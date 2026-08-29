@@ -1,4 +1,4 @@
-# 启明 ERP：基础资料与销售订单最小重构版
+# Modern ERP：基础资料与销售订单最小重构版
 
 这是从方天云端 ERP B9V27 中提炼出的独立练习项目，覆盖：
 
@@ -97,3 +97,4 @@ modern-erp/
 | 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由，前端组件 |
 | 2026-08-29 | 仓库与库存 | 新增 warehouses/inventory/inventory_checks/inventory_transfers 表 |
 | 2026-08-29 | 财务凭证 | 新增 accounting_subjects/vouchers/entries 表，自动生成凭证 |
+

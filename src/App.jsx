@@ -42,7 +42,7 @@ export default function App() {
   }, [toast]);
 
   const notify = (message, type = 'success') => setToast({ message, type });
-  if (checking) return <div className="boot"><div className="spinner"/><p>正在载入启明 ERP…</p></div>;
+  if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
   if (!user) return <Login onLogin={setUser} notify={notify}/>;
 
   const visibleNav = navItems.filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)));
@@ -70,7 +70,7 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">Q</div><div><strong>启明 ERP</strong><span>现代化练习版</span></div></div>
+      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>现代化练习版</span></div></div>
       <nav>{visibleNav.map((item) => <a key={item.key} href={`#${item.key}`} className={page === item.key ? 'active' : ''}>
         <span className="nav-icon">{item.icon}</span>{item.label}
         {item.key === 'approvals' && <span className="nav-dot"/>}
@@ -103,14 +103,14 @@ function Login({ onLogin, notify }) {
   ];
   return <div className="login-page">
     <section className="login-story">
-      <div className="login-badge">ERP · REIMAGINED</div>
+      <div className="login-badge">MODERN ERP</div>
       <h1>让每一张订单<br/><em>有迹可循。</em></h1>
       <p>从客户与货品资料，到销售制单、提交审批和订单追踪，一条清晰、可解释的最小业务链。</p>
       <div className="flow-strip"><span>基础资料</span><i>→</i><span>销售订单</span><i>→</i><span>提交审批</span><i>→</i><span>业务追踪</span></div>
     </section>
     <section className="login-panel">
       <div className="login-card">
-        <div className="mini-brand"><div className="brand-mark">Q</div><strong>启明 ERP</strong></div>
+        <div className="mini-brand"><div className="brand-mark">M</div><strong>Modern ERP</strong></div>
         <h2>欢迎回来</h2><p className="muted">使用演示账号进入销售业务中心</p>
         <form onSubmit={submit}>
           <label>登录账号<input autoFocus value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}/></label>
