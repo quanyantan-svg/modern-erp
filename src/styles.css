@@ -1314,3 +1314,27 @@ label.check input {
   .role-grid { grid-template-columns: repeat(2, 1fr); }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
+/* === Sidebar Groups === */
+.sidebar-group {
+  margin-bottom: 4px;
+}
+
+.sidebar-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ios-secondary);
+  letter-spacing: 0.5px;
+  padding: 12px 12px 4px 12px;
+  text-transform: uppercase;
+}
+
+.sidebar-group:first-child .sidebar-group-label {
+  padding-top: 4px;
+}
+
+.sidebar-divider {
+  height: 1px;
+  background: var(--ios-separator);
+  margin: 6px 12px;
+}
+

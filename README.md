@@ -97,4 +97,7 @@ modern-erp/
 | 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由，前端组件 |
 | 2026-08-29 | 仓库与库存 | 新增 warehouses/inventory/inventory_checks/inventory_transfers 表 |
 | 2026-08-29 | 财务凭证 | 新增 accounting_subjects/vouchers/entries 表，自动生成凭证 |
+| 2026-08-29 | 入库/出库 | 新增 purchase_receipts/sales_deliveries/sales_returns/purchase_returns/inventory_transactions 表及全部 API 和前端组件 |
+| 2026-08-29 | 应收/应付账款 | 新增 accounts_receivable/accounts_payable/payment_collections/payment_disbursements 表及全部 API 和前端组件 |
+| 2026-08-29 | BOM+生产工单 | 新增 boms/bom_items/production_orders/production_order_items/production_outputs 表及全部 API 和前端组件 |
 
