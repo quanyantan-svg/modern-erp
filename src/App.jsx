@@ -9,6 +9,7 @@ const navItems = [
   { key: 'dashboard', label: '工作台', icon: '◫', permission: 'DASHBOARD_VIEW' },
   { key: 'orders', label: '销售订单', icon: '▤', permission: 'ORDERS_VIEW' },
   { key: 'approvals', label: '订单审核', icon: '✓', permission: 'ORDERS_APPROVE' },
+  { key: 'purchase-orders', label: '采购订单', icon: '▦', any: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE'] },
   { key: 'suppliers', label: '供应商资料', icon: '○', any: ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE'] },
   { key: 'customers', label: '客户资料', icon: '◎', any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
   { key: 'products', label: '货品资料', icon: '◇', any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
@@ -50,6 +51,7 @@ export default function App() {
     approvals: <Approvals notify={notify}/>,
     customers: <Customers user={user} notify={notify}/>,
     suppliers: <Suppliers user={user} notify={notify}/>,
+    purchaseOrders: <PurchaseOrders user={user} notify={notify}/>,
     products: <Products user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>
   };
@@ -314,6 +316,67 @@ function RoleModal({ value, permissions, onClose, onSaved, notify }) {
   function toggle(code) { setForm({ ...form, permissions: form.permissions.includes(code) ? form.permissions.filter((x) => x !== code) : [...form.permissions, code] }); }
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/roles/${value.id}` : '/api/roles', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? `配置角色：${value.name}` : '新增角色'} onClose={onClose}><form onSubmit={save}><div className="form-grid"><label>角色编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} disabled={Boolean(value.id)} required/></label><label>角色名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required/></label><label className="full">角色说明<input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label></div><div className="permission-list"><strong>功能权限</strong>{permissions.map((p) => <label key={p.code}><input type="checkbox" checked={form.permissions.includes(p.code)} onChange={() => toggle(p.code)}/><span>{p.name}<small className="mono">{p.code}</small></span></label>)}</div><FormActions onClose={onClose}/></form></Modal>;
+}
+
+
+function PurchaseOrders({ user, notify }) {
+  const [orders, setOrders] = useState([]); const [search, setSearch] = useState(''); const [status, setStatus] = useState('');
+  const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(null);
+  const load = () => api(`/api/purchase-orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.purchaseOrders)).catch((e) => notify(e.message, 'error'));
+  useEffect(() => { void load(); }, [status]);
+  async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
+  return <Panel title="采购订单" subtitle="向供应商采购货品的业务单据" action={can(user, 'PURCHASE_ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建采购订单</button>}>
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审核</option><option value="APPROVED">已审核</option><option value="REJECTED">已驳回</option></select>}/>
+    <PurchaseOrderTable orders={orders} onView={setViewing} actions={(order) => <>
+      {can(user, 'PURCHASE_ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
+      {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+    </>}/>
+    {editing && <PurchaseOrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('采购订单草稿已保存'); }} notify={notify}/>} 
+    {viewing && <PurchaseOrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
+  </Panel>;
+}
+
+function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
+  const [suppliers, setSuppliers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
+  const [form, setForm] = useState({ supplierId: '', remark: '', items: [{ productId: '', quantity: 1, price: '' }] });
+  useEffect(() => {
+    Promise.all([api('/api/suppliers'), api('/api/products'), order.id ? api(`/api/purchase-orders/${order.id}`) : null]).then(([s, p, detail]) => {
+      setSuppliers(s.suppliers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
+      if (detail) setForm({ supplierId: detail.order.supplierId, remark: detail.order.remark, items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) });
+    }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
+  }, []);
+  const total = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.price) || 0), 0), [form]);
+  function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
+  function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
+  async function save(e) { e.preventDefault(); try { await api(order.id ? `/api/purchase-orders/${order.id}` : '/api/purchase-orders', { method: order.id ? 'PUT' : 'POST', body: { ...form, items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: Math.round(Number(x.price) * 100) })) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建采购订单'} onClose={onClose} wide>
+    {loading ? <Loading/> : <form onSubmit={save}>
+      <div className="form-grid order-head"><label>供应商<select value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })} required><option value="">请选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></label><label>订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label></div>
+      <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
+      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价</span><span>金额</span><span/></div>
+        {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
+      </div>
+      <div className="order-total"><span>订单合计</span><strong>{money(Math.round(total * 100))}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
+    </form>}
+  </Modal>;
+}
+
+function PurchaseOrderDetail({ id, onClose, notify }) {
+  const [order, setOrder] = useState(null);
+  useEffect(() => { api(`/api/purchase-orders/${id}`).then((r) => setOrder(r.order)).catch((e) => notify(e.message, 'error')); }, [id]);
+  return <Modal title="采购订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
+    <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.supplierName}</h3><p>{order.supplierCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
+    {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
+    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
+    <div className="detail-total"><span>订单合计</span><strong>{money(order.totalCents)}</strong></div>
+    {order.remark && <p className="remark"><b>备注：</b>{order.remark}</p>}
+    <div className="timeline"><h4>操作记录</h4>{order.history.map((item, index) => <div key={index}><i/><span>{dateTime(item.createdAt)}</span><strong>{item.userName || '系统'}</strong><p>{item.detail}</p></div>)}</div>
+  </>}</Modal>;
+}
+
+function PurchaseOrderTable({ orders = [], onView, actions, compact }) {
+  return <div className="table-wrap"><table><thead><tr><th>订单号</th><th>供应商</th><th>状态</th><th className="number">金额</th><th>制单人</th><th>创建时间</th>{!compact && <th/>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id} className={onView ? 'clickable' : ''} onClick={() => onView?.(order)}><td className="mono strong-text">{order.orderNo}</td><td><strong>{order.supplierName}</strong><small className="block">{order.itemCount} 项明细</small></td><td><Status status={order.status} label={order.statusLabel}/></td><td className="number"><strong>{money(order.totalCents)}</strong></td><td>{order.creatorName}</td><td className="dim">{dateTime(order.createdAt)}</td>{!compact && <td className="actions" onClick={(e) => e.stopPropagation()}><button className="row-action" onClick={() => onView?.(order)}>查看</button>{actions?.(order)}</td>}</tr>)}</tbody></table>{!orders.length && <Empty text="当前没有符合条件的采购订单"/>}</div>;
 }
 
 function OrderTable({ orders = [], onView, actions, compact }) {

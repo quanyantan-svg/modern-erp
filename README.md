@@ -72,6 +72,7 @@ modern-erp/
 | 货品资料 | Products | /api/products | 货品增删改查 |
 | 销售订单 | Orders | /api/orders | 创建/编辑/提交 |
 | 订单审核 | Approvals | /api/orders/*/approve/reject | 审批/驳回 |
+| 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
 | 用户与角色 | UsersRoles | /api/users, /api/roles | 权限管理 |
 
 ## 练习版边界
@@ -87,3 +88,4 @@ modern-erp/
 | 日期 | 模块 | 说明 |
 |------|------|------|
 | 2026-08-29 | 供应商资料 | 新增 suppliers 表、API路由、前端组件 |
+| 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由、前端组件 |

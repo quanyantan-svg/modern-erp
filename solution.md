@@ -10,19 +10,41 @@
 
 #### 表结构
 
-**suppliers 表**
+**purchase_orders 表**
 ```sql
-CREATE TABLE IF NOT EXISTS suppliers (
+CREATE TABLE IF NOT EXISTS purchase_orders (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  name TEXT NOT NULL,
-  contact TEXT NOT NULL DEFAULT '',
-  phone TEXT NOT NULL DEFAULT '',
-  address TEXT NOT NULL DEFAULT '',
-  email TEXT NOT NULL DEFAULT '',
-  active INTEGER NOT NULL DEFAULT 1,
+  order_no TEXT NOT NULL UNIQUE,
+  supplier_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','APPROVED','REJECTED')),
+  total_cents INTEGER NOT NULL DEFAULT 0,
+  remark TEXT NOT NULL DEFAULT '',
+  rejection_reason TEXT NOT NULL DEFAULT '',
+  creator_id TEXT NOT NULL,
+  reviewer_id TEXT,
+  submitted_at TEXT,
+  reviewed_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+  FOREIGN KEY (creator_id) REFERENCES users(id),
+  FOREIGN KEY (reviewer_id) REFERENCES users(id)
+);
+```
+
+**purchase_order_items 表**
+```sql
+CREATE TABLE IF NOT EXISTS purchase_order_items (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  quantity REAL NOT NULL CHECK(quantity > 0),
+  unit_price_cents INTEGER NOT NULL CHECK(unit_price_cents >= 0),
+  amount_cents INTEGER NOT NULL CHECK(amount_cents >= 0),
+  line_no INTEGER NOT NULL,
+  FOREIGN KEY (order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
+  FOREIGN KEY (product_id) REFERENCES products(id),
+  UNIQUE(order_id, line_no)
 );
 ```
 
@@ -36,12 +58,6 @@ CREATE TABLE IF NOT EXISTS suppliers (
 | transaction(db, work) | 数据库连接，工作函数 | work()返回值 | 包装事务，自动提交或回滚 |
 | id() | 无 | string | 生成UUID |
 
-#### 种子数据
-
-**suppliers 表种子数据：**
-- SUP-001 - 深圳市鹏程电子有限公司，联系人王经理，13800002001
-- SUP-002 - 东莞市鑫源物料有限公司，联系人李工，13800002002
-
 ---
 
 ### 1.2 API路由层 (app.js)
@@ -53,43 +69,47 @@ CREATE TABLE IF NOT EXISTS suppliers (
 | allow(actor, permission) | 演员对象，权限码 | 验证是否有指定权限，无则抛403 |
 | allowAny(actor, permissions) | 演员对象，权限码数组 | 验证是否有任一权限 |
 
-#### 供应商相关路由
+#### 采购订单相关路由
 
 | 方法 | 路径 | 处理函数 | 权限 | 说明 |
 |------|------|----------|------|------|
-| GET | /api/suppliers | listSuppliers | SUPPLIERS_VIEW/MANAGE | 列表查询 |
-| POST | /api/suppliers | createSupplier | SUPPLIERS_MANAGE | 新增 |
-| PATCH | /api/suppliers/:id | updateSupplier | SUPPLIERS_MANAGE | 更新 |
+| GET | /api/purchase-orders | listPurchaseOrders | PURCHASE_ORDERS_VIEW | 列表查询 |
+| POST | /api/purchase-orders | createPurchaseOrder | PURCHASE_ORDERS_CREATE | 新增 |
+| GET | /api/purchase-orders/:id | getPurchaseOrder | PURCHASE_ORDERS_VIEW | 详情 |
+| PUT | /api/purchase-orders/:id | updatePurchaseOrder | PURCHASE_ORDERS_CREATE | 更新 |
+| POST | /api/purchase-orders/:id/submit | changePurchaseOrderState(submit) | PURCHASE_ORDERS_SUBMIT | 提交 |
+| POST | /api/purchase-orders/:id/approve | changePurchaseOrderState(approve) | PURCHASE_ORDERS_APPROVE | 审核 |
+| POST | /api/purchase-orders/:id/reject | changePurchaseOrderState(reject) | PURCHASE_ORDERS_APPROVE | 驳回 |
 
 #### 核心函数解析
 
-**listSuppliers(db, res, actor, url)**
-- 功能：查询供应商列表，支持按编码、名称、联系人模糊搜索
+**listPurchaseOrders(db, res, actor, url)**
+- 功能：查询采购订单列表
 - 参数：db数据库连接，res响应对象，actor当前用户，url请求URL
-- 返回：供应商列表
-- SQL：SELECT ... FROM suppliers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ?
+- 返回：采购订单列表（包含供应商名称、明细行数）
+- 支持按状态和关键词搜索
 
-**createSupplier(db, req, res, actor)**
-- 功能：创建新供应商
-- 参数：同listSuppliers
-- 权限：需要SUPPLIERS_MANAGE
-- 验证：编码唯一性检查
-- 审计：写入audit_logs
+**createPurchaseOrder(db, req, res, actor)**
+- 功能：创建新采购订单
+- 验证：供应商必须存在且启用、至少一条明细
+- 金额：以后端计算为准，前端传入仅供参考
 
-**updateSupplier(db, req, res, actor, supplierId)**
-- 功能：更新供应商信息
-- 特殊逻辑：系统管理员角色ADMIN的供应商SUP-001不能停用
-- 停用供应商不能在采购订单中引用
+**updatePurchaseOrder(db, req, res, actor, orderId)**
+- 功能：更新采购订单
+- 限制：只有草稿或已驳回订单可修改
+- 限制：制单人不能审核自己的订单
 
-**supplierInput(body)**
-- 功能：验证并规范化供应商输入数据
+**changePurchaseOrderState(db, req, res, actor, orderId, action)**
+- 功能：采购订单状态流转
+- submit：提交订单
+- approve：审核通过
+- reject：驳回（需要reason）
+
+**purchaseOrderInput(db, body)**
+- 功能：验证并规范化采购订单输入
 - 验证规则：
-  - code：必填，唯一编码格式（大写字母、数字、下划线、短横线）
-  - name：必填，最大100字符
-  - contact：可选，最大50字符
-  - phone：可选，最大30字符
-  - address：可选，最大200字符
-  - email：可选，有效邮箱格式
+  - supplierId：必填，供应商必须存在且启用
+  - items：必填，至少一条明细
 
 ---
 
@@ -116,51 +136,52 @@ CREATE TABLE IF NOT EXISTS suppliers (
 
 ### 2.1 API调用层 (api.js)
 
-供应商相关API调用：
-- GET /api/suppliers - 列表查询
-- POST /api/suppliers - 新增供应商
-- PATCH /api/suppliers/:id - 更新供应商
+采购订单相关API调用：
+- GET /api/purchase-orders - 列表查询
+- POST /api/purchase-orders - 新增采购订单
+- GET /api/purchase-orders/:id - 采购订单详情
+- PUT /api/purchase-orders/:id - 更新采购订单
+- POST /api/purchase-orders/:id/submit - 提交
+- POST /api/purchase-orders/:id/approve - 审核
+- POST /api/purchase-orders/:id/reject - 驳回
 
 ### 2.2 组件结构 (App.jsx)
 
-#### Suppliers 组件
+#### PurchaseOrders 组件
+- 采购订单列表页面
+- 状态筛选：全部/草稿/待审核/已审核/已驳回
+- 关键词搜索
+- 操作：查看、编辑、提交、审核
 
-```jsx
-function Suppliers({ user, notify }) {
-  // 状态管理
-  const [items, setItems] = useState([])       // 供应商列表
-  const [search, setSearch] = useState('')     // 搜索关键字
-  const [editing, setEditing] = useState(null)  // 编辑中的供应商
-  
-  // 数据加载
-  const load = () => api('/api/suppliers?search=...')
-  
-  // 渲染：Panel + Toolbar + table + SupplierModal
-}
-```
+#### PurchaseOrderEditor 组件
+- 新建/编辑采购订单
+- 选择供应商（下拉选择启用的供应商）
+- 订单明细：选择货品、填写数量和单价
+- 自动计算金额
 
-#### SupplierModal 组件
-
-- value: 编辑的供应商对象，null表示新增
-- 字段表单：code, name, contact, phone, address, email, active
-- 保存时调用 api(method: value.id ? PATCH : POST)
+#### PurchaseOrderDetail 组件
+- 查看采购订单详情
+- 显示订单信息、明细、操作历史
 
 ### 2.3 权限检查
 
 - can(user, permission): 检查用户是否有指定权限
-- 导航项：key=suppliers, label=供应商资料, icon=○, any=[SUPPLIERS_VIEW, SUPPLIERS_MANAGE]
+- 导航项：key=purchase-orders, label=采购订单, icon=▦, any=[PURCHASE_ORDERS_VIEW, ...]
 
 ---
 
 ## 三、数据流向
 
-### 供应商新增流程
+### 采购订单创建流程
 
-用户填写表单 -> 前端验证 -> POST /api/suppliers -> 后端认证 -> 权限校验 -> supplierInput验证 -> INSERT -> 审计日志 -> 返回结果 -> 前端刷新
+用户选择供应商 -> 添加明细行（货品、数量、单价）-> 保存 -> 
+POST /api/purchase-orders -> 后端认证 -> 权限校验 -> 
+purchaseOrderInput验证 -> INSERT -> 审计日志 -> 返回结果 -> 前端刷新
 
-### 供应商查询流程
+### 采购订单审核流程
 
-用户搜索 -> GET /api/suppliers?search=关键字 -> 后端认证 -> 权限校验 -> SQL查询 -> 返回列表 -> 前端渲染
+用户点击审核 -> POST /api/purchase-orders/:id/approve -> 
+后端认证 -> 权限校验 -> 状态更新 -> 审计日志 -> 返回结果 -> 前端刷新
 
 ---
 
@@ -168,9 +189,10 @@ function Suppliers({ user, notify }) {
 
 ```
 请求进入 -> handleApi() 路由分发 -> authenticate() 认证 ->
-  - listSuppliers() -> actorFromRow() -> rolePermissions()
-  - createSupplier() -> supplierInput() -> audit()
-  - updateSupplier() -> supplierInput() -> audit()
+  - listPurchaseOrders() -> purchaseOrderRows()
+  - createPurchaseOrder() -> purchaseOrderInput() -> audit()
+  - updatePurchaseOrder() -> purchaseOrderInput() -> audit()
+  - changePurchaseOrderState() -> audit()
       -> transaction()
       -> db.prepare()
 ```
@@ -188,39 +210,10 @@ function Suppliers({ user, notify }) {
 
 ---
 
-## 六、采购订单关联设计（待实现）
-
-### 采购订单与供应商的关系
-
-```
-采购订单 (purchase_orders)
-    │
-    ├── supplier_id → 供应商 (suppliers)
-    │                    ├── code: 供应商编码
-    │                    ├── name: 供应商名称
-    │                    └── active: 启用状态
-    │
-    └── 明细 (purchase_order_items)
-          ├── product_id → 货品 (products)
-          │                    ├── code: 货品编码
-          │                    ├── name: 货品名称
-          │                    └── active: 启用状态
-          ├── quantity: 采购数量
-          ├── unit_price: 采购单价
-          └── amount: 金额小计
-```
-
-### 数据约束
-
-- 采购订单引用 supplier_id 时，必须检查 suppliers.active = 1
-- 采购订单明细引用 product_id 时，必须检查 products.active = 1
-- 这与销售订单引用客户和货品的逻辑平行
-
----
-
-## 七、变更记录
+## 六、变更记录
 
 | 日期 | 变更内容 |
 |------|----------|
 | 2026-08-29 | 新增供应商资料模块完整实现 |
 | 2026-08-29 | 补充采购订单关联设计文档 |
+| 2026-08-29 | 新增采购订单模块完整实现 |

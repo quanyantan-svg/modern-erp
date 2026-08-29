@@ -71,6 +71,15 @@ async function handleApi(db, req, res, url) {
   if (orderMatch && req.method === 'GET') return getOrder(db, res, actor, orderMatch[1]);
   if (orderMatch && req.method === 'PUT') return updateOrder(db, req, res, actor, orderMatch[1]);
 
+    // Purchase Orders
+  if (pathname === '/api/purchase-orders' && req.method === 'GET') return listPurchaseOrders(db, res, actor, url);
+  if (pathname === '/api/purchase-orders' && req.method === 'POST') return createPurchaseOrder(db, req, res, actor);
+  const poActionMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/(submit|approve|reject)$/);
+  if (poActionMatch && req.method === 'POST') return changePurchaseOrderState(db, req, res, actor, poActionMatch[1], poActionMatch[2]);
+  const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
+  if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
+  if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
+
   throw new HttpError(404, '接口不存在');
 }
 
@@ -124,11 +133,15 @@ function dashboard(db, res, actor) {
   allow(actor, 'DASHBOARD_VIEW');
   const data = {
     customerCount: db.prepare('SELECT count(*) count FROM customers WHERE active=1').get().count,
+    supplierCount: db.prepare('SELECT count(*) count FROM suppliers WHERE active=1').get().count,
     productCount: db.prepare('SELECT count(*) count FROM products WHERE active=1').get().count,
     orderCount: db.prepare('SELECT count(*) count FROM sales_orders').get().count,
+    purchaseOrderCount: db.prepare('SELECT count(*) count FROM purchase_orders').get().count,
     pendingCount: db.prepare("SELECT count(*) count FROM sales_orders WHERE status='SUBMITTED'").get().count,
+    pendingPurchaseCount: db.prepare("SELECT count(*) count FROM purchase_orders WHERE status='SUBMITTED'").get().count,
     approvedAmountCents: db.prepare("SELECT coalesce(sum(total_cents),0) total FROM sales_orders WHERE status='APPROVED'").get().total,
-    recentOrders: orderRows(db, '', [], 'ORDER BY so.created_at DESC LIMIT 5')
+    recentOrders: orderRows(db, '', [], 'ORDER BY so.created_at DESC LIMIT 5'),
+    recentPurchaseOrders: purchaseOrderRows(db, '', [], 'ORDER BY po.created_at DESC LIMIT 5')
   };
   return send(res, 200, data);
 }
@@ -528,6 +541,8 @@ function bearer(req) {
 }
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+function makePurchaseOrderNo() { const now = new Date(); return `PO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
+
 function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
 
 function send(res, status, body) {
@@ -555,4 +570,116 @@ function serveStatic(res, pathname, distDir) {
 
 class HttpError extends Error {
   constructor(status, message, details) { super(message); this.status = status; this.details = details; }
+}
+
+// ============ Purchase Orders ============
+
+function listPurchaseOrders(db, res, actor, url) {
+  allow(actor, 'PURCHASE_ORDERS_VIEW');
+  const where = []; const params = [];
+  const status = url.searchParams.get('status');
+  if (status && PURCHASE_STATUS_LABELS[status]) { where.push('po.status=?'); params.push(status); }
+  const search = url.searchParams.get('search')?.trim();
+  if (search) { where.push('(po.order_no LIKE ? OR s.name LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  return send(res, 200, { purchaseOrders: purchaseOrderRows(db, where.length ? `WHERE ${where.join(' AND ')}` : '', params, 'ORDER BY po.created_at DESC') });
+}
+
+function getPurchaseOrder(db, res, actor, orderId) {
+  allow(actor, 'PURCHASE_ORDERS_VIEW');
+  const order = purchaseOrderRows(db, 'WHERE po.id=?', [orderId], '')[0];
+  if (!order) throw new HttpError(404, '采购订单不存在');
+  order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
+    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo
+    FROM purchase_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
+  order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
+    FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='PURCHASE_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
+  return send(res, 200, { order });
+}
+
+async function createPurchaseOrder(db, req, res, actor) {
+  allow(actor, 'PURCHASE_ORDERS_CREATE');
+  const body = await readJson(req); const input = purchaseOrderInput(db, body);
+  const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
+  transaction(db, () => {
+    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?)`).run(orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now);
+    savePurchaseOrderItems(db, orderId, input.items);
+    audit(db, actor.id, 'CREATE', 'PURCHASE_ORDER', orderId, `创建采购订单 ${orderNo}`);
+  });
+  return send(res, 201, { id: orderId, orderNo });
+}
+
+async function updatePurchaseOrder(db, req, res, actor, orderId) {
+  allow(actor, 'PURCHASE_ORDERS_CREATE');
+  const current = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
+  if (!current) throw new HttpError(404, '采购订单不存在');
+  if (!['DRAFT', 'REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以修改');
+  if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
+  const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare("UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=? WHERE id=?")
+      .run(input.supplierId, input.totalCents, input.remark, now, orderId);
+    db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
+    savePurchaseOrderItems(db, orderId, input.items);
+    audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
+  });
+  return send(res, 200, { ok: true });
+}
+
+async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
+  allow(actor, action === 'submit' ? 'PURCHASE_ORDERS_SUBMIT' : 'PURCHASE_ORDERS_APPROVE');
+  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '采购订单不存在');
+  const now = new Date().toISOString();
+  if (action === 'submit') {
+    if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
+    if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    db.prepare("UPDATE purchase_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
+    audit(db, actor.id, 'SUBMIT', 'PURCHASE_ORDER', orderId, `提交采购订单 ${order.order_no}`);
+  } else if (action === 'approve') {
+    if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审核订单可以处理');
+    if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审核自己的订单');
+    db.prepare("UPDATE purchase_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, orderId);
+    audit(db, actor.id, 'APPROVE', 'PURCHASE_ORDER', orderId, `审核通过采购订单 ${order.order_no}`);
+  } else {
+    if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审核订单可以处理');
+    if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审核自己的订单');
+    const body = await readJson(req); const reason = requiredText(body.reason, '驳回原因', 200);
+    db.prepare("UPDATE purchase_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?")
+      .run(actor.id, now, reason, now, orderId);
+    audit(db, actor.id, 'REJECT', 'PURCHASE_ORDER', orderId, reason);
+  }
+  return send(res, 200, { ok: true });
+}
+
+function purchaseOrderRows(db, where, params, tail) {
+  return db.prepare(`SELECT po.id,po.order_no orderNo,po.status,po.total_cents totalCents,po.remark,
+      po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
+      po.reviewed_at reviewedAt,s.id supplierId,s.code supplierCode,s.name supplierName,
+      creator.display_name creatorName,reviewer.display_name reviewerName,
+      (SELECT count(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount
+    FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
+    JOIN users creator ON creator.id=po.creator_id LEFT JOIN users reviewer ON reviewer.id=po.reviewer_id
+    ${where} ${tail}`).all(...params).map((row) => ({ ...row, statusLabel: PURCHASE_STATUS_LABELS[row.status] }));
+}
+
+function purchaseOrderInput(db, body) {
+  const supplierId = requiredText(body.supplierId, '供应商', 100);
+  const supplier = db.prepare('SELECT id FROM suppliers WHERE id=? AND active=1').get(supplierId);
+  if (!supplier) throw new HttpError(400, '供应商不存在或已停用');
+  if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '采购订单至少需要一条明细');
+  const items = body.items.map((item, index) => {
+    const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
+    if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
+    const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents: Math.round(quantity * unitPriceCents), lineNo: index + 1 };
+  });
+  return { supplierId, remark: optionalText(body.remark, 500), items, totalCents: items.reduce((sum, item) => sum + item.amountCents, 0) };
+}
+
+function savePurchaseOrderItems(db, orderId, items) {
+  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
+  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
 }

@@ -15,7 +15,11 @@ export const PERMISSIONS = [
   ['ORDERS_VIEW', '查看销售订单'],
   ['ORDERS_CREATE', '创建/修改销售订单'],
   ['ORDERS_SUBMIT', '提交销售订单'],
-  ['ORDERS_APPROVE', '审核销售订单']
+  ['ORDERS_APPROVE', '审核销售订单'],
+  ['PURCHASE_ORDERS_VIEW', '查看采购订单'],
+  ['PURCHASE_ORDERS_CREATE', '创建/修改采购订单'],
+  ['PURCHASE_ORDERS_SUBMIT', '提交采购订单'],
+  ['PURCHASE_ORDERS_APPROVE', '审核采购订单']
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -150,6 +154,38 @@ function migrate(db) {
       UNIQUE(order_id, line_no)
     );
 
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id TEXT PRIMARY KEY,
+      order_no TEXT NOT NULL UNIQUE,
+      supplier_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','APPROVED','REJECTED')),
+      total_cents INTEGER NOT NULL DEFAULT 0,
+      remark TEXT NOT NULL DEFAULT '',
+      rejection_reason TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      reviewer_id TEXT,
+      submitted_at TEXT,
+      reviewed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      FOREIGN KEY (reviewer_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_order_items (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity REAL NOT NULL CHECK(quantity > 0),
+      unit_price_cents INTEGER NOT NULL CHECK(unit_price_cents >= 0),
+      amount_cents INTEGER NOT NULL CHECK(amount_cents >= 0),
+      line_no INTEGER NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      UNIQUE(order_id, line_no)
+    );
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -163,6 +199,8 @@ function migrate(db) {
 
     CREATE INDEX IF NOT EXISTS idx_orders_status ON sales_orders(status);
     CREATE INDEX IF NOT EXISTS idx_orders_customer ON sales_orders(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
   `);
 }
@@ -174,8 +212,8 @@ function seed(db) {
 
   const roles = [
     ['role-admin', 'ADMIN', '系统管理员', '管理用户、角色和全部业务', 1],
-    ['role-sales', 'SALES', '销售专员', '维护客户并创建、提交销售订单', 1],
-    ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单', 1]
+    ['role-sales', 'SALES', '销售专员', '维护客户并创建、提交销售订单和采购订单', 1],
+    ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单和采购订单', 1]
   ];
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles(id, code, name, description, system_role, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   for (const role of roles) insertRole.run(...role, now);
@@ -183,8 +221,8 @@ function seed(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT'],
-    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE']
+    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT'],
+    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE']
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
