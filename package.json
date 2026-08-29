@@ -1,0 +1,25 @@
+{
+  "name": "modern-erp-practice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "方天 ERP 基础资料与销售订单流程的现代化最小重构版本",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "node --watch server/index.js",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test",
+    "reset-data": "node server/reset-data.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "vite": "^7.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
+}
