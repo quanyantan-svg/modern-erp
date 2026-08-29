@@ -10,7 +10,7 @@
 
 ## 技术栈
 
-- 前端：React 19、Vite 7、原生 CSS
+- 前端：React 19、Vite 7，原生 CSS
 - 后端：Node.js 原生 HTTP API
 - 数据库：Node.js 内置 SQLite
 - 认证：随机 Bearer Token；数据库只保存 Token 哈希
@@ -38,6 +38,7 @@ pnpm start
 | reviewer | review123 | 销售主管 | 审核或驳回待审核订单 |
 | admin | admin123 | 系统管理员 | 管理用户、角色和全部基础资料 |
 | warehouse | warehouse123 | 仓库管理员 | 管理仓库和库存 |
+| accounting | accounting123 | 财务专员 | 查看财务凭证 |
 
 ## 目录结构
 
@@ -77,6 +78,7 @@ modern-erp/
 | 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
 | 仓库资料 | Warehouses | /api/warehouses | 仓库增删改查 |
 | 库存管理 | Inventory | /api/inventory, /api/inventory-checks, /api/inventory-transfers | 库存查询/盘点/调拨 |
+| 财务凭证 | Accounting | /api/accounting-subjects, /api/accounting-vouchers | 会计科目和凭证 |
 | 用户与角色 | UsersRoles | /api/users, /api/roles | 权限管理 |
 
 ## 练习版边界
@@ -91,6 +93,7 @@ modern-erp/
 
 | 日期 | 模块 | 说明 |
 |------|------|------|
-| 2026-08-29 | 供应商资料 | 新增 suppliers 表、API路由、前端组件 |
-| 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由、前端组件 |
+| 2026-08-29 | 供应商资料 | 新增 suppliers 表、API路由，前端组件 |
+| 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由，前端组件 |
 | 2026-08-29 | 仓库与库存 | 新增 warehouses/inventory/inventory_checks/inventory_transfers 表 |
+| 2026-08-29 | 财务凭证 | 新增 accounting_subjects/vouchers/entries 表，自动生成凭证 |

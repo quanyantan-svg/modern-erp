@@ -15,6 +15,7 @@ const navItems = [
   { key: 'products', label: '货品资料', icon: '◇', any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
   { key: 'warehouses', label: '仓库资料', icon: '⬚', any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
   { key: 'inventory', label: '库存管理', icon: '⬢', any: ['INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE'] },
+  { key: 'accounting', label: '财务凭证', icon: 'ⅿ', any: ['ACCOUNTING_VIEW'] },
   { key: 'users', label: '用户与角色', icon: '♙', any: ['USERS_MANAGE', 'ROLES_MANAGE'] }
 ];
 
@@ -57,6 +58,7 @@ export default function App() {
     products: <Products user={user} notify={notify}/>,
     warehouses: <Warehouses user={user} notify={notify}/>,
     inventory: <Inventory user={user} notify={notify}/>,
+    accounting: <Accounting user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>
   };
   const current = visibleNav.find((item) => item.key === page) || visibleNav[0];
@@ -483,6 +485,37 @@ function InventoryTransferDetail({ value, onClose }) {
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th>单位</th><th className="number">调拨数量</th></tr></thead><tbody>{value.items?.map((item) => <tr key={item.id}><td>{item.line_no || item.id}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.unit}</td><td className="number"><strong>{item.quantity}</strong></td></tr>)}</tbody></table></div>
     {value.remark && <p className="remark"><b>备注：</b>{value.remark}</p>}
   </> : <Loading/> }</Modal>;
+}
+
+
+function Accounting({ user, notify }) {
+  const [subjects, setSubjects] = useState([]);
+  const [vouchers, setVouchers] = useState([]);
+  const [viewing, setViewing] = useState(null);
+  const [tab, setTab] = useState('vouchers');
+  useEffect(() => {
+    Promise.all([api('/api/accounting-subjects'), api('/api/accounting-vouchers')]).then(([s, v]) => {
+      setSubjects(s.subjects || []);
+      setVouchers(v.vouchers || []);
+    }).catch((e) => notify(e.message, 'error'));
+  }, []);
+  function formatMoney(c) { return money(c); }
+  return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
+    <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button></div>
+    {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
+    {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号"/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{v.source_type === 'SALES_ORDER' ? '销售订单' : v.source_type === 'PURCHASE_ORDER' ? '采购订单' : '库存调拨'}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
+    {viewing && <VoucherDetail value={viewing} onClose={() => setViewing(null)} formatMoney={formatMoney}/>}
+  </Panel>;
+}
+
+function VoucherDetail({ value, onClose, formatMoney }) {
+  if (!value) return null;
+  return <Modal title={`凭证 ${value.voucher_no}`} onClose={onClose} wide>
+    <div className="detail-head"><div><span className="mono">{value.voucher_no}</span><h3>{value.source_type === 'SALES_ORDER' ? '销售订单' : value.source_type === 'PURCHASE_ORDER' ? '采购订单' : '库存调拨'}</h3><p>凭证日期：{value.voucher_date} · 制单人：{value.creatorName}</p></div></div>
+    <div className="table-wrap"><table><thead><tr><th>方向</th><th>科目</th><th>金额</th><th>摘要</th></tr></thead><tbody>
+      {value.entries?.map((e) => <tr key={e.id}><td className={e.direction === 'DEBIT' ? 'positive' : 'negative'}>{e.direction === 'DEBIT' ? '借' : '贷'}</td><td>{e.subjectCode} {e.subjectName}</td><td className="number"><strong>{money(e.amount_cents)}</strong></td><td>{e.summary}</td></tr>)}
+    </tbody><tfoot><tr><td colspan="2"/><td className="number"><strong>借方合计：{money(value.debitTotal)}</strong></td><td className="number"><strong>贷方合计：{money(value.creditTotal)}</strong></td></tr></tfoot></table></div>
+  </Modal>;
 }
 
 function OrderTable({ orders = [], onView, actions, compact }) {

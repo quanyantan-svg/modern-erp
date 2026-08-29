@@ -99,6 +99,12 @@ async function handleApi(db, req, res, url) {
   const itActionMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/(transfer|cancel)$/);
   if (itActionMatch && req.method === 'POST') return changeInventoryTransferState(db, req, res, actor, itActionMatch[1], itActionMatch[2]);
 
+  // Accounting
+  if (pathname === '/api/accounting-subjects' && req.method === 'GET') return listAccountingSubjects(db, res, actor);
+  if (pathname === '/api/accounting-vouchers' && req.method === 'GET') return listAccountingVouchers(db, res, actor, url);
+  const avMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)$/);
+  if (avMatch && req.method === 'GET') return getAccountingVoucher(db, res, actor, avMatch[1]);
+
   throw new HttpError(404, '接口不存在');
 }
 
@@ -416,6 +422,18 @@ async function updateOrder(db, req, res, actor, orderId) {
   return send(res, 200, { ok: true });
 }
 
+
+function generateVoucher(db, sourceType, sourceId, entries, actor) {
+  const voucherId = id();
+  const now = new Date().toISOString();
+  const voucherNo = makeVoucherNo();
+  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?)`)
+    .run(voucherId, voucherNo, sourceType, sourceId, now.slice(0, 10), '', actor.id, now);
+  const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
+  for (const e of entries) stmt.run(id(), voucherId, e.subjectId, e.direction, e.amountCents, e.summary || '');
+  return voucherId;
+}
+
 async function changeOrderState(db, req, res, actor, orderId, action) {
   const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId);
   if (!order) throw new HttpError(404, '销售订单不存在');
@@ -433,6 +451,13 @@ async function changeOrderState(db, req, res, actor, orderId, action) {
     if (action === 'approve') {
       db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, orderId);
       audit(db, actor.id, 'APPROVE', 'SALES_ORDER', orderId, `审核通过 ${order.order_no}`);
+      // Generate accounting voucher for sales order
+      const customer = db.prepare('SELECT name FROM customers WHERE id=?').get(order.customer_id);
+      const entries = [
+        { subjectId: 'subject-003', direction: 'DEBIT', amountCents: order.total_cents, summary: `应收 ${customer?.name || ''} ${order.order_no}` },
+        { subjectId: 'subject-006', direction: 'CREDIT', amountCents: order.total_cents, summary: `主营业务收入 ${order.order_no}` }
+      ];
+      generateVoucher(db, 'SALES_ORDER', orderId, entries, actor);
     } else {
       const body = await readJson(req); const reason = requiredText(body.reason, '驳回原因', 200);
       db.prepare("UPDATE sales_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?")
@@ -560,6 +585,8 @@ function bearer(req) {
 }
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+function makeVoucherNo() { const now = new Date(); return `VCH-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
+
 function makeInventoryTransferNo() { const now = new Date(); return `IT-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
 function makePurchaseOrderNo() { const now = new Date(); return `PO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
@@ -882,6 +909,13 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
       }
       db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
       audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
+      // Generate accounting voucher for inventory transfer
+      const totalAmt = items.reduce((s, i) => { const inv = db.prepare('SELECT price_cents FROM products WHERE id=?').get(i.product_id); return s + Math.round(i.quantity * (inv?.price_cents || 0)); }, 0);
+      const entries3 = [
+        { subjectId: 'subject-004', direction: 'DEBIT', amountCents: totalAmt, summary: `调拨入库 ${transfer.transfer_no}` },
+        { subjectId: 'subject-004', direction: 'CREDIT', amountCents: totalAmt, summary: `调拨出库 ${transfer.transfer_no}` }
+      ];
+      generateVoucher(db, 'INVENTORY_TRANSFER', transferId, entries3, actor);
     });
   } else if (action === 'cancel') {
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
@@ -889,6 +923,38 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
     audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
   }
   return send(res, 200, { ok: true });
+}
+
+
+
+// ============ Accounting ============
+
+function listAccountingSubjects(db, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const subjects = db.prepare('SELECT id,code,name,type,direction,parent_id,active FROM accounting_subjects WHERE active=1 ORDER BY code').all();
+  return send(res, 200, { subjects });
+}
+
+function listAccountingVouchers(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const where = []; const params = [];
+  const sourceType = url.searchParams.get('source_type');
+  if (sourceType) { where.push('av.source_type=?'); params.push(sourceType); }
+  const sql = `SELECT av.*, u.display_name creatorName
+    FROM accounting_vouchers av JOIN users u ON u.id=av.creator_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY av.created_at DESC LIMIT 100`;
+  const vouchers = db.prepare(sql).all(...params);
+  return send(res, 200, { vouchers });
+}
+
+function getAccountingVoucher(db, res, actor, voucherId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const voucher = db.prepare(`SELECT av.*, u.display_name creatorName FROM accounting_vouchers av JOIN users u ON u.id=av.creator_id WHERE av.id=?`).get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+  voucher.entries = db.prepare(`SELECT ae.*, acs.code subjectCode, acs.name subjectName FROM accounting_entries ae JOIN accounting_subjects acs ON acs.id=ae.subject_id WHERE ae.voucher_id=? ORDER BY ae.direction DESC, ae.id`).all(voucherId);
+  voucher.debitTotal = voucher.entries.filter((e) => e.direction === 'DEBIT').reduce((s, e) => s + e.amount_cents, 0);
+  voucher.creditTotal = voucher.entries.filter((e) => e.direction === 'CREDIT').reduce((s, e) => s + e.amount_cents, 0);
+  return send(res, 200, { voucher });
 }
 
 

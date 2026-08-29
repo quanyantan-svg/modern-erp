@@ -10,149 +10,102 @@
 
 #### 表结构
 
-**warehouses 表**
+**accounting_subjects 表**
 ```sql
-CREATE TABLE IF NOT EXISTS warehouses (
+CREATE TABLE IF NOT EXISTS accounting_subjects (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  code TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  address TEXT NOT NULL DEFAULT '',
-  manager TEXT NOT NULL DEFAULT '',
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  type TEXT NOT NULL CHECK(type IN ('ASSET','LIABILITY','EQUITY','REVENUE','EXPENSE')),
+  direction TEXT NOT NULL CHECK(direction IN ('DEBIT','CREDIT')),
+  parent_id TEXT,
+  active INTEGER NOT NULL DEFAULT 1
 );
 ```
 
-**inventory 表（实时库存）**
+**accounting_vouchers 表**
 ```sql
-CREATE TABLE IF NOT EXISTS inventory (
-  warehouse_id TEXT NOT NULL,
-  product_id TEXT NOT NULL,
-  quantity REAL NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL,
-  PRIMARY KEY (warehouse_id, product_id),
-  FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-  FOREIGN KEY (product_id) REFERENCES products(id)
-);
-```
-
-**inventory_checks 表（盘点单）**
-```sql
-CREATE TABLE IF NOT EXISTS inventory_checks (
+CREATE TABLE IF NOT EXISTS accounting_vouchers (
   id TEXT PRIMARY KEY,
-  warehouse_id TEXT NOT NULL,
-  product_id TEXT NOT NULL,
-  system_quantity REAL NOT NULL,
-  actual_quantity REAL NOT NULL,
-  difference REAL NOT NULL,
-  reason TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
-  creator_id TEXT NOT NULL,
-  reviewer_id TEXT,
-  created_at TEXT NOT NULL,
-  reviewed_at TEXT,
-  FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-  FOREIGN KEY (product_id) REFERENCES products(id),
-  FOREIGN KEY (creator_id) REFERENCES users(id),
-  FOREIGN KEY (reviewer_id) REFERENCES users(id)
-);
-```
-
-**inventory_transfers 表（调拨单）**
-```sql
-CREATE TABLE IF NOT EXISTS inventory_transfers (
-  id TEXT PRIMARY KEY,
-  transfer_no TEXT NOT NULL UNIQUE,
-  from_warehouse_id TEXT NOT NULL,
-  to_warehouse_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','TRANSFERRED','CANCELLED')),
+  voucher_no TEXT NOT NULL UNIQUE,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  voucher_date TEXT NOT NULL,
   remark TEXT NOT NULL DEFAULT '',
   creator_id TEXT NOT NULL,
-  reviewer_id TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
-  FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
-  FOREIGN KEY (creator_id) REFERENCES users(id),
-  FOREIGN KEY (reviewer_id) REFERENCES users(id)
+  FOREIGN KEY (creator_id) REFERENCES users(id)
 );
 ```
 
-**inventory_transfer_items 表（调拨明细）**
+**accounting_entries 表**
 ```sql
-CREATE TABLE IF NOT EXISTS inventory_transfer_items (
+CREATE TABLE IF NOT EXISTS accounting_entries (
   id TEXT PRIMARY KEY,
-  transfer_id TEXT NOT NULL,
-  product_id TEXT NOT NULL,
-  quantity REAL NOT NULL CHECK(quantity > 0),
-  FOREIGN KEY (transfer_id) REFERENCES inventory_transfers(id) ON DELETE CASCADE,
-  FOREIGN KEY (product_id) REFERENCES products(id)
+  voucher_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK(direction IN ('DEBIT','CREDIT')),
+  amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
+  summary TEXT NOT NULL DEFAULT '',
+  FOREIGN KEY (voucher_id) REFERENCES accounting_vouchers(id) ON DELETE CASCADE,
+  FOREIGN KEY (subject_id) REFERENCES accounting_subjects(id)
 );
 ```
+
+#### 核心科目（种子数据）
+
+| 编码 | 名称 | 类型 | 方向 |
+|------|------|------|------|
+| 1001 | 库存现金 | ASSET | DEBIT |
+| 1002 | 银行存款 | ASSET | DEBIT |
+| 1122 | 应收账款 | ASSET | DEBIT |
+| 1405 | 库存商品 | ASSET | DEBIT |
+| 2202 | 应付账款 | LIABILITY | CREDIT |
+| 6001 | 主营业务收入 | REVENUE | CREDIT |
+| 6401 | 主营业务成本 | EXPENSE | DEBIT |
 
 ---
 
 ### 1.2 API路由层 (app.js)
 
-#### 仓库相关路由
+#### 凭证相关路由
 
 | 方法 | 路径 | 处理函数 | 权限 | 说明 |
 |------|------|----------|------|------|
-| GET | /api/warehouses | listWarehouses | WAREHOUSES_VIEW/MANAGE | 列表查询 |
-| POST | /api/warehouses | createWarehouse | WAREHOUSES_MANAGE | 新增 |
-| PATCH | /api/warehouses/:id | updateWarehouse | WAREHOUSES_MANAGE | 更新 |
+| GET | /api/accounting-subjects | listAccountingSubjects | ACCOUNTING_VIEW | 科目列表 |
+| GET | /api/accounting-vouchers | listAccountingVouchers | ACCOUNTING_VIEW | 凭证列表 |
+| GET | /api/accounting-vouchers/:id | getAccountingVoucher | ACCOUNTING_VIEW | 凭证详情 |
 
-#### 库存相关路由
+#### 凭证生成函数
 
-| 方法 | 路径 | 处理函数 | 权限 | 说明 |
-|------|------|----------|------|------|
-| GET | /api/inventory | listInventory | INVENTORY_VIEW | 库存查询 |
-| GET | /api/inventory-checks | listInventoryChecks | INVENTORY_VIEW | 盘点记录 |
-| POST | /api/inventory-checks | createInventoryCheck | INVENTORY_CHECK_CREATE | 新增盘点单 |
-| PATCH | /api/inventory-checks/:id | approveInventoryCheck | INVENTORY_CHECK_APPROVE | 审核盘点单 |
-| GET | /api/inventory-transfers | listInventoryTransfers | INVENTORY_VIEW | 调拨单列表 |
-| POST | /api/inventory-transfers | createInventoryTransfer | INVENTORY_TRANSFER_CREATE | 新增调拨单 |
-| GET | /api/inventory-transfers/:id | getInventoryTransfer | INVENTORY_VIEW | 调拨单详情 |
-| POST | /api/inventory-transfers/:id/transfer | transferInventory | INVENTORY_TRANSFER_APPROVE | 确认调拨 |
-| POST | /api/inventory-transfers/:id/cancel | cancelInventoryTransfer | INVENTORY_TRANSFER_APPROVE | 取消调拨 |
+**generateVoucher(db, sourceType, sourceId, entries, actor)**
+- 功能：根据业务单据生成会计凭证
+- 参数：
+  - sourceType: 业务类型（SALES_ORDER/PURCHASE_ORDER/INVENTORY_TRANSFER）
+  - sourceId: 业务单据ID
+  - entries: 分录数组 [{subjectId, direction, amountCents, summary}]
+  - actor: 当前用户
 
-#### 核心函数解析
+#### 业务联动
 
-**listInventory(db, res, actor, url)**
-- 功能：查询库存，支持按仓库和货品筛选
-- 参数：db数据库连接，res响应对象，actor当前用户，url请求URL
-- 返回：库存列表（包含仓库名称、货品名称）
-- SQL：JOIN warehouses 和 products 表
+**销售订单审核联动**
+- 时机：changeOrderState 中 action=approve 时
+- 生成凭证：
+  - 借方：1122 应收账款（客户），金额=订单总额
+  - 贷方：6001 主营业务收入，金额=订单总额
 
-**createInventoryCheck(db, req, res, actor)**
-- 功能：创建盘点单
-- 验证：仓库和货品必须存在且启用
-- 计算：difference = actual_quantity - system_quantity
-- 状态：PENDING，等待审核
+**采购订单审核联动**
+- 时机：changePurchaseOrderState 中 action=approve 时
+- 生成凭证：
+  - 借方：1405 库存商品，金额=订单总额
+  - 贷方：2202 应付账款（供应商），金额=订单总额
 
-**approveInventoryCheck(db, req, res, actor, checkId)**
-- 功能：审核盘点单
-- 操作：更新库存数量为实际盘点数量
-- 状态：APPROVED
-
-**createInventoryTransfer(db, req, res, actor)**
-- 功能：创建调拨单
-- 验证：源仓库和目标仓库不能相同
-- 验证：每个货品在源仓库有足够库存
-
-**transferInventory(db, req, res, actor, transferId)**
-- 功能：确认调拨
-- 操作：
-  1. 源仓库库存减少
-  2. 目标仓库库存增加
-- 状态：TRANSFERRED
-
----
-
-### 1.3 认证与会话
-
-（同上版本）
+**库存调拨确认联动**
+- 时机：changeInventoryTransferState 中 action=transfer 时
+- 生成凭证：
+  - 借方：1405 库存商品（目标仓）
+  - 贷方：1405 库存商品（源仓）
+  - 金额=调拨货品金额
 
 ---
 
@@ -160,73 +113,23 @@ CREATE TABLE IF NOT EXISTS inventory_transfer_items (
 
 ### 2.1 组件结构 (App.jsx)
 
-#### Warehouses 组件
-- 仓库列表页面
-- 新增/编辑仓库
-
-#### Inventory 组件
-- 库存查询页面
-- 支持按仓库和货品筛选
-
-#### InventoryChecks 组件
-- 盘点记录列表
-- 新建盘点单
-- 审核盘点单
-
-#### InventoryTransfers 组件
-- 调拨单列表
-- 新建调拨单
-- 确认调拨/取消调拨
+#### Accounting 组件
+- 会计科目列表
+- 凭证列表
+- 凭证详情弹窗
 
 ### 2.2 权限检查
 
 导航项：
-- key=warehouses, label=仓库资料, icon=⬚, any=[WAREHOUSES_VIEW, WAREHOUSES_MANAGE]
-- key=inventory, label=库存管理, icon=⬢, any=[INVENTORY_VIEW, INVENTORY_CHECK_CREATE, INVENTORY_TRANSFER_CREATE]
+- key=accounting, label=财务凭证, icon=ⅿ, any=[ACCOUNTING_VIEW]
 
 ---
 
-## 三、数据流向
-
-### 库存盘点流程
-
-创建盘点单 -> 填写实际数量 -> 保存PENDING ->
-审核通过 -> 更新inventory表 -> 状态改为APPROVED
-
-### 库存调拨流程
-
-创建调拨单 -> 添加明细（货品、数量）-> 保存DRAFT ->
-审核通过 -> 源仓库减少库存 -> 目标仓库增加库存 -> 状态改为TRANSFERRED
-
----
-
-## 四、函数关系图
-
-```
-请求进入 -> handleApi() 路由分发 -> authenticate() 认证 ->
-  - listInventory() -> inventoryRows()
-  - createInventoryCheck() -> inventoryCheckInput() -> audit()
-  - approveInventoryCheck() -> updateInventory()
-  - createInventoryTransfer() -> transferInput() -> audit()
-  - transferInventory() -> updateInventory()
-```
-
----
-
-## 五、安全考量
-
-1. 权限校验：每个API都有权限验证
-2. 数据验证：仓库、货品必须存在且启用
-3. 库存检查：调拨时验证源仓库库存充足
-4. 事务处理：盘点审核、调拨确认使用事务
-
----
-
-## 六、变更记录
+## 三、变更记录
 
 | 日期 | 变更内容 |
 |------|----------|
 | 2026-08-29 | 新增供应商资料模块完整实现 |
-| 2026-08-29 | 补充采购订单关联设计文档 |
 | 2026-08-29 | 新增采购订单模块完整实现 |
 | 2026-08-29 | 新增仓库与库存模块完整实现 |
+| 2026-08-29 | 新增财务凭证模块完整实现 |

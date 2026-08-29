@@ -26,7 +26,8 @@ export const PERMISSIONS = [
   ['INVENTORY_CHECK_CREATE', '创建盘点单'],
   ['INVENTORY_CHECK_APPROVE', '审核盘点单'],
   ['INVENTORY_TRANSFER_CREATE', '创建调拨单'],
-  ['INVENTORY_TRANSFER_APPROVE', '审核调拨单']
+  ['INVENTORY_TRANSFER_APPROVE', '审核调拨单'],
+  ['ACCOUNTING_VIEW', '查看财务凭证']
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -279,6 +280,43 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_inventory_checks_status ON inventory_checks(status);
     CREATE INDEX IF NOT EXISTS idx_inventory_transfers_status ON inventory_transfers(status);
 
+    CREATE TABLE IF NOT EXISTS accounting_subjects (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('ASSET','LIABILITY','EQUITY','REVENUE','EXPENSE')),
+      direction TEXT NOT NULL CHECK(direction IN ('DEBIT','CREDIT')),
+      parent_id TEXT,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS accounting_vouchers (
+      id TEXT PRIMARY KEY,
+      voucher_no TEXT NOT NULL UNIQUE,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      voucher_date TEXT NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS accounting_entries (
+      id TEXT PRIMARY KEY,
+      voucher_id TEXT NOT NULL,
+      subject_id TEXT NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('DEBIT','CREDIT')),
+      amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
+      summary TEXT NOT NULL DEFAULT '',
+      FOREIGN KEY (voucher_id) REFERENCES accounting_vouchers(id) ON DELETE CASCADE,
+      FOREIGN KEY (subject_id) REFERENCES accounting_subjects(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id);
+    CREATE INDEX IF NOT EXISTS idx_entries_voucher ON accounting_entries(voucher_id);
+
+
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
   `);
 }
@@ -292,7 +330,8 @@ function seed(db) {
     ['role-admin', 'ADMIN', '系统管理员', '管理用户、角色和全部业务', 1],
     ['role-sales', 'SALES', '销售专员', '维护客户并创建、提交销售订单和采购订单', 1],
     ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单、采购订单和库存', 1],
-    ['role-warehouse', 'WAREHOUSE', '仓库管理员', '管理仓库和库存', 1]
+    ['role-warehouse', 'WAREHOUSE', '仓库管理员', '管理仓库和库存', 1],
+    ['role-accounting', 'ACCOUNTING', '财务专员', '查看财务凭证和业务单据', 1]
   ];
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles(id, code, name, description, system_role, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   for (const role of roles) insertRole.run(...role, now);
@@ -300,6 +339,7 @@ function seed(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE'],
     'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW'],
@@ -318,7 +358,8 @@ function seed(db) {
     ['user-admin', 'admin', '系统管理员', 'admin123', 'role-admin'],
     ['user-sales', 'sales', '销售专员', 'sales123', 'role-sales'],
     ['user-reviewer', 'reviewer', '销售主管', 'review123', 'role-reviewer'],
-    ['user-warehouse', 'warehouse', '仓库管理员', 'warehouse123', 'role-warehouse']
+    ['user-warehouse', 'warehouse', '仓库管理员', 'warehouse123', 'role-warehouse'],
+    ['user-accounting', 'accounting', '财务专员', 'accounting123', 'role-accounting']
   ]) {
     const password = hashPassword(user[3]);
     insertUser.run(user[0], user[1], user[2], password.hash, password.salt, user[4], now);
@@ -361,6 +402,19 @@ function seed(db) {
     insertInventory.run(wh, 'product-001', wh === 'warehouse-001' ? 20 : 16, now);
     insertInventory.run(wh, 'product-002', wh === 'warehouse-001' ? 100 : 80, now);
     insertInventory.run(wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
+  // Accounting subjects seed
+  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
+  const subjects = [
+    ['subject-001', '1001', '库存现金', 'ASSET', 'DEBIT'],
+    ['subject-002', '1002', '银行存款', 'ASSET', 'DEBIT'],
+    ['subject-003', '1122', '应收账款', 'ASSET', 'DEBIT'],
+    ['subject-004', '1405', '库存商品', 'ASSET', 'DEBIT'],
+    ['subject-005', '2202', '应付账款', 'LIABILITY', 'CREDIT'],
+    ['subject-006', '6001', '主营业务收入', 'REVENUE', 'CREDIT'],
+    ['subject-007', '6401', '主营业务成本', 'EXPENSE', 'DEBIT'],
+  ];
+  for (const s of subjects) insertSubject.run(...s);
+
   }
 
 
