@@ -80,6 +80,25 @@ async function handleApi(db, req, res, url) {
   if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
+  // Warehouses
+  if (pathname === '/api/warehouses' && req.method === 'GET') return listWarehouses(db, res, actor, url);
+  if (pathname === '/api/warehouses' && req.method === 'POST') return createWarehouse(db, req, res, actor);
+  const whMatch = pathname.match(/^\/api\/warehouses\/([^/]+)$/);
+  if (whMatch && req.method === 'PATCH') return updateWarehouse(db, req, res, actor, whMatch[1]);
+
+  // Inventory
+  if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
+  if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
+  if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
+  const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
+  if (icMatch && req.method === 'PATCH') return approveInventoryCheck(db, req, res, actor, icMatch[1]);
+  if (pathname === '/api/inventory-transfers' && req.method === 'GET') return listInventoryTransfers(db, res, actor, url);
+  if (pathname === '/api/inventory-transfers' && req.method === 'POST') return createInventoryTransfer(db, req, res, actor);
+  const itMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)$/);
+  if (itMatch && req.method === 'GET') return getInventoryTransfer(db, res, actor, itMatch[1]);
+  const itActionMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/(transfer|cancel)$/);
+  if (itActionMatch && req.method === 'POST') return changeInventoryTransferState(db, req, res, actor, itActionMatch[1], itActionMatch[2]);
+
   throw new HttpError(404, '接口不存在');
 }
 
@@ -541,6 +560,8 @@ function bearer(req) {
 }
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+function makeInventoryTransferNo() { const now = new Date(); return `IT-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
+
 function makePurchaseOrderNo() { const now = new Date(); return `PO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
 
 function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
@@ -682,4 +703,193 @@ function purchaseOrderInput(db, body) {
 function savePurchaseOrderItems(db, orderId, items) {
   const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
   for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+
+// ============ Warehouses ============
+
+function listWarehouses(db, res, actor, url) {
+  allowAny(actor, ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE']);
+  const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
+  const warehouses = db.prepare(`SELECT id,code,name,address,manager,active,created_at createdAt,updated_at updatedAt FROM warehouses WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search).map((row) => ({ ...row, active: Boolean(row.active) }));
+  return send(res, 200, { warehouses });
+}
+
+async function createWarehouse(db, req, res, actor) {
+  allow(actor, 'WAREHOUSES_MANAGE');
+  const body = await readJson(req);
+  const warehouse = { id: id(), code: requiredCode(body.code, '仓库编码'), name: requiredText(body.name, '仓库名称', 100), address: optionalText(body.address, 200), manager: optionalText(body.manager, 50) };
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)`).run(warehouse.id, warehouse.code, warehouse.name, warehouse.address, warehouse.manager, now, now);
+  audit(db, actor.id, 'CREATE', 'WAREHOUSE', warehouse.id, warehouse.code);
+  return send(res, 201, { id: warehouse.id });
+}
+
+async function updateWarehouse(db, req, res, actor, warehouseId) {
+  allow(actor, 'WAREHOUSES_MANAGE');
+  const current = db.prepare('SELECT * FROM warehouses WHERE id=?').get(warehouseId);
+  if (!current) throw new HttpError(404, '仓库不存在');
+  const body = await readJson(req);
+  const name = requiredText(body.name ?? current.name, '仓库名称', 100);
+  const address = optionalText(body.address ?? current.address, 200);
+  const manager = optionalText(body.manager ?? current.manager, 50);
+  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
+  db.prepare('UPDATE warehouses SET name=?,address=?,manager=?,active=?,updated_at=? WHERE id=?').run(name, address, manager, active, new Date().toISOString(), warehouseId);
+  audit(db, actor.id, 'UPDATE', 'WAREHOUSE', warehouseId, name);
+  return send(res, 200, { ok: true });
+}
+
+// ============ Inventory ============
+
+function listInventory(db, res, actor, url) {
+  allow(actor, 'INVENTORY_VIEW');
+  const where = []; const params = [];
+  const warehouseId = url.searchParams.get('warehouse');
+  const productId = url.searchParams.get('product');
+  if (warehouseId) { where.push('i.warehouse_id=?'); params.push(warehouseId); }
+  if (productId) { where.push('i.product_id=?'); params.push(productId); }
+  const sql = `SELECT i.warehouse_id,i.product_id,i.quantity,i.updated_at,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit
+    FROM inventory i JOIN warehouses w ON w.id=i.warehouse_id JOIN products p ON p.id=i.product_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY w.code,p.code`;
+  return send(res, 200, { inventory: db.prepare(sql).all(...params) });
+}
+
+// ============ Inventory Checks ============
+
+function listInventoryChecks(db, res, actor, url) {
+  allow(actor, 'INVENTORY_VIEW');
+  const where = []; const params = [];
+  const status = url.searchParams.get('status');
+  if (status && INVENTORY_CHECK_STATUS[status]) { where.push('ic.status=?'); params.push(status); }
+  const sql = `SELECT ic.*,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,
+    creator.display_name creatorName,reviewer.display_name reviewerName
+    FROM inventory_checks ic
+    JOIN warehouses w ON w.id=ic.warehouse_id JOIN products p ON p.id=ic.product_id
+    JOIN users creator ON creator.id=ic.creator_id LEFT JOIN users reviewer ON reviewer.id=ic.reviewer_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ic.created_at DESC`;
+  const checks = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_CHECK_STATUS[row.status] }));
+  return send(res, 200, { inventoryChecks: checks });
+}
+
+async function createInventoryCheck(db, req, res, actor) {
+  allow(actor, 'INVENTORY_CHECK_CREATE');
+  const body = await readJson(req);
+  const { warehouseId, productId, actualQuantity, reason } = body;
+  if (!warehouseId) throw new HttpError(400, '请选择仓库');
+  if (!productId) throw new HttpError(400, '请选择货品');
+  if (actualQuantity === undefined || actualQuantity === null) throw new HttpError(400, '请填写实际盘点数量');
+  const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId);
+  if (!inv) throw new HttpError(400, '该仓库没有此货品的库存记录');
+  const systemQuantity = inv.quantity;
+  const difference = Number(actualQuantity) - systemQuantity;
+  const checkId = id(); const now = new Date().toISOString();
+  db.prepare(`INSERT INTO inventory_checks(id,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
+    VALUES(?,?,?,?,?,?,?,'PENDING',?,?)`).run(checkId, warehouseId, productId, systemQuantity, Number(actualQuantity), difference, optionalText(reason, 200), actor.id, now);
+  audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
+  return send(res, 201, { id: checkId });
+}
+
+async function approveInventoryCheck(db, req, res, actor, checkId) {
+  allow(actor, 'INVENTORY_CHECK_APPROVE');
+  const check = db.prepare('SELECT * FROM inventory_checks WHERE id=?').get(checkId);
+  if (!check) throw new HttpError(404, '盘点单不存在');
+  if (check.status !== 'PENDING') throw new HttpError(409, '该盘点单已处理');
+  const body = await readJson(req);
+  const action = body.action; // 'APPROVE' or 'REJECT'
+  const now = new Date().toISOString();
+  if (action === 'APPROVE') {
+    transaction(db, () => {
+      db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
+      db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
+      audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity}`);
+    });
+  } else {
+    db.prepare("UPDATE inventory_checks SET status='REJECTED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
+    audit(db, actor.id, 'REJECT', 'INVENTORY_CHECK', checkId, '驳回盘点单');
+  }
+  return send(res, 200, { ok: true });
+}
+
+// ============ Inventory Transfers ============
+
+function listInventoryTransfers(db, res, actor, url) {
+  allow(actor, 'INVENTORY_VIEW');
+  const where = []; const params = [];
+  const status = url.searchParams.get('status');
+  if (status && INVENTORY_TRANSFER_STATUS[status]) { where.push('it.status=?'); params.push(status); }
+  const sql = `SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
+    creator.display_name creatorName,reviewer.display_name reviewerName,
+    (SELECT count(*) FROM inventory_transfer_items WHERE transfer_id=it.id) itemCount
+    FROM inventory_transfers it
+    JOIN warehouses fw ON fw.id=it.from_warehouse_id JOIN warehouses tw ON tw.id=it.to_warehouse_id
+    JOIN users creator ON creator.id=it.creator_id LEFT JOIN users reviewer ON reviewer.id=it.reviewer_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY it.created_at DESC`;
+  const transfers = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_TRANSFER_STATUS[row.status] }));
+  return send(res, 200, { inventoryTransfers: transfers });
+}
+
+async function createInventoryTransfer(db, req, res, actor) {
+  allow(actor, 'INVENTORY_TRANSFER_CREATE');
+  const body = await readJson(req);
+  const { fromWarehouseId, toWarehouseId, remark, items } = body;
+  if (!fromWarehouseId) throw new HttpError(400, '请选择源仓库');
+  if (!toWarehouseId) throw new HttpError(400, '请选择目标仓库');
+  if (fromWarehouseId === toWarehouseId) throw new HttpError(400, '源仓库和目标仓库不能相同');
+  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加调拨货品');
+  // Validate stock
+  for (const item of items) {
+    const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(fromWarehouseId, item.productId);
+    if (!inv || inv.quantity < Number(item.quantity)) {
+      const product = db.prepare('SELECT code,name FROM products WHERE id=?').get(item.productId);
+      throw new HttpError(400, `${product?.code ?? item.productId} 库存不足`);
+    }
+  }
+  const transferId = id(); const now = new Date().toISOString(); const transferNo = makeInventoryTransferNo();
+  transaction(db, () => {
+    db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,'DRAFT',?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now);
+    const stmt = db.prepare('INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES(?,?,?,?)');
+    for (const item of items) stmt.run(id(), transferId, item.productId, Number(item.quantity));
+    audit(db, actor.id, 'CREATE', 'INVENTORY_TRANSFER', transferId, `创建调拨单 ${transferNo}`);
+  });
+  return send(res, 201, { id: transferId, transferNo });
+}
+
+function getInventoryTransfer(db, res, actor, transferId) {
+  allow(actor, 'INVENTORY_VIEW');
+  const transfer = db.prepare(`SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
+    creator.display_name creatorName,reviewer.display_name reviewerName
+    FROM inventory_transfers it
+    JOIN warehouses fw ON fw.id=it.from_warehouse_id JOIN warehouses tw ON tw.id=it.to_warehouse_id
+    JOIN users creator ON creator.id=it.creator_id LEFT JOIN users reviewer ON reviewer.id=it.reviewer_id
+    WHERE it.id=?`).get(transferId);
+  if (!transfer) throw new HttpError(404, '调拨单不存在');
+  transfer.items = db.prepare(`SELECT ti.*,p.code productCode,p.name productName,p.unit
+    FROM inventory_transfer_items ti JOIN products p ON p.id=ti.product_id WHERE ti.transfer_id=?`).all(transferId);
+  transfer.statusLabel = INVENTORY_TRANSFER_STATUS[transfer.status];
+  return send(res, 200, { transfer });
+}
+
+async function changeInventoryTransferState(db, req, res, actor, transferId, action) {
+  allow(actor, 'INVENTORY_TRANSFER_APPROVE');
+  const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
+  if (!transfer) throw new HttpError(404, '调拨单不存在');
+  const now = new Date().toISOString();
+  if (action === 'transfer') {
+    if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以确认');
+    const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
+    transaction(db, () => {
+      for (const item of items) {
+        db.prepare('UPDATE inventory SET quantity=quantity-?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(item.quantity, now, transfer.from_warehouse_id, item.product_id);
+        db.prepare('UPDATE inventory SET quantity=quantity+?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(item.quantity, now, transfer.to_warehouse_id, item.product_id);
+      }
+      db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
+      audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
+    });
+  } else if (action === 'cancel') {
+    if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
+    db.prepare("UPDATE inventory_transfers SET status='CANCELLED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
+    audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
+  }
+  return send(res, 200, { ok: true });
+}
+
+
 }

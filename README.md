@@ -37,6 +37,7 @@ pnpm start
 | sales | sales123 | 销售专员 | 维护客户、创建并提交订单 |
 | reviewer | review123 | 销售主管 | 审核或驳回待审核订单 |
 | admin | admin123 | 系统管理员 | 管理用户、角色和全部基础资料 |
+| warehouse | warehouse123 | 仓库管理员 | 管理仓库和库存 |
 
 ## 目录结构
 
@@ -72,12 +73,15 @@ modern-erp/
 | 货品资料 | Products | /api/products | 货品增删改查 |
 | 销售订单 | Orders | /api/orders | 创建/编辑/提交 |
 | 订单审核 | Approvals | /api/orders/*/approve/reject | 审批/驳回 |
+| 供应商资料 | Suppliers | /api/suppliers | 供应商增删改查 |
 | 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
+| 仓库资料 | Warehouses | /api/warehouses | 仓库增删改查 |
+| 库存管理 | Inventory | /api/inventory, /api/inventory-checks, /api/inventory-transfers | 库存查询/盘点/调拨 |
 | 用户与角色 | UsersRoles | /api/users, /api/roles | 权限管理 |
 
 ## 练习版边界
 
-当前版本故意不包含销售出货、库存扣减、应收账款、复杂多级审批、多组织、多币种和原数据库迁移。
+当前版本故意不包含应收账款、复杂多级审批、多组织、多币种和原数据库迁移。
 
 ---
 
@@ -89,3 +93,4 @@ modern-erp/
 |------|------|------|
 | 2026-08-29 | 供应商资料 | 新增 suppliers 表、API路由、前端组件 |
 | 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由、前端组件 |
+| 2026-08-29 | 仓库与库存 | 新增 warehouses/inventory/inventory_checks/inventory_transfers 表 |

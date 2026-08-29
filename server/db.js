@@ -19,7 +19,14 @@ export const PERMISSIONS = [
   ['PURCHASE_ORDERS_VIEW', '查看采购订单'],
   ['PURCHASE_ORDERS_CREATE', '创建/修改采购订单'],
   ['PURCHASE_ORDERS_SUBMIT', '提交采购订单'],
-  ['PURCHASE_ORDERS_APPROVE', '审核采购订单']
+  ['PURCHASE_ORDERS_APPROVE', '审核采购订单'],
+  ['WAREHOUSES_VIEW', '查看仓库'],
+  ['WAREHOUSES_MANAGE', '管理仓库'],
+  ['INVENTORY_VIEW', '查看库存'],
+  ['INVENTORY_CHECK_CREATE', '创建盘点单'],
+  ['INVENTORY_CHECK_APPROVE', '审核盘点单'],
+  ['INVENTORY_TRANSFER_CREATE', '创建调拨单'],
+  ['INVENTORY_TRANSFER_APPROVE', '审核调拨单']
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -201,6 +208,77 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_orders_customer ON sales_orders(customer_id);
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+    CREATE TABLE IF NOT EXISTS warehouses (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      name TEXT NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      manager TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory (
+      warehouse_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (warehouse_id, product_id),
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_checks (
+      id TEXT PRIMARY KEY,
+      warehouse_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      system_quantity REAL NOT NULL,
+      actual_quantity REAL NOT NULL,
+      difference REAL NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+      creator_id TEXT NOT NULL,
+      reviewer_id TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      FOREIGN KEY (reviewer_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_transfers (
+      id TEXT PRIMARY KEY,
+      transfer_no TEXT NOT NULL UNIQUE,
+      from_warehouse_id TEXT NOT NULL,
+      to_warehouse_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','TRANSFERRED','CANCELLED')),
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      reviewer_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      FOREIGN KEY (reviewer_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_transfer_items (
+      id TEXT PRIMARY KEY,
+      transfer_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity REAL NOT NULL CHECK(quantity > 0),
+      FOREIGN KEY (transfer_id) REFERENCES inventory_transfers(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inventory_warehouse ON inventory(warehouse_id);
+    CREATE INDEX IF NOT EXISTS idx_inventory_product ON inventory(product_id);
+    CREATE INDEX IF NOT EXISTS idx_inventory_checks_status ON inventory_checks(status);
+    CREATE INDEX IF NOT EXISTS idx_inventory_transfers_status ON inventory_transfers(status);
+
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
   `);
 }
@@ -213,7 +291,8 @@ function seed(db) {
   const roles = [
     ['role-admin', 'ADMIN', '系统管理员', '管理用户、角色和全部业务', 1],
     ['role-sales', 'SALES', '销售专员', '维护客户并创建、提交销售订单和采购订单', 1],
-    ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单和采购订单', 1]
+    ['role-reviewer', 'REVIEWER', '销售主管', '查看并审核销售订单、采购订单和库存', 1],
+    ['role-warehouse', 'WAREHOUSE', '仓库管理员', '管理仓库和库存', 1]
   ];
   const insertRole = db.prepare('INSERT OR IGNORE INTO roles(id, code, name, description, system_role, created_at) VALUES (?, ?, ?, ?, ?, ?)');
   for (const role of roles) insertRole.run(...role, now);
@@ -221,8 +300,10 @@ function seed(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT'],
-    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE']
+    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE'],
+    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE']
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
@@ -236,7 +317,8 @@ function seed(db) {
   for (const user of [
     ['user-admin', 'admin', '系统管理员', 'admin123', 'role-admin'],
     ['user-sales', 'sales', '销售专员', 'sales123', 'role-sales'],
-    ['user-reviewer', 'reviewer', '销售主管', 'review123', 'role-reviewer']
+    ['user-reviewer', 'reviewer', '销售主管', 'review123', 'role-reviewer'],
+    ['user-warehouse', 'warehouse', '仓库管理员', 'warehouse123', 'role-warehouse']
   ]) {
     const password = hashPassword(user[3]);
     insertUser.run(user[0], user[1], user[2], password.hash, password.salt, user[4], now);
@@ -263,6 +345,24 @@ function seed(db) {
   insertProduct.run('product-001', 'MAT-001', '工业控制器', '台', 259900, 36, now, now);
   insertProduct.run('product-002', 'MAT-002', '智能传感器', '个', 32900, 180, now, now);
   insertProduct.run('product-003', 'MAT-003', '数据采集网关', '台', 128000, 52, now, now);
+  const insertWarehouse = db.prepare(`
+    INSERT OR IGNORE INTO warehouses(id, code, name, address, manager, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+  `);
+  insertWarehouse.run('warehouse-001', 'WH-001', '深圳总仓', '广东省深圳市南山区', '张经理', now, now);
+  insertWarehouse.run('warehouse-002', 'WH-002', '东莞分仓', '广东省东莞市长安镇', '李主管', now, now);
+
+  // Initialize inventory with stock from products
+  const insertInventory = db.prepare(`
+    INSERT OR IGNORE INTO inventory(warehouse_id, product_id, quantity, updated_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  for (const wh of ['warehouse-001', 'warehouse-002']) {
+    insertInventory.run(wh, 'product-001', wh === 'warehouse-001' ? 20 : 16, now);
+    insertInventory.run(wh, 'product-002', wh === 'warehouse-001' ? 100 : 80, now);
+    insertInventory.run(wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
+  }
+
 
   db.prepare(`INSERT OR IGNORE INTO sales_orders
     (id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,created_at,updated_at)
