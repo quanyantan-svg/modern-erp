@@ -40,6 +40,9 @@ const ic = {
   costAccounting: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
   iqc: <Icon d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>,
   oqc: <Icon d="M9 12l2 2 4-4m6 2a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>,
+  contacts: <Icon d="M17 20h5v-2a3 3 0 0 0-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 0 1 5.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 0 1 9.288 0M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM7 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/>,
+  followups: <Icon d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 0 1-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>,
+  activities: <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
@@ -80,6 +83,13 @@ const navGroups = [
   null,
       null,
         null,
+        null,
+    { label: 'CRM客户关系', items: [
+      { key: 'contacts', label: '联系人管理', icon: ic.contacts, any: ['CRM_VIEW', 'CRM_MANAGE'] },
+      { key: 'followups', label: '客户跟进', icon: ic.followups, any: ['CRM_VIEW', 'CRM_MANAGE'] },
+      { key: 'activities', label: '销售活动', icon: ic.activities, any: ['CRM_VIEW', 'CRM_MANAGE'] },
+    ]},
+    null,
     { label: '质量管理', items: [
       { key: 'iqc', label: 'IQC来料检验', icon: ic.iqc, any: ['QC_VIEW', 'QC_MANAGE'] },
       { key: 'oqc', label: 'OQC出货检验', icon: ic.oqc, any: ['QC_VIEW', 'QC_MANAGE'] },
@@ -144,6 +154,10 @@ export default function App() {
       productCosts: <ProductCosts user={user} notify={notify}/>,
       costRates: <CostRates user={user} notify={notify}/>,
       iqc: <IQCInspections user={user} notify={notify}/>,
+      oqc: <OQCInspections user={user} notify={notify}/>,
+      contacts: <Contacts user={user} notify={notify}/>,
+      followups: <Followups user={user} notify={notify}/>,
+      activities: <SalesActivities user={user} notify={notify}/>,
       oqc: <OQCInspections user={user} notify={notify}/>,
       costRates: <CostRates user={user} notify={notify}/>,
       accounting: <Accounting user={user} notify={notify}/>,
@@ -2537,6 +2551,312 @@ function OQCDetailModal({ inspection, onClose }) {
         </table>
       </div>
       <FormActions onClose={onClose}/>
+    </Modal>
+  );
+}
+// ============ Contacts ============
+
+function Contacts({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ search });
+    api(`/api/contacts?${params}`).then((r) => setItems(r.contacts)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <Panel title="联系人管理" subtitle="客户和供应商联系人档案">
+      <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>姓名</th><th>性别</th><th>职位</th><th>电话</th><th>手机</th><th>邮箱</th><th>所属单位</th><th>主联系人</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td><strong>{item.name}</strong></td>
+                <td>{item.gender === 'MALE' ? '男' : item.gender === 'FEMALE' ? '女' : '-'}</td>
+                <td>{item.position || '-'}</td>
+                <td>{item.phone || '-'}</td>
+                <td>{item.mobile || '-'}</td>
+                <td>{item.email || '-'}</td>
+                <td>{item.customerName || item.supplierName || '-'}</td>
+                <td>{item.is_primary ? '是' : ''}</td>
+                <td>{can(user, 'CRM_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无联系人"/>}
+      </div>
+      {editing && <ContactModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('联系人已保存'); }} />}
+    </Panel>
+  );
+}
+
+function ContactModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    customer_id: '', supplier_id: '', name: '', gender: '', position: '', phone: '', mobile: '', email: '', wechat: '', birthday: '', remark: '', is_primary: false, ...value
+  });
+  const [customers, setCustomers] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+
+  useEffect(() => {
+    api('/api/customers').then((r) => setCustomers(r.customers || []));
+    api('/api/suppliers').then((r) => setSuppliers(r.suppliers || []));
+  }, []);
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/contacts/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/contacts', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑联系人' : '新增联系人'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>姓名<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
+        <label>性别<select value={form.gender} onChange={(e) => setForm({...form, gender: e.target.value})}>
+          <option value="">未选择</option>
+          <option value="MALE">男</option>
+          <option value="FEMALE">女</option>
+        </select></label>
+        <label>职位<input value={form.position} onChange={(e) => setForm({...form, position: e.target.value})}/></label>
+        <label>电话<input value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})}/></label>
+        <label>手机<input value={form.mobile} onChange={(e) => setForm({...form, mobile: e.target.value})}/></label>
+        <label>邮箱<input type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})}/></label>
+        <label>微信<input value={form.wechat} onChange={(e) => setForm({...form, wechat: e.target.value})}/></label>
+        <label>生日<input type="date" value={form.birthday} onChange={(e) => setForm({...form, birthday: e.target.value})}/></label>
+        <label>客户<select value={form.customer_id} onChange={(e) => setForm({...form, customer_id: e.target.value, supplier_id: ''})}>
+          <option value="">无</option>
+          {customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
+        </select></label>
+        <label>供应商<select value={form.supplier_id} onChange={(e) => setForm({...form, supplier_id: e.target.value, customer_id: ''})}>
+          <option value="">无</option>
+          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}
+        </select></label>
+        <label className="check full"><input type="checkbox" checked={form.is_primary} onChange={(e) => setForm({...form, is_primary: e.target.checked})}/> 设为主联系人</label>
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Customer Followups ============
+
+function Followups({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [customerId, setCustomerId] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ customerId });
+    api(`/api/customer-followups?${params}`).then((r) => setItems(r.followups)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => {
+    api('/api/customers').then((r) => setCustomers(r.customers || []));
+    void load();
+  }, []);
+
+  const typeMap = { VISIT: '拜访', CALL: '电话', EMAIL: '邮件', MEETING: '会议', OTHER: '其他' };
+
+  return (
+    <Panel title="客户跟进" subtitle="客户拜访和跟进记录">
+      <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button>}/>
+      <div className="filters">
+        <label>客户<select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+          <option value="">全部客户</option>
+          {customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>跟进日期</th><th>客户</th><th>类型</th><th>内容</th><th>下次计划</th><th>下次日期</th><th>跟进人</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td>{item.followup_date}</td>
+                <td>{item.customerName}</td>
+                <td><Badge>{typeMap[item.followup_type] || item.followup_type}</Badge></td>
+                <td>{item.content}</td>
+                <td>{item.next_plan || '-'}</td>
+                <td>{item.next_date || '-'}</td>
+                <td>{item.handlerName}</td>
+                <td>{can(user, 'CRM_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无跟进记录"/>}
+      </div>
+      {editing && <FollowupModal customers={customers} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('跟进记录已保存'); }} />}
+    </Panel>
+  );
+}
+
+function FollowupModal({ customers, value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    customer_id: '', followup_type: 'VISIT', followup_date: new Date().toISOString().slice(0, 10),
+    content: '', next_plan: '', next_date: '', handler_id: user?.id || '', ...value
+  });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api('/api/customer-followups', { method: 'POST', body: form });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title="新增跟进记录" onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>客户<select value={form.customer_id} onChange={(e) => setForm({...form, customer_id: e.target.value})} required>
+          <option value="">选择客户</option>
+          {customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
+        </select></label>
+        <label>跟进方式<select value={form.followup_type} onChange={(e) => setForm({...form, followup_type: e.target.value})}>
+          <option value="VISIT">拜访</option>
+          <option value="CALL">电话</option>
+          <option value="EMAIL">邮件</option>
+          <option value="MEETING">会议</option>
+          <option value="OTHER">其他</option>
+        </select></label>
+        <label>跟进日期<input type="date" value={form.followup_date} onChange={(e) => setForm({...form, followup_date: e.target.value})} required/></label>
+        <label className="full">跟进内容<textarea value={form.content} onChange={(e) => setForm({...form, content: e.target.value})} rows={3} required/></label>
+        <label className="full">下次计划<input value={form.next_plan} onChange={(e) => setForm({...form, next_plan: e.target.value})}/></label>
+        <label>下次跟进日期<input type="date" value={form.next_date} onChange={(e) => setForm({...form, next_date: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Sales Activities ============
+
+function SalesActivities({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [status, setStatus] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ status });
+    api(`/api/sales-activities?${params}`).then((r) => setItems(r.activities)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const typeMap = { CAMPAIGN: '市场活动', SEMINAR: '研讨会', EXHIBITION: '展会', VISIT: '拜访', OTHER: '其他' };
+  const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
+
+  return (
+    <Panel title="销售活动" subtitle="市场活动和展会管理">
+      <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建活动</button>}/>
+      <div className="filters">
+        <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">全部</option>
+          <option value="PLANNING">计划中</option>
+          <option value="IN_PROGRESS">进行中</option>
+          <option value="COMPLETED">已完成</option>
+          <option value="CANCELLED">已取消</option>
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>活动编号</th><th>标题</th><th>类型</th><th>开始日期</th><th>预算</th><th>实际费用</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.activity_no}</td>
+                <td><strong>{item.title}</strong></td>
+                <td><Badge>{typeMap[item.activity_type]}</Badge></td>
+                <td>{item.start_date}</td>
+                <td className="number">{money(item.budget_cents)}</td>
+                <td className="number">{money(item.actual_cost_cents)}</td>
+                <td><Badge type={item.status === 'COMPLETED' ? 'success' : item.status === 'CANCELLED' ? 'danger' : ''}>{statusMap[item.status]}</Badge></td>
+                <td>
+                  <button className="row-action" onClick={() => setEditing(item)}>编辑</button>
+                  {can(user, 'CRM_MANAGE') && <button className="row-action danger" onClick={() => deleteActivity(item)}>删除</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无销售活动"/>}
+      </div>
+      {editing && <ActivityModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('活动已保存'); }} />}
+    </Panel>
+  );
+
+  async function deleteActivity(item) {
+    if (!confirm(`确认删除活动 "${item.title}"?`)) return;
+    try {
+      await api(`/api/sales-activities/${item.id}`, { method: 'DELETE' });
+      notify('活动已删除');
+      load();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+}
+
+function ActivityModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    activity_type: 'CAMPAIGN', title: '', content: '', start_date: new Date().toISOString().slice(0, 10),
+    end_date: '', location: '', budget_cents: 0, actual_cost_cents: 0, participants: '', status: 'PLANNING', result: '', ...value
+  });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/sales-activities/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/sales-activities', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑活动' : '新建活动'} onClose={onClose} wide>
+      <form className="form-grid" onSubmit={save}>
+        <label>活动类型<select value={form.activity_type} onChange={(e) => setForm({...form, activity_type: e.target.value})}>
+          <option value="CAMPAIGN">市场活动</option>
+          <option value="SEMINAR">研讨会</option>
+          <option value="EXHIBITION">展会</option>
+          <option value="VISIT">拜访</option>
+          <option value="OTHER">其他</option>
+        </select></label>
+        <label>活动标题<input value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} required/></label>
+        <label>开始日期<input type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} required/></label>
+        <label>结束日期<input type="date" value={form.end_date} onChange={(e) => setForm({...form, end_date: e.target.value})}/></label>
+        <label>活动地点<input value={form.location} onChange={(e) => setForm({...form, location: e.target.value})}/></label>
+        <label>预算(元)<input type="number" value={form.budget_cents / 100} step="0.01" onChange={(e) => setForm({...form, budget_cents: Math.round(e.target.value * 100)})}/></label>
+        <label>实际费用(元)<input type="number" value={form.actual_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, actual_cost_cents: Math.round(e.target.value * 100)})}/></label>
+        <label>状态<select value={form.status} onChange={(e) => setForm({...form, status: e.target.value})}>
+          <option value="PLANNING">计划中</option>
+          <option value="IN_PROGRESS">进行中</option>
+          <option value="COMPLETED">已完成</option>
+          <option value="CANCELLED">已取消</option>
+        </select></label>
+        <label className="full">参与人员<input value={form.participants} onChange={(e) => setForm({...form, participants: e.target.value})} placeholder="多人用逗号分隔"/></label>
+        <label className="full">活动内容<textarea value={form.content} onChange={(e) => setForm({...form, content: e.target.value})} rows={2}/></label>
+        <label className="full">活动结果<textarea value={form.result} onChange={(e) => setForm({...form, result: e.target.value})} rows={2}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
     </Modal>
   );
 }

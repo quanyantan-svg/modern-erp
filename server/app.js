@@ -3197,3 +3197,149 @@ async function getOQCDetail(db, res, actor, oqcId) {
   inspection.items = db.prepare(`SELECT oi.*, p.code productCode, p.name productName FROM oqc_inspection_items oi JOIN products p ON p.id=oi.product_id WHERE oi.inspection_id=?`).all(oqcId);
   return send(res, 200, { inspection });
 }
+// ============ Contacts ============
+
+async function listContacts(db, res, actor, url) {
+  allowAny(actor, ['CRM_VIEW', 'CRM_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE']);
+  const customerId = url.searchParams.get('customerId') || '';
+  const supplierId = url.searchParams.get('supplierId') || '';
+  let sql = `SELECT c.*, cu.name customerName, s.name supplierName, u.name creatorName
+    FROM contacts c
+    LEFT JOIN customers cu ON cu.id=c.customer_id
+    LEFT JOIN suppliers s ON s.id=c.supplier_id
+    LEFT JOIN users u ON u.id=c.creator_id
+    WHERE 1=1`;
+  const params = [];
+  if (customerId) { sql += ` AND c.customer_id=?`; params.push(customerId); }
+  if (supplierId) { sql += ` AND c.supplier_id=?`; params.push(supplierId); }
+  sql += ` ORDER BY c.created_at DESC`;
+  const contacts = db.prepare(sql).all(...params);
+  return send(res, 200, { contacts });
+}
+
+async function createContact(db, req, res, actor) {
+  allow(actor, 'CRM_MANAGE');
+  const body = await readJson(req);
+  const { customer_id, supplier_id, name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary } = body;
+  const now = new Date().toISOString();
+  const contactId = id();
+  
+  db.prepare(`INSERT INTO contacts(id,customer_id,supplier_id,name,gender,position,phone,mobile,email,wechat,birthday,remark,is_primary,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    contactId, customer_id || null, supplier_id || null, name, gender || null, position || '', phone || '', mobile || '', email || '', wechat || '', birthday || '', remark || '', is_primary ? 1 : 0, actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'CONTACT', contactId, `新增联系人 ${name}`);
+  return send(res, 200, { id: contactId });
+}
+
+async function updateContact(db, req, res, actor, contactId) {
+  allow(actor, 'CRM_MANAGE');
+  const body = await readJson(req);
+  const { name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare(`UPDATE contacts SET name=?,gender=?,position=?,phone=?,mobile=?,email=?,wechat=?,birthday=?,remark=?,is_primary=?,updated_at=? WHERE id=?`).run(
+    name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary ? 1 : 0, now, contactId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'CONTACT', contactId, `更新联系人 ${name}`);
+  return send(res, 200, { ok: true });
+}
+
+async function deleteContact(db, req, res, actor, contactId) {
+  allow(actor, 'CRM_MANAGE');
+  const contact = db.prepare('SELECT * FROM contacts WHERE id=?').get(contactId);
+  if (!contact) throw new HttpError(404, '联系人不存在');
+  db.prepare('DELETE FROM contacts WHERE id=?').run(contactId);
+  audit(db, actor.id, 'DELETE', 'CONTACT', contactId, `删除联系人 ${contact.name}`);
+  return send(res, 200, { ok: true });
+}
+
+// ============ Customer Followups ============
+
+async function listFollowups(db, res, actor, url) {
+  allowAny(actor, ['CRM_VIEW', 'CRM_MANAGE']);
+  const customerId = url.searchParams.get('customerId') || '';
+  let sql = `SELECT f.*, cu.name customerName, u.name handlerName, creator.name creatorName
+    FROM customer_followups f
+    LEFT JOIN customers cu ON cu.id=f.customer_id
+    LEFT JOIN users u ON u.id=f.handler_id
+    LEFT JOIN users creator ON creator.id=f.creator_id
+    WHERE 1=1`;
+  const params = [];
+  if (customerId) { sql += ` AND f.customer_id=?`; params.push(customerId); }
+  sql += ` ORDER BY f.followup_date DESC, f.created_at DESC`;
+  const followups = db.prepare(sql).all(...params);
+  return send(res, 200, { followups });
+}
+
+async function createFollowup(db, req, res, actor) {
+  allow(actor, 'CRM_MANAGE');
+  const body = await readJson(req);
+  const { customer_id, followup_type, followup_date, content, next_plan, next_date, handler_id } = body;
+  const now = new Date().toISOString();
+  const followupId = id();
+  
+  db.prepare(`INSERT INTO customer_followups(id,customer_id,followup_type,followup_date,content,next_plan,next_date,handler_id,creator_id,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+    followupId, customer_id, followup_type, followup_date, content, next_plan || '', next_date || '', handler_id || actor.id, actor.id, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'CUSTOMER_FOLLOWUP', followupId, `新增客户跟进 ${content.slice(0, 20)}`);
+  return send(res, 200, { id: followupId });
+}
+
+// ============ Sales Activities ============
+
+async function listSalesActivities(db, res, actor, url) {
+  allowAny(actor, ['CRM_VIEW', 'CRM_MANAGE']);
+  const status = url.searchParams.get('status') || '';
+  let sql = `SELECT sa.*, u.name creatorName FROM sales_activities sa LEFT JOIN users u ON u.id=sa.creator_id WHERE 1=1`;
+  const params = [];
+  if (status) { sql += ` AND sa.status=?`; params.push(status); }
+  sql += ` ORDER BY sa.start_date DESC`;
+  const activities = db.prepare(sql).all(...params);
+  return send(res, 200, { activities });
+}
+
+async function createSalesActivity(db, req, res, actor) {
+  allow(actor, 'CRM_MANAGE');
+  const body = await readJson(req);
+  const { activity_type, title, content, start_date, end_date, location, budget_cents, participants, status, result } = body;
+  const now = new Date().toISOString();
+  const activityId = id();
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM sales_activities WHERE start_date LIKE ?').get(start_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
+  const activityNo = `SA-${start_date.replace(/-/g,'')}-${seq}`;
+  
+  db.prepare(`INSERT INTO sales_activities(id,activity_no,activity_type,title,content,start_date,end_date,location,budget_cents,actual_cost_cents,participants,status,result,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)`).run(
+    activityId, activityNo, activity_type, title, content, start_date, end_date || '', location || '', budget_cents || 0, participants || '', status || 'PLANNING', result || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'SALES_ACTIVITY', activityId, `新建销售活动 ${title}`);
+  return send(res, 200, { id: activityId, activity_no: activityNo });
+}
+
+async function updateSalesActivity(db, req, res, actor, activityId) {
+  allow(actor, 'CRM_MANAGE');
+  const body = await readJson(req);
+  const { title, content, start_date, end_date, location, budget_cents, actual_cost_cents, participants, status, result } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare(`UPDATE sales_activities SET title=?,content=?,start_date=?,end_date=?,location=?,budget_cents=?,actual_cost_cents=?,participants=?,status=?,result=?,updated_at=? WHERE id=?`).run(
+    title, content, start_date, end_date || '', location || '', budget_cents || 0, actual_cost_cents || 0, participants || '', status, result || '', now, activityId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'SALES_ACTIVITY', activityId, `更新销售活动 ${title}`);
+  return send(res, 200, { ok: true });
+}
+
+async function deleteSalesActivity(db, req, res, actor, activityId) {
+  allow(actor, 'CRM_MANAGE');
+  const activity = db.prepare('SELECT * FROM sales_activities WHERE id=?').get(activityId);
+  if (!activity) throw new HttpError(404, '活动不存在');
+  db.prepare('DELETE FROM sales_activities WHERE id=?').run(activityId);
+  audit(db, actor.id, 'DELETE', 'SALES_ACTIVITY', activityId, `删除销售活动 ${activity.title}`);
+  return send(res, 200, { ok: true });
+}
