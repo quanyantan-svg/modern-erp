@@ -1,12 +1,6 @@
-# Modern ERP：基础资料与销售订单最小重构版
+# Modern ERP：现代企业管理信息系统
 
-这是从方天云端 ERP B9V27 中提炼出的独立练习项目，覆盖：
-
-```
-登录 → 用户/角色 → 客户/供应商 → 货品 → 销售订单 → 提交 → 审核/驳回 → 查看与追踪
-```
-
-它不会连接或修改原 ERP 数据库。第一次启动会自动创建本地 `data/erp.db`，并写入演示账号和基础资料。
+这是从方天云端 ERP B9V27 中提炼出的独立练习项目，覆盖企业核心业务模块。
 
 ## 技术栈
 
@@ -15,7 +9,6 @@
 - 数据库：Node.js 内置 SQLite
 - 认证：随机 Bearer Token；数据库只保存 Token 哈希
 - 密码：scrypt 加盐哈希
-- 测试：Node.js 内置测试框架
 
 需要 Node.js 22.13 或更高版本，推荐 Node.js 24。
 
@@ -38,86 +31,113 @@ pnpm start
 | reviewer | review123 | 销售主管 | 审核或驳回待审核订单 |
 | admin | admin123 | 系统管理员 | 管理用户、角色和全部基础资料 |
 | warehouse | warehouse123 | 仓库管理员 | 管理仓库和库存 |
-| accounting | accounting123 | 财务专员 | 查看财务凭证 |
+| accounting | accounting123 | 财务专员 | 全部财务功能 |
 
-## 目录结构
+## 开发阶段
 
-```
-modern-erp/
-├─ server/             后端 API、数据库结构和种子数据
-│   ├─ index.js        服务入口，HTTP服务器创建
-│   ├─ app.js          API路由、权限校验、业务规则
-│   ├─ db.js           SQLite表结构、种子数据、工具函数
-│   └─ reset-data.js   数据重置脚本
-├─ src/                React前端
-│   ├─ main.jsx        应用入口
-│   ├─ App.jsx         主应用组件，包含所有业务页面
-│   ├─ api.js          API调用封装
-│   └─ styles.css      全局样式
-├─ test/               端到端业务接口测试
-├─ data/               运行时自动生成的SQLite数据库
-├─ dist/               构建后的前端
-├─ docs/               详细设计文档
-├─ log/                开发日志，按天存放
-├─ scripts/            开发启动脚本
-└─ start-local.ps1     Windows本地启动脚本
-```
+### 第一阶段：财务闭环 ✓ (2-3周)
+- [x] 总账系统 + 凭证管理
+- [x] 辅助核算（部门/项目/客户/供应商）
+- [x] 凭证字与凭证模板
+- [x] 出纳管理增强
+- [x] 月结/年结
+- [x] 银行对账
+- [x] 会计报表
+
+### 第二阶段：制造深化 ✓ (2-3周)
+- [x] MRP物料需求计划
+- [x] 工作中心管理
+- [x] 工序管理（工艺路线）
+- [x] 生产人工记录
+- [x] 成本核算增强
+
+### 第三阶段：质量供应链 ✓ (2周)
+- [x] IQC来料检验
+- [x] OQC出货检验
+- [x] 供应商评估
+
+### 第四阶段：管理扩展 ✓ (3-4周)
+- [x] CRM客户关系管理
+- [x] OA办公审批
+- [x] 预警系统
+- [x] 报表中心
 
 ## 模块清单
 
-| 模块 | 页面 | API | 说明 |
-|------|------|-----|------|
-| 登录 | Login | /api/auth/* | 演示账号切换、认证 |
-| 工作台 | Dashboard | /api/dashboard | 业务概览统计 |
-| 客户资料 | Customers | /api/customers | 客户增删改查 |
-| 供应商资料 | Suppliers | /api/suppliers | 供应商增删改查 |
-| 货品资料 | Products | /api/products | 货品增删改查 |
-| 销售订单 | Orders | /api/orders | 创建/编辑/提交 |
-| 订单审核 | Approvals | /api/orders/*/approve/reject | 审批/驳回 |
-| 供应商资料 | Suppliers | /api/suppliers | 供应商增删改查 |
-| 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
-| 仓库资料 |
-| 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 现金日记账、银行账户、票据 |
-| 固定资产 | FixedAssets | /api/fixed-assets | 固定资产及折旧管理 |
-| 成本会计 | CostAccounting | /api/product-costs, /api/cost-rates | 标准成本、费用项目、工单成本 |
-| 质量管理 | QualityControl | /api/iqc, /api/oqc | IQC来料检验、OQC出货检验 |
-| CRM客户关系 | CRM | /api/contacts, /api/customer-followups, /api/sales-activities | 联系人、客户跟进、销售活动 |
-| 项目管理 | ProjectManagement | /api/projects, /api/project-tasks, /api/timesheets | 项目立项、任务管理、工时记录 |
-| 审批流 | Workflow | /api/workflows, /api/approval-records | 审批流程定义和管理 |
-| 通知中心 | Notifications | /api/notifications | 系统通知和消息 |
-| 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 现金日记账、银行账户、票据 |
-| 固定资产 | FixedAssets | /api/fixed-assets | 固定资产及折旧管理 | Warehouses | /api/warehouses | 仓库增删改查 |
-| 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 日记账、银行账户、票据 |
-| 库存管理 | Inventory | /api/inventory, /api/inventory-checks, /api/inventory-transfers | 库存查询/盘点/调拨 |
-| 财务凭证 | Accounting | /api/accounting-subjects, /api/accounting-vouchers | 会计科目和凭证 |
-| 用户与角色 | UsersRoles | /api/users, /api/roles | 权限管理 |
+### 财务会计模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| 会计科目 | /api/accounting-subjects | 科目体系、辅助核算属性 |
+| 会计凭证 | /api/accounting-vouchers | 凭证管理 |
+| 凭证字 | /api/voucher-words | 凭证字号管理 |
+| 凭证模板 | /api/voucher-templates | 凭证模板 |
+| 部门核算 | /api/departments | 部门辅助核算 |
+| 项目核算 | /api/aux-projects | 项目辅助核算 |
+| 币种管理 | /api/currencies | 多币种汇率 |
+| 期间管理 | /api/period-closures | 月结/年结 |
+| 银行对账 | /api/bank-reconciliations | 银行对账 |
 
-## 练习版边界
+### 制造模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| MRP计划 | /api/mrp-plans | 物料需求计划 |
+| 工作中心 | /api/work-centers | 工作中心 |
+| 工序管理 | /api/routing-operations | 工艺路线 |
+| 人工记录 | /api/labor-records | 生产人工 |
 
-当前版本故意不包含应收账款、复杂多级审批、多组织、多币种和原数据库迁移。
+### 质量模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| IQC检验 | /api/iqc | 来料检验 |
+| OQC检验 | /api/oqc | 出货检验 |
+| 供应商评估 | /api/supplier-evaluations | 供应商评分 |
+
+### 管理模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| 请假申请 | /api/leave-requests | OA请假 |
+| 费用报销 | /api/expense-claims | OA报销 |
+| 预警规则 | /api/alert-rules | 预警设置 |
+| 预警记录 | /api/alerts | 预警消息 |
+
+### 报表模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| 试算平衡表 | /api/reports/trial-balance | 科目余额表 |
+| 明细账 | /api/reports/subject-ledger | 明细分类账 |
+| 财务报表 | /api/reports/financial-summary | 经营汇总 |
+| 库存状态 | /api/reports/inventory-status | 库存分析 |
+| 销售分析 | /api/reports/sales-analysis | 销售分析 |
+
+### 基础模块
+| 模块 | API | 说明 |
+|------|-----|------|
+| 登录认证 | /api/auth/* | 用户认证 |
+| 工作台 | /api/dashboard | 业务概览 |
+| 客户管理 | /api/customers | 客户档案 |
+| 供应商管理 | /api/suppliers | 供应商档案 |
+| 货品管理 | /api/products | 产品档案 |
+| 销售订单 | /api/orders | 订单管理 |
+| 采购订单 | /api/purchase-orders | 采购管理 |
+| 仓库管理 | /api/warehouses | 仓库设置 |
+| 库存管理 | /api/inventory | 库存查询 |
+| 入库出库 | /api/purchase-receipts | 收发货 |
+| 应收应付 | /api/accounts-receivable | 账款管理 |
+| 出纳管理 | /api/cash-journals | 现金银行 |
+| 固定资产 | /api/fixed-assets | 资产管理 |
 
 ---
 
 ## 重构记录
 
-本项目从旧版 ERP 系统逐步重构而来，每次重构的功能模块会及时更新至此文档。
-
-| 日期 | 模块 | 说明 |
-|------|------|------|
-| 2026-08-29 | 供应商资料 | 新增 suppliers 表、API路由，前端组件 |
-| 2026-08-29 | 采购订单 | 新增 purchase_orders 表、API路由，前端组件 |
-| 2026-08-29 | 仓库与库存 | 新增 warehouses/inventory/inventory_checks/inventory_transfers 表 |
-| 2026-08-29 | 财务凭证 | 新增 accounting_subjects/vouchers/entries 表，自动生成凭证 |
-| 2026-08-29 | 入库/出库 | 新增 purchase_receipts/sales_deliveries/sales_returns/purchase_returns/inventory_transactions 表及全部 API 和前端组件 |
-| 2026-08-29 | 应收/应付账款 | 新增 accounts_receivable/accounts_payable/payment_collections/payment_disbursements 表及全部 API 和前端组件 |
-| 2026-08-29 | BOM+生产工单 |
-
-| 2026-08-30 | 出纳管理+固定资产 | 新增 cash_journals/bank_accounts/bills/fixed_assets 表及全部 API 和前端组件 |
-| 2026-08-30 | 成本会计 | 新增 product_costs/cost_rates/production_costs 表及全部 API 和前端组件 |
-| 2026-08-30 | 质量管理 | 新增 iqc_inspections/oqc_inspections 表及全部 API 和前端组件 |
-| 2026-08-30 | CRM客户关系 | 新增 contacts/customer_followups/sales_activities 表及全部 API 和前端组件 |
-| 2026-08-30 | 项目管理 | 新增 projects/project_tasks/project_timesheets 表及全部 API 和前端组件 |
-| 2026-08-30 | 增强功能 | 新增 notifications/approval_workflows/approval_records 表及全部 API 和前端组件 |
-
-| 2026-08-30 | 出纳管理+固定资产 | 新增 cash_journals/bank_accounts/bills/fixed_assets 表及全部 API 和前端组件 | 新增 boms/bom_items/production_orders/production_order_items/production_outputs 表及全部 API 和前端组件 |
-
+| 日期 | 阶段 | 模块 | 说明 |
+|------|------|------|------|
+| 2026-08-29 | - | 基础框架 | 登录、销售订单基础流程 |
+| 2026-08-29 | - | 供应链 | 供应商、采购、仓库、库存 |
+| 2026-08-29 | - | 财务 | 会计凭证、入库出库、应收应付 |
+| 2026-08-29 | - | 生产 | BOM、生产工单 |
+| 2026-08-30 | - | 扩展 | 出纳、固定资产、成本、质检、CRM |
+| **2026-08-30** | **第一阶段** | **财务闭环** | **辅助核算、月结年结、银行对账、报表** |
+| **2026-08-30** | **第二阶段** | **制造深化** | **MRP、工作中心、工序、人工记录** |
+| **2026-08-30** | **第三阶段** | **质量供应链** | **IQC/OQC检验、供应商评估** |
+| **2026-08-30** | **第四阶段** | **管理扩展** | **OA审批、预警系统、经营报表** |

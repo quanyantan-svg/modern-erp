@@ -4,328 +4,163 @@
 
 ## 版本信息
 
-| 版本 | 日期 | 说明 |
-|------|------|------|
-| 1.0.0 | 2026-08-29 | 初始版本，包含登录、销售订单基础流程 |
-| 1.1.0 | 2026-08-29 | 新增供应商资料模块（采购模块基础） |
-| 1.2.0 | 2026-08-29 | 新增采购订单模块 |
-| 1.3.0 | 2026-08-29 | 新增仓库与库存模块 |
-| 1.4.0 | 2026-08-29 | 新增财务凭证模块 |
-| 1.5.0 | 2026-08-29 | 新增入库/出库模块（采购入库、销售出库、退货管理、库存流水） |
-| 1.6.0 | 2026-08-29 | 新增应收/应付账款模块（应收账款、应付账款、收款单、付款单） |
-| 1.7.0 | 2026-08-29 | 新增BOM+生产工单模块（BOM清单、生产工单） |
-| 1.8.0 | 2026-08-30 | 新增出纳管理+固定资产模块 |
-| 1.9.0 | 2026-08-30 | 新增成本会计+质量管理+CRM+项目管理+增强功能模块 |
+| 版本 | 日期 | 阶段 | 说明 |
+|------|------|------|------|
+| 1.0.0 | 2026-08-29 | - | 初始版本，包含登录、销售订单基础流程 |
+| 1.1.0-1.7.0 | 2026-08-29 | - | 供应链、财务、生产模块基础 |
+| 1.8.0 | 2026-08-30 | - | 出纳管理+固定资产 |
+| 1.9.0 | 2026-08-30 | - | 成本会计+质量管理+CRM |
+| **2.0.0** | **2026-08-30** | **第一阶段** | **财务闭环（辅助核算、月结年结、银行对账、报表）** |
+| **2.1.0** | **2026-08-30** | **第二阶段** | **制造深化（MRP、工作中心、工序、人工记录）** |
+| **2.2.0** | **2026-08-30** | **第三阶段** | **质量供应链（IQC/OQC检验、供应商评估）** |
+| **2.3.0** | **2026-08-30** | **第四阶段** | **管理扩展（OA审批、预警、报表中心）** |
 
 ---
 
-## 一、基础资料模块
+## 第一阶段：财务闭环
 
-### 1.1 ~ 1.4 （同前版本）
+### 1.1 会计科目管理
+- 科目体系维护（资产/负债/权益/损益）
+- 辅助核算属性设置
+- 现金/银行科目标识
 
----
+### 1.2 会计凭证
+- 凭证填制与审核
+- 凭证字号管理
+- 凭证模板
+- 辅助核算分录
 
-## 二、财务模块
+### 1.3 辅助核算
+- 部门核算
+- 项目核算
+- 客户核算
+- 供应商核算
 
-### 2.1 会计科目 (Accounting Subjects)
+### 1.4 期间管理
+- 会计期间定义
+- 月末结账
+- 年末结账
+- 反结账
 
-#### 功能说明
-维护企业会计科目体系，采用标准科目结构。
+### 1.5 银行对账
+- 银行对账单导入
+- 对账记录
+- 差异分析
 
-#### 科目分类
-- **资产类**：库存现金、银行存款、应收账款、其他应收款、库存商品
-- **负债类**：应付账款、应付票据
-- **所有者权益类**：实收资本、利润分配
-- **损益类**：主营业务收入、主营业务成本
-
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| code | TEXT | 科目编码，唯一 |
-| name | TEXT | 科目名称 |
-| type | TEXT | 科目类型：ASSET/ LIABILITY/ EQUITY/ REVENUE/ EXPENSE |
-| direction | TEXT | 余额方向：DEBIT/CREDIT |
-| parent_id | TEXT | 父级科目ID |
-| active | INTEGER | 启用状态 |
-
-#### API接口
-- GET /api/accounting-subjects - 列表查询
-
-#### 权限控制
-- 查看：ACCOUNTING_VIEW
-
----
-
-### 2.2 会计凭证 (Accounting Vouchers)
-
-#### 功能说明
-记录业务单据生成的会计凭证，每张凭证包含多个分录。
-
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| voucher_no | TEXT | 凭证号，唯一，格式 VCH-YYYYMMDD-XXXXXX |
-| source_type | TEXT | 来源类型：SALES_ORDER/PURCHASE_ORDER/INVENTORY_TRANSFER |
-| source_id | TEXT | 来源单据ID |
-| voucher_date | TEXT | 凭证日期 |
-| remark | TEXT | 备注 |
-| creator_id | TEXT | 制单人ID |
-| created_at | TEXT | 创建时间 |
-
-#### 凭证分录 (accounting_entries)
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| voucher_id | TEXT | 凭证ID |
-| subject_id | TEXT | 科目ID |
-| direction | TEXT | 方向：DEBIT/CREDIT |
-| amount_cents | INTEGER | 金额（分） |
-| summary | TEXT | 摘要 |
-
-#### API接口
-- GET /api/accounting-vouchers - 凭证列表
-- GET /api/accounting-vouchers/:id - 凭证详情（含分录）
-
-#### 权限控制
-- 查看：ACCOUNTING_VIEW
+### 1.6 会计报表
+- 试算平衡表
+- 明细分类账
+- 凭证汇总表
+- 日报表
 
 ---
 
-### 2.3 凭证自动生成规则
+## 第二阶段：制造深化
 
-#### 销售订单审核通过
-- 借方：应收账款（按客户） - 金额 = 订单总额
-- 贷方：主营业务收入 - 金额 = 订单总额
+### 2.1 MRP物料需求计划
+- 需求来源（销售订单/预测）
+- 毛需求计算
+- 净需求计算
+- 采购建议生成
 
-#### 采购订单审核通过
-- 借方：库存商品 - 金额 = 订单总额
-- 贷方：应付账款（按供应商） - 金额 = 订单总额
+### 2.2 工作中心管理
+- 工作中心定义
+- 产能管理
+- 效率设置
 
-#### 库存调拨确认
-- 借方：库存商品（目标仓库）
-- 贷方：库存商品（源仓库）
-- 金额 = 调拨货品金额
+### 2.3 工序管理
+- 工艺路线定义
+- 工序顺序
+- 工序时间
 
----
-
-## 三、权限体系
-
-### 新增权限
-| 权限码 | 名称 | 说明 |
-|--------|------|------|
-| ACCOUNTING_VIEW | 查看财务凭证 | 查看会计科目和凭证 |
-
-### 角色权限分配
-| 角色 | 新增权限 |
-|------|----------|
-| 系统管理员 | ACCOUNTING_VIEW |
-| 财务专员 | ACCOUNTING_VIEW |
-| 销售主管 | ACCOUNTING_VIEW |
-| 仓库管理员 | - |
+### 2.4 生产人工
+- 工时记录
+- 人工成本归集
 
 ---
 
-## 四、变更记录
+## 第三阶段：质量供应链
 
-| 日期 | 版本 | 变更内容 |
-|------|------|----------|
-| 2026-08-29 | 1.0.0 | 初始版本 |
-| 2026-08-29 | 1.1.0 | 新增供应商资料模块 |
-| 2026-08-29 | 1.2.0 | 新增采购订单模块 |
-| 2026-08-29 | 1.3.0 | 新增仓库与库存模块 |
-| 2026-08-29 | 1.4.0 | 新增财务凭证模块 |
+### 3.1 IQC来料检验
+- 检验单创建
+- 抽样检验
+- 合格/不合格判定
+- 检验结果处理
 
----
+### 3.2 OQC出货检验
+- 出货前检验
+- 质量判定
 
-## 五、出纳管理模块
-
-### 5.1 现金日记账 (Cash Journals)
-
-#### 功能说明
-记录企业现金和银行存款的收付款业务，支持按日期范围和账户类型筛选。
-
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| journal_no | TEXT | 单据号，唯一 |
-| journal_type | TEXT | 业务类型：RECEIPT/PAYMENT/TRANSFER |
-| account_type | TEXT | 账户类型：CASH/BANK |
-| bank_id | TEXT | 银行账户ID |
-| amount_cents | INTEGER | 金额（分） |
-| direction | TEXT | 方向：IN/OUT |
-| counterparty_type | TEXT | 对方类型：CUSTOMER/SUPPLIER |
-| counterparty_id | TEXT | 对方ID |
-| counterparty_name | TEXT | 对方名称 |
-| summary | TEXT | 摘要 |
-| journal_date | TEXT | 业务日期 |
-| operator_id | TEXT | 操作员ID |
-
-#### API接口
-- GET /api/cash-journals - 列表查询（支持搜索、日期筛选）
-- POST /api/cash-journals - 新增记录
-
-#### 权限控制
-- 查看：CASH_JOURNALS_VIEW
-- 管理：CASH_JOURNALS_MANAGE
+### 3.3 供应商评估
+- 质量评分
+- 交期评分
+- 价格评分
+- 服务评分
+- 综合评级
 
 ---
 
-### 5.2 银行账户 (Bank Accounts)
+## 第四阶段：管理扩展
 
-#### 功能说明
-管理企业银行账户信息，记录各账户余额。
+### 4.1 OA请假申请
+- 请假申请提交
+- 审批流程
+- 假期统计
 
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| bank_name | TEXT | 开户银行 |
-| account_no | TEXT | 账号 |
-| account_name | TEXT | 户名 |
-| balance_cents | INTEGER | 当前余额（分） |
-| initial_balance_cents | INTEGER | 期初余额（分） |
-| active | INTEGER | 启用状态 |
+### 4.2 OA费用报销
+- 报销单创建
+- 费用明细
+- 审批流程
 
-#### API接口
-- GET /api/bank-accounts - 列表
-- POST /api/bank-accounts - 新增
-- PATCH /api/bank-accounts/:id - 编辑
+### 4.3 预警系统
+- 预警规则设置
+- 库存预警
+- 账款预警
+- 预警消息处理
 
-#### 权限控制
-- 查看：BANK_ACCOUNTS_VIEW
-- 管理：BANK_ACCOUNTS_MANAGE
+### 4.4 报表中心
+- 经营汇总
+- 库存状态
+- 销售分析
 
 ---
 
-### 5.3 票据管理 (Bills)
+## 权限清单
 
-#### 功能说明
-管理企业应收/应付票据，跟踪票据状态变化。
-
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| bill_type | TEXT | 票据类型：RECEivable/PAYable |
-| bill_no | TEXT | 票据号 |
-| counterparty_type | TEXT | 对方类型：CUSTOMER/SUPPLIER |
-| counterparty_id | TEXT | 对方ID |
-| face_amount_cents | INTEGER | 票面金额（分） |
-| issue_date | TEXT | 出票日期 |
-| due_date | TEXT | 到期日期 |
-| status | TEXT | 状态：PENDING/ACCEPTED/DISCOUNTED/PAID/CANCELLED |
-
-#### API接口
-- GET /api/bills - 列表（支持类型和状态筛选）
-- POST /api/bills - 新增
-- PATCH /api/bills/:id - 编辑
-
-#### 权限控制
-- 查看：BILLS_VIEW
-- 管理：BILLS_MANAGE
-
----
-
-## 六、固定资产模块
-
-### 6.1 固定资产 (Fixed Assets)
-
-#### 功能说明
-管理企业固定资产，记录资产信息及折旧计提。
-
-#### 字段定义
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | TEXT | UUID主键 |
-| asset_code | TEXT | 资产编号 |
-| asset_name | TEXT | 资产名称 |
-| category | TEXT | 资产类别 |
-| purchase_date | TEXT | 购置日期 |
-| purchase_amount_cents | INTEGER | 原值（分） |
-| useful_life_months | INTEGER | 使用期限（月） |
-| salvage_value_cents | INTEGER | 残值（分） |
-| depreciation_method | TEXT | 折旧方法：STRAIGHT_LINE/NONE |
-| monthly_depreciation_cents | INTEGER | 月折旧额（分） |
-| net_value_cents | INTEGER | 净值（分） |
-| status | TEXT | 状态：IN_USE/MAINTENANCE/SCRAPPED/SOLD |
-
-#### API接口
-- GET /api/fixed-assets - 列表
-- POST /api/fixed-assets - 新增
-- PATCH /api/fixed-assets/:id - 编辑
-- POST /api/fixed-assets/depreciation - 计提折旧
-- GET /api/fixed-assets/:id/depreciations - 折旧记录
-
-#### 权限控制
-- 查看：FIXED_ASSETS_VIEW
-- 管理：FIXED_ASSETS_MANAGE
-
----
-
-## 七、新增权限清单
-
-| 权限码 | 名称 | 说明 |
-|--------|------|------|
-| CASH_JOURNALS_VIEW | 查看现金日记账 | 查看现金和银行存款记录 |
-| CASH_JOURNALS_MANAGE | 管理现金日记账 | 新增/编辑日记账记录 |
-| BANK_ACCOUNTS_VIEW | 查看银行账户 | 查看银行账户信息 |
-| BANK_ACCOUNTS_MANAGE | 管理银行账户 | 新增/编辑银行账户 |
-| BILLS_VIEW | 查看票据 | 查看应收/应付票据 |
-| BILLS_MANAGE | 管理票据 | 新增/编辑票据 |
-| FIXED_ASSETS_VIEW | 查看固定资产 | 查看固定资产信息 |
-| FIXED_ASSETS_MANAGE | 管理固定资产 | 新增/编辑资产、计提折旧 |
----
-
-## 八、CRM客户关系模块
-
-### 8.1 联系人管理
-客户和供应商联系人档案管理。
-
-### 8.2 客户跟进
-拜访、电话、邮件等跟进记录。
-
-### 8.3 销售活动
-市场活动、展会、研讨会管理。
-
----
-
-## 九、项目管理模块
-
-### 9.1 项目立项
-项目信息、预算、进度管理。
-
-### 9.2 任务管理
-项目任务分配、优先级、进度跟踪。
-
-### 9.3 工时记录
-项目工时填报和统计。
-
----
-
-## 十、审批流与通知
-
-### 10.1 审批流程
-定义和管理审批流程，支持多级审批。
-
-### 10.2 通知中心
-系统消息和提醒。
-
----
-
-## 十一、新增权限清单
-
-| 权限码 | 名称 |
-|--------|------|
-| COST_VIEW | 查看成本数据 |
-| COST_MANAGE | 管理成本设置 |
-| QC_VIEW | 查看质检数据 |
-| QC_MANAGE | 管理质检 |
-| CRM_VIEW | 查看客户跟进 |
-| CRM_MANAGE | 管理客户跟进 |
-| PROJECT_VIEW | 查看项目 |
-| PROJECT_MANAGE | 管理项目 |
-| WORKFLOW_VIEW | 查看审批流 |
-| WORKFLOW_MANAGE | 管理审批流 |
+| 权限码 | 名称 | 所属模块 |
+|--------|------|----------|
+| ACCOUNTING_VIEW | 查看财务凭证 | 财务 |
+| ACCOUNTING_MANAGE | 管理会计凭证 | 财务 |
+| DEPARTMENTS_VIEW | 查看部门 | 财务 |
+| DEPARTMENTS_MANAGE | 管理部门 | 财务 |
+| PROJECTS_VIEW | 查看项目核算 | 财务 |
+| PROJECTS_MANAGE | 管理项目核算 | 财务 |
+| CURRENCY_VIEW | 查看币种 | 财务 |
+| CURRENCY_MANAGE | 管理币种 | 财务 |
+| VOUCHER_WORDS_VIEW | 查看凭证字 | 财务 |
+| VOUCHER_WORDS_MANAGE | 管理凭证字 | 财务 |
+| PERIOD_CLOSE_VIEW | 查看月结年结 | 财务 |
+| PERIOD_CLOSE_MANAGE | 执行月结年结 | 财务 |
+| BANK_RECONCILE_VIEW | 查看银行对账 | 财务 |
+| BANK_RECONCILE_MANAGE | 管理银行对账 | 财务 |
+| REPORT_VIEW | 查看报表 | 报表 |
+| MRP_VIEW | 查看MRP计划 | 制造 |
+| MRP_MANAGE | 管理MRP计划 | 制造 |
+| WORK_CENTERS_VIEW | 查看工作中心 | 制造 |
+| WORK_CENTERS_MANAGE | 管理工作中心 | 制造 |
+| ROUTING_VIEW | 查看工序 | 制造 |
+| ROUTING_MANAGE | 管理工序 | 制造 |
+| PRODUCTION_COSTS_VIEW | 查看生产成本 | 制造 |
+| PRODUCTION_COSTS_MANAGE | 管理生产成本 | 制造 |
+| IQC_VIEW | 查看来料检验 | 质量 |
+| IQC_MANAGE | 管理来料检验 | 质量 |
+| OQC_VIEW | 查看出货检验 | 质量 |
+| OQC_MANAGE | 管理出货检验 | 质量 |
+| SUPPLIER_EVAL_VIEW | 查看供应商评估 | 质量 |
+| SUPPLIER_EVAL_MANAGE | 管理供应商评估 | 质量 |
+| OA_LEAVE_VIEW | 查看请假 | OA |
+| OA_LEAVE_MANAGE | 管理请假 | OA |
+| OA_EXPENSE_VIEW | 查看报销 | OA |
+| OA_EXPENSE_MANAGE | 管理报销 | OA |
+| ALERT_RULES_VIEW | 查看预警规则 | 预警 |
+| ALERT_RULES_MANAGE | 管理预警规则 | 预警 |
