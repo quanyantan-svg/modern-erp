@@ -1738,6 +1738,143 @@ async function updateBill(db, req, res, actor, billId) {
 }
 
 
+
+
+// ============ 固定资产管理 ============
+
+function listFixedAssets(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const where = [];
+  const params = [];
+  const status = url.searchParams.get('status');
+  const assetType = url.searchParams.get('asset_type');
+  
+  if (status) { where.push('status = ?'); params.push(status); }
+  if (assetType) { where.push('asset_type = ?'); params.push(assetType); }
+  
+  const sql = `SELECT fa.*, u.display_name creatorName,
+    (SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id) as total_depreciation
+    FROM fixed_assets fa
+    JOIN users u ON u.id = fa.creator_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY fa.created_at DESC LIMIT 100`;
+  
+  const assets = db.prepare(sql).all(...params);
+  
+  // 统计汇总
+  const summary = {
+    totalCount: assets.length,
+    totalOriginal: assets.reduce((s, a) => s + a.purchase_amount_cents, 0),
+    totalDepreciation: assets.reduce((s, a) => s + a.accumulated_depreciation_cents, 0),
+    totalNetValue: assets.reduce((s, a) => s + a.net_value_cents, 0)
+  };
+  
+  return send(res, 200, { assets, summary });
+}
+
+async function createFixedAsset(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount, service_years, depreciation_method, residual_value, location, custodian, remark } = body;
+  
+  if (!asset_code || !asset_name || !asset_type) throw new HttpError(400, '请填写完整的资产信息');
+  
+  const assetId = id();
+  const now = new Date().toISOString();
+  const amountCents = Math.round((purchase_amount || 0) * 100);
+  const residualCents = Math.round((residual_value || 0) * 100);
+  
+  db.prepare(`INSERT INTO fixed_assets(id, asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount_cents, service_years, depreciation_method, residual_value_cents, accumulated_depreciation_cents, net_value_cents, location, custodian, remark, creator_id, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(assetId, asset_code, asset_name, asset_type, spec || '', unit || '台', purchase_date || null, amountCents, service_years || 5, depreciation_method || 'STRAIGHT_LINE', residualCents, amountCents - residualCents, location || '', custodian || '', remark || '', actor.id, now, now);
+  
+  return send(res, 201, { id: assetId });
+}
+
+function getFixedAsset(db, res, actor, assetId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const asset = db.prepare(`SELECT fa.*, u.display_name creatorName FROM fixed_assets fa JOIN users u ON u.id = fa.creator_id WHERE fa.id = ?`).get(assetId);
+  if (!asset) throw new HttpError(404, '资产不存在');
+  
+  // 获取折旧记录
+  const depreciations = db.prepare('SELECT * FROM asset_depreciations WHERE asset_id = ? ORDER BY depreciation_date DESC').all(assetId);
+  
+  return send(res, 200, { asset, depreciations });
+}
+
+async function updateFixedAsset(db, req, res, actor, assetId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(assetId);
+  if (!asset) throw new HttpError(404, '资产不存在');
+  
+  const body = await readJson(req);
+  const { status, location, custodian, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE fixed_assets SET status = ?, location = ?, custodian = ?, remark = ?, updated_at = ? WHERE id = ?')
+    .run(status || asset.status, location || asset.location, custodian || asset.custodian, remark || asset.remark, now, assetId);
+  
+  audit(db, actor.id, 'UPDATE', 'FIXED_ASSET', assetId, '更新固定资产 ' + asset.asset_code);
+  
+  return send(res, 200, { success: true });
+}
+
+async function calculateDepreciation(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { asset_id, depreciation_amount } = body;
+  
+  if (!asset_id) throw new HttpError(400, '请选择资产');
+  
+  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(asset_id);
+  if (!asset) throw new HttpError(404, '资产不存在');
+  
+  const depId = id();
+  const now = new Date().toISOString();
+  const depCents = Math.round((depreciation_amount || 0) * 100);
+  const newAccumulated = asset.accumulated_depreciation_cents + depCents;
+  const newNetValue = asset.purchase_amount_cents - newAccumulated;
+  
+  transaction(db, () => {
+    db.prepare(`INSERT INTO asset_depreciations(id, asset_id, depreciation_date, depreciation_amount_cents, accumulated_amount_cents, net_value_cents, creator_id, created_at)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(depId, asset_id, now.slice(0, 10), depCents, newAccumulated, newNetValue, actor.id, now);
+    
+    db.prepare('UPDATE fixed_assets SET accumulated_depreciation_cents = ?, net_value_cents = ?, updated_at = ? WHERE id = ?')
+      .run(newAccumulated, newNetValue, now, asset_id);
+    
+    audit(db, actor.id, 'DEPRECIATE', 'FIXED_ASSET', asset_id, '计提折旧 ' + money(depCents));
+  });
+  
+  return send(res, 200, { id: depId });
+}
+
+function listAssetDepreciations(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const assetId = url.searchParams.get('asset_id');
+  const startDate = url.searchParams.get('start_date');
+  const endDate = url.searchParams.get('end_date');
+  
+  let where = [];
+  let params = [];
+  
+  if (assetId) { where.push('ad.asset_id = ?'); params.push(assetId); }
+  if (startDate) { where.push('ad.depreciation_date >= ?'); params.push(startDate); }
+  if (endDate) { where.push('ad.depreciation_date <= ?'); params.push(endDate); }
+  
+  const sql = `SELECT ad.*, fa.asset_code, fa.asset_name, u.display_name creatorName
+    FROM asset_depreciations ad
+    JOIN fixed_assets fa ON fa.id = ad.asset_id
+    JOIN users u ON u.id = ad.creator_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY ad.depreciation_date DESC LIMIT 100`;
+  
+  const depreciations = db.prepare(sql).all(...params);
+  
+  return send(res, 200, { depreciations });
+}
+
+
 // ============ Purchase Receipts ============
 
 function listPurchaseReceipts(db, res, actor, url) {

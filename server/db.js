@@ -76,6 +76,44 @@ export function createDatabase(filename) {
   return db;
 }
 function migrate(db) {
+    // 固定资产
+    CREATE TABLE IF NOT EXISTS fixed_assets (
+      id TEXT PRIMARY KEY,
+      asset_code TEXT NOT NULL UNIQUE,
+      asset_name TEXT NOT NULL,
+      asset_type TEXT NOT NULL,
+      spec TEXT NOT NULL DEFAULT '',
+      unit TEXT NOT NULL DEFAULT '台',
+      purchase_date TEXT,
+      purchase_amount_cents INTEGER NOT NULL DEFAULT 0,
+      service_years INTEGER NOT NULL DEFAULT 5,
+      depreciation_method TEXT NOT NULL DEFAULT 'STRAIGHT_LINE' CHECK(depreciation_method IN ('STRAIGHT_LINE', 'DOUBLE_DECLINING')),
+      residual_value_cents INTEGER NOT NULL DEFAULT 0,
+      accumulated_depreciation_cents INTEGER NOT NULL DEFAULT 0,
+      net_value_cents INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'IN_USE' CHECK(status IN ('IN_USE', 'IDLE', 'DISPOSED', 'SCRAPPED')),
+      location TEXT NOT NULL DEFAULT '',
+      custodian TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    
+    // 固定资产折旧记录
+    CREATE TABLE IF NOT EXISTS asset_depreciations (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL,
+      depreciation_date TEXT NOT NULL,
+      depreciation_amount_cents INTEGER NOT NULL,
+      accumulated_amount_cents INTEGER NOT NULL,
+      net_value_cents INTEGER NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (asset_id) REFERENCES fixed_assets(id)
+    );
+
     // 出纳日记账
     CREATE TABLE IF NOT EXISTS cash_journals (
       id TEXT PRIMARY KEY,
