@@ -68,9 +68,72 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE inventory_checks ADD COLUMN reviewed_at TEXT');
   addColumn('ALTER TABLE inventory_checks ADD COLUMN remark TEXT');
     addColumn('ALTER TABLE production_orders ADD COLUMN bom_id TEXT');
+  addColumn('ALTER TABLE products ADD COLUMN reorder_point REAL DEFAULT 0');
+  addColumn('ALTER TABLE cash_journals ADD COLUMN bank_id TEXT');
+  addColumn('ALTER TABLE products ADD COLUMN min_stock REAL DEFAULT 0');
+  addColumn('ALTER TABLE products ADD COLUMN max_stock REAL DEFAULT 0');
+  addColumn('ALTER TABLE products ADD COLUMN lead_time_days INTEGER DEFAULT 7');
   return db;
 }
 function migrate(db) {
+    // 出纳日记账
+    CREATE TABLE IF NOT EXISTS cash_journals (
+      id TEXT PRIMARY KEY,
+      journal_no TEXT NOT NULL,
+      journal_type TEXT NOT NULL CHECK(journal_type IN ('RECEIPT', 'PAYMENT', 'TRANSFER')),
+      account_type TEXT NOT NULL CHECK(account_type IN ('CASH', 'BANK')),
+      bank_account TEXT,
+      amount_cents INTEGER NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('IN', 'OUT')),
+      counterparty_type TEXT,
+      counterparty_id TEXT,
+      counterparty_name TEXT,
+      subject_id TEXT,
+      summary TEXT NOT NULL DEFAULT '',
+      voucher_id TEXT,
+      operator_id TEXT NOT NULL,
+      journal_date TEXT NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
+    
+    // 银行账户
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+      id TEXT PRIMARY KEY,
+      bank_name TEXT NOT NULL,
+      account_no TEXT NOT NULL UNIQUE,
+      account_name TEXT NOT NULL,
+      account_type TEXT NOT NULL DEFAULT 'CHECKING',
+      balance_cents INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'CNY',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    
+    // 票据管理
+    CREATE TABLE IF NOT EXISTS bills (
+      id TEXT PRIMARY KEY,
+      bill_no TEXT NOT NULL,
+      bill_type TEXT NOT NULL CHECK(bill_type IN ('DRAFT', 'ACCEPTANCE', 'LC')),
+      direction TEXT NOT NULL CHECK(direction IN ('RECEIVABLE', 'PAYABLE')),
+      face_amount_cents INTEGER NOT NULL,
+      bank_id TEXT,
+      drawer_name TEXT,
+      drawer_bank TEXT,
+      payee_name TEXT,
+      holder TEXT,
+      issue_date TEXT NOT NULL,
+      due_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'ENDORSED', 'DISCOUNTED', 'PAID', 'CANCELLED')),
+      source_type TEXT,
+      source_id TEXT,
+      remark TEXT NOT NULL DEFAULT '',
+      holder_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS roles (
       id TEXT PRIMARY KEY,

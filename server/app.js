@@ -88,6 +88,10 @@ async function handleApi(db, req, res, url) {
 
   // Inventory
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
+  if (pathname === '/api/inventory/alerts' && req.method === 'GET') return getInventoryAlerts(db, res, actor);
+  if (pathname === '/api/inventory/reorder' && req.method === 'GET') return getReorderList(db, res, actor);
+  if (pathname === '/api/mrp/calculate' && req.method === 'POST') return calculateMRP(db, req, res, actor);
+  if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
   if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
   const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
@@ -855,6 +859,205 @@ function listInventory(db, res, actor, url) {
   return send(res, 200, { inventory: db.prepare(sql).all(...params) });
 }
 
+
+
+// ============ 库存预警 ============
+
+function getInventoryAlerts(db, res, actor) {
+  allowAny(actor, ['INVENTORY_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW']);
+  
+  // 查询库存不足的货品（低于最低库存或再订货点）
+  // 首先获取所有有预警配置的货品
+  const productsWithAlerts = db.prepare(`SELECT p.id, p.code, p.name, p.unit, p.reorder_point, p.min_stock, p.max_stock, p.lead_time_days,
+    (SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE product_id = p.id) as total_stock
+    FROM products p WHERE p.active = 1 AND (p.reorder_point > 0 OR p.min_stock > 0)`).all();
+  
+  const alerts = productsWithAlerts.filter(p => 
+    (p.reorder_point > 0 && p.total_stock < p.reorder_point) || 
+    (p.min_stock > 0 && p.total_stock < p.min_stock)
+  );
+  
+  const productsWithLowStock = productsWithAlerts.filter(p => p.min_stock > 0 && p.total_stock < p.min_stock);
+  const productsToReorder = productsWithAlerts.filter(p => p.reorder_point > 0 && p.total_stock < p.reorder_point);
+  const lowStockCount = { cnt: productsWithLowStock.length };
+  const reorderCount = { cnt: productsToReorder.length };
+  
+  return send(res, 200, {
+    alerts,
+    summary: {
+      lowStockCount: lowStockCount?.cnt || 0,
+      reorderCount: reorderCount?.cnt || 0,
+      totalAlerts: alerts.length
+    }
+  });
+}
+
+function getReorderList(db, res, actor) {
+  allowAny(actor, ['INVENTORY_VIEW', 'PRODUCTS_VIEW']);
+  
+  // 计算建议采购数量
+  // 建议采购量 = 最大库存 - 当前库存
+  // 获取需要补货的产品
+  const productsNeedingReorder = db.prepare(`SELECT p.id, p.code, p.name, p.unit, p.reorder_point, p.max_stock, p.lead_time_days, p.price_cents,
+    (SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE product_id = p.id) as current_stock
+    FROM products p WHERE p.active = 1 AND p.reorder_point > 0`).all().filter(p => p.current_stock < p.reorder_point);
+  
+  const reorderItems = productsNeedingReorder.sort((a, b) => {
+    const ratioA = a.reorder_point > 0 ? a.current_stock / a.reorder_point : 1;
+    const ratioB = b.reorder_point > 0 ? b.current_stock / b.reorder_point : 1;
+    return ratioA - ratioB;
+  });
+  
+  // 计算建议采购量和预估金额
+  const reorderList = reorderItems.map(item => {
+    const suggestedQty = Math.max(0, (item.max_stock || item.reorder_point * 2) - item.current_stock);
+    const estimatedCost = Math.round(suggestedQty * (item.price_cents || 0));
+    return {
+      ...item,
+      current_stock: item.current_stock,
+      reorder_point: item.reorder_point,
+      suggested_qty: suggestedQty,
+      estimated_cost_cents: estimatedCost,
+      urgency: item.current_stock === 0 ? 'urgent' : item.current_stock < item.reorder_point * 0.5 ? 'high' : 'normal'
+    };
+  });
+  
+  const totalEstimatedCost = reorderList.reduce((s, i) => s + i.estimated_cost_cents, 0);
+  
+  return send(res, 200, {
+    reorderList,
+    summary: {
+      itemCount: reorderList.length,
+      totalEstimatedCost
+    }
+  });
+}
+
+// ============ MRP (物料需求计划) ============
+
+async function explodeBOM(db, req, res, actor) {
+  allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTION_ORDERS_VIEW', 'ORDERS_VIEW']);
+  const body = await readJson(req);
+  const { productId, quantity } = body;
+  
+  if (!productId || !quantity) throw new HttpError(400, '请提供产品ID和数量');
+  
+  const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
+  if (!product) throw new HttpError(404, '产品不存在');
+  
+  const materials = [];
+  
+  function expand(productId, qty, level) {
+    const boms = db.prepare("SELECT b.*, p.code, p.name, p.unit FROM bom_items b JOIN products p ON p.id = b.product_id WHERE b.bom_id IN (SELECT id FROM boms WHERE product_id=? AND status='APPROVED')").all(productId);
+    
+    if (boms.length === 0) {
+      const prod = db.prepare('SELECT code, name, unit FROM products WHERE id=?').get(productId);
+      materials.push({ productId, code: prod?.code || '', name: prod?.name || '', unit: prod?.unit || '', requiredQty: qty, level });
+      return;
+    }
+    
+    for (const bom of boms) {
+      const requiredQty = qty * bom.quantity * (1 + (bom.scrap_rate || 0));
+      expand(bom.product_id, requiredQty, level + 1);
+    }
+  }
+  
+  expand(productId, Number(quantity), 0);
+  
+  const materialSummary = {};
+  for (const mat of materials) {
+    if (!materialSummary[mat.productId]) {
+      materialSummary[mat.productId] = { ...mat, totalQty: 0 };
+    }
+    materialSummary[mat.productId].totalQty += mat.requiredQty;
+  }
+  
+  const result = Object.values(materialSummary).map(mat => {
+    const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(mat.productId)?.total || 0;
+    const netDemand = Math.max(0, mat.totalQty - stock);
+    return { ...mat, currentStock: stock, netDemand, shortage: stock < mat.totalQty };
+  });
+  
+  return send(res, 200, { product: { id: product.id, code: product.code, name: product.name }, quantity: Number(quantity), materials: result });
+}
+
+async function calculateMRP(db, req, res, actor) {
+  allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTION_ORDERS_VIEW', 'ORDERS_VIEW']);
+  const body = await readJson(req);
+  const { type, productId, quantity } = body;
+  
+  if (type === 'product' && productId && quantity) {
+    const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
+    if (!product) throw new HttpError(404, '产品不存在');
+    
+    const bom = db.prepare("SELECT * FROM boms WHERE product_id=? AND status='APPROVED' LIMIT 1").get(productId);
+    if (!bom) {
+      const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(productId)?.total || 0;
+      const netDemand = Math.max(0, Number(quantity) - stock);
+      return send(res, 200, {
+        demand: { productId, code: product.code, name: product.name, quantity: Number(quantity) },
+        stock,
+        netDemand,
+        suggestions: [{ type: 'purchase', productId, code: product.code, name: product.name, quantity: netDemand, urgency: stock === 0 ? 'urgent' : 'normal' }]
+      });
+    }
+    
+    const materials = [];
+    
+    function expand(bomProductId, qty) {
+      const items = db.prepare('SELECT bi.*, p.code, p.name, p.unit, p.price_cents FROM bom_items bi JOIN products p ON p.id=bi.product_id WHERE bi.bom_id=?').all(bomProductId);
+      for (const item of items) {
+        const requiredQty = qty * item.quantity * (1 + (item.scrap_rate || 0));
+        const subBom = db.prepare("SELECT id FROM boms WHERE product_id=? AND status='APPROVED' LIMIT 1").get(item.product_id);
+        if (!subBom) {
+          materials.push({ productId: item.product_id, code: item.code, name: item.name, unit: item.unit, requiredQty, priceCents: item.price_cents });
+        } else {
+          expand(item.product_id, requiredQty);
+        }
+      }
+    }
+    
+    expand(productId, Number(quantity));
+    
+    const materialMap = {};
+    for (const mat of materials) {
+      if (!materialMap[mat.productId]) materialMap[mat.productId] = { ...mat, totalQty: 0 };
+      materialMap[mat.productId].totalQty += mat.requiredQty;
+    }
+    
+    const suggestions = [];
+    for (const mat of Object.values(materialMap)) {
+      const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(mat.productId)?.total || 0;
+      const netDemand = Math.max(0, mat.totalQty - stock);
+      if (netDemand > 0) {
+        suggestions.push({
+          type: 'purchase', productId: mat.productId, code: mat.code, name: mat.name,
+          quantity: netDemand, unit: mat.unit, estimatedCost: Math.round(netDemand * (mat.priceCents || 0)),
+          currentStock: stock, requiredQty: mat.totalQty,
+          urgency: stock === 0 ? 'urgent' : stock < mat.totalQty * 0.3 ? 'high' : 'normal'
+        });
+      }
+    }
+    
+    suggestions.sort((a, b) => {
+      const priority = { urgent: 0, high: 1, normal: 2 };
+      return priority[a.urgency] - priority[b.urgency];
+    });
+    
+    const totalCost = suggestions.reduce((s, sg) => s + sg.estimatedCost, 0);
+    
+    return send(res, 200, {
+      demand: { productId, code: product.code, name: product.name, quantity: Number(quantity) },
+      materialsCount: suggestions.length, suggestions,
+      summary: { totalItems: suggestions.length, urgentCount: suggestions.filter(s => s.urgency === 'urgent').length, highCount: suggestions.filter(s => s.urgency === 'high').length, totalEstimatedCost: totalCost }
+    });
+  }
+  
+  throw new HttpError(400, '不支持的请求类型');
+}
+
+
+
 // ============ Inventory Checks ============
 
 function listInventoryChecks(db, res, actor, url) {
@@ -1034,6 +1237,505 @@ function getAccountingVoucher(db, res, actor, voucherId) {
   return send(res, 200, { voucher });
 }
 
+
+
+
+
+// ============ 手动凭证录入 ============
+
+async function createAccountingVoucher(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { voucherDate, remark, entries } = body;
+  
+  if (!entries || !Array.isArray(entries) || entries.length < 2) {
+    throw new HttpError(400, '凭证分录至少需要两条');
+  }
+  
+  // 验证借贷平衡
+  const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
+  const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
+  
+  if (Math.abs(debitTotal - creditTotal) > 1) {
+    throw new HttpError(400, '借贷不平衡，借方合计：' + debitTotal + '，贷方合计：' + creditTotal);
+  }
+  
+  const voucherId = id();
+  const now = new Date().toISOString();
+  const voucherNo = makeVoucherNo();
+  
+  transaction(db, () => {
+    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) 
+      VALUES(?,?,?,?,?,?,?,?)`)
+      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now);
+    
+    const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
+    entries.forEach(e => {
+      stmt.run(id(), voucherId, e.subjectId, e.direction, Number(e.amountCents), e.summary || '');
+    });
+    
+    audit(db, actor.id, 'CREATE', 'ACCOUNTING_VOUCHER', voucherId, '录入凭证 ' + voucherNo);
+  });
+  
+  return send(res, 201, { id: voucherId, voucherNo });
+}
+
+async function updateAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+  
+  // 只允许修改手工凭证
+  if (voucher.source_type !== 'MANUAL') {
+    throw new HttpError(400, '只能修改手工凭证');
+  }
+  
+  const body = await readJson(req);
+  const { voucherDate, remark, entries } = body;
+  
+  if (!entries || !Array.isArray(entries) || entries.length < 2) {
+    throw new HttpError(400, '凭证分录至少需要两条');
+  }
+  
+  const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
+  const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
+  
+  if (Math.abs(debitTotal - creditTotal) > 1) {
+    throw new HttpError(400, '借贷不平衡');
+  }
+  
+  const now = new Date().toISOString();
+  
+  transaction(db, () => {
+    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ? WHERE id = ?')
+      .run(voucherDate || voucher.voucher_date, remark || '', voucherId);
+    
+    db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
+    
+    const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
+    entries.forEach(e => {
+      stmt.run(id(), voucherId, e.subjectId, e.direction, Number(e.amountCents), e.summary || '');
+    });
+    
+    audit(db, actor.id, 'UPDATE', 'ACCOUNTING_VOUCHER', voucherId, '修改凭证 ' + voucher.voucher_no);
+  });
+  
+  return send(res, 200, { success: true });
+}
+
+async function deleteAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+  
+  if (voucher.source_type !== 'MANUAL') {
+    throw new HttpError(400, '只能删除手工凭证');
+  }
+  
+  transaction(db, () => {
+    db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
+    db.prepare('DELETE FROM accounting_vouchers WHERE id = ?').run(voucherId);
+    audit(db, actor.id, 'DELETE', 'ACCOUNTING_VOUCHER', voucherId, '删除凭证 ' + voucher.voucher_no);
+  });
+  
+  return send(res, 200, { success: true });
+}
+
+// ============ 账簿查询 ============
+
+function getAccountingBalances(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const period = url.searchParams.get('period'); // 格式: YYYY-MM
+  
+  let startDate, endDate;
+  if (period) {
+    startDate = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    endDate = new Date(y, m, 0).toISOString().slice(0, 10);
+  } else {
+    // 默认当前月
+    const now = new Date();
+    startDate = now.toISOString().slice(0, 7) + '-01';
+    endDate = now.toISOString().slice(0, 10);
+  }
+  
+  // 获取所有末级科目
+  const subjects = db.prepare(`SELECT id, code, name, type, direction FROM accounting_subjects 
+    WHERE active = 1 AND parent_id IS NOT NULL ORDER BY code`).all();
+  
+  // 计算每个科目的期初余额、本期发生、期末余额
+  const balances = subjects.map(subject => {
+    // 期初余额（累计）
+    const opening = db.prepare(`SELECT 
+      COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      .get(subject.id, startDate);
+    
+    // 本期借方发生
+    const periodDebit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
+      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      .get(subject.id, startDate, endDate);
+    
+    // 本期贷方发生
+    const periodCredit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
+      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      .get(subject.id, startDate, endDate);
+    
+    const openingBalance = Number(opening.balance);
+    const debit = Number(periodDebit.total);
+    const credit = Number(periodCredit.total);
+    
+    // 资产类科目：期末 = 期初 + 借方 - 贷方
+    // 负债/权益类科目：期末 = 期初 + 贷方 - 借方
+    let closingBalance;
+    if (subject.type === 'ASSET' || subject.type === 'EXPENSE') {
+      closingBalance = openingBalance + debit - credit;
+    } else {
+      closingBalance = openingBalance + credit - debit;
+    }
+    
+    return {
+      ...subject,
+      openingBalance,
+      periodDebit: debit,
+      periodCredit: credit,
+      closingBalance
+    };
+  }).filter(b => b.openingBalance !== 0 || b.periodDebit !== 0 || b.periodCredit !== 0 || b.closingBalance !== 0);
+  
+  return send(res, 200, { balances, period: { startDate, endDate } });
+}
+
+function getAccountingLedger(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const subjectId = url.searchParams.get('subject_id');
+  const period = url.searchParams.get('period');
+  
+  if (!subjectId) throw new HttpError(400, '请指定科目');
+  
+  const subject = db.prepare('SELECT * FROM accounting_subjects WHERE id = ?').get(subjectId);
+  if (!subject) throw new HttpError(404, '科目不存在');
+  
+  let startDate, endDate;
+  if (period) {
+    startDate = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    endDate = new Date(y, m, 0).toISOString().slice(0, 10);
+  } else {
+    const now = new Date();
+    startDate = now.toISOString().slice(0, 7) + '-01';
+    endDate = now.toISOString().slice(0, 10);
+  }
+  
+  // 期初余额
+  const opening = db.prepare(`SELECT 
+    COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
+    FROM accounting_entries ae 
+    JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+    WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+    .get(subjectId, startDate);
+  
+  // 本期明细
+  const entries = db.prepare(`SELECT ae.*, av.voucher_no, av.voucher_date, av.source_type,
+    CASE WHEN ae.direction = 'DEBIT' THEN ae.amount_cents ELSE 0 END as debit,
+    CASE WHEN ae.direction = 'CREDIT' THEN ae.amount_cents ELSE 0 END as credit
+    FROM accounting_entries ae 
+    JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+    WHERE ae.subject_id = ? AND av.voucher_date >= ? AND av.voucher_date <= ?
+    ORDER BY av.voucher_date, av.id`)
+    .all(subjectId, startDate, endDate);
+  
+  return send(res, 200, {
+    subject,
+    openingBalance: Number(opening.balance),
+    entries,
+    period: { startDate, endDate }
+  });
+}
+
+function getTrialBalance(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const period = url.searchParams.get('period');
+  
+  let startDate, endDate;
+  if (period) {
+    startDate = period + '-01';
+    const [y, m] = period.split('-').map(Number);
+    endDate = new Date(y, m, 0).toISOString().slice(0, 10);
+  } else {
+    const now = new Date();
+    startDate = now.toISOString().slice(0, 7) + '-01';
+    endDate = now.toISOString().slice(0, 10);
+  }
+  
+  // 获取所有末级科目
+  const subjects = db.prepare(`SELECT id, code, name, type FROM accounting_subjects 
+    WHERE active = 1 AND parent_id IS NOT NULL ORDER BY code`).all();
+  
+  const trialBalance = subjects.map(subject => {
+    const opening = db.prepare(`SELECT 
+      COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      .get(subject.id, startDate);
+    
+    const periodDebit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
+      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      .get(subject.id, startDate, endDate);
+    
+    const periodCredit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
+      FROM accounting_entries ae 
+      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
+      WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
+      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      .get(subject.id, startDate, endDate);
+    
+    const openingBalance = Number(opening.balance);
+    const debit = Number(periodDebit.total);
+    const credit = Number(periodCredit.total);
+    
+    let closingBalance;
+    if (subject.type === 'ASSET' || subject.type === 'EXPENSE') {
+      closingBalance = openingBalance + debit - credit;
+    } else {
+      closingBalance = openingBalance + credit - debit;
+    }
+    
+    return {
+      ...subject,
+      openingBalance,
+      periodDebit: debit,
+      periodCredit: credit,
+      closingBalance
+    };
+  });
+  
+  return send(res, 200, { trialBalance, period: { startDate, endDate } });
+}
+
+
+
+// ============ 出纳管理 ============
+
+function listCashJournals(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const where = [];
+  const params = [];
+  const accountType = url.searchParams.get('account_type');
+  const journalType = url.searchParams.get('journal_type');
+  const startDate = url.searchParams.get('start_date');
+  const endDate = url.searchParams.get('end_date');
+  
+  if (accountType) { where.push('c.account_type = ?'); params.push(accountType); }
+  if (journalType) { where.push('c.journal_type = ?'); params.push(journalType); }
+  if (startDate) { where.push('c.journal_date >= ?'); params.push(startDate); }
+  if (endDate) { where.push('c.journal_date <= ?'); params.push(endDate); }
+  
+  const sql = `SELECT c.*, u.display_name operatorName, ba.bank_name, ba.account_no bankAccountNo
+    FROM cash_journals c
+    JOIN users u ON u.id = c.operator_id
+    LEFT JOIN bank_accounts ba ON ba.id = c.bank_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY c.journal_date DESC, c.created_at DESC LIMIT 100`;
+  
+  const journals = db.prepare(sql).all(...params);
+  
+  // 计算余额
+  const inTotal = journals.filter(j => j.direction === 'IN').reduce((s, j) => s + j.amount_cents, 0);
+  const outTotal = journals.filter(j => j.direction === 'OUT').reduce((s, j) => s + j.amount_cents, 0);
+  
+  return send(res, 200, { journals, summary: { inTotal, outTotal, netTotal: inTotal - outTotal } });
+}
+
+async function createCashJournal(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, journal_date, remark } = body;
+  
+  if (!amount_cents || amount_cents <= 0) throw new HttpError(400, '请输入正确的金额');
+  if (!journal_date) throw new HttpError(400, '请选择日期');
+  
+  const journalId = id();
+  const now = new Date().toISOString();
+  const journalNo = 'CJ-' + Date.now().toString().slice(-10);
+  
+  transaction(db, () => {
+    db.prepare(`INSERT INTO cash_journals(id, journal_no, journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, operator_id, journal_date, remark, created_at)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, Math.round(amount_cents * 100), direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
+    
+    // 更新银行账户余额
+    if (bank_id && account_type === 'BANK') {
+      const change = direction === 'IN' ? Math.round(amount_cents * 100) : -Math.round(amount_cents * 100);
+      db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, bank_id);
+    }
+    
+    audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}元`);
+  });
+  
+  return send(res, 201, { id: journalId, journalNo });
+}
+
+function getCashJournal(db, res, actor, journalId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const journal = db.prepare(`SELECT c.*, u.display_name operatorName, ba.bank_name, ba.account_no bankAccountNo
+    FROM cash_journals c JOIN users u ON u.id = c.operator_id
+    LEFT JOIN bank_accounts ba ON ba.id = c.bank_id WHERE c.id = ?`).get(journalId);
+  
+  if (!journal) throw new HttpError(404, '记录不存在');
+  return send(res, 200, { journal });
+}
+
+function deleteCashJournal(db, req, res, actor, journalId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const journal = db.prepare('SELECT * FROM cash_journals WHERE id = ?').get(journalId);
+  if (!journal) throw new HttpError(404, '记录不存在');
+  
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    // 还原银行账户余额
+    if (journal.bank_id) {
+      const change = journal.direction === 'IN' ? -journal.amount_cents : journal.amount_cents;
+      db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, journal.bank_id);
+    }
+    db.prepare('DELETE FROM cash_journals WHERE id = ?').run(journalId);
+    audit(db, actor.id, 'DELETE', 'CASH_JOURNAL', journalId, '删除出纳记录 ' + journal.journal_no);
+  });
+  
+  return send(res, 200, { success: true });
+}
+
+// ============ 银行账户 ============
+
+function listBankAccounts(db, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const accounts = db.prepare('SELECT * FROM bank_accounts WHERE active = 1 ORDER BY created_at DESC').all();
+  return send(res, 200, { bankAccounts: accounts });
+}
+
+async function createBankAccount(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { bank_name, account_no, account_name, account_type, initial_balance } = body;
+  
+  if (!bank_name || !account_no || !account_name) throw new HttpError(400, '请填写完整的银行信息');
+  
+  const accountId = id();
+  const now = new Date().toISOString();
+  
+  db.prepare(`INSERT INTO bank_accounts(id, bank_name, account_no, account_name, account_type, balance_cents, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', Math.round((initial_balance || 0) * 100), now, now);
+  
+  return send(res, 201, { id: accountId });
+}
+
+function getBankAccount(db, res, actor, accountId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(accountId);
+  if (!account) throw new HttpError(404, '账户不存在');
+  
+  // 获取最近10笔交易
+  const transactions = db.prepare(`SELECT * FROM cash_journals WHERE bank_id = ? ORDER BY journal_date DESC, created_at DESC LIMIT 10`).all(accountId);
+  
+  return send(res, 200, { bankAccount: account, transactions });
+}
+
+async function updateBankAccount(db, req, res, actor, accountId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(accountId);
+  if (!account) throw new HttpError(404, '账户不存在');
+  
+  const body = await readJson(req);
+  const { bank_name, account_no, account_name, account_type, active } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE bank_accounts SET bank_name = ?, account_no = ?, account_name = ?, account_type = ?, active = ?, updated_at = ? WHERE id = ?')
+    .run(bank_name || account.bank_name, account_no || account.account_no, account_name || account.account_name, account_type || account.account_type, active !== undefined ? (active ? 1 : 0) : account.active, now, accountId);
+  
+  return send(res, 200, { success: true });
+}
+
+// ============ 票据管理 ============
+
+function listBills(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const where = [];
+  const params = [];
+  const direction = url.searchParams.get('direction');
+  const status = url.searchParams.get('status');
+  const billType = url.searchParams.get('bill_type');
+  
+  if (direction) { where.push('b.direction = ?'); params.push(direction); }
+  if (status) { where.push('b.status = ?'); params.push(status); }
+  if (billType) { where.push('b.bill_type = ?'); params.push(billType); }
+  
+  const sql = `SELECT b.*, ba.bank_name, u.display_name holderName
+    FROM bills b
+    LEFT JOIN bank_accounts ba ON ba.id = b.bank_id
+    LEFT JOIN users u ON u.id = b.holder_id
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY b.issue_date DESC, b.created_at DESC LIMIT 100`;
+  
+  const bills = db.prepare(sql).all(...params);
+  return send(res, 200, { bills });
+}
+
+async function createBill(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { bill_no, bill_type, direction, face_amount, bank_id, drawer_name, drawer_bank, payee_name, issue_date, due_date, holder_id, remark } = body;
+  
+  if (!bill_no || !face_amount || !issue_date || !due_date) throw new HttpError(400, '请填写完整的票据信息');
+  
+  const billId = id();
+  const now = new Date().toISOString();
+  
+  db.prepare(`INSERT INTO bills(id, bill_no, bill_type, direction, face_amount_cents, bank_id, drawer_name, drawer_bank, payee_name, holder, holder_id, issue_date, due_date, status, remark, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`)
+    .run(billId, bill_no, bill_type || 'DRAFT', direction || 'RECEIVABLE', Math.round(face_amount * 100), bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
+  
+  return send(res, 201, { id: billId });
+}
+
+function getBill(db, res, actor, billId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const bill = db.prepare(`SELECT b.*, ba.bank_name, u.display_name holderName
+    FROM bills b LEFT JOIN bank_accounts ba ON ba.id = b.bank_id
+    LEFT JOIN users u ON u.id = b.holder_id WHERE b.id = ?`).get(billId);
+  
+  if (!bill) throw new HttpError(404, '票据不存在');
+  return send(res, 200, { bill });
+}
+
+async function updateBill(db, req, res, actor, billId) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(billId);
+  if (!bill) throw new HttpError(404, '票据不存在');
+  
+  const body = await readJson(req);
+  const { status, holder_id, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE bills SET status = ?, holder_id = ?, holder = (SELECT display_name FROM users WHERE id = ?), remark = ?, updated_at = ? WHERE id = ?')
+    .run(status || bill.status, holder_id || bill.holder_id, holder_id || bill.holder_id, remark || bill.remark, now, billId);
+  
+  audit(db, actor.id, 'UPDATE', 'BILL', billId, `更新票据 ${bill.bill_no} 状态为 ${status}`);
+  
+  return send(res, 200, { success: true });
+}
 
 
 // ============ Purchase Receipts ============
@@ -1707,4 +2409,3 @@ const AP_STATUS = { OPEN: '未付', PARTIAL: '部分付款', CLOSED: '已结清'
 const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const DELIVERY_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RETURN_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
-

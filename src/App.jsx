@@ -40,43 +40,43 @@ const ic = {
 
 // Navigation groups
 const navGroups = [
-  { key: '"'"'dashboard'"'"', label: '"'"'工作台'"'"', icon: ic.dashboard, permission: '"'"'DASHBOARD_VIEW'"'"' },
+  { key: 'dashboard', label: '工作台', icon: ic.dashboard, permission: 'DASHBOARD_VIEW' },
   null,
-  { label: '"'"'销售与采购'"'"', items: [
-    { key: '"'"'orders'"'"', label: '"'"'销售订单'"'"', icon: ic.orders, any: ['"'"'ORDERS_VIEW'"'"', '"'"'ORDERS_CREATE'"'"'] },
-    { key: '"'"'approvals'"'"', label: '"'"'订单审核'"'"', icon: ic.approvals, permission: '"'"'ORDERS_APPROVE'"'"' },
-    { key: '"'"'purchase-orders'"'"', label: '"'"'采购订单'"'"', icon: ic.purchaseOrders, any: ['"'"'PURCHASE_ORDERS_VIEW'"'"', '"'"'PURCHASE_ORDERS_CREATE'"'"'] },
+  { label: '销售与采购', items: [
+    { key: 'orders', label: '销售订单', icon: ic.orders, any: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
+    { key: 'approvals', label: '订单审核', icon: ic.approvals, permission: 'ORDERS_APPROVE' },
+    { key: 'purchase-orders', label: '采购订单', icon: ic.purchaseOrders, any: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE'] },
   ]},
   null,
-  { label: '"'"'基础资料'"'"', items: [
-    { key: '"'"'suppliers'"'"', label: '"'"'供应商'"'"', icon: ic.suppliers, any: ['"'"'SUPPLIERS_VIEW'"'"', '"'"'SUPPLIERS_MANAGE'"'"'] },
-    { key: '"'"'customers'"'"', label: '"'"'客户'"'"', icon: ic.customers, any: ['"'"'CUSTOMERS_VIEW'"'"', '"'"'CUSTOMERS_MANAGE'"'"'] },
-    { key: '"'"'products'"'"', label: '"'"'货品'"'"', icon: ic.products, any: ['"'"'PRODUCTS_VIEW'"'"', '"'"'PRODUCTS_MANAGE'"'"'] },
-    { key: '"'"'warehouses'"'"', label: '"'"'仓库'"'"', icon: ic.warehouses, any: ['"'"'WAREHOUSES_VIEW'"'"', '"'"'WAREHOUSES_MANAGE'"'"'] },
+  { label: '基础资料', items: [
+    { key: 'suppliers', label: '供应商', icon: ic.suppliers, any: ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE'] },
+    { key: 'customers', label: '客户', icon: ic.customers, any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
+    { key: 'products', label: '货品', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
+    { key: 'warehouses', label: '仓库', icon: ic.warehouses, any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
   ]},
   null,
-  { label: '"'"'仓储物流'"'"', items: [
-    { key: '"'"'inventory'"'"', label: '"'"'库存查询'"'"', icon: ic.inventory, any: ['"'"'INVENTORY_VIEW'"'"'] },
-    { key: '"'"'purchase-receipts'"'"', label: '"'"'采购入库'"'"', icon: ic.purchaseReceipts, any: ['"'"'PURCHASE_RECEIPTS_VIEW'"'"', '"'"'PURCHASE_RECEIPTS_MANAGE'"'"'] },
-    { key: '"'"'sales-deliveries'"'"', label: '"'"'销售出库'"'"', icon: ic.salesDeliveries, any: ['"'"'SALES_DELIVERIES_VIEW'"'"', '"'"'SALES_DELIVERIES_MANAGE'"'"'] },
-    { key: '"'"'returns'"'"', label: '"'"'退货管理'"'"', icon: ic.returns, any: ['"'"'RETURNS_VIEW'"'"', '"'"'RETURNS_MANAGE'"'"'] },
-    { key: '"'"'inventory-transactions'"'"', label: '"'"'库存流水'"'"', icon: ic.inventoryTransactions, any: ['"'"'INVENTORY_VIEW'"'"'] },
+  { label: '仓储物流', items: [
+    { key: 'inventory', label: '库存查询', icon: ic.inventory, any: ['INVENTORY_VIEW'] },
+    { key: 'purchase-receipts', label: '采购入库', icon: ic.purchaseReceipts, any: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+    { key: 'sales-deliveries', label: '销售出库', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+    { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
+    { key: 'inventory-transactions', label: '库存流水', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
   ]},
   null,
-  { label: '"'"'财务资金'"'"', items: [
-    { key: '"'"'accounts-receivable'"'"', label: '"'"'应收账款'"'"', icon: ic.accountsReceivable, any: ['"'"'AR_VIEW'"'"', '"'"'AR_MANAGE'"'"', '"'"'ACCOUNTING_VIEW'"'"'] },
-    { key: '"'"'accounts-payable'"'"', label: '"'"'应付账款'"'"', icon: ic.accountsPayable, any: ['"'"'AP_VIEW'"'"', '"'"'AP_MANAGE'"'"', '"'"'ACCOUNTING_VIEW'"'"'] },
-    { key: '"'"'payment-collections'"'"', label: '"'"'收款记录'"'"', icon: ic.paymentCollections, any: ['"'"'AR_MANAGE'"'"', '"'"'ACCOUNTING_VIEW'"'"'] },
-    { key: '"'"'payment-disbursements'"'"', label: '"'"'付款记录'"'"', icon: ic.paymentDisbursements, any: ['"'"'AP_MANAGE'"'"', '"'"'ACCOUNTING_VIEW'"'"'] },
-    { key: '"'"'accounting'"'"', label: '"'"'会计凭证'"'"', icon: ic.accounting, any: ['"'"'ACCOUNTING_VIEW'"'"'] },
+  { label: '财务资金', items: [
+    { key: 'accounts-receivable', label: '应收账款', icon: ic.accountsReceivable, any: ['AR_VIEW', 'AR_MANAGE', 'ACCOUNTING_VIEW'] },
+    { key: 'accounts-payable', label: '应付账款', icon: ic.accountsPayable, any: ['AP_VIEW', 'AP_MANAGE', 'ACCOUNTING_VIEW'] },
+    { key: 'payment-collections', label: '收款记录', icon: ic.paymentCollections, any: ['AR_MANAGE', 'ACCOUNTING_VIEW'] },
+    { key: 'payment-disbursements', label: '付款记录', icon: ic.paymentDisbursements, any: ['AP_MANAGE', 'ACCOUNTING_VIEW'] },
+    { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
   ]},
   null,
-  { label: '"'"'生产制造'"'"', items: [
-    { key: '"'"'boms'"'"', label: '"'"'BOM 清单'"'"', icon: ic.boms, any: ['"'"'PRODUCTION_ORDERS_VIEW'"'"', '"'"'PRODUCTION_ORDERS_CREATE'"'"'] },
-    { key: '"'"'production-orders'"'"', label: '"'"'生产工单'"'"', icon: ic.productionOrders, any: ['"'"'PRODUCTION_ORDERS_VIEW'"'"', '"'"'PRODUCTION_ORDERS_CREATE'"'"'] },
+  { label: '生产制造', items: [
+    { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
+    { key: 'production-orders', label: '生产工单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
   ]},
   null,
-  { key: '"'"'users'"'"', label: '"'"'用户与角色'"'"', icon: ic.users, any: ['"'"'USERS_MANAGE'"'"', '"'"'ROLES_MANAGE'"'"'] },
+  { key: 'users', label: '用户与角色', icon: ic.users, any: ['USERS_MANAGE', 'ROLES_MANAGE'] },
 ];
 
 export default function App() {
@@ -105,7 +105,7 @@ export default function App() {
   if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
   if (!user) return <Login onLogin={setUser} notify={notify}/>;
 
-  const visibleNav = navGroups.flatMap((g) => g.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)));
+  const visibleNav = navGroups.flatMap((g) => g?.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)));
   if (!visibleNav.some((item) => item.key === page)) setTimeout(() => location.hash = visibleNav[0]?.key || '', 0);
 
   const pages = {
@@ -207,7 +207,14 @@ function Login({ onLogin, notify }) {
 
 function Dashboard({ notify }) {
   const [data, setData] = useState(null);
-  useEffect(() => { api('/api/dashboard').then(setData).catch((e) => notify(e.message, 'error')); }, []);
+  useEffect(() => { 
+    Promise.all([
+      api('/api/dashboard'),
+      api('/api/inventory/alerts')
+    ]).then(([d, a]) => {
+      setData({...d, alerts: a});
+    }).catch((e) => notify(e.message, 'error')); 
+  }, []);
   if (!data) return <Loading/>;
   const cards = [
     ['客户总数', data.customerCount, '家', 'teal'], ['在售货品', data.productCount, '项', 'blue'],
@@ -586,6 +593,218 @@ function Accounting({ user, notify }) {
   </Panel>;
 }
 
+
+
+function CashManagement({ user, notify }) {
+  const [tab, setTab] = useState('journals');
+  const [journals, setJournals] = useState([]);
+  const [bankAccounts, setBankAccounts] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [filters, setFilters] = useState({});
+  const [creating, setCreating] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  
+  useEffect(() => {
+    Promise.all([
+      api('/api/cash-journals'),
+      api('/api/bank-accounts'),
+      api('/api/bills')
+    ]).then(([j, b, bi]) => {
+      setJournals(j.journals || []);
+      setBankAccounts(b.bankAccounts || []);
+      setBills(bi.bills || []);
+    }).catch(e => notify(e.message, 'error'));
+  }, []);
+  
+  function refresh() {
+    let url = '/api/cash-journals';
+    const params = [];
+    if (filters.account_type) params.push('account_type=' + filters.account_type);
+    if (filters.start_date) params.push('start_date=' + filters.start_date);
+    if (filters.end_date) params.push('end_date=' + filters.end_date);
+    if (params.length) url += '?' + params.join('&');
+    api(url).then(r => setJournals(r.journals || [])).catch(e => notify(e.message, 'error'));
+  }
+  
+  const accountTypeMap = { CASH: '现金', BANK: '银行存款' };
+  const journalTypeMap = { RECEIPT: '收款', PAYMENT: '付款', TRANSFER: '转账' };
+  const billTypeMap = { DRAFT: '银行承兑', ACCEPTANCE: '商业承兑', LC: '信用证' };
+  const billStatusMap = { PENDING: '待处理', ENDORSED: '已背书', DISCOUNTED: '已贴现', PAID: '已到期', CANCELLED: '已作废' };
+  
+  return <Panel title="出纳管理" subtitle="现金日记账、银行日记账与票据管理">
+    <div className="tabs" style={{marginBottom: '16px', display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-default)', paddingBottom: '12px'}}>
+      <button className={tab === 'journals' ? 'primary' : 'secondary'} onClick={() => setTab('journals')}>日记账</button>
+      <button className={tab === 'accounts' ? 'primary' : 'secondary'} onClick={() => setTab('accounts')}>银行账户</button>
+      <button className={tab === 'bills' ? 'primary' : 'secondary'} onClick={() => setTab('bills')}>票据管理</button>
+    </div>
+    
+    {tab === 'journals' && <>
+      <div className="search-bar">
+        <select value={filters.account_type || ''} onChange={e => setFilters({...filters, account_type: e.target.value})} style={{width: '120px'}}>
+          <option value="">全部账户</option>
+          <option value="CASH">现金</option>
+          <option value="BANK">银行存款</option>
+        </select>
+        <input type="date" value={filters.start_date || ''} onChange={e => setFilters({...filters, start_date: e.target.value})} style={{width: '140px'}}/>
+        <input type="date" value={filters.end_date || ''} onChange={e => setFilters({...filters, end_date: e.target.value})} style={{width: '140px'}}/>
+        <button className="secondary" onClick={refresh}>查询</button>
+        <button className="primary" onClick={() => setCreating({account_type: 'BANK'})}>+ 录入日记账</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>单据号</th><th>日期</th><th>账户</th><th>方向</th><th>金额</th><th>摘要</th><th>操作人</th><th></th></tr></thead>
+          <tbody>
+            {journals.map(j => <tr key={j.id}>
+              <td className="mono">{j.journal_no}</td>
+              <td>{j.journal_date}</td>
+              <td>{j.account_type === 'BANK' ? j.bank_name + ' ' + j.bankAccountNo : '现金'}</td>
+              <td><span className={j.direction === 'IN' ? 'status submitted' : 'status rejected'}>{j.direction === 'IN' ? '收入' : '支出'}</span></td>
+              <td className="number"><strong className={j.direction === 'IN' ? 'positive' : 'negative'}>{money(j.amount_cents)}</strong></td>
+              <td>{j.summary}</td>
+              <td>{j.operatorName}</td>
+              <td><button className="secondary small" onClick={() => setViewing(j)}>详情</button></td>
+            </tr>)}
+          </tbody>
+        </table>
+        {!journals.length && <div className="empty-state"><p>暂无日记账记录</p></div>}
+      </div>
+    </>}
+    
+    {tab === 'accounts' && <>
+      <div className="action-bar">
+        <button className="primary" onClick={() => setCreating({type: 'account'})}>+ 添加银行账户</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>银行名称</th><th>账号</th><th>户名</th><th className="number">余额</th></tr></thead>
+          <tbody>
+            {bankAccounts.map(a => <tr key={a.id}>
+              <td><strong>{a.bank_name}</strong></td>
+              <td className="mono">{a.account_no}</td>
+              <td>{a.account_name}</td>
+              <td className="number"><strong>{money(a.balance_cents)}</strong></td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </>}
+    
+    {tab === 'bills' && <>
+      <div className="action-bar">
+        <button className="primary" onClick={() => setCreating({type: 'bill'})}>+ 新增票据</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>票号</th><th>类型</th><th>方向</th><th className="number">票面金额</th><th>到期日期</th><th>状态</th></tr></thead>
+          <tbody>
+            {bills.map(b => <tr key={b.id}>
+              <td className="mono">{b.bill_no}</td>
+              <td>{billTypeMap[b.bill_type] || b.bill_type}</td>
+              <td>{b.direction === 'RECEIVABLE' ? '应收票据' : '应付票据'}</td>
+              <td className="number"><strong>{money(b.face_amount_cents)}</strong></td>
+              <td>{b.due_date}</td>
+              <td>{billStatusMap[b.status] || b.status}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    </>}
+    
+    {creating && <CashJournalForm bankAccounts={bankAccounts} value={creating} onClose={() => setCreating(null)} onSave={() => { setCreating(null); refresh(); }} notify={notify}/>}
+    {viewing && <CashJournalDetail value={viewing} onClose={() => setViewing(null)}/>}
+  </Panel>;
+}
+
+function CashJournalForm({ bankAccounts, value, onClose, onSave, notify }) {
+  const [form, setForm] = useState({
+    account_type: value.account_type || 'BANK',
+    bank_id: '',
+    direction: 'IN',
+    amount_cents: '',
+    summary: '',
+    journal_date: new Date().toISOString().slice(0, 10),
+    counterparty_name: '',
+    remark: ''
+  });
+  
+  async function save() {
+    if (!form.amount_cents) { notify('请输入金额', 'error'); return; }
+    try {
+      await api('/api/cash-journals', { method: 'POST', body: form });
+      notify('保存成功');
+      onSave();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+  
+  return <Modal title="录入日记账" onClose={onClose}>
+    <div className="modal-body">
+      <div className="form-grid">
+        <label className="full">
+          账户类型
+          <select value={form.account_type} onChange={e => setForm({...form, account_type: e.target.value})}>
+            <option value="CASH">现金</option>
+            <option value="BANK">银行存款</option>
+          </select>
+        </label>
+        {form.account_type === 'BANK' && <label className="full">
+          银行账户
+          <select value={form.bank_id} onChange={e => setForm({...form, bank_id: e.target.value})}>
+            <option value="">选择账户</option>
+            {bankAccounts.map(a => <option key={a.id} value={a.id}>{a.bank_name} {a.account_no}</option>)}
+          </select>
+        </label>}
+        <label>
+          收支方向
+          <select value={form.direction} onChange={e => setForm({...form, direction: e.target.value})}>
+            <option value="IN">收款</option>
+            <option value="OUT">付款</option>
+          </select>
+        </label>
+        <label>
+          日期
+          <input type="date" value={form.journal_date} onChange={e => setForm({...form, journal_date: e.target.value})}/>
+        </label>
+        <label className="full">
+          金额（元）
+          <input type="number" value={form.amount_cents} onChange={e => setForm({...form, amount_cents: e.target.value})} placeholder="请输入金额"/>
+        </label>
+        <label className="full">
+          对方单位
+          <input value={form.counterparty_name} onChange={e => setForm({...form, counterparty_name: e.target.value})}/>
+        </label>
+        <label className="full">
+          摘要
+          <input value={form.summary} onChange={e => setForm({...form, summary: e.target.value})}/>
+        </label>
+      </div>
+    </div>
+    <div className="modal-footer">
+      <button className="secondary" onClick={onClose}>取消</button>
+      <button className="primary" onClick={save}>保存</button>
+    </div>
+  </Modal>;
+}
+
+function CashJournalDetail({ value, onClose }) {
+  return <Modal title={"日记账详情 " + value.journal_no} onClose={onClose}>
+    <div className="modal-body">
+      <div className="form-grid">
+        <label>单据号<span className="mono">{value.journal_no}</span></label>
+        <label>日期<span>{value.journal_date}</span></label>
+        <label>账户<span>{value.account_type === 'BANK' ? value.bank_name : '现金'}</span></label>
+        <label>方向<span className={value.direction === 'IN' ? 'positive' : 'negative'}>{value.direction === 'IN' ? '收入' : '支出'}</span></label>
+        <label className="full">金额<span className="mono"><strong>{money(value.amount_cents)}</strong></span></label>
+        <label className="full">摘要<span>{value.summary}</span></label>
+        <label className="full">操作人<span>{value.operatorName}</span></label>
+      </div>
+    </div>
+    <div className="modal-footer">
+      <button className="secondary" onClick={onClose}>关闭</button>
+    </div>
+  </Modal>;
+}
+
+
 function VoucherDetail({ value, onClose, formatMoney }) {
   if (!value) return null;
   return <Modal title={`凭证 ${value.voucher_no}`} onClose={onClose} wide>
@@ -843,7 +1062,16 @@ function InventoryTransactions({ user, notify }) {
   const [type, setType] = useState("");
   const load = () => api("/api/inventory-transactions?search=" + encodeURIComponent(search) + "&type=" + type).then((r) => setItems(r.inventoryTransactions)).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [type]);
-  const typeMap = { PURCHASE_IN: "采购入库", SALES_OUT: "销售出库", PURCHASE_RETURN_IN: "采购退货入库", SALES_RETURN_OUT: "销售退货出库", ADJUSTMENT_IN: "盘点调整+", ADJUSTMENT_OUT: "盘点调整-", TRANSFER_IN: "调拨入库", TRANSFER_OUT: "调拨出库" };
+  const typeMap = { 
+    PURCHASE_RECEIPT: "采购入库", 
+    SALES_DELIVERY: "销售出库", 
+    SALES_RETURN: "销售退货", 
+    PURCHASE_RETURN: "采购退货", 
+    INVENTORY_CHECK: "库存盘点", 
+    INVENTORY_TRANSFER: "库存调拨", 
+    PRODUCTION_OUTPUT: "生产完工入库",
+    PRODUCTION_ORDER: "生产领料"
+  };
   return <Panel title="库存流水" subtitle="所有库存变动的明细记录">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部类型</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>
     <div className="table-wrap"><table><thead><tr><th>日期</th><th>类型</th><th>单号</th><th>仓库</th><th>货品</th><th className="number">数量</th><th className="number">结存</th></tr></thead><tbody>
@@ -1130,6 +1358,129 @@ function BomModal({ user, value, onClose, notify, api, products }) {
 }
 
 // ============ Production Orders ============
+
+
+function MRPCalculator({ products, onClose, notify }) {
+  const [productId, setProductId] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  
+  async function calculate() {
+    if (!productId || !quantity) {
+      notify('请选择产品和输入数量');
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await api('/api/mrp/calculate', {
+        method: 'POST',
+        body: { type: 'product', productId, quantity: Number(quantity) }
+      });
+      setResult(data);
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+  
+  const selectedProduct = products.find(p => p.id === productId);
+  
+  return <Modal title="MRP 物料需求运算" onClose={onClose} wide>
+    <div className="modal-body">
+      <div className="form-grid" style={{marginBottom: '20px'}}>
+        <label className="full">
+          选择产品
+          <select value={productId} onChange={e => { setProductId(e.target.value); setResult(null); }}>
+            <option value="">-- 选择产品 --</option>
+            {products.map(p => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+          </select>
+        </label>
+        <label>
+          需求数量
+          <input type="number" value={quantity} onChange={e => setQuantity(Number(e.target.value))} min="1"/>
+        </label>
+        <label style={{display: 'flex', alignItems: 'flex-end'}}>
+          <button className="primary" onClick={calculate} disabled={loading}>
+            {loading ? '计算中...' : '计算 MRP'}
+          </button>
+        </label>
+      </div>
+      
+      {result && <>
+        <div className="form-section-head">运算结果</div>
+        
+        <div className="stats-grid" style={{marginBottom: '16px'}}>
+          <div className="stat-card">
+            <span>需求物料数</span>
+            <strong>{result.materialsCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span>紧急采购</span>
+            <strong style={{color: result.summary.urgentCount > 0 ? 'var(--danger)' : 'inherit'}}>{result.summary.urgentCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span>优先采购</span>
+            <strong style={{color: result.summary.highCount > 0 ? 'var(--warning)' : 'inherit'}}>{result.summary.highCount}</strong>
+          </div>
+          <div className="stat-card">
+            <span>预估成本</span>
+            <strong>{money(result.summary.totalEstimatedCost)}</strong>
+          </div>
+        </div>
+        
+        <div style={{marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+          <strong>采购建议清单</strong>
+          <button className="secondary small" onClick={() => setShowDetails(!showDetails)}>
+            {showDetails ? '收起详情' : '显示详情'}
+          </button>
+        </div>
+        
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>物料编码</th><th>物料名称</th><th>需求数量</th><th>当前库存</th><th>采购数量</th><th>单位</th><th>预估成本</th><th>紧急程度</th></tr></thead>
+            <tbody>
+              {result.suggestions.map(s => <tr key={s.productId}>
+                <td className="mono">{s.code}</td>
+                <td><strong>{s.name}</strong></td>
+                <td className="number">{s.requiredQty.toFixed(3)}</td>
+                <td className="number">{s.currentStock.toFixed(3)}</td>
+                <td className="number positive"><strong>{s.quantity.toFixed(3)}</strong></td>
+                <td>{s.unit}</td>
+                <td className="number">{money(s.estimatedCost)}</td>
+                <td>
+                  {s.urgency === 'urgent' && <span className="status rejected">缺货</span>}
+                  {s.urgency === 'high' && <span className="status pending">紧急</span>}
+                  {s.urgency === 'normal' && <span className="status submitted">普通</span>}
+                </td>
+              </tr>)}
+            </tbody>
+            {showDetails && <tfoot style={{background: 'var(--bg-tertiary)'}}>
+              <tr><td colSpan="8"><em>明细：</em></td></tr>
+              {result.suggestions.map(s => <tr key={'detail-' + s.productId}>
+                <td colSpan="2" className="mono">{s.code}</td>
+                <td colSpan="6">需求：{s.requiredQty.toFixed(3)} - 库存：{s.currentStock.toFixed(3)} = 采购：{s.quantity.toFixed(3)} {s.unit}</td>
+              </tr>)}
+            </tfoot>}
+          </table>
+        </div>
+        
+        <div style={{marginTop: '16px', padding: '12px', background: 'var(--accent-primary-subtle)', borderRadius: 'var(--radius-md)'}}>
+          <strong style={{color: 'var(--accent-primary)'}}>💡 说明</strong>
+          <p style={{fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px'}}>
+            以上采购建议基于已审核的 BOM 清单计算。实际采购时还需考虑供应商交期、最小起订量等因素。
+          </p>
+        </div>
+      </>}
+    </div>
+    <div className="modal-footer">
+      <button className="secondary" onClick={onClose}>关闭</button>
+    </div>
+  </Modal>;
+}
+
 function ProductionOrders({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
@@ -1224,4 +1575,5 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
 
 
 function Loading() { return <div className="loading"><div className="spinner"/>载入中…</div>; }
+
 
