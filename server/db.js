@@ -150,6 +150,39 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE accounting_entries ADD COLUMN line_no INTEGER DEFAULT 1');
   db.exec("UPDATE accounting_vouchers SET period=substr(voucher_date,1,7) WHERE period IS NULL; UPDATE accounting_vouchers SET updated_at=created_at WHERE updated_at IS NULL");
   db.exec('UPDATE users SET name=display_name WHERE name IS NULL');
+
+  // Migration: Fix production_orders CHECK constraint to include PENDING status
+  const migrateProductionOrdersCheck = () => {
+    try {
+      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='production_orders'").get()?.sql || '';
+      if (currentSql.includes('PENDING')) return;
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS production_orders_new (
+          id TEXT PRIMARY KEY,
+          order_no TEXT NOT NULL UNIQUE,
+          product_id TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('DRAFT','PENDING','IN_PROGRESS','COMPLETED','CANCELLED')),
+          planned_start TEXT,
+          planned_finish TEXT,
+          actual_start TEXT,
+          actual_finish TEXT,
+          remark TEXT NOT NULL DEFAULT '',
+          creator_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          bom_id TEXT
+        );
+      `);
+      db.exec('INSERT INTO production_orders_new SELECT * FROM production_orders');
+      db.exec('DROP TABLE production_orders');
+      db.exec('ALTER TABLE production_orders_new RENAME TO production_orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id)');
+    } catch (e) { console.error('Migration production_orders CHECK failed:', e.message); }
+  };
+  migrateProductionOrdersCheck();
+
   return db;
 }
 
@@ -678,7 +711,7 @@ function migrate(db) {
       order_no TEXT NOT NULL UNIQUE,
       product_id TEXT NOT NULL,
       quantity REAL NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','IN_PROGRESS','COMPLETED','CANCELLED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','PENDING','IN_PROGRESS','COMPLETED','CANCELLED')),
       planned_start TEXT,
       planned_finish TEXT,
       actual_start TEXT,
@@ -1132,3 +1165,4 @@ export function transaction(db, work) {
 export function id() {
   return randomUUID();
 }
+

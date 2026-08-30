@@ -330,3 +330,177 @@ test('扩展业务模块在全新数据库中完成迁移并可查询', async ()
     assert.equal(response.status, 200, `${path} returned ${response.status}`);
   }
 });
+
+describe('Production Orders', () => {
+  let adminToken;
+  let productId;
+  let bomId;
+  let orderId;
+
+  before(async () => {
+    const loginResult = await login('admin', 'admin123');
+    adminToken = loginResult.data.token;
+    // Get a product for testing
+    const productsRes = await fetch(`${baseUrl}/api/products`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const products = await productsRes.json();
+    productId = products.products?.[0]?.id;
+  });
+
+  test('创建BOM成功', async () => {
+    if (!productId) return; // Skip if no products
+    
+    const bomRes = await fetch(`${baseUrl}/api/boms`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        productId: productId,
+        version: '1.0',
+        remark: 'Test BOM',
+        items: [],
+      }),
+    });
+    assert.equal(bomRes.status, 200);
+    const bom = await bomRes.json();
+    bomId = bom.id;
+  });
+
+  test('创建生产工单成功', async () => {
+    if (!productId) return;
+    
+    const orderRes = await fetch(`${baseUrl}/api/production-orders`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        productId: productId,
+        bomId: bomId || null,
+        quantity: 10,
+        plannedStart: '2026-09-01',
+        remark: 'Test Order',
+      }),
+    });
+    assert.equal(orderRes.status, 200);
+    const order = await orderRes.json();
+    orderId = order.id;
+  });
+
+  test('获取生产工单列表', async () => {
+    const listRes = await fetch(`${baseUrl}/api/production-orders`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    assert.equal(listRes.status, 200);
+    const data = await listRes.json();
+    assert.ok(Array.isArray(data.orders));
+  });
+
+  test('获取生产工单详情', async () => {
+    if (!orderId) return;
+    
+    const detailRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    assert.equal(detailRes.status, 200);
+    const data = await detailRes.json();
+    assert.equal(data.order.id, orderId);
+  });
+
+  test('开工生产工单', async () => {
+    if (!orderId) return;
+    
+    const startRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'start' }),
+    });
+    assert.equal(startRes.status, 200);
+    
+    // Verify status changed
+    const detailRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const data = await detailRes.json();
+    assert.equal(data.order.status, 'IN_PROGRESS');
+  });
+
+  test('完工生产工单', async () => {
+    if (!orderId) return;
+    
+    const completeRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'complete' }),
+    });
+    assert.equal(completeRes.status, 200);
+    
+    // Verify status changed
+    const detailRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    const data = await detailRes.json();
+    assert.equal(data.order.status, 'COMPLETED');
+  });
+
+  test('已完工工单不能取消', async () => {
+    if (!orderId) return;
+    
+    const cancelRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'cancel' }),
+    });
+    assert.equal(cancelRes.status, 409); // Should fail
+  });
+
+  test('不存在的工单返回404', async () => {
+    const res = await fetch(`${baseUrl}/api/production-orders/nonexistent-id`, {
+      headers: { 'Authorization': `Bearer ${adminToken}` },
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('未开工的工单不能完工', async () => {
+    if (!productId) return;
+    
+    // Create new order
+    const orderRes = await fetch(`${baseUrl}/api/production-orders`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        productId: productId,
+        quantity: 5,
+      }),
+    });
+    const order = await orderRes.json();
+    
+    // Try to complete without starting
+    const completeRes = await fetch(`${baseUrl}/api/production-orders/${order.id}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${adminToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'complete' }),
+    });
+    assert.equal(completeRes.status, 409);
+  });
+});
+

@@ -2839,6 +2839,16 @@ async function createProductionOutput(db, req, res, actor) {
     db.prepare('UPDATE inventory SET quantity=quantity+? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(qualifiedQuantity || quantity, order.product_id);
     // Consume materials from BOM
     const items = db.prepare('SELECT * FROM production_order_items WHERE order_id=?').all(orderId);
+    // Validate stock availability before consuming materials (prevent negative inventory)
+    const warehouseId = db.prepare("SELECT value FROM settings WHERE key='?' AND active=1 LIMIT 1").get("default_warehouse")?.value;
+    for (const item of items) {
+      const inv = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?").get(warehouseId, item.product_id);
+      if (!inv || inv.quantity < item.consumed_quantity) {
+        const product = db.prepare("SELECT code FROM products WHERE id=?").get(item.product_id);
+        throw new HttpError(400, (product?.code || item.product_id) + " 库存不足，需要 " + item.consumed_quantity.toFixed(3) + "，实际 " + (inv?.quantity || 0).toFixed(3));
+      }
+    }
+    // Now safe to consume materials
     for (const item of items) {
       db.prepare('UPDATE inventory SET quantity=quantity-? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(item.consumed_quantity, item.product_id);
       db.prepare('UPDATE production_order_items SET consumed_quantity=? WHERE id=?').run(item.quantity, item.id);
