@@ -77,6 +77,7 @@ modern-erp/
 | 供应商资料 | Suppliers | /api/suppliers | 供应商增删改查 |
 | 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
 | 仓库资料 | Warehouses | /api/warehouses | 仓库增删改查 |
+| 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 日记账、银行账户、票据 |
 | 库存管理 | Inventory | /api/inventory, /api/inventory-checks, /api/inventory-transfers | 库存查询/盘点/调拨 |
 | 财务凭证 | Accounting | /api/accounting-subjects, /api/accounting-vouchers | 会计科目和凭证 |
 | 用户与角色 | UsersRoles | /api/users, /api/roles | 权限管理 |
