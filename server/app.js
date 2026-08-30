@@ -78,6 +78,31 @@ async function handleApi(db, req, res, url) {
   if (poActionMatch && req.method === 'POST') return changePurchaseOrderState(db, req, res, actor, poActionMatch[1], poActionMatch[2]);
   const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
   if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
+
+  // Cash Journals
+  if (pathname === '/api/cash-journals' && req.method === 'GET') return listCashJournals(db, res, actor, url);
+  if (pathname === '/api/cash-journals' && req.method === 'POST') return createCashJournal(db, req, res, actor);
+
+  // Bank Accounts
+  if (pathname === '/api/bank-accounts' && req.method === 'GET') return listBankAccounts(db, res, actor);
+  if (pathname === '/api/bank-accounts' && req.method === 'POST') return createBankAccount(db, req, res, actor);
+  const bankAccountMatch = pathname.match(/^\/api\/bank-accounts\/([^/]+)$/);
+  if (bankAccountMatch && req.method === 'PATCH') return updateBankAccount(db, req, res, actor, bankAccountMatch[1]);
+
+  // Bills
+  if (pathname === '/api/bills' && req.method === 'GET') return listBills(db, res, actor, url);
+  if (pathname === '/api/bills' && req.method === 'POST') return createBill(db, req, res, actor);
+  const billMatch = pathname.match(/^\/api\/bills\/([^/]+)$/);
+  if (billMatch && req.method === 'PATCH') return updateBill(db, req, res, actor, billMatch[1]);
+
+  // Fixed Assets
+  if (pathname === '/api/fixed-assets' && req.method === 'GET') return listFixedAssets(db, res, actor);
+  if (pathname === '/api/fixed-assets' && req.method === 'POST') return createFixedAsset(db, req, res, actor);
+  const assetMatch = pathname.match(/^\/api\/fixed-assets\/([^/]+)$/);
+  if (assetMatch && req.method === 'PATCH') return updateFixedAsset(db, req, res, actor, assetMatch[1]);
+  if (pathname === '/api/fixed-assets/depreciation' && req.method === 'POST') return calculateDepreciation(db, req, res, actor);
+  const assetDepMatch = pathname.match(/^\/api\/fixed-assets\/([^/]+)\/depreciations$/);
+  if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // Warehouses
@@ -1875,6 +1900,146 @@ function listAssetDepreciations(db, res, actor, url) {
 }
 
 
+
+
+// ============ 成本管理 ============
+
+function listProductCosts(db, res, actor, url) {
+  allowAny(actor, ['ACCOUNTING_VIEW', 'PRODUCTS_VIEW']);
+  const productId = url.searchParams.get('product_id');
+  
+  let sql = `SELECT pc.*, p.code productCode, p.name productName, u.display_name creatorName
+    FROM product_costs pc
+    JOIN products p ON p.id = pc.product_id
+    JOIN users u ON u.id = pc.creator_id
+    WHERE pc.status = 'ACTIVE'`;
+  const params = [];
+  
+  if (productId) { sql += ' AND pc.product_id = ?'; params.push(productId); }
+  
+  sql += ' ORDER BY pc.effective_date DESC LIMIT 100';
+  
+  const costs = db.prepare(sql).all(...params);
+  return send(res, 200, { costs });
+}
+
+async function createProductCost(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { product_id, standard_cost, material_cost, labor_cost, overhead_cost, effective_date, remark } = body;
+  
+  if (!product_id) throw new HttpError(400, '请选择产品');
+  
+  // 将旧标准成本设为历史
+  db.prepare("UPDATE product_costs SET status = 'HISTORICAL', updated_at = ? WHERE product_id = ? AND status = 'ACTIVE'")
+    .run(new Date().toISOString(), product_id);
+  
+  const costId = id();
+  const now = new Date().toISOString();
+  const totalCents = Math.round((standard_cost || 0) * 100) + Math.round((material_cost || 0) * 100) + Math.round((labor_cost || 0) * 100) + Math.round((overhead_cost || 0) * 100);
+  
+  db.prepare(`INSERT INTO product_costs(id, product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, status, remark, creator_id, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`)
+    .run(costId, product_id, Math.round((standard_cost || 0) * 100), Math.round((material_cost || 0) * 100), Math.round((labor_cost || 0) * 100), Math.round((overhead_cost || 0) * 100), effective_date || now.slice(0, 10), remark || '', actor.id, now, now);
+  
+  // 更新产品的标准成本
+  db.prepare('UPDATE products SET price_cents = ? WHERE id = ?').run(totalCents, product_id);
+  
+  return send(res, 201, { id: costId });
+}
+
+function listProductionCosts(db, res, actor, url) {
+  allowAny(actor, ['ACCOUNTING_VIEW', 'PRODUCTION_ORDERS_VIEW']);
+  const orderId = url.searchParams.get('order_id');
+  
+  let sql = `SELECT pc.*, po.order_no, p.code productCode, p.name productName, u.display_name creatorName
+    FROM production_costs pc
+    JOIN production_orders po ON po.id = pc.order_id
+    JOIN products p ON p.id = po.product_id
+    JOIN users u ON u.id = pc.creator_id`;
+  const params = [];
+  
+  if (orderId) { sql += ' WHERE pc.order_id = ?'; params.push(orderId); }
+  sql += ' ORDER BY pc.calculated_at DESC LIMIT 100';
+  
+  const costs = db.prepare(sql).all(...params);
+  return send(res, 200, { costs });
+}
+
+async function calculateProductionCost(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { order_id } = body;
+  
+  if (!order_id) throw new HttpError(400, '请选择工单');
+  
+  const order = db.prepare(`SELECT po.*, p.code productCode, p.name productName, pc.standard_cost_cents
+    FROM production_orders po
+    JOIN products p ON p.id = po.product_id
+    LEFT JOIN product_costs pc ON pc.product_id = po.product_id AND pc.status = 'ACTIVE'
+    WHERE po.id = ?`).get(order_id);
+  
+  if (!order) throw new HttpError(404, '工单不存在');
+  
+  // 获取物料消耗
+  const items = db.prepare('SELECT * FROM production_order_items WHERE order_id = ?').all(order_id);
+  
+  // 获取成本要素费率
+  const laborRate = db.prepare("SELECT rate_value FROM cost_rates WHERE rate_type = 'LABOR_RATE' AND effective_date <= date('now') ORDER BY effective_date DESC LIMIT 1").get();
+  const overheadRate = db.prepare("SELECT rate_value FROM cost_rates WHERE rate_type = 'OVERHEAD_RATE' AND effective_date <= date('now') ORDER BY effective_date DESC LIMIT 1").get();
+  
+  // 计算物料成本
+  let materialCost = 0;
+  for (const item of items) {
+    const itemCost = db.prepare("SELECT standard_cost_cents FROM product_costs WHERE product_id = ? AND status = 'ACTIVE' LIMIT 1").get(item.product_id);
+    materialCost += (itemCost?.standard_cost_cents || 0) * item.consumed_quantity;
+  }
+  
+  // 假设工时（简化计算：生产数量 / 10 小时）
+  const laborHours = order.quantity / 10;
+  const laborCost = Math.round(laborHours * (laborRate?.rate_value || 100) * 100); // 每小时100元
+  const overheadCost = Math.round(laborCost * (overheadRate?.rate_value || 0.5)); // 50% 制造费用率
+  
+  const totalCost = materialCost + laborCost + overheadCost;
+  const unitCost = order.quantity > 0 ? Math.round(totalCost / order.quantity) : 0;
+  
+  const costId = id();
+  const now = new Date().toISOString();
+  
+  db.prepare(`INSERT INTO production_costs(id, order_id, material_cost_cents, labor_cost_cents, overhead_cost_cents, total_cost_cents, unit_cost_cents, calculated_at, creator_id, created_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(costId, order_id, materialCost, laborCost, overheadCost, totalCost, unitCost, now.slice(0, 10), actor.id, now);
+  
+  return send(res, 200, {
+    cost: { id: costId, order_id, material_cost_cents: materialCost, labor_cost_cents: laborCost, overhead_cost_cents: overheadCost, total_cost_cents: totalCost, unit_cost_cents: unitCost },
+    breakdown: { laborHours: laborHours.toFixed(2), laborRate: laborRate?.rate_value || 100, overheadRate: overheadRate?.rate_value || 0.5 }
+  });
+}
+
+function listCostRates(db, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const rates = db.prepare('SELECT * FROM cost_rates ORDER BY rate_type, effective_date DESC').all();
+  return send(res, 200, { rates });
+}
+
+async function createCostRate(db, req, res, actor) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const body = await readJson(req);
+  const { rate_type, rate_value, unit, effective_date, remark } = body;
+  
+  if (!rate_type || rate_value === undefined) throw new HttpError(400, '请填写完整的费率信息');
+  
+  const rateId = id();
+  const now = new Date().toISOString();
+  
+  db.prepare(`INSERT INTO cost_rates(id, rate_type, rate_value, unit, effective_date, remark, creator_id, created_at, updated_at)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(rateId, rate_type, rate_value, unit || '元/小时', effective_date || now.slice(0, 10), remark || '', actor.id, now, now);
+  
+  return send(res, 201, { id: rateId });
+}
+
+
 // ============ Purchase Receipts ============
 
 function listPurchaseReceipts(db, res, actor, url) {
@@ -2546,3 +2711,234 @@ const AP_STATUS = { OPEN: '未付', PARTIAL: '部分付款', CLOSED: '已结清'
 const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const DELIVERY_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RETURN_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
+
+// ============ Cash Journals ============
+
+async function listCashJournals(db, res, actor, url) {
+  allowAny(actor, ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE']);
+  const search = url.searchParams.get('search') || '';
+  const startDate = url.searchParams.get('startDate') || '';
+  const endDate = url.searchParams.get('endDate') || '';
+  const accountType = url.searchParams.get('accountType') || '';
+  
+  let sql = `SELECT cj.*, u.name operatorName, ba.account_name bankName
+    FROM cash_journals cj
+    LEFT JOIN users u ON u.id=cj.operator_id
+    LEFT JOIN bank_accounts ba ON ba.id=cj.bank_id
+    WHERE 1=1`;
+  const params = [];
+  
+  if (search) {
+    sql += ` AND (cj.journal_no LIKE ? OR cj.summary LIKE ? OR cj.counterparty_name LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  }
+  if (startDate) { sql += ` AND cj.journal_date >= ?`; params.push(startDate); }
+  if (endDate) { sql += ` AND cj.journal_date <= ?`; params.push(endDate); }
+  if (accountType) { sql += ` AND cj.account_type = ?`; params.push(accountType); }
+  
+  sql += ` ORDER BY cj.journal_date DESC, cj.created_at DESC`;
+  
+  const journals = db.prepare(sql).all(...params);
+  return send(res, 200, { journals });
+}
+
+async function createCashJournal(db, req, res, actor) {
+  allow(actor, 'CASH_JOURNALS_MANAGE');
+  const body = await readJson(req);
+  const { journal_type, account_type, bank_account, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, journal_date, remark } = body;
+  
+  const now = new Date().toISOString();
+  const journalId = id();
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM cash_journals WHERE journal_date LIKE ?').get(journal_date.slice(0,7) + '%').cnt + 1).padStart(4, '0');
+  const journalNo = `CJ-${journal_date.replace(/-/g,'')}-${seq}`;
+  
+  db.prepare(`INSERT INTO cash_journals(id,journal_no,journal_type,account_type,bank_id,amount_cents,direction,counterparty_type,counterparty_id,counterparty_name,subject_id,summary,voucher_id,operator_id,journal_date,remark,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    journalId, journalNo, journal_type, account_type, bank_account || null, amount_cents, direction,
+    counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null,
+    summary, null, actor.id, journal_date, remark || '', now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${money(amount_cents)} ${summary}`);
+  return send(res, 200, { id: journalId, journal_no: journalNo });
+}
+
+// ============ Bank Accounts ============
+
+async function listBankAccounts(db, res, actor) {
+  allowAny(actor, ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE']);
+  const accounts = db.prepare('SELECT * FROM bank_accounts ORDER BY created_at DESC').all();
+  return send(res, 200, { accounts });
+}
+
+async function createBankAccount(db, req, res, actor) {
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
+  const body = await readJson(req);
+  const { bank_name, account_no, account_name, initial_balance_cents, remark } = body;
+  const now = new Date().toISOString();
+  const accountId = id();
+  
+  db.prepare('INSERT INTO bank_accounts(id,bank_name,account_no,account_name,balance_cents,initial_balance_cents,active,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?)').run(
+    accountId, bank_name, account_no, account_name, initial_balance_cents || 0, initial_balance_cents || 0, remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'BANK_ACCOUNT', accountId, `新建银行账户 ${account_name}`);
+  return send(res, 200, { id: accountId });
+}
+
+async function updateBankAccount(db, req, res, actor, accountId) {
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
+  const body = await readJson(req);
+  const { bank_name, account_no, account_name, active, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE bank_accounts SET bank_name=?,account_no=?,account_name=?,active=?,remark=?,updated_at=? WHERE id=?').run(
+    bank_name, account_no, account_name, active ? 1 : 0, remark || '', now, accountId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'BANK_ACCOUNT', accountId, `更新银行账户 ${account_name}`);
+  return send(res, 200, { ok: true });
+}
+
+// ============ Bills (Notes Payable/Receivable) ============
+
+async function listBills(db, res, actor, url) {
+  allowAny(actor, ['BILLS_VIEW', 'BILLS_MANAGE']);
+  const billType = url.searchParams.get('billType') || '';
+  const status = url.searchParams.get('status') || '';
+  
+  let sql = `SELECT b.*, 
+    CASE WHEN b.counterparty_type = 'CUSTOMER' THEN c.name ELSE s.name END counterpartyName,
+    u.name creatorName
+    FROM bills b
+    LEFT JOIN customers c ON c.id=b.counterparty_id AND b.counterparty_type='CUSTOMER'
+    LEFT JOIN suppliers s ON s.id=b.counterparty_id AND b.counterparty_type='SUPPLIER'
+    LEFT JOIN users u ON u.id=b.creator_id
+    WHERE 1=1`;
+  const params = [];
+  
+  if (billType) { sql += ` AND b.bill_type = ?`; params.push(billType); }
+  if (status) { sql += ` AND b.status = ?`; params.push(status); }
+  
+  sql += ` ORDER BY b.issue_date DESC, b.created_at DESC`;
+  
+  const bills = db.prepare(sql).all(...params);
+  return send(res, 200, { bills });
+}
+
+async function createBill(db, req, res, actor) {
+  allow(actor, 'BILLS_MANAGE');
+  const body = await readJson(req);
+  const { bill_type, bill_no, counterparty_type, counterparty_id, face_amount_cents, issue_date, due_date, status, remark } = body;
+  
+  const now = new Date().toISOString();
+  const billId = id();
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM bills WHERE bill_type=? AND issue_date LIKE ?').get(bill_type, issue_date.slice(0,7) + '%').cnt + 1).padStart(4, '0');
+  const billNo = bill_no || `${bill_type === 'RECEivable' ? 'AR' : 'AP'}-${issue_date.replace(/-/g,'')}-${seq}`;
+  
+  db.prepare('INSERT INTO bills(id,bill_type,bill_no,counterparty_type,counterparty_id,face_amount_cents,issue_date,due_date,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+    billId, bill_type, billNo, counterparty_type, counterparty_id, face_amount_cents, issue_date, due_date, status || 'PENDING', remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'BILL', billId, `新建${bill_type === 'RECEivable' ? '应收' : '应付'}票据 ${billNo}`);
+  return send(res, 200, { id: billId, bill_no: billNo });
+}
+
+async function updateBill(db, req, res, actor, billId) {
+  allow(actor, 'BILLS_MANAGE');
+  const body = await readJson(req);
+  const { bill_no, counterparty_id, face_amount_cents, issue_date, due_date, status, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE bills SET bill_no=?,counterparty_id=?,face_amount_cents=?,issue_date=?,due_date=?,status=?,remark=?,updated_at=? WHERE id=?').run(
+    bill_no, counterparty_id, face_amount_cents, issue_date, due_date, status, remark || '', now, billId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'BILL', billId, `更新票据 ${bill_no}`);
+  return send(res, 200, { ok: true });
+}
+
+// ============ Fixed Assets ============
+
+async function listFixedAssets(db, res, actor) {
+  allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
+  const assets = db.prepare(`SELECT fa.*, u.name creatorName,
+    (SELECT SUM(depreciation_cents) FROM asset_depreciations WHERE asset_id=fa.id) totalDepreciatedCents
+    FROM fixed_assets fa
+    LEFT JOIN users u ON u.id=fa.creator_id
+    ORDER BY fa.purchase_date DESC`).all();
+  return send(res, 200, { assets });
+}
+
+async function createFixedAsset(db, req, res, actor) {
+  allow(actor, 'FIXED_ASSETS_MANAGE');
+  const body = await readJson(req);
+  const { asset_code, asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents, depreciation_method, remark } = body;
+  
+  const now = new Date().toISOString();
+  const assetId = id();
+  const monthlyDepreciation = depreciation_method === 'NONE' ? 0 : 
+    Math.floor((purchase_amount_cents - (salvage_value_cents || 0)) / useful_life_months);
+  
+  db.prepare(`INSERT INTO fixed_assets(id,asset_code,asset_name,category,purchase_date,purchase_amount_cents,useful_life_months,salvage_value_cents,depreciation_method,monthly_depreciation_cents,net_value_cents,status,remark,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    assetId, asset_code, asset_name, category, purchase_date, purchase_amount_cents,
+    useful_life_months, salvage_value_cents || 0, depreciation_method, monthlyDepreciation,
+    purchase_amount_cents, 'IN_USE', remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'FIXED_ASSET', assetId, `新增固定资产 ${asset_name}`);
+  return send(res, 200, { id: assetId });
+}
+
+async function updateFixedAsset(db, req, res, actor, assetId) {
+  allow(actor, 'FIXED_ASSETS_MANAGE');
+  const body = await readJson(req);
+  const { asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents, depreciation_method, status, remark } = body;
+  const now = new Date().toISOString();
+  
+  const monthlyDepreciation = depreciation_method === 'NONE' ? 0 : 
+    Math.floor((purchase_amount_cents - (salvage_value_cents || 0)) / useful_life_months);
+  
+  db.prepare(`UPDATE fixed_assets SET asset_name=?,category=?,purchase_date=?,purchase_amount_cents=?,useful_life_months=?,salvage_value_cents=?,depreciation_method=?,monthly_depreciation_cents=?,status=?,remark=?,updated_at=? WHERE id=?`).run(
+    asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents || 0, depreciation_method, monthlyDepreciation, status, remark || '', now, assetId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'FIXED_ASSET', assetId, `更新固定资产 ${asset_name}`);
+  return send(res, 200, { ok: true });
+}
+
+async function calculateDepreciation(db, req, res, actor) {
+  allow(actor, 'FIXED_ASSETS_MANAGE');
+  const body = await readJson(req);
+  const { assetId, depreciationDate } = body;
+  
+  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id=?').get(assetId);
+  if (!asset) throw new HttpError(404, '固定资产不存在');
+  
+  const now = new Date().toISOString();
+  const depId = id();
+  
+  db.prepare('INSERT INTO asset_depreciations(id,asset_id,depreciation_date,depreciation_cents,creator_id,created_at) VALUES(?,?,?,?,?,?)').run(
+    depId, assetId, depreciationDate, asset.monthly_depreciation_cents, actor.id, now
+  );
+  
+  db.prepare('UPDATE fixed_assets SET net_value_cents=net_value_cents-?,updated_at=? WHERE id=?').run(
+    asset.monthly_depreciation_cents, now, assetId
+  );
+  
+  audit(db, actor.id, 'CREATE', 'ASSET_DEPRECIATION', depId, `计提折旧 ${money(asset.monthly_depreciation_cents)}`);
+  return send(res, 200, { id: depId });
+}
+
+async function getFixedAssetDepreciations(db, res, actor, assetId) {
+  allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
+  const depreciations = db.prepare(`SELECT ad.*, u.name creatorName 
+    FROM asset_depreciations ad LEFT JOIN users u ON u.id=ad.creator_id
+    WHERE ad.asset_id=? ORDER BY ad.depreciation_date DESC`).all(assetId);
+  return send(res, 200, { depreciations });
+}
+
+const BILL_TYPES = { RECEivable: '应收票据', PAYable: '应付票据' };
+const BILL_STATUS = { PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '已贴现', ENDORSED: '已背书', PAID: '已到期', CANCELLED: '已作废' };
+const ASSET_STATUS = { IN_USE: '使用中', MAINTENANCE: '维修中', SCRAPPED: '已报废', SOLD: '已出售' };

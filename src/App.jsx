@@ -33,6 +33,10 @@ const ic = {
   paymentCollections: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
   paymentDisbursements: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
   accounting: <Icon d="M2 17l10-5 10 5M2 12l10-5 10 5M2 7l10-5 10 5M12 22V12M7 7l5-2 5 2"/>,
+  cashJournals: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
+  bankAccounts: <Icon d="M3 21h18M3 10h18M3 7l9-4 9 4M4 10v11M20 10v11M8 10v11M12 10v11M16 10v11"/>,
+  bills: <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6"/>,
+  fixedAssets: <Icon d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
@@ -118,7 +122,11 @@ export default function App() {
     products: <Products user={user} notify={notify}/>,
     warehouses: <Warehouses user={user} notify={notify}/>,
     inventory: <Inventory user={user} notify={notify}/>,
-    accounting: <Accounting user={user} notify={notify}/>,
+    cashJournals: <CashJournals user={user} notify={notify}/>,
+      bankAccounts: <BankAccounts user={user} notify={notify}/>,
+      bills: <Bills user={user} notify={notify}/>,
+      fixedAssets: <FixedAssets user={user} notify={notify}/>,
+      accounting: <Accounting user={user} notify={notify}/>,
     purchaseReceipts: <PurchaseReceipts user={user} notify={notify}/>,
     salesDeliveries: <SalesDeliveries user={user} notify={notify}/>,
     returns: <Returns user={user} notify={notify}/>,
@@ -1577,3 +1585,421 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
 function Loading() { return <div className="loading"><div className="spinner"/>载入中…</div>; }
 
 
+
+// ============ Cash Journals ============
+
+function CashJournals({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [accountType, setAccountType] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ search, startDate, endDate, accountType });
+    api(`/api/cash-journals?${params}`).then((r) => setItems(r.journals)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <Panel title="现金日记账" subtitle="记录现金和银行存款收付款业务">
+      <Toolbar
+        search={search} setSearch={setSearch} onSearch={load}
+        placeholder="搜索单号、摘要或对方单位"
+        action={can(user, 'CASH_JOURNALS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增记录</button>}
+      />
+      <div className="filters">
+        <label>开始日期<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}/></label>
+        <label>结束日期<input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}/></label>
+        <label>账户类型<select value={accountType} onChange={(e) => setAccountType(e.target.value)}>
+          <option value="">全部</option>
+          <option value="CASH">现金</option>
+          <option value="BANK">银行</option>
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>单据号</th><th>日期</th><th>类型</th><th>账户</th><th>方向</th><th className="number">金额</th><th>摘要</th><th>操作员</th></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.journal_no}</td>
+                <td>{item.journal_date}</td>
+                <td><Badge>{item.journal_type === 'RECEIPT' ? '收款' : item.journal_type === 'PAYMENT' ? '付款' : '转账'}</Badge></td>
+                <td>{item.account_type === 'CASH' ? '现金' : '银行'}{item.bankName ? ` - ${item.bankName}` : ''}</td>
+                <td><Badge type={item.direction === 'IN' ? 'success' : 'danger'}>{item.direction === 'IN' ? '收入' : '支出'}</Badge></td>
+                <td className="number">{money(item.amount_cents)}</td>
+                <td>{item.summary}</td>
+                <td>{item.operatorName}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无日记账记录"/>}
+      </div>
+      {editing && <CashJournalModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('日记账已保存'); }} />}
+    </Panel>
+  );
+}
+
+function CashJournalModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    journal_type: 'RECEIPT', account_type: 'CASH', bank_account: '',
+    amount_cents: 0, direction: 'IN', counterparty_type: '', counterparty_id: '',
+    counterparty_name: '', subject_id: '', summary: '', journal_date: new Date().toISOString().slice(0, 10), remark: ''
+  });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api('/api/cash-journals', { method: 'POST', body: form });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title="新增日记账" onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>业务类型<select value={form.journal_type} onChange={(e) => setForm({...form, journal_type: e.target.value})}>
+          <option value="RECEIPT">收款</option>
+          <option value="PAYMENT">付款</option>
+          <option value="TRANSFER">转账</option>
+        </select></label>
+        <label>账户类型<select value={form.account_type} onChange={(e) => setForm({...form, account_type: e.target.value})}>
+          <option value="CASH">现金</option>
+          <option value="BANK">银行</option>
+        </select></label>
+        <label>日期<input type="date" value={form.journal_date} onChange={(e) => setForm({...form, journal_date: e.target.value})} required/></label>
+        <label>收支方向<select value={form.direction} onChange={(e) => setForm({...form, direction: e.target.value})}>
+          <option value="IN">收入</option>
+          <option value="OUT">支出</option>
+        </select></label>
+        <label className="full">金额(元)<input type="number" value={form.amount_cents / 100} step="0.01" min="0" onChange={(e) => setForm({...form, amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label className="full">对方单位<input value={form.counterparty_name} onChange={(e) => setForm({...form, counterparty_name: e.target.value})}/></label>
+        <label className="full">摘要<input value={form.summary} onChange={(e) => setForm({...form, summary: e.target.value})} required/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Bank Accounts ============
+
+function BankAccounts({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => api('/api/bank-accounts').then((r) => setItems(r.accounts)).catch((e) => notify(e.message, 'error'));
+
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <Panel title="银行账户" subtitle="管理企业银行账户信息">
+      <Toolbar action={can(user, 'BANK_ACCOUNTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增账户</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>开户银行</th><th>账号</th><th>户名</th><th className="number">余额</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td>{item.bank_name}</td>
+                <td className="mono">{item.account_no}</td>
+                <td><strong>{item.account_name}</strong></td>
+                <td className="number">{money(item.balance_cents)}</td>
+                <td><Active active={item.active}/></td>
+                <td>{can(user, 'BANK_ACCOUNTS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无银行账户"/>}
+      </div>
+      {editing && <BankAccountModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('银行账户已保存'); }} />}
+    </Panel>
+  );
+}
+
+function BankAccountModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({ bank_name: '', account_no: '', account_name: '', initial_balance_cents: 0, remark: '', active: true, ...value });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/bank-accounts/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/bank-accounts', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑账户' : '新增账户'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>开户银行<input value={form.bank_name} onChange={(e) => setForm({...form, bank_name: e.target.value})} required/></label>
+        <label>账号<input value={form.account_no} onChange={(e) => setForm({...form, account_no: e.target.value})} required/></label>
+        <label>户名<input value={form.account_name} onChange={(e) => setForm({...form, account_name: e.target.value})} required/></label>
+        <label>期初余额(元)<input type="number" value={form.initial_balance_cents / 100} step="0.01" onChange={(e) => setForm({...form, initial_balance_cents: Math.round(e.target.value * 100)})}/></label>
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({...form, active: e.target.checked})}/> 启用该账户</label>}
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Bills ============
+
+function Bills({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [billType, setBillType] = useState('');
+  const [status, setStatus] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ billType, status });
+    api(`/api/bills?${params}`).then((r) => setItems(r.bills)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <Panel title="票据管理" subtitle="管理应收/应付票据">
+      <Toolbar action={can(user, 'BILLS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增票据</button>}/>
+      <div className="filters">
+        <label>票据类型<select value={billType} onChange={(e) => setBillType(e.target.value)}>
+          <option value="">全部</option>
+          <option value="RECEivable">应收票据</option>
+          <option value="PAYable">应付票据</option>
+        </select></label>
+        <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">全部</option>
+          <option value="PENDING">待承兑</option>
+          <option value="ACCEPTED">已承兑</option>
+          <option value="DISCOUNTED">已贴现</option>
+          <option value="PAID">已到期</option>
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>票据号</th><th>类型</th><th>出票日期</th><th>到期日期</th><th>对方单位</th><th className="number">票面金额</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.bill_no}</td>
+                <td><Badge>{item.bill_type === 'RECEivable' ? '应收' : '应付'}</Badge></td>
+                <td>{item.issue_date}</td>
+                <td>{item.due_date}</td>
+                <td>{item.counterpartyName}</td>
+                <td className="number">{money(item.face_amount_cents)}</td>
+                <td><Badge type={item.status === 'PAID' ? 'success' : item.status === 'PENDING' ? 'warning' : ''}>{item.status}</Badge></td>
+                <td>{can(user, 'BILLS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无票据"/>}
+      </div>
+      {editing && <BillModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('票据已保存'); }} />}
+    </Panel>
+  );
+}
+
+function BillModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    bill_type: 'RECEivable', bill_no: '', counterparty_type: 'CUSTOMER', counterparty_id: '',
+    face_amount_cents: 0, issue_date: new Date().toISOString().slice(0, 10),
+    due_date: new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10),
+    status: 'PENDING', remark: '', ...value
+  });
+  const [counterparties, setCounterparties] = useState([]);
+
+  useEffect(() => {
+    if (form.bill_type === 'RECEivable') {
+      api('/api/customers').then((r) => setCounterparties(r.customers || []));
+    } else {
+      api('/api/suppliers').then((r) => setCounterparties(r.suppliers || []));
+    }
+  }, [form.bill_type]);
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/bills/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/bills', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑票据' : '新增票据'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>票据类型<select value={form.bill_type} onChange={(e) => setForm({...form, bill_type: e.target.value, counterparty_id: ''})}>
+          <option value="RECEivable">应收票据</option>
+          <option value="PAYable">应付票据</option>
+        </select></label>
+        <label>票据号<input value={form.bill_no} onChange={(e) => setForm({...form, bill_no: e.target.value})} placeholder="系统自动生成"/></label>
+        <label>对方单位<select value={form.counterparty_id} onChange={(e) => setForm({...form, counterparty_id: e.target.value})} required>
+          <option value="">选择单位</option>
+          {counterparties.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
+        </select></label>
+        <label>票面金额(元)<input type="number" value={form.face_amount_cents / 100} step="0.01" onChange={(e) => setForm({...form, face_amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>出票日期<input type="date" value={form.issue_date} onChange={(e) => setForm({...form, issue_date: e.target.value})} required/></label>
+        <label>到期日期<input type="date" value={form.due_date} onChange={(e) => setForm({...form, due_date: e.target.value})} required/></label>
+        <label>状态<select value={form.status} onChange={(e) => setForm({...form, status: e.target.value})}>
+          <option value="PENDING">待承兑</option>
+          <option value="ACCEPTED">已承兑</option>
+          <option value="DISCOUNTED">已贴现</option>
+          <option value="PAID">已到期</option>
+          <option value="CANCELLED">已作废</option>
+        </select></label>
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Fixed Assets ============
+
+function FixedAssets({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [viewDep, setViewDep] = useState(null);
+  const [depreciations, setDepreciations] = useState([]);
+
+  const load = () => api('/api/fixed-assets').then((r) => setItems(r.assets)).catch((e) => notify(e.message, 'error'));
+
+  useEffect(() => { void load(); }, []);
+
+  function viewDepreciations(asset) {
+    setViewDep(asset);
+    api(`/api/fixed-assets/${asset.id}/depreciations`).then((r) => setDepreciations(r.depreciations)).catch((e) => notify(e.message, 'error'));
+  }
+
+  async function calculateDep(assetId) {
+    if (!confirm('确认计提本月折旧?')) return;
+    try {
+      await api('/api/fixed-assets/depreciation', { method: 'POST', body: { assetId, depreciationDate: new Date().toISOString().slice(0, 10) } });
+      notify('折旧已计提');
+      load();
+      viewDepreciations({ id: assetId });
+    } catch (e) { notify(e.message, 'error'); }
+  }
+
+  return (
+    <Panel title="固定资产" subtitle="管理企业固定资产及折旧">
+      <Toolbar action={can(user, 'FIXED_ASSETS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增资产</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>资产编号</th><th>资产名称</th><th>类别</th><th>购置日期</th><th className="number">原值</th><th className="number">累计折旧</th><th className="number">净值</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.asset_code}</td>
+                <td><strong>{item.asset_name}</strong></td>
+                <td>{item.category}</td>
+                <td>{item.purchase_date}</td>
+                <td className="number">{money(item.purchase_amount_cents)}</td>
+                <td className="number">{money(item.totalDepreciatedCents || 0)}</td>
+                <td className="number"><strong>{money(item.net_value_cents)}</strong></td>
+                <td><Badge type={item.status === 'IN_USE' ? 'success' : ''}>{item.status}</Badge></td>
+                <td>
+                  <button className="row-action" onClick={() => viewDepreciations(item)}>折旧记录</button>
+                  {can(user, 'FIXED_ASSETS_MANAGE') && <button className="row-action" onClick={() => calculateDep(item.id)}>计提折旧</button>}
+                  {can(user, 'FIXED_ASSETS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无固定资产"/>}
+      </div>
+      {editing && <FixedAssetModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('固定资产已保存'); }} />}
+      {viewDep && <DepreciationModal asset={viewDep} depreciations={depreciations} onClose={() => setViewDep(null)}/>}
+    </Panel>
+  );
+}
+
+function FixedAssetModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    asset_code: '', asset_name: '', category: '电子设备', purchase_date: new Date().toISOString().slice(0, 10),
+    purchase_amount_cents: 0, useful_life_months: 60, salvage_value_cents: 0, depreciation_method: 'STRAIGHT_LINE', remark: '', status: 'IN_USE', ...value
+  });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/fixed-assets/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/fixed-assets', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑资产' : '新增资产'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>资产编号<input value={form.asset_code} onChange={(e) => setForm({...form, asset_code: e.target.value})} required/></label>
+        <label>资产名称<input value={form.asset_name} onChange={(e) => setForm({...form, asset_name: e.target.value})} required/></label>
+        <label>资产类别<select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})}>
+          <option value="电子设备">电子设备</option>
+          <option value="办公设备">办公设备</option>
+          <option value="运输设备">运输设备</option>
+          <option value="建筑物">建筑物</option>
+          <option value="机器设备">机器设备</option>
+          <option value="其他">其他</option>
+        </select></label>
+        <label>购置日期<input type="date" value={form.purchase_date} onChange={(e) => setForm({...form, purchase_date: e.target.value})} required/></label>
+        <label>原值(元)<input type="number" value={form.purchase_amount_cents / 100} step="0.01" onChange={(e) => setForm({...form, purchase_amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>使用月数<input type="number" value={form.useful_life_months} min="1" onChange={(e) => setForm({...form, useful_life_months: Number(e.target.value)})} required/></label>
+        <label>残值(元)<input type="number" value={form.salvage_value_cents / 100} step="0.01" onChange={(e) => setForm({...form, salvage_value_cents: Math.round(e.target.value * 100)})}/></label>
+        <label>折旧方法<select value={form.depreciation_method} onChange={(e) => setForm({...form, depreciation_method: e.target.value})}>
+          <option value="STRAIGHT_LINE">直线法</option>
+          <option value="NONE">不提折旧</option>
+        </select></label>
+        {value.id && <label>状态<select value={form.status} onChange={(e) => setForm({...form, status: e.target.value})}>
+          <option value="IN_USE">使用中</option>
+          <option value="MAINTENANCE">维修中</option>
+          <option value="SCRAPPED">已报废</option>
+          <option value="SOLD">已出售</option>
+        </select></label>}
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+function DepreciationModal({ asset, depreciations, onClose }) {
+  return (
+    <Modal title={`${asset.asset_name} - 折旧记录`} onClose={onClose}>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>计提日期</th><th className="number">折旧金额</th><th>操作员</th></tr></thead>
+          <tbody>
+            {depreciations.map((d) => (
+              <tr key={d.id}>
+                <td>{d.depreciation_date}</td>
+                <td className="number">{money(d.depreciation_cents)}</td>
+                <td>{d.creatorName}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!depreciations.length && <Empty text="暂无折旧记录"/>}
+      </div>
+      <FormActions onClose={onClose}/>
+    </Modal>
+  );
+}
