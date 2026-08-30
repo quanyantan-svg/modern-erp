@@ -35,7 +35,10 @@ import {
   setSecurityHeaders,
 } from './lib/http.js';
 
-const SESSION_HOURS = 12;
+const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
+const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
+const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
+const TOKEN_LENGTH = Number(process.env.TOKEN_LENGTH || 32);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
 
 export function createApp(db, options = {}) {
@@ -65,8 +68,8 @@ async function handleApi(db, req, res, url) {
   if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
   if (req.method === 'POST' && pathname === '/api/auth/login') return login(db, req, res);
 
-  const actor = authenticate(db, req);
   if (req.method === 'POST' && pathname === '/api/auth/logout') return logout(db, req, res);
+  const actor = authenticate(db, req);
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
 
@@ -343,26 +346,106 @@ async function handleApi(db, req, res, url) {
 }
 
 async function login(db, req, res) {
+  const ip = getClientIp(req);
+  const now = new Date();
+  
+  // Check if account is locked due to too many failed attempts
+  const lockedAttempt = db.prepare(`
+    SELECT * FROM login_attempts 
+    WHERE username = ? AND success = 0 AND locked_until > ?
+    ORDER BY updated_at DESC LIMIT 1
+  `).get(req.body?.username || '', now.toISOString());
+  
+  if (lockedAttempt) {
+    const remainingMinutes = Math.ceil((new Date(lockedAttempt.locked_until) - now) / 60000);
+    return send(res, 429, { 
+      error: '登录失败次数过多，请稍后再试',
+      code: 'ACCOUNT_LOCKED',
+      retryAfter: remainingMinutes
+    });
+  }
+  
   const body = await readJson(req);
   const username = requiredText(body.username, '用户名', 50);
   const password = requiredText(body.password, '密码', 100);
+  
   const row = db.prepare(`
     SELECT u.*, r.name role_name, r.code role_code FROM users u JOIN roles r ON r.id=u.role_id
     WHERE u.username=? COLLATE NOCASE
   `).get(username);
+  
   if (!row || !row.active || !verifyPassword(password, row.password_salt, row.password_hash)) {
-    audit(db, row?.id, 'LOGIN_FAILED', 'AUTH', null, username);
-    throw new HttpError(401, '用户名或密码错误');
+    // Record failed attempt
+    const attemptId = id();
+    const existingAttempt = db.prepare(`
+      SELECT * FROM login_attempts 
+      WHERE username = ? AND success = 0 AND locked_until IS NULL
+      ORDER BY updated_at DESC LIMIT 1
+    `).get(username);
+    
+    if (existingAttempt) {
+      const newCount = existingAttempt.attempt_count + 1;
+      if (newCount >= LOGIN_MAX_ATTEMPTS) {
+        // Lock the account
+        const lockUntil = new Date(now.getTime() + LOGIN_LOCK_MINUTES * 60 * 1000);
+        db.prepare(`
+          UPDATE login_attempts 
+          SET attempt_count = ?, locked_until = ?, updated_at = ?
+          WHERE id = ?
+        `).run(newCount, lockUntil.toISOString(), now.toISOString(), existingAttempt.id);
+        
+        audit(db, null, 'LOGIN_LOCKED', 'AUTH', null, `账户 ${username} 因多次登录失败被锁定`);
+        return send(res, 429, { 
+          error: '登录失败次数过多，账户已锁定',
+          code: 'ACCOUNT_LOCKED',
+          retryAfter: LOGIN_LOCK_MINUTES * 60
+        });
+      }
+      db.prepare(`
+        UPDATE login_attempts 
+        SET attempt_count = ?, ip_address = COALESCE(?, ip_address), updated_at = ?
+        WHERE id = ?
+      `).run(newCount, ip, now.toISOString(), existingAttempt.id);
+    } else {
+      db.prepare(`
+        INSERT INTO login_attempts (id, username, ip_address, success, attempt_count, created_at, updated_at)
+        VALUES (?, ?, ?, 0, 1, ?, ?)
+      `).run(attemptId, username, ip, now.toISOString(), now.toISOString());
+    }
+    
+    audit(db, row?.id, 'LOGIN_FAILED', 'AUTH', null, `用户 ${username} 登录失败 (IP: ${ip})`);
+    return send(res, 401, { 
+      error: '用户名或密码错误',
+      code: 'INVALID_CREDENTIALS'
+    });
   }
-  const token = randomBytes(32).toString('base64url');
+  
+  // Record successful login
+  const attemptId = id();
+  db.prepare(`
+    INSERT INTO login_attempts (id, username, ip_address, success, attempt_count, created_at, updated_at)
+    VALUES (?, ?, ?, 1, 0, ?, ?)
+  `).run(attemptId, username, ip, now.toISOString(), now.toISOString());
+  
+  // Generate token
+  const token = randomBytes(TOKEN_LENGTH).toString('base64url');
   const tokenHash = sha256(token);
-  const now = new Date();
   const expires = new Date(now.getTime() + SESSION_HOURS * 3600_000);
+  
+  // Clean up expired sessions
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now.toISOString());
+  
+  // Create new session
   db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)')
     .run(tokenHash, row.id, expires.toISOString(), now.toISOString());
-  audit(db, row.id, 'LOGIN', 'AUTH', null, '登录成功');
-  return send(res, 200, { token, user: actorFromRow(db, row) });
+  
+  audit(db, row.id, 'LOGIN', 'AUTH', null, `用户 ${username} 登录成功 (IP: ${ip})`);
+  return send(res, 200, { 
+    token, 
+    user: actorFromRow(db, row),
+    expiresAt: expires.toISOString(),
+    sessionHours: SESSION_HOURS
+  });
 }
 
 function logout(db, req, res) {
@@ -371,6 +454,14 @@ function logout(db, req, res) {
   return send(res, 204, null);
 }
 
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  const realIp = req.headers['x-real-ip'];
+  if (realIp) return realIp;
+  return req.socket?.remoteAddress || '';
+}
 function authenticate(db, req) {
   const token = bearer(req);
   if (!token) throw new HttpError(401, '请先登录');

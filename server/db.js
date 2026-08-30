@@ -810,14 +810,28 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
+      user_id TEXT,
       action TEXT NOT NULL,
       entity_type TEXT NOT NULL,
       entity_id TEXT,
       detail TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id)
+      created_at TEXT NOT NULL
     );
+
+      -- 登录尝试记录表
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        ip_address TEXT NOT NULL DEFAULT '',
+        success INTEGER NOT NULL DEFAULT 0,
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        locked_until TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username);
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address);
 
     CREATE TABLE IF NOT EXISTS contacts (
       id TEXT PRIMARY KEY,
