@@ -5,8 +5,5 @@ data/
 *.db-shm
 *.db-wal
 *.bak
-test.log
-data/*.db
-data/*.db-*
 *.log
 .env
