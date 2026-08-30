@@ -2942,3 +2942,116 @@ async function getFixedAssetDepreciations(db, res, actor, assetId) {
 const BILL_TYPES = { RECEivable: '应收票据', PAYable: '应付票据' };
 const BILL_STATUS = { PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '已贴现', ENDORSED: '已背书', PAID: '已到期', CANCELLED: '已作废' };
 const ASSET_STATUS = { IN_USE: '使用中', MAINTENANCE: '维修中', SCRAPPED: '已报废', SOLD: '已出售' };
+// ============ Cost Accounting ============
+
+async function listProductCosts(db, res, actor, url) {
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const productId = url.searchParams.get('productId') || '';
+  let sql = `SELECT pc.*, p.code productCode, p.name productName, u.name creatorName 
+    FROM product_costs pc JOIN products p ON p.id=pc.product_id LEFT JOIN users u ON u.id=pc.creator_id WHERE pc.status='ACTIVE'`;
+  const params = [];
+  if (productId) { sql += ` AND pc.product_id=?`; params.push(productId); }
+  sql += ` ORDER BY pc.effective_date DESC`;
+  const costs = db.prepare(sql).all(...params);
+  return send(res, 200, { costs });
+}
+
+async function createProductCost(db, req, res, actor) {
+  allow(actor, 'COST_MANAGE');
+  const body = await readJson(req);
+  const { product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, remark } = body;
+  const now = new Date().toISOString();
+  const costId = id();
+  
+  // Mark existing as historical
+  db.prepare(`UPDATE product_costs SET status='HISTORICAL',updated_at=? WHERE product_id=? AND status='ACTIVE'`).run(now, product_id);
+  
+  db.prepare(`INSERT INTO product_costs(id,product_id,standard_cost_cents,material_cost_cents,labor_cost_cents,overhead_cost_cents,effective_date,status,remark,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    costId, product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, 'ACTIVE', remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'PRODUCT_COST', costId, `设置产品标准成本`);
+  return send(res, 200, { id: costId });
+}
+
+async function listCostRates(db, res, actor) {
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const rates = db.prepare('SELECT cr.*, u.name creatorName FROM cost_rates cr LEFT JOIN users u ON u.id=cr.creator_id ORDER BY cr.category, cr.code').all();
+  return send(res, 200, { rates });
+}
+
+async function createCostRate(db, req, res, actor) {
+  allow(actor, 'COST_MANAGE');
+  const body = await readJson(req);
+  const { code, name, category, rate_cents_per_hour, unit, remark } = body;
+  const now = new Date().toISOString();
+  const rateId = id();
+  
+  db.prepare('INSERT INTO cost_rates(id,code,name,category,rate_cents_per_hour,unit,active,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?)').run(
+    rateId, code, name, category, rate_cents_per_hour, unit || '小时', remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'COST_RATE', rateId, `新增费用项目 ${name}`);
+  return send(res, 200, { id: rateId });
+}
+
+async function updateCostRate(db, req, res, actor, rateId) {
+  allow(actor, 'COST_MANAGE');
+  const body = await readJson(req);
+  const { name, category, rate_cents_per_hour, unit, active, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare('UPDATE cost_rates SET name=?,category=?,rate_cents_per_hour=?,unit=?,active=?,remark=?,updated_at=? WHERE id=?').run(
+    name, category, rate_cents_per_hour, unit, active ? 1 : 0, remark || '', now, rateId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'COST_RATE', rateId, `更新费用项目 ${name}`);
+  return send(res, 200, { ok: true });
+}
+
+async function calculateProductionCost(db, req, res, actor) {
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const body = await readJson(req);
+  const { orderId } = body;
+  
+  const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '生产工单不存在');
+  
+  // Get product standard cost
+  const stdCost = db.prepare('SELECT * FROM product_costs WHERE product_id=? AND status=? ORDER BY effective_date DESC LIMIT 1').get(order.product_id, 'ACTIVE');
+  
+  // Get consumed materials from production order items
+  const items = db.prepare('SELECT * FROM production_order_items WHERE order_id=?').all(orderId);
+  let materialCost = 0;
+  for (const item of items) {
+    const itemCost = db.prepare('SELECT standard_cost_cents FROM product_costs WHERE product_id=? AND status=? ORDER BY effective_date DESC LIMIT 1').get(item.product_id, 'ACTIVE');
+    materialCost += (itemCost?.standard_cost_cents || 0) * item.consumed_quantity;
+  }
+  
+  // Get labor and overhead from cost rates
+  const laborRate = db.prepare('SELECT rate_cents_per_hour FROM cost_rates WHERE category=? AND active=1 ORDER BY created_at LIMIT 1').get('LABOR');
+  const overheadRate = db.prepare('SELECT rate_cents_per_hour FROM cost_rates WHERE category=? AND active=1 ORDER BY created_at LIMIT 1').get('OVERHEAD');
+  
+  const now = new Date().toISOString();
+  const costId = id();
+  
+  // Calculate based on production quantity
+  const laborCost = (laborRate?.rate_cents_per_hour || 0) * order.quantity;
+  const overheadCost = (overheadRate?.rate_cents_per_hour || 0) * order.quantity;
+  const totalCost = materialCost + laborCost + overheadCost;
+  const unitCost = order.quantity > 0 ? Math.floor(totalCost / order.quantity) : 0;
+  
+  db.prepare('INSERT INTO production_costs(id,order_id,material_cost_cents,labor_cost_cents,overhead_cost_cents,total_cost_cents,unit_cost_cents,calculated_at,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(
+    costId, orderId, materialCost, laborCost, overheadCost, totalCost, unitCost, now, actor.id, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'PRODUCTION_COST', costId, `计算工单成本 ${money(totalCost)}`);
+  return send(res, 200, { id: costId, materialCost, laborCost, overheadCost, totalCost, unitCost });
+}
+
+async function getProductionCost(db, res, actor, orderId) {
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const cost = db.prepare('SELECT * FROM production_costs WHERE order_id=? ORDER BY created_at DESC LIMIT 1').get(orderId);
+  return send(res, 200, { cost });
+}

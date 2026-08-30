@@ -37,6 +37,7 @@ const ic = {
   bankAccounts: <Icon d="M3 21h18M3 10h18M3 7l9-4 9 4M4 10v11M20 10v11M8 10v11M12 10v11M16 10v11"/>,
   bills: <Icon d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 15h6"/>,
   fixedAssets: <Icon d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>,
+  costAccounting: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
@@ -75,7 +76,13 @@ const navGroups = [
     { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
   ]},
   null,
-  { label: '生产制造', items: [
+      null,
+    { label: '成本会计', items: [
+      { key: 'product-costs', label: '标准成本', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
+      { key: 'cost-rates', label: '费用项目', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
+    ]},
+    null,
+    { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'production-orders', label: '生产工单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
   ]},
@@ -126,6 +133,8 @@ export default function App() {
       bankAccounts: <BankAccounts user={user} notify={notify}/>,
       bills: <Bills user={user} notify={notify}/>,
       fixedAssets: <FixedAssets user={user} notify={notify}/>,
+      productCosts: <ProductCosts user={user} notify={notify}/>,
+      costRates: <CostRates user={user} notify={notify}/>,
       accounting: <Accounting user={user} notify={notify}/>,
     purchaseReceipts: <PurchaseReceipts user={user} notify={notify}/>,
     salesDeliveries: <SalesDeliveries user={user} notify={notify}/>,
@@ -2000,6 +2009,175 @@ function DepreciationModal({ asset, depreciations, onClose }) {
         {!depreciations.length && <Empty text="暂无折旧记录"/>}
       </div>
       <FormActions onClose={onClose}/>
+    </Modal>
+  );
+}
+// ============ Product Costs ============
+
+function ProductCosts({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [productId, setProductId] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ productId });
+    api(`/api/product-costs?${params}`).then((r) => setItems(r.costs)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => {
+    api('/api/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
+    void load();
+  }, []);
+
+  return (
+    <Panel title="产品标准成本" subtitle="设置和维护产品标准成本数据">
+      <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 设置标准成本</button>}/>
+      <div className="filters">
+        <label>产品<select value={productId} onChange={(e) => setProductId(e.target.value)}>
+          <option value="">全部产品</option>
+          {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>产品编码</th><th>产品名称</th><th>生效日期</th><th className="number">材料成本</th><th className="number">人工成本</th><th className="number">制造费用</th><th className="number">标准成本</th><th>设置人</th></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.productCode}</td>
+                <td><strong>{item.productName}</strong></td>
+                <td>{item.effective_date}</td>
+                <td className="number">{money(item.material_cost_cents)}</td>
+                <td className="number">{money(item.labor_cost_cents)}</td>
+                <td className="number">{money(item.overhead_cost_cents)}</td>
+                <td className="number"><strong>{money(item.standard_cost_cents)}</strong></td>
+                <td>{item.creatorName}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无标准成本数据"/>}
+      </div>
+      {editing && <ProductCostModal products={products} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('标准成本已保存'); }} />}
+    </Panel>
+  );
+}
+
+function ProductCostModal({ products, value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    product_id: '', material_cost_cents: 0, labor_cost_cents: 0, overhead_cost_cents: 0,
+    effective_date: new Date().toISOString().slice(0, 10), remark: '', ...value
+  });
+
+  useEffect(() => {
+    if (form.product_id && !value.id) {
+      const product = products.find((p) => p.id === form.product_id);
+      if (product) {
+        setForm((f) => ({ ...f, material_cost_cents: product.price_cents || 0 }));
+      }
+    }
+  }, [form.product_id]);
+
+  async function save(e) {
+    e.preventDefault();
+    const standard_cost_cents = form.material_cost_cents + form.labor_cost_cents + form.overhead_cost_cents;
+    try {
+      await api('/api/product-costs', { method: 'POST', body: { ...form, standard_cost_cents } });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title="设置标准成本" onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>产品<select value={form.product_id} onChange={(e) => setForm({...form, product_id: e.target.value})} required disabled={!!value.id}>
+          <option value="">选择产品</option>
+          {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+        </select></label>
+        <label>生效日期<input type="date" value={form.effective_date} onChange={(e) => setForm({...form, effective_date: e.target.value})} required/></label>
+        <label>材料成本(元)<input type="number" value={form.material_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, material_cost_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>人工成本(元)<input type="number" value={form.labor_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, labor_cost_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>制造费用(元)<input type="number" value={form.overhead_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, overhead_cost_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        <div className="full"><strong>标准成本: {money(form.material_cost_cents + form.labor_cost_cents + form.overhead_cost_cents)}</strong></div>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Cost Rates ============
+
+function CostRates({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => api('/api/cost-rates').then((r) => setItems(r.rates)).catch((e) => notify(e.message, 'error'));
+
+  useEffect(() => { void load(); }, []);
+
+  const categories = { MATERIAL: '材料', LABOR: '人工', OVERHEAD: '制造费用' };
+
+  return (
+    <Panel title="费用项目" subtitle="定义成本费用项目和费率">
+      <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增费用项目</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>编号</th><th>名称</th><th>类别</th><th className="number">费率(元/小时)</th><th>单位</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.code}</td>
+                <td><strong>{item.name}</strong></td>
+                <td><Badge>{categories[item.category] || item.category}</Badge></td>
+                <td className="number">{money(item.rate_cents_per_hour)}</td>
+                <td>{item.unit}</td>
+                <td><Active active={item.active}/></td>
+                <td>{can(user, 'COST_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无费用项目"/>}
+      </div>
+      {editing && <CostRateModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('费用项目已保存'); }} />}
+    </Panel>
+  );
+}
+
+function CostRateModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({ code: '', name: '', category: 'LABOR', rate_cents_per_hour: 0, unit: '小时', remark: '', active: true, ...value });
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/cost-rates/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/cost-rates', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑费用项目' : '新增费用项目'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>编号<input value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} required disabled={!!value.id}/></label>
+        <label>名称<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
+        <label>类别<select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})}>
+          <option value="MATERIAL">材料</option>
+          <option value="LABOR">人工</option>
+          <option value="OVERHEAD">制造费用</option>
+        </select></label>
+        <label>费率(元/小时)<input type="number" value={form.rate_cents_per_hour / 100} step="0.01" onChange={(e) => setForm({...form, rate_cents_per_hour: Math.round(e.target.value * 100)})} required/></label>
+        <label>单位<input value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="小时/件/米等"/></label>
+        <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
+        {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({...form, active: e.target.checked})}/> 启用该项目</label>}
+        <FormActions onClose={onClose}/>
+      </form>
     </Modal>
   );
 }

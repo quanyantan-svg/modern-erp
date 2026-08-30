@@ -83,7 +83,57 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE products ADD COLUMN lead_time_days INTEGER DEFAULT 7');
   return db;
 }
-function migrate(db) {
+
+    // 产品标准成本
+    CREATE TABLE IF NOT EXISTS product_costs (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      standard_cost_cents INTEGER NOT NULL DEFAULT 0,
+      material_cost_cents INTEGER NOT NULL DEFAULT 0,
+      labor_cost_cents INTEGER NOT NULL DEFAULT 0,
+      overhead_cost_cents INTEGER NOT NULL DEFAULT 0,
+      effective_date TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE', 'HISTORICAL')),
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
+    
+    // 工单成本记录
+    CREATE TABLE IF NOT EXISTS production_costs (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      material_cost_cents INTEGER NOT NULL DEFAULT 0,
+      labor_cost_cents INTEGER NOT NULL DEFAULT 0,
+      overhead_cost_cents INTEGER NOT NULL DEFAULT 0,
+      total_cost_cents INTEGER NOT NULL DEFAULT 0,
+      unit_cost_cents INTEGER NOT NULL DEFAULT 0,
+      calculated_at TEXT NOT NULL,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES production_orders(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+    
+    // 成本费用项目
+    CREATE TABLE IF NOT EXISTS cost_rates (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('MATERIAL', 'LABOR', 'OVERHEAD')),
+      rate_cents_per_hour INTEGER NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT '小时',
+      active INTEGER NOT NULL DEFAULT 1,
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+
     // 固定资产
     CREATE TABLE IF NOT EXISTS fixed_assets (
       id TEXT PRIMARY KEY,
