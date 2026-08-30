@@ -3343,3 +3343,161 @@ async function deleteSalesActivity(db, req, res, actor, activityId) {
   audit(db, actor.id, 'DELETE', 'SALES_ACTIVITY', activityId, `删除销售活动 ${activity.title}`);
   return send(res, 200, { ok: true });
 }
+// ============ Projects ============
+
+async function listProjects(db, res, actor, url) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const status = url.searchParams.get('status') || '';
+  let sql = `SELECT p.*, c.name customerName, u.name managerName, creator.name creatorName
+    FROM projects p
+    LEFT JOIN customers c ON c.id=p.customer_id
+    LEFT JOIN users u ON u.id=p.manager_id
+    LEFT JOIN users creator ON creator.id=p.creator_id
+    WHERE 1=1`;
+  const params = [];
+  if (status) { sql += ` AND p.status=?`; params.push(status); }
+  sql += ` ORDER BY p.created_at DESC`;
+  const projects = db.prepare(sql).all(...params);
+  return send(res, 200, { projects });
+}
+
+async function createProject(db, req, res, actor) {
+  allow(actor, 'PROJECT_MANAGE');
+  const body = await readJson(req);
+  const { project_no, name, description, project_type, customer_id, start_date, end_date, budget_cents, manager_id, remark } = body;
+  const now = new Date().toISOString();
+  const projectId = id();
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM projects WHERE start_date LIKE ?').get(start_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
+  const projectNo = project_no || `PRJ-${start_date.replace(/-/g,'')}-${seq}`;
+  
+  db.prepare(`INSERT INTO projects(id,project_no,name,description,project_type,customer_id,start_date,end_date,status,budget_cents,manager_id,remark,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    projectId, projectNo, name, description, project_type, customer_id || null, start_date, end_date || null, 'PLANNING', budget_cents || 0, manager_id, remark || '', actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'PROJECT', projectId, `新建项目 ${name}`);
+  return send(res, 200, { id: projectId, project_no: projectNo });
+}
+
+async function updateProject(db, req, res, actor, projectId) {
+  allow(actor, 'PROJECT_MANAGE');
+  const body = await readJson(req);
+  const { name, description, project_type, customer_id, start_date, end_date, status, budget_cents, manager_id, remark } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare(`UPDATE projects SET name=?,description=?,project_type=?,customer_id=?,start_date=?,end_date=?,status=?,budget_cents=?,manager_id=?,remark=?,updated_at=? WHERE id=?`).run(
+    name, description, project_type, customer_id || null, start_date, end_date || null, status, budget_cents || 0, manager_id, remark || '', now, projectId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'PROJECT', projectId, `更新项目 ${name}`);
+  return send(res, 200, { ok: true });
+}
+
+async function getProjectDetail(db, res, actor, projectId) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const project = db.prepare(`SELECT p.*, c.name customerName, u.name managerName FROM projects p LEFT JOIN customers c ON c.id=p.customer_id LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?`).get(projectId);
+  if (!project) throw new HttpError(404, '项目不存在');
+  project.tasks = db.prepare(`SELECT t.*, u.name assigneeName FROM project_tasks t LEFT JOIN users u ON u.id=t.assignee_id WHERE t.project_id=? ORDER BY t.created_at`).all(projectId);
+  project.timesheets = db.prepare(`SELECT ts.*, u.name userName FROM project_timesheets ts LEFT JOIN users u ON u.id=ts.user_id WHERE ts.project_id=? ORDER BY ts.work_date DESC LIMIT 100`).all(projectId);
+  return send(res, 200, { project });
+}
+
+// ============ Project Tasks ============
+
+async function listProjectTasks(db, res, actor, url) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const projectId = url.searchParams.get('projectId') || '';
+  let sql = `SELECT t.*, p.name projectName, u.name assigneeName
+    FROM project_tasks t
+    LEFT JOIN projects p ON p.id=t.project_id
+    LEFT JOIN users u ON u.id=t.assignee_id
+    WHERE 1=1`;
+  const params = [];
+  if (projectId) { sql += ` AND t.project_id=?`; params.push(projectId); }
+  sql += ` ORDER BY t.priority DESC, t.created_at`;
+  const tasks = db.prepare(sql).all(...params);
+  return send(res, 200, { tasks });
+}
+
+async function createProjectTask(db, req, res, actor) {
+  allow(actor, 'PROJECT_MANAGE');
+  const body = await readJson(req);
+  const { project_id, parent_id, name, description, priority, planned_start, planned_end, assignee_id, estimated_hours } = body;
+  const now = new Date().toISOString();
+  const taskId = id();
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM project_tasks WHERE project_id=?').get(project_id).cnt + 1).padStart(3, '0');
+  const taskNo = `TASK-${seq}`;
+  
+  db.prepare(`INSERT INTO project_tasks(id,project_id,parent_id,task_no,name,description,priority,status,planned_start,planned_end,assignee_id,estimated_hours,creator_id,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    taskId, project_id, parent_id || null, taskNo, name, description, priority || 'MEDIUM', 'PENDING', planned_start || null, planned_end || null, assignee_id || null, estimated_hours || 0, actor.id, now, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'PROJECT_TASK', taskId, `新建任务 ${name}`);
+  return send(res, 200, { id: taskId, task_no: taskNo });
+}
+
+async function updateProjectTask(db, req, res, actor, taskId) {
+  allow(actor, 'PROJECT_MANAGE');
+  const body = await readJson(req);
+  const { name, description, priority, status, planned_start, planned_end, actual_start, actual_end, progress, assignee_id, estimated_hours } = body;
+  const now = new Date().toISOString();
+  
+  db.prepare(`UPDATE project_tasks SET name=?,description=?,priority=?,status=?,planned_start=?,planned_end=?,actual_start=?,actual_end=?,progress=?,assignee_id=?,estimated_hours=?,updated_at=? WHERE id=?`).run(
+    name, description, priority, status, planned_start || null, planned_end || null, actual_start || null, actual_end || null, progress || 0, assignee_id || null, estimated_hours || 0, now, taskId
+  );
+  
+  audit(db, actor.id, 'UPDATE', 'PROJECT_TASK', taskId, `更新任务 ${name}`);
+  return send(res, 200, { ok: true });
+}
+
+// ============ Project Timesheets ============
+
+async function listTimesheets(db, res, actor, url) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const projectId = url.searchParams.get('projectId') || '';
+  const userId = url.searchParams.get('userId') || '';
+  const startDate = url.searchParams.get('startDate') || '';
+  const endDate = url.searchParams.get('endDate') || '';
+  
+  let sql = `SELECT ts.*, p.name projectName, t.name taskName, u.name userName
+    FROM project_timesheets ts
+    LEFT JOIN projects p ON p.id=ts.project_id
+    LEFT JOIN project_tasks t ON t.id=ts.task_id
+    LEFT JOIN users u ON u.id=ts.user_id
+    WHERE 1=1`;
+  const params = [];
+  if (projectId) { sql += ` AND ts.project_id=?`; params.push(projectId); }
+  if (userId) { sql += ` AND ts.user_id=?`; params.push(userId); }
+  if (startDate) { sql += ` AND ts.work_date>=?`; params.push(startDate); }
+  if (endDate) { sql += ` AND ts.work_date<=?`; params.push(endDate); }
+  sql += ` ORDER BY ts.work_date DESC, ts.created_at DESC`;
+  
+  const timesheets = db.prepare(sql).all(...params);
+  return send(res, 200, { timesheets });
+}
+
+async function createTimesheet(db, req, res, actor) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const body = await readJson(req);
+  const { project_id, task_id, user_id, work_date, hours, description, billable } = body;
+  const now = new Date().toISOString();
+  const tsId = id();
+  
+  db.prepare(`INSERT INTO project_timesheets(id,project_id,task_id,user_id,work_date,hours,description,billable,creator_id,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+    tsId, project_id, task_id || null, user_id || actor.id, work_date, hours, description || '', billable ? 1 : 0, actor.id, now
+  );
+  
+  audit(db, actor.id, 'CREATE', 'TIMESHEET', tsId, `记录工时 ${hours}h`);
+  return send(res, 200, { id: tsId });
+}
+
+async function deleteTimesheet(db, req, res, actor, tsId) {
+  allowAny(actor, ['PROJECT_VIEW', 'PROJECT_MANAGE']);
+  const ts = db.prepare('SELECT * FROM project_timesheets WHERE id=?').get(tsId);
+  if (!ts) throw new HttpError(404, '工时记录不存在');
+  db.prepare('DELETE FROM project_timesheets WHERE id=?').run(tsId);
+  audit(db, actor.id, 'DELETE', 'TIMESHEET', tsId, `删除工时记录`);
+  return send(res, 200, { ok: true });
+}

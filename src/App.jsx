@@ -43,6 +43,9 @@ const ic = {
   contacts: <Icon d="M17 20h5v-2a3 3 0 0 0-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 0 1 5.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 0 1 9.288 0M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM7 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/>,
   followups: <Icon d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 0 1-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>,
   activities: <Icon d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/>,
+  projects: <Icon d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/>,
+  tasks: <Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>,
+  timesheets: <Icon d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
@@ -84,6 +87,13 @@ const navGroups = [
       null,
         null,
         null,
+        null,
+    { label: '项目管理', items: [
+      { key: 'projects', label: '项目立项', icon: ic.projects, any: ['PROJECT_VIEW', 'PROJECT_MANAGE'] },
+      { key: 'tasks', label: '任务管理', icon: ic.tasks, any: ['PROJECT_VIEW', 'PROJECT_MANAGE'] },
+      { key: 'timesheets', label: '工时记录', icon: ic.timesheets, any: ['PROJECT_VIEW', 'PROJECT_MANAGE'] },
+    ]},
+    null,
     { label: 'CRM客户关系', items: [
       { key: 'contacts', label: '联系人管理', icon: ic.contacts, any: ['CRM_VIEW', 'CRM_MANAGE'] },
       { key: 'followups', label: '客户跟进', icon: ic.followups, any: ['CRM_VIEW', 'CRM_MANAGE'] },
@@ -158,6 +168,9 @@ export default function App() {
       contacts: <Contacts user={user} notify={notify}/>,
       followups: <Followups user={user} notify={notify}/>,
       activities: <SalesActivities user={user} notify={notify}/>,
+      projects: <Projects user={user} notify={notify}/>,
+      tasks: <ProjectTasks user={user} notify={notify}/>,
+      timesheets: <Timesheets user={user} notify={notify}/>,
       oqc: <OQCInspections user={user} notify={notify}/>,
       costRates: <CostRates user={user} notify={notify}/>,
       accounting: <Accounting user={user} notify={notify}/>,
@@ -1615,6 +1628,339 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
   </Modal>;
 }
 
+
+
+// ============ Projects ============
+
+function Projects({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [status, setStatus] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [detail, setDetail] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ status });
+    api(`/api/projects?${params}`).then((r) => setItems(r.projects)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  function viewDetail(item) {
+    api(`/api/projects/${item.id}`).then((r) => setDetail(r.project)).catch((e) => notify(e.message, 'error'));
+  }
+
+  const typeMap = { IT: 'IT项目', CONSTRUCTION: '工程项目', RND: '研发项目', MARKETING: '市场项目', OTHER: '其他' };
+  const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', SUSPENDED: '已暂停', COMPLETED: '已完成', CANCELLED: '已取消' };
+
+  return (
+    <Panel title="项目立项" subtitle="项目信息管理">
+      <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建项目</button>}/>
+      <div className="filters">
+        <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">全部</option>
+          <option value="PLANNING">计划中</option>
+          <option value="IN_PROGRESS">进行中</option>
+          <option value="COMPLETED">已完成</option>
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>项目编号</th><th>项目名称</th><th>类型</th><th>开始日期</th><th className="number">预算</th><th>项目经理</th><th>状态</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.project_no}</td>
+                <td><strong>{item.name}</strong></td>
+                <td><Badge>{typeMap[item.project_type]}</Badge></td>
+                <td>{item.start_date}</td>
+                <td className="number">{money(item.budget_cents)}</td>
+                <td>{item.managerName}</td>
+                <td><Badge type={item.status === 'COMPLETED' ? 'success' : ''}>{statusMap[item.status]}</Badge></td>
+                <td>
+                  <button className="row-action" onClick={() => viewDetail(item)}>详情</button>
+                  {can(user, 'PROJECT_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无项目"/>}
+      </div>
+      {editing && <ProjectModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('项目已保存'); }} />}
+      {detail && <ProjectDetailModal project={detail} onClose={() => setDetail(null)}/>}
+    </Panel>
+  );
+}
+
+function ProjectModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: '', description: '', project_type: 'IT', customer_id: '',
+    start_date: new Date().toISOString().slice(0, 10), end_date: '', budget_cents: 0, manager_id: user?.id || '', ...value
+  });
+  const [customers, setCustomers] = useState([]);
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    api('/api/customers').then((r) => setCustomers(r.customers || []));
+    api('/api/users').then((r) => setUsers(r.users || []));
+  }, []);
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/projects/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/projects', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑项目' : '新建项目'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>项目名称<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
+        <label>项目类型<select value={form.project_type} onChange={(e) => setForm({...form, project_type: e.target.value})}>
+          <option value="IT">IT项目</option>
+          <option value="RND">研发项目</option>
+          <option value="MARKETING">市场项目</option>
+          <option value="OTHER">其他</option>
+        </select></label>
+        <label>开始日期<input type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} required/></label>
+        <label>项目经理<select value={form.manager_id} onChange={(e) => setForm({...form, manager_id: e.target.value})} required>
+          <option value="">选择经理</option>
+          {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select></label>
+        <label className="full">项目描述<textarea value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} rows={2}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+function ProjectDetailModal({ project, onClose }) {
+  const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', COMPLETED: '已完成' };
+  return (
+    <Modal title={`项目详情 - ${project.name}`} onClose={onClose}>
+      <div className="detail-grid">
+        <div>项目编号: {project.project_no}</div>
+        <div>项目经理: {project.managerName}</div>
+        <div>开始日期: {project.start_date}</div>
+        <div>状态: <Badge>{statusMap[project.status]}</Badge></div>
+      </div>
+      <h4>任务列表 ({project.tasks?.length || 0})</h4>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>任务</th><th>负责人</th><th>状态</th><th>进度</th></tr></thead>
+          <tbody>
+            {project.tasks?.map((t) => (
+              <tr key={t.id}>
+                <td>{t.name}</td>
+                <td>{t.assigneeName || '-'}</td>
+                <td>{t.status}</td>
+                <td>{t.progress}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <FormActions onClose={onClose}/>
+    </Modal>
+  );
+}
+
+// ============ Project Tasks ============
+
+function ProjectTasks({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ projectId });
+    api(`/api/project-tasks?${params}`).then((r) => setItems(r.tasks)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => {
+    api('/api/projects').then((r) => setProjects(r.projects || []));
+    void load();
+  }, []);
+
+  const priorityMap = { LOW: '低', MEDIUM: '中', HIGH: '高', URGENT: '紧急' };
+  const statusMap = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成' };
+
+  return (
+    <Panel title="任务管理" subtitle="项目任务分配和进度跟踪">
+      <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建任务</button>}/>
+      <div className="filters">
+        <label>所属项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <option value="">全部项目</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>任务编号</th><th>任务名称</th><th>所属项目</th><th>负责人</th><th>优先级</th><th>状态</th><th>进度</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.task_no}</td>
+                <td><strong>{item.name}</strong></td>
+                <td>{item.projectName}</td>
+                <td>{item.assigneeName || '-'}</td>
+                <td><Badge>{priorityMap[item.priority]}</Badge></td>
+                <td>{statusMap[item.status]}</td>
+                <td>{item.progress}%</td>
+                <td>{can(user, 'PROJECT_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无任务"/>}
+      </div>
+      {editing && <TaskModal projects={projects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('任务已保存'); }} />}
+    </Panel>
+  );
+}
+
+function TaskModal({ projects, value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    project_id: '', name: '', description: '', priority: 'MEDIUM', planned_start: '', estimated_hours: 0, ...value
+  });
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    api('/api/users').then((r) => setUsers(r.users || []));
+  }, []);
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      if (value.id) {
+        await api(`/api/project-tasks/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/project-tasks', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title={value.id ? '编辑任务' : '新建任务'} onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>所属项目<select value={form.project_id} onChange={(e) => setForm({...form, project_id: e.target.value})} required>
+          <option value="">选择项目</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
+        </select></label>
+        <label>任务名称<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
+        <label>优先级<select value={form.priority} onChange={(e) => setForm({...form, priority: e.target.value})}>
+          <option value="LOW">低</option>
+          <option value="MEDIUM">中</option>
+          <option value="HIGH">高</option>
+          <option value="URGENT">紧急</option>
+        </select></label>
+        <label>计划开始<input type="date" value={form.planned_start} onChange={(e) => setForm({...form, planned_start: e.target.value})}/></label>
+        <label className="full">任务描述<textarea value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} rows={2}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+// ============ Timesheets ============
+
+function Timesheets({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState('');
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams({ projectId });
+    api(`/api/timesheets?${params}`).then((r) => setItems(r.timesheets)).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => {
+    api('/api/projects').then((r) => setProjects(r.projects || []));
+    void load();
+  }, []);
+
+  return (
+    <Panel title="工时记录" subtitle="项目工时填报和统计">
+      <Toolbar action={<button className="primary" onClick={() => setEditing({})}>＋ 记录工时</button>}/>
+      <div className="filters">
+        <label>项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <option value="">全部项目</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
+        </select></label>
+        <button onClick={load}>查询</button>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>工作日期</th><th>项目</th><th>人员</th><th className="number">工时</th><th>说明</th><th>可计费</th></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td>{item.work_date}</td>
+                <td>{item.projectName}</td>
+                <td>{item.userName}</td>
+                <td className="number">{item.hours}h</td>
+                <td>{item.description || '-'}</td>
+                <td>{item.billable ? '是' : '否'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无工时记录"/>}
+      </div>
+      {editing && <TimesheetModal projects={projects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('工时已记录'); }} />}
+    </Panel>
+  );
+}
+
+function TimesheetModal({ projects, value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    project_id: '', user_id: user?.id || '', work_date: new Date().toISOString().slice(0, 10),
+    hours: 0, description: '', billable: true, ...value
+  });
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    api('/api/users').then((r) => setUsers(r.users || []));
+  }, []);
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api('/api/timesheets', { method: 'POST', body: form });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title="记录工时" onClose={onClose}>
+      <form className="form-grid" onSubmit={save}>
+        <label>项目<select value={form.project_id} onChange={(e) => setForm({...form, project_id: e.target.value})} required>
+          <option value="">选择项目</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
+        </select></label>
+        <label>工作日期<input type="date" value={form.work_date} onChange={(e) => setForm({...form, work_date: e.target.value})} required/></label>
+        <label>工时<input type="number" value={form.hours} min="0.5" step="0.5" onChange={(e) => setForm({...form, hours: Number(e.target.value)})} required/></label>
+        <label>填报人<select value={form.user_id} onChange={(e) => setForm({...form, user_id: e.target.value})} required>
+          <option value="">选择人员</option>
+          {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select></label>
+        <label className="check full"><input type="checkbox" checked={form.billable} onChange={(e) => setForm({...form, billable: e.target.checked})}/> 可计费工时</label>
+        <label className="full">工作说明<input value={form.description} onChange={(e) => setForm({...form, description: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
 
 function Loading() { return <div className="loading"><div className="spinner"/>载入中…</div>; }
 
