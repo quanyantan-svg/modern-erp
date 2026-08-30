@@ -78,6 +78,14 @@ modern-erp/
 | 采购订单 | PurchaseOrders | /api/purchase-orders | 采购订单管理 |
 | 仓库资料 |
 | 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 现金日记账、银行账户、票据 |
+| 固定资产 | FixedAssets | /api/fixed-assets | 固定资产及折旧管理 |
+| 成本会计 | CostAccounting | /api/product-costs, /api/cost-rates | 标准成本、费用项目、工单成本 |
+| 质量管理 | QualityControl | /api/iqc, /api/oqc | IQC来料检验、OQC出货检验 |
+| CRM客户关系 | CRM | /api/contacts, /api/customer-followups, /api/sales-activities | 联系人、客户跟进、销售活动 |
+| 项目管理 | ProjectManagement | /api/projects, /api/project-tasks, /api/timesheets | 项目立项、任务管理、工时记录 |
+| 审批流 | Workflow | /api/workflows, /api/approval-records | 审批流程定义和管理 |
+| 通知中心 | Notifications | /api/notifications | 系统通知和消息 |
+| 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 现金日记账、银行账户、票据 |
 | 固定资产 | FixedAssets | /api/fixed-assets | 固定资产及折旧管理 | Warehouses | /api/warehouses | 仓库增删改查 |
 | 出纳管理 | CashManagement | /api/cash-journals, /api/bank-accounts, /api/bills | 日记账、银行账户、票据 |
 | 库存管理 | Inventory | /api/inventory, /api/inventory-checks, /api/inventory-transfers | 库存查询/盘点/调拨 |
@@ -103,6 +111,13 @@ modern-erp/
 | 2026-08-29 | 入库/出库 | 新增 purchase_receipts/sales_deliveries/sales_returns/purchase_returns/inventory_transactions 表及全部 API 和前端组件 |
 | 2026-08-29 | 应收/应付账款 | 新增 accounts_receivable/accounts_payable/payment_collections/payment_disbursements 表及全部 API 和前端组件 |
 | 2026-08-29 | BOM+生产工单 |
+
+| 2026-08-30 | 出纳管理+固定资产 | 新增 cash_journals/bank_accounts/bills/fixed_assets 表及全部 API 和前端组件 |
+| 2026-08-30 | 成本会计 | 新增 product_costs/cost_rates/production_costs 表及全部 API 和前端组件 |
+| 2026-08-30 | 质量管理 | 新增 iqc_inspections/oqc_inspections 表及全部 API 和前端组件 |
+| 2026-08-30 | CRM客户关系 | 新增 contacts/customer_followups/sales_activities 表及全部 API 和前端组件 |
+| 2026-08-30 | 项目管理 | 新增 projects/project_tasks/project_timesheets 表及全部 API 和前端组件 |
+| 2026-08-30 | 增强功能 | 新增 notifications/approval_workflows/approval_records 表及全部 API 和前端组件 |
 
 | 2026-08-30 | 出纳管理+固定资产 | 新增 cash_journals/bank_accounts/bills/fixed_assets 表及全部 API 和前端组件 | 新增 boms/bom_items/production_orders/production_order_items/production_outputs 表及全部 API 和前端组件 |
 
