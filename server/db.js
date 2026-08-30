@@ -36,7 +36,10 @@ export const PERMISSIONS = [
   ['PRODUCTION_ORDERS_CREATE', '新建生产工单'],
   ['PRODUCTION_ORDERS_START', '开始生产'],
   ['PRODUCTION_ORDERS_COMPLETE', '完成生产'],
-  ['ACCOUNTING_VIEW', '查看财务凭证'],  ['CASH_JOURNALS_VIEW', '查看现金日记账'],
+  ['ACCOUNTING_VIEW', '查看财务凭证'],
+  ['VOUCHER_SUBMIT', '提交凭证'],
+  ['VOUCHER_APPROVE', '审核凭证'],
+  ['CASH_JOURNALS_VIEW', '查看现金日记账'],
   ['CASH_JOURNALS_MANAGE', '管理现金日记账'],
   ['BANK_ACCOUNTS_VIEW', '查看银行账户'],
   ['BANK_ACCOUNTS_MANAGE', '管理银行账户'],
@@ -182,6 +185,50 @@ export function createDatabase(filename) {
     } catch (e) { console.error('Migration production_orders CHECK failed:', e.message); }
   };
   migrateProductionOrdersCheck();
+  // Migration: Voucher workflow - add new columns and update CHECK constraint
+  const migrateVoucherWorkflow = () => {
+    try {
+      // Add new columns if they do not exist
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN rejection_reason TEXT"); } catch (e) { }
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_at TEXT"); } catch (e) { }
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_by TEXT"); } catch (e) { }
+      
+      // Check if CHECK constraint needs updating
+      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='accounting_vouchers'").get()?.sql || '';
+      if (!currentSql.includes("'ENTERED'")) {
+        // Need to rebuild table with new CHECK constraint
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS accounting_vouchers_new (
+            id TEXT PRIMARY KEY,
+            voucher_no TEXT NOT NULL UNIQUE,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            voucher_date TEXT NOT NULL,
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            voucher_word_id TEXT,
+            period TEXT,
+            status TEXT NOT NULL DEFAULT 'ENTERED' CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED')),
+            attachment_count INTEGER DEFAULT 0,
+            approver_id TEXT,
+            approved_at TEXT,
+            updated_at TEXT,
+            rejection_reason TEXT,
+            submitted_at TEXT,
+            submitted_by TEXT,
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          );
+        `);
+        // Copy data preserving existing status values
+        db.exec("INSERT INTO accounting_vouchers_new (id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, status, attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by) SELECT id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, COALESCE(status, 'POSTED'), attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by FROM accounting_vouchers");
+        db.exec('DROP TABLE accounting_vouchers');
+        db.exec('ALTER TABLE accounting_vouchers_new RENAME TO accounting_vouchers');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
+      }
+    } catch (e) { console.error('Migration voucher workflow failed:', e.message); }
+  };
+  migrateVoucherWorkflow();
 
   return db;
 }

@@ -219,8 +219,22 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/bank-statements' && req.method === 'POST') return createBankStatement(db, req, res, actor);
   if (pathname === '/api/bank-reconciliations' && req.method === 'GET') return listBankReconciliations(db, res, actor, url);
   if (pathname === '/api/bank-reconciliations' && req.method === 'POST') return createBankReconciliation(db, req, res, actor);
-  if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, req, res, actor, url);
+  if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
+  // Accounting Voucher Workflow
+  const voucherActionMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/(submit|approve|reject)$/);
+  if (voucherActionMatch && req.method === 'POST') {
+    const voucherId = voucherActionMatch[1];
+    const action = voucherActionMatch[2];
+    if (action === 'submit') return submitAccountingVoucher(db, req, res, actor, voucherId);
+    if (action === 'approve') return approveAccountingVoucher(db, req, res, actor, voucherId);
+    if (action === 'reject') return rejectAccountingVoucher(db, req, res, actor, voucherId);
+  }
+  const avPatchMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)$/);
+  if (avPatchMatch && req.method === 'PATCH') return updateAccountingVoucher(db, req, res, actor, avPatchMatch[1]);
+  if (avPatchMatch && req.method === 'DELETE') return deleteAccountingVoucher(db, req, res, actor, avPatchMatch[1]);
+  // Audit Logs
+  if (pathname === '/api/audit-logs' && req.method === 'GET') return listAuditLogs(db, res, actor, url);
 
 
   // Purchase Receipts
@@ -1434,9 +1448,8 @@ async function createAccountingVoucher(db, req, res, actor) {
   const voucherNo = makeVoucherNo();
   
   transaction(db, () => {
-    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) 
-      VALUES(?,?,?,?,?,?,?,?)`)
-      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now);
+    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now, 'ENTERED');
     
     const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
     entries.forEach(e => {
@@ -1448,66 +1461,201 @@ async function createAccountingVoucher(db, req, res, actor) {
   
   return send(res, 201, { id: voucherId, voucherNo });
 }
-
 async function updateAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'ACCOUNTING_VIEW');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-  
+
   // 只允许修改手工凭证
   if (voucher.source_type !== 'MANUAL') {
     throw new HttpError(400, '只能修改手工凭证');
   }
-  
+
+  // State protection - only ENTERED and REJECTED can be edited
+  if (voucher.status === 'SUBMITTED') {
+    throw new HttpError(409, '待审核凭证不能修改');
+  }
+  if (voucher.status === 'POSTED') {
+    throw new HttpError(409, '已审核凭证不能修改');
+  }
+
+  // Check period status for ENTERED (REJECTED can always be corrected)
+  if (voucher.status === 'ENTERED') {
+    const period = voucher.voucher_date.slice(0, 7);
+    const closure = db.prepare('SELECT * FROM period_closures WHERE period = ?').get(period);
+    if (closure) {
+      throw new HttpError(409, '会计期间已结账，不能修改凭证');
+    }
+  }
+
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
-  
+
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
-  
+
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
-  
+
   if (Math.abs(debitTotal - creditTotal) > 1) {
     throw new HttpError(400, '借贷不平衡');
   }
-  
+
   const now = new Date().toISOString();
-  
+
   transaction(db, () => {
-    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ? WHERE id = ?')
-      .run(voucherDate || voucher.voucher_date, remark || '', voucherId);
-    
+    // If editing REJECTED voucher, reset to ENTERED
+    const newStatus = voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status;
+    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ?, status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
+      .run(voucherDate || voucher.voucher_date, remark || '', newStatus, '', now, voucherId);
+
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
-    
+
     const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
     entries.forEach(e => {
       stmt.run(id(), voucherId, e.subjectId, e.direction, Number(e.amountCents), e.summary || '');
     });
-    
-    audit(db, actor.id, 'UPDATE', 'ACCOUNTING_VOUCHER', voucherId, '修改凭证 ' + voucher.voucher_no);
+
+    audit(db, actor.id, 'UPDATE', 'ACCOUNTING_VOUCHER', voucherId, '修改凭证 ' + voucher.voucher_no + (newStatus === 'ENTERED' ? ' (重新提交后生效)' : ''));
   });
-  
-  return send(res, 200, { success: true });
+
+  return send(res, 200, { success: true, status: voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status });
 }
 
 async function deleteAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'ACCOUNTING_VIEW');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-  
+
+  // 只允许删除手工凭证
   if (voucher.source_type !== 'MANUAL') {
     throw new HttpError(400, '只能删除手工凭证');
   }
-  
+
+  // State protection - only ENTERED and REJECTED can be deleted
+  if (voucher.status === 'SUBMITTED') {
+    throw new HttpError(409, '待审核凭证不能删除');
+  }
+  if (voucher.status === 'POSTED') {
+    throw new HttpError(409, '已审核凭证不能删除');
+  }
+
+  // Check period closure
+  const period = voucher.voucher_date.slice(0, 7);
+  const closure = db.prepare('SELECT * FROM period_closures WHERE period = ?').get(period);
+  if (closure) {
+    throw new HttpError(409, '会计期间已结账，不能删除凭证');
+  }
+
   transaction(db, () => {
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
     db.prepare('DELETE FROM accounting_vouchers WHERE id = ?').run(voucherId);
     audit(db, actor.id, 'DELETE', 'ACCOUNTING_VOUCHER', voucherId, '删除凭证 ' + voucher.voucher_no);
   });
-  
+
   return send(res, 200, { success: true });
+}
+
+async function submitAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_SUBMIT');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Only ENTERED and REJECTED vouchers can be submitted
+  if (!['ENTERED', 'REJECTED'].includes(voucher.status)) {
+    throw new HttpError(409, '只有录入或已驳回的凭证可以提交');
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, submitted_at = ?, submitted_by = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
+    .run('SUBMITTED', now, actor.id, '', now, voucherId);
+
+  audit(db, actor.id, 'SUBMIT', 'ACCOUNTING_VOUCHER', voucherId, '提交凭证 ' + voucher.voucher_no);
+
+  return send(res, 200, { success: true });
+}
+
+async function approveAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_APPROVE');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Only SUBMITTED vouchers can be approved
+  if (voucher.status !== 'SUBMITTED') {
+    throw new HttpError(409, '只有待审核凭证可以审核');
+  }
+
+  // Cannot approve own voucher
+  if (voucher.creator_id === actor.id) {
+    throw new HttpError(403, '不能审核自己录入的凭证');
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+    .run('POSTED', actor.id, now, now, voucherId);
+
+  audit(db, actor.id, 'APPROVE', 'ACCOUNTING_VOUCHER', voucherId, '审核通过凭证 ' + voucher.voucher_no);
+
+  return send(res, 200, { success: true });
+}
+
+async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_APPROVE');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Only SUBMITTED vouchers can be rejected
+  if (voucher.status !== 'SUBMITTED') {
+    throw new HttpError(409, '只有待审核凭证可以驳回');
+  }
+
+  // Cannot reject own voucher
+  if (voucher.creator_id === actor.id) {
+    throw new HttpError(403, '不能驳回自己录入的凭证');
+  }
+
+  const body = await readJson(req);
+  const rejectionReason = requiredText(body.rejectionReason, '驳回原因', 500);
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, rejection_reason = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+    .run('REJECTED', rejectionReason, actor.id, now, now, voucherId);
+
+  audit(db, actor.id, 'REJECT', 'ACCOUNTING_VOUCHER', voucherId, '驳回凭证 ' + voucher.voucher_no + ': ' + rejectionReason);
+
+  return send(res, 200, { success: true });
+}
+
+function listAuditLogs(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const entityType = url.searchParams.get('entity_type');
+  const entityId = url.searchParams.get('entity_id');
+  const userId = url.searchParams.get('user_id');
+  const action = url.searchParams.get('action');
+  const limit = Math.min(Number(url.searchParams.get('limit') || '100'), 500);
+  const offset = Number(url.searchParams.get('offset') || '0');
+
+  let sql = 'SELECT l.*, u.username, u.display_name FROM audit_logs l LEFT JOIN users u ON u.id = l.user_id WHERE 1=1';
+  const params = [];
+
+  if (entityType) { sql += ' AND l.entity_type = ?'; params.push(entityType); }
+  if (entityId) { sql += ' AND l.entity_id = ?'; params.push(entityId); }
+  if (userId) { sql += ' AND l.user_id = ?'; params.push(userId); }
+  if (action) { sql += ' AND l.action = ?'; params.push(action); }
+
+  sql += ' ORDER BY l.created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const logs = db.prepare(sql).all(...params);
+  const countSql = 'SELECT COUNT(*) cnt FROM audit_logs WHERE 1=1' + (entityType ? ' AND entity_type = ?' : '') + (entityId ? ' AND entity_id = ?' : '') + (userId ? ' AND user_id = ?' : '') + (action ? ' AND action = ?' : '');
+  const countParams = params.slice(0, -2);
+  const total = db.prepare(countSql).get(...countParams);
+
+  return send(res, 200, { logs, total: total.cnt, limit, offset });
 }
 
 // ============ 账簿查询 ============
