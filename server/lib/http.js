@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+﻿import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 
 export class HttpError extends Error {
@@ -72,7 +72,7 @@ export function setSecurityHeaders(res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'");
 }
 
 export function serveStatic(res, pathname, distDir) {

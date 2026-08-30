@@ -7,7 +7,7 @@ export function PurchaseReceipts({ user, notify }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [view, setView] = useState(null);
-  const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts)).catch((e) => notify(e.message, "error"));
+  const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="采购入库单" subtitle="采购到货入仓记录，与采购订单联动" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增进货单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
@@ -76,7 +76,7 @@ export function SalesDeliveries({ user, notify }) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [view, setView] = useState(null);
-  const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries)).catch((e) => notify(e.message, "error"));
+  const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="销售出库单" subtitle="发货给客户的出库记录，与销售订单联动" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增出库单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
@@ -234,7 +234,7 @@ export function InventoryTransactions({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
-  const load = () => api("/api/inventory-transactions?search=" + encodeURIComponent(search) + "&type=" + type).then((r) => setItems(r.inventoryTransactions)).catch((e) => notify(e.message, "error"));
+  const load = () => api("/api/inventory-transactions?search=" + encodeURIComponent(search) + "&type=" + type).then((r) => setItems(r.inventoryTransactions || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [type]);
   const typeMap = { 
     PURCHASE_RECEIPT: "采购入库", 
@@ -261,7 +261,7 @@ export function AccountsReceivable({ user, notify }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [view, setView] = useState(null);
-  const load = () => api('/api/accounts-receivable?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.receivables)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/accounts-receivable?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.receivables || [])).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="应收账款" subtitle="客户欠款，跟踪回款情况" action={can(user, 'AR_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 手工应收</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="OPEN">未收</option><option value="PARTIAL">部分收款</option><option value="CLOSED">已结清</option></select>}/>
@@ -303,7 +303,7 @@ export function AccountsPayable({ user, notify }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [view, setView] = useState(null);
-  const load = () => api('/api/accounts-payable?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.payables)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/accounts-payable?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.payables || [])).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="应付账款" subtitle="对供应商的欠款，跟踪付款情况" action={can(user, 'AP_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 手工应付</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="OPEN">未付</option><option value="PARTIAL">部分付款</option><option value="CLOSED">已结清</option></select>}/>
@@ -344,7 +344,7 @@ export function PaymentCollections({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [view, setView] = useState(null);
-  const load = () => api('/api/payment-collections?search=' + encodeURIComponent(search)).then((r) => setItems(r.collections)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/payment-collections?search=' + encodeURIComponent(search)).then((r) => setItems(r.collections || [])).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
   return <Panel title="收款单" subtitle="记录客户回款，核销应收账款" action={can(user, 'AR_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 新增收款</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户"/>
@@ -407,7 +407,7 @@ export function PaymentDisbursements({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [view, setView] = useState(null);
-  const load = () => api('/api/payment-disbursements?search=' + encodeURIComponent(search)).then((r) => setItems(r.disbursements)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/payment-disbursements?search=' + encodeURIComponent(search)).then((r) => setItems(r.disbursements || [])).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
   return <Panel title="付款单" subtitle="记录对供应商的付款，核销应付账款" action={can(user, 'AP_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 新增付款</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商"/>

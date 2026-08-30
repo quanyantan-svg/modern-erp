@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { Active, Empty, FormActions, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: 'sales', password: 'sales123' });

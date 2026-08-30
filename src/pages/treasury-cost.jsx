@@ -106,7 +106,7 @@ export function BankAccounts({ user, notify }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
 
-  const load = () => api('/api/bank-accounts').then((r) => setItems(r.accounts)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/bank-accounts').then((r) => setItems(r.bankAccounts || [])).catch((e) => notify(e.message, 'error'));
 
   useEffect(() => { void load(); }, []);
 
@@ -290,13 +290,13 @@ export function FixedAssets({ user, notify }) {
   const [viewDep, setViewDep] = useState(null);
   const [depreciations, setDepreciations] = useState([]);
 
-  const load = () => api('/api/fixed-assets').then((r) => setItems(r.assets)).catch((e) => notify(e.message, 'error'));
+  const load = () => api('/api/fixed-assets').then((r) => setItems(r.assets || [])).catch((e) => notify(e.message, 'error'));
 
   useEffect(() => { void load(); }, []);
 
   function viewDepreciations(asset) {
     setViewDep(asset);
-    api(`/api/fixed-assets/${asset.id}/depreciations`).then((r) => setDepreciations(r.depreciations)).catch((e) => notify(e.message, 'error'));
+    api(`/api/fixed-assets/${asset.id}/depreciations`).then((r) => setDepreciations(r.depreciations || [])).catch((e) => notify(e.message, 'error'));
   }
 
   async function calculateDep(assetId) {

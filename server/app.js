@@ -128,7 +128,7 @@ async function handleApi(db, req, res, url) {
   if (billMatch && req.method === 'PATCH') return updateBill(db, req, res, actor, billMatch[1]);
 
   // Fixed Assets
-  if (pathname === '/api/fixed-assets' && req.method === 'GET') return listFixedAssets(db, res, actor);
+  if (pathname === '/api/fixed-assets' && req.method === 'GET') return listFixedAssets(db, res, actor, url);
   if (pathname === '/api/fixed-assets' && req.method === 'POST') return createFixedAsset(db, req, res, actor);
   const assetMatch = pathname.match(/^\/api\/fixed-assets\/([^/]+)$/);
   if (assetMatch && req.method === 'PATCH') return updateFixedAsset(db, req, res, actor, assetMatch[1]);
@@ -1830,8 +1830,11 @@ function listFixedAssets(db, res, actor, url) {
   if (status) { where.push('status = ?'); params.push(status); }
   if (assetType) { where.push('asset_type = ?'); params.push(assetType); }
   
-  const sql = `SELECT fa.*, u.display_name creatorName,
-    (SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id) as total_depreciation
+  const sql = `SELECT fa.asset_code, fa.asset_name, fa.asset_type AS category, fa.purchase_date,
+    fa.purchase_amount_cents, fa.status, fa.net_value_cents, fa.accumulated_depreciation_cents,
+    fa.depreciation_method, fa.service_years, fa.residual_value_cents,
+    u.display_name creatorName,
+    COALESCE((SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id), 0) AS totalDepreciatedCents
     FROM fixed_assets fa
     JOIN users u ON u.id = fa.creator_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -1871,7 +1874,12 @@ async function createFixedAsset(db, req, res, actor) {
 
 function getFixedAsset(db, res, actor, assetId) {
   allow(actor, 'ACCOUNTING_VIEW');
-  const asset = db.prepare(`SELECT fa.*, u.display_name creatorName FROM fixed_assets fa JOIN users u ON u.id = fa.creator_id WHERE fa.id = ?`).get(assetId);
+  const asset = db.prepare(`SELECT fa.asset_code, fa.asset_name, fa.asset_type AS category, fa.purchase_date,
+    fa.purchase_amount_cents, fa.status, fa.net_value_cents, fa.accumulated_depreciation_cents,
+    fa.depreciation_method, fa.service_years, fa.residual_value_cents,
+    u.display_name creatorName,
+    COALESCE((SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id), 0) AS totalDepreciatedCents
+    FROM fixed_assets fa JOIN users u ON u.id = fa.creator_id WHERE fa.id = ?`).get(assetId);
   if (!asset) throw new HttpError(404, '资产不存在');
   
   // 获取折旧记录
