@@ -1,5 +1,11 @@
 node_modules/
 dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.bak
+test.log
 data/*.db
 data/*.db-*
 *.log

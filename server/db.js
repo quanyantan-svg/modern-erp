@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { migrateExtendedSchema } from './migrations/extended-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -80,6 +81,14 @@ export const PERMISSIONS = [
   ['OA_EXPENSE_MANAGE', '管理报销'],
   ['ALERT_RULES_VIEW', '查看预警规则'],
   ['ALERT_RULES_MANAGE', '管理预警规则'],
+  ['COST_VIEW', '查看成本管理'],
+  ['COST_MANAGE', '管理成本数据'],
+  ['CRM_VIEW', '查看客户关系管理'],
+  ['CRM_MANAGE', '管理客户关系数据'],
+  ['PROJECT_VIEW', '查看项目管理'],
+  ['PROJECT_MANAGE', '管理项目数据'],
+  ['WORKFLOW_VIEW', '查看审批流'],
+  ['WORKFLOW_MANAGE', '管理审批流'],
 
   ['FIXED_ASSETS_VIEW', '查看固定资产'],
   ['FIXED_ASSETS_MANAGE', '管理固定资产'],
@@ -102,6 +111,8 @@ export function createDatabase(filename) {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
   migrate(db);
+  migrateExtendedSchema(db);
+  normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables
   const addColumn = (sql) => { try { db.exec(sql); } catch (e) { } };
@@ -121,10 +132,30 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE products ADD COLUMN min_stock REAL DEFAULT 0');
   addColumn('ALTER TABLE products ADD COLUMN max_stock REAL DEFAULT 0');
   addColumn('ALTER TABLE products ADD COLUMN lead_time_days INTEGER DEFAULT 7');
+  addColumn('ALTER TABLE users ADD COLUMN name TEXT');
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN voucher_word_id TEXT');
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN period TEXT');
+  addColumn("ALTER TABLE accounting_vouchers ADD COLUMN status TEXT DEFAULT 'POSTED'");
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN attachment_count INTEGER DEFAULT 0');
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN approver_id TEXT');
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN approved_at TEXT');
+  addColumn('ALTER TABLE accounting_vouchers ADD COLUMN updated_at TEXT');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN department_id TEXT');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN project_id TEXT');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN customer_id TEXT');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN supplier_id TEXT');
+  addColumn("ALTER TABLE accounting_entries ADD COLUMN currency_code TEXT DEFAULT 'CNY'");
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN exchange_rate REAL DEFAULT 1');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN amount_foreign REAL DEFAULT 0');
+  addColumn('ALTER TABLE accounting_entries ADD COLUMN line_no INTEGER DEFAULT 1');
+  db.exec("UPDATE accounting_vouchers SET period=substr(voucher_date,1,7) WHERE period IS NULL; UPDATE accounting_vouchers SET updated_at=created_at WHERE updated_at IS NULL");
+  db.exec('UPDATE users SET name=display_name WHERE name IS NULL');
   return db;
 }
 
-    // 产品标准成本
+function migrate(db) {
+  db.exec(`
+    -- 产品标准成本
     CREATE TABLE IF NOT EXISTS product_costs (
       id TEXT PRIMARY KEY,
       product_id TEXT NOT NULL,
@@ -141,7 +172,7 @@ export function createDatabase(filename) {
       FOREIGN KEY (product_id) REFERENCES products(id)
     );
     
-    // 工单成本记录
+    -- 工单成本记录
     CREATE TABLE IF NOT EXISTS production_costs (
       id TEXT PRIMARY KEY,
       order_id TEXT NOT NULL,
@@ -157,15 +188,13 @@ export function createDatabase(filename) {
       FOREIGN KEY (creator_id) REFERENCES users(id)
     );
     
-    // 成本费用项目
+    -- 成本费用项目
     CREATE TABLE IF NOT EXISTS cost_rates (
       id TEXT PRIMARY KEY,
-      code TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      category TEXT NOT NULL CHECK(category IN ('MATERIAL', 'LABOR', 'OVERHEAD')),
-      rate_cents_per_hour INTEGER NOT NULL DEFAULT 0,
+      rate_type TEXT NOT NULL,
+      rate_value REAL NOT NULL DEFAULT 0,
       unit TEXT NOT NULL DEFAULT '小时',
-      active INTEGER NOT NULL DEFAULT 1,
+      effective_date TEXT NOT NULL,
       remark TEXT NOT NULL DEFAULT '',
       creator_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
@@ -174,7 +203,7 @@ export function createDatabase(filename) {
     );
 
 
-    // 固定资产
+    -- 固定资产
     CREATE TABLE IF NOT EXISTS fixed_assets (
       id TEXT PRIMARY KEY,
       asset_code TEXT NOT NULL UNIQUE,
@@ -198,7 +227,7 @@ export function createDatabase(filename) {
       updated_at TEXT NOT NULL
     );
     
-    // 固定资产折旧记录
+    -- 固定资产折旧记录
     CREATE TABLE IF NOT EXISTS asset_depreciations (
       id TEXT PRIMARY KEY,
       asset_id TEXT NOT NULL,
@@ -212,7 +241,7 @@ export function createDatabase(filename) {
       FOREIGN KEY (asset_id) REFERENCES fixed_assets(id)
     );
 
-    // 出纳日记账
+    -- 出纳日记账
     CREATE TABLE IF NOT EXISTS cash_journals (
       id TEXT PRIMARY KEY,
       journal_no TEXT NOT NULL,
@@ -233,7 +262,7 @@ export function createDatabase(filename) {
       created_at TEXT NOT NULL
     );
     
-    // 银行账户
+    -- 银行账户
     CREATE TABLE IF NOT EXISTS bank_accounts (
       id TEXT PRIMARY KEY,
       bank_name TEXT NOT NULL,
@@ -247,7 +276,7 @@ export function createDatabase(filename) {
       updated_at TEXT NOT NULL
     );
     
-    // 票据管理
+    -- 票据管理
     CREATE TABLE IF NOT EXISTS bills (
       id TEXT PRIMARY KEY,
       bill_no TEXT NOT NULL,
@@ -270,7 +299,6 @@ export function createDatabase(filename) {
       updated_at TEXT NOT NULL
     );
 
-  db.exec(`
     CREATE TABLE IF NOT EXISTS roles (
       id TEXT PRIMARY KEY,
       code TEXT NOT NULL UNIQUE,
@@ -791,6 +819,154 @@ export function createDatabase(filename) {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS contacts (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT,
+      supplier_id TEXT,
+      name TEXT NOT NULL,
+      gender TEXT,
+      position TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      mobile TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      wechat TEXT NOT NULL DEFAULT '',
+      birthday TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS customer_followups (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT NOT NULL,
+      followup_type TEXT NOT NULL,
+      followup_date TEXT NOT NULL,
+      content TEXT NOT NULL,
+      next_plan TEXT NOT NULL DEFAULT '',
+      next_date TEXT NOT NULL DEFAULT '',
+      handler_id TEXT,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (handler_id) REFERENCES users(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sales_activities (
+      id TEXT PRIMARY KEY,
+      activity_no TEXT NOT NULL UNIQUE,
+      activity_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL DEFAULT '',
+      budget_cents INTEGER NOT NULL DEFAULT 0,
+      actual_cost_cents INTEGER NOT NULL DEFAULT 0,
+      participants TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'PLANNING',
+      result TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      project_no TEXT UNIQUE,
+      code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      project_type TEXT NOT NULL DEFAULT '',
+      customer_id TEXT,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT NOT NULL DEFAULT 'PLANNING',
+      budget_cents INTEGER NOT NULL DEFAULT 0,
+      manager_id TEXT,
+      manager TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      FOREIGN KEY (customer_id) REFERENCES customers(id),
+      FOREIGN KEY (manager_id) REFERENCES users(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS project_tasks (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      parent_id TEXT,
+      task_no TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      priority TEXT NOT NULL DEFAULT 'MEDIUM',
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      planned_start TEXT,
+      planned_end TEXT,
+      actual_start TEXT,
+      actual_end TEXT,
+      progress INTEGER NOT NULL DEFAULT 0,
+      assignee_id TEXT,
+      estimated_hours REAL NOT NULL DEFAULT 0,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (parent_id) REFERENCES project_tasks(id),
+      FOREIGN KEY (assignee_id) REFERENCES users(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS project_timesheets (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      task_id TEXT,
+      user_id TEXT NOT NULL,
+      work_date TEXT NOT NULL,
+      hours REAL NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      billable INTEGER NOT NULL DEFAULT 0,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES project_tasks(id),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT 'INFO',
+      source_type TEXT,
+      source_id TEXT,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS approval_workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      steps TEXT NOT NULL DEFAULT '[]',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id);
     CREATE INDEX IF NOT EXISTS idx_entries_voucher ON accounting_entries(voucher_id);
     CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id);
@@ -800,6 +976,39 @@ export function createDatabase(filename) {
     CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id);
     CREATE INDEX IF NOT EXISTS idx_production_items_order ON production_order_items(order_id);
     CREATE INDEX IF NOT EXISTS idx_production_outputs_order ON production_outputs(order_id);
+  `);
+}
+
+function normalizeCostRates(db) {
+  const columns = db.prepare('PRAGMA table_info(cost_rates)').all().map((column) => column.name);
+  if (columns.includes('rate_type')) return;
+
+  db.exec(`
+    ALTER TABLE cost_rates RENAME TO cost_rates_legacy;
+    CREATE TABLE cost_rates (
+      id TEXT PRIMARY KEY,
+      rate_type TEXT NOT NULL,
+      rate_value REAL NOT NULL DEFAULT 0,
+      unit TEXT NOT NULL DEFAULT '小时',
+      effective_date TEXT NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+    INSERT INTO cost_rates(id, rate_type, rate_value, unit, effective_date, remark, creator_id, created_at, updated_at)
+    SELECT id,
+      CASE category WHEN 'LABOR' THEN 'LABOR_RATE' WHEN 'OVERHEAD' THEN 'OVERHEAD_RATE' ELSE category END,
+      rate_cents_per_hour / 100.0,
+      unit,
+      substr(created_at, 1, 10),
+      remark,
+      creator_id,
+      created_at,
+      updated_at
+    FROM cost_rates_legacy;
+    DROP TABLE cost_rates_legacy;
   `);
 }
 
@@ -821,7 +1030,7 @@ function seed(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],,
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
     'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],

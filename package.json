@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "方天 ERP 基础资料与销售订单流程的现代化最小重构版本",
+  "description": "方天 ERP 核心业务与管理能力的现代化模块化重构版本",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:api": "node --watch server/index.js",
