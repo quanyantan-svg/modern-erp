@@ -3501,3 +3501,65 @@ async function deleteTimesheet(db, req, res, actor, tsId) {
   audit(db, actor.id, 'DELETE', 'TIMESHEET', tsId, `删除工时记录`);
   return send(res, 200, { ok: true });
 }
+// ============ Notifications ============
+
+async function listNotifications(db, res, actor) {
+  allow(actor, 'DASHBOARD_VIEW');
+  const notifications = db.prepare(`SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50`).all(actor.id);
+  const unreadCount = db.prepare('SELECT COUNT(*) cnt FROM notifications WHERE user_id=? AND is_read=0').get(actor.id).cnt;
+  return send(res, 200, { notifications, unreadCount });
+}
+
+async function markNotificationRead(db, req, res, actor) {
+  allow(actor, 'DASHBOARD_VIEW');
+  const body = await readJson(req);
+  const { notificationId } = body;
+  if (notificationId) {
+    db.prepare('UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?').run(notificationId, actor.id);
+  } else {
+    db.prepare('UPDATE notifications SET is_read=1 WHERE user_id=?').run(actor.id);
+  }
+  return send(res, 200, { ok: true });
+}
+
+function createNotification(db, userId, title, content, type = 'INFO', sourceType = null, sourceId = null) {
+  const now = new Date().toISOString();
+  const nid = id();
+  db.prepare('INSERT INTO notifications(id,user_id,title,content,type,source_type,source_id,created_at) VALUES(?,?,?,?,?,?,?,?)').run(nid, userId, title, content, type, sourceType, sourceId, now);
+}
+
+// ============ Approval Workflows ============
+
+async function listWorkflows(db, res, actor) {
+  allowAny(actor, ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE']);
+  const workflows = db.prepare('SELECT w.*, u.name creatorName FROM approval_workflows w LEFT JOIN users u ON u.id=w.creator_id ORDER BY w.created_at DESC').all();
+  return send(res, 200, { workflows });
+}
+
+async function createWorkflow(db, req, res, actor) {
+  allow(actor, 'WORKFLOW_MANAGE');
+  const body = await readJson(req);
+  const { name, entity_type, steps } = body;
+  const now = new Date().toISOString();
+  const wfId = id();
+  
+  db.prepare('INSERT INTO approval_workflows(id,name,entity_type,steps,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(wfId, name, entity_type, JSON.stringify(steps || []), actor.id, now, now);
+  
+  audit(db, actor.id, 'CREATE', 'WORKFLOW', wfId, `创建审批流程 ${name}`);
+  return send(res, 200, { id: wfId });
+}
+
+async function listApprovalRecords(db, res, actor, url) {
+  allowAny(actor, ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE']);
+  const entityType = url.searchParams.get('entityType') || '';
+  const entityId = url.searchParams.get('entityId') || '';
+  
+  let sql = `SELECT ar.*, u.name approverName FROM approval_records ar LEFT JOIN users u ON u.id=ar.approver_id WHERE 1=1`;
+  const params = [];
+  if (entityType) { sql += ` AND ar.entity_type=?`; params.push(entityType); }
+  if (entityId) { sql += ` AND ar.entity_id=?`; params.push(entityId); }
+  sql += ` ORDER BY ar.created_at DESC`;
+  
+  const records = db.prepare(sql).all(...params);
+  return send(res, 200, { records });
+}

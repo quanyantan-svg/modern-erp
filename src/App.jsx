@@ -46,6 +46,7 @@ const ic = {
   projects: <Icon d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/>,
   tasks: <Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>,
   timesheets: <Icon d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>,
+  notifications: <Icon d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 0 0-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
@@ -115,7 +116,12 @@ const navGroups = [
     { key: 'production-orders', label: '生产工单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
   ]},
   null,
-  { key: 'users', label: '用户与角色', icon: ic.users, any: ['USERS_MANAGE', 'ROLES_MANAGE'] },
+      null,
+    { label: '系统设置', items: [
+      { key: 'notifications', label: '通知中心', icon: ic.notifications, any: ['DASHBOARD_VIEW'] },
+      { key: 'workflows', label: '审批流', icon: ic.approvals, any: ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE'] },
+      { key: 'users', label: '用户与角色', icon: ic.users, any: ['USERS_MANAGE', 'ROLES_MANAGE'] },
+    ]},
 ];
 
 export default function App() {
@@ -171,6 +177,8 @@ export default function App() {
       projects: <Projects user={user} notify={notify}/>,
       tasks: <ProjectTasks user={user} notify={notify}/>,
       timesheets: <Timesheets user={user} notify={notify}/>,
+      notifications: <Notifications user={user} notify={notify}/>,
+      workflows: <Workflows user={user} notify={notify}/>,
       oqc: <OQCInspections user={user} notify={notify}/>,
       costRates: <CostRates user={user} notify={notify}/>,
       accounting: <Accounting user={user} notify={notify}/>,
@@ -1956,6 +1964,154 @@ function TimesheetModal({ projects, value, onClose, onSaved }) {
         </select></label>
         <label className="check full"><input type="checkbox" checked={form.billable} onChange={(e) => setForm({...form, billable: e.target.checked})}/> 可计费工时</label>
         <label className="full">工作说明<input value={form.description} onChange={(e) => setForm({...form, description: e.target.value})}/></label>
+        <FormActions onClose={onClose}/>
+      </form>
+    </Modal>
+  );
+}
+
+
+// ============ Notifications ============
+
+function Notifications({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const load = () => {
+    api('/api/notifications').then((r) => {
+      setItems(r.notifications);
+      setUnreadCount(r.unreadCount);
+    }).catch((e) => notify(e.message, 'error'));
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  async function markAllRead() {
+    try {
+      await api('/api/notifications/read', { method: 'POST', body: {} });
+      notify('已全部标为已读');
+      load();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+
+  const typeMap = { INFO: '信息', WARNING: '警告', SUCCESS: '成功', ERROR: '错误' };
+  const typeColors = { INFO: '', WARNING: 'warning', SUCCESS: 'success', ERROR: 'danger' };
+
+  return (
+    <Panel title="通知中心" subtitle="系统消息和提醒">
+      <Toolbar action={<button className="secondary" onClick={markAllRead}>全部标为已读</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>类型</th><th>标题</th><th>内容</th><th>时间</th><th>状态</th></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className={item.is_read ? 'read-row' : ''}>
+                <td><Badge type={typeColors[item.type]}>{typeMap[item.type]}</Badge></td>
+                <td><strong>{item.title}</strong></td>
+                <td>{item.content}</td>
+                <td className="dim">{dateTime(item.created_at)}</td>
+                <td>{item.is_read ? <span className="dim">已读</span> : <Badge type="info">新</Badge>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无通知"/>}
+      </div>
+    </Panel>
+  );
+}
+
+// ============ Workflows ============
+
+function Workflows({ user, notify }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => api('/api/workflows').then((r) => setItems(r.workflows)).catch((e) => notify(e.message, 'error'));
+
+  useEffect(() => { void load(); }, []);
+
+  return (
+    <Panel title="审批流程" subtitle="定义和管理审批流程">
+      <Toolbar action={can(user, 'WORKFLOW_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建流程</button>}/>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>流程名称</th><th>适用业务</th><th>状态</th><th>创建人</th><th/></tr></thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td><strong>{item.name}</strong></td>
+                <td>{item.entity_type}</td>
+                <td><Active active={item.active}/></td>
+                <td>{item.creatorName}</td>
+                <td>{can(user, 'WORKFLOW_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <Empty text="暂无审批流程"/>}
+      </div>
+      {editing && <WorkflowModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('流程已保存'); }} />}
+    </Panel>
+  );
+}
+
+function WorkflowModal({ value, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: '', entity_type: 'ORDER', steps: [{ approver_id: '', step_name: '' }], ...value
+  });
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    api('/api/users').then((r) => setUsers(r.users || []));
+  }, []);
+
+  function addStep() { setForm((f) => ({ ...f, steps: [...f.steps, { approver_id: '', step_name: '' }] })); }
+  function removeStep(i) { setForm((f) => ({ ...f, steps: f.steps.filter((_, idx) => idx !== i) })); }
+  function updateStep(i, field, val) {
+    const steps = [...form.steps];
+    steps[i] = { ...steps[i], [field]: val };
+    setForm((f) => ({ ...f, steps }));
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api('/api/workflows', { method: 'POST', body: form });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+
+  return (
+    <Modal title="新建审批流程" onClose={onClose} wide>
+      <form onSubmit={save}>
+        <div className="form-grid">
+          <label>流程名称<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
+          <label>适用业务<select value={form.entity_type} onChange={(e) => setForm({...form, entity_type: e.target.value})}>
+            <option value="ORDER">销售订单</option>
+            <option value="PURCHASE_ORDER">采购订单</option>
+            <option value="PRODUCTION_ORDER">生产工单</option>
+          </select></label>
+        </div>
+        <h4>审批步骤</h4>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>步骤</th><th>审批人</th><th></th></tr></thead>
+            <tbody>
+              {form.steps.map((step, i) => (
+                <tr key={i}>
+                  <td>第 {i + 1} 步</td>
+                  <td><select value={step.approver_id} onChange={(e) => updateStep(i, 'approver_id', e.target.value)} required>
+                    <option value="">选择审批人</option>
+                    {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  </select></td>
+                  <td><button type="button" className="danger-button" onClick={() => removeStep(i)}>删除</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button type="button" className="secondary" onClick={addStep}>+ 添加步骤</button>
         <FormActions onClose={onClose}/>
       </form>
     </Modal>
