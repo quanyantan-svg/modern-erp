@@ -1,206 +1,205 @@
-# 实现方法文档 (solution.md)
+# Modern ERP 技术实现文档
 
-本文档记录功能实现方法，包括代码中各函数的含义及它们之间的关系。每次新增代码时必须修改。
+## 1. 文档目的
 
----
+本文档说明 Modern ERP 如何实现，包括系统结构、模块职责、数据迁移、核心业务规则和验证方式。功能范围与验收标准见 [document.md](./document.md)，运行方式见 [README.md](./README.md)。
 
-## 一、数据库层 (db.js)
+## 2. 总体架构
 
-`db.js` 作为数据库入口，负责连接、基础表迁移和种子数据；扩展业务表由 `server/migrations/extended-schema.js` 独立迁移。迁移使用 `CREATE TABLE IF NOT EXISTS` 与兼容性列升级，可在全新数据库和已有开发数据库上重复执行。
+```text
+React 页面
+    │ JSON / HTTP
+    ▼
+Node.js API 路由与后端权限校验
+    │
+    ├─ 业务处理器与状态转换
+    ├─ 审计记录
+    └─ SQLite 事务与迁移
+```
 
-### 新增表结构
+前端负责交互和展示，不直接访问数据库，也不作为权限与金额计算的可信来源。后端完成认证、授权、输入校验、业务计算和事务控制。
 
-#### 财务模块
-- `departments` - 部门辅助核算
-- `projects` - 项目辅助核算
-- `currencies` - 币种管理
-- `voucher_words` - 凭证字
-- `voucher_templates` - 凭证模板
-- `period_closures` - 期间结账
-- `bank_statements` - 银行对账单
-- `bank_reconciliations` - 银行对账记录
-- `voucher_sequences` - 凭证序号
-- `subject_aux_types` - 科目辅助核算属性
+## 3. 代码结构与职责
 
-#### 制造模块
-- `mrp_plans` - MRP计划主表
-- `mrp_plan_items` - MRP计划明细
-- `work_centers` - 工作中心
-- `routing_operations` - 工序定义
-- `production_labor_records` - 生产人工记录
+### 3.1 前端
 
-#### 质量模块
-- `iqc_inspections` - IQC检验单
-- `iqc_inspection_items` - IQC检验明细
-- `oqc_inspections` - OQC检验单
-- `oqc_inspection_items` - OQC检验明细
-- `supplier_evaluations` - 供应商评估
+| 路径 | 职责 |
+| --- | --- |
+| `src/main.jsx` | React 应用入口 |
+| `src/App.jsx` | 登录态恢复、导航、页面装配和全局提示 |
+| `src/api.js` | Token 管理、统一请求和未认证事件 |
+| `src/components/ui.jsx` | 表格、弹窗、工具栏、状态和空数据等公共组件 |
+| `src/pages/master-data.jsx` | 工作台、基础资料、订单和用户角色页面 |
+| `src/pages/logistics-finance.jsx` | 入出库、退货、库存流水和账款页面 |
+| `src/pages/accounting.jsx` | 会计凭证页面 |
+| `src/pages/treasury-cost.jsx` | 出纳、银行、票据、资产和成本页面 |
+| `src/pages/manufacturing.jsx` | BOM、MRP 和生产工单页面 |
+| `src/pages/quality.jsx` | IQC 和 OQC 页面 |
+| `src/pages/crm.jsx` | 联系人、跟进和销售活动页面 |
+| `src/pages/projects-workflow.jsx` | 项目、任务、工时、通知和审批页面 |
 
-#### OA模块
-- `leave_requests` - 请假申请
-- `expense_claims` - 费用报销
-- `expense_claim_items` - 报销明细
+页面通过 `api()` 访问后端。权限菜单由用户权限决定，但真正的授权仍由 API 执行。
 
-#### 预警模块
-- `alert_rules` - 预警规则
-- `alert_records` - 预警记录
+### 3.2 后端
 
-### 种子数据
+| 路径 | 职责 |
+| --- | --- |
+| `server/index.js` | 创建数据库和 HTTP 服务，处理优雅关闭 |
+| `server/app.js` | HTTP 应用入口、认证和主要 API 路由装配 |
+| `server/lib/http.js` | JSON 解析、响应、安全头、权限辅助和静态资源服务 |
+| `server/lib/audit.js` | 统一写入审计日志 |
+| `server/modules/business.js` | CRM、项目、任务、工时、通知和工作流处理器 |
+| `server/modules/extended.js` | 财务扩展、MRP、质量、OA、预警和报表处理器 |
+| `server/db.js` | SQLite 连接、基础表迁移、兼容列升级和种子数据 |
+| `server/migrations/extended-schema.js` | 扩展业务表的幂等迁移 |
+| `server/reset-data.js` | 删除本地演示数据库 |
 
-| 数据类型 | 内容 |
-|---------|------|
-| 凭证字 | 记账(JZ)、调整(TZ)、转账(ZD) |
-| 部门 | 总经理室、销售部、采购部、财务部、仓储部、生产部 |
-| 项目核算 | 智能家居研发项目、生产线改造项目 |
-| 币种 | 人民币(CNY)、美元(USD)、欧元(EUR)、港币(HKD) |
-| 工作中心 | 装配车间、机加工车间、检测车间 |
+`server/app.js` 仍包含部分基础业务处理器。后续继续重构时，应逐步迁移到按领域划分的模块，避免重新形成单文件聚集。
 
----
+## 4. 请求处理流程
 
-## 二、API路由层 (app.js)
+```text
+请求进入
+  ├─ OPTIONS：直接返回 204
+  ├─ /api/auth/login：校验账号密码并签发 Token
+  ├─ 其他 /api/*：认证 Token → 构造用户权限 → 分发业务处理器
+  └─ 非 API：从 dist/ 提供静态文件或回退到 index.html
+```
 
-`app.js` 负责服务器装配、认证入口与 API 分发。公共 HTTP 响应、JSON 解析、权限校验和静态资源服务位于 `server/lib/http.js`，审计写入位于 `server/lib/audit.js`。CRM、项目、通知和审批处理器位于 `server/modules/business.js`；财务扩展、MRP、质量、OA、预警和报表处理器位于 `server/modules/extended.js`。
+异常处理规则：
 
-前端采用相同的业务域边界：`src/App.jsx` 只负责应用壳、导航和页面装配，通用组件位于 `src/components/ui.jsx`，业务页面位于 `src/pages/`。
+- 业务输入错误返回 400；
+- 未认证返回 401；
+- 无权限返回 403；
+- 资源不存在返回 404；
+- 唯一键冲突返回 409；
+- 未预期错误记录到服务端并返回 500。
 
-### 财务模块路由
+## 5. 认证、权限与审计
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/departments | listDepartments | 部门列表 |
-| POST | /api/departments | createDepartment | 新增部门 |
-| GET | /api/aux-projects | listProjects | 项目列表 |
-| POST | /api/aux-projects | createProject | 新增项目 |
-| GET | /api/currencies | listCurrencies | 币种列表 |
-| GET | /api/voucher-words | listVoucherWords | 凭证字列表 |
-| GET | /api/voucher-templates | listVoucherTemplates | 模板列表 |
-| GET | /api/period-closures | listPeriodClosures | 期间列表 |
-| POST | /api/period-closures/:id/close | closePeriod | 结账 |
-| GET | /api/bank-statements | listBankStatements | 对账单列表 |
-| POST | /api/bank-statements | createBankStatement | 导入对账单 |
-| GET | /api/bank-reconciliations | listBankReconciliations | 对账列表 |
-| GET | /api/reports/trial-balance | getTrialBalance | 试算平衡表 |
-| GET | /api/reports/subject-ledger | getSubjectLedger | 明细账 |
+### 5.1 密码与会话
 
-### 制造模块路由
+- 密码使用 scrypt 和随机盐生成哈希；
+- 登录后生成随机 Token，数据库只保存 SHA-256 Token 哈希；
+- 每次受保护请求根据 Token 查询用户、角色和权限；
+- 退出时删除对应会话记录。
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/mrp-plans | listMrpPlans | MRP计划列表 |
-| POST | /api/mrp-plans | createMrpPlan | 创建MRP计划 |
-| POST | /api/mrp-plans/generate | generateMrp | 生成MRP建议 |
-| POST | /api/mrp-plans/:id/execute | executeMrpPlan | 执行MRP计划 |
-| GET | /api/work-centers | listWorkCenters | 工作中心列表 |
-| POST | /api/work-centers | createWorkCenter | 创建工作中心 |
-| GET | /api/routing-operations | listRoutingOperations | 工序列表 |
-| POST | /api/routing-operations | createRoutingOperation | 创建工序 |
-| GET | /api/labor-records | listLaborRecords | 人工记录列表 |
-| POST | /api/labor-records | createLaborRecord | 记录人工 |
+### 5.2 RBAC
 
-### 质量模块路由
+```text
+用户 → 角色 → 角色权限关联 → 权限代码
+```
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/iqc | listIqcInspections | IQC列表 |
-| POST | /api/iqc | createIqcInspection | 创建检验单 |
-| GET | /api/iqc/:id | getIqcInspection | 检验单详情 |
-| PATCH | /api/iqc/:id | updateIqcInspection | 更新检验单 |
-| GET | /api/oqc | listOqcInspections | OQC列表 |
-| POST | /api/oqc | createOqcInspection | 创建检验单 |
-| GET | /api/oqc/:id | getOqcInspection | 检验单详情 |
-| PATCH | /api/oqc/:id | updateOqcInspection | 更新检验单 |
-| GET | /api/supplier-evaluations | listSupplierEvaluations | 评估列表 |
-| POST | /api/supplier-evaluations | createSupplierEvaluation | 创建评估 |
+`allow()` 校验单项权限，`allowAny()` 校验候选权限集合。新增接口必须在处理器内部声明所需权限，不能只依赖前端隐藏菜单。
 
-### OA模块路由
+### 5.3 审计
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/leave-requests | listLeaveRequests | 请假列表 |
-| POST | /api/leave-requests | createLeaveRequest | 创建请假 |
-| POST | /api/leave-requests/:id/approve | processLeaveRequest | 审批请假 |
-| POST | /api/leave-requests/:id/reject | processLeaveRequest | 驳回请假 |
-| GET | /api/expense-claims | listExpenseClaims | 报销列表 |
-| POST | /api/expense-claims | createExpenseClaim | 创建报销 |
-| POST | /api/expense-claims/:id/approve | processExpenseClaim | 审批报销 |
-| POST | /api/expense-claims/:id/reject | processExpenseClaim | 驳回报销 |
+关键操作通过 `audit()` 写入操作用户、动作、实体类型、实体 ID、说明和时间。审计失败应使相关事务失败，避免业务成功但轨迹缺失。
 
-### 预警模块路由
+## 6. 数据库与迁移
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/alert-rules | listAlertRules | 规则列表 |
-| POST | /api/alert-rules | createAlertRule | 创建规则 |
-| PATCH | /api/alert-rules/:id | updateAlertRule | 更新规则 |
-| GET | /api/alerts | listAlertRecords | 预警列表 |
-| POST | /api/alerts/:id/resolve | resolveAlert | 处理预警 |
+### 6.1 初始化顺序
 
-### 报表模块路由
+`createDatabase()` 按以下顺序运行：
 
-| 方法 | 路径 | 函数 | 说明 |
-|------|------|------|------|
-| GET | /api/reports/financial-summary | getFinancialSummary | 经营汇总 |
-| GET | /api/reports/inventory-status | getInventoryStatus | 库存状态 |
-| GET | /api/reports/sales-analysis | getSalesAnalysis | 销售分析 |
+1. 打开 SQLite 并启用外键；
+2. 启用 WAL 日志模式；
+3. 执行基础表迁移；
+4. 执行 `migrateExtendedSchema()`；
+5. 规范化历史成本费率表；
+6. 写入权限、角色、用户和基础演示数据；
+7. 为已有数据库补充兼容列并回填必要字段。
 
----
+迁移使用 `CREATE TABLE IF NOT EXISTS` 和受控列升级，保证全新数据库和已有开发数据库均可启动。
 
-## 三、核心函数说明
+### 6.2 主要数据域
 
-### MRP相关
+| 数据域 | 代表性表 |
+| --- | --- |
+| 认证权限 | `users`、`roles`、`permissions`、`role_permissions`、`sessions` |
+| 基础资料 | `customers`、`suppliers`、`products`、`warehouses` |
+| 销售采购 | `sales_orders`、`sales_order_items`、`purchase_orders`、`purchase_order_items` |
+| 库存物流 | `inventory`、`inventory_transactions`、入出库与退货相关表 |
+| 财务 | `accounting_subjects`、`accounting_vouchers`、`accounting_entries`、应收应付相关表 |
+| 辅助核算 | `departments`、`aux_projects`、`currencies`、`voucher_words` |
+| 生产 | `boms`、`production_orders`、`mrp_plans`、`work_centers`、`routing_operations` |
+| 质量 | `iqc_inspections`、`oqc_inspections`、`supplier_evaluations` |
+| 管理扩展 | `contacts`、`projects`、`project_tasks`、`notifications`、OA 与预警相关表 |
+| 审计 | `audit_logs` |
 
-**generateMrp**
-- 功能：基于BOM和需求计算物料需求
-- 计算逻辑：
-  1. 获取毛需求（销售订单数量）
-  2. 减去现有库存
-  3. 减去在途采购
-  4. 计算净需求
-  5. 生成计划订单建议
+项目辅助核算使用 `aux_projects`，项目管理使用 `projects`，两者用途不同，不得混用。
 
-**executeMrpPlan**
-- 功能：将MRP建议转化为采购申请
-- 处理逻辑：
-  1. 遍历PENDING状态的计划明细
-  2. 为每个物料创建采购订单
-  3. 更新计划明细状态为CONVERTED
+## 7. 核心实现规则
 
-### 质检相关
+### 7.1 单据与明细事务
 
-**updateIqcInspection**
-- 功能：完成IQC检验
-- 处理逻辑：
-  1. 更新检验单状态为COMPLETED
-  2. 根据合格/不合格数量更新结果
-  3. 如果有明细则插入检验明细
+订单、入出库和其他包含明细的单据使用事务写入。后端重新读取货品价格或校验提交值，并重新计算总额，避免依赖前端结果。
 
-**createSupplierEvaluation**
-- 功能：创建供应商评估
-- 计算逻辑：
-  - 综合评分 = 质量分×40% + 交期分×30% + 价格分×20% + 服务分×10%
-  - 评级：A(≥90), B(≥80), C(≥70), D(<70)
+### 7.2 状态机
 
-### OA相关
+销售和采购订单只允许规定的状态转换。状态处理器在修改前读取当前记录，校验状态、权限及驳回原因，并写入审计信息。
 
-**processLeaveRequest / processExpenseClaim**
-- 功能：审批处理
-- 处理逻辑：
-  1. 更新申请单状态为APPROVED或REJECTED
-  2. 记录审批人ID和审批时间
-  3. 如果是批准，可能触发后续流程
+### 7.3 库存
 
----
+库存以仓库和货品组合维护。采购入库增加库存，销售出库减少库存，退货和调拨根据方向写入对应流水。订单审核只表示业务约定，不直接改变实物库存。
 
-## 四、变更记录
+### 7.4 会计与金额
 
-| 日期 | 版本 | 变更内容 |
-|------|------|----------|
-| 2026-08-29 | 1.0.0 | 初始版本 |
-| 2026-08-29 | - | 供应商、采购、仓库、库存模块 |
-| 2026-08-29 | - | 财务凭证、入库出库、应收应付 |
-| 2026-08-30 | - | BOM、生产工单、出纳、固定资产 |
-| **2026-08-30** | **2.0.0** | **第一阶段：财务闭环完成** |
-| **2026-08-30** | **2.1.0** | **第二阶段：制造深化完成** |
-| **2026-08-30** | **2.2.0** | **第三阶段：质量供应链完成** |
-| **2026-08-30** | **2.3.0** | **第四阶段：管理扩展完成** |
-| **2026-08-30** | **2.4.0** | **模块化重构、扩展表迁移与自动化冒烟测试** |
+金额统一使用整数分保存。会计凭证包含凭证头和多条分录，业务凭证保留来源类型与来源 ID，便于追溯。财务期间由凭证日期派生并用于报表和期间控制。
+
+### 7.5 MRP
+
+MRP 根据需求来源读取销售订单明细，结合现有库存和计划收货计算净需求，生成 `mrp_plan_items`。计划执行时可将待处理建议转化为采购业务数据。
+
+### 7.6 供应商评分
+
+综合评分计算规则：
+
+```text
+综合评分 = 质量 × 40% + 交期 × 30% + 价格 × 20% + 服务 × 10%
+```
+
+评分结果按阈值划分为 A、B、C、D 等级。
+
+## 8. API 设计约定
+
+- 资源列表使用 `GET /api/<resource>`；
+- 新建资源使用 `POST /api/<resource>`；
+- 局部更新使用 `PATCH /api/<resource>/:id`；
+- 状态动作使用 `POST /api/<resource>/:id/<action>`；
+- 搜索、状态和日期范围通过查询参数传递；
+- 成功响应返回 JSON 对象，错误响应至少包含 `error` 字段。
+
+具体路由以 `server/app.js` 的分发代码为准，文档不重复维护易过期的完整路由表。
+
+## 9. 测试与验证
+
+`server/app.test.js` 使用临时目录和全新 SQLite 数据库启动随机端口服务，当前覆盖：
+
+- 健康检查和生产构建后的静态入口；
+- 销售账号登录和工作台访问；
+- 普通用户访问管理接口时返回 403；
+- CRM、项目、部门、MRP、质量、OA、预警和报表等扩展接口成功迁移并查询。
+
+标准验证命令：
+
+```powershell
+pnpm build
+pnpm test
+```
+
+后续应增加状态机异常、事务回滚、库存不足、凭证平衡、期间关闭和浏览器端到端测试。
+
+## 10. 运维与仓库约定
+
+- `dist/`、`data/`、数据库、日志、备份和 `.env` 不进入 Git；
+- 本地数据通过 `pnpm reset-data` 删除并在下次启动时重建；
+- 正式环境必须更换演示密码，并补充 HTTPS、密钥管理、备份恢复和监控；
+- 代码变化若影响功能范围，应修改 `document.md`；若影响架构或实现，应修改本文档。
+
+## 11. 当前技术边界
+
+- SQLite 和原生 HTTP 服务适合本地验证，正式高并发部署需要重新评估；
+- 后端基础业务仍有继续按领域拆分的空间；
+- 自动化测试目前以接口冒烟为主，尚未达到完整业务回归覆盖；
+- 尚未实现原生产数据迁移和新旧系统总量核对。
