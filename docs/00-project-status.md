@@ -15,7 +15,7 @@
 | Authentication | ✅ | acdaad2 | 11 tests |
 | Production Order Core Workflow | ✅ | 5809edb | 8 tests |
 | Voucher Approval Workflow | ✅ | 9e8aab4 | 15 tests |
-| Accounting Period Integrity / Period Closing Core | ✅ | 待提交 | 13 tests |
+| Accounting Period Integrity / Period Closing Core | ✅ | ee3168b | 13 tests |
 
 ## 当前测试状态
 
