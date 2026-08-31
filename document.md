@@ -8,7 +8,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前版本 | 2.5.0 |
+| 当前版本 | 2.6.0 |
 | 更新日期 | 2026-08-31 |
 | 项目定位 | 原 ERP 核心业务的现代化模块化重构 |
 | 当前状态 | 可运行、可构建、具备基础自动化验证 |
@@ -103,6 +103,16 @@
 - FIN-011 试算平衡表和财务报表仅计入 POSTED 状态的凭证；
 - FIN-012 凭证创建人和审核人不得为同一人；
 
+#### 5.5.2 期间关闭核心流程
+
+- FIN-013 期间状态包含 OPEN（未结）和 CLOSED（已结），由 `period_closures` 表维护；
+- FIN-014 结账前置检查：期间内不能存在 ENTERED、SUBMITTED、REJECTED 状态的凭证，否则结账被拒绝；
+- FIN-015 结账成功后，期间内所有凭证相关操作（create / update / delete / submit / approve / reject）均被后端拒绝（409 冲突）；
+- FIN-016 反结账将 CLOSED → OPEN，duplicate reopen 被拒绝；
+- FIN-017 结账 / 反结账状态变更与审计日志写入必须在同一事务中，审计失败应回滚状态变更；
+- FIN-018 试算平衡表、财务汇总、科目余额、日记账等正式报表仅计入 POSTED 状态凭证；
+- FIN-019 结账需要 `PERIOD_CLOSE_MANAGE` 权限；年结 / Year-End Carry Forward 不在本阶段范围。
+
 
 ### 5.6 生产与质量
 
@@ -185,3 +195,4 @@ DRAFT ──提交──> SUBMITTED ──审核──> APPROVED
 | 1.1.0–1.9.0 | 2026-08-29 至 2026-08-30 | 供应链、财务、生产、成本、质量和 CRM 扩展 |
 | 2.0.0–2.3.0 | 2026-08-30 | 财务闭环、制造深化、质量供应链和管理扩展 |
 | 2.5.0 | 2026-08-31 | 凭证审核流程：ENTERED→SUBMITTED→POSTED / REJECTED，creator/approver 分离，试算平衡表按POSTED过滤 |
+| 2.6.0 | 2026-08-31 | 期间关闭核心：Accounting Period Integrity + Period Closing Core + Period Reopen；CLOSED 期间阻断凭证 CRUD/Submit/Approve/Reject；试算平衡表与财务报表仅计入 POSTED |

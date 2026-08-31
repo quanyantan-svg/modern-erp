@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+﻿import { createHash, randomBytes } from 'node:crypto';
 import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
 import { audit } from './lib/audit.js';
 import {
@@ -18,7 +18,7 @@ import {
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
   listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
   listOqcInspections, listPeriodClosures, listRoutingOperations,
-  listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters,
+  closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
 import {
@@ -178,6 +178,16 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/voucher-templates' && req.method === 'GET') return listVoucherTemplates(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'GET') return listPeriodClosures(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'POST') return createPeriodClosure(db, req, res, actor);
+  // Period Closure Operations
+  const periodClosureMatch = pathname.match(/^\/api\/period-closures\/([^/]+)\/(close|unclose)$/);
+  if (periodClosureMatch && req.method === 'POST') {
+    const closureId = periodClosureMatch[1];
+    const action = periodClosureMatch[2];
+    if (action === 'close') return closePeriod(db, req, res, actor, closureId);
+    if (action === 'unclose') return unclosePeriod(db, req, res, actor, closureId);
+  }
+  // Closure Checklist
+  if (pathname === '/api/period-closures/closure-checklist' && req.method === 'GET') return getClosureChecklist(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'GET') return listMrpPlans(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'POST') return createMrpPlan(db, req, res, actor);
   if (pathname === '/api/mrp-plans/generate' && req.method === 'POST') return generateMrp(db, req, res, actor);
@@ -1426,10 +1436,23 @@ function getAccountingVoucher(db, res, actor, voucherId) {
 
 // ============ 手动凭证录入 ============
 
+// 期间关闭保护辅助函数
+function checkPeriodNotClosedForVoucher(db, voucherDate, operation) {
+  const period = voucherDate.slice(0, 7);
+  const closure = db.prepare('SELECT * FROM period_closures WHERE period=? AND status=?').get(period, 'CLOSED');
+  if (closure) {
+    throw new HttpError(409, `会计期间 ${period} 已结账，禁止 ${operation} 凭证`);
+  }
+}
+
 async function createAccountingVoucher(db, req, res, actor) {
   allow(actor, 'ACCOUNTING_VIEW');
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
+  
+  // 检查期间是否已关闭
+  const effectiveDate = voucherDate || new Date().toISOString().slice(0, 10);
+  checkPeriodNotClosedForVoucher(db, effectiveDate, '录入');
   
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
@@ -1479,14 +1502,8 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(409, '已审核凭证不能修改');
   }
 
-  // Check period status for ENTERED (REJECTED can always be corrected)
-  if (voucher.status === 'ENTERED') {
-    const period = voucher.voucher_date.slice(0, 7);
-    const closure = db.prepare('SELECT * FROM period_closures WHERE period = ?').get(period);
-    if (closure) {
-      throw new HttpError(409, '会计期间已结账，不能修改凭证');
-    }
-  }
+  // Check period status for ENTERED and REJECTED - closed period prohibits modification
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '修改');
 
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
@@ -1542,11 +1559,7 @@ async function deleteAccountingVoucher(db, req, res, actor, voucherId) {
   }
 
   // Check period closure
-  const period = voucher.voucher_date.slice(0, 7);
-  const closure = db.prepare('SELECT * FROM period_closures WHERE period = ?').get(period);
-  if (closure) {
-    throw new HttpError(409, '会计期间已结账，不能删除凭证');
-  }
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '删除');
 
   transaction(db, () => {
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
@@ -1561,6 +1574,9 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'VOUCHER_SUBMIT');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '提交');
 
   // Only ENTERED and REJECTED vouchers can be submitted
   if (!['ENTERED', 'REJECTED'].includes(voucher.status)) {
@@ -1581,6 +1597,9 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '审核');
 
   // Only SUBMITTED vouchers can be approved
   if (voucher.status !== 'SUBMITTED') {
@@ -1606,6 +1625,9 @@ async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '驳回');
 
   // Only SUBMITTED vouchers can be rejected
   if (voucher.status !== 'SUBMITTED') {
@@ -1687,7 +1709,7 @@ function getAccountingBalances(db, res, actor, url) {
       COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      WHERE ae.subject_id = ? AND av.voucher_date < ? AND av.status='POSTED'`)
       .get(subject.id, startDate);
     
     // 本期借方发生
@@ -1695,7 +1717,7 @@ function getAccountingBalances(db, res, actor, url) {
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     // 本期贷方发生
@@ -1703,7 +1725,7 @@ function getAccountingBalances(db, res, actor, url) {
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const openingBalance = Number(opening.balance);
@@ -1802,21 +1824,21 @@ function getTrialBalance(db, res, actor, url) {
       COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      WHERE ae.subject_id = ? AND av.voucher_date < ? AND av.status='POSTED'`)
       .get(subject.id, startDate);
     
     const periodDebit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const periodCredit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const openingBalance = Number(opening.balance);

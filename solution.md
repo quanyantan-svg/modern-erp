@@ -216,6 +216,81 @@ MRP 根据需求来源读取销售订单明细，结合现有库存和计划收�
 - `POST /api/accounting-vouchers/:id/reject` — 驳回凭证（需 `reason` 字段）
 - `PATCH /api/accounting-vouchers/:id` — 修改凭证（仅 ENTERED / REJECTED）
 - `DELETE /api/accounting-vouchers/:id` — 删除凭证（仅 ENTERED / REJECTED）
+
+### 7.8 期间关闭流程
+
+期间关闭（Period Closing）是凭证审核之上的财务控制层，确保已结期间内的凭证状态稳定。
+
+#### 期间状态
+
+| 状态 | 说明 |
+|------|------|
+| OPEN | 未结，可正常录入/修改/审核凭证 |
+| CLOSED | 已结，期间内凭证操作被后端拒绝（409 冲突） |
+
+#### 期间表
+
+`period_closures` 表（`server/migrations/extended-schema.js`）：
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 主键 |
+| `period` | 期间标识，格式 `YYYY-MM`，唯一 |
+| `period_year` / `period_month` | 年/月 |
+| `closure_type` | `MONTH` / 其他；本阶段仅实现月结 |
+| `status` | `OPEN` / `CLOSED` |
+| `closed_by` / `closed_at` | 结账人与结账时间 |
+| `checklist_passed` | 结账前置检查是否通过 |
+| `created_at` | 创建时间 |
+
+#### 结账前置检查
+
+`getPeriodClosureChecklist(db, period)` 检查期间内是否存在以下状态的凭证：
+
+- ENTERED（录入中）—— 必须先提交或删除
+- SUBMITTED（待审核）—— 必须先审核或驳回
+- REJECTED（已驳回）—— 必须修改并重新提交或删除
+
+任一不通过，结账请求被拒绝（400 错误，包含失败项详情）。
+
+#### 结账 / 反结账事务一致性
+
+`closePeriod` 与 `unclosePeriod` 使用 `transaction(db, ...)` 包装：
+
+1. `UPDATE period_closures SET status=...` —— 状态变更
+2. `INSERT INTO audit_logs(...)` —— 写入审计日志（动作 `CLOSE_PERIOD` / `UNCLOSE_PERIOD`）
+
+任意一步失败则整个事务回滚，确保状态变更与审计日志原子。
+
+#### CLOSED 期间凭证保护
+
+凭证的以下操作在执行时调用 `checkPeriodNotClosedForVoucher(db, voucherDate, operation)`：
+
+- `createAccountingVoucher` —— 录入
+- `updateAccountingVoucher` —— 修改
+- `deleteAccountingVoucher` —— 删除
+- `submitAccountingVoucher` —— 提交
+- `approveAccountingVoucher` —— 审核
+- `rejectAccountingVoucher` —— 驳回
+
+若期间已 CLOSED，操作被拒绝（409 冲突，提示「会计期间 YYYY-MM 已结账，禁止 X 凭证」）。
+
+#### API 路由
+
+- `GET /api/period-closures?year=YYYY` — 列出指定年的期间记录
+- `POST /api/period-closures` — 创建期间记录（`year`、`month`）
+- `POST /api/period-closures/:id/close` — 结账（执行前置检查 + 状态变更）
+- `POST /api/period-closures/:id/unclose` — 反结账
+- `GET /api/period-closures/closure-checklist?period=YYYY-MM` — 查询结账前置检查项
+
+#### 报表过滤行为
+
+- 试算平衡表（`getTrialBalance`）、财务汇总（`getFinancialSummary`）、科目余额（`getSubjectLedger`）、日余额（`getDailyBalance`）仅查询 `status = 'POSTED'` 的凭证；
+- 已结期间内的 ENTERED / SUBMITTED / REJECTED 凭证不参与期间汇总。
+
+#### 范围限制
+
+- 仅实现月结（`closure_type = 'MONTH'`）；年结 / Year-End Carry Forward NOT_VERIFIED，不在本阶段范围。
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定

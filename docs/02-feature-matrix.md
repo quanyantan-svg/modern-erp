@@ -94,8 +94,11 @@
 | 凭证审核 | 完整 | P1 | 完整审核流程（含提交/审核/驳回/状态保护） |
 | 凭证字 | 完整 | P1 | 凭证编号规则 |
 | 凭证模板 | 缺失 | P1 | - |
-| 期间管理 | 部分 | P1 | 基础期间 |
-| 月结/年结 | 部分 | P1 | 基础结账 |
+| Accounting Period Integrity | 完整 | P1 | 凭证 CRUD/Submit/Approve/Reject 在 CLOSED 期间被后端拒绝 |
+| Period Closing Core | 完整 | P1 | 期间结账 + 前置检查（ENTERED/SUBMITTED/REJECTED 阻塞结账） |
+| Period Reopen | 完整 | P1 | CLOSED → OPEN 反结账，duplicate reopen 拒绝 |
+| Year-End | NOT_VERIFIED | P1 | 年结 / Year-End Carry Forward 未实现 |
+| 月结/年结 | NOT_VERIFIED | P1 | 完整年结逻辑不在本阶段范围 |
 
 ---
 
@@ -248,9 +251,10 @@
 
 | 状态 | 数量 | 占比 |
 |------|------|------|
-| 完整 | 35 | 40% |
-| 部分 | 28 | 32% |
-| 缺失 | 25 | 28% |
+| 完整 | 38 | 43% |
+| 部分 | 27 | 31% |
+| 缺失 | 22 | 25% |
+| NOT_VERIFIED | 1 | 1% |
 | **总计** | **88** | 100% |
 
 ---
