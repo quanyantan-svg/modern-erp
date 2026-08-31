@@ -21,12 +21,13 @@
 | Financial Reporting Consistency | ✅ | f6a2521 | 15 tests |
 | Production Safety (Phase 2A) | ✅ | 023f34b | 11 tests |
 | Backup / Restore (Phase 2B) | ✅ | 43a0386 | 18 tests |
-| First Admin Bootstrap (Phase 2C-1) | ✅ | 待提交 | 17 tests |
+| First Admin Bootstrap (Phase 2C-1) | ✅ | a880d89 | 17 tests |
+| systemd Service + Backup Timer (Phase 2C-2A) | ✅ | 本提交 | 4 tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js
-- 178 tests / 58 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js
+- 182 tests / 59 suites
 - **全部通过**
 
 ## 分值汇总

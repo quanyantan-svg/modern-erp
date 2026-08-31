@@ -1,0 +1,10 @@
+[Unit]
+Description=Modern ERP Daily Backup Timer
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+Unit=modern-erp-backup.service
+
+[Install]
+WantedBy=timers.target

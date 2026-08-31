@@ -803,10 +803,56 @@ deploy → start service (empty DB + schema created)
 
 #### 不在本任务范围
 
-- 自动服务启停 → Phase 2C systemd
+- 自动服务启停 → Phase 2C-2A systemd
 - 批量用户创建 / 密码重置 → 后续
 - 多管理员并行创建 → 后续(当前每次只创建 1 个)
 评分结果按阈值划分为 A、B、C、D 等级。
+
+### 7.15 systemd Service + Backup Timer（Phase 2C-2A）
+
+本阶段新增最小生产 systemd 文件,不引入 PM2 / Docker / Nginx / HTTPS。
+
+#### 主应用服务
+
+`deploy/systemd/modern-erp.service`:
+
+- `User=modern-erp` / `Group=modern-erp`;
+- `WorkingDirectory=/opt/modern-erp`;
+- `EnvironmentFile=/etc/modern-erp/env`;
+- `ExecStart=/usr/bin/node server/index.js`(等价于当前 `pnpm start` 的 Node production 启动入口);
+- `Restart=on-failure`, `RestartSec=5s`;
+- `KillSignal=SIGTERM`,与 `server/index.js` 当前 SIGTERM graceful shutdown 兼容;
+- 不设置 `HOST`,Node 继续绑定 `127.0.0.1:3001`。
+
+#### 备份服务与 timer
+
+`deploy/systemd/modern-erp-backup.service` 为 `Type=oneshot`,使用同一 `modern-erp` 用户和 `/etc/modern-erp/env`,仅调用:
+
+```text
+/usr/bin/node scripts/backup-db.mjs
+```
+
+不调用 restore,不停止主应用服务。
+
+`deploy/systemd/modern-erp-backup.timer`:
+
+- `OnCalendar=*-*-* 02:30:00`;
+- `Persistent=true`;
+- `Unit=modern-erp-backup.service`。
+
+#### 生产目录假设
+
+- Application: `/opt/modern-erp`;
+- Database: `/var/lib/modern-erp/erp.db`;
+- Backups: `/var/backups/modern-erp`;
+- Environment: `/etc/modern-erp/env`;
+- Service user: `modern-erp`。
+
+`/etc/modern-erp/env` 至少包含 `NODE_ENV=production`, `PORT=3001`, `ERP_DB_PATH=/var/lib/modern-erp/erp.db`, `ERP_BACKUP_DIR=/var/backups/modern-erp` 和当前 session/login 配置。
+
+#### 验证
+
+新增 `server/systemd.test.js` 静态验证 unit 文件结构、路径、`ExecStart`、`EnvironmentFile`、`User/Group`、timer 到 service 的映射、backup script 存在且 backup service 不调用 restore。Windows 环境不运行 `systemctl`;Ubuntu 上线前仍需执行 `systemd-analyze verify`。
 
 ## 8. API 设计约定
 
