@@ -8,7 +8,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前版本 | 2.6.0 |
+| 当前版本 | 2.7.0 |
 | 更新日期 | 2026-08-31 |
 | 项目定位 | 原 ERP 核心业务的现代化模块化重构 |
 | 当前状态 | 可运行、可构建、具备基础自动化验证 |
@@ -113,6 +113,17 @@
 - FIN-018 试算平衡表、财务汇总、科目余额、日记账等正式报表仅计入 POSTED 状态凭证；
 - FIN-019 结账需要 `PERIOD_CLOSE_MANAGE` 权限；年结 / Year-End Carry Forward 不在本阶段范围。
 
+#### 5.5.3 利润表
+
+- FIN-020 利润表查询参数为单月 `period=YYYY-MM`，缺省或格式错误返回 400；
+- FIN-021 利润表仅纳入 `accounting_vouchers.status = 'POSTED'` 的凭证，ENTERED / SUBMITTED / REJECTED 排除；
+- FIN-022 利润表科目范围：REVENUE 计入「营业收入」，EXPENSE 计入「营业成本与费用」；
+- FIN-023 方向规则：REVENUE 净额 = `credit_cents - debit_cents`；EXPENSE 净额 = `debit_cents - credit_cents`（与试算平衡表 / 会计余额一致）；
+- FIN-024 营业利润 = 营业收入 − 营业成本与费用；
+- FIN-025 OPEN 期间与 CLOSED 期间均允许查询利润表；利润表为只读操作，不触发期间写保护；
+- FIN-026 利润表需要 `REPORT_VIEW` 权限；本年累计 / 同比环比 / 多月对比不在本任务范围；
+- FIN-027 当前 schema 中 EXPENSE 类型包含「主营业务成本」（subject-007）等成本类科目，报表口径合并展示为「营业成本与费用」，不强行拆分成本子类别。
+
 
 ### 5.6 生产与质量
 
@@ -196,3 +207,4 @@ DRAFT ──提交──> SUBMITTED ──审核──> APPROVED
 | 2.0.0–2.3.0 | 2026-08-30 | 财务闭环、制造深化、质量供应链和管理扩展 |
 | 2.5.0 | 2026-08-31 | 凭证审核流程：ENTERED→SUBMITTED→POSTED / REJECTED，creator/approver 分离，试算平衡表按POSTED过滤 |
 | 2.6.0 | 2026-08-31 | 期间关闭核心：Accounting Period Integrity + Period Closing Core + Period Reopen；CLOSED 期间阻断凭证 CRUD/Submit/Approve/Reject；试算平衡表与财务报表仅计入 POSTED |
+| 2.7.0 | 2026-08-31 | 利润表：单月期间；REVENUE → 营业收入（credit-debit）；EXPENSE → 营业成本与费用（debit-credit）；POSTED only；OPEN/CLOSED 均可查询 |

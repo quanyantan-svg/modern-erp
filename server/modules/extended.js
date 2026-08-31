@@ -973,13 +973,70 @@ export async function resolveAlert(db, req, res, actor, alertId) {
 export function getFinancialSummary(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
   const period = url.searchParams.get("period") || new Date().toISOString().slice(0, 7);
-  
+
   const revenue = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='REVENUE'").get(period).total;
   const expense = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='EXPENSE'").get(period).total;
   const ar = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_receivables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
   const ap = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_payables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
-  
+
   return send(res, 200, { period, revenue, expense, profit: revenue - expense, accounts_receivable: ar, accounts_payable: ap });
+}
+
+// ============ 利润表 ============
+// 期间过滤使用 voucher_date 范围，避免手工凭证 period 列为 NULL 的问题。
+// 净额规则：REVENUE 用 credit-debit；EXPENSE 用 debit-credit（与试算平衡表一致）。
+
+export function getIncomeStatement(db, res, actor, url) {
+  allow(actor, "REPORT_VIEW");
+  const period = url.searchParams.get("period");
+  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
+  const match = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!match) throw new HttpError(400, "期间格式错误，应为 YYYY-MM");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new HttpError(400, "月份必须在 01-12 之间");
+
+  const startDate = period + "-01";
+  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+
+  const aggregateByType = db.prepare(`
+    SELECT s.code, s.name, s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT' THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date >= ?
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+    GROUP BY s.id
+    ORDER BY s.code
+  `).all(startDate, endDate);
+
+  const buildSection = (type, name, sign) => {
+    const rows = aggregateByType
+      .filter(r => r.type === type)
+      .map(r => ({ code: r.code, name: r.name, amount: sign === '+' ? Number(r.credit_total) - Number(r.debit_total) : Number(r.debit_total) - Number(r.credit_total) }))
+      .filter(r => r.amount !== 0);
+    const subtotal = rows.reduce((s, r) => s + r.amount, 0);
+    return { name, type, subtotal, subjects: rows };
+  };
+
+  const revenueSection = buildSection('REVENUE', '营业收入', '+');
+  const expenseSection = buildSection('EXPENSE', '营业成本与费用', '-');
+  const revenue = revenueSection.subtotal;
+  const expense = expenseSection.subtotal;
+  const profit = revenue - expense;
+
+  return send(res, 200, {
+    period,
+    periodRange: { startDate, endDate },
+    revenue,
+    expense,
+    profit,
+    sections: [revenueSection, expenseSection],
+  });
 }
 
 export function getInventoryStatus(db, res, actor, url) {

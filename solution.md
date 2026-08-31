@@ -291,6 +291,107 @@ MRP 根据需求来源读取销售订单明细，结合现有库存和计划收�
 #### 范围限制
 
 - 仅实现月结（`closure_type = 'MONTH'`）；年结 / Year-End Carry Forward NOT_VERIFIED，不在本阶段范围。
+
+### 7.9 利润表
+
+利润表（Income Statement / Profit & Loss）将凭证审核 + 期间关闭之上形成的 POSTED 数据，按月份聚合成经营成果。
+
+#### Handler
+
+`getIncomeStatement(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`（已存在于 `server/db.js:66`）。
+
+#### SQL 聚合
+
+期间过滤使用 `voucher_date` 范围：
+
+```sql
+voucher_date >= period + '-01'
+AND voucher_date <= LAST_DAY(period)
+```
+
+避免依赖 `accounting_vouchers.period` 列（手工凭证可能为 NULL）。
+
+每科目净额（沿用试算平衡表 / 会计余额的方向规则）：
+
+| Subject Type | 净额 |
+|--------------|------|
+| REVENUE | `credit_cents - debit_cents` |
+| EXPENSE | `debit_cents - credit_cents` |
+| ASSET / LIABILITY / EQUITY | 利润表不参与 |
+
+凭证状态过滤：
+
+```sql
+accounting_vouchers.status = 'POSTED'
+```
+
+排除 ENTERED / SUBMITTED / REJECTED。
+
+#### 期间状态
+
+OPEN / CLOSED 期间均允许查询。利润表 handler **不调用** `checkPeriodNotClosed*` 系列写保护函数（只读操作）。
+
+#### API
+
+```
+GET /api/reports/income-statement?period=YYYY-MM
+```
+
+- `period` 缺失 → 400
+- `period` 非 `YYYY-MM` 格式 → 400
+- 无 `REPORT_VIEW` → 403
+- 合法请求 → 200
+
+#### Response
+
+```json
+{
+  "period": "2026-08",
+  "periodRange": { "startDate": "2026-08-01", "endDate": "2026-08-31" },
+  "revenue": 100000,
+  "expense": 60000,
+  "profit": 40000,
+  "sections": [
+    {
+      "name": "营业收入",
+      "type": "REVENUE",
+      "subtotal": 100000,
+      "subjects": [
+        { "code": "6001", "name": "主营业务收入", "amount": 100000 }
+      ]
+    },
+    {
+      "name": "营业成本与费用",
+      "type": "EXPENSE",
+      "subtotal": 60000,
+      "subjects": [
+        { "code": "6401", "name": "主营业务成本", "amount": 60000 }
+      ]
+    }
+  ]
+}
+```
+
+- 金额单位:与项目其它报表一致,使用 `cents`(整数分)
+- 零发生额科目不返回
+- `sections[]` 顺序固定:REVENUE 在前,EXPENSE 在后
+
+#### Schema 限制
+
+当前 `accounting_subjects.type` 仅支持 `ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE`,**没有独立 COST 类型**。`主营业务成本`（subject-007）当前归类为 EXPENSE,因此利润表展示口径合并为「营业成本与费用」,不强行区分成本 / 销售费用 / 管理费用 / 财务费用。
+
+#### 不在本任务范围
+
+- 本年累计 / 同比 / 环比 / 多月对比
+- 资产负债表 / 现金流量表
+- 年结 / Year-End Carry Forward
+- BI / 自定义报表设计器
+- 新增 COST / TAX / SELLING_EXPENSE 等科目类型
+- 修改 `createAccountingVoucher` 补 `period` 列
+
+#### UI
+
+最小集成于 `src/pages/accounting.jsx` 报表 tab,沿用现有 API 调用与权限风格。前端隐藏菜单由 `REPORT_VIEW` 控制,但 **API 权限仍是最终安全边界**。
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定
