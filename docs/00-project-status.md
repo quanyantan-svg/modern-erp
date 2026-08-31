@@ -25,13 +25,21 @@
 | systemd Service + Backup Timer (Phase 2C-2A) | ✅ | 90dcd49 | 4 tests |
 | Nginx Reverse Proxy (Phase 2C-2B) | ✅ | 本提交 | 4 tests |
 | Supplier Schema Migration (v0.9.1 hotfix) | ✅ | 70df697 | 9 tests |
-| Production UI Refinement (iOS-inspired) | ✅ | 本提交 | 11 tests |
+| Production UI Refinement (iOS-inspired) | ✅ | 6168cdd | 11 tests |
+| **Phase A Production Acceptance (v0.9.2)** | ✅ | 本提交 | 13 记录项 |
 
 ## 当前测试状态
 
 - 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js
 - 206 tests / 66 suites
 - **全部通过**
+
+## Production Acceptance Status
+
+- **Release**: v0.9.2
+- **Commit**: 6168cdd
+- **Phase A — Deployment Baseline**: ✅ 记录完成(基于 user-confirmed production manual verification;详见 `docs/07-production-acceptance.md`)。Phase A 中所有 server-side runtime 项均需在生产服务器(Ubuntu 22.04 / Tencent Cloud Lighthouse)上由具备 SSH 访问权限的运维直接复测后,才能从"user-confirmed"升级为"evidence-locked"。
+- **Phase B — Authentication & Permission**: NOT STARTED — 下一阶段,不在本任务范围。
 
 ## 分值汇总
 
