@@ -970,40 +970,84 @@ export async function resolveAlert(db, req, res, actor, alertId) {
 
 // ============ 经营报表 ============
 
+// 纯业务 helper：按指定期间计算 REVENUE / EXPENSE 净额与利润。
+// 不接收 res，不做 HTTP 权限校验，不发送 response。
+// 期间过滤使用 voucher_date 范围（避开 v.period 列可能 NULL 的问题）。
+// 净额规则：REVENUE = credit - debit；EXPENSE = debit - credit（与试算平衡表一致）。
+// 入参 period 为 YYYY-MM 字符串；非法格式抛出 Error，由 HTTP handler 转为 HttpError。
+// period 缺省时回退到当前月（与 getFinancialSummary 历史行为一致）。
+export function calculateIncomeForPeriod(db, period) {
+  const resolved = period || new Date().toISOString().slice(0, 7);
+  const match = /^(\d{4})-(\d{2})$/.exec(resolved);
+  if (!match) throw new Error("period 格式错误，应为 YYYY-MM");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new Error("月份必须在 01-12 之间");
+  const startDate = resolved + "-01";
+  const lastDay = new Date(year, month, 0).getDate();
+  const endDate = resolved + "-" + String(lastDay).padStart(2, "0");
+
+  const row = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN s.type='REVENUE' AND e.direction='CREDIT' THEN e.amount_cents ELSE 0 END), 0)
+    - COALESCE(SUM(CASE WHEN s.type='REVENUE' AND e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END), 0)
+      AS revenue_net,
+      COALESCE(SUM(CASE WHEN s.type='EXPENSE' AND e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END), 0)
+    - COALESCE(SUM(CASE WHEN s.type='EXPENSE' AND e.direction='CREDIT' THEN e.amount_cents ELSE 0 END), 0)
+      AS expense_net
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date >= ?
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+  `).get(startDate, endDate);
+
+  const revenue = Number(row.revenue_net);
+  const expense = Number(row.expense_net);
+  const profit = revenue - expense;
+  return { period: resolved, periodRange: { startDate, endDate }, revenue, expense, profit };
+}
+
 export function getFinancialSummary(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
-  const period = url.searchParams.get("period") || new Date().toISOString().slice(0, 7);
+  const period = url.searchParams.get("period");
 
-  const revenue = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='REVENUE'").get(period).total;
-  const expense = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='EXPENSE'").get(period).total;
+  const income = calculateIncomeForPeriod(db, period);
+
   const ar = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_receivables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
   const ap = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_payables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
 
-  return send(res, 200, { period, revenue, expense, profit: revenue - expense, accounts_receivable: ar, accounts_payable: ap });
+  return send(res, 200, {
+    period: income.period,
+    revenue: income.revenue,
+    expense: income.expense,
+    profit: income.profit,
+    accounts_receivable: Number(ar),
+    accounts_payable: Number(ap),
+  });
 }
 
 // ============ 利润表 ============
-// 期间过滤使用 voucher_date 范围，避免手工凭证 period 列为 NULL 的问题。
-// 净额规则：REVENUE 用 credit-debit；EXPENSE 用 debit-credit（与试算平衡表一致）。
+// 复用 calculateIncomeForPeriod；附加按科目类型的明细 section。
 
 export function getIncomeStatement(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
   const period = url.searchParams.get("period");
   if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
-  const match = /^(\d{4})-(\d{2})$/.exec(period);
-  if (!match) throw new HttpError(400, "期间格式错误，应为 YYYY-MM");
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  if (month < 1 || month > 12) throw new HttpError(400, "月份必须在 01-12 之间");
 
-  const startDate = period + "-01";
-  const lastDay = new Date(year, month, 0).getDate();
-  const endDate = period + "-" + String(lastDay).padStart(2, "0");
+  let income;
+  try {
+    income = calculateIncomeForPeriod(db, period);
+  } catch (e) {
+    throw new HttpError(400, e.message);
+  }
 
   const aggregateByType = db.prepare(`
     SELECT s.code, s.name, s.type,
       SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
-      SUM(CASE WHEN e.direction = 'DEBIT' THEN e.amount_cents ELSE 0 END) AS debit_total
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
     FROM accounting_entries e
     JOIN accounting_vouchers v ON v.id = e.voucher_id
     JOIN accounting_subjects s ON s.id = e.subject_id
@@ -1013,7 +1057,7 @@ export function getIncomeStatement(db, res, actor, url) {
       AND s.type IN ('REVENUE', 'EXPENSE')
     GROUP BY s.id
     ORDER BY s.code
-  `).all(startDate, endDate);
+  `).all(income.periodRange.startDate, income.periodRange.endDate);
 
   const buildSection = (type, name, sign) => {
     const rows = aggregateByType
@@ -1026,16 +1070,13 @@ export function getIncomeStatement(db, res, actor, url) {
 
   const revenueSection = buildSection('REVENUE', '营业收入', '+');
   const expenseSection = buildSection('EXPENSE', '营业成本与费用', '-');
-  const revenue = revenueSection.subtotal;
-  const expense = expenseSection.subtotal;
-  const profit = revenue - expense;
 
   return send(res, 200, {
-    period,
-    periodRange: { startDate, endDate },
-    revenue,
-    expense,
-    profit,
+    period: income.period,
+    periodRange: income.periodRange,
+    revenue: income.revenue,
+    expense: income.expense,
+    profit: income.profit,
     sections: [revenueSection, expenseSection],
   });
 }

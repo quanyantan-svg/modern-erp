@@ -570,6 +570,74 @@ VALUES ('subject-4001', '4001', '实收资本', 'EQUITY', 'CREDIT', 1)
 - 修改全局 demo seed（仅测试 fixture 添加 EQUITY）
 评分结果按阈值划分为 A、B、C、D 等级。
 
+### 7.11 财务报表一致性收口
+
+#### 共享 Income Calculation Helper
+
+`calculateIncomeForPeriod(db, period)`（`server/modules/extended.js`）：
+
+- 纯业务 helper，不接收 `res`，不做 HTTP 权限校验，不发送 response
+- 入参 `period` 为 `YYYY-MM`，缺省回退当前月；非法格式抛 `Error`
+- SQL 使用 `voucher_date` 月份范围 + `status='POSTED'`
+- REVENUE = `credit − debit`，EXPENSE = `debit − credit`
+- 返回 `{ period, periodRange, revenue, expense, profit }`
+
+#### 修正后的 Financial Summary
+
+`getFinancialSummary()` 调用 `calculateIncomeForPeriod` 获取 income 三项，再加 AR/AP 字段：
+
+```javascript
+const income = calculateIncomeForPeriod(db, period);
+const ar = ...;  // accounts_receivable（独立语义）
+const ap = ...;  // accounts_payable（独立语义）
+return { period, revenue, expense, profit, accounts_receivable, accounts_payable };
+```
+
+**修正点**:
+- ❌ `v.period` 列 → ✅ `voucher_date` 月份范围
+- ❌ `SUM(amount_cents)` 忽略方向 → ✅ direction-aware
+- ❌ 销售退回虚增收入 → ✅ 正确减收入
+
+**保留字段**:
+- `period` / `revenue` / `expense` / `profit`
+- `accounts_receivable` / `accounts_payable`（与 Income Statement 独立）
+
+#### 报表权限统一
+
+| 报表 | 权限 |
+|------|------|
+| Income Statement | `REPORT_VIEW` |
+| Balance Sheet | `REPORT_VIEW` |
+| Trial Balance | `REPORT_VIEW` |
+| Financial Summary | `REPORT_VIEW` |
+| 凭证操作 / 余额 / 账簿 | `ACCOUNTING_VIEW` |
+
+**`role-accounting` 调整**:
+- + `REPORT_VIEW`
+- 保留 `ACCOUNTING_VIEW` / `ORDERS_VIEW` / `PURCHASE_ORDERS_VIEW` / 出纳 / 银行 / 票据 / 固定资产 等原有权限
+
+#### Trial Balance UI
+
+最小集成于 `src/pages/accounting.jsx` `试算平衡表` tab：
+
+- 期间选择器 + 查询按钮
+- 每科目表格：期初 / 本期借方 / 本期贷方 / 期末
+- 顶部本期借贷发生额校验：`totalPeriodDebit === totalPeriodCredit`
+- 平衡显示绿色 `借方发生额 = 贷方发生额`，不平衡显示差额
+- loading / error / empty 状态
+
+仅做本期借贷发生额校验，**不**与资产负债表的 `Assets = Liabilities + Equity` 混为一谈。
+
+#### Financial Summary UI
+
+**不创建 UI**。保持后端 API 修正即可。不得声称"用户可在浏览器查看 Financial Summary"。
+
+#### Deferred
+
+- `getAccountingLedger`：POSTED 过滤缺失 + 无 API 路由 → 标记 DEFERRED，后续独立处理
+- Demo data expansion：0 POSTED vouchers + 0 EQUITY subjects → DEMO READINESS ISSUE，不在本任务范围
+评分结果按阈值划分为 A、B、C、D 等级。
+
 ## 8. API 设计约定
 
 - 资源列表使用 `GET /api/<resource>`；

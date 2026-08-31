@@ -8,7 +8,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前版本 | 2.8.0 |
+| 当前版本 | 2.9.0 |
 | 更新日期 | 2026-08-31 |
 | 项目定位 | 原 ERP 核心业务的现代化模块化重构 |
 | 当前状态 | 可运行、可构建、具备基础自动化验证 |
@@ -140,6 +140,16 @@
 - FIN-039 本任务不实现：本年累计资产负债表对比、自动结转、损益结转凭证生成、Year-End Carry Forward、独立 opening_balance 表、新增 EQUITY 子类型（如本年利润、利润分配）；
 - FIN-040 当前全局 seed 缺少 EQUITY 种子科目；测试 fixture 自行添加 EQUITY 科目（如 `4001 实收资本`），不修改全局 demo seed。
 
+#### 5.5.5 财务报表一致性
+
+- FIN-041 Financial Summary、Income Statement、Balance Sheet、Trial Balance 等正式财务报告统一使用 `REPORT_VIEW` 权限；凭证操作等运维接口继续使用 `ACCOUNTING_VIEW`，不因统一报表权限而扩大凭证修改权限；
+- FIN-042 Financial Summary 与 Income Statement 共享同一份 income calculation helper（`calculateIncomeForPeriod(db, period)`）：voucher_date 月份范围、POSTED only、REVENUE = `credit − debit`、EXPENSE = `debit − credit`、profit = `revenue − expense`；
+- FIN-043 Financial Summary 保留 `accounts_receivable` / `accounts_payable` 等与 Income Statement 独立的字段（语义：未收回应收 / 未付应付余额）；
+- FIN-044 Trial Balance UI 最小集成于会计凭证页面 `试算平衡表` tab：期间选择器、查询按钮、每科目期初 / 本期借方 / 本期贷方 / 期末余额、本期借贷发生额校验（`totalPeriodDebit === totalPeriodCredit`）；
+- FIN-045 Financial Summary 仅保持后端 API 修正，不补 UI（与 Income Statement 语义重叠，不值得新增页面）；不得声称"用户可在浏览器查看 Financial Summary"；
+- FIN-046 `role-accounting` 增加 `REPORT_VIEW` 权限（财务专员可访问 Trial Balance / Income Statement / Balance Sheet / Financial Summary API），保留原有 `ACCOUNTING_VIEW` 与其它财务权限；
+- FIN-047 `getAccountingLedger` 仍存在 POSTED 过滤缺失 + 无 API 路由问题，标记为 **DEFERRED**（与本任务范围外）。
+
 
 ### 5.6 生产与质量
 
@@ -225,3 +235,4 @@ DRAFT ──提交──> SUBMITTED ──审核──> APPROVED
 | 2.6.0 | 2026-08-31 | 期间关闭核心：Accounting Period Integrity + Period Closing Core + Period Reopen；CLOSED 期间阻断凭证 CRUD/Submit/Approve/Reject；试算平衡表与财务报表仅计入 POSTED |
 | 2.7.0 | 2026-08-31 | 利润表：单月期间；REVENUE → 营业收入（credit-debit）；EXPENSE → 营业成本与费用（debit-credit）；POSTED only；OPEN/CLOSED 均可查询 |
 | 2.8.0 | 2026-08-31 | 资产负债表：as-of 期间末累计；ASSET/LIABILITY/EQUITY 三段；未结转损益虚拟行（自数据库可见累计 REVENUE−EXPENSE）；equationValid 整数严格比较；OPEN/CLOSED 均可查询 |
+| 2.9.0 | 2026-08-31 | 财务报表一致性收口：Financial Summary 修复为与 Income Statement 共享计算（voucher_date 范围 + direction-aware + POSTED only）；保留 AR/AP 字段；Trial Balance / Financial Summary / Income Statement / Balance Sheet 统一使用 REPORT_VIEW 权限；role-accounting 增加 REPORT_VIEW；Trial Balance 补齐最小 UI |

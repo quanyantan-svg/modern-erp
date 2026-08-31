@@ -17,19 +17,20 @@
 | Voucher Approval Workflow | ✅ | 9e8aab4 | 15 tests |
 | Accounting Period Integrity / Period Closing Core | ✅ | ee3168b | 13 tests |
 | Income Statement | ✅ | 28c2f51 | 21 tests |
-| Balance Sheet | ✅ | 待提交 | 28 tests |
+| Balance Sheet | ✅ | fc088f3 | 28 tests |
+| Financial Reporting Consistency | ✅ | 待提交 | 15 tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js
-- 117 tests / 41 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js
+- 132 tests / 47 suites
 - **全部通过**
 
 ## 分值汇总
 
-- 完整：40 / 88 (45%)
-- 部分：27 / 88 (31%)
-- 缺失：20 / 88 (23%)
+- 完整：42 / 88 (48%)
+- 部分：26 / 88 (30%)
+- 缺失：19 / 88 (21%)
 - NOT_VERIFIED：1 / 88 (1%)
 
 ## 当前 P0 问题
@@ -42,7 +43,8 @@
 - 月结/年结（Month Closing 已完整；Year-End Carry Forward 未实现）
 - 凭证字 + 编号规则（部分）
 - 凭证模板（缺失）
-- 试算平衡表（部分，按POSTED过滤）
+- 试算平衡表（已升级为完整：REPORT_VIEW；UI 补齐）
+- 经营汇总（已升级为完整：与利润表共享计算；保留 AR/AP；无 UI）
 - 利润表（已升级为完整：单月期间；REVENUE/EXPENSE；POSTED only）
 - 资产负债表（已升级为完整：as-of 期间末累计；未结转损益虚拟行；equationValid 整数比较）
 - 现金流量表（缺失）

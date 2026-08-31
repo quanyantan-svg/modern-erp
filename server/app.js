@@ -1803,7 +1803,7 @@ function getAccountingLedger(db, res, actor, url) {
 }
 
 function getTrialBalance(db, res, actor, url) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'REPORT_VIEW');
   const period = url.searchParams.get('period');
   
   let startDate, endDate;
