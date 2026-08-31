@@ -11,6 +11,13 @@ export function Toolbar({ search, setSearch, onSearch, placeholder, action, extr
 export function Modal({ title, onClose, children, wide }) { return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className={`modal ${wide ? 'wide' : ''}`}><div className="modal-head"><h2>{title}</h2><button onClick={onClose}>×</button></div><div className="modal-body">{children}</div></div></div>; }
 export function FormActions({ onClose, saveText = '保存', danger }) { return <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button className={danger ? 'danger-button' : 'primary'}>{saveText}</button></div>; }
 export function Status({ status, label }) { return <span className={`status status-${status?.toLowerCase()}`}>{label}</span>; }
+export function Badge({ type, children }) {
+  // Map semantic badge types to existing .status color classes so badges
+  // reuse the same pill design as <Status> without adding new CSS.
+  const typeMap = { info: 'submitted', success: 'approved', warning: 'pending', danger: 'rejected', error: 'rejected' };
+  const status = typeMap[type] || 'draft';
+  return <span className={`status status-${status}`}>{children}</span>;
+}
 export function Active({ active }) { return <span className={`active-state ${active ? 'yes' : 'no'}`}><i/>{active ? '启用' : '停用'}</span>; }
 export function Empty({ text }) { return <div className="empty"><span>◇</span><p>{text}</p></div>; }
 
