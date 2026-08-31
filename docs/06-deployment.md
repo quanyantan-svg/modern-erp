@@ -209,7 +209,69 @@ curl http://127.0.0.1:3001/api/health
 
 ---
 
-## 6. 待补章节（Phase 2C / 后续任务）
+## 6. 首次管理员初始化
+
+Phase 2A 起,生产环境空 DB 不再自动创建演示账号。生产部署完成后,运维需显式运行 `setup-admin` 创建首个管理员。
+
+```bash
+# 完整生产初始化流程（首次部署或新建数据库后）
+cd /opt/modern-erp
+sudo -u erp \
+  ERP_DB_PATH=/var/lib/modern-erp/erp.db \
+  node scripts/setup-admin.mjs \
+  --username admin \
+  --password 'Strong-Production-Pwd-2026!'
+```
+
+**安全规则**：
+- `username` 与 `password` 均为必填
+- 密码至少 12 个字符
+- 拒绝已知弱密码（`admin123` / `sales123` / `warehouse123` / `accounting123` / `review123` / `admin` / `password` / `123456` / `12345678` / `qwerty` 等）
+- 用户已存在时拒绝覆盖
+- admin role(ADMIN)不存在时明确失败
+- 不向 stdout / stderr 输出明文密码
+- 不写入日志或文件
+- 失败返回 non-zero exit code
+
+**允许在 `NODE_ENV=production` 下运行** —— 这是生产初始化工具。但**必须显式调用**,应用正常启动(`pnpm start`)绝不能自动执行。
+
+CLI 用法：
+
+```bash
+node scripts/setup-admin.mjs --username <name> --password '<secret>'
+# 或
+pnpm setup-admin -- --username <name> --password '<secret>'
+```
+
+完整生产初始化序列（Phase 2C 之前手动）：
+
+```bash
+# 1. 部署应用
+cd /opt/modern-erp
+sudo -u erp git pull
+sudo -u erp pnpm install --prod
+sudo -u erp pnpm build
+
+# 2. 首次启动（创建空 DB + schema）
+sudo -u erp pnpm start &
+sleep 2  # 等待启动完成
+# 或 systemd 启动
+
+# 3. 创建首个管理员
+sudo -u erp node scripts/setup-admin.mjs \
+  --username admin \
+  --password 'Strong-Production-Pwd-2026!'
+
+# 4. 健康检查
+curl http://127.0.0.1:3001/api/health
+
+# 5. 登录并验证
+# 通过 Web UI 或 curl /api/auth/login 登录 admin
+```
+
+---
+
+## 7. 待补章节（Phase 2C / 后续任务）
 
 以下章节尚未在本 Phase 范围实现，将在后续 Phase 补齐：
 
@@ -217,6 +279,5 @@ curl http://127.0.0.1:3001/api/health
 - Nginx 反向代理配置
 - 备份调度（systemd timer / cron）
 - HTTPS / certbot 配置
-- 首次管理员初始化流程（Phase 2C）
 - 监控与日志
 - 防火墙 / 安全组规则

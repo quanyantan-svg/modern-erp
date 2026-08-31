@@ -20,19 +20,20 @@
 | Balance Sheet | ✅ | fc088f3 | 28 tests |
 | Financial Reporting Consistency | ✅ | f6a2521 | 15 tests |
 | Production Safety (Phase 2A) | ✅ | 023f34b | 11 tests |
-| Backup / Restore (Phase 2B) | ✅ | 待提交 | 18 tests |
+| Backup / Restore (Phase 2B) | ✅ | 43a0386 | 18 tests |
+| First Admin Bootstrap (Phase 2C-1) | ✅ | 待提交 | 17 tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js
-- 161 tests / 54 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js
+- 178 tests / 58 suites
 - **全部通过**
 
 ## 分值汇总
 
 - 完整：42 / 88 (48%)
-- 部分：24 / 88 (27%)
-- 缺失：21 / 88 (24%)
+- 部分：23 / 88 (26%)
+- 缺失：22 / 88 (25%)
 - NOT_VERIFIED：1 / 88 (1%)
 
 ## 当前 P0 问题

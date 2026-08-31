@@ -13,7 +13,8 @@
     "test": "node --test",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/backup-db.mjs",
-    "restore-db": "node scripts/restore-db.mjs"
+    "restore-db": "node scripts/restore-db.mjs",
+    "setup-admin": "node scripts/setup-admin.mjs"
   },
   "engines": {
     "node": ">=22.13"

@@ -755,6 +755,57 @@ if (isProduction && !confirm) {
 - 备份加密 / 远程上传 → 后续
 - 备份保留策略自动化（已包含 retention 默认 30）
 - 自动服务启停（恢复后由运维手动重启）
+
+### 7.14 First Admin Bootstrap（Phase 2C-1）
+
+Phase 2A 阻断了生产环境的 demo seed 自动创建,空生产 DB 因此无管理员可登录。`scripts/setup-admin.mjs` 是创建首个管理员的**唯一**显式路径。
+
+#### 用法
+
+```bash
+node scripts/setup-admin.mjs --username admin --password 'Strong-Production-Pwd-2026!'
+# 或
+pnpm setup-admin -- --username admin --password 'Strong-Production-Pwd-2026!'
+```
+
+#### 工具设计
+
+导出 `setupAdmin({ dbPath, username, password, displayName, now })` 供测试。CLI 主入口处理 `process.argv` 解析与 isMainModule 检测(跨平台)。
+
+#### 安全规则
+
+| 规则 | 实现 |
+|------|------|
+| `username` 必填 | `if (!username || !username.trim()) reject` |
+| `password` 必填 | `if (!password) reject` |
+| 密码长度 ≥ 12 | `if (password.length < 12) reject` |
+| 拒绝已知弱密码 | `WEAK_DEMO_PASSWORDS` 黑名单(case-insensitive) |
+| 用户已存在拒绝覆盖 | `SELECT id FROM users WHERE username = ?` 检查 |
+| admin role 不存在失败 | `SELECT id FROM roles WHERE code='ADMIN'` 检查 |
+| 不输出明文密码 | CLI 输出仅 username / userId / role |
+| 不写入文件 / 日志 | 工具仅 `INSERT INTO users` |
+| 失败返回 non-zero | `process.exit(1)` |
+
+#### 行为约束
+
+- ✅ 允许 `NODE_ENV=production` 下运行 —— 显式生产初始化工具
+- ❌ **应用启动绝不自动调用** —— `server/index.js` 不导入此脚本
+- ✅ 复用现有 `hashPassword` 函数(无新算法)
+- ✅ 使用现有 users / roles schema,userId 固定为 `user-admin-init`
+- ✅ 不创建 demo 业务数据 / 其他 demo 用户
+
+#### 完整生产初始化序列
+
+```
+deploy → start service (empty DB + schema created)
+  → explicit setup-admin → login → use ERP
+```
+
+#### 不在本任务范围
+
+- 自动服务启停 → Phase 2C systemd
+- 批量用户创建 / 密码重置 → 后续
+- 多管理员并行创建 → 后续(当前每次只创建 1 个)
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定
