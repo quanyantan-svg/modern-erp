@@ -854,6 +854,41 @@ deploy → start service (empty DB + schema created)
 
 新增 `server/systemd.test.js` 静态验证 unit 文件结构、路径、`ExecStart`、`EnvironmentFile`、`User/Group`、timer 到 service 的映射、backup script 存在且 backup service 不调用 restore。Windows 环境不运行 `systemctl`;Ubuntu 上线前仍需执行 `systemd-analyze verify`。
 
+### 7.16 Nginx Reverse Proxy（Phase 2C-2B）
+
+本阶段新增最小 HTTP reverse proxy 配置,不配置 HTTPS / Certbot / 域名 / Tencent Cloud 操作。
+
+#### 架构
+
+```text
+Browser → Nginx :80 → http://127.0.0.1:3001 → Node ERP
+```
+
+Node 仍然负责 API、production `dist` 和 React SPA fallback。Nginx 不直接 serve `dist/`,也不为 `/api`、`/assets` 或 SPA routes 创建第二套路由。
+
+#### 配置
+
+`deploy/nginx/modern-erp.conf` 只包含一个 server block 和一个 `location /`:
+
+- `listen 80`;
+- `listen [::]:80`;
+- `server_name _`;
+- `client_max_body_size 1m`;
+- `proxy_pass http://127.0.0.1:3001`;
+- proxy headers:`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`;
+- timeout:`proxy_connect_timeout 10s`, `proxy_send_timeout 60s`, `proxy_read_timeout 60s`。
+
+不添加复杂缓存规则,不添加 websocket 配置,不开放 Node 的 `3001` 公网访问。
+
+#### 验证
+
+新增 `server/nginx.test.js` 静态验证 Nginx 配置文件存在、HTTP listen、单一 `location /`、统一 proxy、必要 headers、body size、timeout,并防止出现 `root` / `alias` / `try_files` / `/api` 分流 / HTTPS / websocket 相关配置。Windows 环境不运行 `nginx -t`;Ubuntu 上线前仍需执行 `nginx -t` 并分别检查:
+
+```text
+curl http://127.0.0.1:3001/api/health
+curl http://127.0.0.1/api/health
+```
+
 ## 8. API 设计约定
 
 - 资源列表使用 `GET /api/<resource>`；

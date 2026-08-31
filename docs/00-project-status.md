@@ -22,12 +22,13 @@
 | Production Safety (Phase 2A) | ✅ | 023f34b | 11 tests |
 | Backup / Restore (Phase 2B) | ✅ | 43a0386 | 18 tests |
 | First Admin Bootstrap (Phase 2C-1) | ✅ | a880d89 | 17 tests |
-| systemd Service + Backup Timer (Phase 2C-2A) | ✅ | 本提交 | 4 tests |
+| systemd Service + Backup Timer (Phase 2C-2A) | ✅ | 90dcd49 | 4 tests |
+| Nginx Reverse Proxy (Phase 2C-2B) | ✅ | 本提交 | 4 tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js
-- 182 tests / 59 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js
+- 186 tests / 60 suites
 - **全部通过**
 
 ## 分值汇总

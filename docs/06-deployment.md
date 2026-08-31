@@ -22,7 +22,7 @@ sudo apt update && sudo apt upgrade -y
 
 ### 1.2 安装基础软件
 ```bash
-sudo apt install -y curl git vim
+sudo apt install -y curl git vim nginx
 ```
 
 ### 1.3 安装Node.js
@@ -137,7 +137,7 @@ ERP_SEED_DEMO=false
 
 **重要**：
 - `NODE_ENV=production` 配合 `ERP_SEED_DEMO=false` 禁止自动创建弱密码演示账号
-- 首个管理员账号需通过 `scripts/setup-admin.mjs` 显式创建（见 §7）
+- 首个管理员账号需通过 `scripts/setup-admin.mjs` 显式创建（见 §8）
 - 应用不引入 dotenv；环境变量由 systemd `EnvironmentFile` 注入
 - `/etc/modern-erp/env` 至少包含当前实际使用的 session/login 配置：`SESSION_HOURS`、`LOGIN_MAX_ATTEMPTS`、`LOGIN_LOCK_MINUTES`、`TOKEN_LENGTH`
 
@@ -220,15 +220,121 @@ systemd-analyze verify /etc/systemd/system/modern-erp-backup.timer
 
 ---
 
-## 5. Demo 数据与重置
+## 5. Nginx 反向代理
 
-### 5.1 演示账号默认禁用
+目标架构：
+
+```text
+Browser
+  → Nginx :80
+  → proxy_pass http://127.0.0.1:3001
+  → Node ERP
+```
+
+Node 仍是应用层唯一来源，负责 API、production `dist` 和 React SPA fallback。Nginx 不直接 serve `dist/`，也不配置第二套路由。
+
+### 5.1 配置文件
+
+本阶段提供：
+
+```text
+deploy/nginx/modern-erp.conf
+```
+
+核心配置：
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name _;
+
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+所有请求共用同一个 proxy，包括：
+
+- `/`
+- `/assets/*`
+- `/api/*`
+- `/api/health`
+- React SPA routes
+
+### 5.2 启用配置
+
+Ubuntu 22.04 上执行：
+
+```bash
+sudo cp deploy/nginx/modern-erp.conf /etc/nginx/sites-available/modern-erp.conf
+sudo ln -s /etc/nginx/sites-available/modern-erp.conf /etc/nginx/sites-enabled/modern-erp.conf
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+`nginx -t` 成功标准：
+
+```text
+syntax is ok
+test is successful
+```
+
+### 5.3 健康检查
+
+先确认 Node 本身正常：
+
+```bash
+curl http://127.0.0.1:3001/api/health
+```
+
+再确认通过 Nginx 代理正常：
+
+```bash
+curl http://127.0.0.1/api/health
+```
+
+两者都应返回当前应用真实 health response：
+
+```json
+{"status":"ok","service":"modern-erp-api"}
+```
+
+### 5.4 腾讯云安全组建议
+
+本任务不实际操作腾讯云，仅记录后续安全组原则：
+
+- 允许入站 `TCP 80`
+- 未来 HTTPS 阶段允许入站 `TCP 443`
+- 不开放 `TCP 3001`
+- `SSH 22` 只用于管理员维护，并建议限制来源 IP
+
+HTTPS = NEXT PHASE。
+
+---
+
+## 6. Demo 数据与重置
+
+### 6.1 演示账号默认禁用
 
 启动空数据库时，**生产环境不会**自动创建以下账号（`admin/admin123`、`sales/sales123` 等）。
 
 仅当 `ERP_SEED_DEMO=true` 显式启用时，才会创建演示账号与演示业务数据。
 
-### 5.2 pnpm reset-data 保护
+### 6.2 pnpm reset-data 保护
 
 `pnpm reset-data` 在 `NODE_ENV=production` 下立即退出并返回错误，不会删除任何文件。
 
@@ -241,9 +347,9 @@ $ NODE_ENV=production pnpm reset-data
 
 ---
 
-## 6. 数据库备份与恢复
+## 7. 数据库备份与恢复
 
-### 6.1 备份工具
+### 7.1 备份工具
 
 跨平台 Node 脚本：
 
@@ -266,7 +372,7 @@ node scripts/backup-db.mjs
 - 默认保留最近 30 个备份（`ERP_BACKUP_RETENTION` 可调）
 - 失败返回 non-zero exit code
 
-### 6.2 恢复工具
+### 7.2 恢复工具
 
 ```bash
 pnpm restore-db -- <backup-file>
@@ -284,7 +390,7 @@ node scripts/restore-db.mjs /var/backups/modern-erp/erp-20260831-130000.db
 - 恢复后再次 `PRAGMA integrity_check`
 - **生产环境必须显式传入 `--confirm-restore`**，否则拒绝执行（避免自动化场景误操作）
 
-### 6.3 生产恢复流程
+### 7.3 生产恢复流程
 
 完整生产恢复应在维护窗口执行：
 
@@ -307,7 +413,7 @@ curl http://127.0.0.1:3001/api/health
 
 ---
 
-## 7. 首次管理员初始化
+## 8. 首次管理员初始化
 
 Phase 2A 起,生产环境空 DB 不再自动创建演示账号。生产部署完成并首次启动服务创建 schema 后,运维需显式运行 `setup-admin` 创建首个管理员。
 
@@ -367,11 +473,10 @@ curl http://127.0.0.1:3001/api/health
 
 ---
 
-## 8. 待补章节（后续任务）
+## 9. 待补章节（后续任务）
 
 以下章节尚未在本 Phase 范围实现，将在后续 Phase 补齐：
 
-- Nginx 反向代理配置
 - HTTPS / certbot 配置
 - 监控与日志
 - 防火墙 / 安全组规则
