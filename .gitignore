@@ -8,3 +8,4 @@ data/
 *.log
 .env
 backups/
+.claude/settings.local.json
