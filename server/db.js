@@ -147,6 +147,7 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE accounting_entries ADD COLUMN project_id TEXT');
   addColumn('ALTER TABLE accounting_entries ADD COLUMN customer_id TEXT');
   addColumn('ALTER TABLE accounting_entries ADD COLUMN supplier_id TEXT');
+  addColumn("ALTER TABLE suppliers ADD COLUMN email TEXT NOT NULL DEFAULT ''");
   addColumn("ALTER TABLE accounting_entries ADD COLUMN currency_code TEXT DEFAULT 'CNY'");
   addColumn('ALTER TABLE accounting_entries ADD COLUMN exchange_rate REAL DEFAULT 1');
   addColumn('ALTER TABLE accounting_entries ADD COLUMN amount_foreign REAL DEFAULT 0');
@@ -436,6 +437,7 @@ function migrate(db) {
       contact TEXT NOT NULL DEFAULT '',
       phone TEXT NOT NULL DEFAULT '',
       address TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
