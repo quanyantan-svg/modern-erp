@@ -3,41 +3,30 @@ import { api, setToken } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
 export function Login({ onLogin, notify }) {
-  const [form, setForm] = useState({ username: 'sales', password: 'sales123' });
+  const [form, setForm] = useState({ username: '', password: '' });
   const [busy, setBusy] = useState(false);
   async function submit(event) {
     event.preventDefault(); setBusy(true);
     try { const result = await api('/api/auth/login', { method: 'POST', body: form }); setToken(result.token); onLogin(result.user); }
     catch (error) { notify(error.message, 'error'); } finally { setBusy(false); }
   }
-  const demos = [
-    ['sales', 'sales123', '销售专员', '创建并提交订单'],
-    ['reviewer', 'review123', '销售主管', '审核或驳回订单'],
-    ['admin', 'admin123', '系统管理员', '管理用户、角色和资料']
-  ];
   return <div className="login-page">
-    <section className="login-story">
-      <div className="login-badge">MODERN ERP</div>
-      <h1>让每一张订单<br/><em>有迹可循。</em></h1>
-      <p>从客户与货品资料，到销售制单、提交审批和订单追踪，一条清晰、可解释的最小业务链。</p>
-      <div className="flow-strip"><span>基础资料</span><i>→</i><span>销售订单</span><i>→</i><span>提交审批</span><i>→</i><span>业务追踪</span></div>
-    </section>
-    <section className="login-panel">
+    <div className="login-shell">
       <div className="login-card">
-        <div className="mini-brand"><div className="brand-mark">M</div><strong>Modern ERP</strong></div>
-        <h2>欢迎回来</h2><p className="muted">使用演示账号进入销售业务中心</p>
+        <div className="login-brand">
+          <div className="brand-mark">M</div>
+          <strong>Modern ERP</strong>
+        </div>
+        <h2>登录</h2>
+        <p className="lead">使用您的账号进入企业资源计划系统。</p>
         <form onSubmit={submit}>
-          <label>登录账号<input autoFocus value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })}/></label>
-          <label>密码<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}/></label>
-          <button className="primary wide" disabled={busy}>{busy ? '正在验证…' : '登录系统'}</button>
+          <label>账号<input autoFocus required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="username"/></label>
+          <label>密码<input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password"/></label>
+          <button className="primary wide" disabled={busy}>{busy ? '正在验证…' : '登录'}</button>
         </form>
-        <div className="demo-title">快速选择演示角色</div>
-        <div className="demo-accounts">{demos.map(([username, password, role, tip]) => <button key={username} onClick={() => setForm({ username, password })}>
-          <span><strong>{role}</strong><small>{tip}</small></span><b>选择</b>
-        </button>)}</div>
-        <p className="security-hint">仅供本地练习，请勿将演示密码用于真实系统。</p>
+        <p className="footnote">请使用由系统管理员分配的账号登录。如需协助，请联系企业 IT 支持。</p>
       </div>
-    </section>
+    </div>
   </div>;
 }
 

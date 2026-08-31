@@ -195,7 +195,7 @@ export default function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>现代化重构版</span></div></div>
+      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业资源计划</span></div></div>
       <nav>{navGroups.map((group, gi) => group === null
         ? <div key={'div-' + gi} className="sidebar-divider"/>
         : <div key={gi} className="sidebar-group">
@@ -208,12 +208,15 @@ export default function App() {
             )}
           </div>
       )}</nav>
-      <div className="sidebar-note"><span>开发环境</span><p>当前数据保存在本地 SQLite，可随时重置验证。</p></div>
     </aside>
     <main className="main-area">
       <header className="topbar">
-        <div><p className="topbar-eyebrow">销售业务中心</p><h1>{current?.label}</h1></div>
-        <div className="user-area"><div className="avatar">{user.displayName.slice(0, 1)}</div><div><strong>{user.displayName}</strong><span>{user.roleName}</span></div><button className="text-button" onClick={logout}>退出</button></div>
+        <div><h1>{current?.label}</h1></div>
+        <div className="user-area">
+          <div className="user-info"><strong>{user.displayName}</strong><span>{user.roleName}</span></div>
+          <div className="avatar">{user.displayName.slice(0, 1)}</div>
+          <button className="text-button" onClick={logout}>退出</button>
+        </div>
       </header>
       <section className="page-content">{pages[page] || pages.dashboard}</section>
     </main>
