@@ -700,6 +700,61 @@ if (process.env.NODE_ENV === 'production') {
 - 备份 / 恢复 → Phase 2B
 - 首次管理员初始化流程 → Phase 2C
 - HTTPS / 监控 / 安全组
+
+### 7.13 Backup / Restore（Phase 2B）
+
+#### 工具
+
+- `scripts/backup-db.mjs` — 导出 `runBackup({ dbPath, backupDir, retention, now })`
+- `scripts/restore-db.mjs` — 导出 `runRestore({ backupPath, dbPath, backupDir, isProduction, confirm })`
+- `pnpm backup-db` / `pnpm restore-db` — CLI 入口
+
+#### 一致性策略
+
+Node `node:sqlite` (>= 22.13) 的 `DatabaseSync` **不暴露** C `sqlite3_backup_*` API。本项目使用 SQLite 官方一致的 `VACUUM INTO <path>` 命令：
+
+- `VACUUM INTO` 在内部完成 WAL checkpoint，将所有已提交事务物化到新文件
+- 新备份文件**没有** `-wal` / `-shm` 旁路文件，自包含
+- 与正在运行的应用连接不冲突(读+写 vs 读+写指向不同文件)
+
+#### 文件命名
+
+`erp-YYYYMMDD-HHmmss.db`（本地时间戳），safety 备份 `safety-YYYYMMDD-HHmmss.db`。
+
+#### 生产恢复保护
+
+`NODE_ENV=production` 必须显式传入 `--confirm-restore`，否则立即拒绝：
+
+```javascript
+if (isProduction && !confirm) {
+  return { success: false, error: '生产环境必须显式传入 --confirm-restore ...' };
+}
+```
+
+#### 恢复流程
+
+1. 验证备份文件存在 + 大小 > 0
+2. 打开备份执行 `PRAGMA integrity_check`（必须 `ok`）
+3. 拒绝 backup 与 target 相同（防止覆盖）
+4. 创建 safety 备份（VACUUM INTO safetyPath）
+5. 删除 target 的 `-wal` / `-shm`
+6. VACUUM INTO `<target>.restore.tmp` 后 rename 到 target
+7. 恢复后再次 `PRAGMA integrity_check`
+8. 任意验证失败 → 停止恢复 → target 未修改
+
+#### 关键安全保证
+
+- `pnpm backup-db` 失败时**自动清理**备份文件
+- `pnpm restore-db` 任何步骤失败**不修改** target DB
+- `safety-` 备份保证可回滚到执行恢复前一刻
+- 生产恢复不依赖交互式提示，可被 SSH / systemd ExecStart 安全调用
+
+#### 不在本任务范围
+
+- 备份调度（systemd timer / cron）→ Phase 2C
+- 备份加密 / 远程上传 → 后续
+- 备份保留策略自动化（已包含 retention 默认 30）
+- 自动服务启停（恢复后由运维手动重启）
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定

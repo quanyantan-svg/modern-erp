@@ -143,15 +143,80 @@ $ NODE_ENV=production pnpm reset-data
 
 ---
 
-## 5. 待补章节（Phase 2C / 后续任务）
+## 5. 数据库备份与恢复
 
-以下章节尚未在本 Phase 2A 范围实现，将在后续 Phase 补齐：
+### 5.1 备份工具
+
+跨平台 Node 脚本：
+
+```bash
+pnpm backup-db
+# 或显式指定：
+ERP_DB_PATH=/var/lib/modern-erp/erp.db \
+ERP_BACKUP_DIR=/var/backups/modern-erp \
+node scripts/backup-db.mjs
+```
+
+行为：
+- 读取 `ERP_DB_PATH`（默认 `<repo>/data/erp.db`）
+- 读取 `ERP_BACKUP_DIR`（默认 `<repo>/backups`，生产推荐 `/var/backups/modern-erp`）
+- 文件名格式：`erp-YYYYMMDD-HHmmss.db`
+- 不覆盖已存在的备份文件
+- 使用 SQLite `VACUUM INTO` 生成一致快照（WAL 自动合入）
+- 备份完成后执行 `PRAGMA integrity_check`，必须返回 `ok`
+- 文件大小必须 > 0
+- 默认保留最近 30 个备份（`ERP_BACKUP_RETENTION` 可调）
+- 失败返回 non-zero exit code
+
+### 5.2 恢复工具
+
+```bash
+pnpm restore-db -- <backup-file>
+# 或：
+node scripts/restore-db.mjs /var/backups/modern-erp/erp-20260831-130000.db
+```
+
+行为：
+- 验证备份文件存在且大小 > 0
+- 打开备份执行 `PRAGMA integrity_check`，必须返回 `ok`
+- 拒绝目标数据库与备份相同（防止覆盖运行中 DB）
+- 创建 safety 备份至 `ERP_BACKUP_DIR/safety-YYYYMMDD-HHmmss.db`
+- 清理目标 DB 的旧 `-wal` / `-shm`
+- 用 `VACUUM INTO` 重建目标 DB
+- 恢复后再次 `PRAGMA integrity_check`
+- **生产环境必须显式传入 `--confirm-restore`**，否则拒绝执行（避免自动化场景误操作）
+
+### 5.3 生产恢复流程
+
+完整生产恢复应在维护窗口执行：
+
+```bash
+# 1. 停止服务（Phase 2C 由 systemd 接管）
+sudo systemctl stop modern-erp
+
+# 2. 创建 safety 备份（脚本自动完成）
+# 3. 执行恢复（生产环境必须显式确认）
+sudo -u erp NODE_ENV=production \
+  node scripts/restore-db.mjs /var/backups/modern-erp/erp-20260831-130000.db \
+  --confirm-restore
+
+# 4. 启动服务
+sudo systemctl start modern-erp
+
+# 5. 健康检查
+curl http://127.0.0.1:3001/api/health
+```
+
+---
+
+## 6. 待补章节（Phase 2C / 后续任务）
+
+以下章节尚未在本 Phase 范围实现，将在后续 Phase 补齐：
 
 - 进程管理（systemd unit 模板）
 - Nginx 反向代理配置
-- 备份 / 恢复脚本（`scripts/backup.sh`、`scripts/restore.sh`）
 - 备份调度（systemd timer / cron）
 - HTTPS / certbot 配置
+- 首次管理员初始化流程（Phase 2C）
 - 监控与日志
 - 防火墙 / 安全组规则
-- 首次管理员初始化流程
