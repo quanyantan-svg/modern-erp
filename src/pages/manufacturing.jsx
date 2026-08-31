@@ -28,7 +28,11 @@ function BomModal({ user, value, onClose, notify, api, products }) {
   useEffect(() => {
     if (value.id) api('/api/boms/' + value.id).then((r) => setDetail(r.bom)).catch((e) => notify(e.message, 'error'));
   }, []);
-  if (detail && !form.productId) setForm({ productId: detail.product_id || '', version: detail.version || '1.0', remark: detail.remark || '', items: detail.items || [] });
+  useEffect(() => {
+    if (value.id && detail && !form.productId) {
+      setForm({ productId: detail.product_id || '', version: detail.version || '1.0', remark: detail.remark || '', items: detail.items || [] });
+    }
+  }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
@@ -217,7 +221,11 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
     if (form.productId) api('/api/boms?product=' + form.productId).then((r) => setBoms(r.boms.filter((b) => b.status === 'ACTIVE'))).catch(() => setBoms([]));
     else setBoms([]);
   }, [form.productId]);
-  if (detail && !form.productId) setForm({ productId: detail.product_id || '', bomId: detail.bom_id || '', quantity: detail.quantity || 1, plannedStart: detail.planned_start || '', plannedFinish: detail.planned_finish || '', remark: detail.remark || '' });
+  useEffect(() => {
+    if (value.id && detail && !form.productId) {
+      setForm({ productId: detail.product_id || '', bomId: detail.bom_id || '', quantity: detail.quantity || 1, plannedStart: detail.planned_start || '', plannedFinish: detail.planned_finish || '', remark: detail.remark || '' });
+    }
+  }, [detail]);
   const save = async () => {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
