@@ -8,8 +8,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前版本 | 2.4.0 |
-| 更新日期 | 2026-08-30 |
+| 当前版本 | 2.9.0 |
+| 更新日期 | 2026-08-31 |
 | 项目定位 | 原 ERP 核心业务的现代化模块化重构 |
 | 当前状态 | 可运行、可构建、具备基础自动化验证 |
 
@@ -91,6 +91,66 @@
 - `FIN-006` 支持期间管理、银行对账和基础财务报表；
 - `FIN-007` 业务单据与凭证、账款之间必须能够追溯来源。
 
+#### 5.5.1 凭证审核流程
+
+- FIN-008 凭证状态包含 ENTERED（录入）、SUBMITTED（待审核）、POSTED（已审核）、REJECTED（已驳回）；
+- FIN-009 凭证状态转换规则：
+  - ENTERED → SUBMITTED：需持有 VOUCHER_SUBMIT 权限；
+  - SUBMITTED → POSTED：需持有 VOUCHER_APPROVE 权限，且审核人不得为凭证创建人；
+  - SUBMITTED → REJECTED：需持有 VOUCHER_APPROVE 权限，驳回必须填写原因；
+  - REJECTED → edit → ENTERED：驳回后可修改分录并重新提交；
+- FIN-010 已审核（POSTED）和待审核（SUBMITTED）的凭证不可修改和删除；
+- FIN-011 试算平衡表和财务报表仅计入 POSTED 状态的凭证；
+- FIN-012 凭证创建人和审核人不得为同一人；
+
+#### 5.5.2 期间关闭核心流程
+
+- FIN-013 期间状态包含 OPEN（未结）和 CLOSED（已结），由 `period_closures` 表维护；
+- FIN-014 结账前置检查：期间内不能存在 ENTERED、SUBMITTED、REJECTED 状态的凭证，否则结账被拒绝；
+- FIN-015 结账成功后，期间内所有凭证相关操作（create / update / delete / submit / approve / reject）均被后端拒绝（409 冲突）；
+- FIN-016 反结账将 CLOSED → OPEN，duplicate reopen 被拒绝；
+- FIN-017 结账 / 反结账状态变更与审计日志写入必须在同一事务中，审计失败应回滚状态变更；
+- FIN-018 试算平衡表、财务汇总、科目余额、日记账等正式报表仅计入 POSTED 状态凭证；
+- FIN-019 结账需要 `PERIOD_CLOSE_MANAGE` 权限；年结 / Year-End Carry Forward 不在本阶段范围。
+
+#### 5.5.3 利润表
+
+- FIN-020 利润表查询参数为单月 `period=YYYY-MM`，缺省或格式错误返回 400；
+- FIN-021 利润表仅纳入 `accounting_vouchers.status = 'POSTED'` 的凭证，ENTERED / SUBMITTED / REJECTED 排除；
+- FIN-022 利润表科目范围：REVENUE 计入「营业收入」，EXPENSE 计入「营业成本与费用」；
+- FIN-023 方向规则：REVENUE 净额 = `credit_cents - debit_cents`；EXPENSE 净额 = `debit_cents - credit_cents`（与试算平衡表 / 会计余额一致）；
+- FIN-024 营业利润 = 营业收入 − 营业成本与费用；
+- FIN-025 OPEN 期间与 CLOSED 期间均允许查询利润表；利润表为只读操作，不触发期间写保护；
+- FIN-026 利润表需要 `REPORT_VIEW` 权限；本年累计 / 同比环比 / 多月对比不在本任务范围；
+- FIN-027 当前 schema 中 EXPENSE 类型包含「主营业务成本」（subject-007）等成本类科目，报表口径合并展示为「营业成本与费用」，不强行拆分成本子类别。
+
+#### 5.5.4 资产负债表
+
+- FIN-028 资产负债表是 **as-of / 期间末报表**，反映所选期间**月末**（`asOfDate = LAST_DAY(period)`）的累计财务状况；与利润表的「时段」口径不同；
+- FIN-029 资产负债表查询参数为单月 `period=YYYY-MM`，缺省或格式错误返回 400；
+- FIN-030 资产负债表仅纳入 `accounting_vouchers.status = 'POSTED'` 的凭证，ENTERED / SUBMITTED / REJECTED 排除；
+- FIN-031 资产负债表科目范围：仅 ASSET / LIABILITY / EQUITY 三类；
+- FIN-032 余额方向：ASSET 净额 = `debit - credit`；LIABILITY 净额 = `credit - debit`；EQUITY 净额 = `credit - debit`（与试算平衡表 / 会计余额一致）；
+- FIN-033 期末余额 = `voucher_date <= asOfDate` 范围内的累计净额（沿用试算平衡表累计口径，不显示期初列）；
+- FIN-034 当前系统**未实现**自动损益结转 / 年结 / 利润结转至 EQUITY，资产负债表通过**虚拟权益行「未结转损益」**展示截至 `asOfDate` 累计的 REVENUE − EXPENSE 净额；
+- FIN-035 未结转损益 = Σ(REVENUE `credit - debit`) − Σ(EXPENSE `debit - credit`)，统计范围为所有 `status='POSTED'` 且 `voucher_date <= asOfDate` 的分录（自数据库可见最早起累计）；
+- FIN-036 扩展会计恒等式：`Assets = Liabilities + Posted Equity + Unclosed Profit`，API 字段 `equationValid` 为正式响应字段，使用整数（cents）严格比较 `difference === 0`；
+- FIN-037 OPEN 与 CLOSED 期间均允许查询资产负债表；资产负债表为只读操作，不触发期间写保护；
+- FIN-038 资产负债表需要 `REPORT_VIEW` 权限；
+- FIN-039 本任务不实现：本年累计资产负债表对比、自动结转、损益结转凭证生成、Year-End Carry Forward、独立 opening_balance 表、新增 EQUITY 子类型（如本年利润、利润分配）；
+- FIN-040 当前全局 seed 缺少 EQUITY 种子科目；测试 fixture 自行添加 EQUITY 科目（如 `4001 实收资本`），不修改全局 demo seed。
+
+#### 5.5.5 财务报表一致性
+
+- FIN-041 Financial Summary、Income Statement、Balance Sheet、Trial Balance 等正式财务报告统一使用 `REPORT_VIEW` 权限；凭证操作等运维接口继续使用 `ACCOUNTING_VIEW`，不因统一报表权限而扩大凭证修改权限；
+- FIN-042 Financial Summary 与 Income Statement 共享同一份 income calculation helper（`calculateIncomeForPeriod(db, period)`）：voucher_date 月份范围、POSTED only、REVENUE = `credit − debit`、EXPENSE = `debit − credit`、profit = `revenue − expense`；
+- FIN-043 Financial Summary 保留 `accounts_receivable` / `accounts_payable` 等与 Income Statement 独立的字段（语义：未收回应收 / 未付应付余额）；
+- FIN-044 Trial Balance UI 最小集成于会计凭证页面 `试算平衡表` tab：期间选择器、查询按钮、每科目期初 / 本期借方 / 本期贷方 / 期末余额、本期借贷发生额校验（`totalPeriodDebit === totalPeriodCredit`）；
+- FIN-045 Financial Summary 仅保持后端 API 修正，不补 UI（与 Income Statement 语义重叠，不值得新增页面）；不得声称"用户可在浏览器查看 Financial Summary"；
+- FIN-046 `role-accounting` 增加 `REPORT_VIEW` 权限（财务专员可访问 Trial Balance / Income Statement / Balance Sheet / Financial Summary API），保留原有 `ACCOUNTING_VIEW` 与其它财务权限；
+- FIN-047 `getAccountingLedger` 仍存在 POSTED 过滤缺失 + 无 API 路由问题，标记为 **DEFERRED**（与本任务范围外）。
+
+
 ### 5.6 生产与质量
 
 - `MFG-001` 维护 BOM、生产工单、工作中心和工艺路线；
@@ -171,4 +231,8 @@ DRAFT ──提交──> SUBMITTED ──审核──> APPROVED
 | 1.0.0 | 2026-08-29 | 登录、权限和销售订单基础流程 |
 | 1.1.0–1.9.0 | 2026-08-29 至 2026-08-30 | 供应链、财务、生产、成本、质量和 CRM 扩展 |
 | 2.0.0–2.3.0 | 2026-08-30 | 财务闭环、制造深化、质量供应链和管理扩展 |
-| 2.4.0 | 2026-08-30 | 模块化重构、扩展数据库迁移和自动化冒烟测试 |
+| 2.5.0 | 2026-08-31 | 凭证审核流程：ENTERED→SUBMITTED→POSTED / REJECTED，creator/approver 分离，试算平衡表按POSTED过滤 |
+| 2.6.0 | 2026-08-31 | 期间关闭核心：Accounting Period Integrity + Period Closing Core + Period Reopen；CLOSED 期间阻断凭证 CRUD/Submit/Approve/Reject；试算平衡表与财务报表仅计入 POSTED |
+| 2.7.0 | 2026-08-31 | 利润表：单月期间；REVENUE → 营业收入（credit-debit）；EXPENSE → 营业成本与费用（debit-credit）；POSTED only；OPEN/CLOSED 均可查询 |
+| 2.8.0 | 2026-08-31 | 资产负债表：as-of 期间末累计；ASSET/LIABILITY/EQUITY 三段；未结转损益虚拟行（自数据库可见累计 REVENUE−EXPENSE）；equationValid 整数严格比较；OPEN/CLOSED 均可查询 |
+| 2.9.0 | 2026-08-31 | 财务报表一致性收口：Financial Summary 修复为与 Income Statement 共享计算（voucher_date 范围 + direction-aware + POSTED only）；保留 AR/AP 字段；Trial Balance / Financial Summary / Income Statement / Balance Sheet 统一使用 REPORT_VIEW 权限；role-accounting 增加 REPORT_VIEW；Trial Balance 补齐最小 UI |

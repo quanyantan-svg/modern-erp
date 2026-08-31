@@ -159,7 +159,735 @@ MRP 根据需求来源读取销售订单明细，结合现有库存和计划收�
 综合评分 = 质量 × 40% + 交期 × 30% + 价格 × 20% + 服务 × 10%
 ```
 
+
+### 7.7 凭证审核流程
+
+凭证审核是财务模块的状态机扩展，确保 creator 和 approver 角色分离。
+
+#### 状态定义
+
+| 状态 | 说明 | 可执行动作 |
+|------|------|------------|
+| ENTERED | 录入完成 | submit |
+| SUBMITTED | 待审核 | approve / reject |
+| POSTED | 已审核 | — |
+| REJECTED | 已驳回 | edit 然后 ENTERED |
+
+#### 状态转换规则
+
+- `submitAccountingVoucher`：ENTERED / REJECTED → SUBMITTED；需要 `VOUCHER_SUBMIT` 权限；
+- `approveAccountingVoucher`：SUBMITTED → POSTED；需要 `VOUCHER_APPROVE` 权限；审核人不得为凭证创建人；
+- `rejectAccountingVoucher`：SUBMITTED → REJECTED；需要 `VOUCHER_APPROVE` 权限；驳回原因必填；
+- `updateAccountingVoucher`：REJECTED → ENTERED（自动重置）；ENTERED 可正常修改；SUBMITTED / POSTED 拒绝修改；
+- `deleteAccountingVoucher`：仅 ENTERED / REJECTED 可删除；SUBMITTED / POSTED 拒绝删除；
+
+#### 权限设计
+
+- `VOUCHER_SUBMIT`：提交凭证；
+- `VOUCHER_APPROVE`：审核和驳回凭证；
+- 默认情况下录入人和审核人为不同角色；`creator_id` 记录凭证创建人；`submitted_by` 记录提交人；
+
+#### SQLite 迁移
+
+通过 `migrateVoucherWorkflow()` 完成，兼容已有数据库：
+
+1. 通过 `ALTER TABLE` 添加 `rejection_reason`、`submitted_at`、`submitted_by` 列（如不存在）；
+2. 检测 `accounting_vouchers` 表的 CHECK 约束是否包含 `'ENTERED'`；
+3. 如不包含，重建表并更新 CHECK 约束为 `CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED'))`；
+4. 重建后保留已有数据，缺失状态字段的记录默认填充为 `'POSTED'`（已有凭证视为已审核）；
+5. 幂等执行，已迁移的数据库不会重复迁移；
+
+#### 审计日志
+
+- SUBMIT 操作写入动作 `SUBMIT`，说明包含凭证号；
+- APPROVE 操作写入动作 `APPROVE`，记录 `approver_id`；
+- REJECT 操作写入动作 `REJECT`，记录驳回原因；
+- UPDATE 操作在重新提交时写入说明包含 "重新提交后生效"；
+
+#### 报表过滤行为
+
+- `getTrialBalance()` 和财务汇总接口只查询 `status = 'POSTED'` 的凭证；
+- 录入中（ENTERED）和待审核（SUBMITTED）的凭证不参与期间汇总；
+
+#### API 路由
+
+- `POST /api/accounting-vouchers/:id/submit` — 提交凭证
+- `POST /api/accounting-vouchers/:id/approve` — 审核凭证
+- `POST /api/accounting-vouchers/:id/reject` — 驳回凭证（需 `reason` 字段）
+- `PATCH /api/accounting-vouchers/:id` — 修改凭证（仅 ENTERED / REJECTED）
+- `DELETE /api/accounting-vouchers/:id` — 删除凭证（仅 ENTERED / REJECTED）
+
+### 7.8 期间关闭流程
+
+期间关闭（Period Closing）是凭证审核之上的财务控制层，确保已结期间内的凭证状态稳定。
+
+#### 期间状态
+
+| 状态 | 说明 |
+|------|------|
+| OPEN | 未结，可正常录入/修改/审核凭证 |
+| CLOSED | 已结，期间内凭证操作被后端拒绝（409 冲突） |
+
+#### 期间表
+
+`period_closures` 表（`server/migrations/extended-schema.js`）：
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 主键 |
+| `period` | 期间标识，格式 `YYYY-MM`，唯一 |
+| `period_year` / `period_month` | 年/月 |
+| `closure_type` | `MONTH` / 其他；本阶段仅实现月结 |
+| `status` | `OPEN` / `CLOSED` |
+| `closed_by` / `closed_at` | 结账人与结账时间 |
+| `checklist_passed` | 结账前置检查是否通过 |
+| `created_at` | 创建时间 |
+
+#### 结账前置检查
+
+`getPeriodClosureChecklist(db, period)` 检查期间内是否存在以下状态的凭证：
+
+- ENTERED（录入中）—— 必须先提交或删除
+- SUBMITTED（待审核）—— 必须先审核或驳回
+- REJECTED（已驳回）—— 必须修改并重新提交或删除
+
+任一不通过，结账请求被拒绝（400 错误，包含失败项详情）。
+
+#### 结账 / 反结账事务一致性
+
+`closePeriod` 与 `unclosePeriod` 使用 `transaction(db, ...)` 包装：
+
+1. `UPDATE period_closures SET status=...` —— 状态变更
+2. `INSERT INTO audit_logs(...)` —— 写入审计日志（动作 `CLOSE_PERIOD` / `UNCLOSE_PERIOD`）
+
+任意一步失败则整个事务回滚，确保状态变更与审计日志原子。
+
+#### CLOSED 期间凭证保护
+
+凭证的以下操作在执行时调用 `checkPeriodNotClosedForVoucher(db, voucherDate, operation)`：
+
+- `createAccountingVoucher` —— 录入
+- `updateAccountingVoucher` —— 修改
+- `deleteAccountingVoucher` —— 删除
+- `submitAccountingVoucher` —— 提交
+- `approveAccountingVoucher` —— 审核
+- `rejectAccountingVoucher` —— 驳回
+
+若期间已 CLOSED，操作被拒绝（409 冲突，提示「会计期间 YYYY-MM 已结账，禁止 X 凭证」）。
+
+#### API 路由
+
+- `GET /api/period-closures?year=YYYY` — 列出指定年的期间记录
+- `POST /api/period-closures` — 创建期间记录（`year`、`month`）
+- `POST /api/period-closures/:id/close` — 结账（执行前置检查 + 状态变更）
+- `POST /api/period-closures/:id/unclose` — 反结账
+- `GET /api/period-closures/closure-checklist?period=YYYY-MM` — 查询结账前置检查项
+
+#### 报表过滤行为
+
+- 试算平衡表（`getTrialBalance`）、财务汇总（`getFinancialSummary`）、科目余额（`getSubjectLedger`）、日余额（`getDailyBalance`）仅查询 `status = 'POSTED'` 的凭证；
+- 已结期间内的 ENTERED / SUBMITTED / REJECTED 凭证不参与期间汇总。
+
+#### 范围限制
+
+- 仅实现月结（`closure_type = 'MONTH'`）；年结 / Year-End Carry Forward NOT_VERIFIED，不在本阶段范围。
+
+### 7.9 利润表
+
+利润表（Income Statement / Profit & Loss）将凭证审核 + 期间关闭之上形成的 POSTED 数据，按月份聚合成经营成果。
+
+#### Handler
+
+`getIncomeStatement(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`（已存在于 `server/db.js:66`）。
+
+#### SQL 聚合
+
+期间过滤使用 `voucher_date` 范围：
+
+```sql
+voucher_date >= period + '-01'
+AND voucher_date <= LAST_DAY(period)
+```
+
+避免依赖 `accounting_vouchers.period` 列（手工凭证可能为 NULL）。
+
+每科目净额（沿用试算平衡表 / 会计余额的方向规则）：
+
+| Subject Type | 净额 |
+|--------------|------|
+| REVENUE | `credit_cents - debit_cents` |
+| EXPENSE | `debit_cents - credit_cents` |
+| ASSET / LIABILITY / EQUITY | 利润表不参与 |
+
+凭证状态过滤：
+
+```sql
+accounting_vouchers.status = 'POSTED'
+```
+
+排除 ENTERED / SUBMITTED / REJECTED。
+
+#### 期间状态
+
+OPEN / CLOSED 期间均允许查询。利润表 handler **不调用** `checkPeriodNotClosed*` 系列写保护函数（只读操作）。
+
+#### API
+
+```
+GET /api/reports/income-statement?period=YYYY-MM
+```
+
+- `period` 缺失 → 400
+- `period` 非 `YYYY-MM` 格式 → 400
+- 无 `REPORT_VIEW` → 403
+- 合法请求 → 200
+
+#### Response
+
+```json
+{
+  "period": "2026-08",
+  "periodRange": { "startDate": "2026-08-01", "endDate": "2026-08-31" },
+  "revenue": 100000,
+  "expense": 60000,
+  "profit": 40000,
+  "sections": [
+    {
+      "name": "营业收入",
+      "type": "REVENUE",
+      "subtotal": 100000,
+      "subjects": [
+        { "code": "6001", "name": "主营业务收入", "amount": 100000 }
+      ]
+    },
+    {
+      "name": "营业成本与费用",
+      "type": "EXPENSE",
+      "subtotal": 60000,
+      "subjects": [
+        { "code": "6401", "name": "主营业务成本", "amount": 60000 }
+      ]
+    }
+  ]
+}
+```
+
+- 金额单位:与项目其它报表一致,使用 `cents`(整数分)
+- 零发生额科目不返回
+- `sections[]` 顺序固定:REVENUE 在前,EXPENSE 在后
+
+#### Schema 限制
+
+当前 `accounting_subjects.type` 仅支持 `ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE`,**没有独立 COST 类型**。`主营业务成本`（subject-007）当前归类为 EXPENSE,因此利润表展示口径合并为「营业成本与费用」,不强行区分成本 / 销售费用 / 管理费用 / 财务费用。
+
+#### 不在本任务范围
+
+- 本年累计 / 同比 / 环比 / 多月对比
+- 资产负债表 / 现金流量表
+- 年结 / Year-End Carry Forward
+- BI / 自定义报表设计器
+- 新增 COST / TAX / SELLING_EXPENSE 等科目类型
+- 修改 `createAccountingVoucher` 补 `period` 列
+
+#### UI
+
+最小集成于 `src/pages/accounting.jsx` 报表 tab,沿用现有 API 调用与权限风格。前端隐藏菜单由 `REPORT_VIEW` 控制,但 **API 权限仍是最终安全边界**。
+
+### 7.10 资产负债表
+
+资产负债表（Balance Sheet）反映截至指定期间月末的财务状况，是 as-of / period-end 时点报表，与利润表（period-based）的口径不同。
+
+#### Handler
+
+`getBalanceSheet(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`。
+
+#### 期间语义
+
+- 入参：`period=YYYY-MM`
+- `asOfDate = LAST_DAY(period)`（月末）
+- 所有余额按 `voucher_date <= asOfDate` 累计计算
+- 不显示「期初余额」列（资产负债表标准形态，仅显示期末时点）
+
+#### 期末余额计算
+
+沿用 `getAccountingBalances` 的方向规则：
+
+| Subject Type | 净额公式 |
+|--------------|---------|
+| ASSET | `debit_total - credit_total` |
+| LIABILITY | `credit_total - debit_total` |
+| EQUITY | `credit_total - debit_total` |
+
+聚合 SQL：
+
+```sql
+SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+FROM accounting_entries e
+JOIN accounting_vouchers v ON v.id = e.voucher_id
+JOIN accounting_subjects s ON s.id = e.subject_id
+WHERE v.status = 'POSTED'
+  AND v.voucher_date <= ?
+  AND s.type IN ('ASSET', 'LIABILITY', 'EQUITY')
+GROUP BY s.id
+```
+
+#### 未结转损益（Unclosed Accumulated Profit）
+
+当前系统**没有自动损益结转**机制。`本年利润` 或 `利润分配` 之类的 EQUITY 子科目也不存在。为使扩展恒等式成立，资产负债表引入虚拟行「未结转损益」：
+
+```sql
+SELECT
+  SUM(CASE WHEN e.direction='CREDIT' THEN e.amount_cents ELSE 0 END)
+  - SUM(CASE WHEN e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END) AS revenue_net
+FROM accounting_entries e
+JOIN accounting_vouchers v ON v.id = e.voucher_id
+JOIN accounting_subjects s ON s.id = e.subject_id
+WHERE v.status = 'POSTED'
+  AND v.voucher_date <= ?
+  AND s.type = 'REVENUE';
+
+-- 同理 expense_net = debit_total - credit_total (EXPENSE)
+
+unclosed_profit = revenue_net - expense_net
+```
+
+**统计范围**：所有 `status='POSTED'` 且 `voucher_date <= asOfDate` 的 REVENUE / EXPENSE 分录。**自数据库可见最早起累计**，不假设会计年度起点为 1 月 1 日（当前 schema 无 fiscal year 字段）。
+
+**该虚拟行不写入数据库**，仅为查询展示用。
+
+#### 扩展会计恒等式
+
+由于未结转损益是虚拟行，标准恒等式 `A = L + E` 在当前系统下形式化为：
+
+```
+Assets = Liabilities + Posted Equity + Unclosed Profit
+```
+
+#### API
+
+```
+GET /api/reports/balance-sheet?period=YYYY-MM
+```
+
+- `period` 缺失 → 400
+- `period` 非 `YYYY-MM` → 400
+- 月份超出 01-12 → 400
+- 无 `REPORT_VIEW` → 403
+- 合法请求 → 200
+
+#### Response
+
+```json
+{
+  "period": "2026-08",
+  "asOfDate": "2026-08-31",
+  "assets": {
+    "total": 1000000,
+    "subjects": [
+      { "code": "1001", "name": "库存现金", "amount": 50000 },
+      { "code": "1002", "name": "银行存款", "amount": 800000 }
+    ]
+  },
+  "liabilities": {
+    "total": 200000,
+    "subjects": [
+      { "code": "2202", "name": "应付账款", "amount": 200000 }
+    ]
+  },
+  "equity": {
+    "postedEquity": 500000,
+    "unclosedProfit": 300000,
+    "total": 800000,
+    "subjects": [
+      { "code": "4001", "name": "实收资本", "amount": 500000 }
+    ]
+  },
+  "totalAssets": 1000000,
+  "totalLiabilitiesAndEquity": 1000000,
+  "difference": 0,
+  "equationValid": true
+}
+```
+
+#### equationValid 规则
+
+```javascript
+const totalAssets = assets.total;
+const totalLiabilitiesAndEquity = liabilities.total + equity.postedEquity + equity.unclosedProfit;
+const difference = totalAssets - totalLiabilitiesAndEquity;
+const equationValid = difference === 0;
+```
+
+- 使用整数（cents）严格比较，无浮点容差
+- `equationValid` 为正式响应字段，每次请求均返回
+- UI 必须如实展示 `difference` 与 `equationValid`，不平衡时不隐藏差额，不强制修改数字使等式成立
+
+#### EQUITY 测试数据
+
+当前全局 seed 中无 EQUITY 科目。测试 fixture 在 `before()` 中通过直接 DB 插入：
+
+```sql
+INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active)
+VALUES ('subject-4001', '4001', '实收资本', 'EQUITY', 'CREDIT', 1)
+```
+
+**不修改全局 production demo seed**——除非 `document.md` 明确要求默认系统必须存在 EQUITY 科目。
+
+#### UI
+
+最小集成于 `src/pages/accounting.jsx`，新增 `资产负债表` tab：
+
+- 期间选择器 + 查询按钮
+- 三段表格：资产 / 负债 / 权益
+- 权益段含「未结转损益」虚拟行（不可编辑、不持久化）
+- 顶部显示 `equationValid` 状态与 `difference`
+- 平衡时：「资产 = 负债 + 权益」（绿色指示）
+- 不平衡时：明显显示差额（如红色横幅 + 差额金额）
+- 不通过修改报表数字强行让等式成立
+
+#### Schema 限制
+
+当前 `accounting_subjects` 与 `accounting_vouchers` schema 不包含：
+- fiscal_year / 会计年度字段
+- opening_balance / 期初余额表
+- 本年利润 / 利润分配 EQUITY 子科目
+- year-end / 期间结转凭证生成机制
+
+因此资产负债表只能做到「as-of 期间末累计 + 未结转损益虚拟展示」，不能等同于企业级完整资产负债表。
+
+#### 不在本任务范围
+
+- 现金流量表
+- 年结 / Year-End Carry Forward / 自动结转
+- 损益结转凭证生成
+- 独立 opening_balance 表
+- 本年累计对比 / 同比 / 环比
+- 新增 EQUITY 子类型（本年利润、利润分配等）
+- 多组织 / 多账套 / 多币种
+- BI / 自定义报表设计器
+- 修改 `createAccountingVoucher` period 字段
+- 修改全局 demo seed（仅测试 fixture 添加 EQUITY）
 评分结果按阈值划分为 A、B、C、D 等级。
+
+### 7.11 财务报表一致性收口
+
+#### 共享 Income Calculation Helper
+
+`calculateIncomeForPeriod(db, period)`（`server/modules/extended.js`）：
+
+- 纯业务 helper，不接收 `res`，不做 HTTP 权限校验，不发送 response
+- 入参 `period` 为 `YYYY-MM`，缺省回退当前月；非法格式抛 `Error`
+- SQL 使用 `voucher_date` 月份范围 + `status='POSTED'`
+- REVENUE = `credit − debit`，EXPENSE = `debit − credit`
+- 返回 `{ period, periodRange, revenue, expense, profit }`
+
+#### 修正后的 Financial Summary
+
+`getFinancialSummary()` 调用 `calculateIncomeForPeriod` 获取 income 三项，再加 AR/AP 字段：
+
+```javascript
+const income = calculateIncomeForPeriod(db, period);
+const ar = ...;  // accounts_receivable（独立语义）
+const ap = ...;  // accounts_payable（独立语义）
+return { period, revenue, expense, profit, accounts_receivable, accounts_payable };
+```
+
+**修正点**:
+- ❌ `v.period` 列 → ✅ `voucher_date` 月份范围
+- ❌ `SUM(amount_cents)` 忽略方向 → ✅ direction-aware
+- ❌ 销售退回虚增收入 → ✅ 正确减收入
+
+**保留字段**:
+- `period` / `revenue` / `expense` / `profit`
+- `accounts_receivable` / `accounts_payable`（与 Income Statement 独立）
+
+#### 报表权限统一
+
+| 报表 | 权限 |
+|------|------|
+| Income Statement | `REPORT_VIEW` |
+| Balance Sheet | `REPORT_VIEW` |
+| Trial Balance | `REPORT_VIEW` |
+| Financial Summary | `REPORT_VIEW` |
+| 凭证操作 / 余额 / 账簿 | `ACCOUNTING_VIEW` |
+
+**`role-accounting` 调整**:
+- + `REPORT_VIEW`
+- 保留 `ACCOUNTING_VIEW` / `ORDERS_VIEW` / `PURCHASE_ORDERS_VIEW` / 出纳 / 银行 / 票据 / 固定资产 等原有权限
+
+#### Trial Balance UI
+
+最小集成于 `src/pages/accounting.jsx` `试算平衡表` tab：
+
+- 期间选择器 + 查询按钮
+- 每科目表格：期初 / 本期借方 / 本期贷方 / 期末
+- 顶部本期借贷发生额校验：`totalPeriodDebit === totalPeriodCredit`
+- 平衡显示绿色 `借方发生额 = 贷方发生额`，不平衡显示差额
+- loading / error / empty 状态
+
+仅做本期借贷发生额校验，**不**与资产负债表的 `Assets = Liabilities + Equity` 混为一谈。
+
+#### Financial Summary UI
+
+**不创建 UI**。保持后端 API 修正即可。不得声称"用户可在浏览器查看 Financial Summary"。
+
+#### Deferred
+
+- `getAccountingLedger`：POSTED 过滤缺失 + 无 API 路由 → 标记 DEFERRED，后续独立处理
+- Demo data expansion：0 POSTED vouchers + 0 EQUITY subjects → DEMO READINESS ISSUE，不在本任务范围
+
+### 7.12 Production Safety（Phase 2A）
+
+#### Demo Seed Gating
+
+`createDatabase()` 启动时拆分为两阶段 seed：
+
+- `seedSchema(db)` —— **始终执行**：permissions、roles、role_permissions、accounting_subjects（系统运行必需）
+- `seedDemoData(db)` —— **条件执行**：demo 账号（admin/admin123 等弱密码）、demo 业务数据、demo 销售订单
+
+是否执行 demo seed 由 `shouldSeedDemoData()` 决定：
+
+```javascript
+function shouldSeedDemoData() {
+  if (process.env.ERP_SEED_DEMO === 'true') return true;  // 强制种子（任意环境）
+  if (process.env.NODE_ENV === 'production') return false;  // 生产禁止
+  return true;  // dev/test 默认（保持现有体验）
+```
+
+**生产语义**：`NODE_ENV=production` 时即使数据库为空也**不会**自动创建弱密码账号；如需演示部署可显式 `ERP_SEED_DEMO=true` 覆盖。
+
+#### reset-data 生产保护
+
+`server/reset-data.js` 起始处加入：
+
+```javascript
+if (process.env.NODE_ENV === 'production') {
+  console.error('错误：生产环境禁止执行 reset-data。');
+  process.exit(1);
+}
+```
+
+删除 SQLite 文件等破坏性操作在生产环境被硬阻断，不依赖交互式确认。
+
+#### 环境变量
+
+`process.env` 直接读取，**不引入 dotenv**。生产环境变量由 systemd `EnvironmentFile` 注入。
+
+实际支持的 env 列表见 `.env.example`：
+
+| 变量 | 用途 | 默认 |
+|------|------|------|
+| `NODE_ENV` | `development` / `production` | — |
+| `PORT` | HTTP 监听端口 | 3001 |
+| `ERP_DB_PATH` | SQLite 数据库绝对路径 | `./data/erp.db` |
+| `SESSION_HOURS` | 会话有效期（小时） | 12 |
+| `LOGIN_MAX_ATTEMPTS` | 登录失败锁定阈值 | 5 |
+| `LOGIN_LOCK_MINUTES` | 锁定时长（分钟） | 15 |
+| `TOKEN_LENGTH` | Token 字节长度 | 32 |
+| `ERP_SEED_DEMO` | demo 种子开关 | dev: `true`；prod: `false` |
+
+#### 生产数据库路径
+
+- 开发：`./data/erp.db`（项目内）
+- 生产：`/var/lib/modern-erp/erp.db`（与源代码分离）
+- 必须确保父目录存在并由 `erp` 用户拥有
+
+#### 不在本任务范围
+
+- 进程管理（systemd unit 模板）→ Phase 2C
+- Nginx 反向代理配置 → Phase 2C
+- 备份 / 恢复 → Phase 2B
+- 首次管理员初始化流程 → Phase 2C
+- HTTPS / 监控 / 安全组
+
+### 7.13 Backup / Restore（Phase 2B）
+
+#### 工具
+
+- `scripts/backup-db.mjs` — 导出 `runBackup({ dbPath, backupDir, retention, now })`
+- `scripts/restore-db.mjs` — 导出 `runRestore({ backupPath, dbPath, backupDir, isProduction, confirm })`
+- `pnpm backup-db` / `pnpm restore-db` — CLI 入口
+
+#### 一致性策略
+
+Node `node:sqlite` (>= 22.13) 的 `DatabaseSync` **不暴露** C `sqlite3_backup_*` API。本项目使用 SQLite 官方一致的 `VACUUM INTO <path>` 命令：
+
+- `VACUUM INTO` 在内部完成 WAL checkpoint，将所有已提交事务物化到新文件
+- 新备份文件**没有** `-wal` / `-shm` 旁路文件，自包含
+- 与正在运行的应用连接不冲突(读+写 vs 读+写指向不同文件)
+
+#### 文件命名
+
+`erp-YYYYMMDD-HHmmss.db`（本地时间戳），safety 备份 `safety-YYYYMMDD-HHmmss.db`。
+
+#### 生产恢复保护
+
+`NODE_ENV=production` 必须显式传入 `--confirm-restore`，否则立即拒绝：
+
+```javascript
+if (isProduction && !confirm) {
+  return { success: false, error: '生产环境必须显式传入 --confirm-restore ...' };
+}
+```
+
+#### 恢复流程
+
+1. 验证备份文件存在 + 大小 > 0
+2. 打开备份执行 `PRAGMA integrity_check`（必须 `ok`）
+3. 拒绝 backup 与 target 相同（防止覆盖）
+4. 创建 safety 备份（VACUUM INTO safetyPath）
+5. 删除 target 的 `-wal` / `-shm`
+6. VACUUM INTO `<target>.restore.tmp` 后 rename 到 target
+7. 恢复后再次 `PRAGMA integrity_check`
+8. 任意验证失败 → 停止恢复 → target 未修改
+
+#### 关键安全保证
+
+- `pnpm backup-db` 失败时**自动清理**备份文件
+- `pnpm restore-db` 任何步骤失败**不修改** target DB
+- `safety-` 备份保证可回滚到执行恢复前一刻
+- 生产恢复不依赖交互式提示，可被 SSH / systemd ExecStart 安全调用
+
+#### 不在本任务范围
+
+- 备份调度（systemd timer / cron）→ Phase 2C
+- 备份加密 / 远程上传 → 后续
+- 备份保留策略自动化（已包含 retention 默认 30）
+- 自动服务启停（恢复后由运维手动重启）
+
+### 7.14 First Admin Bootstrap（Phase 2C-1）
+
+Phase 2A 阻断了生产环境的 demo seed 自动创建,空生产 DB 因此无管理员可登录。`scripts/setup-admin.mjs` 是创建首个管理员的**唯一**显式路径。
+
+#### 用法
+
+```bash
+node scripts/setup-admin.mjs --username admin --password 'Strong-Production-Pwd-2026!'
+# 或
+pnpm setup-admin -- --username admin --password 'Strong-Production-Pwd-2026!'
+```
+
+#### 工具设计
+
+导出 `setupAdmin({ dbPath, username, password, displayName, now })` 供测试。CLI 主入口处理 `process.argv` 解析与 isMainModule 检测(跨平台)。
+
+#### 安全规则
+
+| 规则 | 实现 |
+|------|------|
+| `username` 必填 | `if (!username || !username.trim()) reject` |
+| `password` 必填 | `if (!password) reject` |
+| 密码长度 ≥ 12 | `if (password.length < 12) reject` |
+| 拒绝已知弱密码 | `WEAK_DEMO_PASSWORDS` 黑名单(case-insensitive) |
+| 用户已存在拒绝覆盖 | `SELECT id FROM users WHERE username = ?` 检查 |
+| admin role 不存在失败 | `SELECT id FROM roles WHERE code='ADMIN'` 检查 |
+| 不输出明文密码 | CLI 输出仅 username / userId / role |
+| 不写入文件 / 日志 | 工具仅 `INSERT INTO users` |
+| 失败返回 non-zero | `process.exit(1)` |
+
+#### 行为约束
+
+- ✅ 允许 `NODE_ENV=production` 下运行 —— 显式生产初始化工具
+- ❌ **应用启动绝不自动调用** —— `server/index.js` 不导入此脚本
+- ✅ 复用现有 `hashPassword` 函数(无新算法)
+- ✅ 使用现有 users / roles schema,userId 固定为 `user-admin-init`
+- ✅ 不创建 demo 业务数据 / 其他 demo 用户
+
+#### 完整生产初始化序列
+
+```
+deploy → start service (empty DB + schema created)
+  → explicit setup-admin → login → use ERP
+```
+
+#### 不在本任务范围
+
+- 自动服务启停 → Phase 2C-2A systemd
+- 批量用户创建 / 密码重置 → 后续
+- 多管理员并行创建 → 后续(当前每次只创建 1 个)
+评分结果按阈值划分为 A、B、C、D 等级。
+
+### 7.15 systemd Service + Backup Timer（Phase 2C-2A）
+
+本阶段新增最小生产 systemd 文件,不引入 PM2 / Docker / Nginx / HTTPS。
+
+#### 主应用服务
+
+`deploy/systemd/modern-erp.service`:
+
+- `User=modern-erp` / `Group=modern-erp`;
+- `WorkingDirectory=/opt/modern-erp`;
+- `EnvironmentFile=/etc/modern-erp/env`;
+- `ExecStart=/usr/bin/node server/index.js`(等价于当前 `pnpm start` 的 Node production 启动入口);
+- `Restart=on-failure`, `RestartSec=5s`;
+- `KillSignal=SIGTERM`,与 `server/index.js` 当前 SIGTERM graceful shutdown 兼容;
+- 不设置 `HOST`,Node 继续绑定 `127.0.0.1:3001`。
+
+#### 备份服务与 timer
+
+`deploy/systemd/modern-erp-backup.service` 为 `Type=oneshot`,使用同一 `modern-erp` 用户和 `/etc/modern-erp/env`,仅调用:
+
+```text
+/usr/bin/node scripts/backup-db.mjs
+```
+
+不调用 restore,不停止主应用服务。
+
+`deploy/systemd/modern-erp-backup.timer`:
+
+- `OnCalendar=*-*-* 02:30:00`;
+- `Persistent=true`;
+- `Unit=modern-erp-backup.service`。
+
+#### 生产目录假设
+
+- Application: `/opt/modern-erp`;
+- Database: `/var/lib/modern-erp/erp.db`;
+- Backups: `/var/backups/modern-erp`;
+- Environment: `/etc/modern-erp/env`;
+- Service user: `modern-erp`。
+
+`/etc/modern-erp/env` 至少包含 `NODE_ENV=production`, `PORT=3001`, `ERP_DB_PATH=/var/lib/modern-erp/erp.db`, `ERP_BACKUP_DIR=/var/backups/modern-erp` 和当前 session/login 配置。
+
+#### 验证
+
+新增 `server/systemd.test.js` 静态验证 unit 文件结构、路径、`ExecStart`、`EnvironmentFile`、`User/Group`、timer 到 service 的映射、backup script 存在且 backup service 不调用 restore。Windows 环境不运行 `systemctl`;Ubuntu 上线前仍需执行 `systemd-analyze verify`。
+
+### 7.16 Nginx Reverse Proxy（Phase 2C-2B）
+
+本阶段新增最小 HTTP reverse proxy 配置,不配置 HTTPS / Certbot / 域名 / Tencent Cloud 操作。
+
+#### 架构
+
+```text
+Browser → Nginx :80 → http://127.0.0.1:3001 → Node ERP
+```
+
+Node 仍然负责 API、production `dist` 和 React SPA fallback。Nginx 不直接 serve `dist/`,也不为 `/api`、`/assets` 或 SPA routes 创建第二套路由。
+
+#### 配置
+
+`deploy/nginx/modern-erp.conf` 只包含一个 server block 和一个 `location /`:
+
+- `listen 80`;
+- `listen [::]:80`;
+- `server_name _`;
+- `client_max_body_size 1m`;
+- `proxy_pass http://127.0.0.1:3001`;
+- proxy headers:`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`;
+- timeout:`proxy_connect_timeout 10s`, `proxy_send_timeout 60s`, `proxy_read_timeout 60s`。
+
+不添加复杂缓存规则,不添加 websocket 配置,不开放 Node 的 `3001` 公网访问。
+
+#### 验证
+
+新增 `server/nginx.test.js` 静态验证 Nginx 配置文件存在、HTTP listen、单一 `location /`、统一 proxy、必要 headers、body size、timeout,并防止出现 `root` / `alias` / `try_files` / `/api` 分流 / HTTPS / websocket 相关配置。Windows 环境不运行 `nginx -t`;Ubuntu 上线前仍需执行 `nginx -t` 并分别检查:
+
+```text
+curl http://127.0.0.1:3001/api/health
+curl http://127.0.0.1/api/health
+```
 
 ## 8. API 设计约定
 
