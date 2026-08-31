@@ -36,7 +36,10 @@ export const PERMISSIONS = [
   ['PRODUCTION_ORDERS_CREATE', '新建生产工单'],
   ['PRODUCTION_ORDERS_START', '开始生产'],
   ['PRODUCTION_ORDERS_COMPLETE', '完成生产'],
-  ['ACCOUNTING_VIEW', '查看财务凭证'],  ['CASH_JOURNALS_VIEW', '查看现金日记账'],
+  ['ACCOUNTING_VIEW', '查看财务凭证'],
+  ['VOUCHER_SUBMIT', '提交凭证'],
+  ['VOUCHER_APPROVE', '审核凭证'],
+  ['CASH_JOURNALS_VIEW', '查看现金日记账'],
   ['CASH_JOURNALS_MANAGE', '管理现金日记账'],
   ['BANK_ACCOUNTS_VIEW', '查看银行账户'],
   ['BANK_ACCOUNTS_MANAGE', '管理银行账户'],
@@ -150,6 +153,83 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE accounting_entries ADD COLUMN line_no INTEGER DEFAULT 1');
   db.exec("UPDATE accounting_vouchers SET period=substr(voucher_date,1,7) WHERE period IS NULL; UPDATE accounting_vouchers SET updated_at=created_at WHERE updated_at IS NULL");
   db.exec('UPDATE users SET name=display_name WHERE name IS NULL');
+
+  // Migration: Fix production_orders CHECK constraint to include PENDING status
+  const migrateProductionOrdersCheck = () => {
+    try {
+      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='production_orders'").get()?.sql || '';
+      if (currentSql.includes('PENDING')) return;
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS production_orders_new (
+          id TEXT PRIMARY KEY,
+          order_no TEXT NOT NULL UNIQUE,
+          product_id TEXT NOT NULL,
+          quantity REAL NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('DRAFT','PENDING','IN_PROGRESS','COMPLETED','CANCELLED')),
+          planned_start TEXT,
+          planned_finish TEXT,
+          actual_start TEXT,
+          actual_finish TEXT,
+          remark TEXT NOT NULL DEFAULT '',
+          creator_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          bom_id TEXT
+        );
+      `);
+      db.exec('INSERT INTO production_orders_new SELECT * FROM production_orders');
+      db.exec('DROP TABLE production_orders');
+      db.exec('ALTER TABLE production_orders_new RENAME TO production_orders');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_status ON production_orders(status)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id)');
+    } catch (e) { console.error('Migration production_orders CHECK failed:', e.message); }
+  };
+  migrateProductionOrdersCheck();
+  // Migration: Voucher workflow - add new columns and update CHECK constraint
+  const migrateVoucherWorkflow = () => {
+    try {
+      // Add new columns if they do not exist
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN rejection_reason TEXT"); } catch (e) { }
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_at TEXT"); } catch (e) { }
+      try { db.exec("ALTER TABLE accounting_vouchers ADD COLUMN submitted_by TEXT"); } catch (e) { }
+      
+      // Check if CHECK constraint needs updating
+      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='accounting_vouchers'").get()?.sql || '';
+      if (!currentSql.includes("'ENTERED'")) {
+        // Need to rebuild table with new CHECK constraint
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS accounting_vouchers_new (
+            id TEXT PRIMARY KEY,
+            voucher_no TEXT NOT NULL UNIQUE,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            voucher_date TEXT NOT NULL,
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            voucher_word_id TEXT,
+            period TEXT,
+            status TEXT NOT NULL DEFAULT 'ENTERED' CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED')),
+            attachment_count INTEGER DEFAULT 0,
+            approver_id TEXT,
+            approved_at TEXT,
+            updated_at TEXT,
+            rejection_reason TEXT,
+            submitted_at TEXT,
+            submitted_by TEXT,
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          );
+        `);
+        // Copy data preserving existing status values
+        db.exec("INSERT INTO accounting_vouchers_new (id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, status, attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by) SELECT id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, voucher_word_id, period, COALESCE(status, 'POSTED'), attachment_count, approver_id, approved_at, updated_at, rejection_reason, submitted_at, submitted_by FROM accounting_vouchers");
+        db.exec('DROP TABLE accounting_vouchers');
+        db.exec('ALTER TABLE accounting_vouchers_new RENAME TO accounting_vouchers');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
+      }
+    } catch (e) { console.error('Migration voucher workflow failed:', e.message); }
+  };
+  migrateVoucherWorkflow();
+
   return db;
 }
 
@@ -678,7 +758,7 @@ function migrate(db) {
       order_no TEXT NOT NULL UNIQUE,
       product_id TEXT NOT NULL,
       quantity REAL NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','IN_PROGRESS','COMPLETED','CANCELLED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','PENDING','IN_PROGRESS','COMPLETED','CANCELLED')),
       planned_start TEXT,
       planned_finish TEXT,
       actual_start TEXT,
@@ -810,14 +890,28 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
+      user_id TEXT,
       action TEXT NOT NULL,
       entity_type TEXT NOT NULL,
       entity_id TEXT,
       detail TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id)
+      created_at TEXT NOT NULL
     );
+
+      -- 登录尝试记录表
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        ip_address TEXT NOT NULL DEFAULT '',
+        success INTEGER NOT NULL DEFAULT 0,
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        locked_until TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_username ON login_attempts(username);
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip_address);
 
     CREATE TABLE IF NOT EXISTS contacts (
       id TEXT PRIMARY KEY,
@@ -1012,7 +1106,7 @@ function normalizeCostRates(db) {
   `);
 }
 
-function seed(db) {
+function seedSchema(db) {
   const now = new Date().toISOString();
   const insertPermission = db.prepare('INSERT OR IGNORE INTO permissions(code, name) VALUES (?, ?)');
   for (const permission of PERMISSIONS) insertPermission.run(...permission);
@@ -1030,7 +1124,7 @@ function seed(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
     'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
@@ -1039,6 +1133,21 @@ function seed(db) {
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
     for (const permission of permissions) insertRolePermission.run(roleId, permission);
   }
+
+  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
+  for (const s of [
+    ['subject-001', '1001', '库存现金', 'ASSET', 'DEBIT'],
+    ['subject-002', '1002', '银行存款', 'ASSET', 'DEBIT'],
+    ['subject-003', '1122', '应收账款', 'ASSET', 'DEBIT'],
+    ['subject-004', '1405', '库存商品', 'ASSET', 'DEBIT'],
+    ['subject-005', '2202', '应付账款', 'LIABILITY', 'CREDIT'],
+    ['subject-006', '6001', '主营业务收入', 'REVENUE', 'CREDIT'],
+    ['subject-007', '6401', '主营业务成本', 'EXPENSE', 'DEBIT'],
+  ]) insertSubject.run(...s);
+}
+
+function seedDemoData(db) {
+  const now = new Date().toISOString();
 
   const insertUser = db.prepare('INSERT OR IGNORE INTO users(id, username, display_name, password_hash, password_salt, role_id, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)');
   for (const user of [
@@ -1086,21 +1195,25 @@ function seed(db) {
     insertInventory.run(wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
   }
 
-  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
-  for (const s of [
-    ['subject-001', '1001', '库存现金', 'ASSET', 'DEBIT'],
-    ['subject-002', '1002', '银行存款', 'ASSET', 'DEBIT'],
-    ['subject-003', '1122', '应收账款', 'ASSET', 'DEBIT'],
-    ['subject-004', '1405', '库存商品', 'ASSET', 'DEBIT'],
-    ['subject-005', '2202', '应付账款', 'LIABILITY', 'CREDIT'],
-    ['subject-006', '6001', '主营业务收入', 'REVENUE', 'CREDIT'],
-    ['subject-007', '6401', '主营业务成本', 'EXPENSE', 'DEBIT'],
-  ]) insertSubject.run(...s);
-
   db.prepare("INSERT OR IGNORE INTO sales_orders (id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,created_at,updated_at) VALUES ('order-demo-001','SO-DEMO-001','customer-001','SUBMITTED',684300,'首张演示订单，等待销售主管审核','user-sales',?,?,?)").run(now, now, now);
   db.prepare("INSERT OR IGNORE INTO sales_order_items (id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES ('item-demo-001','order-demo-001','product-001',2,259900,519800,1)").run();
   db.prepare("INSERT OR IGNORE INTO sales_order_items (id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES ('item-demo-002','order-demo-001','product-002',5,32900,164500,2)").run();
   db.prepare("INSERT OR IGNORE INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES ('audit-demo-001','user-sales','CREATE','SALES_ORDER','order-demo-001','创建并提交演示订单 SO-DEMO-001',?)").run(now);
+}
+
+// demo seed gating: production 默认禁止;开发/测试保持默认行为
+// - ERP_SEED_DEMO=true  → 强制种子(任意环境)
+// - NODE_ENV=production → 不种子(除非 ERP_SEED_DEMO=true)
+// - 其他(开发/测试) → 种子(保留现有测试 / 本地体验)
+export function shouldSeedDemoData() {
+  if (process.env.ERP_SEED_DEMO === 'true') return true;
+  if (process.env.NODE_ENV === 'production') return false;
+  return true;
+}
+
+function seed(db) {
+  seedSchema(db);
+  if (shouldSeedDemoData()) seedDemoData(db);
 }
 
 export function transaction(db, work) {
@@ -1118,3 +1231,4 @@ export function transaction(db, work) {
 export function id() {
   return randomUUID();
 }
+

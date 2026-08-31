@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+﻿import { createHash, randomBytes } from 'node:crypto';
 import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
 import { audit } from './lib/audit.js';
 import {
@@ -13,12 +13,12 @@ import {
   createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
   createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getFinancialSummary, getInventoryStatus, getSalesAnalysis,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
   listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
   listOqcInspections, listPeriodClosures, listRoutingOperations,
-  listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters,
+  closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
 import {
@@ -35,7 +35,10 @@ import {
   setSecurityHeaders,
 } from './lib/http.js';
 
-const SESSION_HOURS = 12;
+const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
+const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
+const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
+const TOKEN_LENGTH = Number(process.env.TOKEN_LENGTH || 32);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
 
 export function createApp(db, options = {}) {
@@ -65,8 +68,8 @@ async function handleApi(db, req, res, url) {
   if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
   if (req.method === 'POST' && pathname === '/api/auth/login') return login(db, req, res);
 
-  const actor = authenticate(db, req);
   if (req.method === 'POST' && pathname === '/api/auth/logout') return logout(db, req, res);
+  const actor = authenticate(db, req);
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
 
@@ -175,6 +178,16 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/voucher-templates' && req.method === 'GET') return listVoucherTemplates(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'GET') return listPeriodClosures(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'POST') return createPeriodClosure(db, req, res, actor);
+  // Period Closure Operations
+  const periodClosureMatch = pathname.match(/^\/api\/period-closures\/([^/]+)\/(close|unclose)$/);
+  if (periodClosureMatch && req.method === 'POST') {
+    const closureId = periodClosureMatch[1];
+    const action = periodClosureMatch[2];
+    if (action === 'close') return closePeriod(db, req, res, actor, closureId);
+    if (action === 'unclose') return unclosePeriod(db, req, res, actor, closureId);
+  }
+  // Closure Checklist
+  if (pathname === '/api/period-closures/closure-checklist' && req.method === 'GET') return getClosureChecklist(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'GET') return listMrpPlans(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'POST') return createMrpPlan(db, req, res, actor);
   if (pathname === '/api/mrp-plans/generate' && req.method === 'POST') return generateMrp(db, req, res, actor);
@@ -210,14 +223,30 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/alerts/:id/resolve' && req.method === 'POST') return resolveAlert(db, req, res, actor);
   // Dashboard Reports
   if (pathname === '/api/reports/financial-summary' && req.method === 'GET') return getFinancialSummary(db, res, actor, url);
+  if (pathname === '/api/reports/income-statement' && req.method === 'GET') return getIncomeStatement(db, res, actor, url);
+  if (pathname === '/api/reports/balance-sheet' && req.method === 'GET') return getBalanceSheet(db, res, actor, url);
   if (pathname === '/api/reports/inventory-status' && req.method === 'GET') return getInventoryStatus(db, res, actor, url);
   if (pathname === '/api/reports/sales-analysis' && req.method === 'GET') return getSalesAnalysis(db, res, actor, url);
   if (pathname === '/api/bank-statements' && req.method === 'GET') return listBankStatements(db, res, actor, url);
   if (pathname === '/api/bank-statements' && req.method === 'POST') return createBankStatement(db, req, res, actor);
   if (pathname === '/api/bank-reconciliations' && req.method === 'GET') return listBankReconciliations(db, res, actor, url);
   if (pathname === '/api/bank-reconciliations' && req.method === 'POST') return createBankReconciliation(db, req, res, actor);
-  if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, req, res, actor, url);
+  if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
+  // Accounting Voucher Workflow
+  const voucherActionMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/(submit|approve|reject)$/);
+  if (voucherActionMatch && req.method === 'POST') {
+    const voucherId = voucherActionMatch[1];
+    const action = voucherActionMatch[2];
+    if (action === 'submit') return submitAccountingVoucher(db, req, res, actor, voucherId);
+    if (action === 'approve') return approveAccountingVoucher(db, req, res, actor, voucherId);
+    if (action === 'reject') return rejectAccountingVoucher(db, req, res, actor, voucherId);
+  }
+  const avPatchMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)$/);
+  if (avPatchMatch && req.method === 'PATCH') return updateAccountingVoucher(db, req, res, actor, avPatchMatch[1]);
+  if (avPatchMatch && req.method === 'DELETE') return deleteAccountingVoucher(db, req, res, actor, avPatchMatch[1]);
+  // Audit Logs
+  if (pathname === '/api/audit-logs' && req.method === 'GET') return listAuditLogs(db, res, actor, url);
 
 
   // Purchase Receipts
@@ -343,26 +372,106 @@ async function handleApi(db, req, res, url) {
 }
 
 async function login(db, req, res) {
+  const ip = getClientIp(req);
+  const now = new Date();
+  
+  // Check if account is locked due to too many failed attempts
+  const lockedAttempt = db.prepare(`
+    SELECT * FROM login_attempts 
+    WHERE username = ? AND success = 0 AND locked_until > ?
+    ORDER BY updated_at DESC LIMIT 1
+  `).get(req.body?.username || '', now.toISOString());
+  
+  if (lockedAttempt) {
+    const remainingMinutes = Math.ceil((new Date(lockedAttempt.locked_until) - now) / 60000);
+    return send(res, 429, { 
+      error: '登录失败次数过多，请稍后再试',
+      code: 'ACCOUNT_LOCKED',
+      retryAfter: remainingMinutes
+    });
+  }
+  
   const body = await readJson(req);
   const username = requiredText(body.username, '用户名', 50);
   const password = requiredText(body.password, '密码', 100);
+  
   const row = db.prepare(`
     SELECT u.*, r.name role_name, r.code role_code FROM users u JOIN roles r ON r.id=u.role_id
     WHERE u.username=? COLLATE NOCASE
   `).get(username);
+  
   if (!row || !row.active || !verifyPassword(password, row.password_salt, row.password_hash)) {
-    audit(db, row?.id, 'LOGIN_FAILED', 'AUTH', null, username);
-    throw new HttpError(401, '用户名或密码错误');
+    // Record failed attempt
+    const attemptId = id();
+    const existingAttempt = db.prepare(`
+      SELECT * FROM login_attempts 
+      WHERE username = ? AND success = 0 AND locked_until IS NULL
+      ORDER BY updated_at DESC LIMIT 1
+    `).get(username);
+    
+    if (existingAttempt) {
+      const newCount = existingAttempt.attempt_count + 1;
+      if (newCount >= LOGIN_MAX_ATTEMPTS) {
+        // Lock the account
+        const lockUntil = new Date(now.getTime() + LOGIN_LOCK_MINUTES * 60 * 1000);
+        db.prepare(`
+          UPDATE login_attempts 
+          SET attempt_count = ?, locked_until = ?, updated_at = ?
+          WHERE id = ?
+        `).run(newCount, lockUntil.toISOString(), now.toISOString(), existingAttempt.id);
+        
+        audit(db, null, 'LOGIN_LOCKED', 'AUTH', null, `账户 ${username} 因多次登录失败被锁定`);
+        return send(res, 429, { 
+          error: '登录失败次数过多，账户已锁定',
+          code: 'ACCOUNT_LOCKED',
+          retryAfter: LOGIN_LOCK_MINUTES * 60
+        });
+      }
+      db.prepare(`
+        UPDATE login_attempts 
+        SET attempt_count = ?, ip_address = COALESCE(?, ip_address), updated_at = ?
+        WHERE id = ?
+      `).run(newCount, ip, now.toISOString(), existingAttempt.id);
+    } else {
+      db.prepare(`
+        INSERT INTO login_attempts (id, username, ip_address, success, attempt_count, created_at, updated_at)
+        VALUES (?, ?, ?, 0, 1, ?, ?)
+      `).run(attemptId, username, ip, now.toISOString(), now.toISOString());
+    }
+    
+    audit(db, row?.id, 'LOGIN_FAILED', 'AUTH', null, `用户 ${username} 登录失败 (IP: ${ip})`);
+    return send(res, 401, { 
+      error: '用户名或密码错误',
+      code: 'INVALID_CREDENTIALS'
+    });
   }
-  const token = randomBytes(32).toString('base64url');
+  
+  // Record successful login
+  const attemptId = id();
+  db.prepare(`
+    INSERT INTO login_attempts (id, username, ip_address, success, attempt_count, created_at, updated_at)
+    VALUES (?, ?, ?, 1, 0, ?, ?)
+  `).run(attemptId, username, ip, now.toISOString(), now.toISOString());
+  
+  // Generate token
+  const token = randomBytes(TOKEN_LENGTH).toString('base64url');
   const tokenHash = sha256(token);
-  const now = new Date();
   const expires = new Date(now.getTime() + SESSION_HOURS * 3600_000);
+  
+  // Clean up expired sessions
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now.toISOString());
+  
+  // Create new session
   db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)')
     .run(tokenHash, row.id, expires.toISOString(), now.toISOString());
-  audit(db, row.id, 'LOGIN', 'AUTH', null, '登录成功');
-  return send(res, 200, { token, user: actorFromRow(db, row) });
+  
+  audit(db, row.id, 'LOGIN', 'AUTH', null, `用户 ${username} 登录成功 (IP: ${ip})`);
+  return send(res, 200, { 
+    token, 
+    user: actorFromRow(db, row),
+    expiresAt: expires.toISOString(),
+    sessionHours: SESSION_HOURS
+  });
 }
 
 function logout(db, req, res) {
@@ -371,6 +480,14 @@ function logout(db, req, res) {
   return send(res, 204, null);
 }
 
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) return forwarded.split(',')[0].trim();
+  const realIp = req.headers['x-real-ip'];
+  if (realIp) return realIp;
+  return req.socket?.remoteAddress || '';
+}
 function authenticate(db, req) {
   const token = bearer(req);
   if (!token) throw new HttpError(401, '请先登录');
@@ -1321,10 +1438,23 @@ function getAccountingVoucher(db, res, actor, voucherId) {
 
 // ============ 手动凭证录入 ============
 
+// 期间关闭保护辅助函数
+function checkPeriodNotClosedForVoucher(db, voucherDate, operation) {
+  const period = voucherDate.slice(0, 7);
+  const closure = db.prepare('SELECT * FROM period_closures WHERE period=? AND status=?').get(period, 'CLOSED');
+  if (closure) {
+    throw new HttpError(409, `会计期间 ${period} 已结账，禁止 ${operation} 凭证`);
+  }
+}
+
 async function createAccountingVoucher(db, req, res, actor) {
   allow(actor, 'ACCOUNTING_VIEW');
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
+  
+  // 检查期间是否已关闭
+  const effectiveDate = voucherDate || new Date().toISOString().slice(0, 10);
+  checkPeriodNotClosedForVoucher(db, effectiveDate, '录入');
   
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
@@ -1343,9 +1473,8 @@ async function createAccountingVoucher(db, req, res, actor) {
   const voucherNo = makeVoucherNo();
   
   transaction(db, () => {
-    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) 
-      VALUES(?,?,?,?,?,?,?,?)`)
-      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now);
+    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now, 'ENTERED');
     
     const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
     entries.forEach(e => {
@@ -1357,66 +1486,200 @@ async function createAccountingVoucher(db, req, res, actor) {
   
   return send(res, 201, { id: voucherId, voucherNo });
 }
-
 async function updateAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'ACCOUNTING_VIEW');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-  
+
   // 只允许修改手工凭证
   if (voucher.source_type !== 'MANUAL') {
     throw new HttpError(400, '只能修改手工凭证');
   }
-  
+
+  // State protection - only ENTERED and REJECTED can be edited
+  if (voucher.status === 'SUBMITTED') {
+    throw new HttpError(409, '待审核凭证不能修改');
+  }
+  if (voucher.status === 'POSTED') {
+    throw new HttpError(409, '已审核凭证不能修改');
+  }
+
+  // Check period status for ENTERED and REJECTED - closed period prohibits modification
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '修改');
+
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
-  
+
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
-  
+
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
-  
+
   if (Math.abs(debitTotal - creditTotal) > 1) {
     throw new HttpError(400, '借贷不平衡');
   }
-  
+
   const now = new Date().toISOString();
-  
+
   transaction(db, () => {
-    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ? WHERE id = ?')
-      .run(voucherDate || voucher.voucher_date, remark || '', voucherId);
-    
+    // If editing REJECTED voucher, reset to ENTERED
+    const newStatus = voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status;
+    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ?, status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
+      .run(voucherDate || voucher.voucher_date, remark || '', newStatus, '', now, voucherId);
+
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
-    
+
     const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
     entries.forEach(e => {
       stmt.run(id(), voucherId, e.subjectId, e.direction, Number(e.amountCents), e.summary || '');
     });
-    
-    audit(db, actor.id, 'UPDATE', 'ACCOUNTING_VOUCHER', voucherId, '修改凭证 ' + voucher.voucher_no);
+
+    audit(db, actor.id, 'UPDATE', 'ACCOUNTING_VOUCHER', voucherId, '修改凭证 ' + voucher.voucher_no + (newStatus === 'ENTERED' ? ' (重新提交后生效)' : ''));
   });
-  
-  return send(res, 200, { success: true });
+
+  return send(res, 200, { success: true, status: voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status });
 }
 
 async function deleteAccountingVoucher(db, req, res, actor, voucherId) {
   allow(actor, 'ACCOUNTING_VIEW');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
-  
+
+  // 只允许删除手工凭证
   if (voucher.source_type !== 'MANUAL') {
     throw new HttpError(400, '只能删除手工凭证');
   }
-  
+
+  // State protection - only ENTERED and REJECTED can be deleted
+  if (voucher.status === 'SUBMITTED') {
+    throw new HttpError(409, '待审核凭证不能删除');
+  }
+  if (voucher.status === 'POSTED') {
+    throw new HttpError(409, '已审核凭证不能删除');
+  }
+
+  // Check period closure
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '删除');
+
   transaction(db, () => {
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
     db.prepare('DELETE FROM accounting_vouchers WHERE id = ?').run(voucherId);
     audit(db, actor.id, 'DELETE', 'ACCOUNTING_VOUCHER', voucherId, '删除凭证 ' + voucher.voucher_no);
   });
-  
+
   return send(res, 200, { success: true });
+}
+
+async function submitAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_SUBMIT');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '提交');
+
+  // Only ENTERED and REJECTED vouchers can be submitted
+  if (!['ENTERED', 'REJECTED'].includes(voucher.status)) {
+    throw new HttpError(409, '只有录入或已驳回的凭证可以提交');
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, submitted_at = ?, submitted_by = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
+    .run('SUBMITTED', now, actor.id, '', now, voucherId);
+
+  audit(db, actor.id, 'SUBMIT', 'ACCOUNTING_VOUCHER', voucherId, '提交凭证 ' + voucher.voucher_no);
+
+  return send(res, 200, { success: true });
+}
+
+async function approveAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_APPROVE');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '审核');
+
+  // Only SUBMITTED vouchers can be approved
+  if (voucher.status !== 'SUBMITTED') {
+    throw new HttpError(409, '只有待审核凭证可以审核');
+  }
+
+  // Cannot approve own voucher
+  if (voucher.creator_id === actor.id) {
+    throw new HttpError(403, '不能审核自己录入的凭证');
+  }
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+    .run('POSTED', actor.id, now, now, voucherId);
+
+  audit(db, actor.id, 'APPROVE', 'ACCOUNTING_VOUCHER', voucherId, '审核通过凭证 ' + voucher.voucher_no);
+
+  return send(res, 200, { success: true });
+}
+
+async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
+  allow(actor, 'VOUCHER_APPROVE');
+  const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
+  if (!voucher) throw new HttpError(404, '凭证不存在');
+
+  // Check if period is closed FIRST
+  checkPeriodNotClosedForVoucher(db, voucher.voucher_date, '驳回');
+
+  // Only SUBMITTED vouchers can be rejected
+  if (voucher.status !== 'SUBMITTED') {
+    throw new HttpError(409, '只有待审核凭证可以驳回');
+  }
+
+  // Cannot reject own voucher
+  if (voucher.creator_id === actor.id) {
+    throw new HttpError(403, '不能驳回自己录入的凭证');
+  }
+
+  const body = await readJson(req);
+  const rejectionReason = requiredText(body.rejectionReason, '驳回原因', 500);
+
+  const now = new Date().toISOString();
+
+  db.prepare('UPDATE accounting_vouchers SET status = ?, rejection_reason = ?, approver_id = ?, approved_at = ?, updated_at = ? WHERE id = ?')
+    .run('REJECTED', rejectionReason, actor.id, now, now, voucherId);
+
+  audit(db, actor.id, 'REJECT', 'ACCOUNTING_VOUCHER', voucherId, '驳回凭证 ' + voucher.voucher_no + ': ' + rejectionReason);
+
+  return send(res, 200, { success: true });
+}
+
+function listAuditLogs(db, res, actor, url) {
+  allow(actor, 'ACCOUNTING_VIEW');
+  const entityType = url.searchParams.get('entity_type');
+  const entityId = url.searchParams.get('entity_id');
+  const userId = url.searchParams.get('user_id');
+  const action = url.searchParams.get('action');
+  const limit = Math.min(Number(url.searchParams.get('limit') || '100'), 500);
+  const offset = Number(url.searchParams.get('offset') || '0');
+
+  let sql = 'SELECT l.*, u.username, u.display_name FROM audit_logs l LEFT JOIN users u ON u.id = l.user_id WHERE 1=1';
+  const params = [];
+
+  if (entityType) { sql += ' AND l.entity_type = ?'; params.push(entityType); }
+  if (entityId) { sql += ' AND l.entity_id = ?'; params.push(entityId); }
+  if (userId) { sql += ' AND l.user_id = ?'; params.push(userId); }
+  if (action) { sql += ' AND l.action = ?'; params.push(action); }
+
+  sql += ' ORDER BY l.created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  const logs = db.prepare(sql).all(...params);
+  const countSql = 'SELECT COUNT(*) cnt FROM audit_logs WHERE 1=1' + (entityType ? ' AND entity_type = ?' : '') + (entityId ? ' AND entity_id = ?' : '') + (userId ? ' AND user_id = ?' : '') + (action ? ' AND action = ?' : '');
+  const countParams = params.slice(0, -2);
+  const total = db.prepare(countSql).get(...countParams);
+
+  return send(res, 200, { logs, total: total.cnt, limit, offset });
 }
 
 // ============ 账簿查询 ============
@@ -1448,7 +1711,7 @@ function getAccountingBalances(db, res, actor, url) {
       COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      WHERE ae.subject_id = ? AND av.voucher_date < ? AND av.status='POSTED'`)
       .get(subject.id, startDate);
     
     // 本期借方发生
@@ -1456,7 +1719,7 @@ function getAccountingBalances(db, res, actor, url) {
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     // 本期贷方发生
@@ -1464,7 +1727,7 @@ function getAccountingBalances(db, res, actor, url) {
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const openingBalance = Number(opening.balance);
@@ -1540,7 +1803,7 @@ function getAccountingLedger(db, res, actor, url) {
 }
 
 function getTrialBalance(db, res, actor, url) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'REPORT_VIEW');
   const period = url.searchParams.get('period');
   
   let startDate, endDate;
@@ -1563,21 +1826,21 @@ function getTrialBalance(db, res, actor, url) {
       COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND av.voucher_date < ?`)
+      WHERE ae.subject_id = ? AND av.voucher_date < ? AND av.status='POSTED'`)
       .get(subject.id, startDate);
     
     const periodDebit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const periodCredit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
       FROM accounting_entries ae 
       JOIN accounting_vouchers av ON av.id = ae.voucher_id 
       WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ?`)
+      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
       .get(subject.id, startDate, endDate);
     
     const openingBalance = Number(opening.balance);
@@ -2748,6 +3011,16 @@ async function createProductionOutput(db, req, res, actor) {
     db.prepare('UPDATE inventory SET quantity=quantity+? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(qualifiedQuantity || quantity, order.product_id);
     // Consume materials from BOM
     const items = db.prepare('SELECT * FROM production_order_items WHERE order_id=?').all(orderId);
+    // Validate stock availability before consuming materials (prevent negative inventory)
+    const warehouseId = db.prepare("SELECT value FROM settings WHERE key='?' AND active=1 LIMIT 1").get("default_warehouse")?.value;
+    for (const item of items) {
+      const inv = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?").get(warehouseId, item.product_id);
+      if (!inv || inv.quantity < item.consumed_quantity) {
+        const product = db.prepare("SELECT code FROM products WHERE id=?").get(item.product_id);
+        throw new HttpError(400, (product?.code || item.product_id) + " 库存不足，需要 " + item.consumed_quantity.toFixed(3) + "，实际 " + (inv?.quantity || 0).toFixed(3));
+      }
+    }
+    // Now safe to consume materials
     for (const item of items) {
       db.prepare('UPDATE inventory SET quantity=quantity-? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(item.consumed_quantity, item.product_id);
       db.prepare('UPDATE production_order_items SET consumed_quantity=? WHERE id=?').run(item.quantity, item.id);

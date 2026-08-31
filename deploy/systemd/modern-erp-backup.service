@@ -1,0 +1,11 @@
+[Unit]
+Description=Modern ERP Database Backup
+After=network.target
+
+[Service]
+Type=oneshot
+User=modern-erp
+Group=modern-erp
+WorkingDirectory=/opt/modern-erp
+EnvironmentFile=/etc/modern-erp/env
+ExecStart=/usr/bin/node scripts/backup-db.mjs

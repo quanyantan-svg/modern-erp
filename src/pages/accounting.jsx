@@ -2,6 +2,227 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
+function currentPeriod() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function IncomeStatement({ user, notify }) {
+  const [period, setPeriod] = useState(currentPeriod());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const query = () => {
+    if (!/^\d{4}-\d{2}$/.test(period)) {
+      setError('请输入合法期间 YYYY-MM');
+      setData(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    api(`/api/reports/income-statement?period=${encodeURIComponent(period)}`)
+      .then((r) => { setData(r); setError(null); })
+      .catch((e) => { setError(e.message || '查询失败'); setData(null); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { query(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const isEmpty = data && (!data.sections || data.sections.every(s => s.subjects.length === 0));
+
+  return <div className="income-statement">
+    <div className="search-bar">
+      <label>期间</label>
+      <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} />
+      <button className="primary" onClick={query} disabled={loading}>{loading ? '查询中…' : '查询'}</button>
+      {data && <span className="dim" style={{ marginLeft: 12 }}>范围 {data.periodRange?.startDate} 至 {data.periodRange?.endDate}</span>}
+    </div>
+    {error && <div className="error-banner">{error}</div>}
+    {loading && <Loading />}
+    {data && !loading && <>
+      <div className="is-summary">
+        <div className="is-summary-card"><span>营业收入</span><strong className="positive">{money(data.revenue)}</strong></div>
+        <div className="is-summary-card"><span>营业成本与费用</span><strong className="negative">{money(data.expense)}</strong></div>
+        <div className="is-summary-card"><span>营业利润</span><strong className={data.profit >= 0 ? 'positive' : 'negative'}>{money(data.profit)}</strong></div>
+      </div>
+      {isEmpty && <Empty text={`期间 ${data.period} 无 POSTED 凭证,无利润表数据`} />}
+      {!isEmpty && data.sections.map((section) => (
+        <div key={section.type} className="is-section">
+          <h3>{section.name} <small className="dim">（{section.type}）</small></h3>
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>科目编码</th><th>科目名称</th><th className="number">净额</th></tr></thead>
+              <tbody>
+                {section.subjects.map((s) => <tr key={s.code}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td className="number"><strong className={s.amount >= 0 ? 'positive' : 'negative'}>{money(s.amount)}</strong></td></tr>)}
+                <tr className="subtotal-row"><td colSpan={2}>小计</td><td className="number"><strong>{money(section.subtotal)}</strong></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </>}
+  </div>;
+}
+
+function BalanceSheet({ user, notify }) {
+  const [period, setPeriod] = useState(currentPeriod());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const query = () => {
+    if (!/^\d{4}-\d{2}$/.test(period)) {
+      setError('请输入合法期间 YYYY-MM');
+      setData(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    api(`/api/reports/balance-sheet?period=${encodeURIComponent(period)}`)
+      .then((r) => { setData(r); setError(null); })
+      .catch((e) => { setError(e.message || '查询失败'); setData(null); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { query(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const isEmpty = data && data.assets.subjects.length === 0 && data.liabilities.subjects.length === 0 && data.equity.subjects.length === 0 && data.equity.unclosedProfit === 0;
+
+  const renderSection = (title, section, totalKey) => (
+    <div className="bs-section">
+      <h3>{title} <small className="dim">（{section.total >= 0 ? '合计' : '负数'}）</small></h3>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>科目编码</th><th>科目名称</th><th className="number">金额</th></tr></thead>
+          <tbody>
+            {section.subjects.map((s) => <tr key={s.code}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td className="number"><strong className={s.amount >= 0 ? 'positive' : 'negative'}>{money(s.amount)}</strong></td></tr>)}
+            {totalKey === 'equity' && (
+              <tr className="bs-virtual-row"><td colSpan={2}>未结转损益（虚拟行，不持久化）</td><td className="number"><strong className={data.equity.unclosedProfit >= 0 ? 'positive' : 'negative'}>{money(data.equity.unclosedProfit)}</strong></td></tr>
+            )}
+            <tr className="subtotal-row"><td colSpan={2}>小计</td><td className="number"><strong>{money(totalKey === 'equity' ? data.equity.total : section.total)}</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return <div className="balance-sheet">
+    <div className="search-bar">
+      <label>期间</label>
+      <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} />
+      <button className="primary" onClick={query} disabled={loading}>{loading ? '查询中…' : '查询'}</button>
+      {data && <span className="dim" style={{ marginLeft: 12 }}>截至 {data.asOfDate}</span>}
+    </div>
+    {error && <div className="error-banner">{error}</div>}
+    {loading && <Loading />}
+    {data && !loading && <>
+      <div className={`bs-equation-banner ${data.equationValid ? 'valid' : 'invalid'}`}>
+        {data.equationValid
+          ? <><strong>资产 = 负债 + 权益</strong><span className="dim">（恒等式成立，差额 {money(data.difference)}）</span></>
+          : <><strong>⚠ 资产 ≠ 负债 + 权益</strong><span className="dim">（差额 {money(data.difference)}，请检查未结转损益或凭证数据）</span></>}
+      </div>
+      {isEmpty && <Empty text={`截至 ${data.asOfDate} 无 POSTED 凭证,无资产负债表数据`} />}
+      {!isEmpty && <>
+        {renderSection('资产', data.assets, 'assets')}
+        {renderSection('负债', data.liabilities, 'liabilities')}
+        {renderSection('所有者权益', data.equity, 'equity')}
+        <div className="bs-totals">
+          <div className="bs-total-row"><span>资产合计</span><strong className={data.totalAssets >= 0 ? 'positive' : 'negative'}>{money(data.totalAssets)}</strong></div>
+          <div className="bs-total-row"><span>负债和权益合计</span><strong>{money(data.totalLiabilitiesAndEquity)}</strong></div>
+        </div>
+      </>}
+    </>}
+  </div>;
+}
+
+function TrialBalanceReport({ user, notify }) {
+  const [period, setPeriod] = useState(currentPeriod());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const query = () => {
+    if (!/^\d{4}-\d{2}$/.test(period)) {
+      setError('请输入合法期间 YYYY-MM');
+      setData(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    api(`/api/reports/trial-balance?period=${encodeURIComponent(period)}`)
+      .then((r) => { setData(r); setError(null); })
+      .catch((e) => { setError(e.message || '查询失败'); setData(null); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { query(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const rows = data?.trialBalance || [];
+  const totalDebit = rows.reduce((s, r) => s + Number(r.periodDebit || 0), 0);
+  const totalCredit = rows.reduce((s, r) => s + Number(r.periodCredit || 0), 0);
+  const totalOpeningDebit = rows.reduce((s, r) => s + Math.max(Number(r.openingBalance || 0), 0), 0);
+  const totalOpeningCredit = rows.reduce((s, r) => s + Math.max(-Number(r.openingBalance || 0), 0), 0);
+  const totalClosingDebit = rows.reduce((s, r) => s + Math.max(Number(r.closingBalance || 0), 0), 0);
+  const totalClosingCredit = rows.reduce((s, r) => s + Math.max(-Number(r.closingBalance || 0), 0), 0);
+  const periodBalanced = totalDebit === totalCredit;
+  const periodDiff = totalDebit - totalCredit;
+
+  return <div className="trial-balance">
+    <div className="search-bar">
+      <label>期间</label>
+      <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} style={{ width: 160 }} />
+      <button className="primary" onClick={query} disabled={loading}>{loading ? '查询中…' : '查询'}</button>
+      {data && <span className="dim" style={{ marginLeft: 12 }}>范围 {data.period?.startDate} 至 {data.period?.endDate}</span>}
+    </div>
+    {error && <div className="error-banner">{error}</div>}
+    {loading && <Loading />}
+    {data && !loading && <>
+      <div className={`bs-equation-banner ${periodBalanced ? 'valid' : 'invalid'}`}>
+        {periodBalanced
+          ? <><strong>借方发生额 = 贷方发生额</strong><span className="dim">（本期借贷相等）</span></>
+          : <><strong>⚠ 借方 ≠ 贷方</strong><span className="dim">（本期借贷发生额差额 {money(periodDiff)}）</span></>}
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>科目编码</th>
+              <th>科目名称</th>
+              <th className="number">期初余额</th>
+              <th className="number">本期借方</th>
+              <th className="number">本期贷方</th>
+              <th className="number">期末余额</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="mono">{r.code}</td>
+                <td><strong>{r.name}</strong></td>
+                <td className="number"><strong className={r.openingBalance >= 0 ? 'positive' : 'negative'}>{money(r.openingBalance)}</strong></td>
+                <td className="number">{money(r.periodDebit)}</td>
+                <td className="number">{money(r.periodCredit)}</td>
+                <td className="number"><strong className={r.closingBalance >= 0 ? 'positive' : 'negative'}>{money(r.closingBalance)}</strong></td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={6}><Empty text={`期间 ${period} 无 POSTED 凭证`} /></td></tr>}
+          </tbody>
+          <tfoot>
+            <tr className="subtotal-row">
+              <td colSpan={2}>合计</td>
+              <td className="number">借 {money(totalOpeningDebit)} / 贷 {money(totalOpeningCredit)}</td>
+              <td className="number"><strong>{money(totalDebit)}</strong></td>
+              <td className="number"><strong>{money(totalCredit)}</strong></td>
+              <td className="number">借 {money(totalClosingDebit)} / 贷 {money(totalClosingCredit)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </>}
+  </div>;
+}
+
 export function Accounting({ user, notify }) {
   const [subjects, setSubjects] = useState([]);
   const [vouchers, setVouchers] = useState([]);
@@ -14,10 +235,14 @@ export function Accounting({ user, notify }) {
     }).catch((e) => notify(e.message, 'error'));
   }, []);
   function formatMoney(c) { return money(c); }
+  const showReport = can(user, 'REPORT_VIEW');
   return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
-    <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button></div>
+    <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
     {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号"/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{v.source_type === 'SALES_ORDER' ? '销售订单' : v.source_type === 'PURCHASE_ORDER' ? '采购订单' : '库存调拨'}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
+    {tab === 'income' && showReport && <IncomeStatement user={user} notify={notify} />}
+    {tab === 'balance' && showReport && <BalanceSheet user={user} notify={notify} />}
+    {tab === 'trial' && showReport && <TrialBalanceReport user={user} notify={notify} />}
     {viewing && <VoucherDetail value={viewing} onClose={() => setViewing(null)} formatMoney={formatMoney}/>}
   </Panel>;
 }

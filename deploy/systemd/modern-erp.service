@@ -1,0 +1,17 @@
+[Unit]
+Description=Modern ERP Application
+After=network.target
+
+[Service]
+Type=simple
+User=modern-erp
+Group=modern-erp
+WorkingDirectory=/opt/modern-erp
+EnvironmentFile=/etc/modern-erp/env
+ExecStart=/usr/bin/node server/index.js
+KillSignal=SIGTERM
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

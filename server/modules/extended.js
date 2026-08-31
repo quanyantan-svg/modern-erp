@@ -1,4 +1,4 @@
-import { id } from '../db.js';
+﻿import { id, transaction } from '../db.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 
 // ============ 部门辅助核算 ============
@@ -185,7 +185,7 @@ export async function updateVoucherTemplate(db, req, res, actor, templateId) {
 export function listPeriodClosures(db, res, actor, url) {
   allowAny(actor, ["PERIOD_CLOSE_VIEW", "PERIOD_CLOSE_MANAGE"]);
   const year = url.searchParams.get("year") || new Date().getFullYear();
-  const closures = db.prepare("SELECT * FROM period_closures WHERE period_year=? ORDER BY period_month DESC").all(parseInt(year));
+  const closures = db.prepare("SELECT pc.*, u.display_name closed_by_name FROM period_closures pc LEFT JOIN users u ON u.id=pc.closed_by WHERE pc.period_year=? ORDER BY pc.period_month DESC").all(parseInt(year));
   return send(res, 200, { closures });
 }
 
@@ -202,33 +202,116 @@ export async function createPeriodClosure(db, req, res, actor) {
   return send(res, 201, { id: closureId, period });
 }
 
+// ============ 期间关闭前置检查（内部函数）===========
+// 统一的检查逻辑，供 closePeriod 和 getClosureChecklist 共用
+// 返回 { passed: boolean, items: Array<{ item, passed, detail }> }
+
+export function getPeriodClosureChecklist(db, period) {
+  const checklist = [];
+  
+  // 检查1: 期间内是否存在 ENTERED 状态的凭证
+  const enteredCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='ENTERED'").get(period + '%').cnt;
+  const enteredPassed = enteredCount === 0;
+  checklist.push({
+    item: "录入中凭证",
+    passed: enteredPassed,
+    detail: enteredPassed ? "无录入中凭证" : `有 ${enteredCount} 张录入中凭证，请先提交或删除`
+  });
+  
+  // 检查2: 期间内是否存在 SUBMITTED 状态的凭证
+  const submittedCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='SUBMITTED'").get(period + '%').cnt;
+  const submittedPassed = submittedCount === 0;
+  checklist.push({
+    item: "待审核凭证",
+    passed: submittedPassed,
+    detail: submittedPassed ? "无待审核凭证" : `有 ${submittedCount} 张待审核凭证，请先审核或驳回`
+  });
+  
+  // 检查3: 期间内是否存在 REJECTED 状态的凭证
+  const rejectedCount = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE voucher_date LIKE ? AND status='REJECTED'").get(period + '%').cnt;
+  const rejectedPassed = rejectedCount === 0;
+  checklist.push({
+    item: "已驳回凭证",
+    passed: rejectedPassed,
+    detail: rejectedPassed ? "无已驳回凭证" : `有 ${rejectedCount} 张已驳回凭证，请修改后重新提交或删除`
+  });
+  
+  // 所有检查通过
+  const allPassed = checklist.every(c => c.passed);
+  return { passed: allPassed, items: checklist };
+}
+export function getClosureChecklist(db, res, actor, url) {
+  allow(actor, "PERIOD_CLOSE_MANAGE");
+  const period = url.searchParams.get("period");
+  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
+  
+  // 检查期间是否存在
+  const closure = db.prepare("SELECT * FROM period_closures WHERE period=?").get(period);
+  if (!closure) {
+    return send(res, 200, { 
+      checklist: [], 
+      passed: false, 
+      detail: "期间未初始化，请先创建期间记录" 
+    });
+  }
+  
+  if (closure.status === 'CLOSED') {
+    return send(res, 200, { 
+      checklist: [], 
+      passed: false, 
+      detail: "期间已结账" 
+    });
+  }
+  
+  const result = getPeriodClosureChecklist(db, period);
+  return send(res, 200, { 
+    checklist: result.items, 
+    passed: result.passed 
+  });
+}
+
 export async function closePeriod(db, req, res, actor, closureId) {
   allow(actor, "PERIOD_CLOSE_MANAGE");
+
   const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
   if (!closure) throw new HttpError(404, "期间不存在");
   if (closure.status === "CLOSED") throw new HttpError(400, "期间已结账");
-  const pendingVouchers = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE period=? AND status=?").get(closure.period, "DRAFT").cnt;
-  if (pendingVouchers > 0) throw new HttpError(400, "有 " + pendingVouchers + " 张凭证未审核，请先审核");
+
+  // 执行统一的关闭前置检查
+  const checklistResult = getPeriodClosureChecklist(db, closure.period);
+  if (!checklistResult.passed) {
+    const failedItems = checklistResult.items.filter(c => !c.passed);
+    const reasons = failedItems.map(c => c.detail).join("; ");
+    throw new HttpError(400, `结账前置检查未通过: ${reasons}`);
+  }
+
   const now = new Date().toISOString();
-  db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=1 WHERE id=?").run("CLOSED", actor.id, now, closureId);
+  transaction(db, () => {
+    db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=1 WHERE id=?")
+      .run("CLOSED", actor.id, now, closureId);
+    db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
+      .run(id(), actor.id, "CLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `结账期间 ${closure.period}`, now);
+  });
+
   return send(res, 200, { ok: true, message: "期间结账成功" });
 }
 
 export async function unclosePeriod(db, req, res, actor, closureId) {
   allow(actor, "PERIOD_CLOSE_MANAGE");
-  const now = new Date().toISOString();
-  db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=? WHERE id=?").run("OPEN", null, null, closureId);
-  return send(res, 200, { ok: true, message: "反结账成功" });
-}
 
-export function getClosureChecklist(db, req, res, actor, url) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
-  const period = url.searchParams.get("period");
-  if (!period) throw new HttpError(400, "请指定期间");
-  const checklist = [];
-  const pending = db.prepare("SELECT COUNT(*) cnt FROM accounting_vouchers WHERE period=? AND status=?").get(period, "DRAFT").cnt;
-  checklist.push({ item: "未审核凭证", passed: pending === 0, detail: pending === 0 ? "无未审核凭证" : "有 " + pending + " 张未审核凭证" });
-  return send(res, 200, { checklist });
+  const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
+  if (!closure) throw new HttpError(404, "期间不存在");
+  if (closure.status !== "CLOSED") throw new HttpError(400, "期间未结账，无需反结账");
+
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=0 WHERE id=?")
+      .run("OPEN", actor.id, now, closureId);
+    db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
+      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}`, now);
+  });
+
+  return send(res, 200, { ok: true, message: "反结账成功" });
 }
 
 // ============ 银行对账单 ============
@@ -887,16 +970,213 @@ export async function resolveAlert(db, req, res, actor, alertId) {
 
 // ============ 经营报表 ============
 
+// 纯业务 helper：按指定期间计算 REVENUE / EXPENSE 净额与利润。
+// 不接收 res，不做 HTTP 权限校验，不发送 response。
+// 期间过滤使用 voucher_date 范围（避开 v.period 列可能 NULL 的问题）。
+// 净额规则：REVENUE = credit - debit；EXPENSE = debit - credit（与试算平衡表一致）。
+// 入参 period 为 YYYY-MM 字符串；非法格式抛出 Error，由 HTTP handler 转为 HttpError。
+// period 缺省时回退到当前月（与 getFinancialSummary 历史行为一致）。
+export function calculateIncomeForPeriod(db, period) {
+  const resolved = period || new Date().toISOString().slice(0, 7);
+  const match = /^(\d{4})-(\d{2})$/.exec(resolved);
+  if (!match) throw new Error("period 格式错误，应为 YYYY-MM");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new Error("月份必须在 01-12 之间");
+  const startDate = resolved + "-01";
+  const lastDay = new Date(year, month, 0).getDate();
+  const endDate = resolved + "-" + String(lastDay).padStart(2, "0");
+
+  const row = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN s.type='REVENUE' AND e.direction='CREDIT' THEN e.amount_cents ELSE 0 END), 0)
+    - COALESCE(SUM(CASE WHEN s.type='REVENUE' AND e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END), 0)
+      AS revenue_net,
+      COALESCE(SUM(CASE WHEN s.type='EXPENSE' AND e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END), 0)
+    - COALESCE(SUM(CASE WHEN s.type='EXPENSE' AND e.direction='CREDIT' THEN e.amount_cents ELSE 0 END), 0)
+      AS expense_net
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date >= ?
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+  `).get(startDate, endDate);
+
+  const revenue = Number(row.revenue_net);
+  const expense = Number(row.expense_net);
+  const profit = revenue - expense;
+  return { period: resolved, periodRange: { startDate, endDate }, revenue, expense, profit };
+}
+
 export function getFinancialSummary(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
-  const period = url.searchParams.get("period") || new Date().toISOString().slice(0, 7);
-  
-  const revenue = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='REVENUE'").get(period).total;
-  const expense = db.prepare("SELECT COALESCE(SUM(e.amount_cents), 0) total FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.period=? AND v.status='POSTED' AND s.type='EXPENSE'").get(period).total;
+  const period = url.searchParams.get("period");
+
+  const income = calculateIncomeForPeriod(db, period);
+
   const ar = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_receivables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
   const ap = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_payables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
-  
-  return send(res, 200, { period, revenue, expense, profit: revenue - expense, accounts_receivable: ar, accounts_payable: ap });
+
+  return send(res, 200, {
+    period: income.period,
+    revenue: income.revenue,
+    expense: income.expense,
+    profit: income.profit,
+    accounts_receivable: Number(ar),
+    accounts_payable: Number(ap),
+  });
+}
+
+// ============ 利润表 ============
+// 复用 calculateIncomeForPeriod；附加按科目类型的明细 section。
+
+export function getIncomeStatement(db, res, actor, url) {
+  allow(actor, "REPORT_VIEW");
+  const period = url.searchParams.get("period");
+  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
+
+  let income;
+  try {
+    income = calculateIncomeForPeriod(db, period);
+  } catch (e) {
+    throw new HttpError(400, e.message);
+  }
+
+  const aggregateByType = db.prepare(`
+    SELECT s.code, s.name, s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date >= ?
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+    GROUP BY s.id
+    ORDER BY s.code
+  `).all(income.periodRange.startDate, income.periodRange.endDate);
+
+  const buildSection = (type, name, sign) => {
+    const rows = aggregateByType
+      .filter(r => r.type === type)
+      .map(r => ({ code: r.code, name: r.name, amount: sign === '+' ? Number(r.credit_total) - Number(r.debit_total) : Number(r.debit_total) - Number(r.credit_total) }))
+      .filter(r => r.amount !== 0);
+    const subtotal = rows.reduce((s, r) => s + r.amount, 0);
+    return { name, type, subtotal, subjects: rows };
+  };
+
+  const revenueSection = buildSection('REVENUE', '营业收入', '+');
+  const expenseSection = buildSection('EXPENSE', '营业成本与费用', '-');
+
+  return send(res, 200, {
+    period: income.period,
+    periodRange: income.periodRange,
+    revenue: income.revenue,
+    expense: income.expense,
+    profit: income.profit,
+    sections: [revenueSection, expenseSection],
+  });
+}
+
+// ============ 资产负债表 ============
+// as-of / period-end 时点报表。统计 voucher_date <= asOfDate 的累计余额。
+// 当前 schema 无自动损益结转，通过「未结转损益」虚拟权益行补偿。
+// 扩展恒等式：Assets = Liabilities + Posted Equity + Unclosed Profit。
+
+export function getBalanceSheet(db, res, actor, url) {
+  allow(actor, "REPORT_VIEW");
+  const period = url.searchParams.get("period");
+  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
+  const match = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!match) throw new HttpError(400, "期间格式错误，应为 YYYY-MM");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new HttpError(400, "月份必须在 01-12 之间");
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const asOfDate = period + "-" + String(lastDay).padStart(2, "0");
+
+  const balances = db.prepare(`
+    SELECT s.code, s.name, s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date <= ?
+      AND s.type IN ('ASSET', 'LIABILITY', 'EQUITY')
+    GROUP BY s.id
+    ORDER BY s.code
+  `).all(asOfDate);
+
+  const buildSection = (type) => {
+    const subjects = balances
+      .filter(r => r.type === type)
+      .map(r => {
+        const credit = Number(r.credit_total);
+        const debit = Number(r.debit_total);
+        const amount = (type === 'ASSET') ? debit - credit : credit - debit;
+        return { code: r.code, name: r.name, amount };
+      })
+      .filter(s => s.amount !== 0);
+    const total = subjects.reduce((s, x) => s + x.amount, 0);
+    return { total, subjects };
+  };
+
+  const assets = buildSection('ASSET');
+  const liabilities = buildSection('LIABILITY');
+  const equityPosted = buildSection('EQUITY');
+
+  // 未结转损益：累计 voucher_date <= asOfDate 的 REVENUE/EXPENSE 净额
+  const profitRows = db.prepare(`
+    SELECT s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+    GROUP BY s.type
+  `).all(asOfDate);
+
+  let revenueNet = 0;
+  let expenseNet = 0;
+  for (const r of profitRows) {
+    const credit = Number(r.credit_total);
+    const debit = Number(r.debit_total);
+    if (r.type === 'REVENUE') revenueNet = credit - debit;
+    if (r.type === 'EXPENSE') expenseNet = debit - credit;
+  }
+  const unclosedProfit = revenueNet - expenseNet;
+  const equityTotal = equityPosted.total + unclosedProfit;
+
+  const totalAssets = assets.total;
+  const totalLiabilitiesAndEquity = liabilities.total + equityTotal;
+  const difference = totalAssets - totalLiabilitiesAndEquity;
+  const equationValid = difference === 0;
+
+  return send(res, 200, {
+    period,
+    asOfDate,
+    assets,
+    liabilities,
+    equity: {
+      postedEquity: equityPosted.total,
+      unclosedProfit,
+      total: equityTotal,
+      subjects: equityPosted.subjects,
+    },
+    totalAssets,
+    totalLiabilitiesAndEquity,
+    difference,
+    equationValid,
+  });
 }
 
 export function getInventoryStatus(db, res, actor, url) {
