@@ -636,6 +636,70 @@ return { period, revenue, expense, profit, accounts_receivable, accounts_payable
 
 - `getAccountingLedger`：POSTED 过滤缺失 + 无 API 路由 → 标记 DEFERRED，后续独立处理
 - Demo data expansion：0 POSTED vouchers + 0 EQUITY subjects → DEMO READINESS ISSUE，不在本任务范围
+
+### 7.12 Production Safety（Phase 2A）
+
+#### Demo Seed Gating
+
+`createDatabase()` 启动时拆分为两阶段 seed：
+
+- `seedSchema(db)` —— **始终执行**：permissions、roles、role_permissions、accounting_subjects（系统运行必需）
+- `seedDemoData(db)` —— **条件执行**：demo 账号（admin/admin123 等弱密码）、demo 业务数据、demo 销售订单
+
+是否执行 demo seed 由 `shouldSeedDemoData()` 决定：
+
+```javascript
+function shouldSeedDemoData() {
+  if (process.env.ERP_SEED_DEMO === 'true') return true;  // 强制种子（任意环境）
+  if (process.env.NODE_ENV === 'production') return false;  // 生产禁止
+  return true;  // dev/test 默认（保持现有体验）
+```
+
+**生产语义**：`NODE_ENV=production` 时即使数据库为空也**不会**自动创建弱密码账号；如需演示部署可显式 `ERP_SEED_DEMO=true` 覆盖。
+
+#### reset-data 生产保护
+
+`server/reset-data.js` 起始处加入：
+
+```javascript
+if (process.env.NODE_ENV === 'production') {
+  console.error('错误：生产环境禁止执行 reset-data。');
+  process.exit(1);
+}
+```
+
+删除 SQLite 文件等破坏性操作在生产环境被硬阻断，不依赖交互式确认。
+
+#### 环境变量
+
+`process.env` 直接读取，**不引入 dotenv**。生产环境变量由 systemd `EnvironmentFile` 注入。
+
+实际支持的 env 列表见 `.env.example`：
+
+| 变量 | 用途 | 默认 |
+|------|------|------|
+| `NODE_ENV` | `development` / `production` | — |
+| `PORT` | HTTP 监听端口 | 3001 |
+| `ERP_DB_PATH` | SQLite 数据库绝对路径 | `./data/erp.db` |
+| `SESSION_HOURS` | 会话有效期（小时） | 12 |
+| `LOGIN_MAX_ATTEMPTS` | 登录失败锁定阈值 | 5 |
+| `LOGIN_LOCK_MINUTES` | 锁定时长（分钟） | 15 |
+| `TOKEN_LENGTH` | Token 字节长度 | 32 |
+| `ERP_SEED_DEMO` | demo 种子开关 | dev: `true`；prod: `false` |
+
+#### 生产数据库路径
+
+- 开发：`./data/erp.db`（项目内）
+- 生产：`/var/lib/modern-erp/erp.db`（与源代码分离）
+- 必须确保父目录存在并由 `erp` 用户拥有
+
+#### 不在本任务范围
+
+- 进程管理（systemd unit 模板）→ Phase 2C
+- Nginx 反向代理配置 → Phase 2C
+- 备份 / 恢复 → Phase 2B
+- 首次管理员初始化流程 → Phase 2C
+- HTTPS / 监控 / 安全组
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定

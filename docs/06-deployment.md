@@ -1,268 +1,157 @@
-﻿# 部署指南
+# 部署指南
 
 ## 目标环境
 | 项目 | 配置 |
 |------|------|
 | 云服务器 | 腾讯云轻量应用服务器 Lighthouse |
 | 操作系统 | Ubuntu 22.04 LTS |
-| 数据库 | MySQL 8.0 |
+| 数据库 | SQLite 3（应用内置，无需独立服务） |
 | 后端 | Node.js 22 LTS |
 | 前端托管 | Nginx |
 | 部署方式 | Git代码拉取 |
+| 进程管理 | systemd（Phase 2C 引入，当前文档不涉及） |
 
 ---
 
 ## 1. 服务器准备
 
 ### 1.1 系统更新
-\\\ash
+```bash
 sudo apt update && sudo apt upgrade -y
-\\\
+```
 
 ### 1.2 安装基础软件
-\\\ash
+```bash
 sudo apt install -y curl git vim nginx certbot python3-certbot-nginx
-\\\
+```
 
 ### 1.3 安装Node.js
-\\\ash
+```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs
 node --version
 npm --version
-\\\
+```
 
-### 1.4 安装MySQL
-\\\ash
-sudo apt install -y mysql-server
-sudo mysql_secure_installation
-\\\
+### 1.4 安装pnpm
+```bash
+sudo npm install -g pnpm
+pnpm --version
+```
 
 ---
 
-## 2. 数据库配置
+## 2. SQLite 数据库路径
 
-### 2.1 创建数据库和用户
-\\\sql
-CREATE DATABASE erp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER erp_user@localhost IDENTIFIED BY YourStrongPassword;
-GRANT ALL PRIVILEGES ON erp.* TO erp_user@localhost;
-FLUSH PRIVILEGES;
-\\\
+本项目使用 SQLite 作为生产数据库，**无需独立数据库服务**。
 
-### 2.2 初始化表结构
-\\\ash
-cd /var/www/erp
-pnpm install
-pnpm db:migrate
-\\\
+### 2.1 生产数据库路径约定
+
+生产环境数据库必须与应用源代码分离：
+
+```bash
+sudo mkdir -p /var/lib/modern-erp
+sudo chown erp:erp /var/lib/modern-erp
+sudo chmod 750 /var/lib/modern-erp
+```
+
+数据库路径由 `ERP_DB_PATH` 环境变量指定（推荐绝对路径）：
+
+```bash
+# /etc/modern-erp/env
+ERP_DB_PATH=/var/lib/modern-erp/erp.db
+```
+
+### 2.2 不要将数据库放在项目源代码目录
+
+`./data/erp.db`（开发默认）不应作为生产路径，否则：
+- Git 拉取可能覆盖或暴露数据
+- 应用升级时容易误删
+- 备份策略复杂
 
 ---
 
 ## 3. 应用部署
 
-### 3.1 创建应用目录
-\\\ash
-sudo mkdir -p /var/www/erp
-sudo chown -R www-data:www-data /var/www/erp
-\\\
+### 3.1 创建应用目录与专用用户
+```bash
+sudo mkdir -p /opt/modern-erp
+sudo useradd -r -d /opt/modern-erp -s /bin/bash erp
+sudo chown -R erp:erp /opt/modern-erp
+```
 
 ### 3.2 从Git拉取代码
-\\\ash
-cd /var/www/erp
-git clone <your-repo-url> .
-\\\
+```bash
+sudo -u erp git clone <your-repo-url> /opt/modern-erp
+sudo -u erp git checkout <your-deploy-branch>
+cd /opt/modern-erp
+```
 
 ### 3.3 配置环境变量
-\\\ash
-cp .env.example .env
-nano .env
-\\\
 
-配置内容:
-\\\ash
+环境变量由 systemd EnvironmentFile 提供（`/etc/modern-erp/env`），不在项目目录中创建 `.env`。
+
+```bash
+sudo mkdir -p /etc/modern-erp
+sudo nano /etc/modern-erp/env
+```
+
+最小生产配置示例：
+
+```bash
 NODE_ENV=production
 PORT=3001
-HOST=0.0.0.0
+ERP_DB_PATH=/var/lib/modern-erp/erp.db
+SESSION_HOURS=12
+LOGIN_MAX_ATTEMPTS=5
+LOGIN_LOCK_MINUTES=15
+TOKEN_LENGTH=32
+ERP_SEED_DEMO=false
+```
 
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=erp
-DB_USER=erp_user
-DB_PASSWORD=YourStrongPassword
-
-JWT_SECRET=your-jwt-secret-key-here
-\\\
+**重要**：
+- `NODE_ENV=production` 配合 `ERP_SEED_DEMO=false` 禁止自动创建弱密码演示账号
+- 首个管理员账号需通过外部初始化流程创建（Phase 2C 处理）
+- 应用不引入 dotenv；环境变量由 systemd EnvironmentFile / 启动脚本注入
 
 ### 3.4 安装依赖和构建
-\\\ash
-pnpm install
-pnpm build
-\\\
+```bash
+sudo -u erp pnpm install --prod
+sudo -u erp pnpm build
+```
 
 ---
 
-## 4. PM2进程管理
+## 4. Demo 数据与重置
 
-### 4.1 安装PM2
-\\\ash
-sudo npm install -g pm2
-\\\
+### 4.1 演示账号默认禁用
 
-### 4.2 创建ecosystem配置
-\\\javascript
-module.exports = {
-  apps: [{
-    name: erp-api,
-    script: server/index.js,
-    instances: 1,
-    autorestart: true,
-    watch: false,
-    max_memory_restart: 512M,
-    env: {
-      NODE_ENV: production
-    }
-  }]
-};
-\\\
+启动空数据库时，**生产环境不会**自动创建以下账号（`admin/admin123`、`sales/sales123` 等）。
 
-### 4.3 启动应用
-\\\ash
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup
-\\\
+仅当 `ERP_SEED_DEMO=true` 显式启用时，才会创建演示账号与演示业务数据。
 
-### 4.4 PM2常用命令
-| 命令 | 说明 |
-|------|------|
-| pm2 status | 查看状态 |
-| pm2 logs | 查看日志 |
-| pm2 restart | 重启 |
-| pm2 stop | 停止 |
+### 4.2 pnpm reset-data 保护
+
+`pnpm reset-data` 在 `NODE_ENV=production` 下立即退出并返回错误，不会删除任何文件。
+
+```bash
+$ NODE_ENV=production pnpm reset-data
+错误：生产环境禁止执行 reset-data。
+```
+
+开发 / 测试环境正常使用此命令清理本地演示数据。
 
 ---
 
-## 5. Nginx配置
+## 5. 待补章节（Phase 2C / 后续任务）
 
-### 5.1 创建Nginx配置
-\\\ash
-sudo nano /etc/nginx/sites-available/erp
-\\\
+以下章节尚未在本 Phase 2A 范围实现，将在后续 Phase 补齐：
 
-配置内容:
-\\\
-ginx
-server {
-    listen 80;
-    server_name your-domain.com;
-    return 301 https://server_name;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name your-domain.com;
-
-    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-
-    root /var/www/erp/dist;
-    index index.html;
-
-    location / {
-        try_files uri uri/ /index.html;
-    }
-
-    location /api/ {
-        proxy_pass http://127.0.0.1:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Host host;
-        proxy_set_header X-Real-IP remote_addr;
-    }
-
-    location /assets/ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-}
-\\\
-
-### 5.2 启用配置
-\\\ash
-sudo ln -s /etc/nginx/sites-available/erp /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-\\\
-
-### 5.3 SSL证书
-\\\ash
-sudo certbot --nginx -d your-domain.com
-sudo systemctl reload nginx
-\\\
-
----
-
-## 6. 备份配置
-
-### 6.1 创建备份脚本
-\\\ash
-sudo nano /usr/local/bin/erp-backup.sh
-\\\
-
-内容:
-\\\ash
-#!/bin/bash
-DATE=
-BACKUP_DIR=/var/backups/erp
-mkdir -p BACKUP_DIR
-mysqldump -u erp_user -pERP_PASSWORD erp > BACKUP_DIR/erp_db_DATE.sql
-find BACKUP_DIR -name "*.sql" -mtime +7 -delete
-\\\
-
-### 6.2 设置定时任务
-\\\ash
-sudo chmod +x /usr/local/bin/erp-backup.sh
-sudo crontab -e
-0 2 * * * /usr/local/bin/erp-backup.sh
-\\\
-
----
-
-## 7. 验证部署
-
-### 7.1 检查服务状态
-\\\ash
-pm2 status
-sudo systemctl status nginx
-sudo systemctl status mysql
-\\\
-
-### 7.2 测试访问
-- 前端: https://your-domain.com
-- API: https://your-domain.com/api/health
-- 预期: 返回 {status: ok}
-
----
-
-## 8. 故障排查
-
-### 8.1 查看日志
-| 命令 | 用途 |
-|------|------|
-| pm2 logs | PM2日志 |
-| sudo tail -f /var/log/nginx/error.log | Nginx错误日志 |
-| sudo journalctl -u erp -f | Systemd日志 |
-
-### 8.2 常见问题
-| 问题 | 解决方案 |
-|------|----------|
-| 502 Bad Gateway | 检查PM2是否运行 |
-| 数据库连接失败 | 检查.env配置 |
-| SSL证书过期 | 运行certbot renew |
-
----
-
-## 9. 参考文档
-- docs/03-architecture.md - 目标架构
-- docs/04-refactor-plan.md - 重构计划
-- docs/05-database.md - 数据库设计
+- 进程管理（systemd unit 模板）
+- Nginx 反向代理配置
+- 备份 / 恢复脚本（`scripts/backup.sh`、`scripts/restore.sh`）
+- 备份调度（systemd timer / cron）
+- HTTPS / certbot 配置
+- 监控与日志
+- 防火墙 / 安全组规则
+- 首次管理员初始化流程

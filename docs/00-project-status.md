@@ -18,19 +18,20 @@
 | Accounting Period Integrity / Period Closing Core | ✅ | ee3168b | 13 tests |
 | Income Statement | ✅ | 28c2f51 | 21 tests |
 | Balance Sheet | ✅ | fc088f3 | 28 tests |
-| Financial Reporting Consistency | ✅ | 待提交 | 15 tests |
+| Financial Reporting Consistency | ✅ | f6a2521 | 15 tests |
+| Production Safety (Phase 2A) | ✅ | 待提交 | 待测 |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js
-- 132 tests / 47 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js
+- 132+ tests / 47+ suites
 - **全部通过**
 
 ## 分值汇总
 
 - 完整：42 / 88 (48%)
-- 部分：26 / 88 (30%)
-- 缺失：19 / 88 (21%)
+- 部分：25 / 88 (28%)
+- 缺失：20 / 88 (23%)
 - NOT_VERIFIED：1 / 88 (1%)
 
 ## 当前 P0 问题

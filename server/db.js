@@ -1106,7 +1106,7 @@ function normalizeCostRates(db) {
   `);
 }
 
-function seed(db) {
+function seedSchema(db) {
   const now = new Date().toISOString();
   const insertPermission = db.prepare('INSERT OR IGNORE INTO permissions(code, name) VALUES (?, ?)');
   for (const permission of PERMISSIONS) insertPermission.run(...permission);
@@ -1133,6 +1133,21 @@ function seed(db) {
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
     for (const permission of permissions) insertRolePermission.run(roleId, permission);
   }
+
+  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
+  for (const s of [
+    ['subject-001', '1001', '库存现金', 'ASSET', 'DEBIT'],
+    ['subject-002', '1002', '银行存款', 'ASSET', 'DEBIT'],
+    ['subject-003', '1122', '应收账款', 'ASSET', 'DEBIT'],
+    ['subject-004', '1405', '库存商品', 'ASSET', 'DEBIT'],
+    ['subject-005', '2202', '应付账款', 'LIABILITY', 'CREDIT'],
+    ['subject-006', '6001', '主营业务收入', 'REVENUE', 'CREDIT'],
+    ['subject-007', '6401', '主营业务成本', 'EXPENSE', 'DEBIT'],
+  ]) insertSubject.run(...s);
+}
+
+function seedDemoData(db) {
+  const now = new Date().toISOString();
 
   const insertUser = db.prepare('INSERT OR IGNORE INTO users(id, username, display_name, password_hash, password_salt, role_id, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)');
   for (const user of [
@@ -1180,21 +1195,25 @@ function seed(db) {
     insertInventory.run(wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
   }
 
-  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
-  for (const s of [
-    ['subject-001', '1001', '库存现金', 'ASSET', 'DEBIT'],
-    ['subject-002', '1002', '银行存款', 'ASSET', 'DEBIT'],
-    ['subject-003', '1122', '应收账款', 'ASSET', 'DEBIT'],
-    ['subject-004', '1405', '库存商品', 'ASSET', 'DEBIT'],
-    ['subject-005', '2202', '应付账款', 'LIABILITY', 'CREDIT'],
-    ['subject-006', '6001', '主营业务收入', 'REVENUE', 'CREDIT'],
-    ['subject-007', '6401', '主营业务成本', 'EXPENSE', 'DEBIT'],
-  ]) insertSubject.run(...s);
-
   db.prepare("INSERT OR IGNORE INTO sales_orders (id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,created_at,updated_at) VALUES ('order-demo-001','SO-DEMO-001','customer-001','SUBMITTED',684300,'首张演示订单，等待销售主管审核','user-sales',?,?,?)").run(now, now, now);
   db.prepare("INSERT OR IGNORE INTO sales_order_items (id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES ('item-demo-001','order-demo-001','product-001',2,259900,519800,1)").run();
   db.prepare("INSERT OR IGNORE INTO sales_order_items (id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES ('item-demo-002','order-demo-001','product-002',5,32900,164500,2)").run();
   db.prepare("INSERT OR IGNORE INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES ('audit-demo-001','user-sales','CREATE','SALES_ORDER','order-demo-001','创建并提交演示订单 SO-DEMO-001',?)").run(now);
+}
+
+// demo seed gating: production 默认禁止;开发/测试保持默认行为
+// - ERP_SEED_DEMO=true  → 强制种子(任意环境)
+// - NODE_ENV=production → 不种子(除非 ERP_SEED_DEMO=true)
+// - 其他(开发/测试) → 种子(保留现有测试 / 本地体验)
+export function shouldSeedDemoData() {
+  if (process.env.ERP_SEED_DEMO === 'true') return true;
+  if (process.env.NODE_ENV === 'production') return false;
+  return true;
+}
+
+function seed(db) {
+  seedSchema(db);
+  if (shouldSeedDemoData()) seedDemoData(db);
 }
 
 export function transaction(db, work) {
