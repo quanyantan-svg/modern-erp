@@ -195,7 +195,7 @@ export function ProductionOrders({ user, notify }) {
   const [view, setView] = useState(null);
   const load = () => api('/api/production-orders?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="生产工单" subtitle="生产任务排程与跟踪" action={can(user, 'PRODUCTION_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建工单</button>}>
+  return <Panel title="生产工单" subtitle="生产任务排程与跟踪" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建工单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索工单号或产品" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="PENDING">待生产</option><option value="IN_PROGRESS">生产中</option><option value="COMPLETED">已完成</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>工单号</th><th>产品</th><th className="number">数量</th><th>计划开始</th><th>状态</th><th>完工</th></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{item.quantity}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={item.statusLabel}/></td><td className="number">{item.totalOutput || 0}</td></tr>)}
@@ -264,9 +264,9 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       {!detail.items?.length && <tbody><tr><td colspan="3" style={{textAlign:'center',color:'#999'}}>无配料记录</td></tr></tbody>}
       </table>
       <div className="form-actions" style={{marginTop:'1rem'}}>
-        {detail.status === 'PENDING' && can(user, 'PRODUCTION_START') && <button className="primary" onClick={startOrder}>开工</button>}
-        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_COMPLETE') && <button className="primary" onClick={completeOrder}>完工</button>}
-        {detail.status !== 'COMPLETED' && can(user, 'PRODUCTION_CANCEL') && <button className="danger-button" onClick={cancelOrder}>取消</button>}
+        {detail.status === 'PENDING' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>开工</button>}
+        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_COMPLETE') && <button className="primary" onClick={completeOrder}>完工</button>}
+        {detail.status !== 'COMPLETED' && (can(user, 'PRODUCTION_ORDERS_CREATE') || can(user, 'PRODUCTION_ORDERS_START')) && <button className="danger-button" onClick={cancelOrder}>取消</button>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>
     </> : <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>

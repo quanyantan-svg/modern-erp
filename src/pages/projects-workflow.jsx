@@ -57,13 +57,13 @@ export function Projects({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无项目"/>}
       </div>
-      {editing && <ProjectModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('项目已保存'); }} />}
+      {editing && <ProjectModal user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('项目已保存'); }} />}
       {detail && <ProjectDetailModal project={detail} onClose={() => setDetail(null)}/>}
     </Panel>
   );
 }
 
-function ProjectModal({ value, onClose, onSaved }) {
+function ProjectModal({ user, notify, value, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: '', description: '', project_type: 'IT', customer_id: '',
     start_date: new Date().toISOString().slice(0, 10), end_date: '', budget_cents: 0, manager_id: user?.id || '', ...value
@@ -192,12 +192,12 @@ export function ProjectTasks({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无任务"/>}
       </div>
-      {editing && <TaskModal projects={projects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('任务已保存'); }} />}
+      {editing && <TaskModal projects={projects} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('任务已保存'); }} />}
     </Panel>
   );
 }
 
-function TaskModal({ projects, value, onClose, onSaved }) {
+function TaskModal({ projects, notify, value, onClose, onSaved }) {
   const [form, setForm] = useState({
     project_id: '', name: '', description: '', priority: 'MEDIUM', planned_start: '', estimated_hours: 0, ...value
   });
@@ -287,12 +287,12 @@ export function Timesheets({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无工时记录"/>}
       </div>
-      {editing && <TimesheetModal projects={projects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('工时已记录'); }} />}
+      {editing && <TimesheetModal projects={projects} user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('工时已记录'); }} />}
     </Panel>
   );
 }
 
-function TimesheetModal({ projects, value, onClose, onSaved }) {
+function TimesheetModal({ projects, user, notify, value, onClose, onSaved }) {
   const [form, setForm] = useState({
     project_id: '', user_id: user?.id || '', work_date: new Date().toISOString().slice(0, 10),
     hours: 0, description: '', billable: true, ...value
@@ -413,12 +413,12 @@ export function Workflows({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无审批流程"/>}
       </div>
-      {editing && <WorkflowModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('流程已保存'); }} />}
+      {editing && <WorkflowModal notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('流程已保存'); }} />}
     </Panel>
   );
 }
 
-function WorkflowModal({ value, onClose, onSaved }) {
+function WorkflowModal({ notify, value, onClose, onSaved }) {
   const [form, setForm] = useState({
     name: '', entity_type: 'ORDER', steps: [{ approver_id: '', step_name: '' }], ...value
   });
