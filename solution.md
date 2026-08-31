@@ -159,6 +159,63 @@ MRP 根据需求来源读取销售订单明细，结合现有库存和计划收�
 综合评分 = 质量 × 40% + 交期 × 30% + 价格 × 20% + 服务 × 10%
 ```
 
+
+### 7.7 凭证审核流程
+
+凭证审核是财务模块的状态机扩展，确保 creator 和 approver 角色分离。
+
+#### 状态定义
+
+| 状态 | 说明 | 可执行动作 |
+|------|------|------------|
+| ENTERED | 录入完成 | submit |
+| SUBMITTED | 待审核 | approve / reject |
+| POSTED | 已审核 | — |
+| REJECTED | 已驳回 | edit 然后 ENTERED |
+
+#### 状态转换规则
+
+- `submitAccountingVoucher`：ENTERED / REJECTED → SUBMITTED；需要 `VOUCHER_SUBMIT` 权限；
+- `approveAccountingVoucher`：SUBMITTED → POSTED；需要 `VOUCHER_APPROVE` 权限；审核人不得为凭证创建人；
+- `rejectAccountingVoucher`：SUBMITTED → REJECTED；需要 `VOUCHER_APPROVE` 权限；驳回原因必填；
+- `updateAccountingVoucher`：REJECTED → ENTERED（自动重置）；ENTERED 可正常修改；SUBMITTED / POSTED 拒绝修改；
+- `deleteAccountingVoucher`：仅 ENTERED / REJECTED 可删除；SUBMITTED / POSTED 拒绝删除；
+
+#### 权限设计
+
+- `VOUCHER_SUBMIT`：提交凭证；
+- `VOUCHER_APPROVE`：审核和驳回凭证；
+- 默认情况下录入人和审核人为不同角色；`creator_id` 记录凭证创建人；`submitted_by` 记录提交人；
+
+#### SQLite 迁移
+
+通过 `migrateVoucherWorkflow()` 完成，兼容已有数据库：
+
+1. 通过 `ALTER TABLE` 添加 `rejection_reason`、`submitted_at`、`submitted_by` 列（如不存在）；
+2. 检测 `accounting_vouchers` 表的 CHECK 约束是否包含 `'ENTERED'`；
+3. 如不包含，重建表并更新 CHECK 约束为 `CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED'))`；
+4. 重建后保留已有数据，缺失状态字段的记录默认填充为 `'POSTED'`（已有凭证视为已审核）；
+5. 幂等执行，已迁移的数据库不会重复迁移；
+
+#### 审计日志
+
+- SUBMIT 操作写入动作 `SUBMIT`，说明包含凭证号；
+- APPROVE 操作写入动作 `APPROVE`，记录 `approver_id`；
+- REJECT 操作写入动作 `REJECT`，记录驳回原因；
+- UPDATE 操作在重新提交时写入说明包含 "重新提交后生效"；
+
+#### 报表过滤行为
+
+- `getTrialBalance()` 和财务汇总接口只查询 `status = 'POSTED'` 的凭证；
+- 录入中（ENTERED）和待审核（SUBMITTED）的凭证不参与期间汇总；
+
+#### API 路由
+
+- `POST /api/accounting-vouchers/:id/submit` — 提交凭证
+- `POST /api/accounting-vouchers/:id/approve` — 审核凭证
+- `POST /api/accounting-vouchers/:id/reject` — 驳回凭证（需 `reason` 字段）
+- `PATCH /api/accounting-vouchers/:id` — 修改凭证（仅 ENTERED / REJECTED）
+- `DELETE /api/accounting-vouchers/:id` — 删除凭证（仅 ENTERED / REJECTED）
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定
