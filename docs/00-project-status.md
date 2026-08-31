@@ -27,7 +27,8 @@
 | Supplier Schema Migration (v0.9.1 hotfix) | ✅ | 70df697 | 9 tests |
 | Production UI Refinement (iOS-inspired) | ✅ | 6168cdd | 11 tests |
 | **Phase A Production Acceptance (v0.9.2)** | ✅ | d33147b | 13 记录项 |
-| **Phase B Production Acceptance (v0.9.2)** | ✅ | 本提交 | 12 记录项 + 95 focused tests |
+| **Phase B Production Acceptance (v0.9.2)** | ✅ | b59de70 | 12 记录项 + 95 focused tests |
+| **Phase B Evidence Lock (v0.9.2)** | ✅ | 本提交 | 11 user-confirmed production manual checks + 1 retained automated-only |
 
 ## 当前测试状态
 
@@ -39,8 +40,8 @@
 
 - **Release**: v0.9.2
 - **Commit**: 6168cdd
-- **Phase A — Deployment Baseline**: ✅ 记录完成(基于 user-confirmed production manual verification;详见 `docs/07-production-acceptance.md`)。Phase A 中所有 server-side runtime 项均需在生产服务器(Ubuntu 22.04 / Tencent Cloud Lighthouse)上由具备 SSH 访问权限的运维直接复测后,才能从"user-confirmed"升级为"evidence-locked"。
-- **Phase B — Authentication & Permission**: ✅ 记录完成(基于 automated regression evidence + 待 production-side operator action 升级到 evidence-locked)。Phase B 中所有 production runtime / browser 项(B01 浏览器层 / B02 生产凭据 / B03 浏览器刷新 / B04 浏览器登出 / B05 生产烟雾 / B07 创建 smoke_accounting / B08 sidebar 渲染 / B09 浏览器 round-trip / B10 浏览器 round-trip / B11 跨角色浏览器对比 / B12 production journal)需要运维直接复测后,才能从"automated regression"升级为"evidence-locked"。
+- **Phase A — Deployment Baseline**: ✅ 记录完成(基于 user-confirmed production manual verification;详见 `docs/07-production-acceptance.md`)。
+- **Phase B — Authentication & Permission**: ✅ **`PASS — EVIDENCE LOCKED`**(基于 11 项 user-confirmed production manual verification + B06 保留 automated regression evidence;详见 `docs/07-production-acceptance.md`)。
 - **Phase C — Master Data CRUD**: NOT STARTED — 下一阶段,等待明确指令。
 
 ## 分值汇总
