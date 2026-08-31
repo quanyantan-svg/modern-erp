@@ -8,7 +8,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 当前版本 | 2.7.0 |
+| 当前版本 | 2.8.0 |
 | 更新日期 | 2026-08-31 |
 | 项目定位 | 原 ERP 核心业务的现代化模块化重构 |
 | 当前状态 | 可运行、可构建、具备基础自动化验证 |
@@ -124,6 +124,22 @@
 - FIN-026 利润表需要 `REPORT_VIEW` 权限；本年累计 / 同比环比 / 多月对比不在本任务范围；
 - FIN-027 当前 schema 中 EXPENSE 类型包含「主营业务成本」（subject-007）等成本类科目，报表口径合并展示为「营业成本与费用」，不强行拆分成本子类别。
 
+#### 5.5.4 资产负债表
+
+- FIN-028 资产负债表是 **as-of / 期间末报表**，反映所选期间**月末**（`asOfDate = LAST_DAY(period)`）的累计财务状况；与利润表的「时段」口径不同；
+- FIN-029 资产负债表查询参数为单月 `period=YYYY-MM`，缺省或格式错误返回 400；
+- FIN-030 资产负债表仅纳入 `accounting_vouchers.status = 'POSTED'` 的凭证，ENTERED / SUBMITTED / REJECTED 排除；
+- FIN-031 资产负债表科目范围：仅 ASSET / LIABILITY / EQUITY 三类；
+- FIN-032 余额方向：ASSET 净额 = `debit - credit`；LIABILITY 净额 = `credit - debit`；EQUITY 净额 = `credit - debit`（与试算平衡表 / 会计余额一致）；
+- FIN-033 期末余额 = `voucher_date <= asOfDate` 范围内的累计净额（沿用试算平衡表累计口径，不显示期初列）；
+- FIN-034 当前系统**未实现**自动损益结转 / 年结 / 利润结转至 EQUITY，资产负债表通过**虚拟权益行「未结转损益」**展示截至 `asOfDate` 累计的 REVENUE − EXPENSE 净额；
+- FIN-035 未结转损益 = Σ(REVENUE `credit - debit`) − Σ(EXPENSE `debit - credit`)，统计范围为所有 `status='POSTED'` 且 `voucher_date <= asOfDate` 的分录（自数据库可见最早起累计）；
+- FIN-036 扩展会计恒等式：`Assets = Liabilities + Posted Equity + Unclosed Profit`，API 字段 `equationValid` 为正式响应字段，使用整数（cents）严格比较 `difference === 0`；
+- FIN-037 OPEN 与 CLOSED 期间均允许查询资产负债表；资产负债表为只读操作，不触发期间写保护；
+- FIN-038 资产负债表需要 `REPORT_VIEW` 权限；
+- FIN-039 本任务不实现：本年累计资产负债表对比、自动结转、损益结转凭证生成、Year-End Carry Forward、独立 opening_balance 表、新增 EQUITY 子类型（如本年利润、利润分配）；
+- FIN-040 当前全局 seed 缺少 EQUITY 种子科目；测试 fixture 自行添加 EQUITY 科目（如 `4001 实收资本`），不修改全局 demo seed。
+
 
 ### 5.6 生产与质量
 
@@ -208,3 +224,4 @@ DRAFT ──提交──> SUBMITTED ──审核──> APPROVED
 | 2.5.0 | 2026-08-31 | 凭证审核流程：ENTERED→SUBMITTED→POSTED / REJECTED，creator/approver 分离，试算平衡表按POSTED过滤 |
 | 2.6.0 | 2026-08-31 | 期间关闭核心：Accounting Period Integrity + Period Closing Core + Period Reopen；CLOSED 期间阻断凭证 CRUD/Submit/Approve/Reject；试算平衡表与财务报表仅计入 POSTED |
 | 2.7.0 | 2026-08-31 | 利润表：单月期间；REVENUE → 营业收入（credit-debit）；EXPENSE → 营业成本与费用（debit-credit）；POSTED only；OPEN/CLOSED 均可查询 |
+| 2.8.0 | 2026-08-31 | 资产负债表：as-of 期间末累计；ASSET/LIABILITY/EQUITY 三段；未结转损益虚拟行（自数据库可见累计 REVENUE−EXPENSE）；equationValid 整数严格比较；OPEN/CLOSED 均可查询 |

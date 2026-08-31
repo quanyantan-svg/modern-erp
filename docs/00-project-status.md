@@ -16,19 +16,20 @@
 | Production Order Core Workflow | ✅ | 5809edb | 8 tests |
 | Voucher Approval Workflow | ✅ | 9e8aab4 | 15 tests |
 | Accounting Period Integrity / Period Closing Core | ✅ | ee3168b | 13 tests |
-| Income Statement | ✅ | 待提交 | 21 tests |
+| Income Statement | ✅ | 28c2f51 | 21 tests |
+| Balance Sheet | ✅ | 待提交 | 28 tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js
-- 89 tests / 30 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js
+- 117 tests / 41 suites
 - **全部通过**
 
 ## 分值汇总
 
-- 完整：39 / 88 (44%)
+- 完整：40 / 88 (45%)
 - 部分：27 / 88 (31%)
-- 缺失：21 / 88 (24%)
+- 缺失：20 / 88 (23%)
 - NOT_VERIFIED：1 / 88 (1%)
 
 ## 当前 P0 问题
@@ -43,7 +44,7 @@
 - 凭证模板（缺失）
 - 试算平衡表（部分，按POSTED过滤）
 - 利润表（已升级为完整：单月期间；REVENUE/EXPENSE；POSTED only）
-- 资产负债表（缺失）
+- 资产负债表（已升级为完整：as-of 期间末累计；未结转损益虚拟行；equationValid 整数比较）
 - 现金流量表（缺失）
 - 往来对账（基础）
 - 银行对账（基础）
@@ -65,8 +66,8 @@
 
 | # | 模块 | 功能 | 当前 | 优先级 | 依赖 | 备注 |
 |---|------|------|------|--------|------|------|
-| 1 | 报表 | 利润表 | 完整 | P1 | 凭证审核 ✅ + 期间结账 ✅ | 本次实现 |
-| 2 | 报表 | 资产负债表 | 缺失 | P1 | 凭证审核 ✅ + 期间结账 ✅ | 新增 |
+| 1 | 报表 | 利润表 | 完整 | P1 | 凭证审核 ✅ + 期间结账 ✅ | 已完成 |
+| 2 | 报表 | 资产负债表 | 完整 | P1 | 凭证审核 ✅ + 期间结账 ✅ | 本次实现 |
 | 3 | 报表 | 现金流量表 | 缺失 | P2 | 凭证审核 ✅ + 期间结账 ✅ | 新增 |
 | 4 | 财务 | 凭证字 + 编号规则 | 部分 | P1 | — | 已有表，编号规则未完善 |
 | 5 | 财务 | Year-End / 年结 | NOT_VERIFIED | P1 | 期间结账 ✅ | 完整年结逻辑未实现 |

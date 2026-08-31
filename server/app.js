@@ -13,7 +13,7 @@ import {
   createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
   createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
   listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
@@ -224,6 +224,7 @@ async function handleApi(db, req, res, url) {
   // Dashboard Reports
   if (pathname === '/api/reports/financial-summary' && req.method === 'GET') return getFinancialSummary(db, res, actor, url);
   if (pathname === '/api/reports/income-statement' && req.method === 'GET') return getIncomeStatement(db, res, actor, url);
+  if (pathname === '/api/reports/balance-sheet' && req.method === 'GET') return getBalanceSheet(db, res, actor, url);
   if (pathname === '/api/reports/inventory-status' && req.method === 'GET') return getInventoryStatus(db, res, actor, url);
   if (pathname === '/api/reports/sales-analysis' && req.method === 'GET') return getSalesAnalysis(db, res, actor, url);
   if (pathname === '/api/bank-statements' && req.method === 'GET') return listBankStatements(db, res, actor, url);

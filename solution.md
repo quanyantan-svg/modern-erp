@@ -392,6 +392,182 @@ GET /api/reports/income-statement?period=YYYY-MM
 #### UI
 
 最小集成于 `src/pages/accounting.jsx` 报表 tab,沿用现有 API 调用与权限风格。前端隐藏菜单由 `REPORT_VIEW` 控制,但 **API 权限仍是最终安全边界**。
+
+### 7.10 资产负债表
+
+资产负债表（Balance Sheet）反映截至指定期间月末的财务状况，是 as-of / period-end 时点报表，与利润表（period-based）的口径不同。
+
+#### Handler
+
+`getBalanceSheet(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`。
+
+#### 期间语义
+
+- 入参：`period=YYYY-MM`
+- `asOfDate = LAST_DAY(period)`（月末）
+- 所有余额按 `voucher_date <= asOfDate` 累计计算
+- 不显示「期初余额」列（资产负债表标准形态，仅显示期末时点）
+
+#### 期末余额计算
+
+沿用 `getAccountingBalances` 的方向规则：
+
+| Subject Type | 净额公式 |
+|--------------|---------|
+| ASSET | `debit_total - credit_total` |
+| LIABILITY | `credit_total - debit_total` |
+| EQUITY | `credit_total - debit_total` |
+
+聚合 SQL：
+
+```sql
+SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+FROM accounting_entries e
+JOIN accounting_vouchers v ON v.id = e.voucher_id
+JOIN accounting_subjects s ON s.id = e.subject_id
+WHERE v.status = 'POSTED'
+  AND v.voucher_date <= ?
+  AND s.type IN ('ASSET', 'LIABILITY', 'EQUITY')
+GROUP BY s.id
+```
+
+#### 未结转损益（Unclosed Accumulated Profit）
+
+当前系统**没有自动损益结转**机制。`本年利润` 或 `利润分配` 之类的 EQUITY 子科目也不存在。为使扩展恒等式成立，资产负债表引入虚拟行「未结转损益」：
+
+```sql
+SELECT
+  SUM(CASE WHEN e.direction='CREDIT' THEN e.amount_cents ELSE 0 END)
+  - SUM(CASE WHEN e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END) AS revenue_net
+FROM accounting_entries e
+JOIN accounting_vouchers v ON v.id = e.voucher_id
+JOIN accounting_subjects s ON s.id = e.subject_id
+WHERE v.status = 'POSTED'
+  AND v.voucher_date <= ?
+  AND s.type = 'REVENUE';
+
+-- 同理 expense_net = debit_total - credit_total (EXPENSE)
+
+unclosed_profit = revenue_net - expense_net
+```
+
+**统计范围**：所有 `status='POSTED'` 且 `voucher_date <= asOfDate` 的 REVENUE / EXPENSE 分录。**自数据库可见最早起累计**，不假设会计年度起点为 1 月 1 日（当前 schema 无 fiscal year 字段）。
+
+**该虚拟行不写入数据库**，仅为查询展示用。
+
+#### 扩展会计恒等式
+
+由于未结转损益是虚拟行，标准恒等式 `A = L + E` 在当前系统下形式化为：
+
+```
+Assets = Liabilities + Posted Equity + Unclosed Profit
+```
+
+#### API
+
+```
+GET /api/reports/balance-sheet?period=YYYY-MM
+```
+
+- `period` 缺失 → 400
+- `period` 非 `YYYY-MM` → 400
+- 月份超出 01-12 → 400
+- 无 `REPORT_VIEW` → 403
+- 合法请求 → 200
+
+#### Response
+
+```json
+{
+  "period": "2026-08",
+  "asOfDate": "2026-08-31",
+  "assets": {
+    "total": 1000000,
+    "subjects": [
+      { "code": "1001", "name": "库存现金", "amount": 50000 },
+      { "code": "1002", "name": "银行存款", "amount": 800000 }
+    ]
+  },
+  "liabilities": {
+    "total": 200000,
+    "subjects": [
+      { "code": "2202", "name": "应付账款", "amount": 200000 }
+    ]
+  },
+  "equity": {
+    "postedEquity": 500000,
+    "unclosedProfit": 300000,
+    "total": 800000,
+    "subjects": [
+      { "code": "4001", "name": "实收资本", "amount": 500000 }
+    ]
+  },
+  "totalAssets": 1000000,
+  "totalLiabilitiesAndEquity": 1000000,
+  "difference": 0,
+  "equationValid": true
+}
+```
+
+#### equationValid 规则
+
+```javascript
+const totalAssets = assets.total;
+const totalLiabilitiesAndEquity = liabilities.total + equity.postedEquity + equity.unclosedProfit;
+const difference = totalAssets - totalLiabilitiesAndEquity;
+const equationValid = difference === 0;
+```
+
+- 使用整数（cents）严格比较，无浮点容差
+- `equationValid` 为正式响应字段，每次请求均返回
+- UI 必须如实展示 `difference` 与 `equationValid`，不平衡时不隐藏差额，不强制修改数字使等式成立
+
+#### EQUITY 测试数据
+
+当前全局 seed 中无 EQUITY 科目。测试 fixture 在 `before()` 中通过直接 DB 插入：
+
+```sql
+INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active)
+VALUES ('subject-4001', '4001', '实收资本', 'EQUITY', 'CREDIT', 1)
+```
+
+**不修改全局 production demo seed**——除非 `document.md` 明确要求默认系统必须存在 EQUITY 科目。
+
+#### UI
+
+最小集成于 `src/pages/accounting.jsx`，新增 `资产负债表` tab：
+
+- 期间选择器 + 查询按钮
+- 三段表格：资产 / 负债 / 权益
+- 权益段含「未结转损益」虚拟行（不可编辑、不持久化）
+- 顶部显示 `equationValid` 状态与 `difference`
+- 平衡时：「资产 = 负债 + 权益」（绿色指示）
+- 不平衡时：明显显示差额（如红色横幅 + 差额金额）
+- 不通过修改报表数字强行让等式成立
+
+#### Schema 限制
+
+当前 `accounting_subjects` 与 `accounting_vouchers` schema 不包含：
+- fiscal_year / 会计年度字段
+- opening_balance / 期初余额表
+- 本年利润 / 利润分配 EQUITY 子科目
+- year-end / 期间结转凭证生成机制
+
+因此资产负债表只能做到「as-of 期间末累计 + 未结转损益虚拟展示」，不能等同于企业级完整资产负债表。
+
+#### 不在本任务范围
+
+- 现金流量表
+- 年结 / Year-End Carry Forward / 自动结转
+- 损益结转凭证生成
+- 独立 opening_balance 表
+- 本年累计对比 / 同比 / 环比
+- 新增 EQUITY 子类型（本年利润、利润分配等）
+- 多组织 / 多账套 / 多币种
+- BI / 自定义报表设计器
+- 修改 `createAccountingVoucher` period 字段
+- 修改全局 demo seed（仅测试 fixture 添加 EQUITY）
 评分结果按阈值划分为 A、B、C、D 等级。
 
 ## 8. API 设计约定

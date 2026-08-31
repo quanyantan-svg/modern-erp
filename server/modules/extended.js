@@ -997,7 +997,8 @@ export function getIncomeStatement(db, res, actor, url) {
   if (month < 1 || month > 12) throw new HttpError(400, "月份必须在 01-12 之间");
 
   const startDate = period + "-01";
-  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+  const lastDay = new Date(year, month, 0).getDate();
+  const endDate = period + "-" + String(lastDay).padStart(2, "0");
 
   const aggregateByType = db.prepare(`
     SELECT s.code, s.name, s.type,
@@ -1036,6 +1037,104 @@ export function getIncomeStatement(db, res, actor, url) {
     expense,
     profit,
     sections: [revenueSection, expenseSection],
+  });
+}
+
+// ============ 资产负债表 ============
+// as-of / period-end 时点报表。统计 voucher_date <= asOfDate 的累计余额。
+// 当前 schema 无自动损益结转，通过「未结转损益」虚拟权益行补偿。
+// 扩展恒等式：Assets = Liabilities + Posted Equity + Unclosed Profit。
+
+export function getBalanceSheet(db, res, actor, url) {
+  allow(actor, "REPORT_VIEW");
+  const period = url.searchParams.get("period");
+  if (!period) throw new HttpError(400, "请指定期间，格式: YYYY-MM");
+  const match = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!match) throw new HttpError(400, "期间格式错误，应为 YYYY-MM");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) throw new HttpError(400, "月份必须在 01-12 之间");
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const asOfDate = period + "-" + String(lastDay).padStart(2, "0");
+
+  const balances = db.prepare(`
+    SELECT s.code, s.name, s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date <= ?
+      AND s.type IN ('ASSET', 'LIABILITY', 'EQUITY')
+    GROUP BY s.id
+    ORDER BY s.code
+  `).all(asOfDate);
+
+  const buildSection = (type) => {
+    const subjects = balances
+      .filter(r => r.type === type)
+      .map(r => {
+        const credit = Number(r.credit_total);
+        const debit = Number(r.debit_total);
+        const amount = (type === 'ASSET') ? debit - credit : credit - debit;
+        return { code: r.code, name: r.name, amount };
+      })
+      .filter(s => s.amount !== 0);
+    const total = subjects.reduce((s, x) => s + x.amount, 0);
+    return { total, subjects };
+  };
+
+  const assets = buildSection('ASSET');
+  const liabilities = buildSection('LIABILITY');
+  const equityPosted = buildSection('EQUITY');
+
+  // 未结转损益：累计 voucher_date <= asOfDate 的 REVENUE/EXPENSE 净额
+  const profitRows = db.prepare(`
+    SELECT s.type,
+      SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
+      SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id = e.voucher_id
+    JOIN accounting_subjects s ON s.id = e.subject_id
+    WHERE v.status = 'POSTED'
+      AND v.voucher_date <= ?
+      AND s.type IN ('REVENUE', 'EXPENSE')
+    GROUP BY s.type
+  `).all(asOfDate);
+
+  let revenueNet = 0;
+  let expenseNet = 0;
+  for (const r of profitRows) {
+    const credit = Number(r.credit_total);
+    const debit = Number(r.debit_total);
+    if (r.type === 'REVENUE') revenueNet = credit - debit;
+    if (r.type === 'EXPENSE') expenseNet = debit - credit;
+  }
+  const unclosedProfit = revenueNet - expenseNet;
+  const equityTotal = equityPosted.total + unclosedProfit;
+
+  const totalAssets = assets.total;
+  const totalLiabilitiesAndEquity = liabilities.total + equityTotal;
+  const difference = totalAssets - totalLiabilitiesAndEquity;
+  const equationValid = difference === 0;
+
+  return send(res, 200, {
+    period,
+    asOfDate,
+    assets,
+    liabilities,
+    equity: {
+      postedEquity: equityPosted.total,
+      unclosedProfit,
+      total: equityTotal,
+      subjects: equityPosted.subjects,
+    },
+    totalAssets,
+    totalLiabilitiesAndEquity,
+    difference,
+    equationValid,
   });
 }
 
