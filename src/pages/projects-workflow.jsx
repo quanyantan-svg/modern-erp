@@ -72,8 +72,8 @@ function ProjectModal({ user, notify, value, onClose, onSaved }) {
   const [users, setUsers] = useState([]);
 
   useEffect(() => {
-    api('/api/customers').then((r) => setCustomers(r.customers || []));
-    api('/api/users').then((r) => setUsers(r.users || []));
+    api('/api/customers').then((r) => setCustomers(r.customers || [])).catch(() => {});
+    api('/api/users/lookup').then((r) => setUsers(r.users || [])).catch((e) => notify(e.message, 'error'));
   }, []);
 
   async function save(e) {
@@ -101,7 +101,7 @@ function ProjectModal({ user, notify, value, onClose, onSaved }) {
         <label>开始日期<input type="date" value={form.start_date} onChange={(e) => setForm({...form, start_date: e.target.value})} required/></label>
         <label>项目经理<select value={form.manager_id} onChange={(e) => setForm({...form, manager_id: e.target.value})} required>
           <option value="">选择经理</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {users.map((u) => <option key={u.id} value={u.id}>{u.displayName || u.username}</option>)}
         </select></label>
         <label className="full">项目描述<textarea value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} rows={2}/></label>
         <FormActions onClose={onClose}/>

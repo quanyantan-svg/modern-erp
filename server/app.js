@@ -78,6 +78,7 @@ async function handleApi(db, req, res, url) {
   const roleMatch = pathname.match(/^\/api\/roles\/([^/]+)$/);
   if (roleMatch && req.method === 'PATCH') return updateRole(db, req, res, actor, roleMatch[1]);
 
+  if (pathname === '/api/users/lookup' && req.method === 'GET') return listProjectManagerCandidates(db, res, actor);
   if (pathname === '/api/users' && req.method === 'GET') return listUsers(db, res, actor);
   if (pathname === '/api/users' && req.method === 'POST') return createUser(db, req, res, actor);
   const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
@@ -570,6 +571,17 @@ function listUsers(db, res, actor) {
     SELECT u.id,u.username,u.display_name displayName,u.active,u.created_at createdAt,
            r.id roleId,r.name roleName,r.code roleCode
     FROM users u JOIN roles r ON r.id=u.role_id ORDER BY u.created_at
+  `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
+  return send(res, 200, { users });
+}
+
+function listProjectManagerCandidates(db, res, actor) {
+  allow(actor, 'PROJECT_MANAGE');
+  const users = db.prepare(`
+    SELECT u.id, u.username, u.display_name displayName, u.active
+    FROM users u
+    WHERE u.active = 1
+    ORDER BY u.display_name, u.username
   `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
   return send(res, 200, { users });
 }
