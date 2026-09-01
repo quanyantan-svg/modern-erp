@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { centsToYuanInput, yuanToCents } from '../lib/money.js';
 
 function currentPeriod() {
   const d = new Date();
@@ -503,6 +504,9 @@ function CashJournalDetail({ value, onClose }) {
 
 function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
   const isEdit = Boolean(value?.id);
+  // Form state holds YUAN strings (the unit the user types in). Conversion
+  // to backend integer cents happens only at the request boundary via
+  // yuanToCents(). See src/lib/money.js for the unit boundary contract.
   const [form, setForm] = useState(() => ({
     voucherDate: value?.voucher_date || new Date().toISOString().slice(0, 10),
     remark: value?.remark || '',
@@ -510,11 +514,11 @@ function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
       ? value.entries.map((e) => ({
           subjectId: e.subject_id || e.subjectId || '',
           direction: e.direction || 'DEBIT',
-          amountCents: e.amount_cents ?? e.amountCents ?? '',
+          amount: centsToYuanInput(e.amount_cents ?? e.amountCents),
           summary: e.summary || '',
         }))
-      : [{ subjectId: '', direction: 'DEBIT', amountCents: '', summary: '' },
-         { subjectId: '', direction: 'CREDIT', amountCents: '', summary: '' }],
+      : [{ subjectId: '', direction: 'DEBIT', amount: '', summary: '' },
+         { subjectId: '', direction: 'CREDIT', amount: '', summary: '' }],
   }));
 
   function setEntry(i, field, val) {
@@ -523,43 +527,55 @@ function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
     setForm({ ...form, entries: next });
   }
   function addEntry() {
-    setForm({ ...form, entries: [...form.entries, { subjectId: '', direction: 'DEBIT', amountCents: '', summary: '' }] });
+    setForm({ ...form, entries: [...form.entries, { subjectId: '', direction: 'DEBIT', amount: '', summary: '' }] });
   }
   function removeEntry(i) {
     setForm({ ...form, entries: form.entries.filter((_, idx) => idx !== i) });
   }
 
   // Frontend UX validation; backend still authoritatively enforces.
-  const validation = (() => {
-    if (form.entries.length < 2) return '至少需要两条分录';
+  // Convert each entry's yuan amount to integer cents for arithmetic so
+  // balance check operates in cents space (no float drift).
+  const { validation, debitTotal, creditTotal } = (() => {
+    if (form.entries.length < 2) return { validation: '至少需要两条分录', debitTotal: 0, creditTotal: 0 };
     let debit = 0, credit = 0;
     for (const [i, e] of form.entries.entries()) {
-      if (!e.subjectId) return `第 ${i + 1} 行科目不能为空`;
-      if (!['DEBIT', 'CREDIT'].includes(e.direction)) return `第 ${i + 1} 行方向不合法`;
-      const amt = Number(e.amountCents);
-      if (!Number.isFinite(amt) || amt <= 0) return `第 ${i + 1} 行金额必须大于 0`;
-      if (e.direction === 'DEBIT') debit += amt; else credit += amt;
+      if (!e.subjectId) return { validation: `第 ${i + 1} 行科目不能为空`, debitTotal: 0, creditTotal: 0 };
+      if (!['DEBIT', 'CREDIT'].includes(e.direction)) return { validation: `第 ${i + 1} 行方向不合法`, debitTotal: 0, creditTotal: 0 };
+      const cents = yuanToCents(e.amount);
+      if (cents === null || cents <= 0) return { validation: `第 ${i + 1} 行金额必须大于 0`, debitTotal: 0, creditTotal: 0 };
+      if (e.direction === 'DEBIT') debit += cents; else credit += cents;
     }
-    if (Math.abs(debit - credit) > 1) return `借贷不平衡:借方 ${debit} / 贷方 ${credit}`;
-    return null;
+    const diff = Math.abs(debit - credit);
+    if (diff > 1) return { validation: `借贷不平衡:借方 ${debit / 100} 元 / 贷方 ${credit / 100} 元`, debitTotal: debit, creditTotal: credit };
+    return { validation: null, debitTotal: debit, creditTotal: credit };
   })();
 
   async function save(e) {
     e.preventDefault();
     if (validation) { notify(validation, 'error'); return; }
+    // Build the canonical request body: entries in integer cents (backend contract).
+    const body = {
+      voucherDate: form.voucherDate,
+      remark: form.remark,
+      entries: form.entries.map((e) => ({
+        subjectId: e.subjectId,
+        direction: e.direction,
+        amountCents: yuanToCents(e.amount),
+        summary: e.summary,
+      })),
+    };
     try {
       if (isEdit) {
-        await api(`/api/accounting-vouchers/${value.id}`, { method: 'PATCH', body: form });
+        await api(`/api/accounting-vouchers/${value.id}`, { method: 'PATCH', body });
       } else {
-        await api('/api/accounting-vouchers', { method: 'POST', body: form });
+        await api('/api/accounting-vouchers', { method: 'POST', body });
       }
       onSaved();
     } catch (err) { notify(err.message, 'error'); }
   }
 
-  const debitTotal = form.entries.filter((e) => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents || 0), 0);
-  const creditTotal = form.entries.filter((e) => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents || 0), 0);
-  const balanced = Math.abs(debitTotal - creditTotal) <= 1 && form.entries.length >= 2;
+  const balanced = validation === null && form.entries.length >= 2;
 
   return <Modal title={isEdit ? `编辑凭证 ${value.voucher_no}` : '新建凭证'} onClose={onClose} wide>
     <form className="form-grid" onSubmit={save}>
@@ -581,7 +597,7 @@ function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
                   <option value="DEBIT">借</option>
                   <option value="CREDIT">贷</option>
                 </select></td>
-                <td><input type="number" step="0.01" min="0" value={entry.amountCents} onChange={(e) => setEntry(i, 'amountCents', e.target.value)} required/></td>
+                <td><input type="number" step="0.01" min="0" value={entry.amount} onChange={(e) => setEntry(i, 'amount', e.target.value)} required/></td>
                 <td><input value={entry.summary} onChange={(e) => setEntry(i, 'summary', e.target.value)}/></td>
                 <td>{form.entries.length > 2 && <button type="button" className="danger-button" onClick={() => removeEntry(i)}>删除</button>}</td>
               </tr>

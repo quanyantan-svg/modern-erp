@@ -318,15 +318,22 @@ describe('Phase E — frontend voucher UI wiring', () => {
     assert.ok(/借贷不平衡/.test(modal), 'balance check must surface 借贷不平衡');
   });
 
-  test('VoucherModal uses integer amountCents — no floating-point arithmetic on money fields', () => {
+  test('VoucherModal stores yuan strings and converts to integer amountCents only at the request boundary', () => {
     const src = readSrc('pages/accounting.jsx');
     const modal = extractComponent(src, 'VoucherModal');
     assert.ok(modal, 'VoucherModal must be defined');
-    // The amount input is forwarded as amountCents — backend stores integer cents.
-    assert.ok(/setEntry\(i,\s*'amountCents',\s*e\.target\.value\)/.test(modal),
-      'UI must forward amount via amountCents field (integer cents)');
+    // The amount input must be a yuan string field, NOT named amountCents.
+    assert.ok(/setEntry\(i,\s*'amount',\s*e\.target\.value\)/.test(modal),
+      'amount input must be stored under the `amount` field (yuan string)');
+    // Conversion to backend amountCents happens at the request body build step,
+    // not at the input boundary.
+    assert.ok(/amountCents:\s*yuanToCents\(e\.amount\)/.test(modal),
+      'amountCents must be derived from yuanToCents(e.amount) at the request boundary');
+    // Defence in depth: the UI must NOT use Math.round(yuan*100) — that produces
+    // float drift like 10000.01 → 1000000.9999999. The dedicated helpers live in
+    // src/lib/money.js.
     assert.equal(/Math\.round\([^)]*\*\s*100/.test(modal), false,
-      'UI must not invent amountCents = round(yuan*100); backend contract is integer cents');
+      'UI must not invent amountCents = round(yuan*100); use yuanToCents helper instead');
   });
 
   test('voucher tab keeps POSTED-only reporting rules unchanged (no UI drift)', () => {
