@@ -1,11 +1,44 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
 function currentPeriod() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
+
+// ============ Accounting label maps ============
+//
+// Source labels for accounting vouchers. Backend creates MANUAL vouchers
+// via createAccountingVoucher and SALES_ORDER / PURCHASE_ORDER via legacy
+// auto-posting paths. unknown source_type renders the raw code (never
+// silently masks as another business type).
+const VOUCHER_SOURCE_LABELS = {
+  MANUAL: '手工凭证',
+  SALES_ORDER: '销售订单',
+  PURCHASE_ORDER: '采购订单',
+  INVENTORY_TRANSFER: '库存调拨',
+};
+function voucherSourceLabel(type) {
+  if (!type) return '—';
+  return VOUCHER_SOURCE_LABELS[type] || type;
+}
+
+const VOUCHER_STATUS_LABELS = {
+  ENTERED: '已录入',
+  SUBMITTED: '待审核',
+  POSTED: '已过账',
+  REJECTED: '已驳回',
+};
+// Map raw status to existing CSS class. POSTED reuses .status.completed
+// (green/success) since no dedicated .status.posted rule exists.
+// CSS is intentionally untouched (per scope rule).
+const VOUCHER_STATUS_BADGE = {
+  ENTERED: { type: 'info', status: 'draft' },
+  SUBMITTED: { type: 'warning', status: 'submitted' },
+  POSTED: { type: 'success', status: 'completed' },
+  REJECTED: { type: 'danger', status: 'rejected' },
+};
 
 function IncomeStatement({ user, notify }) {
   const [period, setPeriod] = useState(currentPeriod());
@@ -227,7 +260,14 @@ export function Accounting({ user, notify }) {
   const [subjects, setSubjects] = useState([]);
   const [vouchers, setVouchers] = useState([]);
   const [viewing, setViewing] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [tab, setTab] = useState('vouchers');
+
+  function loadVouchers() {
+    api('/api/accounting-vouchers').then((r) => setVouchers(r.vouchers || []))
+      .catch((e) => notify(e.message, 'error'));
+  }
+
   useEffect(() => {
     Promise.all([api('/api/accounting-subjects'), api('/api/accounting-vouchers')]).then(([s, v]) => {
       setSubjects(s.subjects || []);
@@ -236,14 +276,16 @@ export function Accounting({ user, notify }) {
   }, []);
   function formatMoney(c) { return money(c); }
   const showReport = can(user, 'REPORT_VIEW');
+  const canCreateVoucher = can(user, 'ACCOUNTING_VIEW');
   return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
     <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
-    {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号"/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{v.source_type === 'SALES_ORDER' ? '销售订单' : v.source_type === 'PURCHASE_ORDER' ? '采购订单' : '库存调拨'}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
+    {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号" action={canCreateVoucher && <button className="primary" onClick={() => setEditing({})}>＋ 新建凭证</button>}/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>状态</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{voucherSourceLabel(v.source_type)}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td><Badge type={VOUCHER_STATUS_BADGE[v.status]?.type}>{VOUCHER_STATUS_LABELS[v.status] || v.status}</Badge></td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
     {tab === 'income' && showReport && <IncomeStatement user={user} notify={notify} />}
     {tab === 'balance' && showReport && <BalanceSheet user={user} notify={notify} />}
     {tab === 'trial' && showReport && <TrialBalanceReport user={user} notify={notify} />}
-    {viewing && <VoucherDetail value={viewing} onClose={() => setViewing(null)} formatMoney={formatMoney}/>}
+    {editing && <VoucherModal subjects={subjects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); loadVouchers(); notify('凭证已保存'); }} notify={notify}/>}
+    {viewing && <VoucherDetail user={user} value={viewing} onClose={() => setViewing(null)} onChanged={() => { setViewing(null); loadVouchers(); }} onEdit={(voucher) => { setEditing(voucher); setViewing(null); }} formatMoney={formatMoney} notify={notify}/>}
   </Panel>;
 }
 
@@ -459,12 +501,188 @@ function CashJournalDetail({ value, onClose }) {
 }
 
 
-function VoucherDetail({ value, onClose, formatMoney }) {
+function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
+  const isEdit = Boolean(value?.id);
+  const [form, setForm] = useState(() => ({
+    voucherDate: value?.voucher_date || new Date().toISOString().slice(0, 10),
+    remark: value?.remark || '',
+    entries: value?.entries?.length
+      ? value.entries.map((e) => ({
+          subjectId: e.subject_id || e.subjectId || '',
+          direction: e.direction || 'DEBIT',
+          amountCents: e.amount_cents ?? e.amountCents ?? '',
+          summary: e.summary || '',
+        }))
+      : [{ subjectId: '', direction: 'DEBIT', amountCents: '', summary: '' },
+         { subjectId: '', direction: 'CREDIT', amountCents: '', summary: '' }],
+  }));
+
+  function setEntry(i, field, val) {
+    const next = [...form.entries];
+    next[i] = { ...next[i], [field]: val };
+    setForm({ ...form, entries: next });
+  }
+  function addEntry() {
+    setForm({ ...form, entries: [...form.entries, { subjectId: '', direction: 'DEBIT', amountCents: '', summary: '' }] });
+  }
+  function removeEntry(i) {
+    setForm({ ...form, entries: form.entries.filter((_, idx) => idx !== i) });
+  }
+
+  // Frontend UX validation; backend still authoritatively enforces.
+  const validation = (() => {
+    if (form.entries.length < 2) return '至少需要两条分录';
+    let debit = 0, credit = 0;
+    for (const [i, e] of form.entries.entries()) {
+      if (!e.subjectId) return `第 ${i + 1} 行科目不能为空`;
+      if (!['DEBIT', 'CREDIT'].includes(e.direction)) return `第 ${i + 1} 行方向不合法`;
+      const amt = Number(e.amountCents);
+      if (!Number.isFinite(amt) || amt <= 0) return `第 ${i + 1} 行金额必须大于 0`;
+      if (e.direction === 'DEBIT') debit += amt; else credit += amt;
+    }
+    if (Math.abs(debit - credit) > 1) return `借贷不平衡:借方 ${debit} / 贷方 ${credit}`;
+    return null;
+  })();
+
+  async function save(e) {
+    e.preventDefault();
+    if (validation) { notify(validation, 'error'); return; }
+    try {
+      if (isEdit) {
+        await api(`/api/accounting-vouchers/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/accounting-vouchers', { method: 'POST', body: form });
+      }
+      onSaved();
+    } catch (err) { notify(err.message, 'error'); }
+  }
+
+  const debitTotal = form.entries.filter((e) => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents || 0), 0);
+  const creditTotal = form.entries.filter((e) => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents || 0), 0);
+  const balanced = Math.abs(debitTotal - creditTotal) <= 1 && form.entries.length >= 2;
+
+  return <Modal title={isEdit ? `编辑凭证 ${value.voucher_no}` : '新建凭证'} onClose={onClose} wide>
+    <form className="form-grid" onSubmit={save}>
+      <label>凭证日期<input type="date" value={form.voucherDate} onChange={(e) => setForm({ ...form, voucherDate: e.target.value })} required/></label>
+      <label className="full">摘要<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
+      <h4 className="full">分录</h4>
+      <div className="table-wrap full">
+        <table>
+          <thead><tr><th>#</th><th>科目</th><th>方向</th><th className="number">金额（元）</th><th>摘要</th><th/></tr></thead>
+          <tbody>
+            {form.entries.map((entry, i) => (
+              <tr key={i}>
+                <td>{i + 1}</td>
+                <td><select value={entry.subjectId} onChange={(e) => setEntry(i, 'subjectId', e.target.value)} required>
+                  <option value="">选择科目</option>
+                  {subjects.map((s) => <option key={s.id} value={s.id}>{s.code} {s.name}</option>)}
+                </select></td>
+                <td><select value={entry.direction} onChange={(e) => setEntry(i, 'direction', e.target.value)}>
+                  <option value="DEBIT">借</option>
+                  <option value="CREDIT">贷</option>
+                </select></td>
+                <td><input type="number" step="0.01" min="0" value={entry.amountCents} onChange={(e) => setEntry(i, 'amountCents', e.target.value)} required/></td>
+                <td><input value={entry.summary} onChange={(e) => setEntry(i, 'summary', e.target.value)}/></td>
+                <td>{form.entries.length > 2 && <button type="button" className="danger-button" onClick={() => removeEntry(i)}>删除</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="subtotal-row">
+              <td colSpan={2}>合计</td>
+              <td className="number"><strong>借 {money(debitTotal)}</strong></td>
+              <td className="number"><strong>贷 {money(creditTotal)}</strong></td>
+              <td colSpan={2}><strong className={balanced ? 'positive' : 'negative'}>{balanced ? '借贷平衡' : '不平衡'}</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div className="full" style={{ display: 'flex', gap: 8 }}>
+        <button type="button" className="secondary" onClick={addEntry}>+ 新增分录</button>
+      </div>
+      {validation && <div className="error-banner full">{validation}</div>}
+      <div className="form-actions full">
+        <button type="button" className="secondary" onClick={onClose}>取消</button>
+        <button type="submit" className="primary" disabled={Boolean(validation)}>{isEdit ? '保存' : '保存为已录入'}</button>
+      </div>
+    </form>
+  </Modal>;
+}
+
+function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, notify }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState('');
   if (!value) return null;
+
+  const status = value.status;
+  const editable = value.source_type === 'MANUAL' && (status === 'ENTERED' || status === 'REJECTED') && can(user, 'ACCOUNTING_VIEW');
+  const deletable = editable;
+  const canSubmit = status === 'ENTERED' && can(user, 'VOUCHER_SUBMIT');
+  // Re-submit is allowed for REJECTED too (backend submitAccountingVoucher accepts both ENTERED and REJECTED).
+  const canResubmit = status === 'REJECTED' && can(user, 'VOUCHER_SUBMIT') && value.source_type === 'MANUAL';
+  const canApprove = status === 'SUBMITTED' && can(user, 'VOUCHER_APPROVE') && value.creator_id !== user?.id;
+  const isReadOnly = status === 'POSTED';
+
+  async function submit() {
+    try {
+      await api(`/api/accounting-vouchers/${value.id}/submit`, { method: 'POST', body: {} });
+      notify('凭证已提交');
+      onChanged();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+  async function approve() {
+    try {
+      await api(`/api/accounting-vouchers/${value.id}/approve`, { method: 'POST', body: {} });
+      notify('凭证已审核通过');
+      onChanged();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+  async function reject() {
+    const reason = rejectionReason.trim();
+    if (!reason) { notify('请输入驳回原因', 'error'); return; }
+    try {
+      await api(`/api/accounting-vouchers/${value.id}/reject`, { method: 'POST', body: { rejectionReason: reason } });
+      notify('凭证已驳回');
+      setRejecting(false); setRejectionReason('');
+      onChanged();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+  async function remove() {
+    if (!window.confirm('确认删除该凭证？此操作不可撤销。')) return;
+    try {
+      await api(`/api/accounting-vouchers/${value.id}`, { method: 'DELETE' });
+      notify('凭证已删除');
+      onChanged();
+    } catch (e) { notify(e.message, 'error'); }
+  }
+
+  const statusBadge = VOUCHER_STATUS_BADGE[status];
   return <Modal title={`凭证 ${value.voucher_no}`} onClose={onClose} wide>
-    <div className="detail-head"><div><span className="mono">{value.voucher_no}</span><h3>{value.source_type === 'SALES_ORDER' ? '销售订单' : value.source_type === 'PURCHASE_ORDER' ? '采购订单' : '库存调拨'}</h3><p>凭证日期：{value.voucher_date} · 制单人：{value.creatorName}</p></div></div>
+    <div className="detail-head">
+      <div>
+        <span className="mono">{value.voucher_no}</span>
+        <h3>{voucherSourceLabel(value.source_type)}{statusBadge && <> · <Badge type={statusBadge.type}>{VOUCHER_STATUS_LABELS[status] || status}</Badge></>}</h3>
+        <p>凭证日期：{value.voucher_date} · 制单人：{value.creatorName}{value.approver_id ? ` · 审核人：${value.approver_id}` : ''}</p>
+        {status === 'REJECTED' && value.rejection_reason && <p className="dim">驳回原因：{value.rejection_reason}</p>}
+      </div>
+    </div>
     <div className="table-wrap"><table><thead><tr><th>方向</th><th>科目</th><th>金额</th><th>摘要</th></tr></thead><tbody>
       {value.entries?.map((e) => <tr key={e.id}><td className={e.direction === 'DEBIT' ? 'positive' : 'negative'}>{e.direction === 'DEBIT' ? '借' : '贷'}</td><td>{e.subjectCode} {e.subjectName}</td><td className="number"><strong>{money(e.amount_cents)}</strong></td><td>{e.summary}</td></tr>)}
     </tbody><tfoot><tr><td colspan="2"/><td className="number"><strong>借方合计：{money(value.debitTotal)}</strong></td><td className="number"><strong>贷方合计：{money(value.creditTotal)}</strong></td></tr></tfoot></table></div>
+    {rejecting && <div className="form-grid" style={{ marginTop: 12 }}>
+      <label className="full">驳回原因<textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows={2} required/></label>
+      <div className="form-actions full">
+        <button type="button" className="secondary" onClick={() => { setRejecting(false); setRejectionReason(''); }}>取消</button>
+        <button type="button" className="danger-button" onClick={reject} disabled={!rejectionReason.trim()}>确认驳回</button>
+      </div>
+    </div>}
+    {!rejecting && (canSubmit || canResubmit || canApprove || editable || deletable) && <div className="form-actions full" style={{ marginTop: 12 }}>
+      {(canSubmit || canResubmit) && <button type="button" className="primary" onClick={submit}>{canResubmit ? '重新提交' : '提交'}</button>}
+      {canApprove && <button type="button" className="primary" onClick={approve}>审核通过</button>}
+      {canApprove && <button type="button" className="danger-button" onClick={() => setRejecting(true)}>驳回</button>}
+      {editable && <button type="button" className="secondary" onClick={() => onEdit?.(value)}>编辑</button>}
+      {deletable && <button type="button" className="danger-button" onClick={remove}>删除</button>}
+    </div>}
+    {isReadOnly && <p className="dim full" style={{ marginTop: 12 }}>已过账凭证为只读。</p>}
   </Modal>;
 }

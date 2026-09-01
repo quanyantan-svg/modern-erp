@@ -32,12 +32,13 @@
 | **Phase D Hotfix (project + production permissions)** | ✅ | 3d1a973 | 21 regression tests |
 | **Phase D Hotfix — Badge component repair** | ✅ | b8556f4 | 12 regression tests |
 | **Phase D Follow-up — ProductionOrderModal render loop fix** | ✅ | 本提交 | 9 regression tests |
-| **Phase D Hotfix — Project manager selector population** | ✅ | 本提交 | 26 regression tests |
+| **Phase D Hotfix — Project manager selector population** | ✅ | 7d3a3aa | 26 regression tests |
+| **Phase E Hotfix — Manual voucher workflow + role-accounting VOUCHER_SUBMIT** | ✅ | 本提交 | 27 regression tests |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js + server/phase-d-hfix.test.js + server/badge-defect.test.js + server/phase-d-renderloop.test.js + server/project-manager.test.js
-- 274 tests / 79 suites
+- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js + server/phase-d-hfix.test.js + server/badge-defect.test.js + server/phase-d-renderloop.test.js + server/project-manager.test.js + server/phase-e-accounting.test.js
+- 301 tests / 83 suites
 - **全部通过**
 
 ## Production Acceptance Status
