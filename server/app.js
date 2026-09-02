@@ -329,6 +329,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === "/api/production-outputs" && req.method === "POST") return createProductionOutput(db, req, res, actor);
 
   // ============ Cost Management ============
+  if (pathname === '/api/product-costs/products' && req.method === 'GET') return listCostProducts(db, res, actor);
   if (pathname === '/api/product-costs' && req.method === 'GET') return listProductCosts(db, res, actor, url);
   if (pathname === '/api/product-costs' && req.method === 'POST') return createProductCost(db, req, res, actor);
   if (pathname === '/api/cost-rates' && req.method === 'GET') return listCostRates(db, res, actor);
@@ -2218,9 +2219,51 @@ function listAssetDepreciations(db, res, actor, url) {
 
 // ============ 成本管理 ============
 
+const COST_RATE_TYPES = new Set(['MATERIAL_RATE', 'LABOR_RATE', 'OVERHEAD_RATE']);
+
+function requiredNonNegativeCents(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new HttpError(400, `${label}必须是非负整数分`);
+  return value;
+}
+
+function requiredIsoDate(value, label = '生效日期') {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new HttpError(400, `${label}格式必须为 YYYY-MM-DD`);
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new HttpError(400, `${label}不是有效日期`);
+  return value;
+}
+
+function productCostDto(row) {
+  return {
+    id: row.id, productId: row.product_id, productCode: row.productCode, productName: row.productName,
+    standardCostCents: row.standard_cost_cents, materialCostCents: row.material_cost_cents,
+    laborCostCents: row.labor_cost_cents, overheadCostCents: row.overhead_cost_cents,
+    effectiveDate: row.effective_date, status: row.status, remark: row.remark,
+    creatorId: row.creator_id, creatorName: row.creatorName, createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+function costRateDto(row) {
+  return {
+    id: row.id, rateType: row.rate_type, rateValue: row.rate_value, unit: row.unit,
+    effectiveDate: row.effective_date, remark: row.remark, creatorId: row.creator_id,
+    creatorName: row.creatorName, createdAt: row.created_at, updatedAt: row.updated_at,
+  };
+}
+
+function requiredCostRateBody(body) {
+  const rateType = requiredCode(body.rateType, '费率类型');
+  if (!COST_RATE_TYPES.has(rateType)) throw new HttpError(400, '费率类型无效');
+  if (typeof body.rateValue !== 'number' || !Number.isFinite(body.rateValue) || body.rateValue < 0) throw new HttpError(400, '费率值必须是非负数');
+  return {
+    rateType, rateValue: body.rateValue, unit: requiredText(body.unit, '单位', 30),
+    effectiveDate: requiredIsoDate(body.effectiveDate), remark: optionalText(body.remark, 500),
+  };
+}
+
 function listProductCosts(db, res, actor, url) {
-  allowAny(actor, ['ACCOUNTING_VIEW', 'PRODUCTS_VIEW']);
-  const productId = url.searchParams.get('product_id');
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const productId = url.searchParams.get('productId');
   
   let sql = `SELECT pc.*, p.code productCode, p.name productName, u.display_name creatorName
     FROM product_costs pc
@@ -2233,33 +2276,36 @@ function listProductCosts(db, res, actor, url) {
   
   sql += ' ORDER BY pc.effective_date DESC LIMIT 100';
   
-  const costs = db.prepare(sql).all(...params);
+  const costs = db.prepare(sql).all(...params).map(productCostDto);
   return send(res, 200, { costs });
 }
 
 async function createProductCost(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'COST_MANAGE');
   const body = await readJson(req);
-  const { product_id, standard_cost, material_cost, labor_cost, overhead_cost, effective_date, remark } = body;
-  
-  if (!product_id) throw new HttpError(400, '请选择产品');
-  
-  // 将旧标准成本设为历史
-  db.prepare("UPDATE product_costs SET status = 'HISTORICAL', updated_at = ? WHERE product_id = ? AND status = 'ACTIVE'")
-    .run(new Date().toISOString(), product_id);
-  
   const costId = id();
   const now = new Date().toISOString();
-  const totalCents = Math.round((standard_cost || 0) * 100) + Math.round((material_cost || 0) * 100) + Math.round((labor_cost || 0) * 100) + Math.round((overhead_cost || 0) * 100);
-  
-  db.prepare(`INSERT INTO product_costs(id, product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, status, remark, creator_id, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`)
-    .run(costId, product_id, Math.round((standard_cost || 0) * 100), Math.round((material_cost || 0) * 100), Math.round((labor_cost || 0) * 100), Math.round((overhead_cost || 0) * 100), effective_date || now.slice(0, 10), remark || '', actor.id, now, now);
-  
-  // 更新产品的标准成本
-  db.prepare('UPDATE products SET price_cents = ? WHERE id = ?').run(totalCents, product_id);
-  
-  return send(res, 201, { id: costId });
+
+  const cost = transaction(db, () => {
+    const productId = requiredText(body.productId, '产品', 100);
+    const materialCostCents = requiredNonNegativeCents(body.materialCostCents, '材料成本');
+    const laborCostCents = requiredNonNegativeCents(body.laborCostCents, '人工成本');
+    const overheadCostCents = requiredNonNegativeCents(body.overheadCostCents, '制造费用');
+    const standardCostCents = requiredNonNegativeCents(body.standardCostCents, '标准成本');
+    const componentTotal = materialCostCents + laborCostCents + overheadCostCents;
+    if (!Number.isSafeInteger(componentTotal) || standardCostCents !== componentTotal) throw new HttpError(400, '标准成本必须等于材料、人工和制造费用之和');
+    const effectiveDate = requiredIsoDate(body.effectiveDate);
+    const remark = optionalText(body.remark, 500);
+    if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(productId)) throw new HttpError(404, '产品不存在');
+    db.prepare("UPDATE product_costs SET status = 'HISTORICAL', updated_at = ? WHERE product_id = ? AND status = 'ACTIVE'").run(now, productId);
+    db.prepare(`INSERT INTO product_costs(id, product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, status, remark, creator_id, created_at, updated_at)
+      VALUES(?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`)
+      .run(costId, productId, standardCostCents, materialCostCents, laborCostCents, overheadCostCents, effectiveDate, remark, actor.id, now, now);
+    audit(db, actor.id, 'CREATE', 'PRODUCT_COST', costId, '设置产品标准成本');
+    return productCostDto(db.prepare(`SELECT pc.*, p.code productCode, p.name productName, u.display_name creatorName
+      FROM product_costs pc JOIN products p ON p.id = pc.product_id JOIN users u ON u.id = pc.creator_id WHERE pc.id = ?`).get(costId));
+  });
+  return send(res, 201, { cost });
 }
 
 function listProductionCosts(db, res, actor, url) {
@@ -2331,26 +2377,29 @@ async function calculateProductionCost(db, req, res, actor) {
 }
 
 function listCostRates(db, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const rates = db.prepare('SELECT * FROM cost_rates ORDER BY rate_type, effective_date DESC').all();
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const rates = db.prepare(`SELECT cr.*, u.display_name creatorName FROM cost_rates cr JOIN users u ON u.id = cr.creator_id
+    ORDER BY cr.rate_type, cr.effective_date DESC`).all().map(costRateDto);
   return send(res, 200, { rates });
 }
 
 async function createCostRate(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const body = await readJson(req);
-  const { rate_type, rate_value, unit, effective_date, remark } = body;
-  
-  if (!rate_type || rate_value === undefined) throw new HttpError(400, '请填写完整的费率信息');
-  
+  allow(actor, 'COST_MANAGE');
+  const rate = requiredCostRateBody(await readJson(req));
   const rateId = id();
   const now = new Date().toISOString();
-  
   db.prepare(`INSERT INTO cost_rates(id, rate_type, rate_value, unit, effective_date, remark, creator_id, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(rateId, rate_type, rate_value, unit || '元/小时', effective_date || now.slice(0, 10), remark || '', actor.id, now, now);
-  
-  return send(res, 201, { id: rateId });
+    .run(rateId, rate.rateType, rate.rateValue, rate.unit, rate.effectiveDate, rate.remark, actor.id, now, now);
+  audit(db, actor.id, 'CREATE', 'COST_RATE', rateId, `新增费率 ${rate.rateType}`);
+  const created = db.prepare(`SELECT cr.*, u.display_name creatorName FROM cost_rates cr JOIN users u ON u.id = cr.creator_id WHERE cr.id = ?`).get(rateId);
+  return send(res, 201, { rate: costRateDto(created) });
+}
+
+function listCostProducts(db, res, actor) {
+  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
+  const products = db.prepare('SELECT id, code, name FROM products WHERE active = 1 ORDER BY code').all();
+  return send(res, 200, { products });
 }
 
 
@@ -3299,70 +3348,17 @@ const BILL_STATUS = { PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '
 const ASSET_STATUS = { IN_USE: '使用中', MAINTENANCE: '维修中', SCRAPPED: '已报废', SOLD: '已出售' };
 // ============ Cost Accounting ============
 
-async function legacyListProductCosts(db, res, actor, url) {
-  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
-  const productId = url.searchParams.get('productId') || '';
-  let sql = `SELECT pc.*, p.code productCode, p.name productName, u.name creatorName 
-    FROM product_costs pc JOIN products p ON p.id=pc.product_id LEFT JOIN users u ON u.id=pc.creator_id WHERE pc.status='ACTIVE'`;
-  const params = [];
-  if (productId) { sql += ` AND pc.product_id=?`; params.push(productId); }
-  sql += ` ORDER BY pc.effective_date DESC`;
-  const costs = db.prepare(sql).all(...params);
-  return send(res, 200, { costs });
-}
-
-async function legacyCreateProductCost(db, req, res, actor) {
-  allow(actor, 'COST_MANAGE');
-  const body = await readJson(req);
-  const { product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, remark } = body;
-  const now = new Date().toISOString();
-  const costId = id();
-  
-  // Mark existing as historical
-  db.prepare(`UPDATE product_costs SET status='HISTORICAL',updated_at=? WHERE product_id=? AND status='ACTIVE'`).run(now, product_id);
-  
-  db.prepare(`INSERT INTO product_costs(id,product_id,standard_cost_cents,material_cost_cents,labor_cost_cents,overhead_cost_cents,effective_date,status,remark,creator_id,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    costId, product_id, standard_cost_cents, material_cost_cents, labor_cost_cents, overhead_cost_cents, effective_date, 'ACTIVE', remark || '', actor.id, now, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'PRODUCT_COST', costId, `设置产品标准成本`);
-  return send(res, 200, { id: costId });
-}
-
-async function legacyListCostRates(db, res, actor) {
-  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
-  const rates = db.prepare('SELECT cr.*, u.name creatorName FROM cost_rates cr LEFT JOIN users u ON u.id=cr.creator_id ORDER BY cr.category, cr.code').all();
-  return send(res, 200, { rates });
-}
-
-async function legacyCreateCostRate(db, req, res, actor) {
-  allow(actor, 'COST_MANAGE');
-  const body = await readJson(req);
-  const { code, name, category, rate_cents_per_hour, unit, remark } = body;
-  const now = new Date().toISOString();
-  const rateId = id();
-  
-  db.prepare('INSERT INTO cost_rates(id,code,name,category,rate_cents_per_hour,unit,active,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?)').run(
-    rateId, code, name, category, rate_cents_per_hour, unit || '小时', remark || '', actor.id, now, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'COST_RATE', rateId, `新增费用项目 ${name}`);
-  return send(res, 200, { id: rateId });
-}
-
 async function updateCostRate(db, req, res, actor, rateId) {
   allow(actor, 'COST_MANAGE');
-  const body = await readJson(req);
-  const { name, category, rate_cents_per_hour, unit, active, remark } = body;
+  const rate = requiredCostRateBody(await readJson(req));
+  if (!db.prepare('SELECT 1 FROM cost_rates WHERE id = ?').get(rateId)) throw new HttpError(404, '费率不存在');
   const now = new Date().toISOString();
-  
-  db.prepare('UPDATE cost_rates SET name=?,category=?,rate_cents_per_hour=?,unit=?,active=?,remark=?,updated_at=? WHERE id=?').run(
-    name, category, rate_cents_per_hour, unit, active ? 1 : 0, remark || '', now, rateId
+  db.prepare('UPDATE cost_rates SET rate_type=?,rate_value=?,unit=?,effective_date=?,remark=?,updated_at=? WHERE id=?').run(
+    rate.rateType, rate.rateValue, rate.unit, rate.effectiveDate, rate.remark, now, rateId
   );
-  
-  audit(db, actor.id, 'UPDATE', 'COST_RATE', rateId, `更新费用项目 ${name}`);
-  return send(res, 200, { ok: true });
+  audit(db, actor.id, 'UPDATE', 'COST_RATE', rateId, `更新费率 ${rate.rateType}`);
+  const updated = db.prepare(`SELECT cr.*, u.display_name creatorName FROM cost_rates cr JOIN users u ON u.id = cr.creator_id WHERE cr.id = ?`).get(rateId);
+  return send(res, 200, { rate: costRateDto(updated) });
 }
 
 async function legacyCalculateProductionCost(db, req, res, actor) {

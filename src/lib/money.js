@@ -20,7 +20,7 @@
 
 const YUAN_TO_CENTS_RE = /^\d+(\.\d+)?$/;
 
-export function yuanToCents(yuan) {
+function parseYuanToCents(yuan, allowZero) {
   if (yuan === '' || yuan === null || yuan === undefined) return null;
   const s = String(yuan).trim();
   if (!s) return null;
@@ -37,8 +37,18 @@ export function yuanToCents(yuan) {
   const fracCents = Number(fracPadded);
   if (!Number.isFinite(wholeCents) || !Number.isFinite(fracCents)) return null;
   const cents = wholeCents + fracCents;
-  if (cents <= 0) return null;
+  if (!Number.isSafeInteger(cents) || cents < 0 || (!allowZero && cents === 0)) return null;
   return cents;
+}
+
+export function yuanToCents(yuan) {
+  return parseYuanToCents(yuan, false);
+}
+
+// Cost components may legitimately be zero, while still requiring the same
+// exact decimal-to-integer conversion used by accounting entries.
+export function yuanToNonNegativeCents(yuan) {
+  return parseYuanToCents(yuan, true);
 }
 
 // Convert integer cents to a fixed-2-decimal yuan string for display in

@@ -1363,7 +1363,7 @@ function normalizeCostRates(db) {
     );
     INSERT INTO cost_rates(id, rate_type, rate_value, unit, effective_date, remark, creator_id, created_at, updated_at)
     SELECT id,
-      CASE category WHEN 'LABOR' THEN 'LABOR_RATE' WHEN 'OVERHEAD' THEN 'OVERHEAD_RATE' ELSE category END,
+      CASE category WHEN 'MATERIAL' THEN 'MATERIAL_RATE' WHEN 'LABOR' THEN 'LABOR_RATE' WHEN 'OVERHEAD' THEN 'OVERHEAD_RATE' ELSE category END,
       rate_cents_per_hour / 100.0,
       unit,
       substr(created_at, 1, 10),

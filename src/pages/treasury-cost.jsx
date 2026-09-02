@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { yuanToNonNegativeCents } from '../lib/money.js';
 
 export function CashJournals({ user, notify }) {
   const [items, setItems] = useState([]);
@@ -419,6 +420,17 @@ function DepreciationModal({ asset, depreciations, onClose }) {
 }
 // ============ Product Costs ============
 
+export async function runCostSave(request, onSaved, notify) {
+  try {
+    await request();
+    onSaved();
+    return true;
+  } catch (error) {
+    notify(error.message, 'error');
+    return false;
+  }
+}
+
 export function ProductCosts({ user, notify }) {
   const [items, setItems] = useState([]);
   const [products, setProducts] = useState([]);
@@ -431,7 +443,7 @@ export function ProductCosts({ user, notify }) {
   };
 
   useEffect(() => {
-    api('/api/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
+    api('/api/product-costs/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
     void load();
   }, []);
 
@@ -453,11 +465,11 @@ export function ProductCosts({ user, notify }) {
               <tr key={item.id}>
                 <td className="mono">{item.productCode}</td>
                 <td><strong>{item.productName}</strong></td>
-                <td>{item.effective_date}</td>
-                <td className="number">{money(item.material_cost_cents)}</td>
-                <td className="number">{money(item.labor_cost_cents)}</td>
-                <td className="number">{money(item.overhead_cost_cents)}</td>
-                <td className="number"><strong>{money(item.standard_cost_cents)}</strong></td>
+                <td>{item.effectiveDate}</td>
+                <td className="number">{money(item.materialCostCents)}</td>
+                <td className="number">{money(item.laborCostCents)}</td>
+                <td className="number">{money(item.overheadCostCents)}</td>
+                <td className="number"><strong>{money(item.standardCostCents)}</strong></td>
                 <td>{item.creatorName}</td>
               </tr>
             ))}
@@ -465,48 +477,43 @@ export function ProductCosts({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无标准成本数据"/>}
       </div>
-      {editing && <ProductCostModal products={products} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('标准成本已保存'); }} />}
+      {editing && <ProductCostModal products={products} value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('标准成本已保存'); }} />}
     </Panel>
   );
 }
 
-function ProductCostModal({ products, value, onClose, onSaved }) {
+export function ProductCostModal({ products, value, notify, onClose, onSaved, apiClient = api }) {
   const [form, setForm] = useState({
-    product_id: '', material_cost_cents: 0, labor_cost_cents: 0, overhead_cost_cents: 0,
-    effective_date: new Date().toISOString().slice(0, 10), remark: '', ...value
+    productId: '', materialCostYuan: '0.00', laborCostYuan: '0.00', overheadCostYuan: '0.00',
+    effectiveDate: new Date().toISOString().slice(0, 10), remark: '', ...value
   });
 
-  useEffect(() => {
-    if (form.product_id && !value.id) {
-      const product = products.find((p) => p.id === form.product_id);
-      if (product) {
-        setForm((f) => ({ ...f, material_cost_cents: product.price_cents || 0 }));
-      }
-    }
-  }, [form.product_id]);
+  const componentCents = [form.materialCostYuan, form.laborCostYuan, form.overheadCostYuan].map(yuanToNonNegativeCents);
+  const standardCostCents = componentCents.every((amount) => amount !== null) ? componentCents.reduce((sum, amount) => sum + amount, 0) : null;
 
   async function save(e) {
     e.preventDefault();
-    const standard_cost_cents = form.material_cost_cents + form.labor_cost_cents + form.overhead_cost_cents;
-    try {
-      await api('/api/product-costs', { method: 'POST', body: { ...form, standard_cost_cents } });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+    if (standardCostCents === null) return notify('成本必须是最多两位小数的非负金额', 'error');
+    const [materialCostCents, laborCostCents, overheadCostCents] = componentCents;
+    await runCostSave(() => apiClient('/api/product-costs', { method: 'POST', body: {
+        productId: form.productId, materialCostCents, laborCostCents, overheadCostCents,
+        standardCostCents, effectiveDate: form.effectiveDate, remark: form.remark,
+      } }), onSaved, notify);
   }
 
   return (
     <Modal title="设置标准成本" onClose={onClose}>
       <form className="form-grid" onSubmit={save}>
-        <label>产品<select value={form.product_id} onChange={(e) => setForm({...form, product_id: e.target.value})} required disabled={!!value.id}>
+        <label>产品<select value={form.productId} onChange={(e) => setForm({...form, productId: e.target.value})} required disabled={!!value.id}>
           <option value="">选择产品</option>
           {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
         </select></label>
-        <label>生效日期<input type="date" value={form.effective_date} onChange={(e) => setForm({...form, effective_date: e.target.value})} required/></label>
-        <label>材料成本(元)<input type="number" value={form.material_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, material_cost_cents: Math.round(e.target.value * 100)})} required/></label>
-        <label>人工成本(元)<input type="number" value={form.labor_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, labor_cost_cents: Math.round(e.target.value * 100)})} required/></label>
-        <label>制造费用(元)<input type="number" value={form.overhead_cost_cents / 100} step="0.01" onChange={(e) => setForm({...form, overhead_cost_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>生效日期<input type="date" value={form.effectiveDate} onChange={(e) => setForm({...form, effectiveDate: e.target.value})} required/></label>
+        <label>材料成本(元)<input type="number" min="0" value={form.materialCostYuan} step="0.01" onChange={(e) => setForm({...form, materialCostYuan: e.target.value})} required/></label>
+        <label>人工成本(元)<input type="number" min="0" value={form.laborCostYuan} step="0.01" onChange={(e) => setForm({...form, laborCostYuan: e.target.value})} required/></label>
+        <label>制造费用(元)<input type="number" min="0" value={form.overheadCostYuan} step="0.01" onChange={(e) => setForm({...form, overheadCostYuan: e.target.value})} required/></label>
         <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-        <div className="full"><strong>标准成本: {money(form.material_cost_cents + form.labor_cost_cents + form.overhead_cost_cents)}</strong></div>
+        <div className="full"><strong>标准成本: {standardCostCents === null ? '金额格式无效' : money(standardCostCents)}</strong></div>
         <FormActions onClose={onClose}/>
       </form>
     </Modal>
@@ -523,23 +530,22 @@ export function CostRates({ user, notify }) {
 
   useEffect(() => { void load(); }, []);
 
-  const categories = { MATERIAL: '材料', LABOR: '人工', OVERHEAD: '制造费用' };
+  const rateTypes = { MATERIAL_RATE: '材料费率', LABOR_RATE: '人工费率', OVERHEAD_RATE: '制造费用率' };
 
   return (
     <Panel title="费用项目" subtitle="定义成本费用项目和费率">
       <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增费用项目</button>}/>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>编号</th><th>名称</th><th>类别</th><th className="number">费率(元/小时)</th><th>单位</th><th>状态</th><th/></tr></thead>
+          <thead><tr><th>费率类型</th><th className="number">费率值</th><th>单位</th><th>生效日期</th><th>设置人</th><th/></tr></thead>
           <tbody>
             {items.map((item) => (
               <tr key={item.id}>
-                <td className="mono">{item.code}</td>
-                <td><strong>{item.name}</strong></td>
-                <td><Badge>{categories[item.category] || item.category}</Badge></td>
-                <td className="number">{money(item.rate_cents_per_hour)}</td>
+                <td><Badge>{rateTypes[item.rateType] || item.rateType}</Badge></td>
+                <td className="number">{item.rateValue}</td>
                 <td>{item.unit}</td>
-                <td><Active active={item.active}/></td>
+                <td>{item.effectiveDate}</td>
+                <td>{item.creatorName}</td>
                 <td>{can(user, 'COST_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
               </tr>
             ))}
@@ -547,40 +553,36 @@ export function CostRates({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无费用项目"/>}
       </div>
-      {editing && <CostRateModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('费用项目已保存'); }} />}
+      {editing && <CostRateModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('费用项目已保存'); }} />}
     </Panel>
   );
 }
 
-function CostRateModal({ value, onClose, onSaved }) {
-  const [form, setForm] = useState({ code: '', name: '', category: 'LABOR', rate_cents_per_hour: 0, unit: '小时', remark: '', active: true, ...value });
+export function CostRateModal({ value, notify, onClose, onSaved, apiClient = api }) {
+  const [form, setForm] = useState({ rateType: 'LABOR_RATE', rateValue: 0, unit: '元/小时', effectiveDate: new Date().toISOString().slice(0, 10), remark: '', ...value });
 
   async function save(e) {
     e.preventDefault();
-    try {
+    await runCostSave(() => {
       if (value.id) {
-        await api(`/api/cost-rates/${value.id}`, { method: 'PATCH', body: form });
-      } else {
-        await api('/api/cost-rates', { method: 'POST', body: form });
+        return apiClient(`/api/cost-rates/${value.id}`, { method: 'PATCH', body: form });
       }
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+      return apiClient('/api/cost-rates', { method: 'POST', body: form });
+    }, onSaved, notify);
   }
 
   return (
     <Modal title={value.id ? '编辑费用项目' : '新增费用项目'} onClose={onClose}>
       <form className="form-grid" onSubmit={save}>
-        <label>编号<input value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} required disabled={!!value.id}/></label>
-        <label>名称<input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required/></label>
-        <label>类别<select value={form.category} onChange={(e) => setForm({...form, category: e.target.value})}>
-          <option value="MATERIAL">材料</option>
-          <option value="LABOR">人工</option>
-          <option value="OVERHEAD">制造费用</option>
+        <label>费率类型<select value={form.rateType} onChange={(e) => setForm({...form, rateType: e.target.value})}>
+          <option value="MATERIAL_RATE">材料费率</option>
+          <option value="LABOR_RATE">人工费率</option>
+          <option value="OVERHEAD_RATE">制造费用率</option>
         </select></label>
-        <label>费率(元/小时)<input type="number" value={form.rate_cents_per_hour / 100} step="0.01" onChange={(e) => setForm({...form, rate_cents_per_hour: Math.round(e.target.value * 100)})} required/></label>
+        <label>费率值<input type="number" min="0" value={form.rateValue} step="0.01" onChange={(e) => setForm({...form, rateValue: Number(e.target.value)})} required/></label>
         <label>单位<input value={form.unit} onChange={(e) => setForm({...form, unit: e.target.value})} placeholder="小时/件/米等"/></label>
+        <label>生效日期<input type="date" value={form.effectiveDate} onChange={(e) => setForm({...form, effectiveDate: e.target.value})} required/></label>
         <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-        {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({...form, active: e.target.checked})}/> 启用该项目</label>}
         <FormActions onClose={onClose}/>
       </form>
     </Modal>
