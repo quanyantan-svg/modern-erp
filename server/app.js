@@ -337,9 +337,6 @@ async function handleApi(db, req, res, url) {
   if (mOatch && req.method === "GET") return getProductionOrder(db, res, actor, mOatch[1]);
   if (mOatch && req.method === "POST") return changeProductionOrderState(db, req, res, actor, mOatch[1]);
 
-  // ============ Production Outputs ============
-  if (pathname === "/api/production-outputs" && req.method === "POST") return createProductionOutput(db, req, res, actor);
-
   // ============ Cost Management ============
   if (pathname === '/api/product-costs/products' && req.method === 'GET') return listCostProducts(db, res, actor);
   if (pathname === '/api/product-costs' && req.method === 'GET') return listProductCosts(db, res, actor, url);
@@ -1174,7 +1171,7 @@ async function explodeBOM(db, req, res, actor) {
   const materials = [];
   
   function expand(productId, qty, level) {
-    const boms = db.prepare("SELECT b.*, p.code, p.name, p.unit FROM bom_items b JOIN products p ON p.id = b.product_id WHERE b.bom_id IN (SELECT id FROM boms WHERE product_id=? AND status='APPROVED')").all(productId);
+    const boms = db.prepare("SELECT b.*, p.code, p.name, p.unit FROM bom_items b JOIN products p ON p.id = b.product_id WHERE b.bom_id IN (SELECT id FROM boms WHERE product_id=? AND status='ACTIVE')").all(productId);
     
     if (boms.length === 0) {
       const prod = db.prepare('SELECT code, name, unit FROM products WHERE id=?').get(productId);
@@ -1216,7 +1213,7 @@ async function calculateMRP(db, req, res, actor) {
     const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
     if (!product) throw new HttpError(404, '产品不存在');
     
-    const bom = db.prepare("SELECT * FROM boms WHERE product_id=? AND status='APPROVED' LIMIT 1").get(productId);
+    const bom = db.prepare("SELECT * FROM boms WHERE product_id=? AND status='ACTIVE' LIMIT 1").get(productId);
     if (!bom) {
       const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(productId)?.total || 0;
       const netDemand = Math.max(0, Number(quantity) - stock);
@@ -1234,7 +1231,7 @@ async function calculateMRP(db, req, res, actor) {
       const items = db.prepare('SELECT bi.*, p.code, p.name, p.unit, p.price_cents FROM bom_items bi JOIN products p ON p.id=bi.product_id WHERE bi.bom_id=?').all(bomProductId);
       for (const item of items) {
         const requiredQty = qty * item.quantity * (1 + (item.scrap_rate || 0));
-        const subBom = db.prepare("SELECT id FROM boms WHERE product_id=? AND status='APPROVED' LIMIT 1").get(item.product_id);
+        const subBom = db.prepare("SELECT id FROM boms WHERE product_id=? AND status='ACTIVE' LIMIT 1").get(item.product_id);
         if (!subBom) {
           materials.push({ productId: item.product_id, code: item.code, name: item.name, unit: item.unit, requiredQty, priceCents: item.price_cents });
         } else {
@@ -2957,21 +2954,62 @@ function listBoms(db, res, actor, url) {
   return send(res, 200, { boms: db.prepare(sql).all(...params) });
 }
 
+function requirePositiveQuantity(value, label) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, label + '必须大于0');
+  return n;
+}
+
+function requireScrapRate(value, label) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n) || n < 0 || n > 1) throw new HttpError(400, label + '必须在0到1之间');
+  return n;
+}
+
+function validateBomPayload(db, body, options = {}) {
+  const productId = String(body.productId ?? body.product_id ?? '').trim();
+  if (!options.existingProductId && !productId) throw new HttpError(400, '请选择父项产品');
+  const parentProductId = options.existingProductId || productId;
+  const parent = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(parentProductId);
+  if (!parent) throw new HttpError(400, '父项产品不存在或已停用');
+  const rawItems = body.items;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) throw new HttpError(400, 'BOM至少需要一条物料明细');
+
+  const seen = new Set();
+  const items = rawItems.map((item, index) => {
+    const componentId = String(item?.productId ?? item?.product_id ?? '').trim();
+    if (!componentId) throw new HttpError(400, `第${index + 1}行物料不能为空`);
+    if (componentId === parentProductId) throw new HttpError(400, 'BOM物料不能引用父项产品本身');
+    if (seen.has(componentId)) throw new HttpError(400, 'BOM物料不能重复');
+    seen.add(componentId);
+    const component = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(componentId);
+    if (!component) throw new HttpError(400, `第${index + 1}行物料不存在或已停用`);
+    return {
+      productId: componentId,
+      quantity: requirePositiveQuantity(item.quantity, `第${index + 1}行用量`),
+      scrapRate: requireScrapRate(item.scrapRate ?? item.scrap_rate, `第${index + 1}行损耗率`),
+    };
+  });
+
+  return { productId: parentProductId, version: String(body.version ?? '1.0').trim() || '1.0', remark: optionalText(body.remark, 500), items };
+}
+
 async function createBom(db, req, res, actor) {
   allow(actor, 'PRODUCTION_ORDERS_CREATE');
   const body = await readJson(req);
-  const { productId, version, remark, items } = body;
+  const bom = validateBomPayload(db, body);
   const now = new Date().toISOString();
   const bomId = id();
-  // Deactivate existing active BOM for this product
-  db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE product_id=? AND status='ACTIVE'").run(now, productId);
-  db.prepare('INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(bomId, productId, version || '1.0', 'ACTIVE', remark || '', actor.id, now, now);
-  const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
-  let lineNo = 1;
-  for (const item of (items || [])) {
-    itemStmt.run(id(), bomId, item.productId, item.quantity || 1, item.scrapRate || 0, lineNo++);
-  }
-  audit(db, actor.id, 'CREATE', 'BOM', bomId, '创建物料清单 BOM-' + version);
+  transaction(db, () => {
+    db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE product_id=? AND status='ACTIVE'").run(now, bom.productId);
+    db.prepare('INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(bomId, bom.productId, bom.version, 'ACTIVE', bom.remark, actor.id, now, now);
+    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
+    let lineNo = 1;
+    for (const item of bom.items) {
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
+    }
+    audit(db, actor.id, 'CREATE', 'BOM', bomId, '创建物料清单 BOM-' + bom.version);
+  });
   return send(res, 200, { id: bomId });
 }
 
@@ -2986,26 +3024,30 @@ function getBom(db, res, actor, bomId) {
 async function updateBom(db, req, res, actor, bomId) {
   allow(actor, 'PRODUCTION_ORDERS_CREATE');
   const body = await readJson(req);
-  const { action, remark, items } = body;
+  const { action } = body;
   const now = new Date().toISOString();
+  const current = db.prepare('SELECT * FROM boms WHERE id=?').get(bomId);
+  if (!current) throw new HttpError(404, 'BOM不存在');
   if (action === 'deactivate') {
-    db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE id=?").run(now, bomId);
-    audit(db, actor.id, 'UPDATE', 'BOM', bomId, '停用BOM');
+    if (current.status === 'DISCONTINUED') return send(res, 200, { ok: true });
+    transaction(db, () => {
+      db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE id=?").run(now, bomId);
+      audit(db, actor.id, 'UPDATE', 'BOM', bomId, '停用BOM');
+    });
     return send(res, 200, { ok: true });
   }
-  // Update items
-  if (items) {
+  if (current.status === 'DISCONTINUED') throw new HttpError(409, '已停用的BOM不可修改');
+  const bom = validateBomPayload(db, body, { existingProductId: current.product_id });
+  transaction(db, () => {
     db.prepare('DELETE FROM bom_items WHERE bom_id=?').run(bomId);
     const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
     let lineNo = 1;
-    for (const item of items) {
-      itemStmt.run(id(), bomId, item.productId, item.quantity || 1, item.scrapRate || 0, lineNo++);
+    for (const item of bom.items) {
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
     }
-  }
-  if (remark !== undefined) {
-    db.prepare('UPDATE boms SET remark=?,updated_at=? WHERE id=?').run(remark, now, bomId);
-  }
-  audit(db, actor.id, 'UPDATE', 'BOM', bomId, '更新BOM');
+    db.prepare('UPDATE boms SET remark=?,updated_at=? WHERE id=?').run(bom.remark, now, bomId);
+    audit(db, actor.id, 'UPDATE', 'BOM', bomId, '更新BOM');
+  });
   return send(res, 200, { ok: true });
 }
 
@@ -3026,21 +3068,32 @@ async function createProductionOrder(db, req, res, actor) {
   allow(actor, 'PRODUCTION_ORDERS_CREATE');
   const body = await readJson(req);
   const { productId, bomId, quantity, plannedStart, plannedFinish, remark } = body;
+  if (!productId) throw new HttpError(400, '请选择产品');
+  const product = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(productId);
+  if (!product) throw new HttpError(400, '产品不存在或已停用');
+  const orderQuantity = requirePositiveQuantity(quantity, '生产数量');
+  if (bomId) {
+    const bom = db.prepare("SELECT id, product_id, status FROM boms WHERE id=?").get(bomId);
+    if (!bom) throw new HttpError(400, 'BOM不存在');
+    if (bom.status !== 'ACTIVE') throw new HttpError(400, '只能使用启用的BOM');
+    if (bom.product_id !== productId) throw new HttpError(400, 'BOM与生产产品不匹配');
+  }
   const now = new Date().toISOString();
   const poId = id();
   const poNo = 'MO-' + Date.now().toString(36).toUpperCase();
-  db.prepare('INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(poId, poNo, productId, bomId || null, quantity, 'PENDING', plannedStart || null, plannedFinish || null, remark || '', actor.id, now, now);
-  // Auto-populate items from BOM if bomId provided
-  if (bomId) {
-    const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=?').all(bomId);
-    const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no) VALUES(?,?,?,?,0,?)');
-    let lineNo = 1;
-    for (const item of bomItems) {
-      const requiredQty = item.quantity * quantity * (1 + item.scrap_rate);
-      itemStmt.run(id(), poId, item.product_id, requiredQty, lineNo++);
+  transaction(db, () => {
+    db.prepare('INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(poId, poNo, productId, bomId || null, orderQuantity, 'PENDING', plannedStart || null, plannedFinish || null, optionalText(remark, 500), actor.id, now, now);
+    if (bomId) {
+      const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
+      const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no) VALUES(?,?,?,?,0,?)');
+      let lineNo = 1;
+      for (const item of bomItems) {
+        const requiredQty = item.quantity * orderQuantity * (1 + item.scrap_rate);
+        itemStmt.run(id(), poId, item.product_id, requiredQty, lineNo++);
+      }
     }
-  }
-  audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, '创建生产工单 ' + poNo);
+    audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, '创建生产工单 ' + poNo);
+  });
   return send(res, 200, { id: poId, orderNo: poNo });
 }
 
@@ -3073,8 +3126,11 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');
+    if (order.status === 'CANCELLED') return send(res, 200, { ok: true, status: 'CANCELLED' });
     db.prepare("UPDATE production_orders SET status='CANCELLED',updated_at=? WHERE id=?").run(now, poId);
     audit(db, actor.id, 'CANCEL', 'PRODUCTION_ORDER', poId, '取消生产工单 ' + order.order_no);
+  } else {
+    throw new HttpError(400, '不支持的生产工单操作');
   }
   return send(res, 200, { ok: true });
 }

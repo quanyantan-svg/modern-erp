@@ -13,7 +13,7 @@ export function Boms({ user, notify }) {
     api('/api/products').then((r) => setProducts(r.products)).catch((e) => notify(e.message, 'error'));
     void load();
   }, [filterProduct]);
-  return <Panel title="BOM清单" subtitle="物料清单，定义产品组成" action={can(user, 'BOM_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 新建BOM</button>}>
+  return <Panel title="BOM清单" subtitle="物料清单，定义产品组成" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建BOM</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索BOM" extra={<select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}><option value="">全部产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>}/>
     <div className="table-wrap"><table><thead><tr><th>BOM版本</th><th>产品</th><th>状态</th><th>物料项</th><th>备注</th><th>创建人</th></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.productCode}-v{item.version}</td><td>{item.productName}</td><td><Status status={item.status?.toLowerCase()} label={item.status === 'ACTIVE' ? '启用' : item.status === 'DISCONTINUED' ? '停用' : '草稿'}/></td><td className="number">{item.itemCount}</td><td>{item.remark || '-'}</td><td>{item.creatorName}</td></tr>)}
@@ -46,6 +46,13 @@ function BomModal({ user, value, onClose, notify, api, products }) {
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
+  const deactivate = async () => {
+    try {
+      await api('/api/boms/' + value.id, { method: 'POST', body: { action: 'deactivate' } });
+      notify('已停用');
+      onClose();
+    } catch (e) { notify(e.message, 'error'); }
+  };
   const addItem = () => setItems([...form.items, { productId: '', quantity: 1, scrapRate: 0 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
@@ -54,17 +61,21 @@ function BomModal({ user, value, onClose, notify, api, products }) {
     {!value.id && <><label>产品<select value={form.productId} onChange={(e) => setForm({...form, productId: e.target.value})} required><option value="">选择产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></label>
     <label>版本号<input value={form.version} onChange={(e) => setForm({...form, version: e.target.value})} required/></label></>}
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-    <div className="full"><div className="form-section-head"><span>物料组成</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
+    <div className="full"><div className="form-section-head"><span>物料组成</span><button type="button" className="secondary" onClick={addItem} disabled={detail?.status === 'DISCONTINUED'}>＋ 增行</button></div>
       <table className="line-table"><thead><tr><th>物料</th><th className="number">用量</th><th className="number">损耗率</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
-          <td><select value={item.productId} onChange={(e) => updateItem(i, 'productId', e.target.value)} required><option value="">选择物料</option>{usedProducts.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
-          <td><input type="number" value={item.quantity} min="0.001" step="0.001" onChange={(e) => updateItem(i, 'quantity', Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.scrapRate} min="0" max="1" step="0.01" onChange={(e) => updateItem(i, 'scrapRate', Number(e.target.value))}/></td>
-          <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>x</button></td>
+          <td><select value={item.productId || item.product_id || ''} onChange={(e) => updateItem(i, 'productId', e.target.value)} required disabled={detail?.status === 'DISCONTINUED'}><option value="">选择物料</option>{usedProducts.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
+          <td><input type="number" value={item.quantity} min="0.001" step="0.001" onChange={(e) => updateItem(i, 'quantity', Number(e.target.value))} required disabled={detail?.status === 'DISCONTINUED'}/></td>
+          <td><input type="number" value={item.scrapRate ?? item.scrap_rate ?? 0} min="0" max="1" step="0.01" onChange={(e) => updateItem(i, 'scrapRate', Number(e.target.value))} disabled={detail?.status === 'DISCONTINUED'}/></td>
+          <td><button type="button" className="danger-text" onClick={() => removeItem(i)} disabled={detail?.status === 'DISCONTINUED'}>x</button></td>
         </tr>)}
       </tbody></table>
     </div>
-    <FormActions onClose={onClose}/>
+    {value.id && detail?.status === 'DISCONTINUED'
+      ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
+      : value.id && detail?.status === 'ACTIVE'
+        ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button type="button" className="danger-button" onClick={deactivate}>停用</button><button className="primary">保存</button></div>
+        : <FormActions onClose={onClose}/>}
   </form></Modal>;
 }
 
@@ -181,7 +192,7 @@ function MRPCalculator({ products, onClose, notify }) {
         <div style={{marginTop: '16px', padding: '12px', background: 'var(--accent-primary-subtle)', borderRadius: 'var(--radius-md)'}}>
           <strong style={{color: 'var(--accent-primary)'}}>💡 说明</strong>
           <p style={{fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px'}}>
-            以上采购建议基于已审核的 BOM 清单计算。实际采购时还需考虑供应商交期、最小起订量等因素。
+            以上采购建议基于启用的 BOM 清单计算。实际采购时还需考虑供应商交期、最小起订量等因素。
           </p>
         </div>
       </>}
@@ -228,7 +239,6 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
   }, [detail]);
   const save = async () => {
     try {
-      if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/production-orders', { method: 'POST', body: form });
       notify('创建成功');
       onClose();

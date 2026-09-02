@@ -334,6 +334,7 @@ test('扩展业务模块在全新数据库中完成迁移并可查询', async ()
 describe('Production Orders', () => {
   let adminToken;
   let productId;
+  let componentProductId;
   let bomId;
   let orderId;
 
@@ -346,6 +347,7 @@ describe('Production Orders', () => {
     });
     const products = await productsRes.json();
     productId = products.products?.[0]?.id;
+    componentProductId = products.products?.find((product) => product.id !== productId)?.id;
   });
 
   test('创建BOM成功', async () => {
@@ -361,7 +363,7 @@ describe('Production Orders', () => {
         productId: productId,
         version: '1.0',
         remark: 'Test BOM',
-        items: [],
+        items: [{ productId: componentProductId, quantity: 1, scrapRate: 0 }],
       }),
     });
     assert.equal(bomRes.status, 200);

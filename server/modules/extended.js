@@ -613,42 +613,85 @@ export function getMrpPlan(db, res, actor, planId) {
 export async function updateMrpPlan(db, req, res, actor, planId) {
   allow(actor, "MRP_MANAGE");
   const body = await readJson(req);
+  const current = db.prepare("SELECT id FROM mrp_plans WHERE id=?").get(planId);
+  if (!current) throw new HttpError(404, "MRP计划不存在");
   const now = new Date().toISOString();
   db.prepare("UPDATE mrp_plans SET status=?, updated_at=? WHERE id=?").run(body.status || "DRAFT", now, planId);
   return send(res, 200, { ok: true });
+}
+
+function productStock(db, productId) {
+  const row = db.prepare("SELECT COALESCE(SUM(quantity), 0) total FROM inventory WHERE product_id=?").get(productId);
+  return Number(row?.total || 0);
+}
+
+function scheduledReceipt(db, productId) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(pri.quantity), 0) total
+    FROM purchase_receipt_items pri
+    JOIN purchase_receipts pr ON pr.id = pri.receipt_id
+    WHERE pri.product_id = ? AND pr.status = 'CONFIRMED'
+  `).get(productId);
+  return Number(row?.total || 0);
+}
+
+function explodeActiveBomDemand(db, productId, quantity, seen = new Set()) {
+  if (seen.has(productId)) throw new HttpError(400, "BOM存在递归引用");
+  const bom = db.prepare("SELECT id FROM boms WHERE product_id=? AND status='ACTIVE' ORDER BY updated_at DESC LIMIT 1").get(productId);
+  if (!bom) return [{ productId, quantity }];
+  const items = db.prepare("SELECT product_id, quantity, scrap_rate FROM bom_items WHERE bom_id=? ORDER BY line_no").all(bom.id);
+  if (items.length === 0) return [{ productId, quantity }];
+  const nextSeen = new Set(seen);
+  nextSeen.add(productId);
+  const result = [];
+  for (const item of items) {
+    const required = Number(quantity) * Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+    result.push(...explodeActiveBomDemand(db, item.product_id, required, nextSeen));
+  }
+  return result;
 }
 
 export async function generateMrp(db, req, res, actor) {
   allow(actor, "MRP_MANAGE");
   const body = await readJson(req);
   const { plan_id, demand_type, demand_source_id } = body;
+  if (!plan_id) throw new HttpError(400, "请选择MRP计划");
+  if (demand_type !== "SALES_ORDER" || !demand_source_id) throw new HttpError(400, "仅支持按销售订单生成MRP");
   const plan = db.prepare("SELECT * FROM mrp_plans WHERE id=?").get(plan_id);
   if (!plan) throw new HttpError(404, "MRP计划不存在");
   
   const now = new Date().toISOString();
   
-  // 获取销售订单需求
-  if (demand_type === "SALES_ORDER" && demand_source_id) {
-    const order = db.prepare("SELECT * FROM sales_orders WHERE id=?").get(demand_source_id);
-    if (order) {
-      const items = db.prepare("SELECT * FROM sales_order_items WHERE order_id=?").all(demand_source_id);
-      for (const item of items) {
-        const product = db.prepare("SELECT * FROM products WHERE id=?").get(item.product_id);
-        const onHand = product?.stock_quantity || 0;
-        const scheduledReceipt = db.prepare("SELECT COALESCE(SUM(quantity), 0) total FROM purchase_receipts WHERE product_id=? AND status='CONFIRMED'").get(item.product_id).total;
-        
-        const itemId = id();
-        const plannedQty = Math.max(0, item.quantity - onHand - scheduledReceipt);
-        
-        db.prepare("INSERT INTO mrp_plan_items(id,plan_id,product_id,demand_type,demand_source_id,gross_requirement,on_hand,scheduled_receipt,planned_receipt,planned_order_quantity,due_date,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
-          .run(itemId, plan_id, item.product_id, demand_type, demand_source_id, item.quantity, onHand, scheduledReceipt, 0, plannedQty, order.submitted_at?.slice(0, 10) || now.slice(0, 10), "PENDING");
+  const order = db.prepare("SELECT * FROM sales_orders WHERE id=?").get(demand_source_id);
+  if (!order) throw new HttpError(404, "销售订单不存在");
+  const items = db.prepare("SELECT * FROM sales_order_items WHERE order_id=? ORDER BY line_no").all(demand_source_id);
+  if (items.length === 0) throw new HttpError(400, "销售订单没有明细");
+  transaction(db, () => {
+    db.prepare("DELETE FROM mrp_plan_items WHERE plan_id=?").run(plan_id);
+    const demandMap = new Map();
+    for (const item of items) {
+      const leaves = explodeActiveBomDemand(db, item.product_id, Number(item.quantity));
+      for (const leaf of leaves) {
+        demandMap.set(leaf.productId, (demandMap.get(leaf.productId) || 0) + leaf.quantity);
       }
     }
-  }
-  
-  // 更新计划汇总
-  const stats = db.prepare("SELECT COUNT(*) total_items, SUM(planned_order_quantity) total_qty FROM mrp_plan_items WHERE plan_id=?").get(plan_id);
-  db.prepare("UPDATE mrp_plans SET total_items=?, updated_at=? WHERE id=?").run(stats.total_items || 0, now, plan_id);
+
+    for (const [productId, grossRequirement] of demandMap.entries()) {
+      const product = db.prepare("SELECT * FROM products WHERE id=?").get(productId);
+      if (!product) throw new HttpError(400, "MRP需求产品不存在");
+      const onHand = productStock(db, productId);
+      const expectedReceipt = scheduledReceipt(db, productId);
+        
+      const itemId = id();
+      const plannedQty = Math.max(0, grossRequirement - onHand - expectedReceipt);
+        
+      db.prepare("INSERT INTO mrp_plan_items(id,plan_id,product_id,demand_type,demand_source_id,gross_requirement,on_hand,scheduled_receipt,planned_receipt,planned_order_quantity,due_date,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
+        .run(itemId, plan_id, productId, demand_type, demand_source_id, grossRequirement, onHand, expectedReceipt, 0, plannedQty, order.submitted_at?.slice(0, 10) || now.slice(0, 10), "PENDING");
+    }
+    const stats = db.prepare("SELECT COUNT(*) total_items, SUM(planned_order_quantity) total_qty FROM mrp_plan_items WHERE plan_id=?").get(plan_id);
+    db.prepare("UPDATE mrp_plans SET total_items=?, updated_at=? WHERE id=?").run(stats.total_items || 0, now, plan_id);
+    audit(db, actor.id, 'GENERATE', 'MRP_PLAN', plan_id, `按销售订单生成MRP ${order.order_no}`);
+  });
   
   return send(res, 200, { ok: true, message: "MRP计算完成" });
 }
@@ -730,7 +773,7 @@ export async function deleteWorkCenter(db, res, actor, wcId) {
 export function listRoutingOperations(db, res, actor, url) {
   allowAny(actor, ["ROUTING_VIEW", "ROUTING_MANAGE"]);
   const bomId = url.searchParams.get("bom_id");
-  let sql = "SELECT r.*, w.code wc_code, w.name wc_name, b.bom_code FROM routing_operations r JOIN work_centers w ON w.id=r.work_center_id JOIN boms b ON b.id=r.bom_id";
+  let sql = "SELECT r.*, w.code wc_code, w.name wc_name, b.version bom_version, p.code product_code, p.name product_name FROM routing_operations r JOIN work_centers w ON w.id=r.work_center_id JOIN boms b ON b.id=r.bom_id JOIN products p ON p.id=b.product_id";
   const params = [];
   if (bomId) { sql += " WHERE r.bom_id=?"; params.push(bomId); }
   sql += " ORDER BY r.bom_id, r.operation_no";

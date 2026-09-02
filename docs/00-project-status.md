@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Quality Stabilization)
+> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Manufacturing Stabilization)
 
 ## 阶段与分支
 
@@ -10,7 +10,24 @@
 
 ## 当前生产验收状态
 
-> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Quality Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Manufacturing Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+
+### Post-v1.0.0 Teacher Acceptance — Manufacturing Stabilization
+
+- 支持面明确收口：**SUPPORTED_UI = BOM + Production Orders**；**SUPPORTED_API_ONLY = MRP plan list/create/generate、legacy MRP calculate/bom-explode、work centers、routing operations、labor records 的现有 routed 基础合同**；**DEFERRED = Production Output、Production Cost、MRP Calculator UI、MRP detail/update/execute 未路由 lifecycle**；
+- 五角色合同保持不变：Manufacturing 由 `test_admin` 操作；`role-sales` / `role-reviewer` / `role-warehouse` / `role-accounting` 不获得制造入口或生产变更权限；未新增第六角色；
+- BOM 前端移除不存在的 `BOM_MANAGE`，统一使用 canonical `PRODUCTION_ORDERS_CREATE`；后端 BOM list/detail 使用 `PRODUCTION_ORDERS_VIEW`，create/update/discontinue 使用 `PRODUCTION_ORDERS_CREATE`；
+- BOM 状态合同固定为 `ACTIVE` / `DISCONTINUED`，不引入 `APPROVED`；create 会停用同产品旧 ACTIVE BOM，事务内写入 header + 全部 items；update 事务内替换 items，避免重复或半写；DISCONTINUED BOM 不可编辑；
+- BOM 校验覆盖父项产品、至少一条组件、组件产品、数量 > 0、损耗率 0..1、重复组件、自引用；
+- Production Order Core 保留历史状态机 `PENDING → IN_PROGRESS → COMPLETED` 与有效取消语义；`complete` 仍是流程完工，不自动入库；新增未知 action 400、非法重复转换 409、重复取消幂等返回已取消；
+- 生产工单 UI 移除“编辑功能开发中”占位，不暴露虚假的编辑入口；
+- MRP canonical contract：输入为 `plan_id + SALES_ORDER demand_source_id`；需求来源为销售订单明细；BOM 来源为最新 ACTIVE BOM 并递归展开；库存来源为 `inventory` 汇总；在途来源为 `purchase_receipts` header + `purchase_receipt_items`；输出为 `mrp_plan_items.gross_requirement/on_hand/scheduled_receipt/planned_order_quantity`；
+- `/api/mrp-plans/generate` 修复错误 SQL：不再读取 `purchase_receipts.product_id/quantity`，改从 receipt items 汇总；生成前清理同 plan 旧明细并在事务中重建；
+- legacy `/api/mrp/calculate` 与 `/api/mrp/bom-explode` 的 BOM 状态查询从 `APPROVED` 改为 `ACTIVE`；MRP Calculator UI 组件保持 unmounted，记录为 DEFERRED；
+- Routing GET 修复不存在的 `b.bom_code`，改返回 `bom_version/product_code/product_name`；空库和有数据均应 200；
+- Production Output 不注册 `PRODUCTION_OUTPUT`，并移除 `/api/production-outputs` 路由；当前 unsafe handler 不作为公开支持面；
+- Production Cost 继续延后，不新增 route/UI，不修改已稳定 Standard Cost / Cost Rate 合同；
+- Focused：`server/manufacturing-stabilization.test.js`，11 tests / 4 suites / PASS；Affected：`server/manufacturing-stabilization.test.js server/app.test.js`，51 tests / 14 suites / PASS；Full：581 tests / 133 suites / PASS；`pnpm build` PASS（418.51 kB JS / 29.19 kB CSS）；`git diff --check` PASS（仅 CRLF 提示）。
 
 ### Post-v1.0.0 Teacher Acceptance — Quality Stabilization
 

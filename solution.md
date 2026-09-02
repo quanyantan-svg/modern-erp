@@ -909,6 +909,18 @@ Cost Rate 公共契约使用 `rateType`、`rateValue`、`unit`、`effectiveDate`
 
 成本资源 GET 需要 `COST_VIEW` 或 `COST_MANAGE`，POST/PATCH 需要 `COST_MANAGE`；`PRODUCTS_VIEW` 和 `ACCOUNTING_VIEW` 都不是 Cost API 的替代授权。当前 `role-accounting` 没有 `COST_VIEW/COST_MANAGE`，本阶段不扩权，角色归属决策保持 PENDING。已有但未路由、未验证的 Production Cost 计算继续延后到 Manufacturing/Cost Integration，本阶段不暴露。
 
+### 7.19 Manufacturing Stabilization（Post-v1.0.0 Teacher Acceptance）
+
+制造域的 v1.0.1 支持面明确收口：浏览器教师验收只承诺 BOM 与 Production Orders；API-only 仅保留现有 routed 基础合同（MRP plan list/create/generate、legacy MRP calculate/bom-explode、work centers、routing operations、labor records）。Production Output、Production Cost、未挂载的 MRP Calculator UI、未路由的 MRP detail/update/execute lifecycle 均为 DEFERRED，不作为 teacher-ready 功能。
+
+BOM 使用生产工单 canonical 权限，不引入 `BOM_MANAGE`：列表/详情为 `PRODUCTION_ORDERS_VIEW`，创建/编辑/停用为 `PRODUCTION_ORDERS_CREATE`。BOM 状态只允许 `ACTIVE` 与 `DISCONTINUED`。创建新 BOM 时事务内停用同产品旧 ACTIVE BOM、插入 header 与全部 items，并写审计；编辑时事务内替换 items，避免重复行或半写。DISCONTINUED BOM 不可编辑。校验覆盖父项产品、至少一条组件、组件产品存在且启用、数量大于 0、损耗率 0..1、重复组件和自引用。
+
+Production Order Core 保留历史状态机：`PENDING → IN_PROGRESS → COMPLETED`，取消仍只允许非 COMPLETED 工单。`complete` 表示流程完工，不自动产生 finished-goods inventory receipt。生产入库/领料类库存影响继续延后到 Production Output 安全重设计。新增的 hardening 仅限输入校验、BOM 与产品匹配校验、未知 action 返回 400、非法重复转换返回 409、重复 cancel 返回已取消。
+
+MRP canonical contract：`/api/mrp-plans/generate` 输入为 `plan_id + demand_type=SALES_ORDER + demand_source_id`；需求来源为销售订单明细；BOM 来源为最新 `ACTIVE` BOM 并递归展开，`DISCONTINUED` BOM 不参与；当前库存来源为 `inventory` 按产品汇总；在途来源为 `purchase_receipts` header 与 `purchase_receipt_items` 明细 join 后按 `pri.product_id` 汇总；输出写入 `mrp_plan_items.gross_requirement/on_hand/scheduled_receipt/planned_order_quantity`。生成过程在事务中删除同计划旧明细并重建，避免旧结果叠加。
+
+Routing list 不再引用不存在的 `b.bom_code`，改返回 BOM version 与产品 code/name。Production Output 不注册 `PRODUCTION_OUTPUT`，且 `/api/production-outputs` 不再 routed；当前 unsafe handler 留作内部 deferred 代码，不进入公开 mutation surface。Production Cost 仍未路由/未接 UI，继续延后，不修改 Standard Cost / Cost Rate 合同。
+
 ## 8. API 设计约定
 
 - 资源列表使用 `GET /api/<resource>`；
