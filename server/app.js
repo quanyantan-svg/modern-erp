@@ -42,6 +42,7 @@ const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
 const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
 const TOKEN_LENGTH = Number(process.env.TOKEN_LENGTH || 32);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
+const PURCHASE_STATUS_LABELS = STATUS_LABELS;
 
 export function createApp(db, options = {}) {
   const distDir = options.distDir;
