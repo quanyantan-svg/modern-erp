@@ -13,7 +13,7 @@ import {
   createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
   createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
   listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
@@ -1483,10 +1483,11 @@ async function createAccountingVoucher(db, req, res, actor) {
   const voucherId = id();
   const now = new Date().toISOString();
   const voucherNo = makeVoucherNo();
-  
+  const effectiveVoucherDate = voucherDate || now.slice(0, 10);
+
   transaction(db, () => {
-    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status) VALUES(?,?,?,?,?,?,?,?,?)`)
-      .run(voucherId, voucherNo, 'MANUAL', voucherId, voucherDate || now.slice(0, 10), remark || '', actor.id, now, 'ENTERED');
+    db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status,period) VALUES(?,?,?,?,?,?,?,?,?,?)`)
+      .run(voucherId, voucherNo, 'MANUAL', voucherId, effectiveVoucherDate, remark || '', actor.id, now, 'ENTERED', effectiveVoucherDate.slice(0, 7));
     
     const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
     entries.forEach(e => {
@@ -1534,12 +1535,13 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
   }
 
   const now = new Date().toISOString();
+  const newVoucherDate = voucherDate || voucher.voucher_date;
 
   transaction(db, () => {
     // If editing REJECTED voucher, reset to ENTERED
     const newStatus = voucher.status === 'REJECTED' ? 'ENTERED' : voucher.status;
-    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ?, status = ?, rejection_reason = ?, updated_at = ? WHERE id = ?')
-      .run(voucherDate || voucher.voucher_date, remark || '', newStatus, '', now, voucherId);
+    db.prepare('UPDATE accounting_vouchers SET voucher_date = ?, remark = ?, status = ?, rejection_reason = ?, updated_at = ?, period = ? WHERE id = ?')
+      .run(newVoucherDate, remark || '', newStatus, '', now, newVoucherDate.slice(0, 7), voucherId);
 
     db.prepare('DELETE FROM accounting_entries WHERE voucher_id = ?').run(voucherId);
 
@@ -1813,72 +1815,6 @@ function getAccountingLedger(db, res, actor, url) {
     period: { startDate, endDate }
   });
 }
-
-function getTrialBalance(db, res, actor, url) {
-  allow(actor, 'REPORT_VIEW');
-  const period = url.searchParams.get('period');
-  
-  let startDate, endDate;
-  if (period) {
-    startDate = period + '-01';
-    const [y, m] = period.split('-').map(Number);
-    endDate = new Date(y, m, 0).toISOString().slice(0, 10);
-  } else {
-    const now = new Date();
-    startDate = now.toISOString().slice(0, 7) + '-01';
-    endDate = now.toISOString().slice(0, 10);
-  }
-  
-  // 获取所有末级科目
-  const subjects = db.prepare(`SELECT id, code, name, type FROM accounting_subjects 
-    WHERE active = 1 AND parent_id IS NOT NULL ORDER BY code`).all();
-  
-  const trialBalance = subjects.map(subject => {
-    const opening = db.prepare(`SELECT 
-      COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount_cents ELSE -amount_cents END), 0) as balance
-      FROM accounting_entries ae 
-      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND av.voucher_date < ? AND av.status='POSTED'`)
-      .get(subject.id, startDate);
-    
-    const periodDebit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
-      FROM accounting_entries ae 
-      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND ae.direction = 'DEBIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
-      .get(subject.id, startDate, endDate);
-    
-    const periodCredit = db.prepare(`SELECT COALESCE(SUM(amount_cents), 0) as total
-      FROM accounting_entries ae 
-      JOIN accounting_vouchers av ON av.id = ae.voucher_id 
-      WHERE ae.subject_id = ? AND ae.direction = 'CREDIT' 
-      AND av.voucher_date >= ? AND av.voucher_date <= ? AND av.status='POSTED'`)
-      .get(subject.id, startDate, endDate);
-    
-    const openingBalance = Number(opening.balance);
-    const debit = Number(periodDebit.total);
-    const credit = Number(periodCredit.total);
-    
-    let closingBalance;
-    if (subject.type === 'ASSET' || subject.type === 'EXPENSE') {
-      closingBalance = openingBalance + debit - credit;
-    } else {
-      closingBalance = openingBalance + credit - debit;
-    }
-    
-    return {
-      ...subject,
-      openingBalance,
-      periodDebit: debit,
-      periodCredit: credit,
-      closingBalance
-    };
-  });
-  
-  return send(res, 200, { trialBalance, period: { startDate, endDate } });
-}
-
-
 
 // ============ 出纳管理 ============
 

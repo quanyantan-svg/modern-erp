@@ -970,13 +970,13 @@ export async function resolveAlert(db, req, res, actor, alertId) {
 
 // ============ 经营报表 ============
 
-// 纯业务 helper：按指定期间计算 REVENUE / EXPENSE 净额与利润。
-// 不接收 res，不做 HTTP 权限校验，不发送 response。
-// 期间过滤使用 voucher_date 范围（避开 v.period 列可能 NULL 的问题）。
-// 净额规则：REVENUE = credit - debit；EXPENSE = debit - credit（与试算平衡表一致）。
+// 纯业务 helper：解析期间字符串为 { period, startDate, endDate }。
+// 单一 canonical period 解析器：Income Statement / Trial Balance / Balance Sheet 等
+// 所有 financial reporting 复用。endDate 通过 Date(y, m, 0).getDate() 在本地时区
+// 直接构造，避免 toISOString() 在 UTC+8 等非 UTC 时区产生 -1 天的偏移。
 // 入参 period 为 YYYY-MM 字符串；非法格式抛出 Error，由 HTTP handler 转为 HttpError。
 // period 缺省时回退到当前月（与 getFinancialSummary 历史行为一致）。
-export function calculateIncomeForPeriod(db, period) {
+export function resolvePeriodRange(period) {
   const resolved = period || new Date().toISOString().slice(0, 7);
   const match = /^(\d{4})-(\d{2})$/.exec(resolved);
   if (!match) throw new Error("period 格式错误，应为 YYYY-MM");
@@ -986,6 +986,17 @@ export function calculateIncomeForPeriod(db, period) {
   const startDate = resolved + "-01";
   const lastDay = new Date(year, month, 0).getDate();
   const endDate = resolved + "-" + String(lastDay).padStart(2, "0");
+  return { period: resolved, startDate, endDate };
+}
+
+// 纯业务 helper：按指定期间计算 REVENUE / EXPENSE 净额与利润。
+// 不接收 res，不做 HTTP 权限校验，不发送 response。
+// 期间过滤使用 voucher_date 范围（避开 v.period 列可能 NULL 的问题）。
+// 净额规则：REVENUE = credit - debit；EXPENSE = debit - credit（与试算平衡表一致）。
+// 入参 period 为 YYYY-MM 字符串；非法格式抛出 Error，由 HTTP handler 转为 HttpError。
+// period 缺省时回退到当前月（与 getFinancialSummary 历史行为一致）。
+export function calculateIncomeForPeriod(db, period) {
+  const { period: resolved, startDate, endDate } = resolvePeriodRange(period);
 
   const row = db.prepare(`
     SELECT
@@ -1027,6 +1038,66 @@ export function getFinancialSummary(db, res, actor, url) {
     accounts_receivable: Number(ar),
     accounts_payable: Number(ap),
   });
+}
+
+// ============ 试算平衡表 ============
+// 单月期间期初/本期借方/本期贷方/期末。POSTED only。
+// 期间过滤使用 voucher_date 范围（避开 v.period 列可能 NULL 的问题，与利润表共享 resolvePeriodRange）。
+// 科目集合：所有 active 科目（不要求 parent_id；与利润表 / 资产负债表保持一致；
+//  seed 数据未设置 parent_id，过滤会导致整个列表为空）。
+// 净额规则：ASSET/EXPENSE 期末 = 期初 + 借方 - 贷方；其他 = 期初 + 贷方 - 借方。
+export function getTrialBalance(db, res, actor, url) {
+  allow(actor, "REPORT_VIEW");
+  const period = url.searchParams.get("period");
+  const { startDate, endDate } = resolvePeriodRange(period);
+
+  const subjects = db.prepare(`
+    SELECT id, code, name, type FROM accounting_subjects
+    WHERE active = 1 ORDER BY code
+  `).all();
+
+  const trialBalance = subjects.map(subject => {
+    const opening = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN e.direction = 'DEBIT' THEN e.amount_cents ELSE -e.amount_cents END), 0) AS balance
+      FROM accounting_entries e
+      JOIN accounting_vouchers v ON v.id = e.voucher_id
+      WHERE e.subject_id = ? AND v.voucher_date < ? AND v.status = 'POSTED'
+    `).get(subject.id, startDate);
+
+    const periodDebit = db.prepare(`
+      SELECT COALESCE(SUM(e.amount_cents), 0) AS total
+      FROM accounting_entries e
+      JOIN accounting_vouchers v ON v.id = e.voucher_id
+      WHERE e.subject_id = ? AND e.direction = 'DEBIT'
+        AND v.voucher_date >= ? AND v.voucher_date <= ? AND v.status = 'POSTED'
+    `).get(subject.id, startDate, endDate);
+
+    const periodCredit = db.prepare(`
+      SELECT COALESCE(SUM(e.amount_cents), 0) AS total
+      FROM accounting_entries e
+      JOIN accounting_vouchers v ON v.id = e.voucher_id
+      WHERE e.subject_id = ? AND e.direction = 'CREDIT'
+        AND v.voucher_date >= ? AND v.voucher_date <= ? AND v.status = 'POSTED'
+    `).get(subject.id, startDate, endDate);
+
+    const openingBalance = Number(opening.balance);
+    const debit = Number(periodDebit.total);
+    const credit = Number(periodCredit.total);
+
+    const closingBalance = (subject.type === 'ASSET' || subject.type === 'EXPENSE')
+      ? openingBalance + debit - credit
+      : openingBalance + credit - debit;
+
+    return {
+      ...subject,
+      openingBalance,
+      periodDebit: debit,
+      periodCredit: credit,
+      closingBalance,
+    };
+  });
+
+  return send(res, 200, { trialBalance, period: { startDate, endDate } });
 }
 
 // ============ 利润表 ============
