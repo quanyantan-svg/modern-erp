@@ -120,6 +120,19 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
         product_id TEXT NOT NULL,
         quantity REAL NOT NULL
       );
+
+      CREATE TABLE products (
+        id TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT '',
+        unit TEXT NOT NULL DEFAULT '',
+        price_cents INTEGER NOT NULL DEFAULT 0,
+        stock_quantity REAL NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT ''
+      );
     `);
     // Minimal seed users / warehouses to satisfy NOT NULL FKs.
     legacy.exec("INSERT INTO roles(id,code,name,description,system_role,created_at) VALUES('role-admin','ADMIN','系统管理员','',1,datetime('now'))");
@@ -130,6 +143,10 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
     legacy.exec("INSERT INTO warehouses(id,code,name,address,manager,active,created_at) VALUES('wh-2','WH-002','分仓','','李经理',1,datetime('now'))");
     legacy.exec(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,creator_id,created_at)
       VALUES('it-legacy-1','IT-LEGACY-001','wh-1','wh-2','DRAFT','user-admin','2026-08-01T10:00:00.000Z')`);
+    legacy.exec(`INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at)
+      VALUES('product-mig-1','P-MIG-1','调拨测试品','TEST','个',1000,0,1,datetime('now'),datetime('now'))`);
+    legacy.exec("INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES('iti-legacy-1','it-legacy-1','product-mig-1',10)");
+    legacy.exec("INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES('iti-legacy-2','it-legacy-1','product-mig-1',5)");
     legacy.close();
 
     // 2. Re-open through the application's canonical initialization path.
@@ -234,17 +251,12 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
   });
 
   test('POST /api/inventory-transfers/{id}/transfer writes TRANSFERRED status (CHECK constraint accepts it)', async () => {
-    // Need INVENTORY_TRANSFER_APPROVE to confirm a transfer. Admin role gets
-    // every permission via 'role-admin': all.
+    // Admin receives INVENTORY_TRANSFER_APPROVE through the canonical admin-all
+    // permission reconciliation ('role-admin': all). The migration repaired the
+    // CHECK constraint so this UPDATE actually persists.
     const res = await fetch(`${baseUrl}/api/inventory-transfers/it-legacy-1/transfer`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adminToken}` },
     });
-    if (res.status === 403) {
-      // INVENTORY_TRANSFER_APPROVE is not in the registry in this build — skip.
-      // The migration's broader CHECK still allows TRANSFERRED even if the
-      // approve endpoint is gated by an unregistered permission. Documented.
-      return;
-    }
     assert.equal(res.status, 200, `transfer action must succeed, got ${res.status}`);
     const row = db.prepare("SELECT status, reviewer_id, updated_at FROM inventory_transfers WHERE id='it-legacy-1'").get();
     assert.equal(row.status, 'TRANSFERRED');
@@ -253,13 +265,16 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
   });
 
   test('POST /api/inventory-transfers/{id}/cancel writes CANCELLED status', async () => {
+    // Use the warehouse token (warehouse holds INVENTORY_TRANSFER_APPROVE
+    // via the canonical rolePermissions seed) to also assert the warehouse
+    // approver surface actually works end-to-end.
     const res = await fetch(`${baseUrl}/api/inventory-transfers/it-legacy-1/cancel`, {
-      method: 'POST', headers: { 'Authorization': `Bearer ${adminToken}` },
+      method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}` },
     });
-    if (res.status === 403) return;
     assert.equal(res.status, 200);
-    const row = db.prepare("SELECT status FROM inventory_transfers WHERE id='it-legacy-1'").get();
+    const row = db.prepare("SELECT status, reviewer_id FROM inventory_transfers WHERE id='it-legacy-1'").get();
     assert.equal(row.status, 'CANCELLED');
+    assert.equal(row.reviewer_id, 'user-warehouse');
   });
 });
 

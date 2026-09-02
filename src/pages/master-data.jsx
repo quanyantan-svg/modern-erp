@@ -211,7 +211,7 @@ function OrderDetail({ id, onClose, notify }) {
 export function UsersRoles({ user, notify }) {
   const defaultTab = can(user, 'USERS_MANAGE') ? 'users' : 'roles';
   const [tab, setTab] = useState(defaultTab); const [users, setUsers] = useState([]); const [roles, setRoles] = useState([]); const [permissions, setPermissions] = useState([]); const [editingUser, setEditingUser] = useState(null); const [editingRole, setEditingRole] = useState(null);
-  const load = () => Promise.all([can(user, 'USERS_MANAGE') ? api('/api/users') : null, api('/api/roles')]).then(([u, r]) => { setUsers(u?.users || []); setRoles(r.roles); setPermissions(r.permissions); }).catch((e) => notify(e.message, 'error'));
+  const load = () => Promise.all([can(user, 'USERS_MANAGE') ? api('/api/users') : null, can(user, 'ROLES_MANAGE') ? api('/api/roles') : null]).then(([u, r]) => { setUsers(u?.users || []); if (r) { setRoles(r.roles); setPermissions(r.permissions); } }).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
   return <Panel title="用户与角色" subtitle="角色是一组权限模板，用户通过角色获得功能权限" action={tab === 'users' ? can(user, 'USERS_MANAGE') && <button className="primary" onClick={() => setEditingUser({})}>＋ 新增用户</button> : can(user, 'ROLES_MANAGE') && <button className="primary" onClick={() => setEditingRole({ permissions: [] })}>＋ 新增角色</button>}>
     <div className="tabs">{can(user, 'USERS_MANAGE') && <button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理</button>}<button className={tab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色权限</button></div>
