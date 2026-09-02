@@ -1,5 +1,104 @@
 ﻿import { id, transaction } from '../db.js';
+import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
+
+const IQC_OQC_STATUSES = ['PENDING', 'COMPLETED'];
+const IQC_OQC_RESULTS = ['PASS', 'FAIL'];
+const IQC_OQC_INSPECTION_TYPES = ['NORMAL', 'SAMPLING', 'FULL'];
+
+function requireFiniteNumber(value, label, options = {}) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new HttpError(400, `${label}必须为有效数字`);
+  if (options.nonNegative && n < 0) throw new HttpError(400, `${label}不能为负数`);
+  if (options.max != null && n > options.max) throw new HttpError(400, `${label}不能超过 ${options.max}`);
+  return n;
+}
+
+function validateIqcOqcItems(items, label) {
+  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, `${label}: 检验明细不能为空`);
+  const validated = [];
+  for (let i = 0; i < items.length; i++) {
+    const raw = items[i] || {};
+    const productId = String(raw.product_id ?? '').trim();
+    if (!productId) throw new HttpError(400, `${label}: 第 ${i + 1} 行产品不能为空`);
+    const quantity = requireFiniteNumber(raw.quantity, `${label}: 第 ${i + 1} 行数量`, { nonNegative: true });
+    const sampleSize = requireFiniteNumber(raw.sample_size ?? 0, `${label}: 第 ${i + 1} 行抽样数`, { nonNegative: true });
+    if (sampleSize > quantity) throw new HttpError(400, `${label}: 第 ${i + 1} 行抽样数不能大于数量`);
+    const qualifiedRaw = raw.qualified;
+    const qualified = qualifiedRaw === true || qualifiedRaw === 1 || qualifiedRaw === '1' ? 1 : 0;
+    validated.push({
+      product_id: productId,
+      batch_no: String(raw.batch_no ?? '').trim(),
+      quantity,
+      sample_size: sampleSize,
+      qualified,
+      reject_reason: String(raw.reject_reason ?? '').trim(),
+    });
+  }
+  return validated;
+}
+
+function validateIqcHeader(body, db) {
+  const supplierId = String(body.supplier_id ?? '').trim();
+  if (!supplierId) throw new HttpError(400, '供应商不能为空');
+  if (!db.prepare('SELECT id FROM suppliers WHERE id=?').get(supplierId)) throw new HttpError(400, '供应商不存在');
+  const receiptId = body.receipt_id ? String(body.receipt_id).trim() : null;
+  const inspectionType = String(body.inspection_type ?? 'NORMAL').trim();
+  if (!IQC_OQC_INSPECTION_TYPES.includes(inspectionType)) throw new HttpError(400, `检验类型必须是 ${IQC_OQC_INSPECTION_TYPES.join(' / ')}`);
+  const totalQuantity = requireFiniteNumber(body.total_quantity ?? 0, '送检数量', { nonNegative: true });
+  const sampleQuantity = requireFiniteNumber(body.sample_quantity ?? 0, '抽样数量', { nonNegative: true, max: totalQuantity });
+  const qualifiedQuantity = requireFiniteNumber(body.qualified_quantity ?? 0, '合格数量', { nonNegative: true, max: sampleQuantity });
+  const rejectQuantity = requireFiniteNumber(body.reject_quantity ?? 0, '不合格数量', { nonNegative: true });
+  if (qualifiedQuantity + rejectQuantity > sampleQuantity) throw new HttpError(400, '合格数与不合格数之和不能超过抽样数');
+  return {
+    supplier_id: supplierId,
+    receipt_id: receiptId,
+    inspection_type: inspectionType,
+    total_quantity: totalQuantity,
+    sample_quantity: sampleQuantity,
+    qualified_quantity: qualifiedQuantity,
+    reject_quantity: rejectQuantity,
+    remark: String(body.remark ?? '').trim(),
+  };
+}
+
+function validateOqcHeader(body, db) {
+  const customerId = String(body.customer_id ?? '').trim();
+  if (!customerId) throw new HttpError(400, '客户不能为空');
+  if (!db.prepare('SELECT id FROM customers WHERE id=?').get(customerId)) throw new HttpError(400, '客户不存在');
+  const deliveryId = body.delivery_id ? String(body.delivery_id).trim() : null;
+  const inspectionType = String(body.inspection_type ?? 'NORMAL').trim();
+  if (!IQC_OQC_INSPECTION_TYPES.includes(inspectionType)) throw new HttpError(400, `检验类型必须是 ${IQC_OQC_INSPECTION_TYPES.join(' / ')}`);
+  const totalQuantity = requireFiniteNumber(body.total_quantity ?? 0, '送检数量', { nonNegative: true });
+  const sampleQuantity = requireFiniteNumber(body.sample_quantity ?? 0, '抽样数量', { nonNegative: true, max: totalQuantity });
+  const qualifiedQuantity = requireFiniteNumber(body.qualified_quantity ?? 0, '合格数量', { nonNegative: true, max: sampleQuantity });
+  const rejectQuantity = requireFiniteNumber(body.reject_quantity ?? 0, '不合格数量', { nonNegative: true });
+  if (qualifiedQuantity + rejectQuantity > sampleQuantity) throw new HttpError(400, '合格数与不合格数之和不能超过抽样数');
+  return {
+    customer_id: customerId,
+    delivery_id: deliveryId,
+    inspection_type: inspectionType,
+    total_quantity: totalQuantity,
+    sample_quantity: sampleQuantity,
+    qualified_quantity: qualifiedQuantity,
+    reject_quantity: rejectQuantity,
+    remark: String(body.remark ?? '').trim(),
+  };
+}
+
+function loadIqcInspection(db, iqcId) {
+  const inspection = db.prepare("SELECT i.*, s.code supplier_code, s.name supplier_name, u.display_name inspector_name FROM iqc_inspections i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN users u ON u.id=i.inspector_id WHERE i.id=?").get(iqcId);
+  if (!inspection) throw new HttpError(404, '来料检验单不存在');
+  inspection.items = db.prepare("SELECT ii.*, p.code product_code, p.name product_name FROM iqc_inspection_items ii JOIN products p ON p.id=ii.product_id WHERE ii.iqc_id=?").all(iqcId);
+  return inspection;
+}
+
+function loadOqcInspection(db, oqcId) {
+  const inspection = db.prepare("SELECT o.*, c.code customer_code, c.name customer_name, u.display_name inspector_name FROM oqc_inspections o JOIN customers c ON c.id=o.customer_id LEFT JOIN users u ON u.id=o.inspector_id WHERE o.id=?").get(oqcId);
+  if (!inspection) throw new HttpError(404, '出货检验单不存在');
+  inspection.items = db.prepare("SELECT oi.*, p.code product_code, p.name product_name FROM oqc_inspection_items oi JOIN products p ON p.id=oi.product_id WHERE oi.oqc_id=?").all(oqcId);
+  return inspection;
+}
 
 // ============ 部门辅助核算 ============
 
@@ -701,47 +800,75 @@ export function listIqcInspections(db, res, actor, url) {
 export async function createIqcInspection(db, req, res, actor) {
   allow(actor, "IQC_MANAGE");
   const body = await readJson(req);
+  const header = validateIqcHeader(body, db);
+  const items = validateIqcOqcItems(body.items, 'IQC');
   const now = new Date().toISOString();
   const iqcId = id();
   const seq = String(db.prepare("SELECT COUNT(*) cnt FROM iqc_inspections").get().cnt + 1).padStart(4, "0");
   const iqcNo = "IQC-" + now.slice(0, 10).replace(/-/g, "") + "-" + seq;
-  
-  db.prepare("INSERT INTO iqc_inspections(id,iqc_no,supplier_id,receipt_id,inspection_type,status,total_quantity,sample_quantity,inspector_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-    .run(iqcId, iqcNo, body.supplier_id, body.receipt_id || null, body.inspection_type || "NORMAL", "PENDING", body.total_quantity || 0, body.sample_quantity || 0, actor.id, now, now);
-  
+
+  transaction(db, () => {
+    db.prepare("INSERT INTO iqc_inspections(id,iqc_no,supplier_id,receipt_id,inspection_type,status,total_quantity,sample_quantity,qualified_quantity,reject_quantity,inspector_id,remark,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(iqcId, iqcNo, header.supplier_id, header.receipt_id, header.inspection_type, 'PENDING', header.total_quantity, header.sample_quantity, header.qualified_quantity, header.reject_quantity, actor.id, header.remark, now, now);
+    const insertItem = db.prepare("INSERT INTO iqc_inspection_items(id,iqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)");
+    for (const item of items) {
+      insertItem.run(id(), iqcId, item.product_id, item.batch_no, item.quantity, item.sample_size, item.qualified, item.reject_reason);
+    }
+    audit(db, actor.id, 'CREATE', 'IQC_INSPECTION', iqcId, `新建来料检验单 ${iqcNo}`);
+  });
+
   return send(res, 201, { id: iqcId, iqc_no: iqcNo });
 }
 
 export function getIqcInspection(db, res, actor, iqcId) {
   allowAny(actor, ["IQC_VIEW", "IQC_MANAGE"]);
-  const inspection = db.prepare("SELECT i.*, s.code supplier_code, s.name supplier_name, u.display_name inspector_name FROM iqc_inspections i JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN users u ON u.id=i.inspector_id WHERE i.id=?").get(iqcId);
-  if (!inspection) throw new HttpError(404, "检验单不存在");
-  inspection.items = db.prepare("SELECT ii.*, p.code product_code, p.name product_name FROM iqc_inspection_items ii JOIN products p ON p.id=ii.product_id WHERE ii.iqc_id=?").all(iqcId);
-  return send(res, 200, { inspection });
+  return send(res, 200, { inspection: loadIqcInspection(db, iqcId) });
 }
 
 export async function updateIqcInspection(db, req, res, actor, iqcId) {
   allow(actor, "IQC_MANAGE");
   const body = await readJson(req);
+  const inspection = db.prepare('SELECT * FROM iqc_inspections WHERE id=?').get(iqcId);
+  if (!inspection) throw new HttpError(404, '来料检验单不存在');
+  if (inspection.status === 'COMPLETED') throw new HttpError(409, '已完成的检验单不可修改');
+  const header = validateIqcHeader(body, db);
+  const items = validateIqcOqcItems(body.items, 'IQC');
   const now = new Date().toISOString();
-  
-  if (body.status === "COMPLETED") {
-    db.prepare("UPDATE iqc_inspections SET status=?,result=?,qualified_quantity=?,reject_quantity=?,inspected_at=?,remark=?,updated_at=? WHERE id=?")
-      .run("COMPLETED", body.result || "PASS", body.qualified_quantity || 0, body.reject_quantity || 0, now, body.remark || "", now, iqcId);
-  } else {
-    db.prepare("UPDATE iqc_inspections SET status=?,remark=?,updated_at=? WHERE id=?")
-      .run(body.status || "PENDING", body.remark || "", now, iqcId);
-  }
-  
-  // 如果有明细
-  if (body.items?.length) {
+
+  transaction(db, () => {
+    db.prepare("UPDATE iqc_inspections SET supplier_id=?,receipt_id=?,inspection_type=?,total_quantity=?,sample_quantity=?,qualified_quantity=?,reject_quantity=?,remark=?,updated_at=? WHERE id=?")
+      .run(header.supplier_id, header.receipt_id, header.inspection_type, header.total_quantity, header.sample_quantity, header.qualified_quantity, header.reject_quantity, header.remark, now, iqcId);
     db.prepare("DELETE FROM iqc_inspection_items WHERE iqc_id=?").run(iqcId);
-    for (const item of body.items) {
-      db.prepare("INSERT INTO iqc_inspection_items(id,iqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)")
-        .run(id(), iqcId, item.product_id, item.batch_no || "", item.quantity || 0, item.sample_size || 0, item.qualified ? 1 : 0, item.reject_reason || "");
+    const insertItem = db.prepare("INSERT INTO iqc_inspection_items(id,iqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)");
+    for (const item of items) {
+      insertItem.run(id(), iqcId, item.product_id, item.batch_no, item.quantity, item.sample_size, item.qualified, item.reject_reason);
     }
-  }
-  
+    audit(db, actor.id, 'UPDATE', 'IQC_INSPECTION', iqcId, `更新来料检验单 ${inspection.iqc_no}`);
+  });
+
+  return send(res, 200, { ok: true });
+}
+
+export async function completeIqcInspection(db, req, res, actor, iqcId) {
+  allow(actor, 'IQC_MANAGE');
+  const body = await readJson(req);
+  const result = String(body.result || '').trim();
+  if (!IQC_OQC_RESULTS.includes(result)) throw new HttpError(400, `检验结果必须是 ${IQC_OQC_RESULTS.join(' / ')}`);
+  const qualifiedQuantity = requireFiniteNumber(body.qualified_quantity ?? 0, '合格数量', { nonNegative: true });
+  const rejectQuantity = requireFiniteNumber(body.reject_quantity ?? 0, '不合格数量', { nonNegative: true });
+  const inspection = db.prepare('SELECT * FROM iqc_inspections WHERE id=?').get(iqcId);
+  if (!inspection) throw new HttpError(404, '来料检验单不存在');
+  if (inspection.status === 'COMPLETED') throw new HttpError(409, '来料检验单已完成,不可重复完成');
+  const sampleQuantity = Number(inspection.sample_quantity);
+  if (qualifiedQuantity > sampleQuantity) throw new HttpError(400, '合格数量不能超过抽样数量');
+  if (rejectQuantity > sampleQuantity) throw new HttpError(400, '不合格数量不能超过抽样数量');
+  if (qualifiedQuantity + rejectQuantity > sampleQuantity) throw new HttpError(400, '合格数与不合格数之和不能超过抽样数');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare("UPDATE iqc_inspections SET status=?,result=?,qualified_quantity=?,reject_quantity=?,inspected_at=?,updated_at=? WHERE id=?")
+      .run('COMPLETED', result, qualifiedQuantity, rejectQuantity, now, now, iqcId);
+    audit(db, actor.id, 'COMPLETE', 'IQC_INSPECTION', iqcId, `完成来料检验单 ${inspection.iqc_no}, 结果 ${result}`);
+  });
   return send(res, 200, { ok: true });
 }
 
@@ -761,46 +888,75 @@ export function listOqcInspections(db, res, actor, url) {
 export async function createOqcInspection(db, req, res, actor) {
   allow(actor, "OQC_MANAGE");
   const body = await readJson(req);
+  const header = validateOqcHeader(body, db);
+  const items = validateIqcOqcItems(body.items, 'OQC');
   const now = new Date().toISOString();
   const oqcId = id();
   const seq = String(db.prepare("SELECT COUNT(*) cnt FROM oqc_inspections").get().cnt + 1).padStart(4, "0");
   const oqcNo = "OQC-" + now.slice(0, 10).replace(/-/g, "") + "-" + seq;
-  
-  db.prepare("INSERT INTO oqc_inspections(id,oqc_no,customer_id,delivery_id,inspection_type,status,total_quantity,sample_quantity,inspector_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
-    .run(oqcId, oqcNo, body.customer_id, body.delivery_id || null, body.inspection_type || "NORMAL", "PENDING", body.total_quantity || 0, body.sample_quantity || 0, actor.id, now, now);
-  
+
+  transaction(db, () => {
+    db.prepare("INSERT INTO oqc_inspections(id,oqc_no,customer_id,delivery_id,inspection_type,status,total_quantity,sample_quantity,qualified_quantity,reject_quantity,inspector_id,remark,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(oqcId, oqcNo, header.customer_id, header.delivery_id, header.inspection_type, 'PENDING', header.total_quantity, header.sample_quantity, header.qualified_quantity, header.reject_quantity, actor.id, header.remark, now, now);
+    const insertItem = db.prepare("INSERT INTO oqc_inspection_items(id,oqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)");
+    for (const item of items) {
+      insertItem.run(id(), oqcId, item.product_id, item.batch_no, item.quantity, item.sample_size, item.qualified, item.reject_reason);
+    }
+    audit(db, actor.id, 'CREATE', 'OQC_INSPECTION', oqcId, `新建出货检验单 ${oqcNo}`);
+  });
+
   return send(res, 201, { id: oqcId, oqc_no: oqcNo });
 }
 
 export function getOqcInspection(db, res, actor, oqcId) {
   allowAny(actor, ["OQC_VIEW", "OQC_MANAGE"]);
-  const inspection = db.prepare("SELECT o.*, c.code customer_code, c.name customer_name, u.display_name inspector_name FROM oqc_inspections o JOIN customers c ON c.id=o.customer_id LEFT JOIN users u ON u.id=o.inspector_id WHERE o.id=?").get(oqcId);
-  if (!inspection) throw new HttpError(404, "检验单不存在");
-  inspection.items = db.prepare("SELECT oi.*, p.code product_code, p.name product_name FROM oqc_inspection_items oi JOIN products p ON p.id=oi.product_id WHERE oi.oqc_id=?").all(oqcId);
-  return send(res, 200, { inspection });
+  return send(res, 200, { inspection: loadOqcInspection(db, oqcId) });
 }
 
 export async function updateOqcInspection(db, req, res, actor, oqcId) {
   allow(actor, "OQC_MANAGE");
   const body = await readJson(req);
+  const inspection = db.prepare('SELECT * FROM oqc_inspections WHERE id=?').get(oqcId);
+  if (!inspection) throw new HttpError(404, '出货检验单不存在');
+  if (inspection.status === 'COMPLETED') throw new HttpError(409, '已完成的检验单不可修改');
+  const header = validateOqcHeader(body, db);
+  const items = validateIqcOqcItems(body.items, 'OQC');
   const now = new Date().toISOString();
-  
-  if (body.status === "COMPLETED") {
-    db.prepare("UPDATE oqc_inspections SET status=?,result=?,qualified_quantity=?,reject_quantity=?,inspected_at=?,remark=?,updated_at=? WHERE id=?")
-      .run("COMPLETED", body.result || "PASS", body.qualified_quantity || 0, body.reject_quantity || 0, now, body.remark || "", now, oqcId);
-  } else {
-    db.prepare("UPDATE oqc_inspections SET status=?,remark=?,updated_at=? WHERE id=?")
-      .run(body.status || "PENDING", body.remark || "", now, oqcId);
-  }
-  
-  if (body.items?.length) {
+
+  transaction(db, () => {
+    db.prepare("UPDATE oqc_inspections SET customer_id=?,delivery_id=?,inspection_type=?,total_quantity=?,sample_quantity=?,qualified_quantity=?,reject_quantity=?,remark=?,updated_at=? WHERE id=?")
+      .run(header.customer_id, header.delivery_id, header.inspection_type, header.total_quantity, header.sample_quantity, header.qualified_quantity, header.reject_quantity, header.remark, now, oqcId);
     db.prepare("DELETE FROM oqc_inspection_items WHERE oqc_id=?").run(oqcId);
-    for (const item of body.items) {
-      db.prepare("INSERT INTO oqc_inspection_items(id,oqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)")
-        .run(id(), oqcId, item.product_id, item.batch_no || "", item.quantity || 0, item.sample_size || 0, item.qualified ? 1 : 0, item.reject_reason || "");
+    const insertItem = db.prepare("INSERT INTO oqc_inspection_items(id,oqc_id,product_id,batch_no,quantity,sample_size,qualified,reject_reason) VALUES(?,?,?,?,?,?,?,?)");
+    for (const item of items) {
+      insertItem.run(id(), oqcId, item.product_id, item.batch_no, item.quantity, item.sample_size, item.qualified, item.reject_reason);
     }
-  }
-  
+    audit(db, actor.id, 'UPDATE', 'OQC_INSPECTION', oqcId, `更新出货检验单 ${inspection.oqc_no}`);
+  });
+
+  return send(res, 200, { ok: true });
+}
+
+export async function completeOqcInspection(db, req, res, actor, oqcId) {
+  allow(actor, 'OQC_MANAGE');
+  const body = await readJson(req);
+  const result = String(body.result || '').trim();
+  if (!IQC_OQC_RESULTS.includes(result)) throw new HttpError(400, `检验结果必须是 ${IQC_OQC_RESULTS.join(' / ')}`);
+  const qualifiedQuantity = requireFiniteNumber(body.qualified_quantity ?? 0, '合格数量', { nonNegative: true });
+  const rejectQuantity = requireFiniteNumber(body.reject_quantity ?? 0, '不合格数量', { nonNegative: true });
+  const inspection = db.prepare('SELECT * FROM oqc_inspections WHERE id=?').get(oqcId);
+  if (!inspection) throw new HttpError(404, '出货检验单不存在');
+  if (inspection.status === 'COMPLETED') throw new HttpError(409, '出货检验单已完成,不可重复完成');
+  const sampleQuantity = Number(inspection.sample_quantity);
+  if (qualifiedQuantity > sampleQuantity) throw new HttpError(400, '合格数量不能超过抽样数量');
+  if (rejectQuantity > sampleQuantity) throw new HttpError(400, '不合格数量不能超过抽样数量');
+  if (qualifiedQuantity + rejectQuantity > sampleQuantity) throw new HttpError(400, '合格数与不合格数之和不能超过抽样数');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare("UPDATE oqc_inspections SET status=?,result=?,qualified_quantity=?,reject_quantity=?,inspected_at=?,updated_at=? WHERE id=?")
+      .run('COMPLETED', result, qualifiedQuantity, rejectQuantity, now, now, oqcId);
+    audit(db, actor.id, 'COMPLETE', 'OQC_INSPECTION', oqcId, `完成出货检验单 ${inspection.oqc_no}, 结果 ${result}`);
+  });
   return send(res, 200, { ok: true });
 }
 

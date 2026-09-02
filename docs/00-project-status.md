@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / CRM Stabilization)
+> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Quality Stabilization)
 
 ## 阶段与分支
 
@@ -10,7 +10,24 @@
 
 ## 当前生产验收状态
 
-> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 CRM Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Quality Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+
+### Post-v1.0.0 Teacher Acceptance — Quality Stabilization
+
+- 代码提交：待提交 `fix(quality): stabilize iqc and oqc workflows`；
+- 单一 canonical IQC / OQC 合同与 DB schema 对齐：`iqc_no` / `oqc_no`、`supplier_id` / `customer_id`、`receipt_id` / `delivery_id`、`inspection_type`、`status`、`result`、`total_quantity`、`sample_quantity`、`qualified_quantity`、`reject_quantity`、`inspector_id`、`inspected_at`、`remark`；明细 `iqc_id` / `oqc_id`、`product_id`、`batch_no`、`quantity`、`sample_size`、`qualified` (0/1)、`reject_reason`；
+- `server/app.js` 内与现行 schema 不一致的 legacy `QC_*` handler 死代码（约 140 行，引用不存在的 `inspection_no` / `inspection_id` / `inspection_date` / `sampled_quantity` / `defective_quantity` / `defect_rate` / `inspection_result` 等列）已清理；这些 handler 从未被任何 route 注册；
+- 新增 routed 端点：`GET /api/iqc/:id`、`PATCH /api/iqc/:id`、`POST /api/iqc/:id/complete`；对称的 `GET /api/oqc/:id`、`PATCH /api/oqc/:id`、`POST /api/oqc/:id/complete`；
+- `createIqcInspection` / `createOqcInspection` 现以 `BEGIN` 事务写入 header + 全部明细行；任何字段校验失败 → 完整 rollback，header 不再孤立、`items` 不再被静默丢弃（P0 DATA LOSS 已修复）；
+- `updateIqcInspection` / `updateOqcInspection` 同样事务化：先校验 header + items，再 DELETE/INSERT items；不允许重复行；
+- 新增 `completeIqcInspection` / `completeOqcInspection` —— 唯一合法的 `PENDING → COMPLETED` 通道，要求 `result ∈ {PASS, FAIL}`，写入 `inspected_at` 并 audit；重复 complete 返回 409，COMPLETED 单据 PATCH 返回 409；
+- 数量不变量（header + items 两层同时生效）：非负、有限、`sample_quantity ≤ total_quantity`、`sample_size ≤ quantity`（item 级）、`qualified_quantity + reject_quantity ≤ sample_quantity`；任何违反返回 400；
+- 状态 / 结果枚举：`status ∈ {PENDING, COMPLETED}`，`result ∈ {PASS, FAIL}`；未知值返回 400；
+- 权限：`role-warehouse` 经 canonical role-permission reconciliation 增加 `IQC_VIEW` / `IQC_MANAGE` / `OQC_VIEW` / `OQC_MANAGE`；`role-admin` 通过 all-canonical-permissions 继承；`role-sales` / `role-reviewer` / `role-accounting` 不持有；无第六个角色；
+- Frontend：`src/pages/quality.jsx` 完全重写 —— 移除 `QC_MANAGE` 引用，弹窗显式接收 `user` / `notify`，使用 canonical `iqc_no` / `supplier_name` / `customer_name` / `inspector_name` 字段、`PENDING` / `COMPLETED` 状态、`PASS` / `FAIL` 结果、`sample_size` / `qualified` / `reject_reason` 明细字段；依赖改用 `GET /api/lookup/suppliers` 与 `GET /api/lookup/customers`（窄查询，返回 `id / code / name`），产品复用 `GET /api/products`；检验员从 `user.displayName` 派生，无 `/api/users` 调用；
+- 编辑仅在 `PENDING` 状态下显示；新增「完成」动作触发 `POST /:id/complete`；fetch / save 失败由 `notify` 受控提示，无 unhandled rejection、无 ReferenceError、无白屏；
+- Supplier Evaluation API：`GET /api/supplier-evaluations` 与 `POST /api/supplier-evaluations` 路由、handler、schema 完整保留；**SUPPLIER EVALUATION UI = DEFERRED**（未新增页面）；
+- Focused：`server/quality-stabilization.test.js`，51 tests / 5 suites / PASS；Full：570 tests / 129 suites / PASS；`pnpm build` PASS（417.71 kB JS / 29.19 kB CSS）；`git diff --check` PASS。
 
 ### Post-v1.0.0 Teacher Acceptance — CRM Stabilization
 

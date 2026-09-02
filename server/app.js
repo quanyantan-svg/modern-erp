@@ -13,7 +13,9 @@ import {
   createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
   createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getInventoryStatus, getSalesAnalysis, getTrialBalance,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getIqcInspection,
+  getInventoryStatus, getOqcInspection, getSalesAnalysis, getTrialBalance,
+  completeIqcInspection, completeOqcInspection, updateIqcInspection, updateOqcInspection,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
   listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
@@ -200,8 +202,18 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/labor-records' && req.method === 'POST') return createLaborRecord(db, req, res, actor);
   if (pathname === '/api/iqc' && req.method === 'GET') return listIqcInspections(db, res, actor, url);
   if (pathname === '/api/iqc' && req.method === 'POST') return createIqcInspection(db, req, res, actor);
+  const iqcMatch = pathname.match(/^\/api\/iqc\/([^/]+)$/);
+  if (iqcMatch && req.method === 'GET') return getIqcInspection(db, res, actor, iqcMatch[1]);
+  if (iqcMatch && req.method === 'PATCH') return updateIqcInspection(db, req, res, actor, iqcMatch[1]);
+  const iqcCompleteMatch = pathname.match(/^\/api\/iqc\/([^/]+)\/complete$/);
+  if (iqcCompleteMatch && req.method === 'POST') return completeIqcInspection(db, req, res, actor, iqcCompleteMatch[1]);
   if (pathname === '/api/oqc' && req.method === 'GET') return listOqcInspections(db, res, actor, url);
   if (pathname === '/api/oqc' && req.method === 'POST') return createOqcInspection(db, req, res, actor);
+  const oqcMatch = pathname.match(/^\/api\/oqc\/([^/]+)$/);
+  if (oqcMatch && req.method === 'GET') return getOqcInspection(db, res, actor, oqcMatch[1]);
+  if (oqcMatch && req.method === 'PATCH') return updateOqcInspection(db, req, res, actor, oqcMatch[1]);
+  const oqcCompleteMatch = pathname.match(/^\/api\/oqc\/([^/]+)\/complete$/);
+  if (oqcCompleteMatch && req.method === 'POST') return completeOqcInspection(db, req, res, actor, oqcCompleteMatch[1]);
   if (pathname === '/api/supplier-evaluations' && req.method === 'GET') return listSupplierEvaluations(db, res, actor, url);
   if (pathname === '/api/supplier-evaluations' && req.method === 'POST') return createSupplierEvaluation(db, req, res, actor);
   // OA Leave Requests
@@ -3408,145 +3420,4 @@ async function getProductionCost(db, res, actor, orderId) {
   const cost = db.prepare('SELECT * FROM production_costs WHERE order_id=? ORDER BY created_at DESC LIMIT 1').get(orderId);
   return send(res, 200, { cost });
 }
-// ============ IQC Inspections ============
-
-async function listIQCs(db, res, actor, url) {
-  allowAny(actor, ['QC_VIEW', 'QC_MANAGE']);
-  const status = url.searchParams.get('status') || '';
-  let sql = `SELECT i.*, s.name supplierName, u.name inspectorName, creator.name creatorName
-    FROM iqc_inspections i
-    LEFT JOIN suppliers s ON s.id=i.supplier_id
-    LEFT JOIN users u ON u.id=i.inspector_id
-    LEFT JOIN users creator ON creator.id=i.creator_id
-    WHERE 1=1`;
-  const params = [];
-  if (status) { sql += ` AND i.status=?`; params.push(status); }
-  sql += ` ORDER BY i.inspection_date DESC, i.created_at DESC`;
-  const inspections = db.prepare(sql).all(...params);
-  return send(res, 200, { inspections });
-}
-
-async function createIQC(db, req, res, actor) {
-  allow(actor, 'QC_MANAGE');
-  const body = await readJson(req);
-  const { source_type, source_id, supplier_id, inspector_id, inspection_date, items, remark } = body;
-  const now = new Date().toISOString();
-  const iqcId = id();
-  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM iqc_inspections WHERE inspection_date LIKE ?').get(inspection_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
-  const inspectionNo = `IQC-${inspection_date.replace(/-/g,'')}-${seq}`;
-  
-  db.prepare(`INSERT INTO iqc_inspections(id,inspection_no,source_type,source_id,supplier_id,inspector_id,inspection_date,status,remark,creator_id,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(iqcId, inspectionNo, source_type, source_id, supplier_id, inspector_id, inspection_date, 'PENDING', remark || '', actor.id, now, now);
-  
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const itemId = id();
-    db.prepare('INSERT INTO iqc_inspection_items(id,inspection_id,product_id,quantity,sampled_quantity,qualified_quantity,defective_quantity,defect_rate,inspection_result,remark) VALUES(?,?,?,?,?,?,?,?,?,?)').run(
-      itemId, iqcId, item.product_id, item.quantity, item.sampled_quantity || 0, item.qualified_quantity || 0, item.defective_quantity || 0, item.defect_rate || 0, item.inspection_result || 'PASS', item.remark || ''
-    );
-  }
-  
-  audit(db, actor.id, 'CREATE', 'IQC_INSPECTION', iqcId, `新建来料检验单 ${inspectionNo}`);
-  return send(res, 200, { id: iqcId, inspection_no: inspectionNo });
-}
-
-async function updateIQC(db, req, res, actor, iqcId) {
-  allow(actor, 'QC_MANAGE');
-  const body = await readJson(req);
-  const { status, items } = body;
-  const now = new Date().toISOString();
-  
-  db.prepare('UPDATE iqc_inspections SET status=?,updated_at=? WHERE id=?').run(status, now, iqcId);
-  
-  if (items) {
-    db.prepare('DELETE FROM iqc_inspection_items WHERE inspection_id=?').run(iqcId);
-    for (const item of items) {
-      const itemId = id();
-      db.prepare('INSERT INTO iqc_inspection_items(id,inspection_id,product_id,quantity,sampled_quantity,qualified_quantity,defective_quantity,defect_rate,inspection_result,remark) VALUES(?,?,?,?,?,?,?,?,?,?)').run(
-        itemId, iqcId, item.product_id, item.quantity, item.sampled_quantity || 0, item.qualified_quantity || 0, item.defective_quantity || 0, item.defect_rate || 0, item.inspection_result || 'PASS', item.remark || ''
-      );
-    }
-  }
-  
-  audit(db, actor.id, 'UPDATE', 'IQC_INSPECTION', iqcId, `更新来料检验单状态为 ${status}`);
-  return send(res, 200, { ok: true });
-}
-
-async function getIQCDetail(db, res, actor, iqcId) {
-  allowAny(actor, ['QC_VIEW', 'QC_MANAGE']);
-  const inspection = db.prepare('SELECT i.*, s.name supplierName, u.name inspectorName FROM iqc_inspections i LEFT JOIN suppliers s ON s.id=i.supplier_id LEFT JOIN users u ON u.id=i.inspector_id WHERE i.id=?').get(iqcId);
-  if (!inspection) throw new HttpError(404, '检验单不存在');
-  inspection.items = db.prepare(`SELECT ii.*, p.code productCode, p.name productName FROM iqc_inspection_items ii JOIN products p ON p.id=ii.product_id WHERE ii.inspection_id=?`).all(iqcId);
-  return send(res, 200, { inspection });
-}
-
-// ============ OQC Inspections ============
-
-async function listOQCs(db, res, actor, url) {
-  allowAny(actor, ['QC_VIEW', 'QC_MANAGE']);
-  const status = url.searchParams.get('status') || '';
-  let sql = `SELECT o.*, c.name customerName, u.name inspectorName, creator.name creatorName
-    FROM oqc_inspections o
-    LEFT JOIN customers c ON c.id=o.customer_id
-    LEFT JOIN users u ON u.id=o.inspector_id
-    LEFT JOIN users creator ON creator.id=o.creator_id
-    WHERE 1=1`;
-  const params = [];
-  if (status) { sql += ` AND o.status=?`; params.push(status); }
-  sql += ` ORDER BY o.inspection_date DESC, o.created_at DESC`;
-  const inspections = db.prepare(sql).all(...params);
-  return send(res, 200, { inspections });
-}
-
-async function createOQC(db, req, res, actor) {
-  allow(actor, 'QC_MANAGE');
-  const body = await readJson(req);
-  const { source_type, source_id, customer_id, inspector_id, inspection_date, items, remark } = body;
-  const now = new Date().toISOString();
-  const oqcId = id();
-  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM oqc_inspections WHERE inspection_date LIKE ?').get(inspection_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
-  const inspectionNo = `OQC-${inspection_date.replace(/-/g,'')}-${seq}`;
-  
-  db.prepare(`INSERT INTO oqc_inspections(id,inspection_no,source_type,source_id,customer_id,inspector_id,inspection_date,status,remark,creator_id,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(oqcId, inspectionNo, source_type, source_id, customer_id, inspector_id, inspection_date, 'PENDING', remark || '', actor.id, now, now);
-  
-  for (const item of items) {
-    const itemId = id();
-    db.prepare('INSERT INTO oqc_inspection_items(id,inspection_id,product_id,quantity,sampled_quantity,qualified_quantity,defective_quantity,inspection_result,remark) VALUES(?,?,?,?,?,?,?,?,?)').run(
-      itemId, oqcId, item.product_id, item.quantity, item.sampled_quantity || 0, item.qualified_quantity || 0, item.defective_quantity || 0, item.inspection_result || 'PASS', item.remark || ''
-    );
-  }
-  
-  audit(db, actor.id, 'CREATE', 'OQC_INSPECTION', oqcId, `新建出货检验单 ${inspectionNo}`);
-  return send(res, 200, { id: oqcId, inspection_no: inspectionNo });
-}
-
-async function updateOQC(db, req, res, actor, oqcId) {
-  allow(actor, 'QC_MANAGE');
-  const body = await readJson(req);
-  const { status, items } = body;
-  const now = new Date().toISOString();
-  
-  db.prepare('UPDATE oqc_inspections SET status=?,updated_at=? WHERE id=?').run(status, now, oqcId);
-  
-  if (items) {
-    db.prepare('DELETE FROM oqc_inspection_items WHERE inspection_id=?').run(oqcId);
-    for (const item of items) {
-      const itemId = id();
-      db.prepare('INSERT INTO oqc_inspection_items(id,inspection_id,product_id,quantity,sampled_quantity,qualified_quantity,defective_quantity,inspection_result,remark) VALUES(?,?,?,?,?,?,?,?,?)').run(
-        itemId, oqcId, item.product_id, item.quantity, item.sampled_quantity || 0, item.qualified_quantity || 0, item.defective_quantity || 0, item.inspection_result || 'PASS', item.remark || ''
-      );
-    }
-  }
-  
-  audit(db, actor.id, 'UPDATE', 'OQC_INSPECTION', oqcId, `更新出货检验单状态为 ${status}`);
-  return send(res, 200, { ok: true });
-}
-
-async function getOQCDetail(db, res, actor, oqcId) {
-  allowAny(actor, ['QC_VIEW', 'QC_MANAGE']);
-  const inspection = db.prepare('SELECT o.*, c.name customerName, u.name inspectorName FROM oqc_inspections o LEFT JOIN customers c ON c.id=o.customer_id LEFT JOIN users u ON u.id=o.inspector_id WHERE o.id=?').get(oqcId);
-  if (!inspection) throw new HttpError(404, '检验单不存在');
-  inspection.items = db.prepare(`SELECT oi.*, p.code productCode, p.name productName FROM oqc_inspection_items oi JOIN products p ON p.id=oi.product_id WHERE oi.inspection_id=?`).all(oqcId);
-  return send(res, 200, { inspection });
-}
+// ============ IQC Inspections (canonical handlers live in server/modules/extended.js) ============
