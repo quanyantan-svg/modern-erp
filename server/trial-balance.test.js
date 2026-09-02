@@ -66,8 +66,10 @@ import { createDatabase } from './db.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 const serverSrc = resolve(repoRoot, 'server');
+const srcDir = resolve(repoRoot, 'src');
 
 function readServerSrc(rel) { return readFileSync(join(serverSrc, rel), 'utf8'); }
+function readSrc(rel) { return readFileSync(join(srcDir, rel), 'utf8'); }
 
 // ============================================================
 // Source-level: canonical helper + new wiring + period write
@@ -138,6 +140,42 @@ describe('Phase E — Trial Balance canonical period helper', () => {
     const src = readServerSrc('app.js');
     assert.ok(/UPDATE accounting_vouchers SET voucher_date[\s\S]*?period\s*=\s*\?/.test(src),
       'UPDATE statement must keep period in sync');
+  });
+
+  test('getTrialBalance returns per-row openingDirection and closingDirection', () => {
+    const ext = readServerSrc('modules/extended.js');
+    const fn = ext.match(/export\s+function\s+getTrialBalance[\s\S]*?^}/m);
+    assert.ok(fn, 'getTrialBalance must be present');
+    assert.ok(/openingDirection:\s*classifyBalanceDirection\(openingBalance/.test(fn[0]),
+      'openingDirection must be derived from classifyBalanceDirection with opening=true');
+    assert.ok(/closingDirection:\s*classifyBalanceDirection\(closingBalance/.test(fn[0]),
+      'closingDirection must be derived from classifyBalanceDirection with opening=false');
+  });
+
+  test('classifyBalanceDirection helper exists with canonical accounting rules', () => {
+    const ext = readServerSrc('modules/extended.js');
+    assert.ok(/function\s+classifyBalanceDirection\(/.test(ext),
+      'classifyBalanceDirection helper must be defined');
+    // Verify the two canonical branches:
+    // - opening branch: sign-based, subject-type agnostic
+    // - closing branch: subject normal direction + sign of balance
+    assert.ok(/balance\s*>\s*0\s*\?\s*"DEBIT"\s*:\s*"CREDIT"/.test(ext),
+      'opening branch must classify positive → DEBIT, negative → CREDIT (sign-agnostic)');
+    assert.ok(/\(balance\s*>\s*0\)\s*===\s*isDebitNormal/.test(ext),
+      'closing branch must compare sign to subject normal direction');
+  });
+
+  test('frontend trial-balance aggregation uses direction fields (not Math.max sign heuristic)', () => {
+    const src = readSrc('pages/accounting.jsx');
+    // Must reference openingDirection / closingDirection fields
+    assert.ok(/openingDirection/.test(src), 'aggregation must reference openingDirection');
+    assert.ok(/closingDirection/.test(src), 'aggregation must reference closingDirection');
+    // Defence in depth: the old buggy Math.max(balance, 0) / Math.max(-balance, 0) heuristic
+    // for openingBalance and closingBalance must NOT appear in this file.
+    assert.equal(/Math\.max\(Number\(r\.openingBalance\s*\|\|\s*0\),\s*0\)/.test(src), false,
+      'opening balance aggregation must not use the old Math.max(>0, 0) sign heuristic');
+    assert.equal(/Math\.max\(Number\(r\.closingBalance\s*\|\|\s*0\),\s*0\)/.test(src), false,
+      'closing balance aggregation must not use the old Math.max(>0, 0) sign heuristic');
   });
 });
 
@@ -274,18 +312,24 @@ describe('Phase E — Trial Balance end-to-end', () => {
     assert.equal(r1001.periodDebit, 1000000, '1001 periodDebit must equal 1000000');
     assert.equal(r1001.periodCredit, 400000, '1001 periodCredit must equal 400000');
     assert.equal(r1001.closingBalance, 600000, '1001 closingBalance (ASSET: +debit-credit) must be 600000');
+    assert.equal(r1001.openingDirection, null, '1001 openingDirection must be null (zero opening)');
+    assert.equal(r1001.closingDirection, 'DEBIT', '1001 closingDirection must be DEBIT (ASSET positive = DEBIT)');
 
     // 6001: credit 1000000
     const r6001 = row(tb, '6001');
     assert.equal(r6001.periodDebit, 0);
     assert.equal(r6001.periodCredit, 1000000, '6001 periodCredit must equal 1000000');
     assert.equal(r6001.closingBalance, 1000000, '6001 closingBalance (REVENUE: +credit-debit) must be 1000000');
+    assert.equal(r6001.openingDirection, null, '6001 openingDirection must be null (zero opening)');
+    assert.equal(r6001.closingDirection, 'CREDIT', '6001 closingDirection must be CREDIT (REVENUE positive = CREDIT)');
 
     // 6401: debit 400000
     const r6401 = row(tb, '6401');
     assert.equal(r6401.periodDebit, 400000, '6401 periodDebit must equal 400000');
     assert.equal(r6401.periodCredit, 0);
     assert.equal(r6401.closingBalance, 400000, '6401 closingBalance (EXPENSE: +debit-credit) must be 400000');
+    assert.equal(r6401.openingDirection, null, '6401 openingDirection must be null (zero opening)');
+    assert.equal(r6401.closingDirection, 'DEBIT', '6401 closingDirection must be DEBIT (EXPENSE positive = DEBIT)');
 
     // Debit/Credit totals must match production smoke expectation (14,000,000 cents = ¥140,000.00)
     const totalDebit = tb.reduce((s, r) => s + r.periodDebit, 0);
@@ -562,5 +606,401 @@ describe('Phase E — Other reports unaffected by Trial Balance fix', () => {
     assert.equal(data.profit, 600000);
     assert.equal(typeof data.accounts_receivable, 'number');
     assert.equal(typeof data.accounts_payable, 'number');
+  });
+});
+
+// ============================================================
+// Closing-direction regression — production smoke + edge cases
+// ============================================================
+//
+// Original defect: Trial Balance footer showed
+//   `期末余额 借 ¥20,000.00 / 贷 ¥0.00`
+// instead of
+//   `借 ¥10,000.00 / 贷 ¥10,000.00`.
+// Root cause: backend stored closingBalance with subject-type-relative
+// sign convention (positive = normal side of subject type), but the
+// frontend used a sign-only heuristic Math.max(balance, 0) for debit /
+// Math.max(-balance, 0) for credit. For credit-normal subjects
+// (LIABILITY / EQUITY / REVENUE) a positive closing balance is on the
+// CREDIT side — but the heuristic treated it as DEBIT.
+//
+// Fix: backend exposes per-row `openingDirection` and `closingDirection`
+// fields ('DEBIT' | 'CREDIT' | null). Frontend aggregation uses these
+// direction fields rather than balance sign. Same logic applies to
+// opening balance to prevent the same latent defect on opening footer
+// totals. Zero balance returns null direction and contributes to
+// neither footer side.
+
+// Each scenario gets its own describe block with a fresh DB. Cross-test data
+// leakage is impossible because each tempDir/database is destroyed in `after`.
+// Common setup helpers are inlined per block to keep each scenario standalone
+// (Node test runner does not support nested describe hooks cleanly).
+
+async function setupDirectionTestEnvironment() {
+  const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-tb-direction-'));
+  const database = createDatabase(join(tempDir, 'erp.db'));
+  const server = createServer(createApp(database, { distDir: undefined }));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+  });
+  const adminToken = (await adminLogin.json()).token;
+
+  const approverRole = await fetch(`${baseUrl}/api/roles`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${adminToken}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ code: 'TB_DIR_APPROVER', name: 'TB Direction Approver', permissions: ['ACCOUNTING_VIEW', 'VOUCHER_APPROVE', 'REPORT_VIEW'] }),
+  });
+  const approverRoleId = (await approverRole.json()).id;
+  const { hashPassword } = await import('./db.js');
+  const pwd = hashPassword('tb-dir-pwd');
+  database.prepare(`INSERT INTO users(id, username, display_name, password_hash, password_salt, role_id, active, created_at)
+    VALUES ('user-tb-dir-approver', 'tb-dir-approver', 'TB Direction 审核员', ?, ?, ?, 1, ?)`)
+    .run(pwd.hash, pwd.salt, approverRoleId, new Date().toISOString());
+
+  const accLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'accounting', password: 'accounting123' }),
+  });
+  const accountingToken = (await accLogin.json()).token;
+
+  const apprLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'tb-dir-approver', password: 'tb-dir-pwd' }),
+  });
+  const approverToken = (await apprLogin.json()).token;
+
+  async function api(path, opts = {}, token = accountingToken) {
+    const headers = { ...(opts.headers || {}) };
+    if (token) headers.Authorization = 'Bearer ' + token;
+    if (opts.body && typeof opts.body !== 'string') {
+      headers['Content-Type'] = 'application/json';
+      opts = { ...opts, body: JSON.stringify(opts.body) };
+    }
+    const res = await fetch(`${baseUrl}${path}`, { ...opts, headers });
+    const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
+  async function createSubmitApprove(token, voucherDate, entries) {
+    const create = await api('/api/accounting-vouchers', {
+      method: 'POST',
+      body: { voucherDate, remark: 'direction regression', entries },
+    }, token);
+    assert.equal(create.status, 201, `create must succeed; got ${create.status} ${JSON.stringify(create.data)}`);
+    const vid = create.data.id;
+    const submit = await api(`/api/accounting-vouchers/${vid}/submit`, { method: 'POST' }, token);
+    assert.equal(submit.status, 200, `submit must succeed; got ${submit.status} ${JSON.stringify(submit.data)}`);
+    const approve = await api(`/api/accounting-vouchers/${vid}/approve`, { method: 'POST' }, approverToken);
+    assert.equal(approve.status, 200, `approve must succeed; got ${approve.status} ${JSON.stringify(approve.data)}`);
+    return vid;
+  }
+
+  function insertPostedVoucher(voucherDate, entries, period) {
+    const vid = `v-${Math.random().toString(36).slice(2, 10)}`;
+    const vno = `DIR-${vid}`;
+    const now = new Date().toISOString();
+    database.prepare(`
+      INSERT INTO accounting_vouchers(id, voucher_no, source_type, source_id, voucher_date, remark, creator_id, created_at, status, period)
+      VALUES (?, ?, 'MANUAL', ?, ?, 'synthetic', 'user-admin', ?, 'POSTED', ?)
+    `).run(vid, vno, vid, voucherDate, now, period || voucherDate.slice(0, 7));
+    for (const e of entries) {
+      database.prepare(`
+        INSERT INTO accounting_entries(id, voucher_id, subject_id, direction, amount_cents, summary)
+        VALUES (?, ?, ?, ?, ?, 'synthetic')
+      `).run(`e-${Math.random().toString(36).slice(2, 10)}`, vid, e.subjectId, e.direction, e.amountCents);
+    }
+    return vid;
+  }
+
+  async function teardown() {
+    await new Promise((r) => server.close(() => r()));
+    try { database.close(); } catch {}
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+
+  return { database, api, createSubmitApprove, insertPostedVoucher, teardown, accountingToken, approverToken };
+}
+
+function row(trialBalance, code) {
+  return trialBalance.find((r) => r.code === code);
+}
+
+describe('Phase E — Production smoke: closing debit = closing credit = 1000000 cents', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('closing totals match ¥10,000 / ¥10,000 for SMOKE-E01 + SMOKE-E02 in 2026-09', async () => {
+    await env.createSubmitApprove(env.accountingToken, '2026-09-01', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 1000000, summary: '现金' },
+      { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 1000000, summary: '收入' },
+    ]);
+    await env.createSubmitApprove(env.accountingToken, '2026-09-02', [
+      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+      { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
+    ]);
+
+    const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
+    assert.equal(res.status, 200);
+    const tb = res.data.trialBalance;
+
+    const closingDebit = tb.reduce((s, r) =>
+      s + (r.closingDirection === 'DEBIT' ? Math.abs(r.closingBalance) : 0), 0);
+    const closingCredit = tb.reduce((s, r) =>
+      s + (r.closingDirection === 'CREDIT' ? Math.abs(r.closingBalance) : 0), 0);
+    assert.equal(closingDebit, 1000000,
+      `production smoke closing debit total must be 1000000 cents (¥10,000); got ${closingDebit}`);
+    assert.equal(closingCredit, 1000000,
+      `production smoke closing credit total must be 1000000 cents (¥10,000); got ${closingCredit}`);
+
+    // Period debit/credit still 1400000 each (gross movement, unaffected by direction fix).
+    const periodDebit = tb.reduce((s, r) => s + r.periodDebit, 0);
+    const periodCredit = tb.reduce((s, r) => s + r.periodCredit, 0);
+    assert.equal(periodDebit, 1400000);
+    assert.equal(periodCredit, 1400000);
+
+    // `借方发生额 = 贷方发生额` banner remains correct.
+    assert.equal(periodDebit, periodCredit, 'period balanced flag must remain true');
+  });
+});
+
+describe('Phase E — 1001 closing direction = DEBIT (ASSET)', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('1001 closing direction = DEBIT (ASSET, positive closing = DEBIT)', async () => {
+    await env.createSubmitApprove(env.accountingToken, '2026-09-01', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 1000000, summary: '现金' },
+      { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 1000000, summary: '收入' },
+    ]);
+    const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.closingDirection, 'DEBIT',
+      `1001 (ASSET) positive closing must be DEBIT; got '${r1001.closingDirection}'`);
+    assert.equal(r1001.closingBalance, 1000000);
+  });
+});
+
+describe('Phase E — 6001 closing direction = CREDIT (REVENUE)', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('6001 closing direction = CREDIT (REVENUE, positive closing = CREDIT)', async () => {
+    await env.createSubmitApprove(env.accountingToken, '2026-09-01', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 1000000, summary: '现金' },
+      { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 1000000, summary: '收入' },
+    ]);
+    const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
+    const r6001 = row(res.data.trialBalance, '6001');
+    assert.equal(r6001.closingDirection, 'CREDIT',
+      `6001 (REVENUE) positive closing must be CREDIT (credit-normal subject); got '${r6001.closingDirection}'`);
+    assert.equal(r6001.closingBalance, 1000000);
+  });
+});
+
+describe('Phase E — 6401 closing direction = DEBIT (EXPENSE)', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('6401 closing direction = DEBIT (EXPENSE, positive closing = DEBIT)', async () => {
+    await env.createSubmitApprove(env.accountingToken, '2026-09-02', [
+      { subjectId: 'subject-007', direction: 'DEBIT', amountCents: 400000, summary: '成本' },
+      { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 400000, summary: '现金' },
+    ]);
+    const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
+    const r6401 = row(res.data.trialBalance, '6401');
+    assert.equal(r6401.closingDirection, 'DEBIT',
+      `6401 (EXPENSE) positive closing must be DEBIT; got '${r6401.closingDirection}'`);
+    assert.equal(r6401.closingBalance, 400000);
+  });
+});
+
+describe('Phase E — debit-normal contra balance direction', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('debit-normal account crossing into credit balance is classified CREDIT', async () => {
+    // 1001 (ASSET, debit-normal) — debit 100, credit 150 → closing = -50 → CREDIT side (contra).
+    env.insertPostedVoucher('2027-01-15', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 10000 },
+      { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 10000 },
+    ], '2027-01');
+    env.insertPostedVoucher('2027-01-16', [
+      { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 15000 },
+      { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 15000 },
+    ], '2027-01');
+
+    const res = await env.api('/api/reports/trial-balance?period=2027-01', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.closingBalance, -5000,
+      `1001 closing should be -5000 (10000 debit - 15000 credit); got ${r1001.closingBalance}`);
+    assert.equal(r1001.closingDirection, 'CREDIT',
+      `debit-normal account with negative closing must classify as CREDIT (contra); got '${r1001.closingDirection}'`);
+  });
+});
+
+describe('Phase E — credit-normal contra balance direction', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('credit-normal account crossing into debit balance is classified DEBIT', async () => {
+    // 6001 (REVENUE, credit-normal) — credit 100, debit 150 → closing = -50 → DEBIT side (contra).
+    env.insertPostedVoucher('2027-02-10', [
+      { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 10000 },
+      { subjectId: 'subject-002', direction: 'DEBIT', amountCents: 10000 },
+    ], '2027-02');
+    env.insertPostedVoucher('2027-02-11', [
+      { subjectId: 'subject-006', direction: 'DEBIT', amountCents: 15000 },
+      { subjectId: 'subject-002', direction: 'CREDIT', amountCents: 15000 },
+    ], '2027-02');
+
+    const res = await env.api('/api/reports/trial-balance?period=2027-02', {}, env.approverToken);
+    const r6001 = row(res.data.trialBalance, '6001');
+    assert.equal(r6001.closingBalance, -5000,
+      `6001 closing should be -5000 (10000 credit - 15000 debit); got ${r6001.closingBalance}`);
+    assert.equal(r6001.closingDirection, 'DEBIT',
+      `credit-normal account with negative closing must classify as DEBIT (contra); got '${r6001.closingDirection}'`);
+  });
+});
+
+describe('Phase E — zero balance does not inflate footer', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('zero balance does not inflate either side', async () => {
+    // Self-cancelling voucher: debit + credit of equal amount → zero net.
+    env.insertPostedVoucher('2027-03-10', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 10000 },
+      { subjectId: 'subject-001', direction: 'CREDIT', amountCents: 10000 },
+    ], '2027-03');
+    const res = await env.api('/api/reports/trial-balance?period=2027-03', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.closingBalance, 0);
+    assert.equal(r1001.closingDirection, null,
+      `zero closing balance must return null direction (so it does not inflate either footer total); got '${r1001.closingDirection}'`);
+
+    // Footer totals must both be 0.
+    const closingDebit = res.data.trialBalance.reduce((s, r) =>
+      s + (r.closingDirection === 'DEBIT' ? Math.abs(r.closingBalance) : 0), 0);
+    const closingCredit = res.data.trialBalance.reduce((s, r) =>
+      s + (r.closingDirection === 'CREDIT' ? Math.abs(r.closingBalance) : 0), 0);
+    assert.equal(closingDebit, 0, `closing debit total must be 0; got ${closingDebit}`);
+    assert.equal(closingCredit, 0, `closing credit total must be 0; got ${closingCredit}`);
+  });
+});
+
+describe('Phase E — opening balance direction parity', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('opening balance uses the same correct direction logic', async () => {
+    // Pre-September voucher creates a non-zero opening for 1001.
+    env.insertPostedVoucher('2026-08-15', [
+      { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 200000 },
+      { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 200000 },
+    ], '2026-08');
+    const res = await env.api('/api/reports/trial-balance?period=2026-09', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.openingBalance, 200000,
+      `1001 opening should reflect pre-September debit; got ${r1001.openingBalance}`);
+    assert.equal(r1001.openingDirection, 'DEBIT',
+      `opening positive must classify as DEBIT regardless of subject type; got '${r1001.openingDirection}'`);
+
+    // For a credit-normal subject (6001), opening SQL gives negative when only credits existed.
+    const r6001 = row(res.data.trialBalance, '6001');
+    assert.equal(r6001.openingBalance, -200000,
+      `6001 opening = 0 - 200000 = -200000 (credit activity); got ${r6001.openingBalance}`);
+    assert.equal(r6001.openingDirection, 'CREDIT',
+      `opening negative must classify as CREDIT; got '${r6001.openingDirection}'`);
+
+    // Opening footer totals: 200000 DEBIT, 200000 CREDIT → balanced.
+    const openingDebit = res.data.trialBalance.reduce((s, r) =>
+      s + (r.openingDirection === 'DEBIT' ? Math.abs(r.openingBalance) : 0), 0);
+    const openingCredit = res.data.trialBalance.reduce((s, r) =>
+      s + (r.openingDirection === 'CREDIT' ? Math.abs(r.openingBalance) : 0), 0);
+    assert.equal(openingDebit, 200000);
+    assert.equal(openingCredit, 200000);
+  });
+});
+
+describe('Phase E — POSTED-only direction behavior unchanged', () => {
+  let env;
+  before(async () => { env = await setupDirectionTestEnvironment(); });
+  after(async () => { await env.teardown(); });
+
+  test('ENTERED voucher does not affect closing totals', async () => {
+    // Insert only an ENTERED voucher (no submit / approve).
+    await env.api('/api/accounting-vouchers', {
+      method: 'POST',
+      body: {
+        voucherDate: '2027-04-10',
+        remark: 'entered only',
+        entries: [
+          { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 50000, summary: 'x' },
+          { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 50000, summary: 'x' },
+        ],
+      },
+    });
+    const res = await env.api('/api/reports/trial-balance?period=2027-04', {}, env.approverToken);
+    const tb = res.data.trialBalance;
+    const r1001 = row(tb, '1001');
+    assert.equal(r1001.closingBalance, 0,
+      `ENTERED voucher must NOT affect closing balance; got ${r1001.closingBalance}`);
+    assert.equal(r1001.closingDirection, null);
+    const closingDebit = tb.reduce((s, r) =>
+      s + (r.closingDirection === 'DEBIT' ? Math.abs(r.closingBalance) : 0), 0);
+    assert.equal(closingDebit, 0,
+      `ENTERED voucher must not contribute to closing debit total; got ${closingDebit}`);
+  });
+
+  test('SUBMITTED voucher does not affect closing totals', async () => {
+    const create = await env.api('/api/accounting-vouchers', {
+      method: 'POST',
+      body: {
+        voucherDate: '2027-04-11',
+        remark: 'submitted only',
+        entries: [
+          { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 60000, summary: 'x' },
+          { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 60000, summary: 'x' },
+        ],
+      },
+    });
+    await env.api(`/api/accounting-vouchers/${create.data.id}/submit`, { method: 'POST' });
+    const res = await env.api('/api/reports/trial-balance?period=2027-04', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.closingBalance, 0);
+  });
+
+  test('REJECTED voucher does not affect closing totals', async () => {
+    const create = await env.api('/api/accounting-vouchers', {
+      method: 'POST',
+      body: {
+        voucherDate: '2027-04-12',
+        remark: 'rejected only',
+        entries: [
+          { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 70000, summary: 'x' },
+          { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 70000, summary: 'x' },
+        ],
+      },
+    });
+    await env.api(`/api/accounting-vouchers/${create.data.id}/submit`, { method: 'POST' });
+    await env.api(`/api/accounting-vouchers/${create.data.id}/reject`, {
+      method: 'POST',
+      body: { rejectionReason: 'direction regression' },
+    }, env.approverToken);
+    const res = await env.api('/api/reports/trial-balance?period=2027-04', {}, env.approverToken);
+    const r1001 = row(res.data.trialBalance, '1001');
+    assert.equal(r1001.closingBalance, 0);
   });
 });

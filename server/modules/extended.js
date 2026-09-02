@@ -1046,6 +1046,11 @@ export function getFinancialSummary(db, res, actor, url) {
 // 科目集合：所有 active 科目（不要求 parent_id；与利润表 / 资产负债表保持一致；
 //  seed 数据未设置 parent_id，过滤会导致整个列表为空）。
 // 净额规则：ASSET/EXPENSE 期末 = 期初 + 借方 - 贷方；其他 = 期初 + 贷方 - 借方。
+// direction 规则（per row，独立的 openingDirection / closingDirection 字段）：
+//   opening：基于 SQL Σ(DEBIT)-Σ(CREDIT) 的符号 —— 正 → DEBIT，负 → CREDIT（与 subject type 无关）。
+//   closing：基于科目 normal direction —— debit-normal 科目（ASSET/EXPENSE）正 → DEBIT，
+//    负 → CREDIT（contra）；credit-normal 科目（LIABILITY/EQUITY/REVENUE）正 → CREDIT，
+//    负 → DEBIT（contra）。由 classifyBalanceDirection 统一实现。
 export function getTrialBalance(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
   const period = url.searchParams.get("period");
@@ -1091,13 +1096,45 @@ export function getTrialBalance(db, res, actor, url) {
     return {
       ...subject,
       openingBalance,
+      openingDirection: classifyBalanceDirection(openingBalance, subject.type, /*opening=*/true),
       periodDebit: debit,
       periodCredit: credit,
       closingBalance,
+      closingDirection: classifyBalanceDirection(closingBalance, subject.type, /*opening=*/false),
     };
   });
 
   return send(res, 200, { trialBalance, period: { startDate, endDate } });
+}
+
+// 纯 helper：按 canonical accounting direction 规则对余额进行方向归类。
+// 入参：
+//   balance — 已签名的余额数值（cents）。
+//   subjectType — 科目类型（ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE）。
+//   opening — true 表示走 opening SQL 规则（SUM(DEBIT)-SUM(CREDIT)，符号直接代表方向）；
+//             false 表示走 closing 规则（按科目 normal direction 解读）。
+// 出参：
+//   "DEBIT" | "CREDIT" | null（null 仅当余额为 0；不计入借/贷任一侧合计，避免污染 footer）。
+//
+// canonical 规则：
+//   opening 余额的符号约定：Σ(DEBIT) - Σ(CREDIT)。
+//     - 正数：净借方活动 → DEBIT 方向（与 subject type 无关）。
+//     - 负数：净贷方活动 → CREDIT 方向（与 subject type 无关）。
+//     - 零：null。
+//   closing 余额的符号约定：
+//     - ASSET / EXPENSE（debit-normal 科目）：期初+借方-贷方；
+//       正余额 → DEBIT（normal side）；负余额 → CREDIT（contra balance，反向）。
+//     - LIABILITY / EQUITY / REVENUE（credit-normal 科目）：期初+贷方-借方；
+//       正余额 → CREDIT（normal side）；负余额 → DEBIT（contra balance，反向）。
+function classifyBalanceDirection(balance, subjectType, opening) {
+  if (balance === 0) return null;
+  if (opening) {
+    // opening 符号直接代表借贷方向，不依赖 subject type。
+    return balance > 0 ? "DEBIT" : "CREDIT";
+  }
+  const isDebitNormal = subjectType === "ASSET" || subjectType === "EXPENSE";
+  // closing：正余额对应科目 normal side，负余额对应 contra side。
+  return (balance > 0) === isDebitNormal ? "DEBIT" : "CREDIT";
 }
 
 // ============ 利润表 ============

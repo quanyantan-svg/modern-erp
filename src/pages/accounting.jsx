@@ -195,10 +195,17 @@ function TrialBalanceReport({ user, notify }) {
   const rows = data?.trialBalance || [];
   const totalDebit = rows.reduce((s, r) => s + Number(r.periodDebit || 0), 0);
   const totalCredit = rows.reduce((s, r) => s + Number(r.periodCredit || 0), 0);
-  const totalOpeningDebit = rows.reduce((s, r) => s + Math.max(Number(r.openingBalance || 0), 0), 0);
-  const totalOpeningCredit = rows.reduce((s, r) => s + Math.max(-Number(r.openingBalance || 0), 0), 0);
-  const totalClosingDebit = rows.reduce((s, r) => s + Math.max(Number(r.closingBalance || 0), 0), 0);
-  const totalClosingCredit = rows.reduce((s, r) => s + Math.max(-Number(r.closingBalance || 0), 0), 0);
+  // Period debit / credit 是 gross movement，不依赖 direction 字段，直接相加即可。
+  // Opening / Closing 余额按 backend 返回的 openingDirection / closingDirection 归类：
+  //  正负号不能独立判定借贷侧（credit-normal 科目的 closing 正余额表示 CREDIT 侧）。
+  //  零余额不进任一侧合计，避免污染 footer。
+  const sumByDirection = (balanceField, directionField, side) =>
+    rows.reduce((s, r) =>
+      s + (r[directionField] === side ? Math.abs(Number(r[balanceField] || 0)) : 0), 0);
+  const totalOpeningDebit = sumByDirection('openingBalance', 'openingDirection', 'DEBIT');
+  const totalOpeningCredit = sumByDirection('openingBalance', 'openingDirection', 'CREDIT');
+  const totalClosingDebit = sumByDirection('closingBalance', 'closingDirection', 'DEBIT');
+  const totalClosingCredit = sumByDirection('closingBalance', 'closingDirection', 'CREDIT');
   const periodBalanced = totalDebit === totalCredit;
   const periodDiff = totalDebit - totalCredit;
 
@@ -234,10 +241,18 @@ function TrialBalanceReport({ user, notify }) {
               <tr key={r.id}>
                 <td className="mono">{r.code}</td>
                 <td><strong>{r.name}</strong></td>
-                <td className="number"><strong className={r.openingBalance >= 0 ? 'positive' : 'negative'}>{money(r.openingBalance)}</strong></td>
+                <td className="number">
+                  <strong className={r.openingDirection === 'DEBIT' ? 'positive' : (r.openingDirection === 'CREDIT' ? 'negative' : '')}>
+                    {r.openingDirection === 'DEBIT' ? '借 ' : r.openingDirection === 'CREDIT' ? '贷 ' : ''}{money(Math.abs(r.openingBalance))}
+                  </strong>
+                </td>
                 <td className="number">{money(r.periodDebit)}</td>
                 <td className="number">{money(r.periodCredit)}</td>
-                <td className="number"><strong className={r.closingBalance >= 0 ? 'positive' : 'negative'}>{money(r.closingBalance)}</strong></td>
+                <td className="number">
+                  <strong className={r.closingDirection === 'DEBIT' ? 'positive' : (r.closingDirection === 'CREDIT' ? 'negative' : '')}>
+                    {r.closingDirection === 'DEBIT' ? '借 ' : r.closingDirection === 'CREDIT' ? '贷 ' : ''}{money(Math.abs(r.closingBalance))}
+                  </strong>
+                </td>
               </tr>
             ))}
             {!rows.length && <tr><td colSpan={6}><Empty text={`期间 ${period} 无 POSTED 凭证`} /></td></tr>}
