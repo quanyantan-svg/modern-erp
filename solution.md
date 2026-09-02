@@ -899,6 +899,16 @@ curl http://127.0.0.1/api/health
 
 App 对无权访问的陈旧 hash 使用 `current.key` 渲染首个可见页面，避免短暂挂载 `UsersRoles` 等不可访问组件并触发 `/api/users`、`/api/roles` 请求。
 
+### 7.18 Cost P0 Containment（Post-v1.0.0 Teacher Acceptance）
+
+Standard Cost 的唯一公共请求/响应契约使用 camelCase：`productId`、`materialCostCents`、`laborCostCents`、`overheadCostCents`、`standardCostCents`、`effectiveDate`、`remark`。四个金额字段都是非负安全整数分，`standardCostCents` 必须严格等于三个组成项之和；缺失、负数、非整数、非有限值、无效日期或不一致总额返回正常 400，不进行默认补零或元/分二次换算。前端只在元输入边界用精确字符串解析生成整数分，例如 `153.45` 元严格生成 `15345` 分。
+
+新标准成本版本在仓库统一的 `BEGIN IMMEDIATE` 事务中完成：验证字段与产品、将旧 ACTIVE 版本改为 HISTORICAL、插入新 ACTIVE 版本、写审计记录并提交。任一步骤失败均回滚。标准成本与 `products.price_cents`（产品销售价）完全解耦；成本写入不得修改销售价。列表筛选的唯一查询参数为 `productId`。产品选择器使用 `GET /api/product-costs/products`，只返回 `id/code/name`。
+
+Cost Rate 公共契约使用 `rateType`、`rateValue`、`unit`、`effectiveDate`、`remark`，映射到 canonical SQLite 列 `rate_type`、`rate_value`、`unit`、`effective_date`、`remark`。允许的类型为 `MATERIAL_RATE`、`LABOR_RATE`、`OVERHEAD_RATE`。旧 `code/name/category/rate_cents_per_hour/active` 布局只在启动迁移时读取；迁移保留有意义的行，将旧分值除以 100 转为规范费率值，并将旧类别映射为 `*_RATE`。迁移后 GET/POST/PATCH 不再查询旧列，重复启动幂等。
+
+成本资源 GET 需要 `COST_VIEW` 或 `COST_MANAGE`，POST/PATCH 需要 `COST_MANAGE`；`PRODUCTS_VIEW` 和 `ACCOUNTING_VIEW` 都不是 Cost API 的替代授权。当前 `role-accounting` 没有 `COST_VIEW/COST_MANAGE`，本阶段不扩权，角色归属决策保持 PENDING。已有但未路由、未验证的 Production Cost 计算继续延后到 Manufacturing/Cost Integration，本阶段不暴露。
+
 ## 8. API 设计约定
 
 - 资源列表使用 `GET /api/<resource>`；

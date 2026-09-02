@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 自动生成：2026-09-02(最终生产验收收口)
+> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Cost P0 Containment)
 
 ## 阶段与分支
 
@@ -10,7 +10,23 @@
 
 ## 当前生产验收状态
 
+> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Cost P0 containment；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+
+### Post-v1.0.0 Teacher Acceptance — Cost P0 Containment
+
+- 代码提交：`3031573 fix(cost): align standard cost and rate contracts`；
+- Standard Cost 公共契约统一为 camelCase + integer cents：`productId`、`materialCostCents`、`laborCostCents`、`overheadCostCents`、`standardCostCents`、`effectiveDate`、`remark`；
+- 新版本替换在 `BEGIN IMMEDIATE` 事务内完成校验、旧 ACTIVE 历史化、新 ACTIVE 插入和审计；失败全部回滚；
+- 标准成本维护不再写 `products.price_cents`，产品销售价保持不变；
+- Cost Rate 统一使用 `rateType`、`rateValue`、`unit`、`effectiveDate`、`remark`，数据库保持 canonical `rate_type/rate_value/effective_date`；
+- API 读取统一要求 `COST_VIEW` 或 `COST_MANAGE`，写入要求 `COST_MANAGE`；成本产品选择器使用只返回 `id/code/name` 的域内窄查询；
+- `role-accounting` 未被静默授予 Cost 权限：**ROLE ASSIGNMENT DECISION = PENDING**；
+- `PRODUCTION COST = DEFERRED TO MANUFACTURING/COST INTEGRATION`，未增加路由或 UI；
+- Focused：32 tests / 4 suites / PASS；Full：500 tests / 121 suites / PASS；`pnpm build` PASS。
+
 > v1.0.1 Warehouse & Logistics Stabilization：代码候选已完成本地自动化验证；禁止 tag/push/deploy。必须在真实生产浏览器完成 `test_warehouse` 回归后才可评估发布。目前仅为 **READY FOR PRODUCTION REGRESSION**。
+
+以下为 v1.0.0 发布前的历史验收记录，原结论保留：
 
 - **当前已验收生产候选**: `v0.9.10`
 - **对应 commit**: `3064442 fix(accounting): expose period closing workflow`
@@ -58,11 +74,12 @@
 
 ## 当前测试状态
 
-- 测试文件:server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js + server/phase-d-hfix.test.js + server/badge-defect.test.js + server/phase-d-renderloop.test.js + server/project-manager.test.js + server/phase-e-accounting.test.js + server/voucher-amount-units.test.js + server/trial-balance.test.js + server/period-ui.test.js
-- **406 tests / 104 suites**(基线 375 / 99 + Final Hotfix 新增 31 / 5)
+- 成本定向：`server/cost-stabilization.test.js`，**32 tests / 4 suites**；
+- 全量：**500 tests / 121 suites**；
+- 构建：`pnpm build` PASS；
 - **全部通过**
 
-## Production Acceptance Status(更新)
+## Production Acceptance Status（v1.0.0 发布前历史记录）
 
 - **Release**: `v0.9.10`
 - **Commit**: `3064442`
