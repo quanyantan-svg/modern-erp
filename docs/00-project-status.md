@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Cost P0 Containment)
+> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / CRM Stabilization)
 
 ## 阶段与分支
 
@@ -10,7 +10,19 @@
 
 ## 当前生产验收状态
 
-> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Cost P0 containment；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 CRM Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+
+### Post-v1.0.0 Teacher Acceptance — CRM Stabilization
+
+- 代码提交：待提交 `fix(crm): stabilize customer follow-up workflows`；
+- `role-sales` 经 canonical role-permission reconciliation 增加 `CRM_VIEW` 与 `CRM_MANAGE`；`role-admin` 继续继承全部 canonical permissions；`role-reviewer`、`role-warehouse`、`role-accounting` 不持有 CRM 权限；
+- CRM API 授权统一为：GET 联系人 / 客户跟进 / 销售活动需要 `CRM_VIEW` 或 `CRM_MANAGE`，POST/PATCH/DELETE 需要 `CRM_MANAGE`；联系人列表不再以 `CUSTOMERS_VIEW` / `CUSTOMERS_MANAGE` 作为替代授权；
+- CRM 选择器改用 `GET /api/lookup/customers` 与 `GET /api/lookup/suppliers`，响应保持最小 `id/code/name`；lookup 额外允许 CRM 权限，但完整客户/供应商 API 未放宽；
+- 联系人 create/edit 使用 snake_case API contract，`customer_id` / `supplier_id` 关系字段在 PATCH 中持久化；
+- 客户跟进弹窗修复未声明 `user` / `notify`，新增真实 `PATCH /api/customer-followups/:id`，编辑保存更新原行而不是创建重复行；handler/creator 继续由当前认证 actor 派生；
+- 销售活动 create/edit 持久化 `actual_cost_cents` 精确整数分，状态限制为 `PLANNING / IN_PROGRESS / COMPLETED / CANCELLED`，未知状态返回 400；
+- CRM 三个 modal 的失败保存路径通过受控 `notify` 处理，不再因未声明变量白屏；
+- Focused：`server/crm-stabilization.test.js`，19 tests / 3 suites / PASS；受影响 lookup 回归：`server/phase-e-warehouse-logistics.test.js` 继续 PASS；Full：519 tests / 124 suites / PASS；`pnpm build` PASS。
 
 ### Post-v1.0.0 Teacher Acceptance — Cost P0 Containment
 
@@ -74,8 +86,9 @@
 
 ## 当前测试状态
 
+- CRM 定向：`server/crm-stabilization.test.js`，**19 tests / 3 suites**；
 - 成本定向：`server/cost-stabilization.test.js`，**32 tests / 4 suites**；
-- 全量：**500 tests / 121 suites**；
+- 全量：**519 tests / 124 suites**；
 - 构建：`pnpm build` PASS；
 - **全部通过**
 

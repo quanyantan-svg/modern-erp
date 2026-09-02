@@ -6,7 +6,7 @@ import {
   createTimesheet, createWorkflow, deleteContact, deleteSalesActivity, deleteTimesheet,
   getProjectDetail, listContacts, listFollowups, listNotifications, listProjectTasks,
   listProjects, listSalesActivities, listTimesheets, listWorkflows, markNotificationRead,
-  updateContact, updateProject, updateProjectTask, updateSalesActivity,
+  updateContact, updateFollowup, updateProject, updateProjectTask, updateSalesActivity,
 } from './modules/business.js';
 import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
@@ -366,6 +366,8 @@ async function handleApi(db, req, res, url) {
   if (contactMatch && req.method === 'DELETE') return deleteContact(db, req, res, actor, contactMatch[1]);
   if (pathname === '/api/customer-followups' && req.method === 'GET') return listFollowups(db, res, actor, url);
   if (pathname === '/api/customer-followups' && req.method === 'POST') return createFollowup(db, req, res, actor);
+  const followupMatch = pathname.match(/^\/api\/customer-followups\/([^/]+)$/);
+  if (followupMatch && req.method === 'PATCH') return updateFollowup(db, req, res, actor, followupMatch[1]);
   if (pathname === '/api/sales-activities' && req.method === 'GET') return listSalesActivities(db, res, actor, url);
   if (pathname === '/api/sales-activities' && req.method === 'POST') return createSalesActivity(db, req, res, actor);
   const salesActivityMatch = pathname.match(/^\/api\/sales-activities\/([^/]+)$/);
@@ -2781,14 +2783,14 @@ function getAccountReceivable(db, res, actor, arId) {
 //
 // Pattern matches /api/users/lookup (project-manager candidates).
 function listSupplierLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const suppliers = db.prepare("SELECT id, code, name FROM suppliers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
   return send(res, 200, { suppliers });
 }
 
 function listCustomerLookup(db, res, actor, url) {
-  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
   return send(res, 200, { customers });

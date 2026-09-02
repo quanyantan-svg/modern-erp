@@ -2,6 +2,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
+export async function runCrmSave(operation, onSaved, notify) {
+  try {
+    await operation();
+    onSaved();
+    return true;
+  } catch (error) {
+    notify(error.message, 'error');
+    return false;
+  }
+}
+
 export function Contacts({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
@@ -38,12 +49,12 @@ export function Contacts({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无联系人"/>}
       </div>
-      {editing && <ContactModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('联系人已保存'); }} />}
+      {editing && <ContactModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('联系人已保存'); }} />}
     </Panel>
   );
 }
 
-function ContactModal({ value, onClose, onSaved }) {
+export function ContactModal({ value, notify, onClose, onSaved }) {
   const [form, setForm] = useState({
     customer_id: '', supplier_id: '', name: '', gender: '', position: '', phone: '', mobile: '', email: '', wechat: '', birthday: '', remark: '', is_primary: false, ...value
   });
@@ -51,20 +62,19 @@ function ContactModal({ value, onClose, onSaved }) {
   const [suppliers, setSuppliers] = useState([]);
 
   useEffect(() => {
-    api('/api/customers').then((r) => setCustomers(r.customers || []));
-    api('/api/suppliers').then((r) => setSuppliers(r.suppliers || []));
+    api('/api/lookup/customers').then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, 'error'));
+    api('/api/lookup/suppliers').then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, 'error'));
   }, []);
 
   async function save(e) {
     e.preventDefault();
-    try {
+    await runCrmSave(async () => {
       if (value.id) {
         await api(`/api/contacts/${value.id}`, { method: 'PATCH', body: form });
       } else {
         await api('/api/contacts', { method: 'POST', body: form });
       }
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+    }, onSaved, notify);
   }
 
   return (
@@ -112,7 +122,7 @@ export function Followups({ user, notify }) {
   };
 
   useEffect(() => {
-    api('/api/customers').then((r) => setCustomers(r.customers || []));
+    api('/api/lookup/customers').then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, 'error'));
     void load();
   }, []);
 
@@ -148,12 +158,12 @@ export function Followups({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无跟进记录"/>}
       </div>
-      {editing && <FollowupModal customers={customers} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('跟进记录已保存'); }} />}
+      {editing && <FollowupModal customers={customers} user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('跟进记录已保存'); }} />}
     </Panel>
   );
 }
 
-function FollowupModal({ customers, value, onClose, onSaved }) {
+export function FollowupModal({ customers, user, notify, value, onClose, onSaved }) {
   const [form, setForm] = useState({
     customer_id: '', followup_type: 'VISIT', followup_date: new Date().toISOString().slice(0, 10),
     content: '', next_plan: '', next_date: '', handler_id: user?.id || '', ...value
@@ -161,14 +171,17 @@ function FollowupModal({ customers, value, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
-    try {
-      await api('/api/customer-followups', { method: 'POST', body: form });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+    await runCrmSave(async () => {
+      if (value.id) {
+        await api(`/api/customer-followups/${value.id}`, { method: 'PATCH', body: form });
+      } else {
+        await api('/api/customer-followups', { method: 'POST', body: form });
+      }
+    }, onSaved, notify);
   }
 
   return (
-    <Modal title="新增跟进记录" onClose={onClose}>
+    <Modal title={value.id ? '编辑跟进记录' : '新增跟进记录'} onClose={onClose}>
       <form className="form-grid" onSubmit={save}>
         <label>客户<select value={form.customer_id} onChange={(e) => setForm({...form, customer_id: e.target.value})} required>
           <option value="">选择客户</option>
@@ -235,7 +248,7 @@ export function SalesActivities({ user, notify }) {
                 <td className="number">{money(item.actual_cost_cents)}</td>
                 <td><Badge type={item.status === 'COMPLETED' ? 'success' : item.status === 'CANCELLED' ? 'danger' : ''}>{statusMap[item.status]}</Badge></td>
                 <td>
-                  <button className="row-action" onClick={() => setEditing(item)}>编辑</button>
+                  {can(user, 'CRM_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
                   {can(user, 'CRM_MANAGE') && <button className="row-action danger" onClick={() => deleteActivity(item)}>删除</button>}
                 </td>
               </tr>
@@ -244,7 +257,7 @@ export function SalesActivities({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无销售活动"/>}
       </div>
-      {editing && <ActivityModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('活动已保存'); }} />}
+      {editing && <ActivityModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('活动已保存'); }} />}
     </Panel>
   );
 
@@ -258,7 +271,7 @@ export function SalesActivities({ user, notify }) {
   }
 }
 
-function ActivityModal({ value, onClose, onSaved }) {
+export function ActivityModal({ value, notify, onClose, onSaved }) {
   const [form, setForm] = useState({
     activity_type: 'CAMPAIGN', title: '', content: '', start_date: new Date().toISOString().slice(0, 10),
     end_date: '', location: '', budget_cents: 0, actual_cost_cents: 0, participants: '', status: 'PLANNING', result: '', ...value
@@ -266,14 +279,13 @@ function ActivityModal({ value, onClose, onSaved }) {
 
   async function save(e) {
     e.preventDefault();
-    try {
+    await runCrmSave(async () => {
       if (value.id) {
         await api(`/api/sales-activities/${value.id}`, { method: 'PATCH', body: form });
       } else {
         await api('/api/sales-activities', { method: 'POST', body: form });
       }
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+    }, onSaved, notify);
   }
 
   return (

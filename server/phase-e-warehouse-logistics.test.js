@@ -738,17 +738,19 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
     }
   });
 
-  test('WHITE-SCREEN SAFETY: lookup endpoints use workflow permissions (warehouse holds)', () => {
+  test('WHITE-SCREEN SAFETY: lookup endpoints use workflow permissions and CRM lookup permissions', () => {
     // Source-level guarantee: the narrow lookup endpoints exist; their
     // backend gating does not require SUPPLIERS_VIEW / CUSTOMERS_VIEW so
-    // a future custom role can keep warehouse scoped.
+    // a future custom role can keep warehouse scoped. CRM_VIEW / CRM_MANAGE
+    // are also allowed so CRM selectors can reuse the same minimal id/code/name
+    // contract without weakening full master-data APIs.
     const dbjs = readFileSync(join(repoRoot, 'server', 'app.js'), 'utf8');
     assert.match(dbjs,
-      /function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
-      'listSupplierLookup must gate by receipt/return workflow permissions');
+      /function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+      'listSupplierLookup must gate by receipt/return workflow permissions plus CRM permissions');
     assert.match(dbjs,
-      /function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
-      'listCustomerLookup must gate by delivery/return workflow permissions');
+      /function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+      'listCustomerLookup must gate by delivery/return workflow permissions plus CRM permissions');
   });
 
   test('stale inaccessible hash renders the first visible page, not admin UsersRoles', () => {

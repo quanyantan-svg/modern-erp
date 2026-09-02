@@ -2,10 +2,59 @@ import { id } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 
+const SALES_ACTIVITY_STATUSES = new Set(['PLANNING', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED']);
+
+function text(value, label, { required = false, max = 500 } = {}) {
+  const result = String(value ?? '').trim();
+  if (required && !result) throw new HttpError(400, `${label}不能为空`);
+  if (result.length > max) throw new HttpError(400, `${label}不能超过 ${max} 个字符`);
+  return result;
+}
+
+function optionalId(value) {
+  const result = String(value ?? '').trim();
+  return result || null;
+}
+
+function nonNegativeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new HttpError(400, `${label}必须是非负整数分`);
+  return value;
+}
+
+function requireDate(value, label) {
+  const result = text(value, label, { required: true, max: 10 });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result)) throw new HttpError(400, `${label}格式无效`);
+  return result;
+}
+
+function optionalDate(value, label) {
+  const result = text(value, label, { max: 10 });
+  if (result && !/^\d{4}-\d{2}-\d{2}$/.test(result)) throw new HttpError(400, `${label}格式无效`);
+  return result;
+}
+
+function salesActivityInput(body) {
+  const status = text(body.status ?? 'PLANNING', '活动状态', { required: true, max: 30 });
+  if (!SALES_ACTIVITY_STATUSES.has(status)) throw new HttpError(400, '活动状态无效');
+  return {
+    activity_type: text(body.activity_type, '活动类型', { required: true, max: 30 }),
+    title: text(body.title, '活动标题', { required: true, max: 100 }),
+    content: text(body.content, '活动内容', { max: 1000 }),
+    start_date: requireDate(body.start_date, '开始日期'),
+    end_date: optionalDate(body.end_date, '结束日期'),
+    location: text(body.location, '活动地点', { max: 100 }),
+    budget_cents: nonNegativeInteger(body.budget_cents, '预算'),
+    actual_cost_cents: nonNegativeInteger(body.actual_cost_cents, '实际费用'),
+    participants: text(body.participants, '参与人员', { max: 200 }),
+    status,
+    result: text(body.result, '活动结果', { max: 1000 }),
+  };
+}
+
 // ============ Contacts ============
 
 export async function listContacts(db, res, actor, url) {
-  allowAny(actor, ['CRM_VIEW', 'CRM_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE']);
+  allowAny(actor, ['CRM_VIEW', 'CRM_MANAGE']);
   const customerId = url.searchParams.get('customerId') || '';
   const supplierId = url.searchParams.get('supplierId') || '';
   let sql = `SELECT c.*, cu.name customerName, s.name supplierName, u.name creatorName
@@ -25,13 +74,14 @@ export async function listContacts(db, res, actor, url) {
 export async function createContact(db, req, res, actor) {
   allow(actor, 'CRM_MANAGE');
   const body = await readJson(req);
-  const { customer_id, supplier_id, name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary } = body;
+  const { customer_id, supplier_id, gender, is_primary } = body;
+  const name = text(body.name, '联系人姓名', { required: true, max: 100 });
   const now = new Date().toISOString();
   const contactId = id();
   
   db.prepare(`INSERT INTO contacts(id,customer_id,supplier_id,name,gender,position,phone,mobile,email,wechat,birthday,remark,is_primary,creator_id,created_at,updated_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    contactId, customer_id || null, supplier_id || null, name, gender || null, position || '', phone || '', mobile || '', email || '', wechat || '', birthday || '', remark || '', is_primary ? 1 : 0, actor.id, now, now
+    contactId, optionalId(customer_id), optionalId(supplier_id), name, gender || null, text(body.position, '职位', { max: 100 }), text(body.phone, '电话', { max: 30 }), text(body.mobile, '手机', { max: 30 }), text(body.email, '邮箱', { max: 100 }), text(body.wechat, '微信', { max: 100 }), optionalDate(body.birthday, '生日'), text(body.remark, '备注', { max: 500 }), is_primary ? 1 : 0, actor.id, now, now
   );
   
   audit(db, actor.id, 'CREATE', 'CONTACT', contactId, `新增联系人 ${name}`);
@@ -40,12 +90,15 @@ export async function createContact(db, req, res, actor) {
 
 export async function updateContact(db, req, res, actor, contactId) {
   allow(actor, 'CRM_MANAGE');
+  const contact = db.prepare('SELECT * FROM contacts WHERE id=?').get(contactId);
+  if (!contact) throw new HttpError(404, '联系人不存在');
   const body = await readJson(req);
-  const { name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary } = body;
+  const { customer_id, supplier_id, gender, is_primary } = body;
+  const name = text(body.name, '联系人姓名', { required: true, max: 100 });
   const now = new Date().toISOString();
   
-  db.prepare(`UPDATE contacts SET name=?,gender=?,position=?,phone=?,mobile=?,email=?,wechat=?,birthday=?,remark=?,is_primary=?,updated_at=? WHERE id=?`).run(
-    name, gender, position, phone, mobile, email, wechat, birthday, remark, is_primary ? 1 : 0, now, contactId
+  db.prepare(`UPDATE contacts SET customer_id=?,supplier_id=?,name=?,gender=?,position=?,phone=?,mobile=?,email=?,wechat=?,birthday=?,remark=?,is_primary=?,updated_at=? WHERE id=?`).run(
+    optionalId(customer_id), optionalId(supplier_id), name, gender || null, text(body.position, '职位', { max: 100 }), text(body.phone, '电话', { max: 30 }), text(body.mobile, '手机', { max: 30 }), text(body.email, '邮箱', { max: 100 }), text(body.wechat, '微信', { max: 100 }), optionalDate(body.birthday, '生日'), text(body.remark, '备注', { max: 500 }), is_primary ? 1 : 0, now, contactId
   );
   
   audit(db, actor.id, 'UPDATE', 'CONTACT', contactId, `更新联系人 ${name}`);
@@ -82,17 +135,38 @@ export async function listFollowups(db, res, actor, url) {
 export async function createFollowup(db, req, res, actor) {
   allow(actor, 'CRM_MANAGE');
   const body = await readJson(req);
-  const { customer_id, followup_type, followup_date, content, next_plan, next_date, handler_id } = body;
+  const customer_id = text(body.customer_id, '客户', { required: true, max: 80 });
+  const followup_type = text(body.followup_type, '跟进方式', { required: true, max: 30 });
+  const followup_date = requireDate(body.followup_date, '跟进日期');
+  const content = text(body.content, '跟进内容', { required: true, max: 1000 });
   const now = new Date().toISOString();
   const followupId = id();
   
   db.prepare(`INSERT INTO customer_followups(id,customer_id,followup_type,followup_date,content,next_plan,next_date,handler_id,creator_id,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
-    followupId, customer_id, followup_type, followup_date, content, next_plan || '', next_date || '', handler_id || actor.id, actor.id, now
+    followupId, customer_id, followup_type, followup_date, content, text(body.next_plan, '下次计划', { max: 500 }), optionalDate(body.next_date, '下次跟进日期'), actor.id, actor.id, now
   );
   
   audit(db, actor.id, 'CREATE', 'CUSTOMER_FOLLOWUP', followupId, `新增客户跟进 ${content.slice(0, 20)}`);
   return send(res, 200, { id: followupId });
+}
+
+export async function updateFollowup(db, req, res, actor, followupId) {
+  allow(actor, 'CRM_MANAGE');
+  const followup = db.prepare('SELECT * FROM customer_followups WHERE id=?').get(followupId);
+  if (!followup) throw new HttpError(404, '跟进记录不存在');
+  const body = await readJson(req);
+  const customer_id = text(body.customer_id, '客户', { required: true, max: 80 });
+  const followup_type = text(body.followup_type, '跟进方式', { required: true, max: 30 });
+  const followup_date = requireDate(body.followup_date, '跟进日期');
+  const content = text(body.content, '跟进内容', { required: true, max: 1000 });
+
+  db.prepare(`UPDATE customer_followups SET customer_id=?,followup_type=?,followup_date=?,content=?,next_plan=?,next_date=? WHERE id=?`).run(
+    customer_id, followup_type, followup_date, content, text(body.next_plan, '下次计划', { max: 500 }), optionalDate(body.next_date, '下次跟进日期'), followupId
+  );
+
+  audit(db, actor.id, 'UPDATE', 'CUSTOMER_FOLLOWUP', followupId, `更新客户跟进 ${content.slice(0, 20)}`);
+  return send(res, 200, { ok: true });
 }
 
 // ============ Sales Activities ============
@@ -111,32 +185,34 @@ export async function listSalesActivities(db, res, actor, url) {
 export async function createSalesActivity(db, req, res, actor) {
   allow(actor, 'CRM_MANAGE');
   const body = await readJson(req);
-  const { activity_type, title, content, start_date, end_date, location, budget_cents, participants, status, result } = body;
+  const activity = salesActivityInput(body);
   const now = new Date().toISOString();
   const activityId = id();
-  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM sales_activities WHERE start_date LIKE ?').get(start_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
-  const activityNo = `SA-${start_date.replace(/-/g,'')}-${seq}`;
+  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM sales_activities WHERE start_date LIKE ?').get(activity.start_date.slice(0, 7) + '%').cnt + 1).padStart(4, '0');
+  const activityNo = `SA-${activity.start_date.replace(/-/g,'')}-${seq}`;
   
   db.prepare(`INSERT INTO sales_activities(id,activity_no,activity_type,title,content,start_date,end_date,location,budget_cents,actual_cost_cents,participants,status,result,creator_id,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)`).run(
-    activityId, activityNo, activity_type, title, content, start_date, end_date || '', location || '', budget_cents || 0, participants || '', status || 'PLANNING', result || '', actor.id, now, now
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    activityId, activityNo, activity.activity_type, activity.title, activity.content, activity.start_date, activity.end_date, activity.location, activity.budget_cents, activity.actual_cost_cents, activity.participants, activity.status, activity.result, actor.id, now, now
   );
   
-  audit(db, actor.id, 'CREATE', 'SALES_ACTIVITY', activityId, `新建销售活动 ${title}`);
+  audit(db, actor.id, 'CREATE', 'SALES_ACTIVITY', activityId, `新建销售活动 ${activity.title}`);
   return send(res, 200, { id: activityId, activity_no: activityNo });
 }
 
 export async function updateSalesActivity(db, req, res, actor, activityId) {
   allow(actor, 'CRM_MANAGE');
+  const current = db.prepare('SELECT * FROM sales_activities WHERE id=?').get(activityId);
+  if (!current) throw new HttpError(404, '活动不存在');
   const body = await readJson(req);
-  const { title, content, start_date, end_date, location, budget_cents, actual_cost_cents, participants, status, result } = body;
+  const activity = salesActivityInput(body);
   const now = new Date().toISOString();
   
   db.prepare(`UPDATE sales_activities SET title=?,content=?,start_date=?,end_date=?,location=?,budget_cents=?,actual_cost_cents=?,participants=?,status=?,result=?,updated_at=? WHERE id=?`).run(
-    title, content, start_date, end_date || '', location || '', budget_cents || 0, actual_cost_cents || 0, participants || '', status, result || '', now, activityId
+    activity.title, activity.content, activity.start_date, activity.end_date, activity.location, activity.budget_cents, activity.actual_cost_cents, activity.participants, activity.status, activity.result, now, activityId
   );
   
-  audit(db, actor.id, 'UPDATE', 'SALES_ACTIVITY', activityId, `更新销售活动 ${title}`);
+  audit(db, actor.id, 'UPDATE', 'SALES_ACTIVITY', activityId, `更新销售活动 ${activity.title}`);
   return send(res, 200, { ok: true });
 }
 
