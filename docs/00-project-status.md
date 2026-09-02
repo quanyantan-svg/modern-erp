@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Manufacturing Stabilization)
+> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Five-Role Teacher Acceptance Matrix)
 
 ## 阶段与分支
 
@@ -10,7 +10,31 @@
 
 ## 当前生产验收状态
 
-> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Manufacturing Stabilization；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Five-Role Teacher Acceptance Matrix；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+
+### Post-v1.0.0 Teacher Acceptance — Five-Role Teacher Acceptance Matrix
+
+- 代码提交：待提交 `test(acceptance): add five-role teacher acceptance matrix`；
+- 单一 canonical 文件 `server/teacher-acceptance-matrix.test.js`：**52 tests / 12 suites / PASS**，覆盖 navigation closure / live auth/me / 五角色完整 surface / cross-role separation of duties / frontend crash sweep / API 500 sweep / legacy DB 兼容 / data integrity / deferred feature visibility；
+- 五角色合同从真实源码（`src/App.jsx navGroups` + `server/db.js rolePermissions` + `server/db.js PERMISSIONS`）推导，不依赖记忆或假设：
+  - `role-admin` 经 `PERMISSIONS.map(...)` 继承所有 96 个 permission，sidebar 显示全部 nav；
+  - `role-sales`：`ORDERS_*` + `PURCHASE_ORDERS_*` + `CUSTOMERS_*` + `SUPPLIERS_*` + `CRM_*` + 仓库 `PURCHASE_RECEIPTS_*` / `SALES_DELIVERIES_*` / `RETURNS_*`，**无** `ORDERS_APPROVE` / `VOUCHER_*` / `PERIOD_CLOSE_*` / `IQC_*` / `OQC_*` / `COST_*` / `USERS_MANAGE` / `ROLES_MANAGE`；
+  - `role-reviewer`：仅 `ORDERS_APPROVE` + `PURCHASE_ORDERS_APPROVE` + 业务 read，**无**任何 `_MANAGE` / `_CREATE` / `_SUBMIT` 写权限，无 `VOUCHER_*` / `PERIOD_CLOSE_*` / `IQC_*` / `OQC_*` / `COST_*` / `CRM_*` / `USERS_MANAGE`；
+  - `role-warehouse`：`IQC_VIEW` / `IQC_MANAGE` / `OQC_VIEW` / `OQC_MANAGE` / `INVENTORY_TRANSFER_APPROVE` / `PURCHASE_RECEIPTS_*` / `SALES_DELIVERIES_*` / `RETURNS_*`，**无** `VOUCHER_*` / `PERIOD_CLOSE_*` / `COST_*` / `CRM_*` / `ORDERS_*` / `USERS_MANAGE` / `ROLES_MANAGE`；
+  - `role-accounting`：`VOUCHER_SUBMIT` + `ACCOUNTING_VIEW` + `REPORT_VIEW` + 出纳 / 银行 / 票据 / 固定资产，**无** `VOUCHER_APPROVE` / `PERIOD_CLOSE_*` / `COST_*` / `CRM_*` / `IQC_*` / `OQC_*` / `USERS_MANAGE` / `ROLES_MANAGE`；
+- **ROLE-ACCOUNTING COST ACCESS = PENDING**：保持与 `3031573` Cost P0 Containment 一致，未在本次任务中变更；
+- Cross-role SoD 显式测试覆盖：sales 创建/提交 → reviewer approve，accounting 创建/提交 → admin approve（creator ≠ approver 强制），accounting 不能自审；
+- Menu ↔ Permission ↔ API closure：所有可见页的 nav gate → 组件 → action gate → API → permission → lookup 形成闭合链路；`server/app.js` 中无 `QC_MANAGE` / `QC_VIEW` / `BOM_MANAGE` / 任何未注册 permission code；
+- Deferred feature visibility：Production Output 路由已移除，`src/App.jsx navGroups` 不含 production-output / production-cost / mrp-calculator / unrouted MRP lifecycle 任何 nav 项；
+- Frontend crash sweep：post-v0.9.4 / post-Quality 模态无 `if(...) setForm(...)` 反模式；非 admin-visible 页面无 `/api/users` 调用；IQC / OQC / Contacts / Followups / SalesActivities / Production 模态 SSR 渲染无 ReferenceError；
+- API 500 sweep：所有 sidebar 可见页对应的 GET 端点在空 DB 与最小 DB 下都返回 2xx/4xx，**无 500**；non-existent detail route 返回 404；
+- Legacy DB 兼容：representative pre-stabilization fixture（删除 IQC/OQC permissions 后再启动 createDatabase）→ 自动恢复 IQC_VIEW / IQC_MANAGE / OQC_VIEW / OQC_MANAGE，schema 全列存在；二次启动幂等；
+- Data integrity：IQC / OQC 多行校验失败时完整 rollback，header 与 items 行均不持久化；PATCH 替换 items 不重复行 / 不重复文档；
+- 真实生产浏览器验证：**不在本次范围**（Windows 本地环境无生产 browser 访问能力），仅完成代码 + 自动化测试层面；
+- Focused：`node --test server/teacher-acceptance-matrix.test.js` → 52 tests / 12 suites / PASS；Full：`pnpm test` → **633 tests / 145 suites / 0 failed**；`pnpm build` PASS（418.51 kB JS / 29.19 kB CSS，无 warning）；`git diff --check` PASS（仅 CRLF 提示）；
+- P0 / P1 = NONE；P2 记录：`src/pages/logistics-finance.jsx` 与 `src/pages/master-data.jsx` 中部分 modal 仍以 `if (detail && !form.X) setForm(...)` 形式在 render 阶段触发 setter（带 guard 不无限循环），与 v0.9.4 修复后的 canonical `useEffect([detail])` 模式不一致，不影响功能，记录待后续清理任务。
+
+### Post-v1.0.0 Teacher Acceptance — Manufacturing Stabilization
 
 ### Post-v1.0.0 Teacher Acceptance — Manufacturing Stabilization
 

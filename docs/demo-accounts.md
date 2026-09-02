@@ -1,6 +1,6 @@
 # Modern ERP — Demo / Test Account Guide (Teacher-Facing)
 
-> Status: v1.0.0 production-released. This document supports teacher / reviewer-side acceptance by exposing **five read-only test accounts**, one per real seeded role. No business code, permission model, role definition, or production database is changed by this guide.
+> Status: Post-v1.0.0 Teacher Acceptance Matrix — five-role teacher accounts pre-stabilization complete. Permission listings reflect the post-stabilization final contract (`939fd15` Quality Stabilization + `71208cb` CRM Stabilization). No business code, permission model, role definition, or production database is changed by this guide.
 
 ---
 
@@ -11,10 +11,10 @@ The system ships exactly **five (5) seeded roles** in `server/db.js → seedSche
 | # | Account | Role (code / 中文) | Main Responsibility | Key Capabilities | Key Restrictions |
 |---|---|---|---|---|---|
 | 1 | `test_admin` | `ADMIN` / 系统管理员 | Full system administration | All modules visible; user / role management; voucher approval; period closing; production order state machine | Cannot bypass backend authorization (admins are full but UI / API still apply business rules such as `creator_id !== approver_id`) |
-| 2 | `test_sales` | `SALES` / 销售专员 | Customer & order front-line work | Customers, suppliers, products, sales orders (create / submit), purchase orders (create / submit), inventory, returns | No approve / reject authority; no accounting; no production order |
-| 3 | `test_reviewer` | `REVIEWER` / 销售主管 | Approve / reject submitted orders | Approvals (sales + purchase approve / reject), read-only master data, inventory visibility | No order create; no submit (only approve / reject); no accounting; no production order |
-| 4 | `test_warehouse` | `WAREHOUSE` / 仓库管理员 | Warehouse + inventory ops | Warehouses (manage), inventory, purchase receipts, sales deliveries, returns, inventory transfers / checks | No customer / product (master-data) write; no orders; no accounting |
-| 5 | `test_accounting` | `ACCOUNTING` / 财务专员 | Financial voucher entry, submission, reporting | Manual voucher create / submit / edit (ENTERED + REJECTED); financial reports (Trial Balance / Income Statement / Balance Sheet); cash / bank / bills / fixed assets view; period view (read-only) | **No `VOUCHER_APPROVE`** — cannot post vouchers; cannot close or reopen periods; creator ≠ approver rule applies |
+| 2 | `test_sales` | `SALES` / 销售专员 | Customer & order front-line work | Customers, suppliers, products, sales orders (create / submit), purchase orders (create / submit), inventory, returns, **CRM (Contacts / Follow-ups / Sales Activities)** | No approve / reject authority; no accounting; no production order; no IQC / OQC; no Cost; no system |
+| 3 | `test_reviewer` | `REVIEWER` / 销售主管 | Approve / reject submitted orders | Approvals (sales + purchase approve / reject), read-only master data, inventory visibility | No order create; no submit (only approve / reject); no accounting; no production order; no IQC / OQC; no Cost; no CRM; no system |
+| 4 | `test_warehouse` | `WAREHOUSE` / 仓库管理员 | Warehouse + inventory ops + IQC / OQC | Warehouses (manage), inventory, purchase receipts, sales deliveries, returns, inventory transfers / checks, **IQC / OQC inspections (read + write)** | No customer / product (master-data) write; no orders; no accounting; no Cost; no CRM; no production order; no system |
+| 5 | `test_accounting` | `ACCOUNTING` / 财务专员 | Financial voucher entry, submission, reporting | Manual voucher create / submit / edit (ENTERED + REJECTED); financial reports (Trial Balance / Income Statement / Balance Sheet); cash / bank / bills / fixed assets view; period view (read-only) | **No `VOUCHER_APPROVE`** — cannot post vouchers; cannot close or reopen periods; creator ≠ approver rule applies; **no Cost** (PENDING); no IQC / OQC; no CRM; no system |
 
 > Cross-role permission maps (full enumeration) are derived verbatim from `server/db.js → PERMISSIONS` and `rolePermissions` (`server/db.js:1126-1137`).
 
@@ -70,9 +70,9 @@ Every permission code registered in the system is granted to `role-admin` via `'
 
 **Permission list** (verbatim from `rolePermissions['role-sales']`, `server/db.js:1130`):
 
-`DASHBOARD_VIEW`, `SUPPLIERS_VIEW` / `SUPPLIERS_MANAGE`, `CUSTOMERS_VIEW` / `CUSTOMERS_MANAGE`, `PRODUCTS_VIEW`, `ORDERS_VIEW` / `ORDERS_CREATE` / `ORDERS_SUBMIT`, `PURCHASE_ORDERS_VIEW` / `PURCHASE_ORDERS_CREATE` / `PURCHASE_ORDERS_SUBMIT`, `WAREHOUSES_VIEW`, `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, `INVENTORY_TRANSFER_CREATE`, `PURCHASE_RECEIPTS_VIEW` / `PURCHASE_RECEIPTS_MANAGE`, `SALES_DELIVERIES_VIEW` / `SALES_DELIVERIES_MANAGE`, `RETURNS_VIEW` / `RETURNS_MANAGE`.
+`DASHBOARD_VIEW`, `SUPPLIERS_VIEW` / `SUPPLIERS_MANAGE`, `CUSTOMERS_VIEW` / `CUSTOMERS_MANAGE`, `PRODUCTS_VIEW`, `ORDERS_VIEW` / `ORDERS_CREATE` / `ORDERS_SUBMIT`, `PURCHASE_ORDERS_VIEW` / `PURCHASE_ORDERS_CREATE` / `PURCHASE_ORDERS_SUBMIT`, `WAREHOUSES_VIEW`, `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, `INVENTORY_TRANSFER_CREATE`, `PURCHASE_RECEIPTS_VIEW` / `PURCHASE_RECEIPTS_MANAGE`, `SALES_DELIVERIES_VIEW` / `SALES_DELIVERIES_MANAGE`, `RETURNS_VIEW` / `RETURNS_MANAGE`, **`CRM_VIEW` / `CRM_MANAGE`** *(added by `71208cb` CRM Stabilization)*.
 
-**Main accessible modules**: 工作台, 销售订单 (create + submit), 采购订单 (create + submit), 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出库, 退货管理, 库存流水.
+**Main accessible modules**: 工作台, 销售订单 (create + submit), 采购订单 (create + submit), 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出库, 退货管理, 库存流水, **联系人管理, 客户跟进, 销售活动** *(added by `71208cb` CRM Stabilization)*.
 
 **Main operations**:
 - Create / submit sales orders (`POST /api/orders`, `POST /api/orders/:id/submit`)
@@ -151,9 +151,9 @@ Every permission code registered in the system is granted to `role-admin` via `'
 
 **Permission list** (verbatim from `rolePermissions['role-warehouse']`, `server/db.js:1132`):
 
-`DASHBOARD_VIEW`, `WAREHOUSES_VIEW` / `WAREHOUSES_MANAGE`, `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, `INVENTORY_TRANSFER_CREATE`, `PURCHASE_RECEIPTS_VIEW` / `PURCHASE_RECEIPTS_MANAGE`, `SALES_DELIVERIES_VIEW` / `SALES_DELIVERIES_MANAGE`, `RETURNS_VIEW` / `RETURNS_MANAGE`.
+`DASHBOARD_VIEW`, `PRODUCTS_VIEW`, `WAREHOUSES_VIEW` / `WAREHOUSES_MANAGE`, `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, `INVENTORY_TRANSFER_CREATE`, `INVENTORY_TRANSFER_APPROVE`, `PURCHASE_RECEIPTS_VIEW` / `PURCHASE_RECEIPTS_MANAGE`, `SALES_DELIVERIES_VIEW` / `SALES_DELIVERIES_MANAGE`, `RETURNS_VIEW` / `RETURNS_MANAGE`, **`IQC_VIEW` / `IQC_MANAGE` / `OQC_VIEW` / `OQC_MANAGE`** *(added by `939fd15` Quality Stabilization)*.
 
-**Main accessible modules**: 工作台, 仓库 (manage), 库存查询, 库存流水, 采购入库 (manage), 销售出库 (manage), 退货管理.
+**Main accessible modules**: 工作台, 仓库 (manage), 库存查询, 库存流水, 采购入库 (manage), 销售出库 (manage), 退货管理, **IQC来料检验, OQC出货检验** *(added by `939fd15` Quality Stabilization)*.
 
 **Main operations**:
 - Create / edit warehouses (`POST /api/warehouses`, `PATCH /api/warehouses/:id`)
@@ -164,9 +164,11 @@ Every permission code registered in the system is granted to `role-admin` via `'
 - Create inventory transfers (`POST /api/inventory-transfers`)
 
 **Restricted operations**:
-- **No customer / supplier / product master-data writes** (no `*_MANAGE` on master data outside warehouses).
+- **No customer / supplier / product master-data writes** (no `*_MANAGE` on master data outside warehouses; `PRODUCTS_VIEW` is read-only).
 - No order creation or approval (`ORDERS_*` / `PURCHASE_ORDERS_*` not granted).
 - No accounting (`ACCOUNTING_VIEW` / `VOUCHER_*` / `REPORT_VIEW` not granted).
+- **No Cost** (`COST_VIEW` / `COST_MANAGE` not granted).
+- **No CRM** (`CRM_VIEW` / `CRM_MANAGE` not granted — CRM is owned by `role-sales`).
 - No production orders, no period closing, no user / role management.
 
 **Recommended demo scenario** (3–6 steps):
@@ -178,7 +180,7 @@ Every permission code registered in the system is granted to `role-admin` via `'
 6. Attempt to navigate to **会计凭证**; observe UI hides the link (no `ACCOUNTING_VIEW`).
 
 **Permission delta vs other roles**:
-- vs `test_sales`: same warehouse / receipts / deliveries / returns, but lacks customer / supplier / orders / purchases. Holds warehouse create (sales does not).
+- vs `test_sales`: same warehouse / receipts / deliveries / returns, but lacks customer / supplier / orders / purchases. Holds warehouse create (sales does not); `test_warehouse` also owns IQC / OQC (sales does not).
 - vs `test_reviewer` / `test_accounting`: reviewer's not a warehouse account; accounting has zero warehouse role.
 
 ---
@@ -240,12 +242,15 @@ Every permission code registered in the system is granted to `role-admin` via `'
 | Confirm purchase receipts | ✓ | ✓ | — | ✓ | — |
 | Create / confirm inventory checks / transfers | ✓ | ✓ | — | ✓ | — |
 | Production order create / start / complete | ✓ | — | — | — | — |
+| IQC / OQC inspection (create + edit + complete) | ✓ | — | — | ✓ | — |
+| CRM (Contacts / Follow-ups / Sales Activities) | ✓ | ✓ | — | — | — |
 | Manual voucher create / submit | ✓ | — | — | — | ✓ |
 | Voucher approve (`VOUCHER_APPROVE`) | ✓ | — | — | — | — |
 | Period close / reopen | ✓ | — | — | — | — |
 | Trial Balance / Income Statement / Balance Sheet | ✓ | — | — | — | ✓ |
 | Cash / bank / bills / fixed assets | ✓ | — | — | — | ✓ |
 | User / role management | ✓ | — | — | — | — |
+| Standard Cost / Cost Rate manage | ✓ | — | — | — | — |
 
 ---
 
