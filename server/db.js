@@ -231,6 +231,58 @@ export function createDatabase(filename) {
   };
   migrateVoucherWorkflow();
 
+  // Migration: inventory_transfers runtime requires remark / updated_at / reviewer_id
+  // columns that pre-fix production schema does not declare. Production journals
+  // repeatedly report "no such column: it.reviewer_id" on GET /api/inventory-transfers
+  // (server/app.js:1336) and a latent CHECK-constraint mismatch (runtime writes
+  // TRANSFERRED / CANCELLED but pre-fix CHECK only allows DRAFT / SUBMITTED / APPROVED).
+  //
+  // Add columns idempotently first so the legacy rows are readable when the
+  // table-rebuild SELECT runs. Then rebuild the CHECK constraint and copy.
+  const migrateInventoryTransfers = () => {
+    try {
+      // 1. Add missing columns. ALTER TABLE ADD COLUMN throws when the column
+      //    already exists; the existing addColumn pattern swallows that.
+      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN remark TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN updated_at TEXT"); } catch (e) {}
+      try { db.exec("ALTER TABLE inventory_transfers ADD COLUMN reviewer_id TEXT"); } catch (e) {}
+      // 2. Backfill updated_at from created_at for legacy rows so the
+      //    runtime contract has a non-NULL value to read back.
+      try { db.exec("UPDATE inventory_transfers SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
+
+      // 3. Rebuild the CHECK constraint to include TRANSFERRED / CANCELLED
+      //    (runtime writes these statuses on action=transfer / cancel).
+      const currentSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='inventory_transfers'").get()?.sql || '';
+      if (currentSql.includes("'TRANSFERRED'") && currentSql.includes("'CANCELLED'")) return;
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS inventory_transfers_new (
+          id TEXT PRIMARY KEY,
+          transfer_no TEXT NOT NULL UNIQUE,
+          from_warehouse_id TEXT NOT NULL,
+          to_warehouse_id TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','APPROVED','TRANSFERRED','CANCELLED')),
+          remark TEXT NOT NULL DEFAULT '',
+          creator_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT '',
+          reviewer_id TEXT,
+          FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
+          FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
+          FOREIGN KEY (creator_id) REFERENCES users(id)
+        );
+      `);
+      db.exec(`INSERT INTO inventory_transfers_new(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,reviewer_id)
+        SELECT id,transfer_no,from_warehouse_id,to_warehouse_id,status,COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),reviewer_id
+        FROM inventory_transfers`);
+      db.exec('DROP TABLE inventory_transfers');
+      db.exec('ALTER TABLE inventory_transfers_new RENAME TO inventory_transfers');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_inventory_transfers_status ON inventory_transfers(status)');
+    } catch (e) {
+      console.error('Migration inventory_transfers failed:', e.message);
+    }
+  };
+  migrateInventoryTransfers();
+
   return db;
 }
 
@@ -1129,7 +1181,7 @@ function seedSchema(db) {
     'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
-    'role-warehouse': ['DASHBOARD_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {

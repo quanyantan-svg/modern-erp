@@ -1323,6 +1323,17 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
 
 // ============ Inventory Transfers ============
 
+// Status labels for inventory transfers. Runtime accepts
+// DRAFT / SUBMITTED / APPROVED (legacy CHECK) and
+// TRANSFERRED / CANCELLED (post-fix CHECK after schema rebuild).
+const INVENTORY_TRANSFER_STATUS = {
+  DRAFT: '草稿',
+  SUBMITTED: '待审核',
+  APPROVED: '已审核',
+  TRANSFERRED: '已调拨',
+  CANCELLED: '已取消',
+};
+
 function listInventoryTransfers(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const where = []; const params = [];
