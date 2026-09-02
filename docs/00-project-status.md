@@ -1,12 +1,26 @@
 # 项目状态快照
 
-> 自动生成：2026-08-31
+> 自动生成：2026-09-02(最终生产验收收口)
 
 ## 阶段与分支
 
-- 阶段：Cloud Refactor Phase 2
+- 阶段：Cloud Refactor Phase 2(Final Acceptance 完成)
 - 分支：refactor/cloud-deployment
 - 基准提交：a2e1f7e (docs: establish cloud refactor documentation)
+
+## 当前生产验收状态
+
+- **当前已验收生产候选**: `v0.9.10`
+- **对应 commit**: `3064442 fix(accounting): expose period closing workflow`
+- **最终验收文档**: `docs/07-production-acceptance.md`(已扩展 Phase C / D / E / F 综合结论,A / B 历史 evidence-locked 段落保留)
+- **Phase A** — Deployment: PASS
+- **Phase B** — Authentication / Permission: PASS(evidence-locked;来自 `v0.9.2` 历史 record,未被重写)
+- **Phase C** — Master Data: PASS
+- **Phase D** — Core ERP: PASS
+- **Phase E** — Accounting: PASS
+- **Phase F** — Operations / Recovery: PASS
+- **FINAL PRODUCTION ACCEPTANCE = PASS**
+- **READY FOR v1.0.0 RELEASE = YES**(`v1.0.0` tag 仍未创建)
 
 ## 已完成的核心工作流
 
@@ -37,21 +51,27 @@
 | **Phase E Hotfix — Manual voucher amount unit (yuan ↔ cents)** | ✅ | 本提交 | 39 regression tests |
 | **Phase E Hotfix — Trial Balance filter (subject include + canonical period range + period write)** | ✅ | 本提交 | 21 regression tests |
 | **Phase E Hotfix — Trial Balance closing/opening direction classification** | ✅ | 本提交 | 14 regression tests |
-| **Phase E Final Hotfix — Period closing workflow UI exposure** | ✅ | 本提交 | 31 regression tests |
+| **Phase E Final Hotfix — Period closing workflow UI exposure** | ✅ | 3064442 | 31 regression tests |
+| **Final Production Acceptance (v0.9.10)** | ✅ | 本提交 | DOCS-ONLY 收口,A–F 全部 PASS |
 
 ## 当前测试状态
 
-- 测试文件：server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js + server/phase-d-hfix.test.js + server/badge-defect.test.js + server/phase-d-renderloop.test.js + server/project-manager.test.js + server/phase-e-accounting.test.js + server/voucher-amount-units.test.js + server/trial-balance.test.js
-- 375 tests / 99 suites
+- 测试文件:server/app.test.js + server/voucher.test.js + server/period.test.js + server/income-statement.test.js + server/balance-sheet.test.js + server/financial-summary.test.js + server/production-safety.test.js + server/backup-restore.test.js + server/setup-admin.test.js + server/systemd.test.js + server/nginx.test.js + server/supplier-schema.test.js + server/ui-source.test.js + server/phase-d-hfix.test.js + server/badge-defect.test.js + server/phase-d-renderloop.test.js + server/project-manager.test.js + server/phase-e-accounting.test.js + server/voucher-amount-units.test.js + server/trial-balance.test.js + server/period-ui.test.js
+- **406 tests / 104 suites**(基线 375 / 99 + Final Hotfix 新增 31 / 5)
 - **全部通过**
 
-## Production Acceptance Status
+## Production Acceptance Status(更新)
 
-- **Release**: v0.9.2
-- **Commit**: 6168cdd
-- **Phase A — Deployment Baseline**: ✅ 记录完成(基于 user-confirmed production manual verification;详见 `docs/07-production-acceptance.md`)。
-- **Phase B — Authentication & Permission**: ✅ **`PASS — EVIDENCE LOCKED`**(基于 11 项 user-confirmed production manual verification + B06 保留 automated regression evidence;详见 `docs/07-production-acceptance.md`)。
-- **Phase C — Master Data CRUD**: NOT STARTED — 下一阶段,等待明确指令。
+- **Release**: `v0.9.10`
+- **Commit**: `3064442`
+- **Phase A — Deployment Baseline**: ✅ PASS(详见 `docs/07-production-acceptance.md`)
+- **Phase B — Authentication & Permission**: ✅ **`PASS — EVIDENCE LOCKED`**(来自 `v0.9.2` 历史 record,未被重写)
+- **Phase C — Master Data CRUD**: ✅ PASS
+- **Phase D — Core ERP**: ✅ PASS
+- **Phase E — Accounting**: ✅ PASS
+- **Phase F — Operations / Recovery**: ✅ PASS
+- **FINAL PRODUCTION ACCEPTANCE = PASS**
+- **READY FOR v1.0.0 RELEASE = YES**(未创建 `v1.0.0` tag)
 
 ## 分值汇总
 
