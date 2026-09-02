@@ -151,6 +151,8 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
 
     // 2. Re-open through the application's canonical initialization path.
     db = createDatabase(legacyPath);
+    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at)
+      VALUES('inv-mig-source','wh-1','product-mig-1',20,datetime('now'))`).run();
 
     // 3. Boot a fresh HTTP server against the migrated DB.
     svr = createServer(createApp(db, { distDir: resolve('dist') }));

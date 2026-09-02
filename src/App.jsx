@@ -218,7 +218,7 @@ export default function App() {
           <button className="text-button" onClick={logout}>退出</button>
         </div>
       </header>
-      <section className="page-content">{pages[page] || pages.dashboard}</section>
+      <section className="page-content">{pages[current?.key] || pages.dashboard}</section>
     </main>
     {toast && <div className={`toast ${toast.type}`}>{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
   </div>;

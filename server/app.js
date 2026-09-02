@@ -281,6 +281,10 @@ async function handleApi(db, req, res, url) {
   // Inventory Transactions
   if (pathname === "/api/inventory-transactions" && req.method === "GET") return listInventoryTransactions(db, res, actor, url);
 
+  // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
+  if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);
+  if (pathname === "/api/lookup/customers" && req.method === "GET") return listCustomerLookup(db, res, actor, url);
+
   // ============ Accounts Receivable ============
   if (pathname === "/api/accounts-receivable" && req.method === "GET") return listAccountsReceivable(db, res, actor, url);
   if (pathname === "/api/accounts-receivable" && req.method === "POST") return createAccountReceivable(db, req, res, actor);
@@ -1350,6 +1354,26 @@ function listInventoryTransfers(db, res, actor, url) {
   return send(res, 200, { inventoryTransfers: transfers });
 }
 
+function validateWarehouseItems(db, items) {
+  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加明细');
+  for (const item of items) {
+    const quantity = Number(item.quantity);
+    if (!item.productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(item.productId)) {
+      throw new HttpError(400, '请选择有效货品');
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
+  }
+}
+
+function adjustInventory(db, warehouseId, productId, quantityChange, now) {
+  db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at)
+    VALUES(?,?,?,?,?)
+    ON CONFLICT(warehouse_id,product_id) DO UPDATE SET
+      quantity=inventory.quantity+excluded.quantity,
+      updated_at=excluded.updated_at`).run(id(), warehouseId, productId, quantityChange, now);
+  return db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity;
+}
+
 async function createInventoryTransfer(db, req, res, actor) {
   allow(actor, 'INVENTORY_TRANSFER_CREATE');
   const body = await readJson(req);
@@ -1357,7 +1381,7 @@ async function createInventoryTransfer(db, req, res, actor) {
   if (!fromWarehouseId) throw new HttpError(400, '请选择源仓库');
   if (!toWarehouseId) throw new HttpError(400, '请选择目标仓库');
   if (fromWarehouseId === toWarehouseId) throw new HttpError(400, '源仓库和目标仓库不能相同');
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加调拨货品');
+  validateWarehouseItems(db, items);
   // Validate stock
   for (const item of items) {
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(fromWarehouseId, item.productId);
@@ -1402,8 +1426,15 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
     const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
     transaction(db, () => {
       for (const item of items) {
-        db.prepare('UPDATE inventory SET quantity=quantity-?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(item.quantity, now, transfer.from_warehouse_id, item.product_id);
-        db.prepare('UPDATE inventory SET quantity=quantity+?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(item.quantity, now, transfer.to_warehouse_id, item.product_id);
+        const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
+        if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
+        const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, now);
+        const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, now);
+        const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
+          (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+        insertTransaction.run(id(), transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
+        insertTransaction.run(id(), transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
       }
       db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
       audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
@@ -1419,7 +1450,7 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
     db.prepare("UPDATE inventory_transfers SET status='CANCELLED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
     audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
-  }
+  } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
 
@@ -2332,7 +2363,7 @@ function listPurchaseReceipts(db, res, actor, url) {
   let where = '(pr.receipt_no LIKE ? OR s.name LIKE ?)';
   const params = [search, search];
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
-  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.handler_id WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
+  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
   return send(res, 200, { purchaseReceipts: receipts });
 }
 
@@ -2340,14 +2371,15 @@ async function createPurchaseReceipt(db, req, res, actor) {
   allow(actor, 'PURCHASE_RECEIPTS_MANAGE');
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
+  const receiptDate = (body && body.receiptDate) || new Date().toISOString().slice(0, 10);
   if (!supplierId) throw new HttpError(400, '请选择供应商');
   if (!warehouseId) throw new HttpError(400, '请选择仓库');
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加入库明细');
+  validateWarehouseItems(db, items);
   const receiptId = id();
   const now = new Date().toISOString();
   const receiptNo = 'PR' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',0,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId || null, supplierId, warehouseId, remark || '', actor.id, now, now);
+    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',0,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId || null, supplierId, warehouseId, actor.id, receiptDate, remark || '', actor.id, now, now);
     let total = 0;
     const stmt = db.prepare('INSERT INTO purchase_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)');
     items.forEach((item, i) => { const amount = Math.round(Number(item.quantity) * Number(item.unitPriceCents || 0)); total += amount; stmt.run(id(), receiptId, item.productId, Number(item.quantity), Number(item.unitPriceCents || 0), amount, i + 1); });
@@ -2378,10 +2410,10 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
     const items = db.prepare('SELECT * FROM purchase_receipt_items WHERE receipt_id = ?').all(receiptId);
     transaction(db, () => {
       for (const item of items) {
-        db.prepare('UPDATE inventory SET quantity = quantity + ?, updated_at = ? WHERE warehouse_id = ? AND product_id = ?').run(item.quantity, now, receipt.warehouse_id, item.product_id);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
+        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
       }
-      db.prepare('UPDATE purchase_receipts SET status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(now, actor.id, now, receiptId);
+      db.prepare('UPDATE purchase_receipts SET status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(now, actor.id, now, receiptId);
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
       const totalAmt = items.reduce((s, i) => s + i.amount_cents, 0);
       const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
@@ -2390,11 +2422,11 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         { subjectId: 'subject-005', direction: 'CREDIT', amountCents: totalAmt, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
       ], actor);
     });
-  } else {
+  } else if (action === 'cancel') {
     if (receipt.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
-    db.prepare('UPDATE purchase_receipts SET status=\'CANCELLED\',updated_at=? WHERE id=?').run(now, receiptId);
+    db.prepare('UPDATE purchase_receipts SET status=\'CANCELLED\', updated_at=? WHERE id=?').run(now, receiptId);
     audit(db, actor.id, 'CANCEL', 'PURCHASE_RECEIPT', receiptId, '取消采购入库 ' + receipt.receipt_no);
-  }
+  } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
 
@@ -2407,7 +2439,7 @@ function listSalesDeliveries(db, res, actor, url) {
   let where = '(sd.delivery_no LIKE ? OR c.name LIKE ?)';
   const params = [search, search];
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sd.status = ?'; params.push(status); }
-  const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.handler_id WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
+  const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
   const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status }));
   return send(res, 200, { salesDeliveries: deliveries });
 }
@@ -2416,9 +2448,10 @@ async function createSalesDelivery(db, req, res, actor) {
   allow(actor, 'SALES_DELIVERIES_MANAGE');
   const body = await readJson(req);
   const { salesOrderId, customerId, warehouseId, remark, items } = body;
+  const deliveryDate = (body && body.deliveryDate) || new Date().toISOString().slice(0, 10);
   if (!customerId) throw new HttpError(400, '请选择客户');
   if (!warehouseId) throw new HttpError(400, '请选择仓库');
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加出库明细');
+  validateWarehouseItems(db, items);
   for (const item of items) {
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
@@ -2427,7 +2460,7 @@ async function createSalesDelivery(db, req, res, actor) {
   const now = new Date().toISOString();
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',0,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId || null, customerId, warehouseId, remark || '', actor.id, now, now);
+    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',0,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId || null, customerId, warehouseId, actor.id, deliveryDate, remark || '', actor.id, now, now);
     let total = 0;
     const stmt = db.prepare('INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)');
     items.forEach((item, i) => { const amount = Math.round(Number(item.quantity) * Number(item.unitPriceCents || 0)); total += amount; stmt.run(id(), deliveryId, item.productId, Number(item.quantity), Number(item.unitPriceCents || 0), amount, i + 1); });
@@ -2458,10 +2491,12 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
     const items = db.prepare('SELECT * FROM sales_delivery_items WHERE delivery_id = ?').all(deliveryId);
     transaction(db, () => {
       for (const item of items) {
-        db.prepare('UPDATE inventory SET quantity = quantity - ?, updated_at = ? WHERE warehouse_id = ? AND product_id = ?').run(item.quantity, now, delivery.warehouse_id, item.product_id);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',\'SALES_DELIVERY\',?,?,?,?,?)').run(id(), delivery.warehouse_id, item.product_id, item.quantity, deliveryId, delivery.delivery_no, '销售出库', actor.id, now);
+        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
+        if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
+        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?)').run(id(), delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now);
       }
-      db.prepare('UPDATE sales_deliveries SET status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(now, actor.id, now, deliveryId);
+      db.prepare('UPDATE sales_deliveries SET status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(now, actor.id, now, deliveryId);
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
       const totalAmt = items.reduce((s, i) => s + i.amount_cents, 0);
       const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
@@ -2470,11 +2505,11 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         { subjectId: 'subject-006', direction: 'CREDIT', amountCents: totalAmt, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
       ], actor);
     });
-  } else {
+  } else if (action === 'cancel') {
     if (delivery.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
-    db.prepare('UPDATE sales_deliveries SET status=\'CANCELLED\',updated_at=? WHERE id=?').run(now, deliveryId);
+    db.prepare('UPDATE sales_deliveries SET status=\'CANCELLED\', updated_at=? WHERE id=?').run(now, deliveryId);
     audit(db, actor.id, 'CANCEL', 'SALES_DELIVERY', deliveryId, '取消销售出库 ' + delivery.delivery_no);
-  }
+  } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
 
@@ -2496,14 +2531,15 @@ async function createSalesReturn(db, req, res, actor) {
   allow(actor, 'RETURNS_MANAGE');
   const body = await readJson(req);
   const { deliveryId, customerId, warehouseId, remark, items } = body;
+  const returnDate = (body && body.returnDate) || new Date().toISOString().slice(0, 10);
   if (!customerId) throw new HttpError(400, '请选择客户');
   if (!warehouseId) throw new HttpError(400, '请选择仓库');
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加退货明细');
+  validateWarehouseItems(db, items);
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'SRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO return_orders(id,return_no,delivery_id,customer_id,warehouse_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',0,?,?,?,?)').run(returnId, returnNo, deliveryId || null, customerId, warehouseId, remark || '', actor.id, now, now);
+    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',0,?,?,?,?,?)').run(returnId, returnNo, deliveryId || null, deliveryId || null, customerId, warehouseId, returnDate, remark || '', actor.id, now, now);
     let total = 0;
     const stmt = db.prepare('INSERT INTO return_order_items(id,return_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)');
     items.forEach((item, i) => { const amount = Math.round(Number(item.quantity) * Number(item.unitPriceCents || 0)); total += amount; stmt.run(id(), returnId, item.productId, Number(item.quantity), Number(item.unitPriceCents || 0), amount, i + 1); });
@@ -2534,8 +2570,8 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
     const items = db.prepare('SELECT * FROM return_order_items WHERE return_id = ?').all(returnId);
     transaction(db, () => {
       for (const item of items) {
-        db.prepare('UPDATE inventory SET quantity = quantity + ?, updated_at = ? WHERE warehouse_id = ? AND product_id = ?').run(item.quantity, now, ret.warehouse_id, item.product_id);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, returnId, ret.return_no, '销售退货', actor.id, now);
+        const balance = adjustInventory(db, ret.warehouse_id, item.product_id, item.quantity, now);
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now);
       }
       db.prepare('UPDATE return_orders SET status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(now, actor.id, now, returnId);
       audit(db, actor.id, 'CONFIRM', 'SALES_RETURN', returnId, '确认销售退货 ' + ret.return_no);
@@ -2546,11 +2582,11 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-004', direction: 'CREDIT', amountCents: totalAmt, summary: '销售退货 ' + ret.return_no + ' ' + customerName }
       ], actor);
     });
-  } else {
+  } else if (action === 'cancel') {
     if (ret.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
     db.prepare('UPDATE return_orders SET status=\'CANCELLED\',updated_at=? WHERE id=?').run(now, returnId);
     audit(db, actor.id, 'CANCEL', 'SALES_RETURN', returnId, '取消销售退货 ' + ret.return_no);
-  }
+  } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
 
@@ -2572,14 +2608,15 @@ async function createPurchaseReturn(db, req, res, actor) {
   allow(actor, 'RETURNS_MANAGE');
   const body = await readJson(req);
   const { receiptId, supplierId, warehouseId, remark, items } = body;
+  const returnDate = (body && body.returnDate) || new Date().toISOString().slice(0, 10);
   if (!supplierId) throw new HttpError(400, '请选择供应商');
   if (!warehouseId) throw new HttpError(400, '请选择仓库');
-  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加退货明细');
+  validateWarehouseItems(db, items);
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'PRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',0,?,?,?,?)').run(returnId, returnNo, receiptId || null, supplierId, warehouseId, remark || '', actor.id, now, now);
+    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',0,?,?,?,?,?)').run(returnId, returnNo, receiptId || null, supplierId, warehouseId, returnDate, remark || '', actor.id, now, now);
     let total = 0;
     const stmt = db.prepare('INSERT INTO purchase_return_items(id,return_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)');
     items.forEach((item, i) => { const amount = Math.round(Number(item.quantity) * Number(item.unitPriceCents || 0)); total += amount; stmt.run(id(), returnId, item.productId, Number(item.quantity), Number(item.unitPriceCents || 0), amount, i + 1); });
@@ -2610,8 +2647,10 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
     const items = db.prepare('SELECT * FROM purchase_return_items WHERE return_id = ?').all(returnId);
     transaction(db, () => {
       for (const item of items) {
-        db.prepare('UPDATE inventory SET quantity = quantity - ?, updated_at = ? WHERE warehouse_id = ? AND product_id = ?').run(item.quantity, now, ret.warehouse_id, item.product_id);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',\'PURCHASE_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, returnId, ret.return_no, '采购退货', actor.id, now);
+        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(ret.warehouse_id, item.product_id);
+        if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
+        const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now);
       }
       db.prepare('UPDATE purchase_returns SET status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(now, actor.id, now, returnId);
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
@@ -2622,11 +2661,11 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-004', direction: 'CREDIT', amountCents: totalAmt, summary: '采购退货 ' + ret.return_no }
       ], actor);
     });
-  } else {
+  } else if (action === 'cancel') {
     if (ret.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');
     db.prepare('UPDATE purchase_returns SET status=\'CANCELLED\',updated_at=? WHERE id=?').run(now, returnId);
     audit(db, actor.id, 'CANCEL', 'PURCHASE_RETURN', returnId, '取消采购退货 ' + ret.return_no);
-  }
+  } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }
 
@@ -2640,7 +2679,8 @@ function listInventoryTransactions(db, res, actor, url) {
   if (warehouseId) { where.push('t.warehouse_id = ?'); params.push(warehouseId); }
   if (productId) { where.push('t.product_id = ?'); params.push(productId); }
   const sql = 'SELECT t.*, w.code warehouseCode, w.name warehouseName, p.code productCode, p.name productName, p.unit FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id ' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
-  return send(res, 200, { transactions: db.prepare(sql).all(...params) });
+  const inventoryTransactions = db.prepare(sql).all(...params);
+  return send(res, 200, { inventoryTransactions, transactions: inventoryTransactions });
 }
 
 
@@ -2682,6 +2722,28 @@ function getAccountReceivable(db, res, actor, arId) {
 }
 
 // ============ Accounts Payable ============
+
+// ============ Narrow Lookups (warehouse / logistics-flavored) ============
+// Return minimal id+code+name projections so warehouse workflows (purchase
+// receipts, sales deliveries, returns) can populate party pickers without
+// granting full master-data *_MANAGE permissions. Gated by INVENTORY_VIEW
+// which warehouse already holds. Safe for production: the response body
+// contains no PII, no contact info, no balances.
+//
+// Pattern matches /api/users/lookup (project-manager candidates).
+function listSupplierLookup(db, res, actor, url) {
+  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const suppliers = db.prepare("SELECT id, code, name FROM suppliers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
+  return send(res, 200, { suppliers });
+}
+
+function listCustomerLookup(db, res, actor, url) {
+  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
+  return send(res, 200, { customers });
+}
 
 function listAccountsPayable(db, res, actor, url) {
   allowAny(actor, ['ACCOUNTING_VIEW', 'AP_VIEW', 'AP_MANAGE']);

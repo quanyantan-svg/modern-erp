@@ -283,8 +283,205 @@ export function createDatabase(filename) {
     }
   };
   migrateInventoryTransfers();
+  migrateWarehouseLogistics(db);
 
   return db;
+}
+
+// Idempotent migration for purchase_receipts / sales_deliveries /
+// return_orders / purchase_returns. The canonical CREATE TABLE in migrate()
+// missed columns the runtime writes (confirmed_by, confirmed_at, updated_at,
+// receipt_date / delivery_date) and used overly-narrow CHECK constraints
+// that would reject the CONFIRMED / CANCELLED writes from change handlers.
+// This mirrors the production_orders / accounting_vouchers /
+// inventory_transfers reconciliation pattern.
+function migrateWarehouseLogistics(db) {
+  try {
+    // ---- purchase_receipts ----
+    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN confirmed_by TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN confirmed_at TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN updated_at TEXT"); } catch (e) {}
+    try { db.exec("UPDATE purchase_receipts SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
+    try { db.exec("ALTER TABLE purchase_receipts ADD COLUMN receipt_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    {
+      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='purchase_receipts'").get()?.sql || '';
+      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+        db.exec('DROP TABLE IF EXISTS purchase_receipts_new');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS purchase_receipts_new (
+            id TEXT PRIMARY KEY,
+            receipt_no TEXT NOT NULL UNIQUE,
+            purchase_order_id TEXT,
+            supplier_id TEXT NOT NULL,
+            warehouse_id TEXT NOT NULL,
+            handler_id TEXT NOT NULL,
+            total_cents INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+            receipt_date TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT '',
+            confirmed_at TEXT,
+            confirmed_by TEXT,
+            FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (handler_id) REFERENCES users(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          );
+        `);
+        db.exec(`INSERT INTO purchase_receipts_new(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
+          SELECT id,receipt_no,purchase_order_id,supplier_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(receipt_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
+          FROM purchase_receipts`);
+        db.exec('DROP TABLE purchase_receipts');
+        db.exec('ALTER TABLE purchase_receipts_new RENAME TO purchase_receipts');
+      }
+    }
+
+    // ---- sales_deliveries ----
+    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN confirmed_by TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN confirmed_at TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN updated_at TEXT"); } catch (e) {}
+    try { db.exec("UPDATE sales_deliveries SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
+    try { db.exec("ALTER TABLE sales_deliveries ADD COLUMN delivery_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    {
+      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='sales_deliveries'").get()?.sql || '';
+      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+        db.exec('DROP TABLE IF EXISTS sales_deliveries_new');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS sales_deliveries_new (
+            id TEXT PRIMARY KEY,
+            delivery_no TEXT NOT NULL UNIQUE,
+            sales_order_id TEXT,
+            customer_id TEXT NOT NULL,
+            warehouse_id TEXT NOT NULL,
+            handler_id TEXT NOT NULL,
+            total_cents INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+            delivery_date TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT '',
+            confirmed_at TEXT,
+            confirmed_by TEXT,
+            FOREIGN KEY (sales_order_id) REFERENCES sales_orders(id),
+            FOREIGN KEY (customer_id) REFERENCES customers(id),
+            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (handler_id) REFERENCES users(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          );
+        `);
+        db.exec(`INSERT INTO sales_deliveries_new(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
+          SELECT id,delivery_no,sales_order_id,customer_id,warehouse_id,COALESCE(handler_id,creator_id),COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(delivery_date,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by
+          FROM sales_deliveries`);
+        db.exec('DROP TABLE sales_deliveries');
+        db.exec('ALTER TABLE sales_deliveries_new RENAME TO sales_deliveries');
+      }
+    }
+
+    // ---- return_orders (sales + purchase returns share this table per
+    //      polymorphic source_type). Schema has source_type / source_id
+    //      but runtime writes delivery_id / receipt_id. Migrate runtime
+    //      to use source_id (sales → delivery, purchase → receipt) via
+    //      two appended source columns. ----
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN delivery_id TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN receipt_id TEXT"); } catch (e) {}
+    try { db.exec("UPDATE return_orders SET delivery_id = source_id WHERE source_type='SALES'"); } catch (e) {}
+    try { db.exec("UPDATE return_orders SET receipt_id = source_id WHERE source_type='PURCHASE'"); } catch (e) {}
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN confirmed_by TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN confirmed_at TEXT"); } catch (e) {}
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    try { db.exec("UPDATE return_orders SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
+    try { db.exec("ALTER TABLE return_orders ADD COLUMN return_date TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    {
+      const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='return_orders'").get()?.sql || '';
+      if (!sql.includes("'CONFIRMED'") || !sql.includes("'CANCELLED'")) {
+        db.exec('DROP TABLE IF EXISTS return_orders_new');
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS return_orders_new (
+            id TEXT PRIMARY KEY,
+            return_no TEXT NOT NULL UNIQUE,
+            source_type TEXT NOT NULL CHECK(source_type IN ('PURCHASE','SALES')),
+            source_id TEXT,
+            customer_id TEXT,
+            supplier_id TEXT,
+            warehouse_id TEXT NOT NULL,
+            total_cents INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+            return_date TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT '',
+            confirmed_at TEXT,
+            confirmed_by TEXT,
+            delivery_id TEXT,
+            receipt_id TEXT,
+            FOREIGN KEY (customer_id) REFERENCES customers(id),
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          );
+        `);
+        db.exec(`INSERT INTO return_orders_new(id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,total_cents,status,return_date,reason,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by,delivery_id,receipt_id)
+          SELECT id,return_no,source_type,source_id,customer_id,supplier_id,warehouse_id,COALESCE(total_cents,0),CASE WHEN status IN ('CONFIRMED','CANCELLED') THEN status ELSE 'DRAFT' END,COALESCE(return_date,''),COALESCE(reason,''),COALESCE(remark,''),creator_id,COALESCE(created_at,''),COALESCE(updated_at,created_at,''),confirmed_at,confirmed_by,delivery_id,receipt_id
+          FROM return_orders`);
+        db.exec('DROP TABLE return_orders');
+        db.exec('ALTER TABLE return_orders_new RENAME TO return_orders');
+      }
+    }
+
+    // ---- purchase_returns ----
+    // Schema already declares all required columns. CHECK constraint is
+    // implicit because canonical CREATE has no CHECK — but verify the
+    // runtime writes (CONFIRMED, CANCELLED) are still permitted.
+    try { db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at TEXT"); } catch (e) {}
+    try { db.exec("UPDATE purchase_returns SET updated_at = created_at WHERE updated_at IS NULL OR updated_at = ''"); } catch (e) {}
+    try { db.exec("ALTER TABLE purchase_returns ADD COLUMN return_date TEXT"); } catch (e) {}
+
+    // ---- inventory_transactions ----
+    // Legacy schema used type/quantity/balance_after, while the warehouse
+    // handlers and UI use direction/quantity_change plus source metadata.
+    // Rebuild once and preserve every legacy row.
+    {
+      const columns = db.prepare("PRAGMA table_info(inventory_transactions)").all().map((column) => column.name);
+      if (!columns.includes('quantity_change') || !columns.includes('direction') || !columns.includes('source_no') || !columns.includes('creator_id')) {
+        db.exec('DROP TABLE IF EXISTS inventory_transactions_new');
+        db.exec(`
+          CREATE TABLE inventory_transactions_new (
+            id TEXT PRIMARY KEY,
+            warehouse_id TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            quantity_change REAL NOT NULL,
+            direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
+            balance_after REAL,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_no TEXT NOT NULL DEFAULT '',
+            remark TEXT NOT NULL DEFAULT '',
+            creator_id TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (product_id) REFERENCES products(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+          )
+        `);
+        db.exec(`INSERT INTO inventory_transactions_new(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
+          SELECT id,warehouse_id,product_id,quantity,
+            CASE WHEN type='OUT' OR quantity < 0 THEN 'OUT' ELSE 'IN' END,
+            balance_after,source_type,source_id,'','',NULL,created_at
+          FROM inventory_transactions`);
+        db.exec('DROP TABLE inventory_transactions');
+        db.exec('ALTER TABLE inventory_transactions_new RENAME TO inventory_transactions');
+      }
+    }
+  } catch (e) {
+    console.error('Migration warehouse logistics failed:', e.message);
+    throw e;
+  }
 }
 
 function migrate(db) {
@@ -632,9 +829,12 @@ function migrate(db) {
       transfer_no TEXT NOT NULL UNIQUE,
       from_warehouse_id TEXT NOT NULL,
       to_warehouse_id TEXT NOT NULL,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','APPROVED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','APPROVED','TRANSFERRED','CANCELLED')),
+      remark TEXT NOT NULL DEFAULT '',
       creator_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      reviewer_id TEXT,
       FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
       FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
       FOREIGN KEY (creator_id) REFERENCES users(id)
@@ -655,11 +855,14 @@ function migrate(db) {
       warehouse_id TEXT NOT NULL,
       handler_id TEXT NOT NULL,
       total_cents INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
       receipt_date TEXT NOT NULL,
       remark TEXT NOT NULL DEFAULT '',
       creator_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      confirmed_by TEXT,
       FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id),
       FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
       FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
@@ -685,11 +888,14 @@ function migrate(db) {
       warehouse_id TEXT NOT NULL,
       handler_id TEXT NOT NULL,
       total_cents INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
       delivery_date TEXT NOT NULL,
       remark TEXT NOT NULL DEFAULT '',
       creator_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      confirmed_by TEXT,
       FOREIGN KEY (sales_order_id) REFERENCES sales_orders(id),
       FOREIGN KEY (customer_id) REFERENCES customers(id),
       FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
@@ -711,17 +917,20 @@ function migrate(db) {
       id TEXT PRIMARY KEY,
       return_no TEXT NOT NULL UNIQUE,
       source_type TEXT NOT NULL CHECK(source_type IN ('PURCHASE','SALES')),
-      source_id TEXT NOT NULL,
+      source_id TEXT,
       customer_id TEXT,
       supplier_id TEXT,
       warehouse_id TEXT NOT NULL,
       total_cents INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED')),
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
       return_date TEXT NOT NULL,
       reason TEXT NOT NULL DEFAULT '',
       remark TEXT NOT NULL DEFAULT '',
       creator_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      confirmed_by TEXT,
       FOREIGN KEY (customer_id) REFERENCES customers(id),
       FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
       FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
@@ -773,14 +982,20 @@ function migrate(db) {
 
     CREATE TABLE IF NOT EXISTS inventory_transactions (
       id TEXT PRIMARY KEY,
-      type TEXT NOT NULL CHECK(type IN ('IN','OUT','TRANSFER','CHECK')),
-      source_type TEXT NOT NULL,
-      source_id TEXT NOT NULL,
       warehouse_id TEXT NOT NULL,
       product_id TEXT NOT NULL,
-      quantity REAL NOT NULL,
-      balance_after REAL NOT NULL,
-      created_at TEXT NOT NULL
+      quantity_change REAL NOT NULL,
+      direction TEXT NOT NULL CHECK(direction IN ('IN','OUT')),
+      balance_after REAL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      source_no TEXT NOT NULL DEFAULT '',
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
     );
 
 

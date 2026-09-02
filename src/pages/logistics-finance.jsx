@@ -25,14 +25,29 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
-    Promise.all([
-      api("/api/suppliers").then((r) => setSuppliers(r.suppliers)),
-      api("/api/warehouses").then((r) => setWarehouses(r.warehouses)),
-      api("/api/products").then((r) => setProducts(r.products))
-    ]).catch((e) => notify(e.message, "error"));
+    // Each fetch carries its own .catch so a single 403 (e.g. supplier
+    // lookup unavailable for the role) does not cascade-reject the
+    // Promise.all and silently disable warehouses / products selectors.
+    api("/api/lookup/suppliers").then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, "error"));
+    api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
+    api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
     if (value.id) api("/api/purchase-receipts/" + value.id).then((r) => setDetail(r.purchaseReceipt)).catch((e) => notify(e.message, "error"));
   }, []);
-  if (detail && !form.supplierId) setForm({ supplierId: detail.supplier_id || "", warehouseId: detail.warehouse_id || "", receiptDate: detail.receipt_date || "", remark: detail.remark || "", items: detail.items || [] });
+  useEffect(() => {
+    // Defer setForm to an effect (not render). Avoids React 19 / 18 race
+    // when editing an existing receipt.
+    if (detail && !form.supplierId) {
+      setForm({
+        supplierId: detail.supplier_id || "",
+        warehouseId: detail.warehouse_id || "",
+        receiptDate: detail.receipt_date || "",
+        remark: detail.remark || "",
+        items: detail.items || [],
+      });
+    }
+    // intentional: only run when `detail` first arrives
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
@@ -94,14 +109,25 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
-    Promise.all([
-      api("/api/customers").then((r) => setCustomers(r.customers)),
-      api("/api/warehouses").then((r) => setWarehouses(r.warehouses)),
-      api("/api/products").then((r) => setProducts(r.products))
-    ]).catch((e) => notify(e.message, "error"));
+    // Per-fetch .catch so a single 403 (e.g. customer lookup unavailable)
+    // does not cascade-reject and silently disable the other selectors.
+    api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
+    api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
+    api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
     if (value.id) api("/api/sales-deliveries/" + value.id).then((r) => setDetail(r.salesDelivery)).catch((e) => notify(e.message, "error"));
   }, []);
-  if (detail && !form.customerId) setForm({ customerId: detail.customer_id || "", warehouseId: detail.warehouse_id || "", deliveryDate: detail.delivery_date || "", remark: detail.remark || "", items: detail.items || [] });
+  useEffect(() => {
+    if (detail && !form.customerId) {
+      setForm({
+        customerId: detail.customer_id || "",
+        warehouseId: detail.warehouse_id || "",
+        deliveryDate: detail.delivery_date || detail.receipt_date || "",
+        remark: detail.remark || "",
+        items: detail.items || [],
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
@@ -179,18 +205,28 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ partyId: "", warehouseId: "", remark: "", items: [] });
   useEffect(() => {
-    Promise.all([
-      api("/api/suppliers").then((r) => setSuppliers(r.suppliers)),
-      api("/api/customers").then((r) => setCustomers(r.customers)),
-      api("/api/warehouses").then((r) => setWarehouses(r.warehouses)),
-      api("/api/products").then((r) => setProducts(r.products))
-    ]).catch((e) => notify(e.message, "error"));
+    // Per-fetch .catch so a single 403 (e.g. supplier lookup unavailable)
+    // does not cascade-reject and disable the other selectors.
+    api("/api/lookup/suppliers").then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, "error"));
+    api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
+    api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
+    api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
     if (value.id) {
       const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
       api(apiPath + "/" + value.id).then((r) => setDetail(tab === "sales" ? r.salesReturn : r.purchaseReturn)).catch((e) => notify(e.message, "error"));
     }
   }, []);
-  if (detail && !form.partyId) setForm({ partyId: (tab === "sales" ? detail.customer_id : detail.supplier_id) || "", warehouseId: detail.warehouse_id || "", remark: detail.remark || "", items: detail.items || [] });
+  useEffect(() => {
+    if (detail && !form.partyId) {
+      setForm({
+        partyId: (tab === "sales" ? detail.customer_id : detail.supplier_id) || "",
+        warehouseId: detail.warehouse_id || "",
+        remark: detail.remark || "",
+        items: detail.items || [],
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
