@@ -37,6 +37,7 @@
 | **Phase E Hotfix — Manual voucher amount unit (yuan ↔ cents)** | ✅ | 本提交 | 39 regression tests |
 | **Phase E Hotfix — Trial Balance filter (subject include + canonical period range + period write)** | ✅ | 本提交 | 21 regression tests |
 | **Phase E Hotfix — Trial Balance closing/opening direction classification** | ✅ | 本提交 | 14 regression tests |
+| **Phase E Final Hotfix — Period closing workflow UI exposure** | ✅ | 本提交 | 31 regression tests |
 
 ## 当前测试状态
 

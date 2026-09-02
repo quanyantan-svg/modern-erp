@@ -170,6 +170,221 @@ function BalanceSheet({ user, notify }) {
   </div>;
 }
 
+const PERIOD_STATUS_LABELS = {
+  OPEN: '未结账',
+  CLOSED: '已结账',
+};
+const PERIOD_STATUS_BADGE = {
+  OPEN: { type: 'info', status: 'draft' },
+  CLOSED: { type: 'success', status: 'completed' },
+};
+const PERIOD_CLOSURE_TYPE_LABELS = {
+  MONTH: '月结',
+};
+
+function PeriodManagement({ user, notify }) {
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [closures, setClosures] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const [selectedPeriod, setSelectedPeriod] = useState(null); // 'YYYY-MM' string
+  const [checklist, setChecklist] = useState(null);
+  const [checklistLoading, setChecklistLoading] = useState(false);
+  const [checklistError, setChecklistError] = useState(null);
+
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+
+  const canView = can(user, 'PERIOD_CLOSE_VIEW');
+  const canManage = can(user, 'PERIOD_CLOSE_MANAGE');
+
+  function load() {
+    setLoading(true);
+    setError(null);
+    api(`/api/period-closures?year=${encodeURIComponent(year)}`)
+      .then((r) => {
+        setClosures(r.closures || []);
+        setError(null);
+      })
+      .catch((e) => {
+        setError(e.message || '加载期间列表失败');
+        setClosures([]);
+      })
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
+
+  const monthList = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+  const closureByPeriod = useMemo(() => {
+    const map = new Map();
+    for (const c of closures) map.set(c.period, c);
+    return map;
+  }, [closures]);
+
+  function loadChecklist(period) {
+    setChecklistLoading(true);
+    setChecklistError(null);
+    setChecklist(null);
+    api(`/api/period-closures/closure-checklist?period=${encodeURIComponent(period)}`)
+      .then((r) => setChecklist(r))
+      .catch((e) => setChecklistError(e.message || '加载结账检查失败'))
+      .finally(() => setChecklistLoading(false));
+  }
+
+  function selectPeriod(period) {
+    setSelectedPeriod(period);
+    loadChecklist(period);
+  }
+
+  async function createPeriod(period) {
+    const [y, m] = period.split('-');
+    setBusy(true);
+    try {
+      await api('/api/period-closures', { method: 'POST', body: { year: Number(y), month: Number(m) } });
+      notify(`期间 ${period} 已初始化`);
+      load();
+      selectPeriod(period);
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function closePeriod(closureId) {
+    setBusy(true);
+    try {
+      await api(`/api/period-closures/${closureId}/close`, { method: 'POST', body: {} });
+      notify(`期间 ${selectedPeriod} 已结账`);
+      setConfirm(null);
+      load();
+      loadChecklist(selectedPeriod);
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function unclosePeriod(closureId) {
+    setBusy(true);
+    try {
+      await api(`/api/period-closures/${closureId}/unclose`, { method: 'POST', body: {} });
+      notify(`期间 ${selectedPeriod} 已重开`);
+      setConfirm(null);
+      load();
+      loadChecklist(selectedPeriod);
+    } catch (e) {
+      notify(e.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedClosure = selectedPeriod ? closureByPeriod.get(selectedPeriod) : null;
+
+  return <div className="period-closures">
+    <div className="search-bar">
+      <label>年度</label>
+      <input type="number" value={year} onChange={(e) => setYear(Number(e.target.value) || new Date().getFullYear())} style={{ width: 110 }} />
+      <button className="primary" onClick={load} disabled={loading}>{loading ? '加载中…' : '刷新'}</button>
+      {!canView && <span className="dim">当前账号无期间查看权限</span>}
+    </div>
+    {error && <div className="error-banner">{error}</div>}
+    {loading && <Loading />}
+    {!loading && canView && <>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>期间</th>
+              <th>状态</th>
+              <th>结账类型</th>
+              <th>结账人</th>
+              <th>结账时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {monthList.map((m) => {
+              const period = `${year}-${m}`;
+              const c = closureByPeriod.get(period);
+              const status = c?.status;
+              const isSelected = selectedPeriod === period;
+              return <tr key={period} className={isSelected ? 'selected' : ''}>
+                <td className="mono"><strong>{period}</strong></td>
+                <td>{status
+                  ? <Badge type={PERIOD_STATUS_BADGE[status]?.type}>{PERIOD_STATUS_LABELS[status] || status}</Badge>
+                  : <span className="dim">未初始化</span>}</td>
+                <td>{c?.closure_type ? (PERIOD_CLOSURE_TYPE_LABELS[c.closure_type] || c.closure_type) : '—'}</td>
+                <td>{c?.closed_by_name || '—'}</td>
+                <td className="dim">{c?.closed_at ? dateTime(c.closed_at) : '—'}</td>
+                <td style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {!c && canManage && <button className="secondary" disabled={busy} onClick={() => createPeriod(period)}>初始化</button>}
+                  {c && status === 'OPEN' && canManage && <button className="secondary" disabled={busy} onClick={() => selectPeriod(period)}>结账检查</button>}
+                  {c && status === 'CLOSED' && canManage && <button className="secondary" disabled={busy} onClick={() => { setSelectedPeriod(period); loadChecklist(period); }}>查看</button>}
+                </td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+      </div>
+      {selectedPeriod && <div className="period-detail" style={{ marginTop: 16 }}>
+        <h3>期间 {selectedPeriod} 详情</h3>
+        {!selectedClosure && <Empty text={`期间 ${selectedPeriod} 尚未初始化,无法结账。请先点击行内「初始化」创建期间记录。`} />}
+        {selectedClosure && <>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+            <span>状态:</span>
+            <Badge type={PERIOD_STATUS_BADGE[selectedClosure.status]?.type}>{PERIOD_STATUS_LABELS[selectedClosure.status] || selectedClosure.status}</Badge>
+            {selectedClosure.closed_by_name && <span className="dim">结账人 {selectedClosure.closed_by_name}{selectedClosure.closed_at ? ` · ${dateTime(selectedClosure.closed_at)}` : ''}</span>}
+          </div>
+          {checklistLoading && <Loading />}
+          {checklistError && <div className="error-banner">{checklistError}</div>}
+          {checklist && !checklistLoading && <>
+            {checklist.detail && <div className="error-banner">{checklist.detail}</div>}
+            {checklist.checklist && checklist.checklist.length > 0 && <div className="table-wrap" style={{ marginBottom: 12 }}>
+              <table>
+                <thead><tr><th>检查项</th><th>状态</th><th>说明</th></tr></thead>
+                <tbody>
+                  {checklist.checklist.map((item, idx) => <tr key={idx}>
+                    <td><strong>{item.item}</strong></td>
+                    <td>{item.passed ? <Badge type="success">通过</Badge> : <Badge type="danger">阻塞</Badge>}</td>
+                    <td>{item.detail}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>}
+            {!checklist.detail && <div className={`bs-equation-banner ${checklist.passed ? 'valid' : 'invalid'}`}>
+              {checklist.passed
+                ? <><strong>结账检查通过</strong><span className="dim">（可关闭该期间）</span></>
+                : <><strong>结账检查未通过</strong><span className="dim">（请先处理阻塞项后再关闭）</span></>}
+            </div>}
+          </>}
+          {canManage && <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            {selectedClosure.status === 'OPEN' && <button className="primary" disabled={busy || !checklist || !checklist.passed || Boolean(checklist.detail)} onClick={() => setConfirm({ kind: 'close', closureId: selectedClosure.id, period: selectedPeriod })}>关闭期间</button>}
+            {selectedClosure.status === 'CLOSED' && <button className="secondary" disabled={busy} onClick={() => setConfirm({ kind: 'unclose', closureId: selectedClosure.id, period: selectedPeriod })}>重开期间</button>}
+          </div>}
+        </>}
+      </div>}
+    </>}
+    {confirm && <Modal title={confirm.kind === 'close' ? '确认关闭会计期间' : '确认重开会计期间'} onClose={() => !busy && setConfirm(null)}>
+      <div className="modal-body">
+        <p>{confirm.kind === 'close'
+          ? `确认关闭会计期间 ${confirm.period}?关闭后该期间的会计凭证将受到结账保护。`
+          : `确认重开会计期间 ${confirm.period}?重开后可以再次在该期间录入凭证。`}</p>
+      </div>
+      <div className="modal-footer">
+        <button type="button" className="secondary" disabled={busy} onClick={() => setConfirm(null)}>取消</button>
+        <button type="button" className="primary" disabled={busy} onClick={() => confirm.kind === 'close' ? closePeriod(confirm.closureId) : unclosePeriod(confirm.closureId)}>
+          {confirm.kind === 'close' ? '关闭' : '重开'}
+        </button>
+      </div>
+    </Modal>}
+  </div>;
+}
+
 function TrialBalanceReport({ user, notify }) {
   const [period, setPeriod] = useState(currentPeriod());
   const [data, setData] = useState(null);
@@ -293,13 +508,15 @@ export function Accounting({ user, notify }) {
   function formatMoney(c) { return money(c); }
   const showReport = can(user, 'REPORT_VIEW');
   const canCreateVoucher = can(user, 'ACCOUNTING_VIEW');
+  const showPeriod = can(user, 'PERIOD_CLOSE_VIEW');
   return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
-    <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}</div>
+    <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}{showPeriod && <button className={tab === 'period' ? 'active' : ''} onClick={() => setTab('period')}>会计期间</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
     {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号" action={canCreateVoucher && <button className="primary" onClick={() => setEditing({})}>＋ 新建凭证</button>}/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>状态</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{voucherSourceLabel(v.source_type)}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td><Badge type={VOUCHER_STATUS_BADGE[v.status]?.type}>{VOUCHER_STATUS_LABELS[v.status] || v.status}</Badge></td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
     {tab === 'income' && showReport && <IncomeStatement user={user} notify={notify} />}
     {tab === 'balance' && showReport && <BalanceSheet user={user} notify={notify} />}
     {tab === 'trial' && showReport && <TrialBalanceReport user={user} notify={notify} />}
+    {tab === 'period' && showPeriod && <PeriodManagement user={user} notify={notify} />}
     {editing && <VoucherModal subjects={subjects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); loadVouchers(); notify('凭证已保存'); }} notify={notify}/>}
     {viewing && <VoucherDetail user={user} value={viewing} onClose={() => setViewing(null)} onChanged={() => { setViewing(null); loadVouchers(); }} onEdit={(voucher) => { setEditing(voucher); setViewing(null); }} formatMoney={formatMoney} notify={notify}/>}
   </Panel>;
