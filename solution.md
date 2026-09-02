@@ -889,6 +889,16 @@ curl http://127.0.0.1:3001/api/health
 curl http://127.0.0.1/api/health
 ```
 
+### 7.17 Warehouse & Logistics Stabilization（v1.0.1 candidate）
+
+仓储新增弹窗不再在 render path 同步调用 `setForm`；详情到达后由独立 effect 初始化表单。供应商与客户选择器分别使用 `/api/lookup/suppliers` 和 `/api/lookup/customers`，只返回 `id/code/name`，并由对应入库、出库或退货管理权限守卫，不授予仓库角色完整客户/供应商模块权限。各依赖请求独立捕获错误并通过 `notify` 呈现。
+
+`createDatabase()` 的幂等迁移统一 `purchase_receipts`、`sales_deliveries`、`return_orders`、`purchase_returns`、`inventory_transfers` 与 `inventory_transactions` 的运行时列和状态约束。旧 `SUBMITTED` 物流草稿迁移为可操作的 `DRAFT`；旧库存流水的 `type/quantity` 转换为 `direction/quantity_change`，原记录保留。确认动作使用库存 upsert、写入余额后的库存流水，并在事务内重新校验出库数量。
+
+实际创建依赖如下：采购入库需要供应商、仓库、货品（采购订单链接可选）；销售出库需要客户、仓库、货品（销售订单链接可选）；销售/采购退货需要对应往来单位、仓库、货品（来源出库/入库链接可选）；库存调拨需要源仓、目标仓、货品和源仓库存。仓库角色通过窄查询端点闭合这些依赖，仍不持有客户、供应商、订单、会计、期间、用户、角色或生产管理权限。
+
+App 对无权访问的陈旧 hash 使用 `current.key` 渲染首个可见页面，避免短暂挂载 `UsersRoles` 等不可访问组件并触发 `/api/users`、`/api/roles` 请求。
+
 ## 8. API 设计约定
 
 - 资源列表使用 `GET /api/<resource>`；

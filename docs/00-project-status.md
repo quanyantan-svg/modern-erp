@@ -10,6 +10,8 @@
 
 ## 当前生产验收状态
 
+> v1.0.1 Warehouse & Logistics Stabilization：代码候选已完成本地自动化验证；禁止 tag/push/deploy。必须在真实生产浏览器完成 `test_warehouse` 回归后才可评估发布。目前仅为 **READY FOR PRODUCTION REGRESSION**。
+
 - **当前已验收生产候选**: `v0.9.10`
 - **对应 commit**: `3064442 fix(accounting): expose period closing workflow`
 - **最终验收文档**: `docs/07-production-acceptance.md`(已扩展 Phase C / D / E / F 综合结论,A / B 历史 evidence-locked 段落保留)
