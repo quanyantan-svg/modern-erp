@@ -158,6 +158,35 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     }
   });
 
+  test('representative pre-rc.3 stocktake data and approval permission reconcile idempotently', () => {
+    const filename = join(tmp, 'legacy-stocktake.db');
+    let legacy = createDatabase(filename);
+    const now = new Date().toISOString();
+    const password = hashPassword('legacy-stocktake-1234');
+    legacy.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('legacy-wh','LEG-WH','Legacy Warehouse','','',1,?,?)").run(now, now);
+    legacy.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)')
+      .run('legacy-user', 'legacy-stocktake', 'Legacy Stocktake', password.hash, password.salt, 'role-warehouse', now);
+    legacy.prepare("INSERT INTO inventory_checks(id,check_no,warehouse_id,status,checked_at,creator_id,created_at,reason) VALUES('legacy-check','IC-LEGACY-001','legacy-wh','DRAFT',NULL,'legacy-user',?,'keep me')").run(now);
+    legacy.prepare("DELETE FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").run();
+    legacy.prepare("DELETE FROM permissions WHERE code='INVENTORY_CHECK_APPROVE'").run();
+    legacy.close();
+
+    legacy = createDatabase(filename);
+    const preserved = legacy.prepare("SELECT check_no,status,reason FROM inventory_checks WHERE id='legacy-check'").get();
+    assert.equal(preserved.check_no, 'IC-LEGACY-001');
+    assert.equal(preserved.status, 'DRAFT');
+    assert.equal(preserved.reason, 'keep me');
+    assert.equal(legacy.prepare("SELECT count(*) count FROM permissions WHERE code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-admin' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-warehouse' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 0);
+    legacy.close();
+
+    legacy = createDatabase(filename);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM inventory_checks WHERE id='legacy-check'").get().count, 1);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    legacy.close();
+  });
+
   test('stocktake follows DRAFT -> SUBMITTED -> APPROVED with role separation and traceable adjustment', async () => {
     let response = await request('/api/inventory-checks', 'warehouse', 'POST', { warehouseId: 'wh', productId: 'p1', actualQuantity: 95, reason: 'count' });
     assert.equal(response.status, 201);
