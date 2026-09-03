@@ -22,7 +22,7 @@
 - `generateVoucher()` 集中校验 CLOSED 期间、正整数分与借贷平衡；物流凭证使用单据日期，关闭期间的业务确认返回 409 并整体回滚；
 - 库存盘点修复 `check_no`，状态机统一为 `DRAFT → SUBMITTED → APPROVED`；新增注册权限 `INVENTORY_CHECK_APPROVE`，仅 admin 通过 all-permissions 获得，warehouse 创建/编辑/提交，不能自审；APPROVED 是唯一库存调整点并写 `INVENTORY_CHECK` 流水；
 - 应收、应付、收款、付款的 API/内部代码保留，但由于未形成可用子账闭环，从教师可见导航与页面装配中移除，明确标记 DEFERRED；
-- 新增 `server/business-integrity-stabilization.test.js`；聚焦回归 37 tests / 7 suites PASS；全量基线 661 tests / 148 suites / 0 failed；`pnpm build` PASS。
+- 新增 `server/business-integrity-stabilization.test.js`；聚焦回归 38 tests / 7 suites PASS；全量基线 662 tests / 148 suites / 0 failed；`pnpm build` PASS。
 
 ### Post-v1.0.0 Teacher Acceptance — Five-Role Teacher Acceptance Matrix
 
