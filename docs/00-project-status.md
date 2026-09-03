@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-02(Post-v1.0.0 Teacher Acceptance / Five-Role Teacher Acceptance Matrix)
+> 更新：2026-09-03 (Post-v1.0.0 Teacher Acceptance / Business Document Integrity Stabilization)
 
 ## 阶段与分支
 
@@ -10,7 +10,19 @@
 
 ## 当前生产验收状态
 
-> **Current official immutable release: `v1.0.0`（tag target `98d22fb`）。** 本次仅完成本地 Five-Role Teacher Acceptance Matrix；未 tag、未 push、未 deploy，也未移动或修改 `v1.0.0`。
+> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### Post-v1.0.0 Teacher Acceptance — Business Document Integrity Stabilization
+
+- 采购入库、销售出库、销售退货、采购退货统一使用 `quantity + unit_price_cents + amount_cents + total_cents`；单价必须显式提供且为正整数分，服务端重算行金额和表头总额，忽略客户端注入的总额；
+- 四类物流单据状态固定为 `DRAFT / CONFIRMED / CANCELLED`；`PATCH /api/<resource>/:id` 仅替换 DRAFT 头和明细，同一事务失败全部回滚；确认和取消仅对 DRAFT 可用；
+- 确认动作在 `BEGIN IMMEDIATE` 内重新校验状态、会计期间、库存与权威金额，然后写库存、库存流水、自动凭证、状态和审计；任一失败零副作用；
+- 采购入库 `IN`，销售出库 `OUT`，销售退货 `IN`，采购退货 `OUT`；流水保存 direction / quantity_change / balance_after / source type-id-no / warehouse / product；
+- 销售收入只在销售出库确认时识别；销售订单审批仅为业务授权，不再生成重复 `Dr 1122 / Cr 6001` 凭证；
+- `generateVoucher()` 集中校验 CLOSED 期间、正整数分与借贷平衡；物流凭证使用单据日期，关闭期间的业务确认返回 409 并整体回滚；
+- 库存盘点修复 `check_no`，状态机统一为 `DRAFT → SUBMITTED → APPROVED`；新增注册权限 `INVENTORY_CHECK_APPROVE`，仅 admin 通过 all-permissions 获得，warehouse 创建/编辑/提交，不能自审；APPROVED 是唯一库存调整点并写 `INVENTORY_CHECK` 流水；
+- 应收、应付、收款、付款的 API/内部代码保留，但由于未形成可用子账闭环，从教师可见导航与页面装配中移除，明确标记 DEFERRED；
+- 新增 `server/business-integrity-stabilization.test.js`；聚焦回归 37 tests / 7 suites PASS；全量基线 661 tests / 148 suites / 0 failed；`pnpm build` PASS。
 
 ### Post-v1.0.0 Teacher Acceptance — Five-Role Teacher Acceptance Matrix
 

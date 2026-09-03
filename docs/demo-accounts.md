@@ -1,6 +1,6 @@
 # Modern ERP — Demo / Test Account Guide (Teacher-Facing)
 
-> Status: Post-v1.0.0 Teacher Acceptance Matrix — five-role teacher accounts pre-stabilization complete. Permission listings reflect the post-stabilization final contract (`939fd15` Quality Stabilization + `71208cb` CRM Stabilization). No business code, permission model, role definition, or production database is changed by this guide.
+> Status: Post-v1.0.0 Teacher Acceptance — Business Document Integrity Stabilization. 教师可见功能以当前 `src/App.jsx` 与 `server/db.js` 为准；AR/AP/收付款已明确延后，不再作为演示页面。
 
 ---
 
@@ -28,11 +28,11 @@ The system ships exactly **five (5) seeded roles** in `server/db.js → seedSche
 
 **Role purpose**: Full single-tenant administrator. Owns user / role management, period management, master-data maintenance, and serves as the independent approver for vouchers and purchase orders when no separate approver role exists.
 
-**Permission list (full)** — all 92 permissions registered in `server/db.js → PERMISSIONS`:
+**Permission registry** — all 93 permissions are registered in `server/db.js → PERMISSIONS`; the role sections below list each account's grants:
 
-Every permission code registered in the system is granted to `role-admin` via `'role-admin': all` (`server/db.js:1128`). The exhaustive list spans `DASHBOARD_VIEW`, `USERS_MANAGE`, `ROLES_MANAGE`, `SUPPLIERS_VIEW`/`MANAGE`, `CUSTOMERS_VIEW`/`MANAGE`, `PRODUCTS_VIEW`/`MANAGE`, `ORDERS_VIEW`/`CREATE`/`SUBMIT`/`APPROVE`/`REJECT`, `PURCHASE_ORDERS_VIEW`/`CREATE`/`SUBMIT`/`APPROVE`, `WAREHOUSES_VIEW`/`MANAGE`, `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, `INVENTORY_TRANSFER_CREATE`, `PURCHASE_RECEIPTS_VIEW`/`MANAGE`, `SALES_DELIVERIES_VIEW`/`MANAGE`, `RETURNS_VIEW`/`MANAGE`, `PRODUCTION_ORDERS_VIEW`/`CREATE`/`START`/`COMPLETE`, `ACCOUNTING_VIEW`, `VOUCHER_SUBMIT`, `VOUCHER_APPROVE`, `CASH_JOURNALS_VIEW`/`MANAGE`, `BANK_ACCOUNTS_VIEW`/`MANAGE`, `BILLS_VIEW`/`MANAGE`, `DEPARTMENTS_VIEW`/`MANAGE`, `PROJECTS_VIEW`/`MANAGE`, `PERIOD_CLOSE_VIEW`/`MANAGE`, `BANK_RECONCILE_VIEW`/`MANAGE`, `CURRENCY_VIEW`/`MANAGE`, `VOUCHER_WORDS_VIEW`/`MANAGE`, `VOUCHER_TEMPLATES_VIEW`/`MANAGE`, `OA_VIEW`/`MANAGE`, `ALERT_VIEW`/`MANAGE`, `REPORT_VIEW`, `MRP_VIEW`/`MANAGE`, `WORK_CENTERS_VIEW`/`MANAGE`, `ROUTING_VIEW`/`MANAGE`, `PRODUCTION_COSTS_VIEW`/`MANAGE`, `IQC_VIEW`/`MANAGE`, `OQC_VIEW`/`MANAGE`, `SUPPLIER_EVAL_VIEW`/`MANAGE`, `OA_LEAVE_VIEW`/`MANAGE`, `OA_EXPENSE_VIEW`/`MANAGE`, `ALERT_RULES_VIEW`/`MANAGE`, `COST_VIEW`/`MANAGE`, `CRM_VIEW`/`MANAGE`, `PROJECT_VIEW`/`MANAGE`, `WORKFLOW_VIEW`/`MANAGE`, `FIXED_ASSETS_VIEW`/`MANAGE`.
+Every permission code registered in the system is granted to `role-admin` via `'role-admin': all`. The inventory family includes `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, **`INVENTORY_CHECK_APPROVE`**, `INVENTORY_TRANSFER_CREATE`, and `INVENTORY_TRANSFER_APPROVE`. Stocktake approval is intentionally not granted to creator roles.
 
-**Main accessible modules** (sidebar / `src/App.jsx navGroups`): 工作台, 销售订单, 订单审核, 采购订单, 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出库, 退货管理, 库存流水, 应收账款, 应付账款, 收款记录, 付款记录, **会计凭证** (full: 凭证 / 报表 / 会计期间), 现金日记账, 银行账户, 票据管理, 固定资产, BOM清单, 生产工单, 标准成本, 费用项目, IQC来料检验, OQC出货检验, 项目立项, 任务管理, 工时记录, 联系人管理, 客户跟进, 销售活动, 通知中心, 审批流, **用户与角色**.
+**Main accessible modules** (sidebar / `src/App.jsx navGroups`): 工作台, 销售订单, 订单审核, 采购订单, 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出库, 退货管理, 库存流水, **会计凭证** (full: 凭证 / 报表 / 会计期间), 现金日记账, 银行账户, 票据管理, 固定资产, BOM清单, 生产工单, 标准成本, 费用项目, IQC来料检验, OQC出货检验, 项目立项, 任务管理, 工时记录, 联系人管理, 客户跟进, 销售活动, 通知中心, 审批流, **用户与角色**. AR/AP/收付款不在当前演示导航中。
 
 **Main operations**:
 - Create / edit / disable users (`POST /api/users`, `PATCH /api/users/:id`, gated by `USERS_MANAGE`)
@@ -160,7 +160,7 @@ Every permission code registered in the system is granted to `role-admin` via `'
 - Confirm purchase receipts (`POST /api/purchase-receipts/:id`)
 - Confirm sales deliveries (`POST /api/sales-deliveries/:id`)
 - Confirm returns (purchase / sales returns)
-- Create inventory checks (`POST /api/inventory-checks`)
+- Create, edit and submit inventory checks; approval is performed by `test_admin` with `INVENTORY_CHECK_APPROVE`
 - Create inventory transfers (`POST /api/inventory-transfers`)
 
 **Restricted operations**:
@@ -197,7 +197,7 @@ Every permission code registered in the system is granted to `role-admin` via `'
 
 `DASHBOARD_VIEW`, `ACCOUNTING_VIEW`, `VOUCHER_SUBMIT`, `REPORT_VIEW`, `ORDERS_VIEW`, `PURCHASE_ORDERS_VIEW`, `CASH_JOURNALS_VIEW` / `CASH_JOURNALS_MANAGE`, `BANK_ACCOUNTS_VIEW` / `BANK_ACCOUNTS_MANAGE`, `BILLS_VIEW` / `BILLS_MANAGE`, `FIXED_ASSETS_VIEW` / `FIXED_ASSETS_MANAGE`.
 
-**Main accessible modules**: 工作台, 应收账款 / 应付账款 (read-only via `ACCOUNTING_VIEW`), 收款记录 / 付款记录 (read-only via `ACCOUNTING_VIEW`), **会计凭证** (full: 凭证 / 利润表 / 资产负债表 / 试算平衡表 / 会计期间 [read-only — no `PERIOD_CLOSE_MANAGE`]), 现金日记账, 银行账户, 票据管理, 固定资产, 销售订单 (read-only), 采购订单 (read-only).
+**Main accessible modules**: 工作台, **会计凭证** (full: 凭证 / 利润表 / 资产负债表 / 试算平衡表 / 会计期间 [read-only — no `PERIOD_CLOSE_MANAGE`]), 现金日记账, 银行账户, 票据管理, 固定资产, 销售订单 (read-only), 采购订单 (read-only). AR/AP/收付款页面已延后。
 
 **Main operations**:
 - Create manual voucher (`POST /api/accounting-vouchers`, status ENTERED)
@@ -240,7 +240,8 @@ Every permission code registered in the system is granted to `role-admin` via `'
 | Supplier create / edit | ✓ | ✓ | — | — | — |
 | Warehouse create / edit | ✓ | — | — | ✓ | — |
 | Confirm purchase receipts | ✓ | ✓ | — | ✓ | — |
-| Create / confirm inventory checks / transfers | ✓ | ✓ | — | ✓ | — |
+| Create / submit inventory checks | ✓ | ✓ | — | ✓ | — |
+| Approve submitted inventory checks | ✓ | — | — | — | — |
 | Production order create / start / complete | ✓ | — | — | — | — |
 | IQC / OQC inspection (create + edit + complete) | ✓ | — | — | ✓ | — |
 | CRM (Contacts / Follow-ups / Sales Activities) | ✓ | ✓ | — | — | — |
