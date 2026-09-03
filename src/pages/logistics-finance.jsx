@@ -2,6 +2,23 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
+function LogisticsActions({ existing, onClose, onAction }) {
+  return <div className="form-actions full">
+    <button type="button" className="secondary" onClick={onClose}>关闭</button>
+    {existing && <button type="button" className="danger-button" onClick={() => onAction('cancel')}>取消单据</button>}
+    {existing && <button type="button" className="approve-button" onClick={() => onAction('confirm')}>确认单据</button>}
+    <button className="primary">{existing ? '保存修改' : '保存草稿'}</button>
+  </div>;
+}
+
+function ReadOnlyDocument({ detail, onClose, partyName }) {
+  return <div>
+    <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || detail.status}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{item.quantity}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
+    <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
+  </div>;
+}
+
 export function PurchaseReceipts({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
@@ -52,7 +69,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const save = async () => {
     try {
       if (value.id) {
-        await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action: "update", ...form } });
+        await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form });
         notify("保存成功");
       } else {
         await api("/api/purchase-receipts", { method: "POST", body: form });
@@ -61,10 +78,12 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
-  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 0 }]);
+  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
+  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form }); await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="采购入库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑采购入库单" : "新增采购入库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>供应商<select value={form.supplierId} onChange={(e) => setForm({...form, supplierId: e.target.value})} required><option value="">选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
@@ -75,14 +94,14 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="0" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <FormActions onClose={onClose}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
   </form></Modal>;
 }
 // SalesDeliveries
@@ -132,7 +151,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const save = async () => {
     try {
       if (value.id) {
-        await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action: "update", ...form } });
+        await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form });
         notify("保存成功");
       } else {
         await api("/api/sales-deliveries", { method: "POST", body: form });
@@ -141,10 +160,12 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
-  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 0 }]);
+  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
+  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出库单" : "新增销售出库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
@@ -155,14 +176,14 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="0" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <FormActions onClose={onClose}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
   </form></Modal>;
 }
 // Returns
@@ -203,7 +224,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const [customers, setCustomers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ partyId: "", warehouseId: "", remark: "", items: [] });
+  const [form, setForm] = useState({ partyId: "", warehouseId: "", returnDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. supplier lookup unavailable)
     // does not cascade-reject and disable the other selectors.
@@ -221,6 +242,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
       setForm({
         partyId: (tab === "sales" ? detail.customer_id : detail.supplier_id) || "",
         warehouseId: detail.warehouse_id || "",
+        returnDate: detail.return_date || "",
         remark: detail.remark || "",
         items: detail.items || [],
       });
@@ -230,9 +252,9 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
-      const body = tab === "sales" ? { customerId: form.partyId, warehouseId: form.warehouseId, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, remark: form.remark, items: form.items };
+      const body = tab === "sales" ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
       if (value.id) {
-        await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "POST", body: { action: "update", ...body } });
+        await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "PATCH", body });
         notify("保存成功");
       } else {
         await api(tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns", { method: "POST", body });
@@ -241,28 +263,31 @@ function ReturnModal({ user, value, onClose, notify, api }) {
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
-  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 0 }]);
+  const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const partyOptions = tab === "sales" ? customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>) : suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>);
+  const changeState = async (action) => { try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm') { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={tab === 'sales' ? detail.customerName : detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={(value.id ? "编辑" : "新增") + (tab === "sales" ? "销售退货单" : "采购退货单")} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} onChange={(e) => setForm({...form, partyId: e.target.value})} required><option value="">选择{tab === "sales" ? "客户" : "供应商"}</option>{partyOptions}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
+    <label>退货日期<input type="date" value={form.returnDate} onChange={(e) => setForm({...form, returnDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
       <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="0" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <FormActions onClose={onClose}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
   </form></Modal>;
 }
 // InventoryTransactions

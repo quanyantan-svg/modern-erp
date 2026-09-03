@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, getToken, setToken } from './api.js';
 import { Login, Dashboard, Suppliers, Customers, Products, Orders, Approvals, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
 import { Accounting } from './pages/accounting.jsx';
-import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions, AccountsReceivable, AccountsPayable, PaymentCollections, PaymentDisbursements } from './pages/logistics-finance.jsx';
+import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
 import { Boms, ProductionOrders } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
@@ -81,10 +81,6 @@ const navGroups = [
     { key: 'inventory-transactions', label: '库存流水', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
   ]},
   { label: '财务资金', items: [
-    { key: 'accounts-receivable', label: '应收账款', icon: ic.accountsReceivable, any: ['AR_VIEW', 'AR_MANAGE', 'ACCOUNTING_VIEW'] },
-    { key: 'accounts-payable', label: '应付账款', icon: ic.accountsPayable, any: ['AP_VIEW', 'AP_MANAGE', 'ACCOUNTING_VIEW'] },
-    { key: 'payment-collections', label: '收款记录', icon: ic.paymentCollections, any: ['AR_MANAGE', 'ACCOUNTING_VIEW'] },
-    { key: 'payment-disbursements', label: '付款记录', icon: ic.paymentDisbursements, any: ['AP_MANAGE', 'ACCOUNTING_VIEW'] },
     { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
     { key: 'cash-journals', label: '现金日记账', icon: ic.cashJournals, any: ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE'] },
     { key: 'bank-accounts', label: '银行账户', icon: ic.bankAccounts, any: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
@@ -178,10 +174,6 @@ export default function App() {
     'sales-deliveries': <SalesDeliveries user={user} notify={notify}/>,
     returns: <Returns user={user} notify={notify}/>,
     'inventory-transactions': <InventoryTransactions user={user} notify={notify}/>,
-    'accounts-receivable': <AccountsReceivable user={user} notify={notify}/>,
-    'accounts-payable': <AccountsPayable user={user} notify={notify}/>,
-    'payment-collections': <PaymentCollections user={user} notify={notify}/>,
-    'payment-disbursements': <PaymentDisbursements user={user} notify={notify}/>,
     boms: <Boms user={user} notify={notify}/>,
     'production-orders': <ProductionOrders user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>

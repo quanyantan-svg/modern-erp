@@ -85,7 +85,7 @@ describe('UI source — production cleanup', () => {
 });
 
 describe('UI source — route surface preserved', () => {
-  test('All page modules remain importable from App.jsx', () => {
+  test('All supported page modules remain importable from App.jsx', () => {
     const app = readFile('App.jsx');
     // every page component referenced in App.jsx must be present in the corresponding module
     const expectedExports = [
@@ -123,10 +123,6 @@ describe('UI source — route surface preserved', () => {
       ['SalesDeliveries', 'pages/logistics-finance.jsx'],
       ['Returns', 'pages/logistics-finance.jsx'],
       ['InventoryTransactions', 'pages/logistics-finance.jsx'],
-      ['AccountsReceivable', 'pages/logistics-finance.jsx'],
-      ['AccountsPayable', 'pages/logistics-finance.jsx'],
-      ['PaymentCollections', 'pages/logistics-finance.jsx'],
-      ['PaymentDisbursements', 'pages/logistics-finance.jsx'],
     ];
     for (const [name, module] of expectedExports) {
       assert.ok(app.includes(name), `App.jsx must still reference ${name}`);
@@ -135,6 +131,12 @@ describe('UI source — route surface preserved', () => {
         || new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`).test(src);
       assert.ok(exportMatch, `${module} must still export ${name}`);
     }
+  });
+
+  test('deferred AR/AP and payment pages are not advertised in App.jsx', () => {
+    const app = readFile('App.jsx');
+    for (const name of ['AccountsReceivable', 'AccountsPayable', 'PaymentCollections', 'PaymentDisbursements']) assert.equal(app.includes(name), false);
+    for (const key of ['accounts-receivable', 'accounts-payable', 'payment-collections', 'payment-disbursements']) assert.equal(app.includes(key), false);
   });
 
   test('Permission-based navigation logic (navGroups + can) preserved', () => {
