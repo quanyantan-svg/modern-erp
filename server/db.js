@@ -25,6 +25,7 @@ export const PERMISSIONS = [
   ['WAREHOUSES_MANAGE', '管理仓库'],
   ['INVENTORY_VIEW', '查看库存'],
   ['INVENTORY_CHECK_CREATE', '新建库存盘点单'],
+  ['INVENTORY_CHECK_APPROVE', '审批库存盘点单'],
   ['INVENTORY_TRANSFER_CREATE', '新建库存调拨单'],
   ['INVENTORY_TRANSFER_APPROVE', '审核库存调拨'],
   ['PURCHASE_RECEIPTS_VIEW', '查看采购入库单'],
@@ -130,6 +131,9 @@ export function createDatabase(filename) {
   addColumn('ALTER TABLE inventory_checks ADD COLUMN reviewer_id TEXT');
   addColumn('ALTER TABLE inventory_checks ADD COLUMN reviewed_at TEXT');
   addColumn('ALTER TABLE inventory_checks ADD COLUMN remark TEXT');
+  addColumn('ALTER TABLE inventory_checks ADD COLUMN check_no TEXT');
+  addColumn('ALTER TABLE inventory_checks ADD COLUMN checked_at TEXT');
+  db.exec("UPDATE inventory_checks SET check_no='IC-LEGACY-' || substr(replace(id,'-',''),1,12) WHERE check_no IS NULL OR check_no=''; UPDATE inventory_checks SET status='SUBMITTED' WHERE status='PENDING'; CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_checks_check_no ON inventory_checks(check_no)");
     addColumn('ALTER TABLE production_orders ADD COLUMN bom_id TEXT');
   addColumn('ALTER TABLE products ADD COLUMN reorder_point REAL DEFAULT 0');
   addColumn('ALTER TABLE cash_journals ADD COLUMN bank_id TEXT');
