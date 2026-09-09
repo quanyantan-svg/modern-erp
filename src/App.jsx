@@ -8,7 +8,15 @@ import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
 import { IQCInspections, OQCInspections } from './pages/quality.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
+import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
+import MobilePage from './components/MobilePage.jsx';
+import MobileLauncher from './components/MobileLauncher.jsx';
+import { useMobile } from './hooks/useMediaQuery.js';
 const can = (user, permission) => user?.permissions?.includes(permission);
+
+// Allowed mobile tab keys. `directory` is intentionally absent because
+// the directory tab is rendered as a disabled button in MobileShell.
+const MOBILE_TAB_KEYS = new Set(MOBILE_TABS.filter((t) => t.enabled).map((t) => t.key));
 
 // Lucide-style inline SVG icon component
 const Icon = ({ d, size = 17, strokeWidth = 1.8 }) => (
@@ -119,6 +127,10 @@ export default function App() {
   const [checking, setChecking] = useState(Boolean(getToken()));
   const [page, setPage] = useState(location.hash.slice(1) || 'dashboard');
   const [toast, setToast] = useState(null);
+  // M1: mobile-only navigation tab. Persists across resize so that
+  // moving the window between desktop and mobile does not lose state.
+  const [mobileTab, setMobileTab] = useState('apps');
+  const isMobile = useMobile();
 
   useEffect(() => {
     if (!getToken()) return setChecking(false);
@@ -183,6 +195,113 @@ export default function App() {
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* local logout still succeeds */ }
     setToken(''); setUser(null);
+  }
+
+  // M1 mobile handlers.
+  // The mobile tab is independent of the desktop `page` state.
+  // Tapping a launcher item moves the desktop page state, but the
+  // mobile shell remains visible. The launcher item callback is a
+  // foundation for M2 role-based grouping; M1 only wires `messages`
+  // / `approvals` / `profile` placeholders.
+  function handleMobileTabChange(key) {
+    if (MOBILE_TAB_KEYS.has(key)) {
+      setMobileTab(key);
+    }
+  }
+
+  function renderMobileContent() {
+    if (mobileTab === 'messages') {
+      return (
+        <MobilePage
+          title="消息"
+          subtitle="系统通知与业务提醒"
+          bodyState="empty"
+          emptyText="暂无新消息"
+        />
+      );
+    }
+    if (mobileTab === 'approvals') {
+      return (
+        <MobilePage
+          title="审批"
+          subtitle="待签 / 已签 / 退转(将在 M3 接入)"
+          bodyState="empty"
+          emptyText="审批中心将在 M3 接入"
+        />
+      );
+    }
+    if (mobileTab === 'profile') {
+      return (
+        <MobilePage
+          title="我的"
+          subtitle={`${user.displayName} · ${user.roleName}`}
+          actions={(
+            <button
+              type="button"
+              className="text-button"
+              data-testid="mobile-profile-logout"
+              onClick={logout}
+            >
+              退出
+            </button>
+          )}
+        >
+          <div className="mobile-card" data-testid="mobile-profile-card">
+            <div className="mobile-card__title">账户信息</div>
+            <div className="mobile-card__row">
+              <span className="mobile-card__row-label">姓名</span>
+              <span className="mobile-card__row-value">{user.displayName}</span>
+            </div>
+            <div className="mobile-card__row">
+              <span className="mobile-card__row-label">角色</span>
+              <span className="mobile-card__row-value">{user.roleName}</span>
+            </div>
+            <div className="mobile-card__row">
+              <span className="mobile-card__row-label">登录账号</span>
+              <span className="mobile-card__row-value">{user.username || '—'}</span>
+            </div>
+          </div>
+        </MobilePage>
+      );
+    }
+    // Default: apps launcher (M1 visual primitive only).
+    // M1 only renders the group container; M2 will populate
+    // groups from `navGroups` filtered by `can(user, ...)`.
+    return (
+      <MobilePage
+        title="应用"
+        subtitle="业务应用启动器(M2 将基于权限填充)"
+      >
+        <MobileLauncher
+          groups={[]}
+          icons={ic}
+          onItemSelect={() => {/* M2 will navigate via setPage(...) */}}
+        />
+      </MobilePage>
+    );
+  }
+
+  // M1 responsive composition:
+  // - Mobile  : render MobileShell only. Do NOT mount the desktop
+  //             page tree (so business pages do not fetch on hidden
+  //             mobile tabs).
+  // - Desktop : render the existing app-shell with sidebar + topbar.
+  // The user, page, and toast state are shared by both branches but
+  // each branch is rendered conditionally so that page components
+  // are not mounted twice.
+  if (isMobile) {
+    const tabLabel = MOBILE_TABS.find((t) => t.key === mobileTab)?.label || 'Modern ERP';
+    return (
+      <MobileShell
+        brand="Modern ERP"
+        pageTitle={mobileTab === 'apps' ? '应用' : tabLabel}
+        activeTab={mobileTab}
+        onTabChange={handleMobileTabChange}
+      >
+        {renderMobileContent()}
+        {toast && <div className={`toast ${toast.type}`} data-testid="mobile-toast">{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
+      </MobileShell>
+    );
   }
 
   return <div className="app-shell">
