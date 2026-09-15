@@ -107,7 +107,7 @@ function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction 
 //   Renders 5 tabs in a 5-column grid.
 //   Disabled tabs are visually muted, do not navigate, do not throw.
 //   onTabChange: (tabKey) => void
-function MobileBottomNav({ activeTab, onTabChange }) {
+function MobileBottomNav({ activeTab, onTabChange, tabBadges = {} }) {
   return (
     <nav
       className="mobile-bottom-nav"
@@ -159,7 +159,7 @@ function MobileBottomNav({ activeTab, onTabChange }) {
             aria-label={tab.label}
             onClick={() => onTabChange && onTabChange(tab.key)}
           >
-            <span className="mobile-bottom-nav__icon">{TAB_ICONS[tab.icon]}</span>
+            <span className="mobile-bottom-nav__icon">{TAB_ICONS[tab.icon]}{tabBadges[tab.key] > 0 ? <span className="mobile-bottom-nav__badge" aria-label={`${tabBadges[tab.key]} 项待处理`}>{tabBadges[tab.key] > 99 ? '99+' : tabBadges[tab.key]}</span> : null}</span>
             <span className="mobile-bottom-nav__label">{tab.label}</span>
           </button>
         );
@@ -187,6 +187,7 @@ export default function MobileShell({
   onTabChange,
   backAction,
   rightAction,
+  tabBadges,
   children,
 }) {
   const handleTabChange = useCallback(
@@ -208,7 +209,7 @@ export default function MobileShell({
       <main className="mobile-main" data-testid="mobile-main">
         {children}
       </main>
-      <MobileBottomNav activeTab={activeTab} onTabChange={handleTabChange} />
+      <MobileBottomNav activeTab={activeTab} onTabChange={handleTabChange} tabBadges={tabBadges} />
     </div>
   );
 }

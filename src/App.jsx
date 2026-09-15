@@ -12,6 +12,7 @@ import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
 import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
 import MobileCrmApplication from './components/MobileCrmApplication.jsx';
+import MobileApprovalCenter from './components/MobileApprovalCenter.jsx';
 import { useMobile } from './hooks/useMediaQuery.js';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
 const can = (user, permission) => user?.permissions?.includes(permission);
@@ -133,6 +134,7 @@ export default function App() {
   // moving the window between desktop and mobile does not lose state.
   const [mobileTab, setMobileTab] = useState('apps');
   const [mobileApplication, setMobileApplication] = useState(null);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const isMobile = useMobile();
 
   useEffect(() => {
@@ -150,6 +152,14 @@ export default function App() {
     const timer = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    if (!user || isMobile === false) { setPendingApprovalCount(0); return; }
+    let current = true;
+    api('/api/approvals?tab=pending&limit=1')
+      .then((data) => { if (current) setPendingApprovalCount(data.counts?.pending || 0); })
+      .catch(() => { if (current) setPendingApprovalCount(0); });
+    return () => { current = false; };
+  }, [user, isMobile]);
 
   const notify = (message, type = 'success') => setToast({ message, type });
   if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
@@ -240,14 +250,7 @@ export default function App() {
       );
     }
     if (mobileTab === 'approvals') {
-      return (
-        <MobilePage
-          title="审批"
-          subtitle="待签 / 已签 / 退转(将在 M3 接入)"
-          bodyState="empty"
-          emptyText="审批中心将在 M3 接入"
-        />
-      );
+      return <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} />;
     }
     if (mobileTab === 'profile') {
       return (
@@ -327,6 +330,7 @@ export default function App() {
         activeTab={mobileTab}
         onTabChange={handleMobileTabChange}
         backAction={mobileApplication ? returnToMobileApplications : null}
+        tabBadges={{ approvals: pendingApprovalCount }}
       >
         {renderMobileContent()}
         {toast && <div className={`toast ${toast.type}`} data-testid="mobile-toast">{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}

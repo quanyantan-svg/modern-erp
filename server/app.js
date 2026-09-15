@@ -23,6 +23,7 @@ import {
   closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
+import { listApprovals } from './modules/approvals.js';
 import {
   HttpError,
   allow,
@@ -75,6 +76,7 @@ async function handleApi(db, req, res, url) {
   const actor = authenticate(db, req);
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
+  if (req.method === 'GET' && pathname === '/api/approvals') return listApprovals(db, res, actor, url);
 
   if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
   if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);
