@@ -67,11 +67,22 @@ const TABS = [
 ];
 
 // MobileHeader — top bar of the mobile shell.
-//   Shows: brand + page title (or brand only) + optional right action.
-function MobileHeader({ brand, pageTitle, pageSubtitle, rightAction }) {
+//   Shows: optional back action + page title + optional right action.
+function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction }) {
   return (
     <header className="mobile-header" data-testid="mobile-header">
       <div className="mobile-header__brand">
+        {backAction ? (
+          <button
+            type="button"
+            className="mobile-header__back"
+            data-testid="mobile-header-back"
+            aria-label="返回应用"
+            onClick={backAction}
+          >
+            <MobileIcon d="M15 18l-6-6 6-6" size={22} />
+          </button>
+        ) : null}
         <div>
           {pageTitle ? (
             <>
@@ -165,6 +176,7 @@ function MobileBottomNav({ activeTab, onTabChange }) {
 //   pageSubtitle  (string?) — current page subtitle
 //   activeTab     (string)  — currently active tab key
 //   onTabChange   (fn)      — (tabKey) => void
+//   backAction    (fn?)      — return from an application to the launcher
 //   rightAction   (node?)   — top bar right-side action
 //   children      (node)    — main page content
 export default function MobileShell({
@@ -173,6 +185,7 @@ export default function MobileShell({
   pageSubtitle,
   activeTab,
   onTabChange,
+  backAction,
   rightAction,
   children,
 }) {
@@ -189,6 +202,7 @@ export default function MobileShell({
         brand={brand}
         pageTitle={pageTitle}
         pageSubtitle={pageSubtitle}
+        backAction={backAction}
         rightAction={rightAction}
       />
       <main className="mobile-main" data-testid="mobile-main">

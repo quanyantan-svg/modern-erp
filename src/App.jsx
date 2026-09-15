@@ -11,7 +11,9 @@ import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
 import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
+import MobileCrmApplication from './components/MobileCrmApplication.jsx';
 import { useMobile } from './hooks/useMediaQuery.js';
+import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
 const can = (user, permission) => user?.permissions?.includes(permission);
 
 // Allowed mobile tab keys. `directory` is intentionally absent because
@@ -66,7 +68,7 @@ const ic = {
 };
 
 // Navigation groups
-const navGroups = [
+export const navGroups = [
   { label: '概览', items: [
     { key: 'dashboard', label: '工作台', icon: ic.dashboard, permission: 'DASHBOARD_VIEW' },
   ]},
@@ -130,6 +132,7 @@ export default function App() {
   // M1: mobile-only navigation tab. Persists across resize so that
   // moving the window between desktop and mobile does not lose state.
   const [mobileTab, setMobileTab] = useState('apps');
+  const [mobileApplication, setMobileApplication] = useState(null);
   const isMobile = useMobile();
 
   useEffect(() => {
@@ -191,6 +194,7 @@ export default function App() {
     users: <UsersRoles user={user} notify={notify}/>
   };
   const current = visibleNav.find((item) => item.key === page) || visibleNav[0];
+  const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav);
 
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* local logout still succeeds */ }
@@ -205,8 +209,23 @@ export default function App() {
   // / `approvals` / `profile` placeholders.
   function handleMobileTabChange(key) {
     if (MOBILE_TAB_KEYS.has(key)) {
+      setMobileApplication(null);
       setMobileTab(key);
     }
+  }
+
+  function handleMobileApplicationSelect(item) {
+    const authorizedPage = visibleNav.find((entry) => entry.key === item.page);
+    if (!authorizedPage) return;
+    setPage(authorizedPage.key);
+    location.hash = authorizedPage.key;
+    setMobileApplication({ ...item, page: authorizedPage.key });
+    setMobileTab('apps');
+  }
+
+  function returnToMobileApplications() {
+    setMobileApplication(null);
+    setMobileTab('apps');
   }
 
   function renderMobileContent() {
@@ -264,18 +283,27 @@ export default function App() {
         </MobilePage>
       );
     }
-    // Default: apps launcher (M1 visual primitive only).
-    // M1 only renders the group container; M2 will populate
-    // groups from `navGroups` filtered by `can(user, ...)`.
+    if (mobileApplication) {
+      return (
+        <section
+          className="mobile-application-view"
+          data-testid={`mobile-application-view-${mobileApplication.page}`}
+          aria-label={mobileApplication.label}
+        >
+          {mobileApplication.page === 'contacts'
+            ? <MobileCrmApplication user={user} notify={notify} />
+            : pages[mobileApplication.page]}
+        </section>
+      );
+    }
+    // The launcher consumes the already permission-filtered desktop nav.
+    // Mobile metadata adds product grouping and display terminology only.
     return (
-      <MobilePage
-        title="应用"
-        subtitle="业务应用启动器(M2 将基于权限填充)"
-      >
+      <MobilePage>
         <MobileLauncher
-          groups={[]}
+          groups={mobileApplicationGroups}
           icons={ic}
-          onItemSelect={() => {/* M2 will navigate via setPage(...) */}}
+          onItemSelect={handleMobileApplicationSelect}
         />
       </MobilePage>
     );
@@ -291,12 +319,14 @@ export default function App() {
   // are not mounted twice.
   if (isMobile) {
     const tabLabel = MOBILE_TABS.find((t) => t.key === mobileTab)?.label || 'Modern ERP';
+    const mobileTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
     return (
       <MobileShell
         brand="Modern ERP"
-        pageTitle={mobileTab === 'apps' ? '应用' : tabLabel}
+        pageTitle={mobileTitle}
         activeTab={mobileTab}
         onTabChange={handleMobileTabChange}
+        backAction={mobileApplication ? returnToMobileApplications : null}
       >
         {renderMobileContent()}
         {toast && <div className={`toast ${toast.type}`} data-testid="mobile-toast">{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
