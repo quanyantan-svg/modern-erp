@@ -160,6 +160,15 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
   if (pathname === '/api/inventory/alerts' && req.method === 'GET') return getInventoryAlerts(db, res, actor);
   if (pathname === '/api/inventory/reorder' && req.method === 'GET') return getReorderList(db, res, actor);
+  const inventoryDetailMatch = pathname.match(/^\/api\/inventory\/([^/]+)\/([^/]+)$/);
+  if (inventoryDetailMatch && req.method === 'GET') return getInventoryDetail(db, res, actor, inventoryDetailMatch[1], inventoryDetailMatch[2]);
+  if (pathname === '/api/inventory-adjustments' && req.method === 'GET') return listInventoryAdjustments(db, res, actor, url);
+  if (pathname === '/api/inventory-adjustments' && req.method === 'POST') return createInventoryAdjustment(db, req, res, actor);
+  const adjustmentActionMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)\/(confirm|cancel)$/);
+  if (adjustmentActionMatch && req.method === 'POST') return changeInventoryAdjustmentState(db, res, actor, adjustmentActionMatch[1], adjustmentActionMatch[2]);
+  const adjustmentMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)$/);
+  if (adjustmentMatch && req.method === 'GET') return getInventoryAdjustment(db, res, actor, adjustmentMatch[1]);
+  if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return calculateMRP(db, req, res, actor);
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
@@ -938,6 +947,8 @@ function makeInventoryTransferNo() { const now = new Date(); return `IT-${now.to
 
 function makeInventoryCheckNo() { const now = new Date(); return `IC-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
 
+function makeInventoryAdjustmentNo() { const now = new Date(); return `IA-${now.toISOString().slice(0,10).replaceAll('-','')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random()*90+10)}`; }
+
 function makePurchaseOrderNo() { const now = new Date(); return `PO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
 
 function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().slice(0, 10).replaceAll('-', '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`; }
@@ -1139,7 +1150,8 @@ function listInventory(db, res, actor, url) {
   const productId = url.searchParams.get('product');
   if (warehouseId) { where.push('i.warehouse_id=?'); params.push(warehouseId); }
   if (productId) { where.push('i.product_id=?'); params.push(productId); }
-  const sql = `SELECT i.warehouse_id,i.product_id,i.quantity,i.updated_at,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit
+  const sql = `SELECT i.warehouse_id,i.product_id,i.quantity,i.updated_at,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,
+    (SELECT MAX(t.created_at) FROM inventory_transactions t WHERE t.warehouse_id=i.warehouse_id AND t.product_id=i.product_id) recentMovementAt
     FROM inventory i JOIN warehouses w ON w.id=i.warehouse_id JOIN products p ON p.id=i.product_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY w.code,p.code`;
   return send(res, 200, { inventory: db.prepare(sql).all(...params) });
 }
@@ -1378,6 +1390,119 @@ async function createInventoryCheck(db, req, res, actor) {
     VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
   audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
   return send(res, 201, { id: checkId, checkNo, status: 'DRAFT' });
+}
+
+function getInventoryDetail(db, res, actor, warehouseId, productId) {
+  allow(actor, 'INVENTORY_VIEW');
+  const stock = db.prepare(`SELECT i.warehouse_id,i.product_id,i.quantity,i.updated_at,w.code warehouseCode,w.name warehouseName,
+    p.code productCode,p.name productName,p.unit FROM inventory i JOIN warehouses w ON w.id=i.warehouse_id
+    JOIN products p ON p.id=i.product_id WHERE i.warehouse_id=? AND i.product_id=?`).get(warehouseId, productId);
+  if (!stock) throw new HttpError(404, '库存记录不存在');
+  const transactions = db.prepare(`SELECT t.id,t.direction,t.quantity_change quantityChange,t.balance_after balanceAfter,t.source_type sourceType,
+    t.source_id sourceId,t.source_no sourceNo,t.remark,t.created_at createdAt FROM inventory_transactions t
+    WHERE t.warehouse_id=? AND t.product_id=? ORDER BY t.created_at DESC LIMIT 20`).all(warehouseId, productId);
+  return send(res, 200, { stock, transactions });
+}
+
+const INVENTORY_ADJUSTMENT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
+
+function normalizeAdjustmentItems(db, items) {
+  if (!Array.isArray(items) || !items.length) throw new HttpError(400, '请添加调整明细');
+  const seen = new Set();
+  return items.map((item, index) => {
+    if (!item?.productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(item.productId)) throw new HttpError(400, `第 ${index + 1} 行货品无效`);
+    if (seen.has(item.productId)) throw new HttpError(400, '同一货品不能重复');
+    seen.add(item.productId);
+    const quantityDelta = Number(item.quantityDelta);
+    if (!Number.isFinite(quantityDelta) || quantityDelta === 0) throw new HttpError(400, `第 ${index + 1} 行调整数量必须为非零数字`);
+    return { id: id(), productId: item.productId, quantityDelta, lineNo: index + 1 };
+  });
+}
+
+function saveAdjustmentItems(db, adjustmentId, items) {
+  db.prepare('DELETE FROM inventory_adjustment_items WHERE adjustment_id=?').run(adjustmentId);
+  const insert = db.prepare('INSERT INTO inventory_adjustment_items(id,adjustment_id,product_id,quantity_delta,line_no) VALUES(?,?,?,?,?)');
+  for (const item of items) insert.run(item.id, adjustmentId, item.productId, item.quantityDelta, item.lineNo);
+}
+
+function listInventoryAdjustments(db, res, actor, url) {
+  allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
+  const status = url.searchParams.get('status'); const params = []; let where = '';
+  if (status && INVENTORY_ADJUSTMENT_STATUS[status]) { where = 'WHERE ia.status=?'; params.push(status); }
+  const rows = db.prepare(`SELECT ia.*,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName,
+    (SELECT COUNT(*) FROM inventory_adjustment_items WHERE adjustment_id=ia.id) itemCount
+    FROM inventory_adjustments ia JOIN warehouses w ON w.id=ia.warehouse_id JOIN users creator ON creator.id=ia.creator_id
+    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by ${where} ORDER BY ia.created_at DESC`).all(...params)
+    .map((row) => ({ ...row, statusLabel: INVENTORY_ADJUSTMENT_STATUS[row.status] }));
+  return send(res, 200, { inventoryAdjustments: rows });
+}
+
+function getInventoryAdjustment(db, res, actor, adjustmentId) {
+  allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
+  const adjustment = db.prepare(`SELECT ia.*,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName
+    FROM inventory_adjustments ia JOIN warehouses w ON w.id=ia.warehouse_id JOIN users creator ON creator.id=ia.creator_id
+    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by WHERE ia.id=?`).get(adjustmentId);
+  if (!adjustment) throw new HttpError(404, '库存调整单不存在');
+  adjustment.statusLabel = INVENTORY_ADJUSTMENT_STATUS[adjustment.status];
+  adjustment.items = db.prepare(`SELECT i.*,i.product_id productId,i.quantity_delta quantityDelta,i.before_quantity beforeQuantity,i.after_quantity afterQuantity,
+    p.code productCode,p.name productName,p.unit FROM inventory_adjustment_items i JOIN products p ON p.id=i.product_id WHERE i.adjustment_id=? ORDER BY i.line_no`).all(adjustmentId);
+  return send(res, 200, { inventoryAdjustment: adjustment });
+}
+
+async function createInventoryAdjustment(db, req, res, actor) {
+  allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
+  const body = await readJson(req); requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
+  const reason = requiredText(body.reason, '调整原因', 200); const items = normalizeAdjustmentItems(db, body.items);
+  const adjustmentDate = normalizeDocumentDate(body.adjustmentDate || new Date().toISOString().slice(0, 10), '调整日期');
+  const adjustmentId = id(); const now = new Date().toISOString(); const adjustmentNo = makeInventoryAdjustmentNo();
+  transaction(db, () => {
+    db.prepare("INSERT INTO inventory_adjustments(id,adjustment_no,warehouse_id,status,reason,adjustment_date,creator_id,created_at,updated_at) VALUES(?,?,?,'DRAFT',?,?,?,?,?)").run(adjustmentId, adjustmentNo, body.warehouseId, reason, adjustmentDate, actor.id, now, now);
+    saveAdjustmentItems(db, adjustmentId, items); audit(db, actor.id, 'CREATE', 'INVENTORY_ADJUSTMENT', adjustmentId, `创建库存调整 ${adjustmentNo}`);
+  });
+  return send(res, 201, { id: adjustmentId, adjustmentNo, status: 'DRAFT' });
+}
+
+async function updateInventoryAdjustment(db, req, res, actor, adjustmentId) {
+  allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
+  const current = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
+  if (!current) throw new HttpError(404, '库存调整单不存在');
+  if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿调整单可以修改');
+  const body = await readJson(req); requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
+  const reason = requiredText(body.reason, '调整原因', 200); const items = normalizeAdjustmentItems(db, body.items); const now = new Date().toISOString();
+  transaction(db, () => {
+    db.prepare('UPDATE inventory_adjustments SET warehouse_id=?,reason=?,adjustment_date=?,updated_at=? WHERE id=?').run(body.warehouseId, reason, normalizeDocumentDate(body.adjustmentDate || current.adjustment_date, '调整日期'), now, adjustmentId);
+    saveAdjustmentItems(db, adjustmentId, items); audit(db, actor.id, 'UPDATE', 'INVENTORY_ADJUSTMENT', adjustmentId, `修改库存调整 ${current.adjustment_no}`);
+  });
+  return send(res, 200, { ok: true });
+}
+
+function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
+  allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
+  const adjustment = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
+  if (!adjustment) throw new HttpError(404, '库存调整单不存在');
+  if (adjustment.status !== 'DRAFT') throw new HttpError(409, '只有草稿调整单可以操作');
+  const now = new Date().toISOString();
+  if (action === 'confirm') transaction(db, () => {
+    const locked = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
+    if (locked.status !== 'DRAFT') throw new HttpError(409, '库存调整单已处理');
+    const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId);
+    for (const item of items) {
+      const before = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id)?.quantity || 0;
+      const after = before + item.quantity_delta;
+      if (!Number.isFinite(after) || after < 0) throw new HttpError(409, '调整后库存不能为负数');
+      const balance = adjustInventory(db, locked.warehouse_id, item.product_id, item.quantity_delta, now);
+      db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, balance, item.id);
+      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
+        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?)`).run(id(), locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now);
+    }
+    db.prepare("UPDATE inventory_adjustments SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, adjustmentId);
+    audit(db, actor.id, 'CONFIRM', 'INVENTORY_ADJUSTMENT', adjustmentId, `确认库存调整 ${locked.adjustment_no}`);
+  });
+  else if (action === 'cancel') {
+    db.prepare("UPDATE inventory_adjustments SET status='CANCELLED',updated_at=? WHERE id=?").run(now, adjustmentId);
+    audit(db, actor.id, 'CANCEL', 'INVENTORY_ADJUSTMENT', adjustmentId, `取消库存调整 ${adjustment.adjustment_no}`);
+  }
+  return send(res, 200, { ok: true });
 }
 
 async function approveInventoryCheck(db, req, res, actor, checkId) {
@@ -2962,9 +3087,19 @@ function listInventoryTransactions(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const warehouseId = url.searchParams.get('warehouse');
   const productId = url.searchParams.get('product');
+  const direction = url.searchParams.get('direction');
+  const sourceType = url.searchParams.get('type');
+  const startDate = url.searchParams.get('startDate');
+  const endDate = url.searchParams.get('endDate');
+  const search = `%${url.searchParams.get('search') || ''}%`;
   let where = []; let params = [];
+  where.push('(t.source_no LIKE ? OR p.code LIKE ? OR p.name LIKE ?)'); params.push(search, search, search);
   if (warehouseId) { where.push('t.warehouse_id = ?'); params.push(warehouseId); }
   if (productId) { where.push('t.product_id = ?'); params.push(productId); }
+  if (['IN', 'OUT'].includes(direction)) { where.push('t.direction = ?'); params.push(direction); }
+  if (sourceType) { where.push('t.source_type = ?'); params.push(sourceType); }
+  if (startDate) { where.push('DATE(t.created_at) >= ?'); params.push(startDate); }
+  if (endDate) { where.push('DATE(t.created_at) <= ?'); params.push(endDate); }
   const sql = "SELECT t.*,t.source_type tx_type,t.source_no ref_no,CASE WHEN t.direction='OUT' THEN -t.quantity_change ELSE t.quantity_change END quantity,t.balance_after balance,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id " + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
   const inventoryTransactions = db.prepare(sql).all(...params);
   return send(res, 200, { inventoryTransactions, transactions: inventoryTransactions });

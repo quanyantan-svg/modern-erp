@@ -324,11 +324,12 @@ describe('App.jsx — responsive composition', () => {
 // ---------------------------------------------------------------------------
 // 6. Role permissions are not changed
 // ---------------------------------------------------------------------------
-describe('Permissions — M1 must not change any', () => {
-  test('PERMISSIONS array in server/db.js still has 93 entries', async () => {
+describe('Permissions — canonical registry count', () => {
+  test('PERMISSIONS array in server/db.js has 94 entries after M5 inventory adjustment', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 93, `PERMISSIONS array must have 93 entries (got ${perms.length})`);
+    assert.equal(perms.length, 94, `PERMISSIONS array must have 94 entries (got ${perms.length})`);
+    assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
   });
 
   test('role-accounting still has 14 permissions (M0 baseline)', () => {

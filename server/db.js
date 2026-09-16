@@ -28,6 +28,7 @@ export const PERMISSIONS = [
   ['INVENTORY_CHECK_APPROVE', '审批库存盘点单'],
   ['INVENTORY_TRANSFER_CREATE', '新建库存调拨单'],
   ['INVENTORY_TRANSFER_APPROVE', '审核库存调拨'],
+  ['INVENTORY_ADJUSTMENT_MANAGE', '管理库存调整单'],
   ['PURCHASE_RECEIPTS_VIEW', '查看采购入库单'],
   ['PURCHASE_RECEIPTS_MANAGE', '管理采购入库单'],
   ['SALES_DELIVERIES_VIEW', '查看销售出库单'],
@@ -851,6 +852,35 @@ function migrate(db) {
       quantity REAL NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS inventory_adjustments (
+      id TEXT PRIMARY KEY,
+      adjustment_no TEXT NOT NULL UNIQUE,
+      warehouse_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+      reason TEXT NOT NULL,
+      adjustment_date TEXT NOT NULL,
+      creator_id TEXT NOT NULL,
+      confirmed_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      FOREIGN KEY (confirmed_by) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_adjustment_items (
+      id TEXT PRIMARY KEY,
+      adjustment_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity_delta REAL NOT NULL CHECK(quantity_delta <> 0),
+      before_quantity REAL,
+      after_quantity REAL,
+      line_no INTEGER NOT NULL,
+      FOREIGN KEY (adjustment_id) REFERENCES inventory_adjustments(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
+
     CREATE TABLE IF NOT EXISTS purchase_receipts (
       id TEXT PRIMARY KEY,
       receipt_no TEXT NOT NULL UNIQUE,
@@ -1344,6 +1374,8 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id);
     CREATE INDEX IF NOT EXISTS idx_production_items_order ON production_order_items(order_id);
     CREATE INDEX IF NOT EXISTS idx_production_outputs_order ON production_outputs(order_id);
+    CREATE INDEX IF NOT EXISTS idx_inventory_adjustments_status ON inventory_adjustments(status);
+    CREATE INDEX IF NOT EXISTS idx_inventory_adjustment_items_document ON inventory_adjustment_items(adjustment_id);
   `);
 }
 
@@ -1401,7 +1433,7 @@ function seedSchema(db) {
     'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
