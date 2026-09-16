@@ -316,6 +316,12 @@ async function handleApi(db, req, res, url) {
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);
   if (pathname === "/api/lookup/customers" && req.method === "GET") return listCustomerLookup(db, res, actor, url);
+  // Scoped source-document lookups for Sales Delivery / Purchase Receipt forms.
+  // Read-only minimal projections of APPROVED source orders so the warehouse
+  // role can populate the optional source selector without gaining broad
+  // Sales Order / Purchase Order module access (no ORDERS_VIEW / PURCHASE_ORDERS_VIEW).
+  if (pathname === "/api/lookup/sales-orders-source" && req.method === "GET") return listSalesOrderSourceLookup(db, res, actor, url);
+  if (pathname === "/api/lookup/purchase-orders-source" && req.method === "GET") return listPurchaseOrderSourceLookup(db, res, actor, url);
 
   // ============ Accounts Receivable ============
   if (pathname === "/api/accounts-receivable" && req.method === "GET") return listAccountsReceivable(db, res, actor, url);
@@ -3165,6 +3171,71 @@ function listCustomerLookup(db, res, actor, url) {
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
   return send(res, 200, { customers });
+}
+
+// Minimal read-only projection of APPROVED sales orders eligible as the
+// optional source for Sales Delivery forms. Gated by the logistics
+// permission that authorizes creating/managing Sales Delivery (no
+// ORDERS_VIEW required) so the warehouse role can populate the optional
+// source selector without gaining broad Sales Order module access. Items
+// are included so the form can prefill quantities / unit prices from the
+// dropdown selection without a follow-up /api/orders/:id call (which
+// would require ORDERS_VIEW).
+function listSalesOrderSourceLookup(db, res, actor, url) {
+  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const headerStmt = db.prepare(`
+    SELECT so.id, so.order_no orderNo, so.status, so.total_cents totalCents, so.created_at createdAt,
+           c.id customerId, c.code customerCode, c.name customerName
+    FROM sales_orders so
+    JOIN customers c ON c.id = so.customer_id
+    WHERE so.status = 'APPROVED'
+      AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
+    ORDER BY so.created_at DESC
+    LIMIT 100
+  `);
+  const itemStmt = db.prepare(`
+    SELECT soi.product_id productId, soi.quantity, soi.unit_price_cents unitPriceCents,
+           p.code productCode, p.name productName, p.unit
+    FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
+    WHERE soi.order_id = ?
+    ORDER BY soi.line_no
+  `);
+  const orders = headerStmt.all(search, search, search).map((row) => ({
+    ...row,
+    items: itemStmt.all(row.id),
+  }));
+  return send(res, 200, { orders });
+}
+
+// Symmetric to listSalesOrderSourceLookup but for the Purchase Receipt
+// form. Gated by the logistics permission that authorizes creating /
+// managing Purchase Receipt — no PURCHASE_ORDERS_VIEW required.
+function listPurchaseOrderSourceLookup(db, res, actor, url) {
+  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const headerStmt = db.prepare(`
+    SELECT po.id, po.order_no orderNo, po.status, po.total_cents totalCents, po.created_at createdAt,
+           s.id supplierId, s.code supplierCode, s.name supplierName
+    FROM purchase_orders po
+    JOIN suppliers s ON s.id = po.supplier_id
+    WHERE po.status = 'APPROVED'
+      AND (po.order_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)
+    ORDER BY po.created_at DESC
+    LIMIT 100
+  `);
+  const itemStmt = db.prepare(`
+    SELECT poi.product_id productId, poi.quantity, poi.unit_price_cents unitPriceCents,
+           p.code productCode, p.name productName, p.unit
+    FROM purchase_order_items poi JOIN products p ON p.id = poi.product_id
+    WHERE poi.order_id = ?
+    ORDER BY poi.line_no
+  `);
+  const purchaseOrders = headerStmt.all(search, search, search).map((row) => ({
+    ...row,
+    items: itemStmt.all(row.id),
+  }));
+  return send(res, 200, { purchaseOrders });
 }
 
 function listAccountsPayable(db, res, actor, url) {

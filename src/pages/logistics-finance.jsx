@@ -65,7 +65,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/suppliers").then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api("/api/purchase-orders?status=APPROVED").then((r) => setPurchaseOrders(r.purchaseOrders || [])).catch(() => {});
+    api("/api/lookup/purchase-orders-source").then((r) => setPurchaseOrders(r.purchaseOrders || [])).catch((e) => notify("来源采购订单加载失败，请重试；仍可选择直接入库。", "error"));
     if (value.id) api("/api/purchase-receipts/" + value.id).then((r) => setDetail(r.purchaseReceipt)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
@@ -101,9 +101,11 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
-  const choosePurchaseOrder = async (purchaseOrderId) => {
+  const choosePurchaseOrder = (purchaseOrderId) => {
     if (!purchaseOrderId) return setForm((current) => ({ ...current, purchaseOrderId: "" }));
-    try { const { order } = await api('/api/purchase-orders/' + purchaseOrderId); setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+    const order = purchaseOrders.find((o) => o.id === purchaseOrderId);
+    if (!order) return;
+    setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
   };
   const changeState = async (action) => { try { if (action === 'confirm') await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form }); await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="采购入库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.supplierName} onClose={onClose}/></Modal>;
@@ -159,7 +161,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api("/api/orders?status=APPROVED").then((r) => setSalesOrders(r.orders || [])).catch(() => {});
+    api("/api/lookup/sales-orders-source").then((r) => setSalesOrders(r.orders || [])).catch((e) => notify("来源销售订单加载失败，请重试；仍可选择直接出货。", "error"));
     if (value.id) api("/api/sales-deliveries/" + value.id).then((r) => setDetail(r.salesDelivery)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
@@ -192,9 +194,11 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
-  const chooseSalesOrder = async (salesOrderId) => {
+  const chooseSalesOrder = (salesOrderId) => {
     if (!salesOrderId) return setForm((current) => ({ ...current, salesOrderId: "" }));
-    try { const { order } = await api('/api/orders/' + salesOrderId); setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+    const order = salesOrders.find((o) => o.id === salesOrderId);
+    if (!order) return;
+    setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
   };
   const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
@@ -267,7 +271,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch(() => {});
+    api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch((e) => notify("来源单据加载失败，请重试；仍可选择直接退货 / 补录。", "error"));
     if (value.id) {
       const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
       api(apiPath + "/" + value.id).then((r) => setDetail(tab === "sales" ? r.salesReturn : r.purchaseReturn)).catch((e) => notify(e.message, "error"));
