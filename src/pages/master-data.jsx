@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -151,7 +152,7 @@ export function Orders({ user, notify }) {
       {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
     </>}/>
     {editing && <OrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('销售订单草稿已保存'); }} notify={notify}/>} 
-    {viewing && <OrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
+    {viewing && <OrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
   </Panel>;
 }
 
@@ -194,13 +195,33 @@ export function Approvals({ notify }) {
   </>;
 }
 
-function OrderDetail({ id, onClose, notify }) {
+function orderWorkflowStages(order, trace, kind) {
+  const isSales = kind === 'sales';
+  const logistics = trace?.downstream || [];
+  const returns = logistics.flatMap((item) => item.returns || []);
+  const voucher = [...logistics.map((item) => item.voucher), ...returns.map((item) => item.voucher)].find(Boolean);
+  const submitted = ['SUBMITTED', 'APPROVED'].includes(order.status);
+  const approved = order.status === 'APPROVED';
+  return [
+    { key: 'order', label: isSales ? '销售订单已创建' : '采购订单已创建', state: 'completed', documentNo: order.orderNo },
+    { key: 'submit', label: '已提交', state: submitted ? 'completed' : order.status === 'REJECTED' ? 'current' : 'current', hint: submitted ? '' : order.status === 'REJECTED' ? '已驳回，修改后可重新提交' : '待提交' },
+    { key: 'approve', label: '审核', state: approved ? 'completed' : submitted ? 'current' : 'pending', hint: submitted && !approved ? '等待审批' : '' },
+    { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, href: logistics.length ? (isSales ? '#sales-deliveries' : '#purchase-receipts') : null, hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `尚未关联${isSales ? '销售出货' : '采购入库'}（来源可选）` },
+    { key: 'return', label: isSales ? '销售退货' : '采购退货', state: returns.length ? 'completed' : 'optional', documentNo: returns[0]?.documentNo, href: returns.length ? '#returns' : null, hint: returns.length ? `已关联 ${returns.length} 张退货单` : '如发生' },
+    { key: 'voucher', label: '财务凭证', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, href: voucher?.documentNo ? '#accounting' : null, hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生财务记录' : '' },
+  ];
+}
+
+function OrderDetail({ id, user, onClose, notify }) {
   const [order, setOrder] = useState(null);
-  useEffect(() => { api(`/api/orders/${id}`).then((r) => setOrder(r.order)).catch((e) => notify(e.message, 'error')); }, [id]);
+  const [trace, setTrace] = useState(null);
+  useEffect(() => { Promise.all([api(`/api/orders/${id}`), api(`/api/workflow/sales-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="销售订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.customerName}</h3><p>{order.customerCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
     <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'sales')}/>
+    {order.status === 'SUBMITTED' && can(user, 'ORDERS_APPROVE') && <a className="secondary workflow-approval-link" href="#approvals">前往审批</a>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
     <div className="detail-total"><span>订单合计</span><strong>{money(order.totalCents)}</strong></div>
     {order.remark && <p className="remark"><b>备注：</b>{order.remark}</p>}
@@ -248,7 +269,7 @@ export function PurchaseOrders({ user, notify }) {
       {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
     </>}/>
     {editing && <PurchaseOrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('采购订单草稿已保存'); }} notify={notify}/>} 
-    {viewing && <PurchaseOrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
+    {viewing && <PurchaseOrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
   </Panel>;
 }
 
@@ -277,13 +298,16 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
   </Modal>;
 }
 
-function PurchaseOrderDetail({ id, onClose, notify }) {
+function PurchaseOrderDetail({ id, user, onClose, notify }) {
   const [order, setOrder] = useState(null);
-  useEffect(() => { api(`/api/purchase-orders/${id}`).then((r) => setOrder(r.order)).catch((e) => notify(e.message, 'error')); }, [id]);
+  const [trace, setTrace] = useState(null);
+  useEffect(() => { Promise.all([api(`/api/purchase-orders/${id}`), api(`/api/workflow/purchase-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="采购订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.supplierName}</h3><p>{order.supplierCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
     <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'purchase')}/>
+    {order.status === 'SUBMITTED' && can(user, 'PURCHASE_ORDERS_APPROVE') && <a className="secondary workflow-approval-link" href="#approvals">前往审批</a>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
     <div className="detail-total"><span>订单合计</span><strong>{money(order.totalCents)}</strong></div>
     {order.remark && <p className="remark"><b>备注：</b>{order.remark}</p>}
@@ -292,7 +316,7 @@ function PurchaseOrderDetail({ id, onClose, notify }) {
 }
 
 function PurchaseOrderTable({ orders = [], onView, actions, compact }) {
-  return <div className="table-wrap"><table><thead><tr><th>订单号</th><th>供应商</th><th>状态</th><th className="number">金额</th><th>制单人</th><th>创建时间</th>{!compact && <th/>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id} className={onView ? 'clickable' : ''} onClick={() => onView?.(order)}><td className="mono strong-text">{order.orderNo}</td><td><strong>{order.supplierName}</strong><small className="block">{order.itemCount} 项明细</small></td><td><Status status={order.status} label={order.statusLabel}/></td><td className="number"><strong>{money(order.totalCents)}</strong></td><td>{order.creatorName}</td><td className="dim">{dateTime(order.createdAt)}</td>{!compact && <td className="actions" onClick={(e) => e.stopPropagation()}><button className="row-action" onClick={() => onView?.(order)}>查看</button>{actions?.(order)}</td>}</tr>)}</tbody></table>{!orders.length && <Empty text="当前没有符合条件的采购订单"/>}</div>;
+  return <div className="table-wrap"><table><thead><tr><th>订单号</th><th>供应商</th><th>状态</th><th className="number">金额</th><th>制单人</th><th>创建时间</th>{!compact && <th/>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id} className={onView ? 'clickable' : ''} onClick={() => onView?.(order)}><td className="mono strong-text">{order.orderNo}<small className="block workflow-next">{order.status === 'DRAFT' ? '待提交' : order.status === 'SUBMITTED' ? '待审核' : order.status === 'REJECTED' ? '已驳回' : order.receiptCount ? `已关联 ${order.receiptCount} 张入库单` : '已审核 · 待入库'}</small></td><td><strong>{order.supplierName}</strong><small className="block">{order.itemCount} 项明细</small></td><td><Status status={order.status} label={order.statusLabel}/></td><td className="number"><strong>{money(order.totalCents)}</strong></td><td>{order.creatorName}</td><td className="dim">{dateTime(order.createdAt)}</td>{!compact && <td className="actions" onClick={(e) => e.stopPropagation()}><button className="row-action" onClick={() => onView?.(order)}>查看</button>{actions?.(order)}</td>}</tr>)}</tbody></table>{!orders.length && <Empty text="当前没有符合条件的采购订单"/>}</div>;
 }
 
 

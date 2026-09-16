@@ -11,9 +11,25 @@ function LogisticsActions({ existing, onClose, onAction }) {
   </div>;
 }
 
+const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
+const relationshipHref = (type) => ({ SALES_ORDER: '#orders', SALES_DELIVERY: '#sales-deliveries', SALES_RETURN: '#returns', PURCHASE_ORDER: '#purchase-orders', PURCHASE_RECEIPT: '#purchase-receipts', PURCHASE_RETURN: '#returns', ACCOUNTING_VOUCHER: '#accounting' }[type]);
+
+function RelationshipSections({ detail }) {
+  const relation = detail.relationships || { upstream: [], downstream: [] };
+  const directLabel = detail.delivery_no ? '直接出货（未关联销售订单）' : detail.receipt_no ? '直接入库（未关联采购订单）' : '直接退货 / 补录（未关联来源单）';
+  return <>
+    <section className="document-relations" data-testid="document-relations"><h4>关联单据</h4>
+      {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <a key={item.id} href={relationshipHref(item.type)}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></a>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>直接业务</small></div>}
+      {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <a key={item.id} href={relationshipHref(item.type)}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></a>)}</div>}
+    </section>
+    {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{relation.finance.status}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
+  </>;
+}
+
 function ReadOnlyDocument({ detail, onClose, partyName }) {
   return <div>
     <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || detail.status}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    <RelationshipSections detail={detail}/>
     <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{item.quantity}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
     <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
   </div>;
@@ -40,7 +56,8 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const [suppliers, setSuppliers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [form, setForm] = useState({ purchaseOrderId: "", supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
     // Each fetch carries its own .catch so a single 403 (e.g. supplier
     // lookup unavailable for the role) does not cascade-reject the
@@ -48,6 +65,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/suppliers").then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
+    api("/api/purchase-orders?status=APPROVED").then((r) => setPurchaseOrders(r.purchaseOrders || [])).catch(() => {});
     if (value.id) api("/api/purchase-receipts/" + value.id).then((r) => setDetail(r.purchaseReceipt)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
@@ -55,6 +73,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     // when editing an existing receipt.
     if (detail && !form.supplierId) {
       setForm({
+        purchaseOrderId: detail.purchase_order_id || "",
         supplierId: detail.supplier_id || "",
         warehouseId: detail.warehouse_id || "",
         receiptDate: detail.receipt_date || "",
@@ -82,9 +101,15 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
+  const choosePurchaseOrder = async (purchaseOrderId) => {
+    if (!purchaseOrderId) return setForm((current) => ({ ...current, purchaseOrderId: "" }));
+    try { const { order } = await api('/api/purchase-orders/' + purchaseOrderId); setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+  };
   const changeState = async (action) => { try { if (action === 'confirm') await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form }); await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="采购入库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑采购入库单" : "新增采购入库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+    {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
+    {!value.id && <label className="full">来源采购订单（可选）<select value={form.purchaseOrderId} onChange={(e) => void choosePurchaseOrder(e.target.value)}><option value="">直接入库（不关联采购订单）</option>{purchaseOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.supplierName}</option>)}</select><small>可随时清除来源，直接入库仍然有效</small></label>}
     <label>供应商<select value={form.supplierId} onChange={(e) => setForm({...form, supplierId: e.target.value})} required><option value="">选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>收货日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({...form, receiptDate: e.target.value})} required/></label>
@@ -126,18 +151,21 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const [customers, setCustomers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [salesOrders, setSalesOrders] = useState([]);
+  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. customer lookup unavailable)
     // does not cascade-reject and silently disable the other selectors.
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
+    api("/api/orders?status=APPROVED").then((r) => setSalesOrders(r.orders || [])).catch(() => {});
     if (value.id) api("/api/sales-deliveries/" + value.id).then((r) => setDetail(r.salesDelivery)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
     if (detail && !form.customerId) {
       setForm({
+        salesOrderId: detail.sales_order_id || "",
         customerId: detail.customer_id || "",
         warehouseId: detail.warehouse_id || "",
         deliveryDate: detail.delivery_date || detail.receipt_date || "",
@@ -164,9 +192,15 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
+  const chooseSalesOrder = async (salesOrderId) => {
+    if (!salesOrderId) return setForm((current) => ({ ...current, salesOrderId: "" }));
+    try { const { order } = await api('/api/orders/' + salesOrderId); setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+  };
   const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出库单" : "新增销售出库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+    {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
+    {!value.id && <label className="full">来源销售订单（可选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)}><option value="">直接出货（不关联销售订单）</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>可随时清除来源，直接出货仍然有效</small></label>}
     <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>发货日期<input type="date" value={form.deliveryDate} onChange={(e) => setForm({...form, deliveryDate: e.target.value})} required/></label>
@@ -224,7 +258,8 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const [customers, setCustomers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ partyId: "", warehouseId: "", returnDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [sources, setSources] = useState([]);
+  const [form, setForm] = useState({ sourceId: "", partyId: "", warehouseId: "", returnDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. supplier lookup unavailable)
     // does not cascade-reject and disable the other selectors.
@@ -232,6 +267,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
+    api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch(() => {});
     if (value.id) {
       const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
       api(apiPath + "/" + value.id).then((r) => setDetail(tab === "sales" ? r.salesReturn : r.purchaseReturn)).catch((e) => notify(e.message, "error"));
@@ -240,6 +276,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   useEffect(() => {
     if (detail && !form.partyId) {
       setForm({
+        sourceId: (tab === 'sales' ? detail.delivery_id : detail.receipt_id) || "",
         partyId: (tab === "sales" ? detail.customer_id : detail.supplier_id) || "",
         warehouseId: detail.warehouse_id || "",
         returnDate: detail.return_date || "",
@@ -252,7 +289,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
-      const body = tab === "sales" ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
+      const body = tab === "sales" ? { deliveryId: form.sourceId || null, customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { receiptId: form.sourceId || null, supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
       if (value.id) {
         await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "PATCH", body });
         notify("保存成功");
@@ -268,9 +305,15 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const partyOptions = tab === "sales" ? customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>) : suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>);
+  const chooseReturnSource = async (sourceId) => {
+    if (!sourceId) return setForm((current) => ({ ...current, sourceId: '' }));
+    try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+  };
   const changeState = async (action) => { try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm') { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={tab === 'sales' ? detail.customerName : detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={(value.id ? "编辑" : "新增") + (tab === "sales" ? "销售退货单" : "采购退货单")} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+    {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
+    {!value.id && <label className="full">来源{tab === 'sales' ? '销售出货' : '采购入库'}（可选）<select value={form.sourceId} onChange={(e) => void chooseReturnSource(e.target.value)}><option value="">直接退货 / 补录</option>{sources.map((source) => <option key={source.id} value={source.id}>{tab === 'sales' ? source.delivery_no : source.receipt_no} · {tab === 'sales' ? source.customerName : source.supplierName}</option>)}</select></label>}
     <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} onChange={(e) => setForm({...form, partyId: e.target.value})} required><option value="">选择{tab === "sales" ? "客户" : "供应商"}</option>{partyOptions}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>退货日期<input type="date" value={form.returnDate} onChange={(e) => setForm({...form, returnDate: e.target.value})} required/></label>

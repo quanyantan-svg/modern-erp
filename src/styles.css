@@ -1527,3 +1527,40 @@ tfoot td {
   .modal__body { padding: 14px 16px; }
   .modal__foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
 }
+.mobile-workflow,
+.document-relations,
+.finance-trace {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 14px;
+  background: #fff;
+}
+.mobile-workflow h4,
+.document-relations h4,
+.finance-trace h4 { margin: 0 0 14px; }
+.mobile-workflow ol { list-style: none; margin: 0; padding: 0; }
+.mobile-workflow__stage { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 8px; align-items: start; min-height: 48px; }
+.mobile-workflow__stage:not(:last-child)::after { content: ''; position: absolute; left: 10px; top: 24px; bottom: 2px; width: 2px; background: #dbe3ed; }
+.mobile-workflow__marker { position: relative; z-index: 1; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; color: #64748b; background: #eef2f7; }
+.mobile-workflow__stage.is-completed .mobile-workflow__marker { color: #fff; background: #16845b; }
+.mobile-workflow__stage.is-current .mobile-workflow__marker { color: #fff; background: #2563eb; }
+.mobile-workflow__label { display: block; font-weight: 650; }
+.mobile-workflow__document { display: block; color: #2563eb; margin-top: 2px; overflow-wrap: anywhere; }
+.mobile-workflow__stage small { display: block; color: #64748b; margin-top: 3px; }
+.mobile-workflow__state { font-size: 12px; color: #64748b; white-space: nowrap; }
+.mobile-workflow__link { display: block; padding: 0; border: 0; background: none; text-align: left; color: inherit; }
+.workflow-next { color: #64748b; font-family: inherit; margin-top: 4px; }
+.workflow-approval-link { display: inline-block; margin: 0 0 16px; }
+.document-relations > div { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid #eef2f7; }
+.document-relations > div > span { font-size: 12px; color: #64748b; }
+.document-relations strong { font-weight: 600; }
+.document-relations small { color: #64748b; }
+
+@media (max-width: 600px) {
+  .mobile-workflow, .document-relations, .finance-trace { margin: 14px 0; padding: 14px; border-radius: 12px; }
+  .mobile-workflow__stage { grid-template-columns: 24px minmax(0, 1fr); }
+  .mobile-workflow__state { grid-column: 2; margin-top: -16px; justify-self: end; }
+  .modal.wide { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .modal-body { padding: 14px; }
+}

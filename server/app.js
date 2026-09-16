@@ -111,6 +111,8 @@ async function handleApi(db, req, res, url) {
   const orderMatch = pathname.match(/^\/api\/orders\/([^/]+)$/);
   if (orderMatch && req.method === 'GET') return getOrder(db, res, actor, orderMatch[1]);
   if (orderMatch && req.method === 'PUT') return updateOrder(db, req, res, actor, orderMatch[1]);
+  const salesWorkflowMatch = pathname.match(/^\/api\/workflow\/sales-orders\/([^/]+)$/);
+  if (salesWorkflowMatch && req.method === 'GET') return getSalesOrderWorkflow(db, res, actor, salesWorkflowMatch[1]);
 
     // Purchase Orders
   if (pathname === '/api/purchase-orders' && req.method === 'GET') return listPurchaseOrders(db, res, actor, url);
@@ -119,6 +121,8 @@ async function handleApi(db, req, res, url) {
   if (poActionMatch && req.method === 'POST') return changePurchaseOrderState(db, req, res, actor, poActionMatch[1], poActionMatch[2]);
   const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
   if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
+  const purchaseWorkflowMatch = pathname.match(/^\/api\/workflow\/purchase-orders\/([^/]+)$/);
+  if (purchaseWorkflowMatch && req.method === 'GET') return getPurchaseOrderWorkflow(db, res, actor, purchaseWorkflowMatch[1]);
 
   // Cash Journals
   if (pathname === '/api/cash-journals' && req.method === 'GET') return listCashJournals(db, res, actor, url);
@@ -864,7 +868,8 @@ function orderRows(db, where, params, tail) {
       so.rejection_reason rejectionReason,so.created_at createdAt,so.updated_at updatedAt,so.submitted_at submittedAt,
       so.reviewed_at reviewedAt,c.id customerId,c.code customerCode,c.name customerName,
       creator.display_name creatorName,reviewer.display_name reviewerName,
-      (SELECT count(*) FROM sales_order_items i WHERE i.order_id=so.id) itemCount
+      (SELECT count(*) FROM sales_order_items i WHERE i.order_id=so.id) itemCount,
+      (SELECT count(*) FROM sales_deliveries sd WHERE sd.sales_order_id=so.id) deliveryCount
     FROM sales_orders so JOIN customers c ON c.id=so.customer_id
     JOIN users creator ON creator.id=so.creator_id LEFT JOIN users reviewer ON reviewer.id=so.reviewer_id
     ${where} ${tail}`).all(...params).map((row) => ({ ...row, statusLabel: STATUS_LABELS[row.status] }));
@@ -1022,10 +1027,53 @@ function purchaseOrderRows(db, where, params, tail) {
       po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
       po.reviewed_at reviewedAt,s.id supplierId,s.code supplierCode,s.name supplierName,
       creator.display_name creatorName,reviewer.display_name reviewerName,
-      (SELECT count(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount
+      (SELECT count(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount,
+      (SELECT count(*) FROM purchase_receipts pr WHERE pr.purchase_order_id=po.id) receiptCount
     FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
     JOIN users creator ON creator.id=po.creator_id LEFT JOIN users reviewer ON reviewer.id=po.reviewer_id
     ${where} ${tail}`).all(...params).map((row) => ({ ...row, statusLabel: PURCHASE_STATUS_LABELS[row.status] }));
+}
+
+function actorCanViewFinance(actor) {
+  return actor.permissions?.includes('ACCOUNTING_VIEW') || actor.roleCode === 'ADMIN';
+}
+
+function workflowVoucher(db, sourceType, sourceId, actor) {
+  const voucher = db.prepare(`SELECT id, voucher_no documentNo, status, voucher_date documentDate,
+    (SELECT COALESCE(SUM(amount_cents),0) FROM accounting_entries WHERE voucher_id=accounting_vouchers.id AND direction='DEBIT') amountCents
+    FROM accounting_vouchers WHERE source_type=? AND source_id=? ORDER BY created_at LIMIT 1`).get(sourceType, sourceId);
+  if (!voucher) return null;
+  return actorCanViewFinance(actor) ? { ...voucher, type: 'ACCOUNTING_VOUCHER' } : { type: 'FINANCIAL_RECORD', exists: true };
+}
+
+function getSalesOrderWorkflow(db, res, actor, orderId) {
+  allow(actor, 'ORDERS_VIEW');
+  const order = db.prepare(`SELECT so.id,so.order_no documentNo,so.status,so.created_at createdAt,
+    so.submitted_at submittedAt,so.reviewed_at reviewedAt,so.total_cents amountCents,
+    c.id partyId,c.name partyName FROM sales_orders so JOIN customers c ON c.id=so.customer_id WHERE so.id=?`).get(orderId);
+  if (!order) throw new HttpError(404, '销售订单不存在');
+  const deliveries = db.prepare(`SELECT id,delivery_no documentNo,status,delivery_date documentDate,total_cents amountCents
+    FROM sales_deliveries WHERE sales_order_id=? ORDER BY created_at`).all(orderId).map((delivery) => {
+      const returns = db.prepare(`SELECT id,return_no documentNo,status,return_date documentDate,total_cents amountCents
+        FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at`).all(delivery.id, delivery.id);
+      return { ...delivery, type: 'SALES_DELIVERY', returns: returns.map((item) => ({ ...item, type: 'SALES_RETURN', voucher: workflowVoucher(db, 'SALES_RETURN', item.id, actor) })), voucher: workflowVoucher(db, 'SALES_DELIVERY', delivery.id, actor) };
+    });
+  return send(res, 200, { root: { ...order, type: 'SALES_ORDER' }, upstream: [], downstream: deliveries });
+}
+
+function getPurchaseOrderWorkflow(db, res, actor, orderId) {
+  allow(actor, 'PURCHASE_ORDERS_VIEW');
+  const order = db.prepare(`SELECT po.id,po.order_no documentNo,po.status,po.created_at createdAt,
+    po.submitted_at submittedAt,po.reviewed_at reviewedAt,po.total_cents amountCents,
+    s.id partyId,s.name partyName FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id WHERE po.id=?`).get(orderId);
+  if (!order) throw new HttpError(404, '采购订单不存在');
+  const receipts = db.prepare(`SELECT id,receipt_no documentNo,status,receipt_date documentDate,total_cents amountCents
+    FROM purchase_receipts WHERE purchase_order_id=? ORDER BY created_at`).all(orderId).map((receipt) => {
+      const returns = db.prepare(`SELECT id,return_no documentNo,status,return_date documentDate,total_cents amountCents
+        FROM purchase_returns WHERE receipt_id=? ORDER BY created_at`).all(receipt.id);
+      return { ...receipt, type: 'PURCHASE_RECEIPT', returns: returns.map((item) => ({ ...item, type: 'PURCHASE_RETURN', voucher: workflowVoucher(db, 'PURCHASE_RETURN', item.id, actor) })), voucher: workflowVoucher(db, 'PURCHASE_RECEIPT', receipt.id, actor) };
+    });
+  return send(res, 200, { root: { ...order, type: 'PURCHASE_ORDER' }, upstream: [], downstream: receipts });
 }
 
 function purchaseOrderInput(db, body) {
@@ -2542,6 +2590,11 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
   receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId);
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
+  receipt.relationships = {
+    upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
+    downstream: db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),
+    finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor), direct: !receipt.poNo,
+  };
   return send(res, 200, { purchaseReceipt: receipt });
 }
 
@@ -2641,6 +2694,11 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   if (!delivery) throw new HttpError(404, '销售出库单不存在');
   delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId);
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
+  delivery.relationships = {
+    upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
+    downstream: db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),
+    finance: workflowVoucher(db, 'SALES_DELIVERY', deliveryId, actor), direct: !delivery.soNo,
+  };
   return send(res, 200, { salesDelivery: delivery });
 }
 
@@ -2734,10 +2792,14 @@ async function createSalesReturn(db, req, res, actor) {
 
 function getSalesReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
-  const ret = db.prepare('SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, sd.delivery_no deliveryNo FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by LEFT JOIN sales_deliveries sd ON sd.id = sr.delivery_id WHERE sr.id = ?').get(returnId);
+  const ret = db.prepare('SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, sd.delivery_no deliveryNo FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by LEFT JOIN sales_deliveries sd ON sd.id = COALESCE(sr.delivery_id,sr.source_id) WHERE sr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '销售退货单不存在');
   ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
+  ret.relationships = {
+    upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
+    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), direct: !ret.deliveryNo,
+  };
   return send(res, 200, { salesReturn: ret });
 }
 
@@ -2833,6 +2895,10 @@ function getPurchaseReturn(db, res, actor, returnId) {
   if (!ret) throw new HttpError(404, '采购退货单不存在');
   ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
+  ret.relationships = {
+    upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
+    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), direct: !ret.receiptNo,
+  };
   return send(res, 200, { purchaseReturn: ret });
 }
 
