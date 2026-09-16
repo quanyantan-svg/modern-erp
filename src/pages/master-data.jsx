@@ -32,12 +32,12 @@ export function Login({ onLogin, notify }) {
   </div>;
 }
 
-export function Dashboard({ notify }) {
+export function Dashboard({ user, notify }) {
   const [data, setData] = useState(null);
   useEffect(() => { 
     Promise.all([
       api('/api/dashboard'),
-      api('/api/inventory/alerts')
+      can(user, 'INVENTORY_VIEW') ? api('/api/inventory/alerts') : Promise.resolve({ alerts: [] })
     ]).then(([d, a]) => {
       setData({...d, alerts: a});
     }).catch((e) => notify(e.message, 'error')); 

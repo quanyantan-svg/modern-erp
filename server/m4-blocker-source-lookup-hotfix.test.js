@@ -452,7 +452,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
   describe('F. SECURITY — registry + role permission stability', () => {
     test('26. PERMISSIONS registry size = 96 (M6 manufacturing adds two narrow perms)', () => {
-      assert.equal(PERMISSIONS.length, 96, 'PERMISSIONS count is now 96 after M6 additions');
+      assert.equal(PERMISSIONS.length, 100, 'PERMISSIONS count is now 100 after M8 settlement additions');
     });
 
     test('27. role-warehouse permission set unchanged from M5 baseline', () => {

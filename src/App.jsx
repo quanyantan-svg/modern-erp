@@ -4,6 +4,7 @@ import { Login, Dashboard, Suppliers, Customers, Products, Orders, Approvals, Us
 import { Accounting } from './pages/accounting.jsx';
 import DecisionReports, { canViewDecisionReport } from './pages/decision-reports.jsx';
 import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
+import { Collections, Payables, Payments, Receivables } from './pages/settlement.jsx';
 import { Boms, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
@@ -95,6 +96,10 @@ export const navGroups = [
     { key: 'inventory-transactions', label: '库存流水', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
   ]},
   { label: '财务资金', items: [
+    { key: 'accounts-receivable', label: '应收账款', icon: ic.accounting, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { key: 'payment-collections', label: '收款单', icon: ic.cashJournals, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { key: 'accounts-payable', label: '应付账款', icon: ic.accounting, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { key: 'payment-disbursements', label: '付款单', icon: ic.bankAccounts, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
     { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
     { key: 'cash-journals', label: '现金日记账', icon: ic.cashJournals, any: ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE'] },
     { key: 'bank-accounts', label: '银行账户', icon: ic.bankAccounts, any: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
@@ -205,7 +210,7 @@ export default function App() {
   if (!user) return <Login onLogin={setUser} notify={notify}/>;
 
   const pages = {
-    dashboard: <Dashboard notify={notify}/>,
+    dashboard: <Dashboard user={user} notify={notify}/>,
     orders: <Orders user={user} notify={notify}/>,
     approvals: <Approvals notify={notify}/>,
     customers: <Customers user={user} notify={notify}/>,
@@ -231,6 +236,10 @@ export default function App() {
     notifications: <Notifications user={user} notify={notify}/>,
     workflows: <Workflows user={user} notify={notify}/>,
     accounting: <Accounting user={user} notify={notify}/>,
+    'accounts-receivable': <Receivables user={user} notify={notify}/>,
+    'payment-collections': <Collections user={user} notify={notify}/>,
+    'accounts-payable': <Payables user={user} notify={notify}/>,
+    'payment-disbursements': <Payments user={user} notify={notify}/>,
     'decision-reports': <DecisionReports user={user} notify={notify}/>,
     'purchase-receipts': <PurchaseReceipts user={user} notify={notify}/>,
     'sales-deliveries': <SalesDeliveries user={user} notify={notify}/>,

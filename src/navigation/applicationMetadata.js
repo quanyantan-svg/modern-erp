@@ -11,6 +11,10 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     label: '基础资料',
     accent: 'slate',
     items: [
+      { page: 'accounts-receivable', mobileLabel: '应收账款', iconKey: 'accounting' },
+      { page: 'payment-collections', mobileLabel: '收款单', iconKey: 'cashJournals' },
+      { page: 'accounts-payable', mobileLabel: '应付账款', iconKey: 'accounting' },
+      { page: 'payment-disbursements', mobileLabel: '付款单', iconKey: 'bankAccounts' },
       { page: 'customers', mobileLabel: '客户', iconKey: 'customers' },
       { page: 'suppliers', mobileLabel: '供应商', iconKey: 'suppliers' },
       { page: 'products', mobileLabel: '货品', iconKey: 'products' },
@@ -103,7 +107,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
   '请购单', 'MRP', '生产指令',
-  '库存调整', '库存报废', '库存月结', '应收', '应付', '收款', '付款',
+  '库存调整', '库存报废', '库存月结',
 ]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {

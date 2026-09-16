@@ -6,7 +6,7 @@
 //     stock-affecting documents for production;
 //   * Five-role contract holds (admin only, sales/reviewer/warehouse/
 //     accounting are forbidden from manufacturing mutations);
-//   * The permission registry is exactly 96 entries;
+//   * The permission registry includes the subsequent M8 settlement additions;
 //   * The legacy DB shape (no M6 tables) opens cleanly, M6 migration
 //     is idempotent, and existing BOM/production_orders/inventory are
 //     untouched;
@@ -101,8 +101,8 @@ function seedProductionOrder(quantity = 5, bomId = null) {
 // =====================================================================
 
 describe('M6 permission registry', () => {
-  test('1. PERMISSIONS registry has 96 entries including M6 manufacturing perms', () => {
-    assert.equal(PERMISSIONS.length, 96);
+  test('1. PERMISSIONS registry has 100 entries including M6 and M8 permissions', () => {
+    assert.equal(PERMISSIONS.length, 100);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('PRODUCTION_MATERIAL_ISSUE_MANAGE'));
     assert.ok(codes.has('PRODUCTION_RECEIPT_MANAGE'));

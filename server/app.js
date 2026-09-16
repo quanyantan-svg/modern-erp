@@ -28,6 +28,13 @@ import {
   getSalesOutstanding, getSalesSummary,
 } from './modules/decision-reports.js';
 import { listApprovals } from './modules/approvals.js';
+import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
+import {
+  cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument,
+  customerStatement, getPayable as getPayableM8, getReceivable as getReceivableM8,
+  getSettlementDocument, listPayables as listPayablesM8, listReceivables as listReceivablesM8,
+  listSettlementDocuments, listSettlementParties, supplierStatement, updateSettlementDocument,
+} from './modules/settlement.js';
 import {
   cancelProductionMaterialIssue, cancelProductionReceipt,
   confirmProductionMaterialIssue, confirmProductionReceipt,
@@ -343,28 +350,36 @@ async function handleApi(db, req, res, url) {
   if (pathname === "/api/lookup/purchase-orders-source" && req.method === "GET") return listPurchaseOrderSourceLookup(db, res, actor, url);
 
   // ============ Accounts Receivable ============
-  if (pathname === "/api/accounts-receivable" && req.method === "GET") return listAccountsReceivable(db, res, actor, url);
-  if (pathname === "/api/accounts-receivable" && req.method === "POST") return createAccountReceivable(db, req, res, actor);
-  const arMatch = pathname.match(/^\/api\/accounts-receivable\/(.+)$/);
-  if (arMatch && req.method === "GET") return getAccountReceivable(db, res, actor, arMatch[1]);
+  if (pathname === '/api/settlement/customers' && req.method === 'GET') return listSettlementParties(db, res, actor, url, 'CUSTOMER');
+  if (pathname === '/api/settlement/suppliers' && req.method === 'GET') return listSettlementParties(db, res, actor, url, 'SUPPLIER');
+  if (pathname === '/api/accounts-receivable' && req.method === 'GET') return listReceivablesM8(db, res, actor, url);
+  if (pathname === '/api/accounts-receivable/statement' && req.method === 'GET') return customerStatement(db, res, actor, url);
+  const arMatch = pathname.match(/^\/api\/accounts-receivable\/([^/]+)$/);
+  if (arMatch && req.method === 'GET') return getReceivableM8(db, res, actor, arMatch[1]);
 
   // ============ Accounts Payable ============
-  if (pathname === "/api/accounts-payable" && req.method === "GET") return listAccountsPayable(db, res, actor, url);
-  if (pathname === "/api/accounts-payable" && req.method === "POST") return createAccountPayable(db, req, res, actor);
-  const apMatch = pathname.match(/^\/api\/accounts-payable\/(.+)$/);
-  if (apMatch && req.method === "GET") return getAccountPayable(db, res, actor, apMatch[1]);
+  if (pathname === '/api/accounts-payable' && req.method === 'GET') return listPayablesM8(db, res, actor, url);
+  if (pathname === '/api/accounts-payable/statement' && req.method === 'GET') return supplierStatement(db, res, actor, url);
+  const apMatch = pathname.match(/^\/api\/accounts-payable\/([^/]+)$/);
+  if (apMatch && req.method === 'GET') return getPayableM8(db, res, actor, apMatch[1]);
 
   // ============ Payment Collections ============
-  if (pathname === "/api/payment-collections" && req.method === "GET") return listPaymentCollections(db, res, actor, url);
-  if (pathname === "/api/payment-collections" && req.method === "POST") return createPaymentCollection(db, req, res, actor);
-  const pcMatch = pathname.match(/^\/api\/payment-collections\/(.+)$/);
-  if (pcMatch && req.method === "GET") return getPaymentCollection(db, res, actor, pcMatch[1]);
+  if (pathname === '/api/payment-collections' && req.method === 'GET') return listSettlementDocuments(db, res, actor, url, 'COLLECTION');
+  if (pathname === '/api/payment-collections' && req.method === 'POST') return createSettlementDocument(db, req, res, actor, 'COLLECTION');
+  const pcAction = pathname.match(/^\/api\/payment-collections\/([^/]+)\/(confirm|cancel)$/);
+  if (pcAction && req.method === 'POST') return pcAction[2] === 'confirm' ? confirmSettlementDocument(db, req, res, actor, 'COLLECTION', pcAction[1], generateVoucher) : cancelSettlementDocument(db, req, res, actor, 'COLLECTION', pcAction[1]);
+  const pcMatch = pathname.match(/^\/api\/payment-collections\/([^/]+)$/);
+  if (pcMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'COLLECTION', pcMatch[1]);
+  if (pcMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'COLLECTION', pcMatch[1]);
 
   // ============ Payment Disbursements ============
-  if (pathname === "/api/payment-disbursements" && req.method === "GET") return listPaymentDisbursements(db, res, actor, url);
-  if (pathname === "/api/payment-disbursements" && req.method === "POST") return createPaymentDisbursement(db, req, res, actor);
-  const pdMatch = pathname.match(/^\/api\/payment-disbursements\/(.+)$/);
-  if (pdMatch && req.method === "GET") return getPaymentDisbursement(db, res, actor, pdMatch[1]);
+  if (pathname === '/api/payment-disbursements' && req.method === 'GET') return listSettlementDocuments(db, res, actor, url, 'PAYMENT');
+  if (pathname === '/api/payment-disbursements' && req.method === 'POST') return createSettlementDocument(db, req, res, actor, 'PAYMENT');
+  const pdAction = pathname.match(/^\/api\/payment-disbursements\/([^/]+)\/(confirm|cancel)$/);
+  if (pdAction && req.method === 'POST') return pdAction[2] === 'confirm' ? confirmSettlementDocument(db, req, res, actor, 'PAYMENT', pdAction[1], generateVoucher) : cancelSettlementDocument(db, req, res, actor, 'PAYMENT', pdAction[1]);
+  const pdMatch = pathname.match(/^\/api\/payment-disbursements\/([^/]+)$/);
+  if (pdMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
+  if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
 
 
 
@@ -2770,7 +2785,9 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
     downstream: db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),
-    finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor), direct: !receipt.poNo,
+    finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor),
+    subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId) : null,
+    direct: !receipt.poNo,
   };
   return send(res, 200, { purchaseReceipt: receipt });
 }
@@ -2817,6 +2834,7 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         { subjectId: 'subject-004', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName },
         { subjectId: 'subject-005', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
       ], actor, locked.receipt_date);
+      ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
     });
   } else if (action === 'cancel') {
@@ -2874,7 +2892,9 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   delivery.relationships = {
     upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
     downstream: db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),
-    finance: workflowVoucher(db, 'SALES_DELIVERY', deliveryId, actor), direct: !delivery.soNo,
+    finance: workflowVoucher(db, 'SALES_DELIVERY', deliveryId, actor),
+    subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(deliveryId) : null,
+    direct: !delivery.soNo,
   };
   return send(res, 200, { salesDelivery: delivery });
 }
@@ -2923,6 +2943,7 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         { subjectId: 'subject-003', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' ' + customerName },
         { subjectId: 'subject-006', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
       ], actor, locked.delivery_date);
+      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
   } else if (action === 'cancel') {
@@ -2975,7 +2996,7 @@ function getSalesReturn(db, res, actor, returnId) {
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), direct: !ret.deliveryNo,
+    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.deliveryNo,
   };
   return send(res, 200, { salesReturn: ret });
 }
@@ -3022,6 +3043,7 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-006', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' 收入冲减' },
         { subjectId: 'subject-003', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' ' + customerName }
       ], actor, locked.return_date);
+      ensureReceivableSource(db, { id: returnId, sourceType: 'SALES_RETURN', sourceNo: ret.return_no, partyId: ret.customer_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
       audit(db, actor.id, 'CONFIRM', 'SALES_RETURN', returnId, '确认销售退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
@@ -3074,7 +3096,7 @@ function getPurchaseReturn(db, res, actor, returnId) {
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), direct: !ret.receiptNo,
+    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.receiptNo,
   };
   return send(res, 200, { purchaseReturn: ret });
 }
@@ -3123,6 +3145,7 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-005', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no + ' ' + supplierName },
         { subjectId: 'subject-004', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no }
       ], actor, locked.return_date);
+      ensurePayableSource(db, { id: returnId, sourceType: 'PURCHASE_RETURN', sourceNo: ret.return_no, partyId: ret.supplier_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {

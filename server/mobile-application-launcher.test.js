@@ -78,6 +78,7 @@ function applicationPagesFor(roleId) {
 
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
+    'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
     'customers', 'suppliers', 'products', 'warehouses', 'boms',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
@@ -102,6 +103,7 @@ const EXPECTED_ROLE_PAGES = {
     'purchase-receipts', 'inventory', 'inventory-transactions', 'iqc', 'oqc',
   ],
   'role-accounting': [
+    'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
     'orders', 'purchase-orders', 'accounting', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
     'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',

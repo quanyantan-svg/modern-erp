@@ -133,10 +133,10 @@ describe('UI source — route surface preserved', () => {
     }
   });
 
-  test('deferred AR/AP and payment pages are not advertised in App.jsx', () => {
+  test('M8 AR/AP and settlement pages are mounted and advertised in App.jsx', () => {
     const app = readFile('App.jsx');
-    for (const name of ['AccountsReceivable', 'AccountsPayable', 'PaymentCollections', 'PaymentDisbursements']) assert.equal(app.includes(name), false);
-    for (const key of ['accounts-receivable', 'accounts-payable', 'payment-collections', 'payment-disbursements']) assert.equal(app.includes(key), false);
+    for (const name of ['Receivables', 'Payables', 'Collections', 'Payments']) assert.equal(app.includes(name), true);
+    for (const key of ['accounts-receivable', 'accounts-payable', 'payment-collections', 'payment-disbursements']) assert.equal(app.includes(key), true);
   });
 
   test('Permission-based navigation logic (navGroups + can) preserved', () => {

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { migrateExtendedSchema } from './migrations/extended-schema.js';
+import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -40,6 +41,10 @@ export const PERMISSIONS = [
   ['PRODUCTION_ORDERS_START', '开始生产'],
   ['PRODUCTION_ORDERS_COMPLETE', '完成生产'],
   ['ACCOUNTING_VIEW', '查看财务凭证'],
+  ['AR_VIEW', '查看应收账款与客户对账单'],
+  ['COLLECTION_MANAGE', '管理并确认收款单'],
+  ['AP_VIEW', '查看应付账款与供应商对账单'],
+  ['PAYMENT_MANAGE', '管理并确认付款单'],
   ['VOUCHER_SUBMIT', '提交凭证'],
   ['VOUCHER_APPROVE', '审核凭证'],
   ['CASH_JOURNALS_VIEW', '查看现金日记账'],
@@ -120,6 +125,7 @@ export function createDatabase(filename) {
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
   migrate(db);
+  migrateSettlementSchema(db);
   migrateExtendedSchema(db);
   normalizeCostRates(db);
   seed(db);
@@ -293,6 +299,7 @@ export function createDatabase(filename) {
   migrateInventoryTransfers();
   migrateWarehouseLogistics(db);
   migrateProductionDocuments(db);
+  reconcileSettlementSubledgers(db);
 
   return db;
 }
@@ -1434,7 +1441,7 @@ function seedSchema(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'],
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE'],
     'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE'],
     'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
     'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE'],

@@ -1226,8 +1226,8 @@ export function getFinancialSummary(db, res, actor, url) {
 
   const income = calculateIncomeForPeriod(db, period);
 
-  const ar = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_receivables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
-  const ap = db.prepare("SELECT COALESCE(SUM(amount_cents - paid_cents), 0) total FROM account_payables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
+  const ar = db.prepare("SELECT COALESCE(SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents), 0) total FROM account_receivables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
+  const ap = db.prepare("SELECT COALESCE(SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents), 0) total FROM account_payables WHERE status IN ('PENDING', 'PARTIAL')").get().total;
 
   return send(res, 200, {
     period: income.period,

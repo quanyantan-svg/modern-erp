@@ -299,6 +299,7 @@ describe('App.jsx — responsive composition', () => {
       'CRM_VIEW', 'CRM_MANAGE', 'PROJECT_VIEW', 'PROJECT_MANAGE',
       'WORKFLOW_VIEW', 'WORKFLOW_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE',
       'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE',
+      'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE',
     ];
     const refs = new Set();
     const re = /\b([A-Z][A-Z0-9_]+_(?:VIEW|MANAGE|CREATE|SUBMIT|APPROVE|REJECT|START|COMPLETE))\b/g;
@@ -326,21 +327,21 @@ describe('App.jsx — responsive composition', () => {
 // 6. Role permissions are not changed
 // ---------------------------------------------------------------------------
 describe('Permissions — canonical registry count', () => {
-  test('PERMISSIONS array in server/db.js has 96 entries after M6 manufacturing additions', async () => {
+  test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 96, `PERMISSIONS array must have 96 entries (got ${perms.length})`);
+    assert.equal(perms.length, 100, `PERMISSIONS array must have 100 entries (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
   });
 
-  test('role-accounting still has 14 permissions (M0 baseline)', () => {
+  test('role-accounting has 18 permissions after four narrow M8 grants', () => {
     const dbSrc = readRoot('server/db.js');
     const accountingMatch = dbSrc.match(/'role-accounting':\s*\[([^\]]+)\]/);
     assert.ok(accountingMatch, 'role-accounting must exist in db.js');
     const count = (accountingMatch[1].match(/'/g) || []).length;
-    assert.equal(count / 2, 14, `role-accounting must have 14 permissions (got ${count / 2})`);
+    assert.equal(count / 2, 18, `role-accounting must have 18 permissions (got ${count / 2})`);
   });
 });
 

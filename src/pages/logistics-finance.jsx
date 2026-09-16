@@ -24,6 +24,7 @@ export function RelationshipSections({ detail }) {
       {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div>}
     </section>
     {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{relation.finance.status}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
+    {relation.subledger && <section className="finance-trace"><h4>往来结算</h4><AppLink page={detail.customer_id ? 'accounts-receivable' : 'accounts-payable'} documentId={relation.subledger.id}><span>{detail.customer_id ? '应收记录' : '应付记录'}</span> <strong className="mono">{relation.subledger.documentNo}</strong></AppLink></section>}
   </>;
 }
 
