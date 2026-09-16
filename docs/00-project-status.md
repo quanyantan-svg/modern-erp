@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-03 (Post-v1.0.0 Teacher Acceptance / Business Document Integrity Stabilization)
+> 更新：2026-09-16 (M7 Decision Reports)
 
 ## 阶段与分支
 
@@ -11,6 +11,17 @@
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M7 — Decision Reports
+
+- 决策报表已实现五张教师要求报表：销售统计、销售未出货、采购统计、采购未交货、库存异动明细；数据均直接查询现有 canonical 业务单据与 `inventory_transactions`，未新增快照表、重复台账或统计假数据；
+- 销售/采购统计严格区分订单金额、CONFIRMED 出/入库金额、CONFIRMED 退货金额与净额；所有金额继续以整数分聚合和传输；
+- 未交付能力判定为 **B（文档级）**：出/入库表头可关联订单，但物流明细不直接引用订单明细，故只展示关联确认单据数、最近履行日期与“尚未/已有记录”，不伪造逐行剩余数量；
+- 报表授权要求 `REPORT_VIEW` 与对应销售、采购或库存业务可见权限的交集；`role-accounting` 可见销售/采购四张报表，不可见库存异动明细；未新增权限；
+- 库存异动直接复用 canonical 流水，支持日期、货品、仓库、方向和来源过滤；同时选择货品与仓库时，返回 `inventory` 当前库存与最新完整流水余额核对结果，不推导历史期初；
+- 移动应用组已启用五张报表卡片；窄屏使用 KPI 与卡片/受控表格，销售/采购订单号通过 permission-aware `AppLink` 进行 SPA 下钻；
+- Focused：118 tests / 17 suites / PASS；Full：991 tests / 195 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
+- Real browser：Microsoft Edge 153，375×667、414×896、1024×768 PASS；控制台异常及意外 400/403/404/500 均为 0；无 tag、push、deploy。
 
 ### Post-v1.0.0 Teacher Acceptance — Business Document Integrity Stabilization
 

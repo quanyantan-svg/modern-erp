@@ -82,7 +82,13 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'reports',
     label: '决策报表',
     accent: 'blue',
-    items: [],
+    items: [
+      { page: 'decision-reports', mobileLabel: '销售统计', iconKey: 'reports', reportKey: 'sales-summary' },
+      { page: 'decision-reports', mobileLabel: '销售未出货', iconKey: 'reports', reportKey: 'sales-outstanding' },
+      { page: 'decision-reports', mobileLabel: '采购统计', iconKey: 'reports', reportKey: 'purchase-summary' },
+      { page: 'decision-reports', mobileLabel: '采购未交货', iconKey: 'reports', reportKey: 'purchase-outstanding' },
+      { page: 'decision-reports', mobileLabel: '库存异动明细', iconKey: 'reports', reportKey: 'inventory-movements' },
+    ],
   },
   {
     key: 'system',
@@ -98,11 +104,11 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
   '请购单', 'MRP', '生产指令',
   '库存调整', '库存报废', '库存月结', '应收', '应付', '收款', '付款',
-  '采购统计', '采购未交货', '销售统计', '销售未出货',
 ]);
 
-export function buildMobileApplicationGroups(visibleNav = []) {
+export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
   const authorizedByPage = new Map(visibleNav.map((item) => [item.key, item]));
+  const isItemVisible = options.isItemVisible || (() => true);
 
   return MOBILE_APPLICATION_GROUPS.map((group) => ({
     key: group.key,
@@ -110,12 +116,14 @@ export function buildMobileApplicationGroups(visibleNav = []) {
     accent: group.accent,
     items: group.items.flatMap((metadata) => {
       const navigationItem = authorizedByPage.get(metadata.page);
-      if (!navigationItem) return [];
+      if (!navigationItem || !isItemVisible(metadata)) return [];
       return [{
         ...navigationItem,
         page: navigationItem.key,
         label: metadata.mobileLabel || navigationItem.label,
         iconKey: metadata.iconKey,
+        key: metadata.reportKey ? navigationItem.key + ':' + metadata.reportKey : navigationItem.key,
+        reportKey: metadata.reportKey || null,
       }];
     }),
   })).filter((group) => group.items.length > 0);

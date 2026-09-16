@@ -23,6 +23,10 @@ import {
   closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
+import {
+  getInventoryMovements, getPurchaseOutstanding, getPurchaseSummary,
+  getSalesOutstanding, getSalesSummary,
+} from './modules/decision-reports.js';
 import { listApprovals } from './modules/approvals.js';
 import {
   cancelProductionMaterialIssue, cancelProductionReceipt,
@@ -270,6 +274,12 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/bank-reconciliations' && req.method === 'GET') return listBankReconciliations(db, res, actor, url);
   if (pathname === '/api/bank-reconciliations' && req.method === 'POST') return createBankReconciliation(db, req, res, actor);
   if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, res, actor, url);
+  // M7 Decision Reports — read-only analytics over canonical documents.
+  if (pathname === '/api/reports/decision/sales-summary' && req.method === 'GET') return getSalesSummary(db, res, actor, url);
+  if (pathname === '/api/reports/decision/sales-outstanding' && req.method === 'GET') return getSalesOutstanding(db, res, actor, url);
+  if (pathname === '/api/reports/decision/purchase-summary' && req.method === 'GET') return getPurchaseSummary(db, res, actor, url);
+  if (pathname === '/api/reports/decision/purchase-outstanding' && req.method === 'GET') return getPurchaseOutstanding(db, res, actor, url);
+  if (pathname === '/api/reports/decision/inventory-movements' && req.method === 'GET') return getInventoryMovements(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
   // Accounting Voucher Workflow
   const voucherActionMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/(submit|approve|reject)$/);

@@ -19,6 +19,7 @@ let navGroups;
 let mobileGroups;
 let deferredApplications;
 let buildMobileApplicationGroups;
+let canViewDecisionReport;
 let MobileLauncher;
 let MobileShell;
 let MobileCrmApplication;
@@ -37,6 +38,7 @@ before(async () => {
     DEFERRED_MOBILE_APPLICATIONS: deferredApplications,
     buildMobileApplicationGroups,
   } = await vite.ssrLoadModule('/src/navigation/applicationMetadata.js'));
+  ({ canViewDecisionReport } = await vite.ssrLoadModule('/src/pages/decision-reports.jsx'));
   MobileLauncher = (await vite.ssrLoadModule('/src/components/MobileLauncher.jsx')).default;
   MobileShell = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).default;
   MobileCrmApplication = (await vite.ssrLoadModule('/src/components/MobileCrmApplication.jsx')).default;
@@ -67,7 +69,10 @@ function visibleNavigationFor(roleId) {
 }
 
 function applicationPagesFor(roleId) {
-  return buildMobileApplicationGroups(visibleNavigationFor(roleId))
+  const user = { permissions: rolePermissions(roleId) };
+  return buildMobileApplicationGroups(visibleNavigationFor(roleId), {
+    isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
+  })
     .flatMap((group) => group.items.map((item) => item.page));
 }
 
@@ -79,7 +84,8 @@ const EXPECTED_ROLE_PAGES = {
     'inventory', 'inventory-transactions', 'production-orders',
     'material-issues', 'production-receipts',
     'iqc', 'oqc', 'accounting', 'cash-journals', 'bank-accounts',
-    'bills', 'fixed-assets', 'workflows', 'users',
+    'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
+    'workflows', 'users',
   ],
   'role-sales': [
     'customers', 'suppliers', 'products', 'warehouses',
@@ -98,6 +104,7 @@ const EXPECTED_ROLE_PAGES = {
   'role-accounting': [
     'orders', 'purchase-orders', 'accounting', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
+    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
   ],
 };
 
@@ -138,9 +145,17 @@ describe('M2 application metadata', () => {
     }
   });
 
-  test('application page cards are unique', () => {
-    const pages = mobileGroups.flatMap((group) => group.items.map((item) => item.page));
-    assert.equal(new Set(pages).size, pages.length);
+  test('application page cards have unique composite keys (reportKey-aware)', () => {
+    // M7 decision reports intentionally expose five cards that all point at the
+    // same 'decision-reports' page; buildMobileApplicationGroups adds a
+    // composite `key` (page:reportKey) so React keys stay unique. The static
+    // `page` field is allowed to repeat; the runtime composite `key` is what
+    // the launcher uses.
+    const items = buildMobileApplicationGroups(visibleNavigationFor('role-admin'))
+      .flatMap((group) => group.items);
+    const compositeKeys = items.map((item) => item.key || item.page);
+    assert.equal(new Set(compositeKeys).size, compositeKeys.length,
+      'composite keys must be unique across all launcher cards');
   });
 
   test('mobile labels do not rename canonical page keys', () => {
@@ -156,10 +171,31 @@ describe('M2 application metadata', () => {
     for (const deferred of deferredApplications) assert.ok(!labels.includes(deferred), deferred);
   });
 
-  test('empty groups are removed at runtime (including 决策报表)', () => {
-    const groups = buildMobileApplicationGroups(visibleNavigationFor('role-admin'));
+  test('empty groups are removed at runtime', () => {
+    const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     assert.ok(groups.every((group) => group.items.length > 0));
+    // role-sales has no REPORT_VIEW, so 决策报表 group must be filtered out.
     assert.ok(!groups.some((group) => group.key === 'reports'));
+  });
+
+  test('admin role sees the populated 决策报表 group', () => {
+    const user = { permissions: rolePermissions('role-admin') };
+    const groups = buildMobileApplicationGroups(visibleNavigationFor('role-admin'), {
+      isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
+    });
+    const reports = groups.find((group) => group.key === 'reports');
+    assert.ok(reports, 'admin must see the 决策报表 group');
+    assert.ok(reports.items.length >= 5, '决策报表 must expose five report cards');
+  });
+
+  test('accounting sees sales and purchase reports but not unauthorized inventory movements', () => {
+    const user = { permissions: rolePermissions('role-accounting') };
+    const reports = buildMobileApplicationGroups(visibleNavigationFor('role-accounting'), {
+      isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
+    }).find((group) => group.key === 'reports');
+    assert.deepEqual(reports.items.map((item) => item.reportKey), [
+      'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding',
+    ]);
   });
 
   test('visibility is the intersection of mobile metadata and visibleNav', () => {

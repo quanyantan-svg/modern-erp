@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, getToken, setToken } from './api.js';
 import { Login, Dashboard, Suppliers, Customers, Products, Orders, Approvals, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
 import { Accounting } from './pages/accounting.jsx';
+import DecisionReports, { canViewDecisionReport } from './pages/decision-reports.jsx';
 import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
 import { Boms, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
@@ -45,6 +46,7 @@ const ic = {
   salesDeliveries: <Icon d="M5 18H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-2M9 18h6v4H9z"/>,
   returns: <Icon d="M9 14L4 9l5-5M4 9h11a4 4 0 0 1 0 8h-1"/>,
   inventoryTransactions: <Icon d="M12 2v20M2 12h20M7 7l5 5-5 5M17 7l-5 5 5 5"/>,
+  reports: <Icon d="M3 3v18h18M7 14l4-4 4 4 6-6"/>,
   accountsReceivable: <Icon d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm0 5v5l3 3"/>,
   accountsPayable: <Icon d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm0 5v5l3 3"/>,
   paymentCollections: <Icon d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>,
@@ -98,6 +100,9 @@ export const navGroups = [
     { key: 'bank-accounts', label: '银行账户', icon: ic.bankAccounts, any: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
     { key: 'bills', label: '票据管理', icon: ic.bills, any: ['BILLS_VIEW', 'BILLS_MANAGE'] },
     { key: 'fixed-assets', label: '固定资产', icon: ic.fixedAssets, any: ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'] },
+  ]},
+  { label: '决策报表', items: [
+    { key: 'decision-reports', label: '决策报表', icon: ic.reports, any: ['REPORT_VIEW'] },
   ]},
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
@@ -153,7 +158,10 @@ export default function App() {
       return false;
     }
     setPage(authorizedPage.key);
-    setNavigationTarget(target?.documentId ? { page: authorizedPage.key, ...target } : null);
+    const nextTarget = target?.documentId
+      ? { page: authorizedPage.key, ...target }
+      : (target && typeof target === 'object' && Object.keys(target).length ? { page: authorizedPage.key, ...target } : null);
+    setNavigationTarget(nextTarget);
     if (options.writeHash !== false && location.hash.slice(1) !== authorizedPage.key) location.hash = authorizedPage.key;
     if (isMobile === true) {
       setMobileApplication((current) => current?.page === authorizedPage.key && !target?.documentId
@@ -223,6 +231,7 @@ export default function App() {
     notifications: <Notifications user={user} notify={notify}/>,
     workflows: <Workflows user={user} notify={notify}/>,
     accounting: <Accounting user={user} notify={notify}/>,
+    'decision-reports': <DecisionReports user={user} notify={notify}/>,
     'purchase-receipts': <PurchaseReceipts user={user} notify={notify}/>,
     'sales-deliveries': <SalesDeliveries user={user} notify={notify}/>,
     returns: <Returns user={user} notify={notify}/>,
@@ -234,7 +243,9 @@ export default function App() {
     users: <UsersRoles user={user} notify={notify}/>
   };
   const current = visibleNav.find((item) => item.key === page) || visibleNav[0];
-  const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav);
+  const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav, {
+    isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
+  });
 
   async function logout() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* local logout still succeeds */ }
@@ -255,7 +266,11 @@ export default function App() {
   }
 
   function handleMobileApplicationSelect(item) {
-    navigateToPage(item.page);
+    if (item.reportKey) {
+      navigateToPage(item.page, { reportKey: item.reportKey });
+    } else {
+      navigateToPage(item.page);
+    }
   }
 
   function returnToMobileApplications() {
