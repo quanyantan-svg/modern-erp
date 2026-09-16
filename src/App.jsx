@@ -3,7 +3,7 @@ import { api, getToken, setToken } from './api.js';
 import { Login, Dashboard, Suppliers, Customers, Products, Orders, Approvals, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
 import { Accounting } from './pages/accounting.jsx';
 import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
-import { Boms, ProductionOrders } from './pages/manufacturing.jsx';
+import { Boms, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
 import { IQCInspections, OQCInspections } from './pages/quality.jsx';
@@ -102,6 +102,8 @@ export const navGroups = [
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'production-orders', label: '生产工单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
+    { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },
+    { key: 'production-receipts', label: '生产入库', icon: ic.purchaseReceipts, any: ['PRODUCTION_RECEIPT_MANAGE'] },
   ]},
   { label: '成本与质量', items: [
     { key: 'product-costs', label: '标准成本', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
@@ -227,6 +229,8 @@ export default function App() {
     'inventory-transactions': <InventoryTransactions user={user} notify={notify}/>,
     boms: <Boms user={user} notify={notify}/>,
     'production-orders': <ProductionOrders user={user} notify={notify}/>,
+    'material-issues': <MaterialIssues user={user} notify={notify}/>,
+    'production-receipts': <ProductionReceipts user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>
   };
   const current = visibleNav.find((item) => item.key === page) || visibleNav[0];

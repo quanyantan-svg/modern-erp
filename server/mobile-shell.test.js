@@ -298,6 +298,7 @@ describe('App.jsx — responsive composition', () => {
       'ALERT_RULES_VIEW', 'ALERT_RULES_MANAGE', 'COST_VIEW', 'COST_MANAGE',
       'CRM_VIEW', 'CRM_MANAGE', 'PROJECT_VIEW', 'PROJECT_MANAGE',
       'WORKFLOW_VIEW', 'WORKFLOW_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE',
+      'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE',
     ];
     const refs = new Set();
     const re = /\b([A-Z][A-Z0-9_]+_(?:VIEW|MANAGE|CREATE|SUBMIT|APPROVE|REJECT|START|COMPLETE))\b/g;
@@ -325,11 +326,13 @@ describe('App.jsx — responsive composition', () => {
 // 6. Role permissions are not changed
 // ---------------------------------------------------------------------------
 describe('Permissions — canonical registry count', () => {
-  test('PERMISSIONS array in server/db.js has 94 entries after M5 inventory adjustment', async () => {
+  test('PERMISSIONS array in server/db.js has 96 entries after M6 manufacturing additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 94, `PERMISSIONS array must have 94 entries (got ${perms.length})`);
+    assert.equal(perms.length, 96, `PERMISSIONS array must have 96 entries (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
   });
 
   test('role-accounting still has 14 permissions (M0 baseline)', () => {

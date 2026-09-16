@@ -53,6 +53,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'blue',
     items: [
       { page: 'production-orders', mobileLabel: '制令单', iconKey: 'productionOrders' },
+      { page: 'material-issues', mobileLabel: '用料出库', iconKey: 'salesDeliveries' },
+      { page: 'production-receipts', mobileLabel: '生产入库', iconKey: 'purchaseReceipts' },
     ],
   },
   {
@@ -94,7 +96,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '请购单', 'MRP', '生产指令', '用料出库', '生产入库',
+  '请购单', 'MRP', '生产指令',
   '库存调整', '库存报废', '库存月结', '应收', '应付', '收款', '付款',
   '采购统计', '采购未交货', '销售统计', '销售未出货',
 ]);

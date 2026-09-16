@@ -352,22 +352,25 @@ export function InventoryTransactions({ user, notify }) {
   const load = () => { const params = new URLSearchParams({ search, type, ...filters }); return api('/api/inventory-transactions?' + params).then((r) => setItems(r.inventoryTransactions || [])).catch((e) => notify(e.message, 'error')); };
   useEffect(() => { Promise.all([api('/api/warehouses'), api('/api/products')]).then(([w, p]) => { setWarehouses(w.warehouses || []); setProducts(p.products || []); }).catch((e) => notify(e.message, 'error')); }, []);
   useEffect(() => { void load(); }, [type, filters.warehouse, filters.product, filters.direction, filters.startDate, filters.endDate]);
-  const typeMap = { 
-    PURCHASE_RECEIPT: "采购入库", 
-    SALES_DELIVERY: "销售出库", 
-    SALES_RETURN: "销售退货", 
-    PURCHASE_RETURN: "采购退货", 
-    INVENTORY_CHECK: "库存盘点", 
-    INVENTORY_TRANSFER: "库存调拨", 
+  const sourcePage = (sourceType) => ({ PRODUCTION_MATERIAL_ISSUE: 'material-issues', PRODUCTION_RECEIPT: 'production-receipts' }[sourceType] || null);
+  const typeMap = {
+    PURCHASE_RECEIPT: "采购入库",
+    SALES_DELIVERY: "销售出库",
+    SALES_RETURN: "销售退货",
+    PURCHASE_RETURN: "采购退货",
+    INVENTORY_CHECK: "库存盘点",
+    INVENTORY_TRANSFER: "库存调拨",
     INVENTORY_ADJUSTMENT: "库存调整",
     PRODUCTION_OUTPUT: "生产完工入库",
-    PRODUCTION_ORDER: "生产领料"
+    PRODUCTION_ORDER: "生产领料",
+    PRODUCTION_MATERIAL_ISSUE: "用料出库",
+    PRODUCTION_RECEIPT: "生产入库"
   };
   return <Panel title="库存流水" subtitle="所有库存变动的明细记录">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部来源</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>
     <div className="toolbar movement-filters"><select value={filters.product} onChange={(e) => setFilters({ ...filters, product: e.target.value })}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={filters.warehouse} onChange={(e) => setFilters({ ...filters, warehouse: e.target.value })}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select><select value={filters.direction} onChange={(e) => setFilters({ ...filters, direction: e.target.value })}><option value="">全部方向</option><option value="IN">IN · 入库</option><option value="OUT">OUT · 出库</option></select><input aria-label="开始日期" type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}/><input aria-label="结束日期" type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}/></div>
     <div className="table-wrap"><table><thead><tr><th>时间</th><th>来源类型</th><th>来源单号</th><th>仓库</th><th>货品</th><th>方向</th><th className="number">数量</th><th className="number">变动后库存</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{item.ref_no || '—'}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{item.quantity_change}</td><td className="number">{item.balance}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{sourcePage(item.tx_type) && item.source_id ? <AppLink page={sourcePage(item.tx_type)} documentId={item.source_id} documentType={item.tx_type}>{item.ref_no}</AppLink> : (item.ref_no || '—')}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{item.quantity_change}</td><td className="number">{item.balance}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有库存流水记录"/>}</div>
   </Panel>;
 }

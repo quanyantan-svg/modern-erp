@@ -25,6 +25,15 @@ import {
 } from './modules/extended.js';
 import { listApprovals } from './modules/approvals.js';
 import {
+  cancelProductionMaterialIssue, cancelProductionReceipt,
+  confirmProductionMaterialIssue, confirmProductionReceipt,
+  createProductionMaterialIssue, createProductionReceipt,
+  getProductionMaterialIssue, getProductionReceipt,
+  listProductionMaterialIssues, listProductionReceipts,
+  prefetchMaterialIssueFromBom,
+  updateProductionMaterialIssue, updateProductionReceipt,
+} from './modules/production-workflow.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -362,6 +371,33 @@ async function handleApi(db, req, res, url) {
   const mOatch = pathname.match(/^\/api\/production-orders\/(.+)$/);
   if (mOatch && req.method === "GET") return getProductionOrder(db, res, actor, mOatch[1]);
   if (mOatch && req.method === "POST") return changeProductionOrderState(db, req, res, actor, mOatch[1]);
+
+  // ============ Production Material Issue (M6) ============
+  if (pathname === "/api/production-material-issues" && req.method === "GET") return listProductionMaterialIssues(db, res, actor, url);
+  if (pathname === "/api/production-material-issues" && req.method === "POST") return createProductionMaterialIssue(db, req, res, actor);
+  if (pathname === "/api/production-material-issues/prefill-from-bom" && req.method === "GET") return prefetchMaterialIssueFromBom(db, res, actor, url);
+  const pmiMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)$/);
+  if (pmiMatch && req.method === "GET") return getProductionMaterialIssue(db, res, actor, pmiMatch[1]);
+  if (pmiMatch && req.method === "PATCH") return updateProductionMaterialIssue(db, req, res, actor, pmiMatch[1]);
+  const pmiActionMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)\/(confirm|cancel)$/);
+  if (pmiActionMatch && req.method === "POST") {
+    return pmiActionMatch[2] === 'confirm'
+      ? confirmProductionMaterialIssue(db, res, actor, pmiActionMatch[1])
+      : cancelProductionMaterialIssue(db, res, actor, pmiActionMatch[1]);
+  }
+
+  // ============ Production Receipt (M6) ============
+  if (pathname === "/api/production-receipts" && req.method === "GET") return listProductionReceipts(db, res, actor, url);
+  if (pathname === "/api/production-receipts" && req.method === "POST") return createProductionReceipt(db, req, res, actor);
+  const prxMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)$/);
+  if (prxMatch && req.method === "GET") return getProductionReceipt(db, res, actor, prxMatch[1]);
+  if (prxMatch && req.method === "PATCH") return updateProductionReceipt(db, req, res, actor, prxMatch[1]);
+  const prxActionMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)\/(confirm|cancel)$/);
+  if (prxActionMatch && req.method === "POST") {
+    return prxActionMatch[2] === 'confirm'
+      ? confirmProductionReceipt(db, res, actor, prxActionMatch[1])
+      : cancelProductionReceipt(db, res, actor, prxActionMatch[1]);
+  }
 
   // ============ Cost Management ============
   if (pathname === '/api/product-costs/products' && req.method === 'GET') return listCostProducts(db, res, actor);

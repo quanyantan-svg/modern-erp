@@ -77,6 +77,7 @@ const EXPECTED_ROLE_PAGES = {
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-transactions', 'production-orders',
+    'material-issues', 'production-receipts',
     'iqc', 'oqc', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'workflows', 'users',
   ],

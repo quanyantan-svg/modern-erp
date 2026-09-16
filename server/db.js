@@ -99,6 +99,9 @@ export const PERMISSIONS = [
   ['FIXED_ASSETS_VIEW', '查看固定资产'],
   ['FIXED_ASSETS_MANAGE', '管理固定资产'],
 
+  ['PRODUCTION_MATERIAL_ISSUE_MANAGE', '管理用料出库'],
+  ['PRODUCTION_RECEIPT_MANAGE', '管理生产入库'],
+
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -289,6 +292,7 @@ export function createDatabase(filename) {
   };
   migrateInventoryTransfers();
   migrateWarehouseLogistics(db);
+  migrateProductionDocuments(db);
 
   return db;
 }
@@ -1536,5 +1540,81 @@ export function transaction(db, work) {
 }
 export function id() {
   return randomUUID();
+}
+
+// M6 Production Workflow — explicit material issue & production receipt
+// documents. Idempotent: every ALTER/INDEX statement is wrapped in
+// CREATE IF NOT EXISTS or try/catch. Re-running createDatabase() on a
+// pre-M6 production DB only adds the new tables and leaves BOM,
+// production_orders, inventory, inventory_transactions untouched.
+//
+// Header/items follow the audit-friendly shape used by the existing
+// logistics modules. Canonical source types in inventory_transactions
+// are PRODUCTION_MATERIAL_ISSUE (OUT) and PRODUCTION_RECEIPT (IN).
+function migrateProductionDocuments(db) {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS production_material_issues (
+        id TEXT PRIMARY KEY,
+        issue_no TEXT NOT NULL UNIQUE,
+        production_order_id TEXT NOT NULL,
+        warehouse_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+        issue_date TEXT NOT NULL DEFAULT '',
+        remark TEXT NOT NULL DEFAULT '',
+        creator_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_by TEXT,
+        confirmed_at TEXT,
+        FOREIGN KEY (production_order_id) REFERENCES production_orders(id),
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+        FOREIGN KEY (creator_id) REFERENCES users(id),
+        FOREIGN KEY (confirmed_by) REFERENCES users(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pmi_status ON production_material_issues(status);
+      CREATE INDEX IF NOT EXISTS idx_pmi_order ON production_material_issues(production_order_id);
+
+      CREATE TABLE IF NOT EXISTS production_material_issue_items (
+        id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        planned_quantity REAL NOT NULL DEFAULT 0,
+        issue_quantity REAL NOT NULL,
+        before_quantity REAL,
+        after_quantity REAL,
+        line_no INTEGER NOT NULL,
+        FOREIGN KEY (issue_id) REFERENCES production_material_issues(id) ON DELETE CASCADE,
+        FOREIGN KEY (product_id) REFERENCES products(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pmi_items_issue ON production_material_issue_items(issue_id);
+
+      CREATE TABLE IF NOT EXISTS production_receipts (
+        id TEXT PRIMARY KEY,
+        receipt_no TEXT NOT NULL UNIQUE,
+        production_order_id TEXT NOT NULL,
+        warehouse_id TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+        receipt_date TEXT NOT NULL DEFAULT '',
+        remark TEXT NOT NULL DEFAULT '',
+        creator_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_by TEXT,
+        confirmed_at TEXT,
+        before_quantity REAL,
+        after_quantity REAL,
+        FOREIGN KEY (production_order_id) REFERENCES production_orders(id),
+        FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+        FOREIGN KEY (creator_id) REFERENCES users(id),
+        FOREIGN KEY (confirmed_by) REFERENCES users(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pr_status ON production_receipts(status);
+      CREATE INDEX IF NOT EXISTS idx_pr_order ON production_receipts(production_order_id);
+    `);
+  } catch (e) {
+    console.error('Migration production documents failed:', e.message);
+  }
 }
 
