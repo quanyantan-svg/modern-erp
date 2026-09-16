@@ -15,6 +15,7 @@ import MobileCrmApplication from './components/MobileCrmApplication.jsx';
 import MobileApprovalCenter from './components/MobileApprovalCenter.jsx';
 import { useMobile } from './hooks/useMediaQuery.js';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
+import { AppLink, AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
 const can = (user, permission) => user?.permissions?.includes(permission);
 
 // Allowed mobile tab keys. `directory` is intentionally absent because
@@ -134,8 +135,32 @@ export default function App() {
   // moving the window between desktop and mobile does not lose state.
   const [mobileTab, setMobileTab] = useState('apps');
   const [mobileApplication, setMobileApplication] = useState(null);
+  const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const isMobile = useMobile();
+  const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p))) : [];
+
+  function canNavigate(pageKey) {
+    return visibleNav.some((item) => item.key === pageKey);
+  }
+
+  function navigateToPage(pageKey, target = null, options = {}) {
+    const authorizedPage = visibleNav.find((item) => item.key === pageKey);
+    if (!authorizedPage) {
+      if (options.notifyDenied !== false) setToast({ message: '没有权限打开该应用', type: 'error' });
+      return false;
+    }
+    setPage(authorizedPage.key);
+    setNavigationTarget(target?.documentId ? { page: authorizedPage.key, ...target } : null);
+    if (options.writeHash !== false && location.hash.slice(1) !== authorizedPage.key) location.hash = authorizedPage.key;
+    if (isMobile === true) {
+      setMobileApplication((current) => current?.page === authorizedPage.key && !target?.documentId
+        ? current
+        : { page: authorizedPage.key, label: authorizedPage.label });
+      setMobileTab('apps');
+    }
+    return true;
+  }
 
   useEffect(() => {
     if (!getToken()) return setChecking(false);
@@ -143,10 +168,14 @@ export default function App() {
   }, []);
   useEffect(() => {
     const unauthorized = () => setUser(null);
-    const hash = () => setPage(location.hash.slice(1) || 'dashboard');
+    const hash = () => navigateToPage(location.hash.slice(1) || 'dashboard', null, { writeHash: false, notifyDenied: false });
     addEventListener('erp:unauthorized', unauthorized); addEventListener('hashchange', hash);
+    if (user && location.hash.slice(1)) hash();
     return () => { removeEventListener('erp:unauthorized', unauthorized); removeEventListener('hashchange', hash); };
-  }, []);
+  }, [user, isMobile]);
+  useEffect(() => {
+    if (user && visibleNav.length && !canNavigate(page)) navigateToPage(visibleNav[0].key, null, { notifyDenied: false });
+  }, [user, page, isMobile]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 3200);
@@ -164,9 +193,6 @@ export default function App() {
   const notify = (message, type = 'success') => setToast({ message, type });
   if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
   if (!user) return <Login onLogin={setUser} notify={notify}/>;
-
-  const visibleNav = navGroups.flatMap((g) => g?.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)));
-  if (!visibleNav.some((item) => item.key === page)) setTimeout(() => location.hash = visibleNav[0]?.key || '', 0);
 
   const pages = {
     dashboard: <Dashboard notify={notify}/>,
@@ -225,12 +251,7 @@ export default function App() {
   }
 
   function handleMobileApplicationSelect(item) {
-    const authorizedPage = visibleNav.find((entry) => entry.key === item.page);
-    if (!authorizedPage) return;
-    setPage(authorizedPage.key);
-    location.hash = authorizedPage.key;
-    setMobileApplication({ ...item, page: authorizedPage.key });
-    setMobileTab('apps');
+    navigateToPage(item.page);
   }
 
   function returnToMobileApplications() {
@@ -324,6 +345,7 @@ export default function App() {
     const tabLabel = MOBILE_TABS.find((t) => t.key === mobileTab)?.label || 'Modern ERP';
     const mobileTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
     return (
+      <AppNavigationProvider value={{ target: navigationTarget, canNavigate, navigateToPage }}>
       <MobileShell
         brand="Modern ERP"
         pageTitle={mobileTitle}
@@ -335,10 +357,11 @@ export default function App() {
         {renderMobileContent()}
         {toast && <div className={`toast ${toast.type}`} data-testid="mobile-toast">{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
       </MobileShell>
+      </AppNavigationProvider>
     );
   }
 
-  return <div className="app-shell">
+  return <div className="app-shell"><AppNavigationProvider value={{ target: navigationTarget, canNavigate, navigateToPage }}>
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业资源计划</span></div></div>
       <nav>{navGroups.map((group, gi) => group === null
@@ -346,10 +369,10 @@ export default function App() {
         : <div key={gi} className="sidebar-group">
             <div className="sidebar-group-label">{group.label}</div>
             {group.items?.map((item) => visibleNav.some((v) => v.key === item.key) &&
-              <a key={item.key} href={`#${item.key}`} className={page === item.key ? 'active' : ''}>
+              <AppLink key={item.key} page={item.key} className={page === item.key ? 'active' : ''}>
                 <span className="nav-icon">{item.icon}</span>{item.label}
                 {item.key === 'approvals' && <span className="nav-dot"/>}
-              </a>
+              </AppLink>
             )}
           </div>
       )}</nav>
@@ -366,5 +389,5 @@ export default function App() {
       <section className="page-content">{pages[current?.key] || pages.dashboard}</section>
     </main>
     {toast && <div className={`toast ${toast.type}`}>{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
-  </div>;
+  </AppNavigationProvider></div>;
 }

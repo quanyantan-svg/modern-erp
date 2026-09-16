@@ -1,3 +1,5 @@
+import { AppLink } from '../navigation/AppNavigationContext.jsx';
+
 const STATE_LABELS = {
   completed: '已完成',
   current: '进行中',
@@ -20,7 +22,7 @@ export default function MobileWorkflowProgress({ stages = [], title = '业务流
         </>;
         return <li key={stage.key || `${stage.label}-${index}`} className={`mobile-workflow__stage is-${state}`} data-state={state}>
           <span className="mobile-workflow__marker" aria-hidden="true">{marker}</span>
-          <div>{stage.href ? <a className="mobile-workflow__link" href={stage.href}>{content}</a> : stage.onOpen ? <button type="button" className="mobile-workflow__link" onClick={() => stage.onOpen(stage)}>{content}</button> : onOpen && stage.documentNo ? <button type="button" className="mobile-workflow__link" onClick={() => onOpen(stage)}>{content}</button> : content}</div>
+          <div>{stage.pageKey ? <AppLink className="mobile-workflow__link" page={stage.pageKey} documentId={stage.documentId} documentType={stage.documentType}>{content}</AppLink> : stage.onOpen ? <button type="button" className="mobile-workflow__link" onClick={() => stage.onOpen(stage)}>{content}</button> : onOpen && stage.documentNo ? <button type="button" className="mobile-workflow__link" onClick={() => onOpen(stage)}>{content}</button> : content}</div>
           <span className="mobile-workflow__state">{stage.stateLabel || STATE_LABELS[state]}</span>
         </li>;
       })}

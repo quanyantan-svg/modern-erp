@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 function LogisticsActions({ existing, onClose, onAction }) {
   return <div className="form-actions full">
@@ -12,15 +13,15 @@ function LogisticsActions({ existing, onClose, onAction }) {
 }
 
 const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
-const relationshipHref = (type) => ({ SALES_ORDER: '#orders', SALES_DELIVERY: '#sales-deliveries', SALES_RETURN: '#returns', PURCHASE_ORDER: '#purchase-orders', PURCHASE_RECEIPT: '#purchase-receipts', PURCHASE_RETURN: '#returns', ACCOUNTING_VOUCHER: '#accounting' }[type]);
+export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVERY: 'sales-deliveries', SALES_RETURN: 'returns', PURCHASE_ORDER: 'purchase-orders', PURCHASE_RECEIPT: 'purchase-receipts', PURCHASE_RETURN: 'returns', ACCOUNTING_VOUCHER: 'accounting' }[type]);
 
-function RelationshipSections({ detail }) {
+export function RelationshipSections({ detail }) {
   const relation = detail.relationships || { upstream: [], downstream: [] };
   const directLabel = detail.delivery_no ? '直接出货（未关联销售订单）' : detail.receipt_no ? '直接入库（未关联采购订单）' : '直接退货 / 补录（未关联来源单）';
   return <>
     <section className="document-relations" data-testid="document-relations"><h4>关联单据</h4>
-      {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <a key={item.id} href={relationshipHref(item.type)}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></a>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>直接业务</small></div>}
-      {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <a key={item.id} href={relationshipHref(item.type)}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></a>)}</div>}
+      {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>直接业务</small></div>}
+      {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div>}
     </section>
     {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{relation.finance.status}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
   </>;
@@ -36,10 +37,11 @@ function ReadOnlyDocument({ detail, onClose, partyName }) {
 }
 
 export function PurchaseReceipts({ user, notify }) {
+  const { target } = useAppNavigation();
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState(null);
+  const [view, setView] = useState(target?.page === 'purchase-receipts' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="采购入库单" subtitle="采购到货入仓记录，与采购订单联动" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增进货单</button>}>
@@ -133,10 +135,11 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
 }
 // SalesDeliveries
 export function SalesDeliveries({ user, notify }) {
+  const { target } = useAppNavigation();
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState(null);
+  const [view, setView] = useState(target?.page === 'sales-deliveries' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
   return <Panel title="销售出库单" subtitle="发货给客户的出库记录，与销售订单联动" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增出库单</button>}>
@@ -226,11 +229,13 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
 }
 // Returns
 export function Returns({ user, notify }) {
-  const [tab, setTab] = useState("sales");
+  const { target } = useAppNavigation();
+  const targetTab = target?.documentType === 'PURCHASE_RETURN' ? 'purchase' : 'sales';
+  const [tab, setTab] = useState(target?.page === 'returns' ? targetTab : "sales");
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState(null);
+  const [view, setView] = useState(target?.page === 'returns' && target.documentId ? { id: target.documentId, tab: targetTab } : null);
   const load = () => {
     const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
     api(apiPath + "?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(tab === "sales" ? r.salesReturns : r.purchaseReturns)).catch((e) => notify(e.message, "error"));

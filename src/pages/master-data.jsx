@@ -2,6 +2,7 @@
 import { api, setToken } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
+import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -49,7 +50,7 @@ export function Dashboard({ notify }) {
   return <>
     <div className="hero-card"><div><span className="pill">今日业务概览</span><h2>从一张清晰的订单开始</h2><p>订单经过保存、提交和审核，每一步都会留下操作记录。销售订单审核后只确认交易，不直接扣减库存。</p></div><div className="hero-amount"><span>已审核订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div></div>
     <div className="stats-grid">{cards.map(([label, value, unit, color]) => <div className={`stat-card ${color}`} key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong><i/></div>)}</div>
-    <Panel title="最近订单" subtitle="按创建时间显示最新五张销售订单" action={<a className="link-button" href="#orders">查看全部 →</a>}>
+    <Panel title="最近订单" subtitle="按创建时间显示最新五张销售订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
       <OrderTable orders={data.recentOrders} compact/>
     </Panel>
   </>;
@@ -140,8 +141,9 @@ function ProductModal({ value, onClose, onSaved, notify }) {
 }
 
 export function Orders({ user, notify }) {
+  const { target } = useAppNavigation();
   const [orders, setOrders] = useState([]); const [search, setSearch] = useState(''); const [status, setStatus] = useState('');
-  const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(null);
+  const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
   async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
@@ -195,7 +197,7 @@ export function Approvals({ notify }) {
   </>;
 }
 
-function orderWorkflowStages(order, trace, kind) {
+export function orderWorkflowStages(order, trace, kind) {
   const isSales = kind === 'sales';
   const logistics = trace?.downstream || [];
   const returns = logistics.flatMap((item) => item.returns || []);
@@ -206,9 +208,9 @@ function orderWorkflowStages(order, trace, kind) {
     { key: 'order', label: isSales ? '销售订单已创建' : '采购订单已创建', state: 'completed', documentNo: order.orderNo },
     { key: 'submit', label: '已提交', state: submitted ? 'completed' : order.status === 'REJECTED' ? 'current' : 'current', hint: submitted ? '' : order.status === 'REJECTED' ? '已驳回，修改后可重新提交' : '待提交' },
     { key: 'approve', label: '审核', state: approved ? 'completed' : submitted ? 'current' : 'pending', hint: submitted && !approved ? '等待审批' : '' },
-    { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, href: logistics.length ? (isSales ? '#sales-deliveries' : '#purchase-receipts') : null, hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `尚未关联${isSales ? '销售出货' : '采购入库'}（来源可选）` },
-    { key: 'return', label: isSales ? '销售退货' : '采购退货', state: returns.length ? 'completed' : 'optional', documentNo: returns[0]?.documentNo, href: returns.length ? '#returns' : null, hint: returns.length ? `已关联 ${returns.length} 张退货单` : '如发生' },
-    { key: 'voucher', label: '财务凭证', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, href: voucher?.documentNo ? '#accounting' : null, hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生财务记录' : '' },
+    { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, documentId: logistics[0]?.id, documentType: logistics[0]?.type, pageKey: logistics.length ? (isSales ? 'sales-deliveries' : 'purchase-receipts') : null, hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `尚未关联${isSales ? '销售出货' : '采购入库'}（来源可选）` },
+    { key: 'return', label: isSales ? '销售退货' : '采购退货', state: returns.length ? 'completed' : 'optional', documentNo: returns[0]?.documentNo, documentId: returns[0]?.id, documentType: returns[0]?.type, pageKey: returns.length ? 'returns' : null, hint: returns.length ? `已关联 ${returns.length} 张退货单` : '如发生' },
+    { key: 'voucher', label: '财务凭证', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, documentId: voucher?.id, documentType: voucher?.type, pageKey: voucher?.documentNo ? 'accounting' : null, hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生财务记录' : '' },
   ];
 }
 
@@ -221,7 +223,7 @@ function OrderDetail({ id, user, onClose, notify }) {
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
     <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'sales')}/>
-    {order.status === 'SUBMITTED' && can(user, 'ORDERS_APPROVE') && <a className="secondary workflow-approval-link" href="#approvals">前往审批</a>}
+    {order.status === 'SUBMITTED' && can(user, 'ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
     <div className="detail-total"><span>订单合计</span><strong>{money(order.totalCents)}</strong></div>
     {order.remark && <p className="remark"><b>备注：</b>{order.remark}</p>}
@@ -257,8 +259,9 @@ function RoleModal({ value, permissions, onClose, onSaved, notify }) {
 
 
 export function PurchaseOrders({ user, notify }) {
+  const { target } = useAppNavigation();
   const [orders, setOrders] = useState([]); const [search, setSearch] = useState(''); const [status, setStatus] = useState('');
-  const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(null);
+  const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'purchase-orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/purchase-orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.purchaseOrders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
   async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
@@ -307,7 +310,7 @@ function PurchaseOrderDetail({ id, user, onClose, notify }) {
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
     <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'purchase')}/>
-    {order.status === 'SUBMITTED' && can(user, 'PURCHASE_ORDERS_APPROVE') && <a className="secondary workflow-approval-link" href="#approvals">前往审批</a>}
+    {order.status === 'SUBMITTED' && can(user, 'PURCHASE_ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
     <div className="detail-total"><span>订单合计</span><strong>{money(order.totalCents)}</strong></div>
     {order.remark && <p className="remark"><b>备注：</b>{order.remark}</p>}
@@ -355,7 +358,7 @@ export function Inventory({ user, notify }) {
   const loadInventory = () => { let url = '/api/inventory'; const params = []; if (searchWh) params.push(`warehouse=${searchWh}`); if (searchPd) params.push(`product=${searchPd}`); if (params.length) url += '?' + params.join('&'); api(url).then((r) => setInventory(r.inventory)).catch((e) => notify(e.message, 'error')); };
   useEffect(() => { void loadInventory(); }, [searchWh, searchPd]);
   return <Panel title="库存管理" subtitle="查询、盘点、调拨企业库存">
-    <div className="inventory-workbench" aria-label="仓储库存"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}><strong>库存查询</strong><small>查看当前库存</small></button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}><strong>库存调拨</strong><small>仓库间移动</small></button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}><strong>库存盘点</strong><small>账实对比</small></button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}><strong>库存调整</strong><small>杂项库存修正</small></button>}<a href="#inventory-transactions"><strong>库存异动</strong><small>全部变动轨迹</small></a></div>
+    <div className="inventory-workbench" aria-label="仓储库存"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}><strong>库存查询</strong><small>查看当前库存</small></button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}><strong>库存调拨</strong><small>仓库间移动</small></button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}><strong>库存盘点</strong><small>账实对比</small></button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}><strong>库存调整</strong><small>杂项库存修正</small></button>}<AppLink page="inventory-transactions"><strong>库存异动</strong><small>全部变动轨迹</small></AppLink></div>
     {tab === 'query' && <><div className="toolbar inventory-filters"><select value={searchPd} onChange={(e) => setSearchPd(e.target.value)}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={searchWh} onChange={(e) => setSearchWh(e.target.value)}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></div>
       <div className="table-wrap"><table><thead><tr><th>仓库</th><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{row.quantity}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty text="没有找到库存记录"/>}</div></>}
     {tab === 'check' && <InventoryChecks user={user} notify={notify} warehouses={warehouses} products={products}/>}
@@ -431,7 +434,7 @@ function InventoryChecks({ user, notify, warehouses, products }) {
   useEffect(() => { void load(); }, []);
   function changeState(check, action) { api(`/api/inventory-checks/${check.id}`, { method: 'PATCH', body: { action } }).then(() => { notify('盘点已提交审批'); load(); }).catch((e) => notify(e.message, 'error')); }
   return <><Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_CHECK_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建盘点单</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>盘点单号</th><th>仓库</th><th>货品</th><th>账面数量</th><th>实盘数量</th><th>差异数量</th><th>状态</th><th>制单人</th><th>时间</th><th/></tr></thead><tbody>{checks.map((c) => <tr key={c.id}><td className="mono">{c.check_no}</td><td>{c.warehouseName}</td><td>{c.productCode} {c.productName}</td><td className="number">{c.system_quantity}</td><td className="number">{c.actual_quantity}</td><td className={`number ${c.difference > 0 ? 'positive' : c.difference < 0 ? 'negative' : ''}`}>{c.difference > 0 ? '+' : ''}{c.difference}</td><td><Status status={c.status} label={c.statusLabel}/></td><td>{c.creatorName}</td><td className="dim">{dateTime(c.created_at)}</td><td>{c.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <><button className="row-action" onClick={() => setEditing(c)}>编辑</button><button className="approve-button" onClick={() => changeState(c, 'SUBMIT')}>提交审批</button></>}{c.status === 'SUBMITTED' && can(user, 'INVENTORY_CHECK_APPROVE') && <a className="row-action strong" href="#approvals">前往审批中心</a>}{c.status === 'SUBMITTED' && !can(user, 'INVENTORY_CHECK_APPROVE') && <span className="dim">等待审批</span>}</td></tr>)}</tbody></table>{!checks.length && <Empty text="没有盘点记录"/>}</div>
+    <div className="table-wrap"><table><thead><tr><th>盘点单号</th><th>仓库</th><th>货品</th><th>账面数量</th><th>实盘数量</th><th>差异数量</th><th>状态</th><th>制单人</th><th>时间</th><th/></tr></thead><tbody>{checks.map((c) => <tr key={c.id}><td className="mono">{c.check_no}</td><td>{c.warehouseName}</td><td>{c.productCode} {c.productName}</td><td className="number">{c.system_quantity}</td><td className="number">{c.actual_quantity}</td><td className={`number ${c.difference > 0 ? 'positive' : c.difference < 0 ? 'negative' : ''}`}>{c.difference > 0 ? '+' : ''}{c.difference}</td><td><Status status={c.status} label={c.statusLabel}/></td><td>{c.creatorName}</td><td className="dim">{dateTime(c.created_at)}</td><td>{c.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <><button className="row-action" onClick={() => setEditing(c)}>编辑</button><button className="approve-button" onClick={() => changeState(c, 'SUBMIT')}>提交审批</button></>}{c.status === 'SUBMITTED' && can(user, 'INVENTORY_CHECK_APPROVE') && <AppLink className="row-action strong" page="approvals">前往审批中心</AppLink>}{c.status === 'SUBMITTED' && !can(user, 'INVENTORY_CHECK_APPROVE') && <span className="dim">等待审批</span>}</td></tr>)}</tbody></table>{!checks.length && <Empty text="没有盘点记录"/>}</div>
     {editing && <InventoryCheckModal value={editing} warehouses={warehouses} products={products} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('盘点单已保存'); }} notify={notify}/>}
   </>;
 }
