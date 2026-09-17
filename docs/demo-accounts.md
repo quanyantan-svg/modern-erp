@@ -1,6 +1,6 @@
 # Modern ERP — Demo / Test Account Guide (Teacher-Facing)
 
-> Status: Post-v1.0.0 Teacher Acceptance — Business Document Integrity Stabilization. 教师可见功能以当前 `src/App.jsx` 与 `server/db.js` 为准；AR/AP/收付款已明确延后，不再作为演示页面。
+> Status: M9 Final ERP Polish（2026-09-17）。主演示路线、当前模块边界和五角色速查以 [`09-demo-business-flow.md`](./09-demo-business-flow.md) 为准；本文件保留更细的账号权限说明。应收、应付、收款、付款和对账现已进入受支持演示范围。
 
 ---
 
@@ -28,11 +28,11 @@ The system ships exactly **five (5) seeded roles** in `server/db.js → seedSche
 
 **Role purpose**: Full single-tenant administrator. Owns user / role management, period management, master-data maintenance, and serves as the independent approver for vouchers and purchase orders when no separate approver role exists.
 
-**Permission registry** — all 93 permissions are registered in `server/db.js → PERMISSIONS`; the role sections below list each account's grants:
+**Permission registry** — all 100 permissions are registered in `server/db.js → PERMISSIONS`; the role sections below list each account's grants:
 
 Every permission code registered in the system is granted to `role-admin` via `'role-admin': all`. The inventory family includes `INVENTORY_VIEW`, `INVENTORY_CHECK_CREATE`, **`INVENTORY_CHECK_APPROVE`**, `INVENTORY_TRANSFER_CREATE`, and `INVENTORY_TRANSFER_APPROVE`. Stocktake approval is intentionally not granted to creator roles.
 
-**Main accessible modules** (sidebar / `src/App.jsx navGroups`): 工作台, 销售订单, 订单审核, 采购订单, 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出库, 退货管理, 库存流水, **会计凭证** (full: 凭证 / 报表 / 会计期间), 现金日记账, 银行账户, 票据管理, 固定资产, BOM清单, 生产工单, 标准成本, 费用项目, IQC来料检验, OQC出货检验, 项目立项, 任务管理, 工时记录, 联系人管理, 客户跟进, 销售活动, 通知中心, 审批流, **用户与角色**. AR/AP/收付款不在当前演示导航中。
+**Main accessible modules** (sidebar / `src/App.jsx navGroups`): 业务总览, 工作台, 销售订单, 订单审批, 采购订单, 供应商, 客户, 货品, 仓库, 库存查询, 采购入库, 销售出货, 退货管理, 库存异动, **会计凭证** (full: 凭证 / 报表 / 会计期间), 应收、应付、收款、付款、对账, 现金日记账, 银行账户, 票据管理, 固定资产, BOM清单, 制令单, 标准成本, 费用项目, IQC来料检验, OQC出货检验, 项目立项, 任务管理, 工时记录, 联系人管理, 客户跟进, 销售活动, 通知中心, 审批流, **用户与角色**.
 
 **Main operations**:
 - Create / edit / disable users (`POST /api/users`, `PATCH /api/users/:id`, gated by `USERS_MANAGE`)

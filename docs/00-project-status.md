@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-16 (M7 Decision Reports)
+> 更新：2026-09-17 (M9 Final ERP Polish)
 
 ## 阶段与分支
 
@@ -11,6 +11,24 @@
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M9 — Final ERP Polish
+
+- 新增权限感知的“业务总览”，仅使用已经实现的销售、采购、库存、生产、财务与报表页面；授权节点使用 canonical `AppLink`，未授权节点只作流程说明，延期能力不提供活动链接；
+- 移动端继续以“应用”为默认页，新增“业务导航”卡片；应收、收款、应付、付款从“基础资料”归位到“财务管理”；空应用组仍自动隐藏；
+- Desktop Dashboard 增加角色相关快捷入口和指标过滤；`/api/inventory/alerts` 仅在用户持有 `INVENTORY_VIEW` 时请求，财务角色不再产生页面加载 403；
+- 教师可见术语统一为“审批、销售出货、采购入库、库存异动、制令单、用料出库、生产入库、应收账款、应付账款、收款单、付款单”；后端 permission、API、数据库标识均未改名；
+- 五个演示角色保持不变，权限注册数保持 100；没有新增角色、权限、业务表或迁移；
+- 本地演示数据继续由现有开发种子提供，生产环境 `NODE_ENV=production + ERP_SEED_DEMO=false` 明确禁止自动演示种子；不增加危险的数据重置工具；
+- 教师演示流程见 `docs/09-demo-business-flow.md`；Focused 118 tests / 21 suites、Full 1014 tests / 198 suites 均 0 failed，`pnpm build` 与 whitespace check 通过；Microsoft Edge 153 在 375×667、414×896、1024×768 完成五角色、业务总览、代表业务页和财务工作台验收，运行时异常及意外 400/403/404/500 均为 0；无 tag、push、deploy。
+
+### M8 — AR/AP Settlement
+
+- 已确认销售出货/退货形成应收及贷项，已确认采购入库/退货形成应付及借项；历史确认单据启动时幂等补账；
+- 收款单、付款单支持草稿、取消、原子确认、单笔/多笔分配、部分结清与全额结清；禁止零/负金额、跨往来单位和超额核销；
+- 确认结算在单一事务中更新子账、分配、凭证和审计；关闭期间整体拒绝且零副作用；金额继续使用整数分；
+- 新增 `AR_VIEW`、`COLLECTION_MANAGE`、`AP_VIEW`、`PAYMENT_MANAGE`，权限总数为 100；仅 admin 与 accounting 获得财务结算能力；
+- `pnpm test`：1004 tests / 196 suites / 0 failed；构建、真实 Edge 375/414/1024 验收及 Git hygiene 均通过；M8 最终提交为 `dcab276`；无 tag、push、deploy。
 
 ### M7 — Decision Reports
 
