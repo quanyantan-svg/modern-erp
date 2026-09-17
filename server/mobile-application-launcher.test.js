@@ -79,7 +79,7 @@ function applicationPagesFor(roleId) {
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
-    'customers', 'suppliers', 'products', 'warehouses', 'boms',
+    'customers', 'suppliers', 'products', 'warehouses', 'boms', 'product-routings',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-transactions', 'production-orders',

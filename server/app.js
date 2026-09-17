@@ -45,6 +45,11 @@ import {
   updateProductionMaterialIssue, updateProductionReceipt,
 } from './modules/production-workflow.js';
 import {
+  changeProductRoutingStatus, createProductRouting, createProductRoutingOperation,
+  deleteProductRoutingOperation, getProductRouting, listProductRoutings,
+  updateProductRouting, updateProductRoutingOperation,
+} from './modules/product-routing.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -382,6 +387,20 @@ async function handleApi(db, req, res, url) {
   if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
 
 
+
+  // ============ Product Routings ============
+  if (pathname === '/api/product-routings' && req.method === 'GET') return listProductRoutings(db, res, actor, url);
+  if (pathname === '/api/product-routings' && req.method === 'POST') return createProductRouting(db, req, res, actor);
+  const productRoutingAction = pathname.match(/^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/);
+  if (productRoutingAction && req.method === 'POST') return changeProductRoutingStatus(db, req, res, actor, productRoutingAction[1], productRoutingAction[2]);
+  const productRoutingOperation = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/);
+  if (productRoutingOperation && req.method === 'PATCH') return updateProductRoutingOperation(db, req, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
+  if (productRoutingOperation && req.method === 'DELETE') return deleteProductRoutingOperation(db, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
+  const productRoutingOperations = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations$/);
+  if (productRoutingOperations && req.method === 'POST') return createProductRoutingOperation(db, req, res, actor, productRoutingOperations[1]);
+  const productRoutingMatch = pathname.match(/^\/api\/product-routings\/([^/]+)$/);
+  if (productRoutingMatch && req.method === 'GET') return getProductRouting(db, res, actor, productRoutingMatch[1]);
+  if (productRoutingMatch && req.method === 'PATCH') return updateProductRouting(db, req, res, actor, productRoutingMatch[1]);
 
   // ============ BOM ============
   if (pathname === "/api/boms" && req.method === "GET") return listBoms(db, res, actor, url);
@@ -3605,7 +3624,16 @@ async function createProductionOrder(db, req, res, actor) {
 
 function getProductionOrder(db, res, actor, poId) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
-  const order = db.prepare('SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE po.id=?').get(poId);
+  const order = db.prepare(`SELECT po.*, p.code productCode, p.name productName, b.version bomVersion,
+    creator.display_name creatorName, routing.id activeRoutingId,
+    routing.routing_code activeRoutingCode, routing.routing_name activeRoutingName,
+    routing.version activeRoutingVersion
+    FROM production_orders po
+    JOIN products p ON p.id=po.product_id
+    LEFT JOIN boms b ON b.id=po.bom_id
+    JOIN users creator ON creator.id=po.creator_id
+    LEFT JOIN product_routings routing ON routing.product_id=po.product_id AND routing.status='ACTIVE'
+    WHERE po.id=?`).get(poId);
   if (!order) throw new HttpError(404, '生产工单不存在');
   order.items = db.prepare('SELECT poi.*, p.code productCode, p.name productName, p.unit, p.stock_quantity availableStock FROM production_order_items poi JOIN products p ON p.id=poi.product_id WHERE poi.order_id=? ORDER BY poi.line_no').all(poId);
   order.outputs = db.prepare('SELECT * FROM production_outputs WHERE order_id=? ORDER BY created_at DESC').all(poId);

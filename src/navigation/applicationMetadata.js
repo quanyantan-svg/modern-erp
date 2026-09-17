@@ -24,6 +24,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'products', mobileLabel: '货品', iconKey: 'products' },
       { page: 'warehouses', mobileLabel: '仓库', iconKey: 'warehouses' },
       { page: 'boms', mobileLabel: 'BOM', iconKey: 'boms' },
+      { page: 'product-routings', mobileLabel: '制品工序标准', iconKey: 'routings' },
     ],
   },
   {

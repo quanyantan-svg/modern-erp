@@ -33,9 +33,9 @@ export const BUSINESS_FLOWS = [
   {
     key: 'production',
     title: '生产链',
-    description: 'BOM 定义用料，制令单串联领料、成品入库与完工。',
+    description: 'BOM 定义用料，制品工序标准定义加工顺序，制令单串联领料、成品入库与完工。',
     nodes: [
-      ['BOM', 'boms'], ['制令单', 'production-orders'], ['开工', 'production-orders'],
+      ['BOM', 'boms'], ['制品工序标准', 'product-routings'], ['制令单', 'production-orders'], ['开工', 'production-orders'],
       ['用料出库', 'material-issues'], ['生产入库', 'production-receipts'], ['完工', 'production-orders'],
     ],
   },

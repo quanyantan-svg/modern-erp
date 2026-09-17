@@ -1,16 +1,27 @@
 # 项目状态快照
 
-> 更新：2026-09-17 (M9 Final ERP Polish)
+> 更新：2026-09-18 (M10 Product Routing Standard)
 
 ## 阶段与分支
 
-- 阶段：Cloud Refactor Phase 2(Final Acceptance 完成)
-- 分支：refactor/cloud-deployment
-- 基准提交：a2e1f7e (docs: establish cloud refactor documentation)
+- 阶段：v1.1 Expansion — M10 Product Routing Standard
+- 分支：feature/v1.1-routing
+- 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M10 — Product Routing Standard / 制品工序标准
+
+- 新增产品级路线主数据：`product_routings` 保存产品、路线编码/名称、版本、启停状态与备注；`product_routing_operations` 保存确定性的正整数顺序号、工序编码/名称、简单工作中心文本、准备时间与单位运行时间；
+- 路线与 BOM 是产品下的同级主数据，不嵌入 BOM，也不改变 BOM 语义；旧 `routing_operations`（BOM-bound API-only）保留为兼容面，并在启动时一次性、幂等迁移为停用历史路线；
+- 每个产品最多一条 `ACTIVE` 路线，旧产品允许没有路线；工序始终按 `sequence_no` 排序，重复顺序、负工时、缺失产品/名称与非法编码由后端拒绝；
+- 复用既有 `ROUTING_VIEW` / `ROUTING_MANAGE` 双权限，注册权限仍为 100；五角色中仅 `test_admin` 可见和管理，sales/reviewer/warehouse/accounting 均无路线权限；
+- 新增完整 REST API、基础资料桌面入口与移动应用卡片，支持搜索、产品/状态筛选、详情、增删改工序、顺序号重排、启用/停用；货品页、制令单详情和业务总览均使用 canonical SPA 导航关联；
+- 路线是规划主数据：库存影响 = NONE，会计影响 = NONE，审批中心影响 = NONE；未实现 MRP、工序级执行、报工、设备、产能或工序成本；
+- Focused：13 tests / 4 suites / PASS；Full：1027 tests / 202 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
+- Real Edge 153：375×667、414×896、1024×768 均完成列表/详情/编辑/排序/启停验收，无页面横向溢出；console error = 0，unexpected 400/403/404/500 = 0；使用隔离 DB，未修改生产数据；无 tag、push、deploy。
 
 ### M9 — Final ERP Polish
 

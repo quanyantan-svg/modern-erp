@@ -219,7 +219,7 @@ function ProductionWorkflowTrace({ detail, materialIssues, productionReceipts })
   const issuedCount = materialIssues.filter((mi) => mi.status === 'CONFIRMED').length;
   const receivedCount = productionReceipts.filter((pr) => pr.status === 'CONFIRMED').length;
   const stages = [
-    { key: 'bom', label: bomReady ? `BOM ${detail.bomVersion || ''}` : 'BOM', state: bomReady ? 'completed' : 'optional', hint: bomReady ? `已关联 BOM v${detail.bomVersion}` : '尚未关联 BOM', documentType: null },
+    { key: 'master', label: 'BOM / 制品工序标准', state: bomReady || detail?.activeRoutingId ? 'completed' : 'optional', hint: [bomReady ? `BOM v${detail.bomVersion}` : '', detail?.activeRoutingCode ? `工序 ${detail.activeRoutingCode}` : ''].filter(Boolean).join(' · ') || '均可独立维护', documentType: null },
     { key: 'order', label: '制令单', state: orderCreated ? 'completed' : 'pending', hint: detail?.order_no, documentType: null },
     { key: 'start', label: '已开工', state: orderStarted ? 'completed' : 'pending', hint: orderStarted ? (detail?.actual_start || '') : '待开工', documentType: null },
     { key: 'issue', label: '用料出库', state: issuedCount ? 'completed' : orderStarted ? 'current' : 'pending', hint: issuedCount ? `已出库 ${issuedCount} 单` : '待出库', documentType: 'materialIssue', pageKey: 'material-issues' },
@@ -358,6 +358,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
         <label>实际开工<span>{detail.actual_start || '-'}</span></label>
         <label>实际完工<span>{detail.actual_finish || '-'}</span></label>
         <label>BOM<span>{detail.bom_id ? `v${detail.bomVersion || ''}` : '未关联'}</span></label>
+        <label>工序标准<span>{detail.activeRoutingId ? <AppLink page="product-routings" documentId={detail.activeRoutingId} documentType="productRouting" className="link-button">{detail.activeRoutingCode} · {detail.activeRoutingName}</AppLink> : '无启用路线'}</span></label>
         <label>创建人<span>{detail.creatorName}</span></label>
       </div>
       <div className="form-section-head" style={{marginTop:'1rem'}}>生产流程</div>

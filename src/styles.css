@@ -1855,3 +1855,43 @@ tfoot td {
   .business-flow__node { width:100%; min-width:0; }
   .business-flow__arrow { transform:rotate(90deg); justify-self:center; line-height:1; }
 }
+
+/* M10 product routing master data */
+.routing-filters { display:flex; gap:8px; flex-wrap:wrap; }
+.routing-list-mobile { display:none; }
+.routing-summary-card { width:100%; border:1px solid var(--border-default); border-radius:var(--r-md); background:var(--bg-surface); padding:14px; color:var(--text-primary); text-align:left; display:grid; gap:7px; }
+.routing-summary-card__head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+.routing-summary-card small { color:var(--text-secondary); line-height:1.5; }
+.routing-editor { min-width:0; }
+.routing-operation-editor { display:grid; grid-template-columns:58px minmax(0,1fr) auto; align-items:start; gap:12px; padding:14px 0; border-top:1px solid var(--border-subtle); }
+.routing-operation-editor__sequence,
+.routing-operation-card__sequence { width:48px; height:48px; border-radius:14px; display:grid; place-items:center; background:var(--accent-soft); color:var(--accent); font-weight:700; font-family:var(--font-mono); }
+.routing-operation-editor__fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; min-width:0; }
+.routing-operation-editor__fields label.full { grid-column:1/-1; }
+.routing-detail-heading { margin-top:20px; }
+.routing-operation-flow { display:grid; gap:0; }
+.routing-operation-step { display:grid; justify-items:center; width:100%; }
+.routing-operation-card { width:100%; border:1px solid var(--border-default); border-radius:var(--r-md); padding:14px; display:grid; grid-template-columns:58px minmax(150px,1fr) minmax(260px,2fr); align-items:center; gap:12px; background:var(--bg-surface); }
+.routing-operation-card strong, .routing-operation-card small { display:block; }
+.routing-operation-card small { margin-top:4px; color:var(--text-secondary); }
+.routing-operation-card dl { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:0; }
+.routing-operation-card dl div { min-width:0; }
+.routing-operation-card dt { color:var(--text-tertiary); font-size:11px; }
+.routing-operation-card dd { margin:4px 0 0; overflow-wrap:anywhere; }
+.routing-operation-card p { grid-column:2/-1; margin:0; color:var(--text-secondary); font-size:12px; }
+.routing-operation-arrow { color:var(--accent); font-size:20px; line-height:28px; }
+
+@media (max-width: 767.98px) {
+  .routing-list-desktop { display:none; }
+  .routing-list-mobile { display:grid; gap:10px; }
+  .routing-filters { width:100%; }
+  .routing-filters select { flex:1 1 140px; min-width:0; }
+  .routing-operation-editor { grid-template-columns:44px minmax(0,1fr); }
+  .routing-operation-editor__sequence, .routing-operation-card__sequence { width:40px; height:40px; border-radius:12px; }
+  .routing-operation-editor > .danger-text { grid-column:2; justify-self:start; }
+  .routing-operation-editor__fields { grid-template-columns:1fr; }
+  .routing-operation-editor__fields label.full { grid-column:auto; }
+  .routing-operation-card { grid-template-columns:44px minmax(0,1fr); align-items:start; }
+  .routing-operation-card dl { grid-column:1/-1; grid-template-columns:1fr; border-top:1px solid var(--border-subtle); padding-top:10px; }
+  .routing-operation-card p { grid-column:1/-1; }
+}

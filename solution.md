@@ -122,7 +122,7 @@ Node.js API 路由与后端权限校验
 | 库存物流 | `inventory`、`inventory_transactions`、入出库与退货相关表 |
 | 财务 | `accounting_subjects`、`accounting_vouchers`、`accounting_entries`、应收应付相关表 |
 | 辅助核算 | `departments`、`aux_projects`、`currencies`、`voucher_words` |
-| 生产 | `boms`、`production_orders`、`mrp_plans`、`work_centers`、`routing_operations` |
+| 生产 | `boms`、`product_routings`、`product_routing_operations`、`production_orders`、`mrp_plans`；旧 `work_centers` / `routing_operations` 保留兼容 |
 | 质量 | `iqc_inspections`、`oqc_inspections`、`supplier_evaluations` |
 | 管理扩展 | `contacts`、`projects`、`project_tasks`、`notifications`、OA 与预警相关表 |
 | 审计 | `audit_logs` |
@@ -920,6 +920,18 @@ Production Order Core 保留历史状态机：`PENDING → IN_PROGRESS → COMPL
 MRP canonical contract：`/api/mrp-plans/generate` 输入为 `plan_id + demand_type=SALES_ORDER + demand_source_id`；需求来源为销售订单明细；BOM 来源为最新 `ACTIVE` BOM 并递归展开，`DISCONTINUED` BOM 不参与；当前库存来源为 `inventory` 按产品汇总；在途来源为 `purchase_receipts` header 与 `purchase_receipt_items` 明细 join 后按 `pri.product_id` 汇总；输出写入 `mrp_plan_items.gross_requirement/on_hand/scheduled_receipt/planned_order_quantity`。生成过程在事务中删除同计划旧明细并重建，避免旧结果叠加。
 
 Routing list 不再引用不存在的 `b.bom_code`，改返回 BOM version 与产品 code/name。Production Output 不注册 `PRODUCTION_OUTPUT`，且 `/api/production-outputs` 不再 routed；当前 unsafe handler 留作内部 deferred 代码，不进入公开 mutation surface。Production Cost 仍未路由/未接 UI，继续延后，不修改 Standard Cost / Cost Rate 合同。
+
+### 7.20 Product Routing Standard（M10 / v1.1）
+
+`product_routings` 是产品级路线头，字段包含产品、路线编码/名称、版本、`ACTIVE/INACTIVE`、备注及创建/更新时间；SQLite partial unique index 保证同一产品最多一条 `ACTIVE` 路线。产品没有路线仍然合法。
+
+`product_routing_operations` 是路线工序明细，`sequence_no` 必须是正整数且路线内唯一，查询始终显式按 `sequence_no` 排序。工序保存编码、名称、简单工作中心文本、非负准备时间和非负单位运行时间；这些时间仅供规划，不生成成本或执行记录。
+
+旧 `routing_operations` 以 BOM 为父级并强制引用 `work_centers`，与产品级路线头不兼容，因此被归类为 `LEGACY / HIDDEN`。启动迁移按旧 BOM 分组生成停用历史 `product_routings`，并将旧工时和工作中心名称复制到新明细；旧表继续保留以维持 v1.0 API 与 `production_labor_records` 外键。迁移使用确定性 ID 和 `INSERT OR IGNORE`，重复启动不重复数据。
+
+公开 API 使用 `/api/product-routings`，覆盖列表/详情/创建/修改、启用/停用和工序增删改；读取需要 `ROUTING_VIEW` 或 `ROUTING_MANAGE`，写入需要 `ROUTING_MANAGE`。现有五角色中 admin 通过 all-permissions 获得全部能力，其他四角色不获授权，注册权限数保持 100。
+
+制品工序标准与 BOM 是同级主数据。它不修改库存、不生成会计凭证、不进入 Approval Center，也不改变 `PENDING → IN_PROGRESS → COMPLETED / CANCELLED` 的制令单状态机。制令单详情仅只读显示产品当前启用路线；工序级执行、报工、设备、产能和成本均延期。
 
 ## 8. API 设计约定
 
