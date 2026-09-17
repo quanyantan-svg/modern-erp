@@ -7,14 +7,18 @@
 
 export const MOBILE_APPLICATION_GROUPS = Object.freeze([
   {
+    key: 'overview',
+    label: '业务导航',
+    accent: 'blue',
+    items: [
+      { page: 'business-overview', mobileLabel: '业务总览', iconKey: 'overview' },
+    ],
+  },
+  {
     key: 'master-data',
     label: '基础资料',
     accent: 'slate',
     items: [
-      { page: 'accounts-receivable', mobileLabel: '应收账款', iconKey: 'accounting' },
-      { page: 'payment-collections', mobileLabel: '收款单', iconKey: 'cashJournals' },
-      { page: 'accounts-payable', mobileLabel: '应付账款', iconKey: 'accounting' },
-      { page: 'payment-disbursements', mobileLabel: '付款单', iconKey: 'bankAccounts' },
       { page: 'customers', mobileLabel: '客户', iconKey: 'customers' },
       { page: 'suppliers', mobileLabel: '供应商', iconKey: 'suppliers' },
       { page: 'products', mobileLabel: '货品', iconKey: 'products' },
@@ -75,6 +79,10 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     label: '财务管理',
     accent: 'slate',
     items: [
+      { page: 'accounts-receivable', mobileLabel: '应收账款', iconKey: 'accounting' },
+      { page: 'payment-collections', mobileLabel: '收款单', iconKey: 'cashJournals' },
+      { page: 'accounts-payable', mobileLabel: '应付账款', iconKey: 'accounting' },
+      { page: 'payment-disbursements', mobileLabel: '付款单', iconKey: 'bankAccounts' },
       { page: 'accounting', mobileLabel: '会计凭证 / 财务报表', iconKey: 'accounting' },
       { page: 'cash-journals', mobileLabel: '现金日记账', iconKey: 'cashJournals' },
       { page: 'bank-accounts', mobileLabel: '银行账户', iconKey: 'bankAccounts' },
@@ -106,8 +114,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '请购单', 'MRP', '生产指令',
-  '库存调整', '库存报废', '库存月结',
+  '计划预测', 'MRP 执行', '请购单', '采购指令',
+  '库存报废', '库存月结', '销售折让', '采购折让',
 ]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {

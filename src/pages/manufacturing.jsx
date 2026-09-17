@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -283,11 +283,11 @@ export function ProductionOrders({ user, notify }) {
       setView({ id: target.documentId });
     }
   }, [target]);
-  return <Panel title="生产工单" subtitle="生产任务排程与跟踪" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建工单</button>}>
+  return <Panel title="制令单" subtitle="生产任务排程与跟踪" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建制令单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索工单号或产品" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="PENDING">待生产</option><option value="IN_PROGRESS">生产中</option><option value="COMPLETED">已完成</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>工单号</th><th>产品</th><th className="number">数量</th><th>计划开始</th><th>状态</th><th>完工</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{item.quantity}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={PO_STATUS_LABELS[item.status] || item.statusLabel}/></td><td className="number">{item.totalOutput || 0}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有生产工单"/>}</div>
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={PO_STATUS_LABELS[item.status] || item.statusLabel}/></td><td className="number">{quantity(item.totalOutput)}</td></tr>)}
+    </tbody></table>{!items.length && <Empty text="没有制令单"/>}</div>
     {view && <ProductionOrderModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
 }
@@ -346,13 +346,13 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       refreshDetail();
     } catch (e) { notify(e.message, 'error'); }
   };
-  return <Modal title={value.id ? '生产工单详情' : '新建生产工单'} onClose={onClose} wide>
+  return <Modal title={value.id ? '制令单详情' : '新建制令单'} onClose={onClose} wide>
     {value.id && detail ? <>
       <div className="form-grid">
         <label>工单号<span className="mono">{detail.order_no}</span></label>
         <label>状态<Status status={detail.status?.toLowerCase()} label={PO_STATUS_LABELS[detail.status] || detail.statusLabel}/></label>
         <label>产品<span>{detail.productName}</span></label>
-        <label>计划数量<span>{detail.quantity}</span></label>
+        <label>计划数量<span>{quantity(detail.quantity)}</span></label>
         <label>计划开始<span>{detail.planned_start || '-'}</span></label>
         <label>计划完工<span>{detail.planned_finish || '-'}</span></label>
         <label>实际开工<span>{detail.actual_start || '-'}</span></label>
@@ -365,7 +365,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       <LinkedDocuments materialIssues={materialIssues} productionReceipts={productionReceipts} />
       <div className="form-section-head" style={{marginTop:'1rem'}}>物料清单</div>
       <table className="line-table"><thead><tr><th>物料</th><th className="number">需求数量</th><th className="number">已消耗</th></tr></thead><tbody>
-        {(detail.items || []).map((item) => <tr key={item.id}><td>{item.productName}</td><td className="number">{item.quantity.toFixed(3)}</td><td className="number">{item.consumed_quantity.toFixed(3)}</td></tr>)}
+        {(detail.items || []).map((item) => <tr key={item.id}><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td className="number">{quantity(item.consumed_quantity)}</td></tr>)}
       </tbody>
       {!detail.items?.length && <tbody><tr><td colSpan="3" style={{textAlign:'center',color:'#999'}}>无配料记录</td></tr></tbody>}
       </table>
@@ -583,7 +583,7 @@ export function ProductionReceipts({ user, notify }) {
         <td className="mono">{item.productionOrderNo}</td>
         <td>{item.productCode} - {item.productName}</td>
         <td>{item.warehouseName}</td>
-        <td className="number">{Number(item.quantity).toFixed(3)}</td>
+        <td className="number">{quantity(item.quantity)}</td>
         <td>{item.receiptDate || '-'}</td>
         <td><Status status={item.status?.toLowerCase()} label={RECEIPT_STATUS_LABELS[item.status] || item.statusLabel}/></td>
       </tr>)}
@@ -653,7 +653,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         <label>制令单<span className="mono">{detail.productionOrderNo}</span></label>
         <label>制品<span>{detail.productCode} - {detail.productName}</span></label>
         <label>计划数量<span>{Number(detail.plannedQuantity || 0).toFixed(3)}</span></label>
-        <label>本次入库<span>{Number(detail.quantity).toFixed(3)}</span></label>
+        <label>本次入库<span>{quantity(detail.quantity)}</span></label>
         <label>累计入库<span>{Number(detail.cumulativeReceived || 0).toFixed(3)}</span></label>
         <label>仓库<span>{detail.warehouseName}</span></label>
         <label>入库前库存<span>{detail.beforeQuantity == null ? '-' : Number(detail.beforeQuantity).toFixed(3)}</span></label>

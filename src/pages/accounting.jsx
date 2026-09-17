@@ -27,7 +27,7 @@ function voucherSourceLabel(type) {
 
 const VOUCHER_STATUS_LABELS = {
   ENTERED: '已录入',
-  SUBMITTED: '待审核',
+  SUBMITTED: '待审批',
   POSTED: '已过账',
   REJECTED: '已驳回',
 };
@@ -881,7 +881,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
   async function approve() {
     try {
       await api(`/api/accounting-vouchers/${value.id}/approve`, { method: 'POST', body: {} });
-      notify('凭证已审核通过');
+      notify('凭证已审批通过');
       onChanged();
     } catch (e) { notify(e.message, 'error'); }
   }
@@ -926,7 +926,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
     </div>}
     {!rejecting && (canSubmit || canResubmit || canApprove || editable || deletable) && <div className="form-actions full" style={{ marginTop: 12 }}>
       {(canSubmit || canResubmit) && <button type="button" className="primary" onClick={submit}>{canResubmit ? '重新提交' : '提交'}</button>}
-      {canApprove && <button type="button" className="primary" onClick={approve}>审核通过</button>}
+      {canApprove && <button type="button" className="primary" onClick={approve}>审批通过</button>}
       {canApprove && <button type="button" className="danger-button" onClick={() => setRejecting(true)}>驳回</button>}
       {editable && <button type="button" className="secondary" onClick={() => onEdit?.(value)}>编辑</button>}
       {deletable && <button type="button" className="danger-button" onClick={remove}>删除</button>}

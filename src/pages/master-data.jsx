@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
@@ -33,6 +33,7 @@ export function Login({ onLogin, notify }) {
 }
 
 export function Dashboard({ user, notify }) {
+  const navigation = useAppNavigation();
   const [data, setData] = useState(null);
   useEffect(() => { 
     Promise.all([
@@ -44,15 +45,23 @@ export function Dashboard({ user, notify }) {
   }, []);
   if (!data) return <Loading/>;
   const cards = [
-    ['客户总数', data.customerCount, '家', 'teal'], ['在售货品', data.productCount, '项', 'blue'],
-    ['销售订单', data.orderCount, '张', 'orange'], ['待我审核', data.pendingCount, '张', 'purple']
-  ];
+    can(user, 'CUSTOMERS_VIEW') && ['客户总数', data.customerCount, '家', 'teal'],
+    can(user, 'PRODUCTS_VIEW') && ['在售货品', data.productCount, '项', 'blue'],
+    can(user, 'ORDERS_VIEW') && ['销售订单', data.orderCount, '张', 'orange'],
+    can(user, 'ORDERS_APPROVE') && ['待我审批', data.pendingCount, '张', 'purple'],
+  ].filter(Boolean);
+  const shortcuts = [
+    ['业务总览', 'business-overview'], ['销售订单', 'orders'], ['订单审批', 'approvals'],
+    ['销售出货', 'sales-deliveries'], ['仓储库存', 'inventory'], ['制令单', 'production-orders'],
+    ['应收账款', 'accounts-receivable'], ['应付账款', 'accounts-payable'], ['决策报表', 'decision-reports'],
+  ].filter(([, page]) => navigation.canNavigate(page));
   return <>
-    <div className="hero-card"><div><span className="pill">今日业务概览</span><h2>从一张清晰的订单开始</h2><p>订单经过保存、提交和审核，每一步都会留下操作记录。销售订单审核后只确认交易，不直接扣减库存。</p></div><div className="hero-amount"><span>已审核订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div></div>
+    <div className="hero-card"><div><span className="pill">今日业务概览</span><h2>从业务总览理解完整 ERP</h2><p>审批确认业务授权，出入库负责执行，库存异动记录实物流转，应收应付与收付款完成财务闭环。</p></div>{can(user, 'ORDERS_VIEW') && <div className="hero-amount"><span>已审批订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div>}</div>
     <div className="stats-grid">{cards.map(([label, value, unit, color]) => <div className={`stat-card ${color}`} key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong><i/></div>)}</div>
-    <Panel title="最近订单" subtitle="按创建时间显示最新五张销售订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
+    <Panel title="常用工作" subtitle="按照当前角色权限显示可访问应用"><div className="dashboard-shortcuts">{shortcuts.map(([label, page]) => <AppLink key={page} page={page}>{label}<span>→</span></AppLink>)}</div></Panel>
+    {can(user, 'ORDERS_VIEW') && <Panel title="最近订单" subtitle="按创建时间显示最新五张销售订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
       <OrderTable orders={data.recentOrders} compact/>
-    </Panel>
+    </Panel>}
   </>;
 }
 
@@ -148,7 +157,7 @@ export function Orders({ user, notify }) {
   useEffect(() => { void load(); }, [status]);
   async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
   return <Panel title="销售订单" subtitle="从客户需求到审批确认的核心业务单据" action={can(user, 'ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建销售订单</button>}>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或客户名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审核</option><option value="APPROVED">已审核</option><option value="REJECTED">已驳回</option></select>}/>
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或客户名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
     <OrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
       {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
@@ -187,11 +196,11 @@ export function Approvals({ notify }) {
   const [orders, setOrders] = useState([]); const [viewing, setViewing] = useState(null); const [rejecting, setRejecting] = useState(null); const [reason, setReason] = useState('');
   const load = () => api('/api/orders?status=SUBMITTED').then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  async function approve(order) { if (!confirm(`确定审核通过订单 ${order.orderNo} 吗？`)) return; try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('订单已审核通过'); load(); } catch (e) { notify(e.message, 'error'); } }
+  async function approve(order) { if (!confirm(`确定审批通过订单 ${order.orderNo} 吗？`)) return; try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('订单已审批通过'); load(); } catch (e) { notify(e.message, 'error'); } }
   async function reject(e) { e.preventDefault(); try { await api(`/api/orders/${rejecting.id}/reject`, { method: 'POST', body: { reason } }); notify('订单已驳回'); setRejecting(null); setReason(''); load(); } catch (error) { notify(error.message, 'error'); } }
   return <>
-    <div className="approval-banner"><div className="approval-icon">✓</div><div><h2>待审核订单</h2><p>审核是业务确认，不等于出货。审核通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
-    <Panel title="审核队列" subtitle="制单人与审核人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><button className="approve-button" onClick={() => approve(order)}>通过</button></>}/></Panel>
+    <div className="approval-banner"><div className="approval-icon">✓</div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
+    <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><button className="approve-button" onClick={() => approve(order)}>通过</button></>}/></Panel>
     {viewing && <OrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
     {rejecting && <Modal title={`驳回 ${rejecting.orderNo}`} onClose={() => setRejecting(null)}><form onSubmit={reject}><label>驳回原因<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="请说明需要销售人员修改的内容" required/></label><FormActions onClose={() => setRejecting(null)} saveText="确认驳回" danger/></form></Modal>}
   </>;
@@ -207,7 +216,7 @@ export function orderWorkflowStages(order, trace, kind) {
   return [
     { key: 'order', label: isSales ? '销售订单已创建' : '采购订单已创建', state: 'completed', documentNo: order.orderNo },
     { key: 'submit', label: '已提交', state: submitted ? 'completed' : order.status === 'REJECTED' ? 'current' : 'current', hint: submitted ? '' : order.status === 'REJECTED' ? '已驳回，修改后可重新提交' : '待提交' },
-    { key: 'approve', label: '审核', state: approved ? 'completed' : submitted ? 'current' : 'pending', hint: submitted && !approved ? '等待审批' : '' },
+    { key: 'approve', label: '审批', state: approved ? 'completed' : submitted ? 'current' : 'pending', hint: submitted && !approved ? '等待审批' : '' },
     { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, documentId: logistics[0]?.id, documentType: logistics[0]?.type, pageKey: logistics.length ? (isSales ? 'sales-deliveries' : 'purchase-receipts') : null, hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `尚未关联${isSales ? '销售出货' : '采购入库'}（来源可选）` },
     { key: 'return', label: isSales ? '销售退货' : '采购退货', state: returns.length ? 'completed' : 'optional', documentNo: returns[0]?.documentNo, documentId: returns[0]?.id, documentType: returns[0]?.type, pageKey: returns.length ? 'returns' : null, hint: returns.length ? `已关联 ${returns.length} 张退货单` : '如发生' },
     { key: 'voucher', label: '财务凭证', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, documentId: voucher?.id, documentType: voucher?.type, pageKey: voucher?.documentNo ? 'accounting' : null, hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生财务记录' : '' },
@@ -266,7 +275,7 @@ export function PurchaseOrders({ user, notify }) {
   useEffect(() => { void load(); }, [status]);
   async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
   return <Panel title="采购订单" subtitle="向供应商采购货品的业务单据" action={can(user, 'PURCHASE_ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建采购订单</button>}>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审核</option><option value="APPROVED">已审核</option><option value="REJECTED">已驳回</option></select>}/>
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
     <PurchaseOrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'PURCHASE_ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
       {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
@@ -319,7 +328,8 @@ function PurchaseOrderDetail({ id, user, onClose, notify }) {
 }
 
 function PurchaseOrderTable({ orders = [], onView, actions, compact }) {
-  return <div className="table-wrap"><table><thead><tr><th>订单号</th><th>供应商</th><th>状态</th><th className="number">金额</th><th>制单人</th><th>创建时间</th>{!compact && <th/>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id} className={onView ? 'clickable' : ''} onClick={() => onView?.(order)}><td className="mono strong-text">{order.orderNo}<small className="block workflow-next">{order.status === 'DRAFT' ? '待提交' : order.status === 'SUBMITTED' ? '待审核' : order.status === 'REJECTED' ? '已驳回' : order.receiptCount ? `已关联 ${order.receiptCount} 张入库单` : '已审核 · 待入库'}</small></td><td><strong>{order.supplierName}</strong><small className="block">{order.itemCount} 项明细</small></td><td><Status status={order.status} label={order.statusLabel}/></td><td className="number"><strong>{money(order.totalCents)}</strong></td><td>{order.creatorName}</td><td className="dim">{dateTime(order.createdAt)}</td>{!compact && <td className="actions" onClick={(e) => e.stopPropagation()}><button className="row-action" onClick={() => onView?.(order)}>查看</button>{actions?.(order)}</td>}</tr>)}</tbody></table>{!orders.length && <Empty text="当前没有符合条件的采购订单"/>}</div>;
+  const approvalLabel = (order) => order.status === 'SUBMITTED' ? '待审批' : order.status === 'APPROVED' ? '已审批' : order.statusLabel;
+  return <div className="table-wrap"><table><thead><tr><th>订单号</th><th>供应商</th><th>状态</th><th className="number">金额</th><th>制单人</th><th>创建时间</th>{!compact && <th/>}</tr></thead><tbody>{orders.map((order) => <tr key={order.id} className={onView ? 'clickable' : ''} onClick={() => onView?.(order)}><td className="mono strong-text">{order.orderNo}<small className="block workflow-next">{order.status === 'DRAFT' ? '待提交' : order.status === 'SUBMITTED' ? '待审批' : order.status === 'REJECTED' ? '已驳回' : order.receiptCount ? `已关联 ${order.receiptCount} 张入库单` : '已审批 · 待入库'}</small></td><td><strong>{order.supplierName}</strong><small className="block">{order.itemCount} 项明细</small></td><td><Status status={order.status} label={approvalLabel(order)}/></td><td className="number"><strong>{money(order.totalCents)}</strong></td><td>{order.creatorName}</td><td className="dim">{dateTime(order.createdAt)}</td>{!compact && <td className="actions" onClick={(e) => e.stopPropagation()}><button className="row-action" onClick={() => onView?.(order)}>查看</button>{actions?.(order)}</td>}</tr>)}</tbody></table>{!orders.length && <Empty text="当前没有符合条件的采购订单"/>}</div>;
 }
 
 
@@ -360,7 +370,7 @@ export function Inventory({ user, notify }) {
   return <Panel title="库存管理" subtitle="查询、盘点、调拨企业库存">
     <div className="inventory-workbench" aria-label="仓储库存"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}><strong>库存查询</strong><small>查看当前库存</small></button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}><strong>库存调拨</strong><small>仓库间移动</small></button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}><strong>库存盘点</strong><small>账实对比</small></button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}><strong>库存调整</strong><small>杂项库存修正</small></button>}<AppLink page="inventory-transactions"><strong>库存异动</strong><small>全部变动轨迹</small></AppLink></div>
     {tab === 'query' && <><div className="toolbar inventory-filters"><select value={searchPd} onChange={(e) => setSearchPd(e.target.value)}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={searchWh} onChange={(e) => setSearchWh(e.target.value)}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></div>
-      <div className="table-wrap"><table><thead><tr><th>仓库</th><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{row.quantity}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty text="没有找到库存记录"/>}</div></>}
+      <div className="table-wrap"><table><thead><tr><th>仓库</th><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{quantity(row.quantity)}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty text="没有找到库存记录"/>}</div></>}
     {tab === 'check' && <InventoryChecks user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'transfer' && <InventoryTransfers user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'adjustment' && can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <InventoryAdjustments notify={notify} warehouses={warehouses} products={products} inventory={inventory}/>}

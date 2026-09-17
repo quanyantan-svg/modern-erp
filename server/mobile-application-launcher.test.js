@@ -78,44 +78,46 @@ function applicationPagesFor(roleId) {
 
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
-    'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
+    'business-overview',
     'customers', 'suppliers', 'products', 'warehouses', 'boms',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-transactions', 'production-orders',
     'material-issues', 'production-receipts',
-    'iqc', 'oqc', 'accounting', 'cash-journals', 'bank-accounts',
+    'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
+    'accounts-payable', 'payment-disbursements', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
     'workflows', 'users',
   ],
   'role-sales': [
-    'customers', 'suppliers', 'products', 'warehouses',
+    'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
   ],
   'role-reviewer': [
-    'customers', 'products', 'warehouses', 'orders', 'sales-deliveries',
+    'business-overview', 'customers', 'products', 'warehouses', 'orders', 'sales-deliveries',
     'returns', 'purchase-orders', 'purchase-receipts', 'inventory',
     'inventory-transactions',
   ],
   'role-warehouse': [
-    'products', 'warehouses', 'sales-deliveries', 'returns',
+    'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
     'purchase-receipts', 'inventory', 'inventory-transactions', 'iqc', 'oqc',
   ],
   'role-accounting': [
+    'business-overview', 'orders', 'purchase-orders',
     'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
-    'orders', 'purchase-orders', 'accounting', 'cash-journals',
+    'accounting', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
     'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
   ],
 };
 
 describe('M2 application metadata', () => {
-  test('defines the nine teacher-aligned product groups in order', () => {
+  test('defines the ten teacher-aligned product groups in order', () => {
     assert.deepEqual(
       mobileGroups.map(({ key, label }) => [key, label]),
       [
-        ['master-data', '基础资料'], ['sales', '销售管理'],
+        ['overview', '业务导航'], ['master-data', '基础资料'], ['sales', '销售管理'],
         ['purchasing', '采购管理'], ['inventory', '仓储库存'],
         ['manufacturing', '生产管理'], ['quality', '质量管理'],
         ['finance', '财务管理'], ['reports', '决策报表'],
@@ -282,8 +284,9 @@ describe('M2 launcher interaction and navigation contracts', () => {
 
   test('desktop shell and labels remain present', () => {
     assert.match(appSource, /return <div className="app-shell">/);
-    assert.match(appSource, /key: 'production-orders', label: '生产工单'/);
-    assert.match(appSource, /key: 'sales-deliveries', label: '销售出库'/);
-    assert.match(appSource, /key: 'inventory-transactions', label: '库存流水'/);
+    assert.match(appSource, /key: 'business-overview', label: '业务总览'/);
+    assert.match(appSource, /key: 'production-orders', label: '制令单'/);
+    assert.match(appSource, /key: 'sales-deliveries', label: '销售出货'/);
+    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动'/);
   });
 });

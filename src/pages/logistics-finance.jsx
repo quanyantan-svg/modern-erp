@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 function LogisticsActions({ existing, onClose, onAction }) {
@@ -32,7 +32,7 @@ function ReadOnlyDocument({ detail, onClose, partyName }) {
   return <div>
     <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || detail.status}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
     <RelationshipSections detail={detail}/>
-    <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{item.quantity}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
+    <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{quantity(item.quantity)}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
     <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
   </div>;
 }
@@ -45,7 +45,7 @@ export function PurchaseReceipts({ user, notify }) {
   const [view, setView] = useState(target?.page === 'purchase-receipts' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="采购入库单" subtitle="采购到货入仓记录，与采购订单联动" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增进货单</button>}>
+  return <Panel title="采购入库单" subtitle="采购到货入仓记录，与采购订单联动" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增采购入库</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
@@ -143,11 +143,11 @@ export function SalesDeliveries({ user, notify }) {
   const [view, setView] = useState(target?.page === 'sales-deliveries' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="销售出库单" subtitle="发货给客户的出库记录，与销售订单联动" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增出库单</button>}>
+  return <Panel title="销售出货单" subtitle="发货给客户的出库记录，与销售订单联动" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增销售出货</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有销售出库记录"/>}</div>
+    </tbody></table>{!items.length && <Empty text="没有销售出货记录"/>}</div>
     {view && <SalesDeliveryModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
 }
@@ -205,8 +205,8 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
   };
   const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
-  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
-  return <Modal title={value.id ? "编辑销售出库单" : "新增销售出库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
+  return <Modal title={value.id ? "编辑销售出货单" : "新增销售出货单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
     {!value.id && <label className="full">来源销售订单（可选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)}><option value="">直接出货（不关联销售订单）</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>可随时清除来源，直接出货仍然有效</small></label>}
     <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
@@ -356,7 +356,7 @@ export function InventoryTransactions({ user, notify }) {
   const sourcePage = (sourceType) => ({ PRODUCTION_MATERIAL_ISSUE: 'material-issues', PRODUCTION_RECEIPT: 'production-receipts' }[sourceType] || null);
   const typeMap = {
     PURCHASE_RECEIPT: "采购入库",
-    SALES_DELIVERY: "销售出库",
+    SALES_DELIVERY: "销售出货",
     SALES_RETURN: "销售退货",
     PURCHASE_RETURN: "采购退货",
     INVENTORY_CHECK: "库存盘点",
@@ -367,12 +367,12 @@ export function InventoryTransactions({ user, notify }) {
     PRODUCTION_MATERIAL_ISSUE: "用料出库",
     PRODUCTION_RECEIPT: "生产入库"
   };
-  return <Panel title="库存流水" subtitle="所有库存变动的明细记录">
+  return <Panel title="库存异动" subtitle="所有库存变动的明细记录">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部来源</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>
     <div className="toolbar movement-filters"><select value={filters.product} onChange={(e) => setFilters({ ...filters, product: e.target.value })}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={filters.warehouse} onChange={(e) => setFilters({ ...filters, warehouse: e.target.value })}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select><select value={filters.direction} onChange={(e) => setFilters({ ...filters, direction: e.target.value })}><option value="">全部方向</option><option value="IN">IN · 入库</option><option value="OUT">OUT · 出库</option></select><input aria-label="开始日期" type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}/><input aria-label="结束日期" type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}/></div>
     <div className="table-wrap"><table><thead><tr><th>时间</th><th>来源类型</th><th>来源单号</th><th>仓库</th><th>货品</th><th>方向</th><th className="number">数量</th><th className="number">变动后库存</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{sourcePage(item.tx_type) && item.source_id ? <AppLink page={sourcePage(item.tx_type)} documentId={item.source_id} documentType={item.tx_type}>{item.ref_no}</AppLink> : (item.ref_no || '—')}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{item.quantity_change}</td><td className="number">{item.balance}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有库存流水记录"/>}</div>
+      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{sourcePage(item.tx_type) && item.source_id ? <AppLink page={sourcePage(item.tx_type)} documentId={item.source_id} documentType={item.tx_type}>{item.ref_no}</AppLink> : (item.ref_no || '—')}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{quantity(item.quantity_change)}</td><td className="number">{quantity(item.balance)}</td></tr>)}
+    </tbody></table>{!items.length && <Empty text="没有库存异动记录"/>}</div>
   </Panel>;
 }
 

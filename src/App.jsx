@@ -10,6 +10,7 @@ import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
 import { IQCInspections, OQCInspections } from './pages/quality.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
+import BusinessOverview from './pages/business-overview.jsx';
 import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
 import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
@@ -34,6 +35,7 @@ const Icon = ({ d, size = 17, strokeWidth = 1.8 }) => (
 
 // Icon library
 const ic = {
+  overview: <Icon d="M3 5h18M5 9h6v10H5zM15 9h4v4h-4zM15 17h4v2h-4z"/>,
   dashboard: <Icon d="M4 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5zm10 0a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V5zm-10 10a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4zm10 0a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-6z"/>,
   orders: <Icon d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 14l2 2 4-4"/>,
   approvals: <Icon d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>,
@@ -75,11 +77,12 @@ const ic = {
 // Navigation groups
 export const navGroups = [
   { label: '概览', items: [
+    { key: 'business-overview', label: '业务总览', icon: ic.overview, permission: 'DASHBOARD_VIEW' },
     { key: 'dashboard', label: '工作台', icon: ic.dashboard, permission: 'DASHBOARD_VIEW' },
   ]},
   { label: '销售与采购', items: [
     { key: 'orders', label: '销售订单', icon: ic.orders, any: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
-    { key: 'approvals', label: '订单审核', icon: ic.approvals, permission: 'ORDERS_APPROVE' },
+    { key: 'approvals', label: '订单审批', icon: ic.approvals, permission: 'ORDERS_APPROVE' },
     { key: 'purchase-orders', label: '采购订单', icon: ic.purchaseOrders, any: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE'] },
   ]},
   { label: '基础资料', items: [
@@ -91,9 +94,9 @@ export const navGroups = [
   { label: '仓储物流', items: [
     { key: 'inventory', label: '库存查询', icon: ic.inventory, any: ['INVENTORY_VIEW'] },
     { key: 'purchase-receipts', label: '采购入库', icon: ic.purchaseReceipts, any: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
-    { key: 'sales-deliveries', label: '销售出库', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+    { key: 'sales-deliveries', label: '销售出货', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
     { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
-    { key: 'inventory-transactions', label: '库存流水', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
+    { key: 'inventory-transactions', label: '库存异动', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
   ]},
   { label: '财务资金', items: [
     { key: 'accounts-receivable', label: '应收账款', icon: ic.accounting, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
@@ -111,7 +114,7 @@ export const navGroups = [
   ]},
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
-    { key: 'production-orders', label: '生产工单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
+    { key: 'production-orders', label: '制令单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },
     { key: 'production-receipts', label: '生产入库', icon: ic.purchaseReceipts, any: ['PRODUCTION_RECEIPT_MANAGE'] },
   ]},
@@ -210,6 +213,7 @@ export default function App() {
   if (!user) return <Login onLogin={setUser} notify={notify}/>;
 
   const pages = {
+    'business-overview': <BusinessOverview/>,
     dashboard: <Dashboard user={user} notify={notify}/>,
     orders: <Orders user={user} notify={notify}/>,
     approvals: <Approvals notify={notify}/>,

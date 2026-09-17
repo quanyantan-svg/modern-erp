@@ -160,7 +160,7 @@ function SalesSummaryPanel() {
           { name: 'dateTo', type: 'date', label: '结束日期' },
           { name: 'customerId', label: '客户ID', placeholder: '客户编号' },
           { name: 'status', label: '订单状态', options: [
-            { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审核' },
+            { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审批' },
             { value: 'APPROVED', label: '已审批' }, { value: 'REJECTED', label: '已驳回' },
           ] },
         ]}
@@ -303,7 +303,7 @@ function PurchaseSummaryPanel() {
           { name: 'dateTo', type: 'date', label: '结束日期' },
           { name: 'supplierId', label: '供应商ID', placeholder: '供应商编号' },
           { name: 'status', label: '订单状态', options: [
-            { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审核' },
+            { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审批' },
             { value: 'APPROVED', label: '已审批' }, { value: 'REJECTED', label: '已驳回' },
           ] },
         ]}

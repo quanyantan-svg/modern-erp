@@ -276,7 +276,7 @@ describe('Phase E — frontend voucher UI wiring', () => {
       'approve / reject gating must reference VOUCHER_APPROVE');
     assert.ok(/value\.creator_id\s*!==\s*user\?\.id/.test(detail),
       'approve / reject must NOT be exposed to the voucher creator (separation of duties)');
-    assert.ok(/审核通过/.test(detail), 'approve button label must be 审核通过');
+    assert.ok(/审批通过/.test(detail), 'approve button label must be 审批通过');
     assert.ok(/驳回/.test(detail), 'reject button label must be 驳回');
   });
 
