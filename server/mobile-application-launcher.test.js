@@ -80,6 +80,7 @@ const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
     'customers', 'suppliers', 'products', 'warehouses', 'boms', 'product-routings',
+    'forecasts', 'mrp',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-transactions', 'production-orders',

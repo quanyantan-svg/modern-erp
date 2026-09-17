@@ -12,6 +12,7 @@ import { IQCInspections, OQCInspections } from './pages/quality.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
+import Planning from './pages/planning.jsx';
 import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
 import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
@@ -72,6 +73,8 @@ const ic = {
   notifications: <Icon d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 0 0-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>,
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   routings: <Icon d="M5 4h5v5H5zM14 15h5v5h-5zM10 6h4a3 3 0 0 1 3 3v2M14 18h-4a3 3 0 0 1-3-3v-2"/>,
+  forecasts: <Icon d="M3 17l6-6 4 4 8-8M14 7h7v7"/>,
+  mrp: <Icon d="M4 4h16v6H4zM4 14h10v6H4zM18 14h2v6h-2z"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
 };
@@ -92,7 +95,6 @@ export const navGroups = [
     { key: 'customers', label: '客户', icon: ic.customers, any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
     { key: 'products', label: '货品', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
     { key: 'warehouses', label: '仓库', icon: ic.warehouses, any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
-    { key: 'product-routings', label: '制品工序标准', icon: ic.routings, any: ['ROUTING_VIEW', 'ROUTING_MANAGE'] },
   ]},
   { label: '仓储物流', items: [
     { key: 'inventory', label: '库存查询', icon: ic.inventory, any: ['INVENTORY_VIEW'] },
@@ -117,6 +119,9 @@ export const navGroups = [
   ]},
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
+    { key: 'product-routings', label: '制品工序标准', icon: ic.routings, any: ['ROUTING_VIEW', 'ROUTING_MANAGE'] },
+    { key: 'forecasts', label: '计划预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'mrp', label: 'MRP 物料需求计划', icon: ic.mrp, any: ['MRP_VIEW', 'MRP_MANAGE'] },
     { key: 'production-orders', label: '制令单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },
     { key: 'production-receipts', label: '生产入库', icon: ic.purchaseReceipts, any: ['PRODUCTION_RECEIPT_MANAGE'] },
@@ -254,6 +259,8 @@ export default function App() {
     'inventory-transactions': <InventoryTransactions user={user} notify={notify}/>,
     boms: <Boms user={user} notify={notify}/>,
     'product-routings': <ProductRoutings user={user} notify={notify}/>,
+    'forecasts': <Planning user={user} notify={notify}/>,
+    'mrp': <Planning user={user} notify={notify}/>,
     'production-orders': <ProductionOrders user={user} notify={notify}/>,
     'material-issues': <MaterialIssues user={user} notify={notify}/>,
     'production-receipts': <ProductionReceipts user={user} notify={notify}/>,

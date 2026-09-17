@@ -152,12 +152,14 @@
 | BOM管理 | 完整 | P0 | 多层BOM |
 | BOM展开 | 完整 | P0 | 组件分解 |
 | 制品工序标准 | COMPLETE | P0 | 与 BOM 同级的产品主数据；ACTIVE/INACTIVE；工序增删改与顺序号重排；仅 admin 管理 |
-| MRP 计划/计算 API | INTERNAL / API ONLY | P1 | 保留兼容 API；MRP 执行和移动 UI 明确延期 |
+| 计划预测 | COMPLETE | P1 | DRAFT/ACTIVE/CANCELLED 生命周期；草稿可编辑、已生效不可改；MRP 仅消费已生效预测；不写库存 / 凭证 / 审批 |
+| MRP 物料需求计划 | COMPLETE | P1 | 仅作为计划快照输出生产 / 采购建议；DRAFT/COMPLETED/CANCELLED；COMPLETED 不可重算；不改库存、不生成凭证、不进审批、不写生产 / 采购单据 |
+| MRP 计划/计算 API（v1.0 兼容） | INTERNAL / API ONLY | P2 | `/api/mrp-plans` 与 `/api/mrp/calculate` 等旧端点保留作为兼容性面；M11 canonical 路径是 `/api/planning/*` |
 | 制令单 | COMPLETE | P0 | 创建、开工、完工、取消及生产追踪 |
 | 用料出库 | COMPLETE | P0 | 仅已开工制令单；确认后组件库存 OUT |
 | 生产入库 | COMPLETE | P0 | 仅已开工制令单；确认后成品库存 IN |
 | 旧工作中心 / BOM 工序 / 人工记录 | LEGACY / HIDDEN | P2 | v1.0 API 兼容面；既有 BOM-bound 工序幂等桥接为停用历史产品路线，不作为 M10 执行模型 |
-| 计划预测 / MRP 执行 | DEFERRED | P2 | 无活动 UI |
+| 生产指令 / 采购指令 / 请购单 | DEFERRED | P2 | 未实现；M12 起规划 |
 | 生产执行报表 | DEFERRED | P2 | 未实现 |
 
 ---

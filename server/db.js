@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { migrateExtendedSchema } from './migrations/extended-schema.js';
 import { migrateProductRoutingSchema } from './migrations/product-routing.js';
+import { migratePlanningSchema } from './migrations/planning-schema.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -129,6 +130,7 @@ export function createDatabase(filename) {
   migrateSettlementSchema(db);
   migrateExtendedSchema(db);
   migrateProductRoutingSchema(db);
+  migratePlanningSchema(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables

@@ -1,11 +1,11 @@
 # 项目状态快照
 
-> 更新：2026-09-18 (M10 Product Routing Standard)
+> 更新：2026-09-18 (M11 Forecast & MRP)
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M10 Product Routing Standard
-- 分支：feature/v1.1-routing
+- 阶段：v1.1 Expansion — M11 Forecast & MRP
+- 分支：feature/v1.1-mrp
 - 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
@@ -22,6 +22,25 @@
 - 路线是规划主数据：库存影响 = NONE，会计影响 = NONE，审批中心影响 = NONE；未实现 MRP、工序级执行、报工、设备、产能或工序成本；
 - Focused：13 tests / 4 suites / PASS；Full：1027 tests / 202 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
 - Real Edge 153：375×667、414×896、1024×768 均完成列表/详情/编辑/排序/启停验收，无页面横向溢出；console error = 0，unexpected 400/403/404/500 = 0；使用隔离 DB，未修改生产数据；无 tag、push、deploy。
+
+### M11 — Forecast & MRP / 计划预测与物料需求计划
+
+- 新增 `planning_forecasts`（DRAFT/ACTIVE/CANCELLED）与 `planning_forecast_items` 主数据；MRP canonical 路径下 `mrp_runs`（DRAFT/COMPLETED/CANCELLED）、`mrp_run_demands`、`mrp_run_results`、`mrp_run_components`、`mrp_run_pegging` 是只追加的不可变快照；旧 `mrp_plans` / `mrp_plan_items` 保留作为兼容面，UI 不再挂载；
+- 销售需求 = `APPROVED 销售订单明细 − CONFIRMED 销售出货明细（按订单头关联）`，文档级未交付；销售退货不重新打开需求；非 APPROVED 订单不进入 MRP；采购供应 = `APPROVED 采购订单明细 − CONFIRMED 采购入库明细（按入库单关联采购订单）`；直纳入库不计未来供应；采购退货不重建 PO 供应；生产供应 = `PENDING/IN_PROGRESS 制令单数量 − CONFIRMED 生产入库数量`；COMPLETED / CANCELLED 工单不计入。
+- 库存源为 `inventory` 跨全仓库汇总（教学语境明确企业可用库存，不做仓库级 MRP）；销售/采购/生产三大供应维度不重复计数 CONFIRMED 业务单据；
+- BOM 展开支持多层级、循环检测、深度上限 12；组件在聚合后净库存与在途供应，避免按父级分别消耗同一条库存；Make = 有 ACTIVE BOM，Buy = 无 BOM；MAKE 建议缺少 ACTIVE 路线时附加 `ROUTING_MISSING` 警告，不阻断物料计算；MRP 原子执行：BOM 校验失败 / 循环 / 长度越界时不写任何结果行，运行保持 DRAFT；
+- COMPLETED MRP 不可执行、PATCH / 不可修改、不可取消；之后预测取消、库存变化都不再改写已完成的运行；新计算必须新建运行；
+- 需求来源支持 `SALES_ORDERS` / `FORECAST` / `SALES_PLUS_FORECAST` 三种模式；SALES_PLUS_FORECAST 为累加关系，状态视图在销售展示中说明两个独立贡献维度；
+- 权限：复用既有 `MRP_VIEW` / `MRP_MANAGE`（已存在），注册权限数仍为 100；五角色中仅 `test_admin` 具备计划预测 / MRP 变能力；其他四角色无 MRP 变更权限；
+- 库存 = NONE，会计 = NONE，审批中心 = NONE，生产 / 采购 / 请购 / 领料单据创建 = 0；
+- UI：教师可见业务总览新增「计划与物料需求」链；应用组加入 计划预测 / MRP 物料需求计划；桌面 / 移动两端均完成列表 / 编辑 / 详情 / 结果追溯验证；移动端 375×667 无横向溢出，主操作可见于底部导航之上；
+- Focused：48 tests / 10 suites / PASS；Full：1075 tests / 212 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
+- 保留旧 API 作为内部兼容面，旧 MRP 历史数据无破坏；
+- 无 tag、push、deploy。
+
+### M11 — Product Routing Standard / 制品工序标准（M10 历史段，已在新段下）
+
+- M11 不涉及 M10 的具体范围；M10 制品工序标准已完整收口，新段在 M10 之上叠加 Forecast + MRP canonical。
 
 ### M9 — Final ERP Polish
 

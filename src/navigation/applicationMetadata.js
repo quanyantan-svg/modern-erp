@@ -25,6 +25,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'warehouses', mobileLabel: '仓库', iconKey: 'warehouses' },
       { page: 'boms', mobileLabel: 'BOM', iconKey: 'boms' },
       { page: 'product-routings', mobileLabel: '制品工序标准', iconKey: 'routings' },
+      { page: 'forecasts', mobileLabel: '计划预测', iconKey: 'forecasts' },
+      { page: 'mrp', mobileLabel: 'MRP 物料需求计划', iconKey: 'mrp' },
     ],
   },
   {
@@ -115,7 +117,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '计划预测', 'MRP 执行', '请购单', '采购指令',
+  '请购单', '采购指令',
   '库存报废', '库存月结', '销售折让', '采购折让',
 ]);
 

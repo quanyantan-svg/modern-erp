@@ -28,6 +28,12 @@ import {
   getSalesOutstanding, getSalesSummary,
 } from './modules/decision-reports.js';
 import { listApprovals } from './modules/approvals.js';
+import {
+  activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
+  createMrpRun, createPlanningForecast, executeMrpRun, getMrpRun,
+  getPlanningForecast, listMrpRuns, listPlanningForecasts,
+  updateMrpRun, updatePlanningForecast,
+} from './modules/planning.js';
 import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
   cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument,
@@ -235,6 +241,27 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/mrp-plans' && req.method === 'GET') return listMrpPlans(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'POST') return createMrpPlan(db, req, res, actor);
   if (pathname === '/api/mrp-plans/generate' && req.method === 'POST') return generateMrp(db, req, res, actor);
+  // M11 — Forecast & MRP canonical planning
+  if (pathname === '/api/planning/forecasts' && req.method === 'GET') return listPlanningForecasts(db, res, actor, url);
+  if (pathname === '/api/planning/forecasts' && req.method === 'POST') return createPlanningForecast(db, req, res, actor);
+  const forecastMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)$/);
+  if (forecastMatch && req.method === 'GET') return getPlanningForecast(db, res, actor, forecastMatch[1]);
+  if (forecastMatch && req.method === 'PATCH') return updatePlanningForecast(db, req, res, actor, forecastMatch[1]);
+  const forecastActionMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)\/(activate|cancel)$/);
+  if (forecastActionMatch && req.method === 'POST') {
+    if (forecastActionMatch[2] === 'activate') return activatePlanningForecast(db, res, actor, forecastActionMatch[1]);
+    return cancelPlanningForecast(db, res, actor, forecastActionMatch[1]);
+  }
+  if (pathname === '/api/planning/mrp/runs' && req.method === 'GET') return listMrpRuns(db, res, actor, url);
+  if (pathname === '/api/planning/mrp/runs' && req.method === 'POST') return createMrpRun(db, req, res, actor);
+  const mrpRunMatch = pathname.match(/^\/api\/planning\/mrp\/runs\/([^/]+)$/);
+  if (mrpRunMatch && req.method === 'GET') return getMrpRun(db, res, actor, mrpRunMatch[1]);
+  if (mrpRunMatch && req.method === 'PATCH') return updateMrpRun(db, req, res, actor, mrpRunMatch[1]);
+  const mrpRunActionMatch = pathname.match(/^\/api\/planning\/mrp\/runs\/([^/]+)\/(execute|cancel)$/);
+  if (mrpRunActionMatch && req.method === 'POST') {
+    if (mrpRunActionMatch[2] === 'execute') return executeMrpRun(db, req, res, actor, mrpRunActionMatch[1]);
+    return cancelMrpRun(db, res, actor, mrpRunActionMatch[1]);
+  }
   if (pathname === '/api/work-centers' && req.method === 'GET') return listWorkCenters(db, res, actor);
   if (pathname === '/api/work-centers' && req.method === 'POST') return createWorkCenter(db, req, res, actor);
   if (pathname === '/api/routing-operations' && req.method === 'GET') return listRoutingOperations(db, res, actor, url);

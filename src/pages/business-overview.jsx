@@ -33,10 +33,19 @@ export const BUSINESS_FLOWS = [
   {
     key: 'production',
     title: '生产链',
-    description: 'BOM 定义用料，制品工序标准定义加工顺序，制令单串联领料、成品入库与完工。',
+    description: 'BOM 定义用料，制品工序标准定义加工顺序；计划预测与 MRP 输出建议，制令单再串联领料、成品入库与完工。',
     nodes: [
+      ['销售订单', 'orders'], ['计划预测', 'forecasts'], ['MRP', 'mrp'],
       ['BOM', 'boms'], ['制品工序标准', 'product-routings'], ['制令单', 'production-orders'], ['开工', 'production-orders'],
       ['用料出库', 'material-issues'], ['生产入库', 'production-receipts'], ['完工', 'production-orders'],
+    ],
+  },
+  {
+    key: 'planning',
+    title: '计划与物料需求',
+    description: '从销售订单与已生效计划预测出发，叠加需求后运行 MRP，输出生产与采购建议（仅建议，未生成业务单据）。',
+    nodes: [
+      ['销售订单', 'orders'], ['计划预测', 'forecasts'], ['MRP', 'mrp'],
     ],
   },
   {
@@ -77,6 +86,6 @@ export default function BusinessOverview() {
         </div>
       </article>)}
     </div>
-    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；计划预测、MRP 执行、请购、库存报废、库存月结及销售／采购折让未作为可操作节点展示。</p>
+    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；请购单、采购指令、库存报废、库存月结及销售／采购折让未作为可操作节点展示。MRP 输出仅为生产与采购建议，不会直接生成业务单据。</p>
   </section>;
 }
