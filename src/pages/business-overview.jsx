@@ -43,9 +43,11 @@ export const BUSINESS_FLOWS = [
   {
     key: 'planning',
     title: '计划与物料需求',
-    description: '从销售订单与已生效计划预测出发，叠加需求后运行 MRP，输出生产与采购建议（仅建议，未生成业务单据）。',
+    description: '从销售订单与已生效计划预测出发，叠加需求后运行 MRP，输出生产与采购建议；按建议下达生产指令 / 采购指令，再分别生成制令单或经审批的请购单与采购订单。',
     nodes: [
       ['销售订单', 'orders'], ['计划预测', 'forecasts'], ['MRP', 'mrp'],
+      ['生产指令', 'production-instructions'], ['制令单', 'production-orders'],
+      ['采购指令', 'purchase-instructions'], ['请购单', 'purchase-requisitions'], ['采购订单', 'purchase-orders'],
     ],
   },
   {
@@ -86,6 +88,6 @@ export default function BusinessOverview() {
         </div>
       </article>)}
     </div>
-    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；请购单、采购指令、库存报废、库存月结及销售／采购折让未作为可操作节点展示。MRP 输出仅为生产与采购建议，不会直接生成业务单据。</p>
+    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；库存报废、库存月结及销售／采购折让未作为可操作节点展示。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。</p>
   </section>;
 }

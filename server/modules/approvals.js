@@ -84,6 +84,29 @@ const DOCUMENTS = [
       FROM accounting_vouchers av JOIN users creator ON creator.id=av.creator_id
       LEFT JOIN users approver ON approver.id=av.approver_id`,
   },
+  {
+    type: 'PURCHASE_REQUISITION',
+    label: '请购单',
+    view: 'PURCHASE_REQUISITION_VIEW',
+    approve: 'PURCHASE_REQUISITION_APPROVE',
+    supportsReject: true,
+    table: 'purchase_requisitions',
+    alias: 'pr',
+    reviewerColumn: 'reviewer_id',
+    approvedStatus: 'APPROVED',
+    handledColumn: 'reviewed_at',
+    sql: `SELECT pr.id,pr.requisition_no documentNo,pr.status,
+      COALESCE((SELECT SUM(amount_cents) FROM purchase_requisition_items WHERE requisition_id=pr.id),0) amountCents,
+      pr.notes remark,COALESCE(pr.rejection_reason,'') rejectionReason,pr.creator_id initiatorId,
+      creator.display_name initiatorName,reviewer.display_name handlerName,
+      pr.created_at createdAt,pr.submitted_at submittedAt,pr.reviewed_at handledAt,
+      (SELECT pi.instruction_no FROM purchase_instructions pi WHERE pi.id=pr.source_instruction_id) partyName,
+      (SELECT COUNT(*) FROM purchase_requisition_items WHERE requisition_id=pr.id) itemCount,
+      (SELECT COALESCE(SUM(quantity),0) FROM purchase_requisition_items WHERE requisition_id=pr.id) systemQuantity
+      FROM purchase_requisitions pr
+      JOIN users creator ON creator.id=pr.creator_id
+      LEFT JOIN users reviewer ON reviewer.id=pr.reviewer_id`,
+  },
 ];
 
 const STATUS_LABELS = {

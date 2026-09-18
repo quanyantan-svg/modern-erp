@@ -67,7 +67,7 @@
 | 采购订单新建 | 完整 | P0 | 明细、金额重算 |
 | 采购订单提交 | 完整 | P0 | 状态机 |
 | 采购订单审批 | COMPLETE | P0 | 提交、审批/驳回；审批不等于入库 |
-| 请购单 / 采购指令 | DEFERRED | P2 | 无活动 UI，不在主业务流中伪装为可用 |
+| 请购单 / 采购指令 | DEFERRED | P2 | 无活动 UI，不在主业务流中伪装为可用（已被 M12 实现并迁出，请勿使用） |
 
 ---
 
@@ -159,7 +159,9 @@
 | 用料出库 | COMPLETE | P0 | 仅已开工制令单；确认后组件库存 OUT |
 | 生产入库 | COMPLETE | P0 | 仅已开工制令单；确认后成品库存 IN |
 | 旧工作中心 / BOM 工序 / 人工记录 | LEGACY / HIDDEN | P2 | v1.0 API 兼容面；既有 BOM-bound 工序幂等桥接为停用历史产品路线，不作为 M10 执行模型 |
-| 生产指令 / 采购指令 / 请购单 | DEFERRED | P2 | 未实现；M12 起规划 |
+| 生产指令 | COMPLETE | P1 | DRAFT/RELEASED/CANCELLED；仅消费 MAKE 建议；支持部分下达（MRP 建议 = 100 时可分 60 + 40）；RELEASED 后可显式生成制令单；0 库存 / 凭证 / 审批影响 |
+| 采购指令 | COMPLETE | P1 | DRAFT/RELEASED/CANCELLED；仅消费 BUY 建议；支持部分下达；RELEASED 后可显式生成请购单；0 库存 / 凭证 / 审批影响 |
+| 请购单 | COMPLETE | P1 | DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED；接 M3 审批中心；创建人不可自审；APPROVED 后可显式生成采购订单；0 库存 / 凭证影响 |
 | 生产执行报表 | DEFERRED | P2 | 未实现 |
 
 ---

@@ -34,6 +34,15 @@ import {
   getPlanningForecast, listMrpRuns, listPlanningForecasts,
   updateMrpRun, updatePlanningForecast,
 } from './modules/planning.js';
+import {
+  approvePurchaseRequisition, cancelProductionInstruction, cancelPurchaseInstruction,
+  cancelPurchaseRequisition, createProductionInstruction, createPurchaseInstruction,
+  createPurchaseRequisition, generateProductionOrderFromInstruction,
+  generatePurchaseOrderFromRequisition, getProductionInstruction,
+  getPurchaseInstruction, getPurchaseRequisition, listProductionInstructions,
+  listPurchaseInstructions, listPurchaseRequisitions, rejectPurchaseRequisition,
+  releaseProductionInstruction, releasePurchaseInstruction, submitPurchaseRequisition,
+} from './modules/planning-documents.js';
 import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
   cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument,
@@ -261,6 +270,46 @@ async function handleApi(db, req, res, url) {
   if (mrpRunActionMatch && req.method === 'POST') {
     if (mrpRunActionMatch[2] === 'execute') return executeMrpRun(db, req, res, actor, mrpRunActionMatch[1]);
     return cancelMrpRun(db, res, actor, mrpRunActionMatch[1]);
+  }
+  // M12 — Production Instruction
+  if (pathname === '/api/production-instructions' && req.method === 'GET') return listProductionInstructions(db, res, actor, url);
+  if (pathname === '/api/production-instructions' && req.method === 'POST') return createProductionInstruction(db, req, res, actor);
+  const prodInstMatch = pathname.match(/^\/api\/production-instructions\/([^/]+)$/);
+  if (prodInstMatch && req.method === 'GET') return getProductionInstruction(db, res, actor, prodInstMatch[1]);
+  const prodInstActionMatch = pathname.match(/^\/api\/production-instructions\/([^/]+)\/(release|cancel|generate-production-order)$/);
+  if (prodInstActionMatch && req.method === 'POST') {
+    const iid = prodInstActionMatch[1];
+    const action = prodInstActionMatch[2];
+    if (action === 'release') return releaseProductionInstruction(db, res, actor, iid);
+    if (action === 'cancel') return cancelProductionInstruction(db, res, actor, iid);
+    return generateProductionOrderFromInstruction(db, req, res, actor, iid);
+  }
+  // M12 — Purchase Instruction
+  if (pathname === '/api/purchase-instructions' && req.method === 'GET') return listPurchaseInstructions(db, res, actor, url);
+  if (pathname === '/api/purchase-instructions' && req.method === 'POST') return createPurchaseInstruction(db, req, res, actor);
+  const purchInstMatch = pathname.match(/^\/api\/purchase-instructions\/([^/]+)$/);
+  if (purchInstMatch && req.method === 'GET') return getPurchaseInstruction(db, res, actor, purchInstMatch[1]);
+  const purchInstActionMatch = pathname.match(/^\/api\/purchase-instructions\/([^/]+)\/(release|cancel)$/);
+  if (purchInstActionMatch && req.method === 'POST') {
+    const iid = purchInstActionMatch[1];
+    const action = purchInstActionMatch[2];
+    if (action === 'release') return releasePurchaseInstruction(db, res, actor, iid);
+    return cancelPurchaseInstruction(db, res, actor, iid);
+  }
+  // M12 — Purchase Requisition
+  if (pathname === '/api/purchase-requisitions' && req.method === 'GET') return listPurchaseRequisitions(db, res, actor, url);
+  if (pathname === '/api/purchase-requisitions' && req.method === 'POST') return createPurchaseRequisition(db, req, res, actor);
+  const purchReqMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)$/);
+  if (purchReqMatch && req.method === 'GET') return getPurchaseRequisition(db, res, actor, purchReqMatch[1]);
+  const purchReqActionMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)\/(submit|approve|reject|cancel|generate-purchase-order)$/);
+  if (purchReqActionMatch && req.method === 'POST') {
+    const rid = purchReqActionMatch[1];
+    const action = purchReqActionMatch[2];
+    if (action === 'submit') return submitPurchaseRequisition(db, res, actor, rid);
+    if (action === 'approve') return approvePurchaseRequisition(db, res, actor, rid);
+    if (action === 'reject') return rejectPurchaseRequisition(db, req, res, actor, rid);
+    if (action === 'cancel') return cancelPurchaseRequisition(db, res, actor, rid);
+    return generatePurchaseOrderFromRequisition(db, req, res, actor, rid);
   }
   if (pathname === '/api/work-centers' && req.method === 'GET') return listWorkCenters(db, res, actor);
   if (pathname === '/api/work-centers' && req.method === 'POST') return createWorkCenter(db, req, res, actor);

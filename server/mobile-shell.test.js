@@ -300,6 +300,10 @@ describe('App.jsx — responsive composition', () => {
       'WORKFLOW_VIEW', 'WORKFLOW_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE',
       'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE',
       'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE',
+      'PRODUCTION_INSTRUCTION_VIEW', 'PRODUCTION_INSTRUCTION_MANAGE',
+      'PURCHASE_INSTRUCTION_VIEW', 'PURCHASE_INSTRUCTION_MANAGE',
+      'PURCHASE_REQUISITION_VIEW', 'PURCHASE_REQUISITION_MANAGE',
+      'PURCHASE_REQUISITION_APPROVE',
     ];
     const refs = new Set();
     const re = /\b([A-Z][A-Z0-9_]+_(?:VIEW|MANAGE|CREATE|SUBMIT|APPROVE|REJECT|START|COMPLETE))\b/g;
@@ -330,7 +334,7 @@ describe('Permissions — canonical registry count', () => {
   test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 100, `PERMISSIONS array must have 100 entries (got ${perms.length})`);
+    assert.equal(perms.length, 107, `PERMISSIONS array must have 107 entries after M12 (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);

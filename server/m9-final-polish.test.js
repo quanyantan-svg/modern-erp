@@ -55,8 +55,8 @@ describe('M9 business overview', () => {
   });
 
   test('deferred concepts are never active links', () => {
-    const html = renderOverview(['orders', 'inventory', 'production-orders', 'forecasts', 'mrp']);
-    for (const deferred of ['请购', '库存报废', '库存月结', '销售折让', '采购折让', '生产指令', '采购指令']) {
+    const html = renderOverview(['orders', 'inventory', 'production-orders', 'forecasts', 'mrp', 'production-instructions', 'purchase-instructions', 'purchase-requisitions']);
+    for (const deferred of ['库存报废', '库存月结', '销售折让', '采购折让']) {
       assert.doesNotMatch(html, new RegExp(`href="[^"]+"[^>]*>[^<]*${deferred}`));
     }
   });

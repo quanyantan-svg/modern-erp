@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
+import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { Badge, can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
-import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const FORECAST_STATUS_LABELS = { DRAFT: '草稿', ACTIVE: '已生效', CANCELLED: '已取消' };
 const MRP_STATUS_LABELS = { DRAFT: '草稿', COMPLETED: '已计算', CANCELLED: '已取消' };
@@ -403,7 +403,8 @@ function MrpResultSection({ grouped, run, onClose, notify }) {
       <th>产品</th><th className="number">销售需求</th><th className="number">预测需求</th><th className="number">组件需求</th>
       <th className="number">毛需求</th><th className="number">现有库存</th><th className="number">在途采购</th>
       <th className="number">在途生产</th><th className="number">净需求</th><th>建议类型</th>
-      <th className="number">建议数量</th><th>需求日期</th><th>提示</th>
+      <th className="number">建议数量</th><th className="number">已下达</th><th className="number">剩余</th>
+      <th>需求日期</th><th>提示</th><th>操作</th>
     </tr></thead><tbody>
       {[...make, ...buy, ...satisfied].map((row) => <tr className="clickable" key={row.id} onClick={() => setOpenRow(row)}>
         <td><strong>{row.product_name}</strong><small className="block mono">{row.product_code}</small></td>
@@ -417,8 +418,15 @@ function MrpResultSection({ grouped, run, onClose, notify }) {
         <td className="number"><strong>{fmtQty(row.net_requirement)}</strong></td>
         <td>{row.suggestion_type ? <Badge type={row.suggestion_type === 'MAKE' ? 'info' : 'success'}>{SUGGESTION_LABELS[row.suggestion_type]}</Badge> : <span className="dim">无</span>}</td>
         <td className="number">{fmtQty(row.suggested_quantity)}</td>
+        <td className="number">{fmtQty(row.converted_quantity)}</td>
+        <td className="number">{fmtQty(row.remaining_quantity)}</td>
         <td>{row.need_by_date || '—'}</td>
         <td>{row.warning ? <Badge type="warning">{row.warning === 'ROUTING_MISSING' ? '缺少工序' : row.warning}</Badge> : '—'}</td>
+        <td onClick={(event) => event.stopPropagation()}>
+          {row.suggestion_type === 'MAKE' && row.remaining_quantity > 0 && <AppLink page="production-instructions">创建生产指令</AppLink>}
+          {row.suggestion_type === 'BUY' && row.remaining_quantity > 0 && <AppLink page="purchase-instructions">创建采购指令</AppLink>}
+          {row.suggestion_type && row.remaining_quantity <= 0 && <span className="dim">已下达完</span>}
+        </td>
       </tr>)}
     </tbody></table></div>
     {openRow && <MrpResultTrace runId={run.id} result={openRow} onClose={() => setOpenRow(null)} notify={notify}/>}
@@ -448,6 +456,12 @@ function MrpResultTrace({ runId, result, onClose, notify }) {
       <label>在途生产<span>{fmtQty(result.open_production_supply)}</span></label>
       <label>净需求<span><strong>{fmtQty(result.net_requirement)}</strong></span></label>
       <label>建议数量<span>{fmtQty(result.suggested_quantity)}</span></label>
+      <label>已下达<span>{fmtQty(result.converted_quantity)}</span></label>
+      <label>剩余可下达<span><strong>{fmtQty(result.remaining_quantity)}</strong></span></label>
+    </div>
+    <div className="form-actions full">
+      {result.suggestion_type === 'MAKE' && <AppLink page="production-instructions">创建生产指令</AppLink>}
+      {result.suggestion_type === 'BUY' && <AppLink page="purchase-instructions">创建采购指令</AppLink>}
     </div>
     <h3>需求来源</h3>
     <div className="table-wrap"><table><thead><tr><th>来源类型</th><th>单据</th><th>需求日期</th><th className="number">数量</th></tr></thead><tbody>

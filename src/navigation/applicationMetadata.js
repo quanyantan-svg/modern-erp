@@ -46,6 +46,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'green',
     items: [
       { page: 'purchase-orders', mobileLabel: '采购订单', iconKey: 'purchaseOrders' },
+      { page: 'purchase-requisitions', mobileLabel: '请购单', iconKey: 'purchaseOrders' },
+      { page: 'purchase-instructions', mobileLabel: '采购指令', iconKey: 'purchaseOrders' },
       { page: 'purchase-receipts', mobileLabel: '采购入库', iconKey: 'purchaseReceipts' },
     ],
   },
@@ -64,6 +66,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'blue',
     items: [
       { page: 'production-orders', mobileLabel: '制令单', iconKey: 'productionOrders' },
+      { page: 'production-instructions', mobileLabel: '生产指令', iconKey: 'productionOrders' },
       { page: 'material-issues', mobileLabel: '用料出库', iconKey: 'salesDeliveries' },
       { page: 'production-receipts', mobileLabel: '生产入库', iconKey: 'purchaseReceipts' },
     ],
@@ -117,7 +120,6 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '请购单', '采购指令',
   '库存报废', '库存月结', '销售折让', '采购折让',
 ]);
 

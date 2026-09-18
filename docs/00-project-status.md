@@ -1,16 +1,37 @@
 # 项目状态快照
 
-> 更新：2026-09-19 (M11 Net-Before-Explosion HOTFIX)
+> 更新：2026-09-19 (M12 Production / Purchase Instruction & Purchase Requisition)
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M11 Forecast & MRP
-- 分支：feature/v1.1-mrp
+- 阶段：v1.1 Expansion — M12 Planning Documents
+- 分支：feature/v1.1-planning-docs
 - 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M12 — Production / Purchase Instruction & Purchase Requisition
+
+- 在 M11 不可变 MRP 快照之上新增三类计划单据：`production_instructions` / `production_instruction_items`、`purchase_instructions` / `purchase_instruction_items`、`purchase_requisitions` / `purchase_requisition_items`；新表均为 append-only，不重写 `mrp_run_results`；
+- 三个新生命周期：生产指令 `DRAFT → RELEASED → CANCELLED`、采购指令 `DRAFT → RELEASED → CANCELLED`、请购单 `DRAFT → SUBMITTED → APPROVED / REJECTED → CANCELLED`；
+- 部分下达：同一 MRP 建议（MAKE 或 BUY）可被多条指令分批下达（建议 100 = 60 + 40）；剩余 `0` 时第 `+1` 次返回 `409`；MRP 建议数量本身永远不被修改；`/api/planning/mrp/runs/:id` 现在携带只读 `converted_quantity` / `remaining_quantity` 元数据；
+- 显式生成下游单据：RELEASED 生产指令 → 制令单（创建时显式选择 itemId，一对一幂等），APPROVED 已完成后才能下达制令单，否则 `409`；RELEASED 采购指令 → 请购单（自动 back-link 到 instruction item），APPROVED 请购单 → 采购订单（用户显式选择供应商，PO 以 DRAFT 创建并走既有审批 / 入库 / AP / 付款流程）；
+- 仅消费对应建议：生产指令 `MRP.suggestion_type === 'MAKE' && net_requirement > 0`，采购指令 `BUY && net_requirement > 0`，否则 `400`；MRP DRAFT run `409`；
+- 取消规则：DRAFT 取消直接 `200`；RELEASED / APPROVED 取消仅当未生成下游单据时成功；存在下游 PO / 制令单时 `409`；
+- 审批中心新增 `PURCHASE_REQUISITION` 文档族；与 `SALES_ORDER` / `PURCHASE_ORDER` / `INVENTORY_CHECK` / `ACCOUNTING_VOUCHER` 并列；创建人自审 `409`；驳回必填原因；其他四个审批族保持原状；
+- 权限：注册 7 个新窄权限 `PRODUCTION_INSTRUCTION_VIEW/MANAGE`、`PURCHASE_INSTRUCTION_VIEW/MANAGE`、`PURCHASE_REQUISITION_VIEW/MANAGE/APPROVE`，从 `100` 增至 `107`；`admin` 继承全部，`role-reviewer` 经决策获得 `PURCHASE_REQUISITION_VIEW` 与 `PURCHASE_REQUISITION_APPROVE`（理由：与既有 `PURCHASE_ORDERS_APPROVE` 对称），`role-sales` / `role-warehouse` / `role-accounting` 全部不获得任何 M12 权限；
+- 库存影响 = NONE，会计影响 = NONE，生产 / 采购单据写入仅在用户显式触发「生成制令单」/「生成请购单」/「生成采购订单」按钮时发生；
+- 完整路由：`GET/POST /api/production-instructions[/:id[/release|cancel|generate-production-order]]`、`/api/purchase-instructions[/:id[/release|cancel]]`、`/api/purchase-requisitions[/:id[/submit|approve|reject|cancel|generate-purchase-order]]`；
+- UI：教师可见业务总览新增「计划与物料需求」链 `销售订单 → 计划预测 → MRP → 生产指令 → 制令单` 与 `MRP → 采购指令 → 请购单 → 采购订单`，所有节点为 canonical `AppLink`；MRP 结果明细新增「已下达 / 剩余」列；生产指令 / 采购指令 / 请购单均支持列表 / 详情 / 编辑 / 下达 / 取消 / 生成下游 / AppLink 跨单据导航；
+- 移动端：基础资料 / 采购管理 / 生产管理组均暴露 `生产指令`、`采购指令`、`请购单` 入口；窄屏 375 / 414 / 1024 均无横向溢出；
+- Focused：`server/m12-planning-documents.test.js` → **36 tests / 9 suites / 0 failed**，覆盖 MAKE / BUY 资格、部分下达、`409` 过量下达、下游单据生成幂等、MRP 元数据计算、取消规则、审批中心集成、五角色权限契约、库存 / 会计零影响、MRP 算术回归（FG 净需求 15 / 组件 30 / 45 不变）、数据库重开幂等；
+- Full：`pnpm test` → **1120 tests / 222 suites / 0 failed**（基线 ≥1084 / ≥213）；
+- Build：`pnpm build` PASS（`582.91 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成「MRP MAKE → 生产指令 → 制令单」与「MRP BUY → 采购指令 → 请购单 → 采购订单」两条链路的 SPA 下钻与跨单据导航验收；五角色权限验证、`403` / `409` 隔离、console / 500 sweep 通过；
+- 旧 `mrp_plans` / `mrp_plan_items` / `mrp-plans` 端点保持 legacy 兼容面；
+- 无 tag、push、deploy。
 
 ### M10 — Product Routing Standard / 制品工序标准
 

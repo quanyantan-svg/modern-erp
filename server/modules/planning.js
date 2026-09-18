@@ -495,6 +495,33 @@ export function getMrpRun(db, res, actor, runId) {
      WHERE r.run_id = ?
      ORDER BY (r.suggestion_type = 'MAKE') DESC, (r.suggestion_type = 'BUY') DESC, p.code
   `).all(runId);
+  // Compute read-only conversion metadata (suggested / converted /
+  // remaining). Mutating mrp_run_results would violate the M11
+  // immutability contract, so these values live only in the response.
+  for (const result of run.results) {
+    if (result.suggestion_type === 'MAKE') {
+      const convertedRow = db.prepare(`
+        SELECT COALESCE(SUM(i.quantity), 0) qty
+          FROM production_instruction_items i
+          JOIN production_instructions h ON h.id = i.instruction_id
+         WHERE i.mrp_result_id = ? AND h.status IN ('DRAFT', 'RELEASED')
+      `).get(result.id);
+      result.converted_quantity = Number(convertedRow.qty);
+      result.remaining_quantity = Math.max(0, Number(result.suggested_quantity) - result.converted_quantity);
+    } else if (result.suggestion_type === 'BUY') {
+      const convertedRow = db.prepare(`
+        SELECT COALESCE(SUM(i.quantity), 0) qty
+          FROM purchase_instruction_items i
+          JOIN purchase_instructions h ON h.id = i.instruction_id
+         WHERE i.mrp_result_id = ? AND h.status IN ('DRAFT', 'RELEASED')
+      `).get(result.id);
+      result.converted_quantity = Number(convertedRow.qty);
+      result.remaining_quantity = Math.max(0, Number(result.suggested_quantity) - result.converted_quantity);
+    } else {
+      result.converted_quantity = 0;
+      result.remaining_quantity = Number(result.suggested_quantity);
+    }
+  }
   run.components = db.prepare(`
     SELECT c.id, c.parent_product_id, c.product_id, c.gross_required, c.bom_path, c.level,
            pp.code parent_code, pp.name parent_name,
