@@ -981,7 +981,272 @@ describe('M11 traceability / pegging', () => {
 });
 
 // =====================================================================
-// 10. Legacy DB reopen — idempotency
+// 10. Net-before-explosion (M11 HOTFIX)
+// =====================================================================
+//
+// Canonical principle: for a MAKE item, only the parent's NET
+// requirement (after on-hand + open purchase supply + open production
+// supply are subtracted from the gross) may drive BOM explosion. If
+// net <= 0, the parent contributes 0 to child gross demand.
+describe('M11 net-before-explosion (HOTFIX)', () => {
+  test('49. simple: FG gross 20 (10 sales + 10 forecast), on-hand 3, open production 2 → FG net 15 → A gross 30, B gross 45', async () => {
+    const fgId = ensureProduct('NB-FG', '净需求前置FG');
+    const compA = ensureProduct('NB-A', '净需求前置A');
+    const compB = ensureProduct('NB-B', '净需求前置B');
+    seedBom({ parentId: fgId, items: [
+      { productId: compA, quantity: 2 },
+      { productId: compB, quantity: 3 },
+    ] });
+    const fc = await createForecast({
+      name: 'NB forecast',
+      items: [{ productId: fgId, needDate: plusDays(todayIso(), 7), quantity: 10 }],
+    });
+    await request(`/api/planning/forecasts/${fc.id}/activate`, { method: 'POST', token: adminToken });
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    const whId = seedWarehouse();
+    seedInventory(whId, fgId, 3);
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    const run = await createMrpRun({ name: 'NB simple', mode: 'SALES_PLUS_FORECAST', forecastId: fc.id });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    assert.ok(fgRow);
+    assert.equal(Number(fgRow.gross_sales_demand), 10);
+    assert.equal(Number(fgRow.gross_forecast_demand), 10);
+    assert.equal(Number(fgRow.gross_requirement), 20);
+    assert.equal(Number(fgRow.on_hand), 3);
+    assert.equal(Number(fgRow.open_production_supply), 2);
+    assert.equal(Number(fgRow.net_requirement), 15);
+    assert.equal(Number(fgRow.suggested_quantity), 15);
+    assert.equal(fgRow.suggestion_type, 'MAKE');
+    const aRow = detail.data.run.results.find((r) => r.product_id === compA);
+    const bRow = detail.data.run.results.find((r) => r.product_id === compB);
+    assert.ok(aRow);
+    assert.ok(bRow);
+    assert.equal(Number(aRow.gross_component_demand), 30, 'A gross = FG net 15 × 2 = 30, NOT 40');
+    assert.equal(Number(bRow.gross_component_demand), 45, 'B gross = FG net 15 × 3 = 45, NOT 60');
+    assert.equal(aRow.suggestion_type, 'BUY');
+    assert.equal(bRow.suggestion_type, 'BUY');
+    // Verify bom components match the net-driven contributions.
+    const comp = detail.data.run.components.filter((c) => c.parent_product_id === fgId);
+    const byChild = Object.fromEntries(comp.map((c) => [c.product_id, Number(c.gross_required)]));
+    assert.equal(byChild[compA], 30);
+    assert.equal(byChild[compB], 45);
+  });
+
+  test('50. zero-net parent: FG gross 10, on-hand 10 → net 0 → no child component gross demand', async () => {
+    const fgId = ensureProduct('ZN-FG', '零净需求FG');
+    const compA = ensureProduct('ZN-A', '零净需求A');
+    seedBom({ parentId: fgId, items: [{ productId: compA, quantity: 2 }] });
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    const whId = seedWarehouse();
+    seedInventory(whId, fgId, 10);
+    const run = await createMrpRun({ name: 'NB zero-net' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    assert.ok(fgRow);
+    assert.equal(Number(fgRow.gross_requirement), 10);
+    assert.equal(Number(fgRow.on_hand), 10);
+    assert.equal(Number(fgRow.net_requirement), 0);
+    assert.equal(Number(fgRow.suggested_quantity), 0);
+    assert.equal(fgRow.suggestion_type, '', 'zero-net parent must not produce MAKE/BUY suggestion');
+    // The child component MUST NOT receive any gross component demand.
+    const aRow = detail.data.run.results.find((r) => r.product_id === compA);
+    assert.equal(aRow, undefined, 'zero-net parent must not create any child component row');
+    const comp = detail.data.run.components.filter((c) => c.parent_product_id === fgId);
+    assert.equal(comp.length, 0, 'zero-net parent must not persist any bom_components row');
+    const peg = detail.data.run.pegging.filter((p) => p.source_type === 'BOM_EXPLOSION' && p.result_product_id === compA);
+    assert.equal(peg.length, 0, 'zero-net parent must not produce any BOM_EXPLOSION pegging');
+  });
+
+  test('51. partial-net parent: FG gross 10, on-hand 4 → net 6 → A × 2 → child gross 12, NOT 20', async () => {
+    const fgId = ensureProduct('PN-FG', '部分净需求FG');
+    const compA = ensureProduct('PN-A', '部分净需求A');
+    seedBom({ parentId: fgId, items: [{ productId: compA, quantity: 2 }] });
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    const whId = seedWarehouse();
+    seedInventory(whId, fgId, 4);
+    const run = await createMrpRun({ name: 'NB partial' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    assert.equal(Number(fgRow.gross_requirement), 10);
+    assert.equal(Number(fgRow.net_requirement), 6);
+    assert.equal(Number(fgRow.suggested_quantity), 6);
+    const aRow = detail.data.run.results.find((r) => r.product_id === compA);
+    assert.ok(aRow);
+    assert.equal(Number(aRow.gross_component_demand), 12, 'partial-net: child gross = parent net 6 × 2 = 12, NOT 20');
+    assert.equal(Number(aRow.net_requirement), 12);
+  });
+
+  test('52. multi-level: FG net 15 → SUB×2 → SUB gross 30 → SUB on-hand 4 + open prod 6 → SUB net 20 → RAW×3 → RAW gross 60 (NOT 90)', async () => {
+    const fgId = ensureProduct('MLN-FG', '多层净需求FG');
+    const subId = ensureProduct('MLN-SUB', '多层净需求SUB');
+    const rawId = ensureProduct('MLN-RAW', '多层净需求RAW');
+    seedBom({ parentId: fgId, items: [{ productId: subId, quantity: 2 }] });
+    seedBom({ parentId: subId, items: [{ productId: rawId, quantity: 3 }] });
+    // Top-level demand = 20 (FG); FG on-hand = 3; FG open prod = 2 → FG net = 15.
+    const fc = await createForecast({
+      name: 'MLN forecast',
+      items: [{ productId: fgId, needDate: plusDays(todayIso(), 7), quantity: 10 }],
+    });
+    await request(`/api/planning/forecasts/${fc.id}/activate`, { method: 'POST', token: adminToken });
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    const whFg = seedWarehouse();
+    seedInventory(whFg, fgId, 3);
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    // SUB inventory: on-hand 4, open prod 6 → SUB net = 30 − 4 − 6 = 20.
+    const whSub = seedWarehouse();
+    seedInventory(whSub, subId, 4);
+    seedProductionOrder({ productId: subId, quantity: 6, status: 'PENDING' });
+    const run = await createMrpRun({ name: 'NB multilevel', mode: 'SALES_PLUS_FORECAST', forecastId: fc.id });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    const subRow = detail.data.run.results.find((r) => r.product_id === subId);
+    const rawRow = detail.data.run.results.find((r) => r.product_id === rawId);
+    assert.equal(Number(fgRow.net_requirement), 15, 'FG net = 20 − 3 − 2 = 15');
+    assert.equal(fgRow.suggestion_type, 'MAKE');
+    assert.equal(Number(subRow.gross_component_demand), 30, 'SUB gross = FG net 15 × 2 = 30');
+    assert.equal(Number(subRow.on_hand), 4);
+    assert.equal(Number(subRow.open_production_supply), 6);
+    assert.equal(Number(subRow.net_requirement), 20, 'SUB net = 30 − 4 − 6 = 20, NOT 26');
+    assert.equal(subRow.suggestion_type, 'MAKE');
+    assert.equal(Number(rawRow.gross_component_demand), 60, 'RAW gross = SUB net 20 × 3 = 60, NOT 90');
+    assert.equal(rawRow.suggestion_type, 'BUY');
+    // Pegging must use net-driven contributions.
+    const subPeg = detail.data.run.pegging.filter((p) => p.result_product_id === subId && p.source_type === 'BOM_EXPLOSION');
+    assert.ok(subPeg.length === 1);
+    assert.equal(Number(subPeg[0].quantity_contribution), 30);
+    const rawPeg = detail.data.run.pegging.filter((p) => p.result_product_id === rawId && p.source_type === 'BOM_EXPLOSION');
+    assert.ok(rawPeg.length === 1);
+    assert.equal(Number(rawPeg[0].quantity_contribution), 60);
+  });
+
+  test('53. shared component: FG1 net 5 × A2 + FG2 net 4 × A3 → A gross 22; net A only once', async () => {
+    const fg1 = ensureProduct('SCN-FG1', '共享净需求FG1');
+    const fg2 = ensureProduct('SCN-FG2', '共享净需求FG2');
+    const shared = ensureProduct('SCN-A', '共享净需求A');
+    seedBom({ parentId: fg1, items: [{ productId: shared, quantity: 2 }] });
+    seedBom({ parentId: fg2, items: [{ productId: shared, quantity: 3 }] });
+    // FG1: sales 5, on-hand 0, open supply 0 → net = 5 → A = 10.
+    seedSalesOrder({ productId: fg1, quantity: 5 });
+    // FG2: sales 7, on-hand 3, open supply 0 → net = 4 → A = 12.
+    seedSalesOrder({ productId: fg2, quantity: 7 });
+    const whId = seedWarehouse();
+    seedInventory(whId, fg2, 3);
+    const run = await createMrpRun({ name: 'NB shared' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fg1Row = detail.data.run.results.find((r) => r.product_id === fg1);
+    const fg2Row = detail.data.run.results.find((r) => r.product_id === fg2);
+    const aRow = detail.data.run.results.find((r) => r.product_id === shared);
+    assert.equal(Number(fg1Row.net_requirement), 5);
+    assert.equal(Number(fg2Row.net_requirement), 4);
+    assert.ok(aRow);
+    assert.equal(Number(aRow.gross_component_demand), 22, '5×2 + 4×3 = 22');
+    assert.equal(Number(aRow.net_requirement), 22, 'A netted only ONCE against its own stock + open supply');
+    // Pegging must show both net-driven contributions.
+    const aPeg = detail.data.run.pegging.filter((p) => p.result_product_id === shared && p.source_type === 'BOM_EXPLOSION');
+    const totalPegged = aPeg.reduce((s, p) => s + Number(p.quantity_contribution), 0);
+    assert.equal(totalPegged, 22);
+    const fg1Peg = aPeg.filter((p) => p.source_id === fg1).reduce((s, p) => s + Number(p.quantity_contribution), 0);
+    const fg2Peg = aPeg.filter((p) => p.source_id === fg2).reduce((s, p) => s + Number(p.quantity_contribution), 0);
+    assert.equal(fg1Peg, 10, 'FG1 → A = FG1 net 5 × 2 = 10');
+    assert.equal(fg2Peg, 12, 'FG2 → A = FG2 net 4 × 3 = 12');
+  });
+
+  test('54. pegging matches corrected (net-driven) BOM explosion quantities', async () => {
+    const fgId = ensureProduct('PG-FG', 'Peg FG');
+    const compA = ensureProduct('PG-A', 'Peg A');
+    const compB = ensureProduct('PG-B', 'Peg B');
+    seedBom({ parentId: fgId, items: [
+      { productId: compA, quantity: 2 },
+      { productId: compB, quantity: 3 },
+    ] });
+    seedSalesOrder({ productId: fgId, quantity: 20 });
+    const whId = seedWarehouse();
+    seedInventory(whId, fgId, 3);
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    const run = await createMrpRun({ name: 'NB peg' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const aPeg = detail.data.run.pegging.filter((p) => p.result_product_id === compA && p.source_type === 'BOM_EXPLOSION');
+    const bPeg = detail.data.run.pegging.filter((p) => p.result_product_id === compB && p.source_type === 'BOM_EXPLOSION');
+    assert.equal(aPeg.length, 1);
+    assert.equal(bPeg.length, 1);
+    assert.equal(Number(aPeg[0].quantity_contribution), 30, 'A pegging = FG net 15 × 2 = 30, never 40');
+    assert.equal(Number(bPeg[0].quantity_contribution), 45, 'B pegging = FG net 15 × 3 = 45, never 60');
+  });
+
+  test('55. parent open purchase supply can reduce parent net before explosion (G)', async () => {
+    const fgId = ensureProduct('PO-FG', '采购供应扣减FG');
+    const compA = ensureProduct('PO-A', '采购供应扣减A');
+    seedBom({ parentId: fgId, items: [{ productId: compA, quantity: 2 }] });
+    // FG sales 10, on-hand 0, APPROVED PO 4 (no receipt yet) → net = 6 → A gross = 12.
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    seedPurchaseOrder({ productId: fgId, quantity: 4 });
+    const run = await createMrpRun({ name: 'NB po' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    const aRow = detail.data.run.results.find((r) => r.product_id === compA);
+    assert.equal(Number(fgRow.open_purchase_supply), 4);
+    assert.equal(Number(fgRow.net_requirement), 6, 'PO supply reduces FG net before explosion');
+    assert.equal(Number(aRow.gross_component_demand), 12, 'A gross = FG net 6 × 2 = 12, NOT 20');
+  });
+
+  test('56. parent open production supply reduces parent net before explosion (H)', async () => {
+    const fgId = ensureProduct('PROD-FG', '生产供应扣减FG');
+    const compA = ensureProduct('PROD-A', '生产供应扣减A');
+    seedBom({ parentId: fgId, items: [{ productId: compA, quantity: 2 }] });
+    // FG sales 10, on-hand 0, PENDING production 4 (no receipt) → net = 6 → A gross = 12.
+    seedSalesOrder({ productId: fgId, quantity: 10 });
+    seedProductionOrder({ productId: fgId, quantity: 4, status: 'PENDING' });
+    const run = await createMrpRun({ name: 'NB prod' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
+    const aRow = detail.data.run.results.find((r) => r.product_id === compA);
+    assert.equal(Number(fgRow.open_production_supply), 4);
+    assert.equal(Number(fgRow.net_requirement), 6, 'production supply reduces FG net before explosion');
+    assert.equal(Number(aRow.gross_component_demand), 12, 'A gross = FG net 6 × 2 = 12, NOT 20');
+  });
+
+  test('57. trace: pegging note shows BOM path that follows net-driven parents', async () => {
+    const fgId = ensureProduct('TRN-FG', '追溯路径FG');
+    const subId = ensureProduct('TRN-SUB', '追溯路径SUB');
+    const rawId = ensureProduct('TRN-RAW', '追溯路径RAW');
+    seedBom({ parentId: fgId, items: [{ productId: subId, quantity: 1 }] });
+    seedBom({ parentId: subId, items: [{ productId: rawId, quantity: 1 }] });
+    // FG sales 4, FG on-hand 0 → FG net = 4 → SUB gross = 4 → SUB net = 4 → RAW gross = 4.
+    seedSalesOrder({ productId: fgId, quantity: 4 });
+    const run = await createMrpRun({ name: 'NB trace' });
+    await executeRun(run.id);
+    const detail = await request(`/api/planning/mrp/runs/${run.id}`);
+    const subPeg = detail.data.run.pegging.filter((p) => p.result_product_id === subId && p.source_type === 'BOM_EXPLOSION');
+    const rawPeg = detail.data.run.pegging.filter((p) => p.result_product_id === rawId && p.source_type === 'BOM_EXPLOSION');
+    assert.equal(subPeg.length, 1);
+    assert.match(subPeg[0].source_label, new RegExp(`${fgId} > ${subId}`), 'pegging note must reference the FG → SUB path');
+    assert.equal(rawPeg.length, 1);
+    assert.match(rawPeg[0].source_label, new RegExp(`${subId} > ${rawId}`), 'pegging note must reference the SUB → RAW path');
+    // bom_components rows must also use the same paths.
+    const subComp = detail.data.run.components.filter((c) => c.product_id === subId);
+    const rawComp = detail.data.run.components.filter((c) => c.product_id === rawId);
+    assert.equal(subComp.length, 1);
+    assert.equal(subComp[0].bom_path, `${fgId} > ${subId}`);
+    assert.equal(subComp[0].parent_product_id, fgId);
+    assert.equal(subComp[0].level, 1);
+    assert.equal(rawComp.length, 1);
+    assert.equal(rawComp[0].bom_path, `${fgId} > ${subId} > ${rawId}`);
+    assert.equal(rawComp[0].parent_product_id, subId, 'RAW direct parent is SUB, not FG');
+    assert.equal(rawComp[0].level, 2);
+  });
+});
+
+// =====================================================================
+// 11. Legacy DB reopen — idempotency
 // =====================================================================
 describe('M11 legacy DB reopen is idempotent', () => {
   test('48. reopen DB twice produces no duplicate forecasts, runs, results, or permissions', async () => {

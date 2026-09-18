@@ -377,64 +377,71 @@ function productActiveRouting(db, productId) {
   return db.prepare("SELECT id FROM product_routings WHERE product_id = ? AND status = 'ACTIVE' LIMIT 1").get(productId);
 }
 
-// Multi-level BOM explosion with cycle detection. Returns
-// { aggregate: Map<productId, grossRequired>, paths: Map<productId, bomPath> }
-// Keys in `aggregate` are the children discovered during the walk.
-// Children that themselves carry a BOM continue to recurse so that
-// deeper-level components appear in the aggregate as well. The caller
-// is responsible for keeping the parent end-item demand out of the
-// aggregate (the top-level parent is dropped before the aggregate is
-// consumed).
-function explodeBom(db, productId, gross, path, depth, state) {
+// Multi-level BOM explosion with cycle detection is implemented by
+// explodeBomNet below. This block intentionally has no other helpers;
+// the previous recursive `explodeBom` used the parent GROSS to drive
+// the walk, which inflated component demand whenever the parent's
+// net requirement was smaller than its gross (e.g. on-hand or open
+// supply covered part of the demand). The new walker enforces
+// net-before-explosion at every level.
+
+// DFS BOM walk with NET-BEFORE-EXPLOSION semantics.
+//
+// A MAKE parent's gross requirement is first netted against its own
+// on-hand stock, open purchase supply, and open production supply.
+// Only the resulting NET MAKE quantity is allowed to drive the
+// parent's BOM explosion. If the parent has no BOM, or its net is
+// zero, or the product is a BUY item, the walk does not contribute
+// any child component demand from this parent.
+//
+// At each step:
+//   1. compute parent net = max(0, gross - onHand - openPo - openProd)
+//   2. if isMake(parent) AND net > 0:
+//        for each BOM child:
+//          childGross += net * child.bomQty * (1 + scrapRate)
+//          record BOM_EXPLOSION pegging contribution = childGross
+//          recurse into the child using childGross as the new gross
+//   3. else: no contribution; do not recurse
+//
+// cycle detection is enforced via `state.active` (DFS ancestors); depth
+// is bounded by MAX_BOM_DEPTH. On violation: HttpError 400 and the
+// outer transaction does not commit any rows.
+//
+// componentGross[childId] accumulates the TOTAL child component demand
+// from all parents and levels — this is the value reported as
+// gross_component_demand and as the child's gross_requirement.
+// componentParents[childId] records one entry per (parent, child) edge
+// for both BOM components persistence and BOM_EXPLOSION pegging.
+function explodeBomNet(db, pid, gross, path, depth, state, componentGross, componentParents) {
   if (depth > MAX_BOM_DEPTH) {
     throw new HttpError(400, 'BOM 展开深度超过限制，可能存在循环');
   }
-  if (state.active.has(productId)) {
+  if (state.active.has(pid)) {
     throw new HttpError(400, 'BOM 存在循环引用，无法计算');
   }
-  state.active.add(productId);
+  state.active.add(pid);
   try {
-    const bom = productBom(db, productId);
-    if (!bom) {
-      addAggregate(state.aggregate, state.paths, productId, gross, path);
-      return;
-    }
-    const items = productBomItems(db, bom.id);
-    if (items.length === 0) {
-      addAggregate(state.aggregate, state.paths, productId, gross, path);
-      return;
-    }
-    // Record this product as a component demand so intermediate
-    // products (subassemblies) appear in the result aggregate. Their
-    // own children will be added by recursive calls below.
-    addAggregate(state.aggregate, state.paths, productId, gross, path);
-    for (const item of items) {
-      const required = gross * Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
-      const childPath = path ? `${path} > ${item.product_id}` : `${productId} > ${item.product_id}`;
-      explodeBom(db, item.product_id, required, childPath, depth + 1, state);
-    }
-  } finally {
-    state.active.delete(productId);
-  }
-}
-
-function addAggregate(map, paths, productId, qty, path) {
-  const cur = map.get(productId) || { productId, grossRequired: 0, bomPath: path };
-  cur.grossRequired += qty;
-  if (path) cur.bomPath = path;
-  map.set(productId, cur);
-  if (path) paths.set(productId, path);
-}
-
-function ensureBombsAreUsable(db, productIds) {
-  for (const pid of productIds) {
+    if (!Number.isFinite(gross) || gross <= 0) return;
+    const netting = computeNetting(db, pid, gross);
+    if (netting.net <= 0) return;
+    if (decideMakeBuy(db, pid) !== 'MAKE') return;
     const bom = productBom(db, pid);
-    if (!bom) continue;
-    // Probe a single level to surface obvious cycles / bad products.
+    if (!bom) return;
     const items = productBomItems(db, bom.id);
+    if (items.length === 0) return;
     for (const item of items) {
       assertActiveProduct(db, item.product_id);
+      const childPid = item.product_id;
+      const childGross = netting.net * Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+      const childPath = path ? `${path} > ${childPid}` : `${pid} > ${childPid}`;
+      componentGross.set(childPid, (componentGross.get(childPid) || 0) + childGross);
+      const parents = componentParents.get(childPid) || [];
+      parents.push({ parentId: pid, qty: childGross, path: childPath, level: depth + 1 });
+      componentParents.set(childPid, parents);
+      explodeBomNet(db, childPid, childGross, childPath, depth + 1, state, componentGross, componentParents);
     }
+  } finally {
+    state.active.delete(pid);
   }
 }
 
@@ -694,24 +701,15 @@ function insertOrUpdateResult(db, runId, partial) {
   }
 }
 
-function explodeBomAggregate(db, parentId, gross) {
-  // Pure helper that walks the BOM and returns the child aggregate
-  // without touching the database. The caller is responsible for
-  // persisting the rows inside its transaction.
-  const aggregate = new Map();
-  const paths = new Map();
-  const localState = { active: new Set(), aggregate, paths };
-  explodeBom(db, parentId, gross, parentId, 0, localState);
-  aggregate.delete(parentId);
-  return { aggregate, paths };
-}
-
-function insertBomComponents(db, runId, parentId, aggregate) {
-  for (const [productId, info] of aggregate.entries()) {
-    db.prepare(`
-      INSERT INTO mrp_run_components(id, run_id, parent_product_id, product_id, gross_required, bom_path, level)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id(), runId, parentId, productId, info.grossRequired, info.bomPath, info.bomPath ? info.bomPath.split('>').length - 1 : 0);
+function insertBomComponentEdges(db, runId, componentParents) {
+  const stmt = db.prepare(`
+    INSERT INTO mrp_run_components(id, run_id, parent_product_id, product_id, gross_required, bom_path, level)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const [childPid, parents] of componentParents.entries()) {
+    for (const parent of parents) {
+      stmt.run(id(), runId, parent.parentId, childPid, parent.qty, parent.path, parent.level);
+    }
   }
 }
 
@@ -759,9 +757,7 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
   // Snapshot all demands and the explosion result, then commit
   // atomically so that BOM cycle / validation errors do not leave a
   // half-written run.
-  const demands = [];
   let summary = { totalProducts: 0, makeSuggestions: 0, buySuggestions: 0, shortageProducts: 0 };
-  const componentTotals = new Map(); // productId -> { gross, parents: [{parentId, qty, path}] }
   const forecastDemand = run.demand_source_mode !== 'SALES_ORDERS'
     ? buildForecastDemandRows(db, run.forecast_id, run.horizon_start, run.horizon_end)
     : [];
@@ -771,58 +767,47 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
   // Aggregate sales + forecast at product level. Need date is the
   // earliest of all contributor dates so MRP result rows show the
   // earliest relevant need.
-  const productGross = new Map(); // productId -> { sales, forecast, needDate }
+  const topGross = new Map(); // productId -> { sales, forecast, needDate }
   for (const row of salesDemand) {
-    const cur = productGross.get(row.productId) || { sales: 0, forecast: 0, needDate: null };
+    const cur = topGross.get(row.productId) || { sales: 0, forecast: 0, needDate: null };
     cur.sales += row.quantity;
     if (!cur.needDate || row.needDate < cur.needDate) cur.needDate = row.needDate;
-    productGross.set(row.productId, cur);
+    topGross.set(row.productId, cur);
   }
   for (const row of forecastDemand) {
-    const cur = productGross.get(row.productId) || { sales: 0, forecast: 0, needDate: null };
+    const cur = topGross.get(row.productId) || { sales: 0, forecast: 0, needDate: null };
     cur.forecast += row.quantity;
     if (!cur.needDate || row.needDate < cur.needDate) cur.needDate = row.needDate;
-    productGross.set(row.productId, cur);
+    topGross.set(row.productId, cur);
   }
   // Validate referenced products (skip silently missing references —
   // already prevented by FK but defensive).
-  for (const [pid] of productGross) {
+  for (const [pid] of topGross) {
     if (!productMap.has(pid)) throw new HttpError(400, `需求产品 ${pid} 不存在或已停用`);
   }
-  // First pass: walk productGross through BOM explosion, accumulating
-  // component gross. Keep end-item net + suggestion after the second
-  // pass. We deliberately aggregate component demand BEFORE netting
-  // so multiple parent requirements do not each consume the same
-  // component stock twice.
-  const parentExposures = new Map(); // productId -> { totalGross, needDate }
-  for (const [pid, info] of productGross.entries()) {
+  // Net-before-explosion walk: each top-level MAKE parent drives its
+  // BOM only with its net requirement (gross - on_hand - open_po -
+  // open_prod). If parent has no BOM or net <= 0, it contributes
+  // nothing to child demand. Children that are themselves MAKE
+  // continue the walk using their accumulated component gross as the
+  // next-level gross, and the same netting rule applies recursively.
+  const componentGross = new Map(); // productId -> total gross from BOM explosions
+  const componentParents = new Map(); // productId -> [{parentId, qty, path, level}]
+  const walkState = { active: new Set() };
+  for (const [pid, info] of topGross.entries()) {
     const totalGross = info.sales + info.forecast;
-    const cur = parentExposures.get(pid) || { totalGross: 0, needDate: null };
-    cur.totalGross += totalGross;
-    if (!cur.needDate || info.needDate < cur.needDate) cur.needDate = info.needDate;
-    parentExposures.set(pid, cur);
+    if (totalGross <= 0) continue;
+    explodeBomNet(db, pid, totalGross, pid, 0, walkState, componentGross, componentParents);
   }
-  for (const [pid, info] of parentExposures.entries()) {
-    const { aggregate } = explodeBomAggregate(db, pid, info.totalGross);
-    for (const [childId, childInfo] of aggregate.entries()) {
-      const cur = componentTotals.get(childId) || { gross: 0, parents: [] };
-      cur.gross += childInfo.grossRequired;
-      cur.parents.push({ parentId: pid, qty: childInfo.grossRequired, path: childInfo.bomPath });
-      componentTotals.set(childId, cur);
-    }
-  }
-  // Second pass: persist demands, then for every demanded product
-  // (parent + component) compute net + suggestion.
+  // Persist demands, BOM components, results, and pegging inside a
+  // single transaction so a cycle / validation failure leaves no
+  // partial rows behind.
   transaction(db, () => {
     db.prepare("DELETE FROM mrp_run_results WHERE run_id=?").run(run.id);
     db.prepare("DELETE FROM mrp_run_components WHERE run_id=?").run(run.id);
     db.prepare("DELETE FROM mrp_run_demands WHERE run_id=?").run(run.id);
     db.prepare("DELETE FROM mrp_run_pegging WHERE run_id=?").run(run.id);
-    for (const [pid] of parentExposures.entries()) {
-      const info = parentExposures.get(pid);
-      const { aggregate } = explodeBomAggregate(db, pid, info.totalGross);
-      insertBomComponents(db, run.id, pid, aggregate);
-    }
+    insertBomComponentEdges(db, run.id, componentParents);
     for (const row of salesDemand) {
       upsertDemandRow(db, run.id, {
         productId: row.productId,
@@ -849,44 +834,43 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
     // both as a parent and as a component gets its MAKE/BUY decision
     // from the parent side.
     const allProductIds = new Set();
-    for (const [pid] of productGross) allProductIds.add(pid);
-    for (const [pid] of componentTotals) allProductIds.add(pid);
+    for (const [pid] of topGross) allProductIds.add(pid);
+    for (const [pid] of componentGross) allProductIds.add(pid);
     let totalProducts = 0;
     let makeSuggestions = 0;
     let buySuggestions = 0;
     let shortageProducts = 0;
     for (const pid of allProductIds) {
-      const parentInfo = productGross.get(pid) || { sales: 0, forecast: 0, needDate: null };
-      const componentInfo = componentTotals.get(pid);
-      const grossFromComponents = componentInfo ? componentInfo.gross : 0;
-      const gross = parentInfo.sales + parentInfo.forecast + grossFromComponents;
+      const topInfo = topGross.get(pid) || { sales: 0, forecast: 0, needDate: null };
+      const parents = componentParents.get(pid);
+      const grossFromComponents = parents ? parents.reduce((sum, p) => sum + p.qty, 0) : 0;
+      const gross = topInfo.sales + topInfo.forecast + grossFromComponents;
       if (gross <= 0) continue;
       const netting = computeNetting(db, pid, gross);
-      const isParent = parentInfo.sales + parentInfo.forecast > 0;
-      const suggestionType = isParent ? decideMakeBuy(db, pid) : (decideMakeBuy(db, pid) === 'MAKE' ? 'MAKE' : 'BUY');
-      const suggestedQty = netting.net;
+      const suggestionType = netting.net > 0 ? decideMakeBuy(db, pid) : '';
       const warning = warningFor(db, pid, suggestionType);
-      const needByDate = parentInfo.needDate || (componentInfo ? componentInfo.parents[0]?.path && null : null);
+      const bomLevel = parents ? parents.reduce((m, p) => Math.max(m, p.level || 0), 0) : 0;
       insertOrUpdateResult(db, run.id, {
         productId: pid,
-        gross_sales_demand: parentInfo.sales,
-        gross_forecast_demand: parentInfo.forecast,
+        gross_sales_demand: topInfo.sales,
+        gross_forecast_demand: topInfo.forecast,
         gross_component_demand: grossFromComponents,
         gross_requirement: gross,
         on_hand: netting.onHand,
         open_purchase_supply: netting.openPo,
         open_production_supply: netting.openProd,
         net_requirement: netting.net,
-        suggestion_type: netting.net > 0 ? suggestionType : '',
-        suggested_quantity: suggestedQty,
-        need_by_date: needByDate || null,
-        bom_level: componentInfo ? Math.max(...componentInfo.parents.map((p) => (p.path || '').split('>').length - 1)) : 0,
+        suggestion_type: suggestionType,
+        suggested_quantity: netting.net,
+        need_by_date: topInfo.needDate || null,
+        bom_level: bomLevel,
         warning,
       });
-      // Pegging for component contributions
-      if (componentInfo) {
-        for (const parent of componentInfo.parents) {
-          upsertPegg(db, run.id, pid, 'BOM_EXPLOSION', parent.parentId, `BOM 展开 ${parent.path || ''}`, parent.qty, '');
+      // Pegging for component contributions (BOM_EXPLOSION quantities
+      // come from parent_net × bom_qty × scrap, never parent_gross).
+      if (parents) {
+        for (const parent of parents) {
+          upsertPegg(db, run.id, pid, 'BOM_EXPLOSION', parent.parentId, `BOM 展开 ${parent.path}`, parent.qty, '');
         }
       }
       totalProducts += 1;
