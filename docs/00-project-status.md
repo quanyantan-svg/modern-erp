@@ -1,16 +1,31 @@
 # 项目状态快照
 
-> 更新：2026-09-19 (M12 Production / Purchase Instruction & Purchase Requisition)
+> 更新：2026-09-19 (M13 Inventory Scrap + Inventory Month-End)
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M12 Planning Documents
-- 分支：feature/v1.1-planning-docs
+- 阶段：v1.1 Expansion — M13 Inventory Extensions
+- 分支：feature/v1.1-inventory-extensions
 - 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M13 — Inventory Scrap & Inventory Month-End
+
+- 新增两族对 canonical `inventory` + `inventory_transactions` 的扩展：**库存报废**（`inventory_scraps` + `inventory_scrap_items`）与**存货月结**（`inventory_period_closures` + `inventory_period_snapshots`），均为 append-only 表，不引入平行库存账；
+- 库存报废：`DRAFT → CONFIRMED / CANCELLED`；CONFIRMED 在同一事务内重新校验每行库存，任一行不足整张回滚；每行产生恰好一条 `direction='OUT' / source_type='INVENTORY_SCRAP'` 的库存异动，第二次确认返回 409，CONFIRMED 后 PATCH / cancel 全部 409；不生成任何会计凭证（报废会计评估 = DEFERRED，不伪造任意损失科目）；CAN 修改、CONFIRM、cancel 仅需 `INVENTORY_SCRAP_MANAGE`；
+- 存货月结：仅 admin，按月结账生成只读快照；期末数量 = `inventory.quantity − Σ(期末后 IN 异动) + Σ(期末后 OUT 异动)`，期内 IN / OUT 数量从 `inventory_transactions.created_at` 期间内聚合得出；快照表上有唯一索引 `(closure_id, warehouse_id, product_id)`，重结在单一事务内重建，不重复；关闭与反向结账对 `inventory` / `inventory_transactions` / `accounting_vouchers` 全部 0 写入；
+- 时间顺序：第一次结账可任意选择已结束月份；之后必须严格晚于最近 `CLOSED period_key`；重复关闭 409；仅最近 `CLOSED` 期间可被反结账 200，反结账后再结账 200；旧期间反结账返回 409；
+- 权限：新增 4 个窄权限 `INVENTORY_SCRAP_VIEW / MANAGE / INVENTORY_PERIOD_CLOSE_VIEW / MANAGE`，注册权限 107 → **111**；`role-admin` 继承全部，`role-warehouse` 仅获得两 VIEW + 报废 MANAGE（不获得月结），`role-sales` / `role-reviewer` / `role-accounting` 不持有任何 M13 权限；
+- 审批中心不受影响：`SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER` 五个文档族不变；`INVENTORY_SCRAP` 与 `INVENTORY_PERIOD_CLOSURE` **不进入**审批中心；
+- UI：教师可见业务总览在库存链新增「库存报废」「存货月结」节点，使用 canonical `AppLink`；导航组「仓储库存」增加 库存报废 / 存货月结 两张移动卡片；库存报废单支持 DRAFT 编辑 / 取消 / 确认，详情页带读写区分；存货月结支持执行月结、查看详情、反结账（仅最近 CLOSED）；决策报表「库存异动明细」增加 `INVENTORY_SCRAP` 来源过滤；
+- Focused：`server/m13-inventory-extensions.test.js` → **16 tests / 4 suites / 0 failed**，覆盖权限注册 111、5 角色合同、草稿生命周期、CONFIRMED 一次唯一 OUT、原子多行库存短缺回滚、二次确认 409、CONFIRMED 不可改 / 不可取消、月结写入 0、快照不可变重建、反结账仅最近 CLOSED、重结无重复行、legacy DB 重新打开幂等、M11 net-before-explosion 算术回归 15/30/45；
+- Full：`pnpm test` → **1136 tests / 226 suites / 0 failed**（基线 ≥1120 / ≥222）；
+- Build：`pnpm build` PASS（`598.87 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成「库存报废草稿→确认」「库存不足原子回滚」「执行月结→反结账→重结」三条 SPA 下钻验收；五角色权限合同、`403` 隔离、console / 500 sweep 通过；
+- 无 tag、push、deploy。
 
 ### M12 — Production / Purchase Instruction & Purchase Requisition
 

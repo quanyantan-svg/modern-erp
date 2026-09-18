@@ -83,7 +83,8 @@ const EXPECTED_ROLE_PAGES = {
     'forecasts', 'mrp',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-requisitions', 'purchase-instructions', 'purchase-receipts',
-    'inventory', 'inventory-transactions', 'production-orders', 'production-instructions',
+    'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions',
+    'production-orders', 'production-instructions',
     'material-issues', 'production-receipts',
     'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'accounting', 'cash-journals', 'bank-accounts',
@@ -102,7 +103,7 @@ const EXPECTED_ROLE_PAGES = {
   ],
   'role-warehouse': [
     'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
-    'purchase-receipts', 'inventory', 'inventory-transactions', 'iqc', 'oqc',
+    'purchase-receipts', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc',
   ],
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',

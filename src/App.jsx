@@ -14,6 +14,7 @@ import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
 import Planning from './pages/planning.jsx';
 import PlanningDocumentsHub from './pages/planning-documents.jsx';
+import { InventoryScraps, InventoryMonthEnd } from './pages/inventory-extensions.jsx';
 import MobileShell, { MOBILE_TABS } from './components/MobileShell.jsx';
 import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
@@ -78,6 +79,8 @@ const ic = {
   mrp: <Icon d="M4 4h16v6H4zM4 14h10v6H4zM18 14h2v6h-2z"/>,
   planningDocuments: <Icon d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 14l2 2 4-4"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
+  inventoryScrap: <Icon d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14M10 11v6M14 11v6"/>,
+  inventoryPeriod: <Icon d="M3 4h18v4H3zM3 12h18v4H3zM3 20h18M7 8v2M11 8v2M15 8v2M7 16v2M11 16v2M15 16v2"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
 };
 
@@ -104,6 +107,8 @@ export const navGroups = [
     { key: 'sales-deliveries', label: '销售出货', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
     { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
     { key: 'inventory-transactions', label: '库存异动', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
+    { key: 'inventory-scraps', label: '库存报废', icon: ic.inventoryScrap, any: ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE'] },
+    { key: 'inventory-month-end', label: '存货月结', icon: ic.inventoryPeriod, any: ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'] },
   ]},
   { label: '财务资金', items: [
     { key: 'accounts-receivable', label: '应收账款', icon: ic.accounting, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
@@ -262,6 +267,8 @@ export default function App() {
     'sales-deliveries': <SalesDeliveries user={user} notify={notify}/>,
     returns: <Returns user={user} notify={notify}/>,
     'inventory-transactions': <InventoryTransactions user={user} notify={notify}/>,
+    'inventory-scraps': <InventoryScraps user={user} notify={notify}/>,
+    'inventory-month-end': <InventoryMonthEnd user={user} notify={notify}/>,
     boms: <Boms user={user} notify={notify}/>,
     'product-routings': <ProductRoutings user={user} notify={notify}/>,
     'forecasts': <Planning user={user} notify={notify}/>,

@@ -57,6 +57,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'amber',
     items: [
       { page: 'inventory', mobileLabel: '库存查询 / 调拨 / 盘点', iconKey: 'inventory' },
+      { page: 'inventory-scraps', mobileLabel: '库存报废', iconKey: 'inventoryScrap' },
+      { page: 'inventory-month-end', mobileLabel: '存货月结', iconKey: 'inventoryPeriod' },
       { page: 'inventory-transactions', mobileLabel: '库存异动', iconKey: 'inventoryTransactions' },
     ],
   },
@@ -120,7 +122,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '库存报废', '库存月结', '销售折让', '采购折让',
+  '销售折让', '采购折让',
 ]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {

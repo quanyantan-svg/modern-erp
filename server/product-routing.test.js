@@ -112,7 +112,7 @@ describe('M10 schema and legacy safety', () => {
 describe('M10 permission and role contract', () => {
   test('reuses registered ROUTING_VIEW and ROUTING_MANAGE without changing permission count', () => {
     const codes = PERMISSIONS.map(([code]) => code);
-    assert.equal(codes.length, 107);
+    assert.equal(codes.length, 111);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
   });

@@ -65,6 +65,12 @@ import {
   updateProductRouting, updateProductRoutingOperation,
 } from './modules/product-routing.js';
 import {
+  cancelInventoryScrap, closeInventoryPeriod, confirmInventoryScrap,
+  createInventoryScrap, getInventoryPeriodClosure, getInventoryScrap,
+  listInventoryPeriodClosures, listInventoryScraps,
+  reopenInventoryPeriod, updateInventoryScrap,
+} from './modules/inventory-extensions.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -419,6 +425,27 @@ async function handleApi(db, req, res, url) {
 
   // Inventory Transactions
   if (pathname === "/api/inventory-transactions" && req.method === "GET") return listInventoryTransactions(db, res, actor, url);
+
+  // M13 — Inventory Scrap (operational stock destruction)
+  if (pathname === '/api/inventory-scraps' && req.method === 'GET') return listInventoryScraps(db, res, actor, url);
+  if (pathname === '/api/inventory-scraps' && req.method === 'POST') return createInventoryScrap(db, req, res, actor);
+  const scrapMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)$/);
+  if (scrapMatch && req.method === 'GET') return getInventoryScrap(db, res, actor, scrapMatch[1]);
+  if (scrapMatch && req.method === 'PATCH') return updateInventoryScrap(db, req, res, actor, scrapMatch[1]);
+  const scrapActionMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)\/(confirm|cancel)$/);
+  if (scrapActionMatch && req.method === 'POST') {
+    const sid = scrapActionMatch[1];
+    if (scrapActionMatch[2] === 'confirm') return confirmInventoryScrap(db, res, actor, sid);
+    return cancelInventoryScrap(db, res, actor, sid);
+  }
+
+  // M13 — Inventory Month-End (period closing + read-only snapshot)
+  if (pathname === '/api/inventory-period-closures' && req.method === 'GET') return listInventoryPeriodClosures(db, res, actor);
+  if (pathname === '/api/inventory-period-closures' && req.method === 'POST') return closeInventoryPeriod(db, req, res, actor);
+  const periodActionMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)\/(reopen)$/);
+  if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, res, actor, periodActionMatch[1]);
+  const periodMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)$/);
+  if (periodMatch && req.method === 'GET') return getInventoryPeriodClosure(db, res, actor, periodMatch[1]);
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);

@@ -23,8 +23,8 @@ describe('M8 AR/AP and settlement workflow', () => {
   });
   after(async () => { await new Promise((done, fail) => server.close((error) => error ? fail(error) : done())); db.close(); rmSync(temp, { recursive: true, force: true }); });
 
-  test('permission registry has 107 entries after M12 planning-document additions; no sixth role', () => {
-    assert.equal(PERMISSIONS.length, 107);
+  test('permission registry has 111 entries after M13 inventory-extension additions; no sixth role', () => {
+    assert.equal(PERMISSIONS.length, 111);
     for (const code of ['AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE']) assert.ok(PERMISSIONS.some(([item]) => item === code));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
   });

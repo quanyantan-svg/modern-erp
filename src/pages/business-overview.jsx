@@ -24,10 +24,11 @@ export const BUSINESS_FLOWS = [
   {
     key: 'inventory',
     title: '库存链',
-    description: '查询现存量，执行调拨、盘点与调整，并追溯每次库存异动。',
+    description: '查询现存量，执行调拨、盘点、调整与报废，按月结存并追溯每次库存异动。',
     nodes: [
       ['库存查询', 'inventory'], ['库存调拨', 'inventory'], ['库存盘点', 'inventory'],
-      ['库存调整', 'inventory'], ['库存异动', 'inventory-transactions'],
+      ['库存调整', 'inventory'], ['库存报废', 'inventory-scraps'],
+      ['存货月结', 'inventory-month-end'], ['库存异动', 'inventory-transactions'],
     ],
   },
   {
@@ -88,6 +89,6 @@ export default function BusinessOverview() {
         </div>
       </article>)}
     </div>
-    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；库存报废、库存月结及销售／采购折让未作为可操作节点展示。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。</p>
+    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；销售／采购折让仍不在当前教师可操作范围内。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。</p>
   </section>;
 }
