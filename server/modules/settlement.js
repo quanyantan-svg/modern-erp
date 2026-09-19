@@ -199,6 +199,18 @@ export async function confirmSettlementDocument(db, req, res, actor, kind, docum
     const documentFk = cfg.table === 'payment_collections' ? 'collection_id' : 'disbursement_id'; const allocations = db.prepare(`SELECT ai.*,s.${cfg.partyColumn} partyId,s.amount_cents+s.adjustment_cents-s.paid_cents-s.write_off_cents outstandingCents FROM ${cfg.itemTable} ai JOIN ${cfg.sourceTable} s ON s.id=ai.${cfg.sourceFk} WHERE ai.${documentFk}=?`).all(documentId);
     if (!allocations.length) throw new HttpError(400, '至少需要一条核销明细'); const total = allocations.reduce((sum, item) => sum + item.amount_cents, 0); if (total !== document.amount_cents) throw new HttpError(409, '核销合计必须等于单据金额');
     for (const item of allocations) { if (item.partyId !== document[cfg.partyColumn]) throw new HttpError(409, `核销记录必须属于同一${cfg.partyLabel}`); if (item.amount_cents > item.outstandingCents) throw new HttpError(409, cfg.settledLabel ? '付款金额超过当前未付余额' : '收款金额超过当前未收余额'); }
+    // M14: customer/supplier net balance safety gate. Per-row outstanding
+    // alone allows over-collection against a positive source while a
+    // discount creates a credit. The customer's NET balance (sum of
+    // principal + adjustments - settled across ALL sources) must cover
+    // the collection amount; otherwise the settlement silently creates
+    // unapplied customer cash / prepayment, which M14 forbids.
+    const partyNet = db.prepare(`SELECT COALESCE(SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents),0) n FROM ${cfg.sourceTable} WHERE ${cfg.partyColumn}=?`).get(document[cfg.partyColumn]).n;
+    if (document.amount_cents > partyNet) {
+      throw new HttpError(409, cfg.settledLabel
+        ? `付款金额 ${document.amount_cents} 超过供应商当前净欠款 ${partyNet}`
+        : `收款金额 ${document.amount_cents} 超过客户当前净欠款 ${partyNet}`);
+    }
     const subjects = resolveSubjects(db, document.payment_method, cfg);
     for (const item of allocations) { const source = db.prepare(`SELECT amount_cents,adjustment_cents,paid_cents,write_off_cents FROM ${cfg.sourceTable} WHERE id=?`).get(item[cfg.sourceFk]); const nextPaid = source.paid_cents + item.amount_cents; const outstanding = source.amount_cents + source.adjustment_cents - nextPaid - source.write_off_cents; const nextStatus = outstanding === 0 ? 'COMPLETED' : 'PARTIAL'; db.prepare(`UPDATE ${cfg.sourceTable} SET paid_cents=?,status=?,updated_at=? WHERE id=?`).run(nextPaid, nextStatus, confirmedAt, item[cfg.sourceFk]); }
     const isCollection = kind === 'COLLECTION'; generateVoucher(db, cfg.voucherSource, documentId, [
