@@ -4,13 +4,13 @@
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M14 Sales & Purchase Discount
-- 分支：feature/v1.1-discounts
+- 阶段：v1.1 Expansion — M14 Sales & Purchase Discount — Final Acceptance
+- 分支：release/v1.1-final-acceptance
 - 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
 
-> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`.** v1.1 final-acceptance 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
 
 ### M14 — Sales / Purchase Discount / Allowance
 
