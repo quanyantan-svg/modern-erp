@@ -87,7 +87,7 @@ const EXPECTED_ROLE_PAGES = {
     'production-orders', 'production-instructions',
     'material-issues', 'production-receipts',
     'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
-    'accounts-payable', 'payment-disbursements', 'accounting', 'cash-journals', 'bank-accounts',
+    'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
     'workflows', 'users',
   ],
@@ -108,6 +108,7 @@ const EXPECTED_ROLE_PAGES = {
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',
     'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
+    'sales-discounts', 'purchase-discounts',
     'accounting', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
     'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',

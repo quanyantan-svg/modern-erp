@@ -306,6 +306,7 @@ describe('App.jsx — responsive composition', () => {
       'PURCHASE_REQUISITION_APPROVE',
       'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE',
       'INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE',
+      'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE',
       'INVENTORY_ADJUSTMENT_MANAGE',
     ];
     const refs = new Set();
@@ -337,18 +338,18 @@ describe('Permissions — canonical registry count', () => {
   test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 111, `PERMISSIONS array must have 111 entries after M13 (got ${perms.length})`);
+    assert.equal(perms.length, 113, `PERMISSIONS array must have 113 entries after M14 (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
   });
 
-  test('role-accounting has 18 permissions after four narrow M8 grants', () => {
+  test('role-accounting has 20 permissions after M8 + M14 narrow grants', () => {
     const dbSrc = readRoot('server/db.js');
     const accountingMatch = dbSrc.match(/'role-accounting':\s*\[([^\]]+)\]/);
     assert.ok(accountingMatch, 'role-accounting must exist in db.js');
     const count = (accountingMatch[1].match(/'/g) || []).length;
-    assert.equal(count / 2, 18, `role-accounting must have 18 permissions (got ${count / 2})`);
+    assert.equal(count / 2, 20, `role-accounting must have 20 permissions (got ${count / 2})`);
   });
 });
 

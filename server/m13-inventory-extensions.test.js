@@ -127,13 +127,15 @@ function countVouchers() {
 // =====================================================================
 
 describe('M13 — Inventory Scrap', () => {
-  test('1. permission registry has 111 entries after M13 additions', () => {
-    assert.equal(PERMISSIONS.length, 111);
+  test('1. permission registry has 113 entries after M13 + M14 additions', () => {
+    assert.equal(PERMISSIONS.length, 113);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('INVENTORY_SCRAP_VIEW'));
     assert.ok(codes.has('INVENTORY_SCRAP_MANAGE'));
     assert.ok(codes.has('INVENTORY_PERIOD_CLOSE_VIEW'));
     assert.ok(codes.has('INVENTORY_PERIOD_CLOSE_MANAGE'));
+    assert.ok(codes.has('SALES_DISCOUNT_MANAGE'));
+    assert.ok(codes.has('PURCHASE_DISCOUNT_MANAGE'));
   });
 
   test('2. five-role permission contract: admin and warehouse can manage scrap; sales / reviewer / accounting cannot', async () => {
