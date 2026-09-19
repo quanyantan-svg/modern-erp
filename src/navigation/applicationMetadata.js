@@ -91,6 +91,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'payment-collections', mobileLabel: '收款单', iconKey: 'cashJournals' },
       { page: 'accounts-payable', mobileLabel: '应付账款', iconKey: 'accounting' },
       { page: 'payment-disbursements', mobileLabel: '付款单', iconKey: 'bankAccounts' },
+      { page: 'sales-discounts', mobileLabel: '销售折让', iconKey: 'salesDiscount' },
+      { page: 'purchase-discounts', mobileLabel: '采购折让', iconKey: 'purchaseDiscount' },
       { page: 'accounting', mobileLabel: '会计凭证 / 财务报表', iconKey: 'accounting' },
       { page: 'cash-journals', mobileLabel: '现金日记账', iconKey: 'cashJournals' },
       { page: 'bank-accounts', mobileLabel: '银行账户', iconKey: 'bankAccounts' },
@@ -122,7 +124,8 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
 ]);
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '销售折让', '采购折让',
+  '销售折让、附加折让',
+  '采购折让、附加折让',
 ]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {

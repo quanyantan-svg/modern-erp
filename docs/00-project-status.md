@@ -1,16 +1,38 @@
 # 项目状态快照
 
-> 更新：2026-09-19 (M13 Inventory Scrap + Inventory Month-End)
+> 更新：2026-09-19 (M14 Sales / Purchase Discount / Allowance)
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M13 Inventory Extensions
-- 分支：feature/v1.1-inventory-extensions
+- 阶段：v1.1 Expansion — M14 Sales & Purchase Discount
+- 分支：feature/v1.1-discounts
 - 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### M14 — Sales / Purchase Discount / Allowance
+
+- 两族新文档：`sales_discounts` / `purchase_discounts`；append-only 表；不重写既有 AR / AP / 凭证；
+- 复用 M8 canonical AR / AP 子账模型：confirmed 折让通过 `ensureSubledger('AR' | 'AP', { sourceType: 'SALES_DISCOUNT' | 'PURCHASE_DISCOUNT', effectCents: -amount_cents })` 创建独立的负向调整行；`UNIQUE(source_type, source_id)` 保证一次确认一次调整行；
+- 生命周期：`DRAFT → CONFIRMED / CANCELLED`；DRAFT 可编辑、可取消；CONFIRMED / CANCELLED 不可变；二次 confirm 返回 409；
+- 凭证：confirmed 后原子写入一条 canonical 凭证。Sales discount：`Dr 6001 / Cr 1122`；Purchase discount：`Dr 2202 / Cr 1405`；与 Sales Return / Purchase Return 完全相同的科目映射，零新硬编码科目；
+- 来源额度：折让金额 + 历史销售退货调整 + 历史销售折让 ≤ 来源正数应收；同供应商 / 同客户硬约束；
+- **结算安全门（fix(finance)）**：在 `confirmSettlementDocument` 中新增客户级 / 供应商级净欠款检查（`SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents)`）。例 `AR +10000 / Discount -2000` 时，collection 8001 → 409；8000 → 200。原本 M8 的「按行 outstanding」检查在 discount 引入后会被「贷项」绕过，M14 修掉了这个洞；
+- 后结算贷项：AR +10000 / collection 8000 / discount 3000 → 客户净 -1000 贷项；历史 8000 收款分配原样保留；后续可发生 AR 抵消；
+- 未来 AR 抵消：客户贷 -1000 + 新 AR 5000 → 净 4000；collection 4000 → 200；4001 → 409；
+- 审批中心不受影响：`SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER` 五个文档族不变；`SALES_DISCOUNT` 与 `PURCHASE_DISCOUNT` **不进入**审批中心；
+- 库存 / MRP / 制造影响：NONE；折让不写 `inventory_transactions`、不改 BOM / 路线 / 制令单；
+- 权限：新增 2 个窄权限 `SALES_DISCOUNT_MANAGE` / `PURCHASE_DISCOUNT_MANAGE`，注册权限 111 → **113**；`role-admin` 继承全部，`role-accounting` 获得两个 MANAGE 以匹配「财务全权」合同；`role-sales` / `role-reviewer` / `role-warehouse` 不持有任何 M14 权限；
+- UI：教师可见业务总览在销售链新增「销售折让」、采购链新增「采购折让」节点，使用 canonical `AppLink`；导航组「仓储库存」加入两张卡片（仍按可见权限过滤）；`src/pages/discounts.jsx` 提供列表 / 详情 / 编辑器，含客户 / 供应商选择 + 来源应收 / 应付筛选 + 剩余可折让额度展示；
+- Focused：`server/m14-discounts.test.js` → **15 tests / 4 suites / 0 failed**，覆盖权限注册 113、5 角色合同、DRAFT 生命周期、确认唯一一条负向调整 + 凭证、二次确认 409、跨客户 / 非正数来源拒绝、来源额度上限、pre-settle 8000/8001、post-settle 客户贷项、future offset、statement 含 SALES_DISCOUNT / PURCHASE_DISCOUNT 行类型、审批中心隔离、legacy DB 重新打开幂等、库存 / BOM / 路线 / 制令单零影响；
+- Full：`pnpm test` → **1151 tests / 230 suites / 0 failed**（基线 ≥1136 / ≥226）；
+- M11 / M12 / M13 regression rerun：M11 + M12 + M13 combined **109 tests / 24 suites / 0 failed**；
+- Build：`pnpm build` PASS（`617.77 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成 `/sales-discounts`、`/purchase-discounts`、`/accounts-receivable`、`/accounts-payable`、`/approvals` 的 SPA 下钻验收；Edge exit = 0 在 15 个页面 × 3 视口 = 45 次截图；五角色权限合同、`403` 隔离、console / 500 sweep 通过；
+- M14 acceptance script `scripts/m14-discounts-acceptance.mjs` 在隔离临时 DB 上跑过完整 88 个 audit check + 5 个页面 × 3 视口 = 15 次 Edge headless 截图：7 条 canonical flow（pre-settle 8000/8001 / post-settle 客户贷项 -1000 / future offset 4000/4001 / pre-settle AP 10000/10001 / post-settle 供应商贷项 -1000）全部 PASS；凭证 6001/1122 与 2202/1405 借贷平衡且整数分；APPROVAL_DOCUMENT_TYPES 与五个 canonical 文档族一致；CLOSED 期间 confirm → 409、AR/AP 与 voucher delta = 0；唯一安全门修复 `confirmSettlementDocument` 引入的「未应用预收」绕过；
+- 无 tag、push、deploy。
 
 ### M13 — Inventory Scrap & Inventory Month-End
 

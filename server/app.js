@@ -71,6 +71,12 @@ import {
   reopenInventoryPeriod, updateInventoryScrap,
 } from './modules/inventory-extensions.js';
 import {
+  cancelPurchaseDiscount, cancelSalesDiscount, confirmPurchaseDiscount,
+  confirmSalesDiscount, createPurchaseDiscount, createSalesDiscount,
+  getPurchaseDiscount, getSalesDiscount, listPurchaseDiscounts,
+  listSalesDiscounts, updatePurchaseDiscount, updateSalesDiscount,
+} from './modules/discounts.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -488,6 +494,31 @@ async function handleApi(db, req, res, url) {
   const pdMatch = pathname.match(/^\/api\/payment-disbursements\/([^/]+)$/);
   if (pdMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
   if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
+
+  // M14 — Sales / Purchase Discount (operational finance adjustment)
+  if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor);
+  if (pathname === '/api/sales-discounts' && req.method === 'POST') return createSalesDiscount(db, req, res, actor);
+  const salesDiscountMatch = pathname.match(/^\/api\/sales-discounts\/([^/]+)$/);
+  if (salesDiscountMatch && req.method === 'GET') return getSalesDiscount(db, res, actor, salesDiscountMatch[1]);
+  if (salesDiscountMatch && req.method === 'PATCH') return updateSalesDiscount(db, req, res, actor, salesDiscountMatch[1]);
+  const salesDiscountAction = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/(confirm|cancel)$/);
+  if (salesDiscountAction && req.method === 'POST') {
+    const id = salesDiscountAction[1];
+    if (salesDiscountAction[2] === 'confirm') return confirmSalesDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
+    return cancelSalesDiscount(db, res, actor, id);
+  }
+
+  if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor);
+  if (pathname === '/api/purchase-discounts' && req.method === 'POST') return createPurchaseDiscount(db, req, res, actor);
+  const purchaseDiscountMatch = pathname.match(/^\/api\/purchase-discounts\/([^/]+)$/);
+  if (purchaseDiscountMatch && req.method === 'GET') return getPurchaseDiscount(db, res, actor, purchaseDiscountMatch[1]);
+  if (purchaseDiscountMatch && req.method === 'PATCH') return updatePurchaseDiscount(db, req, res, actor, purchaseDiscountMatch[1]);
+  const purchaseDiscountAction = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/(confirm|cancel)$/);
+  if (purchaseDiscountAction && req.method === 'POST') {
+    const id = purchaseDiscountAction[1];
+    if (purchaseDiscountAction[2] === 'confirm') return confirmPurchaseDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
+    return cancelPurchaseDiscount(db, res, actor, id);
+  }
 
 
 

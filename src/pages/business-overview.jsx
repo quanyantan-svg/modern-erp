@@ -4,21 +4,23 @@ export const BUSINESS_FLOWS = [
   {
     key: 'sales',
     title: '销售链',
-    description: '从客户需求、订单审批到出货、应收和回款。',
+    description: '从客户需求、订单审批到出货、应收、折让与回款。',
     nodes: [
       ['客户', 'customers'], ['销售订单', 'orders'], ['审批', 'approvals'],
       ['销售出货', 'sales-deliveries'], ['应收账款', 'accounts-receivable'],
-      ['收款单', 'payment-collections'], ['销售统计', 'decision-reports'],
+      ['销售折让', 'sales-discounts'], ['收款单', 'payment-collections'],
+      ['销售统计', 'decision-reports'],
     ],
   },
   {
     key: 'purchase',
     title: '采购链',
-    description: '从供应商与采购订单到入库、应付和付款。',
+    description: '从供应商与采购订单到入库、应付、折让与付款。',
     nodes: [
       ['供应商', 'suppliers'], ['采购订单', 'purchase-orders'], ['审批', 'approvals'],
       ['采购入库', 'purchase-receipts'], ['应付账款', 'accounts-payable'],
-      ['付款单', 'payment-disbursements'], ['采购统计', 'decision-reports'],
+      ['采购折让', 'purchase-discounts'], ['付款单', 'payment-disbursements'],
+      ['采购统计', 'decision-reports'],
     ],
   },
   {
@@ -89,6 +91,6 @@ export default function BusinessOverview() {
         </div>
       </article>)}
     </div>
-    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；销售／采购折让仍不在当前教师可操作范围内。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。</p>
+    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。销售折让、采购折让为业务确认后调整应收/应付的独立流程，不进入审批中心、不重复创建凭证。</p>
   </section>;
 }
