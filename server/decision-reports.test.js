@@ -760,9 +760,9 @@ describe('M7 — frontend wiring', () => {
 
   test('DEFERRED_MOBILE_APPLICATIONS no longer lists the five decision reports', () => {
     const src = readSrc('navigation/applicationMetadata.js');
-    const match = src.match(/DEFERRED_MOBILE_APPLICATIONS\s*=\s*Object\.freeze\(\[([^\]]+)\]\)/);
+    const match = src.match(/DEFERRED_MOBILE_APPLICATIONS\s*=\s*Object\.freeze\(\[([^\]]*)\]\)/);
     assert.ok(match, 'DEFERRED_MOBILE_APPLICATIONS must be a frozen array');
-    const items = match[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, ''));
+    const items = match[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
     for (const label of ['销售统计', '销售未出货', '采购统计', '采购未交货']) {
       assert.equal(items.includes(label), false, `${label} must be removed from DEFERRED list`);
     }

@@ -2,8 +2,7 @@
 //
 // These tests cover the M1 UI infrastructure contract:
 //   1. CSS breakpoint contract: 767 → mobile, 768 → non-mobile
-//   2. MobileShell renders bottom navigation with 4 enabled tabs + 1 disabled
-//   3. Disabled 通讯录 tab does not navigate and does not throw
+//   2. MobileShell renders the five canonical product tabs
 //   4. State preservation on resize (mobileTab + page survive layout switch)
 //   5. No duplicate hidden business page mounting
 //   6. Role permissions are not changed
@@ -123,13 +122,13 @@ describe('CSS — mobile breakpoint contract', () => {
 // 2-3. MobileShell renders bottom navigation correctly
 // ---------------------------------------------------------------------------
 describe('MobileShell — bottom navigation', () => {
-  test('exports exactly 5 tabs (4 enabled + 1 disabled)', () => {
+  test('exports exactly 5 enabled canonical tabs', () => {
     assert.equal(MobileShellTabs.length, 5, 'MobileShell must render 5 tabs');
     const enabled = MobileShellTabs.filter((t) => t.enabled);
     const disabled = MobileShellTabs.filter((t) => !t.enabled);
-    assert.equal(enabled.length, 4, 'MobileShell must have 4 enabled tabs');
-    assert.equal(disabled.length, 1, 'MobileShell must have 1 disabled tab');
-    assert.equal(disabled[0].key, 'directory', 'The disabled tab must be 通讯录 / directory');
+    assert.equal(enabled.length, 5, 'MobileShell must have 5 enabled tabs');
+    assert.equal(disabled.length, 0, 'No canonical product tab is disabled');
+    assert.deepEqual(MobileShellTabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
   });
 
   test('renders the shell wrapper, header, main, and bottom nav', () => {
@@ -145,38 +144,26 @@ describe('MobileShell — bottom navigation', () => {
   test('renders all 5 bottom nav buttons with correct labels', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
     assert.match(html, /data-testid="bottom-tab-messages"[\s\S]*?>[\s\S]*?消息/);
-    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?审批/);
+    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?签核/);
     assert.match(html, /data-testid="bottom-tab-apps"[\s\S]*?>[\s\S]*?应用/);
-    assert.match(html, /data-testid="bottom-tab-directory"[\s\S]*?>[\s\S]*?通讯录/);
+    assert.match(html, /data-testid="bottom-tab-cloud"[\s\S]*?>[\s\S]*?云翼/);
     assert.match(html, /data-testid="bottom-tab-profile"[\s\S]*?>[\s\S]*?我的/);
   });
 
-  test('disabled 通讯录 tab is marked aria-disabled and has a hint', () => {
+  test('cloud tab is enabled and does not expose legacy placeholder copy', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
     assert.match(
       html,
-      /data-testid="bottom-tab-directory"[\s\S]*?aria-disabled="true"/,
-      'disabled directory tab must expose aria-disabled="true"'
+      /data-testid="bottom-tab-cloud"/,
+      'cloud tab must be rendered'
     );
-    assert.match(html, /bottom-tab-directory[\s\S]*?敬请期待/);
+    assert.doesNotMatch(html, /通讯录|敬请期待/);
   });
 
-  test('disabled 通讯录 onClick does not invoke onTabChange', () => {
+  test('legacy disabled branch cannot affect canonical tab contract', () => {
     const source = readSrc('components/MobileShell.jsx');
     // Find the disabled-button code path
-    assert.match(
-      source,
-      /if\s*\(\s*!tab\.enabled\s*\)\s*\{[\s\S]*?onClick=[\s\S]{0,80}?e\.preventDefault/,
-      'disabled tab onClick must call e.preventDefault()'
-    );
-    // The disabled branch must NOT call onTabChange
-    const disabledBranch = source.match(/if\s*\(\s*!tab\.enabled\s*\)\s*\{[\s\S]*?\}\s*\}/);
-    assert.ok(disabledBranch, 'disabled branch must exist');
-    assert.equal(
-      /onTabChange\s*\(/.test(disabledBranch[0]),
-      false,
-      'disabled branch must not invoke onTabChange'
-    );
+    assert.doesNotMatch(source, /key:\s*'directory'|label:\s*'通讯录'/);
   });
 
   test('active tab is visually marked with the active class', () => {
@@ -260,7 +247,7 @@ describe('App.jsx — responsive composition', () => {
     assert.match(appSource, /setMobileTab\(/, 'setMobileTab must be wired');
   });
 
-  test('directory tab is not in MOBILE_TAB_KEYS (cannot be navigated to)', () => {
+  test('tab navigation is filtered through MOBILE_TAB_KEYS', () => {
     assert.match(
       appSource,
       /MOBILE_TAB_KEYS\.has\(key\)/,

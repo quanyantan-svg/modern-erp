@@ -79,33 +79,32 @@ function applicationPagesFor(roleId) {
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
-    'customers', 'suppliers', 'products', 'warehouses', 'boms', 'product-routings',
+    'customers', 'suppliers', 'products', 'warehouses',
     'forecasts', 'mrp-runs', 'material-requirements-plan',
     'production-instructions', 'purchase-instructions', 'purchase-requisitions',
+    'production-orders', 'material-issues', 'production-receipts', 'boms', 'product-routings',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions',
-    'production-orders',
-    'material-issues', 'production-receipts',
-    'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
+    'iqc', 'oqc', 'product-costs', 'cost-rates', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
-    'workflows', 'users',
+    'projects', 'tasks', 'timesheets', 'workflows', 'users', 'notifications',
   ],
   'role-sales': [
     'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
     'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
+    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions', 'notifications',
   ],
   'role-reviewer': [
     'business-overview', 'customers', 'products', 'warehouses',
     'purchase-requisitions',
     'orders', 'sales-deliveries', 'returns',
-    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
+    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions', 'notifications',
   ],
   'role-warehouse': [
     'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
-    'purchase-receipts', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc',
+    'purchase-receipts', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc', 'notifications',
   ],
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',
@@ -113,7 +112,7 @@ const EXPECTED_ROLE_PAGES = {
     'sales-discounts', 'purchase-discounts',
     'accounting', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
-    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
+    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'notifications',
   ],
 };
 
@@ -122,13 +121,13 @@ describe('M2 application metadata', () => {
     assert.deepEqual(
       mobileGroups.map(({ key, label }) => [key, label]),
       [
-        ['overview', '业务导航'], ['master-data', '基础资料'],
+        ['overview', '概览'], ['master-data', '基础资料'],
         ['planning', '计划与生产'],
-        ['sales', '销售管理'],
-        ['purchasing', '采购管理'], ['inventory', '仓储库存'],
-        ['manufacturing', '生产管理'], ['quality', '质量管理'],
-        ['finance', '财务管理'], ['reports', '决策报表'],
-        ['system', '系统管理'],
+        ['sales', '销售'],
+        ['purchasing', '采购'], ['inventory', '库存'],
+        ['quality', '质量'],
+        ['finance', '财务'], ['reports', '决策报表'],
+        ['projects', '项目'], ['system', '系统'],
       ]
     );
   });
@@ -277,9 +276,10 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(html, />销售活动</);
   });
 
-  test('directory remains the sole disabled bottom tab', async () => {
+  test('all five canonical bottom tabs are enabled', async () => {
     const tabs = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).MOBILE_TABS;
-    assert.deepEqual(tabs.filter((tab) => !tab.enabled).map((tab) => tab.key), ['directory']);
+    assert.deepEqual(tabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
+    assert.equal(tabs.every((tab) => tab.enabled), true);
   });
 
   test('320px grid has no fixed item width and labels clamp to two lines', () => {
