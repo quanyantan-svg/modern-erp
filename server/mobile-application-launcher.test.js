@@ -80,11 +80,12 @@ const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
     'customers', 'suppliers', 'products', 'warehouses', 'boms', 'product-routings',
-    'forecasts', 'mrp',
+    'forecasts', 'mrp-runs', 'material-requirements-plan',
+    'production-instructions', 'purchase-instructions', 'purchase-requisitions',
     'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-requisitions', 'purchase-instructions', 'purchase-receipts',
+    'purchase-orders', 'purchase-receipts',
     'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions',
-    'production-orders', 'production-instructions',
+    'production-orders',
     'material-issues', 'production-receipts',
     'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
@@ -97,9 +98,10 @@ const EXPECTED_ROLE_PAGES = {
     'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
   ],
   'role-reviewer': [
-    'business-overview', 'customers', 'products', 'warehouses', 'orders', 'sales-deliveries',
-    'returns', 'purchase-orders', 'purchase-requisitions', 'purchase-receipts', 'inventory',
-    'inventory-transactions',
+    'business-overview', 'customers', 'products', 'warehouses',
+    'purchase-requisitions',
+    'orders', 'sales-deliveries', 'returns',
+    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
   ],
   'role-warehouse': [
     'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
@@ -116,11 +118,13 @@ const EXPECTED_ROLE_PAGES = {
 };
 
 describe('M2 application metadata', () => {
-  test('defines the ten teacher-aligned product groups in order', () => {
+  test('defines the teacher-aligned product groups in order (planning added by P1)', () => {
     assert.deepEqual(
       mobileGroups.map(({ key, label }) => [key, label]),
       [
-        ['overview', '业务导航'], ['master-data', '基础资料'], ['sales', '销售管理'],
+        ['overview', '业务导航'], ['master-data', '基础资料'],
+        ['planning', '计划与生产'],
+        ['sales', '销售管理'],
         ['purchasing', '采购管理'], ['inventory', '仓储库存'],
         ['manufacturing', '生产管理'], ['quality', '质量管理'],
         ['finance', '财务管理'], ['reports', '决策报表'],

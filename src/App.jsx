@@ -12,7 +12,9 @@ import { IQCInspections, OQCInspections } from './pages/quality.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
-import Planning from './pages/planning.jsx';
+import Forecasts from './pages/forecasts.jsx';
+import MrpRuns from './pages/mrp-runs.jsx';
+import MaterialRequirementsPlan from './pages/material-requirements-plan.jsx';
 import PlanningDocumentsHub from './pages/planning-documents.jsx';
 import { InventoryScraps, InventoryMonthEnd } from './pages/inventory-extensions.jsx';
 import { SalesDiscounts, PurchaseDiscounts } from './pages/discounts.jsx';
@@ -77,6 +79,8 @@ const ic = {
   boms: <Icon d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   routings: <Icon d="M5 4h5v5H5zM14 15h5v5h-5zM10 6h4a3 3 0 0 1 3 3v2M14 18h-4a3 3 0 0 1-3-3v-2"/>,
   forecasts: <Icon d="M3 17l6-6 4 4 8-8M14 7h7v7"/>,
+  mrpRuns: <Icon d="M4 4h16v6H4zM4 14h10v6H4zM18 14h2v6h-2z"/>,
+  materialPlan: <Icon d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 14l2 2 4-4"/>,
   mrp: <Icon d="M4 4h16v6H4zM4 14h10v6H4zM18 14h2v6h-2z"/>,
   planningDocuments: <Icon d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 14l2 2 4-4"/>,
   productionOrders: <Icon d="M14.7 6.3a1 1 0 0 0 0 1.4l-8 8a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.4L10 12.2l7.3-7.3a1 1 0 0 0-1.4-1.4z"/>,
@@ -132,14 +136,17 @@ export const navGroups = [
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'product-routings', label: '制品工序标准', icon: ic.routings, any: ['ROUTING_VIEW', 'ROUTING_MANAGE'] },
-    { key: 'forecasts', label: '计划预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
-    { key: 'mrp', label: 'MRP 物料需求计划', icon: ic.mrp, any: ['MRP_VIEW', 'MRP_MANAGE'] },
-    { key: 'production-instructions', label: '生产指令', icon: ic.planningDocuments, any: ['PRODUCTION_INSTRUCTION_VIEW'] },
-    { key: 'purchase-instructions', label: '采购指令', icon: ic.planningDocuments, any: ['PURCHASE_INSTRUCTION_VIEW'] },
-    { key: 'purchase-requisitions', label: '请购单', icon: ic.planningDocuments, any: ['PURCHASE_REQUISITION_VIEW'] },
     { key: 'production-orders', label: '制令单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },
     { key: 'production-receipts', label: '生产入库', icon: ic.purchaseReceipts, any: ['PRODUCTION_RECEIPT_MANAGE'] },
+  ]},
+  { label: '计划与生产', items: [
+    { key: 'forecasts', label: '需求预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'mrp-runs', label: 'MRP 运算', icon: ic.mrpRuns, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'material-requirements-plan', label: '物料需求计划', icon: ic.materialPlan, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'production-instructions', label: '生产指令', icon: ic.planningDocuments, any: ['PRODUCTION_INSTRUCTION_VIEW'] },
+    { key: 'purchase-instructions', label: '采购指令', icon: ic.planningDocuments, any: ['PURCHASE_INSTRUCTION_VIEW'] },
+    { key: 'purchase-requisitions', label: '请购单', icon: ic.planningDocuments, any: ['PURCHASE_REQUISITION_VIEW'] },
   ]},
   { label: '成本与质量', items: [
     { key: 'product-costs', label: '标准成本', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
@@ -278,8 +285,11 @@ export default function App() {
     'purchase-discounts': <PurchaseDiscounts user={user} notify={notify}/>,
     boms: <Boms user={user} notify={notify}/>,
     'product-routings': <ProductRoutings user={user} notify={notify}/>,
-    'forecasts': <Planning user={user} notify={notify}/>,
-    'mrp': <Planning user={user} notify={notify}/>,
+    'forecasts': <Forecasts user={user} notify={notify}/>,
+    'mrp-runs': <MrpRuns user={user} notify={notify}/>,
+    'material-requirements-plan': <MaterialRequirementsPlan user={user} notify={notify}/>,
+    // Backwards-compat alias: legacy hash links / BUSINESS_FLOWS continue to resolve.
+    'mrp': <MaterialRequirementsPlan user={user} notify={notify}/>,
     'production-instructions': <PlanningDocumentsHub user={user} notify={notify}/>,
     'purchase-instructions': <PlanningDocumentsHub user={user} notify={notify}/>,
     'purchase-requisitions': <PlanningDocumentsHub user={user} notify={notify}/>,

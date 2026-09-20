@@ -596,8 +596,10 @@ describe('M6 mobile UI surface', () => {
   test('41. fake / deferred production cards (work center / output) are absent from mobile group; production-instruction is present after M12', () => {
     const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
     const activeGroups = meta.slice(0, meta.indexOf('DEFERRED_MOBILE_APPLICATIONS'));
-    assert.match(activeGroups, /mobileLabel: '计划预测'/);
-    assert.match(activeGroups, /mobileLabel: 'MRP 物料需求计划'/);
+    // P1 — planning entries renamed: 需求预测 / MRP 运算 / 物料需求计划
+    assert.match(activeGroups, /mobileLabel: '需求预测'/);
+    assert.match(activeGroups, /mobileLabel: 'MRP 运算'/);
+    assert.match(activeGroups, /mobileLabel: '物料需求计划'/);
     assert.match(activeGroups, /mobileLabel: '生产指令'/);
     assert.doesNotMatch(activeGroups, /工作中心|work-center/);
     assert.doesNotMatch(activeGroups, /生产产出|production-output/);

@@ -153,8 +153,9 @@
 | BOM管理 | 完整 | P0 | 多层BOM |
 | BOM展开 | 完整 | P0 | 组件分解 |
 | 制品工序标准 | COMPLETE | P0 | 与 BOM 同级的产品主数据；ACTIVE/INACTIVE；工序增删改与顺序号重排；仅 admin 管理 |
-| 计划预测 | COMPLETE | P1 | DRAFT/ACTIVE/CANCELLED 生命周期；草稿可编辑、已生效不可改；MRP 仅消费已生效预测；不写库存 / 凭证 / 审批 |
-| MRP 物料需求计划 | COMPLETE | P1 | 仅作为计划快照输出生产 / 采购建议；DRAFT/COMPLETED/CANCELLED；COMPLETED 不可重算；不改库存、不生成凭证、不进审批、不写生产 / 采购单据 |
+| 需求预测 (Forecast) | COMPLETE | P1 | DRAFT/ACTIVE/CANCELLED 生命周期；草稿可编辑、已生效不可改；MRP 仅消费已生效预测；不写库存 / 凭证 / 审批；P1 引入独立产品名 `需求预测`，集中状态映射 `forecastStatusLabel` |
+| MRP 运算 (MRP Run) | COMPLETE | P1 | DRAFT/COMPLETED/CANCELLED；仅作为系统计算快照；COMPLETED 不可重算；不改库存、不生成凭证、不进审批、不写生产 / 采购单据；P1 拆出独立产品名 `MRP 运算`，运行配置仅含 `计划名称 / 期间 / 需求来源 / 预测方案` |
+| 物料需求计划 (Material Plan) | COMPLETE | P1 | 只读派生视图，复用 `mrp_run_results` / `mrp_run_components` / `mrp_run_pegging`，无需新表；4 个筛选 chip（全部 / 缺料 / 生产建议 / 采购建议）；2 种排序（按需求日期 / 按物料）；按周分组为展示分组；追溯视图用真实 pegging / component / demand 数据解释算式；M12 转换动作链接 |
 | MRP 计划/计算 API（v1.0 兼容） | INTERNAL / API ONLY | P2 | `/api/mrp-plans` 与 `/api/mrp/calculate` 等旧端点保留作为兼容性面；M11 canonical 路径是 `/api/planning/*` |
 | 制令单 | COMPLETE | P0 | 创建、开工、完工、取消及生产追踪 |
 | 用料出库 | COMPLETE | P0 | 仅已开工制令单；确认后组件库存 OUT |

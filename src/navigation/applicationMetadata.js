@@ -25,8 +25,19 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'warehouses', mobileLabel: '仓库', iconKey: 'warehouses' },
       { page: 'boms', mobileLabel: 'BOM', iconKey: 'boms' },
       { page: 'product-routings', mobileLabel: '制品工序标准', iconKey: 'routings' },
-      { page: 'forecasts', mobileLabel: '计划预测', iconKey: 'forecasts' },
-      { page: 'mrp', mobileLabel: 'MRP 物料需求计划', iconKey: 'mrp' },
+    ],
+  },
+  {
+    key: 'planning',
+    label: '计划与生产',
+    accent: 'blue',
+    items: [
+      { page: 'forecasts', mobileLabel: '需求预测', iconKey: 'forecasts' },
+      { page: 'mrp-runs', mobileLabel: 'MRP 运算', iconKey: 'mrpRuns' },
+      { page: 'material-requirements-plan', mobileLabel: '物料需求计划', iconKey: 'materialPlan' },
+      { page: 'production-instructions', mobileLabel: '生产指令', iconKey: 'planningDocuments' },
+      { page: 'purchase-instructions', mobileLabel: '采购指令', iconKey: 'planningDocuments' },
+      { page: 'purchase-requisitions', mobileLabel: '请购单', iconKey: 'planningDocuments' },
     ],
   },
   {
@@ -46,8 +57,6 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'green',
     items: [
       { page: 'purchase-orders', mobileLabel: '采购订单', iconKey: 'purchaseOrders' },
-      { page: 'purchase-requisitions', mobileLabel: '请购单', iconKey: 'purchaseOrders' },
-      { page: 'purchase-instructions', mobileLabel: '采购指令', iconKey: 'purchaseOrders' },
       { page: 'purchase-receipts', mobileLabel: '采购入库', iconKey: 'purchaseReceipts' },
     ],
   },
@@ -68,7 +77,6 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'blue',
     items: [
       { page: 'production-orders', mobileLabel: '制令单', iconKey: 'productionOrders' },
-      { page: 'production-instructions', mobileLabel: '生产指令', iconKey: 'productionOrders' },
       { page: 'material-issues', mobileLabel: '用料出库', iconKey: 'salesDeliveries' },
       { page: 'production-receipts', mobileLabel: '生产入库', iconKey: 'purchaseReceipts' },
     ],

@@ -1,16 +1,44 @@
 # 项目状态快照
 
-> 更新：2026-09-19 (M14 Sales / Purchase Discount / Allowance)
+> 更新：2026-09-20 (P1 — Forecast / MRP Run / Material Requirements Plan IA)
 
 ## 阶段与分支
 
 - 阶段：v1.1 Expansion — M14 Sales & Purchase Discount — Final Acceptance
-- 分支：release/v1.1-final-acceptance
-- 稳定基线：0cbfdd8 (`v1.0.1-rc.4`，保持不变)
+- 分支：feature/v1.1-productization
+- 稳定基线：99bc18f (`v1.1.0-rc.1`)
 
 ## 当前生产验收状态
 
-> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`.** v1.1 final-acceptance 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
+> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`, `v1.1.0-rc.1`.** v1.1 final-acceptance 与 productization 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### P1 — Forecast / MRP Run / Material Requirements Plan IA
+
+> **Status:** IMPLEMENTATION COMPLETE — productization baseline. No schema change. No M11/M12 algorithm change. P2/P3/P4 not started.
+
+- 三个产品概念清晰分离：`需求预测`（人输入的未来需求，forecast）/ `MRP 运算`（系统计算，run）/ `物料需求计划`（计算结果只读视图，material plan）；
+- 后端无变更。复用现有 `planning_forecasts` / `mrp_runs` / `mrp_run_results` / `mrp_run_components` / `mrp_run_pegging` 与既有 `/api/planning/*` 路由；
+- 新增 `src/lib/status.js` 集中状态 / 需求模式 / 建议类型 / 警告文案（`FORECAST_STATUS_LABEL` / `MRP_RUN_STATUS_LABEL` / `MRP_DEMAND_MODE_LABEL` / `SUGGESTION_TYPE_LABEL` / `WARNING_LABEL`），全部 `Object.freeze`，禁止内联枚举值泄漏；
+- 拆分 `src/pages/planning.jsx` 为：
+  - `src/pages/forecasts.jsx` — 需求预测（新建 / 编辑 / 详情 / 生效 / 取消）
+  - `src/pages/mrp-runs.jsx` — MRP 运算（列表 / 运行 / 详情 / 开始计算 / 取消 / 「查看物料需求计划」主操作）
+  - `src/pages/material-requirements-plan.jsx` — 物料需求计划（结果只读视图、筛选、排序、追溯、M12 转换动作）
+- 物料需求计划采用「按需求日期 / 按物料」分组与排序；移动端卡片，桌面端保留稠密表格；4 个筛选 chip：`全部` / `缺料` / `生产建议` / `采购建议`；零库存行展示为「库存充足」卡片，不显示 `0.000000`；
+- 追溯视图（`为什么是这个数量？`）用真实 pegging / component / demand 数据解释算式：销售订单需求 + 需求预测 = 毛需求；毛需求 − 现有库存 − 在途采购 − 在途生产 = 净需求；
+- `src/App.jsx` 新增 `mrp-runs` / `material-requirements-plan` 路由；navGroups 新增 `计划与生产` 组合并把生产 / 采购指令 / 请购单合并到该组；`mrp` 旧 key 作为向后兼容别名路由到 `MaterialRequirementsPlan`；
+- `src/navigation/applicationMetadata.js` 新增 `计划与生产` 移动组，含 `需求预测` / `MRP 运算` / `物料需求计划` / `生产指令` / `采购指令` / `请购单`，从 `基础资料` 组移除 `forecasts` / `mrp` / `material-requirements-plan`；
+- `src/pages/business-overview.jsx` 计划链节点重写为 `需求预测 → MRP 运算 → 物料需求计划 → 生产指令 / 采购指令 → 制令单 / 请购单 / 采购订单`，不再暗示「需求预测 = MRP」；
+- `src/pages/planning-documents.jsx` 中 `来源 MRP` 文案更新为 `来源物料需求计划`，链接 `page="material-requirements-plan"`；编辑器中 `来源 MRP 计算` 更新为 `来源 MRP 运算`；
+- Focused：`server/p1-material-plan.test.js` → **39 tests / 0 failed**，覆盖状态映射、筛选 chip 语义、排序、追溯文案、金色算术（FG MAKE 100 / PCB BUY 70 / CASE 无）、M11 net-before-explosion 回归（FG net 15 / A 30 / B 45）、launcher 三条规划条目、桌面 navGroups、`mrp` 向后兼容别名、业务总览计划链三段、Mobile Material Plan 端不显示桌面稠密表等；
+- Real Edge 153 headless：`scripts/p1-planning-acceptance.mjs` 在隔离临时 DB 上完成「销售 100 + 预测 20 + FG 库存 20」确定性 fixture，MRP `SALES_PLUS_FORECAST` 执行后 FG MAKE 100、组件 PCB BUY 70、CASE 库存充足；375×667 / 414×896 / 1024×768 在 `/forecasts` / `/mrp-runs` / `/material-requirements-plan` / `/business-overview` 全部加载，Edge exit = 0 共 12 次；侧效应不变量 `inventory_transactions = 0` / `accounting_vouchers = 0` / `purchase_orders = 0` / `production_orders = 0`；筛选逻辑在服务端结果上 4 种 chip 全 PASS；
+- Full：`pnpm test` → **1190 tests / 230 suites / 0 failed**（基线 1151 + 39 P1 focused）；
+- Build：`pnpm build` PASS（`627.02 kB JS / 63.33 kB CSS`）；
+- `git diff --check`：仅 Windows CRLF 提示，无真实 whitespace 错误；
+- 已修改既有测试以反映新的 launcher 分组：`server/mobile-application-launcher.test.js`（admin / reviewer 期望 page set、11 个 product group）、`server/m6-production-workflow.test.js`（mobile label 文案 `需求预测` / `MRP 运算` / `物料需求计划`）；
+- 不动：M11 net-before-explosion、M12 转换语义、五角色权限、money cents、stock atomicity、canonical inventory ledger、closed-period accounting、AR/AP history、voucher balancing；
+- 无 tag、push、deploy；
+- **P1 FORECAST / MRP IA COMPLETE = YES**
+- **READY FOR P2 DATA LIFECYCLE = YES**
 
 ### M14 — Sales / Purchase Discount / Allowance
 

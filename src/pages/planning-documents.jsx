@@ -4,7 +4,7 @@
 // M11 MRP snapshot to the existing execution documents. The pages
 // share patterns (list + detail modal) so we keep them in one file.
 // Each list honours role permissions via the can() helper; detail
-// views render cross-document links (来源 MRP / 关联制令单 / 关联请购单 /
+// views render cross-document links (来源物料需求计划 / 关联制令单 / 关联请购单 /
 // 生成的采购订单) using the canonical AppLink navigation.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -85,12 +85,12 @@ export function ProductionInstructionsPage({ user, notify }) {
       </select>}
     />
     <div className="table-wrap"><table><thead><tr>
-      <th>指令号</th><th>来源 MRP</th><th className="number">项目数</th>
+      <th>指令号</th><th>来源物料需求计划</th><th className="number">项目数</th>
       <th className="number">总数量</th><th>计划日期</th><th>状态</th><th>制令单状态</th>
     </tr></thead><tbody>
       {filtered.map((row) => <tr className="clickable" key={row.id} onClick={() => setSelection(row)}>
         <td className="mono strong-text">{row.instructionNo}</td>
-        <td><AppLink page="mrp" documentId={row.mrpRunId}>{row.productName || row.mrpRunId?.slice(-6)}</AppLink></td>
+        <td><AppLink page="material-requirements-plan" documentId={row.mrpRunId}>{row.productName || row.mrpRunId?.slice(-6)}</AppLink></td>
         <td className="number">{row.itemCount}</td>
         <td className="number">{fmtQty(row.totalQuantity)}</td>
         <td>{fmtDate(row.plannedDate)}</td>
@@ -151,8 +151,8 @@ function ProductionInstructionCreate({ value, onClose, onSaved, notify }) {
 
   return <Modal title="新建生产指令" onClose={onClose} wide>
     <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <label className="full">来源 MRP 计算<select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} required>
-        <option value="">选择已完成的 MRP 计算</option>
+      <label className="full">来源 MRP 运算<select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} required>
+        <option value="">选择已完成的 MRP 运算</option>
         {runs.map((r) => <option key={r.id} value={r.id}>{r.run_code} - {r.run_name}</option>)}
       </select></label>
       <label>计划日期<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)}/></label>
@@ -208,7 +208,7 @@ function ProductionInstructionDetail({ instructionId, notify, onChanged }) {
     <div className="form-grid">
       <label>指令号<span className="mono strong-text">{data.instruction_no}</span></label>
       <label>状态<span><Status status={PI_STATUS_VARIANT[data.status] || 'draft'} label={PI_STATUS_LABELS[data.status] || data.status}/></span></label>
-      <label>来源 MRP<span><AppLink page="mrp" documentId={data.mrp_run_id}>{data.runCode}</AppLink></span></label>
+      <label>来源物料需求计划<span><AppLink page="material-requirements-plan" documentId={data.mrp_run_id}>{data.runCode}</AppLink></span></label>
       <label>计划日期<span>{fmtDate(data.planned_date)}</span></label>
       <label>制单人<span>{data.creatorName || '—'}</span></label>
       <label>下达人<span>{data.releaserName || '—'}</span></label>
@@ -283,12 +283,12 @@ export function PurchaseInstructionsPage({ user, notify }) {
       </select>}
     />
     <div className="table-wrap"><table><thead><tr>
-      <th>指令号</th><th>来源 MRP</th><th className="number">项目数</th>
+      <th>指令号</th><th>来源物料需求计划</th><th className="number">项目数</th>
       <th className="number">总数量</th><th>计划日期</th><th>状态</th><th>请购单</th>
     </tr></thead><tbody>
       {filtered.map((row) => <tr className="clickable" key={row.id} onClick={() => setSelection(row)}>
         <td className="mono strong-text">{row.instructionNo}</td>
-        <td><AppLink page="mrp" documentId={row.mrpRunId}>{row.runCode}</AppLink></td>
+        <td><AppLink page="material-requirements-plan" documentId={row.mrpRunId}>{row.runCode}</AppLink></td>
         <td className="number">{row.itemCount}</td>
         <td className="number">{fmtQty(row.totalQuantity)}</td>
         <td>{fmtDate(row.plannedDate)}</td>
@@ -349,8 +349,8 @@ function PurchaseInstructionCreate({ value, onClose, onSaved, notify }) {
 
   return <Modal title="新建采购指令" onClose={onClose} wide>
     <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-      <label className="full">来源 MRP 计算<select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} required>
-        <option value="">选择已完成的 MRP 计算</option>
+      <label className="full">来源 MRP 运算<select value={selectedRunId} onChange={(event) => setSelectedRunId(event.target.value)} required>
+        <option value="">选择已完成的 MRP 运算</option>
         {runs.map((r) => <option key={r.id} value={r.id}>{r.run_code} - {r.run_name}</option>)}
       </select></label>
       <label>计划日期<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)}/></label>
@@ -395,7 +395,7 @@ function PurchaseInstructionDetail({ instructionId, notify, onChanged }) {
     <div className="form-grid">
       <label>指令号<span className="mono strong-text">{data.instruction_no}</span></label>
       <label>状态<span><Status status={PUI_STATUS_VARIANT[data.status] || 'draft'} label={PUI_STATUS_LABELS[data.status] || data.status}/></span></label>
-      <label>来源 MRP<span><AppLink page="mrp" documentId={data.mrp_run_id}>{data.runCode}</AppLink></span></label>
+      <label>来源物料需求计划<span><AppLink page="material-requirements-plan" documentId={data.mrp_run_id}>{data.runCode}</AppLink></span></label>
       <label>计划日期<span>{fmtDate(data.planned_date)}</span></label>
       <label>制单人<span>{data.creatorName || '—'}</span></label>
       <label>下达人<span>{data.releaserName || '—'}</span></label>
