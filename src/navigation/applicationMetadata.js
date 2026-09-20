@@ -8,7 +8,7 @@
 export const MOBILE_APPLICATION_GROUPS = Object.freeze([
   {
     key: 'overview',
-    label: '业务导航',
+    label: '概览',
     accent: 'blue',
     items: [
       { page: 'business-overview', mobileLabel: '业务总览', iconKey: 'overview' },
@@ -23,8 +23,6 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'suppliers', mobileLabel: '供应商', iconKey: 'suppliers' },
       { page: 'products', mobileLabel: '货品', iconKey: 'products' },
       { page: 'warehouses', mobileLabel: '仓库', iconKey: 'warehouses' },
-      { page: 'boms', mobileLabel: 'BOM', iconKey: 'boms' },
-      { page: 'product-routings', mobileLabel: '制品工序标准', iconKey: 'routings' },
     ],
   },
   {
@@ -38,11 +36,16 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'production-instructions', mobileLabel: '生产指令', iconKey: 'planningDocuments' },
       { page: 'purchase-instructions', mobileLabel: '采购指令', iconKey: 'planningDocuments' },
       { page: 'purchase-requisitions', mobileLabel: '请购单', iconKey: 'planningDocuments' },
+      { page: 'production-orders', mobileLabel: '制令单', iconKey: 'productionOrders' },
+      { page: 'material-issues', mobileLabel: '用料出库', iconKey: 'salesDeliveries' },
+      { page: 'production-receipts', mobileLabel: '生产入库', iconKey: 'purchaseReceipts' },
+      { page: 'boms', mobileLabel: 'BOM', iconKey: 'boms' },
+      { page: 'product-routings', mobileLabel: '制品工序标准', iconKey: 'routings' },
     ],
   },
   {
     key: 'sales',
-    label: '销售管理',
+    label: '销售',
     accent: 'blue',
     items: [
       { page: 'orders', mobileLabel: '销售订单', iconKey: 'orders' },
@@ -53,7 +56,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
   },
   {
     key: 'purchasing',
-    label: '采购管理',
+    label: '采购',
     accent: 'green',
     items: [
       { page: 'purchase-orders', mobileLabel: '采购订单', iconKey: 'purchaseOrders' },
@@ -62,7 +65,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
   },
   {
     key: 'inventory',
-    label: '仓储库存',
+    label: '库存',
     accent: 'amber',
     items: [
       { page: 'inventory', mobileLabel: '库存查询 / 调拨 / 盘点', iconKey: 'inventory' },
@@ -72,27 +75,19 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     ],
   },
   {
-    key: 'manufacturing',
-    label: '生产管理',
-    accent: 'blue',
-    items: [
-      { page: 'production-orders', mobileLabel: '制令单', iconKey: 'productionOrders' },
-      { page: 'material-issues', mobileLabel: '用料出库', iconKey: 'salesDeliveries' },
-      { page: 'production-receipts', mobileLabel: '生产入库', iconKey: 'purchaseReceipts' },
-    ],
-  },
-  {
     key: 'quality',
-    label: '质量管理',
+    label: '质量',
     accent: 'green',
     items: [
       { page: 'iqc', mobileLabel: 'IQC 来料检验', iconKey: 'iqc' },
       { page: 'oqc', mobileLabel: 'OQC 出货检验', iconKey: 'oqc' },
+      { page: 'product-costs', mobileLabel: '标准成本', iconKey: 'costAccounting' },
+      { page: 'cost-rates', mobileLabel: '费用项目', iconKey: 'costAccounting' },
     ],
   },
   {
     key: 'finance',
-    label: '财务管理',
+    label: '财务',
     accent: 'slate',
     items: [
       { page: 'accounts-receivable', mobileLabel: '应收账款', iconKey: 'accounting' },
@@ -121,20 +116,28 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     ],
   },
   {
+    key: 'projects',
+    label: '项目',
+    accent: 'slate',
+    items: [
+      { page: 'projects', mobileLabel: '项目立项', iconKey: 'projects' },
+      { page: 'tasks', mobileLabel: '任务管理', iconKey: 'tasks' },
+      { page: 'timesheets', mobileLabel: '工时记录', iconKey: 'timesheets' },
+    ],
+  },
+  {
     key: 'system',
-    label: '系统管理',
+    label: '系统',
     accent: 'slate',
     items: [
       { page: 'workflows', mobileLabel: '审批流定义', iconKey: 'approvals' },
       { page: 'users', mobileLabel: '用户与角色', iconKey: 'users' },
+      { page: 'notifications', mobileLabel: '通知中心', iconKey: 'notifications' },
     ],
   },
 ]);
 
-export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([
-  '销售折让、附加折让',
-  '采购折让、附加折让',
-]);
+export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
   const authorizedByPage = new Map(visibleNav.map((item) => [item.key, item]));

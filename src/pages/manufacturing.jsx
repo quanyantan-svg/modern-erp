@@ -187,7 +187,7 @@ function MRPCalculator({ products, onClose, notify }) {
                 </td>
               </tr>)}
             </tbody>
-            {showDetails && <tfoot style={{background: 'var(--bg-tertiary)'}}>
+            {showDetails && <tfoot style={{background: 'var(--bg-grouped)'}}>
               <tr><td colSpan="8"><em>明细：</em></td></tr>
               {result.suggestions.map(s => <tr key={'detail-' + s.productId}>
                 <td colSpan="2" className="mono">{s.code}</td>
@@ -197,8 +197,8 @@ function MRPCalculator({ products, onClose, notify }) {
           </table>
         </div>
 
-        <div style={{marginTop: '16px', padding: '12px', background: 'var(--accent-primary-subtle)', borderRadius: 'var(--radius-md)'}}>
-          <strong style={{color: 'var(--accent-primary)'}}>💡 说明</strong>
+        <div style={{marginTop: '16px', padding: '12px', background: 'var(--accent-soft)', borderRadius: 'var(--radius-md)'}}>
+          <strong style={{color: 'var(--accent)'}}>说明</strong>
           <p style={{fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px'}}>
             以上采购建议基于启用的 BOM 清单计算。实际采购时还需考虑供应商交期、最小起订量等因素。
           </p>
@@ -541,7 +541,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
       </select></label>
       <label>日期<input type="date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
-      {prefill && !prefill.hasBom && <div className="full" style={{padding:'0.5rem', background:'var(--bg-tertiary)', borderRadius:'4px'}}>未关联 BOM，需手工选择用料</div>}
+      {prefill && !prefill.hasBom && <div className="full" style={{padding:'0.5rem', background:'var(--bg-grouped)', borderRadius:'4px'}}>未关联 BOM，需手工选择用料</div>}
       <div className="full"><div className="form-section-head"><span>出库物料</span><button type="button" className="secondary" onClick={() => setItems([...form.items, { productId: '', plannedQuantity: 0, issueQuantity: 1 }])}>＋ 增行</button></div>
         <table className="line-table"><thead><tr><th>物料</th><th className="number">计划用量</th><th className="number">本次出库量</th><th/></tr></thead><tbody>
           {form.items.map((item, i) => <tr key={i}>

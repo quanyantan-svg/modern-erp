@@ -26,10 +26,10 @@ import MobileApprovalCenter from './components/MobileApprovalCenter.jsx';
 import { useMobile } from './hooks/useMediaQuery.js';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
 import { AppLink, AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
+import { Icon as ProductIcon } from './components/icons.jsx';
 const can = (user, permission) => user?.permissions?.includes(permission);
 
-// Allowed mobile tab keys. `directory` is intentionally absent because
-// the directory tab is rendered as a disabled button in MobileShell.
+// Canonical product tabs share one validated navigation contract.
 const MOBILE_TAB_KEYS = new Set(MOBILE_TABS.filter((t) => t.enabled).map((t) => t.key));
 
 // Lucide-style inline SVG icon component
@@ -348,6 +348,17 @@ export default function App() {
     if (mobileTab === 'approvals') {
       return <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} />;
     }
+    if (mobileTab === 'cloud') {
+      return (
+        <MobilePage title="云翼" subtitle="企业服务入口">
+          <section className="yunyi-portal" aria-labelledby="yunyi-title">
+            <div className="yunyi-portal__icon"><ProductIcon name="cloud" size={34}/></div>
+            <h2 id="yunyi-title">云翼服务正在建设</h2>
+            <p>这里将承载企业服务入口。当前版本不提供尚未实现的业务功能。</p>
+          </section>
+        </MobilePage>
+      );
+    }
     if (mobileTab === 'profile') {
       return (
         <MobilePage
@@ -430,7 +441,7 @@ export default function App() {
         tabBadges={{ approvals: pendingApprovalCount }}
       >
         {renderMobileContent()}
-        {toast && <div className={`toast ${toast.type}`} data-testid="mobile-toast">{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
+        {toast && <div className={`toast ${toast.type}`} role="status" data-testid="mobile-toast"><ProductIcon name={toast.type === 'success' ? 'check' : 'error'} size={18}/><span>{toast.message}</span></div>}
       </MobileShell>
       </AppNavigationProvider>
     );
@@ -463,6 +474,6 @@ export default function App() {
       </header>
       <section className="page-content">{pages[current?.key] || pages.dashboard}</section>
     </main>
-    {toast && <div className={`toast ${toast.type}`}>{toast.type === 'success' ? '✓' : '!'} {toast.message}</div>}
+    {toast && <div className={`toast ${toast.type}`} role="status"><ProductIcon name={toast.type === 'success' ? 'check' : 'error'} size={18}/><span>{toast.message}</span></div>}
   </AppNavigationProvider></div>;
 }
