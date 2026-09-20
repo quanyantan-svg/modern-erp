@@ -36,11 +36,12 @@
 
 | 功能 | 状态 | 优先级 | 说明 |
 |------|------|--------|------|
-| 客户管理 | 完整 | P0 | CRUD、停用 |
-| 供应商管理 | 完整 | P0 | CRUD、停用 |
-| 货品管理 | 完整 | P0 | 分类、单位、价格 |
-| 仓库管理 | 完整 | P0 | 多仓库 |
-| 制品工序标准 | COMPLETE | P0 | 产品级多版本路线、单一 ACTIVE、确定性工序顺序、标准准备/运行时间；无库存/会计/审批影响 |
+| 客户管理 | COMPLETE | P0 | 无引用可删除；有引用返回 409；停用/启用；历史名称保留；新单选择过滤停用项 |
+| 供应商管理 | COMPLETE | P0 | 无引用可删除；有引用返回 409；停用/启用；历史名称保留；新单选择过滤停用项 |
+| 货品管理 | COMPLETE | P0 | 无引用且零库存可删除；跨 BOM/路线/销售/采购/库存/MRP/生产引用显式阻断；停用/启用 |
+| 仓库管理 | COMPLETE | P0 | 空且无引用可删除；库存/流水/物流/盘点/调拨/调整/报废/生产引用阻断；非零库存不可停用 |
+| BOM | COMPLETE | P0 | ACTIVE 先停用为 DISCONTINUED；仅未被生产/计划引用的停用版本可删除 |
+| 制品工序标准 | COMPLETE | P0 | 产品级多版本路线、单一 ACTIVE；仅未被生产指令引用的 INACTIVE 路线可删除；自身工序原子删除 |
 | 计量单位 | 缺失 | P1 | - |
 | 货品分类 | 部分 | P1 | 基础分类 |
 | 特征码 | 缺失 | P2 | - |
@@ -55,6 +56,7 @@
 | 销售订单提交 | 完整 | P0 | 状态机 |
 | 销售订单审批 | COMPLETE | P0 | 提交、审批/驳回；审批不等于出货 |
 | 销售订单修改 | 完整 | P0 | 仅草稿状态 |
+| 销售订单删除 | COMPLETE | P0 | 仅 DRAFT 且无出货/MRP/库存/会计/AR 痕迹；删除自身明细并审计 |
 | 订单状态追踪 | 完整 | P0 | 状态显示 |
 | 销售附加折让 | COMPLETE | P0 | DRAFT 编辑；CONFIRMED 原子扣减；负向应收调整；唯一一条 OUT 凭证；二次确认 409；不进入审批中心；受应收账款剩余额度约束 |
 | 订单打印 | 缺失 | P1 | - |
@@ -68,6 +70,7 @@
 | 采购订单新建 | 完整 | P0 | 明细、金额重算 |
 | 采购订单提交 | 完整 | P0 | 状态机 |
 | 采购订单审批 | COMPLETE | P0 | 提交、审批/驳回；审批不等于入库 |
+| 采购订单删除 | COMPLETE | P0 | 仅 DRAFT 且无入库/请购/库存/会计/AP 痕迹；删除自身明细并审计 |
 | 采购附加折让 | COMPLETE | P0 | DRAFT 编辑；CONFIRMED 原子扣减；负向应付调整；唯一一条凭证；二次确认 409；不进入审批中心；受应付账款剩余额度约束 |
 
 ---
@@ -82,7 +85,7 @@
 | 采购退货 | 完整 | P0 | DRAFT 编辑；确认出库；反向凭证同额 |
 | 库存盘点 | 完整 | P0 | check_no；DRAFT→SUBMITTED→APPROVED；独立审批与调整流水 |
 | 仓库调拨 | 完整 | P0 | 多仓库调拨 |
-| 库存调整 | COMPLETE | P0 | 草稿、确认/取消；确认后产生库存异动 |
+| 库存调整 | COMPLETE | P0 | 草稿可安全删除；确认/取消；确认后产生库存异动且永不可物理删除 |
 | 库存异动 | COMPLETE | P0 | 全程追踪并可回到来源单据 |
 | 库存预警 | 完整 | P1 | 最低库存 |
 | 库存报废 | COMPLETE | P0 | DRAFT 编辑；确认时校验库存并原子扣减；任一行不足整张回滚；每行唯一 OUT 库存异动；二次确认 409；不生成会计凭证；不进入审批中心 |
@@ -153,7 +156,7 @@
 | BOM管理 | 完整 | P0 | 多层BOM |
 | BOM展开 | 完整 | P0 | 组件分解 |
 | 制品工序标准 | COMPLETE | P0 | 与 BOM 同级的产品主数据；ACTIVE/INACTIVE；工序增删改与顺序号重排；仅 admin 管理 |
-| 需求预测 (Forecast) | COMPLETE | P1 | DRAFT/ACTIVE/CANCELLED 生命周期；草稿可编辑、已生效不可改；MRP 仅消费已生效预测；不写库存 / 凭证 / 审批；P1 引入独立产品名 `需求预测`，集中状态映射 `forecastStatusLabel` |
+| 需求预测 (Forecast) | COMPLETE | P1 | DRAFT/ACTIVE/CANCELLED 生命周期；无 MRP 引用的草稿可删除；已生效不可改删；MRP 仅消费已生效预测；不写库存 / 凭证 / 审批 |
 | MRP 运算 (MRP Run) | COMPLETE | P1 | DRAFT/COMPLETED/CANCELLED；仅作为系统计算快照；COMPLETED 不可重算；不改库存、不生成凭证、不进审批、不写生产 / 采购单据；P1 拆出独立产品名 `MRP 运算`，运行配置仅含 `计划名称 / 期间 / 需求来源 / 预测方案` |
 | 物料需求计划 (Material Plan) | COMPLETE | P1 | 只读派生视图，复用 `mrp_run_results` / `mrp_run_components` / `mrp_run_pegging`，无需新表；4 个筛选 chip（全部 / 缺料 / 生产建议 / 采购建议）；2 种排序（按需求日期 / 按物料）；按周分组为展示分组；追溯视图用真实 pegging / component / demand 数据解释算式；M12 转换动作链接 |
 | MRP 计划/计算 API（v1.0 兼容） | INTERNAL / API ONLY | P2 | `/api/mrp-plans` 与 `/api/mrp/calculate` 等旧端点保留作为兼容性面；M11 canonical 路径是 `/api/planning/*` |
@@ -163,7 +166,7 @@
 | 旧工作中心 / BOM 工序 / 人工记录 | LEGACY / HIDDEN | P2 | v1.0 API 兼容面；既有 BOM-bound 工序幂等桥接为停用历史产品路线，不作为 M10 执行模型 |
 | 生产指令 | COMPLETE | P1 | DRAFT/RELEASED/CANCELLED；仅消费 MAKE 建议；支持部分下达（MRP 建议 = 100 时可分 60 + 40）；RELEASED 后可显式生成制令单；0 库存 / 凭证 / 审批影响 |
 | 采购指令 | COMPLETE | P1 | DRAFT/RELEASED/CANCELLED；仅消费 BUY 建议；支持部分下达；RELEASED 后可显式生成请购单；0 库存 / 凭证 / 审批影响 |
-| 请购单 | COMPLETE | P1 | DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED；接 M3 审批中心；创建人不可自审；APPROVED 后可显式生成采购订单；0 库存 / 凭证影响 |
+| 请购单 | COMPLETE | P1 | DRAFT 且无采购指令转换/下游时可删除；SUBMITTED/APPROVED/REJECTED/CANCELLED 不可删；接 M3 审批中心；创建人不可自审；APPROVED 后可显式生成采购订单；0 库存 / 凭证影响 |
 | 生产执行报表 | DEFERRED | P2 | 未实现 |
 
 ---

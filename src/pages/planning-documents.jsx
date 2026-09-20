@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Badge, can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { planningDocumentTabForPage } from '../navigation/planningDocumentNavigation.js';
 
@@ -476,7 +476,7 @@ export function PurchaseRequisitionsPage({ user, notify }) {
   if (selection) {
     return <Panel title="请购单" subtitle={`单号 ${selection.requisitionNo}`}
       action={<button className="secondary" onClick={() => setSelection(null)}>← 返回</button>}>
-      <PurchaseRequisitionDetail requisitionId={selection.id} notify={notify} onChanged={() => { void load(); }} canManage={canManage} canApprove={canApprove}/>
+      <PurchaseRequisitionDetail requisitionId={selection.id} notify={notify} onChanged={() => { void load(); }} onDeleted={() => { setSelection(null); void load(); }} canManage={canManage} canApprove={canApprove}/>
     </Panel>;
   }
   return <Panel title="请购单" subtitle="由采购指令生成或直接创建，经审批后可生成采购订单"
@@ -592,7 +592,7 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
   </Modal>;
 }
 
-function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, canManage, canApprove }) {
+function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted, canManage, canApprove }) {
   const [data, setData] = useState(null);
   const [suppliers, setSuppliers] = useState([]);
   const [showReject, setShowReject] = useState(false);
@@ -653,6 +653,7 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, canManage
     <div className="form-actions">
       {data.status === 'DRAFT' && canManage && <>
         <button type="button" className="primary" onClick={() => act('submit')}>提交</button>
+        <ConfirmDelete label="请购单" onConfirm={async () => { try { await api(`/api/purchase-requisitions/${requisitionId}`, { method: 'DELETE' }); notify('请购单草稿已删除'); onDeleted?.(); } catch (error) { notify(error.message, 'error'); throw error; } }}/>
         <button type="button" className="danger-button" onClick={() => act('cancel')}>取消</button>
       </>}
       {data.status === 'SUBMITTED' && canApprove && <>

@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
 import { forecastStatusLabel } from '../lib/status.js';
 
 function fmtQty(value) {
@@ -267,6 +267,10 @@ function ForecastDetail({ forecastId, onClose, onChanged, notify }) {
         <button type="button" className="secondary" onClick={onClose}>关闭</button>
         {forecast.status === 'DRAFT' && <button type="button" className="primary" onClick={() => setEditing(true)}>编辑</button>}
         {forecast.status === 'DRAFT' && <button type="button" className="primary" onClick={() => act('activate')}>生效</button>}
+        {forecast.status === 'DRAFT' && (<ConfirmDelete label="预测单" onConfirm={async () => {
+          try { await api(`/api/planning/forecasts/${forecastId}`, { method: 'DELETE' }); notify('预测单草稿已删除'); onChanged?.(); onClose(); }
+          catch (error) { notify(error.message, 'error'); throw error; }
+        }}/>) }
         {forecast.status !== 'CANCELLED' && <button type="button" className="danger-button" onClick={() => act('cancel')}>取消预测</button>}
       </div>
     </Modal>

@@ -89,6 +89,7 @@ import {
   serveStatic,
   setSecurityHeaders,
 } from './lib/http.js';
+import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
 
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
 const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
@@ -145,16 +146,19 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/customers' && req.method === 'POST') return createCustomer(db, req, res, actor);
   const customerMatch = pathname.match(/^\/api\/customers\/([^/]+)$/);
   if (customerMatch && req.method === 'PATCH') return updateCustomer(db, req, res, actor, customerMatch[1]);
+  if (customerMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'customer', customerMatch[1]);
 
   if (pathname === '/api/suppliers' && req.method === 'GET') return listSuppliers(db, res, actor, url);
   if (pathname === '/api/suppliers' && req.method === 'POST') return createSupplier(db, req, res, actor);
   const supplierMatch = pathname.match(/^\/api\/suppliers\/([^/]+)$/);
   if (supplierMatch && req.method === 'PATCH') return updateSupplier(db, req, res, actor, supplierMatch[1]);
+  if (supplierMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'supplier', supplierMatch[1]);
 
   if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
   if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
   const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
   if (productMatch && req.method === 'PATCH') return updateProduct(db, req, res, actor, productMatch[1]);
+  if (productMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'product', productMatch[1]);
 
   if (pathname === '/api/orders' && req.method === 'GET') return listOrders(db, res, actor, url);
   if (pathname === '/api/orders' && req.method === 'POST') return createOrder(db, req, res, actor);
@@ -163,6 +167,7 @@ async function handleApi(db, req, res, url) {
   const orderMatch = pathname.match(/^\/api\/orders\/([^/]+)$/);
   if (orderMatch && req.method === 'GET') return getOrder(db, res, actor, orderMatch[1]);
   if (orderMatch && req.method === 'PUT') return updateOrder(db, req, res, actor, orderMatch[1]);
+  if (orderMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'salesOrder', orderMatch[1]);
   const salesWorkflowMatch = pathname.match(/^\/api\/workflow\/sales-orders\/([^/]+)$/);
   if (salesWorkflowMatch && req.method === 'GET') return getSalesOrderWorkflow(db, res, actor, salesWorkflowMatch[1]);
 
@@ -173,6 +178,7 @@ async function handleApi(db, req, res, url) {
   if (poActionMatch && req.method === 'POST') return changePurchaseOrderState(db, req, res, actor, poActionMatch[1], poActionMatch[2]);
   const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
   if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
+  if (poMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'purchaseOrder', poMatch[1]);
   const purchaseWorkflowMatch = pathname.match(/^\/api\/workflow\/purchase-orders\/([^/]+)$/);
   if (purchaseWorkflowMatch && req.method === 'GET') return getPurchaseOrderWorkflow(db, res, actor, purchaseWorkflowMatch[1]);
 
@@ -207,6 +213,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/warehouses' && req.method === 'POST') return createWarehouse(db, req, res, actor);
   const whMatch = pathname.match(/^\/api\/warehouses\/([^/]+)$/);
   if (whMatch && req.method === 'PATCH') return updateWarehouse(db, req, res, actor, whMatch[1]);
+  if (whMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'warehouse', whMatch[1]);
 
   // Inventory
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
@@ -221,6 +228,7 @@ async function handleApi(db, req, res, url) {
   const adjustmentMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)$/);
   if (adjustmentMatch && req.method === 'GET') return getInventoryAdjustment(db, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
+  if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return calculateMRP(db, req, res, actor);
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
@@ -268,6 +276,7 @@ async function handleApi(db, req, res, url) {
   const forecastMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)$/);
   if (forecastMatch && req.method === 'GET') return getPlanningForecast(db, res, actor, forecastMatch[1]);
   if (forecastMatch && req.method === 'PATCH') return updatePlanningForecast(db, req, res, actor, forecastMatch[1]);
+  if (forecastMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'forecast', forecastMatch[1]);
   const forecastActionMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)\/(activate|cancel)$/);
   if (forecastActionMatch && req.method === 'POST') {
     if (forecastActionMatch[2] === 'activate') return activatePlanningForecast(db, res, actor, forecastActionMatch[1]);
@@ -313,6 +322,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/purchase-requisitions' && req.method === 'POST') return createPurchaseRequisition(db, req, res, actor);
   const purchReqMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)$/);
   if (purchReqMatch && req.method === 'GET') return getPurchaseRequisition(db, res, actor, purchReqMatch[1]);
+  if (purchReqMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'purchaseRequisition', purchReqMatch[1]);
   const purchReqActionMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)\/(submit|approve|reject|cancel|generate-purchase-order)$/);
   if (purchReqActionMatch && req.method === 'POST') {
     const rid = purchReqActionMatch[1];
@@ -535,6 +545,7 @@ async function handleApi(db, req, res, url) {
   const productRoutingMatch = pathname.match(/^\/api\/product-routings\/([^/]+)$/);
   if (productRoutingMatch && req.method === 'GET') return getProductRouting(db, res, actor, productRoutingMatch[1]);
   if (productRoutingMatch && req.method === 'PATCH') return updateProductRouting(db, req, res, actor, productRoutingMatch[1]);
+  if (productRoutingMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'routing', productRoutingMatch[1]);
 
   // ============ BOM ============
   if (pathname === "/api/boms" && req.method === "GET") return listBoms(db, res, actor, url);
@@ -542,6 +553,7 @@ async function handleApi(db, req, res, url) {
   const bomMatch = pathname.match(/^\/api\/boms\/(.+)$/);
   if (bomMatch && req.method === "GET") return getBom(db, res, actor, bomMatch[1]);
   if (bomMatch && req.method === "POST") return updateBom(db, req, res, actor, bomMatch[1]);
+  if (bomMatch && req.method === "DELETE") return deleteMasterRecord(db, res, actor, 'bom', bomMatch[1]);
 
   // ============ Production Orders ============
   if (pathname === "/api/production-orders" && req.method === "GET") return listProductionOrders(db, res, actor, url);
@@ -1356,6 +1368,10 @@ async function updateWarehouse(db, req, res, actor, warehouseId) {
   const address = optionalText(body.address ?? current.address, 200);
   const manager = optionalText(body.manager ?? current.manager, 50);
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
+  if (current.active && !active) {
+    const stock = db.prepare('SELECT 1 FROM inventory WHERE warehouse_id=? AND quantity<>0 LIMIT 1').get(warehouseId);
+    if (stock) throw new HttpError(409, '仓库仍有库存，清零或转移库存后才能停用', { code: 'WAREHOUSE_NOT_EMPTY' });
+  }
   db.prepare('UPDATE warehouses SET name=?,address=?,manager=?,active=?,updated_at=? WHERE id=?').run(name, address, manager, active, new Date().toISOString(), warehouseId);
   audit(db, actor.id, 'UPDATE', 'WAREHOUSE', warehouseId, name);
   return send(res, 200, { ok: true });

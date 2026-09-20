@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime } from '../components/ui.jsx';
+import { ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime } from '../components/ui.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const STATUS_LABELS = { ACTIVE: '启用', INACTIVE: '停用' };
@@ -157,6 +157,11 @@ function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }
       refresh();
     } catch (error) { notify(error.message, 'error'); } finally { setBusy(false); }
   };
+  const remove = async () => {
+    setBusy(true);
+    try { await api(`/api/product-routings/${value.id}`, { method: 'DELETE' }); notify('制品工序标准已删除'); onSaved(); }
+    catch (error) { notify(error.message, 'error'); throw error; } finally { setBusy(false); }
+  };
 
   if (!detail) return <Modal title="制品工序标准" onClose={onClose} wide><Loading/></Modal>;
   const title = value.create ? '新建制品工序标准' : editing ? '编辑制品工序标准' : '制品工序标准详情';
@@ -213,6 +218,7 @@ function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }
       </div>
       <div className="form-actions">
         {canManage && detail.status === 'INACTIVE' && <button type="button" className="primary" disabled={busy} onClick={() => void changeStatus('activate')}>启用</button>}
+        {canManage && detail.status === 'INACTIVE' && (<ConfirmDelete label="制品工序标准" message="确定删除这条已停用且未被生产业务引用的工艺路线吗？" onConfirm={remove}/>) }
         {canManage && detail.status === 'ACTIVE' && <button type="button" className="danger-button" disabled={busy} onClick={() => void changeStatus('deactivate')}>停用</button>}
         {canManage && <button type="button" className="secondary" onClick={() => setEditing(true)}>编辑</button>}
         <button type="button" className="secondary" onClick={onClose}>关闭</button>

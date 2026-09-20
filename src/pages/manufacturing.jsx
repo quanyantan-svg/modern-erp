@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -58,6 +58,10 @@ function BomModal({ user, value, onClose, notify, api, products }) {
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
+  const remove = async () => {
+    try { await api('/api/boms/' + value.id, { method: 'DELETE' }); notify('BOM已删除'); onClose(); }
+    catch (e) { notify(e.message, 'error'); throw e; }
+  };
   const addItem = () => setItems([...form.items, { productId: '', quantity: 1, scrapRate: 0 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
@@ -77,7 +81,7 @@ function BomModal({ user, value, onClose, notify, api, products }) {
       </tbody></table>
     </div>
     {value.id && detail?.status === 'DISCONTINUED'
-      ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
+      ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>关闭</button>{can(user, 'PRODUCTION_ORDERS_CREATE') && <ConfirmDelete label="BOM" message="确定删除这个已停用且未被业务引用的 BOM 吗？此操作不可撤销。" onConfirm={remove}/>}</div>
       : value.id && detail?.status === 'ACTIVE'
         ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button type="button" className="danger-button" onClick={deactivate}>停用</button><button className="primary">保存</button></div>
         : <FormActions onClose={onClose}/>}

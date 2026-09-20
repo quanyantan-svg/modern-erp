@@ -1,6 +1,6 @@
 # 项目状态快照
 
-> 更新：2026-09-20 (P1 — Forecast / MRP Run / Material Requirements Plan IA)
+> 更新：2026-09-20 (P2 — Safe Delete / Disable / Archive Data Lifecycle)
 
 ## 阶段与分支
 
@@ -12,9 +12,26 @@
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`, `v1.1.0-rc.1`.** v1.1 final-acceptance 与 productization 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
 
+### P2 — Safe Delete / Disable / Archive Data Lifecycle
+
+> **Status:** IMPLEMENTATION COMPLETE — no schema change; P3/P4 not started.
+
+- 主数据统一为「无引用可删除；有引用只能停用；停用后可重新启用」：客户、供应商、货品、仓库使用既有 `active`；BOM 使用 `ACTIVE / DISCONTINUED`；制品工序标准使用 `ACTIVE / INACTIVE`。
+- 删除前显式检查实际依赖，不依赖原始外键异常；冲突返回稳定的 `RECORD_REFERENCED`，不会向用户泄漏表名、列名或 SQLite 错误。仓库有任意库存/历史引用不可删除，非零库存时也不可停用。
+- 新增且仅新增五类草稿删除：销售订单、采购订单、请购单、需求预测、库存调整单。全部要求既有 MANAGE/CREATE 权限、`DRAFT`、无下游/库存/会计/AR/AP 痕迹，并在单事务内删除自身明细与表头、写入删除审计。
+- MRP 运算、生产/采购指令、制令单、出入库/退货、调拨/盘点/报废/月结、生产领料/入库、收付款、折让、AR/AP 与会计凭证均未新增删除入口；既有业务取消、退货、反结账与凭证状态规则不变。
+- UI 提供紧凑 `···` 主数据操作菜单（编辑 / 启用或停用 / 删除）及复用的非浏览器原生删除确认；确认明确对象与不可恢复性，阻断删除显示产品安全原因；正常新单选择继续过滤 inactive 主数据，历史详情仍通过关联显示原名称。
+- 权限注册仍为 **113**；审批中心仍且仅为 `SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER`；五角色未扩权。
+- Focused：`server/p2-data-lifecycle.test.js` 覆盖无引用删除、有引用阻断、停用/启用、历史可读、选择器过滤、五类草稿删除、五类非草稿阻断、下游阻断、库存/流水/凭证/AR/AP 不变量、权限/审批合同和无 SQL 错误泄漏。
+- Real Edge：`scripts/p2-data-lifecycle-acceptance.mjs` 使用隔离临时 DB，在 375×667 / 414×896 / 1024×768 实际完成客户删除、引用阻断、停用/启用、草稿订单删除和非草稿 409；确认界面不裁切、无横向溢出，按钮触控高度不低于 44px。
+- Full：`pnpm test` → **1208 tests / 233 suites / 0 failed**；`pnpm build` PASS；`git diff --check` PASS（仅 Windows CRLF 提示）。
+- 无 tag、push、deploy。
+- **P2 DATA LIFECYCLE COMPLETE = YES**
+- **READY FOR P3 IOS UI SYSTEM = YES**
+
 ### P1 — Forecast / MRP Run / Material Requirements Plan IA
 
-> **Status:** IMPLEMENTATION COMPLETE — productization baseline. No schema change. No M11/M12 algorithm change. P2/P3/P4 not started.
+> **Status:** FROZEN AND PASS — productization baseline. No schema change. No M11/M12 algorithm change.
 
 - 三个产品概念清晰分离：`需求预测`（人输入的未来需求，forecast）/ `MRP 运算`（系统计算，run）/ `物料需求计划`（计算结果只读视图，material plan）；
 - 后端无变更。复用现有 `planning_forecasts` / `mrp_runs` / `mrp_run_results` / `mrp_run_components` / `mrp_run_pegging` 与既有 `/api/planning/*` 路由；

@@ -379,6 +379,13 @@ td strong { color: var(--text-primary); font-weight: 600; }
 .strong-text { color: var(--text-primary); font-weight: 600; }
 .actions { white-space: nowrap; text-align: right; }
 .actions > * + * { margin-left: 6px; }
+.action-menu { position: relative; display: inline-block; }
+.action-menu summary { cursor: pointer; list-style: none; min-width: 36px; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 8px; text-align: center; }
+.action-menu summary::-webkit-details-marker { display: none; }
+.action-menu__items { position: absolute; right: 0; z-index: 20; display: grid; gap: 4px; min-width: 120px; padding: 6px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-lg); }
+.action-menu__items button { width: 100%; text-align: left; white-space: nowrap; }
+.confirm-delete p { margin: 0 0 20px; line-height: 1.7; }
+.confirm-delete .form-actions button { min-height: 46px; }
 small.block { display: block; margin-top: 2px; font-size: 11.5px; color: var(--text-tertiary); font-weight: 400; }
 tfoot td {
   background: var(--bg-surface-2);

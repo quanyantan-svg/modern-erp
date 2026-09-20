@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { ActionMenu, Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
@@ -65,6 +65,23 @@ export function Dashboard({ user, notify }) {
   </>;
 }
 
+function MasterActions({ item, label, endpoint, onEdit, onChanged, notify }) {
+  async function setActive(active) {
+    try {
+      await api(`${endpoint}/${item.id}`, { method: 'PATCH', body: { active } });
+      notify(`${label}已${active ? '启用' : '停用'}`); await onChanged();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+  return <ActionMenu>
+    <button type="button" className="row-action" onClick={() => onEdit(item)}>编辑</button>
+    <button type="button" className="row-action" onClick={() => void setActive(!item.active)}>{item.active ? '停用' : '启用'}</button>
+    <ConfirmDelete label={label} message={`确定删除“${item.code} · ${item.name}”吗？删除后无法恢复。如已有业务引用，系统将阻止删除并建议停用。`} onConfirm={async () => {
+      try { await api(`${endpoint}/${item.id}`, { method: 'DELETE' }); notify(`${label}已删除`); await onChanged(); }
+      catch (error) { notify(error.message, 'error'); throw error; }
+    }}/>
+  </ActionMenu>;
+}
+
 export function Suppliers({ user, notify }) {
   const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
   const load = () => api(`/api/suppliers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.suppliers)).catch((e) => notify(e.message, 'error'));
@@ -73,7 +90,7 @@ export function Suppliers({ user, notify }) {
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索供应商编码、名称或联系人" action={can(user, 'SUPPLIERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增供应商</button>}
     />
     <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <MasterActions item={item} label="供应商" endpoint="/api/suppliers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到供应商资料"/>}</div>
     {editing && <SupplierModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('供应商资料已保存'); }} notify={notify}/>} 
   </Panel>;
@@ -102,7 +119,7 @@ export function Customers({ user, notify }) {
   return <Panel title="客户资料" subtitle="销售订单引用的客户档案，类似旧系统 SYS_CusA">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
     <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到客户资料"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
   </Panel>;
@@ -130,7 +147,7 @@ export function Products({ user, notify }) {
   return <Panel title="货品资料" subtitle="订单明细引用的标准商品档案，类似旧系统 SYS_GoodInA">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索货品编码或名称" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增货品</button>}/>
     <div className="table-wrap"><table><thead><tr><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">参考售价</th><th className="number">演示库存</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="货品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到货品资料"/>}</div>
     {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('货品资料已保存'); }} notify={notify}/>} 
   </Panel>;
@@ -162,6 +179,10 @@ export function Orders({ user, notify }) {
     <OrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
       {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="销售订单" onConfirm={async () => {
+        try { await api(`/api/orders/${order.id}`, { method: 'DELETE' }); notify('销售订单草稿已删除'); await load(); }
+        catch (error) { notify(error.message, 'error'); throw error; }
+      }}/>) }
     </>}/>
     {editing && <OrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('销售订单草稿已保存'); }} notify={notify}/>} 
     {viewing && <OrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
@@ -280,6 +301,10 @@ export function PurchaseOrders({ user, notify }) {
     <PurchaseOrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'PURCHASE_ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
       {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'PURCHASE_ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="采购订单" onConfirm={async () => {
+        try { await api(`/api/purchase-orders/${order.id}`, { method: 'DELETE' }); notify('采购订单草稿已删除'); await load(); }
+        catch (error) { notify(error.message, 'error'); throw error; }
+      }}/>) }
     </>}/>
     {editing && <PurchaseOrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('采购订单草稿已保存'); }} notify={notify}/>} 
     {viewing && <PurchaseOrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
@@ -341,7 +366,7 @@ export function Warehouses({ user, notify }) {
   return <Panel title="仓库资料" subtitle="管理企业仓库档案">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索仓库编码或名称" action={can(user, 'WAREHOUSES_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增仓库</button>}/>
     <div className="table-wrap"><table><thead><tr><th>仓库编码</th><th>仓库名称</th><th>地址</th><th>管理员</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td className="dim">{item.address || '—'}</td><td>{item.manager || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'WAREHOUSES_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td className="dim">{item.address || '—'}</td><td>{item.manager || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'WAREHOUSES_MANAGE') && <MasterActions item={item} label="仓库" endpoint="/api/warehouses" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到仓库资料"/>}</div>
     {editing && <WarehouseModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('仓库资料已保存'); }} notify={notify}/>}
   </Panel>;
@@ -404,7 +429,7 @@ function InventoryAdjustments({ notify, warehouses, products, inventory }) {
     <p className="section-hint">用于人工修正、发现损坏、数据纠正或期初调整；正数增加库存，负数减少库存。</p>
     <div className="table-wrap"><table><thead><tr><th>调整单号</th><th>仓库</th><th>日期</th><th>状态</th><th>调整项</th><th>原因</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="clickable" onClick={() => void openDetail(item)}><td className="mono">{item.adjustment_no}</td><td>{item.warehouseName}</td><td>{item.adjustment_date}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.itemCount}</td><td>{item.reason}</td></tr>)}</tbody></table>{!items.length && <Empty text="没有库存调整记录"/>}</div>
     {editing && <InventoryAdjustmentModal value={editing} warehouses={warehouses} products={products} inventory={inventory} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); notify('库存调整单已保存'); }}/>}
-    {viewing && <InventoryAdjustmentDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
+    {viewing && <InventoryAdjustmentDetail value={viewing} notify={notify} onDeleted={() => { setViewing(null); void load(); }} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
   </>;
 }
 
@@ -428,13 +453,13 @@ function InventoryAdjustmentModal({ value, warehouses, products, inventory, noti
   </form></Modal>;
 }
 
-function InventoryAdjustmentDetail({ value, onClose, onEdit, onAction }) {
+function InventoryAdjustmentDetail({ value, notify, onDeleted, onClose, onEdit, onAction }) {
   const stages = [{ key: 'DRAFT', label: '草稿' }, { key: 'CONFIRMED', label: '已确认' }];
   return <Modal title="库存调整单详情" onClose={onClose} wide><div className="detail-head"><div><span className="mono">{value.adjustment_no}</span><h3>{value.warehouseName}</h3><p>{value.reason}</p></div><Status status={value.status} label={value.statusLabel}/></div>
     {value.status !== 'CANCELLED' && <MobileWorkflowProgress stages={stages} currentStatus={value.status} title="调整进度"/>}
     <div className="detail-grid"><div><span>调整日期</span><strong>{value.adjustment_date}</strong></div><div><span>创建人</span><strong>{value.creatorName}</strong></div><div><span>确认人</span><strong>{value.confirmedByName || '尚未确认'}</strong></div><div><span>确认时间</span><strong>{dateTime(value.confirmed_at)}</strong></div></div>
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">调整前</th><th className="number">调整数量</th><th className="number">调整后</th></tr></thead><tbody>{value.items.map((item) => <tr key={item.id}><td>{item.line_no}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.beforeQuantity ?? '确认时计算'}</td><td className={`number ${item.quantityDelta > 0 ? 'positive' : 'negative'}`}>{item.quantityDelta > 0 ? '+' : ''}{item.quantityDelta}</td><td className="number">{item.afterQuantity ?? '—'}</td></tr>)}</tbody></table></div>
-    {value.status === 'DRAFT' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button><button type="button" className="row-action" onClick={onEdit}>编辑</button><button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消调整</button><button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认调整</button></div>}
+    {value.status === 'DRAFT' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button><button type="button" className="row-action" onClick={onEdit}>编辑</button><ConfirmDelete label="库存调整单" onConfirm={async () => { try { await api(`/api/inventory-adjustments/${value.id}`, { method: 'DELETE' }); notify('库存调整单草稿已删除'); onDeleted(); } catch (error) { notify(error.message, 'error'); throw error; } }}/><button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消调整</button><button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认调整</button></div>}
     {value.status !== 'DRAFT' && <p className="section-hint">已确认或已取消的调整单只读；已确认差错请通过一张反向调整单纠正。</p>}
   </Modal>;
 }
