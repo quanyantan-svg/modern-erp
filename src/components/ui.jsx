@@ -9,27 +9,29 @@ export function OrderTable({ orders = [], onView, actions, compact }) {
 }
 
 export function Panel({ title, subtitle, action, children }) { return <section className="panel"><div className="panel-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</div>{children}</section>; }
-export function Toolbar({ search, setSearch, onSearch, placeholder, action, extra }) { return <div className="toolbar"><form onSubmit={(e) => { e.preventDefault(); onSearch(); }} className="search"><span>⌕</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder}/><button>查询</button></form>{extra}<div className="toolbar-spacer"/>{action}</div>; }
-export function Modal({ title, onClose, children, wide }) { return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><div className={`modal ${wide ? 'wide' : ''}`}><div className="modal-head"><h2>{title}</h2><button onClick={onClose}>×</button></div><div className="modal-body">{children}</div></div></div>; }
+export function Toolbar({ search, setSearch, onSearch, placeholder, action, extra }) { return <div className="toolbar"><form onSubmit={(e) => { e.preventDefault(); onSearch(); }} className="search" role="search"><SearchIcon size={18}/><input aria-label={placeholder || '搜索'} value={search} onChange={(e) => setSearch(e.target.value)} placeholder={placeholder}/>{search && <button type="button" className="search__clear" aria-label="清除搜索" onClick={() => setSearch('')}><CloseIcon size={16}/></button>}<button type="submit">查询</button></form>{extra}<div className="toolbar-spacer"/>{action}</div>; }
+export function Modal({ title, onClose, children, wide }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h2>{title}</h2><button type="button" className="modal-close" aria-label="关闭" onClick={onClose}><CloseIcon size={18}/></button></div><div className="modal-body">{children}</div></section></div>; }
 export function ConfirmDelete({ label, onConfirm, buttonLabel = '删除', message }) {
   const [open, setOpen] = useState(false); const [busy, setBusy] = useState(false);
   async function confirmDelete() { setBusy(true); try { await onConfirm(); setOpen(false); } catch { /* caller reports the user-safe API error */ } finally { setBusy(false); } }
-  return <><button type="button" className="row-action danger" onClick={() => setOpen(true)}>{buttonLabel}</button>{open && <Modal title={`删除${label}`} onClose={() => !busy && setOpen(false)}><div className="confirm-delete"><p>{message || `确定删除这个${label}吗？此操作不可撤销。`}</p><div className="form-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>保留</button><button type="button" className="danger-button" disabled={busy} onClick={() => void confirmDelete()}>{busy ? '删除中…' : '确认删除'}</button></div></div></Modal>}</>;
+  return <><button type="button" className="row-action danger" onClick={() => setOpen(true)}>{buttonLabel}</button>{open && <Modal title={`删除${label}？`} onClose={() => !busy && setOpen(false)}><div className="confirm-delete"><p>{message || `删除后无法恢复。确定删除这个${label}吗？`}</p><div className="form-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>取消</button><button type="button" className="danger-button" disabled={busy} onClick={() => void confirmDelete()}>{busy ? '删除中…' : '删除'}</button></div></div></Modal>}</>;
 }
-export function ActionMenu({ children }) { return <details className="action-menu"><summary aria-label="更多操作">•••</summary><div className="action-menu__items">{children}</div></details>; }
+export function ActionMenu({ children }) { return <details className="action-menu"><summary aria-label="更多操作"><MoreIcon size={18}/></summary><div className="action-menu__items">{children}</div></details>; }
 export function FormActions({ onClose, saveText = '保存', danger }) { return <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button className={danger ? 'danger-button' : 'primary'}>{saveText}</button></div>; }
-export function Status({ status, label }) { return <span className={`status status-${status?.toLowerCase()}`}>{label}</span>; }
+export function Status({ status, label }) { return <span className={`status ${status?.toLowerCase() || 'draft'}`}>{label}</span>; }
 export function Badge({ type, children }) {
   // Map semantic badge types to existing .status color classes so badges
   // reuse the same pill design as <Status> without adding new CSS.
   const typeMap = { info: 'submitted', success: 'approved', warning: 'pending', danger: 'rejected', error: 'rejected' };
   const status = typeMap[type] || 'draft';
-  return <span className={`status status-${status}`}>{children}</span>;
+  return <span className={`status ${status}`}>{children}</span>;
 }
 export function Active({ active }) { return <span className={`active-state ${active ? 'yes' : 'no'}`}><i/>{active ? '启用' : '停用'}</span>; }
-export function Empty({ text }) { return <div className="empty"><span>◇</span><p>{text}</p></div>; }
+export function Empty({ text, title = '暂无相关数据', action }) { return <div className="empty"><EmptyIcon size={28}/><strong>{title}</strong><p>{text}</p>{action}</div>; }
 
 // PurchaseReceipts
 
-export function Loading() { return <div className="loading"><div className="spinner"/>载入中…</div>; }
+export function Loading() { return <div className="loading" role="status"><div className="spinner"/><span>正在载入…</span></div>; }
+export function ErrorState({ message = '暂时无法载入内容', onRetry }) { return <div className="error-state" role="alert"><ErrorIcon size={28}/><strong>加载失败</strong><p>{message}</p>{onRetry && <button type="button" className="secondary" onClick={onRetry}>重试</button>}</div>; }
 import { useState } from 'react';
+import { CloseIcon, EmptyIcon, ErrorIcon, MoreIcon, SearchIcon } from './icons.jsx';

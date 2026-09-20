@@ -9,3 +9,4 @@ data/
 .env
 backups/
 .claude/settings.local.json
+.tmp/
