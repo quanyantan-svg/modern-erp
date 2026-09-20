@@ -1,16 +1,35 @@
 # 项目状态快照
 
-> 更新：2026-09-20 (P2 — Safe Delete / Disable / Archive Data Lifecycle)
+> 更新：2026-09-20 (P3 — iOS-inspired Commercial UI Design System)
 
 ## 阶段与分支
 
-- 阶段：v1.1 Expansion — M14 Sales & Purchase Discount — Final Acceptance
+- 阶段：v1.1 Productization — P3 Commercial UI
 - 分支：feature/v1.1-productization
 - 稳定基线：99bc18f (`v1.1.0-rc.1`)
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`, `v1.1.0-rc.1`.** v1.1 final-acceptance 与 productization 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### P3 — iOS-inspired Commercial UI Design System
+
+> **Status:** COMPLETE — presentation/component/responsive UX only; P4 copy normalization remains open.
+
+- `src/styles.css` 统一 semantic tokens：app/grouped/surface/elevated 背景、四级文字、separator/border、accent 与 success/warning/danger/info、shadow、radius、4–40px spacing；字体使用系统栈，不引入字体二进制。
+- `src/components/design-system.jsx` 提供页面/分区标题、GroupedList/ListRow、FormSection/FormRow 与语义字段、四级按钮、IconButton、SegmentedControl、BottomActionBar、SummaryCard；`ui.jsx` 的搜索、状态、空态、错误、加载、弹层、确认和操作菜单复用同一视觉合同。
+- 移动底栏固定为五等分 `消息 / 签核 / 应用 / 云翼 / 我的`；全部使用统一线性 SVG，支持 top/bottom safe area，云翼为真实可进入的克制占位入口，不制造未实现业务。
+- 应用启动器按概览、基础资料、计划与生产、销售、采购、库存、质量、财务、决策报表、项目、系统分组；输入仍为经过 `visibleNav` 过滤的授权集合，未新增或绕过 RBAC。
+- `<768`：16px 页边距、48px 输入/主按钮、44px 最小交互控件、单列表单、底部 sheet 弹层；遗留桌面表格在 `.mobile-application-view` 内转换为记录卡片，不再用整页横向滚动。P1 Material Plan 等已有专用移动卡片继续优先。
+- `768–1023` 保留自适应单列字段与收窄桌面壳；`>=1024` 保留固定侧栏、紧凑表格、sticky header 和完整桌面生产力布局。
+- 真实 Edge 隔离数据库验收：`test_admin / test_sales / test_reviewer / test_warehouse / test_accounting` × `375×667 / 414×896 / 1024×768` 共 15 个组合；移动五栏等宽，375/414 整页 overflow 均为 0，可见交互控件最小观测高度 71px；1024 显示侧栏且隐藏底栏；角色入口无越权。
+- 真实页面检查并截图：375 launcher/customer/material plan/inventory/finance/approval，414 launcher/order/approval，1024 business overview/material plan/customer/finance；截图仅作为 `.tmp` 验收产物，不提交。
+- 浏览器观测：ReferenceError 0、TypeError 0、Unhandled Promise Rejection 0、unexpected 400/403/404/500 0。
+- 权限注册仍为 **113**；审批中心仍且仅为 `SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER`；业务 API、数据库 schema、库存/会计/MRP/折让语义均未变。
+- Focused：143 tests / 16 suites / 0 failed（`server/p3-ui-design-system.test.js` + `server/mobile-shell.test.js` + `server/mobile-application-launcher.test.js` + `server/mobile-approval-center.test.js`）；新增 `scripts/p3-ui-acceptance.mjs`。
+- Build：PASS；CSS 73.38 kB（gzip 13.04 kB），JS 632.46 kB（gzip 145.71 kB），保留既有 >500 kB warning。
+- **P3 IOS UI SYSTEM COMPLETE = YES**
+- **READY FOR P4 COPY / POLISH = YES**
 
 ### P2 — Safe Delete / Disable / Archive Data Lifecycle
 
