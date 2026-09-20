@@ -1935,15 +1935,18 @@ tfoot td {
   padding: 4px 0;
 }
 .filter-chip {
-  height: 36px;
+  min-height: 44px;
+  height: auto;
   border-radius: 999px;
-  padding: 0 14px;
+  padding: 8px 16px;
   background: var(--bg-surface-2);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: 500;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
 }
 .filter-chip:hover { background: var(--bg-hover); }
 .filter-chip.is-active {
@@ -2071,8 +2074,9 @@ tfoot td {
 }
 .material-card__footer .link-button { font-size: 13px; }
 .material-card__footer .primary {
-  height: 36px;
-  padding: 0 12px;
+  min-height: 44px;
+  height: auto;
+  padding: 0 16px;
   border-radius: var(--r-sm);
   background: var(--accent);
   color: var(--text-on-accent);
@@ -2082,11 +2086,14 @@ tfoot td {
   align-items: center;
 }
 .material-card__trace {
-  font-size: 12.5px;
+  min-height: 44px;
+  font-size: 13px;
   color: var(--accent);
   background: transparent;
   text-align: left;
-  padding: 0;
+  padding: 12px 8px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .trace-list {

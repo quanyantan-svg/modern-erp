@@ -420,7 +420,7 @@ export default function App() {
     const tabLabel = MOBILE_TABS.find((t) => t.key === mobileTab)?.label || 'Modern ERP';
     const mobileTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
     return (
-      <AppNavigationProvider value={{ target: navigationTarget, canNavigate, navigateToPage }}>
+      <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
       <MobileShell
         brand="Modern ERP"
         pageTitle={mobileTitle}
@@ -436,7 +436,7 @@ export default function App() {
     );
   }
 
-  return <div className="app-shell"><AppNavigationProvider value={{ target: navigationTarget, canNavigate, navigateToPage }}>
+  return <div className="app-shell"><AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业资源计划</span></div></div>
       <nav>{navGroups.map((group, gi) => group === null

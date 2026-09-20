@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Badge, can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { planningDocumentTabForPage } from '../navigation/planningDocumentNavigation.js';
 
 const PI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -692,18 +693,13 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, canManage
 // ============================================================
 
 export function PlanningDocumentsHub({ user, notify }) {
-  const { target } = useAppNavigation();
-  const [tab, setTab] = useState('production-instructions');
-  useEffect(() => {
-    if (target?.page === 'production-instructions') setTab('production-instructions');
-    else if (target?.page === 'purchase-instructions') setTab('purchase-instructions');
-    else if (target?.page === 'purchase-requisitions') setTab('purchase-requisitions');
-  }, [target]);
+  const { currentPage, navigateToPage } = useAppNavigation();
+  const tab = planningDocumentTabForPage(currentPage);
   return <Panel title="计划单据" subtitle="由 MRP 建议生成的生产指令、采购指令与请购单"
     action={<div className="planning-tabs">
-      <button className={tab === 'production-instructions' ? 'active' : ''} onClick={() => setTab('production-instructions')}>生产指令</button>
-      <button className={tab === 'purchase-instructions' ? 'active' : ''} onClick={() => setTab('purchase-instructions')}>采购指令</button>
-      <button className={tab === 'purchase-requisitions' ? 'active' : ''} onClick={() => setTab('purchase-requisitions')}>请购单</button>
+      <button className={tab === 'production-instructions' ? 'active' : ''} onClick={() => navigateToPage('production-instructions')}>生产指令</button>
+      <button className={tab === 'purchase-instructions' ? 'active' : ''} onClick={() => navigateToPage('purchase-instructions')}>采购指令</button>
+      <button className={tab === 'purchase-requisitions' ? 'active' : ''} onClick={() => navigateToPage('purchase-requisitions')}>请购单</button>
     </div>}>
     {tab === 'production-instructions' && <ProductionInstructionsPage user={user} notify={notify}/>}
     {tab === 'purchase-instructions' && <PurchaseInstructionsPage user={user} notify={notify}/>}

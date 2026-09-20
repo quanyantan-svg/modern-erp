@@ -32,6 +32,10 @@ import {
   suggestionTypeLabel,
   warningLabel,
 } from '../src/lib/status.js';
+import {
+  PLANNING_DOCUMENT_PAGES,
+  planningDocumentTabForPage,
+} from '../src/navigation/planningDocumentNavigation.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -463,4 +467,42 @@ test('P1 status: exported maps are frozen so callers cannot mutate them', () => 
   assert.equal(Object.isFrozen(MRP_DEMAND_MODE_LABEL), true);
   assert.equal(Object.isFrozen(SUGGESTION_TYPE_LABEL), true);
   assert.equal(Object.isFrozen(WARNING_LABEL), true);
+});
+
+// ---------------------------------------------------------------------------
+// 14. Planning document hub follows the canonical SPA page
+// ---------------------------------------------------------------------------
+
+test('P1 planning document routes select their matching hub tabs', () => {
+  assert.equal(planningDocumentTabForPage('production-instructions'), 'production-instructions');
+  assert.equal(planningDocumentTabForPage('purchase-instructions'), 'purchase-instructions');
+  assert.equal(planningDocumentTabForPage('purchase-requisitions'), 'purchase-requisitions');
+  assert.deepEqual(PLANNING_DOCUMENT_PAGES, [
+    'production-instructions',
+    'purchase-instructions',
+    'purchase-requisitions',
+  ]);
+});
+
+test('P1 planning document route changes are stateless in both directions', () => {
+  const sequenceA = ['production-instructions', 'purchase-instructions']
+    .map(planningDocumentTabForPage);
+  const sequenceB = ['purchase-instructions', 'production-instructions']
+    .map(planningDocumentTabForPage);
+  const leaveAndReturn = ['purchase-instructions', 'dashboard', 'purchase-instructions']
+    .map(planningDocumentTabForPage);
+  assert.deepEqual(sequenceA, ['production-instructions', 'purchase-instructions']);
+  assert.deepEqual(sequenceB, ['purchase-instructions', 'production-instructions']);
+  assert.equal(leaveAndReturn.at(-1), 'purchase-instructions');
+});
+
+test('P1 planning hub derives its active tab from currentPage and navigates tabs canonically', () => {
+  const hubSource = readFileSync(resolve(repoRoot, 'src/pages/planning-documents.jsx'), 'utf8');
+  const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
+  assertContains(hubSource, 'planningDocumentTabForPage(currentPage)');
+  assertContains(hubSource, "navigateToPage('production-instructions')");
+  assertContains(hubSource, "navigateToPage('purchase-instructions')");
+  assertContains(appSource, 'currentPage: page');
+  assertContains(appSource, "useState(location.hash.slice(1) || 'dashboard')");
+  assertContains(appSource, "navigateToPage(location.hash.slice(1) || 'dashboard'");
 });

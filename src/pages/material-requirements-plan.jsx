@@ -338,7 +338,7 @@ function MaterialCard({ row, onTrace }) {
       {warning && <span className="material-card__warning">{warning}</span>}
     </div>
     <div className="material-card__footer">
-      <button type="button" className="link-button" onClick={() => onTrace(row)}>为什么是这个数量？</button>
+      <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>为什么是这个数量？</button>
       {suggestion === 'MAKE' && <AppLink page="production-instructions" className="primary">创建生产指令</AppLink>}
       {suggestion === 'BUY' && <AppLink page="purchase-instructions" className="primary">创建采购指令</AppLink>}
     </div>
@@ -382,7 +382,7 @@ function MaterialPlanDesktop({ rows, run, onTrace }) {
         <td>{fmtDate(row.need_by_date)}</td>
         <td>{row.warning ? <span className="status status-pending">{warningLabel(row.warning)}</span> : '—'}</td>
         <td>
-          <button type="button" className="link-button" onClick={() => onTrace(row)}>查看依据</button>
+          <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>查看依据</button>
           {row.suggestion_type === 'MAKE' && <AppLink page="production-instructions">生产指令</AppLink>}
           {row.suggestion_type === 'BUY' && <AppLink page="purchase-instructions">采购指令</AppLink>}
         </td>

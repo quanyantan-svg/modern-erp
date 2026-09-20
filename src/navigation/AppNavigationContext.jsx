@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 
 const AppNavigationContext = createContext({
+  currentPage: null,
   target: null,
   canNavigate: () => false,
   navigateToPage: () => false,
