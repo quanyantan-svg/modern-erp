@@ -26,7 +26,7 @@ export function Contacts({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="联系人管理" subtitle="客户和供应商联系人档案">
+    <Panel title="联系人管理">
       <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button>}/>
       <div className="table-wrap">
         <table>
@@ -129,7 +129,7 @@ export function Followups({ user, notify }) {
   const typeMap = { VISIT: '拜访', CALL: '电话', EMAIL: '邮件', MEETING: '会议', OTHER: '其他' };
 
   return (
-    <Panel title="客户跟进" subtitle="客户拜访和跟进记录">
+    <Panel title="客户跟进">
       <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button>}/>
       <div className="filters">
         <label>客户<select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
@@ -222,7 +222,7 @@ export function SalesActivities({ user, notify }) {
   const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
 
   return (
-    <Panel title="销售活动" subtitle="市场活动和展会管理">
+    <Panel title="销售活动">
       <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建活动</button>}/>
       <div className="filters">
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>

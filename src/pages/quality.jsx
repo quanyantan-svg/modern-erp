@@ -94,7 +94,7 @@ export function IQCInspections({ user, notify }) {
   }
 
   return (
-    <Panel title="IQC 来料检验" subtitle="来料质量检验管理">
+    <Panel title="IQC 来料检验">
       <Toolbar action={can(user, 'IQC_MANAGE') && <button className="primary" onClick={() => setEditing({ mode: 'create' })}>＋ 新建检验单</button>} />
       <div className="filters">
         <label>状态
@@ -443,7 +443,7 @@ export function OQCInspections({ user, notify }) {
   }
 
   return (
-    <Panel title="OQC 出货检验" subtitle="出货质量检验管理">
+    <Panel title="OQC 出货检验">
       <Toolbar action={can(user, 'OQC_MANAGE') && <button className="primary" onClick={() => setEditing({ mode: 'create' })}>＋ 新建检验单</button>} />
       <div className="filters">
         <label>状态

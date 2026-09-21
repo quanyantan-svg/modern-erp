@@ -312,6 +312,8 @@ export default function App() {
   function handleMobileApplicationSelect(item) {
     if (item.reportKey) {
       navigateToPage(item.page, { reportKey: item.reportKey });
+    } else if (item.target) {
+      navigateToPage(item.page, item.target);
     } else {
       navigateToPage(item.page);
     }

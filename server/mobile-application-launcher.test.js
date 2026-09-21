@@ -84,7 +84,7 @@ const EXPECTED_ROLE_PAGES = {
     'production-instructions', 'purchase-instructions', 'purchase-requisitions',
     'production-orders', 'material-issues', 'production-receipts', 'boms', 'product-routings',
     'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts',
+    'purchase-orders', 'purchase-receipts', 'returns',
     'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions',
     'iqc', 'oqc', 'product-costs', 'cost-rates', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
@@ -94,17 +94,17 @@ const EXPECTED_ROLE_PAGES = {
   'role-sales': [
     'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
     'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions', 'notifications',
+    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'notifications',
   ],
   'role-reviewer': [
     'business-overview', 'customers', 'products', 'warehouses',
     'purchase-requisitions',
     'orders', 'sales-deliveries', 'returns',
-    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions', 'notifications',
+    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'notifications',
   ],
   'role-warehouse': [
     'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
-    'purchase-receipts', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc', 'notifications',
+    'purchase-receipts', 'returns', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc', 'notifications',
   ],
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',
@@ -174,6 +174,14 @@ describe('M2 application metadata', () => {
     assert.equal(labels.get('sales-deliveries'), '销售出货');
     assert.equal(labels.get('inventory-transactions'), '库存异动明细');
     assert.ok(!labels.has('制令单'));
+  });
+
+  test('sales and purchase returns are distinct launcher entries into one canonical page', () => {
+    const returns = mobileGroups.flatMap((group) => group.items).filter((item) => item.page === 'returns');
+    assert.deepEqual(returns.map((item) => [item.key, item.mobileLabel, item.target.documentType]), [
+      ['returns:sales', '销售退货', 'SALES_RETURN'],
+      ['returns:purchase', '采购退货', 'PURCHASE_RETURN'],
+    ]);
   });
 
   test('deferred and fake applications are absent from launcher items', () => {

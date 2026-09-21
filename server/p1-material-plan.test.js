@@ -281,9 +281,10 @@ test('P1 business overview: planning chain does NOT imply 需求预测 = MRP', (
 // 8. Forecast page — uses centralized status lib, no MRP terminology
 // ---------------------------------------------------------------------------
 
-test('P1 forecasts: page subtitle is product-oriented (需求来源) not engine terminology', () => {
+test('P1 forecasts: permanent helper subtitle is removed while empty state remains purposeful', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/forecasts.jsx'), 'utf8');
-  assertContains(source, '作为 MRP 的需求来源之一');
+  assert.ok(!source.includes('subtitle="录入未来产品需求'), 'low-value permanent helper copy must be removed');
+  assertContains(source, '创建预测后，可将其纳入 MRP 运算');
   // Forecast page must NOT mention "物料需求" or "MRP 运算" as a section title
   assert.ok(!source.includes('物料需求计划'), 'forecast page mentions material plan');
 });

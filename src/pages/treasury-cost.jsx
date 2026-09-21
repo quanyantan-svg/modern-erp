@@ -19,7 +19,7 @@ export function CashJournals({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="现金日记账" subtitle="记录现金和银行存款收付款业务">
+    <Panel title="现金日记账">
       <Toolbar
         search={search} setSearch={setSearch} onSearch={load}
         placeholder="搜索单号、摘要或对方单位"
@@ -112,7 +112,7 @@ export function BankAccounts({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="银行账户" subtitle="管理企业银行账户信息">
+    <Panel title="银行账户">
       <Toolbar action={can(user, 'BANK_ACCOUNTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增账户</button>}/>
       <div className="table-wrap">
         <table>
@@ -183,7 +183,7 @@ export function Bills({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="票据管理" subtitle="管理应收/应付票据">
+    <Panel title="票据管理">
       <Toolbar action={can(user, 'BILLS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增票据</button>}/>
       <div className="filters">
         <label>票据类型<select value={billType} onChange={(e) => setBillType(e.target.value)}>
@@ -310,7 +310,7 @@ export function FixedAssets({ user, notify }) {
   }
 
   return (
-    <Panel title="固定资产" subtitle="管理企业固定资产及折旧">
+    <Panel title="固定资产">
       <Toolbar action={can(user, 'FIXED_ASSETS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增资产</button>}/>
       <div className="table-wrap">
         <table>
@@ -447,7 +447,7 @@ export function ProductCosts({ user, notify }) {
   }, []);
 
   return (
-    <Panel title="产品标准成本" subtitle="设置和维护产品标准成本数据">
+    <Panel title="产品标准成本">
       <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 设置标准成本</button>}/>
       <div className="filters">
         <label>产品<select value={productId} onChange={(e) => setProductId(e.target.value)}>
@@ -532,7 +532,7 @@ export function CostRates({ user, notify }) {
   const rateTypes = { MATERIAL_RATE: '材料费率', LABOR_RATE: '人工费率', OVERHEAD_RATE: '制造费用率' };
 
   return (
-    <Panel title="费用项目" subtitle="定义成本费用项目和费率">
+    <Panel title="费用项目">
       <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增费用项目</button>}/>
       <div className="table-wrap">
         <table>

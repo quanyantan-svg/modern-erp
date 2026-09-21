@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { can, Empty, Loading, money } from '../components/ui.jsx';
+import { FilterButton, FilterSheet, FormRow, RecordCard, RecordList } from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const REPORT_TABS = [
@@ -42,31 +43,27 @@ function KpiCard({ label, value, sublabel }) {
 }
 
 function ReportFilters({ fields, values, onChange, onApply, onReset }) {
+  const [open, setOpen] = useState(false);
+  const activeCount = Object.values(values).filter(Boolean).length;
   return (
-    <div className="mobile-report-filters" data-testid="report-filters">
-      {fields.map((field) => (
-        <label key={field.name} className="mobile-report-filters__field">
-          <span>{field.label}</span>
+    <div className="report-filter-trigger" data-testid="report-filters">
+      <FilterButton activeCount={activeCount} onClick={() => setOpen(true)}>筛选报表</FilterButton>
+      {open && <FilterSheet
+        onClose={() => setOpen(false)}
+        onReset={() => { onReset(); setOpen(false); }}
+        onApply={() => { onApply(); setOpen(false); }}
+      >
+        {fields.map((field) => <FormRow key={field.name} label={field.label}>
           {field.options ? (
-            <select value={values[field.name] || ''} onChange={(e) => onChange(field.name, e.target.value)} data-testid={`report-filter-${field.name}`}>
+            <select value={values[field.name] || ''} onChange={(event) => onChange(field.name, event.target.value)} data-testid={`report-filter-${field.name}`}>
               <option value="">全部</option>
               {field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           ) : (
-            <input
-              type={field.type || 'text'}
-              value={values[field.name] || ''}
-              onChange={(e) => onChange(field.name, e.target.value)}
-              placeholder={field.placeholder || ''}
-              data-testid={`report-filter-${field.name}`}
-            />
+            <input type={field.type || 'text'} value={values[field.name] || ''} onChange={(event) => onChange(field.name, event.target.value)} placeholder={field.placeholder || ''} data-testid={`report-filter-${field.name}`}/>
           )}
-        </label>
-      ))}
-      <div className="mobile-report-filters__actions">
-        <button type="button" className="secondary" onClick={onReset} data-testid="report-filter-reset">重置</button>
-        <button type="button" className="primary" onClick={onApply} data-testid="report-filter-apply">查询</button>
-      </div>
+        </FormRow>)}
+      </FilterSheet>}
     </div>
   );
 }
@@ -191,28 +188,19 @@ function SalesSummaryPanel() {
 function CustomerGroupingTable({ rows }) {
   if (!rows.length) return <Empty text="当前条件下没有客户分组数据" />;
   return (
-    <div className="table-wrap" data-testid="sales-summary-by-customer">
-      <table>
-        <thead>
-          <tr>
-            <th>客户</th>
-            <th className="number">订单数</th>
-            <th className="number">订单金额</th>
-            <th className="number">出货金额</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.customerId} data-testid={`sales-summary-customer-${row.customerId}`}>
-              <td><strong>{row.customerName}</strong><small className="block dim">{row.customerCode}</small></td>
-              <td className="number">{row.orderCount}</td>
-              <td className="number">{money(row.orderCents)}</td>
-              <td className="number">{money(row.deliveryCents)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <RecordList className="decision-report__cards" data-testid="sales-summary-by-customer">
+      {rows.map((row) => <RecordCard
+        key={row.customerId}
+        data-testid={`sales-summary-customer-${row.customerId}`}
+        title={row.customerName}
+        subtitle={row.customerCode}
+        facts={[
+          { label: '订单数', value: row.orderCount },
+          { label: '订单金额', value: money(row.orderCents) },
+          { label: '出货金额', value: money(row.deliveryCents) },
+        ]}
+      />)}
+    </RecordList>
   );
 }
 
@@ -334,28 +322,19 @@ function PurchaseSummaryPanel() {
 function SupplierGroupingTable({ rows }) {
   if (!rows.length) return <Empty text="当前条件下没有供应商分组数据" />;
   return (
-    <div className="table-wrap" data-testid="purchase-summary-by-supplier">
-      <table>
-        <thead>
-          <tr>
-            <th>供应商</th>
-            <th className="number">订单数</th>
-            <th className="number">订单金额</th>
-            <th className="number">入库金额</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.supplierId} data-testid={`purchase-summary-supplier-${row.supplierId}`}>
-              <td><strong>{row.supplierName}</strong><small className="block dim">{row.supplierCode}</small></td>
-              <td className="number">{row.orderCount}</td>
-              <td className="number">{money(row.orderCents)}</td>
-              <td className="number">{money(row.receiptCents)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <RecordList className="decision-report__cards" data-testid="purchase-summary-by-supplier">
+      {rows.map((row) => <RecordCard
+        key={row.supplierId}
+        data-testid={`purchase-summary-supplier-${row.supplierId}`}
+        title={row.supplierName}
+        subtitle={row.supplierCode}
+        facts={[
+          { label: '订单数', value: row.orderCount },
+          { label: '订单金额', value: money(row.orderCents) },
+          { label: '入库金额', value: money(row.receiptCents) },
+        ]}
+      />)}
+    </RecordList>
   );
 }
 
@@ -471,36 +450,21 @@ function InventoryMovementsPanel() {
             </div>
           )}
           {data.rows.length ? (
-            <div className="table-wrap" data-testid="inventory-movements-table-wrap">
-              <table className="decision-report__movements">
-                <thead>
-                  <tr>
-                    <th>日期</th>
-                    <th>货品</th>
-                    <th>仓库</th>
-                    <th>来源类型</th>
-                    <th>来源单号</th>
-                    <th className="number">方向</th>
-                    <th className="number">数量</th>
-                    <th className="number">变动后库存</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.rows.map((row) => (
-                    <tr key={row.id} data-testid={`inventory-movement-row-${row.id}`}>
-                      <td className="dim">{row.created_at?.slice(0, 16).replace('T', ' ')}</td>
-                      <td><strong>{row.productName}</strong><small className="block dim">{row.productCode}</small></td>
-                      <td>{row.warehouseName}</td>
-                      <td data-testid={`inventory-movement-source-${row.id}`}>{row.source_type_label}</td>
-                      <td className="mono">{row.source_no || '—'}</td>
-                      <td className="number">{row.direction_label}</td>
-                      <td className="number">{Math.abs(row.quantity_change)}</td>
-                      <td className="number">{row.balance_after ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <RecordList className="decision-report__cards" data-testid="inventory-movements-list">
+              {data.rows.map((row) => <RecordCard
+                key={row.id}
+                data-testid={`inventory-movement-row-${row.id}`}
+                title={row.productName}
+                subtitle={`${row.productCode} · ${row.source_no || '无来源单号'}`}
+                facts={[
+                  { label: '日期', value: row.created_at?.slice(0, 16).replace('T', ' ') || '—' },
+                  { label: '仓库', value: row.warehouseName },
+                  { label: '来源', value: <span data-testid={`inventory-movement-source-${row.id}`}>{row.source_type_label}</span> },
+                  { label: '变动', value: `${row.direction_label} ${Math.abs(row.quantity_change)}` },
+                  { label: '结存', value: row.balance_after ?? '—' },
+                ]}
+              />)}
+            </RecordList>
           ) : (
             <Empty text="当前条件下没有库存异动记录" />
           )}

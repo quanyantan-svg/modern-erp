@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime } from '../components/ui.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { RecordCard, RecordList } from '../components/design-system.jsx';
 
 const STATUS_LABELS = { ACTIVE: '启用', INACTIVE: '停用' };
 
@@ -81,24 +82,22 @@ export default function ProductRoutings({ user, notify }) {
     action={canManage && <button className="primary" onClick={() => setSelected({ create: true, productId })}>＋ 新建路线</button>}
   >
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品、路线编码或名称" extra={filters}/>
-    <div className="table-wrap routing-list-desktop"><table><thead><tr>
-      <th>产品</th><th>路线编码</th><th>路线名称</th><th>版本</th><th>状态</th><th className="number">工序数量</th><th>更新时间</th>
-    </tr></thead><tbody>
-      {routings.map((routing) => <tr className="clickable" key={routing.id} onClick={() => setSelected({ id: routing.id })}>
-        <td><strong>{routing.product_name}</strong><small className="block mono">{routing.product_code}</small></td>
-        <td className="mono">{routing.routing_code}</td><td>{routing.routing_name}</td><td>{routing.version}</td>
-        <td><Status status={routing.status === 'ACTIVE' ? 'approved' : 'draft'} label={STATUS_LABELS[routing.status] || routing.status}/></td>
-        <td className="number">{routing.operation_count}</td><td className="dim">{dateTime(routing.updated_at)}</td>
-      </tr>)}
-    </tbody></table>{!routings.length && <Empty text="没有符合条件的制品工序标准"/>}</div>
-    <div className="routing-list-mobile">
-      {routings.map((routing) => <button type="button" className="routing-summary-card" key={routing.id} onClick={() => setSelected({ id: routing.id })}>
-        <span className="routing-summary-card__head"><strong>{routing.product_name}</strong><Status status={routing.status === 'ACTIVE' ? 'approved' : 'draft'} label={STATUS_LABELS[routing.status]}/></span>
-        <span><b className="mono">{routing.routing_code}</b> · {routing.routing_name}</span>
-        <small>版本 {routing.version} · {routing.operation_count} 道工序 · {dateTime(routing.updated_at)}</small>
-      </button>)}
+    <RecordList>
+      {routings.map((routing) => <RecordCard
+        key={routing.id}
+        title={routing.product_name}
+        subtitle={`${routing.product_code} · ${routing.routing_name}`}
+        status={<Status status={routing.status === 'ACTIVE' ? 'approved' : 'draft'} label={STATUS_LABELS[routing.status]}/>}
+        facts={[
+          { label: '路线编码', value: routing.routing_code },
+          { label: '版本', value: routing.version },
+          { label: '工序', value: `${routing.operation_count} 道` },
+          { label: '更新时间', value: dateTime(routing.updated_at) },
+        ]}
+        onClick={() => setSelected({ id: routing.id })}
+      />)}
       {!routings.length && <Empty text="没有符合条件的制品工序标准"/>}
-    </div>
+    </RecordList>
     {selected && <ProductRoutingModal
       user={user}
       value={selected}

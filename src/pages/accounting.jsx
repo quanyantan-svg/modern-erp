@@ -509,7 +509,7 @@ export function Accounting({ user, notify }) {
   const showReport = can(user, 'REPORT_VIEW');
   const canCreateVoucher = can(user, 'ACCOUNTING_VIEW');
   const showPeriod = can(user, 'PERIOD_CLOSE_VIEW');
-  return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
+  return <Panel title="财务凭证">
     <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}{showPeriod && <button className={tab === 'period' ? 'active' : ''} onClick={() => setTab('period')}>会计期间</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
     {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号" action={canCreateVoucher && <button className="primary" onClick={() => setEditing({})}>＋ 新建凭证</button>}/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>状态</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{voucherSourceLabel(v.source_type)}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td><Badge type={VOUCHER_STATUS_BADGE[v.status]?.type}>{VOUCHER_STATUS_LABELS[v.status] || v.status}</Badge></td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
@@ -560,7 +560,7 @@ function CashManagement({ user, notify }) {
   const billTypeMap = { DRAFT: '银行承兑', ACCEPTANCE: '商业承兑', LC: '信用证' };
   const billStatusMap = { PENDING: '待处理', ENDORSED: '已背书', DISCOUNTED: '已贴现', PAID: '已到期', CANCELLED: '已作废' };
   
-  return <Panel title="出纳管理" subtitle="现金日记账、银行日记账与票据管理">
+  return <Panel title="出纳管理">
     <div className="tabs" style={{marginBottom: '16px', display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-default)', paddingBottom: '12px'}}>
       <button className={tab === 'journals' ? 'primary' : 'secondary'} onClick={() => setTab('journals')}>日记账</button>
       <button className={tab === 'accounts' ? 'primary' : 'secondary'} onClick={() => setTab('accounts')}>银行账户</button>

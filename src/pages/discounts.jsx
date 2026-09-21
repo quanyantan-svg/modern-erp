@@ -66,7 +66,7 @@ export function SalesDiscounts({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="销售折让" subtitle="DRAFT 编辑；确认时按来源应收原子扣减；不写凭证、不进审批中心">
+  return <Panel title="销售折让">
     <Toolbar search={() => {}} placeholder="" action={can(user, 'SALES_DISCOUNT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建折让</button>}/>
     <p className="section-hint">折让金额不得超过来源应收剩余可折让额度（销售退货 + 历史折让之和不超过原应收）。</p>
     <div className="table-wrap"><table>
@@ -210,7 +210,7 @@ export function PurchaseDiscounts({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="采购折让" subtitle="DRAFT 编辑；确认时按来源应付原子扣减；不写凭证、不进审批中心">
+  return <Panel title="采购折让">
     <Toolbar search={() => {}} placeholder="" action={can(user, 'PURCHASE_DISCOUNT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建折让</button>}/>
     <p className="section-hint">折让金额不得超过来源应付剩余可折让额度（采购退货 + 历史折让之和不超过原应付）。</p>
     <div className="table-wrap"><table>

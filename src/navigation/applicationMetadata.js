@@ -50,7 +50,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     items: [
       { page: 'orders', mobileLabel: '销售订单', iconKey: 'orders' },
       { page: 'sales-deliveries', mobileLabel: '销售出货', iconKey: 'salesDeliveries' },
-      { page: 'returns', mobileLabel: '销售 / 采购退货', iconKey: 'returns' },
+      { page: 'returns', key: 'returns:sales', mobileLabel: '销售退货', iconKey: 'returns', target: { documentType: 'SALES_RETURN' } },
       { page: 'contacts', mobileLabel: '客户关系', iconKey: 'contacts' },
     ],
   },
@@ -61,6 +61,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     items: [
       { page: 'purchase-orders', mobileLabel: '采购订单', iconKey: 'purchaseOrders' },
       { page: 'purchase-receipts', mobileLabel: '采购入库', iconKey: 'purchaseReceipts' },
+      { page: 'returns', key: 'returns:purchase', mobileLabel: '采购退货', iconKey: 'returns', target: { documentType: 'PURCHASE_RETURN' } },
     ],
   },
   {
@@ -155,8 +156,9 @@ export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
         page: navigationItem.key,
         label: metadata.mobileLabel || navigationItem.label,
         iconKey: metadata.iconKey,
-        key: metadata.reportKey ? navigationItem.key + ':' + metadata.reportKey : navigationItem.key,
+        key: metadata.key || (metadata.reportKey ? navigationItem.key + ':' + metadata.reportKey : navigationItem.key),
         reportKey: metadata.reportKey || null,
+        target: metadata.target || null,
       }];
     }),
   })).filter((group) => group.items.length > 0);

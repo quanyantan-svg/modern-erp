@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { RecordCard, RecordList } from '../components/design-system.jsx';
 import { forecastStatusLabel } from '../lib/status.js';
 
 function fmtQty(value) {
@@ -103,7 +104,6 @@ export default function Forecasts({ user, notify }) {
   return <>
     <Panel
       title="需求预测"
-      subtitle="录入未来产品需求，作为 MRP 的需求来源之一"
       action={canManage && <button type="button" className="primary" onClick={handleNew}>＋ 新建预测</button>}
     >
       <Toolbar
@@ -118,29 +118,22 @@ export default function Forecasts({ user, notify }) {
           <option value="CANCELLED">已取消</option>
         </select>}
       />
-      <div className="table-wrap forecast-list-desktop"><table><thead><tr>
-        <th>预测编号</th><th>预测名称</th><th>预测期间</th><th>状态</th>
-        <th className="number">明细数</th><th className="number">预测总数量</th><th>更新时间</th>
-      </tr></thead><tbody>
-        {filtered.map((row) => <tr className="clickable" key={row.id} onClick={() => setViewingId(row.id)}>
-          <td className="mono strong-text">{row.forecast_code}</td>
-          <td><strong>{row.forecast_name}</strong></td>
-          <td>{row.period_start} ~ {row.period_end}</td>
-          <td><Status status={statusBadgeType(row.status)} label={forecastStatusLabel(row.status)}/></td>
-          <td className="number">{row.item_count}</td>
-          <td className="number">{fmtQty(row.total_quantity)}</td>
-          <td className="dim">{row.updated_at?.slice(0, 16).replace('T', ' ')}</td>
-        </tr>)}
-      </tbody></table>{!filtered.length && <Empty text={rows.length === 0 ? '还没有需求预测。创建预测后，可将其纳入 MRP 运算。' : '没有符合筛选条件的预测'}/>}</div>
-      <div className="forecast-list-mobile">
-        {filtered.map((row) => <button type="button" className="forecast-card" key={row.id} onClick={() => setViewingId(row.id)}>
-          <span className="forecast-card__head"><strong>{row.forecast_name}</strong><Status status={statusBadgeType(row.status)} label={forecastStatusLabel(row.status)}/></span>
-          <small className="mono">{row.forecast_code}</small>
-          <small>预测期间 {row.period_start} ~ {row.period_end}</small>
-          <small>共 {row.item_count} 项明细 · 合计 {fmtQty(row.total_quantity)}</small>
-        </button>)}
+      <RecordList>
+        {filtered.map((row) => <RecordCard
+          key={row.id}
+          title={row.forecast_name}
+          subtitle={row.forecast_code}
+          status={<Status status={statusBadgeType(row.status)} label={forecastStatusLabel(row.status)}/>}
+          facts={[
+            { label: '预测期间', value: `${row.period_start} ~ ${row.period_end}` },
+            { label: '明细', value: `${row.item_count} 项` },
+            { label: '预测总量', value: fmtQty(row.total_quantity) },
+            { label: '更新时间', value: row.updated_at?.slice(0, 16).replace('T', ' ') || '—' },
+          ]}
+          onClick={() => setViewingId(row.id)}
+        />)}
         {!filtered.length && <Empty text={rows.length === 0 ? '还没有需求预测。创建预测后，可将其纳入 MRP 运算。' : '没有符合筛选条件的预测'}/>}
-      </div>
+      </RecordList>
     </Panel>
 
     {viewingId && <ForecastDetail

@@ -63,7 +63,7 @@ export function ProductionInstructionsPage({ user, notify }) {
     .then((result) => setRows(result.instructions || []))
     .catch((error) => notify(error.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  if (rows === null) return <Panel title="生产指令" subtitle="根据 MRP 生产建议下达生产指令，并可生成制令单">
+  if (rows === null) return <Panel title="生产指令">
     <Loading/>
   </Panel>;
   const filtered = rows.filter((row) => !search
@@ -75,7 +75,7 @@ export function ProductionInstructionsPage({ user, notify }) {
       <ProductionInstructionDetail instructionId={selection.id} notify={notify} onChanged={() => { void load(); }}/>
     </Panel>;
   }
-  return <Panel title="生产指令" subtitle="根据 MRP 生产建议下达生产指令，并可生成制令单"
+  return <Panel title="生产指令"
     action={canManage && <button className="primary" onClick={() => setCreating({ create: true })}>＋ 新建生产指令</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索指令号或 MRP"
       extra={<select aria-label="状态" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -261,7 +261,7 @@ export function PurchaseInstructionsPage({ user, notify }) {
     .then((result) => setRows(result.instructions || []))
     .catch((error) => notify(error.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  if (rows === null) return <Panel title="采购指令" subtitle="根据 MRP 采购建议下达采购指令，并可生成请购单">
+  if (rows === null) return <Panel title="采购指令">
     <Loading/>
   </Panel>;
   const filtered = rows.filter((row) => !search
@@ -273,7 +273,7 @@ export function PurchaseInstructionsPage({ user, notify }) {
       <PurchaseInstructionDetail instructionId={selection.id} notify={notify} onChanged={() => { void load(); }}/>
     </Panel>;
   }
-  return <Panel title="采购指令" subtitle="根据 MRP 采购建议下达采购指令，并可生成请购单"
+  return <Panel title="采购指令"
     action={canManage && <button className="primary" onClick={() => setCreating({ create: true })}>＋ 新建采购指令</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索指令号或 MRP"
       extra={<select aria-label="状态" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -466,7 +466,7 @@ export function PurchaseRequisitionsPage({ user, notify }) {
     .then((result) => setRows(result.requisitions || []))
     .catch((error) => notify(error.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  if (rows === null) return <Panel title="请购单" subtitle="由采购指令生成或直接创建，经审批后可生成采购订单">
+  if (rows === null) return <Panel title="请购单">
     <Loading/>
   </Panel>;
   const filtered = rows.filter((row) => !search
@@ -479,7 +479,7 @@ export function PurchaseRequisitionsPage({ user, notify }) {
       <PurchaseRequisitionDetail requisitionId={selection.id} notify={notify} onChanged={() => { void load(); }} onDeleted={() => { setSelection(null); void load(); }} canManage={canManage} canApprove={canApprove}/>
     </Panel>;
   }
-  return <Panel title="请购单" subtitle="由采购指令生成或直接创建，经审批后可生成采购订单"
+  return <Panel title="请购单"
     action={canManage && <button className="primary" onClick={() => setCreating({ create: true })}>＋ 新建请购单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或来源指令"
       extra={<select aria-label="状态" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -696,7 +696,7 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
 export function PlanningDocumentsHub({ user, notify }) {
   const { currentPage, navigateToPage } = useAppNavigation();
   const tab = planningDocumentTabForPage(currentPage);
-  return <Panel title="计划单据" subtitle="由 MRP 建议生成的生产指令、采购指令与请购单"
+  return <Panel title="计划单据"
     action={<div className="planning-tabs">
       <button className={tab === 'production-instructions' ? 'active' : ''} onClick={() => navigateToPage('production-instructions')}>生产指令</button>
       <button className={tab === 'purchase-instructions' ? 'active' : ''} onClick={() => navigateToPage('purchase-instructions')}>采购指令</button>
