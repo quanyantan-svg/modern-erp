@@ -7,6 +7,8 @@ export function Icon({ name, size = 20, strokeWidth = 1.8, className = '' }) {
     user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
     back: 'm15 18-6-6 6-6', search: 'm21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
     close: 'M18 6 6 18M6 6l12 12', more: 'M5 12h.01M12 12h.01M19 12h.01',
+    filter: 'M4 5h16M7 12h10M10 19h4',
+    inbox: 'M4 4h16v13H4zM4 13h5l2 3h2l2-3h5',
     empty: 'M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9ZM4 7.5l8 4.5 8-4.5M12 12v9',
     error: 'M12 9v4m0 4h.01M10.3 3.7 2.2 18a2 2 0 0 0 1.74 3h16.12a2 2 0 0 0 1.74-3L13.7 3.7a2 2 0 0 0-3.4 0Z',
     check: 'm5 12 4 4L19 6', info: 'M12 8h.01M11 12h1v4h1M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',

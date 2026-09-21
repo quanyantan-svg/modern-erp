@@ -23,9 +23,8 @@ import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
 import MobileCrmApplication from './components/MobileCrmApplication.jsx';
 import MobileApprovalCenter from './components/MobileApprovalCenter.jsx';
-import { useMobile } from './hooks/useMediaQuery.js';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
-import { AppLink, AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
+import { AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
 import { Icon as ProductIcon } from './components/icons.jsx';
 import { roleDisplayName } from './lib/copy.js';
 const can = (user, permission) => user?.permissions?.includes(permission);
@@ -177,13 +176,10 @@ export default function App() {
   const [checking, setChecking] = useState(Boolean(getToken()));
   const [page, setPage] = useState(location.hash.slice(1) || 'dashboard');
   const [toast, setToast] = useState(null);
-  // M1: mobile-only navigation tab. Persists across resize so that
-  // moving the window between desktop and mobile does not lose state.
   const [mobileTab, setMobileTab] = useState('apps');
   const [mobileApplication, setMobileApplication] = useState(null);
   const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
-  const isMobile = useMobile();
   const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p))) : [];
 
   function canNavigate(pageKey) {
@@ -202,12 +198,10 @@ export default function App() {
       : (target && typeof target === 'object' && Object.keys(target).length ? { page: authorizedPage.key, ...target } : null);
     setNavigationTarget(nextTarget);
     if (options.writeHash !== false && location.hash.slice(1) !== authorizedPage.key) location.hash = authorizedPage.key;
-    if (isMobile === true) {
-      setMobileApplication((current) => current?.page === authorizedPage.key && !target?.documentId
-        ? current
-        : { page: authorizedPage.key, label: authorizedPage.label });
-      setMobileTab('apps');
-    }
+    setMobileApplication((current) => current?.page === authorizedPage.key && !target?.documentId
+      ? current
+      : { page: authorizedPage.key, label: authorizedPage.label });
+    setMobileTab('apps');
     return true;
   }
 
@@ -221,23 +215,23 @@ export default function App() {
     addEventListener('erp:unauthorized', unauthorized); addEventListener('hashchange', hash);
     if (user && location.hash.slice(1)) hash();
     return () => { removeEventListener('erp:unauthorized', unauthorized); removeEventListener('hashchange', hash); };
-  }, [user, isMobile]);
+  }, [user]);
   useEffect(() => {
     if (user && visibleNav.length && !canNavigate(page)) navigateToPage(visibleNav[0].key, null, { notifyDenied: false });
-  }, [user, page, isMobile]);
+  }, [user, page]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 3200);
     return () => clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    if (!user || isMobile === false) { setPendingApprovalCount(0); return; }
+    if (!user) { setPendingApprovalCount(0); return; }
     let current = true;
     api('/api/approvals?tab=pending&limit=1')
       .then((data) => { if (current) setPendingApprovalCount(data.counts?.pending || 0); })
       .catch(() => { if (current) setPendingApprovalCount(0); });
     return () => { current = false; };
-  }, [user, isMobile]);
+  }, [user]);
 
   const notify = (message, type = 'success') => setToast({ message, type });
   if (checking) return <div className="boot"><div className="spinner"/><p>正在载入Modern ERP…</p></div>;
@@ -299,7 +293,6 @@ export default function App() {
     'production-receipts': <ProductionReceipts user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>
   };
-  const current = visibleNav.find((item) => item.key === page) || visibleNav[0];
   const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav, {
     isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
   });
@@ -309,12 +302,6 @@ export default function App() {
     setToken(''); setUser(null);
   }
 
-  // M1 mobile handlers.
-  // The mobile tab is independent of the desktop `page` state.
-  // Tapping a launcher item moves the desktop page state, but the
-  // mobile shell remains visible. The launcher item callback is a
-  // foundation for M2 role-based grouping; M1 only wires `messages`
-  // / `approvals` / `profile` placeholders.
   function handleMobileTabChange(key) {
     if (MOBILE_TAB_KEYS.has(key)) {
       setMobileApplication(null);
@@ -420,22 +407,13 @@ export default function App() {
     );
   }
 
-  // M1 responsive composition:
-  // - Mobile  : render MobileShell only. Do NOT mount the desktop
-  //             page tree (so business pages do not fetch on hidden
-  //             mobile tabs).
-  // - Desktop : render the existing app-shell with sidebar + topbar.
-  // The user, page, and toast state are shared by both branches but
-  // each branch is rendered conditionally so that page components
-  // are not mounted twice.
-  if (isMobile) {
-    const tabLabel = MOBILE_TABS.find((t) => t.key === mobileTab)?.label || 'Modern ERP';
-    const mobileTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
-    return (
-      <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
+  const tabLabel = MOBILE_TABS.find((tab) => tab.key === mobileTab)?.label || 'Modern ERP';
+  const workspaceTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
+  return (
+    <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
       <MobileShell
         brand="Modern ERP"
-        pageTitle={mobileTitle}
+        pageTitle={workspaceTitle}
         activeTab={mobileTab}
         onTabChange={handleMobileTabChange}
         backAction={mobileApplication ? returnToMobileApplications : null}
@@ -444,37 +422,6 @@ export default function App() {
         {renderMobileContent()}
         {toast && <div className={`toast ${toast.type}`} role="status" data-testid="mobile-toast"><ProductIcon name={toast.type === 'success' ? 'check' : 'error'} size={18}/><span>{toast.message}</span></div>}
       </MobileShell>
-      </AppNavigationProvider>
-    );
-  }
-
-  return <div className="app-shell"><AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业运营管理平台</span></div></div>
-      <nav>{navGroups.map((group, gi) => group === null
-        ? <div key={'div-' + gi} className="sidebar-divider"/>
-        : <div key={gi} className="sidebar-group">
-            <div className="sidebar-group-label">{group.label}</div>
-            {group.items?.map((item) => visibleNav.some((v) => v.key === item.key) &&
-              <AppLink key={item.key} page={item.key} className={page === item.key ? 'active' : ''}>
-                <span className="nav-icon">{item.icon}</span>{item.label}
-                {item.key === 'approvals' && <span className="nav-dot"/>}
-              </AppLink>
-            )}
-          </div>
-      )}</nav>
-    </aside>
-    <main className="main-area">
-      <header className="topbar">
-        <div><h1>{current?.label}</h1></div>
-        <div className="user-area">
-          <div className="user-info"><strong>{user.displayName}</strong><span>{roleDisplayName(user)}</span></div>
-          <div className="avatar">{user.displayName.slice(0, 1)}</div>
-          <button className="text-button" onClick={logout}>退出</button>
-        </div>
-      </header>
-      <section className="page-content">{pages[current?.key] || pages.dashboard}</section>
-    </main>
-    {toast && <div className={`toast ${toast.type}`} role="status"><ProductIcon name={toast.type === 'success' ? 'check' : 'error'} size={18}/><span>{toast.message}</span></div>}
-  </AppNavigationProvider></div>;
+    </AppNavigationProvider>
+  );
 }

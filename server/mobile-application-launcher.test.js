@@ -289,8 +289,10 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.doesNotMatch(css, /\.mobile-launcher__item\s*\{[^}]*width:\s*\d+px/s);
   });
 
-  test('desktop shell and labels remain present', () => {
-    assert.match(appSource, /return <div className="app-shell">/);
+  test('canonical responsive shell and business labels remain present', () => {
+    assert.match(appSource, /<MobileShell\b/);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /className="sidebar"/);
     assert.match(appSource, /key: 'business-overview', label: '业务总览'/);
     assert.match(appSource, /key: 'production-orders', label: '制令单'/);
     assert.match(appSource, /key: 'sales-deliveries', label: '销售出货'/);

@@ -25,6 +25,22 @@ describe('P3 global design system', () => {
     for (const name of ['PageHeader', 'SectionHeader', 'GroupedList', 'ListRow', 'FormSection', 'FormRow', 'TextField', 'TextArea', 'SelectField', 'DateField', 'MoneyField', 'QuantityField', 'PrimaryButton', 'SecondaryButton', 'TertiaryButton', 'DestructiveButton', 'IconButton', 'SegmentedControl', 'BottomActionBar', 'SummaryCard']) assert.match(primitives, new RegExp(`export function ${name}\\b`));
   });
 
+  test('exports the V1.2 list, sheet, feedback and lifecycle primitives', () => {
+    for (const name of ['SearchField', 'FilterButton', 'Sheet', 'FilterSheet', 'StatusChip', 'RecordList', 'RecordCard', 'DetailSection', 'KeyValueRow', 'ActionMenu', 'ActionSheet', 'ConfirmSheet', 'DangerSheet', 'InlineAlert', 'EmptyState', 'Skeleton', 'RelationshipCard', 'LifecycleBadge', 'DependencyGraphSheet']) assert.match(primitives, new RegExp(`export function ${name}\\b`));
+  });
+
+  test('uses one centered application viewport with fixed canonical bottom navigation', () => {
+    assert.match(css, /--app-max-width:\s*600px/);
+    assert.match(css, /\.mobile-shell\s*\{[^}]*max-width:\s*var\(--app-max-width\)[^}]*margin:\s*0 auto/s);
+    assert.match(css, /\.mobile-bottom-nav\s*\{[^}]*position:\s*fixed[^}]*width:\s*min\(100%,\s*var\(--app-max-width\)\)/s);
+  });
+
+  test('sheet and action layers use explicit stacking tokens and safe-area padding', () => {
+    for (const token of ['--z-navigation', '--z-sheet', '--z-toast']) assert.match(css, new RegExp(token));
+    assert.match(css, /\.sheet__body\s*\{[^}]*safe-area-inset-bottom/s);
+    assert.match(css, /\.bottom-action-bar\s*\{[^}]*safe-area-inset-bottom/s);
+  });
+
   test('mobile shell exposes exactly the canonical labels in order', () => {
     const labels = [...shell.matchAll(/key: '[^']+', label: '([^']+)'/g)].map((match) => match[1]);
     assert.deepEqual(labels, ['消息', '签核', '应用', '云翼', '我的']);

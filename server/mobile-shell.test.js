@@ -3,10 +3,10 @@
 // These tests cover the M1 UI infrastructure contract:
 //   1. CSS breakpoint contract: 767 → mobile, 768 → non-mobile
 //   2. MobileShell renders the five canonical product tabs
-//   4. State preservation on resize (mobileTab + page survive layout switch)
+//   4. One canonical shell at every viewport width
 //   5. No duplicate hidden business page mounting
 //   6. Role permissions are not changed
-//   7. Desktop nav still renders at desktop layout
+//   7. Canonical navigation and page registry remain complete
 //   8. Local example assets are not imported into production bundle
 //
 // The tests intentionally avoid touching any server business handler
@@ -190,59 +190,28 @@ describe('MobileShell — bottom navigation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4-5. State preservation on resize + no duplicate business page mounting
+// 4-5. One canonical composition + no duplicate business page mounting
 // ---------------------------------------------------------------------------
-describe('App.jsx — responsive composition', () => {
+describe('App.jsx — unified responsive composition', () => {
   const appSource = readSrc('App.jsx');
 
-  test('uses the useMobile hook for layout switching', () => {
-    assert.match(appSource, /useMobile\(\)/, 'App.jsx must use the useMobile hook');
+  test('does not switch component trees with useMobile', () => {
+    assert.doesNotMatch(appSource, /useMobile\(\)/, 'App.jsx must use one component tree at every width');
+    assert.doesNotMatch(appSource, /if\s*\(\s*isMobile\s*\)/, 'viewport width must not choose a second app shell');
   });
 
-  test('desktop tree and mobile tree are NOT rendered simultaneously', () => {
-    assert.match(
-      appSource,
-      /if\s*\(\s*isMobile\s*\)\s*\{[\s\S]*?return\s*\([\s\S]*?MobileShell/,
-      'mobile branch must return <MobileShell> early'
-    );
-    assert.match(
-      appSource,
-      /return <div className="app-shell">/,
-      'desktop branch (app-shell) must remain as the fallthrough'
-    );
+  test('renders exactly one canonical MobileShell tree', () => {
+    assert.equal((appSource.match(/<MobileShell\b/g) || []).length, 1);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /<aside className="sidebar">/);
   });
 
-  test('mobile branch body does not reference the pages map', () => {
-    // The pages map can be defined anywhere, but the mobile branch
-    // body (the JSX returned from the if (isMobile) early-return)
-    // must NOT reference the pages variable or any business page
-    // component, so that no business page is mounted on mobile.
-    const mobileIdx = appSource.indexOf('if (isMobile)');
-    const mobileEnd = appSource.indexOf('return <div className="app-shell">', mobileIdx);
-    assert.ok(mobileIdx > 0, 'mobile branch must exist');
-    assert.ok(mobileEnd > mobileIdx, 'desktop branch must exist after mobile branch');
-    const mobileBranch = appSource.slice(mobileIdx, mobileEnd);
-    assert.equal(
-      /\bpages\[/.test(mobileBranch),
-      false,
-      'mobile branch must not index the pages map (would mount business components)'
-    );
-    // No business page component should appear in the mobile branch
-    const businessComponents = [
-      'Dashboard', 'Orders', 'Approvals', 'Customers', 'Suppliers',
-      'PurchaseOrders', 'Products', 'Warehouses', 'Inventory',
-      'Notifications', 'Accounting', 'ProductionOrders', 'Boms',
-    ];
-    for (const comp of businessComponents) {
-      assert.equal(
-        new RegExp(`<${comp}[\\s/>]`).test(mobileBranch),
-        false,
-        `mobile branch must not render <${comp}> directly`
-      );
-    }
+  test('canonical shell mounts the selected business page exactly once', () => {
+    assert.equal((appSource.match(/pages\[mobileApplication\.page\]/g) || []).length, 1);
+    assert.equal((appSource.match(/\{renderMobileContent\(\)\}/g) || []).length, 1);
   });
 
-  test('mobileTab state is preserved across resize (independent of page state)', () => {
+  test('tab and application state remain independent', () => {
     assert.match(appSource, /useState\('apps'\)/, 'mobileTab must default to "apps"');
     assert.match(appSource, /setMobileTab\(/, 'setMobileTab must be wired');
   });
@@ -310,7 +279,7 @@ describe('App.jsx — responsive composition', () => {
 
   test('App.jsx does not call any business API endpoint from mobile branches', () => {
     const mobileIdx = appSource.indexOf('function renderMobileContent');
-    const mobileEnd = appSource.indexOf('// M1 responsive composition', mobileIdx);
+    const mobileEnd = appSource.indexOf('const tabLabel', mobileIdx);
     assert.ok(mobileIdx > 0 && mobileEnd > mobileIdx);
     const mobileBranch = appSource.slice(mobileIdx, mobileEnd);
     assert.equal(/\bapi\s*\(/.test(mobileBranch), false, 'Mobile branch must not call the api() helper');
@@ -341,15 +310,15 @@ describe('Permissions — canonical registry count', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Desktop nav still renders at desktop layout
+// 7. Canonical navigation remains available to the launcher and page registry
 // ---------------------------------------------------------------------------
-describe('Desktop shell — preserved', () => {
-  test('app-shell + sidebar + topbar are unchanged in App.jsx', () => {
+describe('Canonical shell — preserved', () => {
+  test('legacy desktop shell is absent and MobileShell owns page content', () => {
     const appSource = readSrc('App.jsx');
-    assert.match(appSource, /return <div className="app-shell">/);
-    assert.match(appSource, /<aside className="sidebar">/);
-    assert.match(appSource, /<header className="topbar">/);
-    assert.match(appSource, /<section className="page-content">/);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /className="sidebar"/);
+    assert.doesNotMatch(appSource, /className="topbar"/);
+    assert.match(appSource, /<MobileShell[\s\S]*\{renderMobileContent\(\)\}[\s\S]*<\/MobileShell>/);
   });
 
   test('navGroups array still has all 10 group labels', () => {
