@@ -30,7 +30,7 @@ export function RelationshipSections({ detail }) {
 
 function ReadOnlyDocument({ detail, onClose, partyName }) {
   return <div>
-    <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || detail.status}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || '状态待确认'}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
     <RelationshipSections detail={detail}/>
     <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{quantity(item.quantity)}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
     <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
@@ -92,10 +92,10 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) {
         await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form });
-        notify("保存成功");
+        notify("采购入库单更改已保存");
       } else {
         await api("/api/purchase-receipts", { method: "POST", body: form });
-        notify("创建成功");
+        notify("采购入库单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
@@ -186,10 +186,10 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) {
         await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form });
-        notify("保存成功");
+        notify("销售出货单更改已保存");
       } else {
         await api("/api/sales-deliveries", { method: "POST", body: form });
-        notify("创建成功");
+        notify("销售出货单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
@@ -302,10 +302,10 @@ function ReturnModal({ user, value, onClose, notify, api }) {
       const body = tab === "sales" ? { deliveryId: form.sourceId || null, customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { receiptId: form.sourceId || null, supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
       if (value.id) {
         await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "PATCH", body });
-        notify("保存成功");
+        notify("退货单更改已保存");
       } else {
         await api(tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns", { method: "POST", body });
-        notify("创建成功");
+        notify("退货单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
@@ -388,7 +388,7 @@ export function AccountsReceivable({ user, notify }) {
   return <Panel title="应收账款" subtitle="客户欠款，跟踪回款情况" action={can(user, 'AR_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 手工应收</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="OPEN">未收</option><option value="PARTIAL">部分收款</option><option value="CLOSED">已结清</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>来源单号</th><th>客户</th><th className="number">应收金额</th><th className="number">已收金额</th><th className="number">未收金额</th><th>状态</th><th>到期日</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.source_type === 'SALES_ORDER' ? '销售订单' : '销售出库'}</td><td>{item.customerName}</td><td className="number">{money(item.amount_cents)}</td><td className="number">{money(item.paid_cents)}</td><td className="number positive">{money(item.unpaidCents)}</td><td><Status status={item.status?.toLowerCase()} label={item.statusLabel}/></td><td>{item.due_date || '-'}</td></tr>)}
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.source_type === 'SALES_ORDER' ? '销售订单' : '销售出货'}</td><td>{item.customerName}</td><td className="number">{money(item.amount_cents)}</td><td className="number">{money(item.paid_cents)}</td><td className="number positive">{money(item.unpaidCents)}</td><td><Status status={item.status?.toLowerCase()} label={item.statusLabel}/></td><td>{item.due_date || '-'}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有应收账款记录"/>}</div>
     {view && <ARModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -407,7 +407,7 @@ function ARModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/accounts-receivable', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('应收账款已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -449,7 +449,7 @@ function APModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/accounts-payable', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('应付账款已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -497,7 +497,7 @@ function PCModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/payment-collections', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('收款单已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -560,7 +560,7 @@ function PDModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/payment-disbursements', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('付款单已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };

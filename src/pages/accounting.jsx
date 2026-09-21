@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import { centsToYuanInput, yuanToCents } from '../lib/money.js';
 
 function currentPeriod() {
@@ -22,13 +22,13 @@ const VOUCHER_SOURCE_LABELS = {
 };
 function voucherSourceLabel(type) {
   if (!type) return '—';
-  return VOUCHER_SOURCE_LABELS[type] || type;
+  return VOUCHER_SOURCE_LABELS[type] || '其他业务来源';
 }
 
 const VOUCHER_STATUS_LABELS = {
-  ENTERED: '已录入',
+  ENTERED: '草稿',
   SUBMITTED: '待审批',
-  POSTED: '已过账',
+  POSTED: '已审批',
   REJECTED: '已驳回',
 };
 // Map raw status to existing CSS class. POSTED reuses .status.completed
@@ -657,10 +657,10 @@ function CashJournalForm({ bankAccounts, value, onClose, onSave, notify }) {
   });
   
   async function save() {
-    if (!form.amount_cents) { notify('请输入金额', 'error'); return; }
+    if (!form.amount_cents || Number(form.amount_cents) <= 0) { notify('金额必须大于 0', 'error'); return; }
     try {
       await api('/api/cash-journals', { method: 'POST', body: form });
-      notify('保存成功');
+      notify('已保存');
       onSave();
     } catch (e) { notify(e.message, 'error'); }
   }
@@ -887,7 +887,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
   }
   async function reject() {
     const reason = rejectionReason.trim();
-    if (!reason) { notify('请输入驳回原因', 'error'); return; }
+    if (!reason) { notify('驳回时必须填写原因', 'error'); return; }
     try {
       await api(`/api/accounting-vouchers/${value.id}/reject`, { method: 'POST', body: { rejectionReason: reason } });
       notify('凭证已驳回');
@@ -896,7 +896,6 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
     } catch (e) { notify(e.message, 'error'); }
   }
   async function remove() {
-    if (!window.confirm('确认删除该凭证？此操作不可撤销。')) return;
     try {
       await api(`/api/accounting-vouchers/${value.id}`, { method: 'DELETE' });
       notify('凭证已删除');
@@ -929,7 +928,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
       {canApprove && <button type="button" className="primary" onClick={approve}>审批通过</button>}
       {canApprove && <button type="button" className="danger-button" onClick={() => setRejecting(true)}>驳回</button>}
       {editable && <button type="button" className="secondary" onClick={() => onEdit?.(value)}>编辑</button>}
-      {deletable && <button type="button" className="danger-button" onClick={remove}>删除</button>}
+      {deletable && <ConfirmAction destructive buttonLabel="删除" title={`删除凭证 ${value.voucher_no}？`} message="删除后将无法恢复。" confirmLabel="删除" onConfirm={remove}/>}
     </div>}
     {isReadOnly && <p className="dim full" style={{ marginTop: 12 }}>已过账凭证为只读。</p>}
   </Modal>;

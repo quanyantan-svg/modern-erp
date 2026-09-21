@@ -21,7 +21,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     items: [
       { page: 'customers', mobileLabel: '客户', iconKey: 'customers' },
       { page: 'suppliers', mobileLabel: '供应商', iconKey: 'suppliers' },
-      { page: 'products', mobileLabel: '货品', iconKey: 'products' },
+      { page: 'products', mobileLabel: '产品', iconKey: 'products' },
       { page: 'warehouses', mobileLabel: '仓库', iconKey: 'warehouses' },
     ],
   },
@@ -71,7 +71,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'inventory', mobileLabel: '库存查询 / 调拨 / 盘点', iconKey: 'inventory' },
       { page: 'inventory-scraps', mobileLabel: '库存报废', iconKey: 'inventoryScrap' },
       { page: 'inventory-month-end', mobileLabel: '存货月结', iconKey: 'inventoryPeriod' },
-      { page: 'inventory-transactions', mobileLabel: '库存异动', iconKey: 'inventoryTransactions' },
+      { page: 'inventory-transactions', mobileLabel: '库存异动明细', iconKey: 'inventoryTransactions' },
     ],
   },
   {
@@ -109,9 +109,9 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     accent: 'blue',
     items: [
       { page: 'decision-reports', mobileLabel: '销售统计', iconKey: 'reports', reportKey: 'sales-summary' },
-      { page: 'decision-reports', mobileLabel: '销售未出货', iconKey: 'reports', reportKey: 'sales-outstanding' },
+      { page: 'decision-reports', mobileLabel: '销售未交', iconKey: 'reports', reportKey: 'sales-outstanding' },
       { page: 'decision-reports', mobileLabel: '采购统计', iconKey: 'reports', reportKey: 'purchase-summary' },
-      { page: 'decision-reports', mobileLabel: '采购未交货', iconKey: 'reports', reportKey: 'purchase-outstanding' },
+      { page: 'decision-reports', mobileLabel: '采购未交', iconKey: 'reports', reportKey: 'purchase-outstanding' },
       { page: 'decision-reports', mobileLabel: '库存异动明细', iconKey: 'reports', reportKey: 'inventory-movements' },
     ],
   },

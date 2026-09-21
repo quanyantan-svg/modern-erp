@@ -87,7 +87,7 @@ export function IQCInspections({ user, notify }) {
     const reject = Number(prompt('不合格数量', '0') || 0);
     if (!Number.isFinite(reject) || reject < 0) { notify('不合格数量必须为非负数', 'error'); return; }
     const resultRaw = prompt('检验结果 (PASS / FAIL)', 'PASS');
-    if (!IQC_OQC_RESULTS.some((r) => r.value === resultRaw)) { notify('结果必须是 PASS 或 FAIL', 'error'); return; }
+    if (!IQC_OQC_RESULTS.some((r) => r.value === resultRaw)) { notify('请选择检验结果', 'error'); return; }
     api(`/api/iqc/${item.id}/complete`, { method: 'POST', body: { result: resultRaw, qualified_quantity: qualified, reject_quantity: reject } })
       .then(() => { notify('检验单已完成', 'success'); load(); })
       .catch((e) => notifyError(notify, e, '完成检验单失败'));
@@ -436,7 +436,7 @@ export function OQCInspections({ user, notify }) {
     const reject = Number(prompt('不合格数量', '0') || 0);
     if (!Number.isFinite(reject) || reject < 0) { notify('不合格数量必须为非负数', 'error'); return; }
     const resultRaw = prompt('检验结果 (PASS / FAIL)', 'PASS');
-    if (!IQC_OQC_RESULTS.some((r) => r.value === resultRaw)) { notify('结果必须是 PASS 或 FAIL', 'error'); return; }
+    if (!IQC_OQC_RESULTS.some((r) => r.value === resultRaw)) { notify('请选择检验结果', 'error'); return; }
     api(`/api/oqc/${item.id}/complete`, { method: 'POST', body: { result: resultRaw, qualified_quantity: qualified, reject_quantity: reject } })
       .then(() => { notify('检验单已完成', 'success'); load(); })
       .catch((e) => notifyError(notify, e, '完成检验单失败'));

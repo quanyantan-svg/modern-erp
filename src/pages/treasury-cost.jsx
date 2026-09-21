@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import { yuanToNonNegativeCents } from '../lib/money.js';
 
 export function CashJournals({ user, notify }) {
@@ -212,7 +212,7 @@ export function Bills({ user, notify }) {
                 <td>{item.due_date}</td>
                 <td>{item.counterpartyName}</td>
                 <td className="number">{money(item.face_amount_cents)}</td>
-                <td><Badge type={item.status === 'PAID' ? 'success' : item.status === 'PENDING' ? 'warning' : ''}>{item.status}</Badge></td>
+                <td><Badge type={item.status === 'PAID' ? 'success' : item.status === 'PENDING' ? 'warning' : ''}>{({ PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '已贴现', PAID: '已到期', CANCELLED: '已作废' })[item.status] || '状态待确认'}</Badge></td>
                 <td>{can(user, 'BILLS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
               </tr>
             ))}
@@ -301,7 +301,6 @@ export function FixedAssets({ user, notify }) {
   }
 
   async function calculateDep(assetId) {
-    if (!confirm('确认计提本月折旧?')) return;
     try {
       await api('/api/fixed-assets/depreciation', { method: 'POST', body: { assetId, depreciationDate: new Date().toISOString().slice(0, 10) } });
       notify('折旧已计提');
@@ -326,10 +325,10 @@ export function FixedAssets({ user, notify }) {
                 <td className="number">{money(item.purchase_amount_cents)}</td>
                 <td className="number">{money(item.totalDepreciatedCents || 0)}</td>
                 <td className="number"><strong>{money(item.net_value_cents)}</strong></td>
-                <td><Badge type={item.status === 'IN_USE' ? 'success' : ''}>{item.status}</Badge></td>
+                <td><Badge type={item.status === 'IN_USE' ? 'success' : ''}>{item.status === 'IN_USE' ? '使用中' : item.status === 'DISPOSED' ? '已处置' : '状态待确认'}</Badge></td>
                 <td>
                   <button className="row-action" onClick={() => viewDepreciations(item)}>折旧记录</button>
-                  {can(user, 'FIXED_ASSETS_MANAGE') && <button className="row-action" onClick={() => calculateDep(item.id)}>计提折旧</button>}
+                  {can(user, 'FIXED_ASSETS_MANAGE') && <ConfirmAction className="row-action" buttonLabel="计提折旧" title="确认计提本月折旧？" message="确认后将生成本月折旧记录。" confirmLabel="确认计提" onConfirm={() => calculateDep(item.id)}/>}
                   {can(user, 'FIXED_ASSETS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
                 </td>
               </tr>

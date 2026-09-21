@@ -2,9 +2,9 @@
 //
 // Five reports:
 //   1. 销售统计        — sales order/delivery/return aggregates
-//   2. 销售未出货       — approved sales orders vs. confirmed deliveries (document-level)
+//   2. 销售未交         — approved sales orders vs. confirmed deliveries (document-level)
 //   3. 采购统计        — purchase order/receipt/return aggregates
-//   4. 采购未交货       — approved purchase orders vs. confirmed receipts (document-level)
+//   4. 采购未交         — approved purchase orders vs. confirmed receipts (document-level)
 //   5. 库存异动明细     — inventory_transactions ledger
 //
 // All money is integer cents on the wire; frontend formats via money().
@@ -19,9 +19,9 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 
 const REPORT_TABS = [
   { key: 'sales-summary', label: '销售统计', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
-  { key: 'sales-outstanding', label: '销售未出货', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+  { key: 'sales-outstanding', label: '销售未交', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
   { key: 'purchase-summary', label: '采购统计', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
-  { key: 'purchase-outstanding', label: '采购未交货', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+  { key: 'purchase-outstanding', label: '采购未交', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
   { key: 'inventory-movements', label: '库存异动明细', domainPermissions: ['INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE'] },
 ];
 
@@ -93,7 +93,7 @@ function useReport(endpoint, appliedFilters) {
 
 function ReportBody({ state, render }) {
   if (state.status === 'loading') return <Loading />;
-  if (state.status === 'error') return <Empty text={'查询失败：' + (state.error || '未知错误')} />;
+  if (state.status === 'error') return <Empty title="加载失败" text={state.error || '暂时无法获取数据，请稍后重试。'} />;
   if (!state.data) return <Empty text="暂无数据" />;
   return render(state.data);
 }
@@ -158,7 +158,7 @@ function SalesSummaryPanel() {
         fields={[
           { name: 'dateFrom', type: 'date', label: '开始日期' },
           { name: 'dateTo', type: 'date', label: '结束日期' },
-          { name: 'customerId', label: '客户ID', placeholder: '客户编号' },
+          { name: 'customerId', label: '客户编码', placeholder: '请输入客户编码' },
           { name: 'status', label: '订单状态', options: [
             { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审批' },
             { value: 'APPROVED', label: '已审批' }, { value: 'REJECTED', label: '已驳回' },
@@ -229,7 +229,7 @@ function SalesOutstandingPanel() {
         fields={[
           { name: 'dateFrom', type: 'date', label: '开始日期' },
           { name: 'dateTo', type: 'date', label: '结束日期' },
-          { name: 'customerId', label: '客户ID', placeholder: '客户编号' },
+          { name: 'customerId', label: '客户编码', placeholder: '请输入客户编码' },
         ]}
         values={filters}
         onChange={(name, value) => setFilters((current) => ({ ...current, [name]: value }))}
@@ -301,7 +301,7 @@ function PurchaseSummaryPanel() {
         fields={[
           { name: 'dateFrom', type: 'date', label: '开始日期' },
           { name: 'dateTo', type: 'date', label: '结束日期' },
-          { name: 'supplierId', label: '供应商ID', placeholder: '供应商编号' },
+          { name: 'supplierId', label: '供应商编码', placeholder: '请输入供应商编码' },
           { name: 'status', label: '订单状态', options: [
             { value: 'DRAFT', label: '草稿' }, { value: 'SUBMITTED', label: '待审批' },
             { value: 'APPROVED', label: '已审批' }, { value: 'REJECTED', label: '已驳回' },
@@ -372,7 +372,7 @@ function PurchaseOutstandingPanel() {
         fields={[
           { name: 'dateFrom', type: 'date', label: '开始日期' },
           { name: 'dateTo', type: 'date', label: '结束日期' },
-          { name: 'supplierId', label: '供应商ID', placeholder: '供应商编号' },
+          { name: 'supplierId', label: '供应商编码', placeholder: '请输入供应商编码' },
         ]}
         values={filters}
         onChange={(name, value) => setFilters((current) => ({ ...current, [name]: value }))}
@@ -444,8 +444,8 @@ function InventoryMovementsPanel() {
         fields={[
           { name: 'dateFrom', type: 'date', label: '开始日期' },
           { name: 'dateTo', type: 'date', label: '结束日期' },
-          { name: 'productId', label: '货品ID', placeholder: '货品编号' },
-          { name: 'warehouseId', label: '仓库ID', placeholder: '仓库编号' },
+          { name: 'productId', label: '产品编码', placeholder: '请输入产品编码' },
+          { name: 'warehouseId', label: '仓库编码', placeholder: '请输入仓库编码' },
           { name: 'direction', label: '方向', options: [{ value: 'IN', label: '入库' }, { value: 'OUT', label: '出库' }] },
           { name: 'sourceType', label: '来源类型', options: [
             { value: 'PURCHASE_RECEIPT', label: '采购入库' }, { value: 'SALES_DELIVERY', label: '销售出货' },

@@ -27,6 +27,7 @@ import { useMobile } from './hooks/useMediaQuery.js';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
 import { AppLink, AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
 import { Icon as ProductIcon } from './components/icons.jsx';
+import { roleDisplayName } from './lib/copy.js';
 const can = (user, permission) => user?.permissions?.includes(permission);
 
 // Canonical product tabs share one validated navigation contract.
@@ -105,7 +106,7 @@ export const navGroups = [
   { label: '基础资料', items: [
     { key: 'suppliers', label: '供应商', icon: ic.suppliers, any: ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE'] },
     { key: 'customers', label: '客户', icon: ic.customers, any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
-    { key: 'products', label: '货品', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
+    { key: 'products', label: '产品', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
     { key: 'warehouses', label: '仓库', icon: ic.warehouses, any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
   ]},
   { label: '仓储物流', items: [
@@ -113,7 +114,7 @@ export const navGroups = [
     { key: 'purchase-receipts', label: '采购入库', icon: ic.purchaseReceipts, any: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
     { key: 'sales-deliveries', label: '销售出货', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
     { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
-    { key: 'inventory-transactions', label: '库存异动', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
+    { key: 'inventory-transactions', label: '库存异动明细', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
     { key: 'inventory-scraps', label: '库存报废', icon: ic.inventoryScrap, any: ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE'] },
     { key: 'inventory-month-end', label: '存货月结', icon: ic.inventoryPeriod, any: ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'] },
     { key: 'sales-discounts', label: '销售折让', icon: ic.salesDiscount, any: ['SALES_DISCOUNT_MANAGE'] },
@@ -350,11 +351,11 @@ export default function App() {
     }
     if (mobileTab === 'cloud') {
       return (
-        <MobilePage title="云翼" subtitle="企业服务入口">
+          <MobilePage title="云翼" subtitle="企业协同能力">
           <section className="yunyi-portal" aria-labelledby="yunyi-title">
             <div className="yunyi-portal__icon"><ProductIcon name="cloud" size={34}/></div>
-            <h2 id="yunyi-title">云翼服务正在建设</h2>
-            <p>这里将承载企业服务入口。当前版本不提供尚未实现的业务功能。</p>
+            <h2 id="yunyi-title">更多企业协同能力正在规划中</h2>
+            <p>当前版本暂未开放此功能。</p>
           </section>
         </MobilePage>
       );
@@ -363,7 +364,7 @@ export default function App() {
       return (
         <MobilePage
           title="我的"
-          subtitle={`${user.displayName} · ${user.roleName}`}
+          subtitle={`${user.displayName} · ${roleDisplayName(user)}`}
           actions={(
             <button
               type="button"
@@ -383,7 +384,7 @@ export default function App() {
             </div>
             <div className="mobile-card__row">
               <span className="mobile-card__row-label">角色</span>
-              <span className="mobile-card__row-value">{user.roleName}</span>
+              <span className="mobile-card__row-value">{roleDisplayName(user)}</span>
             </div>
             <div className="mobile-card__row">
               <span className="mobile-card__row-label">登录账号</span>
@@ -449,7 +450,7 @@ export default function App() {
 
   return <div className="app-shell"><AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业资源计划</span></div></div>
+      <div className="brand"><div className="brand-mark">M</div><div><strong>Modern ERP</strong><span>企业运营管理平台</span></div></div>
       <nav>{navGroups.map((group, gi) => group === null
         ? <div key={'div-' + gi} className="sidebar-divider"/>
         : <div key={gi} className="sidebar-group">
@@ -467,7 +468,7 @@ export default function App() {
       <header className="topbar">
         <div><h1>{current?.label}</h1></div>
         <div className="user-area">
-          <div className="user-info"><strong>{user.displayName}</strong><span>{user.roleName}</span></div>
+          <div className="user-info"><strong>{user.displayName}</strong><span>{roleDisplayName(user)}</span></div>
           <div className="avatar">{user.displayName.slice(0, 1)}</div>
           <button className="text-button" onClick={logout}>退出</button>
         </div>

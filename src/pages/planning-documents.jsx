@@ -159,14 +159,14 @@ function ProductionInstructionCreate({ value, onClose, onSaved, notify }) {
       <label>计划日期<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)}/></label>
       <label className="full">备注<input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={200}/></label>
       {makeRows.length > 0 && <div className="full">
-        <div className="form-section-head"><span>指令明细（MAKE 建议）</span></div>
+        <div className="form-section-head"><span>指令明细（生产建议）</span></div>
         <div className="forecast-items-editor">
           {items.map((item, index) => {
             const target = makeRows[index];
             return <article className="forecast-item-editor" key={index}>
               <div className="forecast-item-editor__fields">
                 <label>建议产品<select value={item.mrpResultId} onChange={(event) => setItems((current) => current.map((it, i) => i === index ? { ...it, mrpResultId: event.target.value } : it))} required>
-                  <option value="">选择 MAKE 建议</option>
+                  <option value="">请选择生产建议</option>
                   {makeRows.map((row) => <option key={row.id} value={row.id}>{row.product_code} - {row.product_name}（建议 {fmtQty(row.suggested_quantity)}）</option>)}
                 </select></label>
                 <label>本次指令数量<input type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={(event) => setItems((current) => current.map((it, i) => i === index ? { ...it, quantity: event.target.value } : it))} required/></label>
@@ -357,12 +357,12 @@ function PurchaseInstructionCreate({ value, onClose, onSaved, notify }) {
       <label>计划日期<input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)}/></label>
       <label className="full">备注<input value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={200}/></label>
       {buyRows.length > 0 && <div className="full">
-        <div className="form-section-head"><span>指令明细（BUY 建议）</span></div>
+        <div className="form-section-head"><span>指令明细（采购建议）</span></div>
         <div className="forecast-items-editor">
           {items.map((item, index) => <article className="forecast-item-editor" key={index}>
             <div className="forecast-item-editor__fields">
               <label>建议产品<select value={item.mrpResultId} onChange={(event) => setItems((current) => current.map((it, i) => i === index ? { ...it, mrpResultId: event.target.value } : it))} required>
-                <option value="">选择 BUY 建议</option>
+                <option value="">请选择采购建议</option>
                 {buyRows.map((row) => <option key={row.id} value={row.id}>{row.product_code} - {row.product_name}（建议 {fmtQty(row.suggested_quantity)}）</option>)}
               </select></label>
               <label>本次指令数量<input type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={(event) => setItems((current) => current.map((it, i) => i === index ? { ...it, quantity: event.target.value } : it))} required/></label>

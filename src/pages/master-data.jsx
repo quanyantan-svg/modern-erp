@@ -1,8 +1,9 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { ActionMenu, Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { ActionMenu, Active, ConfirmAction, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { roleDisplayName } from '../lib/copy.js';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -20,7 +21,7 @@ export function Login({ onLogin, notify }) {
           <strong>Modern ERP</strong>
         </div>
         <h2>登录</h2>
-        <p className="lead">使用您的账号进入企业资源计划系统。</p>
+        <p className="lead">企业运营管理平台</p>
         <form onSubmit={submit}>
           <label>账号<input autoFocus required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="username"/></label>
           <label>密码<input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password"/></label>
@@ -46,7 +47,7 @@ export function Dashboard({ user, notify }) {
   if (!data) return <Loading/>;
   const cards = [
     can(user, 'CUSTOMERS_VIEW') && ['客户总数', data.customerCount, '家', 'teal'],
-    can(user, 'PRODUCTS_VIEW') && ['在售货品', data.productCount, '项', 'blue'],
+    can(user, 'PRODUCTS_VIEW') && ['在售产品', data.productCount, '项', 'blue'],
     can(user, 'ORDERS_VIEW') && ['销售订单', data.orderCount, '张', 'orange'],
     can(user, 'ORDERS_APPROVE') && ['待我审批', data.pendingCount, '张', 'purple'],
   ].filter(Boolean);
@@ -120,7 +121,7 @@ export function Customers({ user, notify }) {
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
     <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>状态</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有找到客户资料"/>}</div>
+    </tbody></table>{!items.length && <Empty title="还没有客户" text="创建客户后，就可以建立销售订单。"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
   </Panel>;
 }
@@ -144,25 +145,25 @@ export function Products({ user, notify }) {
   const navigation = useAppNavigation();
   const load = () => api(`/api/products?search=${encodeURIComponent(search)}`).then((r) => setItems(r.products)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="货品资料" subtitle="订单明细引用的标准商品档案，类似旧系统 SYS_GoodInA">
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索货品编码或名称" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增货品</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">参考售价</th><th className="number">演示库存</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="货品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有找到货品资料"/>}</div>
-    {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('货品资料已保存'); }} notify={notify}/>} 
+  return <Panel title="产品资料" subtitle="维护销售、采购与库存业务共用的产品档案">
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品名称或编码" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建产品</button>}/>
+    <div className="table-wrap"><table><thead><tr><th>产品编码</th><th>产品名称</th><th>单位</th><th className="number">参考售价</th><th className="number">当前库存</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="产品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+    </tbody></table>{!items.length && <Empty title="还没有产品" text="新建产品后，即可用于销售、采购和库存业务。"/>}</div>
+    {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('产品资料已保存'); }} notify={notify}/>}
   </Panel>;
 }
 
 function ProductModal({ value, onClose, onSaved, notify }) {
   const [form, setForm] = useState({ code: '', name: '', unit: '个', stockQuantity: 0, active: true, ...value, price: value.priceCents === undefined ? '' : value.priceCents / 100 });
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/products/${value.id}` : '/api/products', { method: value.id ? 'PATCH' : 'POST', body: { ...form, priceCents: Math.round(Number(form.price) * 100) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
-  return <Modal title={value.id ? '编辑货品' : '新增货品'} onClose={onClose}><form className="form-grid" onSubmit={save}>
-    <label>货品编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 MAT-004" required/></label>
-    <label>货品名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required/></label>
+  return <Modal title={value.id ? '编辑产品' : '新建产品'} onClose={onClose}><form className="form-grid" onSubmit={save}>
+    <label>产品编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 MAT-004" required/></label>
+    <label>产品名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="请输入产品名称" required/></label>
     <label>计量单位<input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} required/></label>
     <label>参考售价（元）<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} required/></label>
     <label>演示库存<input type="number" min="0" step="0.01" value={form.stockQuantity} onChange={(e) => setForm({ ...form, stockQuantity: e.target.value })} required/></label>
-    {value.id && <label className="check"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该货品</label>}
+    {value.id && <label className="check"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该产品</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
 }
@@ -173,12 +174,12 @@ export function Orders({ user, notify }) {
   const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
+  async function submitOrder(id) { try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('销售订单已提交'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
   return <Panel title="销售订单" subtitle="从客户需求到审批确认的核心业务单据" action={can(user, 'ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建销售订单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或客户名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
     <OrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
-      {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <ConfirmAction className="row-action strong" buttonLabel="提交" title="提交这张销售订单？" message="提交后，订单将进入审批流程。" confirmLabel="确认提交" onConfirm={() => submitOrder(order.id)}/>}
       {can(user, 'ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="销售订单" onConfirm={async () => {
         try { await api(`/api/orders/${order.id}`, { method: 'DELETE' }); notify('销售订单草稿已删除'); await load(); }
         catch (error) { notify(error.message, 'error'); throw error; }
@@ -218,11 +219,11 @@ export function Approvals({ notify }) {
   const [orders, setOrders] = useState([]); const [viewing, setViewing] = useState(null); const [rejecting, setRejecting] = useState(null); const [reason, setReason] = useState('');
   const load = () => api('/api/orders?status=SUBMITTED').then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  async function approve(order) { if (!confirm(`确定审批通过订单 ${order.orderNo} 吗？`)) return; try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('订单已审批通过'); load(); } catch (e) { notify(e.message, 'error'); } }
+  async function approve(order) { try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('销售订单已审批'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
   async function reject(e) { e.preventDefault(); try { await api(`/api/orders/${rejecting.id}/reject`, { method: 'POST', body: { reason } }); notify('订单已驳回'); setRejecting(null); setReason(''); load(); } catch (error) { notify(error.message, 'error'); } }
   return <>
     <div className="approval-banner"><div className="approval-icon">✓</div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
-    <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><button className="approve-button" onClick={() => approve(order)}>通过</button></>}/></Panel>
+    <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><ConfirmAction className="approve-button" buttonLabel="审批通过" title="通过这张销售订单？" message={`订单 ${order.orderNo} 审批通过后可进入销售出货流程。`} confirmLabel="审批通过" onConfirm={() => approve(order)}/></>}/></Panel>
     {viewing && <OrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
     {rejecting && <Modal title={`驳回 ${rejecting.orderNo}`} onClose={() => setRejecting(null)}><form onSubmit={reject}><label>驳回原因<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="请说明需要销售人员修改的内容" required/></label><FormActions onClose={() => setRejecting(null)} saveText="确认驳回" danger/></form></Modal>}
   </>;
@@ -269,7 +270,7 @@ export function UsersRoles({ user, notify }) {
   useEffect(() => { void load(); }, []);
   return <Panel title="用户与角色" subtitle="角色是一组权限模板，用户通过角色获得功能权限" action={tab === 'users' ? can(user, 'USERS_MANAGE') && <button className="primary" onClick={() => setEditingUser({})}>＋ 新增用户</button> : can(user, 'ROLES_MANAGE') && <button className="primary" onClick={() => setEditingRole({ permissions: [] })}>＋ 新增角色</button>}>
     <div className="tabs">{can(user, 'USERS_MANAGE') && <button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理</button>}<button className={tab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色权限</button></div>
-    {tab === 'users' ? <div className="user-cards">{users.map((item) => <div className="user-card" key={item.id}><div className="avatar large">{item.displayName.slice(0,1)}</div><div><strong>{item.displayName}</strong><span className="mono">{item.username}</span></div><span className="role-chip">{item.roleName}</span><Active active={item.active}/><button className="row-action" onClick={() => setEditingUser(item)}>编辑</button></div>)}</div> : <div className="role-grid">{roles.map((role) => <div className="role-card" key={role.id}><div><span className="mono">{role.code}</span><h3>{role.name}</h3><p>{role.description}</p></div><div className="role-meta"><span>{role.user_count} 位用户</span><span>{role.permissions.length} 项权限</span></div>{can(user, 'ROLES_MANAGE') && <button className="secondary" onClick={() => setEditingRole(role)}>配置权限</button>}</div>)}</div>}
+    {tab === 'users' ? <div className="user-cards">{users.map((item) => <div className="user-card" key={item.id}><div className="avatar large">{item.displayName.slice(0,1)}</div><div><strong>{item.displayName}</strong><span className="mono">{item.username}</span></div><span className="role-chip">{roleDisplayName(item)}</span><Active active={item.active}/><button className="row-action" onClick={() => setEditingUser(item)}>编辑</button></div>)}</div> : <div className="role-grid">{roles.map((role) => <div className="role-card" key={role.id}><div><span className="mono">{role.code}</span><h3>{roleDisplayName({ roleId: role.id, roleCode: role.code, roleName: role.name })}</h3><p>{role.description}</p></div><div className="role-meta"><span>{role.user_count} 位用户</span><span>{role.permissions.length} 项权限</span></div>{can(user, 'ROLES_MANAGE') && <button className="secondary" onClick={() => setEditingRole(role)}>配置权限</button>}</div>)}</div>}
     {editingUser && <UserModal value={editingUser} roles={roles} onClose={() => setEditingUser(null)} onSaved={() => { setEditingUser(null); load(); notify('用户资料已保存'); }} notify={notify}/>} 
     {editingRole && <RoleModal value={editingRole} permissions={permissions} onClose={() => setEditingRole(null)} onSaved={() => { setEditingRole(null); load(); notify('角色权限已保存'); }} notify={notify}/>} 
   </Panel>;
@@ -295,12 +296,12 @@ export function PurchaseOrders({ user, notify }) {
   const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'purchase-orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/purchase-orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.purchaseOrders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
+  async function submitOrder(id) { try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('采购订单已提交'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
   return <Panel title="采购订单" subtitle="向供应商采购货品的业务单据" action={can(user, 'PURCHASE_ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建采购订单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
     <PurchaseOrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'PURCHASE_ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
-      {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <ConfirmAction className="row-action strong" buttonLabel="提交" title="提交这张采购订单？" message="提交后，订单将进入审批流程。" confirmLabel="确认提交" onConfirm={() => submitOrder(order.id)}/>}
       {can(user, 'PURCHASE_ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="采购订单" onConfirm={async () => {
         try { await api(`/api/purchase-orders/${order.id}`, { method: 'DELETE' }); notify('采购订单草稿已删除'); await load(); }
         catch (error) { notify(error.message, 'error'); throw error; }
@@ -396,7 +397,7 @@ export function Inventory({ user, notify }) {
   return <Panel title="库存管理" subtitle="查询、盘点、调拨企业库存">
     <div className="inventory-workbench" aria-label="仓储库存"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}><strong>库存查询</strong><small>查看当前库存</small></button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}><strong>库存调拨</strong><small>仓库间移动</small></button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}><strong>库存盘点</strong><small>账实对比</small></button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}><strong>库存调整</strong><small>杂项库存修正</small></button>}<AppLink page="inventory-transactions"><strong>库存异动</strong><small>全部变动轨迹</small></AppLink></div>
     {tab === 'query' && <><div className="toolbar inventory-filters"><select value={searchPd} onChange={(e) => setSearchPd(e.target.value)}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={searchWh} onChange={(e) => setSearchWh(e.target.value)}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></div>
-      <div className="table-wrap"><table><thead><tr><th>仓库</th><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{quantity(row.quantity)}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty text="没有找到库存记录"/>}</div></>}
+      <div className="table-wrap"><table><thead><tr><th>仓库</th><th>产品编码</th><th>产品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{quantity(row.quantity)}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty title="暂无库存记录" text="完成入库、调整或其他库存业务后，将在这里显示。"/>}</div></>}
     {tab === 'check' && <InventoryChecks user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'transfer' && <InventoryTransfers user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'adjustment' && can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <InventoryAdjustments notify={notify} warehouses={warehouses} products={products} inventory={inventory}/>}

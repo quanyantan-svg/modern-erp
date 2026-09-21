@@ -43,10 +43,10 @@ function BomModal({ user, value, onClose, notify, api, products }) {
     try {
       if (value.id) {
         await api('/api/boms/' + value.id, { method: 'POST', body: { remark: form.remark, items: form.items } });
-        notify('更新成功');
+        notify('BOM 更改已保存');
       } else {
         await api('/api/boms', { method: 'POST', body: form });
-        notify('创建成功');
+        notify('BOM 已创建');
       }
       onClose();
     } catch (e) { notify(e.message, 'error'); }
@@ -325,7 +325,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
   const save = async () => {
     try {
       await api('/api/production-orders', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('制令单已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -475,10 +475,10 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
       const payload = { productionOrderId: form.productionOrderId, warehouseId: form.warehouseId, issueDate: form.issueDate, remark: form.remark, items: form.items };
       if (value.id) {
         await api('/api/production-material-issues/' + value.id, { method: 'PATCH', body: payload });
-        notify('更新成功');
+        notify('用料出库单更改已保存');
       } else {
         await api('/api/production-material-issues', { method: 'POST', body: payload });
-        notify('创建成功');
+        notify('用料出库单已创建');
       }
       onClose();
     } catch (e) { notify(e.message, 'error'); }
@@ -626,10 +626,10 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
       const payload = { productionOrderId: form.productionOrderId, warehouseId: form.warehouseId, quantity: form.quantity, receiptDate: form.receiptDate, remark: form.remark };
       if (value.id) {
         await api('/api/production-receipts/' + value.id, { method: 'PATCH', body: payload });
-        notify('更新成功');
+        notify('生产入库单更改已保存');
       } else {
         await api('/api/production-receipts', { method: 'POST', body: payload });
-        notify('创建成功');
+        notify('生产入库单已创建');
       }
       onClose();
     } catch (e) { notify(e.message, 'error'); }

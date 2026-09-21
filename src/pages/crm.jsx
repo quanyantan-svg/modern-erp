@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
 export async function runCrmSave(operation, onSaved, notify) {
   try {
@@ -249,7 +249,7 @@ export function SalesActivities({ user, notify }) {
                 <td><Badge type={item.status === 'COMPLETED' ? 'success' : item.status === 'CANCELLED' ? 'danger' : ''}>{statusMap[item.status]}</Badge></td>
                 <td>
                   {can(user, 'CRM_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
-                  {can(user, 'CRM_MANAGE') && <button className="row-action danger" onClick={() => deleteActivity(item)}>删除</button>}
+                  {can(user, 'CRM_MANAGE') && <ConfirmAction className="row-action danger" destructive buttonLabel="删除" title={`删除“${item.title}”？`} message="该活动未关联业务单据，删除后无法恢复。" confirmLabel="删除" onConfirm={() => deleteActivity(item)}/>}
                 </td>
               </tr>
             ))}
@@ -262,7 +262,6 @@ export function SalesActivities({ user, notify }) {
   );
 
   async function deleteActivity(item) {
-    if (!confirm(`确认删除活动 "${item.title}"?`)) return;
     try {
       await api(`/api/sales-activities/${item.id}`, { method: 'DELETE' });
       notify('活动已删除');
