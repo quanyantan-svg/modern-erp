@@ -1,5 +1,14 @@
 # 功能矩阵
 
+## V1.1 Productization Final Acceptance（2026-09-21）
+
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| V1.1 集成教师业务流 | PASS | 销售 100000 元 → 退货 -2000 → 折让 -3000 → 收款 95000 = AR 0；采购 14000 → 折让 -1000 → 付款 13000 = AP 0；FG 经生产入库后 = 120，经销售出库 100 + 退货 2 + 调拨 5 + 报废 1 + 盘点调整 = 20；DB 完整性与 FK 校验全部通过 |
+| 启动幂等 idx_vouchers_source 索引 | COMPLETE | `fix(db): restore voucher source index on first startup` — 第一次 `createDatabase` 即创建 `idx_vouchers_source`，无需二次启动；迁移 ID 仍仅 M10–M14 |
+| 空数据库 UX 全覆盖 | PASS | 客户 / 销售订单 / 需求预测 / MRP 运算 / 物料需求计划 / 库存查询 / 审批中心 七个空白页全部 200 返回，无崩溃、无原始枚举泄漏 |
+| V1.1 教师验收最终文档 | PENDING | 收口文档待随 RC tag 一起冻结 |
+
 ## P3 跨模块产品 UI（2026-09-20）
 
 | 能力 | 状态 | 范围与边界 |

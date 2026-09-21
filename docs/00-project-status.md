@@ -4,13 +4,28 @@
 
 ## 阶段与分支
 
-- 阶段：v1.1 Productization — P3 Commercial UI
+- 阶段：v1.1 Productization — Final Acceptance
 - 分支：feature/v1.1-productization
 - 稳定基线：99bc18f (`v1.1.0-rc.1`)
+- 最终验收 HEAD：454986e `test(release): harden productization acceptance checks`
 
 ## 当前生产验收状态
 
 > **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`, `v1.1.0-rc.1`.** v1.1 final-acceptance 与 productization 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### V1.1 Productization Final Acceptance
+
+> **Status:** COMPLETE — frozen teacher flow + first-start DB index fix + empty-DB UX coverage.
+
+- 数据库迁移首启动修复：`fix(db): restore voucher source index on first startup` (b61fa0e)。`migrateVoucherWorkflow` 的 `accounting_vouchers` 表重建分支在第一次 `createDatabase` 调用时只重建了 `idx_vouchers_status`，遗漏 `idx_vouchers_source`；与状态索引一起补建后，源索引从首次启动即存在，无需二次启动才能补齐。迁移 ID 仍仅 M10–M14；schema 二次启动零漂移、`integrity_check=ok`、`foreign_key_check=0 rows`。
+- 教师业务流集成验收（`scripts/v1-1-teacher-fixture.mjs`）覆盖：销售 / 计划 / 采购 / 生产 / 出库 / 退货 / 调拨 / 报废 / 盘点 / 月结 完整链路；最终 FG = 20，AR = 0，AP = 0，DB 完整性 / FK 全部通过。
+- 空数据库 UX 验收（`scripts/v1-1-empty-db-ux.mjs`）覆盖：客户 / 销售订单 / 需求预测 / MRP 运算 / 物料需求计划 / 库存查询 / 审批中心 七个空白页 HTTP 200 + 接口形状校验通过。
+- 修复 + 工具提交：`b61fa0e fix(db)`、`454986e test(release)`；前者独立提交，后者合并 P2 Edge 文案 + 动画等待微调、两处 EOF 空白收紧、四个 V1.1 验收脚本。
+- Focused：`pnpm test` → **1222 tests / 234 suites / 0 failed**；`pnpm build` PASS（637.48 kB JS / 73.38 kB CSS，gzip 147.72 / 13.04 kB）；`git diff --check` 仅 Windows CRLF 提示。
+- P1 / P2 / P3 / P4 阶段产出保持冻结，未变更任何业务、权限、API、迁移 ID。
+- 无 tag、push、deploy。
+- **V1.1 PRODUCTIZATION FINAL ACCEPTANCE = PASS**
+- **READY TO TAG RC = YES**
 
 ### P3 — iOS-inspired Commercial UI Design System
 
