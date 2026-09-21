@@ -91,7 +91,7 @@ import {
 } from './lib/http.js';
 import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
 import {
-  archiveLifecycleRecord, lifecycleAnalysis, restoreLifecycleRecord,
+  archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
 
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
@@ -139,6 +139,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/lifecycle/analyze' && req.method === 'GET') return lifecycleAnalysis(db, res, actor, url);
   if (pathname === '/api/lifecycle/archive' && req.method === 'POST') return archiveLifecycleRecord(db, req, res, actor);
   if (pathname === '/api/lifecycle/restore' && req.method === 'POST') return restoreLifecycleRecord(db, req, res, actor);
+  if (pathname === '/api/lifecycle/cleanup' && req.method === 'POST') return executeLifecycleCleanup(db, req, res, actor);
 
   if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
   if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);

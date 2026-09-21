@@ -49,7 +49,6 @@ const ENTITY_ALIASES = Object.freeze({
   ACCOUNTPAYABLE: 'ACCOUNT_PAYABLE', ACCOUNTINGVOUCHER: 'ACCOUNTING_VOUCHER',
 });
 
-const EFFECTIVE_STATUSES = new Set(['CONFIRMED', 'APPROVED', 'POSTED', 'TRANSFERRED', 'COMPLETED']);
 const ARCHIVE_STATUSES = new Set(['CANCELLED', 'REJECTED', 'VOIDED', 'NEUTRALIZED']);
 const ARCHIVE_ONLY_TYPES = new Set(['MRP_RUN']);
 const REVERSIBLE_EFFECT_TYPES = new Set([
@@ -59,6 +58,17 @@ const REVERSIBLE_EFFECT_TYPES = new Set([
   'SALES_DISCOUNT', 'PURCHASE_DISCOUNT', 'PAYMENT_COLLECTION', 'PAYMENT_DISBURSEMENT',
   'ACCOUNT_RECEIVABLE', 'ACCOUNT_PAYABLE', 'ACCOUNTING_VOUCHER',
 ]);
+
+const EFFECTIVE_STATUS_BY_TYPE = Object.freeze({
+  PURCHASE_RECEIPT: new Set(['CONFIRMED']), SALES_DELIVERY: new Set(['CONFIRMED']),
+  SALES_RETURN: new Set(['CONFIRMED']), PURCHASE_RETURN: new Set(['CONFIRMED']),
+  PRODUCTION_MATERIAL_ISSUE: new Set(['CONFIRMED']), PRODUCTION_RECEIPT: new Set(['CONFIRMED']),
+  INVENTORY_ADJUSTMENT: new Set(['CONFIRMED']), INVENTORY_TRANSFER: new Set(['TRANSFERRED']),
+  INVENTORY_SCRAP: new Set(['CONFIRMED']), INVENTORY_CHECK: new Set(['APPROVED']),
+  SALES_DISCOUNT: new Set(['CONFIRMED']), PURCHASE_DISCOUNT: new Set(['CONFIRMED']),
+  PAYMENT_COLLECTION: new Set(['CONFIRMED']), PAYMENT_DISBURSEMENT: new Set(['CONFIRMED']),
+  ACCOUNTING_VOUCHER: new Set(['POSTED']),
+});
 
 const SOURCE_ENTITY_TYPES = Object.freeze({
   SALES_ORDER: 'SALES_ORDER', PURCHASE_ORDER: 'PURCHASE_ORDER', PURCHASE_REQUISITION: 'PURCHASE_REQUISITION',
@@ -110,7 +120,8 @@ function inventoryEffects(db, entityType, entityId) {
     id: row.id,
     warehouseId: row.warehouse_id,
     productId: row.product_id,
-    quantityChange: Number(row.quantity_change),
+    quantity: Number(row.quantity_change),
+    quantityChange: row.direction === 'OUT' ? -Number(row.quantity_change) : Number(row.quantity_change),
     direction: row.direction,
     balanceAfter: Number(row.balance_after),
     createdAt: row.created_at,
@@ -142,6 +153,8 @@ function buildNode(db, entityType, entityId, selectedForCleanup, relationship = 
   const status = String(row[rule.status] || '');
   const period = periodOf(row[rule.date] || row.created_at);
   const hasEffects = inventoryEffect.length > 0 || financeEffect.receivables.length > 0 || financeEffect.payables.length > 0 || financeEffect.vouchers.length > 0;
+  const intrinsicFinancialEffect = (entityType === 'ACCOUNT_RECEIVABLE' || entityType === 'ACCOUNT_PAYABLE')
+    && (Number(row.amount_cents || 0) !== 0 || Number(row.adjustment_cents || 0) !== 0 || Number(row.paid_cents || 0) !== 0);
   return {
     key: `${entityType}:${entityId}`,
     entityType,
@@ -149,7 +162,7 @@ function buildNode(db, entityType, entityId, selectedForCleanup, relationship = 
     label: rule.label,
     documentNo: String(row[rule.number] || entityId),
     status,
-    effective: EFFECTIVE_STATUSES.has(status) || hasEffects,
+    effective: Boolean(EFFECTIVE_STATUS_BY_TYPE[entityType]?.has(status) || hasEffects || intrinsicFinancialEffect),
     inventoryEffect,
     financialEffect: financeEffect,
     period,
@@ -222,7 +235,10 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       for (const receipt of db.prepare('SELECT id FROM production_receipts WHERE production_order_id=?').all(node.entityId)) add('PRODUCTION_RECEIPT', receipt.id, selectedDownstream, 'GENERATED', node.key);
     }
     if (node.entityType === 'PRODUCTION_MATERIAL_ISSUE' || node.entityType === 'PRODUCTION_RECEIPT') {
-      if (row.production_order_id) add('PRODUCTION_ORDER', row.production_order_id, false, 'SOURCE', node.key);
+      if (row.production_order_id) add(
+        'PRODUCTION_ORDER', row.production_order_id,
+        includeExternal && node.externalDependency, 'SOURCE', node.key, node.externalDependency,
+      );
     }
 
     // Generated accounting subledger and voucher records are part of the
@@ -234,10 +250,12 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
 
     if (node.entityType === 'ACCOUNT_RECEIVABLE') {
       for (const item of db.prepare('SELECT DISTINCT collection_id id FROM payment_collection_items WHERE receivable_id=?').all(node.entityId)) add('PAYMENT_COLLECTION', item.id, includeExternal, 'SETTLEMENT', node.key, true);
+      for (const item of db.prepare('SELECT id FROM payment_collections WHERE receivable_id=?').all(node.entityId)) add('PAYMENT_COLLECTION', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const discount of db.prepare('SELECT id FROM sales_discounts WHERE source_receivable_id=?').all(node.entityId)) add('SALES_DISCOUNT', discount.id, includeExternal, 'DISCOUNT', node.key, true);
     }
     if (node.entityType === 'ACCOUNT_PAYABLE') {
       for (const item of db.prepare('SELECT DISTINCT disbursement_id id FROM payment_disbursement_items WHERE payable_id=?').all(node.entityId)) add('PAYMENT_DISBURSEMENT', item.id, includeExternal, 'SETTLEMENT', node.key, true);
+      for (const item of db.prepare('SELECT id FROM payment_disbursements WHERE payable_id=?').all(node.entityId)) add('PAYMENT_DISBURSEMENT', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const discount of db.prepare('SELECT id FROM purchase_discounts WHERE source_payable_id=?').all(node.entityId)) add('PURCHASE_DISCOUNT', discount.id, includeExternal, 'DISCOUNT', node.key, true);
     }
 
@@ -248,7 +266,7 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       const consumers = db.prepare(`
         SELECT source_type,source_id,source_no,created_at
         FROM inventory_transactions
-        WHERE warehouse_id=? AND product_id=? AND quantity_change < 0
+        WHERE warehouse_id=? AND product_id=? AND direction='OUT'
           AND (created_at > ? OR (created_at = ? AND id > ?))
         ORDER BY created_at,id
       `).all(effect.warehouseId, effect.productId, effect.createdAt, effect.createdAt, effect.id);
@@ -403,4 +421,195 @@ export function createCleanupAudit(db, actor, graph, reason) {
     JSON.stringify(node.inventoryEffect), JSON.stringify(node.financialEffect), node.period,
   );
   return cleanupId;
+}
+
+function selectedIds(graph, entityType) {
+  return graph.nodes.filter((node) => node.selectedForCleanup && node.entityType === entityType).map((node) => node.entityId);
+}
+
+function eachSelected(graph, entityType, callback) {
+  for (const entityId of selectedIds(graph, entityType)) callback(entityId);
+}
+
+function assertInventorySafety(db, graph) {
+  const groups = new Map();
+  for (const node of graph.nodes.filter((item) => item.selectedForCleanup)) {
+    for (const effect of node.inventoryEffect) {
+      const key = `${effect.warehouseId}:${effect.productId}`;
+      const group = groups.get(key) || { warehouseId: effect.warehouseId, productId: effect.productId, removedChange: 0, transactionIds: [] };
+      group.removedChange += Number(effect.quantityChange);
+      group.transactionIds.push(effect.id);
+      groups.set(key, group);
+    }
+  }
+  for (const group of groups.values()) {
+    const inventory = db.prepare('SELECT id,quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(group.warehouseId, group.productId);
+    const current = Number(inventory?.quantity || 0);
+    group.currentQuantity = current;
+    group.resultingQuantity = current - group.removedChange;
+    if (group.resultingQuantity < -1e-9) {
+      throw new HttpError(409, '清理后库存将变为负数，当前业务链不能安全清理', {
+        code: 'NEGATIVE_INVENTORY', warehouseId: group.warehouseId, productId: group.productId,
+        currentQuantity: current, resultingQuantity: group.resultingQuantity,
+      });
+    }
+    if (!inventory && Math.abs(group.resultingQuantity) > 1e-9) {
+      throw new HttpError(409, '库存台账缺少对应余额，当前业务链不能安全清理', { code: 'INVENTORY_BALANCE_MISSING' });
+    }
+  }
+  return [...groups.values()];
+}
+
+function assertVoucherSafety(db, graph) {
+  for (const voucherId of selectedIds(graph, 'ACCOUNTING_VOUCHER')) {
+    const totals = db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN direction='DEBIT' THEN amount_cents ELSE 0 END),0) debit,
+        COALESCE(SUM(CASE WHEN direction='CREDIT' THEN amount_cents ELSE 0 END),0) credit
+      FROM accounting_entries WHERE voucher_id=?
+    `).get(voucherId);
+    if (Number(totals.debit) !== Number(totals.credit)) {
+      throw new HttpError(409, '关联凭证借贷不平，必须先修复凭证后才能清理', { code: 'VOUCHER_UNBALANCED', voucherId });
+    }
+  }
+}
+
+function applyInventoryCleanup(db, groups, actorId) {
+  const remove = db.prepare('DELETE FROM inventory_transactions WHERE id=?');
+  const updateBalance = db.prepare('UPDATE inventory_transactions SET balance_after=? WHERE id=?');
+  for (const group of groups) {
+    for (const transactionId of group.transactionIds) remove.run(transactionId);
+    db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?')
+      .run(Math.max(0, group.resultingQuantity), new Date().toISOString(), group.warehouseId, group.productId);
+
+    const remaining = db.prepare(`
+      SELECT id,quantity_change,direction FROM inventory_transactions
+      WHERE warehouse_id=? AND product_id=? ORDER BY created_at,id
+    `).all(group.warehouseId, group.productId);
+    const signedChange = (row) => row.direction === 'OUT' ? -Number(row.quantity_change) : Number(row.quantity_change);
+    const remainingChange = remaining.reduce((sum, row) => sum + signedChange(row), 0);
+    let running = group.resultingQuantity - remainingChange;
+    for (const row of remaining) {
+      running += signedChange(row);
+      updateBalance.run(running, row.id);
+    }
+    audit(db, actorId, 'REVERSE', 'INVENTORY', `${group.warehouseId}:${group.productId}`, `错误业务链清理后库存 ${group.resultingQuantity}`);
+  }
+}
+
+function unlinkSelectedGraph(db, graph) {
+  eachSelected(graph, 'SALES_ORDER', (entityId) => {
+    db.prepare('UPDATE sales_deliveries SET sales_order_id=NULL WHERE sales_order_id=?').run(entityId);
+  });
+  eachSelected(graph, 'PURCHASE_ORDER', (entityId) => {
+    db.prepare('UPDATE purchase_requisitions SET purchase_order_id=NULL WHERE purchase_order_id=?').run(entityId);
+    db.prepare('UPDATE purchase_receipts SET purchase_order_id=NULL WHERE purchase_order_id=?').run(entityId);
+  });
+  eachSelected(graph, 'PURCHASE_REQUISITION', (entityId) => {
+    db.prepare('UPDATE purchase_instruction_items SET purchase_requisition_id=NULL WHERE purchase_requisition_id=?').run(entityId);
+  });
+  eachSelected(graph, 'PURCHASE_INSTRUCTION', (entityId) => {
+    db.prepare('UPDATE purchase_requisitions SET source_instruction_id=NULL WHERE source_instruction_id=?').run(entityId);
+    db.prepare(`
+      UPDATE purchase_requisition_items SET purchase_instruction_item_id=NULL
+      WHERE purchase_instruction_item_id IN (SELECT id FROM purchase_instruction_items WHERE instruction_id=?)
+    `).run(entityId);
+  });
+  eachSelected(graph, 'PURCHASE_RECEIPT', (entityId) => {
+    db.prepare('UPDATE purchase_returns SET receipt_id=NULL WHERE receipt_id=?').run(entityId);
+  });
+  eachSelected(graph, 'PRODUCTION_ORDER', (entityId) => {
+    db.prepare('UPDATE production_instruction_items SET production_order_id=NULL WHERE production_order_id=?').run(entityId);
+  });
+}
+
+function deleteSelectedGraph(db, graph) {
+  // Settlement and finance dependencies are removed before the subledger rows
+  // they reference. Generated vouchers are always removed as balanced units.
+  eachSelected(graph, 'PAYMENT_COLLECTION', (entityId) => {
+    db.prepare('DELETE FROM payment_collection_items WHERE collection_id=?').run(entityId);
+    db.prepare('DELETE FROM payment_collections WHERE id=?').run(entityId);
+  });
+  eachSelected(graph, 'PAYMENT_DISBURSEMENT', (entityId) => {
+    db.prepare('DELETE FROM payment_disbursement_items WHERE disbursement_id=?').run(entityId);
+    db.prepare('DELETE FROM payment_disbursements WHERE id=?').run(entityId);
+  });
+  eachSelected(graph, 'SALES_DISCOUNT', (entityId) => db.prepare('DELETE FROM sales_discounts WHERE id=?').run(entityId));
+  eachSelected(graph, 'PURCHASE_DISCOUNT', (entityId) => db.prepare('DELETE FROM purchase_discounts WHERE id=?').run(entityId));
+  eachSelected(graph, 'ACCOUNTING_VOUCHER', (entityId) => {
+    db.prepare('DELETE FROM accounting_entries WHERE voucher_id=?').run(entityId);
+    db.prepare('DELETE FROM accounting_vouchers WHERE id=?').run(entityId);
+  });
+  eachSelected(graph, 'ACCOUNT_RECEIVABLE', (entityId) => db.prepare('DELETE FROM account_receivables WHERE id=?').run(entityId));
+  eachSelected(graph, 'ACCOUNT_PAYABLE', (entityId) => db.prepare('DELETE FROM account_payables WHERE id=?').run(entityId));
+
+  const deleteChildren = (type, childTable, foreignKey, table) => eachSelected(graph, type, (entityId) => {
+    db.prepare(`DELETE FROM ${childTable} WHERE ${foreignKey}=?`).run(entityId);
+    db.prepare(`DELETE FROM ${table} WHERE id=?`).run(entityId);
+  });
+  deleteChildren('SALES_RETURN', 'return_order_items', 'return_id', 'return_orders');
+  deleteChildren('PURCHASE_RETURN', 'purchase_return_items', 'return_id', 'purchase_returns');
+  deleteChildren('PRODUCTION_MATERIAL_ISSUE', 'production_material_issue_items', 'issue_id', 'production_material_issues');
+  eachSelected(graph, 'PRODUCTION_RECEIPT', (entityId) => db.prepare('DELETE FROM production_receipts WHERE id=?').run(entityId));
+  deleteChildren('PURCHASE_RECEIPT', 'purchase_receipt_items', 'receipt_id', 'purchase_receipts');
+  deleteChildren('SALES_DELIVERY', 'sales_delivery_items', 'delivery_id', 'sales_deliveries');
+  deleteChildren('INVENTORY_ADJUSTMENT', 'inventory_adjustment_items', 'adjustment_id', 'inventory_adjustments');
+  deleteChildren('INVENTORY_TRANSFER', 'inventory_transfer_items', 'transfer_id', 'inventory_transfers');
+  deleteChildren('INVENTORY_SCRAP', 'inventory_scrap_items', 'scrap_id', 'inventory_scraps');
+  deleteChildren('INVENTORY_CHECK', 'inventory_check_items', 'check_id', 'inventory_checks');
+  deleteChildren('PURCHASE_REQUISITION', 'purchase_requisition_items', 'requisition_id', 'purchase_requisitions');
+  deleteChildren('PURCHASE_ORDER', 'purchase_order_items', 'order_id', 'purchase_orders');
+  deleteChildren('PURCHASE_INSTRUCTION', 'purchase_instruction_items', 'instruction_id', 'purchase_instructions');
+  deleteChildren('PRODUCTION_ORDER', 'production_order_items', 'order_id', 'production_orders');
+  deleteChildren('PRODUCTION_INSTRUCTION', 'production_instruction_items', 'instruction_id', 'production_instructions');
+  deleteChildren('SALES_ORDER', 'sales_order_items', 'order_id', 'sales_orders');
+  deleteChildren('PLANNING_FORECAST', 'planning_forecast_items', 'forecast_id', 'planning_forecasts');
+  eachSelected(graph, 'MRP_RUN', (entityId) => {
+    for (const table of ['mrp_run_pegging', 'mrp_run_components', 'mrp_run_results', 'mrp_run_demands']) db.prepare(`DELETE FROM ${table} WHERE run_id=?`).run(entityId);
+    db.prepare('DELETE FROM mrp_runs WHERE id=?').run(entityId);
+  });
+
+  for (const node of graph.nodes.filter((item) => item.selectedForCleanup)) {
+    db.prepare('DELETE FROM approval_requests WHERE source_type=? AND source_id=?').run(node.entityType, node.entityId);
+    db.prepare('DELETE FROM lifecycle_archives WHERE entity_type=? AND entity_id=?').run(node.entityType, node.entityId);
+  }
+}
+
+export function cleanupLifecycleGraph(db, actor, input, options = {}) {
+  allow(actor, 'USERS_MANAGE');
+  const entityType = normalizeEntityType(input.entityType);
+  const entityId = requiredText(input.entityId, '业务记录', 100);
+  const reason = requiredText(input.reason, '清理原因', 500);
+  if (input.confirm !== true) throw new HttpError(400, '请明确确认清理错误业务链', { code: 'CLEANUP_CONFIRMATION_REQUIRED' });
+
+  return transaction(db, () => {
+    const graph = analyzeLifecycleGraph(db, { entityType, entityId, includeExternal: input.includeExternal === true });
+    if (graph.classification === 'BLOCKED') {
+      throw new HttpError(409, graph.blockers[0]?.message || '当前业务链不能安全清理', { code: 'LIFECYCLE_CLEANUP_BLOCKED', blockers: graph.blockers });
+    }
+    if (graph.classification === 'ARCHIVE_ONLY') {
+      throw new HttpError(409, '当前记录只能归档，不能物理清理', { code: 'LIFECYCLE_ARCHIVE_ONLY' });
+    }
+
+    const inventoryGroups = assertInventorySafety(db, graph);
+    assertVoucherSafety(db, graph);
+    const cleanupId = createCleanupAudit(db, actor, graph, reason);
+    applyInventoryCleanup(db, inventoryGroups, actor.id);
+    if (options.failAfterEffects) throw new Error('SIMULATED_LIFECYCLE_FAILURE');
+    unlinkSelectedGraph(db, graph);
+    deleteSelectedGraph(db, graph);
+    audit(db, actor.id, 'CLEANUP', graph.root.entityType, graph.root.entityId, `清理错误业务链 ${cleanupId}：${reason}`);
+    return { cleanupId, graph };
+  });
+}
+
+export async function executeLifecycleCleanup(db, req, res, actor) {
+  const body = await readJson(req);
+  const result = cleanupLifecycleGraph(db, actor, body);
+  return send(res, 200, {
+    ok: true,
+    cleanupEventId: result.cleanupId,
+    classification: result.graph.classification,
+    affectedRecords: result.graph.summary.selectedRecords,
+  });
 }
