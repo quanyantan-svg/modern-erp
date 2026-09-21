@@ -342,7 +342,7 @@ describe('CRM frontend modal stability and gates', () => {
 
   test('sales activity mutation buttons use CRM_MANAGE', () => {
     assert.match(crmSource, /can\(user, 'CRM_MANAGE'\) && <button className="row-action" onClick=\{\(\) => setEditing\(item\)\}>编辑<\/button>/);
-    assert.match(crmSource, /can\(user, 'CRM_MANAGE'\) && <button className="row-action danger"/);
+    assert.match(crmSource, /can\(user, 'CRM_MANAGE'\) && <ConfirmAction className="row-action danger"/);
   });
 
   test('CRM authorization no longer falls back to master-data permissions', () => {

@@ -172,7 +172,7 @@ describe('M2 application metadata', () => {
     const labels = new Map(mobileGroups.flatMap((group) => group.items.map((item) => [item.page, item.mobileLabel])));
     assert.equal(labels.get('production-orders'), '制令单');
     assert.equal(labels.get('sales-deliveries'), '销售出货');
-    assert.equal(labels.get('inventory-transactions'), '库存异动');
+    assert.equal(labels.get('inventory-transactions'), '库存异动明细');
     assert.ok(!labels.has('制令单'));
   });
 
@@ -294,6 +294,6 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(appSource, /key: 'business-overview', label: '业务总览'/);
     assert.match(appSource, /key: 'production-orders', label: '制令单'/);
     assert.match(appSource, /key: 'sales-deliveries', label: '销售出货'/);
-    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动'/);
+    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动明细'/);
   });
 });

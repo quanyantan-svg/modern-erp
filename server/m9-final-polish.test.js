@@ -92,7 +92,7 @@ describe('M9 permission and terminology contracts', () => {
 
   test('visible labels use the frozen course vocabulary', () => {
     assert.match(appSource, /label: '销售出货'/);
-    assert.match(appSource, /label: '库存异动'/);
+    assert.match(appSource, /label: '库存异动明细'/);
     assert.match(appSource, /label: '制令单'/);
     assert.doesNotMatch(appSource, /label: '销售出库'|label: '库存流水'|label: '生产工单'/);
   });

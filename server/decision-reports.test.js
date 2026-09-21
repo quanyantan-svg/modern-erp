@@ -752,9 +752,9 @@ describe('M7 — frontend wiring', () => {
   test('applicationMetadata exposes all 5 decision report cards', () => {
     const src = readSrc('navigation/applicationMetadata.js');
     assert.match(src, /mobileLabel:\s*'销售统计'/);
-    assert.match(src, /mobileLabel:\s*'销售未出货'/);
+    assert.match(src, /mobileLabel:\s*'销售未交'/);
     assert.match(src, /mobileLabel:\s*'采购统计'/);
-    assert.match(src, /mobileLabel:\s*'采购未交货'/);
+    assert.match(src, /mobileLabel:\s*'采购未交'/);
     assert.match(src, /mobileLabel:\s*'库存异动明细'/);
   });
 
@@ -763,7 +763,7 @@ describe('M7 — frontend wiring', () => {
     const match = src.match(/DEFERRED_MOBILE_APPLICATIONS\s*=\s*Object\.freeze\(\[([^\]]*)\]\)/);
     assert.ok(match, 'DEFERRED_MOBILE_APPLICATIONS must be a frozen array');
     const items = match[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-    for (const label of ['销售统计', '销售未出货', '采购统计', '采购未交货']) {
+    for (const label of ['销售统计', '销售未交', '采购统计', '采购未交']) {
       assert.equal(items.includes(label), false, `${label} must be removed from DEFERRED list`);
     }
   });

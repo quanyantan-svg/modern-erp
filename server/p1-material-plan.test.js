@@ -90,7 +90,7 @@ test('P1 status: forecast status mapping is centralized', () => {
   assert.equal(forecastStatusLabel('DRAFT'), '草稿');
   assert.equal(forecastStatusLabel('ACTIVE'), '已生效');
   assert.equal(forecastStatusLabel('CANCELLED'), '已取消');
-  assert.equal(forecastStatusLabel('UNKNOWN'), 'UNKNOWN'); // fallback is the raw value
+  assert.equal(forecastStatusLabel('UNKNOWN'), '状态待确认'); // P4: raw enum never reaches normal UI
   assert.equal(forecastStatusLabel(null), '—');
 });
 
