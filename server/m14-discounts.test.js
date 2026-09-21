@@ -16,13 +16,14 @@
 //   * Legacy DB reopen idempotency.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS } from './db.js';
+import { buildMobileApplicationGroups } from '../src/navigation/applicationMetadata.js';
 
 let baseUrl;
 let database;
@@ -200,6 +201,35 @@ describe('M14 — Sales Discount', () => {
       amountCents: 100, reason: 'auth-test',
     } });
     assert.equal(ok.status === 201 || ok.status === 400, true, JSON.stringify(ok));
+  });
+
+  test('2a. accounting discount forms use finance-scoped party lookups without master-data access', async () => {
+    const customers = await request('/api/settlement/customers', { token: accountingToken });
+    const suppliers = await request('/api/settlement/suppliers', { token: accountingToken });
+    assert.equal(customers.status, 200);
+    assert.equal(suppliers.status, 200);
+    assert.ok(customers.data.customers.some((row) => row.id === 'customer-001'));
+    assert.ok(suppliers.data.suppliers.some((row) => row.id === 'supplier-001'));
+
+    assert.equal((await request('/api/customers', { token: accountingToken })).status, 403);
+    assert.equal((await request('/api/suppliers', { token: accountingToken })).status, 403);
+
+    const source = readFileSync(resolve('src/pages/discounts.jsx'), 'utf8');
+    assert.match(source, /api\('\/api\/settlement\/customers'\)/);
+    assert.match(source, /api\('\/api\/settlement\/suppliers'\)/);
+    assert.doesNotMatch(source, /api\('\/api\/(?:customers|suppliers)'\)/);
+
+    const appSource = readFileSync(resolve('src/App.jsx'), 'utf8');
+    assert.match(appSource, /key: 'sales-discounts'[\s\S]*?SALES_DISCOUNT_MANAGE/);
+    assert.match(appSource, /key: 'purchase-discounts'[\s\S]*?PURCHASE_DISCOUNT_MANAGE/);
+    const launcher = buildMobileApplicationGroups([
+      { key: 'sales-discounts', label: '销售折让' },
+      { key: 'purchase-discounts', label: '采购折让' },
+    ]);
+    assert.deepEqual(launcher.flatMap((group) => group.items.map((item) => item.page)).sort(), [
+      'purchase-discounts',
+      'sales-discounts',
+    ]);
   });
 
   test('3. DRAFT create -> edit -> cancel leaves no AR / voucher trace', async () => {

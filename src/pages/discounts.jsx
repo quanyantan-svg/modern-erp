@@ -27,10 +27,10 @@ function today() {
 }
 
 async function fetchCustomers(notify) {
-  try { return (await api('/api/customers')).customers || []; } catch (e) { notify(e.message, 'error'); return []; }
+  try { return (await api('/api/settlement/customers')).customers || []; } catch (e) { notify(e.message, 'error'); return []; }
 }
 async function fetchSuppliers(notify) {
-  try { return (await api('/api/suppliers')).suppliers || []; } catch (e) { notify(e.message, 'error'); return []; }
+  try { return (await api('/api/settlement/suppliers')).suppliers || []; } catch (e) { notify(e.message, 'error'); return []; }
 }
 async function fetchReceivablesForCustomer(customerId) {
   if (!customerId) return [];
