@@ -6,6 +6,7 @@ import { migratePlanningSchema } from './migrations/planning-schema.js';
 import { migratePlanningDocumentsSchema } from './migrations/planning-documents-schema.js';
 import { migrateInventoryExtensionsSchema } from './migrations/inventory-extensions-schema.js';
 import { migrateDiscountsSchema } from './migrations/discounts-schema.js';
+import { migrateLifecycleSchema } from './migrations/lifecycle-schema.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -156,6 +157,7 @@ export function createDatabase(filename) {
   migratePlanningDocumentsSchema(db);
   migrateInventoryExtensionsSchema(db);
   migrateDiscountsSchema(db);
+  migrateLifecycleSchema(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables

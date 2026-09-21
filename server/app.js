@@ -90,6 +90,9 @@ import {
   setSecurityHeaders,
 } from './lib/http.js';
 import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
+import {
+  archiveLifecycleRecord, lifecycleAnalysis, restoreLifecycleRecord,
+} from './modules/lifecycle-engine.js';
 
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
 const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
@@ -130,6 +133,12 @@ async function handleApi(db, req, res, url) {
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
   if (req.method === 'GET' && pathname === '/api/approvals') return listApprovals(db, res, actor, url);
+
+  // Lifecycle 2.0 — centralized, administrator-only analysis and archive
+  // metadata. Effective cleanup execution is intentionally a separate route.
+  if (pathname === '/api/lifecycle/analyze' && req.method === 'GET') return lifecycleAnalysis(db, res, actor, url);
+  if (pathname === '/api/lifecycle/archive' && req.method === 'POST') return archiveLifecycleRecord(db, req, res, actor);
+  if (pathname === '/api/lifecycle/restore' && req.method === 'POST') return restoreLifecycleRecord(db, req, res, actor);
 
   if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
   if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);
