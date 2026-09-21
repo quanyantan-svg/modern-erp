@@ -81,17 +81,18 @@ async function runViewport(baseUrl, db, viewport, index) {
 
     await openRowMenu(cdp, `CUST-DELETE-${suffix}`); flag(`${viewport.name} opens delete confirmation`, await clickInRow(cdp, `CUST-DELETE-${suffix}`, '删除'));
     flag(`${viewport.name} confirmation identifies record and irreversibility`, await cdp.waitFor(`document.querySelector('.modal')?.innerText.includes('CUST-DELETE-${suffix}') && document.querySelector('.modal')?.innerText.includes('无法恢复')`));
+    await sleep(250); // Measure after the 200 ms modal entrance animation settles.
     const confirmLayout = await cdp.eval(`(() => { const m=document.querySelector('.modal'); const buttons=[...m.querySelectorAll('.form-actions button')].map(b=>({text:b.innerText,h:Math.round(b.getBoundingClientRect().height)})); const r=m.getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,buttons}; })()`);
     record(`${viewport.name}.confirmLayout`, confirmLayout);
     flag(`${viewport.name} confirmation not clipped`, confirmLayout.left >= 0 && confirmLayout.right <= viewport.width && confirmLayout.top >= 0 && confirmLayout.bottom <= viewport.height, JSON.stringify(confirmLayout));
     flag(`${viewport.name} confirmation buttons >=44px`, confirmLayout.buttons.every((b) => b.h >= 44), JSON.stringify(confirmLayout.buttons));
-    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='确认删除').click()`);
+    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='删除').click()`);
     flag(`${viewport.name} unreferenced customer disappears`, await cdp.waitFor(`!document.body.innerText.includes('CUST-DELETE-${suffix}')`));
 
     await openRowMenu(cdp, `CUST-HISTORY-${suffix}`); await clickInRow(cdp, `CUST-HISTORY-${suffix}`, '删除'); await cdp.waitFor(`!!document.querySelector('.modal')`);
-    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='确认删除').click()`);
+    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='删除').click()`);
     flag(`${viewport.name} referenced delete shows product-safe block`, await cdp.waitFor(`document.body.innerText.includes('已有业务引用') && document.body.innerText.includes('停用')`));
-    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='保留').click()`); await sleep(200);
+    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='取消').click()`); await sleep(200);
     await openRowMenu(cdp, `CUST-HISTORY-${suffix}`); await clickInRow(cdp, `CUST-HISTORY-${suffix}`, '停用');
     flag(`${viewport.name} customer disables`, await cdp.waitFor(`([...document.querySelectorAll('tbody tr')].find(r=>r.innerText.includes('CUST-HISTORY-${suffix}'))?.innerText||'').includes('停用')`));
     await openRowMenu(cdp, `CUST-HISTORY-${suffix}`); await clickInRow(cdp, `CUST-HISTORY-${suffix}`, '启用');
@@ -100,7 +101,7 @@ async function runViewport(baseUrl, db, viewport, index) {
     await openPage(cdp, 'orders'); flag(`${viewport.name} orders loaded`, await cdp.waitFor(`document.body.innerText.includes('SO-DELETE-${suffix}')`));
     const rowDelete = await cdp.eval(`(() => { const row=[...document.querySelectorAll('tbody tr')].find(r=>r.innerText.includes('SO-DELETE-${suffix}')); const b=[...row.querySelectorAll('button')].find(x=>x.innerText==='删除'); b?.click(); return !!b; })()`);
     flag(`${viewport.name} draft order delete offered`, rowDelete); await cdp.waitFor(`!!document.querySelector('.modal')`);
-    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='确认删除').click()`);
+    await cdp.eval(`[...document.querySelectorAll('.modal button')].find(b=>b.innerText==='删除').click()`);
     flag(`${viewport.name} draft order deleted`, await cdp.waitFor(`!document.body.innerText.includes('SO-DELETE-${suffix}')`));
     const nonDraft = await cdp.eval(`fetch('/api/orders/p2-history-${suffix}',{method:'DELETE',headers:{Authorization:'Bearer '+localStorage.getItem('modern_erp_token')}}).then(async r=>({status:r.status,body:await r.json()}))`);
     record(`${viewport.name}.nonDraft`, nonDraft); flag(`${viewport.name} non-DRAFT delete blocked`, nonDraft.status === 409 && nonDraft.body?.details?.code === 'DOCUMENT_NOT_DRAFT');

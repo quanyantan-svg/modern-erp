@@ -50,4 +50,3 @@ test('P4 — targeted surfaces contain no legacy known-bad copy', () => {
   for (const legacy of ['云翼服务正在建设', '销售未出货', '采购未交货', '客户ID', '供应商ID', 'MAKE 建议', 'BUY 建议', '确认计提本月折旧?']) assert.doesNotMatch(combined, new RegExp(legacy));
   assert.doesNotMatch(combined, /window\.confirm|(?<![A-Za-z])confirm\(/);
 });
-
