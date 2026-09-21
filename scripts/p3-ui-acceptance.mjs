@@ -78,11 +78,17 @@ async function runViewport(baseUrl, viewport, profileRoot) {
       if (role.username === 'test_admin') {
         if (viewport.width < 768) {
           await cdp.shot(`${viewport.name}-launcher.png`);
-          const pages = viewport.width === 375 ? ['customers', 'material-requirements-plan', 'inventory', 'accounting'] : ['orders'];
+          const pages = viewport.width === 375
+            ? ['business-overview', 'customers', 'orders', 'purchase-orders', 'forecasts', 'mrp-runs', 'material-requirements-plan', 'inventory', 'inventory-scraps', 'inventory-month-end', 'accounting', 'decision-reports']
+            : ['orders', 'purchase-orders', 'forecasts', 'mrp-runs', 'material-requirements-plan', 'inventory', 'accounting', 'decision-reports'];
           for (const page of pages) { if (await openMobile(cdp, page)) { await cdp.waitFor(`!!document.querySelector('.mobile-application-view')`); await sleep(250); const overflow = await cdp.eval(`document.documentElement.scrollWidth<=innerWidth`); flag(`${viewport.name} ${page} no overflow`, overflow); await cdp.shot(`${viewport.name}-${page}.png`); await cdp.eval(`document.querySelector('.mobile-header__back')?.click()`); await sleep(150); } }
           await cdp.eval(`document.querySelector('[data-testid="bottom-tab-approvals"]')?.click()`); await sleep(300); await cdp.shot(`${viewport.name}-approvals.png`); await cdp.eval(`document.querySelector('[data-testid="bottom-tab-apps"]')?.click()`); await sleep(150);
+          if (viewport.width === 375) {
+            for (const tab of ['cloud', 'profile']) { await cdp.eval(`document.querySelector('[data-testid="bottom-tab-${tab}"]')?.click()`); await sleep(200); flag(`${viewport.name} ${tab} no overflow`, await cdp.eval(`document.documentElement.scrollWidth<=innerWidth`)); await cdp.shot(`${viewport.name}-${tab}.png`); }
+            await cdp.eval(`document.querySelector('[data-testid="bottom-tab-apps"]')?.click()`); await sleep(150);
+          }
         } else {
-          for (const [page, name] of [['business-overview','business-overview'], ['material-requirements-plan','material-plan'], ['customers','customers'], ['accounting','finance']]) { await cdp.eval(`location.hash='#${page}'`); await sleep(350); flag(`${viewport.name} ${page} no overflow`, await cdp.eval(`document.documentElement.scrollWidth<=innerWidth`)); await cdp.shot(`${viewport.name}-${name}.png`); }
+          for (const [page, name] of [['business-overview','business-overview'], ['customers','customers'], ['orders','sales-orders'], ['purchase-orders','purchase-orders'], ['forecasts','forecasts'], ['mrp-runs','mrp-runs'], ['material-requirements-plan','material-plan'], ['approvals','approvals'], ['inventory','inventory'], ['inventory-scraps','inventory-scraps'], ['inventory-month-end','inventory-month-end'], ['accounting','finance'], ['decision-reports','decision-reports'], ['fixed-assets','fixed-assets']]) { await cdp.eval(`location.hash='#${page}'`); await sleep(350); flag(`${viewport.name} ${page} no overflow`, await cdp.eval(`document.documentElement.scrollWidth<=innerWidth`)); await cdp.shot(`${viewport.name}-${name}.png`); }
         }
       }
       flag(`${role.username} ${viewport.name} ReferenceError=0`, !cdp.exceptions.some((item) => item.includes('ReferenceError')));
