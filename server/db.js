@@ -270,6 +270,7 @@ export function createDatabase(filename) {
         db.exec('DROP TABLE accounting_vouchers');
         db.exec('ALTER TABLE accounting_vouchers_new RENAME TO accounting_vouchers');
         db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id)');
       }
     } catch (e) { console.error('Migration voucher workflow failed:', e.message); }
   };

@@ -182,6 +182,19 @@ describe('Phase E — existing DB permission reconciliation', () => {
     assert.ok(queryPerms('ACCOUNTING').includes('VOUCHER_SUBMIT'), 'VOUCHER_SUBMIT must remain present after repeated startups');
   });
 
+  test('first startup preserves both voucher workflow indexes without a second migration pass', () => {
+    const firstStartDir = mkdtempSync(join(tmpdir(), 'modern-erp-phase-e-first-start-'));
+    const firstStartDb = createDatabase(join(firstStartDir, 'erp.db'));
+    try {
+      const indexes = firstStartDb.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='accounting_vouchers'").all().map((row) => row.name);
+      assert.ok(indexes.includes('idx_vouchers_status'));
+      assert.ok(indexes.includes('idx_vouchers_source'));
+    } finally {
+      firstStartDb.close();
+      rmSync(firstStartDir, { recursive: true, force: true });
+    }
+  });
+
   test('reconciliation does not depend on ERP_SEED_DEMO (production with NODE_ENV=production must still get VOUCHER_SUBMIT)', async () => {
     const previousSeed = process.env.ERP_SEED_DEMO;
     const previousNodeEnv = process.env.NODE_ENV;
