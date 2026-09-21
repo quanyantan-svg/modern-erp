@@ -169,10 +169,8 @@ test('P1 material plan: sort by 物料 is alphabetical', () => {
 // 4. Material plan filter / sort implementation lives in the page source
 // ---------------------------------------------------------------------------
 
-test('P1 material plan: page source contains all four filter chips', () => {
-  for (const label of ['全部', '缺料', '生产建议', '采购建议']) {
-    assertContains(FILTER_LOGIC_SOURCE, label, `filter chip "${label}" missing from material-requirements-plan.jsx`);
-  }
+test('P1 material plan: page source contains the four canonical filter segments', () => {
+  assert.match(FILTER_LOGIC_SOURCE, /key: 'all', label: '全部'[\s\S]*key: 'make', label: '生产'[\s\S]*key: 'buy', label: '采购'[\s\S]*key: 'shortage', label: '缺料'/);
 });
 
 test('P1 material plan: page source contains sort options', () => {
@@ -182,9 +180,9 @@ test('P1 material plan: page source contains sort options', () => {
 
 test('P1 material plan: page source uses centralized status labels (no raw enum leakage)', () => {
   assertContains(FILTER_LOGIC_SOURCE, "from '../lib/status.js'");
-  assertContains(FILTER_LOGIC_SOURCE, 'mrpRunStatusLabel');
   assertContains(FILTER_LOGIC_SOURCE, 'demandModeLabel');
   assertContains(FILTER_LOGIC_SOURCE, 'suggestionTypeLabel');
+  assertContains(FILTER_LOGIC_SOURCE, 'warningLabel');
 });
 
 // ---------------------------------------------------------------------------
@@ -305,9 +303,10 @@ test('P1 forecasts: action button uses 开始计算 / 生效 / 取消 lifecycle'
 // 9. MRP Runs page — surfaces calculation workspace, hands off to plan
 // ---------------------------------------------------------------------------
 
-test('P1 mrp-runs: page subtitle explains calculation scope', () => {
+test('P1 mrp-runs: list presents only essential run facts without permanent helper copy', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/mrp-runs.jsx'), 'utf8');
-  assertContains(source, '综合销售订单、需求预测、现有库存、在途供应和 BOM');
+  assert.ok(!source.includes('subtitle="综合销售订单'), 'low-value permanent helper copy must be removed');
+  for (const fact of ['期间', '需求来源', '预测来源', '结果']) assertContains(source, fact);
 });
 
 test('P1 mrp-runs: detail page offers 查看物料需求计划 primary action', () => {
@@ -348,13 +347,14 @@ test('P1 material plan: empty state copy is product-oriented (not 暂无数据)'
   assert.ok(!source.includes('暂无数据'), 'generic 暂无数据 used');
 });
 
-test('P1 material plan: shows friendly "库存充足" copy for shortage = 0', () => {
+test('P1 material plan: shows accurate friendly copy when no replenishment is needed', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
-  assertContains(source, '库存充足');
+  assertContains(source, '无需补充');
 });
 
-test('P1 material plan: trace modal shows user-friendly explanation', () => {
+test('P1 material plan: trace sheet shows user-friendly explanation', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
+  assertContains(source, '<Sheet');
   assertContains(source, '计算依据');
   assertContains(source, '计算式');
   assertContains(source, '销售订单需求');

@@ -4,27 +4,27 @@
 // Reads existing mrp_runs / mrp_run_results / mrp_run_components /
 // mrp_run_pegging via /api/planning/mrp/runs/:id.
 //
-// Mobile-first design with cards; desktop retains the canonical dense
-// table. Four filter chips (全部 / 缺料 / 生产建议 / 采购建议). Sort by
+// One canonical card architecture at every width. Four segments
+// (全部 / 生产 / 采购 / 缺料). Sort by
 // 需求日期 (default) or 物料. Trace view explains the numbers in
 // user-friendly product language, never engineering terms.
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { can, Empty, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { Empty, Loading, Panel } from '../components/ui.jsx';
+import { BottomActionBar, EmptyState, SecondaryButton, SegmentedControl, Sheet } from '../components/design-system.jsx';
 import {
   demandModeLabel,
-  mrpRunStatusLabel,
   suggestionTypeLabel,
   warningLabel,
 } from '../lib/status.js';
 
 const FILTERS = [
   { key: 'all', label: '全部' },
+  { key: 'make', label: '生产' },
+  { key: 'buy', label: '采购' },
   { key: 'shortage', label: '缺料' },
-  { key: 'make', label: '生产建议' },
-  { key: 'buy', label: '采购建议' },
 ];
 
 const SORTS = [
@@ -40,24 +40,12 @@ function fmtQty(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(n);
 }
 
-function fmtDate(value) {
-  if (!value) return '—';
-  const text = String(value).slice(0, 10);
-  return /^d{4}-d{2}-d{2}$/.test(text) ? text : '—';
-}
-
 function fmtDateShort(value) {
   if (!value) return '';
   const text = String(value).slice(0, 10);
   const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return text;
   return `${parseInt(match[2], 10)}月${parseInt(match[3], 10)}日`;
-}
-
-function statusBadgeType(status) {
-  if (status === 'COMPLETED') return 'approved';
-  if (status === 'CANCELLED') return 'rejected';
-  return 'draft';
 }
 
 // Apply the active filter chip to a result row.
@@ -125,7 +113,7 @@ function formatWeekRange(weekKey) {
   return `${fmt(start)}–${fmt(end)}`;
 }
 
-export default function MaterialRequirementsPlan({ user, notify }) {
+export default function MaterialRequirementsPlan({ notify }) {
   const navigation = useAppNavigation();
   const [runs, setRuns] = useState(null);
   const [selectedRunId, setSelectedRunId] = useState(null);
@@ -187,10 +175,7 @@ export default function MaterialRequirementsPlan({ user, notify }) {
   if (runs === null) return <Loading/>;
 
   if (runs.length === 0) {
-    return <Panel
-      title="物料需求计划"
-      subtitle="MRP 运算完成后，将在这里展示未来的生产与采购需求"
-    >
+    return <Panel title="物料需求计划">
       <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
       <div className="form-actions full">
         <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
@@ -200,10 +185,7 @@ export default function MaterialRequirementsPlan({ user, notify }) {
 
   const completedRuns = runs.filter((r) => r.status === 'COMPLETED');
   if (completedRuns.length === 0) {
-    return <Panel
-      title="物料需求计划"
-      subtitle="MRP 运算完成后，将在这里展示未来的生产与采购需求"
-    >
+    return <Panel title="物料需求计划">
       <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
       <div className="form-actions full">
         <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
@@ -214,24 +196,22 @@ export default function MaterialRequirementsPlan({ user, notify }) {
   if (!run) return <Loading/>;
 
   return <>
-    <Panel
-      title="物料需求计划"
-      subtitle={`${run.run_name} · ${demandModeLabel(run.demand_source_mode)} · ${run.horizon_start} ~ ${run.horizon_end}`}
-      action={can(user, 'MRP_VIEW') && <select aria-label="切换 MRP 运算" value={selectedRunId || ''} onChange={(e) => setSelectedRunId(e.target.value)}>
+    <Panel title="物料需求计划">
+      <label className="material-run-selector">
+        <span>MRP 运算</span>
+        <select aria-label="切换 MRP 运算" value={selectedRunId || ''} onChange={(e) => setSelectedRunId(e.target.value)}>
         {runs.filter((r) => r.status === 'COMPLETED').map((r) => <option key={r.id} value={r.id}>{r.run_name}（{r.run_code}）</option>)}
-      </select>}
-    >
+        </select>
+      </label>
+      <p className="material-run-meta">{demandModeLabel(run.demand_source_mode)} · {run.horizon_start} ~ {run.horizon_end}</p>
       <MaterialSummary summary={summary} run={run}/>
-      <div className="filter-chips" role="tablist">
-        {FILTERS.map((f) => <button
-          key={f.key}
-          type="button"
-          role="tab"
-          aria-selected={filter === f.key}
-          className={`filter-chip ${filter === f.key ? 'is-active' : ''}`}
-          onClick={() => setFilter(f.key)}
-        >{f.label}</button>)}
-        <div className="filter-chips__spacer"/>
+      <div className="material-plan-controls">
+        <SegmentedControl
+          label="物料建议筛选"
+          options={FILTERS.map(({ key, label }) => ({ value: key, label }))}
+          value={filter}
+          onChange={setFilter}
+        />
         <label className="filter-sort">
           排序
           <select value={sort} onChange={(e) => setSort(e.target.value)}>
@@ -240,14 +220,11 @@ export default function MaterialRequirementsPlan({ user, notify }) {
         </label>
       </div>
       {visibleRows.length === 0
-        ? <Empty text={filter === 'all' ? '本次 MRP 运算没有产生任何物料结果。' : '当前筛选条件下没有匹配的物料。'}/>
-        : <>
-          <MaterialPlanMobile grouped={grouped} rows={visibleRows} sort={sort} onTrace={setTraceRow}/>
-          <MaterialPlanDesktop rows={visibleRows} run={run} onTrace={setTraceRow}/>
-        </>
+        ? filter === 'all' ? <MaterialPlanZeroState/> : <Empty text="当前筛选条件下没有匹配的物料。"/>
+        : <MaterialPlanList grouped={grouped} rows={visibleRows} onTrace={setTraceRow}/>
       }
     </Panel>
-    {traceRow && <MaterialTraceModal
+    {traceRow && <MaterialTraceSheet
       run={run}
       row={traceRow}
       onClose={() => setTraceRow(null)}
@@ -277,8 +254,16 @@ function MaterialSummary({ summary, run }) {
   </div>;
 }
 
-function MaterialPlanMobile({ grouped, rows, sort, onTrace }) {
-  return <div className="material-plan-mobile">
+function MaterialPlanZeroState() {
+  return <EmptyState
+    title="本次计算期间内没有可纳入的需求"
+    description="请检查销售订单是否已审批且提交、审批或创建日期位于计算期间内，并检查需求预测需求日期和计算期间。"
+    action={<AppLink page="mrp-runs" className="primary">重新运行 MRP</AppLink>}
+  />;
+}
+
+function MaterialPlanList({ grouped, rows, onTrace }) {
+  return <div className="material-plan-list">
     {grouped && grouped.map((group) => <div className="material-plan-week" key={group.weekKey}>
       <div className="material-plan-week__label">{formatWeekRange(group.weekKey)}</div>
       {group.items.map((row) => <MaterialCard key={row.id} row={row} onTrace={onTrace}/>)}
@@ -293,111 +278,43 @@ function MaterialCard({ row, onTrace }) {
   const suggestion = row.suggestion_type;
   const dateText = row.need_by_date ? `${fmtDateShort(row.need_by_date)}前需要` : '—';
   const warning = row.warning ? warningLabel(row.warning) : '';
+  const hasSuggestion = sug > 0 && Boolean(suggestion);
+  const kindLabel = hasSuggestion ? suggestionTypeLabel(suggestion) : '无需补充';
+  const kindClass = hasSuggestion ? suggestion.toLowerCase() : 'ok';
 
-  if (sug <= 0 || suggestion === '') {
-    return <article className="material-card material-card--ok">
-      <header className="material-card__head">
-        <div>
-          <strong>{row.product_name}</strong>
-          <small className="mono">{row.product_code}</small>
-        </div>
-        <span className="material-card__chip is-ok">库存充足</span>
-      </header>
-      <dl className="material-card__rows">
-        <div><dt>毛需求</dt><dd>{fmtQty(row.gross_requirement)}</dd></div>
-        <div><dt>现有库存</dt><dd>{fmtQty(row.on_hand)}</dd></div>
-        <div><dt>在途采购</dt><dd>{fmtQty(row.open_purchase_supply)}</dd></div>
-        <div><dt>在途生产</dt><dd>{fmtQty(row.open_production_supply)}</dd></div>
-        <div><dt>缺口</dt><dd>0</dd></div>
-      </dl>
-      <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>查看计算依据</button>
-    </article>;
-  }
-
-  const kindLabel = suggestionTypeLabel(suggestion);
-  return <article className={`material-card material-card--${suggestion.toLowerCase()}`}>
+  return <article className={`material-card material-card--${kindClass}`}>
     <header className="material-card__head">
       <div>
-        <strong>{row.product_name}</strong>
-        <small className="mono">{row.product_code}</small>
+        <strong className="mono">{row.product_code}</strong>
+        <span>{row.product_name}</span>
       </div>
-      <span className={`material-card__chip is-${suggestion.toLowerCase()}`}>{kindLabel}</span>
+      <span className={`material-card__chip is-${kindClass}`}>{kindLabel}</span>
     </header>
-    <p className="material-card__summary">
-      <span><strong>{fmtQty(net)}</strong> 缺口</span>
-      <span className="dim">{dateText}</span>
-    </p>
     <dl className="material-card__rows">
-      <div><dt>毛需求</dt><dd>{fmtQty(row.gross_requirement)}</dd></div>
+      <div><dt>建议数量</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
+      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
       <div><dt>现有库存</dt><dd>{fmtQty(row.on_hand)}</dd></div>
-      <div><dt>在途采购</dt><dd>{fmtQty(row.open_purchase_supply)}</dd></div>
-      <div><dt>在途生产</dt><dd>{fmtQty(row.open_production_supply)}</dd></div>
     </dl>
-    <div className="material-card__action">
-      <strong>{kindLabel} {fmtQty(sug)}</strong>
+    <div className="material-card__meta">
+      <span>{dateText}</span>
       {warning && <span className="material-card__warning">{warning}</span>}
     </div>
     <div className="material-card__footer">
-      <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>为什么是这个数量？</button>
+      <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>查看计算依据</button>
       {suggestion === 'MAKE' && <AppLink page="production-instructions" className="primary">创建生产指令</AppLink>}
       {suggestion === 'BUY' && <AppLink page="purchase-instructions" className="primary">创建采购指令</AppLink>}
     </div>
   </article>;
 }
 
-function MaterialPlanDesktop({ rows, run, onTrace }) {
-  return <div className="material-plan-desktop">
-    <div className="table-wrap"><table><thead><tr>
-      <th>物料</th>
-      <th className="number">销售需求</th>
-      <th className="number">预测需求</th>
-      <th className="number">组件需求</th>
-      <th className="number">毛需求</th>
-      <th className="number">现有库存</th>
-      <th className="number">在途采购</th>
-      <th className="number">在途生产</th>
-      <th className="number">净需求</th>
-      <th>建议</th>
-      <th className="number">建议数量</th>
-      <th className="number">已转指令</th>
-      <th className="number">剩余</th>
-      <th>需求日期</th>
-      <th>提示</th>
-      <th>操作</th>
-    </tr></thead><tbody>
-      {rows.map((row) => <tr key={row.id}>
-        <td><strong>{row.product_name}</strong><small className="block mono dim">{row.product_code}</small></td>
-        <td className="number">{fmtQty(row.gross_sales_demand)}</td>
-        <td className="number">{fmtQty(row.gross_forecast_demand)}</td>
-        <td className="number">{fmtQty(row.gross_component_demand)}</td>
-        <td className="number">{fmtQty(row.gross_requirement)}</td>
-        <td className="number">{fmtQty(row.on_hand)}</td>
-        <td className="number">{fmtQty(row.open_purchase_supply)}</td>
-        <td className="number">{fmtQty(row.open_production_supply)}</td>
-        <td className="number"><strong>{fmtQty(row.net_requirement)}</strong></td>
-        <td>{row.suggestion_type ? <Status status={row.suggestion_type === 'MAKE' ? 'approved' : 'submitted'} label={suggestionTypeLabel(row.suggestion_type)}/> : <span className="dim">无需补充</span>}</td>
-        <td className="number">{fmtQty(row.suggested_quantity)}</td>
-        <td className="number">{fmtQty(row.converted_quantity)}</td>
-        <td className="number">{fmtQty(row.remaining_quantity)}</td>
-        <td>{fmtDate(row.need_by_date)}</td>
-        <td>{row.warning ? <span className="status status-pending">{warningLabel(row.warning)}</span> : '—'}</td>
-        <td>
-          <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>查看依据</button>
-          {row.suggestion_type === 'MAKE' && <AppLink page="production-instructions">生产指令</AppLink>}
-          {row.suggestion_type === 'BUY' && <AppLink page="purchase-instructions">采购指令</AppLink>}
-        </td>
-      </tr>)}
-    </tbody></table></div>
-  </div>;
-}
-
 // User-friendly trace view explaining the math behind a result row.
 // Uses existing mrp_run_demands / mrp_run_components / mrp_run_pegging.
-function MaterialTraceModal({ run, row, onClose }) {
+function MaterialTraceSheet({ run, row, onClose }) {
   const demands = (run.demands || []).filter((d) => d.product_id === row.product_id);
   const pegging = (run.pegging || []).filter((p) => p.result_product_id === row.product_id);
   const components = (run.components || []).filter((c) => c.product_id === row.product_id);
   const gross = Number(row.gross_requirement || 0);
+  const component = Number(row.gross_component_demand || 0);
   const onHand = Number(row.on_hand || 0);
   const openPo = Number(row.open_purchase_supply || 0);
   const openProd = Number(row.open_production_supply || 0);
@@ -411,10 +328,12 @@ function MaterialTraceModal({ run, row, onClose }) {
     .map((c) => `${c.parent_name || ''}${c.bom_path ? `（${c.bom_path.replace(/^[^>]+>\s*/, '')}）` : ''}`)
     .filter(Boolean);
 
-  return <Modal title={`${row.product_name} · 计算依据`} onClose={onClose} wide>
-    {isTopLevel ? <TopLevelTrace
+  return <Sheet title={`${row.product_name} · 计算依据`} onClose={onClose}>
+    <div className="material-calculation-trace">
+      {isTopLevel ? <TopLevelTrace
       row={row}
       demands={demands}
+      component={component}
       gross={gross}
       onHand={onHand}
       openPo={openPo}
@@ -422,7 +341,7 @@ function MaterialTraceModal({ run, row, onClose }) {
       net={net}
       sug={sug}
       suggestionLabel={suggestionLabel}
-    /> : <BuyItemTrace
+      /> : <BuyItemTrace
       row={row}
       components={components}
       pegging={pegging}
@@ -433,14 +352,13 @@ function MaterialTraceModal({ run, row, onClose }) {
       net={net}
       sug={sug}
       parentsText={parentsText}
-    />}
-    <div className="form-actions full">
-      <button type="button" className="secondary" onClick={onClose}>关闭</button>
+      />}
     </div>
-  </Modal>;
+    <BottomActionBar><SecondaryButton type="button" onClick={onClose}>关闭</SecondaryButton></BottomActionBar>
+  </Sheet>;
 }
 
-function TopLevelTrace({ row, demands, gross, onHand, openPo, openProd, net, sug, suggestionLabel }) {
+function TopLevelTrace({ demands, component, gross, onHand, openPo, openProd, net, sug, suggestionLabel }) {
   const sales = demands.filter((d) => d.source_type === 'SALES_ORDER').reduce((s, d) => s + Number(d.quantity || 0), 0);
   const forecast = demands.filter((d) => d.source_type === 'FORECAST').reduce((s, d) => s + Number(d.quantity || 0), 0);
   return <>
@@ -448,6 +366,7 @@ function TopLevelTrace({ row, demands, gross, onHand, openPo, openProd, net, sug
     <dl className="trace-list">
       <div><dt>销售订单需求</dt><dd>{fmtQty(sales)}</dd></div>
       <div><dt>需求预测</dt><dd>{fmtQty(forecast)}</dd></div>
+      <div><dt>组件需求</dt><dd>{fmtQty(component)}</dd></div>
       <div><dt>毛需求</dt><dd><strong>{fmtQty(gross)}</strong></dd></div>
     </dl>
     <h3>供应情况</h3>
@@ -459,6 +378,7 @@ function TopLevelTrace({ row, demands, gross, onHand, openPo, openProd, net, sug
     <h3>最终结果</h3>
     <dl className="trace-list">
       <div><dt>计算式</dt><dd>{fmtQty(gross)} − {fmtQty(onHand)} − {fmtQty(openPo)} − {fmtQty(openProd)} = <strong>{fmtQty(net)}</strong></dd></div>
+      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
       <div><dt>建议类型</dt><dd>{suggestionLabel}</dd></div>
       <div><dt>{suggestionLabel}</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
     </dl>
@@ -468,6 +388,12 @@ function TopLevelTrace({ row, demands, gross, onHand, openPo, openProd, net, sug
 function BuyItemTrace({ row, components, pegging, gross, onHand, openPo, openProd, net, sug, parentsText }) {
   return <>
     <h3>需求来源</h3>
+    <dl className="trace-list">
+      <div><dt>销售订单需求</dt><dd>{fmtQty(row.gross_sales_demand)}</dd></div>
+      <div><dt>需求预测</dt><dd>{fmtQty(row.gross_forecast_demand)}</dd></div>
+      <div><dt>组件需求</dt><dd>{fmtQty(row.gross_component_demand)}</dd></div>
+    </dl>
+    <h3>BOM 追溯</h3>
     {parentsText.length > 0 ? (
       <ul className="trace-parent-list">
         {parentsText.map((text, idx) => <li key={idx}>来自 {text}</li>)}
@@ -485,6 +411,7 @@ function BuyItemTrace({ row, components, pegging, gross, onHand, openPo, openPro
     <h3>最终结果</h3>
     <dl className="trace-list">
       <div><dt>计算式</dt><dd>{fmtQty(gross)} − {fmtQty(onHand)} − {fmtQty(openPo)} − {fmtQty(openProd)} = <strong>{fmtQty(net)}</strong></dd></div>
+      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
       <div><dt>采购建议</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
     </dl>
   </>;

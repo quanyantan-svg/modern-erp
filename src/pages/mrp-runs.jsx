@@ -5,10 +5,11 @@
 // detail now shows the calculation settings + summary and a primary
 // link "查看物料需求计划" that hands off to the result view.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { DetailSection, EmptyState, KeyValueRow, RecordCard, RecordList } from '../components/design-system.jsx';
 import {
   demandModeHint,
   demandModeLabel,
@@ -90,7 +91,6 @@ export default function MrpRuns({ user, notify }) {
   return <>
     <Panel
       title="MRP 运算"
-      subtitle="综合销售订单、需求预测、现有库存、在途供应和 BOM，计算未来生产与采购需求"
       action={canManage && <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 运行 MRP 运算</button>}
     >
       <Toolbar
@@ -105,35 +105,31 @@ export default function MrpRuns({ user, notify }) {
           <option value="CANCELLED">已取消</option>
         </select>}
       />
-      <div className="table-wrap mrp-run-list-desktop"><table><thead><tr>
-        <th>计划编号</th><th>计划名称</th><th>需求来源</th><th>计算期间</th><th>状态</th>
-        <th className="number">产品结果数</th><th>计算时间</th>
-      </tr></thead><tbody>
-        {filtered.map((row) => <tr className="clickable" key={row.id} onClick={() => setViewingId(row.id)}>
-          <td className="mono strong-text">{row.run_code}</td>
-          <td><strong>{row.run_name}</strong></td>
-          <td>{demandModeLabel(row.demand_source_mode)}{row.forecast_code ? <small className="block dim">关联预测 {row.forecast_code}</small> : null}</td>
-          <td>{row.horizon_start} ~ {row.horizon_end}</td>
-          <td><Status status={statusBadgeType(row.status)} label={mrpRunStatusLabel(row.status)}/></td>
-          <td className="number">{row.summary?.totalProducts ?? '—'}</td>
-          <td className="dim">{row.completed_at?.slice(0, 16).replace('T', ' ') || '—'}</td>
-        </tr>)}
-      </tbody></table>{!filtered.length && <Empty text={rows.length === 0 ? '还没有 MRP 运算。创建一次运算，系统会计算生产与采购需求。' : '没有符合筛选条件的 MRP 运算'}/>}</div>
-      <div className="mrp-run-list-mobile">
-        {filtered.map((row) => <button type="button" className="mrp-run-card" key={row.id} onClick={() => setViewingId(row.id)}>
-          <span className="mrp-run-card__head"><strong>{row.run_name}</strong><Status status={statusBadgeType(row.status)} label={mrpRunStatusLabel(row.status)}/></span>
-          <small className="mono">{row.run_code}</small>
-          <small>需求来源：{demandModeLabel(row.demand_source_mode)}</small>
-          <small>计算期间 {row.horizon_start} ~ {row.horizon_end}</small>
-          <small>{row.summary?.totalProducts ?? '—'} 项产品结果 · {row.completed_at?.slice(0, 16).replace('T', ' ') || '尚未计算'}</small>
-        </button>)}
+      <RecordList>
+        {filtered.map((row) => {
+          const completedZero = row.status === 'COMPLETED' && Number(row.summary?.totalProducts || 0) === 0;
+          return <RecordCard
+            key={row.id}
+            title={row.run_name}
+            subtitle={row.run_code}
+            status={<Status status={statusBadgeType(row.status)} label={mrpRunStatusLabel(row.status)}/>}
+            facts={[
+              { label: '期间', value: `${row.horizon_start} ~ ${row.horizon_end}` },
+              { label: '需求来源', value: demandModeLabel(row.demand_source_mode) },
+              ...(row.forecast_code ? [{ label: '预测来源', value: row.forecast_code }] : []),
+              { label: '结果', value: completedZero ? '本期没有可纳入需求' : `${row.summary?.totalProducts ?? '—'} 项物料` },
+            ]}
+            onClick={() => setViewingId(row.id)}
+          />;
+        })}
         {!filtered.length && <Empty text={rows.length === 0 ? '还没有 MRP 运算。创建一次运算，系统会计算生产与采购需求。' : '没有符合筛选条件的 MRP 运算'}/>}
-      </div>
+      </RecordList>
     </Panel>
 
     {viewingId && <MrpRunDetail
       runId={viewingId}
       onClose={() => setViewingId(null)}
+      onRerun={() => { setViewingId(null); setCreating(true); }}
       onChanged={() => { void handleRefresh(); }}
       notify={notify}
     />}
@@ -199,7 +195,7 @@ function MrpRunEditor({ value, onClose, onSaved, notify }) {
   </Modal>;
 }
 
-function MrpRunDetail({ runId, onClose, onChanged, notify }) {
+function MrpRunDetail({ runId, onClose, onRerun, onChanged, notify }) {
   const navigation = useAppNavigation();
   const [run, setRun] = useState(null);
   const load = () => api('/api/planning/mrp/runs/' + runId)
@@ -219,31 +215,33 @@ function MrpRunDetail({ runId, onClose, onChanged, notify }) {
   if (!run) return <Modal title="MRP 运算详情" onClose={onClose} wide><Loading/></Modal>;
 
   const summary = run.summary || null;
+  const completedZero = run.status === 'COMPLETED' && Number(summary?.totalProducts || 0) === 0;
   const openPlan = () => {
     navigation.navigateToPage('material-requirements-plan', { documentId: runId });
     onClose();
   };
 
   return <Modal title={`MRP 运算 ${run.run_code}`} onClose={onClose} wide>
-    <h3>本次运算设置</h3>
-    <div className="form-grid">
-      <label>计划名称<span><strong>{run.run_name}</strong></span></label>
-      <label>状态<span><Status status={statusBadgeType(run.status)} label={mrpRunStatusLabel(run.status)}/></span></label>
-      <label>需求来源<span>{demandModeLabel(run.demand_source_mode)}{run.forecast_code ? <small className="block dim">关联预测 {run.forecast_code}</small> : null}</span></label>
-      <label>计算期间<span>{run.horizon_start} ~ {run.horizon_end}</span></label>
-      <label>制单人<span>{run.creator_name || '—'}</span></label>
-      <label>执行时间<span>{run.completed_at?.slice(0, 16).replace('T', ' ') || '尚未执行'}</span></label>
-    </div>
-    {summary && <>
-      <h3>运算摘要</h3>
+    <DetailSection title="运算设置">
+      <KeyValueRow label="运行名称" value={run.run_name}/>
+      <KeyValueRow label="期间" value={`${run.horizon_start} ~ ${run.horizon_end}`}/>
+      <KeyValueRow label="需求来源" value={demandModeLabel(run.demand_source_mode)}/>
+      {run.forecast_code && <KeyValueRow label="预测来源" value={run.forecast_code}/>}
+      <KeyValueRow label="状态"><Status status={statusBadgeType(run.status)} label={mrpRunStatusLabel(run.status)}/></KeyValueRow>
+    </DetailSection>
+    {completedZero ? <EmptyState
+      title="本次计算期间内没有可纳入的需求"
+      description="请检查销售订单是否已审批且提交、审批或创建日期位于计算期间内，并检查需求预测需求日期和计算期间。"
+      action={<button type="button" className="primary" onClick={onRerun}>重新运行 MRP</button>}
+    /> : summary && <DetailSection title="结果摘要">
       <div className="mrp-summary">
         <span><strong>{summary.totalProducts}</strong> 项物料</span>
         <span><strong>{summary.makeSuggestions}</strong> 条生产建议</span>
         <span><strong>{summary.buySuggestions}</strong> 条采购建议</span>
         <span><strong>{summary.shortageProducts}</strong> 项缺料</span>
       </div>
-    </>}
-    {run.status === 'COMPLETED' && (
+    </DetailSection>}
+    {run.status === 'COMPLETED' && !completedZero && (
       <div className="form-actions full">
         <button type="button" className="primary" onClick={openPlan}>查看物料需求计划</button>
       </div>
