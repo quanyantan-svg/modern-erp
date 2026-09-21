@@ -86,6 +86,20 @@ function seedFixtures() {
     db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)').run(`${id}-d`,id,'subject-001','DEBIT',560000,'debit');
     db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)').run(`${id}-c`,id,'subject-002','CREDIT',560000,'credit');
   }
+
+  const insertPurchaseReq = db.prepare(`INSERT INTO purchase_requisitions
+    (id,requisition_no,status,required_date,notes,rejection_reason,creator_id,reviewer_id,submitted_at,reviewed_at,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+  insertPurchaseReq.run('z-pr-pending','PR-M3-PENDING','SUBMITTED','2099-06-30','pr pending','','user-sales',null,future,null,future,future);
+  insertPurchaseReq.run('r-pr-reject-target','PR-M3-REJECT-TARGET','SUBMITTED','2099-06-30','pr reject target','','user-sales',null,future,null,future,future);
+  insertPurchaseReq.run('self-pr-pending','PR-M3-SELF','SUBMITTED','2099-06-30','pr self','','user-admin',null,future,null,future,future);
+  insertPurchaseReq.run('m3-pr-approved','PR-M3-APPROVED','APPROVED','2099-06-30','pr approved','','user-sales','user-admin',future,handled,future,handled);
+  insertPurchaseReq.run('m3-pr-rejected','PR-M3-REJECTED','REJECTED','2099-06-30','pr rejected','budget','user-sales','user-admin',future,handled,future,handled);
+  insertPurchaseReq.run('m3-pr-created','PR-M3-CREATED','DRAFT','2099-06-30','pr own','','user-admin',null,null,null,future,future);
+  for (const id of ['z-pr-pending','r-pr-reject-target','self-pr-pending','m3-pr-approved','m3-pr-rejected','m3-pr-created']) {
+    db.prepare(`INSERT INTO purchase_requisition_items(id,requisition_id,product_id,quantity,unit_price_cents,amount_cents,created_at)
+      VALUES(?,?,?,?,?,?,?)`).run(`${id}-line`,id,'product-001',1,123400,123400,future);
+  }
 }
 
 async function login(username, password) {
@@ -129,13 +143,13 @@ describe('M3R approval aggregation API', () => {
   test('caps the limit at 100', async () => { assert.equal((await request('/api/approvals?limit=500')).data.limit, 100); });
   test('normalizes invalid limit to 50', async () => { assert.equal((await request('/api/approvals?limit=bad')).data.limit, 50); });
   test('returns all four count buckets in one request', async () => { assert.deepEqual(Object.keys((await request('/api/approvals')).data.counts), ['pending','approved','rejected','created']); });
-  test('admin pending includes exactly the four supported document types', async () => { const types = new Set((await request('/api/approvals')).data.items.filter((i) => i.submittedAt === future).map((i) => i.documentType)); assert.deepEqual(types, new Set(['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER'])); });
+  test('admin pending includes exactly the five supported document types', async () => { const types = new Set((await request('/api/approvals')).data.items.filter((i) => i.submittedAt === future).map((i) => i.documentType)); assert.deepEqual(types, new Set(['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION'])); });
   test('pending excludes self-created documents', async () => { assert.ok(!(await request('/api/approvals')).data.items.some((item) => item.initiatorId === 'user-admin')); });
   test('approved returns records handled by current actor', async () => { const items = (await request('/api/approvals?tab=approved')).data.items; assert.ok(items.some((i) => i.documentNo === 'SO-M3-APPROVED')); assert.ok(items.every((i) => i.handlerName === '系统管理员')); });
   test('rejected returns records handled by current actor', async () => { const items = (await request('/api/approvals?tab=rejected')).data.items; assert.ok(items.some((i) => i.documentNo === 'VCH-M3-REJECTED')); assert.ok(items.every((i) => i.status === 'REJECTED')); });
   test('inventory check is absent from rejected because it has no reject transition', async () => { assert.ok(!(await request('/api/approvals?tab=rejected')).data.items.some((i) => i.documentType === 'INVENTORY_CHECK')); });
   test('created returns only documents initiated by current actor', async () => { assert.ok((await request('/api/approvals?tab=created')).data.items.every((i) => i.initiatorId === 'user-admin')); });
-  test('reviewer visibility is limited to sales and purchase approvals', async () => { const types = new Set((await request('/api/approvals', 'reviewer')).data.items.map((i) => i.documentType)); assert.deepEqual(types, new Set(['SALES_ORDER','PURCHASE_ORDER'])); });
+  test('reviewer visibility covers sales, purchase and purchase requisition approvals', async () => { const types = new Set((await request('/api/approvals', 'reviewer')).data.items.map((i) => i.documentType)); assert.deepEqual(types, new Set(['SALES_ORDER','PURCHASE_ORDER','PURCHASE_REQUISITION'])); });
   test('sales role cannot see pending approvals without approval permission', async () => { assert.deepEqual((await request('/api/approvals', 'sales')).data.items, []); });
   test('accounting role cannot see pending voucher approvals without VOUCHER_APPROVE', async () => { assert.deepEqual((await request('/api/approvals', 'accounting')).data.items, []); });
   test('warehouse role cannot use legacy transfer approval permission to see approval items', async () => { assert.deepEqual((await request('/api/approvals', 'warehouse')).data.items, []); });
@@ -162,6 +176,8 @@ describe('M3R existing workflow dispatch contracts', () => {
   test('inventory check reject is unavailable', () => { assert.throws(() => approvalActionRequest(item('INVENTORY_CHECK'),'reject'), /不支持/); });
   test('voucher approve uses existing endpoint', () => { assert.equal(approvalActionRequest(item('ACCOUNTING_VOUCHER'),'approve').path, '/api/accounting-vouchers/doc%201/approve'); });
   test('voucher reject uses rejectionReason contract', () => { assert.deepEqual(approvalActionRequest(item('ACCOUNTING_VOUCHER'),'reject','why').options.body, { rejectionReason:'why' }); });
+  test('purchase requisition approve uses existing endpoint', () => { assert.deepEqual(approvalActionRequest(item('PURCHASE_REQUISITION'),'approve'), { path:'/api/purchase-requisitions/doc%201/approve', options:{ method:'POST' } }); });
+  test('purchase requisition reject uses reason contract', () => { assert.deepEqual(approvalActionRequest(item('PURCHASE_REQUISITION'),'reject','why').options.body, { reason:'why' }); });
   test('inventory transfer has no dispatch path', () => { assert.throws(() => approvalActionRequest(item('INVENTORY_TRANSFER'),'approve'), /不支持/); });
 });
 
@@ -173,10 +189,13 @@ describe('M3R actions reuse existing state machines', () => {
   test('sales order reject records the reason and moves tabs', async () => { assert.equal((await request('/api/orders/r-so-reject-target/reject','admin',{method:'POST',body:{reason:'mobile reason'}})).status, 200); const item=(await request('/api/approvals?tab=rejected')).data.items.find((i)=>i.documentId==='r-so-reject-target'); assert.equal(item.rejectionReason,'mobile reason'); });
   test('purchase order approve moves the item to approved', async () => { assert.equal((await request('/api/purchase-orders/y-po-pending/approve','admin',{method:'POST'})).status, 200); assert.ok((await request('/api/approvals?tab=approved')).data.items.some((i)=>i.documentId==='y-po-pending')); });
   test('purchase order reject records the reason', async () => { assert.equal((await request('/api/purchase-orders/q-po-reject-target/reject','admin',{method:'POST',body:{reason:'price mismatch'}})).status, 200); assert.equal((await request('/api/approvals?tab=rejected')).data.items.find((i)=>i.documentId==='q-po-reject-target').rejectionReason,'price mismatch'); });
+  test('purchase requisition approve moves the item to approved', async () => { assert.equal((await request('/api/purchase-requisitions/z-pr-pending/approve','admin',{method:'POST'})).status, 200); assert.ok((await request('/api/approvals?tab=approved')).data.items.some((i)=>i.documentId==='z-pr-pending')); });
+  test('purchase requisition reject records the reason', async () => { assert.equal((await request('/api/purchase-requisitions/r-pr-reject-target/reject','admin',{method:'POST',body:{reason:'budget tight'}})).status, 200); assert.equal((await request('/api/approvals?tab=rejected')).data.items.find((i)=>i.documentId==='r-pr-reject-target').rejectionReason,'budget tight'); });
+  test('self approval remains blocked by the purchase requisition state machine', async () => { assert.equal((await request('/api/purchase-requisitions/self-pr-pending/approve','admin',{method:'POST'})).status, 409); });
   test('inventory check approve uses the transactional stock adjustment', async () => { const before=db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity; assert.equal((await request('/api/inventory-checks/x-check-pending','admin',{method:'PATCH',body:{action:'APPROVE'}})).status,200); assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity,before+2); assert.ok((await request('/api/approvals?tab=approved')).data.items.some((i)=>i.documentId==='x-check-pending')); });
   test('accounting voucher approve moves the item to approved', async () => { assert.equal((await request('/api/accounting-vouchers/w-voucher-pending/approve','admin',{method:'POST'})).status,200); assert.ok((await request('/api/approvals?tab=approved')).data.items.some((i)=>i.documentId==='w-voucher-pending')); });
   test('accounting voucher reject uses its native reason field', async () => { assert.equal((await request('/api/accounting-vouchers/p-voucher-reject-target/reject','admin',{method:'POST',body:{rejectionReason:'attachment missing'}})).status,200); assert.equal((await request('/api/approvals?tab=rejected')).data.items.find((i)=>i.documentId==='p-voucher-reject-target').rejectionReason,'attachment missing'); });
-  test('pending count reflects completed actions without full-list fanout', async () => { const data=(await request('/api/approvals?tab=pending&limit=1')).data; assert.equal(data.items.length,1); assert.ok(data.counts.pending >= 0); assert.ok(!data.items.some((i)=>['z-so-pending','r-so-reject-target','y-po-pending','q-po-reject-target','x-check-pending','w-voucher-pending','p-voucher-reject-target'].includes(i.documentId))); });
+  test('pending count reflects completed actions without full-list fanout', async () => { const data=(await request('/api/approvals?tab=pending&limit=1')).data; assert.equal(data.items.length,1); assert.ok(data.counts.pending >= 0); assert.ok(!data.items.some((i)=>['z-so-pending','r-so-reject-target','y-po-pending','q-po-reject-target','x-check-pending','w-voucher-pending','p-voucher-reject-target','z-pr-pending','r-pr-reject-target'].includes(i.documentId))); });
 });
 
 describe('M3R mobile approval UI', () => {
