@@ -72,6 +72,12 @@ await openApp('物料需求计划', 'material-plan');
 await page.getByTestId('bottom-tab-approvals').click();
 await page.waitForTimeout(250);
 await inspect('approval-center');
+const firstApproval = page.locator('.mobile-approval-card__content').first();
+if (await firstApproval.count()) {
+  await firstApproval.click();
+  await page.getByTestId('approval-detail').waitFor();
+  await inspect('approval-detail');
+}
 await page.getByTestId('bottom-tab-apps').click();
 await openApp('采购订单', 'purchase-orders');
 await openApp('销售订单', 'sales-orders');
