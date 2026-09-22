@@ -15,6 +15,7 @@
 import { HttpError, allow, optionalText, readJson, requiredText, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const ISSUE_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -91,8 +92,10 @@ export function listProductionMaterialIssues(db, res, actor, url) {
   allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
   const status = url.searchParams.get('status');
   const params = [];
-  let where = '';
-  if (status && ISSUE_STATUS[status]) { where = 'WHERE pi.status=?'; params.push(status); }
+  const clauses = [];
+  const archiveFilter = lifecycleArchiveFilter('PRODUCTION_MATERIAL_ISSUE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pi.id' });
+  if (archiveFilter.clause) clauses.push(archiveFilter.clause);
+  if (status && ISSUE_STATUS[status]) { clauses.push('pi.status=?'); params.push(status); }
   const rows = db.prepare(`SELECT pi.*, po.order_no productionOrderNo, po.status productionOrderStatus,
     p.code productCode, p.name productName,
     w.code warehouseCode, w.name warehouseName,
@@ -104,7 +107,7 @@ export function listProductionMaterialIssues(db, res, actor, url) {
     JOIN warehouses w ON w.id=pi.warehouse_id
     JOIN users creator ON creator.id=pi.creator_id
     LEFT JOIN users confirmed ON confirmed.id=pi.confirmed_by
-    ${where}
+    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY pi.created_at DESC LIMIT 100`).all(...params)
     .map((row) => ({ ...row, statusLabel: ISSUE_STATUS[row.status] || row.status }));
   return send(res, 200, { materialIssues: rows });
@@ -275,8 +278,10 @@ export function listProductionReceipts(db, res, actor, url) {
   allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
   const status = url.searchParams.get('status');
   const params = [];
-  let where = '';
-  if (status && RECEIPT_STATUS[status]) { where = 'WHERE pr.status=?'; params.push(status); }
+  const clauses = [];
+  const archiveFilter = lifecycleArchiveFilter('PRODUCTION_RECEIPT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) clauses.push(archiveFilter.clause);
+  if (status && RECEIPT_STATUS[status]) { clauses.push('pr.status=?'); params.push(status); }
   const rows = db.prepare(`SELECT pr.*, po.order_no productionOrderNo, po.status productionOrderStatus,
     po.quantity plannedQuantity,
     p.code productCode, p.name productName,
@@ -288,7 +293,7 @@ export function listProductionReceipts(db, res, actor, url) {
     JOIN warehouses w ON w.id=pr.warehouse_id
     JOIN users creator ON creator.id=pr.creator_id
     LEFT JOIN users confirmed ON confirmed.id=pr.confirmed_by
-    ${where}
+    ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
     ORDER BY pr.created_at DESC LIMIT 100`).all(...params)
     .map((row) => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
   return send(res, 200, { productionReceipts: rows });

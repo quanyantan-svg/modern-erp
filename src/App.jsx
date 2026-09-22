@@ -12,6 +12,7 @@ import { IQCInspections, OQCInspections } from './pages/quality.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
+import DataCleanup from './pages/data-cleanup.jsx';
 import Forecasts from './pages/forecasts.jsx';
 import MrpRuns from './pages/mrp-runs.jsx';
 import MaterialRequirementsPlan from './pages/material-requirements-plan.jsx';
@@ -89,6 +90,7 @@ const ic = {
   salesDiscount: <Icon d="M21 12a9 9 0 1 1-9-9 9 9 0 0 1 9 9zM15 9l-6 6m0-6l6 6"/>,
   purchaseDiscount: <Icon d="M12 1v6m0 10v6m11-11h-6m-10 0H1m17.07-7.07l-4.24 4.24M7.17 16.83l-4.24 4.24m13.14 0l-4.24-4.24M7.17 7.17L2.93 2.93"/>,
   users: <Icon d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm10 0a4 4 0 0 0 4-4v-2M9 21v-2a4 4 0 0 1 4-4h2a4 4 0 0 1 4 4v2"/>,
+  cleanup: <Icon d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/>,
 };
 
 // Navigation groups
@@ -168,6 +170,7 @@ export const navGroups = [
     { key: 'notifications', label: '通知中心', icon: ic.notifications, any: ['DASHBOARD_VIEW'] },
     { key: 'workflows', label: '审批流', icon: ic.approvals, any: ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE'] },
     { key: 'users', label: '用户与角色', icon: ic.users, any: ['USERS_MANAGE', 'ROLES_MANAGE'] },
+    { key: 'data-cleanup', label: '数据整理', icon: ic.cleanup, permission: 'USERS_MANAGE' },
   ]},
 ];
 
@@ -291,7 +294,8 @@ export default function App() {
     'production-orders': <ProductionOrders user={user} notify={notify}/>,
     'material-issues': <MaterialIssues user={user} notify={notify}/>,
     'production-receipts': <ProductionReceipts user={user} notify={notify}/>,
-    users: <UsersRoles user={user} notify={notify}/>
+    users: <UsersRoles user={user} notify={notify}/>,
+    'data-cleanup': <DataCleanup user={user} notify={notify}/>
   };
   const mobileApplicationGroups = buildMobileApplicationGroups(visibleNav, {
     isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),

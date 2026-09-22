@@ -79,6 +79,7 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PERIOD_STATUS = { CLOSED: '已结账', REOPENED: '已反结账' };
@@ -193,8 +194,10 @@ export function listInventoryScraps(db, res, actor, url) {
   allowAny(actor, ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE']);
   const status = url.searchParams.get('status');
   const params = [];
-  let whereClause = '';
-  if (status && SCRAP_STATUS[status]) { whereClause = 'WHERE s.status = ?'; params.push(status); }
+  const clauses = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_SCRAP', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 's.id' });
+  if (archiveFilter.clause) clauses.push(archiveFilter.clause);
+  if (status && SCRAP_STATUS[status]) { clauses.push('s.status = ?'); params.push(status); }
   const rows = db.prepare(`
     SELECT s.id, s.scrap_no scrapNo, s.status, s.scrap_date scrapDate,
            s.reason, s.notes, s.created_at createdAt, s.confirmed_at confirmedAt,
@@ -204,7 +207,7 @@ export function listInventoryScraps(db, res, actor, url) {
       FROM inventory_scraps s
       JOIN users creator ON creator.id = s.creator_id
       LEFT JOIN users confirmed ON confirmed.id = s.confirmed_by
-      ${whereClause}
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
       ORDER BY s.created_at DESC
       LIMIT 100
   `).all(...params).map((row) => ({

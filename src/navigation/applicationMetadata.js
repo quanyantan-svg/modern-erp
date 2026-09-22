@@ -133,6 +133,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     items: [
       { page: 'workflows', mobileLabel: '审批流定义', iconKey: 'approvals' },
       { page: 'users', mobileLabel: '用户与角色', iconKey: 'users' },
+      { page: 'data-cleanup', mobileLabel: '数据整理', iconKey: 'cleanup' },
       { page: 'notifications', mobileLabel: '通知中心', iconKey: 'notifications' },
     ],
   },

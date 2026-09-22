@@ -25,6 +25,7 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, requiredText, send } from '../lib/http.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const FORECAST_STATUS = { DRAFT: '草稿', ACTIVE: '已生效', CANCELLED: '已取消' };
 const MRP_RUN_STATUS = { DRAFT: '草稿', COMPLETED: '已计算', CANCELLED: '已取消' };
@@ -102,6 +103,8 @@ export function listPlanningForecasts(db, res, actor, url) {
   const status = url.searchParams.get('status') || '';
   const where = [];
   const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PLANNING_FORECAST', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'f.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (status && FORECAST_STATUS[status]) {
     where.push('f.status = ?');
     params.push(status);
@@ -450,6 +453,8 @@ export function listMrpRuns(db, res, actor, url) {
   const status = url.searchParams.get('status') || '';
   const where = [];
   const params = [];
+  const archiveFilter = lifecycleArchiveFilter('MRP_RUN', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'r.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (status && MRP_RUN_STATUS[status]) {
     where.push('r.status = ?');
     params.push(status);

@@ -91,7 +91,8 @@ import {
 } from './lib/http.js';
 import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
 import {
-  archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, restoreLifecycleRecord,
+  archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, lifecycleArchiveFilter,
+  listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
 
 const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
@@ -140,6 +141,8 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/lifecycle/archive' && req.method === 'POST') return archiveLifecycleRecord(db, req, res, actor);
   if (pathname === '/api/lifecycle/restore' && req.method === 'POST') return restoreLifecycleRecord(db, req, res, actor);
   if (pathname === '/api/lifecycle/cleanup' && req.method === 'POST') return executeLifecycleCleanup(db, req, res, actor);
+  if (pathname === '/api/lifecycle/records' && req.method === 'GET') return listLifecycleRecordsHandler(db, res, actor, url);
+  if (pathname === '/api/lifecycle/cleanup-events' && req.method === 'GET') return listCleanupEventsHandler(db, res, actor, url);
 
   if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
   if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);
@@ -516,7 +519,7 @@ async function handleApi(db, req, res, url) {
   if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
 
   // M14 — Sales / Purchase Discount (operational finance adjustment)
-  if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor);
+  if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor, url);
   if (pathname === '/api/sales-discounts' && req.method === 'POST') return createSalesDiscount(db, req, res, actor);
   const salesDiscountMatch = pathname.match(/^\/api\/sales-discounts\/([^/]+)$/);
   if (salesDiscountMatch && req.method === 'GET') return getSalesDiscount(db, res, actor, salesDiscountMatch[1]);
@@ -528,7 +531,7 @@ async function handleApi(db, req, res, url) {
     return cancelSalesDiscount(db, res, actor, id);
   }
 
-  if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor);
+  if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor, url);
   if (pathname === '/api/purchase-discounts' && req.method === 'POST') return createPurchaseDiscount(db, req, res, actor);
   const purchaseDiscountMatch = pathname.match(/^\/api\/purchase-discounts\/([^/]+)$/);
   if (purchaseDiscountMatch && req.method === 'GET') return getPurchaseDiscount(db, res, actor, purchaseDiscountMatch[1]);
@@ -1014,6 +1017,8 @@ async function updateProduct(db, req, res, actor, productId) {
 function listOrders(db, res, actor, url) {
   allow(actor, 'ORDERS_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && STATUS_LABELS[status]) { where.push('so.status=?'); params.push(status); }
   const search = url.searchParams.get('search')?.trim();
@@ -1200,6 +1205,8 @@ function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().
 function listPurchaseOrders(db, res, actor, url) {
   allow(actor, 'PURCHASE_ORDERS_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && PURCHASE_STATUS_LABELS[status]) { where.push('po.status=?'); params.push(status); }
   const search = url.searchParams.get('search')?.trim();
@@ -1606,6 +1613,8 @@ async function calculateMRP(db, req, res, actor) {
 function listInventoryChecks(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_CHECK', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ic.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && INVENTORY_CHECK_STATUS[status]) { where.push('ic.status=?'); params.push(status); }
   const sql = `SELECT ic.*,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,
@@ -1673,12 +1682,14 @@ function saveAdjustmentItems(db, adjustmentId, items) {
 
 function listInventoryAdjustments(db, res, actor, url) {
   allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
-  const status = url.searchParams.get('status'); const params = []; let where = '';
-  if (status && INVENTORY_ADJUSTMENT_STATUS[status]) { where = 'WHERE ia.status=?'; params.push(status); }
+  const status = url.searchParams.get('status'); const params = []; const clauses = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_ADJUSTMENT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ia.id' });
+  if (archiveFilter.clause) clauses.push(archiveFilter.clause);
+  if (status && INVENTORY_ADJUSTMENT_STATUS[status]) { clauses.push('ia.status=?'); params.push(status); }
   const rows = db.prepare(`SELECT ia.*,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName,
     (SELECT COUNT(*) FROM inventory_adjustment_items WHERE adjustment_id=ia.id) itemCount
     FROM inventory_adjustments ia JOIN warehouses w ON w.id=ia.warehouse_id JOIN users creator ON creator.id=ia.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by ${where} ORDER BY ia.created_at DESC`).all(...params)
+    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY ia.created_at DESC`).all(...params)
     .map((row) => ({ ...row, statusLabel: INVENTORY_ADJUSTMENT_STATUS[row.status] }));
   return send(res, 200, { inventoryAdjustments: rows });
 }
@@ -1810,6 +1821,8 @@ const INVENTORY_TRANSFER_STATUS = {
 function listInventoryTransfers(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_TRANSFER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'it.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && INVENTORY_TRANSFER_STATUS[status]) { where.push('it.status=?'); params.push(status); }
   const sql = `SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
@@ -1987,6 +2000,8 @@ function listAccountingSubjects(db, res, actor) {
 function listAccountingVouchers(db, res, actor, url) {
   allow(actor, 'ACCOUNTING_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('ACCOUNTING_VOUCHER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'av.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const sourceType = url.searchParams.get('source_type');
   if (sourceType) { where.push('av.source_type=?'); params.push(sourceType); }
   const sql = `SELECT av.*, u.display_name creatorName
@@ -2930,6 +2945,8 @@ function listPurchaseReceipts(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(pr.receipt_no LIKE ? OR s.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_RECEIPT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
   const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
   return send(res, 200, { purchaseReceipts: receipts });
@@ -3032,6 +3049,8 @@ function listSalesDeliveries(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(sd.delivery_no LIKE ? OR c.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('SALES_DELIVERY', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'sd.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sd.status = ?'; params.push(status); }
   const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
   const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status }));
@@ -3141,6 +3160,8 @@ function listSalesReturns(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(sr.return_no LIKE ? OR c.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('SALES_RETURN', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'sr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sr.status = ?'; params.push(status); }
   const sql = 'SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM return_order_items WHERE return_id = sr.id) itemCount FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by WHERE ' + where + ' ORDER BY sr.created_at DESC LIMIT 100';
   const returns = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RETURN_STATUS[row.status] || row.status }));
@@ -3241,6 +3262,8 @@ function listPurchaseReturns(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(pr.return_no LIKE ? OR s.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_RETURN', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
   const sql = 'SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_return_items WHERE return_id = pr.id) itemCount FROM purchase_returns pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ' + where + ' ORDER BY pr.created_at DESC LIMIT 100';
   const returns = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RETURN_STATUS[row.status] || row.status }));
@@ -3432,12 +3455,14 @@ function listCustomerLookup(db, res, actor, url) {
 function listSalesOrderSourceLookup(db, res, actor, url) {
   allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
   const headerStmt = db.prepare(`
     SELECT so.id, so.order_no orderNo, so.status, so.total_cents totalCents, so.created_at createdAt,
            c.id customerId, c.code customerCode, c.name customerName
     FROM sales_orders so
     JOIN customers c ON c.id = so.customer_id
     WHERE so.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
       AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
     ORDER BY so.created_at DESC
     LIMIT 100
@@ -3462,12 +3487,14 @@ function listSalesOrderSourceLookup(db, res, actor, url) {
 function listPurchaseOrderSourceLookup(db, res, actor, url) {
   allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
   const headerStmt = db.prepare(`
     SELECT po.id, po.order_no orderNo, po.status, po.total_cents totalCents, po.created_at createdAt,
            s.id supplierId, s.code supplierCode, s.name supplierName
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
       AND (po.order_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)
     ORDER BY po.created_at DESC
     LIMIT 100
@@ -3528,6 +3555,8 @@ function listPaymentCollections(db, res, actor, url) {
   const customerId = url.searchParams.get('customer');
   let where = '(pc.collection_no LIKE ? OR c.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PAYMENT_COLLECTION', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pc.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (customerId) { where += ' AND pc.customer_id = ?'; params.push(customerId); }
   const sql = 'SELECT pc.id, pc.collection_no collectionNo, pc.amount_cents amountCents, pc.payment_method paymentMethod, pc.collection_date collectionDate, pc.remark, c.code customerCode, c.name customerName FROM payment_collections pc JOIN customers c ON c.id = pc.customer_id WHERE ' + where + ' ORDER BY pc.created_at DESC LIMIT 100';
   return send(res, 200, { collections: db.prepare(sql).all(...params) });
@@ -3581,6 +3610,8 @@ function listPaymentDisbursements(db, res, actor, url) {
   const supplierId = url.searchParams.get('supplier');
   let where = '(pd.disbursement_no LIKE ? OR s.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PAYMENT_DISBURSEMENT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pd.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (supplierId) { where += ' AND pd.supplier_id = ?'; params.push(supplierId); }
   const sql = 'SELECT pd.*, s.code supplierCode, s.name supplierName, creator.display_name creatorName FROM payment_disbursements pd JOIN suppliers s ON s.id = pd.supplier_id JOIN users creator ON creator.id = pd.creator_id WHERE ' + where + ' ORDER BY pd.created_at DESC LIMIT 100';
   return send(res, 200, { disbursements: db.prepare(sql).all(...params) });
@@ -3744,6 +3775,8 @@ function listProductionOrders(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(po.order_no LIKE ? OR p.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PRODUCTION_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND po.status = ?'; params.push(status); }
   const sql = 'SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName, (SELECT sum(consumed_quantity) FROM production_order_items WHERE order_id=po.id) totalConsumed, (SELECT sum(quantity) FROM production_outputs WHERE order_id=po.id) totalOutput FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE ' + where + ' ORDER BY po.created_at DESC LIMIT 100';
   return send(res, 200, { orders: db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: PO_STATUS[row.status] || row.status })) });

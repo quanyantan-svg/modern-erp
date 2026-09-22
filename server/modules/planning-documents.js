@@ -30,6 +30,7 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, send,
 } from '../lib/http.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -156,6 +157,8 @@ export async function listProductionInstructions(db, res, actor, url) {
   const runId = url.searchParams.get('mrpRunId') || url.searchParams.get('mrp_run_id');
   let where = '1=1';
   const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PRODUCTION_INSTRUCTION', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pi.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND pi.status = ?'; params.push(status); }
   if (runId) { where += ' AND pi.mrp_run_id = ?'; params.push(runId); }
   const rows = db.prepare(`
@@ -373,6 +376,8 @@ export async function listPurchaseInstructions(db, res, actor, url) {
   const runId = url.searchParams.get('mrpRunId') || url.searchParams.get('mrp_run_id');
   let where = '1=1';
   const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_INSTRUCTION', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pi.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND pi.status = ?'; params.push(status); }
   if (runId) { where += ' AND pi.mrp_run_id = ?'; params.push(runId); }
   const rows = db.prepare(`
@@ -557,6 +562,8 @@ export async function listPurchaseRequisitions(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '1=1';
   const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_REQUISITION', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND pr.status = ?'; params.push(status); }
   const rows = db.prepare(`
     SELECT pr.id, pr.requisition_no requisitionNo, pr.source_instruction_id sourceInstructionId,

@@ -116,8 +116,12 @@ function sourceRows(db, table, entityType, entityId) {
 }
 
 function inventoryEffects(db, entityType, entityId) {
-  return sourceRows(db, 'inventory_transactions', entityType, entityId).map((row) => ({
+  return db.prepare(`
+    SELECT rowid lifecycle_rowid,* FROM inventory_transactions
+    WHERE source_type=? AND source_id=? ORDER BY created_at,rowid
+  `).all(entityType, entityId).map((row) => ({
     id: row.id,
+    ledgerSequence: Number(row.lifecycle_rowid),
     warehouseId: row.warehouse_id,
     productId: row.product_id,
     quantity: Number(row.quantity_change),
@@ -194,6 +198,7 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       node.selectedForCleanup = true;
       queue.push(node);
     }
+    if (external) node.externalDependency = true;
     if (from) {
       const edgeKey = `${from}|${key}|${relationship}`;
       if (!edges.some((edge) => edge.key === edgeKey)) edges.push({ key: edgeKey, from, to: key, relationship, external: Boolean(external) });
@@ -209,6 +214,18 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
     expanded.add(node.key);
     const selectedDownstream = node.selectedForCleanup;
     const row = rowFor(db, node.entityType, node.entityId);
+
+    if (node.entityType === 'SALES_ORDER') {
+      for (const delivery of db.prepare('SELECT id FROM sales_deliveries WHERE sales_order_id=?').all(node.entityId)) add('SALES_DELIVERY', delivery.id, selectedDownstream, 'GENERATED', node.key);
+    }
+    if (node.entityType === 'SALES_DELIVERY') {
+      if (row.sales_order_id) add('SALES_ORDER', row.sales_order_id, false, 'SOURCE', node.key);
+      for (const ret of db.prepare("SELECT id FROM return_orders WHERE delivery_id=? OR (source_type='SALES' AND source_id=?)").all(node.entityId, node.entityId)) add('SALES_RETURN', ret.id, selectedDownstream, 'GENERATED', node.key);
+    }
+    if (node.entityType === 'SALES_RETURN') {
+      const deliveryId = row.delivery_id || (row.source_type === 'SALES' ? row.source_id : null);
+      if (deliveryId) add('SALES_DELIVERY', deliveryId, false, 'SOURCE', node.key);
+    }
 
     if (node.entityType === 'PURCHASE_INSTRUCTION') {
       for (const req of db.prepare('SELECT id FROM purchase_requisitions WHERE source_instruction_id=?').all(node.entityId)) add('PURCHASE_REQUISITION', req.id, selectedDownstream, 'GENERATED', node.key);
@@ -226,6 +243,11 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       if (row.purchase_order_id) add('PURCHASE_ORDER', row.purchase_order_id, false, 'SOURCE', node.key);
       for (const ret of db.prepare('SELECT id FROM purchase_returns WHERE receipt_id=?').all(node.entityId)) add('PURCHASE_RETURN', ret.id, selectedDownstream, 'GENERATED', node.key);
     }
+    if (node.entityType === 'PURCHASE_RETURN' && row.receipt_id) add('PURCHASE_RECEIPT', row.receipt_id, false, 'SOURCE', node.key);
+    if (node.entityType === 'PLANNING_FORECAST') {
+      for (const run of db.prepare('SELECT id FROM mrp_runs WHERE forecast_id=?').all(node.entityId)) add('MRP_RUN', run.id, selectedDownstream, 'GENERATED', node.key);
+    }
+    if (node.entityType === 'MRP_RUN' && row.forecast_id) add('PLANNING_FORECAST', row.forecast_id, false, 'SOURCE', node.key);
     if (node.entityType === 'PRODUCTION_INSTRUCTION') {
       for (const item of db.prepare('SELECT production_order_id id FROM production_instruction_items WHERE instruction_id=? AND production_order_id IS NOT NULL').all(node.entityId)) add('PRODUCTION_ORDER', item.id, selectedDownstream, 'GENERATED', node.key);
     }
@@ -252,11 +274,27 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       for (const item of db.prepare('SELECT DISTINCT collection_id id FROM payment_collection_items WHERE receivable_id=?').all(node.entityId)) add('PAYMENT_COLLECTION', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const item of db.prepare('SELECT id FROM payment_collections WHERE receivable_id=?').all(node.entityId)) add('PAYMENT_COLLECTION', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const discount of db.prepare('SELECT id FROM sales_discounts WHERE source_receivable_id=?').all(node.entityId)) add('SALES_DISCOUNT', discount.id, includeExternal, 'DISCOUNT', node.key, true);
+      const sourceType = SOURCE_ENTITY_TYPES[row.source_type] || (LIFECYCLE_ENTITIES[row.source_type] ? row.source_type : null);
+      if (sourceType) add(sourceType, row.source_id, includeExternal, 'SOURCE', node.key, true);
     }
     if (node.entityType === 'ACCOUNT_PAYABLE') {
       for (const item of db.prepare('SELECT DISTINCT disbursement_id id FROM payment_disbursement_items WHERE payable_id=?').all(node.entityId)) add('PAYMENT_DISBURSEMENT', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const item of db.prepare('SELECT id FROM payment_disbursements WHERE payable_id=?').all(node.entityId)) add('PAYMENT_DISBURSEMENT', item.id, includeExternal, 'SETTLEMENT', node.key, true);
       for (const discount of db.prepare('SELECT id FROM purchase_discounts WHERE source_payable_id=?').all(node.entityId)) add('PURCHASE_DISCOUNT', discount.id, includeExternal, 'DISCOUNT', node.key, true);
+      const sourceType = SOURCE_ENTITY_TYPES[row.source_type] || (LIFECYCLE_ENTITIES[row.source_type] ? row.source_type : null);
+      if (sourceType) add(sourceType, row.source_id, includeExternal, 'SOURCE', node.key, true);
+    }
+    if (node.entityType === 'SALES_DISCOUNT' && row.source_receivable_id) add('ACCOUNT_RECEIVABLE', row.source_receivable_id, includeExternal, 'DISCOUNT_SOURCE', node.key, true);
+    if (node.entityType === 'PURCHASE_DISCOUNT' && row.source_payable_id) add('ACCOUNT_PAYABLE', row.source_payable_id, includeExternal, 'DISCOUNT_SOURCE', node.key, true);
+    if (node.entityType === 'PAYMENT_COLLECTION') {
+      for (const item of db.prepare('SELECT receivable_id id FROM payment_collection_items WHERE collection_id=?').all(node.entityId)) add('ACCOUNT_RECEIVABLE', item.id, includeExternal, 'SETTLES', node.key, true);
+    }
+    if (node.entityType === 'PAYMENT_DISBURSEMENT') {
+      for (const item of db.prepare('SELECT payable_id id FROM payment_disbursement_items WHERE disbursement_id=?').all(node.entityId)) add('ACCOUNT_PAYABLE', item.id, includeExternal, 'SETTLES', node.key, true);
+    }
+    if (node.entityType === 'ACCOUNTING_VOUCHER') {
+      const sourceType = SOURCE_ENTITY_TYPES[row.source_type] || (LIFECYCLE_ENTITIES[row.source_type] ? row.source_type : null);
+      if (sourceType && !(sourceType === 'ACCOUNTING_VOUCHER' && row.source_id === node.entityId)) add(sourceType, row.source_id, includeExternal, 'SOURCE', node.key, true);
     }
 
     // Conservative stock provenance: without lots, any later outbound movement
@@ -266,10 +304,9 @@ function graphBuilder(db, rootType, rootId, includeExternal) {
       const consumers = db.prepare(`
         SELECT source_type,source_id,source_no,created_at
         FROM inventory_transactions
-        WHERE warehouse_id=? AND product_id=? AND direction='OUT'
-          AND (created_at > ? OR (created_at = ? AND id > ?))
-        ORDER BY created_at,id
-      `).all(effect.warehouseId, effect.productId, effect.createdAt, effect.createdAt, effect.id);
+        WHERE warehouse_id=? AND product_id=? AND direction='OUT' AND rowid>?
+        ORDER BY rowid
+      `).all(effect.warehouseId, effect.productId, effect.ledgerSequence);
       for (const consumer of consumers) {
         const type = SOURCE_ENTITY_TYPES[consumer.source_type];
         if (type) add(type, consumer.source_id, includeExternal, 'INVENTORY_CONSUMPTION', node.key, true);
@@ -392,6 +429,143 @@ export function lifecycleArchiveClause(entityType, idExpression = 'id') {
   return `NOT EXISTS (SELECT 1 FROM lifecycle_archives la WHERE la.entity_type='${type}' AND la.entity_id=${idExpression} AND la.active=1)`;
 }
 
+// Canonical business-list filter. Entity types are resolved from the fixed
+// registry; no client-provided table or column name reaches SQL.
+export function lifecycleArchiveFilter(entityType, { includeArchived = false, idExpression = 'id' } = {}) {
+  const type = normalizeEntityType(entityType);
+  return includeArchived
+    ? { clause: '', entityType: type }
+    : { clause: lifecycleArchiveClause(type, idExpression), entityType: type };
+}
+
+function lifecycleRecordSummary(row, entityType) {
+  const rule = LIFECYCLE_ENTITIES[entityType];
+  return {
+    entityType,
+    entityId: row.id,
+    label: rule.label,
+    documentNo: String(row[rule.number] || row.id),
+    status: String(row[rule.status] || ''),
+    businessDate: row[rule.date] || row.created_at || null,
+    period: periodOf(row[rule.date] || row.created_at),
+    archived: row.archive_active === 1,
+    archiveReason: row.archive_active === 1 ? row.archive_reason || '' : '',
+    archivedAt: row.archive_active === 1 ? row.archive_archived_at : null,
+    archivedBy: row.archive_active === 1 ? row.archive_archived_by : null,
+  };
+}
+
+export function listLifecycleRecords(db, actor, query = {}) {
+  allow(actor, 'USERS_MANAGE');
+  const requestedType = query.entityType ? normalizeEntityType(query.entityType) : null;
+  const search = String(query.search || '').trim();
+  const includeArchived = query.includeArchived === true;
+  const limit = Math.max(1, Math.min(200, Number(query.limit) || 60));
+  const types = requestedType ? [requestedType] : Object.keys(LIFECYCLE_ENTITIES);
+  const records = [];
+
+  for (const entityType of types) {
+    const rule = LIFECYCLE_ENTITIES[entityType];
+    const where = [];
+    const params = [entityType];
+    if (search) {
+      where.push(`(t.${rule.number} LIKE ? OR t.id LIKE ?)`);
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    if (!includeArchived) {
+      where.push('la.entity_id IS NULL');
+    }
+    const rows = db.prepare(`
+      SELECT t.*,la.active archive_active,la.reason archive_reason,
+             la.archived_at archive_archived_at,la.archived_by archive_archived_by
+        FROM ${rule.table} t
+        LEFT JOIN lifecycle_archives la
+          ON la.entity_type=? AND la.entity_id=t.id AND la.active=1
+       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+       ORDER BY t.${rule.date} DESC,t.id DESC
+       LIMIT ${limit}
+    `).all(...params);
+    records.push(...rows.map((row) => lifecycleRecordSummary(row, entityType)));
+  }
+
+  records.sort((left, right) => String(right.businessDate || '').localeCompare(String(left.businessDate || ''))
+    || right.documentNo.localeCompare(left.documentNo));
+  return {
+    records: records.slice(0, limit),
+    total: records.length,
+    entityTypes: Object.entries(LIFECYCLE_ENTITIES).map(([key, rule]) => ({ key, label: rule.label })),
+  };
+}
+
+export function listLifecycleRecordsHandler(db, res, actor, url) {
+  return send(res, 200, listLifecycleRecords(db, actor, {
+    entityType: url.searchParams.get('entityType'),
+    search: url.searchParams.get('search'),
+    includeArchived: url.searchParams.get('includeArchived') === 'true',
+    limit: url.searchParams.get('limit'),
+  }));
+}
+
+function parseAuditJson(value, fallback) {
+  try { return JSON.parse(value || ''); } catch { return fallback; }
+}
+
+export function listCleanupEvents(db, actor, query = {}) {
+  allow(actor, 'USERS_MANAGE');
+  const limit = Math.max(1, Math.min(100, Number(query.limit) || 30));
+  const search = String(query.search || '').trim();
+  const entityType = query.entityType ? normalizeEntityType(query.entityType) : '';
+  const where = [];
+  const params = [];
+  if (search) {
+    where.push('(ce.root_document_no LIKE ? OR ce.reason LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  if (entityType) { where.push('ce.root_entity_type=?'); params.push(entityType); }
+  const rows = db.prepare(`
+    SELECT ce.*,u.display_name actor_name,u.username actor_username
+      FROM cleanup_events ce LEFT JOIN users u ON u.id=ce.actor_id
+     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+     ORDER BY ce.created_at DESC LIMIT ${limit}
+  `).all(...params);
+  const itemQuery = db.prepare('SELECT * FROM cleanup_event_items WHERE cleanup_event_id=? ORDER BY entity_type,document_no');
+  return {
+    events: rows.map((row) => ({
+      id: row.id,
+      rootEntityType: row.root_entity_type,
+      rootEntityId: row.root_entity_id,
+      rootDocumentNo: row.root_document_no,
+      actor: { id: row.actor_id, displayName: row.actor_name || row.actor_username || row.actor_id },
+      reason: row.reason,
+      classification: row.classification,
+      affectedEntityTypes: parseAuditJson(row.affected_entity_types, []),
+      affectedEntityIds: parseAuditJson(row.affected_entity_ids, []),
+      affectedDocumentNumbers: parseAuditJson(row.affected_document_numbers, []),
+      inventoryEffects: parseAuditJson(row.inventory_effects, []),
+      financeEffects: parseAuditJson(row.finance_effects, []),
+      voucherEffects: parseAuditJson(row.voucher_effects, []),
+      periods: parseAuditJson(row.periods, []),
+      successState: row.success_state,
+      createdAt: row.created_at,
+      items: itemQuery.all(row.id).map((item) => ({
+        id: item.id, entityType: item.entity_type, entityId: item.entity_id,
+        documentNo: item.document_no, status: item.status, effective: item.effective === 1,
+        inventoryEffect: parseAuditJson(item.inventory_effect, []),
+        financeEffect: parseAuditJson(item.finance_effect, {}), period: item.period,
+      })),
+    })),
+    total: rows.length,
+  };
+}
+
+export function listCleanupEventsHandler(db, res, actor, url) {
+  return send(res, 200, listCleanupEvents(db, actor, {
+    search: url.searchParams.get('search'),
+    entityType: url.searchParams.get('entityType'),
+    limit: url.searchParams.get('limit'),
+  }));
+}
+
 export function createCleanupAudit(db, actor, graph, reason) {
   const cleanupId = id();
   const selected = graph.nodes.filter((node) => node.selectedForCleanup);
@@ -484,7 +658,7 @@ function applyInventoryCleanup(db, groups, actorId) {
 
     const remaining = db.prepare(`
       SELECT id,quantity_change,direction FROM inventory_transactions
-      WHERE warehouse_id=? AND product_id=? ORDER BY created_at,id
+      WHERE warehouse_id=? AND product_id=? ORDER BY rowid
     `).all(group.warehouseId, group.productId);
     const signedChange = (row) => row.direction === 'OUT' ? -Number(row.quantity_change) : Number(row.quantity_change);
     const remainingChange = remaining.reduce((sum, row) => sum + signedChange(row), 0);

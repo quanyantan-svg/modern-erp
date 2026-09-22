@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, send } from '../lib/http.js';
 import { transaction } from '../db.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const STATUS_OUT = { PENDING: 'OPEN', PARTIAL: 'PARTIALLY_SETTLED', COMPLETED: 'SETTLED', WRITTEN_OFF: 'SETTLED' };
 const STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分收款', SETTLED: '已结清' };
@@ -51,6 +52,8 @@ export function listReceivables(db, res, actor, url) {
   allowAny(actor, ['AR_VIEW', 'COLLECTION_MANAGE']);
   const search = `%${url.searchParams.get('search') || ''}%`; const customerId = url.searchParams.get('customer'); const status = url.searchParams.get('status');
   const where = ['(ar.voucher_no LIKE ? OR ar.source_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)']; const params = [search, search, search, search];
+  const archiveFilter = lifecycleArchiveFilter('ACCOUNT_RECEIVABLE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ar.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (customerId) { where.push('ar.customer_id=?'); params.push(customerId); }
   if (status) { where.push('ar.status=?'); params.push(statusFilter(status)); }
   const rows = db.prepare(`SELECT ar.*,c.code customerCode,c.name customerName FROM account_receivables ar JOIN customers c ON c.id=ar.customer_id WHERE ${where.join(' AND ')} ORDER BY ar.business_date DESC,ar.created_at DESC LIMIT 200`).all(...params);
@@ -70,6 +73,8 @@ export function listPayables(db, res, actor, url) {
   allowAny(actor, ['AP_VIEW', 'PAYMENT_MANAGE']);
   const search = `%${url.searchParams.get('search') || ''}%`; const supplierId = url.searchParams.get('supplier'); const status = url.searchParams.get('status');
   const where = ['(ap.voucher_no LIKE ? OR ap.source_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)']; const params = [search, search, search, search];
+  const archiveFilter = lifecycleArchiveFilter('ACCOUNT_PAYABLE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ap.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (supplierId) { where.push('ap.supplier_id=?'); params.push(supplierId); }
   if (status) { where.push('ap.status=?'); params.push(statusFilter(status)); }
   const rows = db.prepare(`SELECT ap.*,s.code supplierCode,s.name supplierName FROM account_payables ap JOIN suppliers s ON s.id=ap.supplier_id WHERE ${where.join(' AND ')} ORDER BY ap.business_date DESC,ap.created_at DESC LIMIT 200`).all(...params);
@@ -150,6 +155,8 @@ export function listSettlementDocuments(db, res, actor, url, kind) {
   const cfg = documentConfig(kind); allowAny(actor, cfg.viewPermissions);
   const search = `%${url.searchParams.get('search') || ''}%`; const status = url.searchParams.get('status'); const partyId = url.searchParams.get(cfg.listParty);
   const partyAlias = cfg.partyTable === 'customers' ? 'c' : 's'; const where = [`(d.${cfg.numberColumn} LIKE ? OR ${partyAlias}.code LIKE ? OR ${partyAlias}.name LIKE ?)`]; const params = [search, search, search];
+  const archiveFilter = lifecycleArchiveFilter(cfg.entity, { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'd.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   if (status) { where.push('d.status=?'); params.push(status); } if (partyId) { where.push(`d.${cfg.partyColumn}=?`); params.push(partyId); }
   const rows = db.prepare(`SELECT d.*,${partyAlias}.code ${cfg.partyCode},${partyAlias}.name ${cfg.partyName} FROM ${cfg.table} d JOIN ${cfg.partyTable} ${partyAlias} ON ${partyAlias}.id=d.${cfg.partyColumn} WHERE ${where.join(' AND ')} ORDER BY d.${cfg.dateColumn} DESC,d.created_at DESC LIMIT 200`).all(...params);
   return send(res, 200, { [cfg.listKey]: rows.map((row) => mapDocument(row, cfg)) });

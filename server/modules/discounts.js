@@ -43,6 +43,7 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 
 const SALES_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PURCHASE_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -104,8 +105,9 @@ function computeSourceCapacity(db, receivable) {
   return linkedReturnCents + discountCents;
 }
 
-export function listSalesDiscounts(db, res, actor) {
+export function listSalesDiscounts(db, res, actor, url) {
   allowAny(actor, ['AR_VIEW', 'SALES_DISCOUNT_MANAGE']);
+  const archiveFilter = lifecycleArchiveFilter('SALES_DISCOUNT', { includeArchived: url?.searchParams?.get('includeArchived') === 'true', idExpression: 'd.id' });
   const rows = db.prepare(`
     SELECT d.id, d.discount_no discountNo, d.status, d.business_date businessDate,
            d.amount_cents amountCents, d.reason, d.notes, d.created_at createdAt,
@@ -113,7 +115,8 @@ export function listSalesDiscounts(db, res, actor) {
            creator.display_name creatorName
       FROM sales_discounts d
       JOIN customers c ON c.id = d.customer_id
-      JOIN users creator ON creator.id = d.creator_id
+     JOIN users creator ON creator.id = d.creator_id
+     ${archiveFilter.clause ? `WHERE ${archiveFilter.clause}` : ''}
      ORDER BY d.created_at DESC
      LIMIT 100
   `).all().map((row) => ({
@@ -311,8 +314,9 @@ function computePurchaseSourceCapacity(db, payable) {
   return returnCents + discountCents;
 }
 
-export function listPurchaseDiscounts(db, res, actor) {
+export function listPurchaseDiscounts(db, res, actor, url) {
   allowAny(actor, ['AP_VIEW', 'PURCHASE_DISCOUNT_MANAGE']);
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_DISCOUNT', { includeArchived: url?.searchParams?.get('includeArchived') === 'true', idExpression: 'd.id' });
   const rows = db.prepare(`
     SELECT d.id, d.discount_no discountNo, d.status, d.business_date businessDate,
            d.amount_cents amountCents, d.reason, d.notes, d.created_at createdAt,
@@ -320,7 +324,8 @@ export function listPurchaseDiscounts(db, res, actor) {
            creator.display_name creatorName
       FROM purchase_discounts d
       JOIN suppliers s ON s.id = d.supplier_id
-      JOIN users creator ON creator.id = d.creator_id
+     JOIN users creator ON creator.id = d.creator_id
+     ${archiveFilter.clause ? `WHERE ${archiveFilter.clause}` : ''}
      ORDER BY d.created_at DESC
      LIMIT 100
   `).all().map((row) => ({
