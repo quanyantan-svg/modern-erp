@@ -115,7 +115,10 @@ describe('navigation state and regression contracts', () => {
   test('20 business pages are selected once from the canonical pages map', () => { assert.equal((appSource.match(/pages\[mobileApplication\.page\]/g)||[]).length,1); });
   test('21 related navigation keeps the Applications tab active', () => { assert.match(appSource, /function navigateToPage[\s\S]*?setMobileTab\('apps'\)/); });
   test('22 return to Applications still clears the selected application', () => { assert.match(appSource, /function returnToMobileApplications\(\)[\s\S]*?setMobileApplication\(null\)/); });
-  test('23 M1 shell conditional composition is preserved', () => { assert.match(appSource, /if \(isMobile\)[\s\S]*?<MobileShell/); });
+  test('23 one canonical shell is rendered without viewport branching', () => {
+    assert.equal((appSource.match(/<MobileShell/g) || []).length, 1);
+    assert.doesNotMatch(appSource, /isMobile|useMobile|useMediaQuery|matchMedia|innerWidth/);
+  });
   test('24 M2 launcher uses canonical navigation', () => { assert.match(appSource, /function handleMobileApplicationSelect\(item\) \{[\s\S]*?navigateToPage\(item\.page/); });
   test('25 M3 approval mutation dispatch is unchanged', () => { assert.match(approvalSource, /await api\(request\.path, request\.options\)/); });
   test('26 M4 relationship data rendering is unchanged', () => { assert.match(logisticsSource, /relation\.upstream/); assert.match(logisticsSource, /relation\.downstream/); });

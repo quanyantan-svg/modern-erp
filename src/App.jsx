@@ -400,8 +400,8 @@ export default function App() {
         </section>
       );
     }
-    // The launcher consumes the already permission-filtered desktop nav.
-    // Mobile metadata adds product grouping and display terminology only.
+    // The launcher consumes the permission-filtered canonical navigation.
+    // Product metadata adds grouping and display terminology only.
     return (
       <MobilePage>
         <MobileLauncher

@@ -1,7 +1,7 @@
 // Mobile product information architecture.
 //
 // Permissions deliberately do not live here. Each item points at one existing
-// desktop navigation page and buildMobileApplicationGroups() only accepts the
+// application page and buildMobileApplicationGroups() only accepts the
 // already-authorized `visibleNav` produced from App.jsx navGroups. A permission
 // change therefore has one source of truth.
 

@@ -86,8 +86,6 @@
   --font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* Layout */
-  --sidebar-width: 248px;
-  --topbar-height: 56px;
   --app-max-width: 600px;
   --bottom-nav-height: 72px;
   --bottom-action-height: 72px;
@@ -119,23 +117,6 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
 button { cursor: pointer; border: none; background: none; }
 a { color: inherit; text-decoration: none; }
 
-/* ============ App Shell ============ */
-.app-shell { display: grid; grid-template-columns: var(--sidebar-width) 1fr; min-height: 100vh; }
-.main-area { grid-column: 2; min-width: 0; background: var(--bg-page); display: flex; flex-direction: column; }
-.page-content { padding: 28px 32px 60px; flex: 1; min-width: 0; }
-
-/* ============ Sidebar ============ */
-.sidebar {
-  position: fixed; inset: 0 auto 0 0; width: var(--sidebar-width);
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border-default);
-  display: flex; flex-direction: column; z-index: 10; overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-.sidebar::-webkit-scrollbar { width: 6px; }
-.sidebar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
-
-.brand { display: flex; align-items: center; gap: 12px; padding: 18px 18px 14px; border-bottom: 1px solid var(--border-subtle); }
 .brand-mark {
   width: 34px; height: 34px; border-radius: var(--r-sm);
   background: var(--accent);
@@ -144,48 +125,8 @@ a { color: inherit; text-decoration: none; }
   box-shadow: var(--shadow-1);
   letter-spacing: -0.5px;
 }
-.brand > div:last-child { display: flex; flex-direction: column; min-width: 0; }
-.brand > div:last-child strong { font-size: 15px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.2px; }
-.brand > div:last-child span { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
-
-.sidebar nav { padding: 10px 10px; flex: 1; }
-.sidebar-group { margin-bottom: 2px; }
-.sidebar-group-label {
-  font-size: 11px; font-weight: 600; color: var(--text-tertiary);
-  letter-spacing: 0.4px; padding: 14px 10px 6px; text-transform: uppercase;
-}
-.sidebar-divider { height: 1px; background: var(--border-subtle); margin: 8px 10px; }
-.sidebar nav a {
-  display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px;
-  border-radius: var(--r-sm); color: var(--text-secondary); font-size: 13.5px;
-  font-weight: 500; transition: background-color 0.15s ease, color 0.15s ease;
-}
-.sidebar nav a:hover { background: var(--bg-hover); color: var(--text-primary); }
-.sidebar nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-icon { width: 20px; display: inline-flex; align-items: center; justify-content: center; color: inherit; opacity: 0.85; flex-shrink: 0; }
-.sidebar nav a.active .nav-icon { opacity: 1; }
 .nav-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--danger); }
-
-/* ============ Topbar ============ */
-.topbar {
-  position: sticky; top: 0; z-index: 5;
-  background: rgba(255, 255, 255, 0.78);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
-  border-bottom: 1px solid var(--border-default);
-  padding: 0 32px; height: var(--topbar-height);
-  display: flex; align-items: center; justify-content: space-between; gap: 24px;
-}
-.topbar > div:first-child { min-width: 0; }
-.topbar h1 {
-  font-size: 17px; font-weight: 600; color: var(--text-primary);
-  letter-spacing: -0.2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.user-area { display: flex; align-items: center; gap: 12px; }
-.user-info { display: flex; flex-direction: column; line-height: 1.2; }
-.user-info strong { font-size: 13px; font-weight: 600; }
-.user-info span { font-size: 11px; color: var(--text-tertiary); }
 .avatar {
   width: 32px; height: 32px; border-radius: 50%;
   background: var(--accent);
@@ -812,22 +753,8 @@ tfoot td {
   }
 }
 
-/* ============================================================
-   Responsive System
-   - Mobile:  < 768px
-   - Tablet:  768px – 1023px
-   - Desktop: >= 1024px
-
-   Important boundary:
-   - max-width: 767.98px matches widths 0..767 (mobile)
-   - min-width: 768px matches widths 768..1023 (tablet)
-   - min-width: 1024px matches widths 1024+ (desktop)
-   ============================================================ */
-
-/* ---------- Desktop / Tablet compatible defaults (default layout) ---------- */
+/* Responsive refinements for the single canonical workspace. */
 @media (max-width: 1280px) {
-  .page-content { padding: 24px 24px 48px; }
-  .topbar { padding: 0 24px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
   .is-summary, .bs-totals { grid-template-columns: 1fr; }
@@ -836,15 +763,8 @@ tfoot td {
 
 @media (min-width: 768px) and (max-width: 1023.98px) {
   .permission-list { grid-template-columns: 1fr; }
-  .sidebar { width: 220px; }
-  :root { --sidebar-width: 220px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .form-grid { grid-template-columns: 1fr; }
-}
-
-/* ---------- Mobile-only base reset (hide desktop chrome entirely) ---------- */
-@media (max-width: 767.98px) {
-  .app-shell { display: none; }
 }
 
 /* ============================================================
@@ -1742,46 +1662,6 @@ tfoot td {
   box-shadow: var(--shadow-xs);
 }
 
-/* ============================================================
-   Mobile page compatibility (preserve existing desktop pages
-   without rewriting their JSX. Provides horizontal scroll
-   container for large tables.)
-   ============================================================ */
-@media (max-width: 767.98px) {
-  .mobile-main { padding: 14px 12px 24px; }
-  .mobile-application-view > * { min-width: 0; max-width: 100%; }
-  .desktop-only { display: none !important; }
-  /* Make desktop panel tables horizontally scrollable inside a
-     dedicated container rather than producing a global scroll. */
-  .panel-body table,
-  .panel table {
-    display: block;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-  .panel-body { padding: 12px; }
-  .form-grid { grid-template-columns: 1fr; }
-  .form-field input, .form-field select, .form-field textarea {
-    width: 100%;
-    max-width: 100%;
-  }
-  .toolbar { flex-wrap: wrap; gap: 8px; }
-  .toolbar input, .toolbar select { flex: 1 1 140px; min-width: 0; }
-  /* Modals: fit viewport on mobile */
-  .modal {
-    width: calc(100vw - 24px) !important;
-    max-width: calc(100vw - 24px) !important;
-    max-height: calc(100vh - 32px) !important;
-    max-height: calc(100dvh - 32px) !important;
-    margin: 16px 12px !important;
-    overflow-y: auto;
-  }
-  .modal__head { padding: 14px 16px; }
-  .modal__body { padding: 14px 16px; }
-  .modal__foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
-}
 .mobile-workflow,
 .document-relations,
 .finance-trace {
@@ -1896,10 +1776,6 @@ tfoot td {
 
 /* M10 product routing master data */
 .routing-filters { display:flex; gap:8px; flex-wrap:wrap; }
-.routing-list-mobile { display:none; }
-.routing-summary-card { width:100%; border:1px solid var(--border-default); border-radius:var(--r-md); background:var(--bg-surface); padding:14px; color:var(--text-primary); text-align:left; display:grid; gap:7px; }
-.routing-summary-card__head { display:flex; justify-content:space-between; align-items:center; gap:10px; }
-.routing-summary-card small { color:var(--text-secondary); line-height:1.5; }
 .routing-editor { min-width:0; }
 .routing-operation-editor { display:grid; grid-template-columns:58px minmax(0,1fr) auto; align-items:start; gap:12px; padding:14px 0; border-top:1px solid var(--border-subtle); }
 .routing-operation-editor__sequence,
@@ -1920,8 +1796,6 @@ tfoot td {
 .routing-operation-arrow { color:var(--accent); font-size:20px; line-height:28px; }
 
 @media (max-width: 767.98px) {
-  .routing-list-desktop { display:none; }
-  .routing-list-mobile { display:grid; gap:10px; }
   .routing-filters { width:100%; }
   .routing-filters select { flex:1 1 140px; min-width:0; }
   .routing-operation-editor { grid-template-columns:44px minmax(0,1fr); }
@@ -2232,7 +2106,7 @@ tfoot td {
   .mobile-bottom-nav__label { font-size:12px; }
   .mobile-bottom-nav__hint { display:none; }
 
-  /* Legacy desktop tables become contained mobile record cards. */
+  /* Canonical record tables retain the same card structure at compact widths. */
   .mobile-application-view .table-wrap { overflow:visible; border-radius:0; }
   .mobile-application-view .table-wrap table,
   .mobile-application-view .panel table { display:table; width:100%; overflow:visible; }
@@ -2253,11 +2127,6 @@ tfoot td {
   .stats-grid, .is-summary, .bs-totals { grid-template-columns:minmax(0,1fr); gap:12px; }
   .hero-card { align-items:flex-start; flex-direction:column; padding:20px; border-radius:var(--radius-lg); }
   .hero-amount { text-align:left; }
-}
-
-@media (min-width: 1024px) {
-  thead { position:sticky; top:var(--topbar-height); z-index:2; }
-  .page-content { max-width:1600px; width:100%; margin:0 auto; }
 }
 
 /* V1.2 canonical workspace and shared product primitives. The same structure

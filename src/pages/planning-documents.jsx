@@ -689,7 +689,7 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
 
 // ============================================================
 // PlanningDocumentsHub — entrypoint when no specific document selected.
-// The user lands here from the sidebar nav; from there they can
+// The user lands here from the application launcher; from there they can
 // drill into any of the three families.
 // ============================================================
 
