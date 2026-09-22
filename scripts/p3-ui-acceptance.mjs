@@ -89,6 +89,17 @@ async function verifyInteractiveSurfaces(cdp, viewport) {
   flag(`${viewport.name} material plan filters`, JSON.stringify(plan.filters) === JSON.stringify(['全部','生产','采购','缺料']), JSON.stringify(plan.filters));
   flag(`${viewport.name} material plan result state`, plan.cards > 0 || plan.zero);
   flag(`${viewport.name} bottom navigation does not overlap content`, plan.reservedBottom >= plan.navHeight, JSON.stringify(plan));
+  for (const filter of [
+    { label: '生产', expectCard: true },
+    { label: '采购', expectCard: false },
+    { label: '缺料', expectCard: true },
+  ]) {
+    await cdp.eval(`([...document.querySelectorAll('.segmented-control button')].find((button)=>button.innerText.trim()===${JSON.stringify(filter.label)}))?.click()`);
+    await cdp.waitFor(`[...document.querySelectorAll('.segmented-control button')].some((button)=>button.innerText.trim()===${JSON.stringify(filter.label)} && button.getAttribute('aria-pressed')==='true')`);
+    const filterState = await cdp.eval(`({cards:document.querySelectorAll('.material-card').length,empty:document.querySelector('.empty,.canonical-empty-state')?.innerText||''})`);
+    flag(`${viewport.name} ${filter.label} filter usable`, filter.expectCard ? filterState.cards > 0 : filterState.cards === 0 && filterState.empty.includes('没有匹配的物料'), JSON.stringify(filterState));
+  }
+  await cdp.eval(`([...document.querySelectorAll('.segmented-control button')].find((button)=>button.innerText.trim()==='全部'))?.click()`); await sleep(50);
   if (plan.cards > 0) {
     await cdp.eval(`[...document.querySelectorAll('.material-card__trace')][0]?.click()`);
     flag(`${viewport.name} calculation basis opens`, await cdp.waitFor(`!!document.querySelector('.sheet') && document.querySelector('.sheet').innerText.includes('计算依据')`));
