@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
+import { PERMISSIONS, createDatabase } from './db.js';
+import { APPROVAL_DOCUMENT_TYPES } from './modules/approvals.js';
+import { LIFECYCLE_ENTITIES } from './modules/lifecycle-engine.js';
+
+const root = new URL('../', import.meta.url);
+const source = (path) => readFileSync(new URL(path, root), 'utf8');
+const appSource = source('src/App.jsx');
+const shellSource = source('src/components/MobileShell.jsx');
+const designSource = source('src/components/design-system.jsx');
+const uiSource = `${designSource}\n${source('src/components/ui.jsx')}`;
+const materialPlanSource = source('src/pages/material-requirements-plan.jsx');
+const lifecycleTestSource = source('server/v12-lifecycle-cleanup.test.js');
+const browserAcceptanceSource = source('scripts/p3-ui-acceptance.mjs');
+let tempDir;
+
+before(() => { tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-v12-release-')); });
+after(() => { rmSync(tempDir, { recursive: true, force: true }); });
+
+describe('V1.2 release registries', () => {
+  test('permission, role, approval and lifecycle registries stay canonical', () => {
+    assert.equal(PERMISSIONS.length, 113);
+    assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION']);
+    assert.equal(Object.keys(LIFECYCLE_ENTITIES).length, 25);
+
+    const db = createDatabase(join(tempDir, 'registry.db'));
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM roles').get().count, 5);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM role_permissions WHERE role_id='role-admin'").get().count, 113);
+    assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+    db.close();
+  });
+
+  test('fresh and second database startup are idempotent', () => {
+    const path = join(tempDir, 'second-start.db');
+    createDatabase(path).close();
+    const reopened = createDatabase(path);
+    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM permissions').get().count, 113);
+    assert.equal(reopened.prepare('SELECT COUNT(*) count FROM roles').get().count, 5);
+    assert.equal(reopened.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), []);
+    reopened.close();
+  });
+});
+
+describe('V1.2 unified product acceptance contract', () => {
+  test('one canonical shell and five fixed tabs serve every viewport', () => {
+    assert.equal((appSource.match(/<MobileShell/g) || []).length, 1);
+    assert.doesNotMatch(appSource, /isMobile|useDesktop|useMediaQuery|matchMedia|innerWidth/);
+    for (const label of ['消息', '签核', '应用', '云翼', '我的']) assert.match(shellSource, new RegExp(`label: '${label}'`));
+    assert.equal((shellSource.match(/enabled: true/g) || []).length, 5);
+  });
+
+  test('shared product primitives cover lists, forms, filters, actions, status and errors', () => {
+    for (const primitive of ['RecordCard', 'FormRow', 'FilterSheet', 'ActionSheet', 'DangerSheet', 'StatusChip', 'ErrorState', 'BottomActionBar']) {
+      assert.match(uiSource, new RegExp(`export function ${primitive}\\b`));
+    }
+  });
+
+  test('material plan keeps one card architecture and all explicit controls', () => {
+    assert.match(materialPlanSource, /One canonical card architecture at every width/);
+    for (const filter of ['all', 'make', 'buy', 'shortage']) assert.match(materialPlanSource, new RegExp(`key: '${filter}'`));
+    assert.match(materialPlanSource, /本次计算期间内没有可纳入的需求/);
+    assert.match(materialPlanSource, /查看计算依据/);
+    assert.doesNotMatch(materialPlanSource, /<table|desktop/i);
+  });
+});
+
+describe('V1.2 lifecycle and real-browser acceptance matrix', () => {
+  test('all ten destructive lifecycle cases have executable coverage', () => {
+    const contracts = [
+      'simple bad draft deletes directly',
+      'deletes as one atomic chain',
+      'confirmed purchase receipt reverses stock + AP + balanced voucher atomically',
+      'partial cleanup is blocked after valid production consumed stock',
+      'includeExternal: true',
+      'closed inventory period blocks cleanup',
+      'archive is hidden in normal list',
+      'includeArchived=true',
+      '/api/lifecycle/restore',
+      'forced failure after reversal work rolls back',
+    ];
+    const allLifecycleCoverage = lifecycleTestSource + source('server/v12-lifecycle-product.test.js');
+    for (const contract of contracts) assert.ok(allLifecycleCoverage.includes(contract), `missing lifecycle coverage: ${contract}`);
+  });
+
+  test('real Edge acceptance declares every required width and role', () => {
+    for (const width of [375, 414, 768, 1024, 1440, 1600, 1920]) assert.match(browserAcceptanceSource, new RegExp(`width: ${width}\\b`));
+    for (const role of ['admin', 'sales', 'reviewer', 'warehouse', 'accounting']) assert.match(browserAcceptanceSource, new RegExp(`label: '${role}'`));
+    for (const check of ['login completes', 'canonical tabs', 'centered workspace', 'no page overflow', 'calculation basis opens', 'filter sheet opens', 'keyboard focus reaches a control', 'console errors=0', 'unexpected HTTP=0']) assert.ok(browserAcceptanceSource.includes(check));
+  });
+});

@@ -81,13 +81,10 @@ describe('CSS — mobile breakpoint contract', () => {
     );
   });
 
-  test('useMobile hook uses the same breakpoint as CSS', () => {
-    const hook = readSrc('hooks/useMediaQuery.js');
-    assert.match(
-      hook,
-      /\(max-width:\s*767\.98px\)/,
-      'useMobile hook must use the canonical 767.98px breakpoint'
-    );
+  test('viewport CSS never selects a second component tree', () => {
+    const app = readSrc('App.jsx');
+    assert.doesNotMatch(app, /useMobile|useDesktop|useMediaQuery|matchMedia|innerWidth/);
+    assert.doesNotMatch(css, /\.desktop-only|\.mobile-only|\.app-shell|\.sidebar|\.topbar/);
   });
 
   test('767px → mobile, 768px → non-mobile (boundary rule)', () => {

@@ -89,7 +89,7 @@ const EXPECTED_ROLE_PAGES = {
     'iqc', 'oqc', 'product-costs', 'cost-rates', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
-    'projects', 'tasks', 'timesheets', 'workflows', 'users', 'notifications',
+    'projects', 'tasks', 'timesheets', 'workflows', 'users', 'data-cleanup', 'notifications',
   ],
   'role-sales': [
     'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
@@ -138,7 +138,7 @@ describe('M2 application metadata', () => {
     assert.doesNotMatch(metadataSource, /user\.username|username\s*===/);
   });
 
-  test('every application points to a canonical desktop nav page', () => {
+  test('every application points to a canonical navigation page', () => {
     const navPages = new Set(navGroups.flatMap((group) => group.items || []).map((item) => item.key));
     for (const item of mobileGroups.flatMap((group) => group.items)) {
       assert.ok(navPages.has(item.page), `unknown mobile page: ${item.page}`);
@@ -262,7 +262,7 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(appSource, /function returnToMobileApplications\(\)[\s\S]*?setMobileApplication\(null\)[\s\S]*?setMobileTab\('apps'\)/);
   });
 
-  test('mobile defaults to Applications while desktop keeps dashboard default', () => {
+  test('the canonical shell defaults to Applications while preserving the page fallback', () => {
     assert.match(appSource, /useState\('apps'\)/);
     assert.match(appSource, /location\.hash\.slice\(1\) \|\| 'dashboard'/);
   });
