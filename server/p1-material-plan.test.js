@@ -376,7 +376,7 @@ test('P1 material plan: routing titles use exact product names', () => {
 
 test('P1 material plan: conversion actions link to M12 production / purchase instructions', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
-  // Mobile cards and desktop table both wire the link
+  // Canonical cards wire the link at every width.
   const makeCount = (source.match(/page="production-instructions"/g) || []).length;
   const buyCount = (source.match(/page="purchase-instructions"/g) || []).length;
   assert.ok(makeCount >= 1, 'production-instructions AppLink missing');

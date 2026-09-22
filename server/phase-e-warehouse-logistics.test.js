@@ -755,7 +755,8 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
 
   test('stale inaccessible hash renders the first visible page, not admin UsersRoles', () => {
     const app = readFileSync(join(srcDir, 'App.jsx'), 'utf8');
-    assert.match(app, /pages\[current\?\.key\]\s*\|\|\s*pages\.dashboard/);
+    assert.match(app, /if \(user && visibleNav\.length && !canNavigate\(page\)\) navigateToPage\(visibleNav\[0\]\.key/);
+    assert.match(app, /function navigateToPage[\s\S]*?const authorizedPage = visibleNav\.find/);
     assert.doesNotMatch(app, /className="page-content">\{pages\[page\]/);
   });
 });

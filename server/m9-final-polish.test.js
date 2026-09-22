@@ -35,7 +35,7 @@ function renderOverview(allowed = []) {
 }
 
 describe('M9 business overview', () => {
-  test('is mounted in desktop and mobile navigation without a new permission', () => {
+  test('is mounted in canonical navigation without a new permission', () => {
     assert.match(appSource, /key: 'business-overview',[^\n]+permission: 'DASHBOARD_VIEW'/);
     assert.match(appSource, /'business-overview': <BusinessOverview\/>/);
     assert.match(metadataSource, /page: 'business-overview', mobileLabel: '业务总览'/);
