@@ -45,7 +45,7 @@ const launcherIconNames = [
   'productionOrders', 'inventoryScrap', 'inventoryPeriod', 'salesDiscount',
   'purchaseDiscount', 'users', 'cleanup',
 ];
-const ic = Object.fromEntries(launcherIconNames.map((name) => [name, <ProductIcon key={name} name={name} size={22}/>]));
+const ic = Object.fromEntries(launcherIconNames.map((name) => [name, <ProductIcon key={name} name={name} size={24}/>]));
 
 // Navigation groups
 export const navGroups = [

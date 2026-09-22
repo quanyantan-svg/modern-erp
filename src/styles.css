@@ -2446,3 +2446,192 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 @media (prefers-reduced-motion:reduce) {
   *, *::before, *::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
 }
+
+/* ============================================================
+   V1.2 premium polish — round 2
+   Reduction-first hierarchy for the canonical mobile workspace.
+   ============================================================ */
+.mobile-main { gap:20px; padding-top:16px; }
+
+/* The shell header owns page identity. Direct page panels are layout only. */
+.mobile-application-view > .panel {
+  margin:0;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}
+.mobile-application-view > .panel > .panel-head { min-height:0; margin:0; }
+.mobile-application-view > .panel > .panel-head > div:first-child { display:none; }
+.mobile-application-view > .panel > .panel-head:empty { display:none; }
+.mobile-application-view > .panel > .panel-head > :last-child:not(:first-child) { margin-left:auto; }
+
+.mobile-application-view .toolbar { gap:10px; margin-bottom:20px; }
+.mobile-application-view .toolbar .search {
+  border:0;
+  background:var(--bg-surface-3);
+  box-shadow:none;
+}
+.mobile-application-view .toolbar .search:focus-within { background:var(--bg-surface); }
+.mobile-application-view .toolbar .search > button { padding:0; background:transparent; }
+.mobile-application-view .toolbar .compact-create { min-height:42px; padding:8px 17px; box-shadow:none; }
+.mobile-application-view .toolbar--search-action .search { grid-column:1; }
+.mobile-application-view .toolbar--search-action .compact-create { grid-column:2; grid-row:1; align-self:center; }
+.mobile-application-view .settlement-filters button {
+  flex:0 0 auto;
+  margin-left:auto;
+  padding:6px 2px;
+  border:0;
+  background:transparent;
+  color:var(--accent);
+}
+.mobile-application-view .form-actions > a.primary {
+  display:flex;
+  min-height:48px;
+  align-items:center;
+  justify-content:center;
+  border-radius:var(--radius-md);
+  background:var(--accent);
+  color:var(--text-on-accent);
+  font-weight:620;
+}
+.mobile-application-view > .panel > .form-actions {
+  position:static;
+  margin:10px 0 0;
+  padding:0;
+  background:transparent;
+}
+
+/* Empty states are intentional pauses, not oversized cards. */
+.canonical-empty-state, .empty, .mobile-page__body--empty {
+  min-height:168px;
+  gap:8px;
+  padding:25px 18px 28px;
+  background:transparent;
+  box-shadow:none;
+}
+.canonical-empty-state > svg, .empty > svg {
+  width:32px;
+  height:32px;
+  padding:6px;
+  border-radius:10px;
+  background:var(--bg-surface-3);
+  color:var(--text-tertiary);
+}
+.canonical-empty-state strong, .empty strong { font-size:17px; }
+.canonical-empty-state p, .empty p { margin:0; line-height:1.45; }
+
+/* Launcher groups use whitespace; app buttons carry the interaction. */
+.mobile-launcher { gap:27px; }
+.mobile-launcher__group {
+  gap:9px;
+  overflow:visible;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}
+.mobile-launcher__group--blue { --mobile-app-accent:#276a91; --mobile-app-accent-soft:#e9f1f5; }
+.mobile-launcher__group--green { --mobile-app-accent:#397765; --mobile-app-accent-soft:#ebf2ef; }
+.mobile-launcher__group--amber { --mobile-app-accent:#80653d; --mobile-app-accent-soft:#f3efe8; }
+.mobile-launcher__group-label { padding:0 3px; font-size:16px; font-weight:650; }
+.mobile-launcher__grid { gap:3px 5px; padding:0; }
+.mobile-launcher__item { min-height:91px; gap:8px; padding:8px 3px; }
+.mobile-launcher__item-icon {
+  width:44px;
+  height:44px;
+  border-radius:13px;
+  box-shadow:none;
+}
+.mobile-launcher__item-label { min-height:34px; font-size:13.5px; font-weight:550; line-height:1.3; }
+
+/* Compact inventory modes replace the previous launcher-within-a-page. */
+.inventory-workbench {
+  display:flex;
+  gap:2px;
+  margin:0 0 20px;
+  padding:3px;
+  overflow-x:auto;
+  border-radius:12px;
+  background:#E8EBEF;
+  scrollbar-width:none;
+}
+.inventory-workbench::-webkit-scrollbar { display:none; }
+.inventory-workbench > button, .inventory-workbench > a {
+  display:flex;
+  flex:1 0 auto;
+  min-height:38px;
+  padding:7px 11px;
+  border:0;
+  border-radius:9px;
+  background:transparent;
+  color:var(--text-secondary);
+  font-size:13px;
+  font-weight:580;
+  text-align:center;
+  white-space:nowrap;
+}
+.inventory-workbench > button.active {
+  border:0;
+  background:var(--bg-surface);
+  color:var(--text-primary);
+  box-shadow:0 1px 4px rgba(35,45,61,.12);
+}
+.inventory-records { display:grid; gap:11px; }
+.inventory-record {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto 18px;
+  grid-template-rows:auto auto;
+  gap:7px 12px;
+  width:100%;
+  min-height:88px;
+  padding:15px 14px 13px 16px;
+  border:0;
+  border-radius:var(--radius-lg);
+  background:var(--bg-surface);
+  box-shadow:var(--shadow-sm);
+  text-align:left;
+}
+.inventory-record__main { display:grid; min-width:0; gap:2px; }
+.inventory-record__main strong { overflow:hidden; font-size:16px; font-weight:680; text-overflow:ellipsis; white-space:nowrap; }
+.inventory-record__main .mono { color:var(--text-tertiary); font-size:12px; }
+.inventory-record__quantity { align-self:start; font-size:20px; font-weight:680; font-variant-numeric:tabular-nums; letter-spacing:-.35px; }
+.inventory-record__quantity small { font-size:13px; font-weight:550; color:var(--text-secondary); }
+.inventory-record__warehouse { grid-column:1 / 3; color:var(--text-secondary); font-size:14px; }
+.inventory-record > svg { grid-column:3; grid-row:1 / 3; align-self:center; color:var(--text-tertiary); }
+
+/* Approval decisions belong to detail. The list remains informational. */
+.mobile-approval-card__content { padding:15px 16px 16px; }
+.mobile-approval-card__summary { color:var(--text-primary); }
+.mobile-approval-card__meta b { font-size:17px; font-weight:680; }
+.mobile-approval-detail { padding-bottom:96px; }
+.mobile-approval-detail__actions { box-shadow:0 -1px 0 var(--separator); }
+
+.status-chip, .lifecycle-badge, .mobile-approval-status, .status {
+  min-height:20px;
+  padding:1px 7px;
+  font-size:11.5px;
+  font-weight:600;
+}
+.mobile-approval-status--submitted { background:#F8F1DE; color:#796022; }
+
+/* Financial record cards emphasize the balance and party. */
+.mobile-application-view .settlement-table tbody tr { position:relative; padding:16px; }
+.mobile-application-view .settlement-table tbody td.settlement-party { grid-column:1 / 2; font-size:16px; }
+.mobile-application-view .settlement-table tbody td.settlement-outstanding {
+  grid-column:2;
+  grid-row:1 / 3;
+  display:grid;
+  align-content:start;
+  justify-items:end;
+  color:var(--text-primary);
+  text-align:right;
+}
+.settlement-outstanding small { color:var(--text-tertiary); font-size:11px; font-weight:500; }
+.settlement-outstanding strong { font-size:19px; font-weight:700; letter-spacing:-.4px; }
+
+/* Bottom navigation is separated by a hairline, never a floating card. */
+.mobile-bottom-nav { border-top-color:rgba(54,62,74,.13); box-shadow:none; }
+.mobile-bottom-nav__item { color:#737C89; }
+.mobile-bottom-nav__item--active { color:#125FC5; }

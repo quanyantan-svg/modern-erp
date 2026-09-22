@@ -77,7 +77,7 @@ const ICONS = {
   cleanup: DatabaseZap,
 };
 
-export function Icon({ name, size = 20, strokeWidth = 1.8, className = '', ...props }) {
+export function Icon({ name, size = 20, strokeWidth = 1.75, className = '', ...props }) {
   const Component = ICONS[name] || Grid3X3;
   return <Component aria-hidden="true" className={className} size={size} strokeWidth={strokeWidth} {...props}/>;
 }
