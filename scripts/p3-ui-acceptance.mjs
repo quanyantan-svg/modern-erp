@@ -130,14 +130,14 @@ async function runViewport(baseUrl, viewport, profileRoot) {
         const shell=document.querySelector('.mobile-shell').getBoundingClientRect();
         const nav=document.querySelector('.mobile-bottom-nav').getBoundingClientRect();
         const visibleControls=[...document.querySelectorAll('button:not([disabled]),a[href],input,select,textarea')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight;});
-        return {items,tabs,widths,innerWidth,overflow:document.documentElement.scrollWidth-innerWidth,minTarget:visibleControls.length?Math.min(...visibleControls.map(e=>Math.round(e.getBoundingClientRect().height))):0,shell:{left:Math.round(shell.left),right:Math.round(shell.right),width:Math.round(shell.width),paddingBottom:parseFloat(getComputedStyle(document.querySelector('.mobile-shell')).paddingBottom)},nav:{left:Math.round(nav.left),right:Math.round(nav.right),width:Math.round(nav.width),height:Math.round(nav.height)},legacyChrome:Boolean(document.querySelector('.sidebar,.app-shell,.topbar')),bottomNav:Boolean(document.querySelector('.mobile-bottom-nav'))};
+        return {items,tabs,widths,clientWidth:document.documentElement.clientWidth,overflow:document.documentElement.scrollWidth-innerWidth,minTarget:visibleControls.length?Math.min(...visibleControls.map(e=>Math.round(e.getBoundingClientRect().height))):0,shell:{left:Math.round(shell.left),right:Math.round(shell.right),width:Math.round(shell.width),paddingBottom:parseFloat(getComputedStyle(document.querySelector('.mobile-shell')).paddingBottom)},nav:{left:Math.round(nav.left),right:Math.round(nav.right),width:Math.round(nav.width),height:Math.round(nav.height)},legacyChrome:Boolean(document.querySelector('.sidebar,.app-shell,.topbar')),bottomNav:Boolean(document.querySelector('.mobile-bottom-nav'))};
       })()`);
       record(`${role.label}.${viewport.name}`, state);
       flag(`${role.label} ${viewport.name} canonical tabs`, JSON.stringify(state.tabs) === JSON.stringify(['消息','签核','应用','云翼','我的']), JSON.stringify(state.tabs));
       flag(`${role.label} ${viewport.name} equal tabs`, Math.max(...state.widths)-Math.min(...state.widths) <= 1, JSON.stringify(state.widths));
       flag(`${role.label} ${viewport.name} touch targets`, state.minTarget >= 44, `min=${state.minTarget}`);
       flag(`${role.label} ${viewport.name} one canonical shell`, state.bottomNav && !state.legacyChrome);
-      flag(`${role.label} ${viewport.name} centered workspace`, state.shell.width <= 600 && Math.abs(state.shell.left-(state.innerWidth-state.shell.width)/2) <= 1, JSON.stringify(state.shell));
+      flag(`${role.label} ${viewport.name} centered workspace`, state.shell.width <= 600 && Math.abs(state.shell.left-(state.clientWidth-state.shell.width)/2) <= 1, JSON.stringify(state.shell));
       flag(`${role.label} ${viewport.name} bottom nav follows workspace`, state.nav.left === state.shell.left && state.nav.right === state.shell.right, JSON.stringify(state.nav));
       flag(`${role.label} ${viewport.name} bottom nav reserves content space`, state.shell.paddingBottom >= state.nav.height, JSON.stringify({padding:state.shell.paddingBottom,height:state.nav.height}));
       flag(`${role.label} ${viewport.name} no page overflow`, state.overflow <= 0, `delta=${state.overflow}`);
