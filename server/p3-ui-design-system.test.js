@@ -16,9 +16,9 @@ describe('P3 global design system', () => {
     for (const token of ['--bg-app', '--bg-grouped', '--bg-surface', '--bg-elevated', '--text-primary', '--text-secondary', '--text-tertiary', '--text-disabled', '--separator', '--border-subtle', '--accent', '--accent-hover', '--accent-soft', '--success', '--success-soft', '--warning', '--warning-soft', '--danger', '--danger-soft', '--info', '--info-soft', '--shadow-sm', '--shadow-md', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--space-1', '--space-8']) assert.match(css, new RegExp(token));
   });
 
-  test('uses the canonical platform font stack without bundled font names', () => {
-    assert.match(css, /system-ui,\s*-apple-system,\s*BlinkMacSystemFont,\s*"Segoe UI",\s*\n?\s*"PingFang SC",\s*"Microsoft YaHei",\s*sans-serif/);
-    assert.doesNotMatch(css, /SF Pro Text|SF Pro Display/);
+  test('uses the canonical native platform font stack without remote font assets', () => {
+    assert.match(css, /-apple-system,\s*BlinkMacSystemFont,\s*"SF Pro Text",\s*"Segoe UI",\s*system-ui,\s*\n?\s*"PingFang SC",\s*"Microsoft YaHei",\s*sans-serif/);
+    assert.doesNotMatch(css, /@font-face|fonts\.(?:googleapis|gstatic)\.com/);
   });
 
   test('exports coherent reusable page, list, form, button, control and summary primitives', () => {
