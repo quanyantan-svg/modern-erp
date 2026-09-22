@@ -215,10 +215,10 @@ test('P1 launcher: 基础资料 no longer contains forecasts or mrp items', () =
 });
 
 // ---------------------------------------------------------------------------
-// 6. App.jsx navGroups — three distinct desktop entries, label rename
+// 6. App.jsx navGroups — three distinct canonical entries, label rename
 // ---------------------------------------------------------------------------
 
-test('P1 navGroups: desktop sidebar uses 需求预测 / MRP 运算 / 物料需求计划 labels', () => {
+test('P1 navGroups: canonical navigation uses 需求预测 / MRP 运算 / 物料需求计划 labels', () => {
   const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
   assertContains(appSource, "key: 'forecasts', label: '需求预测'");
   assertContains(appSource, "key: 'mrp-runs', label: 'MRP 运算'");

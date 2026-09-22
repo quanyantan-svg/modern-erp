@@ -210,8 +210,9 @@ describe('M10 frontend and navigation contracts', () => {
     assert.doesNotMatch(page, /location\.hash|window\.location/);
   });
 
-  test('responsive list, detail cards and editor are present without drag-and-drop or execution semantics', () => {
-    for (const contract of ['routing-list-mobile', 'routing-operation-card', 'routing-operation-editor', 'sequenceNo', 'setupMinutes', 'runMinutesPerUnit']) assert.match(page, new RegExp(contract));
+  test('canonical list, detail cards and editor are present without duplicate variants or execution semantics', () => {
+    for (const contract of ['RecordList', 'RecordCard', 'routing-operation-card', 'routing-operation-editor', 'sequenceNo', 'setupMinutes', 'runMinutesPerUnit']) assert.match(page, new RegExp(contract));
+    assert.doesNotMatch(page, /routing-list-mobile|routing-list-desktop/);
     assert.doesNotMatch(page, /drag|drop|labor reporting|machine reporting/i);
   });
 

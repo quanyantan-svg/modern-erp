@@ -225,5 +225,5 @@ describe('M3R mobile approval UI', () => {
   test('sticky detail actions clear the bottom nav safe area', () => { assert.match(css,/\.mobile-approval-detail__actions\s*\{[^}]*bottom:\s*calc\(72px \+ env\(safe-area-inset-bottom/s); });
   test('touch targets stay at least 44px high', () => { assert.match(css,/\.mobile-approval-tabs__item\s*\{[^}]*min-height:\s*44px/s); assert.match(css,/\.mobile-approval-card__actions button,[^}]*min-height:\s*44px/s); });
   test('approval badge is wired through shell props', () => { assert.match(shellSource,/tabBadges\[tab\.key\] > 0/); });
-  test('desktop Approvals page remains mounted unchanged', () => { assert.match(appSource,/approvals:\s*<Approvals notify=\{notify\}\/>/); });
+  test('canonical Approvals business page remains mounted', () => { assert.match(appSource,/approvals:\s*<Approvals notify=\{notify\}\/>/); });
 });

@@ -739,7 +739,7 @@ describe('M7 — inventory source label map', () => {
 // ============================================================
 
 describe('M7 — frontend wiring', () => {
-  test('App.jsx declares a 决策报表 desktop sidebar group gated by REPORT_VIEW', () => {
+  test('App.jsx declares a 决策报表 navigation group gated by REPORT_VIEW', () => {
     const src = readSrc('App.jsx');
     assert.match(src, /label:\s*'决策报表'[\s\S]{0,200}any:\s*\['REPORT_VIEW'\]/);
   });
