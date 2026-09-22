@@ -42,9 +42,9 @@ const TABS = [
 
 // MobileHeader — top bar of the mobile shell.
 //   Shows: optional back action + page title + optional right action.
-function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction }) {
+function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction, root }) {
   return (
-    <header className="mobile-header" data-testid="mobile-header">
+    <header className={`mobile-header${root ? ' mobile-header--root' : ''}`} data-testid="mobile-header">
       <div className="mobile-header__brand">
         {backAction ? (
           <button
@@ -179,6 +179,7 @@ export default function MobileShell({
         pageSubtitle={pageSubtitle}
         backAction={backAction}
         rightAction={rightAction}
+        root={activeTab === 'apps' && !backAction}
       />
       <main className="mobile-main" data-testid="mobile-main">
         {children}

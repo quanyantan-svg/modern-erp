@@ -20,6 +20,11 @@
 
 import { Icon } from './icons.jsx';
 
+const OPTICALLY_COMPACT_ICONS = new Set([
+  'customers', 'suppliers', 'products', 'warehouses', 'mrpRuns',
+  'planningDocuments', 'inventory', 'accounting', 'cleanup', 'notifications',
+]);
+
 // Group shape:
 //   { key, label, accent, items: [{ page, key, label, iconKey }] }
 //
@@ -48,7 +53,7 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
         return (
           <div
             key={group.key || group.label}
-            className={`mobile-launcher__group mobile-launcher__group--${group.accent || 'slate'}`}
+            className={`mobile-launcher__group mobile-launcher__group--${group.accent || 'slate'} mobile-launcher__group--${group.key || 'other'}`}
             data-testid={`mobile-launcher-group-${group.label}`}
           >
             <h2 className="mobile-launcher__group-label">{group.label}</h2>
@@ -67,7 +72,10 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
                     onClick={() => onItemSelect && onItemSelect(item)}
                     aria-label={`打开${item.label}`}
                   >
-                    <span className="mobile-launcher__item-icon" aria-hidden="true">
+                    <span
+                      className={`mobile-launcher__item-icon${OPTICALLY_COMPACT_ICONS.has(item.iconKey) ? ' mobile-launcher__item-icon--compact' : ''}`}
+                      aria-hidden="true"
+                    >
                       {icon || <Icon name="apps" />}
                     </span>
                     <span className="mobile-launcher__item-label">{item.label}</span>

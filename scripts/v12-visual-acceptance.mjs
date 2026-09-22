@@ -29,15 +29,18 @@ if (await page.locator('input[autocomplete="username"]').count()) {
   await page.getByTestId('mobile-launcher').waitFor();
 }
 
-async function inspect(name) {
+async function inspect(name, { fullPage = false } = {}) {
   await page.waitForTimeout(180);
   const metrics = await page.evaluate(() => {
     const nav = document.querySelector('.mobile-bottom-nav')?.getBoundingClientRect();
+    const main = document.querySelector('.mobile-main')?.getBoundingClientRect();
     const active = document.activeElement;
     return {
       clientWidth: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,
+      documentHeight: document.documentElement.scrollHeight,
       navVisible: Boolean(nav && nav.bottom <= innerHeight + 1 && nav.top >= 0),
+      navOverlapsContent: Boolean(nav && main && nav.top < Math.min(main.bottom, innerHeight) && document.documentElement.scrollHeight <= innerHeight),
       clippedActions: [...document.querySelectorAll('button')]
         .filter((button) => button.offsetWidth > 0 && !button.closest('.mobile-approval-tabs') && (button.scrollWidth > button.clientWidth + 1 || button.getBoundingClientRect().right > innerWidth + 1))
         .map((button) => button.textContent.trim() || button.getAttribute('aria-label')),
@@ -45,7 +48,22 @@ async function inspect(name) {
     };
   });
   results.push({ name, ...metrics, overflow: metrics.scrollWidth > metrics.clientWidth });
-  await page.screenshot({ path: join(outputDir, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(outputDir, `${name}.png`), fullPage });
+}
+
+async function captureLauncherEvidence() {
+  const maxScroll = await page.evaluate(() => Math.max(0, document.documentElement.scrollHeight - innerHeight));
+  const positions = [
+    ['launcher-top', 0],
+    ['launcher-middle', Math.round(maxScroll / 2)],
+    ['launcher-bottom', maxScroll],
+  ];
+  for (const [name, y] of positions) {
+    await page.evaluate((scrollY) => scrollTo(0, scrollY), y);
+    await inspect(name);
+  }
+  await page.evaluate(() => scrollTo(0, 0));
+  await inspect('launcher-full-page', { fullPage: true });
 }
 
 async function returnToLauncher() {
@@ -64,10 +82,12 @@ async function openApp(label, screenshotName) {
 
 for (const width of widths) {
   await page.setViewportSize({ width, height: width <= 414 ? 896 : 1000 });
-  await inspect(`launcher-${width}`);
+  await page.evaluate(() => scrollTo(0, 0));
+  await inspect(`launcher-${width}-viewport`);
 }
 
 await page.setViewportSize({ width: 414, height: 896 });
+await captureLauncherEvidence();
 await openApp('物料需求计划', 'material-plan');
 await page.getByTestId('bottom-tab-approvals').click();
 await page.waitForTimeout(250);
@@ -106,9 +126,10 @@ const report = {
   wholePageOverflow: results.some((result) => result.overflow),
   clippedActions: results.flatMap((result) => result.clippedActions.map((label) => `${result.name}: ${label}`)),
   bottomNavOverlap: results.some((result) => !result.navVisible),
+  runtimeContentOverlap: results.some((result) => result.navOverlapsContent),
   keyboardFocus,
   consoleErrors,
   networkErrors,
 };
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-if (report.wholePageOverflow || report.clippedActions.length || report.bottomNavOverlap || !keyboardFocus || consoleErrors.length || networkErrors.length) process.exitCode = 1;
+if (report.wholePageOverflow || report.clippedActions.length || report.bottomNavOverlap || report.runtimeContentOverlap || !keyboardFocus || consoleErrors.length || networkErrors.length) process.exitCode = 1;

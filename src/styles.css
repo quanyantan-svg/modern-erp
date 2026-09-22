@@ -2523,28 +2523,68 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .canonical-empty-state p, .empty p { margin:0; line-height:1.45; }
 
 /* Launcher groups use whitespace; app buttons carry the interaction. */
-.mobile-launcher { gap:27px; }
+.mobile-header--root {
+  min-height:56px;
+  padding-top:calc(7px + env(safe-area-inset-top,0px));
+  padding-bottom:7px;
+}
+.mobile-header--root .mobile-header__title {
+  font-size:20px;
+  font-weight:720;
+  letter-spacing:-.45px;
+}
+.mobile-header--root + .mobile-main { padding-top:12px; }
+
+.mobile-launcher { gap:20px; }
 .mobile-launcher__group {
-  gap:9px;
+  gap:5px;
   overflow:visible;
   border:0;
   border-radius:0;
   background:transparent;
   box-shadow:none;
 }
-.mobile-launcher__group--blue { --mobile-app-accent:#276a91; --mobile-app-accent-soft:#e9f1f5; }
-.mobile-launcher__group--green { --mobile-app-accent:#397765; --mobile-app-accent-soft:#ebf2ef; }
-.mobile-launcher__group--amber { --mobile-app-accent:#80653d; --mobile-app-accent-soft:#f3efe8; }
-.mobile-launcher__group-label { padding:0 3px; font-size:16px; font-weight:650; }
-.mobile-launcher__grid { gap:3px 5px; padding:0; }
-.mobile-launcher__item { min-height:91px; gap:8px; padding:8px 3px; }
+.mobile-launcher__group--blue { --mobile-app-accent:#316d94; --mobile-app-accent-soft:#edf4f7; }
+.mobile-launcher__group--green { --mobile-app-accent:#41766c; --mobile-app-accent-soft:#eef4f2; }
+.mobile-launcher__group--amber { --mobile-app-accent:#5e7080; --mobile-app-accent-soft:#eff2f4; }
+.mobile-launcher__group--slate { --mobile-app-accent:#586a82; --mobile-app-accent-soft:#eff1f5; }
+.mobile-launcher__group--finance { --mobile-app-accent:#4f6580; --mobile-app-accent-soft:#eef1f5; }
+.mobile-launcher__group--system { --mobile-app-accent:#62647b; --mobile-app-accent-soft:#f0f0f4; }
+.mobile-launcher__group-label {
+  padding:0 2px;
+  color:var(--text-secondary);
+  font-size:14px;
+  font-weight:650;
+  letter-spacing:.05px;
+  line-height:20px;
+}
+.mobile-launcher__grid { gap:0 5px; padding:0; }
+.mobile-launcher__item {
+  display:grid;
+  grid-template-rows:36px 34px;
+  align-content:center;
+  justify-items:center;
+  gap:4px;
+  min-height:84px;
+  padding:5px 3px;
+}
 .mobile-launcher__item-icon {
-  width:44px;
-  height:44px;
-  border-radius:13px;
+  width:36px;
+  height:36px;
+  border-radius:10px;
+  background:transparent;
   box-shadow:none;
 }
-.mobile-launcher__item-label { min-height:34px; font-size:13.5px; font-weight:550; line-height:1.3; }
+.mobile-launcher__item:first-child .mobile-launcher__item-icon { background:var(--mobile-app-accent-soft); }
+.mobile-launcher__item-icon > svg { width:22px; height:22px; stroke-width:1.8; }
+.mobile-launcher__item-icon--compact > svg { width:23px; height:23px; }
+.mobile-launcher__item-label {
+  align-self:start;
+  min-height:32px;
+  font-size:13px;
+  font-weight:550;
+  line-height:16px;
+}
 
 /* Compact inventory modes replace the previous launcher-within-a-page. */
 .inventory-workbench {
@@ -2632,6 +2672,8 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .settlement-outstanding strong { font-size:19px; font-weight:700; letter-spacing:-.4px; }
 
 /* Bottom navigation is separated by a hairline, never a floating card. */
-.mobile-bottom-nav { border-top-color:rgba(54,62,74,.13); box-shadow:none; }
-.mobile-bottom-nav__item { color:#737C89; }
-.mobile-bottom-nav__item--active { color:#125FC5; }
+.mobile-bottom-nav { border-top-color:rgba(54,62,74,.11); box-shadow:none; }
+.mobile-bottom-nav__item { gap:2px; color:#78818d; }
+.mobile-bottom-nav__item--active { color:#245f9e; }
+.mobile-bottom-nav__icon > svg { width:23px; height:23px; stroke-width:1.75; }
+.mobile-bottom-nav__label { line-height:15px; }
