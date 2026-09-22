@@ -56,10 +56,11 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
               {group.items.map((item) => {
                 const icon = icons[item.iconKey];
                 const itemKey = item.page || item.key;
+                const reactKey = item.key || item.page;
                 return (
                   <button
                     type="button"
-                    key={itemKey}
+                    key={reactKey}
                     data-page={itemKey}
                     data-testid={`mobile-launcher-item-${itemKey}`}
                     className="mobile-launcher__item"
