@@ -66,7 +66,7 @@ export function IQCInspections({ user, notify }) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
 
   function viewDetail(item) {
     api(`/api/iqc/${item.id}`)
@@ -103,7 +103,6 @@ export function IQCInspections({ user, notify }) {
             {IQC_OQC_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -415,7 +414,7 @@ export function OQCInspections({ user, notify }) {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
 
   function viewDetail(item) {
     api(`/api/oqc/${item.id}`)
@@ -452,7 +451,6 @@ export function OQCInspections({ user, notify }) {
             {IQC_OQC_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>

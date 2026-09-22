@@ -13,7 +13,7 @@ export function Projects({ user, notify }) {
     api(`/api/projects?${params}`).then((r) => setItems(r.projects)).catch((e) => notify(e.message, 'error'));
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [status]);
 
   function viewDetail(item) {
     api(`/api/projects/${item.id}`).then((r) => setDetail(r.project)).catch((e) => notify(e.message, 'error'));
@@ -32,7 +32,6 @@ export function Projects({ user, notify }) {
           <option value="IN_PROGRESS">进行中</option>
           <option value="COMPLETED">已完成</option>
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -156,8 +155,8 @@ export function ProjectTasks({ user, notify }) {
 
   useEffect(() => {
     api('/api/projects').then((r) => setProjects(r.projects || []));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [projectId]);
 
   const priorityMap = { LOW: '低', MEDIUM: '中', HIGH: '高', URGENT: '紧急' };
   const statusMap = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成' };
@@ -170,7 +169,6 @@ export function ProjectTasks({ user, notify }) {
           <option value="">全部项目</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -256,8 +254,8 @@ export function Timesheets({ user, notify }) {
 
   useEffect(() => {
     api('/api/projects').then((r) => setProjects(r.projects || []));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [projectId]);
 
   return (
     <Panel title="工时记录">
@@ -267,7 +265,6 @@ export function Timesheets({ user, notify }) {
           <option value="">全部项目</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>

@@ -16,7 +16,7 @@ export function CashJournals({ user, notify }) {
     api(`/api/cash-journals?${params}`).then((r) => setItems(r.journals)).catch((e) => notify(e.message, 'error'));
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [startDate, endDate, accountType]);
 
   return (
     <Panel title="现金日记账">
@@ -33,7 +33,6 @@ export function CashJournals({ user, notify }) {
           <option value="CASH">现金</option>
           <option value="BANK">银行</option>
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -180,7 +179,7 @@ export function Bills({ user, notify }) {
     api(`/api/bills?${params}`).then((r) => setItems(r.bills)).catch((e) => notify(e.message, 'error'));
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [billType, status]);
 
   return (
     <Panel title="票据管理">
@@ -198,7 +197,6 @@ export function Bills({ user, notify }) {
           <option value="DISCOUNTED">已贴现</option>
           <option value="PAID">已到期</option>
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -443,8 +441,8 @@ export function ProductCosts({ user, notify }) {
 
   useEffect(() => {
     api('/api/product-costs/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [productId]);
 
   return (
     <Panel title="产品标准成本">
@@ -454,7 +452,6 @@ export function ProductCosts({ user, notify }) {
           <option value="">全部产品</option>
           {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
