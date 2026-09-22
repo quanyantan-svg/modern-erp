@@ -4,6 +4,7 @@ import { ActionMenu, Active, ConfirmAction, ConfirmDelete, Empty, FormActions, L
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { roleDisplayName } from '../lib/copy.js';
+import { Icon } from '../components/icons.jsx';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -222,7 +223,7 @@ export function Approvals({ notify }) {
   async function approve(order) { try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('销售订单已审批'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
   async function reject(e) { e.preventDefault(); try { await api(`/api/orders/${rejecting.id}/reject`, { method: 'POST', body: { reason } }); notify('订单已驳回'); setRejecting(null); setReason(''); load(); } catch (error) { notify(error.message, 'error'); } }
   return <>
-    <div className="approval-banner"><div className="approval-icon">✓</div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
+    <div className="approval-banner"><div className="approval-icon"><Icon name="approval" size={22}/></div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
     <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><ConfirmAction className="approve-button" buttonLabel="审批通过" title="通过这张销售订单？" message={`订单 ${order.orderNo} 审批通过后可进入销售出货流程。`} confirmLabel="审批通过" onConfirm={() => approve(order)}/></>}/></Panel>
     {viewing && <OrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
     {rejecting && <Modal title={`驳回 ${rejecting.orderNo}`} onClose={() => setRejecting(null)}><form onSubmit={reject}><label>驳回原因<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="请说明需要销售人员修改的内容" required/></label><FormActions onClose={() => setRejecting(null)} saveText="确认驳回" danger/></form></Modal>}

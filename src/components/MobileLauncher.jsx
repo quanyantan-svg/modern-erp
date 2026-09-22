@@ -18,26 +18,7 @@
 // Role visibility is resolved before this presentational component receives
 // its groups. It never evaluates roles or permissions itself.
 
-// Local minimal icon primitive for launcher fallback. Real icons are
-// passed in via the `icons` prop from App.jsx; this is only used if
-// an item's iconKey is missing from the supplied icon map.
-function FallbackIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
-    </svg>
-  );
-}
+import { Icon } from './icons.jsx';
 
 // Group shape:
 //   { key, label, accent, items: [{ page, key, label, iconKey }] }
@@ -86,7 +67,7 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
                     aria-label={`打开${item.label}`}
                   >
                     <span className="mobile-launcher__item-icon" aria-hidden="true">
-                      {icon || <FallbackIcon />}
+                      {icon || <Icon name="apps" />}
                     </span>
                     <span className="mobile-launcher__item-label">{item.label}</span>
                   </button>
