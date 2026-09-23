@@ -203,7 +203,8 @@ describe('Period Management', () => {
     const closedPeriod = (await listRes.json()).closures.find(c => c.period === '3000-04' && c.status === 'CLOSED');
     const res = await fetch(`${baseUrl}/api/period-closures/${closedPeriod.id}/unclose`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${periodManagerToken}` },
+      headers: { 'Authorization': `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: '发现跨期更正事项' }),
     });
     assert.equal(res.status, 200);
   });
@@ -215,7 +216,8 @@ describe('Period Management', () => {
     const openPeriod = (await listRes.json()).closures.find(c => c.period === '3000-04' && c.status === 'OPEN');
     const res = await fetch(`${baseUrl}/api/period-closures/${openPeriod.id}/unclose`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${periodManagerToken}` },
+      headers: { 'Authorization': `Bearer ${adminToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: '重复反结账检查' }),
     });
     assert.equal(res.status, 400);
   });

@@ -12,7 +12,11 @@ describe('M8 AR/AP and settlement workflow', () => {
   let temp; let db; let server; let base; const tokens = {}; let arId; let apId;
   const auth = (role) => role ? { authorization: `Bearer ${tokens[role]}` } : {};
   const request = (path, role, options = {}) => fetch(base + path, { ...options, headers: { ...auth(role), ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } });
-  const post = (path, role, body = {}) => request(path, role, { method: 'POST', body: JSON.stringify(body) });
+  const post = (path, role, body = {}) => {
+    const settlementCreate = ['/api/payment-collections', '/api/payment-disbursements'].includes(path);
+    const normalized = settlementCreate ? { ...body, paymentMethod: body.paymentMethod || 'BANK', settlementAccountId: body.settlementAccountId || ((body.paymentMethod || 'BANK') === 'CASH' ? 'subject-001' : 'm8-bank') } : body;
+    return request(path, role, { method: 'POST', body: JSON.stringify(normalized) });
+  };
   const passQuality = async (kind, sourceId, quantity) => {
     const created = await (await post(`/api/${kind}`, 'warehouse', { [kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id']: sourceId })).json();
     return post(`/api/${kind}/${created.id}/complete`, 'warehouse', { result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0 });
@@ -21,6 +25,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   before(async () => {
     temp = mkdtempSync(join(tmpdir(), 'modern-erp-m8-')); db = createDatabase(join(temp, 'erp.db'));
     const now = new Date().toISOString();
+    db.prepare("INSERT INTO bank_accounts(id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at) VALUES('m8-bank','测试银行','M8-001','测试结算户','CHECKING',0,'CNY',1,?,?)").run(now, now);
     db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('m8-so','SO-M8','customer-001','APPROVED',10000,'','user-sales',?,?)").run(now, now);
     db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('m8-soi','m8-so','product-001',1,10000,10000,1)").run();
     db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('m8-po','PO-M8','supplier-001','APPROVED',12000,'','user-sales',?,?)").run(now, now);
@@ -45,7 +50,7 @@ describe('M8 AR/AP and settlement workflow', () => {
     assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ar = db.prepare("SELECT * FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id); arId = ar.id;
     assert.equal(ar.amount_cents, 10000); assert.equal(ar.adjustment_cents, 0); assert.equal(ar.paid_cents, 0); assert.equal(ar.status, 'PENDING'); assert.equal(ar.customer_id, 'customer-001');
-    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 409);
+    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 1);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 1);
   });
@@ -57,7 +62,7 @@ describe('M8 AR/AP and settlement workflow', () => {
     assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ap = db.prepare("SELECT * FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id); apId = ap.id;
     assert.equal(ap.amount_cents, 12000); assert.equal(ap.supplier_id, 'supplier-001'); assert.equal(ap.status, 'PENDING');
-    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 409);
+    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_id=?").get(created.id).n, 1);
   });
 
@@ -95,7 +100,7 @@ describe('M8 AR/AP and settlement workflow', () => {
     let ar = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(freshArId); assert.equal(ar.paid_cents, 4000); assert.equal(ar.status, 'PARTIAL');
     const entries = db.prepare("SELECT s.code,e.direction,e.amount_cents FROM accounting_vouchers v JOIN accounting_entries e ON e.voucher_id=v.id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.source_type='PAYMENT_COLLECTION' AND v.source_id=? ORDER BY e.direction").all(draft.id);
     assert.deepEqual(entries.map((x) => [x.code, x.direction, x.amount_cents]), [['1122', 'CREDIT', 4000], ['1002', 'DEBIT', 4000]]);
-    assert.equal((await post(`/api/payment-collections/${draft.id}/confirm`, 'accounting')).status, 409); assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_id=?").get(draft.id).n, 1);
+    assert.equal((await post(`/api/payment-collections/${draft.id}/confirm`, 'accounting')).status, 200); assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_id=?").get(draft.id).n, 1);
     const final = await (await post('/api/payment-collections', 'accounting', { customerId: 'customer-003', businessDate: '2026-08-14', amountCents: 6000, paymentMethod: 'CASH', allocations: [{ receivableId: freshArId, amountCents: 6000 }] })).json();
     assert.equal((await post(`/api/payment-collections/${final.id}/confirm`, 'accounting')).status, 200); ar = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(freshArId); assert.equal(ar.paid_cents, 10000); assert.equal(ar.status, 'COMPLETED'); assert.equal(ar.amount_cents - ar.paid_cents, 0);
   });

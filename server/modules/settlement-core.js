@@ -111,10 +111,12 @@ export function openItemSnapshot(db, side, itemId) {
   const row = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(itemId);
   if (!row) return null;
   const credits = db.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN adjustment_type='RETURN' AND status='CONFIRMED' THEN applied_cents ELSE 0 END),0) returnCents,
-    COALESCE(SUM(CASE WHEN adjustment_type='DISCOUNT' AND status='CONFIRMED' THEN applied_cents ELSE 0 END),0) discountCents,
-    COALESCE(SUM(CASE WHEN adjustment_type='OTHER' AND status='CONFIRMED' THEN applied_cents ELSE 0 END),0) otherCents
-    FROM financial_credit_adjustments WHERE side=? AND target_open_item_id=?`).get(side, itemId);
+    COALESCE(SUM(CASE WHEN f.adjustment_type='RETURN' AND f.status='CONFIRMED' THEN f.applied_cents-COALESCE(r.applied_reversed,0) ELSE 0 END),0) returnCents,
+    COALESCE(SUM(CASE WHEN f.adjustment_type='DISCOUNT' AND f.status='CONFIRMED' THEN f.applied_cents-COALESCE(r.applied_reversed,0) ELSE 0 END),0) discountCents,
+    COALESCE(SUM(CASE WHEN f.adjustment_type='OTHER' AND f.status='CONFIRMED' THEN f.applied_cents-COALESCE(r.applied_reversed,0) ELSE 0 END),0) otherCents
+    FROM financial_credit_adjustments f
+    LEFT JOIN (SELECT credit_id,SUM(applied_cents) applied_reversed FROM credit_reversal_components GROUP BY credit_id) r ON r.credit_id=f.id
+    WHERE f.side=? AND f.target_open_item_id=?`).get(side, itemId);
   const cash = db.prepare(`SELECT COALESCE(SUM(ai.amount_cents-ai.reversed_cents),0) n
     FROM ${allocationTable} ai JOIN ${documentTable} d ON d.id=ai.${documentFk}
     WHERE ai.${itemFk}=? AND d.status='CONFIRMED'`).get(itemId).n;
@@ -123,9 +125,13 @@ export function openItemSnapshot(db, side, itemId) {
   const discountCents = Number(credits.discountCents);
   const otherCents = Number(credits.otherCents);
   const cashCents = Number(cash);
-  const writeOffCents = Number(row.write_off_cents || 0);
-  const openCents = Math.max(0, original - returnCents - discountCents - otherCents - cashCents - writeOffCents);
+  const applications = Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE side=? AND target_open_item_id=? AND status='CONFIRMED'`).get(side, itemId).n);
+  const writeOffCents = Number(db.prepare(`SELECT COALESCE(SUM(w.amount_cents-COALESCE(r.reversed_cents,0)),0) n
+    FROM financial_write_offs w LEFT JOIN (SELECT write_off_id,SUM(amount_cents) reversed_cents FROM financial_write_off_reversals GROUP BY write_off_id) r ON r.write_off_id=w.id
+    WHERE w.side=? AND w.open_item_id=? AND w.status='CONFIRMED'`).get(side, itemId).n);
+  const openCents = Math.max(0, original - returnCents - discountCents - otherCents - cashCents - applications - writeOffCents);
   return { row, originalCents: original, returnCents, discountCents, otherCents, cashCents, writeOffCents, openCents,
+    applicationCents: applications,
     status: openCents === 0 ? 'COMPLETED' : openCents === original ? 'PENDING' : 'PARTIAL' };
 }
 
@@ -133,9 +139,9 @@ export function refreshOpenItem(db, side, itemId, at = now()) {
   const snap = openItemSnapshot(db, side, itemId);
   if (!snap) throw new Error(`Missing ${side} open item ${itemId}`);
   const table = side === 'AR' ? 'account_receivables' : 'account_payables';
-  db.prepare(`UPDATE ${table} SET return_credit_applied_cents=?,discount_credit_applied_cents=?,other_credit_applied_cents=?,cash_allocation_cents=?,paid_cents=?,adjustment_cents=?,open_amount_cents=?,status=?,updated_at=? WHERE id=?`)
+  db.prepare(`UPDATE ${table} SET return_credit_applied_cents=?,discount_credit_applied_cents=?,other_credit_applied_cents=?,cash_allocation_cents=?,paid_cents=?,write_off_cents=?,adjustment_cents=?,open_amount_cents=?,status=?,updated_at=? WHERE id=?`)
     .run(snap.returnCents, snap.discountCents, snap.otherCents, snap.cashCents, snap.cashCents,
-      -(snap.returnCents + snap.discountCents + snap.otherCents), snap.openCents, snap.status, at, itemId);
+      snap.writeOffCents, -(snap.returnCents + snap.discountCents + snap.otherCents), snap.openCents, snap.status, at, itemId);
   return snap;
 }
 
@@ -150,6 +156,8 @@ export function applyCreditAdjustment(db, input) {
   const creditId = randomUUID();
   db.prepare(`INSERT INTO financial_credit_adjustments(id,side,adjustment_type,source_type,source_id,source_no,target_open_item_id,party_id,business_date,amount_cents,applied_cents,unapplied_cents,created_by,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(creditId, input.side, input.adjustmentType, input.sourceType, input.sourceId, input.sourceNo || '', input.targetOpenItemId, input.partyId, input.businessDate, input.amountCents, applied, unapplied, input.actorId, input.createdAt || now());
+  if (unapplied > 0) db.prepare(`INSERT INTO settlement_unapplied_balances(id,side,balance_type,party_id,source_type,source_id,source_no,original_amount_cents,business_date,created_by,created_at)
+    VALUES(?,?,'CREDIT',?,?,?,?,?,?,?,?)`).run(randomUUID(), input.side === 'AR' ? 'CUSTOMER' : 'SUPPLIER', input.partyId, input.sourceType, creditId, input.sourceNo || '', unapplied, input.businessDate, input.actorId, input.createdAt || now());
   refreshOpenItem(db, input.side, input.targetOpenItemId, input.createdAt || now());
   return db.prepare('SELECT * FROM financial_credit_adjustments WHERE id=?').get(creditId);
 }
@@ -158,9 +166,16 @@ export function reverseCreditAdjustment(db, side, sourceType, sourceId, actorId,
   const credit = db.prepare('SELECT * FROM financial_credit_adjustments WHERE side=? AND source_type=? AND source_id=?').get(side, sourceType, sourceId);
   if (!credit) throw new Error('Credit adjustment not found');
   if (credit.status !== 'CONFIRMED') throw new Error('Credit adjustment already reversed');
+  const balance = db.prepare("SELECT id FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id=?").get(credit.id);
+  if (balance) {
+    const consumed = Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'").get(balance.id).n)
+      + Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'").get(balance.id).n);
+    if (consumed > 0) throw new Error('Credit has dependent applications or refunds; reverse those first');
+  }
   const nowText = now();
   db.prepare(`UPDATE financial_credit_adjustments SET status='REVERSED',reversed_cents=amount_cents,reversed_by=?,reversed_at=?,reversal_date=?,reversal_reason=? WHERE id=?`)
     .run(actorId, nowText, reversalDate, reason, credit.id);
+  if (balance) db.prepare("UPDATE settlement_unapplied_balances SET status='REVERSED' WHERE id=?").run(balance.id);
   refreshOpenItem(db, side, credit.target_open_item_id, nowText);
   return credit;
 }
@@ -175,7 +190,23 @@ export function checkSettlementInvariants(db) {
       if (row.status !== snap.status) issues.push({ side, id: row.id, code: 'STATUS_MISMATCH', expected: snap.status, actual: row.status });
     }
   }
+  for (const balance of db.prepare('SELECT * FROM settlement_unapplied_balances').all()) {
+    const remaining = unappliedBalanceSnapshot(db, balance.id)?.remainingCents;
+    if (remaining < 0) issues.push({ side: balance.side, id: balance.id, code: 'NEGATIVE_UNAPPLIED_BALANCE', actual: remaining });
+  }
   return issues;
+}
+
+export function unappliedBalanceSnapshot(db, balanceId) {
+  const row = db.prepare('SELECT * FROM settlement_unapplied_balances WHERE id=?').get(balanceId);
+  if (!row) return null;
+  const applied = Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'").get(balanceId).n);
+  const refunded = Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'").get(balanceId).n);
+  const reversed = row.balance_type === 'PREPAYMENT'
+    ? Number(db.prepare("SELECT COALESCE(SUM(sri.amount_cents),0) n FROM settlement_reversal_items sri WHERE sri.component_type='UNAPPLIED' AND sri.original_component_id=?").get(balanceId).n)
+    : Number(db.prepare('SELECT COALESCE(SUM(unapplied_cents),0) n FROM credit_reversal_components WHERE credit_id=?').get(row.source_id).n);
+  return { row, appliedCents: applied, refundedCents: refunded, reversedCents: reversed,
+    remainingCents: Number(row.original_amount_cents) - applied - refunded - reversed };
 }
 
 export function reconcileSettlementSubledgers(db) {

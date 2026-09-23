@@ -85,6 +85,12 @@ import {
   listSalesDiscounts, reversePurchaseDiscount, reverseSalesDiscount, updatePurchaseDiscount, updateSalesDiscount,
 } from './modules/discounts.js';
 import {
+  actOnWriteOff, applyUnappliedBalance, createRefund, createWriteOff,
+  idempotencyReplay, requestFingerprint, saveIdempotency,
+  listUnappliedBalances, reverseBalanceApplication, reverseRefund, reverseWriteOff,
+  reverseOperationalReturn, settlementAccountReconciliation,
+} from './modules/financial-controls.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -452,6 +458,8 @@ async function handleApi(db, req, res, url) {
   // Sales Returns
   if (pathname === "/api/sales-returns" && req.method === "GET") return listSalesReturns(db, res, actor, url);
   if (pathname === "/api/sales-returns" && req.method === "POST") return createSalesReturn(db, req, res, actor);
+  const srReverseMatch = pathname.match(/^\/api\/sales-returns\/([^/]+)\/reverse$/);
+  if (srReverseMatch && req.method === 'POST') return reverseOperationalReturn(db, req, res, actor, 'SALES', srReverseMatch[1], generateVoucher);
   const srMatch = pathname.match(/^\/api\/sales-returns\/([^\/]+)$/);
   if (srMatch && req.method === "GET") return getSalesReturn(db, res, actor, srMatch[1]);
   if (srMatch && req.method === "PATCH") return updateSalesReturn(db, req, res, actor, srMatch[1]);
@@ -460,6 +468,8 @@ async function handleApi(db, req, res, url) {
   // Purchase Returns
   if (pathname === "/api/purchase-returns" && req.method === "GET") return listPurchaseReturns(db, res, actor, url);
   if (pathname === "/api/purchase-returns" && req.method === "POST") return createPurchaseReturn(db, req, res, actor);
+  const purReverseMatch = pathname.match(/^\/api\/purchase-returns\/([^/]+)\/reverse$/);
+  if (purReverseMatch && req.method === 'POST') return reverseOperationalReturn(db, req, res, actor, 'PURCHASE', purReverseMatch[1], generateVoucher);
   const purMatch = pathname.match(/^\/api\/purchase-returns\/([^\/]+)$/);
   if (purMatch && req.method === "GET") return getPurchaseReturn(db, res, actor, purMatch[1]);
   if (purMatch && req.method === "PATCH") return updatePurchaseReturn(db, req, res, actor, purMatch[1]);
@@ -505,6 +515,19 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/accounts-receivable' && req.method === 'GET') return listReceivablesM8(db, res, actor, url);
   if (pathname === '/api/accounts-receivable/statement' && req.method === 'GET') return customerStatement(db, res, actor, url);
   if (pathname === '/api/settlement/reconciliation' && req.method === 'GET') return settlementReconciliationCheck(db, res, actor);
+  if (pathname === '/api/settlement/account-reconciliation' && req.method === 'GET') return settlementAccountReconciliation(db, res, actor);
+  if (pathname === '/api/settlement/unapplied-balances' && req.method === 'GET') return listUnappliedBalances(db, res, actor, url);
+  if (pathname === '/api/settlement/balance-applications' && req.method === 'POST') return applyUnappliedBalance(db, req, res, actor);
+  const balanceApplicationReverse = pathname.match(/^\/api\/settlement\/balance-applications\/([^/]+)\/reverse$/);
+  if (balanceApplicationReverse && req.method === 'POST') return reverseBalanceApplication(db, req, res, actor, balanceApplicationReverse[1]);
+  if (pathname === '/api/financial-refunds' && req.method === 'POST') return createRefund(db, req, res, actor, generateVoucher);
+  const refundReverse = pathname.match(/^\/api\/financial-refunds\/([^/]+)\/reverse$/);
+  if (refundReverse && req.method === 'POST') return reverseRefund(db, req, res, actor, refundReverse[1], generateVoucher);
+  if (pathname === '/api/financial-write-offs' && req.method === 'POST') return createWriteOff(db, req, res, actor);
+  const writeOffAction = pathname.match(/^\/api\/financial-write-offs\/([^/]+)\/(submit|confirm|reject)$/);
+  if (writeOffAction && req.method === 'POST') return actOnWriteOff(db, req, res, actor, writeOffAction[1], writeOffAction[2], generateVoucher);
+  const writeOffReverse = pathname.match(/^\/api\/financial-write-offs\/([^/]+)\/reverse$/);
+  if (writeOffReverse && req.method === 'POST') return reverseWriteOff(db, req, res, actor, writeOffReverse[1], generateVoucher);
   const arMatch = pathname.match(/^\/api\/accounts-receivable\/([^/]+)$/);
   if (arMatch && req.method === 'GET') return getReceivableM8(db, res, actor, arMatch[1]);
 
@@ -610,7 +633,7 @@ async function handleApi(db, req, res, url) {
   const pmiActionMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)\/(confirm|cancel)$/);
   if (pmiActionMatch && req.method === "POST") {
     return pmiActionMatch[2] === 'confirm'
-      ? confirmProductionMaterialIssue(db, res, actor, pmiActionMatch[1])
+      ? confirmProductionMaterialIssue(db, req, res, actor, pmiActionMatch[1])
       : cancelProductionMaterialIssue(db, res, actor, pmiActionMatch[1]);
   }
   if (pathname === "/api/production-material-returns" && req.method === "POST") return createProductionMaterialReturn(db, req, res, actor);
@@ -627,7 +650,7 @@ async function handleApi(db, req, res, url) {
   const prxActionMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)\/(confirm|cancel)$/);
   if (prxActionMatch && req.method === "POST") {
     return prxActionMatch[2] === 'confirm'
-      ? confirmProductionReceipt(db, res, actor, prxActionMatch[1])
+      ? confirmProductionReceipt(db, req, res, actor, prxActionMatch[1])
       : cancelProductionReceipt(db, res, actor, prxActionMatch[1]);
   }
   if (pathname === "/api/production-receipt-reversals" && req.method === "POST") return createProductionReceiptReversal(db, req, res, actor);
@@ -3319,6 +3342,8 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
   const action = body.action;
   const now = new Date().toISOString();
   if (action === 'confirm') {
+    const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${receiptId}`); const fingerprint = requestFingerprint({ action });
+    const replay = idempotencyReplay(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
@@ -3344,6 +3369,7 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         { subjectId: 'subject-005', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
       ], actor, locked.receipt_date);
       ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
     });
   } else if (action === 'cancel') {
@@ -3446,6 +3472,8 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
   const action = body.action;
   const now = new Date().toISOString();
   if (action === 'confirm') {
+    const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${deliveryId}`); const fingerprint = requestFingerprint({ action });
+    const replay = idempotencyReplay(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
@@ -3473,6 +3501,7 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         { subjectId: 'subject-006', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
       ], actor, locked.delivery_date);
       ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
   } else if (action === 'cancel') {

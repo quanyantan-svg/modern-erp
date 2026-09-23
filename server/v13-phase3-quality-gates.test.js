@@ -95,7 +95,7 @@ describe('V1.3 Phase 3 authoritative IQC/OQC quality gates', () => {
       const missing = seedSource(kind, `missing-${kind}`); const beforeMissing = effects(); assert.equal((await call(`/api/${path}/${missing}`, 'POST', { action: 'confirm' })).status, 409); assert.deepEqual(effects(), beforeMissing);
       const draft = seedSource(kind, `draft-${kind}`); await createQuality(kind, draft); const beforeDraft = effects(); assert.equal((await call(`/api/${path}/${draft}`, 'POST', { action: 'confirm' })).status, 409); assert.deepEqual(effects(), beforeDraft);
       const failedSource = seedSource(kind, `failed-${kind}`); const failed = await createQuality(kind, failedSource); await complete(kind, failed.data.id, 10, 'FAIL'); const beforeFail = effects(); assert.equal((await call(`/api/${path}/${failedSource}`, 'POST', { action: 'confirm' })).status, 409); assert.deepEqual(effects(), beforeFail);
-      const passedSource = seedSource(kind, `passed-${kind}`); const passed = await createQuality(kind, passedSource); await complete(kind, passed.data.id, 10); assert.equal((await call(`/api/${path}/${passedSource}`, 'POST', { action: 'confirm' })).status, 200); assert.equal((await call(`/api/${path}/${passedSource}`, 'POST', { action: 'confirm' })).status, 409);
+      const passedSource = seedSource(kind, `passed-${kind}`); const passed = await createQuality(kind, passedSource); await complete(kind, passed.data.id, 10); assert.equal((await call(`/api/${path}/${passedSource}`, 'POST', { action: 'confirm' })).status, 200); assert.equal((await call(`/api/${path}/${passedSource}`, 'POST', { action: 'confirm' })).status, 200);
     }
   });
 

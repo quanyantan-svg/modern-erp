@@ -38,6 +38,9 @@ let accountingToken;
 let sourceSequence = 0;
 
 async function request(path, { token = adminToken, method = 'GET', body } = {}) {
+  if (method === 'POST' && ['/api/payment-collections', '/api/payment-disbursements'].includes(path) && body) {
+    body = { ...body, paymentMethod: body.paymentMethod || 'BANK', settlementAccountId: body.settlementAccountId || ((body.paymentMethod || 'BANK') === 'CASH' ? 'subject-001' : 'm14-bank') };
+  }
   const headers = {
     ...(token ? { authorization: `Bearer ${token}` } : {}),
     ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -68,6 +71,7 @@ async function startServer() {
 before(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-m14-test-'));
   database = createDatabase(join(tempDir, 'erp.db'));
+  database.prepare("INSERT INTO bank_accounts(id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at) VALUES('m14-bank','测试银行','M14-001','M14结算户','CHECKING',0,'CNY',1,datetime('now'),datetime('now'))").run();
   await startServer();
   adminToken = await login('admin', 'admin123');
   salesToken = await login('sales', 'sales123');

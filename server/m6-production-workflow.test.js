@@ -320,7 +320,7 @@ describe('M6 material issue contract', () => {
     assert.equal(create.status, 201);
     await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
     const again = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(again.status, 409);
+    assert.equal(again.status, 200);
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id).cnt;
     assert.equal(txCount, 1, 'second confirm must not create additional transactions');
   });
@@ -490,7 +490,7 @@ describe('M6 production receipt contract', () => {
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
     await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     const again = await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(again.status, 409);
+    assert.equal(again.status, 200);
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_RECEIPT' AND source_id=?").get(create.data.id).cnt;
     assert.equal(txCount, 1);
   });

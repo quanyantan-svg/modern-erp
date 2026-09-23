@@ -125,7 +125,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(totals.credit, 37035);
 
     response = await request(`${spec.path}/${created.id}`, 'warehouse', 'POST', { action: 'confirm' });
-    assert.equal(response.status, 409);
+    assert.equal(response.status, ['PURCHASE_RECEIPT', 'SALES_DELIVERY'].includes(spec.voucher) ? 200 : 409);
     assert.equal(db.prepare('SELECT count(*) count FROM inventory_transactions WHERE source_type=? AND source_id=?').get(spec.voucher, created.id).count, 1);
     assert.equal(db.prepare('SELECT count(*) count FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(spec.voucher, created.id).count, 1);
     assert.equal((await request(`${spec.path}/${created.id}`, 'warehouse', 'PATCH', editBody)).status, 409);

@@ -69,7 +69,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     const first = await request('/api/sales-deliveries', 'warehouse', 'POST', base); assert.equal(first.status, 201, first.data.error);
     await passQuality('oqc', first.data.id, 60);
     assert.equal((await request(`/api/sales-deliveries/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
-    assert.equal((await request(`/api/sales-deliveries/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 409);
+    assert.equal((await request(`/api/sales-deliveries/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     const stale = await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
     const second = await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
     await passQuality('oqc', second.data.id, 40);

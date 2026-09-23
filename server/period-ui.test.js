@@ -458,7 +458,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     assert.equal(closeRes.status, 200);
 
     const reopenRes = await fetch(`${url}/api/period-closures/${cv.id}/unclose`, {
-      method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
+      method: 'POST', headers: { 'Authorization': `Bearer ${adm}`, 'content-type': 'application/json' }, body: JSON.stringify({ reason: '审计测试重新打开' }),
     });
     assert.equal(reopenRes.status, 200);
 
@@ -485,7 +485,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
       });
       assert.equal(closeRes.status, 200, `close iter ${i}`);
       const reopenRes = await fetch(`${url}/api/period-closures/${cv.id}/unclose`, {
-        method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
+        method: 'POST', headers: { 'Authorization': `Bearer ${adm}`, 'content-type': 'application/json' }, body: JSON.stringify({ reason: `循环测试 ${i}` }),
       });
       assert.equal(reopenRes.status, 200, `reopen iter ${i}`);
     }
@@ -522,7 +522,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
     assert.equal(denied.status, 409);
 
     await fetch(`${url}/api/period-closures/${cv.id}/unclose`, {
-      method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
+      method: 'POST', headers: { 'Authorization': `Bearer ${adm}`, 'content-type': 'application/json' }, body: JSON.stringify({ reason: '允许开放期更正' }),
     });
 
     const allowed = await fetch(`${url}/api/accounting-vouchers`, {

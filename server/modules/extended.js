@@ -396,7 +396,10 @@ export async function closePeriod(db, req, res, actor, closureId) {
 }
 
 export async function unclosePeriod(db, req, res, actor, closureId) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
+  if (actor.roleCode !== 'ADMIN') throw new HttpError(403, '仅系统管理员可执行会计期间重新打开');
+  const body = await readJson(req);
+  const reason = String(body.reason || '').trim();
+  if (!reason) throw new HttpError(400, '重新打开期间必须填写原因');
 
   const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
   if (!closure) throw new HttpError(404, "期间不存在");
@@ -404,10 +407,12 @@ export async function unclosePeriod(db, req, res, actor, closureId) {
 
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=0 WHERE id=?")
-      .run("OPEN", actor.id, now, closureId);
+    db.prepare("INSERT INTO period_reopen_history(id,period_closure_id,period,previous_closed_by,previous_closed_at,reason,reopened_by,reopened_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run(id(), closureId, closure.period, closure.closed_by, closure.closed_at, reason, actor.id, now);
+    db.prepare("UPDATE period_closures SET status='OPEN',reopen_reason=?,checklist_passed=0 WHERE id=?")
+      .run(reason, closureId);
     db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}`, now);
+      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}：${reason}`, now);
   });
 
   return send(res, 200, { ok: true, message: "反结账成功" });

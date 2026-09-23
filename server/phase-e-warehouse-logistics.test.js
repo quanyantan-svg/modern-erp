@@ -384,12 +384,12 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     const inv = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-1' AND product_id='p-1'").get();
     assert.equal(inv.quantity, 4);
 
-    // repeated confirm 409
+    // repeated confirm replays the committed idempotent result
     res = await fetch(`${baseUrl}/api/purchase-receipts/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'confirm' }),
     });
-    assert.equal(res.status, 409);
+    assert.equal(res.status, 200);
   });
 
   test('accounting cannot create purchase receipts (PURCHASE_RECEIPTS_MANAGE absent on role-accounting)', async () => {
@@ -492,7 +492,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'confirm' }),
     });
-    assert.equal(res.status, 409);
+    assert.equal(res.status, 200);
 
     // cancel path
     res = await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, {
