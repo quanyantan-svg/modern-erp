@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 function LogisticsActions({ existing, onClose, onAction }) {
@@ -102,6 +102,12 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: PR line unit price is entered in yuan. The form
+  // stores integer cents (the API/DB contract) but the input is yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const choosePurchaseOrder = (purchaseOrderId) => {
@@ -120,11 +126,11 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     <label>收货日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({...form, receiptDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><YuanField valueCents={item.unitPriceCents} onChangeCents={(next) => updateItemPriceCents(i, next)} min={0.01} step="0.01" required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
@@ -196,6 +202,11 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: SD line unit price is entered in yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const chooseSalesOrder = (salesOrderId) => {
@@ -214,11 +225,11 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     <label>发货日期<input type="date" value={form.deliveryDate} onChange={(e) => setForm({...form, deliveryDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><YuanField valueCents={item.unitPriceCents} onChangeCents={(next) => updateItemPriceCents(i, next)} min={0.01} step="0.01" required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
@@ -312,6 +323,11 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: return line unit price is entered in yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const partyOptions = tab === "sales" ? customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>) : suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>);
@@ -329,11 +345,11 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     <label>退货日期<input type="date" value={form.returnDate} onChange={(e) => setForm({...form, returnDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td><YuanField valueCents={item.unitPriceCents} onChangeCents={(next) => updateItemPriceCents(i, next)} min={0.01} step="0.01" required/></td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
         </tr>)}
@@ -413,7 +429,7 @@ function ARModal({ user, value, onClose, notify, api }) {
   };
   return <Modal title={value.id ? '应收账款详情' : '手工创建应收'} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
-    <label>应收金额<input type="number" value={form.amountCents} min="0" onChange={(e) => setForm({...form, amountCents: Number(e.target.value)})} required/></label>
+    <label>应收金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({...form, amountCents})} min={0.01} required/></label>
     <label>到期日<input type="date" value={form.dueDate} onChange={(e) => setForm({...form, dueDate: e.target.value})}/></label>
     <FormActions onClose={onClose} saveText={value.id ? '保存' : '创建'}/>
   </form></Modal>;
@@ -455,7 +471,7 @@ function APModal({ user, value, onClose, notify, api }) {
   };
   return <Modal title={value.id ? '应付账款详情' : '手工创建应付'} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>供应商<select value={form.supplierId} onChange={(e) => setForm({...form, supplierId: e.target.value})} required><option value="">选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
-    <label>应付金额<input type="number" value={form.amountCents} min="0" onChange={(e) => setForm({...form, amountCents: Number(e.target.value)})} required/></label>
+    <label>应付金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({...form, amountCents})} min={0.01} required/></label>
     <label>到期日<input type="date" value={form.dueDate} onChange={(e) => setForm({...form, dueDate: e.target.value})}/></label>
     <FormActions onClose={onClose} saveText={value.id ? '保存' : '创建'}/>
   </form></Modal>;
@@ -513,8 +529,8 @@ function PCModal({ user, value, onClose, notify, api }) {
       <table className="line-table"><thead><tr><th>应收单</th><th className="number">未收金额</th><th className="number">本次收款</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.receivableId} onChange={(e) => updateItem(i, 'receivableId', e.target.value)} required><option value="">选择应收单</option>{receivables.map((ar) => <option key={ar.id} value={ar.id}>{(ar.source_type === 'SALES_ORDER' ? '订单' : '出库') + ' ' + money(ar.unpaidCents)}</option>)}</select></td>
-          <td className="number">{item.receivableId ? (receivables.find((r) => r.id === item.receivableId)?.unpaidCents || 0) : 0}</td>
-          <td><input type="number" value={item.amountCents} min="0" onChange={(e) => updateItem(i, 'amountCents', Number(e.target.value))} required/></td>
+          <td className="number">{money(item.receivableId ? (receivables.find((r) => r.id === item.receivableId)?.unpaidCents || 0) : 0)}</td>
+          <td><YuanField ariaLabel="本次收款（元）" valueCents={item.amountCents} min={0.01} onChangeCents={(value) => updateItem(i, 'amountCents', value)} required/></td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>x</button></td>
         </tr>)}
       </tbody></table>
@@ -576,8 +592,8 @@ function PDModal({ user, value, onClose, notify, api }) {
       <table className="line-table"><thead><tr><th>应付单</th><th className="number">未付金额</th><th className="number">本次付款</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.payableId} onChange={(e) => updateItem(i, 'payableId', e.target.value)} required><option value="">选择应付单</option>{payables.map((ap) => <option key={ap.id} value={ap.id}>{(ap.source_type === 'PURCHASE_ORDER' ? '订单' : '入库') + ' ' + money(ap.unpaidCents)}</option>)}</select></td>
-          <td className="number">{item.payableId ? (payables.find((p) => p.id === item.payableId)?.unpaidCents || 0) : 0}</td>
-          <td><input type="number" value={item.amountCents} min="0" onChange={(e) => updateItem(i, 'amountCents', Number(e.target.value))} required/></td>
+          <td className="number">{money(item.payableId ? (payables.find((p) => p.id === item.payableId)?.unpaidCents || 0) : 0)}</td>
+          <td><YuanField ariaLabel="本次付款（元）" valueCents={item.amountCents} min={0.01} onChangeCents={(value) => updateItem(i, 'amountCents', value)} required/></td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>x</button></td>
         </tr>)}
       </tbody></table>

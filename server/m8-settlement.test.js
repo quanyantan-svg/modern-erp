@@ -30,23 +30,23 @@ describe('M8 AR/AP and settlement workflow', () => {
   });
 
   test('draft direct Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {
-    const created = await (await post('/api/sales-deliveries', 'sales', { customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
+    const created = await (await post('/api/sales-deliveries', 'warehouse', { customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 0);
-    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'sales', { action: 'confirm' })).status, 200);
+    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ar = db.prepare("SELECT * FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id); arId = ar.id;
     assert.equal(ar.amount_cents, 10000); assert.equal(ar.adjustment_cents, 0); assert.equal(ar.paid_cents, 0); assert.equal(ar.status, 'PENDING'); assert.equal(ar.customer_id, 'customer-001');
-    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'sales', { action: 'confirm' })).status, 409);
+    assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 409);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 1);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 1);
   });
 
   test('draft direct Purchase Receipt creates no AP; confirmation creates one exact-cent AP', async () => {
-    const created = await (await post('/api/purchase-receipts', 'sales', { supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
+    const created = await (await post('/api/purchase-receipts', 'warehouse', { supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id).n, 0);
-    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'sales', { action: 'confirm' })).status, 200);
+    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ap = db.prepare("SELECT * FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id); apId = ap.id;
     assert.equal(ap.amount_cents, 12000); assert.equal(ap.supplier_id, 'supplier-001'); assert.equal(ap.status, 'PENDING');
-    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'sales', { action: 'confirm' })).status, 409);
+    assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 409);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_id=?").get(created.id).n, 1);
   });
 

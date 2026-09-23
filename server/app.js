@@ -42,6 +42,7 @@ import {
   getPurchaseInstruction, getPurchaseRequisition, listProductionInstructions,
   listPurchaseInstructions, listPurchaseRequisitions, rejectPurchaseRequisition,
   releaseProductionInstruction, releasePurchaseInstruction, submitPurchaseRequisition,
+  updatePurchaseRequisition,
 } from './modules/planning-documents.js';
 import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
@@ -335,6 +336,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/purchase-requisitions' && req.method === 'POST') return createPurchaseRequisition(db, req, res, actor);
   const purchReqMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)$/);
   if (purchReqMatch && req.method === 'GET') return getPurchaseRequisition(db, res, actor, purchReqMatch[1]);
+  if (purchReqMatch && req.method === 'PATCH') return updatePurchaseRequisition(db, req, res, actor, purchReqMatch[1]);
   if (purchReqMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'purchaseRequisition', purchReqMatch[1]);
   const purchReqActionMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)\/(submit|approve|reject|cancel|generate-purchase-order)$/);
   if (purchReqActionMatch && req.method === 'POST') {
@@ -1043,8 +1045,13 @@ async function createOrder(db, req, res, actor) {
   const body = await readJson(req); const input = orderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makeOrderNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?)`).run(orderId, orderNo, input.customerId, input.totalCents, input.remark, actor.id, now, now);
+    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at,
+        order_date,requested_delivery_date,payment_terms,ship_to_contact_name,ship_to_phone,ship_to_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?)`).run(
+      orderId, orderNo, input.customerId, input.totalCents, input.remark, actor.id, now, now,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms,
+      input.shipToContactName, input.shipToPhone, input.shipToAddress,
+    );
     saveOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'CREATE', 'SALES_ORDER', orderId, `创建订单 ${orderNo}`);
   });
@@ -1059,8 +1066,13 @@ async function updateOrder(db, req, res, actor, orderId) {
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = orderInput(db, body); const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=? WHERE id=?")
-      .run(input.customerId, input.totalCents, input.remark, now, orderId);
+    db.prepare(`UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
+        order_date=?,requested_delivery_date=?,payment_terms=?,ship_to_contact_name=?,ship_to_phone=?,ship_to_address=?
+      WHERE id=?`).run(
+      input.customerId, input.totalCents, input.remark, now,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms,
+      input.shipToContactName, input.shipToPhone, input.shipToAddress, orderId,
+    );
     db.prepare('DELETE FROM sales_order_items WHERE order_id=?').run(orderId);
     saveOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'SALES_ORDER', orderId, `修改订单 ${current.order_no}`);
@@ -1099,6 +1111,24 @@ async function changeOrderState(db, req, res, actor, orderId, action) {
     allow(actor, 'ORDERS_SUBMIT');
     if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
     if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    // V1.3 Phase 1: commercial contract gate. SUBMITTED sales orders must
+    // carry order date, requested delivery date, ship-to contact/phone/
+    // address and payment terms so reviewers can evaluate the commitment
+    // and MRP / delivery planning has a real need date.
+    if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+    if (!order.requested_delivery_date) throw new HttpError(400, '提交前请填写要求交期');
+    if (!order.ship_to_contact_name) throw new HttpError(400, '提交前请填写收货联系人');
+    if (!order.ship_to_phone) throw new HttpError(400, '提交前请填写收货电话');
+    if (!order.ship_to_address) throw new HttpError(400, '提交前请填写收货地址');
+    if (!order.payment_terms) throw new HttpError(400, '提交前请填写付款条件');
+    if (order.requested_delivery_date < order.order_date) throw new HttpError(400, '要求交期不能早于订单日期');
+    const lines = db.prepare('SELECT quantity, unit_price_cents FROM sales_order_items WHERE order_id=?').all(orderId);
+    if (!lines.length) throw new HttpError(400, '销售订单至少需要一条明细');
+    for (const line of lines) {
+      if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents) || line.unit_price_cents <= 0) {
+        throw new HttpError(400, '提交前请确认每行数量和单价均大于 0');
+      }
+    }
     db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
     audit(db, actor.id, 'SUBMIT', 'SALES_ORDER', orderId, `提交订单 ${order.order_no}`);
   } else {
@@ -1122,7 +1152,10 @@ async function changeOrderState(db, req, res, actor, orderId, action) {
 function orderRows(db, where, params, tail) {
   return db.prepare(`SELECT so.id,so.order_no orderNo,so.status,so.total_cents totalCents,so.remark,
       so.rejection_reason rejectionReason,so.created_at createdAt,so.updated_at updatedAt,so.submitted_at submittedAt,
-      so.reviewed_at reviewedAt,c.id customerId,c.code customerCode,c.name customerName,
+      so.reviewed_at reviewedAt,
+      so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,
+      so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
+      c.id customerId,c.code customerCode,c.name customerName,c.contact customerContact,c.phone customerPhone,c.address customerAddress,
       creator.display_name creatorName,reviewer.display_name reviewerName,
       (SELECT count(*) FROM sales_order_items i WHERE i.order_id=so.id) itemCount,
       (SELECT count(*) FROM sales_deliveries sd WHERE sd.sales_order_id=so.id) deliveryCount
@@ -1131,20 +1164,60 @@ function orderRows(db, where, params, tail) {
     ${where} ${tail}`).all(...params).map((row) => ({ ...row, statusLabel: STATUS_LABELS[row.status] }));
 }
 
+// Normalize a YYYY-MM-DD-ish business date string. Returns null for
+// empty input so the caller can decide whether the field is required
+// (e.g. required at SUBMIT, optional in DRAFT).
+function readBusinessDate(value) {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new HttpError(400, '日期格式必须为 YYYY-MM-DD');
+  const parsed = new Date(`${s}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== s) {
+    throw new HttpError(400, '日期不正确');
+  }
+  return s;
+}
+
+function readSnapshotText(value, label, max) {
+  if (value === null || value === undefined) return '';
+  return optionalText(String(value), max || 200) || '';
+}
+
 function orderInput(db, body) {
   const customerId = requiredText(body.customerId, '客户', 100);
-  const customer = db.prepare('SELECT id FROM customers WHERE id=? AND active=1').get(customerId);
+  const customer = db.prepare('SELECT id, contact, phone, address FROM customers WHERE id=? AND active=1').get(customerId);
   if (!customer) throw new HttpError(400, '客户不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '销售订单至少需要一条明细');
+  // V1.3 Phase 1: order date + requested delivery date + ship-to / payment
+  // snapshot. DRAFT can persist with empty / null dates (legacy behaviour);
+  // SUBMIT is gated separately.
+  const orderDate = readBusinessDate(body.orderDate ?? body.order_date);
+  const requestedDeliveryDate = readBusinessDate(body.requestedDeliveryDate ?? body.requested_delivery_date);
+  if (orderDate && requestedDeliveryDate && requestedDeliveryDate < orderDate) {
+    throw new HttpError(400, '要求交期不能早于订单日期');
+  }
+  // Snapshot defaults to current customer master values if the form
+  // did not provide them — the document owns its own copy after save.
+  const shipToContactName = readSnapshotText(body.shipToContactName ?? body.ship_to_contact_name, '收货联系人', 50) || (customer.contact || '');
+  const shipToPhone = readSnapshotText(body.shipToPhone ?? body.ship_to_phone, '收货电话', 30) || (customer.phone || '');
+  const shipToAddress = readSnapshotText(body.shipToAddress ?? body.ship_to_address, '收货地址', 200) || (customer.address || '');
+  const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
   const items = body.items.map((item, index) => {
     const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
     const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
     if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
     if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents: Math.round(quantity * unitPriceCents), lineNo: index + 1 };
+    const amountCents = quantity * unitPriceCents;
+    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额无法精确到分`);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1 };
   });
-  return { customerId, remark: optionalText(body.remark, 500), items, totalCents: items.reduce((sum, item) => sum + item.amountCents, 0) };
+  return {
+    customerId, remark: optionalText(body.remark, 500), items,
+    totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
+    orderDate, requestedDeliveryDate, paymentTerms, shipToContactName, shipToPhone, shipToAddress,
+  };
 }
 
 function saveOrderItems(db, orderId, items) {
@@ -1231,8 +1304,13 @@ async function createPurchaseOrder(db, req, res, actor) {
   const body = await readJson(req); const input = purchaseOrderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?)`).run(orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now);
+    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
+        order_date,expected_delivery_date,payment_terms,supplier_contact_name,supplier_contact_phone,supplier_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?)`).run(
+      orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms,
+      input.supplierContactName, input.supplierContactPhone, input.supplierAddress,
+    );
     savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'CREATE', 'PURCHASE_ORDER', orderId, `创建采购订单 ${orderNo}`);
   });
@@ -1247,8 +1325,13 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=? WHERE id=?")
-      .run(input.supplierId, input.totalCents, input.remark, now, orderId);
+    db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
+        order_date=?,expected_delivery_date=?,payment_terms=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
+      WHERE id=?`).run(
+      input.supplierId, input.totalCents, input.remark, now,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms,
+      input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
+    );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
     savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
@@ -1264,6 +1347,28 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
   if (action === 'submit') {
     if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
     if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    // V1.3 Phase 1 commercial contract gate. SUBMITTED purchase orders
+    // must carry order date, expected delivery date, supplier contact /
+    // phone / address, payment terms, and a positive unit price on
+    // every line. A DRAFT generated from a PR with no estimate may
+    // temporarily have unit_price_cents = 0; the user must enter the
+    // final price before SUBMIT.
+    if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+    if (!order.expected_delivery_date) throw new HttpError(400, '提交前请填写预计交期');
+    if (!order.supplier_contact_name) throw new HttpError(400, '提交前请填写供应商联系人');
+    if (!order.supplier_contact_phone) throw new HttpError(400, '提交前请填写供应商电话');
+    if (!order.supplier_address) throw new HttpError(400, '提交前请填写供应商地址');
+    if (!order.payment_terms) throw new HttpError(400, '提交前请填写付款条件');
+    if (order.expected_delivery_date < order.order_date) throw new HttpError(400, '预计交期不能早于订单日期');
+    {
+      const items = db.prepare('SELECT quantity, unit_price_cents FROM purchase_order_items WHERE order_id=?').all(orderId);
+      if (!items.length) throw new HttpError(400, '采购订单至少需要一条明细');
+      for (const line of items) {
+        if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents) || line.unit_price_cents <= 0) {
+          throw new HttpError(400, '提交前请确认每行数量和单价均大于 0');
+        }
+      }
+    }
     db.prepare("UPDATE purchase_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
     audit(db, actor.id, 'SUBMIT', 'PURCHASE_ORDER', orderId, `提交采购订单 ${order.order_no}`);
   } else if (action === 'approve') {
@@ -1285,7 +1390,10 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
 function purchaseOrderRows(db, where, params, tail) {
   return db.prepare(`SELECT po.id,po.order_no orderNo,po.status,po.total_cents totalCents,po.remark,
       po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
-      po.reviewed_at reviewedAt,s.id supplierId,s.code supplierCode,s.name supplierName,
+      po.reviewed_at reviewedAt,
+      po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
+      po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
+      s.id supplierId,s.code supplierCode,s.name supplierName,s.contact supplierContact,s.phone supplierPhone,s.address supplierAddressMaster,
       creator.display_name creatorName,reviewer.display_name reviewerName,
       (SELECT count(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount,
       (SELECT count(*) FROM purchase_receipts pr WHERE pr.purchase_order_id=po.id) receiptCount
@@ -1310,6 +1418,8 @@ function getSalesOrderWorkflow(db, res, actor, orderId) {
   allow(actor, 'ORDERS_VIEW');
   const order = db.prepare(`SELECT so.id,so.order_no documentNo,so.status,so.created_at createdAt,
     so.submitted_at submittedAt,so.reviewed_at reviewedAt,so.total_cents amountCents,
+    so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,
+    so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
     c.id partyId,c.name partyName FROM sales_orders so JOIN customers c ON c.id=so.customer_id WHERE so.id=?`).get(orderId);
   if (!order) throw new HttpError(404, '销售订单不存在');
   const deliveries = db.prepare(`SELECT id,delivery_no documentNo,status,delivery_date documentDate,total_cents amountCents
@@ -1325,6 +1435,8 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
   allow(actor, 'PURCHASE_ORDERS_VIEW');
   const order = db.prepare(`SELECT po.id,po.order_no documentNo,po.status,po.created_at createdAt,
     po.submitted_at submittedAt,po.reviewed_at reviewedAt,po.total_cents amountCents,
+    po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
+    po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
     s.id partyId,s.name partyName FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id WHERE po.id=?`).get(orderId);
   if (!order) throw new HttpError(404, '采购订单不存在');
   const receipts = db.prepare(`SELECT id,receipt_no documentNo,status,receipt_date documentDate,total_cents amountCents
@@ -1338,18 +1450,48 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
 
 function purchaseOrderInput(db, body) {
   const supplierId = requiredText(body.supplierId, '供应商', 100);
-  const supplier = db.prepare('SELECT id FROM suppliers WHERE id=? AND active=1').get(supplierId);
+  const supplier = db.prepare('SELECT id, contact, phone, address, email FROM suppliers WHERE id=? AND active=1').get(supplierId);
   if (!supplier) throw new HttpError(400, '供应商不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '采购订单至少需要一条明细');
+  // V1.3 Phase 1: order date + expected delivery date + supplier /
+  // payment snapshot. DRAFT can persist with empty / null dates; SUBMIT
+  // is gated separately.
+  const orderDate = readBusinessDate(body.orderDate ?? body.order_date);
+  const expectedDeliveryDate = readBusinessDate(body.expectedDeliveryDate ?? body.expected_delivery_date);
+  if (orderDate && expectedDeliveryDate && expectedDeliveryDate < orderDate) {
+    throw new HttpError(400, '预计交期不能早于订单日期');
+  }
+  const supplierContactName = readSnapshotText(body.supplierContactName ?? body.supplier_contact_name, '供应商联系人', 50) || (supplier.contact || '');
+  const supplierContactPhone = readSnapshotText(body.supplierContactPhone ?? body.supplier_contact_phone, '供应商电话', 30) || (supplier.phone || '');
+  const supplierAddress = readSnapshotText(body.supplierAddress ?? body.supplier_address, '供应商地址', 200) || (supplier.address || '');
+  const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
   const items = body.items.map((item, index) => {
     const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
-    const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
+    const quantity = Number(item.quantity);
+    const hasExplicitPrice = item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '';
+    const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : Number(product.price_cents || 0);
     if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
-    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents: Math.round(quantity * unitPriceCents), lineNo: index + 1 };
+    // V1.3 Phase 1: a DRAFT may temporarily carry 0 unit price (a
+    // generated PO from a PR without an estimate is the canonical
+    // example). The submit gate enforces unit price > 0 — see
+    // changePurchaseOrderState. Non-integer cents are rejected here
+    // because the input value must round-trip as integer cents.
+    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
+      throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
+    }
+    if (!Number.isInteger(unitPriceCents)) {
+      throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
+    }
+    const amountCents = quantity * unitPriceCents;
+    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额无法精确到分`);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1 };
   });
-  return { supplierId, remark: optionalText(body.remark, 500), items, totalCents: items.reduce((sum, item) => sum + item.amountCents, 0) };
+  return {
+    supplierId, remark: optionalText(body.remark, 500), items,
+    totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
+    orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress,
+  };
 }
 
 function savePurchaseOrderItems(db, orderId, items) {
@@ -2037,23 +2179,36 @@ function checkPeriodNotClosedForVoucher(db, voucherDate, operation) {
 }
 
 async function createAccountingVoucher(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'VOUCHER_SUBMIT');
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
-  
+
   // 检查期间是否已关闭
   const effectiveDate = voucherDate || new Date().toISOString().slice(0, 10);
   checkPeriodNotClosedForVoucher(db, effectiveDate, '录入');
-  
+
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
-  
-  // 验证借贷平衡
+
+  // V1.3 Phase 1: integer-cent integrity. Every entry must be a
+  // positive safe-integer number of cents; the ledger never accepts
+  // fractional cents, zero, negative, or non-numeric values.
+  for (const [index, e] of entries.entries()) {
+    if (!e || (e.direction !== 'DEBIT' && e.direction !== 'CREDIT')) {
+      throw new HttpError(400, `第 ${index + 1} 行分录方向不正确`);
+    }
+    const amount = Number(e.amountCents);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new HttpError(400, `第 ${index + 1} 行金额必须为正整数（分）`);
+    }
+  }
+
+  // 验证借贷平衡 (V1.3 Phase 1: EXACT match; no 1-cent tolerance).
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
-  
-  if (Math.abs(debitTotal - creditTotal) > 1) {
+
+  if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡，借方合计：' + debitTotal + '，贷方合计：' + creditTotal);
   }
   
@@ -2077,7 +2232,7 @@ async function createAccountingVoucher(db, req, res, actor) {
   return send(res, 201, { id: voucherId, voucherNo });
 }
 async function updateAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'VOUCHER_SUBMIT');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -2104,10 +2259,21 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
 
+  // V1.3 Phase 1: integer-cent integrity and exact debit/credit match.
+  for (const [index, e] of entries.entries()) {
+    if (!e || (e.direction !== 'DEBIT' && e.direction !== 'CREDIT')) {
+      throw new HttpError(400, `第 ${index + 1} 行分录方向不正确`);
+    }
+    const amount = Number(e.amountCents);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new HttpError(400, `第 ${index + 1} 行金额必须为正整数（分）`);
+    }
+  }
+
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
 
-  if (Math.abs(debitTotal - creditTotal) > 1) {
+  if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡');
   }
 
@@ -2426,11 +2592,11 @@ function listCashJournals(db, res, actor, url) {
 }
 
 async function createCashJournal(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'CASH_JOURNALS_MANAGE');
   const body = await readJson(req);
   const { journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, journal_date, remark } = body;
   
-  if (!amount_cents || amount_cents <= 0) throw new HttpError(400, '请输入正确的金额');
+  if (!Number.isSafeInteger(amount_cents) || amount_cents <= 0) throw new HttpError(400, '金额必须为正整数分');
   if (!journal_date) throw new HttpError(400, '请选择日期');
   
   const journalId = id();
@@ -2440,15 +2606,15 @@ async function createCashJournal(db, req, res, actor) {
   transaction(db, () => {
     db.prepare(`INSERT INTO cash_journals(id, journal_no, journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, operator_id, journal_date, remark, created_at)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, Math.round(amount_cents * 100), direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
+      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, amount_cents, direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
     
     // 更新银行账户余额
     if (bank_id && account_type === 'BANK') {
-      const change = direction === 'IN' ? Math.round(amount_cents * 100) : -Math.round(amount_cents * 100);
+      const change = direction === 'IN' ? amount_cents : -amount_cents;
       db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, bank_id);
     }
     
-    audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}元`);
+    audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}分`);
   });
   
   return send(res, 201, { id: journalId, journalNo });
@@ -2492,18 +2658,19 @@ function listBankAccounts(db, res, actor) {
 }
 
 async function createBankAccount(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
   const body = await readJson(req);
-  const { bank_name, account_no, account_name, account_type, initial_balance } = body;
+  const { bank_name, account_no, account_name, account_type, initial_balance_cents = 0 } = body;
   
   if (!bank_name || !account_no || !account_name) throw new HttpError(400, '请填写完整的银行信息');
+  if (!Number.isSafeInteger(initial_balance_cents)) throw new HttpError(400, '期初余额必须为整数分');
   
   const accountId = id();
   const now = new Date().toISOString();
   
   db.prepare(`INSERT INTO bank_accounts(id, bank_name, account_no, account_name, account_type, balance_cents, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', Math.round((initial_balance || 0) * 100), now, now);
+    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', initial_balance_cents, now, now);
   
   return send(res, 201, { id: accountId });
 }
@@ -2560,18 +2727,20 @@ function listBills(db, res, actor, url) {
 }
 
 async function createBill(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BILLS_MANAGE');
   const body = await readJson(req);
-  const { bill_no, bill_type, direction, face_amount, bank_id, drawer_name, drawer_bank, payee_name, issue_date, due_date, holder_id, remark } = body;
+  const { bill_no, bill_type, direction, face_amount_cents, bank_id, drawer_name, drawer_bank, payee_name, issue_date, due_date, holder_id, remark } = body;
   
-  if (!bill_no || !face_amount || !issue_date || !due_date) throw new HttpError(400, '请填写完整的票据信息');
+  if (!issue_date || !due_date) throw new HttpError(400, '请填写完整的票据信息');
+  if (!Number.isSafeInteger(face_amount_cents) || face_amount_cents <= 0) throw new HttpError(400, '票面金额必须为正整数分');
   
   const billId = id();
   const now = new Date().toISOString();
+  const effectiveBillNo = bill_no || `BILL-${Date.now().toString(36).toUpperCase()}`;
   
   db.prepare(`INSERT INTO bills(id, bill_no, bill_type, direction, face_amount_cents, bank_id, drawer_name, drawer_bank, payee_name, holder, holder_id, issue_date, due_date, status, remark, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`)
-    .run(billId, bill_no, bill_type || 'DRAFT', direction || 'RECEIVABLE', Math.round(face_amount * 100), bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
+    .run(billId, effectiveBillNo, bill_type || 'DRAFT', direction || 'RECEIVABLE', face_amount_cents, bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
   
   return send(res, 201, { id: billId });
 }
@@ -3453,7 +3622,11 @@ function listCustomerLookup(db, res, actor, url) {
 // dropdown selection without a follow-up /api/orders/:id call (which
 // would require ORDERS_VIEW).
 function listSalesOrderSourceLookup(db, res, actor, url) {
-  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  // V1.3 Phase 1: sales uses ORDERS_CREATE (rather than the logistics
+  // execute rights it no longer holds) to source approved sales orders
+  // for downstream PR / PO prefill; warehouse / return managers still
+  // have their dedicated logistics permissions for the legacy path.
+  allowAny(actor, ['ORDERS_CREATE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
   const headerStmt = db.prepare(`
@@ -3481,11 +3654,15 @@ function listSalesOrderSourceLookup(db, res, actor, url) {
   return send(res, 200, { orders });
 }
 
-// Symmetric to listSalesOrderSourceLookup but for the Purchase Receipt
-// form. Gated by the logistics permission that authorizes creating /
-// managing Purchase Receipt — no PURCHASE_ORDERS_VIEW required.
+// Symmetric to listSalesOrderSourceLookup but for the Purchase Order
+// prefill (used by purchase-receipt, sales-delivery/PR/PO generation).
+// V1.3 Phase 1: sales uses PURCHASE_ORDERS_CREATE (rather than the
+// logistics execute rights it no longer holds) to source approved
+// purchase orders for downstream PR / PO prefill; warehouse / return
+// managers still have their dedicated logistics permissions for the
+// legacy path.
 function listPurchaseOrderSourceLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  allowAny(actor, ['PURCHASE_ORDERS_CREATE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
   const headerStmt = db.prepare(`

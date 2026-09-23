@@ -46,3 +46,45 @@ export function Loading() { return <div className="loading" role="status"><div c
 export function ErrorState({ message = '暂时无法获取数据，请稍后重试。', onRetry }) { return <div className="error-state" role="alert"><ErrorIcon size={28}/><strong>加载失败</strong><p>{message}</p>{onRetry && <button type="button" className="secondary" onClick={onRetry}>重新加载</button>}</div>; }
 import { useState } from 'react';
 import { CloseIcon, EmptyIcon, ErrorIcon, MoreIcon, SearchIcon } from './icons.jsx';
+import { centsToYuanInput, yuanToCents, yuanToNonNegativeCents } from '../lib/money.js';
+
+// V1.3 Phase 1: YuanField is the canonical yuan-facing money input.
+// The component stores integer cents in the parent form state
+// (matching the API/DB contract) and renders yuan decimal in the
+// <input>. The boundary is the only place where the two
+// representations meet, so logs, transport, and storage stay
+// integer-only.
+export function YuanField({ valueCents, onChangeCents, min = 0, step = '0.01', disabled, required, ariaLabel, inputMode = 'decimal', className }) {
+  const display = centsToYuanInput(valueCents);
+  return (
+    <input
+      type="number"
+      inputMode={inputMode}
+      min={min}
+      step={step}
+      value={display}
+      disabled={disabled}
+      required={required}
+      aria-label={ariaLabel}
+      className={className}
+      onChange={(event) => {
+        const next = Number(min) <= 0
+          ? yuanToNonNegativeCents(event.target.value)
+          : yuanToCents(event.target.value);
+        // Accept empty input as 0; reject malformed entries.
+        if (event.target.value === '' || event.target.value === null) {
+          onChangeCents?.(0);
+          return;
+        }
+        if (next === null) {
+          // Keep the displayed value but signal invalid via NaN-like
+          // sentinel so the parent form can decide whether to gate
+          // submit. We never persist NaN to the form state.
+          onChangeCents?.(Number.NaN);
+          return;
+        }
+        onChangeCents?.(next);
+      }}
+    />
+  );
+}

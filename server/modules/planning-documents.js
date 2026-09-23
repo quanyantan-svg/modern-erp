@@ -61,6 +61,10 @@ function readDate(value, label) {
   if (value === undefined || value === null || value === '') return null;
   const text = String(value).trim();
   if (!DATE_RE.test(text)) throw new HttpError(400, `${label}格式应为 YYYY-MM-DD`);
+  const parsed = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text) {
+    throw new HttpError(400, `${label}不正确`);
+  }
   return text;
 }
 
@@ -544,8 +548,15 @@ function readRequisitionItems(body) {
   return raw.map((entry, index) => {
     const productId = requiredText(entry.productId ?? entry.product_id, `第${index + 1}行产品`, 100);
     const quantity = readPositiveQuantity(entry.quantity, `第${index + 1}行数量`);
-    const unitPriceCents = Math.max(0, Math.trunc(Number(entry.unitPriceCents ?? entry.unit_price_cents ?? 0) || 0));
-    const amountCents = Math.max(0, Math.trunc(Number(entry.amountCents ?? entry.amount_cents ?? quantity * unitPriceCents) || 0));
+    const rawUnitPrice = entry.unitPriceCents ?? entry.unit_price_cents ?? 0;
+    const unitPriceCents = Number(rawUnitPrice);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) {
+      throw new HttpError(400, `第${index + 1}行参考单价必须为非负整数分`);
+    }
+    const amountCents = quantity * unitPriceCents;
+    if (!Number.isSafeInteger(amountCents)) {
+      throw new HttpError(400, `第${index + 1}行参考金额无法精确到分`);
+    }
     return {
       productId,
       quantity,
@@ -568,7 +579,7 @@ export async function listPurchaseRequisitions(db, res, actor, url) {
   const rows = db.prepare(`
     SELECT pr.id, pr.requisition_no requisitionNo, pr.source_instruction_id sourceInstructionId,
            pi.instruction_no sourceInstructionNo,
-           pr.status, pr.required_date requiredDate, pr.notes, pr.created_at createdAt,
+           pr.status, pr.request_date requestDate, pr.required_date requiredDate, pr.notes, pr.created_at createdAt,
            pr.submitted_at submittedAt, pr.reviewed_at reviewedAt,
            pr.purchase_order_id purchaseOrderId,
            po.order_no purchaseOrderNo,
@@ -623,8 +634,8 @@ export async function getPurchaseRequisition(db, res, actor, id) {
   header.items = header.items.map((row) => ({
     ...row,
     quantity: Number(row.quantity),
-    unitPriceCents: Number(row.unitPriceCents),
-    amountCents: Number(row.amountCents),
+    unitPriceCents: Number(row.unit_price_cents),
+    amountCents: Number(row.amount_cents),
   }));
   header.totalAmountCents = header.items.reduce((sum, item) => sum + item.amountCents, 0);
   header.totalQuantity = header.items.reduce((sum, item) => sum + item.quantity, 0);
@@ -636,7 +647,9 @@ export async function createPurchaseRequisition(db, req, res, actor) {
   allow(actor, 'PURCHASE_REQUISITION_MANAGE');
   const body = await readJson(req);
   const items = readRequisitionItems(body);
+  const requestDate = readDate(body.requestDate ?? body.request_date, '请购日期') || nowIso().slice(0, 10);
   const requiredDate = readDate(body.requiredDate ?? body.required_date, '需求日期');
+  if (requiredDate && requiredDate < requestDate) throw new HttpError(400, '要求到货日不能早于请购日期');
   const notes = readString(body.notes, MAX_NOTE);
   const sourceInstructionId = body.sourceInstructionId ?? body.source_instruction_id ?? null;
   if (sourceInstructionId) {
@@ -651,9 +664,9 @@ export async function createPurchaseRequisition(db, req, res, actor) {
 
   transaction(db, () => {
     db.prepare(`
-      INSERT INTO purchase_requisitions(id, requisition_no, source_instruction_id, status, required_date, notes, creator_id, created_at, updated_at)
-      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)
-    `).run(newIdValue, newNo, sourceInstructionId, requiredDate, notes, actor.id, now, now);
+      INSERT INTO purchase_requisitions(id, requisition_no, source_instruction_id, status, request_date, required_date, notes, creator_id, created_at, updated_at)
+      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?)
+    `).run(newIdValue, newNo, sourceInstructionId, requestDate, requiredDate, notes, actor.id, now, now);
 
     const insertItem = db.prepare(`
       INSERT INTO purchase_requisition_items(id, requisition_id, product_id, quantity, preferred_supplier_id, unit_price_cents, amount_cents, purchase_instruction_item_id, created_at)
@@ -681,6 +694,49 @@ export async function createPurchaseRequisition(db, req, res, actor) {
   });
 
   return send(res, 201, { id: newIdValue, requisitionNo: newNo });
+}
+
+export async function updatePurchaseRequisition(db, req, res, actor, id) {
+  allow(actor, 'PURCHASE_REQUISITION_MANAGE');
+  const header = db.prepare("SELECT * FROM purchase_requisitions WHERE id=?").get(id);
+  if (!header) throw new HttpError(404, '请购单不存在');
+  if (header.status !== 'DRAFT') throw new HttpError(409, '只有草稿请购单可以编辑');
+
+  const body = await readJson(req);
+  const requestDate = readDate(body.requestDate ?? body.request_date ?? header.request_date, '请购日期');
+  const requiredDate = readDate(body.requiredDate ?? body.required_date ?? header.required_date, '需求日期');
+  if (!requestDate) throw new HttpError(400, '请购日期不能为空');
+  if (requiredDate && requiredDate < requestDate) throw new HttpError(400, '要求到货日不能早于请购日期');
+  const notes = readString(body.notes, MAX_NOTE, header.notes || '');
+  if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '请购单明细不能为空');
+
+  const storedItems = db.prepare("SELECT id, quantity FROM purchase_requisition_items WHERE requisition_id=?").all(id);
+  const storedById = new Map(storedItems.map((item) => [item.id, item]));
+  const updates = body.items.map((entry, index) => {
+    const itemId = requiredText(entry.id, `第${index + 1}行明细`, 100);
+    const stored = storedById.get(itemId);
+    if (!stored) throw new HttpError(400, `第${index + 1}行明细不属于当前请购单`);
+    const unitPriceCents = Number(entry.unitPriceCents ?? entry.unit_price_cents);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) {
+      throw new HttpError(400, `第${index + 1}行参考单价必须为非负整数分`);
+    }
+    const amountCents = Number(stored.quantity) * unitPriceCents;
+    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第${index + 1}行参考金额无法精确到分`);
+    return { itemId, unitPriceCents, amountCents };
+  });
+  if (new Set(updates.map((item) => item.itemId)).size !== storedItems.length || updates.length !== storedItems.length) {
+    throw new HttpError(400, '必须提交当前请购单的全部明细');
+  }
+
+  const now = nowIso();
+  transaction(db, () => {
+    db.prepare("UPDATE purchase_requisitions SET request_date=?, required_date=?, notes=?, updated_at=? WHERE id=?")
+      .run(requestDate, requiredDate, notes, now, id);
+    const updateItem = db.prepare("UPDATE purchase_requisition_items SET unit_price_cents=?, amount_cents=? WHERE id=? AND requisition_id=?");
+    for (const item of updates) updateItem.run(item.unitPriceCents, item.amountCents, item.itemId, id);
+    audit(db, actor.id, 'UPDATE', 'PURCHASE_REQUISITION', id, `编辑请购单 ${header.requisition_no}`);
+  });
+  return send(res, 200, { ok: true });
 }
 
 export async function submitPurchaseRequisition(db, res, actor, id) {
@@ -764,7 +820,7 @@ export async function generatePurchaseOrderFromRequisition(db, req, res, actor, 
   if (header.purchase_order_id) throw new HttpError(409, '该请购单已经生成过采购订单');
   const body = await readJson(req);
   const supplierId = requiredText(body.supplierId ?? body.supplier_id, '供应商', 100);
-  const supplier = db.prepare("SELECT id, active FROM suppliers WHERE id=?").get(supplierId);
+  const supplier = db.prepare("SELECT id, active, contact, phone, address FROM suppliers WHERE id=?").get(supplierId);
   if (!supplier) throw new HttpError(400, '供应商不存在');
   if (!supplier.active) throw new HttpError(400, '供应商已停用');
 
@@ -775,25 +831,35 @@ export async function generatePurchaseOrderFromRequisition(db, req, res, actor, 
   const poId = genId();
   const ts = Date.now();
   const orderNo = `PO-${now.slice(0, 10).replaceAll('-', '')}-${String(ts).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+  const orderDate = readDate(body.orderDate ?? body.order_date, '订单日期') || now.slice(0, 10);
+  const requestedExpectedDate = readDate(body.expectedDeliveryDate ?? body.expected_delivery_date, '预计交期');
+  const expectedDeliveryDate = requestedExpectedDate || (header.required_date >= orderDate ? header.required_date : null);
+  const paymentTerms = readString(body.paymentTerms ?? body.payment_terms, 200);
+  const supplierContactName = readString(body.supplierContactName ?? body.supplier_contact_name, 50, supplier.contact || '');
+  const supplierContactPhone = readString(body.supplierContactPhone ?? body.supplier_contact_phone, 30, supplier.phone || '');
+  const supplierAddress = readString(body.supplierAddress ?? body.supplier_address, 200, supplier.address || '');
+  if (expectedDeliveryDate && expectedDeliveryDate < orderDate) throw new HttpError(400, '预计交期不能早于订单日期');
 
   transaction(db, () => {
     let totalCents = 0;
     for (const item of items) {
       const qty = Number(item.quantity);
-      const unit = Number(item.unitPriceCents) || 0;
+      const unit = Number(item.unit_price_cents) || 0;
       totalCents += qty * unit;
     }
     db.prepare(`
-      INSERT INTO purchase_orders(id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at)
-      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?)
-    `).run(poId, orderNo, supplierId, totalCents, `来自请购单 ${header.requisition_no}`, actor.id, now, now);
+      INSERT INTO purchase_orders(id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at,
+        order_date, expected_delivery_date, payment_terms, supplier_contact_name, supplier_contact_phone, supplier_address)
+      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(poId, orderNo, supplierId, totalCents, `来自请购单 ${header.requisition_no}`, actor.id, now, now,
+      orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress);
     const insertItem = db.prepare(`
       INSERT INTO purchase_order_items(id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     items.forEach((item, index) => {
       const qty = Number(item.quantity);
-      const unit = Number(item.unitPriceCents) || 0;
+      const unit = Number(item.unit_price_cents) || 0;
       const amount = qty * unit;
       insertItem.run(genId(), poId, item.product_id, qty, unit, amount, index + 1);
     });

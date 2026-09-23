@@ -309,9 +309,16 @@ function openProductionSupply(db, productId) {
 // [{ productId, quantity, orderId, needDate }] for every positive
 // remaining demand line. Returns 0 for fully delivered products and
 // silently drops DRAFT/SUBMITTED/REJECTED/CANCELLED orders.
+//
+// V1.3 Phase 1: need_date precedence is the contractual
+// requested_delivery_date first. The workflow timestamp fallback is
+// permitted only for legacy rows with neither V1.3 business-date column
+// populated. A V1.3 row with order_date but a missing contractual delivery
+// date is skipped instead of silently turning workflow time into demand time.
 function openSalesDemand(db, horizonStart, horizonEnd) {
   const orders = db.prepare(`
-    SELECT id, order_no, submitted_at, reviewed_at, created_at
+    SELECT id, order_no, submitted_at, reviewed_at, created_at,
+           requested_delivery_date, order_date
       FROM sales_orders
      WHERE status = 'APPROVED'
   `).all();
@@ -328,8 +335,11 @@ function openSalesDemand(db, horizonStart, horizonEnd) {
        GROUP BY sdi.product_id
     `).all(order.id);
     const deliveredMap = new Map(delivered.map((row) => [row.product_id, Number(row.total)]));
-    const rawDate = order.submitted_at || order.reviewed_at || order.created_at || '';
-    const needDate = rawDate.slice(0, 10) || horizonEnd;
+    const isLegacyOrder = !order.requested_delivery_date && !order.order_date;
+    const rawDate = order.requested_delivery_date
+      || (isLegacyOrder ? (order.submitted_at || order.reviewed_at || order.created_at || '').slice(0, 10) : '');
+    const needDate = rawDate || horizonEnd;
+    if (!rawDate && !isLegacyOrder) continue;
     // Skip orders whose need_date sits entirely outside the horizon.
     if (needDate < horizonStart || needDate > horizonEnd) continue;
     for (const line of ordered) {

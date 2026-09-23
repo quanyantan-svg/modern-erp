@@ -114,12 +114,18 @@ describe('M6 permission registry', () => {
     assert.ok(me.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'));
   });
 
-  test('3. role-sales / role-reviewer / role-warehouse / role-accounting do not hold M6 perms', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('3. role-sales / role-reviewer / role-accounting do not hold M6 perms; role-warehouse DOES (V1.3 Phase 1)', async () => {
+    // V1.3 Phase 1: warehouse now owns physical stock execution including
+    // material issue and production receipt. sales / reviewer / accounting
+    // remain excluded; warehouse holds the two M6 perms.
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const me = await request('/api/auth/me', { token });
       assert.equal(me.data.user.permissions.includes('PRODUCTION_MATERIAL_ISSUE_MANAGE'), false, `${username} should not hold PRODUCTION_MATERIAL_ISSUE_MANAGE`);
       assert.equal(me.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'), false, `${username} should not hold PRODUCTION_RECEIPT_MANAGE`);
     }
+    const warehouseMe = await request('/api/auth/me', { token: warehouseToken });
+    assert.equal(warehouseMe.data.user.permissions.includes('PRODUCTION_MATERIAL_ISSUE_MANAGE'), true, 'warehouse should hold PRODUCTION_MATERIAL_ISSUE_MANAGE');
+    assert.equal(warehouseMe.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'), true, 'warehouse should hold PRODUCTION_RECEIPT_MANAGE');
   });
 });
 
@@ -534,32 +540,42 @@ describe('M6 security contract', () => {
     assert.equal(result.status, 401);
   });
 
-  test('34. sales / reviewer / warehouse / accounting cannot list material issues', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('34. sales / reviewer / accounting cannot list material issues; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const list = await request('/api/production-material-issues', { token });
       assert.equal(list.status, 403, `${username} must be forbidden from material issue list`);
     }
+    const warehouseList = await request('/api/production-material-issues', { token: warehouseToken });
+    assert.equal(warehouseList.status, 200, `warehouse must be allowed to list material issues, got ${warehouseList.status}`);
   });
 
-  test('35. sales / reviewer / warehouse / accounting cannot create material issues', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('35. sales / reviewer / accounting cannot create material issues; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const create = await request('/api/production-material-issues', { token, method: 'POST', body: { productionOrderId: 'x', warehouseId: 'warehouse-001', items: [{ productId: 'product-002', issueQuantity: 1 }] } });
-      assert.equal(create.status, 403, `${username} must be forbidden from material issue create`);
+      assert.equal(create.status === 403 || create.status === 404, true, `${username} must be forbidden from material issue create, got ${create.status}`);
     }
+    // warehouse may attempt to create against a non-existent production order; 4xx expected, but not 403.
+    const warehouseCreate = await request('/api/production-material-issues', { token: warehouseToken, method: 'POST', body: { productionOrderId: 'non-existent', warehouseId: 'warehouse-001', items: [{ productId: 'product-002', issueQuantity: 1 }] } });
+    assert.notEqual(warehouseCreate.status, 403, 'warehouse must be authorized to attempt material issue create');
   });
 
-  test('36. sales / reviewer / warehouse / accounting cannot list production receipts', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('36. sales / reviewer / accounting cannot list production receipts; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const list = await request('/api/production-receipts', { token });
       assert.equal(list.status, 403, `${username} must be forbidden from receipt list`);
     }
+    const warehouseList = await request('/api/production-receipts', { token: warehouseToken });
+    assert.equal(warehouseList.status, 200, `warehouse must be allowed to list production receipts, got ${warehouseList.status}`);
   });
 
-  test('37. sales / reviewer / warehouse / accounting cannot create production receipts', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('37. sales / reviewer / accounting cannot create production receipts; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const create = await request('/api/production-receipts', { token, method: 'POST', body: { productionOrderId: 'x', warehouseId: 'warehouse-001', quantity: 1 } });
-      assert.equal(create.status, 403, `${username} must be forbidden from receipt create`);
+      assert.equal(create.status === 403 || create.status === 404, true, `${username} must be forbidden from receipt create, got ${create.status}`);
     }
+    // warehouse may attempt to create against a non-existent production order; 4xx expected, but not 403.
+    const warehouseCreate = await request('/api/production-receipts', { token: warehouseToken, method: 'POST', body: { productionOrderId: 'non-existent', warehouseId: 'warehouse-001', quantity: 1 } });
+    assert.notEqual(warehouseCreate.status, 403, 'warehouse must be authorized to attempt production receipt create');
   });
 
   test('38. permission reconciliation is idempotent across re-run', () => {

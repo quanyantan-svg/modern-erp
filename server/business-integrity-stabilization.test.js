@@ -131,12 +131,14 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'warehouse', 'PATCH', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 1 }] })).status, 409);
   });
 
-  test('role-sales retains its existing legitimate logistics manage contract', async () => {
+  test('V1.3 Phase 1: role-sales no longer posts purchase receipts (logistics execution belongs to warehouse)', async () => {
+    // role-sales used to be able to create / edit / cancel purchase receipts.
+    // After V1.3 Phase 1 role remediation, sales owns commercial entry
+    // (customer/supplier master + SO/PR/PO create/submit) and CRM, but
+    // physical stock execution is restricted to warehouse / admin. So
+    // /api/purchase-receipts POST as sales must be 403, not 201.
     const response = await request('/api/purchase-receipts', 'sales', 'POST', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 12345 }] });
-    assert.equal(response.status, 201);
-    const created = await response.json();
-    assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'sales', 'PATCH', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] })).status, 200);
-    assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'sales', 'POST', { action: 'cancel' })).status, 200);
+    assert.equal(response.status, 403, `sales POST /api/purchase-receipts must be 403 after V1.3, got ${response.status}`);
   });
 
   test('closed-period inbound and outbound confirmations roll back all effects', async () => {
@@ -177,13 +179,18 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(preserved.status, 'DRAFT');
     assert.equal(preserved.reason, 'keep me');
     assert.equal(legacy.prepare("SELECT count(*) count FROM permissions WHERE code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    // V1.3 Phase 1: INVENTORY_CHECK_APPROVE is held by both admin
+    // (all-permissions inheritance) and reviewer (canonical approver).
+    // warehouse must NOT hold it.
     assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-admin' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-reviewer' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
     assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-warehouse' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 0);
     legacy.close();
 
     legacy = createDatabase(filename);
     assert.equal(legacy.prepare("SELECT count(*) count FROM inventory_checks WHERE id='legacy-check'").get().count, 1);
-    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    // Idempotency: a second open must not duplicate the row.
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").get().count, 2);
     legacy.close();
   });
 
@@ -209,7 +216,20 @@ describe('v1.0.1-rc.3 business document integrity', () => {
   });
 
   test('sales order approval authorizes only; delivery confirmation is the single revenue trigger', async () => {
-    let response = await request('/api/orders', 'sales', 'POST', { customerId: 'cus', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms. The test now
+    // supplies them so SUBMIT passes; the assertion of "no voucher at
+    // approval" remains the focus of this case.
+    let response = await request('/api/orders', 'sales', 'POST', {
+      customerId: 'cus',
+      orderDate: '2026-09-22',
+      requestedDeliveryDate: '2026-10-10',
+      paymentTerms: '月结 30 天',
+      shipToContactName: '王女士',
+      shipToPhone: '13800000000',
+      shipToAddress: '上海市浦东新区张江路 88 号',
+      items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }],
+    });
     assert.equal(response.status, 201);
     const order = await response.json();
     assert.equal((await request(`/api/orders/${order.id}/submit`, 'sales', 'POST', {})).status, 200);

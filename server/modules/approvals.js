@@ -18,6 +18,8 @@ const DOCUMENTS = [
       so.remark,so.rejection_reason rejectionReason,so.creator_id initiatorId,
       creator.display_name initiatorName,reviewer.display_name handlerName,
       so.created_at createdAt,so.submitted_at submittedAt,so.reviewed_at handledAt,
+      so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,
+      so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
       c.name partyName,(SELECT COUNT(*) FROM sales_order_items i WHERE i.order_id=so.id) itemCount
       FROM sales_orders so JOIN customers c ON c.id=so.customer_id
       JOIN users creator ON creator.id=so.creator_id LEFT JOIN users reviewer ON reviewer.id=so.reviewer_id`,
@@ -37,6 +39,8 @@ const DOCUMENTS = [
       po.remark,po.rejection_reason rejectionReason,po.creator_id initiatorId,
       creator.display_name initiatorName,reviewer.display_name handlerName,
       po.created_at createdAt,po.submitted_at submittedAt,po.reviewed_at handledAt,
+      po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
+      po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
       s.name partyName,(SELECT COUNT(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount
       FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id
       JOIN users creator ON creator.id=po.creator_id LEFT JOIN users reviewer ON reviewer.id=po.reviewer_id`,
@@ -154,6 +158,16 @@ function normalizeRow(document, row, tab) {
     submittedAt: row.submittedAt,
     handledAt: row.handledAt,
     amountCents: row.amountCents == null ? null : Number(row.amountCents),
+    orderDate: row.orderDate || '',
+    requestedDeliveryDate: row.requestedDeliveryDate || '',
+    expectedDeliveryDate: row.expectedDeliveryDate || '',
+    paymentTerms: row.paymentTerms || '',
+    shipToContactName: row.shipToContactName || '',
+    shipToPhone: row.shipToPhone || '',
+    shipToAddress: row.shipToAddress || '',
+    supplierContactName: row.supplierContactName || '',
+    supplierContactPhone: row.supplierContactPhone || '',
+    supplierAddress: row.supplierAddress || '',
     summary,
     partyName: row.partyName || '',
     remark: row.remark || '',
@@ -172,7 +186,8 @@ function addLinePreviews(db, items) {
   for (const item of items) {
     if (item.documentType === 'SALES_ORDER' || item.documentType === 'PURCHASE_ORDER') {
       const table = item.documentType === 'SALES_ORDER' ? 'sales_order_items' : 'purchase_order_items';
-      item.lines = db.prepare(`SELECT p.name productName,p.unit,i.quantity,i.amount_cents amountCents
+      item.lines = db.prepare(`SELECT p.name productName,p.unit,i.quantity,
+        i.unit_price_cents unitPriceCents,i.amount_cents amountCents
         FROM ${table} i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no LIMIT 3`).all(item.documentId);
     } else if (item.documentType === 'ACCOUNTING_VOUCHER') {
       item.lines = db.prepare(`SELECT s.name subjectName,e.direction,e.amount_cents amountCents,e.summary

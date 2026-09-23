@@ -322,9 +322,20 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
   });
 
   test('Sales CAN create + submit sales order', async () => {
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms.
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 100000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 100000 }],
+      },
     });
     assert.equal(order.status, 201, order.body.error);
     const orderId = order.body.id;
@@ -335,7 +346,16 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
   test('Sales CANNOT approve or reject sales orders', async () => {
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 3, unitPriceCents: 150000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 3, unitPriceCents: 150000 }],
+      },
     });
     const orderId = order.body.id;
     await api(baseUrl, salesToken, `/api/orders/${orderId}/submit`, { method: 'POST' });
@@ -496,11 +516,22 @@ describe('Teacher Acceptance Matrix — test_reviewer', () => {
   });
 
   test('Sales creates + submits → Reviewer approves (full SoD)', async () => {
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms.
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 50000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 50000 }],
+      },
     });
-    assert.equal(order.status, 201);
+    assert.equal(order.status, 201, order.body.error);
     const orderId = order.body.id;
     await api(baseUrl, salesToken, `/api/orders/${orderId}/submit`, { method: 'POST' });
     const approve = await api(baseUrl, reviewerToken, `/api/orders/${orderId}/approve`, { method: 'POST' });

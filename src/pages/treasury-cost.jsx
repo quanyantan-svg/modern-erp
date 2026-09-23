@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, YuanField, can, dateTime, money } from '../components/ui.jsx';
 import { yuanToNonNegativeCents } from '../lib/money.js';
 
 export function CashJournals({ user, notify }) {
@@ -91,7 +91,7 @@ function CashJournalModal({ value, onClose, onSaved }) {
           <option value="IN">收入</option>
           <option value="OUT">支出</option>
         </select></label>
-        <label className="full">金额(元)<input type="number" value={form.amount_cents / 100} step="0.01" min="0" onChange={(e) => setForm({...form, amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label className="full">金额（元）<YuanField valueCents={form.amount_cents} onChangeCents={(amount_cents) => setForm({...form, amount_cents})} min={0.01} required/></label>
         <label className="full">对方单位<input value={form.counterparty_name} onChange={(e) => setForm({...form, counterparty_name: e.target.value})}/></label>
         <label className="full">摘要<input value={form.summary} onChange={(e) => setForm({...form, summary: e.target.value})} required/></label>
         <FormActions onClose={onClose}/>
@@ -157,7 +157,7 @@ function BankAccountModal({ value, onClose, onSaved }) {
         <label>开户银行<input value={form.bank_name} onChange={(e) => setForm({...form, bank_name: e.target.value})} required/></label>
         <label>账号<input value={form.account_no} onChange={(e) => setForm({...form, account_no: e.target.value})} required/></label>
         <label>户名<input value={form.account_name} onChange={(e) => setForm({...form, account_name: e.target.value})} required/></label>
-        <label>期初余额(元)<input type="number" value={form.initial_balance_cents / 100} step="0.01" onChange={(e) => setForm({...form, initial_balance_cents: Math.round(e.target.value * 100)})}/></label>
+        <label>期初余额（元）<YuanField valueCents={form.initial_balance_cents} onChangeCents={(initial_balance_cents) => setForm({...form, initial_balance_cents})} min={0}/></label>
         <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
         {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({...form, active: e.target.checked})}/> 启用该账户</label>}
         <FormActions onClose={onClose}/>
@@ -187,8 +187,8 @@ export function Bills({ user, notify }) {
       <div className="filters">
         <label>票据类型<select value={billType} onChange={(e) => setBillType(e.target.value)}>
           <option value="">全部</option>
-          <option value="RECEivable">应收票据</option>
-          <option value="PAYable">应付票据</option>
+          <option value="RECEIVABLE">应收票据</option>
+          <option value="PAYABLE">应付票据</option>
         </select></label>
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">全部</option>
@@ -205,10 +205,10 @@ export function Bills({ user, notify }) {
             {items.map((item) => (
               <tr key={item.id}>
                 <td className="mono">{item.bill_no}</td>
-                <td><Badge>{item.bill_type === 'RECEivable' ? '应收' : '应付'}</Badge></td>
+                <td><Badge>{item.direction === 'RECEIVABLE' ? '应收' : '应付'}</Badge></td>
                 <td>{item.issue_date}</td>
                 <td>{item.due_date}</td>
-                <td>{item.counterpartyName}</td>
+                <td>{item.drawer_name || item.payee_name || '—'}</td>
                 <td className="number">{money(item.face_amount_cents)}</td>
                 <td><Badge type={item.status === 'PAID' ? 'success' : item.status === 'PENDING' ? 'warning' : ''}>{({ PENDING: '待承兑', ACCEPTED: '已承兑', DISCOUNTED: '已贴现', PAID: '已到期', CANCELLED: '已作废' })[item.status] || '状态待确认'}</Badge></td>
                 <td>{can(user, 'BILLS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td>
@@ -225,7 +225,7 @@ export function Bills({ user, notify }) {
 
 function BillModal({ value, onClose, onSaved }) {
   const [form, setForm] = useState({
-    bill_type: 'RECEivable', bill_no: '', counterparty_type: 'CUSTOMER', counterparty_id: '',
+    bill_type: 'DRAFT', direction: 'RECEIVABLE', bill_no: '', counterparty_type: 'CUSTOMER', counterparty_id: '',
     face_amount_cents: 0, issue_date: new Date().toISOString().slice(0, 10),
     due_date: new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10),
     status: 'PENDING', remark: '', ...value
@@ -233,7 +233,7 @@ function BillModal({ value, onClose, onSaved }) {
   const [counterparties, setCounterparties] = useState([]);
 
   useEffect(() => {
-    if (form.bill_type === 'RECEivable') {
+    if (form.direction === 'RECEIVABLE') {
       api('/api/customers').then((r) => setCounterparties(r.customers || []));
     } else {
       api('/api/suppliers').then((r) => setCounterparties(r.suppliers || []));
@@ -255,16 +255,18 @@ function BillModal({ value, onClose, onSaved }) {
   return (
     <Modal title={value.id ? '编辑票据' : '新增票据'} onClose={onClose}>
       <form className="form-grid" onSubmit={save}>
-        <label>票据类型<select value={form.bill_type} onChange={(e) => setForm({...form, bill_type: e.target.value, counterparty_id: ''})}>
-          <option value="RECEivable">应收票据</option>
-          <option value="PAYable">应付票据</option>
+        <label>票据类型<select value={form.bill_type} onChange={(e) => setForm({...form, bill_type: e.target.value})}>
+          <option value="DRAFT">银行汇票</option>
+          <option value="ACCEPTANCE">商业承兑</option>
+          <option value="LC">信用证</option>
         </select></label>
+        <label>收付方向<select value={form.direction} onChange={(e) => setForm({...form, direction: e.target.value, counterparty_id: ''})}><option value="RECEIVABLE">应收</option><option value="PAYABLE">应付</option></select></label>
         <label>票据号<input value={form.bill_no} onChange={(e) => setForm({...form, bill_no: e.target.value})} placeholder="系统自动生成"/></label>
         <label>对方单位<select value={form.counterparty_id} onChange={(e) => setForm({...form, counterparty_id: e.target.value})} required>
           <option value="">选择单位</option>
           {counterparties.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
         </select></label>
-        <label>票面金额(元)<input type="number" value={form.face_amount_cents / 100} step="0.01" onChange={(e) => setForm({...form, face_amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>票面金额（元）<YuanField valueCents={form.face_amount_cents} onChangeCents={(face_amount_cents) => setForm({...form, face_amount_cents})} min={0.01} required/></label>
         <label>出票日期<input type="date" value={form.issue_date} onChange={(e) => setForm({...form, issue_date: e.target.value})} required/></label>
         <label>到期日期<input type="date" value={form.due_date} onChange={(e) => setForm({...form, due_date: e.target.value})} required/></label>
         <label>状态<select value={form.status} onChange={(e) => setForm({...form, status: e.target.value})}>
@@ -373,9 +375,9 @@ function FixedAssetModal({ value, onClose, onSaved }) {
           <option value="其他">其他</option>
         </select></label>
         <label>购置日期<input type="date" value={form.purchase_date} onChange={(e) => setForm({...form, purchase_date: e.target.value})} required/></label>
-        <label>原值(元)<input type="number" value={form.purchase_amount_cents / 100} step="0.01" onChange={(e) => setForm({...form, purchase_amount_cents: Math.round(e.target.value * 100)})} required/></label>
+        <label>原值（元）<YuanField valueCents={form.purchase_amount_cents} onChangeCents={(purchase_amount_cents) => setForm({...form, purchase_amount_cents})} min={0.01} required/></label>
         <label>使用月数<input type="number" value={form.useful_life_months} min="1" onChange={(e) => setForm({...form, useful_life_months: Number(e.target.value)})} required/></label>
-        <label>残值(元)<input type="number" value={form.salvage_value_cents / 100} step="0.01" onChange={(e) => setForm({...form, salvage_value_cents: Math.round(e.target.value * 100)})}/></label>
+        <label>残值（元）<YuanField valueCents={form.salvage_value_cents} onChangeCents={(salvage_value_cents) => setForm({...form, salvage_value_cents})} min={0}/></label>
         <label>折旧方法<select value={form.depreciation_method} onChange={(e) => setForm({...form, depreciation_method: e.target.value})}>
           <option value="STRAIGHT_LINE">直线法</option>
           <option value="NONE">不提折旧</option>

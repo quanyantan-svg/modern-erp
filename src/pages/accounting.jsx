@@ -779,7 +779,7 @@ function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
       if (e.direction === 'DEBIT') debit += cents; else credit += cents;
     }
     const diff = Math.abs(debit - credit);
-    if (diff > 1) return { validation: `借贷不平衡:借方 ${debit / 100} 元 / 贷方 ${credit / 100} 元`, debitTotal: debit, creditTotal: credit };
+    if (diff !== 0) return { validation: `借贷不平衡:借方 ${debit / 100} 元 / 贷方 ${credit / 100} 元`, debitTotal: debit, creditTotal: credit };
     return { validation: null, debitTotal: debit, creditTotal: credit };
   })();
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import {
-  Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime, quantity,
+  Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, YuanField, can, dateTime, money,
 } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
@@ -77,7 +77,7 @@ export function SalesDiscounts({ user, notify }) {
         <td>{row.customerName}</td>
         <td className="mono">{row.reason || '—'}</td>
         <td>{row.businessDate}</td>
-        <td className="number">{quantity(row.amountCents)}</td>
+        <td className="number">{money(row.amountCents)}</td>
         <td>{row.reason || '—'}</td>
         <td>{row.creatorName}</td>
         <td className="dim">{dateTime(row.confirmedAt)}</td>
@@ -139,7 +139,7 @@ function SalesDiscountModal({ value, notify, onClose, onSaved }) {
           <div><span>原应收金额</span><strong>¥{(Number(selectedSource.amountCents) / 100).toFixed(2)}</strong></div>
           <div><span>当前未收余额</span><strong>¥{(Number(selectedSource.outstandingCents) / 100).toFixed(2)}</strong></div>
         </div>}
-        <label>折让金额（分）<input type="number" min="1" step="1" value={form.amountCents} onChange={(e) => setForm({ ...form, amountCents: e.target.value })} required/></label>
+        <label>折让金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({ ...form, amountCents })} min={0.01} required/></label>
         <label className="full">原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} maxLength={200}/></label>
         <label className="full">备注<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength={200}/></label>
       </div>
@@ -221,7 +221,7 @@ export function PurchaseDiscounts({ user, notify }) {
         <td>{row.supplierName}</td>
         <td className="mono">{row.reason || '—'}</td>
         <td>{row.businessDate}</td>
-        <td className="number">{quantity(row.amountCents)}</td>
+        <td className="number">{money(row.amountCents)}</td>
         <td>{row.reason || '—'}</td>
         <td>{row.creatorName}</td>
         <td className="dim">{dateTime(row.confirmedAt)}</td>
@@ -283,7 +283,7 @@ function PurchaseDiscountModal({ value, notify, onClose, onSaved }) {
           <div><span>原应付金额</span><strong>¥{(Number(selectedSource.amountCents) / 100).toFixed(2)}</strong></div>
           <div><span>当前未付余额</span><strong>¥{(Number(selectedSource.outstandingCents) / 100).toFixed(2)}</strong></div>
         </div>}
-        <label>折让金额（分）<input type="number" min="1" step="1" value={form.amountCents} onChange={(e) => setForm({ ...form, amountCents: e.target.value })} required/></label>
+        <label>折让金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({ ...form, amountCents })} min={0.01} required/></label>
         <label className="full">原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} maxLength={200}/></label>
         <label className="full">备注<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength={200}/></label>
       </div>

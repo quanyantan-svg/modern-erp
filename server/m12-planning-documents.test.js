@@ -153,7 +153,16 @@ describe('A. Permission registry', () => {
     const accMe = await request('/api/auth/me', { token: accountingToken });
     assert.equal(planning(adminMe.data.user.permissions).length, 7, 'admin has all 7');
     assert.deepEqual(planning(reviewerMe.data.user.permissions).sort(), ['PURCHASE_REQUISITION_APPROVE', 'PURCHASE_REQUISITION_VIEW']);
-    assert.equal(planning(salesMe.data.user.permissions).length, 0);
+    // V1.3 Phase 1: sales now owns commercial entry — PR create / submit /
+    // view. Sales must NOT have PRODUCTION_INSTRUCTION_*, PURCHASE_INSTRUCTION_*,
+    // or PURCHASE_REQUISITION_APPROVE.
+    const salesPlanning = planning(salesMe.data.user.permissions);
+    assert.equal(salesPlanning.length, 2, `sales planning perms = 2, got ${salesPlanning.length} (${salesPlanning.join(',')})`);
+    assert.ok(salesPlanning.includes('PURCHASE_REQUISITION_VIEW'));
+    assert.ok(salesPlanning.includes('PURCHASE_REQUISITION_MANAGE'));
+    assert.ok(!salesPlanning.includes('PURCHASE_REQUISITION_APPROVE'));
+    assert.ok(!salesPlanning.some((p) => p.startsWith('PRODUCTION_INSTRUCTION_')));
+    assert.ok(!salesPlanning.some((p) => p.startsWith('PURCHASE_INSTRUCTION_')));
     assert.equal(planning(whMe.data.user.permissions).length, 0);
     assert.equal(planning(accMe.data.user.permissions).length, 0);
   });
@@ -612,13 +621,15 @@ describe('G. M11 netting arithmetic regression', () => {
 // Section H: Permission contract — no role gains planning docs by accident
 // =====================================================================
 describe('H. Permission contract', () => {
-  test('H1. sales token returns 403 on planning documents', async () => {
+  test('H1. sales token returns 403 on production / purchase instructions, 200 on purchase requisitions', async () => {
+    // V1.3 Phase 1: sales owns commercial entry (PR / SO / PO). It must NOT
+    // see / mutate production instructions or purchase instructions.
     const r1 = await request('/api/production-instructions', { token: salesToken });
     const r2 = await request('/api/purchase-instructions', { token: salesToken });
     const r3 = await request('/api/purchase-requisitions', { token: salesToken });
-    assert.equal(r1.status, 403);
-    assert.equal(r2.status, 403);
-    assert.equal(r3.status, 403);
+    assert.equal(r1.status, 403, `sales /api/production-instructions must be 403, got ${r1.status}`);
+    assert.equal(r2.status, 403, `sales /api/purchase-instructions must be 403, got ${r2.status}`);
+    assert.equal(r3.status, 200, `sales /api/purchase-requisitions must be 200 (PR view), got ${r3.status}`);
   });
 
   test('H2. warehouse token returns 403 on planning documents', async () => {

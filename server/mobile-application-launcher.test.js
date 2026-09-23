@@ -91,10 +91,15 @@ const EXPECTED_ROLE_PAGES = {
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
     'projects', 'tasks', 'timesheets', 'workflows', 'users', 'data-cleanup', 'notifications',
   ],
+  // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers,
+  // SO/PO/PR create/submit) and CRM. Logistics execution pages
+  // (sales-deliveries, purchase-receipts, returns) are no longer in
+  // the sales surface — those moved to warehouse.
   'role-sales': [
-    'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
-    'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'notifications',
+    'business-overview', 'customers', 'suppliers', 'products',
+    'purchase-requisitions',
+    'orders', 'contacts', 'purchase-orders',
+    'notifications',
   ],
   'role-reviewer': [
     'business-overview', 'customers', 'products', 'warehouses',
@@ -102,9 +107,16 @@ const EXPECTED_ROLE_PAGES = {
     'orders', 'sales-deliveries', 'returns',
     'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'notifications',
   ],
+  // V1.3 Phase 1: WAREHOUSE owns physical stock execution including
+  // material issue and production receipt; sales-deliveries / returns
+  // and purchase-receipts / returns move into the warehouse surface.
   'role-warehouse': [
-    'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
-    'purchase-receipts', 'returns', 'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc', 'notifications',
+    'business-overview', 'products', 'warehouses',
+    'material-issues', 'production-receipts',
+    'sales-deliveries', 'returns',
+    'purchase-receipts', 'returns',
+    'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc',
+    'notifications',
   ],
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',
@@ -231,9 +243,9 @@ describe('M2 canonical role application matrix', () => {
   }
 
   test('non-admin roles do not gain unsupported domains', () => {
-    assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users'].includes(page)));
-    assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users'].includes(page)));
-    assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users'].includes(page)));
+    assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'].includes(page)));
+    assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users', 'production-orders'].includes(page)));
+    assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'].includes(page)));
   });
 });
 

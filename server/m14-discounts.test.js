@@ -132,13 +132,15 @@ async function createConfirmedDelivery(customerId, totalCents) {
   const productId = ensureProduct('P-DEL');
   const warehouseId = ensureWarehouse('WH-DEL');
   seedInventory(warehouseId, productId, 100000);
-  const create = await request('/api/sales-deliveries', { token: salesToken, method: 'POST', body: {
+  // V1.3 Phase 1: physical stock execution belongs to warehouse; the
+  // sales role no longer holds SALES_DELIVERIES_MANAGE.
+  const create = await request('/api/sales-deliveries', { token: warehouseToken, method: 'POST', body: {
     customerId, warehouseId, deliveryDate: '2026-08-01', remark: 'm14 fixture',
     items: [{ productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;
-  const confirm = await request(`/api/sales-deliveries/${id}`, { token: salesToken, method: 'POST', body: { action: 'confirm' } });
+  const confirm = await request(`/api/sales-deliveries/${id}`, { token: warehouseToken, method: 'POST', body: { action: 'confirm' } });
   assert.equal(confirm.status, 200);
   const ar = database.prepare("SELECT id FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(id);
   return { deliveryId: id, receivableId: ar.id };
@@ -147,13 +149,15 @@ async function createConfirmedDelivery(customerId, totalCents) {
 async function createConfirmedReceipt(supplierId, totalCents) {
   const productId = ensureProduct('P-REC');
   const warehouseId = ensureWarehouse('WH-REC');
-  const create = await request('/api/purchase-receipts', { token: salesToken, method: 'POST', body: {
+  // V1.3 Phase 1: physical stock execution belongs to warehouse; the
+  // sales role no longer holds PURCHASE_RECEIPTS_MANAGE.
+  const create = await request('/api/purchase-receipts', { token: warehouseToken, method: 'POST', body: {
     supplierId, warehouseId, receiptDate: '2026-08-01', remark: 'm14 fixture',
     items: [{ productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;
-  const confirm = await request(`/api/purchase-receipts/${id}`, { token: salesToken, method: 'POST', body: { action: 'confirm' } });
+  const confirm = await request(`/api/purchase-receipts/${id}`, { token: warehouseToken, method: 'POST', body: { action: 'confirm' } });
   assert.equal(confirm.status, 200);
   const ap = database.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(id);
   return { receiptId: id, payableId: ap.id };

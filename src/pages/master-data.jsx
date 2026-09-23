@@ -4,6 +4,7 @@ import { ActionMenu, Active, ConfirmAction, ConfirmDelete, Empty, FormActions, L
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { roleDisplayName } from '../lib/copy.js';
+import { yuanToNonNegativeCents } from '../lib/money.js';
 import { Icon } from '../components/icons.jsx';
 
 export function Login({ onLogin, notify }) {
@@ -157,7 +158,7 @@ export function Products({ user, notify }) {
 
 function ProductModal({ value, onClose, onSaved, notify }) {
   const [form, setForm] = useState({ code: '', name: '', unit: '个', stockQuantity: 0, active: true, ...value, price: value.priceCents === undefined ? '' : value.priceCents / 100 });
-  async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/products/${value.id}` : '/api/products', { method: value.id ? 'PATCH' : 'POST', body: { ...form, priceCents: Math.round(Number(form.price) * 100) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/products/${value.id}` : '/api/products', { method: value.id ? 'PATCH' : 'POST', body: { ...form, priceCents: yuanToNonNegativeCents(form.price) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? '编辑产品' : '新建产品'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>产品编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 MAT-004" required/></label>
     <label>产品名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="请输入产品名称" required/></label>
@@ -193,25 +194,79 @@ export function Orders({ user, notify }) {
 
 function OrderEditor({ order, onClose, onSaved, notify }) {
   const [customers, setCustomers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
-  const [form, setForm] = useState({ customerId: '', remark: '', items: [{ productId: '', quantity: 1, price: '' }] });
+  // V1.3 Phase 1: SO commercial contract — order date, requested delivery
+  // date, payment terms, ship-to contact/phone/address snapshot. The
+  // customer master provides defaults for the snapshot fields.
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({
+    customerId: '', orderDate: today, requestedDeliveryDate: '', paymentTerms: '',
+    shipToContactName: '', shipToPhone: '', shipToAddress: '',
+    remark: '', items: [{ productId: '', quantity: 1, price: '' }],
+  });
   useEffect(() => {
     Promise.all([api('/api/customers'), api('/api/products'), order.id ? api(`/api/orders/${order.id}`) : null]).then(([c, p, detail]) => {
       setCustomers(c.customers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
-      if (detail) setForm({ customerId: detail.order.customerId, remark: detail.order.remark, items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) });
+      if (detail) {
+        setForm({
+          customerId: detail.order.customerId,
+          orderDate: detail.order.orderDate || today,
+          requestedDeliveryDate: detail.order.requestedDeliveryDate || '',
+          paymentTerms: detail.order.paymentTerms || '',
+          shipToContactName: detail.order.shipToContactName || '',
+          shipToPhone: detail.order.shipToPhone || '',
+          shipToAddress: detail.order.shipToAddress || '',
+          remark: detail.order.remark,
+          items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })),
+        });
+      }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
   }, []);
-  const total = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.price) || 0), 0), [form]);
+  // When the customer changes, prefill the ship-to / payment snapshot
+  // fields from the customer master if the user has not already typed
+  // a different value. The document owns the snapshot after save.
+  function applyCustomerSnapshot(customerId) {
+    const customer = customers.find((c) => c.id === customerId);
+    setForm((current) => ({
+      ...current,
+      customerId,
+      shipToContactName: current.shipToContactName || customer?.contact || '',
+      shipToPhone: current.shipToPhone || customer?.phone || '',
+      shipToAddress: current.shipToAddress || customer?.address || '',
+    }));
+  }
+  const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
   function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
   function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
-  async function save(e) { e.preventDefault(); try { await api(order.id ? `/api/orders/${order.id}` : '/api/orders', { method: order.id ? 'PUT' : 'POST', body: { ...form, items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: Math.round(Number(x.price) * 100) })) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api(order.id ? `/api/orders/${order.id}` : '/api/orders', {
+        method: order.id ? 'PUT' : 'POST',
+        body: {
+          ...form,
+          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+        },
+      });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建销售订单'} onClose={onClose} wide>
     {loading ? <Loading/> : <form onSubmit={save}>
-      <div className="form-grid order-head"><label>客户<select value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required><option value="">请选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label><label>订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label></div>
+      <div className="form-grid order-head">
+        <label>客户<select value={form.customerId} onChange={(e) => applyCustomerSnapshot(e.target.value)} required><option value="">请选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
+        <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
+        <label>要求交期<input type="date" value={form.requestedDeliveryDate} onChange={(e) => setForm({ ...form, requestedDeliveryDate: e.target.value })} required/></label>
+        <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>收货联系人<input value={form.shipToContactName} onChange={(e) => setForm({ ...form, shipToContactName: e.target.value })} maxLength={50}/></label>
+        <label>收货电话<input value={form.shipToPhone} onChange={(e) => setForm({ ...form, shipToPhone: e.target.value })} maxLength={30}/></label>
+        <label className="full">收货地址<input value={form.shipToAddress} onChange={(e) => setForm({ ...form, shipToAddress: e.target.value })} maxLength={200}/></label>
+        <label className="full">订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label>
+      </div>
       <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价</span><span>金额</span><span/></div>
+      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价（元）</span><span>金额</span><span/></div>
         {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
       </div>
-      <div className="order-total"><span>订单合计</span><strong>{money(Math.round(total * 100))}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
+      <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;
 }
@@ -248,13 +303,33 @@ export function orderWorkflowStages(order, trace, kind) {
 }
 
 function OrderDetail({ id, user, onClose, notify }) {
+  const isSales = true;
   const [order, setOrder] = useState(null);
   const [trace, setTrace] = useState(null);
   useEffect(() => { Promise.all([api(`/api/orders/${id}`), api(`/api/workflow/sales-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="销售订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.customerName}</h3><p>{order.customerCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
-    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <div className="detail-grid">
+      <div><span>{isSales ? '订单日期' : '订单日期'}</span><strong>{order.orderDate || '—'}</strong></div>
+      <div><span>{isSales ? '要求交期' : '预计交期'}</span><strong>{(isSales ? order.requestedDeliveryDate : order.expectedDeliveryDate) || '—'}</strong></div>
+      <div><span>付款条件</span><strong>{order.paymentTerms || '—'}</strong></div>
+      <div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div>
+      <div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div>
+      <div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div>
+      <div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div>
+    </div>
+    {isSales
+      ? <div className="detail-grid">
+          <div><span>收货联系人</span><strong>{order.shipToContactName || '—'}</strong></div>
+          <div><span>收货电话</span><strong>{order.shipToPhone || '—'}</strong></div>
+          <div className="full"><span>收货地址</span><strong>{order.shipToAddress || '—'}</strong></div>
+        </div>
+      : <div className="detail-grid">
+          <div><span>供应商联系人</span><strong>{order.supplierContactName || '—'}</strong></div>
+          <div><span>供应商电话</span><strong>{order.supplierContactPhone || '—'}</strong></div>
+          <div className="full"><span>供应商地址</span><strong>{order.supplierAddress || '—'}</strong></div>
+        </div>}
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'sales')}/>
     {order.status === 'SUBMITTED' && can(user, 'ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
@@ -315,37 +390,108 @@ export function PurchaseOrders({ user, notify }) {
 
 function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
   const [suppliers, setSuppliers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
-  const [form, setForm] = useState({ supplierId: '', remark: '', items: [{ productId: '', quantity: 1, price: '' }] });
+  // V1.3 Phase 1: PO commercial contract — order date, expected delivery
+  // date, payment terms, supplier contact/phone/address snapshot. The
+  // supplier master provides defaults for the snapshot fields.
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({
+    supplierId: '', orderDate: today, expectedDeliveryDate: '', paymentTerms: '',
+    supplierContactName: '', supplierContactPhone: '', supplierAddress: '',
+    remark: '', items: [{ productId: '', quantity: 1, price: '' }],
+  });
   useEffect(() => {
     Promise.all([api('/api/suppliers'), api('/api/products'), order.id ? api(`/api/purchase-orders/${order.id}`) : null]).then(([s, p, detail]) => {
       setSuppliers(s.suppliers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
-      if (detail) setForm({ supplierId: detail.order.supplierId, remark: detail.order.remark, items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) });
+      if (detail) {
+        setForm({
+          supplierId: detail.order.supplierId,
+          orderDate: detail.order.orderDate || today,
+          expectedDeliveryDate: detail.order.expectedDeliveryDate || '',
+          paymentTerms: detail.order.paymentTerms || '',
+          supplierContactName: detail.order.supplierContactName || '',
+          supplierContactPhone: detail.order.supplierContactPhone || '',
+          supplierAddress: detail.order.supplierAddress || '',
+          remark: detail.order.remark,
+          items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })),
+        });
+      }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
   }, []);
-  const total = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.price) || 0), 0), [form]);
+  function applySupplierSnapshot(supplierId) {
+    const supplier = suppliers.find((s) => s.id === supplierId);
+    setForm((current) => ({
+      ...current,
+      supplierId,
+      supplierContactName: current.supplierContactName || supplier?.contact || '',
+      supplierContactPhone: current.supplierContactPhone || supplier?.phone || '',
+      supplierAddress: current.supplierAddress || supplier?.address || '',
+    }));
+  }
+  const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
   function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
   function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
-  async function save(e) { e.preventDefault(); try { await api(order.id ? `/api/purchase-orders/${order.id}` : '/api/purchase-orders', { method: order.id ? 'PUT' : 'POST', body: { ...form, items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: Math.round(Number(x.price) * 100) })) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api(order.id ? `/api/purchase-orders/${order.id}` : '/api/purchase-orders', {
+        method: order.id ? 'PUT' : 'POST',
+        body: {
+          ...form,
+          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+        },
+      });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建采购订单'} onClose={onClose} wide>
     {loading ? <Loading/> : <form onSubmit={save}>
-      <div className="form-grid order-head"><label>供应商<select value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })} required><option value="">请选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></label><label>订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label></div>
+      <div className="form-grid order-head">
+        <label>供应商<select value={form.supplierId} onChange={(e) => applySupplierSnapshot(e.target.value)} required><option value="">请选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></label>
+        <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
+        <label>预计交期<input type="date" value={form.expectedDeliveryDate} onChange={(e) => setForm({ ...form, expectedDeliveryDate: e.target.value })} required/></label>
+        <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>供应商联系人<input value={form.supplierContactName} onChange={(e) => setForm({ ...form, supplierContactName: e.target.value })} maxLength={50}/></label>
+        <label>供应商电话<input value={form.supplierContactPhone} onChange={(e) => setForm({ ...form, supplierContactPhone: e.target.value })} maxLength={30}/></label>
+        <label className="full">供应商地址<input value={form.supplierAddress} onChange={(e) => setForm({ ...form, supplierAddress: e.target.value })} maxLength={200}/></label>
+        <label className="full">订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label>
+      </div>
       <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价</span><span>金额</span><span/></div>
+      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价（元）</span><span>金额</span><span/></div>
         {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
       </div>
-      <div className="order-total"><span>订单合计</span><strong>{money(Math.round(total * 100))}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
+      <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;
 }
 
 function PurchaseOrderDetail({ id, user, onClose, notify }) {
+  const isSales = false;
   const [order, setOrder] = useState(null);
   const [trace, setTrace] = useState(null);
   useEffect(() => { Promise.all([api(`/api/purchase-orders/${id}`), api(`/api/workflow/purchase-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="采购订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.supplierName}</h3><p>{order.supplierCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
-    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <div className="detail-grid">
+      <div><span>{isSales ? '订单日期' : '订单日期'}</span><strong>{order.orderDate || '—'}</strong></div>
+      <div><span>{isSales ? '要求交期' : '预计交期'}</span><strong>{(isSales ? order.requestedDeliveryDate : order.expectedDeliveryDate) || '—'}</strong></div>
+      <div><span>付款条件</span><strong>{order.paymentTerms || '—'}</strong></div>
+      <div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div>
+      <div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div>
+      <div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div>
+      <div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div>
+    </div>
+    {isSales
+      ? <div className="detail-grid">
+          <div><span>收货联系人</span><strong>{order.shipToContactName || '—'}</strong></div>
+          <div><span>收货电话</span><strong>{order.shipToPhone || '—'}</strong></div>
+          <div className="full"><span>收货地址</span><strong>{order.shipToAddress || '—'}</strong></div>
+        </div>
+      : <div className="detail-grid">
+          <div><span>供应商联系人</span><strong>{order.supplierContactName || '—'}</strong></div>
+          <div><span>供应商电话</span><strong>{order.supplierContactPhone || '—'}</strong></div>
+          <div className="full"><span>供应商地址</span><strong>{order.supplierAddress || '—'}</strong></div>
+        </div>}
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'purchase')}/>
     {order.status === 'SUBMITTED' && can(user, 'PURCHASE_ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>

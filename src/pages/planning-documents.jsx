@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
+import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, money, Panel, Status, Toolbar, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { planningDocumentTabForPage } from '../navigation/planningDocumentNavigation.js';
 
@@ -521,6 +521,7 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
   const [instructions, setInstructions] = useState([]);
   const [form, setForm] = useState({
     sourceInstructionId: '',
+    requestDate: todayIso(),
     requiredDate: todayIso(),
     notes: '',
     items: [],
@@ -536,6 +537,45 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
     ...current,
     items: current.items.map((item, i) => i === index ? { ...item, [field]: value } : item),
   }));
+  const chooseProduct = (index, productId) => {
+    const product = products.find((row) => row.id === productId);
+    setForm((current) => ({
+      ...current,
+      items: current.items.map((item, i) => i === index ? {
+        ...item,
+        productId,
+        unitPriceCents: Number(product?.priceCents) || 0,
+        amountCents: (Number(item.quantity) || 0) * (Number(product?.priceCents) || 0),
+      } : item),
+    }));
+  };
+  // V1.3 Phase 1: PR line unit-price is entered in yuan via the
+  // YuanField boundary; the helper converts to integer cents on change.
+  // The form continues to persist `unitPriceCents` (the API / DB
+  // contract) but the field shows yuan.
+  const updateItemPriceCents = (index, nextCents) => {
+    setForm((current) => {
+      const items = current.items.map((item, i) => {
+        if (i !== index) return item;
+        const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+        const quantity = Number(item.quantity) || 0;
+        return { ...item, unitPriceCents: safeCents, amountCents: Math.round(quantity * safeCents) };
+      });
+      return { ...current, items };
+    });
+  };
+  const updateItemQuantity = (index, rawValue) => {
+    setForm((current) => {
+      const items = current.items.map((item, i) => {
+        if (i !== index) return item;
+        const quantity = rawValue === '' ? '' : Number(rawValue);
+        const unitPriceCents = Number(item.unitPriceCents) || 0;
+        const amountCents = Number.isFinite(quantity) ? Math.round(quantity * unitPriceCents) : 0;
+        return { ...item, quantity, amountCents };
+      });
+      return { ...current, items };
+    });
+  };
   const removeItem = (index) => setForm((current) => ({ ...current, items: current.items.filter((_, i) => i !== index) }));
   const save = async () => {
     const body = {
@@ -563,24 +603,25 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
         <option value="">（无关联）</option>
         {instructions.map((ins) => <option key={ins.id} value={ins.id}>{ins.instructionNo}</option>)}
       </select></label>
-      <label>需求日期<input type="date" value={form.requiredDate} onChange={(event) => setForm({ ...form, requiredDate: event.target.value })} required/></label>
+      <label>请购日期<input type="date" value={form.requestDate} onChange={(event) => setForm({ ...form, requestDate: event.target.value })} required/></label>
+      <label>要求到货日<input type="date" value={form.requiredDate} min={form.requestDate} onChange={(event) => setForm({ ...form, requiredDate: event.target.value })} required/></label>
       <label className="full">备注<input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} maxLength={200}/></label>
       <div className="full">
         <div className="form-section-head"><span>请购明细</span><button type="button" className="secondary" onClick={addItem}>＋ 增加</button></div>
         <div className="forecast-items-editor">
           {form.items.map((item, index) => <article className="forecast-item-editor" key={index}>
             <div className="forecast-item-editor__fields">
-              <label>产品<select value={item.productId} onChange={(event) => updateItem(index, 'productId', event.target.value)} required>
+              <label>产品<select value={item.productId} onChange={(event) => chooseProduct(index, event.target.value)} required>
                 <option value="">选择产品</option>
                 {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
               </select></label>
-              <label>数量<input type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={(event) => updateItem(index, 'quantity', event.target.value)} required/></label>
+              <label>数量<input type="number" min="0.000001" step="0.000001" value={item.quantity} onChange={(event) => updateItemQuantity(index, event.target.value)} required/></label>
               <label>参考供应商<select value={item.preferredSupplierId} onChange={(event) => updateItem(index, 'preferredSupplierId', event.target.value)}>
                 <option value="">（不指定）</option>
                 {suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}
               </select></label>
-              <label>参考单价（分）<input type="number" min="0" step="1" value={item.unitPriceCents} onChange={(event) => updateItem(index, 'unitPriceCents', event.target.value)}/></label>
-              <label>参考金额（分）<input type="number" min="0" step="1" value={item.amountCents} onChange={(event) => updateItem(index, 'amountCents', event.target.value)}/></label>
+              <label>参考单价（元）<YuanField valueCents={item.unitPriceCents} onChangeCents={(next) => updateItemPriceCents(index, next)} min={0} step="0.01"/></label>
+              <label>参考金额（元）<input type="text" readOnly value={money(item.amountCents)}/></label>
             </div>
             <button type="button" className="danger-text" onClick={() => removeItem(index)}>删除</button>
           </article>)}
@@ -594,6 +635,7 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
 
 function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted, canManage, canApprove }) {
   const [data, setData] = useState(null);
+  const [editDraft, setEditDraft] = useState(null);
   const [suppliers, setSuppliers] = useState([]);
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -617,6 +659,15 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
       onChanged && onChanged();
     } catch (error) { notify(error.message, 'error'); }
   };
+  const saveDraft = async () => {
+    try {
+      await api(`/api/purchase-requisitions/${requisitionId}`, { method: 'PATCH', body: editDraft });
+      notify('请购单草稿已更新');
+      setEditDraft(null);
+      void load();
+      onChanged?.();
+    } catch (error) { notify(error.message, 'error'); }
+  };
   return <div className="planning-documents-detail">
     <div className="form-grid">
       <label>单号<span className="mono strong-text">{data.requisition_no}</span></label>
@@ -624,7 +675,8 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
       <label>来源采购指令<span>{data.sourceInstructionNo
         ? <AppLink page="purchase-instructions" documentId={data.source_instruction_id}>{data.sourceInstructionNo}</AppLink>
         : '—'}</span></label>
-      <label>需求日期<span>{fmtDate(data.required_date)}</span></label>
+      <label>请购日期<span>{fmtDate(data.request_date)}</span></label>
+      <label>要求到货日<span>{fmtDate(data.required_date)}</span></label>
       <label>申请人<span>{data.creatorName || '—'}</span></label>
       <label>审核人<span>{data.reviewerName || '—'}</span></label>
       <label>提交时间<span>{data.submitted_at?.slice(0, 16).replace('T', ' ') || '—'}</span></label>
@@ -634,24 +686,30 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
     </div>
     <h3>请购明细</h3>
     <div className="table-wrap"><table><thead><tr>
-      <th>产品</th><th className="number">数量</th><th className="number">参考单价（分）</th><th className="number">参考金额（分）</th><th>参考供应商</th>
+      <th>产品</th><th className="number">数量</th><th className="number">参考单价（元）</th><th className="number">参考金额（元）</th><th>参考供应商</th>
     </tr></thead><tbody>
       {(data.items || []).map((item) => <tr key={item.id}>
         <td><strong>{item.productName}</strong><small className="block mono dim">{item.productCode}</small></td>
         <td className="number">{fmtQty(item.quantity)}</td>
-        <td className="number">{fmtQty(item.unitPriceCents)}</td>
-        <td className="number">{fmtQty(item.amountCents)}</td>
+        <td className="number">{money(item.unitPriceCents)}</td>
+        <td className="number">{money(item.amountCents)}</td>
         <td>{item.supplierName ? `${item.supplierCode} - ${item.supplierName}` : '—'}</td>
       </tr>)}
       <tr>
         <td colSpan={2}><strong>合计</strong></td>
         <td className="number"><strong>{fmtQty(data.totalQuantity)}</strong></td>
-        <td className="number"><strong>{fmtQty(data.totalAmountCents)}</strong></td>
+        <td className="number"><strong>{money(data.totalAmountCents)}</strong></td>
         <td/>
       </tr>
     </tbody></table></div>
     <div className="form-actions">
       {data.status === 'DRAFT' && canManage && <>
+        <button type="button" className="secondary" onClick={() => setEditDraft({
+          requestDate: data.request_date || todayIso(),
+          requiredDate: data.required_date || '',
+          notes: data.notes || '',
+          items: (data.items || []).map((item) => ({ id: item.id, unitPriceCents: item.unitPriceCents })),
+        })}>编辑草稿</button>
         <button type="button" className="primary" onClick={() => act('submit')}>提交</button>
         <ConfirmDelete label="请购单" onConfirm={async () => { try { await api(`/api/purchase-requisitions/${requisitionId}`, { method: 'DELETE' }); notify('请购单草稿已删除'); onDeleted?.(); } catch (error) { notify(error.message, 'error'); throw error; } }}/>
         <button type="button" className="danger-button" onClick={() => act('cancel')}>取消</button>
@@ -668,6 +726,26 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
         <button type="button" className="danger-button" onClick={() => act('cancel')}>取消</button>
       </>}
     </div>
+    {editDraft && <Modal title="编辑请购单草稿" onClose={() => setEditDraft(null)} wide>
+      <form className="form-grid" onSubmit={(event) => { event.preventDefault(); void saveDraft(); }}>
+        <label>请购日期<input type="date" value={editDraft.requestDate} onChange={(event) => setEditDraft({ ...editDraft, requestDate: event.target.value })} required/></label>
+        <label>要求到货日<input type="date" min={editDraft.requestDate} value={editDraft.requiredDate} onChange={(event) => setEditDraft({ ...editDraft, requiredDate: event.target.value })}/></label>
+        <label className="full">备注<input value={editDraft.notes} onChange={(event) => setEditDraft({ ...editDraft, notes: event.target.value })} maxLength={200}/></label>
+        <div className="full forecast-items-editor">
+          {(data.items || []).map((item, index) => <article className="forecast-item-editor" key={item.id}>
+            <div className="forecast-item-editor__fields">
+              <label>产品<span>{item.productCode} - {item.productName}</span></label>
+              <label>数量<span>{fmtQty(item.quantity)}</span></label>
+              <label>参考单价（元）<YuanField valueCents={editDraft.items[index].unitPriceCents} min={0} onChangeCents={(unitPriceCents) => setEditDraft((current) => ({
+                ...current,
+                items: current.items.map((entry, itemIndex) => itemIndex === index ? { ...entry, unitPriceCents } : entry),
+              }))}/></label>
+            </div>
+          </article>)}
+        </div>
+        <FormActions onClose={() => setEditDraft(null)} saveText="保存修改"/>
+      </form>
+    </Modal>}
     {showReject && <Modal title="驳回请购单" onClose={() => setShowReject(false)}>
       <form className="form-grid" onSubmit={(event) => { event.preventDefault(); if (!rejectReason.trim()) return; void act('reject', { reason: rejectReason }); }}>
         <label className="full">驳回原因<textarea value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} maxLength={200} required/></label>

@@ -97,6 +97,16 @@ function ApprovalDetail({ item, busy, onBack, onAction }) {
         <div><dt>发起时间</dt><dd>{dateTime(item.submittedAt || item.createdAt)}</dd></div>
         {item.handlerName ? <div><dt>处理人</dt><dd>{item.handlerName}</dd></div> : null}
         {item.handledAt ? <div><dt>处理时间</dt><dd>{dateTime(item.handledAt)}</dd></div> : null}
+        {item.orderDate ? <div><dt>订单日期</dt><dd>{item.orderDate}</dd></div> : null}
+        {item.requestedDeliveryDate ? <div><dt>要求交期</dt><dd>{item.requestedDeliveryDate}</dd></div> : null}
+        {item.expectedDeliveryDate ? <div><dt>预计交期</dt><dd>{item.expectedDeliveryDate}</dd></div> : null}
+        {item.paymentTerms ? <div><dt>付款条件</dt><dd>{item.paymentTerms}</dd></div> : null}
+        {item.shipToContactName ? <div><dt>收货联系人</dt><dd>{item.shipToContactName}</dd></div> : null}
+        {item.shipToPhone ? <div><dt>收货电话</dt><dd>{item.shipToPhone}</dd></div> : null}
+        {item.shipToAddress ? <div><dt>收货地址</dt><dd>{item.shipToAddress}</dd></div> : null}
+        {item.supplierContactName ? <div><dt>供应商联系人</dt><dd>{item.supplierContactName}</dd></div> : null}
+        {item.supplierContactPhone ? <div><dt>供应商电话</dt><dd>{item.supplierContactPhone}</dd></div> : null}
+        {item.supplierAddress ? <div><dt>供应商地址</dt><dd>{item.supplierAddress}</dd></div> : null}
         {item.amountCents != null ? <div><dt>单据金额</dt><dd className="amount">{money(item.amountCents)}</dd></div> : null}
         <div><dt>摘要</dt><dd>{item.summary || '—'}</dd></div>
         {item.remark ? <div><dt>备注</dt><dd>{item.remark}</dd></div> : null}
@@ -108,7 +118,9 @@ function ApprovalDetail({ item, busy, onBack, onAction }) {
           {item.lines.map((line, index) => (
             <div className="mobile-approval-line" key={`${line.productName || line.subjectName}-${index}`}>
               <span>{line.productName || line.subjectName}</span>
-              <small>{line.summary || (line.quantity != null ? `${line.quantity} ${line.unit}` : line.direction === 'DEBIT' ? '借方' : '贷方')}</small>
+              <small>{line.summary || (line.quantity != null
+                ? `${line.quantity} ${line.unit}${line.unitPriceCents != null ? ` · 单价 ${money(line.unitPriceCents)}` : ''}`
+                : line.direction === 'DEBIT' ? '借方' : '贷方')}</small>
               {line.amountCents != null ? <b>{money(line.amountCents)}</b> : null}
             </div>
           ))}

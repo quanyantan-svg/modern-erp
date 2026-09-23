@@ -324,11 +324,11 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const res = await fetch(`${baseUrl}/api/lookup/purchase-orders-source`, { headers: authHeaders(adminToken) });
       assert.equal(res.status, 200);
     });
-    test('sales role is allowed scoped lookup (role-sales canonical contract holds SALES_DELIVERIES_MANAGE / RETURNS_MANAGE / PURCHASE_RECEIPTS_MANAGE)', async () => {
-      // Per canonical role-sales contract (db.js), role-sales holds
-      // SALES_DELIVERIES_MANAGE / PURCHASE_RECEIPTS_MANAGE / RETURNS_MANAGE,
-      // so the scoped lookups are intentionally permitted (sales can also
-      // create sales deliveries, purchase receipts, returns).
+    test('sales role is allowed scoped lookup (role-sales canonical contract holds ORDERS_CREATE / PURCHASE_ORDERS_CREATE)', async () => {
+      // V1.3 Phase 1: sales lost SALES_DELIVERIES_MANAGE / RETURNS_MANAGE /
+      // PURCHASE_RECEIPTS_MANAGE. The scoped lookups are still permitted via
+      // ORDERS_CREATE and PURCHASE_ORDERS_CREATE which sales holds, so it can
+      // prefill approved sales orders / purchase orders for PR / PO creation.
       const resSales = await fetch(`${baseUrl}/api/lookup/sales-orders-source`, { headers: authHeaders(salesToken) });
       const resPurchase = await fetch(`${baseUrl}/api/lookup/purchase-orders-source`, { headers: authHeaders(salesToken) });
       assert.equal(resSales.status, 200);

@@ -47,6 +47,12 @@ async function api(baseUrl, token, path, options = {}) {
 
 const poPayload = (overrides = {}) => ({
   supplierId: 'supplier-001',
+  orderDate: '2026-09-22',
+  expectedDeliveryDate: '2026-10-10',
+  supplierContactName: '采购联系人',
+  supplierContactPhone: '13800000000',
+  supplierAddress: '深圳市华强北',
+  paymentTerms: '月结 30 天',
   items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 100000 }],
   ...overrides,
 });
