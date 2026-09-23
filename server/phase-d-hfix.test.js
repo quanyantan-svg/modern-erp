@@ -204,9 +204,12 @@ async function getFirstProductId() {
 
 async function createActiveBom(productId) {
   if (!productId) return null;
+  const products = await api('/api/products');
+  const component = products.data.products?.find((product) => product.id !== productId);
+  if (!component) return null;
   const res = await api('/api/boms', {
     method: 'POST',
-    body: { productId, version: '1.0', remark: 'phase-d-hfix', items: [] },
+    body: { productId, version: `phase-d-${Date.now()}-${Math.random()}`, remark: 'phase-d-hfix', items: [{ productId: component.id, quantity: 1 }] },
   });
   if (res.status !== 200) return null;
   return res.data.id;
@@ -266,21 +269,22 @@ describe('Production order — permission and state-machine regression', () => {
     assert.equal(detail.data.order.status, 'IN_PROGRESS');
   });
 
-  test('IN_PROGRESS → complete succeeds with action=complete', async () => {
+  test('IN_PROGRESS → complete is refused until material and output reconcile', async () => {
     const orderId = orderRef.id;
     if (!orderId) return;
     const res = await api(`/api/production-orders/${orderId}`, {
       method: 'POST', body: { action: 'complete' },
     });
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 409);
     const detail = await api(`/api/production-orders/${orderId}`);
-    assert.equal(detail.data.order.status, 'COMPLETED');
+    assert.equal(detail.data.order.status, 'IN_PROGRESS');
   });
 
   test('cancellable order → cancel succeeds with action=cancel', async () => {
     const productId = await getFirstProductId();
+    const bomId = await createActiveBom(productId);
     const create = await api('/api/production-orders', {
-      method: 'POST', body: { productId, quantity: 1, plannedStart: '2026-09-02' },
+      method: 'POST', body: { productId, bomId, quantity: 1, plannedStart: '2026-09-02' },
     });
     assert.equal(create.status, 200);
     const newOrderId = create.data.id;
@@ -292,7 +296,7 @@ describe('Production order — permission and state-machine regression', () => {
     assert.equal(detail.data.order.status, 'CANCELLED');
   });
 
-  test('invalid state transition (start already COMPLETED) is rejected with 409', async () => {
+  test('invalid state transition (start already IN_PROGRESS) is rejected with 409', async () => {
     const orderId = orderRef.id;
     if (!orderId) return;
     const res = await api(`/api/production-orders/${orderId}`, {

@@ -10,6 +10,7 @@ import { migrateLifecycleSchema } from './migrations/lifecycle-schema.js';
 import { migrateV13Phase1Contracts } from './migrations/v13-phase1-contracts.js';
 import { migrateV13Phase2SourceIntegrity } from './migrations/v13-phase2-source-integrity.js';
 import { migrateV13Phase3QualityGates } from './migrations/v13-phase3-quality-gates.js';
+import { migrateV13Phase4ProductionIntegrity } from './migrations/v13-phase4-production-integrity.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -337,6 +338,7 @@ export function createDatabase(filename) {
   migrateV13Phase2SourceIntegrity(db);
   migrateV13Phase3QualityGates(db);
   migrateProductionDocuments(db);
+  migrateV13Phase4ProductionIntegrity(db);
   reconcileSettlementSubledgers(db);
 
   return db;
@@ -1492,7 +1494,7 @@ function seedSchema(db) {
     // V1.3 Phase 1: WAREHOUSE owns physical stock execution including material
     // issue and production receipt. No MRP / no accounting / no self-approval of
     // inventory check (INVENTORY_CHECK_APPROVE is on reviewer only).
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {

@@ -112,7 +112,7 @@ const EXPECTED_ROLE_PAGES = {
   // and purchase-receipts / returns move into the warehouse surface.
   'role-warehouse': [
     'business-overview', 'products', 'warehouses',
-    'material-issues', 'production-receipts',
+    'production-orders', 'material-issues', 'production-receipts',
     'sales-deliveries', 'returns',
     'purchase-receipts', 'returns',
     'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc',
@@ -244,7 +244,7 @@ describe('M2 canonical role application matrix', () => {
 
   test('non-admin roles do not gain unsupported domains', () => {
     assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'].includes(page)));
-    assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users', 'production-orders'].includes(page)));
+    assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users'].includes(page)));
     assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'].includes(page)));
   });
 });

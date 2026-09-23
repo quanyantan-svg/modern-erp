@@ -184,7 +184,10 @@ describe('M10 routing lifecycle and validation', () => {
   });
 
   test('inactive routing remains readable but no longer appears as production order active relation', async () => {
-    const order = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-004', quantity: 1, plannedStart: '2026-09-18' } });
+    const bomId = id();
+    db.prepare("INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,'product-004','ROUTING-TEST','ACTIVE','','user-admin',datetime('now'),datetime('now'))").run(bomId);
+    db.prepare("INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,'product-005',1,0,1)").run(id(), bomId);
+    const order = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-004', bomId, quantity: 1, plannedStart: '2026-09-18' } });
     assert.equal(order.status, 200, order.data.error);
     const related = await request(`/api/production-orders/${order.data.id}`);
     assert.equal(related.data.order.activeRoutingId, routingId);

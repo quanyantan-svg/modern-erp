@@ -385,7 +385,9 @@ export function InventoryTransactions({ user, notify }) {
     PRODUCTION_OUTPUT: "生产完工入库",
     PRODUCTION_ORDER: "生产领料",
     PRODUCTION_MATERIAL_ISSUE: "用料出库",
-    PRODUCTION_RECEIPT: "生产入库"
+    PRODUCTION_RECEIPT: "生产入库",
+    PRODUCTION_MATERIAL_RETURN: "生产退料",
+    PRODUCTION_RECEIPT_REVERSAL: "生产入库冲销"
   };
   return <Panel title="库存异动">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部来源</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>

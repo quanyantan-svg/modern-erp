@@ -93,7 +93,29 @@ function seedProductionOrder(quantity = 5, bomId = null) {
   const orderNo = 'MO-M6-' + orderId.slice(0, 8);
   database.prepare("INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,'PENDING',NULL,NULL,?,?,datetime('now'),datetime('now'))")
     .run(orderId, orderNo, 'product-001', bomId, quantity, '', 'user-admin');
+  if (bomId) {
+    const insert = database.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot) VALUES(?,?,?,?,0,?,?,?,?)');
+    for (const item of database.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId)) {
+      const perUnit = Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+      insert.run(id(), orderId, item.product_id, perUnit * quantity, item.line_no, item.id, perUnit, Number(item.scrap_rate || 0));
+    }
+  }
   return { orderId, orderNo };
+}
+
+async function issueAllRequirements(orderId, warehouseId) {
+  const requirements = database.prepare('SELECT * FROM production_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+  for (const item of requirements) {
+    database.prepare('UPDATE inventory SET quantity=MAX(quantity,?) WHERE warehouse_id=? AND product_id=?').run(item.quantity, warehouseId, item.product_id);
+  }
+  const created = await request('/api/production-material-issues', { method: 'POST', body: {
+    productionOrderId: orderId,
+    warehouseId,
+    items: requirements.map((item) => ({ requirementLineId: item.id, issueQuantity: item.quantity })),
+  } });
+  assert.equal(created.status, 201, created.data.error);
+  const confirmed = await request(`/api/production-material-issues/${created.data.id}/confirm`, { method: 'POST' });
+  assert.equal(confirmed.status, 200, confirmed.data.error);
 }
 
 // =====================================================================
@@ -151,14 +173,14 @@ describe('M6 production order START / COMPLETE preserve zero stock effect', () =
     assert.equal(vouchers, 0, 'no manufacturing voucher should be generated');
   });
 
-  test('5. COMPLETE changes status only — no inventory transaction, no stock mutation', async () => {
+  test('5. COMPLETE without reconciled execution is refused with no inventory mutation', async () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
     const complete = await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'complete' } });
-    assert.equal(complete.status, 200);
+    assert.equal(complete.status, 409);
     const order = database.prepare('SELECT status FROM production_orders WHERE id=?').get(orderId);
-    assert.equal(order.status, 'COMPLETED');
+    assert.equal(order.status, 'IN_PROGRESS');
     const p1 = database.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, 'product-001');
     assert.equal(Number(p1.quantity), 0, 'completed order must not have increased finished goods');
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type IN ('PRODUCTION_OUTPUT','PRODUCTION_RECEIPT') AND source_id=?").get(orderId).cnt;
@@ -238,7 +260,7 @@ describe('M6 material issue contract', () => {
     assert.equal(create.status, 201, create.data.error);
     const confirm = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
     assert.equal(confirm.status, 409, confirm.data.error);
-    assert.match(confirm.data.error, /库存不足/);
+    assert.match(confirm.data.error, /库存不足|剩余可领/);
     const issue = database.prepare('SELECT status FROM production_material_issues WHERE id=?').get(create.data.id);
     assert.equal(issue.status, 'DRAFT');
     const afterP2 = database.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, 'product-002').quantity;
@@ -332,11 +354,9 @@ describe('M6 material issue contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     const create = await request('/api/production-material-issues', { method: 'POST', body: { productionOrderId: orderId, warehouseId, items: [{ productId: 'product-002', issueQuantity: 1 }] } });
-    assert.equal(create.status, 201);
-    const confirm = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(confirm.status, 409);
-    assert.match(confirm.data.error, /开工|已开工|IN_PROGRESS/);
-    const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id).cnt;
+    assert.equal(create.status, 409);
+    assert.match(create.data.error, /生产中|开工|IN_PROGRESS/);
+    const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id || 'not-created').cnt;
     assert.equal(txCount, 0);
   });
 
@@ -416,6 +436,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 3 } });
     const confirm = await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     assert.equal(confirm.status, 200, confirm.data.error);
@@ -433,6 +454,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 4 } });
     const second = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 6 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
@@ -447,6 +469,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 9 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
     const second = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
@@ -463,6 +486,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
     await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     const again = await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
@@ -486,6 +510,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
     await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     const cancel = await request(`/api/production-receipts/${create.data.id}/cancel`, { method: 'POST' });
@@ -496,6 +521,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 3 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
     const draft = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 4 } });

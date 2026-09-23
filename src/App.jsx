@@ -90,7 +90,7 @@ export const navGroups = [
     { key: 'decision-reports', label: '决策报表', icon: ic.reports, any: ['REPORT_VIEW'] },
   ]},
   { label: '生产制造', items: [
-    { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
+    { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_CREATE'] },
     { key: 'product-routings', label: '制品工序标准', icon: ic.routings, any: ['ROUTING_VIEW', 'ROUTING_MANAGE'] },
     { key: 'production-orders', label: '制令单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },

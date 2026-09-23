@@ -145,17 +145,20 @@ describe('BOM supported UI contract', () => {
 
 describe('Production order core hardening', () => {
   async function createOrder() {
-    const response = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-001', quantity: 5, plannedStart: '2026-09-02' } });
+    const bom = await request('/api/boms', { method: 'POST', body: { productId: 'product-001', version: `order-${Date.now()}-${Math.random()}`, items: [{ productId: 'product-002', quantity: 1 }] } });
+    assert.equal(bom.status, 200, bom.data.error);
+    const response = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-001', bomId: bom.data.id, quantity: 5, plannedStart: '2026-09-02' } });
     assert.equal(response.status, 200, response.data.error);
     return response.data.id;
   }
 
-  test('create, start, complete and valid cancel preserve the historical workflow', async () => {
+  test('create, start, reconciliation-gated complete and valid zero-effect cancel preserve the workflow', async () => {
     const flowId = await createOrder();
     assert.equal((await request(`/api/production-orders/${flowId}`, { method: 'POST', body: { action: 'start' } })).status, 200);
-    assert.equal((await request(`/api/production-orders/${flowId}`, { method: 'POST', body: { action: 'complete' } })).status, 200);
+    assert.equal((await request(`/api/production-orders/${flowId}`, { method: 'POST', body: { action: 'complete' } })).status, 409);
     const completed = await request(`/api/production-orders/${flowId}`);
-    assert.equal(completed.data.order.status, 'COMPLETED');
+    assert.equal(completed.data.order.status, 'IN_PROGRESS');
+    assert.equal((await request(`/api/production-orders/${flowId}`, { method: 'POST', body: { action: 'cancel' } })).status, 200);
 
     const cancelId = await createOrder();
     assert.equal((await request(`/api/production-orders/${cancelId}`, { method: 'POST', body: { action: 'cancel' } })).status, 200);

@@ -93,6 +93,10 @@ async function createConsumedProductionFlow(quantity) {
     id: orderId, order_no: `MO-V12-${suffix}`, product_id: 'product-002', quantity: 1, status: 'IN_PROGRESS',
     creator_id: 'user-admin', created_at: stamp, updated_at: stamp,
   });
+  insert('production_order_items', {
+    id: `v12-moi-${suffix}`, order_id: orderId, product_id: 'product-001', quantity,
+    consumed_quantity: 0, line_no: 1, quantity_per_unit: quantity,
+  });
   const issue = await request('/api/production-material-issues', { method: 'POST', body: {
     productionOrderId: orderId, warehouseId: 'warehouse-001', issueDate: '2026-09-21',
     items: [{ productId: 'product-001', plannedQuantity: quantity, issueQuantity: quantity }],

@@ -361,19 +361,21 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
         <label>计划完工<span>{detail.planned_finish || '-'}</span></label>
         <label>实际开工<span>{detail.actual_start || '-'}</span></label>
         <label>实际完工<span>{detail.actual_finish || '-'}</span></label>
-        <label>BOM<span>{detail.bom_id ? `v${detail.bomVersion || ''}` : '未关联'}</span></label>
-        <label>工序标准<span>{detail.activeRoutingId ? <AppLink page="product-routings" documentId={detail.activeRoutingId} documentType="productRouting" className="link-button">{detail.activeRoutingCode} · {detail.activeRoutingName}</AppLink> : '无启用路线'}</span></label>
+        <label>来源生产指令<span>{detail.sourceInstruction?.instruction_no || (detail.source_type === 'MANUAL' ? '手工制令' : '-')}</span></label>
+        <label>BOM快照<span>{detail.bom_id ? `v${detail.bom_version_snapshot || detail.bomVersion || ''}` : '未关联'}</span></label>
+        <label>工序快照<span>{detail.routing_version_snapshot ? <>v{detail.routing_version_snapshot} · {detail.routingSnapshot?.length || 0} 道工序 {detail.activeRoutingId && <AppLink page="product-routings" documentId={detail.activeRoutingId} documentType="productRouting" className="link-button">查看主数据</AppLink>}</> : '无工序快照'}</span></label>
         <label>创建人<span>{detail.creatorName}</span></label>
       </div>
       <div className="form-section-head" style={{marginTop:'1rem'}}>生产流程</div>
       <ProductionWorkflowTrace detail={detail} materialIssues={materialIssues} productionReceipts={productionReceipts} />
       <LinkedDocuments materialIssues={materialIssues} productionReceipts={productionReceipts} />
       <div className="form-section-head" style={{marginTop:'1rem'}}>物料清单</div>
-      <table className="line-table"><thead><tr><th>物料</th><th className="number">需求数量</th><th className="number">已消耗</th></tr></thead><tbody>
-        {(detail.items || []).map((item) => <tr key={item.id}><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td className="number">{quantity(item.consumed_quantity)}</td></tr>)}
+      <table className="line-table"><thead><tr><th>物料</th><th className="number">需求数量</th><th className="number">已净领</th><th className="number">剩余领料</th></tr></thead><tbody>
+        {(detail.items || []).map((item) => <tr key={item.id}><td>{item.productName}</td><td className="number">{quantity(item.requiredQuantity ?? item.quantity)}</td><td className="number">{quantity(item.netIssued || 0)}</td><td className="number">{quantity(item.remainingQuantity ?? item.quantity)}</td></tr>)}
       </tbody>
-      {!detail.items?.length && <tbody><tr><td colSpan="3" style={{textAlign:'center',color:'#999'}}>无配料记录</td></tr></tbody>}
+      {!detail.items?.length && <tbody><tr><td colSpan="4" style={{textAlign:'center',color:'#999'}}>无配料记录</td></tr></tbody>}
       </table>
+      <div className="form-grid" style={{marginTop:'1rem'}}><label>计划生产<span>{quantity(detail.quantity)}</span></label><label>已净入库<span>{quantity(detail.netReceived || 0)}</span></label><label>剩余入库<span>{quantity(detail.remainingReceivable ?? detail.quantity)}</span></label><label>当前物料最多支持新增入库<span>{quantity(detail.maximumAdditionalReceipt || 0)}</span></label></div>
       <div className="form-actions" style={{marginTop:'1rem'}}>
         {detail.status === 'PENDING' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>开工</button>}
         {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_COMPLETE') && <button className="primary" onClick={completeOrder}>完工</button>}
@@ -382,7 +384,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       </div>
     </> : <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <label>产品<select value={form.productId} onChange={(e) => setForm({...form, productId: e.target.value})} required><option value="">选择产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></label>
-      <label>BOM版本<select value={form.bomId} onChange={(e) => setForm({...form, bomId: e.target.value})}><option value="">不使用BOM</option>{boms.map((b) => <option key={b.id} value={b.id}>v{b.version}</option>)}</select></label>
+      <label>BOM版本<select value={form.bomId} onChange={(e) => setForm({...form, bomId: e.target.value})} required><option value="">选择BOM</option>{boms.map((b) => <option key={b.id} value={b.id}>v{b.version}</option>)}</select></label>
       <label>生产数量<input type="number" value={form.quantity} min="1" onChange={(e) => setForm({...form, quantity: Number(e.target.value)})} required/></label>
       <label>计划开始<input type="date" value={form.plannedStart} onChange={(e) => setForm({...form, plannedStart: e.target.value})}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
@@ -447,6 +449,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
         issueDate: detail.issueDate || new Date().toISOString().slice(0, 10),
         remark: detail.remark || '',
         items: (detail.items || []).map((it) => ({
+          requirementLineId: it.requirementLineId,
           productId: it.productId,
           plannedQuantity: it.plannedQuantity,
           issueQuantity: it.issueQuantity,
@@ -455,19 +458,19 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
     }
   }, [detail]);
   useEffect(() => {
-    if (!value.id && form.productionOrderId && !prefill) {
-      api('/api/production-material-issues/prefill-from-bom?productionOrderId=' + form.productionOrderId)
+    if (!value.id && form.productionOrderId) {
+      api('/api/production-material-issues/prefill-from-bom?productionOrderId=' + form.productionOrderId + (form.warehouseId ? '&warehouseId=' + form.warehouseId : ''))
         .then((r) => {
           if (r.hasBom) {
             setPrefill(r);
-            setForm((f) => ({ ...f, items: r.items.map((it) => ({ productId: it.productId, plannedQuantity: it.plannedQuantity, issueQuantity: it.issueQuantity })) }));
+            setForm((f) => ({ ...f, items: r.items.map((it) => ({ requirementLineId: it.requirementLineId, productId: it.productId, plannedQuantity: it.plannedQuantity, netIssuedQuantity: it.netIssuedQuantity, remainingQuantity: it.remainingQuantity, currentStock: it.currentStock, issueQuantity: it.issueQuantity })) }));
           } else {
             setPrefill(r);
           }
         })
         .catch(() => setPrefill(null));
     }
-  }, [form.productionOrderId]);
+  }, [form.productionOrderId, form.warehouseId]);
   const isCreate = !value.id;
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
@@ -497,7 +500,20 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
       refresh();
     } catch (e) { notify(e.message, 'error'); }
   };
-  const orderOptions = orders.filter((o) => o.status === 'PENDING' || o.status === 'IN_PROGRESS');
+  const returnMaterial = async (item) => {
+    const raw = window.prompt(`退料数量（原出库 ${quantity(item.issueQuantity)}）`, String(item.issueQuantity));
+    if (raw == null) return;
+    try {
+      const created = await api('/api/production-material-returns', { method: 'POST', body: { originalIssueId: value.id, items: [{ originalIssueItemId: item.id, quantity: Number(raw) }] } });
+      await api('/api/production-material-returns/' + created.id + '/confirm', { method: 'POST' });
+      notify('生产退料已确认'); refresh();
+    } catch (e) { notify(e.message, 'error'); }
+  };
+  const deleteIssue = async () => {
+    try { await api('/api/production-material-issues/' + value.id, { method: 'DELETE' }); notify('未过账出库单已删除'); onClose(); }
+    catch (e) { notify(e.message, 'error'); }
+  };
+  const orderOptions = orders.filter((o) => o.status === 'IN_PROGRESS');
   const status = detail?.status;
   const readOnly = !isCreate && status !== 'DRAFT';
   return <Modal title={value.id ? '用料出库单' : '新建用料出库单'} onClose={onClose} wide>
@@ -514,19 +530,21 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
         <label className="full">备注<span>{detail.remark || '-'}</span></label>
       </div>
       <div className="form-section-head" style={{marginTop:'1rem'}}>出库明细</div>
-      <table className="line-table"><thead><tr><th>物料</th><th className="number">计划用量</th><th className="number">本次出库</th><th className="number">出库前库存</th><th className="number">出库后库存</th></tr></thead><tbody>
+      <table className="line-table"><thead><tr><th>物料</th><th className="number">计划用量</th><th className="number">本次出库</th><th className="number">出库前库存</th><th className="number">出库后库存</th><th>更正</th></tr></thead><tbody>
         {(detail.items || []).map((it) => <tr key={it.id}>
           <td>{it.productCode} - {it.productName}</td>
           <td className="number">{Number(it.plannedQuantity || 0).toFixed(3)}</td>
           <td className="number">{Number(it.issueQuantity).toFixed(3)} {it.unit}</td>
           <td className="number">{it.beforeQuantity == null ? '-' : Number(it.beforeQuantity).toFixed(3)}</td>
           <td className="number">{it.afterQuantity == null ? '-' : Number(it.afterQuantity).toFixed(3)}</td>
+          <td>{status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button type="button" className="secondary" onClick={() => returnMaterial(it)}>生产退料</button>}</td>
         </tr>)}
       </tbody></table>
       <div className="form-actions" style={{marginTop:'1rem'}}>
         {status === 'DRAFT' && <>
           <button className="primary" onClick={confirmIssue}>确认出库</button>
           <button className="danger-button" onClick={cancelIssue}>取消</button>
+          <button className="danger-text" onClick={deleteIssue}>删除草稿</button>
         </>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>
@@ -542,18 +560,15 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
       <label>日期<input type="date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
       {prefill && !prefill.hasBom && <div className="full" style={{padding:'0.5rem', background:'var(--bg-grouped)', borderRadius:'4px'}}>未关联 BOM，需手工选择用料</div>}
-      <div className="full"><div className="form-section-head"><span>出库物料</span><button type="button" className="secondary" onClick={() => setItems([...form.items, { productId: '', plannedQuantity: 0, issueQuantity: 1 }])}>＋ 增行</button></div>
-        <table className="line-table"><thead><tr><th>物料</th><th className="number">计划用量</th><th className="number">本次出库量</th><th/></tr></thead><tbody>
+      <div className="full"><div className="form-section-head"><span>权威需求行</span></div>
+        <table className="line-table"><thead><tr><th>物料</th><th className="number">需求</th><th className="number">已净领</th><th className="number">剩余</th><th className="number">当前库存</th><th className="number">本次出库量</th></tr></thead><tbody>
           {form.items.map((item, i) => <tr key={i}>
-            <td>
-              <select value={item.productId || ''} onChange={(e) => setItems(form.items.map((it, idx) => idx === i ? { ...it, productId: e.target.value } : it))} required>
-                <option value="">选择物料</option>
-                {(prefill?.items || []).filter((it) => !form.items.some((other, idx) => idx !== i && other.productId === it.productId)).map((it) => <option key={it.productId} value={it.productId}>{it.productCode} - {it.productName}</option>)}
-              </select>
-            </td>
-            <td><input type="number" value={item.plannedQuantity} min="0" step="0.001" onChange={(e) => setItems(form.items.map((it, idx) => idx === i ? { ...it, plannedQuantity: Number(e.target.value) } : it))}/></td>
+            <td>{prefill?.items?.find((it) => it.requirementLineId === item.requirementLineId)?.productCode} - {prefill?.items?.find((it) => it.requirementLineId === item.requirementLineId)?.productName}</td>
+            <td className="number">{quantity(item.plannedQuantity)}</td>
+            <td className="number">{quantity(item.netIssuedQuantity || 0)}</td>
+            <td className="number">{quantity(item.remainingQuantity || 0)}</td>
+            <td className="number">{quantity(item.currentStock || 0)}</td>
             <td><input type="number" value={item.issueQuantity} min="0.001" step="0.001" onChange={(e) => setItems(form.items.map((it, idx) => idx === i ? { ...it, issueQuantity: Number(e.target.value) } : it))} required/></td>
-            <td><button type="button" className="danger-text" onClick={() => setItems(form.items.filter((_, idx) => idx !== i))}>x</button></td>
           </tr>)}
         </tbody></table>
         {!form.items.length && <div style={{textAlign:'center', padding:'0.5rem', color:'#999'}}>{prefill?.hasBom ? '点击「＋ 增行」从 BOM 带出用料' : '选择制令单后手工添加出库物料'}</div>}
@@ -601,6 +616,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
   const [detail, setDetail] = useState(value.id ? null : value);
   const [warehouses, setWarehouses] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [orderSummary, setOrderSummary] = useState(null);
   const [form, setForm] = useState({ productionOrderId: '', warehouseId: '', quantity: 1, receiptDate: new Date().toISOString().slice(0, 10), remark: '' });
   const refresh = () => {
     if (value.id) api('/api/production-receipts/' + value.id).then((r) => setDetail(r.productionReceipt)).catch((e) => notify(e.message, 'error'));
@@ -621,6 +637,9 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
       });
     }
   }, [detail]);
+  useEffect(() => {
+    if (!value.id && form.productionOrderId) api('/api/production-orders/' + form.productionOrderId).then((r) => setOrderSummary(r.order)).catch(() => setOrderSummary(null));
+  }, [form.productionOrderId]);
   const save = async () => {
     try {
       const payload = { productionOrderId: form.productionOrderId, warehouseId: form.warehouseId, quantity: form.quantity, receiptDate: form.receiptDate, remark: form.remark };
@@ -648,7 +667,20 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
       refresh();
     } catch (e) { notify(e.message, 'error'); }
   };
-  const orderOptions = orders.filter((o) => o.status === 'IN_PROGRESS' || o.status === 'COMPLETED' || o.status === 'PENDING');
+  const reverseReceipt = async () => {
+    const raw = window.prompt(`冲销数量（原入库 ${quantity(detail.quantity)}）`, String(detail.quantity));
+    if (raw == null) return;
+    try {
+      const created = await api('/api/production-receipt-reversals', { method: 'POST', body: { originalReceiptId: value.id, quantity: Number(raw) } });
+      await api('/api/production-receipt-reversals/' + created.id + '/confirm', { method: 'POST' });
+      notify('生产入库冲销已确认'); refresh();
+    } catch (e) { notify(e.message, 'error'); }
+  };
+  const deleteReceipt = async () => {
+    try { await api('/api/production-receipts/' + value.id, { method: 'DELETE' }); notify('未过账生产入库已删除'); onClose(); }
+    catch (e) { notify(e.message, 'error'); }
+  };
+  const orderOptions = orders.filter((o) => o.status === 'IN_PROGRESS');
   const status = detail?.status;
   return <Modal title={value.id ? '生产入库单' : '新建生产入库单'} onClose={onClose} wide>
     {value.id && detail ? <>
@@ -672,7 +704,9 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         {status === 'DRAFT' && <>
           <button className="primary" onClick={confirmReceipt}>确认入库</button>
           <button className="danger-button" onClick={cancelReceipt}>取消</button>
+          <button className="danger-text" onClick={deleteReceipt}>删除草稿</button>
         </>}
+        {status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button className="danger-button" onClick={reverseReceipt}>入库冲销</button>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>
     </> : <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -685,6 +719,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
       </select></label>
       <label>本次入库数量<input type="number" value={form.quantity} min="0.001" step="0.001" onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })} required/></label>
+      {orderSummary && <div className="full" style={{padding:'0.75rem', background:'var(--bg-grouped)', borderRadius:'4px'}}>计划 {quantity(orderSummary.quantity)} · 已净入库 {quantity(orderSummary.netReceived || 0)} · 剩余 {quantity(orderSummary.remainingReceivable || 0)} · 当前物料最多支持新增入库 {quantity(orderSummary.maximumAdditionalReceipt || 0)}</div>}
       <label>入库日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({ ...form, receiptDate: e.target.value })}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
       <FormActions onClose={onClose} saveText="保存草稿"/>

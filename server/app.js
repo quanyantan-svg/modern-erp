@@ -58,11 +58,12 @@ import {
 } from './modules/settlement.js';
 import {
   cancelProductionMaterialIssue, cancelProductionReceipt,
-  confirmProductionMaterialIssue, confirmProductionReceipt,
-  createProductionMaterialIssue, createProductionReceipt,
+  confirmProductionMaterialIssue, confirmProductionMaterialReturn, confirmProductionReceipt, confirmProductionReceiptReversal,
+  createProductionMaterialIssue, createProductionMaterialReturn, createProductionReceipt, createProductionReceiptReversal,
+  deleteProductionMaterialIssue, deleteProductionReceipt,
   getProductionMaterialIssue, getProductionReceipt,
   listProductionMaterialIssues, listProductionReceipts,
-  prefetchMaterialIssueFromBom,
+  prefetchMaterialIssueFromBom, productionNetReceived, productionRequirementSummary,
   updateProductionMaterialIssue, updateProductionReceipt,
 } from './modules/production-workflow.js';
 import {
@@ -593,12 +594,16 @@ async function handleApi(db, req, res, url) {
   const pmiMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)$/);
   if (pmiMatch && req.method === "GET") return getProductionMaterialIssue(db, res, actor, pmiMatch[1]);
   if (pmiMatch && req.method === "PATCH") return updateProductionMaterialIssue(db, req, res, actor, pmiMatch[1]);
+  if (pmiMatch && req.method === "DELETE") return deleteProductionMaterialIssue(db, res, actor, pmiMatch[1]);
   const pmiActionMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)\/(confirm|cancel)$/);
   if (pmiActionMatch && req.method === "POST") {
     return pmiActionMatch[2] === 'confirm'
       ? confirmProductionMaterialIssue(db, res, actor, pmiActionMatch[1])
       : cancelProductionMaterialIssue(db, res, actor, pmiActionMatch[1]);
   }
+  if (pathname === "/api/production-material-returns" && req.method === "POST") return createProductionMaterialReturn(db, req, res, actor);
+  const pmrConfirmMatch = pathname.match(/^\/api\/production-material-returns\/([^/]+)\/confirm$/);
+  if (pmrConfirmMatch && req.method === "POST") return confirmProductionMaterialReturn(db, res, actor, pmrConfirmMatch[1]);
 
   // ============ Production Receipt (M6) ============
   if (pathname === "/api/production-receipts" && req.method === "GET") return listProductionReceipts(db, res, actor, url);
@@ -606,12 +611,16 @@ async function handleApi(db, req, res, url) {
   const prxMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)$/);
   if (prxMatch && req.method === "GET") return getProductionReceipt(db, res, actor, prxMatch[1]);
   if (prxMatch && req.method === "PATCH") return updateProductionReceipt(db, req, res, actor, prxMatch[1]);
+  if (prxMatch && req.method === "DELETE") return deleteProductionReceipt(db, res, actor, prxMatch[1]);
   const prxActionMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)\/(confirm|cancel)$/);
   if (prxActionMatch && req.method === "POST") {
     return prxActionMatch[2] === 'confirm'
       ? confirmProductionReceipt(db, res, actor, prxActionMatch[1])
       : cancelProductionReceipt(db, res, actor, prxActionMatch[1]);
   }
+  if (pathname === "/api/production-receipt-reversals" && req.method === "POST") return createProductionReceiptReversal(db, req, res, actor);
+  const prrConfirmMatch = pathname.match(/^\/api\/production-receipt-reversals\/([^/]+)\/confirm$/);
+  if (prrConfirmMatch && req.method === "POST") return confirmProductionReceiptReversal(db, res, actor, prrConfirmMatch[1]);
 
   // ============ Cost Management ============
   if (pathname === '/api/product-costs/products' && req.method === 'GET') return listCostProducts(db, res, actor);
@@ -4113,6 +4122,32 @@ async function updateBom(db, req, res, actor, bomId) {
 
 // ============ Production Orders ============
 
+function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routingId = null) {
+  const bom = db.prepare("SELECT * FROM boms WHERE id=? AND product_id=? AND status='ACTIVE'").get(bomId, productId);
+  if (!bom) throw new HttpError(409, '制令单需要与成品匹配的有效 BOM');
+  const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
+  if (!bomItems.length) throw new HttpError(409, 'BOM 没有物料明细，不能下达或开工');
+  if (!db.prepare('SELECT 1 FROM production_order_items WHERE order_id=?').get(orderId)) {
+    const insert = db.prepare(`INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot)
+      VALUES(?,?,?,?,0,?,?,?,?)`);
+    for (const item of bomItems) {
+      const perUnit = Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+      insert.run(id(), orderId, item.product_id, perUnit * Number(quantity), item.line_no, item.id, perUnit, Number(item.scrap_rate || 0));
+    }
+  }
+  let routing = routingId ? db.prepare("SELECT * FROM product_routings WHERE id=? AND product_id=? AND status='ACTIVE'").get(routingId, productId) : db.prepare("SELECT * FROM product_routings WHERE product_id=? AND status='ACTIVE'").get(productId);
+  db.prepare('UPDATE production_orders SET bom_version_snapshot=?,routing_id_snapshot=?,routing_version_snapshot=? WHERE id=?')
+    .run(bom.version || '', routing?.id || null, routing?.version || '', orderId);
+  if (routing && !db.prepare('SELECT 1 FROM production_order_routing_snapshots WHERE production_order_id=?').get(orderId)) {
+    const insert = db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+    const now = new Date().toISOString();
+    for (const op of db.prepare('SELECT * FROM product_routing_operations WHERE routing_id=? ORDER BY sequence_no').all(routing.id)) {
+      insert.run(id(), orderId, routing.id, op.sequence_no, op.operation_code, op.operation_name, op.work_center, op.setup_minutes, op.run_minutes_per_unit, op.notes, now);
+    }
+  }
+}
+
 function listProductionOrders(db, res, actor, url) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
   const search = '%' + (url.searchParams.get('search') || '') + '%';
@@ -4139,21 +4174,14 @@ async function createProductionOrder(db, req, res, actor) {
     if (!bom) throw new HttpError(400, 'BOM不存在');
     if (bom.status !== 'ACTIVE') throw new HttpError(400, '只能使用启用的BOM');
     if (bom.product_id !== productId) throw new HttpError(400, 'BOM与生产产品不匹配');
-  }
+  } else throw new HttpError(400, '手工制令单必须选择有效 BOM');
   const now = new Date().toISOString();
   const poId = id();
   const poNo = 'MO-' + Date.now().toString(36).toUpperCase();
   transaction(db, () => {
-    db.prepare('INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(poId, poNo, productId, bomId || null, orderQuantity, 'PENDING', plannedStart || null, plannedFinish || null, optionalText(remark, 500), actor.id, now, now);
-    if (bomId) {
-      const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
-      const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no) VALUES(?,?,?,?,0,?)');
-      let lineNo = 1;
-      for (const item of bomItems) {
-        const requiredQty = item.quantity * orderQuantity * (1 + item.scrap_rate);
-        itemStmt.run(id(), poId, item.product_id, requiredQty, lineNo++);
-      }
-    }
+    db.prepare(`INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at,source_type)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'MANUAL')`).run(poId, poNo, productId, bomId, orderQuantity, 'PENDING', plannedStart || null, plannedFinish || null, optionalText(remark, 500), actor.id, now, now);
+    snapshotProductionOrder(db, poId, productId, bomId, orderQuantity, body.routingId || null);
     audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, '创建生产工单 ' + poNo);
   });
   return send(res, 200, { id: poId, orderNo: poNo });
@@ -4173,6 +4201,18 @@ function getProductionOrder(db, res, actor, poId) {
     WHERE po.id=?`).get(poId);
   if (!order) throw new HttpError(404, '生产工单不存在');
   order.items = db.prepare('SELECT poi.*, p.code productCode, p.name productName, p.unit, p.stock_quantity availableStock FROM production_order_items poi JOIN products p ON p.id=poi.product_id WHERE poi.order_id=? ORDER BY poi.line_no').all(poId);
+  const materialSummary = productionRequirementSummary(db, poId);
+  order.items = order.items.map((item) => ({ ...item, ...materialSummary.find((summary) => summary.id === item.id) }));
+  order.netReceived = productionNetReceived(db, poId);
+  order.remainingReceivable = Math.max(0, Number(order.quantity) - order.netReceived);
+  order.materialSupportedMaximum = materialSummary.length ? Math.min(...materialSummary.map((item) => item.quantityPerUnit > 0 ? item.netIssued / item.quantityPerUnit : Number(order.quantity))) : 0;
+  order.maximumAdditionalReceipt = Math.max(0, Math.min(order.remainingReceivable, order.materialSupportedMaximum - order.netReceived));
+  order.sourceInstruction = order.production_instruction_id ? db.prepare('SELECT id,instruction_no,status FROM production_instructions WHERE id=?').get(order.production_instruction_id) : null;
+  order.routingSnapshot = db.prepare('SELECT * FROM production_order_routing_snapshots WHERE production_order_id=? ORDER BY sequence_no').all(poId);
+  order.materialIssues = db.prepare('SELECT id,issue_no issueNo,status,issue_date issueDate FROM production_material_issues WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.materialReturns = db.prepare('SELECT id,return_no returnNo,status,return_date returnDate FROM production_material_returns WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.productionReceipts = db.prepare('SELECT id,receipt_no receiptNo,status,quantity,receipt_date receiptDate FROM production_receipts WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.receiptReversals = db.prepare('SELECT id,reversal_no reversalNo,status,quantity,reversal_date reversalDate FROM production_receipt_reversals WHERE production_order_id=? ORDER BY created_at').all(poId);
   order.outputs = db.prepare('SELECT * FROM production_outputs WHERE order_id=? ORDER BY created_at DESC').all(poId);
   order.statusLabel = PO_STATUS[order.status] || order.status;
   return send(res, 200, { order });
@@ -4187,17 +4227,33 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
   if (action === 'start') {
     allow(actor, 'PRODUCTION_ORDERS_START');
     if (order.status !== 'PENDING') throw new HttpError(409, '只有待开工的工单可以开工');
-    db.prepare("UPDATE production_orders SET status='IN_PROGRESS',actual_start=?,updated_at=? WHERE id=?").run(now, now, poId);
-    audit(db, actor.id, 'START', 'PRODUCTION_ORDER', poId, '生产工单开工 ' + order.order_no);
+    transaction(db, () => {
+      if (order.source_type === 'INSTRUCTION') {
+        const source = db.prepare(`SELECT h.status,i.product_id FROM production_instruction_items i JOIN production_instructions h ON h.id=i.instruction_id WHERE i.id=? AND h.id=?`).get(order.production_instruction_item_id, order.production_instruction_id);
+        if (!source || source.status !== 'RELEASED' || source.product_id !== order.product_id) throw new HttpError(409, '生产指令来源无效或未下达');
+      } else if (order.source_type !== 'MANUAL' || order.production_instruction_id || order.production_instruction_item_id) throw new HttpError(409, '手工制令单来源标识无效');
+      snapshotProductionOrder(db, order.id, order.product_id, order.bom_id, order.quantity, order.routing_id_snapshot);
+      db.prepare("UPDATE production_orders SET status='IN_PROGRESS',actual_start=?,updated_at=? WHERE id=?").run(now, now, poId);
+      audit(db, actor.id, 'START', 'PRODUCTION_ORDER', poId, '生产工单开工 ' + order.order_no);
+    });
   } else if (action === 'complete') {
     allow(actor, 'PRODUCTION_ORDERS_COMPLETE');
     if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单可以完工');
-    db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId);
-    audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no);
+    const netReceived = productionNetReceived(db, poId);
+    if (Math.abs(netReceived - Number(order.quantity)) > 1e-9) throw new HttpError(409, `净入库 ${netReceived} 必须等于计划数量 ${order.quantity}`);
+    for (const item of productionRequirementSummary(db, poId)) {
+      const required = Number(order.quantity) * Number(item.quantityPerUnit);
+      if (item.netIssued + 1e-9 < required) throw new HttpError(409, `${item.productCode} 净领料 ${item.netIssued} 小于完工需求 ${required}`);
+    }
+    const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(poId, poId).total);
+    if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
+    transaction(db, () => { db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');
     if (order.status === 'CANCELLED') return send(res, 200, { ok: true, status: 'CANCELLED' });
+    if (!['DRAFT', 'PENDING', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '当前状态不可取消');
+    if (productionNetReceived(db, poId) > 1e-9 || productionRequirementSummary(db, poId).some((item) => Math.abs(item.netIssued) > 1e-9)) throw new HttpError(409, '制令单仍有净库存影响，必须先退料或冲销至零');
     db.prepare("UPDATE production_orders SET status='CANCELLED',updated_at=? WHERE id=?").run(now, poId);
     audit(db, actor.id, 'CANCEL', 'PRODUCTION_ORDER', poId, '取消生产工单 ' + order.order_no);
   } else {

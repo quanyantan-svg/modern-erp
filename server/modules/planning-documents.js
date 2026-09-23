@@ -227,11 +227,9 @@ export async function getProductionInstruction(db, res, actor, instructionId) {
   header.statusLabel = PI_STATUS[header.status] || header.status;
   // Compute conversion metadata per item (read-only).
   for (const item of header.items) {
-    const converted = convertedQtyForMrpResult(
-      db, 'production_instruction_items', 'production_instructions', 'mrp_result_id', ACTIVE_PI_STATUSES, item.mrp_result_id,
-    );
+    const converted = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) qty FROM production_orders WHERE production_instruction_item_id=? AND status<>'CANCELLED'").get(item.id).qty);
     item.convertedQuantity = converted;
-    item.remainingQuantity = Math.max(0, item.mrpSuggestedQuantity - converted);
+    item.remainingQuantity = Math.max(0, Number(item.quantity) - converted);
   }
   return send(res, 200, { instruction: header });
 }
@@ -340,12 +338,17 @@ export async function generateProductionOrderFromInstruction(db, req, res, actor
   if (!targetItemId) throw new HttpError(400, '请选择指令明细');
   const item = db.prepare("SELECT * FROM production_instruction_items WHERE id=? AND instruction_id=?").get(targetItemId, instructionId);
   if (!item) throw new HttpError(404, '指令明细不存在');
-  if (item.production_order_id) throw new HttpError(409, '该指令明细已经生成过制令单');
   if (!item.bom_id) throw new HttpError(400, '指令明细缺少有效 BOM，无法生成制令单');
   const bom = db.prepare("SELECT id, status, product_id FROM boms WHERE id=?").get(item.bom_id);
   if (!bom) throw new HttpError(400, 'BOM 不存在');
   if (bom.status !== 'ACTIVE') throw new HttpError(400, 'BOM 未启用，无法生成制令单');
   if (bom.product_id !== item.product_id) throw new HttpError(400, 'BOM 与产品不匹配');
+
+  const converted = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) qty FROM production_orders WHERE production_instruction_item_id=? AND status<>'CANCELLED'").get(item.id).qty);
+  const remaining = Math.max(0, Number(item.quantity) - converted);
+  const orderQuantity = body.quantity == null ? remaining : readPositiveQuantity(body.quantity, '制令单数量');
+  if (orderQuantity > remaining + 1e-9) throw new HttpError(409, `生产指令剩余可转数量为 ${remaining}，本次 ${orderQuantity} 超出`);
+  if (remaining <= 0) throw new HttpError(409, '该生产指令明细已全部转为制令单');
 
   const now = nowIso();
   const poId = genId();
@@ -353,17 +356,27 @@ export async function generateProductionOrderFromInstruction(db, req, res, actor
 
   transaction(db, () => {
     db.prepare(`
-      INSERT INTO production_orders(id, order_no, product_id, bom_id, quantity, status, planned_start, planned_finish, remark, creator_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, NULL, ?, ?, ?, ?)
-    `).run(poId, poNo, item.product_id, item.bom_id, item.quantity, item.need_by_date, `来自生产指令 ${header.instruction_no}`, actor.id, now, now);
+      INSERT INTO production_orders(id, order_no, product_id, bom_id, quantity, status, planned_start, planned_finish, remark, creator_id, created_at, updated_at,
+        source_type,production_instruction_id,production_instruction_item_id,bom_version_snapshot,routing_id_snapshot,routing_version_snapshot)
+      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, NULL, ?, ?, ?, ?,'INSTRUCTION',?,?,?,?,?)
+    `).run(poId, poNo, item.product_id, item.bom_id, orderQuantity, item.need_by_date, `来自生产指令 ${header.instruction_no}`, actor.id, now, now,
+      header.id, item.id, db.prepare('SELECT version FROM boms WHERE id=?').get(item.bom_id)?.version || '', item.routing_id || null,
+      item.routing_id ? db.prepare('SELECT version FROM product_routings WHERE id=?').get(item.routing_id)?.version || '' : '');
     const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(item.bom_id);
-    const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no) VALUES(?,?,?,?,0,?)');
+    if (!bomItems.length) throw new HttpError(409, 'BOM 没有物料明细，不能生成制令单');
+    const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot) VALUES(?,?,?,?,0,?,?,?,?)');
     let lineNo = 1;
     for (const bomItem of bomItems) {
-      const requiredQty = bomItem.quantity * item.quantity * (1 + bomItem.scrap_rate);
-      itemStmt.run(genId(), poId, bomItem.product_id, requiredQty, lineNo++);
+      const perUnit = Number(bomItem.quantity) * (1 + Number(bomItem.scrap_rate || 0));
+      itemStmt.run(genId(), poId, bomItem.product_id, perUnit * orderQuantity, lineNo++, bomItem.id, perUnit, Number(bomItem.scrap_rate || 0));
     }
-    db.prepare('UPDATE production_instruction_items SET production_order_id=? WHERE id=?').run(poId, targetItemId);
+    if (!item.production_order_id) db.prepare('UPDATE production_instruction_items SET production_order_id=? WHERE id=?').run(poId, targetItemId);
+    if (item.routing_id) {
+      const routingInsert = db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const op of db.prepare('SELECT * FROM product_routing_operations WHERE routing_id=? ORDER BY sequence_no').all(item.routing_id)) {
+        routingInsert.run(genId(), poId, item.routing_id, op.sequence_no, op.operation_code, op.operation_name, op.work_center, op.setup_minutes, op.run_minutes_per_unit, op.notes, now);
+      }
+    }
     audit(db, actor.id, 'GENERATE', 'PRODUCTION_ORDER', poId, `由生产指令 ${header.instruction_no} 生成 ${poNo}`);
   });
 
