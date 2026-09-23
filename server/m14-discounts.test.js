@@ -34,6 +34,7 @@ let salesToken;
 let reviewerToken;
 let warehouseToken;
 let accountingToken;
+let sourceSequence = 0;
 
 async function request(path, { token = adminToken, method = 'GET', body } = {}) {
   const headers = {
@@ -132,11 +133,16 @@ async function createConfirmedDelivery(customerId, totalCents) {
   const productId = ensureProduct('P-DEL');
   const warehouseId = ensureWarehouse('WH-DEL');
   seedInventory(warehouseId, productId, 100000);
+  const suffix = ++sourceSequence;
+  const salesOrderId = `m14-so-${suffix}`;
+  const salesOrderItemId = `m14-soi-${suffix}`;
+  database.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,'APPROVED',?,'','user-sales',datetime('now'),datetime('now'))").run(salesOrderId, `SO-M14-${suffix}`, customerId, totalCents);
+  database.prepare('INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)').run(salesOrderItemId, salesOrderId, productId, 1, totalCents, totalCents);
   // V1.3 Phase 1: physical stock execution belongs to warehouse; the
   // sales role no longer holds SALES_DELIVERIES_MANAGE.
   const create = await request('/api/sales-deliveries', { token: warehouseToken, method: 'POST', body: {
-    customerId, warehouseId, deliveryDate: '2026-08-01', remark: 'm14 fixture',
-    items: [{ productId, quantity: 1, unitPriceCents: totalCents }],
+    salesOrderId, customerId, warehouseId, deliveryDate: '2026-08-01', remark: 'm14 fixture',
+    items: [{ salesOrderItemId, productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;
@@ -149,11 +155,16 @@ async function createConfirmedDelivery(customerId, totalCents) {
 async function createConfirmedReceipt(supplierId, totalCents) {
   const productId = ensureProduct('P-REC');
   const warehouseId = ensureWarehouse('WH-REC');
+  const suffix = ++sourceSequence;
+  const purchaseOrderId = `m14-po-${suffix}`;
+  const purchaseOrderItemId = `m14-poi-${suffix}`;
+  database.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,'APPROVED',?,'','user-sales',datetime('now'),datetime('now'))").run(purchaseOrderId, `PO-M14-${suffix}`, supplierId, totalCents);
+  database.prepare('INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)').run(purchaseOrderItemId, purchaseOrderId, productId, 1, totalCents, totalCents);
   // V1.3 Phase 1: physical stock execution belongs to warehouse; the
   // sales role no longer holds PURCHASE_RECEIPTS_MANAGE.
   const create = await request('/api/purchase-receipts', { token: warehouseToken, method: 'POST', body: {
-    supplierId, warehouseId, receiptDate: '2026-08-01', remark: 'm14 fixture',
-    items: [{ productId, quantity: 1, unitPriceCents: totalCents }],
+    purchaseOrderId, supplierId, warehouseId, receiptDate: '2026-08-01', remark: 'm14 fixture',
+    items: [{ purchaseOrderItemId, productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;

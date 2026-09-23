@@ -67,9 +67,14 @@ function seedPurchaseChain() {
 
 async function createConfirmedReceipt(quantity, receiptDate = '2026-09-21') {
   const before = Number(database.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get()?.quantity || 0);
+  const suffix = ++sequence;
+  const poId = `v12-receipt-po-${suffix}`;
+  const poItemId = `v12-receipt-poi-${suffix}`;
+  insert('purchase_orders', { id: poId, order_no: `PO-RECEIPT-${suffix}`, supplier_id: 'supplier-001', status: 'APPROVED', total_cents: quantity * 200, creator_id: 'user-admin', created_at: stamp, updated_at: stamp });
+  insert('purchase_order_items', { id: poItemId, order_id: poId, product_id: 'product-001', quantity, unit_price_cents: 200, amount_cents: quantity * 200, line_no: 1 });
   const create = await request('/api/purchase-receipts', { method: 'POST', body: {
-    supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate,
-    remark: 'V1.2 lifecycle isolated fixture', items: [{ productId: 'product-001', quantity, unitPriceCents: 200 }],
+    purchaseOrderId: poId, supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate,
+    remark: 'V1.2 lifecycle isolated fixture', items: [{ purchaseOrderItemId: poItemId, productId: 'product-001', quantity, unitPriceCents: 200 }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const confirm = await request(`/api/purchase-receipts/${create.data.id}`, { method: 'POST', body: { action: 'confirm' } });

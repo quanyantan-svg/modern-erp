@@ -16,6 +16,11 @@ describe('M8 AR/AP and settlement workflow', () => {
 
   before(async () => {
     temp = mkdtempSync(join(tmpdir(), 'modern-erp-m8-')); db = createDatabase(join(temp, 'erp.db'));
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('m8-so','SO-M8','customer-001','APPROVED',10000,'','user-sales',?,?)").run(now, now);
+    db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('m8-soi','m8-so','product-001',1,10000,10000,1)").run();
+    db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('m8-po','PO-M8','supplier-001','APPROVED',12000,'','user-sales',?,?)").run(now, now);
+    db.prepare("INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('m8-poi','m8-po','product-002',1,12000,12000,1)").run();
     server = createServer(createApp(db, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done)); base = `http://127.0.0.1:${server.address().port}`;
     for (const [name, password] of [['admin', 'admin123'], ['accounting', 'accounting123'], ['sales', 'sales123'], ['reviewer', 'review123'], ['warehouse', 'warehouse123']]) {
       const response = await post('/api/auth/login', null, { username: name, password }); tokens[name] = (await response.json()).token;
@@ -29,8 +34,8 @@ describe('M8 AR/AP and settlement workflow', () => {
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
   });
 
-  test('draft direct Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {
-    const created = await (await post('/api/sales-deliveries', 'warehouse', { customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
+  test('sourced draft Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {
+    const created = await (await post('/api/sales-deliveries', 'warehouse', { salesOrderId: 'm8-so', customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ salesOrderItemId: 'm8-soi', productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 0);
     assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ar = db.prepare("SELECT * FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id); arId = ar.id;
@@ -40,8 +45,8 @@ describe('M8 AR/AP and settlement workflow', () => {
     assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 1);
   });
 
-  test('draft direct Purchase Receipt creates no AP; confirmation creates one exact-cent AP', async () => {
-    const created = await (await post('/api/purchase-receipts', 'warehouse', { supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
+  test('sourced draft Purchase Receipt creates no AP; confirmation creates one exact-cent AP', async () => {
+    const created = await (await post('/api/purchase-receipts', 'warehouse', { purchaseOrderId: 'm8-po', supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ purchaseOrderItemId: 'm8-poi', productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id).n, 0);
     assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ap = db.prepare("SELECT * FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id); apId = ap.id;

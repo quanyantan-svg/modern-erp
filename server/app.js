@@ -1292,7 +1292,8 @@ function getPurchaseOrder(db, res, actor, orderId) {
   const order = purchaseOrderRows(db, 'WHERE po.id=?', [orderId], '')[0];
   if (!order) throw new HttpError(404, '采购订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
-    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo
+    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.purchase_requisition_item_id purchaseRequisitionItemId
     FROM purchase_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
   order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
     FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='PURCHASE_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
@@ -1324,6 +1325,19 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   if (!['DRAFT', 'REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以修改');
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  if (current.purchase_requisition_id) {
+    if (body.purchaseRequisitionId !== undefined && body.purchaseRequisitionId !== current.purchase_requisition_id) throw new HttpError(409, '请购单来源不可修改');
+    const stored = db.prepare('SELECT purchase_requisition_item_id,product_id,quantity FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+    if (stored.length !== input.items.length) throw new HttpError(409, '来源请购明细不可增删');
+    input.items.forEach((item, index) => {
+      const sourceId = sourceLineId(body.items[index], 'purchaseRequisitionItemId', 'purchase_requisition_item_id');
+      const old = stored[index];
+      if (!sourceId || sourceId !== old.purchase_requisition_item_id || item.productId !== old.product_id || item.quantity !== Number(old.quantity)) {
+        throw new HttpError(409, '来源请购明细、货品和数量不可修改');
+      }
+      item.purchaseRequisitionItemId = sourceId;
+    });
+  }
   transaction(db, () => {
     db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
         order_date=?,expected_delivery_date=?,payment_terms=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
@@ -1333,7 +1347,10 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
     );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
-    savePurchaseOrderItems(db, orderId, input.items);
+    if (current.purchase_requisition_id) {
+      const statement = db.prepare('INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id) VALUES(?,?,?,?,?,?,?,?)');
+      for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo, item.purchaseRequisitionItemId);
+    } else savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
   });
   return send(res, 200, { ok: true });
@@ -1390,7 +1407,7 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
 function purchaseOrderRows(db, where, params, tail) {
   return db.prepare(`SELECT po.id,po.order_no orderNo,po.status,po.total_cents totalCents,po.remark,
       po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
-      po.reviewed_at reviewedAt,
+      po.reviewed_at reviewedAt,po.purchase_requisition_id purchaseRequisitionId,
       po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
       po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
       s.id supplierId,s.code supplierCode,s.name supplierName,s.contact supplierContact,s.phone supplierPhone,s.address supplierAddressMaster,
@@ -2017,10 +2034,76 @@ function normalizeDocumentDate(value, label) {
   return value;
 }
 
-function replaceLogisticsItems(db, table, foreignKey, documentId, items) {
+function replaceLogisticsItems(db, table, foreignKey, documentId, items, sourceColumn = null) {
   db.prepare(`DELETE FROM ${table} WHERE ${foreignKey}=?`).run(documentId);
-  const statement = db.prepare(`INSERT INTO ${table}(id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const columns = sourceColumn
+    ? `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no,${sourceColumn}`
+    : `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no`;
+  const statement = db.prepare(`INSERT INTO ${table}(${columns}) VALUES(${sourceColumn ? '?,?,?,?,?,?,?,?' : '?,?,?,?,?,?,?'})`);
+  for (const item of items) {
+    const values = [id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo];
+    if (sourceColumn) values.push(item.sourceItemId);
+    statement.run(...values);
+  }
+}
+
+function sourceLineId(item, camel, snake) {
+  return item?.[camel] ?? item?.[snake] ?? item?.sourceItemId ?? item?.source_item_id ?? null;
+}
+
+function normalizeSourcedLogisticsItems(db, items, {
+  sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake,
+}) {
+  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加来源明细');
+  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
+  let totalCents = 0;
+  const seen = new Set();
+  const normalized = items.map((item, index) => {
+    const itemId = sourceLineId(item, sourceIdCamel, sourceIdSnake);
+    if (!itemId || seen.has(itemId)) throw new HttpError(400, `第 ${index + 1} 行来源明细无效或重复`);
+    seen.add(itemId);
+    const source = sourceStmt.get(itemId, sourceHeaderId);
+    if (!source) throw new HttpError(400, `第 ${index + 1} 行来源明细不属于来源单据`);
+    if (item.productId !== undefined && item.productId !== source.product_id) throw new HttpError(400, `第 ${index + 1} 行货品与来源不一致`);
+    if (item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '' && Number(item.unitPriceCents) !== source.unit_price_cents) {
+      throw new HttpError(400, `第 ${index + 1} 行单价与来源商业价格不一致`);
+    }
+    const quantity = Number(item.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须为正整数`);
+    const amountCents = quantity * source.unit_price_cents;
+    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额超出安全范围`);
+    totalCents += amountCents;
+    if (!Number.isSafeInteger(totalCents)) throw new HttpError(400, '单据金额超出安全范围');
+    return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1, sourceQuantity: Number(source.quantity) };
+  });
+  return { items: normalized, totalCents };
+}
+
+function assertImmutableSourceItems(db, table, foreignKey, documentId, sourceColumn, items) {
+  const stored = db.prepare(`SELECT ${sourceColumn} id FROM ${table} WHERE ${foreignKey}=? ORDER BY line_no`).all(documentId).map((row) => row.id);
+  const incoming = items.map((item) => item.sourceItemId);
+  if (stored.length !== incoming.length || stored.some((value, index) => value !== incoming[index])) {
+    throw new HttpError(409, '来源明细不可修改；请取消草稿后重新创建');
+  }
+}
+
+function confirmedQuantity(db, { itemTable, sourceColumn, headerTable, headerForeignKey, status = 'CONFIRMED' }, sourceItemId, excludeHeaderId = null) {
+  let sql = `SELECT COALESCE(SUM(i.quantity),0) quantity FROM ${itemTable} i JOIN ${headerTable} h ON h.id=i.${headerForeignKey} WHERE i.${sourceColumn}=? AND h.status=?`;
+  const params = [sourceItemId, status];
+  if (excludeHeaderId) { sql += ' AND h.id<>?'; params.push(excludeHeaderId); }
+  return Number(db.prepare(sql).get(...params).quantity);
+}
+
+function assertRemainingQuantity(db, input, quantityConfig, label) {
+  for (const item of input.items) {
+    const already = confirmedQuantity(db, quantityConfig, item.sourceItemId);
+    if (already + item.quantity > item.sourceQuantity) throw new HttpError(409, `${label}数量超过来源剩余可执行数量`);
+  }
+}
+
+function fulfillmentState(executed, sourceQuantity, labels) {
+  if (executed <= 0) return labels[0];
+  return executed >= sourceQuantity ? labels[2] : labels[1];
 }
 
 function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
@@ -3126,16 +3209,20 @@ async function createPurchaseReceipt(db, req, res, actor) {
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
   const receiptDate = normalizeDocumentDate(body?.receiptDate || new Date().toISOString().slice(0, 10), '收货日期');
-  requireActiveReference(db, 'suppliers', supplierId, '供应商');
+  if (!purchaseOrderId) throw new HttpError(400, '正常采购收货必须选择已审批采购订单');
+  const source = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(purchaseOrderId);
+  if (!source) throw new HttpError(400, '采购订单不存在');
+  if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批采购订单可以收货');
+  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购订单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (purchaseOrderId && !db.prepare('SELECT 1 FROM purchase_orders WHERE id=?').get(purchaseOrderId)) throw new HttpError(400, '采购订单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: purchaseOrderId, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
   const receiptId = id();
   const now = new Date().toISOString();
   const receiptNo = 'PR' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId || null, supplierId, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items);
+    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
     audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
   });
   return send(res, 201, { id: receiptId, receiptNo });
@@ -3145,7 +3232,7 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   allowAny(actor, ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE']);
   const receipt = db.prepare('SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, po.order_no poNo FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by LEFT JOIN purchase_orders po ON po.id = pr.purchase_order_id WHERE pr.id = ?').get(receiptId);
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
-  receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId);
+  receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.purchase_order_item_id purchaseOrderItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId).map((item) => { const receivedQuantity = item.purchaseOrderItemId ? confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, item.purchaseOrderItemId) : 0; const orderedQuantity = item.purchaseOrderItemId ? Number(db.prepare('SELECT quantity FROM purchase_order_items WHERE id=?').get(item.purchaseOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, receivedQuantity, remainingQuantity: Math.max(0, orderedQuantity - receivedQuantity), fulfillmentState: fulfillmentState(receivedQuantity, orderedQuantity, ['NOT_RECEIVED','PARTIALLY_RECEIVED','FULLY_RECEIVED']) }; });
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
@@ -3163,14 +3250,17 @@ async function updatePurchaseReceipt(db, req, res, actor, receiptId) {
   if (!current) throw new HttpError(404, '采购入库单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'suppliers', body.supplierId, '供应商');
+  if (body.purchaseOrderId !== undefined && body.purchaseOrderId !== current.purchase_order_id) throw new HttpError(409, '采购订单来源不可修改');
+  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
   requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.purchase_order_id, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
+  assertImmutableSourceItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, 'purchase_order_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE purchase_receipts SET supplier_id=?,warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.supplierId, body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items);
+    db.prepare('UPDATE purchase_receipts SET warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
+    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RECEIPT', receiptId, '修改采购入库 ' + current.receipt_no);
   });
   return send(res, 200, { ok: true, id: receiptId, receiptNo: current.receipt_no, totalCents: input.totalCents });
@@ -3187,9 +3277,17 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      if (!locked.purchase_order_id) throw new HttpError(409, '旧版无来源采购入库不可确认，请使用库存调整单');
+      const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);
+      if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
+      if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
       checkPeriodNotClosedForVoucher(db, locked.receipt_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.purchase_order_item_id, po.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
+        const already = confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, sourceItem.id, receiptId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
         const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
       }
@@ -3231,10 +3329,14 @@ async function createSalesDelivery(db, req, res, actor) {
   const body = await readJson(req);
   const { salesOrderId, customerId, warehouseId, remark, items } = body;
   const deliveryDate = normalizeDocumentDate(body?.deliveryDate || new Date().toISOString().slice(0, 10), '发货日期');
-  requireActiveReference(db, 'customers', customerId, '客户');
+  if (!salesOrderId) throw new HttpError(400, '正常销售出货必须选择已审批销售订单');
+  const source = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(salesOrderId);
+  if (!source) throw new HttpError(400, '销售订单不存在');
+  if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批销售订单可以出货');
+  if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售订单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (salesOrderId && !db.prepare('SELECT 1 FROM sales_orders WHERE id=?').get(salesOrderId)) throw new HttpError(400, '销售订单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: salesOrderId, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
   for (const item of input.items) {
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
@@ -3243,8 +3345,8 @@ async function createSalesDelivery(db, req, res, actor) {
   const now = new Date().toISOString();
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId || null, customerId, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items);
+    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
   });
   return send(res, 201, { id: deliveryId, deliveryNo });
@@ -3254,7 +3356,7 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   allowAny(actor, ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE']);
   const delivery = db.prepare('SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, so.order_no soNo FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by LEFT JOIN sales_orders so ON so.id = sd.sales_order_id WHERE sd.id = ?').get(deliveryId);
   if (!delivery) throw new HttpError(404, '销售出库单不存在');
-  delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId);
+  delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.sales_order_item_id salesOrderItemId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId).map((item) => { const deliveredQuantity = item.salesOrderItemId ? confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.salesOrderItemId) : 0; const orderedQuantity = item.salesOrderItemId ? Number(db.prepare('SELECT quantity FROM sales_order_items WHERE id=?').get(item.salesOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, deliveredQuantity, remainingQuantity: Math.max(0, orderedQuantity - deliveredQuantity), fulfillmentState: fulfillmentState(deliveredQuantity, orderedQuantity, ['NOT_DELIVERED','PARTIALLY_DELIVERED','FULLY_DELIVERED']) }; });
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
   delivery.relationships = {
     upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
@@ -3272,14 +3374,17 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
   if (!current) throw new HttpError(404, '销售出库单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'customers', body.customerId, '客户');
+  if (body.salesOrderId !== undefined && body.salesOrderId !== current.sales_order_id) throw new HttpError(409, '销售订单来源不可修改');
+  if (body.customerId !== undefined && body.customerId !== current.customer_id) throw new HttpError(409, '来源客户不可修改');
   requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.sales_order_id, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
+  assertImmutableSourceItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, 'sales_order_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE sales_deliveries SET customer_id=?,warehouse_id=?,delivery_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.customerId, body.warehouseId, normalizeDocumentDate(body.deliveryDate || current.delivery_date, '发货日期'), optionalText(body.remark, 500), input.totalCents, now, deliveryId);
-    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items);
+    db.prepare('UPDATE sales_deliveries SET warehouse_id=?,delivery_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(body.warehouseId, normalizeDocumentDate(body.deliveryDate || current.delivery_date, '发货日期'), optionalText(body.remark, 500), input.totalCents, now, deliveryId);
+    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
     audit(db, actor.id, 'UPDATE', 'SALES_DELIVERY', deliveryId, '修改销售出库 ' + current.delivery_no);
   });
   return send(res, 200, { ok: true, id: deliveryId, deliveryNo: current.delivery_no, totalCents: input.totalCents });
@@ -3296,9 +3401,17 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      if (!locked.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
+      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
+      if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
+      if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       checkPeriodNotClosedForVoucher(db, locked.delivery_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId);
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(item.sales_order_item_id, so.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
+        const already = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, sourceItem.id, deliveryId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '出货数量超过销售订单剩余可交数量');
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
         const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
@@ -3342,16 +3455,21 @@ async function createSalesReturn(db, req, res, actor) {
   const body = await readJson(req);
   const { deliveryId, customerId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
-  requireActiveReference(db, 'customers', customerId, '客户');
+  if (!deliveryId) throw new HttpError(400, '正常销售退货必须选择已确认销售出货单');
+  const source = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
+  if (!source) throw new HttpError(400, '销售出库单不存在');
+  if (source.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认销售出货单可以退货');
+  if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售出货单不一致');
+  if (warehouseId !== undefined && warehouseId !== source.warehouse_id) throw new HttpError(400, '仓库与销售出货单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (deliveryId && !db.prepare('SELECT 1 FROM sales_deliveries WHERE id=?').get(deliveryId)) throw new HttpError(400, '销售出库单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_delivery_items', sourceHeaderColumn: 'delivery_id', sourceHeaderId: deliveryId, sourceIdCamel: 'deliveryItemId', sourceIdSnake: 'delivery_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, '退货');
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'SRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId || null, deliveryId || null, customerId, warehouseId, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items);
+    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId, deliveryId, source.customer_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
     audit(db, actor.id, 'CREATE', 'SALES_RETURN', returnId, '创建销售退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -3361,7 +3479,7 @@ function getSalesReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, sd.delivery_no deliveryNo FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by LEFT JOIN sales_deliveries sd ON sd.id = COALESCE(sr.delivery_id,sr.source_id) WHERE sr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '销售退货单不存在');
-  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.delivery_item_id deliveryItemId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
@@ -3376,14 +3494,17 @@ async function updateSalesReturn(db, req, res, actor, returnId) {
   if (!current) throw new HttpError(404, '销售退货单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'customers', body.customerId, '客户');
-  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  if (body.deliveryId !== undefined && body.deliveryId !== (current.delivery_id || current.source_id)) throw new HttpError(409, '销售出货来源不可修改');
+  if (body.customerId !== undefined && body.customerId !== current.customer_id) throw new HttpError(409, '来源客户不可修改');
+  if (body.warehouseId !== undefined && body.warehouseId !== current.warehouse_id) throw new HttpError(409, '来源仓库不可修改');
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_delivery_items', sourceHeaderColumn: 'delivery_id', sourceHeaderId: current.delivery_id || current.source_id, sourceIdCamel: 'deliveryItemId', sourceIdSnake: 'delivery_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, '退货');
+  assertImmutableSourceItems(db, 'return_order_items', 'return_id', returnId, 'delivery_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE return_orders SET customer_id=?,warehouse_id=?,return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.customerId, body.warehouseId, normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
-    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items);
+    db.prepare('UPDATE return_orders SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
     audit(db, actor.id, 'UPDATE', 'SALES_RETURN', returnId, '修改销售退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -3400,9 +3521,18 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
     transaction(db, () => {
       const locked = db.prepare("SELECT * FROM return_orders WHERE id=? AND source_type='SALES'").get(returnId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      const deliveryId = locked.delivery_id || locked.source_id;
+      if (!deliveryId) throw new HttpError(409, '旧版无来源销售退货不可确认');
+      const delivery = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
+      if (!delivery || delivery.status !== 'CONFIRMED') throw new HttpError(409, '来源销售出货单不存在或未确认');
+      if (locked.customer_id !== delivery.customer_id || locked.warehouse_id !== delivery.warehouse_id) throw new HttpError(409, '退货客户或仓库与来源出货单不一致');
       checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'return_order_items', 'return_id', returnId);
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM sales_delivery_items WHERE id=? AND delivery_id=?').get(item.delivery_item_id, delivery.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '销售退货明细与来源出货明细不一致');
+        const already = confirmedQuantity(db, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源出货数量');
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now);
       }
@@ -3444,16 +3574,20 @@ async function createPurchaseReturn(db, req, res, actor) {
   const body = await readJson(req);
   const { receiptId, supplierId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
-  requireActiveReference(db, 'suppliers', supplierId, '供应商');
-  requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (receiptId && !db.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receiptId)) throw new HttpError(400, '采购入库单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  if (!receiptId) throw new HttpError(400, '正常采购退货必须选择已确认采购入库单');
+  const source = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
+  if (!source) throw new HttpError(400, '采购入库单不存在');
+  if (source.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认采购入库单可以退货');
+  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购入库单不一致');
+  if (warehouseId !== undefined && warehouseId !== source.warehouse_id) throw new HttpError(400, '仓库与采购入库单不一致');
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_receipt_items', sourceHeaderColumn: 'receipt_id', sourceHeaderId: receiptId, sourceIdCamel: 'receiptItemId', sourceIdSnake: 'receipt_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, '退货');
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'PRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId || null, supplierId, warehouseId, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items);
+    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId, source.supplier_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
     audit(db, actor.id, 'CREATE', 'PURCHASE_RETURN', returnId, '创建采购退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -3463,7 +3597,7 @@ function getPurchaseReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, prc.receipt_no receiptNo FROM purchase_returns pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by LEFT JOIN purchase_receipts prc ON prc.id = pr.receipt_id WHERE pr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '采购退货单不存在');
-  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.receipt_item_id receiptItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
@@ -3478,14 +3612,17 @@ async function updatePurchaseReturn(db, req, res, actor, returnId) {
   if (!current) throw new HttpError(404, '采购退货单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'suppliers', body.supplierId, '供应商');
-  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  if (body.receiptId !== undefined && body.receiptId !== current.receipt_id) throw new HttpError(409, '采购入库来源不可修改');
+  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
+  if (body.warehouseId !== undefined && body.warehouseId !== current.warehouse_id) throw new HttpError(409, '来源仓库不可修改');
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'purchase_receipt_items', sourceHeaderColumn: 'receipt_id', sourceHeaderId: current.receipt_id, sourceIdCamel: 'receiptItemId', sourceIdSnake: 'receipt_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, '退货');
+  assertImmutableSourceItems(db, 'purchase_return_items', 'return_id', returnId, 'receipt_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE purchase_returns SET supplier_id=?,warehouse_id=?,return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.supplierId, body.warehouseId, normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
-    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items);
+    db.prepare('UPDATE purchase_returns SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RETURN', returnId, '修改采购退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -3502,9 +3639,17 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM purchase_returns WHERE id=?').get(returnId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      if (!locked.receipt_id) throw new HttpError(409, '旧版无来源采购退货不可确认');
+      const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(locked.receipt_id);
+      if (!receipt || receipt.status !== 'CONFIRMED') throw new HttpError(409, '来源采购入库单不存在或未确认');
+      if (locked.supplier_id !== receipt.supplier_id || locked.warehouse_id !== receipt.warehouse_id) throw new HttpError(409, '退货供应商或仓库与来源入库单不一致');
       checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_return_items', 'return_id', returnId);
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM purchase_receipt_items WHERE id=? AND receipt_id=?').get(item.receipt_item_id, receipt.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '采购退货明细与来源入库明细不一致');
+        const already = confirmedQuantity(db, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源入库数量');
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(ret.warehouse_id, item.product_id);
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
@@ -3641,7 +3786,10 @@ function listSalesOrderSourceLookup(db, res, actor, url) {
     LIMIT 100
   `);
   const itemStmt = db.prepare(`
-    SELECT soi.product_id productId, soi.quantity, soi.unit_price_cents unitPriceCents,
+    SELECT soi.id salesOrderItemId, soi.product_id productId, soi.quantity orderedQuantity,
+           soi.quantity-COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) deliveredQuantity,
+           soi.unit_price_cents unitPriceCents,
            p.code productCode, p.name productName, p.unit
     FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
     WHERE soi.order_id = ?
@@ -3677,7 +3825,10 @@ function listPurchaseOrderSourceLookup(db, res, actor, url) {
     LIMIT 100
   `);
   const itemStmt = db.prepare(`
-    SELECT poi.product_id productId, poi.quantity, poi.unit_price_cents unitPriceCents,
+    SELECT poi.id purchaseOrderItemId, poi.product_id productId, poi.quantity orderedQuantity,
+           poi.quantity-COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) receivedQuantity,
+           poi.unit_price_cents unitPriceCents,
            p.code productCode, p.name productName, p.unit
     FROM purchase_order_items poi JOIN products p ON p.id = poi.product_id
     WHERE poi.order_id = ?

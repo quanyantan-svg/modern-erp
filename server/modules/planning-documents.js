@@ -598,6 +598,7 @@ export async function listPurchaseRequisitions(db, res, actor, url) {
   `).all(...params);
   const items = rows.map((row) => ({
     ...row,
+    sourceType: row.sourceInstructionId ? 'PURCHASE_INSTRUCTION' : 'MANUAL',
     statusLabel: PR_STATUS[row.status] || row.status,
     totalQuantity: Number(row.totalQuantity),
     totalAmountCents: Number(row.totalAmountCents),
@@ -639,6 +640,7 @@ export async function getPurchaseRequisition(db, res, actor, id) {
   }));
   header.totalAmountCents = header.items.reduce((sum, item) => sum + item.amountCents, 0);
   header.totalQuantity = header.items.reduce((sum, item) => sum + item.quantity, 0);
+  header.sourceType = header.source_instruction_id ? 'PURCHASE_INSTRUCTION' : 'MANUAL';
   header.statusLabel = PR_STATUS[header.status] || header.status;
   return send(res, 200, { requisition: header });
 }
@@ -680,8 +682,13 @@ export async function createPurchaseRequisition(db, req, res, actor) {
         if (!sup.active) throw new HttpError(400, '供应商已停用');
       }
       if (item.purchaseInstructionItemId) {
-        const pii = db.prepare("SELECT id, purchase_requisition_id FROM purchase_instruction_items WHERE id=?").get(item.purchaseInstructionItemId);
+        if (!sourceInstructionId) throw new HttpError(400, '采购指令明细必须同时提供来源采购指令');
+        const pii = db.prepare("SELECT id, instruction_id, product_id, quantity, need_by_date, purchase_requisition_id FROM purchase_instruction_items WHERE id=?").get(item.purchaseInstructionItemId);
         if (!pii) throw new HttpError(400, '关联的采购指令明细不存在');
+        if (pii.instruction_id !== sourceInstructionId) throw new HttpError(400, '采购指令明细不属于来源采购指令');
+        if (pii.product_id !== item.productId) throw new HttpError(400, '请购货品与采购指令明细不一致');
+        if (Number(item.quantity) > Number(pii.quantity)) throw new HttpError(400, '请购数量不得超过采购指令建议数量');
+        if (requiredDate && pii.need_by_date && requiredDate !== pii.need_by_date) throw new HttpError(400, '来源请购单需求日期必须继承采购指令日期');
         if (pii.purchase_requisition_id) throw new HttpError(409, '该采购指令明细已经生成过请购单');
         // Bind the back-link so future reuse cannot happen.
       }
@@ -703,6 +710,10 @@ export async function updatePurchaseRequisition(db, req, res, actor, id) {
   if (header.status !== 'DRAFT') throw new HttpError(409, '只有草稿请购单可以编辑');
 
   const body = await readJson(req);
+  const requestedSourceId = body.sourceInstructionId ?? body.source_instruction_id;
+  if (requestedSourceId !== undefined && requestedSourceId !== header.source_instruction_id) {
+    throw new HttpError(409, '采购指令来源不可修改；请取消草稿后重新创建');
+  }
   const requestDate = readDate(body.requestDate ?? body.request_date ?? header.request_date, '请购日期');
   const requiredDate = readDate(body.requiredDate ?? body.required_date ?? header.required_date, '需求日期');
   if (!requestDate) throw new HttpError(400, '请购日期不能为空');
@@ -710,12 +721,16 @@ export async function updatePurchaseRequisition(db, req, res, actor, id) {
   const notes = readString(body.notes, MAX_NOTE, header.notes || '');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '请购单明细不能为空');
 
-  const storedItems = db.prepare("SELECT id, quantity FROM purchase_requisition_items WHERE requisition_id=?").all(id);
+  const storedItems = db.prepare("SELECT id, quantity, purchase_instruction_item_id FROM purchase_requisition_items WHERE requisition_id=?").all(id);
   const storedById = new Map(storedItems.map((item) => [item.id, item]));
   const updates = body.items.map((entry, index) => {
     const itemId = requiredText(entry.id, `第${index + 1}行明细`, 100);
     const stored = storedById.get(itemId);
     if (!stored) throw new HttpError(400, `第${index + 1}行明细不属于当前请购单`);
+    const requestedItemSource = entry.purchaseInstructionItemId ?? entry.purchase_instruction_item_id;
+    if (requestedItemSource !== undefined && requestedItemSource !== stored.purchase_instruction_item_id) {
+      throw new HttpError(409, '采购指令来源明细不可修改；请取消草稿后重新创建');
+    }
     const unitPriceCents = Number(entry.unitPriceCents ?? entry.unit_price_cents);
     if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) {
       throw new HttpError(400, `第${index + 1}行参考单价必须为非负整数分`);
@@ -849,19 +864,19 @@ export async function generatePurchaseOrderFromRequisition(db, req, res, actor, 
     }
     db.prepare(`
       INSERT INTO purchase_orders(id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at,
-        order_date, expected_delivery_date, payment_terms, supplier_contact_name, supplier_contact_phone, supplier_address)
-      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        order_date, expected_delivery_date, payment_terms, supplier_contact_name, supplier_contact_phone, supplier_address, purchase_requisition_id)
+      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(poId, orderNo, supplierId, totalCents, `来自请购单 ${header.requisition_no}`, actor.id, now, now,
-      orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress);
+      orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress, id);
     const insertItem = db.prepare(`
-      INSERT INTO purchase_order_items(id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO purchase_order_items(id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no, purchase_requisition_item_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     items.forEach((item, index) => {
       const qty = Number(item.quantity);
       const unit = Number(item.unit_price_cents) || 0;
       const amount = qty * unit;
-      insertItem.run(genId(), poId, item.product_id, qty, unit, amount, index + 1);
+      insertItem.run(genId(), poId, item.product_id, qty, unit, amount, index + 1, item.id);
     });
     db.prepare("UPDATE purchase_requisitions SET purchase_order_id=?, updated_at=? WHERE id=?").run(poId, now, id);
     audit(db, actor.id, 'GENERATE', 'PURCHASE_ORDER', poId, `由请购单 ${header.requisition_no} 生成 ${orderNo}`);

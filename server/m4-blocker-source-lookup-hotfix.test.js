@@ -210,8 +210,8 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       assert.equal(res.status, 403, 'broad /api/orders must remain 403 for warehouse — only the scoped lookup is permitted');
     });
 
-    test('10. selecting source remains optional — empty / null / arbitrary id all tolerated', async () => {
-      // Warehouse creates Sales Delivery with no source → 201
+    test('10. authoritative source is required and approved source line is accepted', async () => {
+      // Warehouse creates Sales Delivery with no source → refused
       const noSrc = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
@@ -219,13 +219,13 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
           items: [{ productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       });
-      assert.equal(noSrc.status, 201);
-      // With approved source → 201 (optional still works)
+      assert.equal(noSrc.status, 400);
+      // With approved source and source line → 201
       const withSrc = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
           salesOrderId: approvedSoId, customerId, warehouseId,
-          items: [{ productId, quantity: 1, unitPriceCents: 1000 }],
+          items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       });
       assert.equal(withSrc.status, 201);
@@ -400,38 +400,37 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       assert.doesNotMatch(modal, /api\("\/api\/purchase-orders"\s*\+\s*purchaseOrderId\)/, 'must not call /api/purchase-orders/:id for prefill');
     });
 
-    test('21. source can be cleared — empty string still maps to direct', () => {
+    test('21. source selectors are required and direct logistics options are absent', () => {
       const sdModal = extractBlock(source, 'SalesDeliveryModal');
       const prModal = extractBlock(source, 'PurchaseReceiptModal');
-      assert.match(sdModal, /chooseSalesOrder\s*=\s*\(salesOrderId\)[\s\S]*?if \(!salesOrderId\)[\s\S]*?salesOrderId:\s*""/, 'sales choose must allow clearing');
-      assert.match(prModal, /choosePurchaseOrder\s*=\s*\(purchaseOrderId\)[\s\S]*?if \(!purchaseOrderId\)[\s\S]*?purchaseOrderId:\s*""/, 'purchase choose must allow clearing');
-      // Direct option still present in JSX
-      assert.match(sdModal, /直接出货（不关联销售订单）/);
-      assert.match(prModal, /直接入库（不关联采购订单）/);
+      assert.match(sdModal, /来源销售订单（必选）/);
+      assert.match(prModal, /来源采购订单（必选）/);
+      assert.doesNotMatch(sdModal, /直接出货（不关联销售订单）/);
+      assert.doesNotMatch(prModal, /直接入库（不关联采购订单）/);
     });
 
-    test('22/23. direct Sales Delivery / Purchase Receipt remain allowed (POST with no source)', async () => {
+    test('22/23. direct Sales Delivery / Purchase Receipt are refused', async () => {
       const r1 = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({ customerId, warehouseId, items: [{ productId, quantity: 1, unitPriceCents: 1000 }] }),
       });
-      assert.equal(r1.status, 201);
+      assert.equal(r1.status, 400);
       const r2 = await fetch(`${baseUrl}/api/purchase-receipts`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({ supplierId, warehouseId, items: [{ productId, quantity: 1, unitPriceCents: 1000 }] }),
       });
-      assert.equal(r2.status, 201);
+      assert.equal(r2.status, 400);
     });
 
     test('24. lookup error is visible and controlled (notify with explicit message; no raw stack trace)', () => {
       const sdModal = extractBlock(source, 'SalesDeliveryModal');
       const prModal = extractBlock(source, 'PurchaseReceiptModal');
       // notify(...) with explanatory Chinese message + "error" tone
-      assert.match(sdModal, /\.catch\(\(e\)\s*=>\s*notify\("来源销售订单加载失败，请重试；仍可选择直接出货。",\s*"error"\)\)/);
-      assert.match(prModal, /\.catch\(\(e\)\s*=>\s*notify\("来源采购订单加载失败，请重试；仍可选择直接入库。",\s*"error"\)\)/);
+      assert.match(sdModal, /\.catch\(\(e\)\s*=>\s*notify\("来源销售订单加载失败，请重试。",\s*"error"\)\)/);
+      assert.match(prModal, /\.catch\(\(e\)\s*=>\s*notify\("来源采购订单加载失败，请重试。",\s*"error"\)\)/);
       // returns modal also surfaces a controlled message
       const returnModal = extractBlock(source, 'ReturnModal');
-      assert.match(returnModal, /notify\("来源单据加载失败，请重试；仍可选择直接退货 \/ 补录。"/);
+      assert.match(returnModal, /notify\("来源单据加载失败，请重试。"/);
     });
 
     test('25. lookup error does not white-screen — no silent .catch(() => {}) on the source-document lookups', () => {
@@ -543,7 +542,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
           salesOrderId: approvedSoId, customerId, warehouseId,
-          items: [{ productId, quantity: 1, unitPriceCents: 1000 }],
+          items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       })).json();
       const detail = (await (await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, { headers: authHeaders(warehouseToken) })).json()).salesDelivery;
@@ -556,8 +555,8 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const created = await (await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
-          customerId, warehouseId,
-          items: [{ productId, quantity: 1, unitPriceCents: 1000 }],
+          salesOrderId: approvedSoId, customerId, warehouseId,
+          items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       })).json();
       // confirm
