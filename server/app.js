@@ -10,19 +10,24 @@ import {
 } from './modules/business.js';
 import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
-  createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
-  createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
+  createDepartment, createExpenseClaim, createLaborRecord,
+  createLeaveRequest, createMrpPlan, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getIqcInspection,
-  getInventoryStatus, getOqcInspection, getSalesAnalysis, getTrialBalance,
-  completeIqcInspection, completeOqcInspection, updateIqcInspection, updateOqcInspection,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement,
+  getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
-  listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
-  listOqcInspections, listPeriodClosures, listRoutingOperations,
+  listLaborRecords, listLeaveRequests, listMrpPlans,
+  listPeriodClosures, listRoutingOperations,
   closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
+import {
+  cancelIqcInspection, cancelOqcInspection, completeIqcInspection, completeOqcInspection,
+  createIqcInspection, createOqcInspection, getIqcInspection, getOqcInspection,
+  listIqcInspections, listOqcInspections, updateIqcInspection, updateOqcInspection,
+} from './modules/authoritative-quality.js';
+import { assertQualityGate, deriveQualityState } from './modules/quality-gates.js';
 import {
   getInventoryMovements, getPurchaseOutstanding, getPurchaseSummary,
   getSalesOutstanding, getSalesSummary,
@@ -361,6 +366,8 @@ async function handleApi(db, req, res, url) {
   if (iqcMatch && req.method === 'PATCH') return updateIqcInspection(db, req, res, actor, iqcMatch[1]);
   const iqcCompleteMatch = pathname.match(/^\/api\/iqc\/([^/]+)\/complete$/);
   if (iqcCompleteMatch && req.method === 'POST') return completeIqcInspection(db, req, res, actor, iqcCompleteMatch[1]);
+  const iqcCancelMatch = pathname.match(/^\/api\/iqc\/([^/]+)\/cancel$/);
+  if (iqcCancelMatch && req.method === 'POST') return cancelIqcInspection(db, req, res, actor, iqcCancelMatch[1]);
   if (pathname === '/api/oqc' && req.method === 'GET') return listOqcInspections(db, res, actor, url);
   if (pathname === '/api/oqc' && req.method === 'POST') return createOqcInspection(db, req, res, actor);
   const oqcMatch = pathname.match(/^\/api\/oqc\/([^/]+)$/);
@@ -368,6 +375,8 @@ async function handleApi(db, req, res, url) {
   if (oqcMatch && req.method === 'PATCH') return updateOqcInspection(db, req, res, actor, oqcMatch[1]);
   const oqcCompleteMatch = pathname.match(/^\/api\/oqc\/([^/]+)\/complete$/);
   if (oqcCompleteMatch && req.method === 'POST') return completeOqcInspection(db, req, res, actor, oqcCompleteMatch[1]);
+  const oqcCancelMatch = pathname.match(/^\/api\/oqc\/([^/]+)\/cancel$/);
+  if (oqcCancelMatch && req.method === 'POST') return cancelOqcInspection(db, req, res, actor, oqcCancelMatch[1]);
   if (pathname === '/api/supplier-evaluations' && req.method === 'GET') return listSupplierEvaluations(db, res, actor, url);
   if (pathname === '/api/supplier-evaluations' && req.method === 'POST') return createSupplierEvaluation(db, req, res, actor);
   // OA Leave Requests
@@ -3200,7 +3209,8 @@ function listPurchaseReceipts(db, res, actor, url) {
   const archiveFilter = lifecycleArchiveFilter('PURCHASE_RECEIPT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
   if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
-  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
+  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;
+  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'IQC', row.id) }));
   return send(res, 200, { purchaseReceipts: receipts });
 }
 
@@ -3234,6 +3244,8 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
   receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.purchase_order_item_id purchaseOrderItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId).map((item) => { const receivedQuantity = item.purchaseOrderItemId ? confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, item.purchaseOrderItemId) : 0; const orderedQuantity = item.purchaseOrderItemId ? Number(db.prepare('SELECT quantity FROM purchase_order_items WHERE id=?').get(item.purchaseOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, receivedQuantity, remainingQuantity: Math.max(0, orderedQuantity - receivedQuantity), fulfillmentState: fulfillmentState(receivedQuantity, orderedQuantity, ['NOT_RECEIVED','PARTIALLY_RECEIVED','FULLY_RECEIVED']) }; });
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
+  receipt.qualityState = deriveQualityState(db, 'IQC', receiptId);
+  receipt.items = receipt.items.map((item) => ({ ...item, qualityState: receipt.qualityState }));
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
     downstream: db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),
@@ -3281,6 +3293,7 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
       const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);
       if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
       if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
+      assertQualityGate(db, 'IQC', receiptId);
       checkPeriodNotClosedForVoucher(db, locked.receipt_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
       for (const item of authoritative.items) {
@@ -3320,7 +3333,7 @@ function listSalesDeliveries(db, res, actor, url) {
   if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sd.status = ?'; params.push(status); }
   const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
-  const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status }));
+  const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'OQC', row.id) }));
   return send(res, 200, { salesDeliveries: deliveries });
 }
 
@@ -3358,6 +3371,8 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   if (!delivery) throw new HttpError(404, '销售出库单不存在');
   delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.sales_order_item_id salesOrderItemId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId).map((item) => { const deliveredQuantity = item.salesOrderItemId ? confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.salesOrderItemId) : 0; const orderedQuantity = item.salesOrderItemId ? Number(db.prepare('SELECT quantity FROM sales_order_items WHERE id=?').get(item.salesOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, deliveredQuantity, remainingQuantity: Math.max(0, orderedQuantity - deliveredQuantity), fulfillmentState: fulfillmentState(deliveredQuantity, orderedQuantity, ['NOT_DELIVERED','PARTIALLY_DELIVERED','FULLY_DELIVERED']) }; });
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
+  delivery.qualityState = deriveQualityState(db, 'OQC', deliveryId);
+  delivery.items = delivery.items.map((item) => ({ ...item, qualityState: delivery.qualityState }));
   delivery.relationships = {
     upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
     downstream: db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),
@@ -3405,6 +3420,7 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
       if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
       if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
+      assertQualityGate(db, 'OQC', deliveryId);
       checkPeriodNotClosedForVoucher(db, locked.delivery_date, '生成业务');
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId);
       for (const item of authoritative.items) {

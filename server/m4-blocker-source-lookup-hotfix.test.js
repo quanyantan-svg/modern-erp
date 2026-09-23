@@ -559,6 +559,13 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
           items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       })).json();
+      const quality = await (await fetch(`${baseUrl}/api/oqc`, {
+        method: 'POST', headers: authHeaders(warehouseToken), body: JSON.stringify({ sales_delivery_id: created.id }),
+      })).json();
+      const qualityComplete = await fetch(`${baseUrl}/api/oqc/${quality.id}/complete`, {
+        method: 'POST', headers: authHeaders(warehouseToken), body: JSON.stringify({ result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0 }),
+      });
+      assert.equal(qualityComplete.status, 200);
       // confirm
       const confirm = await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, {
         method: 'POST', headers: authHeaders(warehouseToken),

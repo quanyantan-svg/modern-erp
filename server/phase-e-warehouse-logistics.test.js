@@ -365,6 +365,10 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     assert.equal(row0.total_cents, 20000);
     assert.ok(row0.receipt_date, 'receipt_date populated');
 
+    const iqc = await (await fetch(`${baseUrl}/api/iqc`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ purchase_receipt_id: created.id }) })).json();
+    res = await fetch(`${baseUrl}/api/iqc/${iqc.id}/complete`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ result: 'PASS', inspection_quantity: 4, passed_quantity: 4, failed_quantity: 0 }) });
+    assert.equal(res.status, 200);
+
     // confirm (consumes PURCHASE_RECEIPTS_MANAGE — warehouse has it)
     res = await fetch(`${baseUrl}/api/purchase-receipts/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
@@ -467,6 +471,10 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
     assert.equal(row0.status, 'DRAFT');
     assert.equal(row0.confirmed_by, null);
     assert.ok(row0.delivery_date);
+
+    const oqc = await (await fetch(`${baseUrl}/api/oqc`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ sales_delivery_id: created.id }) })).json();
+    res = await fetch(`${baseUrl}/api/oqc/${oqc.id}/complete`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ result: 'PASS', inspection_quantity: 3, passed_quantity: 3, failed_quantity: 0 }) });
+    assert.equal(res.status, 200);
 
     res = await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },

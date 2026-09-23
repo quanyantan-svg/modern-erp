@@ -13,6 +13,10 @@ describe('M8 AR/AP and settlement workflow', () => {
   const auth = (role) => role ? { authorization: `Bearer ${tokens[role]}` } : {};
   const request = (path, role, options = {}) => fetch(base + path, { ...options, headers: { ...auth(role), ...(options.body ? { 'content-type': 'application/json' } : {}), ...options.headers } });
   const post = (path, role, body = {}) => request(path, role, { method: 'POST', body: JSON.stringify(body) });
+  const passQuality = async (kind, sourceId, quantity) => {
+    const created = await (await post(`/api/${kind}`, 'warehouse', { [kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id']: sourceId })).json();
+    return post(`/api/${kind}/${created.id}/complete`, 'warehouse', { result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0 });
+  };
 
   before(async () => {
     temp = mkdtempSync(join(tmpdir(), 'modern-erp-m8-')); db = createDatabase(join(temp, 'erp.db'));
@@ -37,6 +41,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   test('sourced draft Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {
     const created = await (await post('/api/sales-deliveries', 'warehouse', { salesOrderId: 'm8-so', customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ salesOrderItemId: 'm8-soi', productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 0);
+    assert.equal((await passQuality('oqc', created.id, 1)).status, 200);
     assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ar = db.prepare("SELECT * FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id); arId = ar.id;
     assert.equal(ar.amount_cents, 10000); assert.equal(ar.adjustment_cents, 0); assert.equal(ar.paid_cents, 0); assert.equal(ar.status, 'PENDING'); assert.equal(ar.customer_id, 'customer-001');
@@ -48,6 +53,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   test('sourced draft Purchase Receipt creates no AP; confirmation creates one exact-cent AP', async () => {
     const created = await (await post('/api/purchase-receipts', 'warehouse', { purchaseOrderId: 'm8-po', supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ purchaseOrderItemId: 'm8-poi', productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id).n, 0);
+    assert.equal((await passQuality('iqc', created.id, 1)).status, 200);
     assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);
     const ap = db.prepare("SELECT * FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id); apId = ap.id;
     assert.equal(ap.amount_cents, 12000); assert.equal(ap.supplier_id, 'supplier-001'); assert.equal(ap.status, 'PENDING');

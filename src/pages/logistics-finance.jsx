@@ -3,9 +3,11 @@ import { api } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
-function LogisticsActions({ existing, onClose, onAction }) {
+function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityLabel, qualityState }) {
   return <div className="form-actions full">
     <button type="button" className="secondary" onClick={onClose}>关闭</button>
+    {existing && qualityAction && <button type="button" className="secondary" onClick={qualityAction}>{qualityLabel}</button>}
+    {existing && qualityState && <span className="muted">质量状态：{qualityState.label}</span>}
     {existing && <button type="button" className="danger-button" onClick={() => onAction('cancel')}>取消单据</button>}
     {existing && <button type="button" className="approve-button" onClick={() => onAction('confirm')}>确认单据</button>}
     <button className="primary">{existing ? '保存修改' : '保存草稿'}</button>
@@ -47,8 +49,8 @@ export function PurchaseReceipts({ user, notify }) {
   useEffect(() => { void load(); }, [status]);
   return <Panel title="采购入库单" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增采购入库</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有采购入库记录"/>}</div>
     {view && <PurchaseReceiptModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -116,7 +118,8 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     if (!order) return;
     setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ purchaseOrderItemId: item.purchaseOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, receivedQuantity: item.receivedQuantity, unitPriceCents: item.unitPriceCents })) }));
   };
-  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form }); await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const changeState = async (action) => { try { await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const createQuality = async () => { try { await api('/api/iqc', { method: 'POST', body: { purchase_receipt_id: value.id } }); notify('IQC 检验草稿已创建，请前往来料检验完成检验'); const response = await api('/api/purchase-receipts/' + value.id); setDetail(response.purchaseReceipt); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="采购入库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑采购入库单" : "新增采购入库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
@@ -137,7 +140,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 IQC 复检' : '创建 IQC'} qualityState={detail?.qualityState}/>
   </form></Modal>;
 }
 // SalesDeliveries
@@ -151,8 +154,8 @@ export function SalesDeliveries({ user, notify }) {
   useEffect(() => { void load(); }, [status]);
   return <Panel title="销售出货单" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增销售出货</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有销售出货记录"/>}</div>
     {view && <SalesDeliveryModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -215,7 +218,8 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     if (!order) return;
     setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ salesOrderItemId: item.salesOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, deliveredQuantity: item.deliveredQuantity, unitPriceCents: item.unitPriceCents })) }));
   };
-  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const changeState = async (action) => { try { await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const createQuality = async () => { try { await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: value.id } }); notify('OQC 检验草稿已创建，请前往出货检验完成检验'); const response = await api('/api/sales-deliveries/' + value.id); setDetail(response.salesDelivery); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出货单" : "新增销售出货单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
@@ -236,7 +240,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 OQC 复检' : '创建 OQC'} qualityState={detail?.qualityState}/>
   </form></Modal>;
 }
 // Returns

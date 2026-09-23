@@ -26,6 +26,15 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
       .run(id, `PO-${id}`, 'sup', status, quantity * price, now, now, '2026-09-23', '2026-09-30', 'COD');
     db.prepare('INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)').run(`${id}-line`, id, 'p1', quantity, price, quantity * price);
   };
+  const passQuality = async (kind, sourceId, quantity) => {
+    const sourceField = kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id';
+    const created = await request(`/api/${kind}`, 'warehouse', 'POST', { [sourceField]: sourceId, sample_quantity: quantity });
+    assert.equal(created.status, 201, created.data.error);
+    const completed = await request(`/api/${kind}/${created.data.id}/complete`, 'warehouse', 'POST', {
+      result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0,
+    });
+    assert.equal(completed.status, 200, completed.data.error);
+  };
 
   beforeEach(async () => {
     temp = createTempDb({ label: 'v13-phase2', production: true }); db = temp.db;
@@ -58,10 +67,12 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     assert.equal((await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], unitPriceCents: 1 }] })).status, 400);
     assert.equal((await request('/api/sales-deliveries', 'warehouse', 'POST', { customerId: 'cus', warehouseId: 'wh', items: base.items })).status, 400);
     const first = await request('/api/sales-deliveries', 'warehouse', 'POST', base); assert.equal(first.status, 201, first.data.error);
+    await passQuality('oqc', first.data.id, 60);
     assert.equal((await request(`/api/sales-deliveries/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     assert.equal((await request(`/api/sales-deliveries/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 409);
     const stale = await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
     const second = await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
+    await passQuality('oqc', second.data.id, 40);
     assert.equal((await request(`/api/sales-deliveries/${second.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     const before = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
     assert.equal((await request(`/api/sales-deliveries/${stale.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 409);
@@ -79,9 +90,11 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     assert.equal((await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], unitPriceCents: 200 }] })).status, 400);
     assert.equal((await request('/api/purchase-receipts', 'warehouse', 'POST', { supplierId: 'sup', warehouseId: 'wh', items: base.items })).status, 400);
     const first = await request('/api/purchase-receipts', 'warehouse', 'POST', base); assert.equal(first.status, 201, first.data.error);
+    await passQuality('iqc', first.data.id, 30);
     assert.equal((await request(`/api/purchase-receipts/${first.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     const stale = await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
     const second = await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], quantity: 40 }] });
+    await passQuality('iqc', second.data.id, 40);
     assert.equal((await request(`/api/purchase-receipts/${second.data.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     assert.equal(db.prepare("SELECT amount_cents FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(second.data.id).amount_cents, 800000);
     assert.equal(db.prepare("SELECT SUM(amount_cents) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT'").get().n, 1400000);
@@ -94,6 +107,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     const sd = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 10, unitPriceCents: 2500 }] });
     const sdItem = db.prepare('SELECT id FROM sales_delivery_items WHERE delivery_id=?').get(sd.data.id).id;
     assert.equal((await request('/api/sales-returns', 'warehouse', 'POST', { deliveryId: sd.data.id, customerId: 'cus', warehouseId: 'wh', items: [{ deliveryItemId: sdItem, productId: 'p1', quantity: 1, unitPriceCents: 2500 }] })).status, 409);
+    await passQuality('oqc', sd.data.id, 10);
     await request(`/api/sales-deliveries/${sd.data.id}`, 'warehouse', 'POST', { action: 'confirm' });
     assert.equal((await request('/api/sales-returns', 'warehouse', 'POST', { customerId: 'cus', warehouseId: 'wh', items: [] })).status, 400);
     assert.equal((await request('/api/sales-returns', 'warehouse', 'POST', { deliveryId: sd.data.id, customerId: 'cus2', warehouseId: 'wh', items: [{ deliveryItemId: sdItem, productId: 'p1', quantity: 1 }] })).status, 400);
@@ -103,6 +117,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
     assert.equal((await request('/api/sales-returns', 'warehouse', 'POST', { deliveryId: sd.data.id, customerId: 'cus', warehouseId: 'wh', items: [{ deliveryItemId: sdItem, productId: 'p1', quantity: 9 }] })).status, 409);
 
     const pr = await request('/api/purchase-receipts', 'warehouse', 'POST', { purchaseOrderId: 'po', supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-09-23', items: [{ purchaseOrderItemId: 'po-line', productId: 'p1', quantity: 10, unitPriceCents: 20000 }] });
+    await passQuality('iqc', pr.data.id, 10);
     await request(`/api/purchase-receipts/${pr.data.id}`, 'warehouse', 'POST', { action: 'confirm' });
     const prItem = db.prepare('SELECT id FROM purchase_receipt_items WHERE receipt_id=?').get(pr.data.id).id;
     const ret = await request('/api/purchase-returns', 'warehouse', 'POST', { receiptId: pr.data.id, supplierId: 'sup', warehouseId: 'wh', items: [{ receiptItemId: prItem, productId: 'p1', quantity: 2, unitPriceCents: 20000 }] });

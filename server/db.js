@@ -9,6 +9,7 @@ import { migrateDiscountsSchema } from './migrations/discounts-schema.js';
 import { migrateLifecycleSchema } from './migrations/lifecycle-schema.js';
 import { migrateV13Phase1Contracts } from './migrations/v13-phase1-contracts.js';
 import { migrateV13Phase2SourceIntegrity } from './migrations/v13-phase2-source-integrity.js';
+import { migrateV13Phase3QualityGates } from './migrations/v13-phase3-quality-gates.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -334,6 +335,7 @@ export function createDatabase(filename) {
   migrateInventoryTransfers();
   migrateWarehouseLogistics(db);
   migrateV13Phase2SourceIntegrity(db);
+  migrateV13Phase3QualityGates(db);
   migrateProductionDocuments(db);
   reconcileSettlementSubledgers(db);
 

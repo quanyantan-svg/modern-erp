@@ -19,6 +19,15 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     headers: { authorization: `Bearer ${tokens[role]}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const passQuality = async (sourceType, sourceId, quantity) => {
+    const kind = sourceType === 'PURCHASE_RECEIPT' ? 'iqc' : 'oqc';
+    const sourceField = kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id';
+    const createdResponse = await request(`/api/${kind}`, 'warehouse', 'POST', { [sourceField]: sourceId });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const completed = await request(`/api/${kind}/${created.id}/complete`, 'warehouse', 'POST', { result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0 });
+    assert.equal(completed.status, 200);
+  };
 
   beforeEach(async () => {
     const previous = process.env.NODE_ENV;
@@ -102,6 +111,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(db.prepare(`SELECT count(*) count FROM ${spec.itemTable} WHERE ${spec.fk}=?`).get(created.id).count, 1);
 
     const before = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
+    if (['PURCHASE_RECEIPT', 'SALES_DELIVERY'].includes(spec.voucher)) await passQuality(spec.voucher, created.id, 3);
     response = await request(`${spec.path}/${created.id}`, 'warehouse', 'POST', { action: 'confirm' });
     assert.equal(response.status, 200);
     assert.equal(db.prepare(`SELECT status,total_cents FROM ${spec.table} WHERE id=?`).get(created.id).status, 'CONFIRMED');
@@ -156,6 +166,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
       ['/api/sales-deliveries', { salesOrderId: 'so-source', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-08-15', items: [{ salesOrderItemId: 'soi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'sales_deliveries'],
     ]) {
       const created = await (await request(path, 'warehouse', 'POST', body)).json();
+      await passQuality(path.includes('purchase') ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY', created.id, 2);
       const stockBefore = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
       const txBefore = db.prepare('SELECT count(*) count FROM inventory_transactions').get().count;
       const voucherBefore = db.prepare('SELECT count(*) count FROM accounting_vouchers').get().count;
@@ -246,6 +257,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     const orderItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(order.id).id;
     response = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: order.id, customerId: 'cus', warehouseId: 'wh', items: [{ salesOrderItemId: orderItemId, productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
     const delivery = await response.json();
+    await passQuality('SALES_DELIVERY', delivery.id, 2);
     assert.equal((await request(`/api/sales-deliveries/${delivery.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     assert.equal(db.prepare("SELECT count(*) count FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.id).count, 1);
   });

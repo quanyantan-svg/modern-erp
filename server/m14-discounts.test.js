@@ -146,6 +146,9 @@ async function createConfirmedDelivery(customerId, totalCents) {
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;
+  const quality = await request('/api/oqc', { token: warehouseToken, method: 'POST', body: { sales_delivery_id: id } });
+  assert.equal(quality.status, 201, JSON.stringify(quality.data));
+  assert.equal((await request(`/api/oqc/${quality.data.id}/complete`, { token: warehouseToken, method: 'POST', body: { result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0 } })).status, 200);
   const confirm = await request(`/api/sales-deliveries/${id}`, { token: warehouseToken, method: 'POST', body: { action: 'confirm' } });
   assert.equal(confirm.status, 200);
   const ar = database.prepare("SELECT id FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(id);
@@ -168,6 +171,9 @@ async function createConfirmedReceipt(supplierId, totalCents) {
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const id = create.data.id;
+  const quality = await request('/api/iqc', { token: warehouseToken, method: 'POST', body: { purchase_receipt_id: id } });
+  assert.equal(quality.status, 201, JSON.stringify(quality.data));
+  assert.equal((await request(`/api/iqc/${quality.data.id}/complete`, { token: warehouseToken, method: 'POST', body: { result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0 } })).status, 200);
   const confirm = await request(`/api/purchase-receipts/${id}`, { token: warehouseToken, method: 'POST', body: { action: 'confirm' } });
   assert.equal(confirm.status, 200);
   const ap = database.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(id);

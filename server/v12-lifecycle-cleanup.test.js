@@ -77,6 +77,10 @@ async function createConfirmedReceipt(quantity, receiptDate = '2026-09-21') {
     remark: 'V1.2 lifecycle isolated fixture', items: [{ purchaseOrderItemId: poItemId, productId: 'product-001', quantity, unitPriceCents: 200 }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
+  const quality = await request('/api/iqc', { method: 'POST', body: { purchase_receipt_id: create.data.id } });
+  assert.equal(quality.status, 201, JSON.stringify(quality.data));
+  const completeQuality = await request(`/api/iqc/${quality.data.id}/complete`, { method: 'POST', body: { result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0 } });
+  assert.equal(completeQuality.status, 200, JSON.stringify(completeQuality.data));
   const confirm = await request(`/api/purchase-receipts/${create.data.id}`, { method: 'POST', body: { action: 'confirm' } });
   assert.equal(confirm.status, 200, JSON.stringify(confirm.data));
   return { id: create.data.id, before };

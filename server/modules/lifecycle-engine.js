@@ -721,6 +721,19 @@ function deleteSelectedGraph(db, graph) {
     db.prepare(`DELETE FROM ${childTable} WHERE ${foreignKey}=?`).run(entityId);
     db.prepare(`DELETE FROM ${table} WHERE id=?`).run(entityId);
   });
+  // Phase 3 quality evidence is a dependent of the logistics document. The
+  // emergency lifecycle cleanup is the only path allowed to remove completed
+  // evidence, so remove it explicitly before its FK-backed source rows.
+  eachSelected(graph, 'PURCHASE_RECEIPT', (entityId) => {
+    const ids = db.prepare('SELECT id FROM iqc_inspections WHERE purchase_receipt_id=?').all(entityId);
+    for (const row of ids) db.prepare('DELETE FROM iqc_inspection_items WHERE iqc_id=?').run(row.id);
+    db.prepare('DELETE FROM iqc_inspections WHERE purchase_receipt_id=?').run(entityId);
+  });
+  eachSelected(graph, 'SALES_DELIVERY', (entityId) => {
+    const ids = db.prepare('SELECT id FROM oqc_inspections WHERE sales_delivery_id=?').all(entityId);
+    for (const row of ids) db.prepare('DELETE FROM oqc_inspection_items WHERE oqc_id=?').run(row.id);
+    db.prepare('DELETE FROM oqc_inspections WHERE sales_delivery_id=?').run(entityId);
+  });
   deleteChildren('SALES_RETURN', 'return_order_items', 'return_id', 'return_orders');
   deleteChildren('PURCHASE_RETURN', 'purchase_return_items', 'return_id', 'purchase_returns');
   deleteChildren('PRODUCTION_MATERIAL_ISSUE', 'production_material_issue_items', 'issue_id', 'production_material_issues');
