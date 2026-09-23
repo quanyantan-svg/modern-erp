@@ -21,14 +21,21 @@ function normalizeOperation(value, index) {
   if (!Number.isInteger(sequenceNo) || sequenceNo <= 0) {
     throw new HttpError(400, `第 ${index + 1} 道工序的顺序号必须为正整数`);
   }
+  const expectedYieldBps = Math.round(parseNonNegative(value?.expectedYieldBps ?? value?.expected_yield_bps ?? 10000, `第 ${index + 1} 道工序预期良率`));
+  if (expectedYieldBps > 10000) throw new HttpError(400, `第 ${index + 1} 道工序预期良率不能超过 100%`);
   return {
     id: value?.id || id(),
     sequenceNo,
     operationCode: requiredCode(value?.operationCode ?? value?.operation_code, `第 ${index + 1} 道工序编码`),
     operationName: requiredText(value?.operationName ?? value?.operation_name, `第 ${index + 1} 道工序名称`, 100),
     workCenter: optionalText(value?.workCenter ?? value?.work_center, 100),
+    workCenterId: value?.workCenterId ?? value?.work_center_id ?? null,
     setupMinutes: parseNonNegative(value?.setupMinutes ?? value?.setup_minutes, `第 ${index + 1} 道工序准备时间`),
     runMinutesPerUnit: parseNonNegative(value?.runMinutesPerUnit ?? value?.run_minutes_per_unit, `第 ${index + 1} 道工序单位工时`),
+    setupSeconds: Math.round(parseNonNegative(value?.setupSeconds ?? value?.setup_seconds ?? (Number(value?.setupMinutes ?? value?.setup_minutes ?? 0) * 60), `第 ${index + 1} 道工序准备秒数`)),
+    runSecondsPerUnit: Math.round(parseNonNegative(value?.runSecondsPerUnit ?? value?.run_seconds_per_unit ?? (Number(value?.runMinutesPerUnit ?? value?.run_minutes_per_unit ?? 0) * 60), `第 ${index + 1} 道工序单位运行秒数`)),
+    expectedYieldBps,
+    active: value?.active === false || value?.active === 0 ? 0 : 1,
     notes: optionalText(value?.notes, 500),
   };
 }
@@ -70,14 +77,17 @@ function insertOperations(db, routingId, operations, now) {
   const insert = db.prepare(`
     INSERT INTO product_routing_operations(
       id,routing_id,sequence_no,operation_code,operation_name,work_center,
-      setup_minutes,run_minutes_per_unit,notes,created_at,updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      setup_minutes,run_minutes_per_unit,work_center_id,setup_seconds,run_seconds_per_unit,
+      expected_yield_bps,active,notes,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   for (const operation of operations) {
     insert.run(
       operation.id, routingId, operation.sequenceNo, operation.operationCode,
       operation.operationName, operation.workCenter, operation.setupMinutes,
-      operation.runMinutesPerUnit, operation.notes, now, now,
+      operation.runMinutesPerUnit, operation.workCenterId, operation.setupSeconds,
+      operation.runSecondsPerUnit, operation.expectedYieldBps, operation.active,
+      operation.notes, now, now,
     );
   }
 }
@@ -203,8 +213,8 @@ export async function updateProductRoutingOperation(db, req, res, actor, routing
   if (duplicate) throw new HttpError(409, `工序顺序号 ${operation.sequenceNo} 重复`);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare(`UPDATE product_routing_operations SET sequence_no=?,operation_code=?,operation_name=?,work_center=?,setup_minutes=?,run_minutes_per_unit=?,notes=?,updated_at=? WHERE id=? AND routing_id=?`)
-      .run(operation.sequenceNo, operation.operationCode, operation.operationName, operation.workCenter, operation.setupMinutes, operation.runMinutesPerUnit, operation.notes, now, operationId, routingId);
+    db.prepare(`UPDATE product_routing_operations SET sequence_no=?,operation_code=?,operation_name=?,work_center=?,setup_minutes=?,run_minutes_per_unit=?,work_center_id=?,setup_seconds=?,run_seconds_per_unit=?,expected_yield_bps=?,active=?,notes=?,updated_at=? WHERE id=? AND routing_id=?`)
+      .run(operation.sequenceNo, operation.operationCode, operation.operationName, operation.workCenter, operation.setupMinutes, operation.runMinutesPerUnit, operation.workCenterId, operation.setupSeconds, operation.runSecondsPerUnit, operation.expectedYieldBps, operation.active, operation.notes, now, operationId, routingId);
     db.prepare('UPDATE product_routings SET updated_at=? WHERE id=?').run(now, routingId);
     audit(db, actor.id, 'UPDATE_OPERATION', 'PRODUCT_ROUTING', routingId, `${operation.sequenceNo} ${operation.operationName}`);
   });

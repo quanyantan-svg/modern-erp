@@ -73,6 +73,13 @@ import {
   updateProductRouting, updateProductRoutingOperation,
 } from './modules/product-routing.js';
 import {
+  assertRoutedCompletion, cancelOperation, cancelOperationReport, completeOperation, confirmOperationReport,
+  createOperationReport, deriveProductionCost, getManufacturingExecution,
+  manufacturingCapacityReport, manufacturingCostReport, manufacturingWipReport,
+  manufacturingYieldReport, reconcileProductionCosts, reverseOperationReport,
+  snapshotManufacturingExecution,
+} from './modules/manufacturing-execution.js';
+import {
   cancelInventoryScrap, closeInventoryPeriod, confirmInventoryScrap,
   createInventoryScrap, getInventoryPeriodClosure, getInventoryScrap,
   listInventoryPeriodClosures, listInventoryScraps,
@@ -637,6 +644,21 @@ async function handleApi(db, req, res, url) {
   const mOatch = pathname.match(/^\/api\/production-orders\/(.+)$/);
   if (mOatch && req.method === "GET") return getProductionOrder(db, res, actor, mOatch[1]);
   if (mOatch && req.method === "POST") return changeProductionOrderState(db, req, res, actor, mOatch[1]);
+  const executionMatch = pathname.match(/^\/api\/manufacturing\/orders\/([^/]+)\/execution$/);
+  if (executionMatch && req.method === 'GET') return getManufacturingExecution(db, res, actor, executionMatch[1]);
+  if (pathname === '/api/manufacturing/operation-reports' && req.method === 'POST') return createOperationReport(db, req, res, actor);
+  const operationReportAction = pathname.match(/^\/api\/manufacturing\/operation-reports\/([^/]+)\/(confirm|reverse|cancel)$/);
+  if (operationReportAction && req.method === 'POST') return operationReportAction[2] === 'confirm'
+    ? confirmOperationReport(db, req, res, actor, operationReportAction[1])
+    : operationReportAction[2] === 'reverse' ? reverseOperationReport(db, req, res, actor, operationReportAction[1])
+      : cancelOperationReport(db, res, actor, operationReportAction[1]);
+  const operationAction = pathname.match(/^\/api\/manufacturing\/operations\/([^/]+)\/(complete|cancel)$/);
+  if (operationAction && req.method === 'POST') return operationAction[2] === 'complete' ? completeOperation(db, res, actor, operationAction[1]) : cancelOperation(db, res, actor, operationAction[1]);
+  if (pathname === '/api/manufacturing/reports/wip' && req.method === 'GET') return manufacturingWipReport(db, res, actor);
+  if (pathname === '/api/manufacturing/reports/yield' && req.method === 'GET') return manufacturingYieldReport(db, res, actor);
+  if (pathname === '/api/manufacturing/reports/capacity' && req.method === 'GET') return manufacturingCapacityReport(db, res, actor, url);
+  if (pathname === '/api/manufacturing/reports/cost' && req.method === 'GET') return manufacturingCostReport(db, res, actor);
+  if (pathname === '/api/manufacturing/costs/reconcile' && req.method === 'GET') return reconcileProductionCosts(db, res, actor);
 
   // ============ Production Material Issue (M6) ============
   if (pathname === "/api/production-material-issues" && req.method === "GET") return listProductionMaterialIssues(db, res, actor, url);
@@ -1056,7 +1078,7 @@ async function updateCustomer(db, req, res, actor, customerId) {
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,stock_quantity stockQuantity,active,tracking_policy trackingPolicy,shelf_life_days shelfLifeDays,tracking_effective_at trackingEffectiveAt,
+  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,standard_manufacturing_cost_cents standardManufacturingCostCents,stock_quantity stockQuantity,active,tracking_policy trackingPolicy,shelf_life_days shelfLifeDays,tracking_effective_at trackingEffectiveAt,
     created_at createdAt,updated_at updatedAt FROM products WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { products });
@@ -1066,8 +1088,9 @@ async function createProduct(db, req, res, actor) {
   allow(actor, 'PRODUCTS_MANAGE');
   const body = await readJson(req); const product = productInput(body);
   const productId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)`)
-    .run(productId, product.code, product.name, product.unit, product.priceCents, product.stockQuantity, now, now);
+  const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
+  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,standard_manufacturing_cost_cents,stock_quantity,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
+    .run(productId, product.code, product.name, product.unit, product.priceCents, standardCost, product.stockQuantity, now, now);
   audit(db, actor.id, 'CREATE', 'PRODUCT', productId, product.code);
   return send(res, 201, { id: productId });
 }
@@ -1080,8 +1103,9 @@ async function updateProduct(db, req, res, actor, productId) {
   const product = productInput({ code: body.code ?? current.code, name: body.name ?? current.name, unit: body.unit ?? current.unit,
     priceCents: body.priceCents ?? current.price_cents, stockQuantity: body.stockQuantity ?? current.stock_quantity });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,stock_quantity=?,active=?,updated_at=? WHERE id=?')
-    .run(product.code, product.name, product.unit, product.priceCents, product.stockQuantity, active, new Date().toISOString(), productId);
+  const standardCost = Number(body.standardManufacturingCostCents ?? current.standard_manufacturing_cost_cents); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
+  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,standard_manufacturing_cost_cents=?,stock_quantity=?,active=?,updated_at=? WHERE id=?')
+    .run(product.code, product.name, product.unit, product.priceCents, standardCost, product.stockQuantity, active, new Date().toISOString(), productId);
   audit(db, actor.id, 'UPDATE', 'PRODUCT', productId, product.code);
   return send(res, 200, { ok: true });
 }
@@ -4350,27 +4374,30 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
         if (!source || source.status !== 'RELEASED' || source.product_id !== order.product_id) throw new HttpError(409, '生产指令来源无效或未下达');
       } else if (order.source_type !== 'MANUAL' || order.production_instruction_id || order.production_instruction_item_id) throw new HttpError(409, '手工制令单来源标识无效');
       snapshotProductionOrder(db, order.id, order.product_id, order.bom_id, order.quantity, order.routing_id_snapshot);
+      snapshotManufacturingExecution(db, order.id);
       db.prepare("UPDATE production_orders SET status='IN_PROGRESS',actual_start=?,updated_at=? WHERE id=?").run(now, now, poId);
       audit(db, actor.id, 'START', 'PRODUCTION_ORDER', poId, '生产工单开工 ' + order.order_no);
     });
   } else if (action === 'complete') {
     allow(actor, 'PRODUCTION_ORDERS_COMPLETE');
     if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单可以完工');
+    const routed = assertRoutedCompletion(db, poId);
     const netReceived = productionNetReceived(db, poId);
-    if (Math.abs(netReceived - Number(order.quantity)) > 1e-9) throw new HttpError(409, `净入库 ${netReceived} 必须等于计划数量 ${order.quantity}`);
+    if (!routed && Math.abs(netReceived - Number(order.quantity)) > 1e-9) throw new HttpError(409, `净入库 ${netReceived} 必须等于计划数量 ${order.quantity}`);
     for (const item of productionRequirementSummary(db, poId)) {
       const required = Number(order.quantity) * Number(item.quantityPerUnit);
       if (item.netIssued + 1e-9 < required) throw new HttpError(409, `${item.productCode} 净领料 ${item.netIssued} 小于完工需求 ${required}`);
     }
     const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(poId, poId).total);
     if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
-    transaction(db, () => { db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
+    transaction(db, () => { db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');
     if (order.status === 'CANCELLED') return send(res, 200, { ok: true, status: 'CANCELLED' });
     if (!['DRAFT', 'PENDING', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '当前状态不可取消');
     if (productionNetReceived(db, poId) > 1e-9 || productionRequirementSummary(db, poId).some((item) => Math.abs(item.netIssued) > 1e-9)) throw new HttpError(409, '制令单仍有净库存影响，必须先退料或冲销至零');
+    if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_order_id=? AND status='CONFIRMED'").get(poId)) throw new HttpError(409, '制令单已有确认报工历史，必须先完整冲销报工后才能取消');
     db.prepare("UPDATE production_orders SET status='CANCELLED',updated_at=? WHERE id=?").run(now, poId);
     audit(db, actor.id, 'CANCEL', 'PRODUCTION_ORDER', poId, '取消生产工单 ' + order.order_no);
   } else {

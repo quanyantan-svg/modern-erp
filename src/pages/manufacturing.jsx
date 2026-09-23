@@ -302,12 +302,15 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
   const [boms, setBoms] = useState([]);
   const [materialIssues, setMaterialIssues] = useState([]);
   const [productionReceipts, setProductionReceipts] = useState([]);
+  const [execution, setExecution] = useState(null);
+  const [report, setReport] = useState({ operationId: '', goodQuantity: 0, scrapQuantity: 0, laborSeconds: '', machineSeconds: '', scrapReason: '', remark: '' });
   const [form, setForm] = useState({ productId: '', bomId: '', quantity: 1, plannedStart: '', plannedFinish: '', remark: '' });
   const refreshDetail = () => {
     if (!value.id) return;
     api('/api/production-orders/' + value.id).then((r) => setDetail(r.order)).catch((e) => notify(e.message, 'error'));
     api(`/api/production-material-issues?status=&search=&page=1`).then((r) => setMaterialIssues((r.materialIssues || []).filter((mi) => mi.productionOrderId === value.id))).catch(() => setMaterialIssues([]));
     api(`/api/production-receipts?status=`).then((r) => setProductionReceipts((r.productionReceipts || []).filter((pr) => pr.productionOrderId === value.id))).catch(() => setProductionReceipts([]));
+    api(`/api/manufacturing/orders/${value.id}/execution`).then((r) => setExecution(r)).catch(() => setExecution(null));
   };
   useEffect(() => {
     api('/api/products').then((r) => setProducts(r.products)).catch((e) => notify(e.message, 'error'));
@@ -350,6 +353,13 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       refreshDetail();
     } catch (e) { notify(e.message, 'error'); }
   };
+  const submitReport = async () => {
+    try {
+      const created = await api('/api/manufacturing/operation-reports', { method: 'POST', body: { productionOrderId: value.id, productionOperationId: report.operationId, goodQuantity: Number(report.goodQuantity), scrapQuantity: Number(report.scrapQuantity), laborSeconds: report.laborSeconds === '' ? null : Number(report.laborSeconds), machineSeconds: report.machineSeconds === '' ? null : Number(report.machineSeconds), scrapReason: report.scrapReason || null, remark: report.remark } });
+      await api(`/api/manufacturing/operation-reports/${created.id}/confirm`, { method: 'POST' });
+      notify('报工已确认'); setReport({ operationId: '', goodQuantity: 0, scrapQuantity: 0, laborSeconds: '', machineSeconds: '', scrapReason: '', remark: '' }); refreshDetail();
+    } catch (e) { notify(e.message, 'error'); }
+  };
   return <Modal title={value.id ? '制令单详情' : '新建制令单'} onClose={onClose} wide>
     {value.id && detail ? <>
       <div className="form-grid">
@@ -375,6 +385,11 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       </tbody>
       {!detail.items?.length && <tbody><tr><td colSpan="4" style={{textAlign:'center',color:'#999'}}>无配料记录</td></tr></tbody>}
       </table>
+      {!!execution?.operations?.length && <>
+        <div className="form-section-head" style={{marginTop:'1rem'}}>工艺进度</div>
+        <div className="mobile-card-list">{execution.operations.map((op) => <article className="mobile-card" key={op.id}><h3>{op.sequence_no} · {op.operation_name}</h3><div className="mobile-card__row"><span>状态</span><strong>{op.status}</strong></div><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(op.good)} / {quantity(op.scrap)}</strong></div><div className="mobile-card__row"><span>可报工 / 剩余</span><strong>{quantity(op.inputAvailable)} / {quantity(op.remainingUnprocessed)}</strong></div><div className="mobile-card__row"><span>计划 / 实际负荷</span><strong>{op.plannedLoadMinutes} / {op.actualLoadMinutes ?? '证据缺失'} 分钟</strong></div><div className="mobile-card__row"><span>实际良率</span><strong>{op.actualYieldBps == null ? '—' : `${(op.actualYieldBps / 100).toFixed(2)}%`}</strong></div></article>)}</div>
+        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_START') && <div className="form-grid"><label>报工工序<select value={report.operationId} onChange={(e) => setReport({...report, operationId:e.target.value})}><option value="">选择当前可报工工序</option>{execution.operations.filter((op) => !['COMPLETED','CANCELLED'].includes(op.status)).map((op) => <option key={op.id} value={op.id}>{op.sequence_no} · {op.operation_name}（剩余 {quantity(op.remainingUnprocessed)}）</option>)}</select></label><label>本次良品<input type="number" min="0" value={report.goodQuantity} onChange={(e) => setReport({...report, goodQuantity:e.target.value})}/></label><label>本次报废<input type="number" min="0" value={report.scrapQuantity} onChange={(e) => setReport({...report, scrapQuantity:e.target.value})}/></label><label>报废原因<select value={report.scrapReason} onChange={(e) => setReport({...report, scrapReason:e.target.value})}><option value="">无报废</option><option value="PROCESS_DEFECT">制程缺陷</option><option value="MATERIAL_DEFECT">材料缺陷</option><option value="SETUP_LOSS">调机损耗</option><option value="QUALITY_FAILURE">质量不合格</option><option value="OTHER">其他</option></select></label><label>人工工时（秒）<input type="number" min="0" value={report.laborSeconds} onChange={(e) => setReport({...report, laborSeconds:e.target.value})}/></label><label>设备工时（秒）<input type="number" min="0" value={report.machineSeconds} onChange={(e) => setReport({...report, machineSeconds:e.target.value})}/></label><label className="full">备注<input value={report.remark} onChange={(e) => setReport({...report, remark:e.target.value})}/></label><div className="full"><button className="primary" type="button" disabled={!report.operationId} onClick={submitReport}>确认报工</button></div></div>}
+      </>}
       <div className="form-grid" style={{marginTop:'1rem'}}><label>计划生产<span>{quantity(detail.quantity)}</span></label><label>已净入库<span>{quantity(detail.netReceived || 0)}</span></label><label>剩余入库<span>{quantity(detail.remainingReceivable ?? detail.quantity)}</span></label><label>当前物料最多支持新增入库<span>{quantity(detail.maximumAdditionalReceipt || 0)}</span></label></div>
       <div className="form-actions" style={{marginTop:'1rem'}}>
         {detail.status === 'PENDING' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>开工</button>}
@@ -391,6 +406,17 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       <FormActions onClose={onClose}/>
     </form>}
   </Modal>;
+}
+
+export function ManufacturingAnalytics({ user, notify }) {
+  const [tab, setTab] = useState('wip'); const [data, setData] = useState([]); const [analyticalOnly, setAnalyticalOnly] = useState(false);
+  useEffect(() => { api(`/api/manufacturing/reports/${tab}`).then((r) => { setData(r.rows || []); setAnalyticalOnly(Boolean(r.analyticalOnly)); }).catch((e) => notify(e.message, 'error')); }, [tab]);
+  return <Panel title="生产执行分析" subtitle="WIP、良率、产能与管理成本均由权威生产事件派生">
+    <div className="tabs"><button className={tab==='wip'?'active':''} onClick={() => setTab('wip')}>在制</button><button className={tab==='yield'?'active':''} onClick={() => setTab('yield')}>良率 / 报废</button><button className={tab==='capacity'?'active':''} onClick={() => setTab('capacity')}>产能</button>{can(user,'PRODUCTION_COSTS_VIEW') && <button className={tab==='cost'?'active':''} onClick={() => setTab('cost')}>生产成本</button>}</div>
+    {analyticalOnly && <p className="hint">生产成本为管理分析，不等同于财务库存计价，也不会自动生成总账凭证。</p>}
+    <div className="mobile-card-list">{data.map((row, index) => <article className="mobile-card" key={row.orderId || `${row.work_center_id}-${row.planned_date}` || index}><h3>{row.orderNo || row.work_center_name || '生产分析'}</h3>{tab==='wip' && <><div className="mobile-card__row"><span>计划 / 物料支持</span><strong>{quantity(row.plannedQuantity)} / {quantity(row.materialSupportedQuantity)}</strong></div><div className="mobile-card__row"><span>当前工序</span><strong>{row.currentOperation || '—'}</strong></div><div className="mobile-card__row"><span>末工序良品 / 报废</span><strong>{quantity(row.finalGood)} / {quantity(row.scrap)}</strong></div></>}{tab==='yield' && <><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(row.goodQuantity)} / {quantity(row.scrapQuantity)}</strong></div><div className="mobile-card__row"><span>良率 / 报废率</span><strong>{(row.yieldBps/100).toFixed(2)}% / {(row.scrapRateBps/100).toFixed(2)}%</strong></div></>}{tab==='capacity' && <><div className="mobile-card__row"><span>日期</span><strong>{row.planned_date || '—'}</strong></div><div className="mobile-card__row"><span>能力 / 计划 / 实际</span><strong>{row.daily_capacity_minutes} / {row.planned_minutes} / {row.actual_minutes} 分钟</strong></div><div className="mobile-card__row"><span>负荷</span><strong>{row.overloaded ? '超负荷' : '正常'}</strong></div></>}{tab==='cost' && <><div className="mobile-card__row"><span>标准总成本</span><strong>{money(row.baseline?.standard_total_cents || 0)}</strong></div><div className="mobile-card__row"><span>实际/暂估总成本</span><strong>{row.totalCostCents == null ? '证据不完整' : money(row.totalCostCents)}</strong></div><div className="mobile-card__row"><span>成本证据</span><strong>{row.materialQuality}</strong></div></>}</article>)}</div>
+    {!data.length && <Empty text="暂无生产分析数据"/>}
+  </Panel>;
 }
 
 // ============ Material Issues ============

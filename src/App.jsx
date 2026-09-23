@@ -5,7 +5,7 @@ import { Accounting } from './pages/accounting.jsx';
 import DecisionReports, { canViewDecisionReport } from './pages/decision-reports.jsx';
 import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
 import { Collections, Payables, Payments, Receivables } from './pages/settlement.jsx';
-import { Boms, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
+import { Boms, ManufacturingAnalytics, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
 import { IQCInspections, OQCInspections, QualityControlPoints } from './pages/quality.jsx';
@@ -97,6 +97,7 @@ export const navGroups = [
     { key: 'production-orders', label: '制令单', icon: ic.productionOrders, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE'] },
     { key: 'material-issues', label: '用料出库', icon: ic.salesDeliveries, any: ['PRODUCTION_MATERIAL_ISSUE_MANAGE'] },
     { key: 'production-receipts', label: '生产入库', icon: ic.purchaseReceipts, any: ['PRODUCTION_RECEIPT_MANAGE'] },
+    { key: 'manufacturing-analytics', label: '生产执行分析', icon: ic.reports, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_COSTS_VIEW'] },
   ]},
   { label: '计划与生产', items: [
     { key: 'forecasts', label: '需求预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
@@ -253,6 +254,7 @@ export default function App() {
     'production-orders': <ProductionOrders user={user} notify={notify}/>,
     'material-issues': <MaterialIssues user={user} notify={notify}/>,
     'production-receipts': <ProductionReceipts user={user} notify={notify}/>,
+    'manufacturing-analytics': <ManufacturingAnalytics user={user} notify={notify}/>,
     users: <UsersRoles user={user} notify={notify}/>,
     'data-cleanup': <DataCleanup user={user} notify={notify}/>
   };

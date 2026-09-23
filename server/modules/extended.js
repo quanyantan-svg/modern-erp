@@ -752,16 +752,22 @@ export async function createWorkCenter(db, req, res, actor) {
   const body = await readJson(req);
   const now = new Date().toISOString();
   const wcId = id();
-  db.prepare("INSERT INTO work_centers(id,code,name,type,capacity_hours,efficiency,unit_cost_cents,created_at) VALUES(?,?,?,?,?,?,?,?)")
-    .run(wcId, body.code, body.name, body.type || "ASSEMBLY", body.capacity_hours || 8, body.efficiency || 100, body.unit_cost_cents || 0, now);
+  const capacity = Math.max(0, Math.round(Number(body.dailyCapacityMinutes ?? body.daily_capacity_minutes ?? (Number(body.capacity_hours || 8) * 60))));
+  const laborRate = Math.max(0, Math.round(Number(body.laborRateCentsPerHour ?? body.labor_rate_cents_per_hour ?? 0)));
+  const overheadRate = Math.max(0, Math.round(Number(body.overheadRateCentsPerHour ?? body.overhead_rate_cents_per_hour ?? 0)));
+  db.prepare("INSERT INTO work_centers(id,code,name,type,capacity_hours,efficiency,unit_cost_cents,daily_capacity_minutes,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(wcId, body.code, body.name, body.type || "ASSEMBLY", capacity / 60, body.efficiency || 100, body.unit_cost_cents || 0, capacity, laborRate, overheadRate, now);
+  audit(db, actor.id, 'CREATE', 'WORK_CENTER', wcId, `${body.code} 能力 ${capacity} 分钟`);
   return send(res, 201, { id: wcId });
 }
 
 export async function updateWorkCenter(db, req, res, actor, wcId) {
   allow(actor, "WORK_CENTERS_MANAGE");
   const body = await readJson(req);
-  db.prepare("UPDATE work_centers SET name=?,type=?,capacity_hours=?,efficiency=?,unit_cost_cents=?,active=? WHERE id=?")
-    .run(body.name, body.type || "ASSEMBLY", body.capacity_hours || 8, body.efficiency || 100, body.unit_cost_cents || 0, body.active ? 1 : 0, wcId);
+  const capacity = Math.max(0, Math.round(Number(body.dailyCapacityMinutes ?? body.daily_capacity_minutes ?? (Number(body.capacity_hours || 8) * 60))));
+  db.prepare("UPDATE work_centers SET name=?,type=?,capacity_hours=?,efficiency=?,unit_cost_cents=?,daily_capacity_minutes=?,labor_rate_cents_per_hour=?,overhead_rate_cents_per_hour=?,active=? WHERE id=?")
+    .run(body.name, body.type || "ASSEMBLY", capacity / 60, body.efficiency || 100, body.unit_cost_cents || 0, capacity, Math.max(0, Math.round(Number(body.laborRateCentsPerHour ?? body.labor_rate_cents_per_hour ?? 0))), Math.max(0, Math.round(Number(body.overheadRateCentsPerHour ?? body.overhead_rate_cents_per_hour ?? 0))), body.active ? 1 : 0, wcId);
+  audit(db, actor.id, 'UPDATE', 'WORK_CENTER', wcId, `能力 ${capacity} 分钟及费率更新`);
   return send(res, 200, { ok: true });
 }
 
