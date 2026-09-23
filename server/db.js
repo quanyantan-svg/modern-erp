@@ -11,6 +11,7 @@ import { migrateV13Phase1Contracts } from './migrations/v13-phase1-contracts.js'
 import { migrateV13Phase2SourceIntegrity } from './migrations/v13-phase2-source-integrity.js';
 import { migrateV13Phase3QualityGates } from './migrations/v13-phase3-quality-gates.js';
 import { migrateV13Phase4ProductionIntegrity } from './migrations/v13-phase4-production-integrity.js';
+import { migrateV13Phase5SettlementIntegrity } from './migrations/v13-phase5-settlement-integrity.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -339,6 +340,7 @@ export function createDatabase(filename) {
   migrateV13Phase3QualityGates(db);
   migrateProductionDocuments(db);
   migrateV13Phase4ProductionIntegrity(db);
+  migrateV13Phase5SettlementIntegrity(db);
   reconcileSettlementSubledgers(db);
 
   return db;

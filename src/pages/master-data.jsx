@@ -92,15 +92,15 @@ export function Suppliers({ user, notify }) {
   return <Panel title="供应商资料">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索供应商编码、名称或联系人" action={can(user, 'SUPPLIERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增供应商</button>}
     />
-    <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <MasterActions item={item} label="供应商" endpoint="/api/suppliers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <MasterActions item={item} label="供应商" endpoint="/api/suppliers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到供应商资料"/>}</div>
     {editing && <SupplierModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('供应商资料已保存'); }} notify={notify}/>} 
   </Panel>;
 }
 
 function SupplierModal({ value, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', email: '', active: true, ...value });
+  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', email: '', paymentTermsDays: 0, active: true, ...value });
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/suppliers/${value.id}` : '/api/suppliers', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? '编辑供应商' : '新增供应商'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>供应商编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 SUP-003" required/></label>
@@ -109,6 +109,7 @@ function SupplierModal({ value, onClose, onSaved, notify }) {
     <label>联系电话<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}/></label>
     <label className="full">联系地址<input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })}/></label>
     <label className="full">电子邮箱<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.cn"/></label>
+    <label>付款条款天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })}/></label>
     {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该供应商</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
@@ -121,15 +122,15 @@ export function Customers({ user, notify }) {
   useEffect(() => { void load(); }, []);
   return <Panel title="客户资料">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty title="还没有客户" text="创建客户后，就可以建立销售订单。"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
   </Panel>;
 }
 
 function CustomerModal({ value, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', active: true, ...value });
+  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', paymentTermsDays: 0, active: true, ...value });
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/customers/${value.id}` : '/api/customers', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? '编辑客户' : '新增客户'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>客户编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 CUS-003" required/></label>
@@ -137,6 +138,7 @@ function CustomerModal({ value, onClose, onSaved, notify }) {
     <label>联系人<input value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })}/></label>
     <label>联系电话<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}/></label>
     <label className="full">联系地址<input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })}/></label>
+    <label>付款条款天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })}/></label>
     {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该客户</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
@@ -199,7 +201,7 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
   // customer master provides defaults for the snapshot fields.
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
-    customerId: '', orderDate: today, requestedDeliveryDate: '', paymentTerms: '',
+    customerId: '', orderDate: today, requestedDeliveryDate: '', paymentTerms: '', paymentTermsDays: 0,
     shipToContactName: '', shipToPhone: '', shipToAddress: '',
     remark: '', items: [{ productId: '', quantity: 1, price: '' }],
   });
@@ -212,6 +214,7 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
           orderDate: detail.order.orderDate || today,
           requestedDeliveryDate: detail.order.requestedDeliveryDate || '',
           paymentTerms: detail.order.paymentTerms || '',
+          paymentTermsDays: detail.order.paymentTermsDays ?? 0,
           shipToContactName: detail.order.shipToContactName || '',
           shipToPhone: detail.order.shipToPhone || '',
           shipToAddress: detail.order.shipToAddress || '',
@@ -232,6 +235,7 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
       shipToContactName: current.shipToContactName || customer?.contact || '',
       shipToPhone: current.shipToPhone || customer?.phone || '',
       shipToAddress: current.shipToAddress || customer?.address || '',
+      paymentTermsDays: customer?.paymentTermsDays ?? 0,
     }));
   }
   const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
@@ -257,6 +261,7 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
         <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
         <label>要求交期<input type="date" value={form.requestedDeliveryDate} onChange={(e) => setForm({ ...form, requestedDeliveryDate: e.target.value })} required/></label>
         <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>账期天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })} required/></label>
         <label>收货联系人<input value={form.shipToContactName} onChange={(e) => setForm({ ...form, shipToContactName: e.target.value })} maxLength={50}/></label>
         <label>收货电话<input value={form.shipToPhone} onChange={(e) => setForm({ ...form, shipToPhone: e.target.value })} maxLength={30}/></label>
         <label className="full">收货地址<input value={form.shipToAddress} onChange={(e) => setForm({ ...form, shipToAddress: e.target.value })} maxLength={200}/></label>
@@ -395,7 +400,7 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
   // supplier master provides defaults for the snapshot fields.
   const today = new Date().toISOString().slice(0, 10);
   const [form, setForm] = useState({
-    supplierId: '', orderDate: today, expectedDeliveryDate: '', paymentTerms: '',
+    supplierId: '', orderDate: today, expectedDeliveryDate: '', paymentTerms: '', paymentTermsDays: 0,
     supplierContactName: '', supplierContactPhone: '', supplierAddress: '',
     remark: '', items: [{ productId: '', quantity: 1, price: '' }],
   });
@@ -408,6 +413,7 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
           orderDate: detail.order.orderDate || today,
           expectedDeliveryDate: detail.order.expectedDeliveryDate || '',
           paymentTerms: detail.order.paymentTerms || '',
+          paymentTermsDays: detail.order.paymentTermsDays ?? 0,
           supplierContactName: detail.order.supplierContactName || '',
           supplierContactPhone: detail.order.supplierContactPhone || '',
           supplierAddress: detail.order.supplierAddress || '',
@@ -425,6 +431,7 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
       supplierContactName: current.supplierContactName || supplier?.contact || '',
       supplierContactPhone: current.supplierContactPhone || supplier?.phone || '',
       supplierAddress: current.supplierAddress || supplier?.address || '',
+      paymentTermsDays: supplier?.paymentTermsDays ?? 0,
     }));
   }
   const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
@@ -450,6 +457,7 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
         <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
         <label>预计交期<input type="date" value={form.expectedDeliveryDate} onChange={(e) => setForm({ ...form, expectedDeliveryDate: e.target.value })} required/></label>
         <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>账期天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })} required/></label>
         <label>供应商联系人<input value={form.supplierContactName} onChange={(e) => setForm({ ...form, supplierContactName: e.target.value })} maxLength={50}/></label>
         <label>供应商电话<input value={form.supplierContactPhone} onChange={(e) => setForm({ ...form, supplierContactPhone: e.target.value })} maxLength={30}/></label>
         <label className="full">供应商地址<input value={form.supplierAddress} onChange={(e) => setForm({ ...form, supplierAddress: e.target.value })} maxLength={200}/></label>

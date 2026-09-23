@@ -38,7 +38,7 @@
 //   existing discount are rejected with 409.
 
 import { id as genId, transaction } from '../db.js';
-import { ensureReceivableSource, ensurePayableSource } from './settlement-core.js';
+import { applyCreditAdjustment, reverseCreditAdjustment } from './settlement-core.js';
 import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
@@ -90,7 +90,7 @@ function fetchSalesDiscountHeader(db, discountId) {
 }
 
 function fetchSourceReceivable(db, discount) {
-  return db.prepare(`SELECT id, voucher_no documentNo, customer_id customerId, amount_cents amountCents, adjustment_cents adjustmentCents, paid_cents paidCents, write_off_cents writeOffCents, status, source_type sourceType, source_id sourceId, business_date businessDate FROM account_receivables WHERE id = ?`).get(discount.source_receivable_id);
+  return db.prepare(`SELECT id, voucher_no documentNo, customer_id customerId, amount_cents amountCents, adjustment_cents adjustmentCents, paid_cents paidCents, write_off_cents writeOffCents, open_amount_cents openAmountCents, due_date dueDate, status, source_type sourceType, source_id sourceId, source_no sourceNo, business_date businessDate FROM account_receivables WHERE id = ?`).get(discount.source_receivable_id);
 }
 
 function computeSourceCapacity(db, receivable) {
@@ -100,9 +100,7 @@ function computeSourceCapacity(db, receivable) {
   // original sales_delivery (for SALES_DELIVERY) or the return id
   // (for SALES_RETURN). For SALES_RETURN rows, the source_id is
   // the return id; the linked delivery_id lives on return_orders.
-  const linkedReturnCents = Number(db.prepare(`SELECT COALESCE(SUM(ABS(amount_cents)),0) n FROM account_receivables WHERE source_type='SALES_RETURN' AND source_id IN (SELECT id FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)))`).get(receivable.source_id, receivable.source_id).n);
-  const discountCents = Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM sales_discounts WHERE source_receivable_id=? AND status='CONFIRMED'`).get(receivable.id).n);
-  return linkedReturnCents + discountCents;
+  return Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM financial_credit_adjustments WHERE side='AR' AND target_open_item_id=? AND status='CONFIRMED'`).get(receivable.id).n);
 }
 
 export function listSalesDiscounts(db, res, actor, url) {
@@ -112,9 +110,12 @@ export function listSalesDiscounts(db, res, actor, url) {
     SELECT d.id, d.discount_no discountNo, d.status, d.business_date businessDate,
            d.amount_cents amountCents, d.reason, d.notes, d.created_at createdAt,
            d.confirmed_at confirmedAt, c.code customerCode, c.name customerName,
-           creator.display_name creatorName
+           creator.display_name creatorName, ar.source_no sourceNo, ar.business_date sourceDate,
+           ar.due_date dueDate, ar.amount_cents originalCents, ar.open_amount_cents openCents,fc.status creditStatus
       FROM sales_discounts d
       JOIN customers c ON c.id = d.customer_id
+      JOIN account_receivables ar ON ar.id=d.source_receivable_id
+      LEFT JOIN financial_credit_adjustments fc ON fc.side='AR' AND fc.source_type='SALES_DISCOUNT' AND fc.source_id=d.id
      JOIN users creator ON creator.id = d.creator_id
      ${archiveFilter.clause ? `WHERE ${archiveFilter.clause}` : ''}
      ORDER BY d.created_at DESC
@@ -134,7 +135,10 @@ export function getSalesDiscount(db, res, actor, discountId) {
   const source = fetchSourceReceivable(db, header);
   const usedCents = computeSourceCapacity(db, source);
   const remainingCapacityCents = Math.max(0, Number(source.amountCents) - usedCents);
-  const customerNet = db.prepare(`SELECT COALESCE(SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents),0) n FROM account_receivables WHERE customer_id=?`).get(header.customer_id).n;
+  const customerOpen = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' THEN open_amount_cents ELSE MAX(0,amount_cents+adjustment_cents-paid_cents-write_off_cents) END),0) n FROM account_receivables WHERE customer_id=?`).get(header.customer_id).n);
+  const customerCredit = Number(db.prepare("SELECT COALESCE(SUM(unapplied_cents),0) n FROM financial_credit_adjustments WHERE side='AR' AND party_id=? AND status='CONFIRMED'").get(header.customer_id).n);
+  const customerNet = customerOpen - customerCredit;
+  const credit = db.prepare("SELECT applied_cents appliedCents,unapplied_cents unappliedCents,status,reversal_date reversalDate,reversal_reason reversalReason FROM financial_credit_adjustments WHERE side='AR' AND source_type='SALES_DISCOUNT' AND source_id=?").get(discountId);
   return send(res, 200, {
     salesDiscount: {
       ...header,
@@ -145,7 +149,7 @@ export function getSalesDiscount(db, res, actor, discountId) {
         documentNo: source.documentNo,
         businessDate: source.businessDate,
         amountCents: Number(source.amountCents),
-        outstandingCents: Math.max(0, source.amountCents + source.adjustmentCents - source.paidCents - source.writeOffCents),
+        outstandingCents: Number(source.openAmountCents),
         creditCents: Math.max(0, -(source.amountCents + source.adjustmentCents - source.paidCents - source.writeOffCents)),
       } : null,
       sourceCapacity: {
@@ -154,6 +158,7 @@ export function getSalesDiscount(db, res, actor, discountId) {
         remainingCents: remainingCapacityCents,
       },
       customerNetCents: customerNet,
+      credit,
     },
   });
 }
@@ -166,7 +171,7 @@ export async function createSalesDiscount(db, req, res, actor) {
     throw new HttpError(400, '客户无效');
   }
   const sourceId = requiredText(body.sourceReceivableId ?? body.source_receivable_id, '来源应收', 100);
-  const source = db.prepare(`SELECT id, customer_id, amount_cents, adjustment_cents, paid_cents, write_off_cents FROM account_receivables WHERE id=?`).get(sourceId);
+  const source = db.prepare(`SELECT id, customer_id, amount_cents, adjustment_cents, paid_cents, write_off_cents FROM account_receivables WHERE id=? AND item_class='SOURCE'`).get(sourceId);
   if (!source) throw new HttpError(400, '来源应收不存在');
   if (source.customer_id !== customerId) throw new HttpError(400, '来源应收必须属于同一客户');
   if (Number(source.amount_cents) <= 0) throw new HttpError(400, '来源应收必须为正数应收');
@@ -199,7 +204,7 @@ export async function updateSalesDiscount(db, req, res, actor, discountId) {
     throw new HttpError(400, '客户无效');
   }
   const sourceId = requiredText(body.sourceReceivableId ?? body.source_receivable_id, '来源应收', 100);
-  const source = db.prepare(`SELECT id, customer_id, amount_cents FROM account_receivables WHERE id=?`).get(sourceId);
+  const source = db.prepare(`SELECT id, customer_id, amount_cents FROM account_receivables WHERE id=? AND item_class='SOURCE'`).get(sourceId);
   if (!source) throw new HttpError(400, '来源应收不存在');
   if (source.customer_id !== customerId) throw new HttpError(400, '来源应收必须属于同一客户');
   if (Number(source.amount_cents) <= 0) throw new HttpError(400, '来源应收必须为正数应收');
@@ -228,7 +233,7 @@ export function confirmSalesDiscount(db, res, actor, discountId, generateVoucher
     if (!discount) throw new HttpError(404, '销售折让单不存在');
     if (discount.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的销售折让单可以确认');
 
-    const source = db.prepare(`SELECT id, source_type, source_id, customer_id, amount_cents, adjustment_cents, paid_cents, write_off_cents FROM account_receivables WHERE id=?`).get(discount.source_receivable_id);
+    const source = db.prepare(`SELECT id, source_type, source_id, customer_id, amount_cents, adjustment_cents, paid_cents, write_off_cents FROM account_receivables WHERE id=? AND item_class='SOURCE'`).get(discount.source_receivable_id);
     if (!source) throw new HttpError(400, '来源应收不存在');
     if (source.customer_id !== discount.customer_id) throw new HttpError(409, '来源应收必须属于同一客户');
     if (Number(source.amount_cents) <= 0) throw new HttpError(409, '来源应收必须为正数应收');
@@ -244,16 +249,10 @@ export function confirmSalesDiscount(db, res, actor, discountId, generateVoucher
     // Closed period guard.
     checkPeriodNotClosedForVoucher(db, discount.business_date, '生成业务');
 
-    // Create negative AR adjustment row.
-    ensureReceivableSource(db, {
-      id: discountId,
-      sourceType: 'SALES_DISCOUNT',
-      sourceNo: discount.discount_no,
-      partyId: discount.customer_id,
-      businessDate: discount.business_date,
-      effectCents: -Number(discount.amount_cents),
-      creatorId: discount.creator_id,
-      createdAt: now,
+    applyCreditAdjustment(db, {
+      side: 'AR', adjustmentType: 'DISCOUNT', sourceType: 'SALES_DISCOUNT', sourceId: discountId,
+      sourceNo: discount.discount_no, targetOpenItemId: source.id, partyId: discount.customer_id,
+      businessDate: discount.business_date, amountCents: Number(discount.amount_cents), actorId: actor.id, createdAt: now,
     });
 
     // Canonical reversal voucher — Dr 6001 / Cr 1122, identical to
@@ -303,15 +302,13 @@ function fetchPurchaseDiscountHeader(db, discountId) {
 }
 
 function fetchSourcePayable(db, discount) {
-  return db.prepare(`SELECT id, voucher_no documentNo, supplier_id supplierId, amount_cents amountCents, adjustment_cents adjustmentCents, paid_cents paidCents, write_off_cents writeOffCents, status, source_type sourceType, source_id sourceId, business_date businessDate FROM account_payables WHERE id = ?`).get(discount.source_payable_id);
+  return db.prepare(`SELECT id, voucher_no documentNo, supplier_id supplierId, amount_cents amountCents, adjustment_cents adjustmentCents, paid_cents paidCents, write_off_cents writeOffCents, open_amount_cents openAmountCents, due_date dueDate, status, source_type sourceType, source_id sourceId, source_no sourceNo, business_date businessDate FROM account_payables WHERE id = ?`).get(discount.source_payable_id);
 }
 
 function computePurchaseSourceCapacity(db, payable) {
   // Sum of PURCHASE_RETURN + PURCHASE_DISCOUNT reductions linked to
   // the same source AP row.
-  const returnCents = Number(db.prepare(`SELECT COALESCE(SUM(ABS(amount_cents)),0) n FROM account_payables WHERE source_type='PURCHASE_RETURN' AND source_id IN (SELECT id FROM purchase_returns WHERE receipt_id=? OR (receipt_id IS NULL AND source_id=?))`).get(payable.source_id, payable.source_id).n);
-  const discountCents = Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM purchase_discounts WHERE source_payable_id=? AND status='CONFIRMED'`).get(payable.id).n);
-  return returnCents + discountCents;
+  return Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM financial_credit_adjustments WHERE side='AP' AND target_open_item_id=? AND status='CONFIRMED'`).get(payable.id).n);
 }
 
 export function listPurchaseDiscounts(db, res, actor, url) {
@@ -321,9 +318,12 @@ export function listPurchaseDiscounts(db, res, actor, url) {
     SELECT d.id, d.discount_no discountNo, d.status, d.business_date businessDate,
            d.amount_cents amountCents, d.reason, d.notes, d.created_at createdAt,
            d.confirmed_at confirmedAt, s.code supplierCode, s.name supplierName,
-           creator.display_name creatorName
+           creator.display_name creatorName, ap.source_no sourceNo, ap.business_date sourceDate,
+           ap.due_date dueDate, ap.amount_cents originalCents, ap.open_amount_cents openCents,fc.status creditStatus
       FROM purchase_discounts d
       JOIN suppliers s ON s.id = d.supplier_id
+      JOIN account_payables ap ON ap.id=d.source_payable_id
+      LEFT JOIN financial_credit_adjustments fc ON fc.side='AP' AND fc.source_type='PURCHASE_DISCOUNT' AND fc.source_id=d.id
      JOIN users creator ON creator.id = d.creator_id
      ${archiveFilter.clause ? `WHERE ${archiveFilter.clause}` : ''}
      ORDER BY d.created_at DESC
@@ -343,7 +343,10 @@ export function getPurchaseDiscount(db, res, actor, discountId) {
   const source = fetchSourcePayable(db, header);
   const usedCents = source ? computePurchaseSourceCapacity(db, source) : 0;
   const remainingCapacityCents = source ? Math.max(0, Number(source.amountCents) - usedCents) : 0;
-  const supplierNet = db.prepare(`SELECT COALESCE(SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents),0) n FROM account_payables WHERE supplier_id=?`).get(header.supplier_id).n;
+  const supplierOpen = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN item_class='SOURCE' THEN open_amount_cents ELSE MAX(0,amount_cents+adjustment_cents-paid_cents-write_off_cents) END),0) n FROM account_payables WHERE supplier_id=?`).get(header.supplier_id).n);
+  const supplierCredit = Number(db.prepare("SELECT COALESCE(SUM(unapplied_cents),0) n FROM financial_credit_adjustments WHERE side='AP' AND party_id=? AND status='CONFIRMED'").get(header.supplier_id).n);
+  const supplierNet = supplierOpen - supplierCredit;
+  const credit = db.prepare("SELECT applied_cents appliedCents,unapplied_cents unappliedCents,status,reversal_date reversalDate,reversal_reason reversalReason FROM financial_credit_adjustments WHERE side='AP' AND source_type='PURCHASE_DISCOUNT' AND source_id=?").get(discountId);
   return send(res, 200, {
     purchaseDiscount: {
       ...header,
@@ -354,7 +357,7 @@ export function getPurchaseDiscount(db, res, actor, discountId) {
         documentNo: source.documentNo,
         businessDate: source.businessDate,
         amountCents: Number(source.amountCents),
-        outstandingCents: Math.max(0, source.amountCents + source.adjustmentCents - source.paidCents - source.writeOffCents),
+        outstandingCents: Number(source.openAmountCents),
         creditCents: Math.max(0, -(source.amountCents + source.adjustmentCents - source.paidCents - source.writeOffCents)),
       } : null,
       sourceCapacity: {
@@ -363,6 +366,7 @@ export function getPurchaseDiscount(db, res, actor, discountId) {
         remainingCents: remainingCapacityCents,
       },
       supplierNetCents: supplierNet,
+      credit,
     },
   });
 }
@@ -375,7 +379,7 @@ export async function createPurchaseDiscount(db, req, res, actor) {
     throw new HttpError(400, '供应商无效');
   }
   const sourceId = requiredText(body.sourcePayableId ?? body.source_payable_id, '来源应付', 100);
-  const source = db.prepare(`SELECT id, supplier_id, amount_cents FROM account_payables WHERE id=?`).get(sourceId);
+  const source = db.prepare(`SELECT id, supplier_id, amount_cents FROM account_payables WHERE id=? AND item_class='SOURCE'`).get(sourceId);
   if (!source) throw new HttpError(400, '来源应付不存在');
   if (source.supplier_id !== supplierId) throw new HttpError(400, '来源应付必须属于同一供应商');
   if (Number(source.amount_cents) <= 0) throw new HttpError(400, '来源应付必须为正数应付');
@@ -408,7 +412,7 @@ export async function updatePurchaseDiscount(db, req, res, actor, discountId) {
     throw new HttpError(400, '供应商无效');
   }
   const sourceId = requiredText(body.sourcePayableId ?? body.source_payable_id, '来源应付', 100);
-  const source = db.prepare(`SELECT id, supplier_id, amount_cents FROM account_payables WHERE id=?`).get(sourceId);
+  const source = db.prepare(`SELECT id, supplier_id, amount_cents FROM account_payables WHERE id=? AND item_class='SOURCE'`).get(sourceId);
   if (!source) throw new HttpError(400, '来源应付不存在');
   if (source.supplier_id !== supplierId) throw new HttpError(400, '来源应付必须属于同一供应商');
   if (Number(source.amount_cents) <= 0) throw new HttpError(400, '来源应付必须为正数应付');
@@ -437,7 +441,7 @@ export function confirmPurchaseDiscount(db, res, actor, discountId, generateVouc
     if (!discount) throw new HttpError(404, '采购折让单不存在');
     if (discount.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的采购折让单可以确认');
 
-    const source = db.prepare(`SELECT id, source_type, source_id, supplier_id, amount_cents FROM account_payables WHERE id=?`).get(discount.source_payable_id);
+    const source = db.prepare(`SELECT id, source_type, source_id, supplier_id, amount_cents FROM account_payables WHERE id=? AND item_class='SOURCE'`).get(discount.source_payable_id);
     if (!source) throw new HttpError(400, '来源应付不存在');
     if (source.supplier_id !== discount.supplier_id) throw new HttpError(409, '来源应付必须属于同一供应商');
     if (Number(source.amount_cents) <= 0) throw new HttpError(409, '来源应付必须为正数应付');
@@ -449,15 +453,10 @@ export function confirmPurchaseDiscount(db, res, actor, discountId, generateVouc
 
     checkPeriodNotClosedForVoucher(db, discount.business_date, '生成业务');
 
-    ensurePayableSource(db, {
-      id: discountId,
-      sourceType: 'PURCHASE_DISCOUNT',
-      sourceNo: discount.discount_no,
-      partyId: discount.supplier_id,
-      businessDate: discount.business_date,
-      effectCents: -Number(discount.amount_cents),
-      creatorId: discount.creator_id,
-      createdAt: now,
+    applyCreditAdjustment(db, {
+      side: 'AP', adjustmentType: 'DISCOUNT', sourceType: 'PURCHASE_DISCOUNT', sourceId: discountId,
+      sourceNo: discount.discount_no, targetOpenItemId: source.id, partyId: discount.supplier_id,
+      businessDate: discount.business_date, amountCents: Number(discount.amount_cents), actorId: actor.id, createdAt: now,
     });
 
     // Canonical reversal voucher — Dr 2202 / Cr 1405, identical to
@@ -487,4 +486,38 @@ export function cancelPurchaseDiscount(db, res, actor, discountId) {
     audit(db, actor.id, 'CANCEL', 'PURCHASE_DISCOUNT', discountId, `取消采购折让 ${discount.discount_no}`);
   });
   return send(res, 200, { ok: true, status: 'CANCELLED' });
+}
+
+async function reverseDiscount(db, req, res, actor, side, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+  const sales = side === 'AR';
+  allow(actor, sales ? 'SALES_DISCOUNT_MANAGE' : 'PURCHASE_DISCOUNT_MANAGE');
+  const table = sales ? 'sales_discounts' : 'purchase_discounts';
+  const sourceType = sales ? 'SALES_DISCOUNT' : 'PURCHASE_DISCOUNT';
+  const body = await readJson(req);
+  const reversalDate = readBusinessDate(body.businessDate ?? body.business_date, nowIso().slice(0, 10));
+  const reason = requiredText(body.reason, '冲销原因', MAX_REASON);
+  checkPeriodNotClosedForVoucher(db, reversalDate, '生成折让冲销');
+  transaction(db, () => {
+    const discount = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(discountId);
+    if (!discount) throw new HttpError(404, sales ? '销售折让单不存在' : '采购折让单不存在');
+    if (discount.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认折让可以冲销');
+    let credit;
+    try { credit = reverseCreditAdjustment(db, side, sourceType, discountId, actor.id, reversalDate, reason); }
+    catch (error) { throw new HttpError(409, error.message); }
+    const originalVoucher = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sourceType, discountId);
+    if (!originalVoucher) throw new HttpError(409, '折让原始凭证不存在');
+    const entries = db.prepare('SELECT subject_id subjectId,direction,amount_cents amountCents,summary FROM accounting_entries WHERE voucher_id=?').all(originalVoucher.id)
+      .map((entry) => ({ ...entry, direction: entry.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT', summary: `${entry.summary} 冲销` }));
+    generateVoucher(db, `${sourceType}_REVERSAL`, discountId, entries, actor, reversalDate);
+    audit(db, actor.id, 'REVERSE', sourceType, discountId, `${sales ? '销售' : '采购'}折让冲销 ${credit.amount_cents} 分：${reason}`);
+  });
+  return send(res, 200, { ok: true, status: 'REVERSED' });
+}
+
+export function reverseSalesDiscount(db, req, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+  return reverseDiscount(db, req, res, actor, 'AR', discountId, generateVoucher, checkPeriodNotClosedForVoucher);
+}
+
+export function reversePurchaseDiscount(db, req, res, actor, discountId, generateVoucher, checkPeriodNotClosedForVoucher) {
+  return reverseDiscount(db, req, res, actor, 'AP', discountId, generateVoucher, checkPeriodNotClosedForVoucher);
 }

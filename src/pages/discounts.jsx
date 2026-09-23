@@ -34,13 +34,13 @@ async function fetchSuppliers(notify) {
 }
 async function fetchReceivablesForCustomer(customerId) {
   if (!customerId) return [];
-  const r = await api(`/api/accounts-receivable?customer=${encodeURIComponent(customerId)}&status=PENDING`);
-  return (r.receivables || []).filter((row) => Number(row.amountCents) > 0);
+  const r = await api(`/api/accounts-receivable?customer=${encodeURIComponent(customerId)}`);
+  return (r.receivables || []).filter((row) => Number(row.amountCents) > 0 && Number(row.outstandingCents) > 0);
 }
 async function fetchPayablesForSupplier(supplierId) {
   if (!supplierId) return [];
-  const r = await api(`/api/accounts-payable?supplier=${encodeURIComponent(supplierId)}&status=PENDING`);
-  return (r.payables || []).filter((row) => Number(row.amountCents) > 0);
+  const r = await api(`/api/accounts-payable?supplier=${encodeURIComponent(supplierId)}`);
+  return (r.payables || []).filter((row) => Number(row.amountCents) > 0 && Number(row.outstandingCents) > 0);
 }
 
 // =====================================================================
@@ -59,8 +59,9 @@ export function SalesDiscounts({ user, notify }) {
 
   async function changeState(row, action) {
     try {
-      await api(`/api/sales-discounts/${row.id}/${action}`, { method: 'POST', body: {} });
-      notify(action === 'confirm' ? '销售折让已确认' : '销售折让已取消');
+      const body = action === 'reverse' ? { businessDate: today(), reason: window.prompt('请输入折让冲销原因') || '' } : {};
+      await api(`/api/sales-discounts/${row.id}/${action}`, { method: 'POST', body });
+      notify(action === 'confirm' ? '销售折让已确认' : action === 'reverse' ? '销售折让已冲销' : '销售折让已取消');
       setViewing(null);
       await reload();
     } catch (error) { notify(error.message, 'error'); }
@@ -73,9 +74,9 @@ export function SalesDiscounts({ user, notify }) {
       <thead><tr><th>折让单号</th><th>状态</th><th>客户</th><th>来源应收</th><th>业务日期</th><th className="number">折让金额</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead>
       <tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
         <td className="mono">{row.discountNo}</td>
-        <td><Status status={row.status} label={SALES_STATUS_LABEL[row.status] || row.status}/></td>
+        <td><Status status={row.creditStatus === 'REVERSED' ? 'CANCELLED' : row.status} label={row.creditStatus === 'REVERSED' ? '已冲销' : SALES_STATUS_LABEL[row.status] || row.status}/></td>
         <td>{row.customerName}</td>
-        <td className="mono">{row.reason || '—'}</td>
+        <td><span className="mono">{row.sourceNo}</span><small className="block">{row.sourceDate} · 到期 {row.dueDate || '—'} · 未结 {money(row.openCents)}</small></td>
         <td>{row.businessDate}</td>
         <td className="number">{money(row.amountCents)}</td>
         <td>{row.reason || '—'}</td>
@@ -133,7 +134,7 @@ function SalesDiscountModal({ value, notify, onClose, onSaved }) {
         <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
         <label className="full">来源应收<select value={form.sourceReceivableId} onChange={(e) => setForm({ ...form, sourceReceivableId: e.target.value })} required disabled={!form.customerId}>
           <option value="">{form.customerId ? '请选择来源应收' : '请先选择客户'}</option>
-          {receivables.map((r) => <option key={r.id} value={r.id}>{r.documentNo} · {r.businessDate} · ¥{(r.amountCents / 100).toFixed(2)}</option>)}
+          {receivables.map((r) => <option key={r.id} value={r.id}>{r.source_no} · {r.businessDate} / 到期 {r.dueDate || '—'} · 原额 {money(r.originalCents)} · 未结 {money(r.outstandingCents)}</option>)}
         </select></label>
         {selectedSource && <div className="full detail-grid" style={{ marginBottom: 8 }}>
           <div><span>原应收金额</span><strong>¥{(Number(selectedSource.amountCents) / 100).toFixed(2)}</strong></div>
@@ -182,7 +183,9 @@ function SalesDiscountDetail({ value, onClose, onEdit, onAction }) {
       <button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消折让</button>
       <button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认折让</button>
     </div>}
-    {value.status === 'CONFIRMED' && canViewReceivables && <p className="section-hint">折让已生成应收调整，可在<strong> 应收账款 </strong>按客户查询。</p>}
+    {value.status === 'CONFIRMED' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button>{value.credit?.status !== 'REVERSED' && <button type="button" className="danger-button" onClick={() => onAction(value, 'reverse')}>冲销折让</button>}</div>}
+    {value.credit?.status === 'REVERSED' && <p className="section-hint">已于 {value.credit.reversalDate} 冲销：{value.credit.reversalReason}</p>}
+    {value.status === 'CONFIRMED' && canViewReceivables && <p className="section-hint">折让已链接至来源应收，可在<strong> 应收账款 </strong>查看调整明细。</p>}
     {value.status === 'CANCELLED' && <p className="section-hint">已取消的销售折让未对应收账款或凭证产生任何影响。</p>}
   </Modal>;
 }
@@ -203,8 +206,9 @@ export function PurchaseDiscounts({ user, notify }) {
 
   async function changeState(row, action) {
     try {
-      await api(`/api/purchase-discounts/${row.id}/${action}`, { method: 'POST', body: {} });
-      notify(action === 'confirm' ? '采购折让已确认' : '采购折让已取消');
+      const body = action === 'reverse' ? { businessDate: today(), reason: window.prompt('请输入折让冲销原因') || '' } : {};
+      await api(`/api/purchase-discounts/${row.id}/${action}`, { method: 'POST', body });
+      notify(action === 'confirm' ? '采购折让已确认' : action === 'reverse' ? '采购折让已冲销' : '采购折让已取消');
       setViewing(null);
       await reload();
     } catch (error) { notify(error.message, 'error'); }
@@ -217,9 +221,9 @@ export function PurchaseDiscounts({ user, notify }) {
       <thead><tr><th>折让单号</th><th>状态</th><th>供应商</th><th>来源应付</th><th>业务日期</th><th className="number">折让金额</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead>
       <tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
         <td className="mono">{row.discountNo}</td>
-        <td><Status status={row.status} label={PURCHASE_STATUS_LABEL[row.status] || row.status}/></td>
+        <td><Status status={row.creditStatus === 'REVERSED' ? 'CANCELLED' : row.status} label={row.creditStatus === 'REVERSED' ? '已冲销' : PURCHASE_STATUS_LABEL[row.status] || row.status}/></td>
         <td>{row.supplierName}</td>
-        <td className="mono">{row.reason || '—'}</td>
+        <td><span className="mono">{row.sourceNo}</span><small className="block">{row.sourceDate} · 到期 {row.dueDate || '—'} · 未结 {money(row.openCents)}</small></td>
         <td>{row.businessDate}</td>
         <td className="number">{money(row.amountCents)}</td>
         <td>{row.reason || '—'}</td>
@@ -277,7 +281,7 @@ function PurchaseDiscountModal({ value, notify, onClose, onSaved }) {
         <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
         <label className="full">来源应付<select value={form.sourcePayableId} onChange={(e) => setForm({ ...form, sourcePayableId: e.target.value })} required disabled={!form.supplierId}>
           <option value="">{form.supplierId ? '请选择来源应付' : '请先选择供应商'}</option>
-          {payables.map((p) => <option key={p.id} value={p.id}>{p.documentNo} · {p.businessDate} · ¥{(p.amountCents / 100).toFixed(2)}</option>)}
+          {payables.map((p) => <option key={p.id} value={p.id}>{p.source_no} · {p.businessDate} / 到期 {p.dueDate || '—'} · 原额 {money(p.originalCents)} · 未结 {money(p.outstandingCents)}</option>)}
         </select></label>
         {selectedSource && <div className="full detail-grid" style={{ marginBottom: 8 }}>
           <div><span>原应付金额</span><strong>¥{(Number(selectedSource.amountCents) / 100).toFixed(2)}</strong></div>
@@ -326,7 +330,9 @@ function PurchaseDiscountDetail({ value, onClose, onEdit, onAction }) {
       <button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消折让</button>
       <button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认折让</button>
     </div>}
-    {value.status === 'CONFIRMED' && canViewPayables && <p className="section-hint">折让已生成应付调整，可在<strong> 应付账款 </strong>按供应商查询。</p>}
+    {value.status === 'CONFIRMED' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button>{value.credit?.status !== 'REVERSED' && <button type="button" className="danger-button" onClick={() => onAction(value, 'reverse')}>冲销折让</button>}</div>}
+    {value.credit?.status === 'REVERSED' && <p className="section-hint">已于 {value.credit.reversalDate} 冲销：{value.credit.reversalReason}</p>}
+    {value.status === 'CONFIRMED' && canViewPayables && <p className="section-hint">折让已链接至来源应付，可在<strong> 应付账款 </strong>查看调整明细。</p>}
     {value.status === 'CANCELLED' && <p className="section-hint">已取消的采购折让未对应付账款或凭证产生任何影响。</p>}
   </Modal>;
 }

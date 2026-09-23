@@ -49,12 +49,13 @@ import {
   releaseProductionInstruction, releasePurchaseInstruction, submitPurchaseRequisition,
   updatePurchaseRequisition,
 } from './modules/planning-documents.js';
-import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
+import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
-  cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument,
+  cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument, deleteSettlementDocument,
   customerStatement, getPayable as getPayableM8, getReceivable as getReceivableM8,
   getSettlementDocument, listPayables as listPayablesM8, listReceivables as listReceivablesM8,
-  listSettlementDocuments, listSettlementParties, supplierStatement, updateSettlementDocument,
+  listSettlementDocuments, listSettlementParties, reverseSettlementDocument, settlementReconciliationCheck,
+  supplierStatement, updateSettlementDocument,
 } from './modules/settlement.js';
 import {
   cancelProductionMaterialIssue, cancelProductionReceipt,
@@ -81,7 +82,7 @@ import {
   cancelPurchaseDiscount, cancelSalesDiscount, confirmPurchaseDiscount,
   confirmSalesDiscount, createPurchaseDiscount, createSalesDiscount,
   getPurchaseDiscount, getSalesDiscount, listPurchaseDiscounts,
-  listSalesDiscounts, updatePurchaseDiscount, updateSalesDiscount,
+  listSalesDiscounts, reversePurchaseDiscount, reverseSalesDiscount, updatePurchaseDiscount, updateSalesDiscount,
 } from './modules/discounts.js';
 import {
   HttpError,
@@ -503,6 +504,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/settlement/suppliers' && req.method === 'GET') return listSettlementParties(db, res, actor, url, 'SUPPLIER');
   if (pathname === '/api/accounts-receivable' && req.method === 'GET') return listReceivablesM8(db, res, actor, url);
   if (pathname === '/api/accounts-receivable/statement' && req.method === 'GET') return customerStatement(db, res, actor, url);
+  if (pathname === '/api/settlement/reconciliation' && req.method === 'GET') return settlementReconciliationCheck(db, res, actor);
   const arMatch = pathname.match(/^\/api\/accounts-receivable\/([^/]+)$/);
   if (arMatch && req.method === 'GET') return getReceivableM8(db, res, actor, arMatch[1]);
 
@@ -520,6 +522,9 @@ async function handleApi(db, req, res, url) {
   const pcMatch = pathname.match(/^\/api\/payment-collections\/([^/]+)$/);
   if (pcMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'COLLECTION', pcMatch[1]);
   if (pcMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'COLLECTION', pcMatch[1]);
+  if (pcMatch && req.method === 'DELETE') return deleteSettlementDocument(db, res, actor, 'COLLECTION', pcMatch[1]);
+  const pcReverse = pathname.match(/^\/api\/payment-collections\/([^/]+)\/reverse$/);
+  if (pcReverse && req.method === 'POST') return reverseSettlementDocument(db, req, res, actor, 'COLLECTION', pcReverse[1], generateVoucher);
 
   // ============ Payment Disbursements ============
   if (pathname === '/api/payment-disbursements' && req.method === 'GET') return listSettlementDocuments(db, res, actor, url, 'PAYMENT');
@@ -529,6 +534,9 @@ async function handleApi(db, req, res, url) {
   const pdMatch = pathname.match(/^\/api\/payment-disbursements\/([^/]+)$/);
   if (pdMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
   if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
+  if (pdMatch && req.method === 'DELETE') return deleteSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
+  const pdReverse = pathname.match(/^\/api\/payment-disbursements\/([^/]+)\/reverse$/);
+  if (pdReverse && req.method === 'POST') return reverseSettlementDocument(db, req, res, actor, 'PAYMENT', pdReverse[1], generateVoucher);
 
   // M14 — Sales / Purchase Discount (operational finance adjustment)
   if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor, url);
@@ -542,6 +550,8 @@ async function handleApi(db, req, res, url) {
     if (salesDiscountAction[2] === 'confirm') return confirmSalesDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
     return cancelSalesDiscount(db, res, actor, id);
   }
+  const salesDiscountReverse = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/reverse$/);
+  if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
   if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor, url);
   if (pathname === '/api/purchase-discounts' && req.method === 'POST') return createPurchaseDiscount(db, req, res, actor);
@@ -554,6 +564,8 @@ async function handleApi(db, req, res, url) {
     if (purchaseDiscountAction[2] === 'confirm') return confirmPurchaseDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
     return cancelPurchaseDiscount(db, res, actor, id);
   }
+  const purchaseDiscountReverse = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/reverse$/);
+  if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
 
 
@@ -929,7 +941,7 @@ async function updateUser(db, req, res, actor, userId) {
 function listSuppliers(db, res, actor, url) {
   allowAny(actor, ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,active,created_at createdAt,updated_at updatedAt
+  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
     FROM suppliers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { suppliers });
@@ -940,8 +952,8 @@ async function createSupplier(db, req, res, actor) {
   const body = await readJson(req);
   const supplier = supplierInput(body);
   const supplierId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
-    .run(supplierId, supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, now, now);
+  db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)`)
+    .run(supplierId, supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, now, now);
   audit(db, actor.id, 'CREATE', 'SUPPLIER', supplierId, supplier.code);
   return send(res, 201, { id: supplierId });
 }
@@ -952,8 +964,8 @@ async function updateSupplier(db, req, res, actor, supplierId) {
   if (!current) throw new HttpError(404, '供应商不存在');
   const body = await readJson(req); const supplier = supplierInput({ ...current, ...body });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE suppliers SET code=?,name=?,contact=?,phone=?,address=?,email=?,active=?,updated_at=? WHERE id=?')
-    .run(supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, active, new Date().toISOString(), supplierId);
+  db.prepare('UPDATE suppliers SET code=?,name=?,contact=?,phone=?,address=?,email=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
+    .run(supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, active, new Date().toISOString(), supplierId);
   audit(db, actor.id, 'UPDATE', 'SUPPLIER', supplierId, supplier.code);
   return send(res, 200, { ok: true });
 }
@@ -965,14 +977,15 @@ function supplierInput(body) {
     contact: optionalText(body.contact, 50),
     phone: optionalText(body.phone, 30),
     address: optionalText(body.address, 200),
-    email: optionalText(body.email, 100)
+    email: optionalText(body.email, 100),
+    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days)
   };
 }
 
 function listCustomers(db, res, actor, url) {
   allowAny(actor, ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const customers = db.prepare(`SELECT id,code,name,contact,phone,address,active,created_at createdAt,updated_at updatedAt
+  const customers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
     FROM customers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { customers });
@@ -983,8 +996,8 @@ async function createCustomer(db, req, res, actor) {
   const body = await readJson(req);
   const customer = customerInput(body);
   const customerId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)`)
-    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, now, now);
+  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
+    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, now, now);
   audit(db, actor.id, 'CREATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 201, { id: customerId });
 }
@@ -995,8 +1008,8 @@ async function updateCustomer(db, req, res, actor, customerId) {
   if (!current) throw new HttpError(404, '客户不存在');
   const body = await readJson(req); const customer = customerInput({ ...current, ...body });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,active=?,updated_at=? WHERE id=?')
-    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, active, new Date().toISOString(), customerId);
+  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
+    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, active, new Date().toISOString(), customerId);
   audit(db, actor.id, 'UPDATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 200, { ok: true });
 }
@@ -1064,10 +1077,10 @@ async function createOrder(db, req, res, actor) {
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makeOrderNo();
   transaction(db, () => {
     db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at,
-        order_date,requested_delivery_date,payment_terms,ship_to_contact_name,ship_to_phone,ship_to_address)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?)`).run(
+        order_date,requested_delivery_date,payment_terms,payment_terms_days,ship_to_contact_name,ship_to_phone,ship_to_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       orderId, orderNo, input.customerId, input.totalCents, input.remark, actor.id, now, now,
-      input.orderDate, input.requestedDeliveryDate, input.paymentTerms,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.shipToContactName, input.shipToPhone, input.shipToAddress,
     );
     saveOrderItems(db, orderId, input.items);
@@ -1085,10 +1098,10 @@ async function updateOrder(db, req, res, actor, orderId) {
   const body = await readJson(req); const input = orderInput(db, body); const now = new Date().toISOString();
   transaction(db, () => {
     db.prepare(`UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
-        order_date=?,requested_delivery_date=?,payment_terms=?,ship_to_contact_name=?,ship_to_phone=?,ship_to_address=?
+        order_date=?,requested_delivery_date=?,payment_terms=?,payment_terms_days=?,ship_to_contact_name=?,ship_to_phone=?,ship_to_address=?
       WHERE id=?`).run(
       input.customerId, input.totalCents, input.remark, now,
-      input.orderDate, input.requestedDeliveryDate, input.paymentTerms,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.shipToContactName, input.shipToPhone, input.shipToAddress, orderId,
     );
     db.prepare('DELETE FROM sales_order_items WHERE order_id=?').run(orderId);
@@ -1101,6 +1114,8 @@ async function updateOrder(db, req, res, actor, orderId) {
 
 function generateVoucher(db, sourceType, sourceId, entries, actor, voucherDate = new Date().toISOString().slice(0, 10)) {
   checkPeriodNotClosedForVoucher(db, voucherDate, '生成业务');
+  const existing = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+  if (existing) return existing.id;
   if (!Array.isArray(entries) || entries.length < 2) throw new HttpError(400, '凭证分录不完整');
   let debitTotal = 0;
   let creditTotal = 0;
@@ -1171,7 +1186,7 @@ function orderRows(db, where, params, tail) {
   return db.prepare(`SELECT so.id,so.order_no orderNo,so.status,so.total_cents totalCents,so.remark,
       so.rejection_reason rejectionReason,so.created_at createdAt,so.updated_at updatedAt,so.submitted_at submittedAt,
       so.reviewed_at reviewedAt,
-      so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,
+      so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,so.payment_terms_days paymentTermsDays,
       so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
       c.id customerId,c.code customerCode,c.name customerName,c.contact customerContact,c.phone customerPhone,c.address customerAddress,
       creator.display_name creatorName,reviewer.display_name reviewerName,
@@ -1204,7 +1219,7 @@ function readSnapshotText(value, label, max) {
 
 function orderInput(db, body) {
   const customerId = requiredText(body.customerId, '客户', 100);
-  const customer = db.prepare('SELECT id, contact, phone, address FROM customers WHERE id=? AND active=1').get(customerId);
+  const customer = db.prepare('SELECT id, contact, phone, address, payment_terms_days FROM customers WHERE id=? AND active=1').get(customerId);
   if (!customer) throw new HttpError(400, '客户不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '销售订单至少需要一条明细');
   // V1.3 Phase 1: order date + requested delivery date + ship-to / payment
@@ -1221,6 +1236,7 @@ function orderInput(db, body) {
   const shipToPhone = readSnapshotText(body.shipToPhone ?? body.ship_to_phone, '收货电话', 30) || (customer.phone || '');
   const shipToAddress = readSnapshotText(body.shipToAddress ?? body.ship_to_address, '收货地址', 200) || (customer.address || '');
   const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
+  const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? customer.payment_terms_days);
   const items = body.items.map((item, index) => {
     const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
@@ -1234,7 +1250,7 @@ function orderInput(db, body) {
   return {
     customerId, remark: optionalText(body.remark, 500), items,
     totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
-    orderDate, requestedDeliveryDate, paymentTerms, shipToContactName, shipToPhone, shipToAddress,
+    orderDate, requestedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, shipToContactName, shipToPhone, shipToAddress,
   };
 }
 
@@ -1245,7 +1261,14 @@ function saveOrderItems(db, orderId, items) {
 
 function customerInput(body) {
   return { code: requiredCode(body.code, '客户编码'), name: requiredText(body.name, '客户名称', 100),
-    contact: optionalText(body.contact, 50), phone: optionalText(body.phone, 30), address: optionalText(body.address, 200) };
+    contact: optionalText(body.contact, 50), phone: optionalText(body.phone, 30), address: optionalText(body.address, 200),
+    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days) };
+}
+
+function paymentTermsDays(value) {
+  const n = value === undefined || value === null || value === '' ? 0 : Number(value);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 3650) throw new HttpError(400, '付款条款天数必须是 0–3650 的整数');
+  return n;
 }
 
 function productInput(body) {
@@ -1324,10 +1347,10 @@ async function createPurchaseOrder(db, req, res, actor) {
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
   transaction(db, () => {
     db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
-        order_date,expected_delivery_date,payment_terms,supplier_contact_name,supplier_contact_phone,supplier_address)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?)`).run(
+        order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now,
-      input.orderDate, input.expectedDeliveryDate, input.paymentTerms,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress,
     );
     savePurchaseOrderItems(db, orderId, input.items);
@@ -1358,10 +1381,10 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   }
   transaction(db, () => {
     db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
-        order_date=?,expected_delivery_date=?,payment_terms=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
+        order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
       WHERE id=?`).run(
       input.supplierId, input.totalCents, input.remark, now,
-      input.orderDate, input.expectedDeliveryDate, input.paymentTerms,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
     );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
@@ -1426,7 +1449,7 @@ function purchaseOrderRows(db, where, params, tail) {
   return db.prepare(`SELECT po.id,po.order_no orderNo,po.status,po.total_cents totalCents,po.remark,
       po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
       po.reviewed_at reviewedAt,po.purchase_requisition_id purchaseRequisitionId,
-      po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
+      po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,po.payment_terms_days paymentTermsDays,
       po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
       s.id supplierId,s.code supplierCode,s.name supplierName,s.contact supplierContact,s.phone supplierPhone,s.address supplierAddressMaster,
       creator.display_name creatorName,reviewer.display_name reviewerName,
@@ -1485,7 +1508,7 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
 
 function purchaseOrderInput(db, body) {
   const supplierId = requiredText(body.supplierId, '供应商', 100);
-  const supplier = db.prepare('SELECT id, contact, phone, address, email FROM suppliers WHERE id=? AND active=1').get(supplierId);
+  const supplier = db.prepare('SELECT id, contact, phone, address, email, payment_terms_days FROM suppliers WHERE id=? AND active=1').get(supplierId);
   if (!supplier) throw new HttpError(400, '供应商不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '采购订单至少需要一条明细');
   // V1.3 Phase 1: order date + expected delivery date + supplier /
@@ -1500,6 +1523,7 @@ function purchaseOrderInput(db, body) {
   const supplierContactPhone = readSnapshotText(body.supplierContactPhone ?? body.supplier_contact_phone, '供应商电话', 30) || (supplier.phone || '');
   const supplierAddress = readSnapshotText(body.supplierAddress ?? body.supplier_address, '供应商地址', 200) || (supplier.address || '');
   const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
+  const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? supplier.payment_terms_days);
   const items = body.items.map((item, index) => {
     const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
@@ -1525,7 +1549,7 @@ function purchaseOrderInput(db, body) {
   return {
     supplierId, remark: optionalText(body.remark, 500), items,
     totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
-    orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress,
+    orderDate, expectedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, supplierContactName, supplierContactPhone, supplierAddress,
   };
 }
 
@@ -3319,7 +3343,7 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         { subjectId: 'subject-004', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName },
         { subjectId: 'subject-005', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
       ], actor, locked.receipt_date);
-      ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
     });
   } else if (action === 'cancel') {
@@ -3448,7 +3472,7 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         { subjectId: 'subject-003', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' ' + customerName },
         { subjectId: 'subject-006', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
       ], actor, locked.delivery_date);
-      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
   } else if (action === 'cancel') {
@@ -3508,7 +3532,7 @@ function getSalesReturn(db, res, actor, returnId) {
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.deliveryNo,
+    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT f.target_open_item_id id,ar.voucher_no documentNo,ar.status,f.amount_cents creditCents,f.applied_cents appliedCents,f.unapplied_cents unappliedCents FROM financial_credit_adjustments f JOIN account_receivables ar ON ar.id=f.target_open_item_id WHERE f.side='AR' AND f.source_type='SALES_RETURN' AND f.source_id=?").get(returnId) : null, direct: !ret.deliveryNo,
   };
   return send(res, 200, { salesReturn: ret });
 }
@@ -3567,7 +3591,11 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-006', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' 收入冲减' },
         { subjectId: 'subject-003', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' ' + customerName }
       ], actor, locked.return_date);
-      ensureReceivableSource(db, { id: returnId, sourceType: 'SALES_RETURN', sourceNo: ret.return_no, partyId: ret.customer_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
+      const sourceTerms = delivery.sales_order_id ? db.prepare('SELECT payment_terms_days FROM sales_orders WHERE id=?').get(delivery.sales_order_id)?.payment_terms_days : null;
+      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: delivery.delivery_date, paymentTermsDays: sourceTerms, effectCents: delivery.total_cents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      const sourceAr = db.prepare("SELECT id FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=? AND item_class='SOURCE'").get(deliveryId);
+      if (!sourceAr) throw new HttpError(409, '来源出货尚未生成权威应收');
+      applyCreditAdjustment(db, { side: 'AR', adjustmentType: 'RETURN', sourceType: 'SALES_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAr.id, partyId: ret.customer_id, businessDate: locked.return_date, amountCents: authoritative.totalCents, actorId: actor.id, createdAt: now });
       audit(db, actor.id, 'CONFIRM', 'SALES_RETURN', returnId, '确认销售退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
@@ -3626,7 +3654,7 @@ function getPurchaseReturn(db, res, actor, returnId) {
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.receiptNo,
+    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT f.target_open_item_id id,ap.voucher_no documentNo,ap.status,f.amount_cents creditCents,f.applied_cents appliedCents,f.unapplied_cents unappliedCents FROM financial_credit_adjustments f JOIN account_payables ap ON ap.id=f.target_open_item_id WHERE f.side='AP' AND f.source_type='PURCHASE_RETURN' AND f.source_id=?").get(returnId) : null, direct: !ret.receiptNo,
   };
   return send(res, 200, { purchaseReturn: ret });
 }
@@ -3686,7 +3714,11 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         { subjectId: 'subject-005', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no + ' ' + supplierName },
         { subjectId: 'subject-004', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no }
       ], actor, locked.return_date);
-      ensurePayableSource(db, { id: returnId, sourceType: 'PURCHASE_RETURN', sourceNo: ret.return_no, partyId: ret.supplier_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
+      const sourceTerms = receipt.purchase_order_id ? db.prepare('SELECT payment_terms_days FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)?.payment_terms_days : null;
+      ensurePayableSource(db, { id: receipt.id, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, paymentTermsDays: sourceTerms, effectCents: receipt.total_cents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      const sourceAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE'").get(locked.receipt_id);
+      if (!sourceAp) throw new HttpError(409, '来源入库尚未生成权威应付');
+      applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: authoritative.totalCents, actorId: actor.id, createdAt: now });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
