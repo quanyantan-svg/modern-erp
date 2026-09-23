@@ -75,6 +75,20 @@ describe('V1.3 Phase 3 authoritative IQC/OQC quality gates', () => {
     const failSource = seedSource('OQC', 'valid-fail'); const fail = await createQuality('OQC', failSource); assert.equal((await complete('OQC', fail.data.id, 10, 'FAIL')).status, 200);
   });
 
+  test('completed IQC/OQC reject invalid results, repeat completion, and mutation', async () => {
+    for (const kind of ['IQC', 'OQC']) {
+      const source = seedSource(kind, `immutable-${kind}`);
+      const created = await createQuality(kind, source);
+      assert.equal(created.status, 201);
+      assert.equal((await complete(kind, created.data.id, 10, 'PASSED')).status, 400);
+      assert.equal((await complete(kind, created.data.id, 10)).status, 200);
+      assert.equal((await complete(kind, created.data.id, 10, 'FAIL')).status, 409);
+      assert.equal((await call(`/api/${kind.toLowerCase()}/${created.data.id}`, 'PATCH', { remark: 'must not change' })).status, 409);
+      const detail = await call(`/api/${kind.toLowerCase()}/${created.data.id}`);
+      assert.equal(detail.data.inspection.result, 'PASS');
+    }
+  });
+
   test('L-P/AC-AG missing, draft, failed, and passed inspections enforce atomic posting', async () => {
     for (const kind of ['IQC', 'OQC']) {
       const path = kind === 'IQC' ? 'purchase-receipts' : 'sales-deliveries';
@@ -116,5 +130,22 @@ describe('V1.3 Phase 3 authoritative IQC/OQC quality gates', () => {
       const recreated = await createQuality(kind, source); assert.equal((await complete(kind, recreated.data.id, 10)).status, 200);
       assert.equal((await call(`/api/${kind === 'IQC' ? 'purchase-receipts' : 'sales-deliveries'}/${source}`, 'POST', { action: 'confirm' })).status, 200);
     }
+  });
+
+  test('supplier evaluation create/list remains operational outside the quality-gate rebuild', async () => {
+    const password = hashPassword('admin-phase3');
+    db.prepare("INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES('user-admin-phase3','admin-p3','Admin',?,?,'role-admin',1,?)").run(password.hash, password.salt, new Date().toISOString());
+    const login = await fetch(baseUrl + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'admin-p3', password: 'admin-phase3' }) });
+    const adminToken = (await login.json()).token;
+    const request = async (path, method = 'GET', body) => {
+      const response = await fetch(baseUrl + path, { method, headers: { authorization: `Bearer ${adminToken}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) });
+      return { status: response.status, data: await response.json() };
+    };
+    const created = await request('/api/supplier-evaluations', 'POST', { supplier_id: 'sup', evaluation_type: 'REGULAR', evaluation_date: '2026-09-23', quality_score: 90, delivery_score: 80, price_score: 70, service_score: 60, remark: '' });
+    assert.equal(created.status, 201, created.data.error);
+    const list = await request('/api/supplier-evaluations');
+    assert.equal(list.status, 200);
+    assert.equal(list.data.evaluations.length, 1);
+    assert.equal(list.data.evaluations[0].supplier_id, 'sup');
   });
 });
