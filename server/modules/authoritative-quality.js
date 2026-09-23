@@ -2,6 +2,7 @@ import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 import { deriveQualityState, loadQualitySource, qualityConfig, sameSourceSnapshot } from './quality-gates.js';
+import { calculateSampleQuantity, freezeQualityPolicy, trackingSnapshot } from './traceability-quality.js';
 
 const RESULTS = ['PASS', 'FAIL'];
 const TYPES = ['NORMAL', 'SAMPLING', 'FULL'];
@@ -84,7 +85,11 @@ async function create(db, req, res, actor, kind) {
   const inspectionType = String(body.inspection_type || 'NORMAL').trim();
   if (!TYPES.includes(inspectionType)) throw new HttpError(400, `检验类型必须是 ${TYPES.join(' / ')}`);
   const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity), 0);
-  const sampleQuantity = number(body.sample_quantity ?? totalQuantity, '抽样数量');
+  const sourceType = kind === 'IQC' ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY';
+  const sourceDate = source[kind === 'IQC' ? 'receipt_date' : 'delivery_date'];
+  const policies = items.map((item) => freezeQualityPolicy(db, { sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, businessDate: sourceDate }));
+  const resolvedSample = items.reduce((sum, item, index) => sum + calculateSampleQuantity(item.quantity, policies[index].sampling_mode, policies[index].sampling_value), 0);
+  const sampleQuantity = number(body.sample_quantity ?? resolvedSample, '抽样数量');
   if (sampleQuantity > totalQuantity) throw new HttpError(400, '抽样数量不能超过送检数量');
   const now = new Date().toISOString();
   const inspectionId = id();
@@ -94,9 +99,18 @@ async function create(db, req, res, actor, kind) {
   transaction(db, () => {
     db.prepare(`INSERT INTO ${v.c.headerTable}(id,${v.numberColumn},${v.partyColumn},${v.c.sourceHeaderColumn},inspection_type,status,total_quantity,sample_quantity,qualified_quantity,reject_quantity,inspector_id,inspection_date,remark,created_at,updated_at)
       VALUES(?,?,?,?,?,'DRAFT',?,?,0,0,?,?,?,?,?)`).run(inspectionId, documentNo, source[v.c.partyColumn], sourceId, inspectionType, totalQuantity, sampleQuantity, actor.id, String(body.inspection_date || now.slice(0, 10)), String(body.remark || '').trim(), now, now);
-    const insert = db.prepare(`INSERT INTO ${v.c.itemTable}(id,${v.c.qualityForeignKey},product_id,batch_no,quantity,sample_size,qualified,reject_reason,${v.c.sourceItemColumn},snapshot_warehouse_id,snapshot_batch_no,snapshot_quantity)
-      VALUES(?,?,?,?,?,?,1,'',?,?,?,?)`);
-    for (const item of items) insert.run(id(), inspectionId, item.product_id, String(item.batch_no || ''), Number(item.quantity), Number(item.quantity), item.id, source.warehouse_id, String(item.batch_no || ''), Number(item.quantity));
+    const insert = db.prepare(`INSERT INTO ${v.c.itemTable}(id,${v.c.qualityForeignKey},product_id,batch_no,quantity,sample_size,qualified,reject_reason,${v.c.sourceItemColumn},snapshot_warehouse_id,snapshot_batch_no,snapshot_quantity,tracking_snapshot)
+      VALUES(?,?,?,?,?,?,1,'',?,?,?,?,?)`);
+    const insertCriterion = db.prepare(`INSERT INTO inspection_criteria_snapshots(id,inspection_type,inspection_id,source_item_id,sequence,criterion_name,specification,result_type,min_value,max_value,unit,required)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
+    for (const [index, item] of items.entries()) {
+      const policy = policies[index];
+      const itemSample = calculateSampleQuantity(item.quantity, policy.sampling_mode, policy.sampling_value);
+      insert.run(id(), inspectionId, item.product_id, String(item.batch_no || ''), Number(item.quantity), itemSample, item.id, source.warehouse_id, String(item.batch_no || ''), Number(item.quantity), trackingSnapshot(db, sourceType, sourceId, item.id));
+      if (policy.qcp_id) for (const criterion of db.prepare('SELECT * FROM quality_control_criteria WHERE qcp_id=? ORDER BY sequence').all(policy.qcp_id)) {
+        insertCriterion.run(id(), kind, inspectionId, item.id, criterion.sequence, criterion.criterion_name, criterion.specification, criterion.result_type, criterion.min_value, criterion.max_value, criterion.unit, criterion.required);
+      }
+    }
     audit(db, actor.id, previous ? 'REINSPECTION_CREATED' : 'CREATE', `${kind}_INSPECTION`, inspectionId, `${previous ? '创建复检单' : '新建检验单'} ${documentNo}; 来源 ${sourceId}; 来源行 ${items.map((item) => item.id).join(',')}`);
   });
   return send(res, 201, { id: inspectionId, [v.numberColumn]: documentNo });
@@ -157,10 +171,23 @@ async function complete(db, req, res, actor, inspectionId, kind) {
     if (!defectReason || !disposition) throw new HttpError(400, '不合格结果必须填写缺陷原因和处置方式');
     if (!DISPOSITIONS[kind].includes(disposition)) throw new HttpError(400, `处置方式必须是 ${DISPOSITIONS[kind].join(' / ')}`);
   }
+  const criteria = db.prepare('SELECT * FROM inspection_criteria_snapshots WHERE inspection_type=? AND inspection_id=? ORDER BY source_item_id,sequence').all(kind, inspectionId);
+  const submitted = new Map((body.criteria_results || body.criteriaResults || []).map((x) => [`${x.sourceItemId || x.source_item_id}:${Number(x.sequence)}`, x]));
+  const evaluated = criteria.map((criterion) => {
+    const value = submitted.get(`${criterion.source_item_id}:${criterion.sequence}`) || {};
+    let passed = true; let passFail = null; let numeric = null; let text = null;
+    if (criterion.result_type === 'PASS_FAIL') { passFail = String(value.result ?? value.passFailResult ?? '').toUpperCase(); if (!['PASS','FAIL'].includes(passFail)) passed = !criterion.required; else passed = passFail === 'PASS'; }
+    if (criterion.result_type === 'NUMERIC') { numeric = Number(value.result ?? value.numericResult); if (!Number.isFinite(numeric)) passed = !criterion.required; else passed = (criterion.min_value === null || numeric >= criterion.min_value) && (criterion.max_value === null || numeric <= criterion.max_value); }
+    if (criterion.result_type === 'TEXT') { text = String(value.result ?? value.textResult ?? '').trim(); passed = !criterion.required || Boolean(text); }
+    if (result === 'PASS' && criterion.required && !passed) throw new HttpError(409, `必检项“${criterion.criterion_name}”未满足，不能判定合格`);
+    return { criterion, passFail, numeric: Number.isFinite(numeric) ? numeric : null, text, passed };
+  });
   const now = new Date().toISOString();
   transaction(db, () => {
     db.prepare(`UPDATE ${v.c.headerTable} SET status='COMPLETED',result=?,qualified_quantity=?,reject_quantity=?,defect_reason=?,disposition=?,inspected_at=?,updated_at=? WHERE id=?`)
       .run(result, passed, failed, defectReason, disposition, now, now, inspectionId);
+    const updateCriterion = db.prepare('UPDATE inspection_criteria_snapshots SET pass_fail_result=?,numeric_result=?,text_result=?,passed=?,completed_at=? WHERE id=?');
+    for (const x of evaluated) updateCriterion.run(x.passFail, x.numeric, x.text, x.passed ? 1 : 0, now, x.criterion.id);
     const sourceLineIds = db.prepare(`SELECT ${v.c.sourceItemColumn} id FROM ${v.c.itemTable} WHERE ${v.c.qualityForeignKey}=?`).all(inspectionId).map((item) => item.id).join(',');
     audit(db, actor.id, `COMPLETE_${result}`, `${kind}_INSPECTION`, inspectionId, `完成 ${kind} ${result}; 来源 ${inspection[v.c.sourceHeaderColumn]}; 来源行 ${sourceLineIds}`);
   });

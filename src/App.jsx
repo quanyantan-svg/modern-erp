@@ -8,7 +8,8 @@ import { Collections, Payables, Payments, Receivables } from './pages/settlement
 import { Boms, ProductionOrders, MaterialIssues, ProductionReceipts } from './pages/manufacturing.jsx';
 import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './pages/projects-workflow.jsx';
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
-import { IQCInspections, OQCInspections } from './pages/quality.jsx';
+import { IQCInspections, OQCInspections, QualityControlPoints } from './pages/quality.jsx';
+import Traceability from './pages/traceability.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
@@ -43,7 +44,7 @@ const launcherIconNames = [
   'activities', 'projects', 'tasks', 'timesheets', 'notifications', 'boms',
   'routings', 'forecasts', 'mrpRuns', 'materialPlan', 'mrp', 'planningDocuments',
   'productionOrders', 'inventoryScrap', 'inventoryPeriod', 'salesDiscount',
-  'purchaseDiscount', 'users', 'cleanup',
+  'purchaseDiscount', 'users', 'cleanup', 'traceability',
 ];
 const ic = Object.fromEntries(launcherIconNames.map((name) => [name, <ProductIcon key={name} name={name} size={24}/>]));
 
@@ -70,6 +71,7 @@ export const navGroups = [
     { key: 'sales-deliveries', label: '销售出货', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
     { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
     { key: 'inventory-transactions', label: '库存异动明细', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
+    { key: 'traceability', label: '批次与序列号追溯', icon: ic.traceability, any: ['INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW'] },
     { key: 'inventory-scraps', label: '库存报废', icon: ic.inventoryScrap, any: ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE'] },
     { key: 'inventory-month-end', label: '存货月结', icon: ic.inventoryPeriod, any: ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'] },
     { key: 'sales-discounts', label: '销售折让', icon: ic.salesDiscount, any: ['SALES_DISCOUNT_MANAGE'] },
@@ -109,6 +111,7 @@ export const navGroups = [
     { key: 'cost-rates', label: '费用项目', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
     { key: 'iqc', label: 'IQC来料检验', icon: ic.iqc, any: ['IQC_VIEW', 'IQC_MANAGE'] },
     { key: 'oqc', label: 'OQC出货检验', icon: ic.oqc, any: ['OQC_VIEW', 'OQC_MANAGE'] },
+    { key: 'quality-control-points', label: '质量控制点', icon: ic.iqc, any: ['USERS_MANAGE'] },
   ]},
   { label: '项目管理', items: [
     { key: 'projects', label: '项目立项', icon: ic.projects, any: ['PROJECT_VIEW', 'PROJECT_MANAGE'] },
@@ -213,6 +216,7 @@ export default function App() {
     'cost-rates': <CostRates user={user} notify={notify}/>,
     iqc: <IQCInspections user={user} notify={notify}/>,
     oqc: <OQCInspections user={user} notify={notify}/>,
+    'quality-control-points': <QualityControlPoints user={user} notify={notify}/>,
     contacts: <Contacts user={user} notify={notify}/>,
     followups: <Followups user={user} notify={notify}/>,
     activities: <SalesActivities user={user} notify={notify}/>,
@@ -231,6 +235,7 @@ export default function App() {
     'sales-deliveries': <SalesDeliveries user={user} notify={notify}/>,
     returns: <Returns user={user} notify={notify}/>,
     'inventory-transactions': <InventoryTransactions user={user} notify={notify}/>,
+    traceability: <Traceability user={user} notify={notify}/>,
     'inventory-scraps': <InventoryScraps user={user} notify={notify}/>,
     'inventory-month-end': <InventoryMonthEnd user={user} notify={notify}/>,
     'sales-discounts': <SalesDiscounts user={user} notify={notify}/>,

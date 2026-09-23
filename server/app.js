@@ -91,6 +91,11 @@ import {
   reverseOperationalReturn, settlementAccountReconciliation,
 } from './modules/financial-controls.js';
 import {
+  availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler,
+  listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
+  saveTrackedAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
+} from './modules/traceability-quality.js';
+import {
   HttpError,
   allow,
   allowAny,
@@ -183,6 +188,17 @@ async function handleApi(db, req, res, url) {
 
   if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
   if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
+  const productTrackingMatch = pathname.match(/^\/api\/products\/([^/]+)\/tracking-policy$/);
+  if (productTrackingMatch && req.method === 'PATCH') return updateProductTrackingHandler(db, req, res, actor, productTrackingMatch[1]);
+  if (pathname === '/api/tracking/allocations' && req.method === 'PUT') return saveAllocationsHandler(db, req, res, actor);
+  const identityHoldMatch = pathname.match(/^\/api\/tracking\/(LOT|SERIAL)\/([^/]+)\/hold$/i);
+  if (identityHoldMatch && req.method === 'POST') return holdIdentityHandler(db, req, res, actor, identityHoldMatch[1], identityHoldMatch[2]);
+  if (pathname === '/api/tracking/reconcile' && req.method === 'GET') return reconcileTrackingHandler(db, res, actor);
+  if (pathname === '/api/tracking/availability' && req.method === 'GET') return availabilityHandler(db, res, actor, url);
+  if (pathname === '/api/traceability' && req.method === 'GET') return traceHandler(db, res, actor, url);
+  if (pathname === '/api/production-genealogy' && req.method === 'POST') return genealogyHandler(db, req, res, actor);
+  if (pathname === '/api/quality-control-points' && req.method === 'GET') return listQcpHandler(db, res, actor);
+  if (pathname === '/api/quality-control-points' && req.method === 'POST') return createQcpHandler(db, req, res, actor);
   const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
   if (productMatch && req.method === 'PATCH') return updateProduct(db, req, res, actor, productMatch[1]);
   if (productMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'product', productMatch[1]);
@@ -1040,7 +1056,7 @@ async function updateCustomer(db, req, res, actor, customerId) {
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,stock_quantity stockQuantity,active,
+  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,stock_quantity stockQuantity,active,tracking_policy trackingPolicy,shelf_life_days shelfLifeDays,tracking_effective_at trackingEffectiveAt,
     created_at createdAt,updated_at updatedAt FROM products WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { products });
@@ -1865,9 +1881,12 @@ async function createInventoryCheck(db, req, res, actor) {
   const systemQuantity = inv.quantity;
   const difference = counted - systemQuantity;
   const checkId = id(); const now = new Date().toISOString(); const checkNo = makeInventoryCheckNo();
-  db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
-    VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
-  audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
+  transaction(db, () => {
+    db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
+      VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
+    saveTrackedAllocations(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId, quantity: Math.abs(difference), allocations: body.trackingAllocations || body.tracking_allocations || [] });
+    audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
+  });
   return send(res, 201, { id: checkId, checkNo, status: 'DRAFT' });
 }
 
@@ -1939,6 +1958,7 @@ async function createInventoryAdjustment(db, req, res, actor) {
   transaction(db, () => {
     db.prepare("INSERT INTO inventory_adjustments(id,adjustment_no,warehouse_id,status,reason,adjustment_date,creator_id,created_at,updated_at) VALUES(?,?,?,'DRAFT',?,?,?,?,?)").run(adjustmentId, adjustmentNo, body.warehouseId, reason, adjustmentDate, actor.id, now, now);
     saveAdjustmentItems(db, adjustmentId, items); audit(db, actor.id, 'CREATE', 'INVENTORY_ADJUSTMENT', adjustmentId, `创建库存调整 ${adjustmentNo}`);
+    for (const [index, item] of items.entries()) saveTrackedAllocations(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.productId, quantity: Math.abs(item.quantityDelta), allocations: body.items[index].trackingAllocations || body.items[index].tracking_allocations || [] });
   });
   return send(res, 201, { id: adjustmentId, adjustmentNo, status: 'DRAFT' });
 }
@@ -1971,6 +1991,7 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
       const before = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id)?.quantity || 0;
       const after = before + item.quantity_delta;
       if (!Number.isFinite(after) || after < 0) throw new HttpError(409, '调整后库存不能为负数');
+      postTrackedMovement(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: Math.abs(item.quantity_delta), direction: item.quantity_delta > 0 ? 'IN' : 'OUT', businessDate: locked.adjustment_date });
       const balance = adjustInventory(db, locked.warehouse_id, item.product_id, item.quantity_delta, now);
       db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, balance, item.id);
       db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
@@ -2019,6 +2040,7 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
       const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(check.warehouse_id, check.product_id);
       if (!current) throw new HttpError(409, '库存记录不存在');
       if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
+      if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate: now.slice(0, 10) });
       db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
       db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
       if (check.difference !== 0) db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?)")
@@ -2110,6 +2132,25 @@ function replaceLogisticsItems(db, table, foreignKey, documentId, items, sourceC
     if (sourceColumn) values.push(item.sourceItemId);
     statement.run(...values);
   }
+}
+
+function configureTrackedDraftLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems, businessDate }) {
+  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
+  for (const [index, item] of persisted.entries()) {
+    freezeQualityPolicy(db, { sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, businessDate });
+    saveTrackedAllocations(db, {
+      sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
+      allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
+    });
+  }
+}
+
+function configureTrackedDocumentLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems }) {
+  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
+  for (const [index, item] of persisted.entries()) saveTrackedAllocations(db, {
+    sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
+    allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
+  });
 }
 
 function sourceLineId(item, camel, snake) {
@@ -2218,7 +2259,7 @@ async function createInventoryTransfer(db, req, res, actor) {
     db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at)
       VALUES(?,?,?,?,'DRAFT',?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now);
     const stmt = db.prepare('INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES(?,?,?,?)');
-    for (const item of items) stmt.run(id(), transferId, item.productId, Number(item.quantity));
+    for (const item of items) { const itemId = id(); stmt.run(itemId, transferId, item.productId, Number(item.quantity)); saveTrackedAllocations(db, { sourceType: 'INVENTORY_TRANSFER', sourceId: transferId, sourceItemId: itemId, productId: item.productId, quantity: Number(item.quantity), allocations: item.trackingAllocations || item.tracking_allocations || [] }); }
     audit(db, actor.id, 'CREATE', 'INVENTORY_TRANSFER', transferId, `创建调拨单 ${transferNo}`);
   });
   return send(res, 201, { id: transferId, transferNo });
@@ -2251,6 +2292,7 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
       for (const item of items) {
         const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
         if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
+        transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate: now.slice(0, 10) });
         const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, now);
         const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, now);
         const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
@@ -3289,6 +3331,7 @@ async function createPurchaseReceipt(db, req, res, actor) {
   transaction(db, () => {
     db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now);
     replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: items, businessDate: receiptDate });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
   });
   return send(res, 201, { id: receiptId, receiptNo });
@@ -3328,7 +3371,10 @@ async function updatePurchaseReceipt(db, req, res, actor, receiptId) {
   transaction(db, () => {
     db.prepare('UPDATE purchase_receipts SET warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
       .run(body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
+    db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
     replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: body.items, businessDate: body.receiptDate || current.receipt_date });
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RECEIPT', receiptId, '修改采购入库 ' + current.receipt_no);
   });
   return send(res, 200, { ok: true, id: receiptId, receiptNo: current.receipt_no, totalCents: input.totalCents });
@@ -3359,6 +3405,7 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
         const already = confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, sourceItem.id, receiptId);
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
+        postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.receipt_date });
         const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
       }
@@ -3419,6 +3466,7 @@ async function createSalesDelivery(db, req, res, actor) {
   transaction(db, () => {
     db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now);
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: items, businessDate: deliveryDate });
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
   });
   return send(res, 201, { id: deliveryId, deliveryNo });
@@ -3458,7 +3506,10 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
   transaction(db, () => {
     db.prepare('UPDATE sales_deliveries SET warehouse_id=?,delivery_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
       .run(body.warehouseId, normalizeDocumentDate(body.deliveryDate || current.delivery_date, '发货日期'), optionalText(body.remark, 500), input.totalCents, now, deliveryId);
+    db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: body.items, businessDate: body.deliveryDate || current.delivery_date });
     audit(db, actor.id, 'UPDATE', 'SALES_DELIVERY', deliveryId, '修改销售出库 ' + current.delivery_no);
   });
   return send(res, 200, { ok: true, id: deliveryId, deliveryNo: current.delivery_no, totalCents: input.totalCents });
@@ -3491,6 +3542,7 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '出货数量超过销售订单剩余可交数量');
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
+        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.delivery_date });
         const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?)').run(id(), delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now);
       }
@@ -3548,6 +3600,7 @@ async function createSalesReturn(db, req, res, actor) {
   transaction(db, () => {
     db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId, deliveryId, source.customer_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
     replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'SALES_RETURN', sourceId: returnId, itemTable: 'return_order_items', foreignKey: 'return_id', rawItems: items });
     audit(db, actor.id, 'CREATE', 'SALES_RETURN', returnId, '创建销售退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -3611,6 +3664,7 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '销售退货明细与来源出货明细不一致');
         const already = confirmedQuantity(db, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源出货数量');
+        postTrackedMovement(db, { sourceType: 'SALES_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.return_date, returnToHold: true });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now);
       }
@@ -3670,6 +3724,7 @@ async function createPurchaseReturn(db, req, res, actor) {
   transaction(db, () => {
     db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId, source.supplier_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
     replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, itemTable: 'purchase_return_items', foreignKey: 'return_id', rawItems: items });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RETURN', returnId, '创建采购退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -3734,6 +3789,7 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源入库数量');
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(ret.warehouse_id, item.product_id);
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
+        postTrackedMovement(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.return_date });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
         db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now);
       }

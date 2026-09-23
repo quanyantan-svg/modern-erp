@@ -80,6 +80,7 @@ import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { postTrackedMovement, saveTrackedAllocations } from './traceability-quality.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PERIOD_STATUS = { CLOSED: '已结账', REOPENED: '已反结账' };
@@ -150,6 +151,7 @@ function normalizeScrapItems(db, rawItems) {
       productId,
       quantity,
       reason: optionalText(entry.reason ?? '', MAX_REASON),
+      trackingAllocations: entry.trackingAllocations || entry.tracking_allocations || [],
       lineNo: index + 1,
     };
   });
@@ -245,6 +247,7 @@ export async function createInventoryScrap(db, req, res, actor) {
       VALUES(?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?)
     `).run(scrapId, scrapNo, scrapDate, reason, notes, actor.id, now, now);
     saveScrapItems(db, scrapId, items);
+    for (const item of items) saveTrackedAllocations(db, { sourceType: 'INVENTORY_SCRAP', sourceId: scrapId, sourceItemId: item.id, productId: item.productId, quantity: item.quantity, allocations: item.trackingAllocations });
     audit(db, actor.id, 'CREATE', 'INVENTORY_SCRAP', scrapId, `创建库存报废 ${scrapNo}`);
   });
   return send(res, 201, { id: scrapId, scrapNo, status: 'DRAFT' });
@@ -293,6 +296,7 @@ export function confirmInventoryScrap(db, res, actor, scrapId) {
     }
     // Mutate canonical inventory and ledger in a single transaction.
     for (const item of items) {
+      postTrackedMovement(db, { sourceType: 'INVENTORY_SCRAP', sourceId: scrapId, sourceItemId: item.id, productId: item.product_id, warehouseId: item.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: header.scrap_date });
       const balance = adjustInventory(db, item.warehouse_id, item.product_id, -Number(item.quantity), now);
       db.prepare(`
         INSERT INTO inventory_transactions

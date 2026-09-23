@@ -85,8 +85,8 @@ const EXPECTED_ROLE_PAGES = {
     'production-orders', 'material-issues', 'production-receipts', 'boms', 'product-routings',
     'orders', 'sales-deliveries', 'returns', 'contacts',
     'purchase-orders', 'purchase-receipts', 'returns',
-    'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions',
-    'iqc', 'oqc', 'product-costs', 'cost-rates', 'accounts-receivable', 'payment-collections',
+    'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions', 'traceability',
+    'iqc', 'oqc', 'quality-control-points', 'product-costs', 'cost-rates', 'accounts-receivable', 'payment-collections',
     'accounts-payable', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
     'projects', 'tasks', 'timesheets', 'workflows', 'users', 'data-cleanup', 'notifications',
@@ -105,7 +105,7 @@ const EXPECTED_ROLE_PAGES = {
     'business-overview', 'customers', 'products', 'warehouses',
     'purchase-requisitions',
     'orders', 'sales-deliveries', 'returns',
-    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'notifications',
+    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'traceability', 'notifications',
   ],
   // V1.3 Phase 1: WAREHOUSE owns physical stock execution including
   // material issue and production receipt; sales-deliveries / returns
@@ -115,7 +115,7 @@ const EXPECTED_ROLE_PAGES = {
     'production-orders', 'material-issues', 'production-receipts',
     'sales-deliveries', 'returns',
     'purchase-receipts', 'returns',
-    'inventory', 'inventory-scraps', 'inventory-transactions', 'iqc', 'oqc',
+    'inventory', 'inventory-scraps', 'inventory-transactions', 'traceability', 'iqc', 'oqc',
     'notifications',
   ],
   'role-accounting': [
@@ -246,6 +246,7 @@ describe('M2 canonical role application matrix', () => {
     assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'].includes(page)));
     assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users'].includes(page)));
     assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'].includes(page)));
+    for (const role of ['role-sales', 'role-reviewer', 'role-warehouse', 'role-accounting']) assert.ok(!applicationPagesFor(role).includes('quality-control-points'));
   });
 });
 

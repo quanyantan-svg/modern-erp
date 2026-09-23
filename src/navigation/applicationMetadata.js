@@ -73,6 +73,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'inventory-scraps', mobileLabel: '库存报废', iconKey: 'inventoryScrap' },
       { page: 'inventory-month-end', mobileLabel: '存货月结', iconKey: 'inventoryPeriod' },
       { page: 'inventory-transactions', mobileLabel: '库存异动明细', iconKey: 'inventoryTransactions' },
+      { page: 'traceability', mobileLabel: '批次 / 序列号追溯', iconKey: 'inventoryTransactions' },
     ],
   },
   {
@@ -82,6 +83,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     items: [
       { page: 'iqc', mobileLabel: 'IQC 来料检验', iconKey: 'iqc' },
       { page: 'oqc', mobileLabel: 'OQC 出货检验', iconKey: 'oqc' },
+      { page: 'quality-control-points', mobileLabel: '质量控制点', iconKey: 'iqc' },
       { page: 'product-costs', mobileLabel: '标准成本', iconKey: 'costAccounting' },
       { page: 'cost-rates', mobileLabel: '费用项目', iconKey: 'costAccounting' },
     ],

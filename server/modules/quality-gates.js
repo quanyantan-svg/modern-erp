@@ -1,4 +1,5 @@
 import { HttpError } from '../lib/http.js';
+import { qualityPolicyAllowsPosting, trackingSnapshot } from './traceability-quality.js';
 
 const EPSILON = 1e-9;
 
@@ -44,15 +45,17 @@ export function loadQualitySource(db, kind, sourceId) {
   return { source, order, items };
 }
 
-function inspectionMatchesSource(c, inspection, source, qualityItems, sourceItems) {
+function inspectionMatchesSource(db, c, inspection, source, qualityItems, sourceItems) {
   if (inspection[c.sourceHeaderColumn] !== source.id || qualityItems.length !== sourceItems.length) return false;
   const byId = new Map(sourceItems.map((item) => [item.id, item]));
   return qualityItems.every((item) => {
     const current = byId.get(item[c.sourceItemColumn]);
+    const policy = db.prepare("SELECT COALESCE(tracking_policy,'NONE') policy FROM products WHERE id=?").get(item.product_id)?.policy || 'NONE';
     return current && item.product_id === current.product_id
       && sameQuantity(item.snapshot_quantity, current.quantity)
       && item.snapshot_warehouse_id === source.warehouse_id
-      && String(item.snapshot_batch_no || '') === String(current.batch_no || '');
+      && String(item.snapshot_batch_no || '') === String(current.batch_no || '')
+      && (policy === 'NONE' || String(item.tracking_snapshot || '') === trackingSnapshot(db, c.sourceHeaderTable === 'purchase_receipts' ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY', source.id, current.id));
   });
 }
 
@@ -63,19 +66,21 @@ export function deriveQualityState(db, kind, sourceId) {
   const sourceItems = db.prepare(`SELECT * FROM ${c.sourceItemTable} WHERE ${c.sourceHeaderForeignKey}=? ORDER BY line_no,id`).all(sourceId);
   const numberColumn = kind === 'IQC' ? 'iqc_no' : 'oqc_no';
   const inspections = db.prepare(`SELECT * FROM ${c.headerTable} WHERE ${c.sourceHeaderColumn}=? ORDER BY created_at DESC,${numberColumn} DESC`).all(sourceId);
+  const policy = qualityPolicyAllowsPosting(db, kind === 'IQC' ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY', sourceId);
+  if (!policy.required) return { code: 'WAIVED', label: '按质量策略免检', inspectionId: null, policySnapshots: policy.snapshots };
   if (!inspections.length) return { code: 'NOT_INSPECTED', label: '未检验', inspectionId: null };
   const latest = inspections[0];
   if (latest.status === 'DRAFT' || latest.status === 'PENDING') return { code: 'INSPECTION_DRAFT', label: '检验草稿', inspectionId: latest.id };
   if (latest.status === 'CANCELLED') return { code: 'NOT_INSPECTED', label: '未检验（最近检验已取消）', inspectionId: latest.id };
   const qualityItems = db.prepare(`SELECT * FROM ${c.itemTable} WHERE ${c.qualityForeignKey}=? ORDER BY id`).all(latest.id);
-  if (!inspectionMatchesSource(c, latest, source, qualityItems, sourceItems)) return { code: 'STALE', label: '检验已失效，需复检', inspectionId: latest.id };
+  if (!inspectionMatchesSource(db, c, latest, source, qualityItems, sourceItems)) return { code: 'STALE', label: '检验已失效，需复检', inspectionId: latest.id };
   if (latest.result === 'PASS') return { code: 'PASS', label: '检验合格', inspectionId: latest.id };
   return { code: 'FAIL', label: '检验不合格', inspectionId: latest.id };
 }
 
 export function assertQualityGate(db, kind, sourceId) {
   const state = deriveQualityState(db, kind, sourceId);
-  if (state.code !== 'PASS') throw new HttpError(409, `${config[kind].sourceLabel}质量门禁未通过：${state.label}`);
+  if (!['PASS', 'WAIVED'].includes(state.code)) throw new HttpError(409, `${config[kind].sourceLabel}质量门禁未通过：${state.label}`);
   return state;
 }
 
@@ -87,5 +92,5 @@ export function sameSourceSnapshot(db, kind, inspectionId) {
   if (!source) return false;
   const qualityItems = db.prepare(`SELECT * FROM ${c.itemTable} WHERE ${c.qualityForeignKey}=?`).all(inspectionId);
   const sourceItems = db.prepare(`SELECT * FROM ${c.sourceItemTable} WHERE ${c.sourceHeaderForeignKey}=?`).all(source.id);
-  return inspectionMatchesSource(c, inspection, source, qualityItems, sourceItems);
+  return inspectionMatchesSource(db, c, inspection, source, qualityItems, sourceItems);
 }
