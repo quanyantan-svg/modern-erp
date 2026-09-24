@@ -19,6 +19,7 @@ let approverToken;
 before(async () => {
   tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-period-test-'));
   database = createDatabase(join(tempDir, 'erp.db'));
+  database.exec("DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory; INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,active) VALUES('period-test-debit','6998','期间测试借方','EXPENSE','DEBIT',1),('period-test-credit','6999','期间测试贷方','REVENUE','CREDIT',1);");
   server = createServer(createApp(database, { distDir: resolve('dist') }));
   await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -92,12 +93,17 @@ async function createVoucher(token, date) {
     body: JSON.stringify({
       voucherDate: date,
       entries: [
-        { subjectId: 'subject-001', direction: 'DEBIT', amountCents: 100000, summary: 'Test' },
-        { subjectId: 'subject-006', direction: 'CREDIT', amountCents: 100000, summary: 'Test' }
+        { subjectId: 'period-test-debit', direction: 'DEBIT', amountCents: 100000, summary: 'Test' },
+        { subjectId: 'period-test-credit', direction: 'CREDIT', amountCents: 100000, summary: 'Test' }
       ],
     }),
   });
   return res.json();
+}
+
+function closeInventoryGate(period) {
+  database.prepare("INSERT OR REPLACE INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes,close_checks_json) VALUES(?,?,'CLOSED','user-admin',?,'test fixture',?)")
+    .run(`inventory-gate-${period}`, period, new Date().toISOString(), JSON.stringify({ overallStatus: 'PASS', checks: [] }));
 }
 
 describe('Period Management', () => {
@@ -134,6 +140,7 @@ describe('Period Management', () => {
       body: JSON.stringify({ year: 3000, month: 2 }),
     });
     const closure = await createRes.json();
+    closeInventoryGate('3000-02');
     await createVoucher(creatorToken, '3000-02-15');
     const res = await fetch(`${baseUrl}/api/period-closures/${closure.id}/close`, {
       method: 'POST',
@@ -149,6 +156,7 @@ describe('Period Management', () => {
       body: JSON.stringify({ year: 3000, month: 3 }),
     });
     const closure = await createRes.json();
+    closeInventoryGate('3000-03');
     const voucher = await createVoucher(creatorToken, '3000-03-15');
     await fetch(`${baseUrl}/api/accounting-vouchers/${voucher.id}/submit`, {
       method: 'POST',
@@ -168,6 +176,7 @@ describe('Period Management', () => {
       body: JSON.stringify({ year: 3000, month: 4 }),
     });
     const closure = await createRes.json();
+    closeInventoryGate('3000-04');
     const voucher = await createVoucher(creatorToken, '3000-04-15');
     await fetch(`${baseUrl}/api/accounting-vouchers/${voucher.id}/submit`, {
       method: 'POST',
@@ -231,6 +240,7 @@ describe('Closed Period Voucher Protection', () => {
       body: JSON.stringify({ year: 3000, month: 10 }),
     });
     const closure = await createRes.json();
+    closeInventoryGate('3000-10');
     await fetch(`${baseUrl}/api/period-closures/${closure.id}/close`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${periodManagerToken}` },

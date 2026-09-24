@@ -100,8 +100,12 @@ import {
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
-  saveTrackedAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
+  reverseTrackedSource, saveTrackedAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
 } from './modules/traceability-quality.js';
+import {
+  assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
+  issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
+} from './modules/financial-inventory.js';
 import {
   HttpError,
   allow,
@@ -159,6 +163,11 @@ async function handleApi(db, req, res, url) {
   const actor = authenticate(db, req);
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
+  if (req.method === 'GET' && pathname === '/api/system-health') return systemHealthHandler(db, res, actor, url);
+  if (req.method === 'GET' && pathname === '/api/reports/inventory-valuation') return inventoryValuationReport(db, res, actor, url);
+  if (req.method === 'GET' && pathname === '/api/reports/inventory-roll-forward') return inventoryRollForwardHandler(db,res,actor,url);
+  if (req.method === 'GET' && pathname === '/api/reports/wip-roll-forward') return wipRollForwardHandler(db,res,actor,url);
+  if (req.method === 'GET' && pathname === '/api/accounting/general-ledger') return generalLedgerHandler(db,res,actor,url);
   if (req.method === 'GET' && pathname === '/api/approvals') return listApprovals(db, res, actor, url);
 
   // Lifecycle 2.0 — centralized, administrator-only analysis and archive
@@ -273,6 +282,8 @@ async function handleApi(db, req, res, url) {
   if (inventoryDetailMatch && req.method === 'GET') return getInventoryDetail(db, res, actor, inventoryDetailMatch[1], inventoryDetailMatch[2]);
   if (pathname === '/api/inventory-adjustments' && req.method === 'GET') return listInventoryAdjustments(db, res, actor, url);
   if (pathname === '/api/inventory-adjustments' && req.method === 'POST') return createInventoryAdjustment(db, req, res, actor);
+  const adjustmentReverseMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)\/reverse$/);
+  if (adjustmentReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_ADJUSTMENT', adjustmentReverseMatch[1]);
   const adjustmentActionMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)\/(confirm|cancel)$/);
   if (adjustmentActionMatch && req.method === 'POST') return changeInventoryAdjustmentState(db, res, actor, adjustmentActionMatch[1], adjustmentActionMatch[2]);
   const adjustmentMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)$/);
@@ -283,10 +294,14 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
   if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
+  const inventoryCheckReverseMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/(?:reverse|reversal-request|reversal-confirm)$/);
+  if (inventoryCheckReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_CHECK', inventoryCheckReverseMatch[1], pathname.endsWith('reversal-confirm') ? 'CONFIRM' : pathname.endsWith('reversal-request') ? 'REQUEST' : null);
   const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
   if (icMatch && req.method === 'PATCH') return approveInventoryCheck(db, req, res, actor, icMatch[1]);
   if (pathname === '/api/inventory-transfers' && req.method === 'GET') return listInventoryTransfers(db, res, actor, url);
   if (pathname === '/api/inventory-transfers' && req.method === 'POST') return createInventoryTransfer(db, req, res, actor);
+  const inventoryTransferReverseMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/reverse$/);
+  if (inventoryTransferReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_TRANSFER', inventoryTransferReverseMatch[1]);
   const itMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)$/);
   if (itMatch && req.method === 'GET') return getInventoryTransfer(db, res, actor, itMatch[1]);
   const itActionMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/(transfer|cancel)$/);
@@ -504,6 +519,8 @@ async function handleApi(db, req, res, url) {
   // M13 — Inventory Scrap (operational stock destruction)
   if (pathname === '/api/inventory-scraps' && req.method === 'GET') return listInventoryScraps(db, res, actor, url);
   if (pathname === '/api/inventory-scraps' && req.method === 'POST') return createInventoryScrap(db, req, res, actor);
+  const scrapReverseMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)\/reverse$/);
+  if (scrapReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_SCRAP', scrapReverseMatch[1]);
   const scrapMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)$/);
   if (scrapMatch && req.method === 'GET') return getInventoryScrap(db, res, actor, scrapMatch[1]);
   if (scrapMatch && req.method === 'PATCH') return updateInventoryScrap(db, req, res, actor, scrapMatch[1]);
@@ -518,7 +535,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/inventory-period-closures' && req.method === 'GET') return listInventoryPeriodClosures(db, res, actor);
   if (pathname === '/api/inventory-period-closures' && req.method === 'POST') return closeInventoryPeriod(db, req, res, actor);
   const periodActionMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)\/(reopen)$/);
-  if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, res, actor, periodActionMatch[1]);
+  if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, req, res, actor, periodActionMatch[1]);
   const periodMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)$/);
   if (periodMatch && req.method === 'GET') return getInventoryPeriodClosure(db, res, actor, periodMatch[1]);
 
@@ -596,6 +613,8 @@ async function handleApi(db, req, res, url) {
     if (salesDiscountAction[2] === 'confirm') return confirmSalesDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
     return cancelSalesDiscount(db, res, actor, id);
   }
+  const voucherReverseMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/reverse$/);
+  if (voucherReverseMatch && req.method === 'POST') return reverseManualVoucher(db, req, res, actor, voucherReverseMatch[1]);
   const salesDiscountReverse = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/reverse$/);
   if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
@@ -1078,8 +1097,8 @@ async function updateCustomer(db, req, res, actor, customerId) {
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,standard_manufacturing_cost_cents standardManufacturingCostCents,stock_quantity stockQuantity,active,tracking_policy trackingPolicy,shelf_life_days shelfLifeDays,tracking_effective_at trackingEffectiveAt,
-    created_at createdAt,updated_at updatedAt FROM products WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search)
+  const products = db.prepare(`SELECT p.id,p.code,p.name,p.unit,p.price_cents priceCents,p.standard_manufacturing_cost_cents standardManufacturingCostCents,COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id=p.id),0) stockQuantity,p.active,p.tracking_policy trackingPolicy,p.shelf_life_days shelfLifeDays,p.tracking_effective_at trackingEffectiveAt,p.valuation_method valuationMethod,p.inventory_classification inventoryClassification,
+    p.created_at createdAt,p.updated_at updatedAt FROM products p WHERE p.code LIKE ? OR p.name LIKE ? ORDER BY p.code`).all(search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { products });
 }
@@ -1089,8 +1108,9 @@ async function createProduct(db, req, res, actor) {
   const body = await readJson(req); const product = productInput(body);
   const productId = id(); const now = new Date().toISOString();
   const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
-  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,standard_manufacturing_cost_cents,stock_quantity,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
-    .run(productId, product.code, product.name, product.unit, product.priceCents, standardCost, product.stockQuantity, now, now);
+  const classification = ['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(body.inventoryClassification) ? body.inventoryClassification : 'OTHER_INVENTORY';
+  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,1,?,?)`)
+    .run(productId, product.code, product.name, product.unit, product.priceCents, standardCost, classification, now, now);
   audit(db, actor.id, 'CREATE', 'PRODUCT', productId, product.code);
   return send(res, 201, { id: productId });
 }
@@ -1100,12 +1120,15 @@ async function updateProduct(db, req, res, actor, productId) {
   const current = db.prepare('SELECT * FROM products WHERE id=?').get(productId);
   if (!current) throw new HttpError(404, '货品不存在');
   const body = await readJson(req);
+  if (body.stockQuantity !== undefined || body.stock_quantity !== undefined) throw new HttpError(409, '货品库存数量只读，请通过库存业务单据变更');
   const product = productInput({ code: body.code ?? current.code, name: body.name ?? current.name, unit: body.unit ?? current.unit,
-    priceCents: body.priceCents ?? current.price_cents, stockQuantity: body.stockQuantity ?? current.stock_quantity });
+    priceCents: body.priceCents ?? current.price_cents, stockQuantity: current.stock_quantity });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
   const standardCost = Number(body.standardManufacturingCostCents ?? current.standard_manufacturing_cost_cents); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
-  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,standard_manufacturing_cost_cents=?,stock_quantity=?,active=?,updated_at=? WHERE id=?')
-    .run(product.code, product.name, product.unit, product.priceCents, standardCost, product.stockQuantity, active, new Date().toISOString(), productId);
+  const classification = body.inventoryClassification ?? current.inventory_classification;
+  if (!['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(classification)) throw new HttpError(400, '库存分类不正确');
+  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,standard_manufacturing_cost_cents=?,inventory_classification=?,active=?,updated_at=? WHERE id=?')
+    .run(product.code, product.name, product.unit, product.priceCents, standardCost, classification, active, new Date().toISOString(), productId);
   audit(db, actor.id, 'UPDATE', 'PRODUCT', productId, product.code);
   return send(res, 200, { ok: true });
 }
@@ -1192,8 +1215,8 @@ function generateVoucher(db, sourceType, sourceId, entries, actor, voucherDate =
   const voucherId = id();
   const now = new Date().toISOString();
   const voucherNo = makeVoucherNo();
-  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?)`)
-    .run(voucherId, voucherNo, sourceType, sourceId, voucherDate, '', actor.id, now);
+  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,approved_at,approver_id,period) VALUES(?,?,?,?,?,?,?,?,?,?,'POSTED','SYSTEM',?,?,?)`)
+    .run(voucherId, voucherNo, sourceType, sourceId, voucherDate, voucherDate, '', actor.id, now, now, now, actor.id, voucherDate.slice(0,7));
   const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
   for (const e of entries) stmt.run(id(), voucherId, e.subjectId, e.direction, e.amountCents, e.summary || '');
   return voucherId;
@@ -2010,7 +2033,8 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
   if (action === 'confirm') transaction(db, () => {
     const locked = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
     if (locked.status !== 'DRAFT') throw new HttpError(409, '库存调整单已处理');
-    const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId);
+    assertFinancialPeriodsOpen(db,locked.adjustment_date);
+    const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId); const voucherEntries=[];
     for (const item of items) {
       const before = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id)?.quantity || 0;
       const after = before + item.quantity_delta;
@@ -2018,9 +2042,12 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
       postTrackedMovement(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: Math.abs(item.quantity_delta), direction: item.quantity_delta > 0 ? 'IN' : 'OUT', businessDate: locked.adjustment_date });
       const balance = adjustInventory(db, locked.warehouse_id, item.product_id, item.quantity_delta, now);
       db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, balance, item.id);
-      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?)`).run(id(), locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now);
+      const transactionId=id(); db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?,?)`).run(transactionId, locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now,locked.adjustment_date);
+      const movements=item.quantity_delta>0?receivePositiveSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_GAIN',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:-Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_LOSS',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId});
+      const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0); const invRole=inventoryAccountRole(db,item.product_id); if(item.quantity_delta>0){voucherEntries.push({role:invRole,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount});}else{voucherEntries.push({role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role:invRole,direction:'CREDIT',amountCents:amount});}
     }
+    createSystemVoucher(db,{sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,businessDate:locked.adjustment_date,actorId:actor.id,entries:voucherEntries});
     db.prepare("UPDATE inventory_adjustments SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, adjustmentId);
     audit(db, actor.id, 'CONFIRM', 'INVENTORY_ADJUSTMENT', adjustmentId, `确认库存调整 ${locked.adjustment_no}`);
   });
@@ -2049,6 +2076,8 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (!inventory) throw new HttpError(400, '该仓库没有此货品的库存记录');
     db.prepare('UPDATE inventory_checks SET warehouse_id=?,product_id=?,system_quantity=?,actual_quantity=?,difference=?,reason=? WHERE id=?')
       .run(body.warehouseId, body.productId, inventory.quantity, actualQuantity, actualQuantity - inventory.quantity, optionalText(body.reason, 200), checkId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='INVENTORY_CHECK' AND source_id=?").run(checkId);
+    saveTrackedAllocations(db,{sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,productId:body.productId,quantity:Math.abs(actualQuantity-inventory.quantity),allocations:body.trackingAllocations||body.tracking_allocations||[]});
     audit(db, actor.id, 'UPDATE', 'INVENTORY_CHECK', checkId, '修改盘点单 ' + check.check_no);
   } else if (action === 'SUBMIT') {
     allow(actor, 'INVENTORY_CHECK_CREATE');
@@ -2061,14 +2090,20 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (check.status !== 'SUBMITTED') throw new HttpError(409, '只有已提交盘点单可以审批');
     if (check.creator_id === actor.id) throw new HttpError(409, '盘点单创建人不能审批自己的单据');
     transaction(db, () => {
+      const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
       const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(check.warehouse_id, check.product_id);
       if (!current) throw new HttpError(409, '库存记录不存在');
       if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
       if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate: now.slice(0, 10) });
       db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
       db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
-      if (check.difference !== 0) db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?)")
-        .run(id(), check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now);
+      if (check.difference !== 0) {
+        const transactionId=id(); db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?,?)")
+          .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now,businessDate);
+        const movements=check.difference>0?receivePositiveSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:Number(check.difference),movementType:'INVENTORY_COUNT_GAIN',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:-Number(check.difference),movementType:'INVENTORY_COUNT_SHORTAGE',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId});
+        const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0), role=inventoryAccountRole(db,check.product_id);
+        createSystemVoucher(db,{sourceType:'INVENTORY_COUNT',sourceId:checkId,businessDate,actorId:actor.id,entries:check.difference>0?[{role,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount}]:[{role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role,direction:'CREDIT',amountCents:amount}]});
+      }
       audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity}`);
     });
   } else throw new HttpError(400, '无效操作');
@@ -2246,7 +2281,8 @@ function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
     if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) throw new HttpError(409, '单据明细数量或单价不正确');
     const amountCents = quantity * unitPriceCents;
     if (!Number.isSafeInteger(amountCents) || amountCents < 0) throw new HttpError(409, '单据明细金额不正确');
-    if (item.amount_cents !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
+    if (Number(item.amount_cents) !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
+    item.amount_cents = amountCents;
     totalCents += amountCents;
     if (!Number.isSafeInteger(totalCents)) throw new HttpError(409, '单据金额超出安全范围');
   }
@@ -2260,6 +2296,85 @@ function adjustInventory(db, warehouseId, productId, quantityChange, now) {
       quantity=inventory.quantity+excluded.quantity,
       updated_at=excluded.updated_at`).run(id(), warehouseId, productId, quantityChange, now);
   return db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity;
+}
+
+const INVENTORY_CONTROL_REVERSAL = Object.freeze({
+  INVENTORY_ADJUSTMENT: { table: 'inventory_adjustments', status: 'CONFIRMED', permission: 'INVENTORY_ADJUSTMENT_MANAGE', voucherSourceType: 'INVENTORY_ADJUSTMENT' },
+  INVENTORY_SCRAP: { table: 'inventory_scraps', status: 'CONFIRMED', permission: 'INVENTORY_SCRAP_MANAGE', voucherSourceType: 'INVENTORY_SCRAP' },
+  INVENTORY_TRANSFER: { table: 'inventory_transfers', status: 'TRANSFERRED', permission: 'INVENTORY_TRANSFER_APPROVE', voucherSourceType: 'INVENTORY_TRANSFER' },
+  INVENTORY_CHECK: { table: 'inventory_checks', status: 'APPROVED', requestPermission: 'INVENTORY_CHECK_CREATE', confirmPermission: 'INVENTORY_CHECK_APPROVE', voucherSourceType: 'INVENTORY_COUNT' },
+});
+
+async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId, routeAction = null) {
+  const config = INVENTORY_CONTROL_REVERSAL[sourceType];
+  if (!config) throw new HttpError(400, '不支持的库存冲销类型');
+  const body = await readJson(req);
+  const requestedAction = String(routeAction || body.action || (sourceType === 'INVENTORY_CHECK' ? 'REQUEST' : 'CONFIRM')).toUpperCase();
+  const original = db.prepare(`SELECT * FROM ${config.table} WHERE id=?`).get(sourceId);
+  if (!original) throw new HttpError(404, '原库存单据不存在');
+  if (original.status !== config.status) throw new HttpError(409, '只有已生效库存单据可以冲销');
+  const existing = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+
+  if (sourceType === 'INVENTORY_CHECK' && requestedAction === 'REQUEST') {
+    allow(actor, config.requestPermission);
+    if (existing) return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+    const reason = requiredText(body.reason, '盘点冲销原因', 200);
+    const businessDate = normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
+    assertFinancialPeriodsOpen(db, businessDate);
+    const reversalId = id(); const now = new Date().toISOString();
+    db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
+    audit(db, actor.id, 'REQUEST_REVERSAL', sourceType, sourceId, `申请冲销：${reason}`);
+    return send(res, 201, { id: reversalId, status: 'DRAFT' });
+  }
+
+  if (sourceType === 'INVENTORY_CHECK') {
+    allow(actor, config.confirmPermission);
+    if (!existing) throw new HttpError(409, '请先由仓库提交盘点冲销申请');
+    if (existing.status === 'CONFIRMED') return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+    if (existing.creator_id === actor.id) throw new HttpError(409, '盘点冲销申请人不能审核自己的申请');
+  } else {
+    allow(actor, config.permission);
+    if (existing) return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+  }
+
+  const reason = sourceType === 'INVENTORY_CHECK' ? existing.reason : requiredText(body.reason, '冲销原因', 200);
+  const businessDate = sourceType === 'INVENTORY_CHECK' ? existing.business_date : normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
+  assertFinancialPeriodsOpen(db, businessDate);
+  const reversalId = existing?.id || id(); const reversalSourceType = `${sourceType}_REVERSAL`; const now = new Date().toISOString();
+  transaction(db, () => {
+    const lockedExisting = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+    if (lockedExisting?.status === 'CONFIRMED') return;
+    if (!lockedExisting) db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
+    const originalTransactions = db.prepare('SELECT * FROM inventory_transactions WHERE source_type=? AND source_id=? ORDER BY CASE direction WHEN \'OUT\' THEN 0 ELSE 1 END,created_at,id').all(sourceType, sourceId);
+    if (!originalTransactions.length) throw new HttpError(409, '原单没有可冲销的库存事件');
+    const netByStock = new Map();
+    for (const item of originalTransactions) {
+      const key = `${item.warehouse_id}\u0000${item.product_id}`;
+      const delta = item.direction === 'IN' ? -Number(item.quantity_change) : Number(item.quantity_change);
+      netByStock.set(key, (netByStock.get(key) || 0) + delta);
+    }
+    for (const [key, delta] of netByStock) {
+      const [warehouseId, productId] = key.split('\u0000');
+      const current = Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId)?.quantity || 0);
+      if (current + delta < -1e-9) throw new HttpError(409, '原入库数量已不可用，不能冲销');
+    }
+    reverseTrackedSource(db, { originalSourceType: sourceType, originalSourceId: sourceId, reversalSourceType, reversalSourceId: reversalId, businessDate });
+    const transactionIdByOriginal = new Map();
+    for (const item of originalTransactions) {
+      const direction = item.direction === 'IN' ? 'OUT' : 'IN';
+      const delta = direction === 'IN' ? Number(item.quantity_change) : -Number(item.quantity_change);
+      const balance = adjustInventory(db, item.warehouse_id, item.product_id, delta, now);
+      const reversalTransactionId = id();
+      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(reversalTransactionId, item.warehouse_id, item.product_id, Math.abs(Number(item.quantity_change)), direction, balance, reversalSourceType, reversalId, `REV-${sourceId}`, reason, actor.id, now, businessDate);
+      transactionIdByOriginal.set(item.id, reversalTransactionId);
+    }
+    reverseValuationSource(db, { originalSourceType: sourceType, originalSourceId: sourceId, reversalSourceType, reversalSourceId: reversalId, businessDate, transactionIdByOriginal });
+    reverseSystemVoucher(db, { originalSourceType: config.voucherSourceType, originalSourceId: sourceId, reversalSourceType: `${config.voucherSourceType}_REVERSAL`, reversalSourceId: reversalId, businessDate, actorId: actor.id, reason });
+    db.prepare("UPDATE inventory_control_reversals SET status='CONFIRMED',reviewer_id=? WHERE id=?").run(sourceType === 'INVENTORY_CHECK' ? actor.id : null, reversalId);
+    audit(db, actor.id, 'REVERSE', sourceType, sourceId, `冲销 ${sourceId}：${reason}`);
+  });
+  return send(res, 200, { id: reversalId, status: 'CONFIRMED' });
 }
 
 async function createInventoryTransfer(db, req, res, actor) {
@@ -2312,6 +2427,7 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
   if (action === 'transfer') {
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以确认');
     const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
+    const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
     transaction(db, () => {
       for (const item of items) {
         const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
@@ -2322,18 +2438,15 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
         const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
           (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
-        insertTransaction.run(id(), transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
-        insertTransaction.run(id(), transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
+        const outTransactionId=id(); const inTransactionId=id();
+        insertTransaction.run(outTransactionId, transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
+        insertTransaction.run(inTransactionId, transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
+        const issued=issueSourceValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.from_warehouse_id,quantity:Number(item.quantity),movementType:'TRANSFER_OUT',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:outTransactionId});
+        issued.forEach((m)=>receiveValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.to_warehouse_id,lotId:m.lotId,serialId:m.serialId,quantity:-m.quantityDelta,valueCents:-m.valueDeltaCents,movementType:'TRANSFER_IN',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:inTransactionId,valuationBasis:m.valuationMethod==='LEGACY_UNVALUED'?'LEGACY_UNVALUED':'TRANSFER_CARRYING_VALUE'}));
       }
       db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
       audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
-      // Generate accounting voucher for inventory transfer
-      const totalAmt = items.reduce((s, i) => { const inv = db.prepare('SELECT price_cents FROM products WHERE id=?').get(i.product_id); return s + Math.round(i.quantity * (inv?.price_cents || 0)); }, 0);
-      const entries3 = [
-        { subjectId: 'subject-004', direction: 'DEBIT', amountCents: totalAmt, summary: `调拨入库 ${transfer.transfer_no}` },
-        { subjectId: 'subject-004', direction: 'CREDIT', amountCents: totalAmt, summary: `调拨出库 ${transfer.transfer_no}` }
-      ];
-      generateVoucher(db, 'INVENTORY_TRANSFER', transferId, entries3, actor);
+      // 同一公司内仓库调拨仅改变估值维度，不形成损益或公司总存货 GL。
     });
   } else if (action === 'cancel') {
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
@@ -2567,7 +2680,7 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
 }
 
 async function approveAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'VOUCHER_APPROVE');
+  if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -2595,7 +2708,7 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
 }
 
 async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'VOUCHER_APPROVE');
+  if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -2901,7 +3014,7 @@ function getBankAccount(db, res, actor, accountId) {
 }
 
 async function updateBankAccount(db, req, res, actor, accountId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
   const account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(accountId);
   if (!account) throw new HttpError(404, '账户不存在');
   
@@ -3025,7 +3138,7 @@ function listFixedAssets(db, res, actor, url) {
 }
 
 async function createFixedAsset(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const body = await readJson(req);
   const { asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount, service_years, depreciation_method, residual_value, location, custodian, remark } = body;
   
@@ -3060,7 +3173,7 @@ function getFixedAsset(db, res, actor, assetId) {
 }
 
 async function updateFixedAsset(db, req, res, actor, assetId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(assetId);
   if (!asset) throw new HttpError(404, '资产不存在');
   
@@ -3077,7 +3190,7 @@ async function updateFixedAsset(db, req, res, actor, assetId) {
 }
 
 async function calculateDepreciation(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const body = await readJson(req);
   const { asset_id, depreciation_amount } = body;
   
@@ -3422,8 +3535,9 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
       if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
       if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
       assertQualityGate(db, 'IQC', receiptId);
-      checkPeriodNotClosedForVoucher(db, locked.receipt_date, '生成业务');
+      assertFinancialPeriodsOpen(db, locked.receipt_date);
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
+      const inventoryEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.purchase_order_item_id, po.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
@@ -3431,14 +3545,14 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
         postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.receipt_date });
         const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?,?)').run(transactionId, receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
+        receiveSourceValue(db,{ businessDate:locked.receipt_date,productId:item.product_id,warehouseId:receipt.warehouse_id,quantity:Number(item.quantity),valueCents:Number(item.amount_cents),movementType:'PURCHASE_RECEIPT',sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,sourceItemId:item.id,inventoryTransactionId:transactionId,valuationBasis:'APPROVED_PO_PRICE' });
+        inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
       }
       db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
       const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
-      generateVoucher(db, 'PURCHASE_RECEIPT', receiptId, [
-        { subjectId: 'subject-004', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName },
-        { subjectId: 'subject-005', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
-      ], actor, locked.receipt_date);
+      createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
       ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
       saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
@@ -3557,8 +3671,9 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
       if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       assertQualityGate(db, 'OQC', deliveryId);
-      checkPeriodNotClosedForVoucher(db, locked.delivery_date, '生成业务');
+      assertFinancialPeriodsOpen(db, locked.delivery_date);
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId);
+      let cogsCents=0; const cogsInventoryEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(item.sales_order_item_id, so.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
@@ -3568,14 +3683,14 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
         postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.delivery_date });
         const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?)').run(id(), delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:Number(item.quantity),movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
       const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-      generateVoucher(db, 'SALES_DELIVERY', deliveryId, [
-        { subjectId: 'subject-003', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' ' + customerName },
-        { subjectId: 'subject-006', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
-      ], actor, locked.delivery_date);
+      createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+      createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
       ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
@@ -3681,8 +3796,9 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
       const delivery = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (!delivery || delivery.status !== 'CONFIRMED') throw new HttpError(409, '来源销售出货单不存在或未确认');
       if (locked.customer_id !== delivery.customer_id || locked.warehouse_id !== delivery.warehouse_id) throw new HttpError(409, '退货客户或仓库与来源出货单不一致');
-      checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
+      assertFinancialPeriodsOpen(db, locked.return_date);
       const authoritative = authoritativeLogisticsTotal(db, 'return_order_items', 'return_id', returnId);
+      let restoredCogsCents=0; const restoredInventoryEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM sales_delivery_items WHERE id=? AND delivery_id=?').get(item.delivery_item_id, delivery.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '销售退货明细与来源出货明细不一致');
@@ -3690,14 +3806,14 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源出货数量');
         postTrackedMovement(db, { sourceType: 'SALES_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.return_date, returnToHold: true });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?,?)').run(transactionId, ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now, locked.return_date);
+        const restored=restoreSourceValue(db,{ businessDate:locked.return_date,productId:item.product_id,warehouseId:ret.warehouse_id,quantity:Number(item.quantity),movementType:'SALES_RETURN_COGS_REVERSAL',sourceType:'SALES_RETURN',sourceId:returnId,sourceItemId:item.id,inventoryTransactionId:transactionId,originalSourceType:'SALES_DELIVERY',originalSourceId:deliveryId,originalSourceItemId:item.delivery_item_id }).reduce((s,x)=>s+x.valueDeltaCents,0); restoredCogsCents+=restored; restoredInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:restored,summary:'销售退货恢复存货 '+ret.return_no});
       }
       db.prepare('UPDATE return_orders SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);
       const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(ret.customer_id)?.name || '';
-      generateVoucher(db, 'SALES_RETURN', returnId, [
-        { subjectId: 'subject-006', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' 收入冲减' },
-        { subjectId: 'subject-003', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' ' + customerName }
-      ], actor, locked.return_date);
+      createSystemVoucher(db,{sourceType:'SALES_RETURN',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[{role:'SALES_REVENUE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售退货 '+ret.return_no+' 收入冲减'},{role:'ACCOUNTS_RECEIVABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售退货 '+ret.return_no+' '+customerName}]});
+      createSystemVoucher(db,{ sourceType:'SALES_RETURN_COGS',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[...restoredInventoryEntries,{role:'COGS',direction:'CREDIT',amountCents:restoredCogsCents,summary:'销售退货冲减成本 '+ret.return_no}] });
       const sourceTerms = delivery.sales_order_id ? db.prepare('SELECT payment_terms_days FROM sales_orders WHERE id=?').get(delivery.sales_order_id)?.payment_terms_days : null;
       ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: delivery.delivery_date, paymentTermsDays: sourceTerms, effectCents: delivery.total_cents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
       const sourceAr = db.prepare("SELECT id FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=? AND item_class='SOURCE'").get(deliveryId);
@@ -3804,8 +3920,9 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
       const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(locked.receipt_id);
       if (!receipt || receipt.status !== 'CONFIRMED') throw new HttpError(409, '来源采购入库单不存在或未确认');
       if (locked.supplier_id !== receipt.supplier_id || locked.warehouse_id !== receipt.warehouse_id) throw new HttpError(409, '退货供应商或仓库与来源入库单不一致');
-      checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
+      assertFinancialPeriodsOpen(db, locked.return_date);
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_return_items', 'return_id', returnId);
+      let carryingValueCents=0; const carryingEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM purchase_receipt_items WHERE id=? AND receipt_id=?').get(item.receipt_item_id, receipt.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '采购退货明细与来源入库明细不一致');
@@ -3815,14 +3932,18 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
         postTrackedMovement(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.return_date });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?,?)').run(transactionId, ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now, locked.return_date);
+        const carrying=issueSourceValue(db,{ businessDate:locked.return_date,productId:item.product_id,warehouseId:ret.warehouse_id,quantity:Number(item.quantity),movementType:'PURCHASE_RETURN',sourceType:'PURCHASE_RETURN',sourceId:returnId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); carryingValueCents+=carrying; carryingEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:carrying,summary:'移除存货账面价值 '+ret.return_no});
       }
       db.prepare('UPDATE purchase_returns SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);
       const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(ret.supplier_id)?.name || '';
-      generateVoucher(db, 'PURCHASE_RETURN', returnId, [
-        { subjectId: 'subject-005', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no + ' ' + supplierName },
-        { subjectId: 'subject-004', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no }
-      ], actor, locked.return_date);
+      const variance=authoritative.totalCents-carryingValueCents;
+      createSystemVoucher(db,{ sourceType:'PURCHASE_RETURN',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[
+        {role:'ACCOUNTS_PAYABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'采购退货 '+ret.return_no+' '+supplierName},
+        ...carryingEntries,
+        ...(variance>0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'CREDIT',amountCents:variance,summary:'采购退货差异'}]:variance<0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'DEBIT',amountCents:-variance,summary:'采购退货差异'}]:[])
+      ]});
       const sourceTerms = receipt.purchase_order_id ? db.prepare('SELECT payment_terms_days FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)?.payment_terms_days : null;
       ensurePayableSource(db, { id: receipt.id, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, paymentTermsDays: sourceTerms, effectCents: receipt.total_cents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
       const sourceAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE'").get(locked.receipt_id);
@@ -4289,6 +4410,10 @@ function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routin
   }
 }
 
+async function reverseManualVoucher(db,req,res,actor,voucherId){
+  allow(actor,'VOUCHER_SUBMIT'); const original=db.prepare('SELECT * FROM accounting_vouchers WHERE id=?').get(voucherId); if(!original)throw new HttpError(404,'凭证不存在'); if(original.voucher_origin!=='MANUAL'||original.source_type!=='MANUAL'||original.status!=='POSTED')throw new HttpError(409,'只能冲销已过账手工凭证'); if(db.prepare('SELECT 1 FROM accounting_vouchers WHERE reversal_of_id=?').get(voucherId))throw new HttpError(409,'手工凭证已经冲销'); const body=await readJson(req); const reason=requiredText(body.reason,'冲销原因',500); const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期'); checkPeriodNotClosedForVoucher(db,businessDate,'冲销'); const entries=db.prepare('SELECT * FROM accounting_entries WHERE voucher_id=? ORDER BY line_no,id').all(voucherId); const reversalId=id(),now=new Date().toISOString(),voucherNo=makeVoucherNo(); transaction(db,()=>{db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,reversal_of_id,submitted_at,submitted_by,period) VALUES(?,?,?,?,?,?,?,?,?,?,'SUBMITTED','MANUAL',?,?,?,?,?)`).run(reversalId,voucherNo,'MANUAL_REVERSAL',reversalId,businessDate,businessDate,reason,actor.id,now,now,voucherId,now,actor.id,businessDate.slice(0,7)); const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); entries.forEach((e,i)=>stmt.run(id(),reversalId,e.subject_id,e.direction==='DEBIT'?'CREDIT':'DEBIT',e.amount_cents,`冲销 ${original.voucher_no} ${e.summary||''}`,i+1)); audit(db,actor.id,'REVERSE_REQUEST','ACCOUNTING_VOUCHER',reversalId,reason);}); return send(res,201,{id:reversalId,voucherNo,status:'SUBMITTED',reversalOfId:voucherId});
+}
+
 function listProductionOrders(db, res, actor, url) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
   const search = '%' + (url.searchParams.get('search') || '') + '%';
@@ -4390,7 +4515,7 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
     }
     const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(poId, poId).total);
     if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
-    transaction(db, () => { db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
+    transaction(db, () => { const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate); const residual=Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE production_order_id=?').get(poId).n); if(residual!==0){ const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_COMPLETION_VARIANCE',sourceId:poId,businessDate,actorId:actor.id,entries:residual>0?[{role:'MANUFACTURING_VARIANCE',direction:'DEBIT',amountCents:residual},{role:'WIP',direction:'CREDIT',amountCents:residual}]:[{role:'WIP',direction:'DEBIT',amountCents:-residual},{role:'MANUFACTURING_VARIANCE',direction:'CREDIT',amountCents:-residual}]}); postWipMovement(db,{productionOrderId:poId,businessDate,movementType:'COMPLETION_VARIANCE',amountCents:-residual,sourceType:'PRODUCTION_ORDER_COMPLETION',sourceId:poId,voucherId}); } db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');

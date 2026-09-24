@@ -1,6 +1,7 @@
 ﻿import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
+import { systemHealth } from './financial-inventory.js';
 
 const IQC_OQC_STATUSES = ['PENDING', 'COMPLETED'];
 const IQC_OQC_RESULTS = ['PASS', 'FAIL'];
@@ -375,6 +376,8 @@ export async function closePeriod(db, req, res, actor, closureId) {
   const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
   if (!closure) throw new HttpError(404, "期间不存在");
   if (closure.status === "CLOSED") throw new HttpError(400, "期间已结账");
+  if(!db.prepare("SELECT 1 FROM inventory_period_closures WHERE period_key=? AND status='CLOSED'").get(closure.period)) throw new HttpError(409,'必须先完成对应存货期间结账');
+  const endDate=`${closure.period}-${String(new Date(Number(closure.period.slice(0,4)),Number(closure.period.slice(5,7)),0).getDate()).padStart(2,'0')}`; const health=systemHealth(db,{asOfDate:endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`会计结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
 
   // 执行统一的关闭前置检查
   const checklistResult = getPeriodClosureChecklist(db, closure.period);

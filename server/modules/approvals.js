@@ -208,8 +208,9 @@ export function listApprovals(db, res, actor, url) {
   let selected = [];
 
   for (const document of DOCUMENTS) {
-    const mayView = can(actor, document.view);
-    const mayApprove = can(actor, document.approve);
+    const reviewerVoucher=document.type==='ACCOUNTING_VOUCHER'&&actor.roleCode==='REVIEWER';
+    const mayView = reviewerVoucher||can(actor, document.view);
+    const mayApprove = reviewerVoucher||can(actor, document.approve);
     for (const candidateTab of TABS) {
       const eligible = mayView && (candidateTab === 'created' || mayApprove) && !(candidateTab === 'rejected' && !document.supportsReject);
       if (!eligible) continue;

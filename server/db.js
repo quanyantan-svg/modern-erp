@@ -15,6 +15,7 @@ import { migrateV13Phase5SettlementIntegrity } from './migrations/v13-phase5-set
 import { migrateV13Phase6AFinancialControls } from './migrations/v13-phase6a-financial-controls.js';
 import { migrateV13Phase6BTraceabilityQuality } from './migrations/v13-phase6b-traceability-quality.js';
 import { migrateV13Phase6CManufacturingExecution } from './migrations/v13-phase6c-manufacturing-execution.js';
+import { migrateV13Phase6DFinancialInventory } from './migrations/v13-phase6d-financial-inventory.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -347,6 +348,7 @@ export function createDatabase(filename) {
   migrateV13Phase6AFinancialControls(db);
   migrateV13Phase6BTraceabilityQuality(db);
   migrateV13Phase6CManufacturingExecution(db);
+  migrateV13Phase6DFinancialInventory(db);
   reconcileSettlementSubledgers(db);
 
   return db;

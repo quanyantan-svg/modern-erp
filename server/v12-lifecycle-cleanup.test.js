@@ -145,16 +145,14 @@ describe('V1.2 simple and non-effective lifecycle cleanup', () => {
     assert.equal(database.prepare('SELECT COUNT(*) n FROM cleanup_event_items WHERE cleanup_event_id=?').get(event.id).n, 1);
   });
 
-  test('instruction -> requisition -> draft PO deletes as one atomic chain', async () => {
+  test('released instruction chain is effective and destructive cleanup is disabled', async () => {
     const chain = seedPurchaseChain();
     const result = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_INSTRUCTION', chain.instructionId) });
-    assert.equal(result.status, 200, JSON.stringify(result.data));
-    assert.equal(result.data.classification, 'SAFE_CHAIN_DELETE');
-    assert.equal(result.data.affectedRecords, 3);
-    assert.equal(database.prepare('SELECT 1 FROM purchase_instructions WHERE id=?').get(chain.instructionId), undefined);
-    assert.equal(database.prepare('SELECT 1 FROM purchase_requisitions WHERE id=?').get(chain.requisitionId), undefined);
-    assert.equal(database.prepare('SELECT 1 FROM purchase_orders WHERE id=?').get(chain.purchaseOrderId), undefined);
-    assert.equal(database.prepare('SELECT COUNT(*) n FROM cleanup_event_items WHERE cleanup_event_id=?').get(result.data.cleanupEventId).n, 3);
+    assert.equal(result.status, 409, JSON.stringify(result.data));
+    assert.equal(result.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
+    assert.ok(database.prepare('SELECT 1 FROM purchase_instructions WHERE id=?').get(chain.instructionId));
+    assert.ok(database.prepare('SELECT 1 FROM purchase_requisitions WHERE id=?').get(chain.requisitionId));
+    assert.ok(database.prepare('SELECT 1 FROM purchase_orders WHERE id=?').get(chain.purchaseOrderId));
   });
 
   test('approved purchase order with no stock or finance effect is not treated as effective', () => {
@@ -176,7 +174,7 @@ describe('V1.2 simple and non-effective lifecycle cleanup', () => {
 });
 
 describe('V1.2 effective purchase chain reversal safety', () => {
-  test('confirmed purchase receipt reverses stock + AP + balanced voucher atomically', async () => {
+  test('confirmed purchase receipt destructive cleanup is refused without changing effects', async () => {
     const receipt = await createConfirmedReceipt(70);
     const beforeEffects = {
       ap: database.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n,
@@ -186,36 +184,22 @@ describe('V1.2 effective purchase chain reversal safety', () => {
     const analysis = analyzeLifecycleGraph(database, { entityType: 'PURCHASE_RECEIPT', entityId: receipt.id });
     assert.equal(analysis.classification, 'SAFE_REVERSAL_CLEANUP');
     const result = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) });
-    assert.equal(result.status, 200, JSON.stringify(result.data));
-    assert.equal(result.data.classification, 'SAFE_REVERSAL_CLEANUP');
-    assert.equal(database.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity, receipt.before);
-    assert.equal(database.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receipt.id), undefined);
-    assert.equal(database.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n, 0);
-    assert.equal(database.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n, 0);
-    assert.equal(database.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n, 0);
-    assert.ok(database.prepare('SELECT 1 FROM cleanup_events WHERE id=?').get(result.data.cleanupEventId));
+    assert.equal(result.status, 409, JSON.stringify(result.data));
+    assert.equal(result.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
+    assert.ok(database.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receipt.id));
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n, beforeEffects.ap);
+    assert.equal(database.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n, beforeEffects.voucher);
   });
 
-  test('partial cleanup is blocked after valid production consumed stock', async () => {
+  test('effective receipt cleanup remains disabled regardless of dependency expansion', async () => {
     const receipt = await createConfirmedReceipt(70);
-    const flow = await createConsumedProductionFlow(30);
-    const analysis = analyzeLifecycleGraph(database, { entityType: 'PURCHASE_RECEIPT', entityId: receipt.id });
-    assert.equal(analysis.classification, 'BLOCKED');
-    assert.ok(analysis.blockers.some((item) => item.code === 'EXTERNAL_DEPENDENCY'));
-    assert.ok(analysis.nodes.some((node) => node.entityId === flow.issueId && node.selectedForCleanup === false));
     const blocked = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) });
     assert.equal(blocked.status, 409);
-    assert.equal(blocked.data.details.code, 'LIFECYCLE_CLEANUP_BLOCKED');
+    assert.equal(blocked.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
     assert.ok(database.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receipt.id));
-
-    const expanded = analyzeLifecycleGraph(database, { entityType: 'PURCHASE_RECEIPT', entityId: receipt.id, includeExternal: true });
-    assert.equal(expanded.classification, 'SAFE_REVERSAL_CLEANUP');
-    assert.ok(expanded.nodes.some((node) => node.entityId === flow.orderId && node.selectedForCleanup));
     const cleaned = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id, { includeExternal: true }) });
-    assert.equal(cleaned.status, 200, JSON.stringify(cleaned.data));
-    assert.equal(database.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity, receipt.before);
-    assert.equal(database.prepare('SELECT 1 FROM production_material_issues WHERE id=?').get(flow.issueId), undefined);
-    assert.equal(database.prepare('SELECT 1 FROM production_orders WHERE id=?').get(flow.orderId), undefined);
+    assert.equal(cleaned.status, 409, JSON.stringify(cleaned.data));
+    assert.equal(cleaned.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
   });
 
   test('closed inventory period blocks cleanup until explicitly reopened', async () => {
@@ -229,10 +213,12 @@ describe('V1.2 effective purchase chain reversal safety', () => {
     assert.equal((await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) })).status, 409);
     database.prepare("UPDATE inventory_period_closures SET status='REOPENED',reopened_by='user-admin',reopened_at=? WHERE id='v12-closed-period'").run(stamp);
     assert.equal(analyzeLifecycleGraph(database, { entityType: 'PURCHASE_RECEIPT', entityId: receipt.id }).classification, 'SAFE_REVERSAL_CLEANUP');
-    assert.equal((await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) })).status, 200);
+    const reopened = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) });
+    assert.equal(reopened.status, 409);
+    assert.equal(reopened.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
   });
 
-  test('forced failure after reversal work rolls back documents, effects, balances and audit event', async () => {
+  test('effective cleanup guard runs before legacy reversal work and preserves every effect', async () => {
     const receipt = await createConfirmedReceipt(12);
     const actor = database.prepare(`
       SELECT u.id,u.username,u.display_name displayName,r.id roleId,r.name roleName,r.code roleCode
@@ -246,7 +232,7 @@ describe('V1.2 effective purchase chain reversal safety', () => {
       voucher: database.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receipt.id).n,
       events: database.prepare('SELECT COUNT(*) n FROM cleanup_events').get().n,
     };
-    assert.throws(() => cleanupLifecycleGraph(database, actor, cleanupBody('PURCHASE_RECEIPT', receipt.id), { failAfterEffects: true }), /SIMULATED_LIFECYCLE_FAILURE/);
+    assert.throws(() => cleanupLifecycleGraph(database, actor, cleanupBody('PURCHASE_RECEIPT', receipt.id), { failAfterEffects: true }), /Phase 6D/);
     assert.ok(database.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receipt.id));
     assert.deepEqual({
       quantity: database.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity,
@@ -256,7 +242,8 @@ describe('V1.2 effective purchase chain reversal safety', () => {
       events: database.prepare('SELECT COUNT(*) n FROM cleanup_events').get().n,
     }, before);
     const final = await request('/api/lifecycle/cleanup', { method: 'POST', body: cleanupBody('PURCHASE_RECEIPT', receipt.id) });
-    assert.equal(final.status, 200, JSON.stringify(final.data));
+    assert.equal(final.status, 409, JSON.stringify(final.data));
+    assert.equal(final.data.details.code, 'EFFECTIVE_CLEANUP_DISABLED');
   });
 
   test('database integrity remains valid after all lifecycle cases', () => {

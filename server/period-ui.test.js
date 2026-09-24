@@ -191,6 +191,15 @@ after(async () => {
 
 async function rawJson(res) { return res.json(); }
 
+function resetFinancialInventoryFixture(db) {
+  db.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory;');
+}
+
+function seedClosedInventoryPeriod(db, period) {
+  db.prepare("INSERT OR REPLACE INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes,close_checks_json) VALUES(?,?,'CLOSED','user-admin',?,'test fixture',?)")
+    .run(`inventory-gate-${period}`, period, new Date().toISOString(), JSON.stringify({ overallStatus: 'PASS', checks: [] }));
+}
+
 async function createVoucher(token, voucherDate, status = 'ENTERED', target = baseUrl) {
   const body = {
     voucherDate,
@@ -303,6 +312,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
   beforeEach(async () => {
     dbDir = mkdtempSync(join(tmpdir(), 'modern-erp-period-checklist-'));
     db = createDatabase(join(dbDir, 'erp.db'));
+    resetFinancialInventoryFixture(db);
     svr = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((r) => svr.listen(0, '127.0.0.1', r));
     url = `http://127.0.0.1:${svr.address().port}`;
@@ -323,6 +333,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
       body: JSON.stringify({ year: 2080, month: 1 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2080-01');
     await createVoucher(creator, '2080-01-15', 'ENTERED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -342,6 +353,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
       body: JSON.stringify({ year: 2080, month: 2 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2080-02');
     await createVoucher(creator, '2080-02-15', 'SUBMITTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -361,6 +373,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
       body: JSON.stringify({ year: 2080, month: 3 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2080-03');
     await createVoucher(creator, '2080-03-15', 'REJECTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -380,6 +393,7 @@ describe('Phase E — period checklist blocking coverage (fresh DB)', () => {
       body: JSON.stringify({ year: 2080, month: 4 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2080-04');
     await createVoucher(creator, '2080-04-15', 'POSTED', url);
 
     const r = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -398,6 +412,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
   beforeEach(async () => {
     dbDir = mkdtempSync(join(tmpdir(), 'modern-erp-period-closed-'));
     db = createDatabase(join(dbDir, 'erp.db'));
+    resetFinancialInventoryFixture(db);
     svr = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((r) => svr.listen(0, '127.0.0.1', r));
     url = `http://127.0.0.1:${svr.address().port}`;
@@ -420,6 +435,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
       body: JSON.stringify({ year: 2081, month: 9 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2081-09');
     await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });
@@ -450,6 +466,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
       body: JSON.stringify({ year: 2082, month: 1 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2082-01');
 
     // No vouchers → close should succeed
     const closeRes = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
@@ -479,6 +496,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
       body: JSON.stringify({ year: 2083, month: 6 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2083-06');
     for (let i = 0; i < 3; i++) {
       const closeRes = await fetch(`${url}/api/period-closures/${cv.id}/close`, {
         method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
@@ -504,6 +522,7 @@ describe('Phase E — closed period protects voucher create + audit trail', () =
       body: JSON.stringify({ year: 2084, month: 1 }),
     });
     const cv = await c.json();
+    seedClosedInventoryPeriod(db, '2084-01');
     await fetch(`${url}/api/period-closures/${cv.id}/close`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adm}` },
     });

@@ -771,6 +771,8 @@ export function cleanupLifecycleGraph(db, actor, input, options = {}) {
 
   return transaction(db, () => {
     const graph = analyzeLifecycleGraph(db, { entityType, entityId, includeExternal: input.includeExternal === true });
+    const unsafe=graph.nodes.filter((node)=>node.selectedForCleanup).filter((node)=>!['DRAFT','CANCELLED'].includes(node.status)||node.effective||node.inventoryEffect.length||node.financialEffect.receivables.length||node.financialEffect.payables.length||node.financialEffect.vouchers.length);
+    if(unsafe.length)throw new HttpError(409,'Phase 6D 禁止清理已确认、已过账或已有业务效果的记录；请使用领域冲销/退货',{code:'EFFECTIVE_CLEANUP_DISABLED',records:unsafe.map(x=>x.key)});
     if (graph.classification === 'BLOCKED') {
       throw new HttpError(409, graph.blockers[0]?.message || '当前业务链不能安全清理', { code: 'LIFECYCLE_CLEANUP_BLOCKED', blockers: graph.blockers });
     }

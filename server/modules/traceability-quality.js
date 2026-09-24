@@ -219,8 +219,58 @@ export function transferTrackedInventory(db, { sourceId, sourceItemId, productId
   return rows;
 }
 
+export function reverseTrackedSource(db, { originalSourceType, originalSourceId, reversalSourceType, reversalSourceId, businessDate }) {
+  const rows = db.prepare(`SELECT * FROM tracked_inventory_movements
+    WHERE source_type=? AND source_id=? AND reversed=0
+    ORDER BY source_item_id,direction,id`).all(originalSourceType, originalSourceId);
+  if (!rows.length) return [];
+  const at = nowIso();
+  if (originalSourceType === 'INVENTORY_TRANSFER') {
+    const itemIds = [...new Set(rows.map((row) => row.source_item_id))];
+    for (const itemId of itemIds) {
+      const outgoing = rows.filter((row) => row.source_item_id === itemId && row.direction === 'OUT');
+      const incoming = rows.filter((row) => row.source_item_id === itemId && row.direction === 'IN');
+      for (const destination of incoming) {
+        const source = outgoing.find((row) => row.product_id === destination.product_id && (destination.serial_id ? row.serial_id === destination.serial_id : row.lot_id === destination.lot_id));
+        if (!source) throw new HttpError(409, '调拨身份移动不完整，不能冲销');
+        if (destination.lot_id) {
+          changeLotBalance(db, destination.warehouse_id, destination.product_id, destination.lot_id, -Number(destination.quantity), at);
+          changeLotBalance(db, source.warehouse_id, source.product_id, source.lot_id, Number(source.quantity), at);
+        } else {
+          const serial = db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(destination.serial_id);
+          if (!serial || serial.current_warehouse_id !== destination.warehouse_id || serial.lifecycle_state !== 'AVAILABLE') throw new HttpError(409, '调拨序列号已不在目标仓可用状态');
+          db.prepare('UPDATE inventory_serials SET current_warehouse_id=?,updated_at=? WHERE id=?').run(source.warehouse_id, at, serial.id);
+        }
+        for (const [row, direction] of [[destination, 'OUT'], [source, 'IN']]) db.prepare(`INSERT INTO tracked_inventory_movements(id,source_type,source_id,source_item_id,product_id,warehouse_id,direction,quantity,lot_id,serial_id,business_date,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id(), reversalSourceType, reversalSourceId, itemId, row.product_id, row.warehouse_id, direction, row.quantity, row.lot_id, row.serial_id, businessDate, at);
+      }
+    }
+  } else {
+    for (const row of rows) {
+      const direction = row.direction === 'IN' ? 'OUT' : 'IN';
+      if (row.lot_id) {
+        changeLotBalance(db, row.warehouse_id, row.product_id, row.lot_id, direction === 'IN' ? Number(row.quantity) : -Number(row.quantity), at);
+      } else if (row.serial_id) {
+        const serial = db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(row.serial_id);
+        if (direction === 'OUT') {
+          if (!serial || serial.current_warehouse_id !== row.warehouse_id || !['AVAILABLE','HOLD'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号已不可用，不能冲销原入库');
+          db.prepare("UPDATE inventory_serials SET lifecycle_state='CONSUMED',current_warehouse_id=NULL,updated_at=? WHERE id=?").run(at, serial.id);
+        } else {
+          if (!serial || serial.current_warehouse_id !== null || !['CONSUMED','SCRAPPED'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号已发生不兼容后续事件，不能恢复');
+          db.prepare("UPDATE inventory_serials SET lifecycle_state='AVAILABLE',current_warehouse_id=?,updated_at=? WHERE id=?").run(row.warehouse_id, at, serial.id);
+        }
+      }
+      db.prepare(`INSERT INTO tracked_inventory_movements(id,source_type,source_id,source_item_id,product_id,warehouse_id,direction,quantity,lot_id,serial_id,business_date,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(id(), reversalSourceType, reversalSourceId, row.source_item_id, row.product_id, row.warehouse_id, direction, row.quantity, row.lot_id, row.serial_id, businessDate, at);
+    }
+  }
+  db.prepare('UPDATE tracked_inventory_movements SET reversed=1 WHERE source_type=? AND source_id=?').run(originalSourceType, originalSourceId);
+  db.prepare('UPDATE tracked_source_allocations SET reversed=1 WHERE source_type=? AND source_id=?').run(originalSourceType, originalSourceId);
+  return rows;
+}
+
 export function holdIdentity(db, actor, identityType, identityId, action, reason) {
-  allowAny(actor, ['INVENTORY_VIEW', 'WAREHOUSES_MANAGE']);
+  allowAny(actor, ['WAREHOUSES_MANAGE', 'INVENTORY_ADJUSTMENT_MANAGE']);
   const type = String(identityType).toUpperCase(); const act = String(action).toUpperCase(); const why = String(reason || '').trim();
   if (!['LOT','SERIAL'].includes(type) || !['HOLD','RELEASE'].includes(act) || !why) throw new HttpError(400, '身份、操作或原因不正确');
   const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const stateColumn = type === 'LOT' ? 'status' : 'lifecycle_state';
@@ -324,17 +374,19 @@ export function reverseReceiptGenealogy(db, outputReceiptId, outputIdentityIds =
   return db.prepare(sql).run(...params).changes;
 }
 
-export function traceIdentity(db, identityType, identityId, direction = 'BACKWARD') {
+export function traceIdentity(db, identityType, identityId, direction = 'BACKWARD', includeReversed = false) {
   const type = String(identityType).toUpperCase(); if (!['LOT','SERIAL'].includes(type)) throw new HttpError(400, '跟踪身份类型无效');
   const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const identity = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(identityId); if (!identity) throw new HttpError(404, '跟踪身份不存在');
   const key = type === 'LOT' ? 'lot_id' : 'serial_id';
-  const movements = db.prepare(`SELECT * FROM tracked_inventory_movements WHERE ${key}=? ORDER BY created_at`).all(identityId);
+  const movementStatus = includeReversed ? '' : ' AND reversed=0';
+  const genealogyStatus = includeReversed ? '' : " AND status='ACTIVE'";
+  const movements = db.prepare(`SELECT * FROM tracked_inventory_movements WHERE ${key}=?${movementStatus} ORDER BY created_at`).all(identityId);
   const genealogy = direction === 'FORWARD'
-    ? db.prepare(`SELECT * FROM production_genealogy_allocations WHERE input_${key}=? ORDER BY created_at`).all(identityId)
-    : db.prepare(`SELECT * FROM production_genealogy_allocations WHERE output_${key}=? ORDER BY created_at`).all(identityId);
+    ? db.prepare(`SELECT * FROM production_genealogy_allocations WHERE input_${key}=?${genealogyStatus} ORDER BY created_at`).all(identityId)
+    : db.prepare(`SELECT * FROM production_genealogy_allocations WHERE output_${key}=?${genealogyStatus} ORDER BY created_at`).all(identityId);
   const outputIds = genealogy.map((x) => x.output_serial_id || x.output_lot_id).filter(Boolean);
-  const downstream = outputIds.flatMap((oid) => db.prepare(`SELECT m.*,d.delivery_no,c.id customer_id,c.name customer_name FROM tracked_inventory_movements m LEFT JOIN sales_deliveries d ON d.id=m.source_id AND m.source_type='SALES_DELIVERY' LEFT JOIN customers c ON c.id=d.customer_id WHERE (m.lot_id=? OR m.serial_id=?) ORDER BY m.created_at`).all(oid, oid));
-  return { identity, direction, movements, genealogy, downstream, legacyNotice: movements.length ? null : '历史记录：未启用批次/序列号管理' };
+  const downstream = outputIds.flatMap((oid) => db.prepare(`SELECT m.*,d.delivery_no,c.id customer_id,c.name customer_name FROM tracked_inventory_movements m LEFT JOIN sales_deliveries d ON d.id=m.source_id AND m.source_type='SALES_DELIVERY' LEFT JOIN customers c ON c.id=d.customer_id WHERE (m.lot_id=? OR m.serial_id=?)${movementStatus} ORDER BY m.created_at`).all(oid, oid));
+  return { identity, direction, includeReversed, movements, genealogy, downstream, legacyNotice: movements.length ? null : '历史记录：未启用批次/序列号管理' };
 }
 
 export function trackedAvailability(db, productId, warehouseId, businessDate = today()) {
@@ -359,7 +411,7 @@ export async function holdIdentityHandler(db, req, res, actor, type, identityId)
 export async function createQcpHandler(db, req, res, actor) { return send(res, 201, createQcp(db, actor, await readJson(req))); }
 export function listQcpHandler(db, res, actor) { if (actor.roleCode !== 'ADMIN') throw new HttpError(403, '只有管理员可以查看质量控制点配置'); return send(res, 200, { qualityControlPoints: db.prepare('SELECT * FROM quality_control_points ORDER BY operation_type,code,version DESC').all() }); }
 export function reconcileTrackingHandler(db, res, actor) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, reconcileTrackedInventory(db)); }
-export function traceHandler(db, res, actor, url) { allowAny(actor, ['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW','ORDERS_VIEW']); const type = String(url.searchParams.get('type') || '').toUpperCase(); let identityId = url.searchParams.get('id'); const code = url.searchParams.get('code'); if (!identityId && code) { const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const column = type === 'LOT' ? 'lot_code' : 'serial_number'; identityId = db.prepare(`SELECT id FROM ${table} WHERE ${column}=? AND (? IS NULL OR product_id=?)`).get(code, url.searchParams.get('productId'), url.searchParams.get('productId'))?.id; } return send(res, 200, traceIdentity(db, type, identityId, url.searchParams.get('direction') || 'BACKWARD')); }
+export function traceHandler(db, res, actor, url) { allowAny(actor, ['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW','ORDERS_VIEW']); const type = String(url.searchParams.get('type') || '').toUpperCase(); let identityId = url.searchParams.get('id'); const code = url.searchParams.get('code'); if (!identityId && code) { const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const column = type === 'LOT' ? 'lot_code' : 'serial_number'; identityId = db.prepare(`SELECT id FROM ${table} WHERE ${column}=? AND (? IS NULL OR product_id=?)`).get(code, url.searchParams.get('productId'), url.searchParams.get('productId'))?.id; } return send(res, 200, traceIdentity(db, type, identityId, url.searchParams.get('direction') || 'BACKWARD', url.searchParams.get('includeReversed') === 'true')); }
 export function availabilityHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, trackedAvailability(db, url.searchParams.get('productId'), url.searchParams.get('warehouseId'), url.searchParams.get('businessDate') || today())); }
 export async function genealogyHandler(db, req, res, actor) { return send(res, 201, allocateGenealogy(db, actor, await readJson(req))); }
 

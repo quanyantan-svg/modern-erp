@@ -81,6 +81,7 @@ import {
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { postTrackedMovement, saveTrackedAllocations } from './traceability-quality.js';
+import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, issueSourceValue, systemHealth } from './financial-inventory.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PERIOD_STATUS = { CLOSED: '已结账', REOPENED: '已反结账' };
@@ -283,6 +284,7 @@ export function confirmInventoryScrap(db, res, actor, scrapId) {
     const header = db.prepare('SELECT * FROM inventory_scraps WHERE id=?').get(scrapId);
     if (!header) throw new HttpError(404, '库存报废单不存在');
     if (header.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的报废单可以确认');
+    assertFinancialPeriodsOpen(db,header.scrap_date);
     const items = db.prepare('SELECT * FROM inventory_scrap_items WHERE scrap_id=? ORDER BY line_no, id').all(scrapId);
     if (!items.length) throw new HttpError(409, '报废单没有明细，无法确认');
     // Pre-validate stock for every item; abort all on any shortage.
@@ -295,17 +297,21 @@ export function confirmInventoryScrap(db, res, actor, scrapId) {
       }
     }
     // Mutate canonical inventory and ledger in a single transaction.
+    const voucherEntries=[];
     for (const item of items) {
       postTrackedMovement(db, { sourceType: 'INVENTORY_SCRAP', sourceId: scrapId, sourceItemId: item.id, productId: item.product_id, warehouseId: item.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: header.scrap_date });
       const balance = adjustInventory(db, item.warehouse_id, item.product_id, -Number(item.quantity), now);
-      db.prepare(`
+      const transactionId=genId(); db.prepare(`
         INSERT INTO inventory_transactions
           (id, warehouse_id, product_id, quantity_change, direction, balance_after,
-           source_type, source_id, source_no, remark, creator_id, created_at)
-        VALUES(?,?,?,?, 'OUT', ?, 'INVENTORY_SCRAP', ?, ?, ?, ?, ?)
-      `).run(genId(), item.warehouse_id, item.product_id, Number(item.quantity), balance,
-             header.id, header.scrap_no, header.reason || '库存报废', actor.id, now);
+           source_type, source_id, source_no, remark, creator_id, created_at,business_date)
+        VALUES(?,?,?,?, 'OUT', ?, 'INVENTORY_SCRAP', ?, ?, ?, ?, ?,?)
+      `).run(transactionId, item.warehouse_id, item.product_id, Number(item.quantity), balance,
+             header.id, header.scrap_no, header.reason || '库存报废', actor.id, now,header.scrap_date);
+      const amount=issueSourceValue(db,{businessDate:header.scrap_date,productId:item.product_id,warehouseId:item.warehouse_id,quantity:Number(item.quantity),movementType:'INVENTORY_SCRAP',sourceType:'INVENTORY_SCRAP',sourceId:scrapId,sourceItemId:item.id,inventoryTransactionId:transactionId}).reduce((s,x)=>s-x.valueDeltaCents,0);
+      voucherEntries.push({role:'INVENTORY_SCRAP_EXPENSE',direction:'DEBIT',amountCents:amount},{role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:amount});
     }
+    createSystemVoucher(db,{sourceType:'INVENTORY_SCRAP',sourceId:scrapId,businessDate:header.scrap_date,actorId:actor.id,entries:voucherEntries});
     db.prepare(`
       UPDATE inventory_scraps
          SET status='CONFIRMED', confirmed_by=?, confirmed_at=?, updated_at=?
@@ -486,6 +492,7 @@ export async function closeInventoryPeriod(db, req, res, actor) {
   const body = await readJson(req);
   const periodKey = readPeriodKey(body.period ?? body.periodKey);
   const notes = optionalText(body.notes ?? '', MAX_NOTE);
+  const health=systemHealth(db,{asOfDate:periodRange(periodKey).endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`存货结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
   const now = nowIso();
   transaction(db, () => {
     // If a closure already exists for this period_key, decide based on
@@ -500,9 +507,9 @@ export async function closeInventoryPeriod(db, req, res, actor) {
       writeSnapshots(db, existing.id, snapshots);
       db.prepare(`
         UPDATE inventory_period_closures
-           SET status='CLOSED', closed_by=?, closed_at=?, reopened_by=NULL, reopened_at=NULL, notes=?
+           SET status='CLOSED', closed_by=?, closed_at=?, reopened_by=NULL, reopened_at=NULL, reopen_reason=NULL, notes=?, close_checks_json=?
          WHERE id=?
-      `).run(actor.id, now, notes, existing.id);
+      `).run(actor.id, now, notes, JSON.stringify(health), existing.id);
       audit(db, actor.id, 'CLOSE_PERIOD', 'INVENTORY_PERIOD_CLOSURE', existing.id, `重新结账 ${periodKey}`);
       return;
     }
@@ -520,22 +527,24 @@ export async function closeInventoryPeriod(db, req, res, actor) {
     const snapshots = buildSnapshotsForPeriod(db, periodKey);
     const closureId = genId();
     db.prepare(`
-      INSERT INTO inventory_period_closures(id, period_key, status, closed_by, closed_at, notes)
-      VALUES(?, ?, 'CLOSED', ?, ?, ?)
-    `).run(closureId, periodKey, actor.id, now, notes);
+      INSERT INTO inventory_period_closures(id, period_key, status, closed_by, closed_at, notes, close_checks_json)
+      VALUES(?, ?, 'CLOSED', ?, ?, ?, ?)
+    `).run(closureId, periodKey, actor.id, now, notes, JSON.stringify(health));
     writeSnapshots(db, closureId, snapshots);
     audit(db, actor.id, 'CLOSE_PERIOD', 'INVENTORY_PERIOD_CLOSURE', closureId, `结账 ${periodKey}`);
   });
   return send(res, 200, { ok: true, period: periodKey });
 }
 
-export function reopenInventoryPeriod(db, res, actor, closureId) {
+export async function reopenInventoryPeriod(db, req, res, actor, closureId) {
   allow(actor, 'INVENTORY_PERIOD_CLOSE_MANAGE');
+  const body=await readJson(req); const reason=requiredText(body.reason,'反结账原因',200);
   const now = nowIso();
   transaction(db, () => {
     const closure = db.prepare('SELECT * FROM inventory_period_closures WHERE id=?').get(closureId);
     if (!closure) throw new HttpError(404, '存货月结记录不存在');
     if (closure.status !== 'CLOSED') throw new HttpError(409, '当前期间已为反结账状态');
+    if(db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED'").get(closure.period_key)) throw new HttpError(409,'必须先重新打开会计期间，再重新打开存货期间');
     // Only the latest CLOSED period may be reopened; opening an older
     // period underneath a newer one would violate forward chronology.
     const latest = db.prepare(`
@@ -547,10 +556,10 @@ export function reopenInventoryPeriod(db, res, actor, closureId) {
     }
     db.prepare(`
       UPDATE inventory_period_closures
-         SET status='REOPENED', reopened_by=?, reopened_at=?
+         SET status='REOPENED', reopened_by=?, reopened_at=?,reopen_reason=?
        WHERE id=?
-    `).run(actor.id, now, closureId);
-    audit(db, actor.id, 'REOPEN_PERIOD', 'INVENTORY_PERIOD_CLOSURE', closureId, `反结账 ${closure.period_key}`);
+    `).run(actor.id, now,reason, closureId);
+    audit(db, actor.id, 'REOPEN_PERIOD', 'INVENTORY_PERIOD_CLOSURE', closureId, `反结账 ${closure.period_key}：${reason}`);
   });
   return send(res, 200, { ok: true, status: 'REOPENED' });
 }

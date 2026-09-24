@@ -74,15 +74,15 @@ describe('V1.2 lifecycle and real-browser acceptance matrix', () => {
   test('all ten destructive lifecycle cases have executable coverage', () => {
     const contracts = [
       'simple bad draft deletes directly',
-      'deletes as one atomic chain',
-      'confirmed purchase receipt reverses stock + AP + balanced voucher atomically',
-      'partial cleanup is blocked after valid production consumed stock',
+      'released instruction chain is effective and destructive cleanup is disabled',
+      'confirmed purchase receipt destructive cleanup is refused without changing effects',
+      'effective receipt cleanup remains disabled regardless of dependency expansion',
       'includeExternal: true',
       'closed inventory period blocks cleanup',
       'archive is hidden in normal list',
       'includeArchived=true',
       '/api/lifecycle/restore',
-      'forced failure after reversal work rolls back',
+      'effective cleanup guard runs before legacy reversal work',
     ];
     const allLifecycleCoverage = lifecycleTestSource + source('server/v12-lifecycle-product.test.js');
     for (const contract of contracts) assert.ok(allLifecycleCoverage.includes(contract), `missing lifecycle coverage: ${contract}`);

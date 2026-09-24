@@ -10,6 +10,7 @@ import { Projects, ProjectTasks, Timesheets, Notifications, Workflows } from './
 import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates } from './pages/treasury-cost.jsx';
 import { IQCInspections, OQCInspections, QualityControlPoints } from './pages/quality.jsx';
 import Traceability from './pages/traceability.jsx';
+import SystemHealth from './pages/system-health.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
@@ -44,7 +45,7 @@ const launcherIconNames = [
   'activities', 'projects', 'tasks', 'timesheets', 'notifications', 'boms',
   'routings', 'forecasts', 'mrpRuns', 'materialPlan', 'mrp', 'planningDocuments',
   'productionOrders', 'inventoryScrap', 'inventoryPeriod', 'salesDiscount',
-  'purchaseDiscount', 'users', 'cleanup', 'traceability',
+  'purchaseDiscount', 'users', 'cleanup', 'traceability', 'health',
 ];
 const ic = Object.fromEntries(launcherIconNames.map((name) => [name, <ProductIcon key={name} name={name} size={24}/>]));
 
@@ -83,10 +84,11 @@ export const navGroups = [
     { key: 'accounts-payable', label: '应付账款', icon: ic.accounting, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
     { key: 'payment-disbursements', label: '付款单', icon: ic.bankAccounts, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
     { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
-    { key: 'cash-journals', label: '现金日记账', icon: ic.cashJournals, any: ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE'] },
+    { key: 'system-health', label: '系统健康', icon: ic.health, any: ['ACCOUNTING_VIEW', 'PERIOD_CLOSE_MANAGE'] },
+    { key: 'cash-journals', label: '现金日记账', icon: ic.cashJournals, any: ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE'], enabled: false },
     { key: 'bank-accounts', label: '银行账户', icon: ic.bankAccounts, any: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
-    { key: 'bills', label: '票据管理', icon: ic.bills, any: ['BILLS_VIEW', 'BILLS_MANAGE'] },
-    { key: 'fixed-assets', label: '固定资产', icon: ic.fixedAssets, any: ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'] },
+    { key: 'bills', label: '票据管理', icon: ic.bills, any: ['BILLS_VIEW', 'BILLS_MANAGE'], enabled: false },
+    { key: 'fixed-assets', label: '固定资产', icon: ic.fixedAssets, any: ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'], enabled: false },
   ]},
   { label: '决策报表', items: [
     { key: 'decision-reports', label: '决策报表', icon: ic.reports, any: ['REPORT_VIEW'] },
@@ -126,9 +128,9 @@ export const navGroups = [
   ]},
   { label: '系统设置', items: [
     { key: 'notifications', label: '通知中心', icon: ic.notifications, any: ['DASHBOARD_VIEW'] },
-    { key: 'workflows', label: '审批流', icon: ic.approvals, any: ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE'] },
+    { key: 'workflows', label: '审批流', icon: ic.approvals, any: ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE'], enabled: false },
     { key: 'users', label: '用户与角色', icon: ic.users, any: ['USERS_MANAGE', 'ROLES_MANAGE'] },
-    { key: 'data-cleanup', label: '数据整理', icon: ic.cleanup, permission: 'USERS_MANAGE' },
+    { key: 'data-cleanup', label: '数据整理', icon: ic.cleanup, permission: 'USERS_MANAGE', enabled: false },
   ]},
 ];
 
@@ -141,7 +143,7 @@ export default function App() {
   const [mobileApplication, setMobileApplication] = useState(null);
   const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
-  const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p))) : [];
+  const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.enabled !== false && (item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)))) : [];
 
   function canNavigate(pageKey) {
     return visibleNav.some((item) => item.key === pageKey);
@@ -227,6 +229,7 @@ export default function App() {
     notifications: <Notifications user={user} notify={notify}/>,
     workflows: <Workflows user={user} notify={notify}/>,
     accounting: <Accounting user={user} notify={notify}/>,
+    'system-health': <SystemHealth user={user} notify={notify}/>,
     'accounts-receivable': <Receivables user={user} notify={notify}/>,
     'payment-collections': <Collections user={user} notify={notify}/>,
     'accounts-payable': <Payables user={user} notify={notify}/>,
