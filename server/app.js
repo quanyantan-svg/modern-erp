@@ -3598,11 +3598,20 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
         const already = confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, sourceItem.id, receiptId);
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
-        postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.receipt_date });
-        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
+        // Inventory, valuation and inventory_transactions always use base
+        // UOM quantity; document UOM / price stay on the document line.
+        // Legacy / seed rows that pre-date Phase 6E may not have base
+        // snapshots filled; fall back to the document quantity, which by
+        // Phase 0 contract equals the base quantity when no conversion is
+        // configured.
+        const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
+          ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
+          : Number(item.quantity);
+        postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: baseQuantity, direction: 'IN', businessDate: locked.receipt_date });
+        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, baseQuantity, now);
         const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?,?)').run(transactionId, receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
-        receiveSourceValue(db,{ businessDate:locked.receipt_date,productId:item.product_id,warehouseId:receipt.warehouse_id,quantity:Number(item.quantity),valueCents:Number(item.amount_cents),movementType:'PURCHASE_RECEIPT',sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,sourceItemId:item.id,inventoryTransactionId:transactionId,valuationBasis:'APPROVED_PO_PRICE' });
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?,?)').run(transactionId, receipt.warehouse_id, item.product_id, baseQuantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
+        receiveSourceValue(db,{ businessDate:locked.receipt_date,productId:item.product_id,warehouseId:receipt.warehouse_id,quantity:baseQuantity,valueCents:Number(item.amount_cents),movementType:'PURCHASE_RECEIPT',sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,sourceItemId:item.id,inventoryTransactionId:transactionId,valuationBasis:'APPROVED_PO_PRICE' });
         inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
       }
       db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
@@ -3743,13 +3752,22 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
         const already = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, sourceItem.id, deliveryId);
         if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '出货数量超过销售订单剩余可交数量');
+        // Inventory, valuation and COGS use the base-UOM quantity so that
+        // UOM conversions never inflate or deflate canonical inventory.
+        // Legacy / seed rows that pre-date Phase 6E may not have base
+        // snapshots filled; fall back to the document quantity, which by
+        // Phase 0 contract equals the base quantity when no conversion is
+        // configured.
+        const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
+          ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
+          : Number(item.quantity);
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
-        if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
-        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.delivery_date });
-        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
+        if (!current || current.quantity < baseQuantity) throw new HttpError(400, '库存不足');
+        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });
+        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -baseQuantity, now);
         const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
-        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:Number(item.quantity),movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, delivery.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
       createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });

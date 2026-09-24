@@ -163,6 +163,7 @@ function prepareBillLines(db, supplierId, date, mode, inputs) {
 export function createSupplierBill(db, input) {
   return atomic(db, () => {
     const existing = input.idempotencyKey && db.prepare('SELECT * FROM supplier_bills WHERE idempotency_key=?').get(input.idempotencyKey); if (existing) return existing;
+    assertFinancialPeriodsOpen(db, input.billDate);
     const lines = prepareBillLines(db, input.supplierId, input.billDate, input.taxMode || 'NO_TAX', input.items); const totals = sumLines(lines); const grni = lines.reduce((sum, x) => sum + x.grniCents, 0); const matched = lines.every(x => x.source?.receipt_status === 'CONFIRMED');
     const id = randomUUID(); const now = stamp(); const no = allocateDocumentNumber(db, 'PB', input.billDate, input.idempotencyKey || `PB:${id}`);
     db.prepare(`INSERT INTO supplier_bills(id,bill_no,supplier_id,supplier_invoice_no,bill_date,status,tax_mode,net_cents,tax_cents,gross_cents,grni_cents,variance_cents,tax_snapshot_json,creator_id,created_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
@@ -192,16 +193,30 @@ export function matchSupplierBill(db,billId,input){return atomic(db,()=>{const b
 
 export function createCommercialCreditNote(db, input) {
   return atomic(db, () => {
+    assertFinancialPeriodsOpen(db, input.creditDate);
     const sales = input.side === 'AR'; const header = db.prepare(`SELECT * FROM ${sales ? 'sales_invoices' : 'supplier_bills'} WHERE id=? AND status='POSTED'`).get(input.sourceId); if (!header) throw new HttpError(409, '只能对已过账发票/账单开具贷项');
     const gross = int(input.grossCents ?? header.gross_cents, '贷项总额', { min: 1 }); if (gross > header.gross_cents) throw new HttpError(409, '贷项不能超过原单');
     const net = roundRational(BigInt(gross) * BigInt(header.net_cents), header.gross_cents); const tax = gross - net; const id = randomUUID(); const no = allocateDocumentNumber(db, sales ? 'SCN' : 'PCN', input.creditDate, input.idempotencyKey || `CN:${id}`); const now = stamp();
-    db.prepare(`INSERT INTO commercial_credit_notes(id,credit_no,side,source_type,source_id,party_id,credit_date,reason,status,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at,posted_by,posted_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?, 'POSTED',?,?,?,?,?,?,?,?,?)`)
-      .run(id, no, input.side, sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id, sales ? header.customer_id : header.supplier_id, input.creditDate, input.reason || '调整', net, tax, gross, header.tax_snapshot_json, input.actorId, now, input.actorId, now, input.idempotencyKey || null);
+    const adjustmentType = ['RETURN', 'DISCOUNT', 'OTHER'].includes(input.adjustmentType) ? input.adjustmentType : 'OTHER';
+    db.prepare(`INSERT INTO commercial_credit_notes(id,credit_no,side,source_type,source_id,party_id,credit_date,reason,status,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at,posted_by,posted_at,idempotency_key,adjustment_type) VALUES(?,?,?,?,?,?,?,?, 'POSTED',?,?,?,?,?,?,?,?,?,?)`)
+      .run(id, no, input.side, sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id, sales ? header.customer_id : header.supplier_id, input.creditDate, input.reason || '调整', net, tax, gross, header.tax_snapshot_json, input.actorId, now, input.actorId, now, input.idempotencyKey || null, adjustmentType);
+    // Phase 6E is a POSTED-bill-only credit-note world, which means GRNI is
+    // already cleared by the supplier bill post.  Reversing GRNI here would
+    // create an unexplained negative GRNI balance.  The physical purchase
+    // return flow owns inventory and a separate return-document; the
+    // commercial credit note always credits PURCHASE_PRICE_VARIANCE (net)
+    // and INPUT_TAX_RECEIVABLE (tax) regardless of RETURN / DISCOUNT / OTHER
+    // reason.  Adjustment type is preserved as a structured audit field.
+    const supplierEntries = [
+      { role: 'ACCOUNTS_PAYABLE', direction: 'DEBIT', amountCents: gross, summary: no },
+      { role: 'PURCHASE_PRICE_VARIANCE', direction: 'CREDIT', amountCents: net, summary: no },
+      ...(tax ? [{ role: 'INPUT_TAX_RECEIVABLE', direction: 'CREDIT', amountCents: tax, summary: no }] : []),
+    ];
     createSystemVoucher(db, { sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: id, businessDate: input.creditDate, actorId: input.actorId, entries: sales ? [
       { role: 'SALES_REVENUE', direction: 'DEBIT', amountCents: net, summary: no }, ...(tax ? [{ role: 'OUTPUT_TAX_PAYABLE', direction: 'DEBIT', amountCents: tax, summary: no }] : []), { role: 'ACCOUNTS_RECEIVABLE', direction: 'CREDIT', amountCents: gross, summary: no },
-    ] : [{ role: 'ACCOUNTS_PAYABLE', direction: 'DEBIT', amountCents: gross, summary: no }, { role: 'GRNI', direction: 'CREDIT', amountCents: net, summary: no }, ...(tax ? [{ role: 'INPUT_TAX_RECEIVABLE', direction: 'CREDIT', amountCents: tax, summary: no }] : [])] });
+    ] : supplierEntries });
     const open = db.prepare(`SELECT id FROM ${sales ? 'account_receivables' : 'account_payables'} WHERE source_type=? AND source_id=?`).get(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id);
-    applyCreditAdjustment(db, { side: input.side, adjustmentType: input.adjustmentType || 'RETURN', sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: id, sourceNo: no, targetOpenItemId: open.id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: gross, actorId: input.actorId, createdAt: now });
+    applyCreditAdjustment(db, { side: input.side, adjustmentType, sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: id, sourceNo: no, targetOpenItemId: open.id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: gross, actorId: input.actorId, createdAt: now });
     return db.prepare('SELECT * FROM commercial_credit_notes WHERE id=?').get(id);
   });
 }

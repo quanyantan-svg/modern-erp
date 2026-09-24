@@ -277,7 +277,7 @@ describe('Phase E — Trial Balance end-to-end', () => {
         `trial balance must include subject ${expected} regardless of activity; got [${codes.join(',')}]`);
     }
     for (const expected of ['1403','1404','1406','5101','5102','6402','6403','6404','6405','6406']) assert.ok(codes.includes(expected), `trial balance must include Phase 6D role subject ${expected}`);
-    assert.equal(codes.length, 17, `trial balance must contain the 17 configured subjects; got [${codes.join(',')}]`);
+    assert.equal(codes.length, 21, `trial balance must contain the 21 configured subjects; got [${codes.join(',')}]`);
   });
 
   test('POSTED manual voucher with period populated appears in Trial Balance', async () => {

@@ -4,12 +4,23 @@ function addColumn(db, sql) {
   }
 }
 
+// Phase 6E introduces distinct control accounts so the immutable Phase 0–6D
+// registry keeps its separation of concerns.  Each Phase 6E role maps to a
+// dedicated subject (no collisions with ACCOUNTS_PAYABLE / ACCOUNTS_RECEIVABLE
+// / MATERIAL_PRICE_VARIANCE).  Legacy 6E-rc1 collisions (OUTPUT_TAX → 2202,
+// INPUT_TAX → 1122, GRNI → 2202, PURCHASE_PRICE_VARIANCE → 6404) are
+// deliberately re-routed here.
+const SUBJECTS = [
+  ['subject-018', '222101', '应交税费-应交增值税-销项税额', 'LIABILITY', 'CREDIT'],
+  ['subject-019', '222102', '应交税费-应交增值税-进项税额', 'ASSET', 'DEBIT'],
+  ['subject-020', '1407', '在途物资', 'ASSET', 'DEBIT'],
+  ['subject-021', '6407', '采购价格差异-商业', 'EXPENSE', 'DEBIT'],
+];
 const ROLES = [
-  // Phase 6E preserves the frozen subject registry.  Distinct business
-  // roles share the existing control accounts and remain separable by
-  // immutable voucher source type.
-  ['OUTPUT_TAX_PAYABLE', '2202'], ['INPUT_TAX_RECEIVABLE', '1122'],
-  ['GRNI', '2202'], ['PURCHASE_PRICE_VARIANCE', '6404'],
+  ['OUTPUT_TAX_PAYABLE', '222101'],
+  ['INPUT_TAX_RECEIVABLE', '222102'],
+  ['GRNI', '1407'],
+  ['PURCHASE_PRICE_VARIANCE', '6407'],
 ];
 
 export function migrateV13Phase6ECommercialGoLive(db) {
@@ -102,7 +113,8 @@ export function migrateV13Phase6ECommercialGoLive(db) {
       source_type TEXT NOT NULL CHECK(source_type IN ('SALES_INVOICE','SUPPLIER_BILL')), source_id TEXT NOT NULL,
       party_id TEXT NOT NULL, credit_date TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('DRAFT','POSTED','REVERSED')),
       net_cents INTEGER NOT NULL, tax_cents INTEGER NOT NULL, gross_cents INTEGER NOT NULL, tax_snapshot_json TEXT NOT NULL,
-      creator_id TEXT NOT NULL, created_at TEXT NOT NULL, posted_by TEXT, posted_at TEXT, idempotency_key TEXT UNIQUE
+      creator_id TEXT NOT NULL, created_at TEXT NOT NULL, posted_by TEXT, posted_at TEXT, idempotency_key TEXT UNIQUE,
+      adjustment_type TEXT NOT NULL DEFAULT 'OTHER' CHECK(adjustment_type IN ('RETURN','DISCOUNT','OTHER'))
     );
     CREATE TABLE IF NOT EXISTS opening_batches (
       id TEXT PRIMARY KEY, batch_no TEXT NOT NULL UNIQUE, status TEXT NOT NULL CHECK(status IN ('DRAFT','VALIDATED','SUBMITTED','APPROVED','POSTED')),
@@ -132,9 +144,19 @@ export function migrateV13Phase6ECommercialGoLive(db) {
 
   const now = new Date().toISOString();
   db.prepare("INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES('EA','Each',?,?)").run(now, now);
-  db.exec("UPDATE products SET base_uom_code=COALESCE(NULLIF(unit,''),'EA'); UPDATE sales_order_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)); UPDATE purchase_order_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)); UPDATE sales_delivery_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)); UPDATE purchase_receipt_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)); UPDATE bom_items SET uom_code_snapshot=COALESCE(uom_code_snapshot,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA')");
-  const role = db.prepare('INSERT OR IGNORE INTO account_role_mappings(role_code,subject_id,updated_at) SELECT ?,id,? FROM accounting_subjects WHERE code=?');
-  for (const [name, code] of ROLES) role.run(name, now, code);
+  // Backfill Phase 6E dedicated subjects so re-opening existing databases
+  // re-routes role mappings to the correct control accounts.  The legacy
+  // 6E-rc1 mappings (OUTPUT_TAX → 2202 / INPUT_TAX → 1122 / GRNI → 2202 /
+  // PURCHASE_PRICE_VARIANCE → 6404) collided with frozen control accounts and
+  // are deliberately replaced here.  MATERIAL_PRICE_VARIANCE retains 6404
+  // and stays Phase 6D-only inventory-side variance; PURCHASE_PRICE_VARIANCE
+  // moves to its own 6407 commercial-discount/price-variance role.
+  const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id,code,name,type,direction,active) VALUES(?,?,?,?,?,1)');
+  for (const subject of SUBJECTS) insertSubject.run(...subject);
+  const upsertRole = db.prepare("INSERT OR REPLACE INTO account_role_mappings(role_code,subject_id,updated_at) SELECT ?,id,? FROM accounting_subjects WHERE code=?");
+  for (const [name, code] of ROLES) upsertRole.run(name, now, code);
+
+  db.exec("UPDATE products SET base_uom_code=COALESCE(NULLIF(unit,''),'EA'); UPDATE sales_order_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),document_quantity_den=COALESCE(document_quantity_den,1),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)),base_quantity_den=COALESCE(base_quantity_den,1); UPDATE purchase_order_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),document_quantity_den=COALESCE(document_quantity_den,1),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)),base_quantity_den=COALESCE(base_quantity_den,1); UPDATE sales_delivery_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),document_quantity_den=COALESCE(document_quantity_den,1),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)),base_quantity_den=COALESCE(base_quantity_den,1); UPDATE purchase_receipt_items SET document_uom_code=COALESCE(document_uom_code,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA'),document_quantity_num=COALESCE(document_quantity_num,CAST(quantity AS INTEGER)),document_quantity_den=COALESCE(document_quantity_den,1),base_quantity_num=COALESCE(base_quantity_num,CAST(quantity AS INTEGER)),base_quantity_den=COALESCE(base_quantity_den,1); UPDATE bom_items SET uom_code_snapshot=COALESCE(uom_code_snapshot,(SELECT base_uom_code FROM products p WHERE p.id=product_id),'EA')");
 
   // Only records that pre-date 6E retain the legacy direct-finance contract.
   db.exec("UPDATE sales_deliveries SET billing_mode='LEGACY_DIRECT' WHERE status='CONFIRMED' AND NOT EXISTS(SELECT 1 FROM sales_invoice_items i WHERE i.delivery_id=sales_deliveries.id); UPDATE purchase_receipts SET billing_mode='LEGACY_DIRECT' WHERE status='CONFIRMED' AND NOT EXISTS(SELECT 1 FROM supplier_bill_items i WHERE i.receipt_id=purchase_receipts.id)");
