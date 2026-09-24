@@ -1502,12 +1502,32 @@ export function getBalanceSheet(db, res, actor, url) {
 
 export function getInventoryStatus(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
-  const items = db.prepare("SELECT p.id, p.code, p.name, p.unit, p.stock_quantity, p.reorder_point, p.min_stock, p.max_stock, w.name warehouse_name FROM inventory i JOIN products p ON p.id=i.product_id JOIN warehouses w ON w.id=i.warehouse_id ORDER BY p.code").all();
+  // Canonical stock truth lives in `inventory.quantity` (base UOM).  The
+  // legacy `products.stock_quantity` display column is never written by
+  // the canonical receipt / delivery / transfer / adjustment / scrap /
+  // production flows, so threshold checks must use SUM(inventory.quantity)
+  // per product rather than the stale display value.
+  const items = db.prepare(`
+    SELECT
+      p.id,
+      p.code,
+      p.name,
+      p.unit,
+      p.min_stock,
+      p.max_stock,
+      p.reorder_point,
+      COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id = p.id), 0) AS quantity
+    FROM products p
+    WHERE EXISTS (SELECT 1 FROM inventory i WHERE i.product_id = p.id)
+    ORDER BY p.code
+  `).all();
   const summary = { total: items.length, low: 0, normal: 0, over: 0 };
   for (const item of items) {
-    if (item.stock_quantity <= item.min_stock) { item.status = "LOW"; summary.low++; }
-    else if (item.stock_quantity >= item.max_stock) { item.status = "OVER"; summary.over++; }
+    const quantity = Number(item.quantity);
+    if (quantity <= Number(item.min_stock)) { item.status = "LOW"; summary.low++; }
+    else if (quantity >= Number(item.max_stock) && Number(item.max_stock) > 0) { item.status = "OVER"; summary.over++; }
     else { item.status = "NORMAL"; summary.normal++; }
+    item.quantity = quantity;
   }
   return send(res, 200, { items, summary });
 }
