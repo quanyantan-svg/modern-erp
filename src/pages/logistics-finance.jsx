@@ -14,8 +14,8 @@ function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityL
   </div>;
 }
 
-const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
-export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVERY: 'sales-deliveries', SALES_RETURN: 'returns', PURCHASE_ORDER: 'purchase-orders', PURCHASE_RECEIPT: 'purchase-receipts', PURCHASE_RETURN: 'returns', ACCOUNTING_VOUCHER: 'accounting' }[type]);
+const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', SALES_INVOICE: '销售发票', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', SUPPLIER_BILL: '供应商账单', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
+export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVERY: 'sales-deliveries', SALES_RETURN: 'returns', SALES_INVOICE: 'sales-invoices', PURCHASE_ORDER: 'purchase-orders', PURCHASE_RECEIPT: 'purchase-receipts', PURCHASE_RETURN: 'returns', SUPPLIER_BILL: 'supplier-bills', ACCOUNTING_VOUCHER: 'accounting' }[type]);
 
 export function RelationshipSections({ detail }) {
   const relation = detail.relationships || { upstream: [], downstream: [] };
@@ -33,6 +33,7 @@ export function RelationshipSections({ detail }) {
 function ReadOnlyDocument({ detail, onClose, partyName }) {
   return <div>
     <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || '状态待确认'}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    {detail.billingSummary && <div className="billing-strip"><div><span>计费状态</span><strong>{detail.billingSummary.status}</strong></div><div><span>已计费</span><strong>{quantity(detail.billingSummary.billedQuantity)}</strong></div><div><span>待计费</span><strong>{quantity(detail.billingSummary.remainingQuantity)}</strong></div>{detail.billingSummary.grniCents!==undefined&&<div><span>GRNI</span><strong>{money(detail.billingSummary.grniCents)}</strong></div>}</div>}
     <RelationshipSections detail={detail}/>
     <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{quantity(item.quantity)}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
     <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
@@ -62,7 +63,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
-  const [form, setForm] = useState({ purchaseOrderId: "", supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [form, setForm] = useState({ purchaseOrderId: "", supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
   useEffect(() => {
     // Each fetch carries its own .catch so a single 403 (e.g. supplier
     // lookup unavailable for the role) does not cascade-reject the
@@ -82,6 +83,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
         supplierId: detail.supplier_id || "",
         warehouseId: detail.warehouse_id || "",
         receiptDate: detail.receipt_date || "",
+        billingMode: detail.billing_mode || "SEPARATE",
         remark: detail.remark || "",
         items: detail.items || [],
       });
@@ -127,6 +129,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     <label>供应商<select value={form.supplierId} disabled required><option value="">由采购订单带入</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>收货日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({...form, receiptDate: e.target.value})} required/></label>
+    <label>计费模式<select value={form.billingMode} onChange={(e)=>setForm({...form,billingMode:e.target.value})}><option value="SEPARATE">收货后独立账单（GRNI）</option><option value="AUTO_BILL">收货后自动建账单</option></select></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
       <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
@@ -167,7 +170,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [salesOrders, setSalesOrders] = useState([]);
-  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. customer lookup unavailable)
     // does not cascade-reject and silently disable the other selectors.
@@ -184,6 +187,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
         customerId: detail.customer_id || "",
         warehouseId: detail.warehouse_id || "",
         deliveryDate: detail.delivery_date || detail.receipt_date || "",
+        billingMode: detail.billing_mode || "SEPARATE",
         remark: detail.remark || "",
         items: detail.items || [],
       });
@@ -227,6 +231,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     <label>客户<select value={form.customerId} disabled required><option value="">由销售订单带入</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>发货日期<input type="date" value={form.deliveryDate} onChange={(e) => setForm({...form, deliveryDate: e.target.value})} required/></label>
+    <label>计费模式<select value={form.billingMode} onChange={(e)=>setForm({...form,billingMode:e.target.value})}><option value="SEPARATE">出货后独立开票</option><option value="DIRECT_BILL">出货后自动开票</option></select></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
       <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>

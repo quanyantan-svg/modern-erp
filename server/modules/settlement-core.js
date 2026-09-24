@@ -82,7 +82,7 @@ function ensureSubledger(db, kind, source) {
   const createdAt = source.createdAt || now();
   const positive = source.effectCents > 0 ? source.effectCents : 0;
   const adjustment = source.effectCents < 0 ? source.effectCents : 0;
-  const itemClass = source.effectCents > 0 && ['SALES_DELIVERY', 'PURCHASE_RECEIPT'].includes(source.sourceType) ? 'SOURCE' : 'LEGACY';
+  const itemClass = source.effectCents > 0 && ['SALES_DELIVERY', 'PURCHASE_RECEIPT', 'SALES_INVOICE', 'SUPPLIER_BILL', 'OPENING_BALANCE'].includes(source.sourceType) ? 'SOURCE' : 'LEGACY';
   const termsDays = Number.isSafeInteger(source.paymentTermsDays) && source.paymentTermsDays >= 0 ? source.paymentTermsDays : null;
   const dueDate = termsDays === null ? source.businessDate : addDays(source.businessDate, termsDays);
   db.prepare(`INSERT INTO ${table}(id,voucher_no,${partyColumn},source_type,source_id,amount_cents,paid_cents,write_off_cents,status,due_date,creator_id,created_at,source_no,business_date,adjustment_cents,updated_at,payment_terms_days,cash_allocation_cents,open_amount_cents,item_class)
@@ -215,7 +215,7 @@ export function reconcileSettlementSubledgers(db) {
     ['purchase_receipts', 'receipt_no', 'supplier_id', 'receipt_date', 'PURCHASE_RECEIPT', ensurePayableSource],
   ];
   for (const [table, noColumn, partyColumn, dateColumn, sourceType, ensure] of specs) {
-    const rows = db.prepare(`SELECT id,${noColumn} sourceNo,${partyColumn} partyId,${dateColumn} businessDate,total_cents totalCents,creator_id creatorId,created_at createdAt FROM ${table} WHERE status='CONFIRMED'`).all();
+    const rows = db.prepare(`SELECT id,${noColumn} sourceNo,${partyColumn} partyId,${dateColumn} businessDate,total_cents totalCents,creator_id creatorId,created_at createdAt FROM ${table} WHERE status='CONFIRMED' AND COALESCE(billing_mode,'LEGACY_DIRECT')='LEGACY_DIRECT'`).all();
     for (const row of rows) ensure(db, { ...row, sourceType, effectCents: row.totalCents });
   }
 }

@@ -106,6 +106,7 @@ import {
   assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
   issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
 } from './modules/financial-inventory.js';
+import { autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
 import {
   HttpError,
   allow,
@@ -168,6 +169,7 @@ async function handleApi(db, req, res, url) {
   if (req.method === 'GET' && pathname === '/api/reports/inventory-roll-forward') return inventoryRollForwardHandler(db,res,actor,url);
   if (req.method === 'GET' && pathname === '/api/reports/wip-roll-forward') return wipRollForwardHandler(db,res,actor,url);
   if (req.method === 'GET' && pathname === '/api/accounting/general-ledger') return generalLedgerHandler(db,res,actor,url);
+  if (/^\/api\/(tax-codes|uom-conversions|sales-invoices|supplier-bills|commercial-credit-notes|commercial-reconciliation|opening-batches|imports|exports)(\/|$)/.test(pathname)) return commercialApiHandler(db,req,res,actor,url);
   if (req.method === 'GET' && pathname === '/api/approvals') return listApprovals(db, res, actor, url);
 
   // Lifecycle 2.0 — centralized, administrator-only analysis and archive
@@ -1097,7 +1099,7 @@ async function updateCustomer(db, req, res, actor, customerId) {
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT p.id,p.code,p.name,p.unit,p.price_cents priceCents,p.standard_manufacturing_cost_cents standardManufacturingCostCents,COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id=p.id),0) stockQuantity,p.active,p.tracking_policy trackingPolicy,p.shelf_life_days shelfLifeDays,p.tracking_effective_at trackingEffectiveAt,p.valuation_method valuationMethod,p.inventory_classification inventoryClassification,
+  const products = db.prepare(`SELECT p.id,p.code,p.name,p.unit,p.base_uom_code baseUomCode,p.purchase_uom_code purchaseUomCode,p.sales_uom_code salesUomCode,p.price_cents priceCents,p.standard_manufacturing_cost_cents standardManufacturingCostCents,COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id=p.id),0) stockQuantity,p.active,p.tracking_policy trackingPolicy,p.shelf_life_days shelfLifeDays,p.tracking_effective_at trackingEffectiveAt,p.valuation_method valuationMethod,p.inventory_classification inventoryClassification,
     p.created_at createdAt,p.updated_at updatedAt FROM products p WHERE p.code LIKE ? OR p.name LIKE ? ORDER BY p.code`).all(search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { products });
@@ -1109,8 +1111,9 @@ async function createProduct(db, req, res, actor) {
   const productId = id(); const now = new Date().toISOString();
   const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
   const classification = ['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(body.inventoryClassification) ? body.inventoryClassification : 'OTHER_INVENTORY';
-  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,1,?,?)`)
-    .run(productId, product.code, product.name, product.unit, product.priceCents, standardCost, classification, now, now);
+  const baseUom=String(body.baseUomCode||product.unit).trim().toUpperCase(); db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,now,now);
+  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,1,?,?)`)
+    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, now, now);
   audit(db, actor.id, 'CREATE', 'PRODUCT', productId, product.code);
   return send(res, 201, { id: productId });
 }
@@ -1127,8 +1130,9 @@ async function updateProduct(db, req, res, actor, productId) {
   const standardCost = Number(body.standardManufacturingCostCents ?? current.standard_manufacturing_cost_cents); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
   const classification = body.inventoryClassification ?? current.inventory_classification;
   if (!['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(classification)) throw new HttpError(400, '库存分类不正确');
-  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,standard_manufacturing_cost_cents=?,inventory_classification=?,active=?,updated_at=? WHERE id=?')
-    .run(product.code, product.name, product.unit, product.priceCents, standardCost, classification, active, new Date().toISOString(), productId);
+  const baseUom=String(body.baseUomCode??current.base_uom_code??product.unit).trim().toUpperCase(); if(baseUom!==current.base_uom_code&&db.prepare('SELECT 1 FROM inventory_transactions WHERE product_id=? LIMIT 1').get(productId))throw new HttpError(409,'已有历史交易的产品不可变更基础单位'); const updatedAt=new Date().toISOString();db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,updatedAt,updatedAt);
+  db.prepare('UPDATE products SET code=?,name=?,unit=?,base_uom_code=?,purchase_uom_code=?,sales_uom_code=?,price_cents=?,standard_manufacturing_cost_cents=?,inventory_classification=?,active=?,updated_at=? WHERE id=?')
+    .run(product.code, product.name, baseUom,baseUom,body.purchaseUomCode??current.purchase_uom_code,body.salesUomCode??current.sales_uom_code, product.priceCents, standardCost, classification, active, updatedAt, productId);
   audit(db, actor.id, 'UPDATE', 'PRODUCT', productId, product.code);
   return send(res, 200, { ok: true });
 }
@@ -1150,7 +1154,10 @@ function getOrder(db, res, actor, orderId) {
   const order = orderRows(db, 'WHERE so.id=?', [orderId], '')[0];
   if (!order) throw new HttpError(404, '销售订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
-    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo
+    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.document_uom_code documentUomCode,i.document_quantity_num documentQuantityNumerator,
+    i.document_quantity_den documentQuantityDenominator,i.conversion_numerator conversionNumerator,
+    i.conversion_denominator conversionDenominator,i.base_quantity_num baseQuantityNumerator,i.base_quantity_den baseQuantityDenominator
     FROM sales_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
   order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
     FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='SALES_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
@@ -1324,14 +1331,21 @@ function orderInput(db, body) {
   const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
   const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? customer.payment_terms_days);
   const items = body.items.map((item, index) => {
-    const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
+    const product = db.prepare('SELECT id,price_cents,base_uom_code,sales_uom_code FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
-    const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
+    const snapshot = quantitySnapshot(db, product.id, {
+      quantityNumerator: item.quantityNumerator ?? item.quantity,
+      quantityDenominator: item.quantityDenominator ?? 1,
+      uomCode: item.uomCode || product.sales_uom_code || product.base_uom_code,
+    }, orderDate || new Date().toISOString().slice(0, 10));
+    const quantity = snapshot.base.num / snapshot.base.den;
+    const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
     if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
-    const amountCents = quantity * unitPriceCents;
-    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额无法精确到分`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1 };
+    const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1,
+      documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
+      conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
+      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
   });
   return {
     customerId, remark: optionalText(body.remark, 500), items,
@@ -1341,8 +1355,12 @@ function orderInput(db, body) {
 }
 
 function saveOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const statement = db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+    item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
+    item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
 function customerInput(body) {
@@ -1420,6 +1438,9 @@ function getPurchaseOrder(db, res, actor, orderId) {
   if (!order) throw new HttpError(404, '采购订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
     i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.document_uom_code documentUomCode,i.document_quantity_num documentQuantityNumerator,
+    i.document_quantity_den documentQuantityDenominator,i.conversion_numerator conversionNumerator,
+    i.conversion_denominator conversionDenominator,i.base_quantity_num baseQuantityNumerator,i.base_quantity_den baseQuantityDenominator,
     i.purchase_requisition_item_id purchaseRequisitionItemId
     FROM purchase_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
   order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
@@ -1475,8 +1496,12 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
     );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
     if (current.purchase_requisition_id) {
-      const statement = db.prepare('INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id) VALUES(?,?,?,?,?,?,?,?)');
-      for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo, item.purchaseRequisitionItemId);
+      const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,
+        document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+        item.purchaseRequisitionItemId, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
+        item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
     } else savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
   });
@@ -1611,12 +1636,16 @@ function purchaseOrderInput(db, body) {
   const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
   const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? supplier.payment_terms_days);
   const items = body.items.map((item, index) => {
-    const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
+    const product = db.prepare('SELECT id,price_cents,base_uom_code,purchase_uom_code FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
-    const quantity = Number(item.quantity);
+    const snapshot = quantitySnapshot(db, product.id, {
+      quantityNumerator: item.quantityNumerator ?? item.quantity,
+      quantityDenominator: item.quantityDenominator ?? 1,
+      uomCode: item.uomCode || product.purchase_uom_code || product.base_uom_code,
+    }, orderDate || new Date().toISOString().slice(0, 10));
+    const quantity = snapshot.base.num / snapshot.base.den;
     const hasExplicitPrice = item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '';
     const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : Number(product.price_cents || 0);
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
     // V1.3 Phase 1: a DRAFT may temporarily carry 0 unit price (a
     // generated PO from a PR without an estimate is the canonical
     // example). The submit gate enforces unit price > 0 — see
@@ -1628,9 +1657,11 @@ function purchaseOrderInput(db, body) {
     if (!Number.isInteger(unitPriceCents)) {
       throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
     }
-    const amountCents = quantity * unitPriceCents;
-    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额无法精确到分`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1 };
+    const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1,
+      documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
+      conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
+      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
   });
   return {
     supplierId, remark: optionalText(body.remark, 500), items,
@@ -1640,8 +1671,12 @@ function purchaseOrderInput(db, body) {
 }
 
 function savePurchaseOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+    item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
+    item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
 // ============ Warehouses ============
@@ -2182,13 +2217,20 @@ function normalizeDocumentDate(value, label) {
 
 function replaceLogisticsItems(db, table, foreignKey, documentId, items, sourceColumn = null) {
   db.prepare(`DELETE FROM ${table} WHERE ${foreignKey}=?`).run(documentId);
+  const hasUomSnapshot = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name='document_uom_code'`).get(table);
+  const uomColumns = hasUomSnapshot
+    ? ',document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den'
+    : '';
   const columns = sourceColumn
-    ? `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no,${sourceColumn}`
-    : `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no`;
-  const statement = db.prepare(`INSERT INTO ${table}(${columns}) VALUES(${sourceColumn ? '?,?,?,?,?,?,?,?' : '?,?,?,?,?,?,?'})`);
+    ? `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no,${sourceColumn}${uomColumns}`
+    : `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no${uomColumns}`;
+  const placeholderCount = 7 + (sourceColumn ? 1 : 0) + (hasUomSnapshot ? 7 : 0);
+  const statement = db.prepare(`INSERT INTO ${table}(${columns}) VALUES(${Array(placeholderCount).fill('?').join(',')})`);
   for (const item of items) {
     const values = [id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo];
     if (sourceColumn) values.push(item.sourceItemId);
+    if (hasUomSnapshot) values.push(item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
+      item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
     statement.run(...values);
   }
 }
@@ -2220,7 +2262,9 @@ function normalizeSourcedLogisticsItems(db, items, {
   sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake,
 }) {
   if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加来源明细');
-  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
+  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents,document_uom_code,document_quantity_num,
+    document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den
+    FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
   let totalCents = 0;
   const seen = new Set();
   const normalized = items.map((item, index) => {
@@ -2235,11 +2279,17 @@ function normalizeSourcedLogisticsItems(db, items, {
     }
     const quantity = Number(item.quantity);
     if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须为正整数`);
-    const amountCents = quantity * source.unit_price_cents;
-    if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `第 ${index + 1} 行金额超出安全范围`);
+    const conversionNumerator = Number(source.conversion_numerator || 1);
+    const conversionDenominator = Number(source.conversion_denominator || 1);
+    const documentQuantity = rational(BigInt(quantity) * BigInt(conversionDenominator), conversionNumerator);
+    const baseQuantity = rational(quantity, 1);
+    const amountCents = roundRational(BigInt(documentQuantity.num) * BigInt(source.unit_price_cents), documentQuantity.den);
     totalCents += amountCents;
     if (!Number.isSafeInteger(totalCents)) throw new HttpError(400, '单据金额超出安全范围');
-    return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1, sourceQuantity: Number(source.quantity) };
+    return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1,
+      sourceQuantity: Number(source.quantity), documentUomCode: source.document_uom_code,
+      documentQuantityNumerator: documentQuantity.num, documentQuantityDenominator: documentQuantity.den,
+      conversionNumerator, conversionDenominator, baseQuantityNumerator: baseQuantity.num, baseQuantityDenominator: baseQuantity.den };
   });
   return { items: normalized, totalCents };
 }
@@ -3445,7 +3495,7 @@ function listPurchaseReceipts(db, res, actor, url) {
   if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
   const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;
-  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'IQC', row.id) }));
+  const receipts = db.prepare(sql).all(...params).map(row => { const billed=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills b ON b.id=i.bill_id WHERE i.receipt_id=? AND b.status IN ('DRAFT','POSTED','WAITING_MATCH')").get(row.id).n); const received=Number(db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM purchase_receipt_items WHERE receipt_id=?').get(row.id).n); return ({ ...row, billedQuantity:billed,remainingBillQuantity:Math.max(0,received-billed),billMatchStatus:billed<=0?'UNBILLED':billed<received?'PARTIALLY_BILLED':'BILLED', statusLabel: RECEIPT_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'IQC', row.id) }); });
   return send(res, 200, { purchaseReceipts: receipts });
 }
 
@@ -3453,6 +3503,8 @@ async function createPurchaseReceipt(db, req, res, actor) {
   allow(actor, 'PURCHASE_RECEIPTS_MANAGE');
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
+  const billingMode = body.billingMode || 'LEGACY_DIRECT';
+  if (!['SEPARATE','AUTO_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效采购计费模式');
   const receiptDate = normalizeDocumentDate(body?.receiptDate || new Date().toISOString().slice(0, 10), '收货日期');
   if (!purchaseOrderId) throw new HttpError(400, '正常采购收货必须选择已审批采购订单');
   const source = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(purchaseOrderId);
@@ -3466,7 +3518,7 @@ async function createPurchaseReceipt(db, req, res, actor) {
   const now = new Date().toISOString();
   const receiptNo = 'PR' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now);
+    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now, billingMode);
     replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
     configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: items, businessDate: receiptDate });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
@@ -3482,9 +3534,12 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
   receipt.qualityState = deriveQualityState(db, 'IQC', receiptId);
   receipt.items = receipt.items.map((item) => ({ ...item, qualityState: receipt.qualityState }));
+  receipt.items = receipt.items.map((item) => { const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills b ON b.id=i.bill_id WHERE i.receipt_item_id=? AND b.status IN ('DRAFT','POSTED','WAITING_MATCH')").get(item.id).n); return {...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)}; });
+  const receiptBilled=receipt.items.reduce((sum,item)=>sum+item.billedQuantity,0),receiptQuantity=receipt.items.reduce((sum,item)=>sum+Number(item.quantity),0);
+  receipt.billingSummary={status:receiptBilled<=0?'UNBILLED':receiptBilled<receiptQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:receiptBilled,remainingQuantity:Math.max(0,receiptQuantity-receiptBilled),grniCents:receipt.billing_mode==='LEGACY_DIRECT'?0:receipt.total_cents};
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
-    downstream: db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),
+    downstream: [...db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),...db.prepare('SELECT DISTINCT b.id,b.bill_no documentNo,b.status FROM supplier_bills b JOIN supplier_bill_items i ON i.bill_id=b.id WHERE i.receipt_id=? ORDER BY b.created_at').all(receiptId).map(row=>({...row,type:'SUPPLIER_BILL'}))],
     finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor),
     subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId) : null,
     direct: !receipt.poNo,
@@ -3551,9 +3606,14 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
       }
       db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
-      const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
-      createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
-      ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      if (locked.billing_mode === 'LEGACY_DIRECT') {
+        const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
+        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
+        ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      } else {
+        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'GRNI',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购收货 GRNI '+receipt.receipt_no}]});
+        if (locked.billing_mode === 'AUTO_BILL') autoBillReceipt(db, receiptId, actor.id, `AUTO_BILL:${receiptId}`);
+      }
       saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
     });
@@ -3577,7 +3637,7 @@ function listSalesDeliveries(db, res, actor, url) {
   if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sd.status = ?'; params.push(status); }
   const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
-  const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'OQC', row.id) }));
+  const deliveries = db.prepare(sql).all(...params).map(row => { const billed=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices v ON v.id=i.invoice_id WHERE i.delivery_id=? AND v.status IN ('DRAFT','POSTED')").get(row.id).n); const delivered=Number(db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM sales_delivery_items WHERE delivery_id=?').get(row.id).n); return ({ ...row,billedQuantity:billed,remainingBillQuantity:Math.max(0,delivered-billed),billingStatus:billed<=0?'UNBILLED':billed<delivered?'PARTIALLY_BILLED':'BILLED', statusLabel: DELIVERY_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'OQC', row.id) }); });
   return send(res, 200, { salesDeliveries: deliveries });
 }
 
@@ -3585,6 +3645,8 @@ async function createSalesDelivery(db, req, res, actor) {
   allow(actor, 'SALES_DELIVERIES_MANAGE');
   const body = await readJson(req);
   const { salesOrderId, customerId, warehouseId, remark, items } = body;
+  const billingMode = body.billingMode || 'LEGACY_DIRECT';
+  if (!['SEPARATE','DIRECT_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效销售计费模式');
   const deliveryDate = normalizeDocumentDate(body?.deliveryDate || new Date().toISOString().slice(0, 10), '发货日期');
   if (!salesOrderId) throw new HttpError(400, '正常销售出货必须选择已审批销售订单');
   const source = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(salesOrderId);
@@ -3602,7 +3664,7 @@ async function createSalesDelivery(db, req, res, actor) {
   const now = new Date().toISOString();
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now);
+    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now, billingMode);
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
     configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: items, businessDate: deliveryDate });
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
@@ -3618,9 +3680,11 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
   delivery.qualityState = deriveQualityState(db, 'OQC', deliveryId);
   delivery.items = delivery.items.map((item) => ({ ...item, qualityState: delivery.qualityState }));
+  delivery.items=delivery.items.map(item=>{const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices v ON v.id=i.invoice_id WHERE i.delivery_item_id=? AND v.status IN ('DRAFT','POSTED')").get(item.id).n);return{...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)};});
+  const deliveryBilled=delivery.items.reduce((sum,item)=>sum+item.billedQuantity,0),deliveryQuantity=delivery.items.reduce((sum,item)=>sum+Number(item.quantity),0);delivery.billingSummary={status:deliveryBilled<=0?'UNBILLED':deliveryBilled<deliveryQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:deliveryBilled,remainingQuantity:Math.max(0,deliveryQuantity-deliveryBilled)};
   delivery.relationships = {
     upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
-    downstream: db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),
+    downstream: [...db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),...db.prepare('SELECT DISTINCT v.id,v.invoice_no documentNo,v.status FROM sales_invoices v JOIN sales_invoice_items i ON i.invoice_id=v.id WHERE i.delivery_id=? ORDER BY v.created_at').all(deliveryId).map(row=>({...row,type:'SALES_INVOICE'}))],
     finance: workflowVoucher(db, 'SALES_DELIVERY', deliveryId, actor),
     subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(deliveryId) : null,
     direct: !delivery.soNo,
@@ -3688,10 +3752,12 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:Number(item.quantity),movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
-      const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-      createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
       createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
-      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      if (locked.billing_mode === 'LEGACY_DIRECT') {
+        const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
+        createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+        ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
@@ -4313,11 +4379,12 @@ function validateBomPayload(db, body, options = {}) {
     if (componentId === parentProductId) throw new HttpError(400, 'BOM物料不能引用父项产品本身');
     if (seen.has(componentId)) throw new HttpError(400, 'BOM物料不能重复');
     seen.add(componentId);
-    const component = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(componentId);
+    const component = db.prepare('SELECT id,base_uom_code,tracking_policy FROM products WHERE id=? AND active=1').get(componentId);
     if (!component) throw new HttpError(400, `第${index + 1}行物料不存在或已停用`);
+    const uomCode=String(item.uomCode??item.uom_code??component.base_uom_code);let numerator=1,denominator=1;if(uomCode!==component.base_uom_code){const conversion=db.prepare("SELECT numerator,denominator FROM product_uom_conversions WHERE product_id=? AND uom_code=? AND active=1 ORDER BY version DESC LIMIT 1").get(componentId,uomCode);if(!conversion)throw new HttpError(409,`第${index+1}行缺少 UOM 换算`);numerator=conversion.numerator;denominator=conversion.denominator;}const documentQuantity=requirePositiveQuantity(item.quantity, `第${index + 1}行用量`);const baseQuantity=documentQuantity*numerator/denominator;if(component.tracking_policy==='SERIAL'&&!Number.isInteger(baseQuantity))throw new HttpError(409,'SERIAL BOM 基础数量必须为整数');
     return {
       productId: componentId,
-      quantity: requirePositiveQuantity(item.quantity, `第${index + 1}行用量`),
+      quantity: baseQuantity, uomCode, conversionNumerator:numerator, conversionDenominator:denominator,
       scrapRate: requireScrapRate(item.scrapRate ?? item.scrap_rate, `第${index + 1}行损耗率`),
     };
   });
@@ -4334,10 +4401,10 @@ async function createBom(db, req, res, actor) {
   transaction(db, () => {
     db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE product_id=? AND status='ACTIVE'").run(now, bom.productId);
     db.prepare('INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(bomId, bom.productId, bom.version, 'ACTIVE', bom.remark, actor.id, now, now);
-    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
+    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator) VALUES(?,?,?,?,?,?,?,?,?)');
     let lineNo = 1;
     for (const item of bom.items) {
-      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++,item.uomCode,item.conversionNumerator,item.conversionDenominator);
     }
     audit(db, actor.id, 'CREATE', 'BOM', bomId, '创建物料清单 BOM-' + bom.version);
   });
@@ -4371,10 +4438,10 @@ async function updateBom(db, req, res, actor, bomId) {
   const bom = validateBomPayload(db, body, { existingProductId: current.product_id });
   transaction(db, () => {
     db.prepare('DELETE FROM bom_items WHERE bom_id=?').run(bomId);
-    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
+    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator) VALUES(?,?,?,?,?,?,?,?,?)');
     let lineNo = 1;
     for (const item of bom.items) {
-      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++,item.uomCode,item.conversionNumerator,item.conversionDenominator);
     }
     db.prepare('UPDATE boms SET remark=?,updated_at=? WHERE id=?').run(bom.remark, now, bomId);
     audit(db, actor.id, 'UPDATE', 'BOM', bomId, '更新BOM');

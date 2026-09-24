@@ -1,6 +1,23 @@
 # 项目状态快照
 
-> 更新：2026-09-20 (P3 — iOS-inspired Commercial UI Design System)
+> 更新：2026-09-25 (V1.3 — Phase 6E Commercial Go-Live)
+
+## V1.3 Phase 6E — 商业计费、税、UOM 与 Go-Live
+
+- **Status:** COMPLETE — 分次开票、商业计费、GRNI/3-way match、税、UOM、Go-Live、CSV 导入导出、文档编号、MRP 改进和系统对账一次落地。
+- 销售权威链路：`Sales Order → Sales Delivery → Sales Invoice → AR / Revenue / Output Tax`；
+- 采购权威链路：`Purchase Order → Purchase Receipt → GRNI → Supplier Bill → AP / Input Tax / PPV`；
+- 兼容模式：`LEGACY_DIRECT`（既有直接开票）、`DIRECT_BILL`、`AUTO_BILL`；新流程默认为 `SEPARATE`；
+- 关键不变：整数分、Phase 0–6D schema、迁移 ID、业务/权限合同；未引入多币种、APS、完整 MES/QMS、法定税务合规或里程碑开票；
+- 新增模块：`server/modules/commercial-golive.js`、`server/migrations/v13-phase6e-commercial-golive.js`、`server/v13-phase6e-commercial-golive.test.js`；
+- 新增 UI：`src/pages/commercial-go-live.jsx` 提供销售发票、供应商账单和 Go-Live 受控上线；
+- Phase 6D System Health 扩展：`SALES_INVOICE_TO_AR_GL`、`SUPPLIER_BILL_TO_AP_GL`、`RECEIPT_GRNI_TO_GL`、`OUTPUT_TAX_TO_GL`、`INPUT_TAX_TO_GL`、`UOM_DOCUMENT_TO_BASE`、`SERIAL_BASE_QUANTITY_INTEGER`；
+- Focused：`pnpm test` 全部 **1355 / 265 suites / 0 failed**（新增 11 个 6E 验收 + 7 个 6D system health 校验回归）；
+- `pnpm build` PASS；`git diff --check` 仅 Windows CRLF 提示；
+- 无 tag、push、production 接触；
+- 详细文档：`docs/V1.3-PHASE6E-COMMERCIAL-GOLIVE.md`。
+
+> **更新：2026-09-20 (P3 — iOS-inspired Commercial UI Design System)**
 
 ## 阶段与分支
 

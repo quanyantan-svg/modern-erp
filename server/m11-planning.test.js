@@ -930,7 +930,7 @@ describe('M11 atomicity, idempotency, and immutability', () => {
     assert.match(result.data.error, /已生效/);
   });
 
-  test('45. SALES_PLUS_FORECAST adds the two demands; UI label verified by mode list', async () => {
+  test('45. SALES_PLUS_FORECAST consumes forecast with MAX(sales, forecast)', async () => {
     const productId = ensureProduct('CB1', '组合需求');
     const fc = await createForecast({
       name: 'combo',
@@ -944,7 +944,7 @@ describe('M11 atomicity, idempotency, and immutability', () => {
     const row = detail.data.run.results.find((r) => r.product_id === productId);
     assert.equal(Number(row.gross_sales_demand), 6);
     assert.equal(Number(row.gross_forecast_demand), 4);
-    assert.equal(Number(row.gross_requirement), 10);
+    assert.equal(Number(row.gross_requirement), 6);
   });
 
   test('46. non-admin cannot execute / cancel MRP runs (403)', async () => {
@@ -989,7 +989,7 @@ describe('M11 traceability / pegging', () => {
 // supply are subtracted from the gross) may drive BOM explosion. If
 // net <= 0, the parent contributes 0 to child gross demand.
 describe('M11 net-before-explosion (HOTFIX)', () => {
-  test('49. simple: FG gross 20 (10 sales + 10 forecast), on-hand 3, open production 2 → FG net 15 → A gross 30, B gross 45', async () => {
+  test('49. simple: FG consumed gross 10, on-hand 3, open production 2 → FG net 5', async () => {
     const fgId = ensureProduct('NB-FG', '净需求前置FG');
     const compA = ensureProduct('NB-A', '净需求前置A');
     const compB = ensureProduct('NB-B', '净需求前置B');
@@ -1013,25 +1013,25 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     assert.ok(fgRow);
     assert.equal(Number(fgRow.gross_sales_demand), 10);
     assert.equal(Number(fgRow.gross_forecast_demand), 10);
-    assert.equal(Number(fgRow.gross_requirement), 20);
+    assert.equal(Number(fgRow.gross_requirement), 10);
     assert.equal(Number(fgRow.on_hand), 3);
     assert.equal(Number(fgRow.open_production_supply), 2);
-    assert.equal(Number(fgRow.net_requirement), 15);
-    assert.equal(Number(fgRow.suggested_quantity), 15);
+    assert.equal(Number(fgRow.net_requirement), 5);
+    assert.equal(Number(fgRow.suggested_quantity), 5);
     assert.equal(fgRow.suggestion_type, 'MAKE');
     const aRow = detail.data.run.results.find((r) => r.product_id === compA);
     const bRow = detail.data.run.results.find((r) => r.product_id === compB);
     assert.ok(aRow);
     assert.ok(bRow);
-    assert.equal(Number(aRow.gross_component_demand), 30, 'A gross = FG net 15 × 2 = 30, NOT 40');
-    assert.equal(Number(bRow.gross_component_demand), 45, 'B gross = FG net 15 × 3 = 45, NOT 60');
+    assert.equal(Number(aRow.gross_component_demand), 10, 'A gross = FG net 5 × 2');
+    assert.equal(Number(bRow.gross_component_demand), 15, 'B gross = FG net 5 × 3');
     assert.equal(aRow.suggestion_type, 'BUY');
     assert.equal(bRow.suggestion_type, 'BUY');
     // Verify bom components match the net-driven contributions.
     const comp = detail.data.run.components.filter((c) => c.parent_product_id === fgId);
     const byChild = Object.fromEntries(comp.map((c) => [c.product_id, Number(c.gross_required)]));
-    assert.equal(byChild[compA], 30);
-    assert.equal(byChild[compB], 45);
+    assert.equal(byChild[compA], 10);
+    assert.equal(byChild[compB], 15);
   });
 
   test('50. zero-net parent: FG gross 10, on-hand 10 → net 0 → no child component gross demand', async () => {
@@ -1080,7 +1080,7 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     assert.equal(Number(aRow.net_requirement), 12);
   });
 
-  test('52. multi-level: FG net 15 → SUB×2 → SUB gross 30 → SUB on-hand 4 + open prod 6 → SUB net 20 → RAW×3 → RAW gross 60 (NOT 90)', async () => {
+  test('52. multi-level forecast consumption prevents duplicated downstream demand', async () => {
     const fgId = ensureProduct('MLN-FG', '多层净需求FG');
     const subId = ensureProduct('MLN-SUB', '多层净需求SUB');
     const rawId = ensureProduct('MLN-RAW', '多层净需求RAW');
@@ -1106,22 +1106,20 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     const fgRow = detail.data.run.results.find((r) => r.product_id === fgId);
     const subRow = detail.data.run.results.find((r) => r.product_id === subId);
     const rawRow = detail.data.run.results.find((r) => r.product_id === rawId);
-    assert.equal(Number(fgRow.net_requirement), 15, 'FG net = 20 − 3 − 2 = 15');
+    assert.equal(Number(fgRow.net_requirement), 5, 'FG net = MAX(10,10) − 3 − 2 = 5');
     assert.equal(fgRow.suggestion_type, 'MAKE');
-    assert.equal(Number(subRow.gross_component_demand), 30, 'SUB gross = FG net 15 × 2 = 30');
+    assert.equal(Number(subRow.gross_component_demand), 10, 'SUB gross = FG net 5 × 2 = 10');
     assert.equal(Number(subRow.on_hand), 4);
     assert.equal(Number(subRow.open_production_supply), 6);
-    assert.equal(Number(subRow.net_requirement), 20, 'SUB net = 30 − 4 − 6 = 20, NOT 26');
-    assert.equal(subRow.suggestion_type, 'MAKE');
-    assert.equal(Number(rawRow.gross_component_demand), 60, 'RAW gross = SUB net 20 × 3 = 60, NOT 90');
-    assert.equal(rawRow.suggestion_type, 'BUY');
+    assert.equal(Number(subRow.net_requirement), 0, 'SUB net = 10 − 4 − 6 = 0');
+    assert.equal(subRow.suggestion_type, '');
+    assert.equal(rawRow, undefined, 'zero-net SUB does not explode RAW');
     // Pegging must use net-driven contributions.
     const subPeg = detail.data.run.pegging.filter((p) => p.result_product_id === subId && p.source_type === 'BOM_EXPLOSION');
     assert.ok(subPeg.length === 1);
-    assert.equal(Number(subPeg[0].quantity_contribution), 30);
+    assert.equal(Number(subPeg[0].quantity_contribution), 10);
     const rawPeg = detail.data.run.pegging.filter((p) => p.result_product_id === rawId && p.source_type === 'BOM_EXPLOSION');
-    assert.ok(rawPeg.length === 1);
-    assert.equal(Number(rawPeg[0].quantity_contribution), 60);
+    assert.equal(rawPeg.length, 0);
   });
 
   test('53. shared component: FG1 net 5 × A2 + FG2 net 4 × A3 → A gross 22; net A only once', async () => {

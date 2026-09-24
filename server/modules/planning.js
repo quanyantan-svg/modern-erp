@@ -256,6 +256,10 @@ export function cancelPlanningForecast(db, res, actor, forecastId) {
 // =================================================================
 
 function productOnHand(db, productId) {
+  const product = db.prepare('SELECT tracking_policy FROM products WHERE id=?').get(productId);
+  const today = new Date().toISOString().slice(0, 10);
+  if (product?.tracking_policy === 'SERIAL') return Number(db.prepare("SELECT COUNT(*) total FROM inventory_serials WHERE product_id=? AND lifecycle_state='AVAILABLE' AND (expiry_date IS NULL OR expiry_date>=?)").get(productId, today).total);
+  if (product?.tracking_policy === 'LOT') return Number(db.prepare(`SELECT COALESCE(SUM(v.quantity),0) total FROM inventory_valuation_balances v JOIN inventory_lots l ON l.id=v.lot_id WHERE v.product_id=? AND l.status='AVAILABLE' AND (l.expiry_date IS NULL OR l.expiry_date>=?)`).get(productId, today).total);
   const row = db.prepare("SELECT COALESCE(SUM(quantity), 0) total FROM inventory WHERE product_id=?").get(productId);
   return Number(row?.total || 0);
 }
@@ -367,6 +371,10 @@ function aggregateDemand(rows) {
     map.set(row.productId, cur);
   }
   return [...map.values()];
+}
+
+export function consumeForecastDemand(salesDemand, forecastDemand) {
+  return Math.max(Number(salesDemand || 0), Number(forecastDemand || 0));
 }
 
 function productBom(db, productId) {
@@ -806,6 +814,9 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
   const salesDemand = run.demand_source_mode !== 'FORECAST'
     ? openSalesDemand(db, run.horizon_start, run.horizon_end)
     : [];
+  const consumedTopGross = (info) => run.demand_source_mode === 'SALES_PLUS_FORECAST'
+    ? consumeForecastDemand(info.sales, info.forecast)
+    : info.sales + info.forecast;
   // Aggregate sales + forecast at product level. Need date is the
   // earliest of all contributor dates so MRP result rows show the
   // earliest relevant need.
@@ -837,7 +848,7 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
   const componentParents = new Map(); // productId -> [{parentId, qty, path, level}]
   const walkState = { active: new Set() };
   for (const [pid, info] of topGross.entries()) {
-    const totalGross = info.sales + info.forecast;
+    const totalGross = consumedTopGross(info);
     if (totalGross <= 0) continue;
     explodeBomNet(db, pid, totalGross, pid, 0, walkState, componentGross, componentParents);
   }
@@ -886,7 +897,10 @@ export async function runMrpCalculation(db, run, actor, nowIso) {
       const topInfo = topGross.get(pid) || { sales: 0, forecast: 0, needDate: null };
       const parents = componentParents.get(pid);
       const grossFromComponents = parents ? parents.reduce((sum, p) => sum + p.qty, 0) : 0;
-      const gross = topInfo.sales + topInfo.forecast + grossFromComponents;
+      // Forecast is consumed by approved sales demand in the same product/run
+      // bucket.  The result retains both source columns for explainability,
+      // while gross requirement uses MAX rather than blindly double counting.
+      const gross = consumedTopGross(topInfo) + grossFromComponents;
       if (gross <= 0) continue;
       const netting = computeNetting(db, pid, gross);
       const suggestionType = netting.net > 0 ? decideMakeBuy(db, pid) : '';

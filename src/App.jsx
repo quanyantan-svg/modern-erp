@@ -11,6 +11,7 @@ import { CashJournals, BankAccounts, Bills, FixedAssets, ProductCosts, CostRates
 import { IQCInspections, OQCInspections, QualityControlPoints } from './pages/quality.jsx';
 import Traceability from './pages/traceability.jsx';
 import SystemHealth from './pages/system-health.jsx';
+import { GoLive, SalesInvoices, SupplierBills } from './pages/commercial-go-live.jsx';
 import { Contacts, Followups, SalesActivities } from './pages/crm.jsx';
 import BusinessOverview from './pages/business-overview.jsx';
 import ProductRoutings from './pages/product-routing.jsx';
@@ -79,12 +80,15 @@ export const navGroups = [
     { key: 'purchase-discounts', label: '采购折让', icon: ic.purchaseDiscount, any: ['PURCHASE_DISCOUNT_MANAGE'] },
   ]},
   { label: '财务资金', items: [
+    { key: 'sales-invoices', label: '销售发票', icon: ic.accounting, any: ['AR_VIEW', 'ACCOUNTING_VIEW'] },
     { key: 'accounts-receivable', label: '应收账款', icon: ic.accounting, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
     { key: 'payment-collections', label: '收款单', icon: ic.cashJournals, any: ['AR_VIEW', 'COLLECTION_MANAGE'] },
     { key: 'accounts-payable', label: '应付账款', icon: ic.accounting, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { key: 'supplier-bills', label: '供应商账单', icon: ic.accounting, any: ['AP_VIEW', 'ACCOUNTING_VIEW'] },
     { key: 'payment-disbursements', label: '付款单', icon: ic.bankAccounts, any: ['AP_VIEW', 'PAYMENT_MANAGE'] },
     { key: 'accounting', label: '会计凭证', icon: ic.accounting, any: ['ACCOUNTING_VIEW'] },
     { key: 'system-health', label: '系统健康', icon: ic.health, any: ['ACCOUNTING_VIEW', 'PERIOD_CLOSE_MANAGE'] },
+    { key: 'go-live', label: '受控上线', icon: ic.health, any: ['ACCOUNTING_VIEW', 'PERIOD_CLOSE_MANAGE'] },
     { key: 'cash-journals', label: '现金日记账', icon: ic.cashJournals, any: ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE'], enabled: false },
     { key: 'bank-accounts', label: '银行账户', icon: ic.bankAccounts, any: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
     { key: 'bills', label: '票据管理', icon: ic.bills, any: ['BILLS_VIEW', 'BILLS_MANAGE'], enabled: false },
@@ -229,6 +233,9 @@ export default function App() {
     notifications: <Notifications user={user} notify={notify}/>,
     workflows: <Workflows user={user} notify={notify}/>,
     accounting: <Accounting user={user} notify={notify}/>,
+    'sales-invoices': <SalesInvoices user={user} notify={notify}/>,
+    'supplier-bills': <SupplierBills user={user} notify={notify}/>,
+    'go-live': <GoLive user={user} notify={notify}/>,
     'system-health': <SystemHealth user={user} notify={notify}/>,
     'accounts-receivable': <Receivables user={user} notify={notify}/>,
     'payment-collections': <Collections user={user} notify={notify}/>,

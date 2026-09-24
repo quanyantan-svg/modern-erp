@@ -80,8 +80,8 @@ describe('M8 AR/AP and settlement workflow', () => {
 
   test('legacy confirmed Delivery and Receipt are backfilled once and repeated reconciliation is stable', () => {
     const stamp = '2026-08-12T02:00:00.000Z';
-    db.prepare("INSERT INTO sales_deliveries(id,delivery_no,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at) VALUES('legacy-sd','SD-LEGACY-M8','customer-002','warehouse-001','user-sales',4321,'CONFIRMED','2026-08-12','旧单','user-sales',?,?)").run(stamp, stamp);
-    db.prepare("INSERT INTO purchase_receipts(id,receipt_no,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at) VALUES('legacy-pr','PR-LEGACY-M8','supplier-002','warehouse-001','user-sales',5432,'CONFIRMED','2026-08-12','旧单','user-sales',?,?)").run(stamp, stamp);
+    db.prepare("INSERT INTO sales_deliveries(id,delivery_no,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES('legacy-sd','SD-LEGACY-M8','customer-002','warehouse-001','user-sales',4321,'CONFIRMED','2026-08-12','旧单','user-sales',?,?,'LEGACY_DIRECT')").run(stamp, stamp);
+    db.prepare("INSERT INTO purchase_receipts(id,receipt_no,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES('legacy-pr','PR-LEGACY-M8','supplier-002','warehouse-001','user-sales',5432,'CONFIRMED','2026-08-12','旧单','user-sales',?,?,'LEGACY_DIRECT')").run(stamp, stamp);
     reconcileSettlementSubledgers(db); reconcileSettlementSubledgers(db);
     const arRows = db.prepare("SELECT source_id,amount_cents FROM account_receivables WHERE source_id='legacy-sd'").all(); const apRows = db.prepare("SELECT source_id,amount_cents FROM account_payables WHERE source_id='legacy-pr'").all();
     assert.equal(arRows.length, 1); assert.equal(arRows[0].amount_cents, 4321); assert.equal(apRows.length, 1); assert.equal(apRows[0].amount_cents, 5432);
