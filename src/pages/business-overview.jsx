@@ -4,39 +4,54 @@ export const BUSINESS_FLOWS = [
   {
     key: 'sales',
     title: '销售链',
-    description: '从客户需求、订单审批到出货、应收和回款。',
+    description: '从客户需求、订单审批到出货、应收、折让与回款。',
     nodes: [
       ['客户', 'customers'], ['销售订单', 'orders'], ['审批', 'approvals'],
       ['销售出货', 'sales-deliveries'], ['应收账款', 'accounts-receivable'],
-      ['收款单', 'payment-collections'], ['销售统计', 'decision-reports'],
+      ['销售折让', 'sales-discounts'], ['收款单', 'payment-collections'],
+      ['销售统计', 'decision-reports'],
     ],
   },
   {
     key: 'purchase',
     title: '采购链',
-    description: '从供应商与采购订单到入库、应付和付款。',
+    description: '从供应商与采购订单到入库、应付、折让与付款。',
     nodes: [
       ['供应商', 'suppliers'], ['采购订单', 'purchase-orders'], ['审批', 'approvals'],
       ['采购入库', 'purchase-receipts'], ['应付账款', 'accounts-payable'],
-      ['付款单', 'payment-disbursements'], ['采购统计', 'decision-reports'],
+      ['采购折让', 'purchase-discounts'], ['付款单', 'payment-disbursements'],
+      ['采购统计', 'decision-reports'],
     ],
   },
   {
     key: 'inventory',
     title: '库存链',
-    description: '查询现存量，执行调拨、盘点与调整，并追溯每次库存异动。',
+    description: '查询现存量，执行调拨、盘点、调整与报废，按月结存并追溯每次库存异动。',
     nodes: [
       ['库存查询', 'inventory'], ['库存调拨', 'inventory'], ['库存盘点', 'inventory'],
-      ['库存调整', 'inventory'], ['库存异动', 'inventory-transactions'],
+      ['库存调整', 'inventory'], ['库存报废', 'inventory-scraps'],
+      ['存货月结', 'inventory-month-end'], ['库存异动', 'inventory-transactions'],
     ],
   },
   {
     key: 'production',
     title: '生产链',
-    description: 'BOM 定义用料，制令单串联领料、成品入库与完工。',
+    description: 'BOM 定义用料，制品工序标准定义加工顺序；计划预测与 MRP 输出建议，制令单再串联领料、成品入库与完工。',
     nodes: [
-      ['BOM', 'boms'], ['制令单', 'production-orders'], ['开工', 'production-orders'],
+      ['销售订单', 'orders'], ['需求预测', 'forecasts'], ['MRP 运算', 'mrp-runs'],
+      ['BOM', 'boms'], ['制品工序标准', 'product-routings'], ['制令单', 'production-orders'], ['开工', 'production-orders'],
       ['用料出库', 'material-issues'], ['生产入库', 'production-receipts'], ['完工', 'production-orders'],
+    ],
+  },
+  {
+    key: 'planning',
+    title: '计划与物料需求',
+    description: '从销售订单与已生效需求预测出发，叠加需求后运行 MRP 运算；查看物料需求计划得到生产与采购建议；按建议下达生产指令或采购指令，再生成制令单或经审批的请购单与采购订单。',
+    nodes: [
+      ['销售订单', 'orders'], ['需求预测', 'forecasts'], ['MRP 运算', 'mrp-runs'],
+      ['物料需求计划', 'material-requirements-plan'],
+      ['生产指令', 'production-instructions'], ['制令单', 'production-orders'],
+      ['采购指令', 'purchase-instructions'], ['请购单', 'purchase-requisitions'], ['采购订单', 'purchase-orders'],
     ],
   },
   {
@@ -77,6 +92,6 @@ export default function BusinessOverview() {
         </div>
       </article>)}
     </div>
-    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力；计划预测、MRP 执行、请购、库存报废、库存月结及销售／采购折让未作为可操作节点展示。</p>
+    <p className="business-overview__note">本页只展示课程系统中已经可用的业务能力。MRP 输出仅为生产与采购建议，需要人工下达生产指令 / 采购指令后再生成业务单据。销售折让、采购折让为业务确认后调整应收/应付的独立流程，不进入审批中心、不重复创建凭证。</p>
   </section>;
 }

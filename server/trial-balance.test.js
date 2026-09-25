@@ -267,16 +267,17 @@ describe('Phase E — Trial Balance end-to-end', () => {
     return trialBalance.find((r) => r.code === code);
   }
 
-  test('subject filter regression: all 7 seeded subjects appear (no parent_id filter)', async () => {
+  test('subject filter includes legacy subjects and all configured Phase 6D role accounts', async () => {
     const res = await api('/api/reports/trial-balance?period=2099-01', {}, adminToken);
     assert.equal(res.status, 200, `trial balance must succeed; got ${res.status} ${JSON.stringify(res.data)}`);
     const codes = res.data.trialBalance.map((r) => r.code).sort();
-    // All 7 seeded subjects must be present even on a period with zero activity.
+    // Legacy subjects remain visible and Phase 6D adds the configured inventory/WIP/variance accounts.
     for (const expected of ['1001', '1002', '1122', '1405', '2202', '6001', '6401']) {
       assert.ok(codes.includes(expected),
         `trial balance must include subject ${expected} regardless of activity; got [${codes.join(',')}]`);
     }
-    assert.equal(codes.length, 7, `trial balance must contain exactly the 7 seeded subjects; got [${codes.join(',')}]`);
+    for (const expected of ['1403','1404','1406','5101','5102','6402','6403','6404','6405','6406']) assert.ok(codes.includes(expected), `trial balance must include Phase 6D role subject ${expected}`);
+    assert.equal(codes.length, 21, `trial balance must contain the 21 configured subjects; got [${codes.join(',')}]`);
   });
 
   test('POSTED manual voucher with period populated appears in Trial Balance', async () => {

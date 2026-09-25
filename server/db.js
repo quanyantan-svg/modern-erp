@@ -1,6 +1,25 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createMySqlDatabase } from './database/mysql-adapter.js';
+import { resolveDatabaseConfig } from './database/config.js';
 import { migrateExtendedSchema } from './migrations/extended-schema.js';
+import { migrateProductRoutingSchema } from './migrations/product-routing.js';
+import { migratePlanningSchema } from './migrations/planning-schema.js';
+import { migratePlanningDocumentsSchema } from './migrations/planning-documents-schema.js';
+import { migrateInventoryExtensionsSchema } from './migrations/inventory-extensions-schema.js';
+import { migrateDiscountsSchema } from './migrations/discounts-schema.js';
+import { migrateLifecycleSchema } from './migrations/lifecycle-schema.js';
+import { migrateV13Phase1Contracts } from './migrations/v13-phase1-contracts.js';
+import { migrateV13Phase2SourceIntegrity } from './migrations/v13-phase2-source-integrity.js';
+import { migrateV13Phase3QualityGates } from './migrations/v13-phase3-quality-gates.js';
+import { migrateV13Phase4ProductionIntegrity } from './migrations/v13-phase4-production-integrity.js';
+import { migrateV13Phase5SettlementIntegrity } from './migrations/v13-phase5-settlement-integrity.js';
+import { migrateV13Phase6AFinancialControls } from './migrations/v13-phase6a-financial-controls.js';
+import { migrateV13Phase6BTraceabilityQuality } from './migrations/v13-phase6b-traceability-quality.js';
+import { migrateV13Phase6CManufacturingExecution } from './migrations/v13-phase6c-manufacturing-execution.js';
+import { migrateV13Phase6DFinancialInventory } from './migrations/v13-phase6d-financial-inventory.js';
+import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-commercial-golive.js';
+import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -107,6 +126,25 @@ export const PERMISSIONS = [
   ['PRODUCTION_MATERIAL_ISSUE_MANAGE', '管理用料出库'],
   ['PRODUCTION_RECEIPT_MANAGE', '管理生产入库'],
 
+  // M12 — Planning documents (Production Instruction, Purchase Instruction, Purchase Requisition)
+  ['PRODUCTION_INSTRUCTION_VIEW', '查看生产指令'],
+  ['PRODUCTION_INSTRUCTION_MANAGE', '管理生产指令'],
+  ['PURCHASE_INSTRUCTION_VIEW', '查看采购指令'],
+  ['PURCHASE_INSTRUCTION_MANAGE', '管理采购指令'],
+  ['PURCHASE_REQUISITION_VIEW', '查看请购单'],
+  ['PURCHASE_REQUISITION_MANAGE', '管理请购单'],
+  ['PURCHASE_REQUISITION_APPROVE', '审核请购单'],
+
+  // M13 — Inventory extensions (Inventory Scrap + Inventory Month-End)
+  ['INVENTORY_SCRAP_VIEW', '查看库存报废单'],
+  ['INVENTORY_SCRAP_MANAGE', '管理与确认库存报废'],
+  ['INVENTORY_PERIOD_CLOSE_VIEW', '查看存货月结'],
+  ['INVENTORY_PERIOD_CLOSE_MANAGE', '执行与反结存货月结'],
+
+  // M14 — Sales / Purchase Discount / Allowance
+  ['SALES_DISCOUNT_MANAGE', '管理与确认销售附加折让'],
+  ['PURCHASE_DISCOUNT_MANAGE', '管理与确认采购附加折让'],
+
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -120,13 +158,20 @@ export function verifyPassword(password, salt, expectedHex) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function createDatabase(filename) {
+function createSqliteDatabase(filename) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
   migrate(db);
   migrateSettlementSchema(db);
   migrateExtendedSchema(db);
+  migrateProductRoutingSchema(db);
+  migratePlanningSchema(db);
+  migratePlanningDocumentsSchema(db);
+  migrateInventoryExtensionsSchema(db);
+  migrateDiscountsSchema(db);
+  migrateLifecycleSchema(db);
+  migrateV13Phase1Contracts(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables
@@ -241,6 +286,7 @@ export function createDatabase(filename) {
         db.exec('DROP TABLE accounting_vouchers');
         db.exec('ALTER TABLE accounting_vouchers_new RENAME TO accounting_vouchers');
         db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_status ON accounting_vouchers(status)');
+        db.exec('CREATE INDEX IF NOT EXISTS idx_vouchers_source ON accounting_vouchers(source_type, source_id)');
       }
     } catch (e) { console.error('Migration voucher workflow failed:', e.message); }
   };
@@ -298,10 +344,37 @@ export function createDatabase(filename) {
   };
   migrateInventoryTransfers();
   migrateWarehouseLogistics(db);
+  migrateV13Phase2SourceIntegrity(db);
+  migrateV13Phase3QualityGates(db);
   migrateProductionDocuments(db);
+  migrateV13Phase4ProductionIntegrity(db);
+  migrateV13Phase5SettlementIntegrity(db);
+  migrateV13Phase6AFinancialControls(db);
+  migrateV13Phase6BTraceabilityQuality(db);
+  migrateV13Phase6CManufacturingExecution(db);
+  migrateV13Phase6DFinancialInventory(db);
+  migrateV13Phase6ECommercialGoLive(db);
+  migrateV13Phase7cPerformance(db);
   reconcileSettlementSubledgers(db);
 
   return db;
+}
+
+/**
+ * Open the configured database backend while preserving the synchronous
+ * domain-level contract used by the frozen V1.3 modules.
+ *
+ * A string remains the backwards-compatible SQLite path. Passing no value or
+ * an object uses the explicit ERP_DB_BACKEND configuration contract.
+ */
+export function createDatabase(target) {
+  if (typeof target === 'string') return createSqliteDatabase(target);
+  const config = resolveDatabaseConfig(target);
+  if (config.backend === 'sqlite') return createSqliteDatabase(config.path);
+  return createMySqlDatabase(config, {
+    createSqliteSnapshot: (filename) => createSqliteDatabase(filename),
+    seedDemo: shouldSeedDemoData(),
+  });
 }
 
 // Idempotent migration for purchase_receipts / sales_deliveries /
@@ -1441,10 +1514,20 @@ function seedSchema(db) {
   const all = PERMISSIONS.map(([code]) => code);
   const rolePermissions = {
     'role-admin': all,
-    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE'],
-    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE'],
-    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW'],
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE'],
+    'role-accounting': ['DASHBOARD_VIEW', 'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW', 'ORDERS_VIEW', 'PURCHASE_ORDERS_VIEW', 'CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE', 'BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE', 'BILLS_VIEW', 'BILLS_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE', 'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE', 'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE'],
+    // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers, SO/PO/PR
+    // create/submit) and CRM. SALES does NOT execute warehouse stock, material
+    // issue, production receipt, inventory transfer, inventory check, or
+    // delivery/return confirmation. VIEW of downstream logistics (POs, PRs)
+    // comes from the *_VIEW entries below.
+    'role-sales': ['DASHBOARD_VIEW', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_REQUISITION_VIEW', 'PURCHASE_REQUISITION_MANAGE', 'CRM_VIEW', 'CRM_MANAGE'],
+    // V1.3 Phase 1: REVIEWER is the canonical independent approver for SO/PO/PR/
+    // INVENTORY_CHECK. No _MANAGE / _CREATE / _SUBMIT write rights.
+    'role-reviewer': ['DASHBOARD_VIEW', 'CUSTOMERS_VIEW', 'PRODUCTS_VIEW', 'ORDERS_VIEW', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_APPROVE', 'WAREHOUSES_VIEW', 'INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW', 'RETURNS_VIEW', 'PURCHASE_REQUISITION_VIEW', 'PURCHASE_REQUISITION_APPROVE', 'INVENTORY_CHECK_APPROVE'],
+    // V1.3 Phase 1: WAREHOUSE owns physical stock execution including material
+    // issue and production receipt. No MRP / no accounting / no self-approval of
+    // inventory check (INVENTORY_CHECK_APPROVE is on reviewer only).
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
@@ -1533,17 +1616,63 @@ function seed(db) {
   if (shouldSeedDemoData()) seedDemoData(db);
 }
 
-export function transaction(db, work) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = work();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+const MYSQL_RETRYABLE_TRANSACTION_CODES = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);
 
+export function isRetryableMySqlTransactionError(error) {
+  return MYSQL_RETRYABLE_TRANSACTION_CODES.has(error?.code)
+    || error?.errno === 1213
+    || error?.errno === 1205
+    || error?.sqlState === '40001';
+}
+
+function mysqlTransactionRetryLimit() {
+  const configured = Number(process.env.ERP_DB_TX_RETRY_MAX ?? 3);
+  return Number.isSafeInteger(configured) && configured >= 0 && configured <= 10 ? configured : 3;
+}
+
+function waitForTransactionRetry(attempt) {
+  const delayMs = Math.min(250, 20 * (2 ** attempt));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+
+function releaseMySqlIdempotencyLocks(db) {
+  if (db?.dialect !== 'mysql' || !db._idempotencyLocks?.size) return;
+  for (const lockName of db._idempotencyLocks) {
+    try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } catch {}
+  }
+  db._idempotencyLocks.clear();
+}
+
+export function transaction(db, work) {
+  const mysql = db?.dialect === 'mysql';
+  const retryLimit = mysql ? mysqlTransactionRetryLimit() : 0;
+  for (let attempt = 0; ; attempt += 1) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (mysql) {
+        // Global order: transaction gate first, then business rows. Holding the
+        // gate until COMMIT/ROLLBACK makes cross-table invariants atomic across
+        // every API process using this database.
+        const gate = db.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE').get();
+        if (!gate) throw new Error('MySQL transaction gate is unavailable');
+      }
+      const result = work();
+      db.exec('COMMIT');
+      releaseMySqlIdempotencyLocks(db);
+      return result;
+    } catch (error) {
+      try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+      if (!mysql || !isRetryableMySqlTransactionError(error) || attempt >= retryLimit) {
+        if (mysql && isRetryableMySqlTransactionError(error)) {
+          error.transactionRetryExhausted = true;
+          error.transactionAttempts = attempt + 1;
+        }
+        releaseMySqlIdempotencyLocks(db);
+        throw error;
+      }
+      waitForTransactionRetry(attempt);
+    }
+  }
 }
 export function id() {
   return randomUUID();

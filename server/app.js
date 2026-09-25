@@ -1,5 +1,6 @@
 ﻿import { createHash, randomBytes } from 'node:crypto';
 import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
+import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import {
   createContact, createFollowup, createProject, createProjectTask, createSalesActivity,
@@ -10,42 +11,106 @@ import {
 } from './modules/business.js';
 import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
-  createDepartment, createExpenseClaim, createIqcInspection, createLaborRecord,
-  createLeaveRequest, createMrpPlan, createOqcInspection, createPeriodClosure,
+  createDepartment, createExpenseClaim, createLaborRecord,
+  createLeaveRequest, createMrpPlan, createPeriodClosure,
   createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
-  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement, getIqcInspection,
-  getInventoryStatus, getOqcInspection, getSalesAnalysis, getTrialBalance,
-  completeIqcInspection, completeOqcInspection, updateIqcInspection, updateOqcInspection,
+  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement,
+  getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
-  listIqcInspections, listLaborRecords, listLeaveRequests, listMrpPlans,
-  listOqcInspections, listPeriodClosures, listRoutingOperations,
+  listLaborRecords, listLeaveRequests, listMrpPlans,
+  listPeriodClosures, listRoutingOperations,
   closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
+import {
+  cancelIqcInspection, cancelOqcInspection, completeIqcInspection, completeOqcInspection,
+  createIqcInspection, createOqcInspection, getIqcInspection, getOqcInspection,
+  listIqcInspections, listOqcInspections, updateIqcInspection, updateOqcInspection,
+} from './modules/authoritative-quality.js';
+import { assertQualityGate, deriveQualityState } from './modules/quality-gates.js';
 import {
   getInventoryMovements, getPurchaseOutstanding, getPurchaseSummary,
   getSalesOutstanding, getSalesSummary,
 } from './modules/decision-reports.js';
 import { listApprovals } from './modules/approvals.js';
-import { ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
-  cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument,
+  activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
+  createMrpRun, createPlanningForecast, executeMrpRun, getMrpRun,
+  getPlanningForecast, listMrpRuns, listPlanningForecasts,
+  updateMrpRun, updatePlanningForecast,
+} from './modules/planning.js';
+import {
+  approvePurchaseRequisition, cancelProductionInstruction, cancelPurchaseInstruction,
+  cancelPurchaseRequisition, createProductionInstruction, createPurchaseInstruction,
+  createPurchaseRequisition, generateProductionOrderFromInstruction,
+  generatePurchaseOrderFromRequisition, getProductionInstruction,
+  getPurchaseInstruction, getPurchaseRequisition, listProductionInstructions,
+  listPurchaseInstructions, listPurchaseRequisitions, rejectPurchaseRequisition,
+  releaseProductionInstruction, releasePurchaseInstruction, submitPurchaseRequisition,
+  updatePurchaseRequisition,
+} from './modules/planning-documents.js';
+import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
+import {
+  cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument, deleteSettlementDocument,
   customerStatement, getPayable as getPayableM8, getReceivable as getReceivableM8,
   getSettlementDocument, listPayables as listPayablesM8, listReceivables as listReceivablesM8,
-  listSettlementDocuments, listSettlementParties, supplierStatement, updateSettlementDocument,
+  listSettlementDocuments, listSettlementParties, reverseSettlementDocument, settlementReconciliationCheck,
+  supplierStatement, updateSettlementDocument,
 } from './modules/settlement.js';
 import {
   cancelProductionMaterialIssue, cancelProductionReceipt,
-  confirmProductionMaterialIssue, confirmProductionReceipt,
-  createProductionMaterialIssue, createProductionReceipt,
+  confirmProductionMaterialIssue, confirmProductionMaterialReturn, confirmProductionReceipt, confirmProductionReceiptReversal,
+  createProductionMaterialIssue, createProductionMaterialReturn, createProductionReceipt, createProductionReceiptReversal,
+  deleteProductionMaterialIssue, deleteProductionReceipt,
   getProductionMaterialIssue, getProductionReceipt,
   listProductionMaterialIssues, listProductionReceipts,
-  prefetchMaterialIssueFromBom,
+  prefetchMaterialIssueFromBom, productionNetReceived, productionRequirementSummary,
   updateProductionMaterialIssue, updateProductionReceipt,
 } from './modules/production-workflow.js';
 import {
+  changeProductRoutingStatus, createProductRouting, createProductRoutingOperation,
+  deleteProductRoutingOperation, getProductRouting, listProductRoutings,
+  updateProductRouting, updateProductRoutingOperation,
+} from './modules/product-routing.js';
+import {
+  assertRoutedCompletion, cancelOperation, cancelOperationReport, completeOperation, confirmOperationReport,
+  createOperationReport, deriveProductionCost, getManufacturingExecution,
+  manufacturingCapacityReport, manufacturingCostReport, manufacturingWipReport,
+  manufacturingYieldReport, reconcileProductionCosts, reverseOperationReport,
+  snapshotManufacturingExecution,
+} from './modules/manufacturing-execution.js';
+import {
+  cancelInventoryScrap, closeInventoryPeriod, confirmInventoryScrap,
+  createInventoryScrap, getInventoryPeriodClosure, getInventoryScrap,
+  listInventoryPeriodClosures, listInventoryScraps,
+  reopenInventoryPeriod, updateInventoryScrap,
+} from './modules/inventory-extensions.js';
+import {
+  cancelPurchaseDiscount, cancelSalesDiscount, confirmPurchaseDiscount,
+  confirmSalesDiscount, createPurchaseDiscount, createSalesDiscount,
+  getPurchaseDiscount, getSalesDiscount, listPurchaseDiscounts,
+  listSalesDiscounts, reversePurchaseDiscount, reverseSalesDiscount, updatePurchaseDiscount, updateSalesDiscount,
+} from './modules/discounts.js';
+import {
+  actOnWriteOff, applyUnappliedBalance, createRefund, createWriteOff,
+  idempotencyReplay, requestFingerprint, saveIdempotency,
+  listUnappliedBalances, reverseBalanceApplication, reverseRefund, reverseWriteOff,
+  reverseOperationalReturn, settlementAccountReconciliation,
+} from './modules/financial-controls.js';
+import {
+  availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler,
+  listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
+  reverseTrackedSource, saveTrackedAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
+} from './modules/traceability-quality.js';
+import {
+  assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
+  issueSourceValue, postWipMovement, receivePositiveSourceValue, receiveSourceValue, receiveValue, restoreSourceValue, reverseSystemVoucher, reverseValuationSource, systemHealthHandler, wipRollForwardHandler,
+} from './modules/financial-inventory.js';
+import { autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
+import {
   HttpError,
+  assertAllowedFields,
   allow,
   allowAny,
   bearer,
@@ -57,46 +122,98 @@ import {
   serveStatic,
   setSecurityHeaders,
 } from './lib/http.js';
+import { createStructuredLogger } from './lib/logger.js';
+import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
+import {
+  archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, lifecycleArchiveFilter,
+  listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
+} from './modules/lifecycle-engine.js';
 
-const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
-const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
-const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
-const TOKEN_LENGTH = Number(process.env.TOKEN_LENGTH || 32);
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value ?? fallback);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+const SESSION_HOURS = boundedInteger(process.env.SESSION_HOURS, 12, 1, 168);
+const LOGIN_MAX_ATTEMPTS = boundedInteger(process.env.LOGIN_MAX_ATTEMPTS, 5, 3, 20);
+const LOGIN_LOCK_MINUTES = boundedInteger(process.env.LOGIN_LOCK_MINUTES, 15, 1, 1_440);
+const TOKEN_LENGTH = boundedInteger(process.env.TOKEN_LENGTH, 32, 32, 64);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
 const PURCHASE_STATUS_LABELS = STATUS_LABELS;
 
 export function createApp(db, options = {}) {
   const distDir = options.distDir;
+  const logger = options.logger === undefined ? null : options.logger;
+  const slowRequestMs = boundedInteger(options.slowRequestMs ?? process.env.SLOW_REQUEST_MS, 1_000, 10, 300_000);
 
   return async function app(req, res) {
+    const startedAt = performance.now();
+    const suppliedRequestId = String(req.headers['x-request-id'] || '');
+    const requestId = /^[A-Za-z0-9._-]{8,100}$/.test(suppliedRequestId) ? suppliedRequestId : randomUUID();
+    req.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
     setSecurityHeaders(res);
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+    res.once('finish', () => {
+      if (!logger) return;
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+      const fields = { requestId, method: req.method, route: url.pathname, status: res.statusCode, durationMs, userId: req.actor?.id ?? null };
+      if (durationMs >= slowRequestMs) logger.warn('slow_request', fields);
+      else if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) logger.info('mutation_request', fields);
+    });
     if (req.method === 'OPTIONS') return send(res, 204, null);
 
-    const url = new URL(req.url, 'http://localhost');
     try {
       if (url.pathname.startsWith('/api/')) {
         return await handleApi(db, req, res, url);
       }
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
-      if (error instanceof HttpError) return send(res, error.status, { error: error.message, details: error.details });
-      if (String(error.message).includes('UNIQUE constraint failed')) return send(res, 409, { error: '编号或账号已存在，请更换后重试' });
-      console.error(error);
-      return send(res, 500, { error: '服务器内部错误' });
+      if (error instanceof HttpError) return send(res, error.status, { error: error.message, details: error.details, requestId });
+      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message))) return send(res, 409, { error: '编号或账号已存在，请更换后重试', requestId });
+      (logger || createStructuredLogger()).error('unhandled_request_error', {
+        requestId, method: req.method, route: url.pathname, userId: req.actor?.id ?? null,
+        category: error?.code || error?.name || 'Error', stack: error?.stack || String(error),
+      });
+      return send(res, 500, { error: '服务器内部错误', requestId });
     }
   };
 }
 
 async function handleApi(db, req, res, url) {
   const { pathname } = url;
-  if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
+  if (req.method === 'GET' && (pathname === '/api/health' || pathname === '/api/health/live')) return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
+  if (req.method === 'GET' && pathname === '/api/health/ready') {
+    try {
+      db.prepare('SELECT 1 ready').get();
+      return send(res, 200, { status: 'ready', database: 'reachable' });
+    } catch {
+      return send(res, 503, { status: 'not_ready', database: 'unreachable', requestId: req.requestId });
+    }
+  }
   if (req.method === 'POST' && pathname === '/api/auth/login') return login(db, req, res);
 
   if (req.method === 'POST' && pathname === '/api/auth/logout') return logout(db, req, res);
   const actor = authenticate(db, req);
+  req.actor = actor;
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
+  if (req.method === 'GET' && pathname === '/api/system-health') return systemHealthHandler(db, res, actor, url);
+  if (req.method === 'GET' && pathname === '/api/reports/inventory-valuation') return inventoryValuationReport(db, res, actor, url);
+  if (req.method === 'GET' && pathname === '/api/reports/inventory-roll-forward') return inventoryRollForwardHandler(db,res,actor,url);
+  if (req.method === 'GET' && pathname === '/api/reports/wip-roll-forward') return wipRollForwardHandler(db,res,actor,url);
+  if (req.method === 'GET' && pathname === '/api/accounting/general-ledger') return generalLedgerHandler(db,res,actor,url);
+  if (/^\/api\/(tax-codes|uom-conversions|sales-invoices|supplier-bills|commercial-credit-notes|commercial-reconciliation|opening-batches|imports|exports)(\/|$)/.test(pathname)) return commercialApiHandler(db,req,res,actor,url);
   if (req.method === 'GET' && pathname === '/api/approvals') return listApprovals(db, res, actor, url);
+
+  // Lifecycle 2.0 — centralized, administrator-only analysis and archive
+  // metadata. Effective cleanup execution is intentionally a separate route.
+  if (pathname === '/api/lifecycle/analyze' && req.method === 'GET') return lifecycleAnalysis(db, res, actor, url);
+  if (pathname === '/api/lifecycle/archive' && req.method === 'POST') return archiveLifecycleRecord(db, req, res, actor);
+  if (pathname === '/api/lifecycle/restore' && req.method === 'POST') return restoreLifecycleRecord(db, req, res, actor);
+  if (pathname === '/api/lifecycle/cleanup' && req.method === 'POST') return executeLifecycleCleanup(db, req, res, actor);
+  if (pathname === '/api/lifecycle/records' && req.method === 'GET') return listLifecycleRecordsHandler(db, res, actor, url);
+  if (pathname === '/api/lifecycle/cleanup-events' && req.method === 'GET') return listCleanupEventsHandler(db, res, actor, url);
 
   if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
   if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);
@@ -113,16 +230,30 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/customers' && req.method === 'POST') return createCustomer(db, req, res, actor);
   const customerMatch = pathname.match(/^\/api\/customers\/([^/]+)$/);
   if (customerMatch && req.method === 'PATCH') return updateCustomer(db, req, res, actor, customerMatch[1]);
+  if (customerMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'customer', customerMatch[1]);
 
   if (pathname === '/api/suppliers' && req.method === 'GET') return listSuppliers(db, res, actor, url);
   if (pathname === '/api/suppliers' && req.method === 'POST') return createSupplier(db, req, res, actor);
   const supplierMatch = pathname.match(/^\/api\/suppliers\/([^/]+)$/);
   if (supplierMatch && req.method === 'PATCH') return updateSupplier(db, req, res, actor, supplierMatch[1]);
+  if (supplierMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'supplier', supplierMatch[1]);
 
   if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
   if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
+  const productTrackingMatch = pathname.match(/^\/api\/products\/([^/]+)\/tracking-policy$/);
+  if (productTrackingMatch && req.method === 'PATCH') return updateProductTrackingHandler(db, req, res, actor, productTrackingMatch[1]);
+  if (pathname === '/api/tracking/allocations' && req.method === 'PUT') return saveAllocationsHandler(db, req, res, actor);
+  const identityHoldMatch = pathname.match(/^\/api\/tracking\/(LOT|SERIAL)\/([^/]+)\/hold$/i);
+  if (identityHoldMatch && req.method === 'POST') return holdIdentityHandler(db, req, res, actor, identityHoldMatch[1], identityHoldMatch[2]);
+  if (pathname === '/api/tracking/reconcile' && req.method === 'GET') return reconcileTrackingHandler(db, res, actor);
+  if (pathname === '/api/tracking/availability' && req.method === 'GET') return availabilityHandler(db, res, actor, url);
+  if (pathname === '/api/traceability' && req.method === 'GET') return traceHandler(db, res, actor, url);
+  if (pathname === '/api/production-genealogy' && req.method === 'POST') return genealogyHandler(db, req, res, actor);
+  if (pathname === '/api/quality-control-points' && req.method === 'GET') return listQcpHandler(db, res, actor);
+  if (pathname === '/api/quality-control-points' && req.method === 'POST') return createQcpHandler(db, req, res, actor);
   const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
   if (productMatch && req.method === 'PATCH') return updateProduct(db, req, res, actor, productMatch[1]);
+  if (productMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'product', productMatch[1]);
 
   if (pathname === '/api/orders' && req.method === 'GET') return listOrders(db, res, actor, url);
   if (pathname === '/api/orders' && req.method === 'POST') return createOrder(db, req, res, actor);
@@ -131,6 +262,7 @@ async function handleApi(db, req, res, url) {
   const orderMatch = pathname.match(/^\/api\/orders\/([^/]+)$/);
   if (orderMatch && req.method === 'GET') return getOrder(db, res, actor, orderMatch[1]);
   if (orderMatch && req.method === 'PUT') return updateOrder(db, req, res, actor, orderMatch[1]);
+  if (orderMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'salesOrder', orderMatch[1]);
   const salesWorkflowMatch = pathname.match(/^\/api\/workflow\/sales-orders\/([^/]+)$/);
   if (salesWorkflowMatch && req.method === 'GET') return getSalesOrderWorkflow(db, res, actor, salesWorkflowMatch[1]);
 
@@ -141,6 +273,7 @@ async function handleApi(db, req, res, url) {
   if (poActionMatch && req.method === 'POST') return changePurchaseOrderState(db, req, res, actor, poActionMatch[1], poActionMatch[2]);
   const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
   if (poMatch && req.method === 'GET') return getPurchaseOrder(db, res, actor, poMatch[1]);
+  if (poMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'purchaseOrder', poMatch[1]);
   const purchaseWorkflowMatch = pathname.match(/^\/api\/workflow\/purchase-orders\/([^/]+)$/);
   if (purchaseWorkflowMatch && req.method === 'GET') return getPurchaseOrderWorkflow(db, res, actor, purchaseWorkflowMatch[1]);
 
@@ -175,6 +308,7 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/warehouses' && req.method === 'POST') return createWarehouse(db, req, res, actor);
   const whMatch = pathname.match(/^\/api\/warehouses\/([^/]+)$/);
   if (whMatch && req.method === 'PATCH') return updateWarehouse(db, req, res, actor, whMatch[1]);
+  if (whMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'warehouse', whMatch[1]);
 
   // Inventory
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
@@ -184,19 +318,26 @@ async function handleApi(db, req, res, url) {
   if (inventoryDetailMatch && req.method === 'GET') return getInventoryDetail(db, res, actor, inventoryDetailMatch[1], inventoryDetailMatch[2]);
   if (pathname === '/api/inventory-adjustments' && req.method === 'GET') return listInventoryAdjustments(db, res, actor, url);
   if (pathname === '/api/inventory-adjustments' && req.method === 'POST') return createInventoryAdjustment(db, req, res, actor);
+  const adjustmentReverseMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)\/reverse$/);
+  if (adjustmentReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_ADJUSTMENT', adjustmentReverseMatch[1]);
   const adjustmentActionMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)\/(confirm|cancel)$/);
   if (adjustmentActionMatch && req.method === 'POST') return changeInventoryAdjustmentState(db, res, actor, adjustmentActionMatch[1], adjustmentActionMatch[2]);
   const adjustmentMatch = pathname.match(/^\/api\/inventory-adjustments\/([^/]+)$/);
   if (adjustmentMatch && req.method === 'GET') return getInventoryAdjustment(db, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
+  if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return calculateMRP(db, req, res, actor);
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
   if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
+  const inventoryCheckReverseMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/(?:reverse|reversal-request|reversal-confirm)$/);
+  if (inventoryCheckReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_CHECK', inventoryCheckReverseMatch[1], pathname.endsWith('reversal-confirm') ? 'CONFIRM' : pathname.endsWith('reversal-request') ? 'REQUEST' : null);
   const icMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)$/);
   if (icMatch && req.method === 'PATCH') return approveInventoryCheck(db, req, res, actor, icMatch[1]);
   if (pathname === '/api/inventory-transfers' && req.method === 'GET') return listInventoryTransfers(db, res, actor, url);
   if (pathname === '/api/inventory-transfers' && req.method === 'POST') return createInventoryTransfer(db, req, res, actor);
+  const inventoryTransferReverseMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/reverse$/);
+  if (inventoryTransferReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_TRANSFER', inventoryTransferReverseMatch[1]);
   const itMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)$/);
   if (itMatch && req.method === 'GET') return getInventoryTransfer(db, res, actor, itMatch[1]);
   const itActionMatch = pathname.match(/^\/api\/inventory-transfers\/([^/]+)\/(transfer|cancel)$/);
@@ -230,6 +371,70 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/mrp-plans' && req.method === 'GET') return listMrpPlans(db, res, actor, url);
   if (pathname === '/api/mrp-plans' && req.method === 'POST') return createMrpPlan(db, req, res, actor);
   if (pathname === '/api/mrp-plans/generate' && req.method === 'POST') return generateMrp(db, req, res, actor);
+  // M11 — Forecast & MRP canonical planning
+  if (pathname === '/api/planning/forecasts' && req.method === 'GET') return listPlanningForecasts(db, res, actor, url);
+  if (pathname === '/api/planning/forecasts' && req.method === 'POST') return createPlanningForecast(db, req, res, actor);
+  const forecastMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)$/);
+  if (forecastMatch && req.method === 'GET') return getPlanningForecast(db, res, actor, forecastMatch[1]);
+  if (forecastMatch && req.method === 'PATCH') return updatePlanningForecast(db, req, res, actor, forecastMatch[1]);
+  if (forecastMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'forecast', forecastMatch[1]);
+  const forecastActionMatch = pathname.match(/^\/api\/planning\/forecasts\/([^/]+)\/(activate|cancel)$/);
+  if (forecastActionMatch && req.method === 'POST') {
+    if (forecastActionMatch[2] === 'activate') return activatePlanningForecast(db, res, actor, forecastActionMatch[1]);
+    return cancelPlanningForecast(db, res, actor, forecastActionMatch[1]);
+  }
+  if (pathname === '/api/planning/mrp/runs' && req.method === 'GET') return listMrpRuns(db, res, actor, url);
+  if (pathname === '/api/planning/mrp/runs' && req.method === 'POST') return createMrpRun(db, req, res, actor);
+  const mrpRunMatch = pathname.match(/^\/api\/planning\/mrp\/runs\/([^/]+)$/);
+  if (mrpRunMatch && req.method === 'GET') return getMrpRun(db, res, actor, mrpRunMatch[1]);
+  if (mrpRunMatch && req.method === 'PATCH') return updateMrpRun(db, req, res, actor, mrpRunMatch[1]);
+  const mrpRunActionMatch = pathname.match(/^\/api\/planning\/mrp\/runs\/([^/]+)\/(execute|cancel)$/);
+  if (mrpRunActionMatch && req.method === 'POST') {
+    if (mrpRunActionMatch[2] === 'execute') return executeMrpRun(db, req, res, actor, mrpRunActionMatch[1]);
+    return cancelMrpRun(db, res, actor, mrpRunActionMatch[1]);
+  }
+  // M12 — Production Instruction
+  if (pathname === '/api/production-instructions' && req.method === 'GET') return listProductionInstructions(db, res, actor, url);
+  if (pathname === '/api/production-instructions' && req.method === 'POST') return createProductionInstruction(db, req, res, actor);
+  const prodInstMatch = pathname.match(/^\/api\/production-instructions\/([^/]+)$/);
+  if (prodInstMatch && req.method === 'GET') return getProductionInstruction(db, res, actor, prodInstMatch[1]);
+  const prodInstActionMatch = pathname.match(/^\/api\/production-instructions\/([^/]+)\/(release|cancel|generate-production-order)$/);
+  if (prodInstActionMatch && req.method === 'POST') {
+    const iid = prodInstActionMatch[1];
+    const action = prodInstActionMatch[2];
+    if (action === 'release') return releaseProductionInstruction(db, res, actor, iid);
+    if (action === 'cancel') return cancelProductionInstruction(db, res, actor, iid);
+    return generateProductionOrderFromInstruction(db, req, res, actor, iid);
+  }
+  // M12 — Purchase Instruction
+  if (pathname === '/api/purchase-instructions' && req.method === 'GET') return listPurchaseInstructions(db, res, actor, url);
+  if (pathname === '/api/purchase-instructions' && req.method === 'POST') return createPurchaseInstruction(db, req, res, actor);
+  const purchInstMatch = pathname.match(/^\/api\/purchase-instructions\/([^/]+)$/);
+  if (purchInstMatch && req.method === 'GET') return getPurchaseInstruction(db, res, actor, purchInstMatch[1]);
+  const purchInstActionMatch = pathname.match(/^\/api\/purchase-instructions\/([^/]+)\/(release|cancel)$/);
+  if (purchInstActionMatch && req.method === 'POST') {
+    const iid = purchInstActionMatch[1];
+    const action = purchInstActionMatch[2];
+    if (action === 'release') return releasePurchaseInstruction(db, res, actor, iid);
+    return cancelPurchaseInstruction(db, res, actor, iid);
+  }
+  // M12 — Purchase Requisition
+  if (pathname === '/api/purchase-requisitions' && req.method === 'GET') return listPurchaseRequisitions(db, res, actor, url);
+  if (pathname === '/api/purchase-requisitions' && req.method === 'POST') return createPurchaseRequisition(db, req, res, actor);
+  const purchReqMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)$/);
+  if (purchReqMatch && req.method === 'GET') return getPurchaseRequisition(db, res, actor, purchReqMatch[1]);
+  if (purchReqMatch && req.method === 'PATCH') return updatePurchaseRequisition(db, req, res, actor, purchReqMatch[1]);
+  if (purchReqMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'purchaseRequisition', purchReqMatch[1]);
+  const purchReqActionMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)\/(submit|approve|reject|cancel|generate-purchase-order)$/);
+  if (purchReqActionMatch && req.method === 'POST') {
+    const rid = purchReqActionMatch[1];
+    const action = purchReqActionMatch[2];
+    if (action === 'submit') return submitPurchaseRequisition(db, res, actor, rid);
+    if (action === 'approve') return approvePurchaseRequisition(db, res, actor, rid);
+    if (action === 'reject') return rejectPurchaseRequisition(db, req, res, actor, rid);
+    if (action === 'cancel') return cancelPurchaseRequisition(db, res, actor, rid);
+    return generatePurchaseOrderFromRequisition(db, req, res, actor, rid);
+  }
   if (pathname === '/api/work-centers' && req.method === 'GET') return listWorkCenters(db, res, actor);
   if (pathname === '/api/work-centers' && req.method === 'POST') return createWorkCenter(db, req, res, actor);
   if (pathname === '/api/routing-operations' && req.method === 'GET') return listRoutingOperations(db, res, actor, url);
@@ -243,6 +448,8 @@ async function handleApi(db, req, res, url) {
   if (iqcMatch && req.method === 'PATCH') return updateIqcInspection(db, req, res, actor, iqcMatch[1]);
   const iqcCompleteMatch = pathname.match(/^\/api\/iqc\/([^/]+)\/complete$/);
   if (iqcCompleteMatch && req.method === 'POST') return completeIqcInspection(db, req, res, actor, iqcCompleteMatch[1]);
+  const iqcCancelMatch = pathname.match(/^\/api\/iqc\/([^/]+)\/cancel$/);
+  if (iqcCancelMatch && req.method === 'POST') return cancelIqcInspection(db, req, res, actor, iqcCancelMatch[1]);
   if (pathname === '/api/oqc' && req.method === 'GET') return listOqcInspections(db, res, actor, url);
   if (pathname === '/api/oqc' && req.method === 'POST') return createOqcInspection(db, req, res, actor);
   const oqcMatch = pathname.match(/^\/api\/oqc\/([^/]+)$/);
@@ -250,6 +457,8 @@ async function handleApi(db, req, res, url) {
   if (oqcMatch && req.method === 'PATCH') return updateOqcInspection(db, req, res, actor, oqcMatch[1]);
   const oqcCompleteMatch = pathname.match(/^\/api\/oqc\/([^/]+)\/complete$/);
   if (oqcCompleteMatch && req.method === 'POST') return completeOqcInspection(db, req, res, actor, oqcCompleteMatch[1]);
+  const oqcCancelMatch = pathname.match(/^\/api\/oqc\/([^/]+)\/cancel$/);
+  if (oqcCancelMatch && req.method === 'POST') return cancelOqcInspection(db, req, res, actor, oqcCancelMatch[1]);
   if (pathname === '/api/supplier-evaluations' && req.method === 'GET') return listSupplierEvaluations(db, res, actor, url);
   if (pathname === '/api/supplier-evaluations' && req.method === 'POST') return createSupplierEvaluation(db, req, res, actor);
   // OA Leave Requests
@@ -323,6 +532,8 @@ async function handleApi(db, req, res, url) {
   // Sales Returns
   if (pathname === "/api/sales-returns" && req.method === "GET") return listSalesReturns(db, res, actor, url);
   if (pathname === "/api/sales-returns" && req.method === "POST") return createSalesReturn(db, req, res, actor);
+  const srReverseMatch = pathname.match(/^\/api\/sales-returns\/([^/]+)\/reverse$/);
+  if (srReverseMatch && req.method === 'POST') return reverseOperationalReturn(db, req, res, actor, 'SALES', srReverseMatch[1], generateVoucher);
   const srMatch = pathname.match(/^\/api\/sales-returns\/([^\/]+)$/);
   if (srMatch && req.method === "GET") return getSalesReturn(db, res, actor, srMatch[1]);
   if (srMatch && req.method === "PATCH") return updateSalesReturn(db, req, res, actor, srMatch[1]);
@@ -331,6 +542,8 @@ async function handleApi(db, req, res, url) {
   // Purchase Returns
   if (pathname === "/api/purchase-returns" && req.method === "GET") return listPurchaseReturns(db, res, actor, url);
   if (pathname === "/api/purchase-returns" && req.method === "POST") return createPurchaseReturn(db, req, res, actor);
+  const purReverseMatch = pathname.match(/^\/api\/purchase-returns\/([^/]+)\/reverse$/);
+  if (purReverseMatch && req.method === 'POST') return reverseOperationalReturn(db, req, res, actor, 'PURCHASE', purReverseMatch[1], generateVoucher);
   const purMatch = pathname.match(/^\/api\/purchase-returns\/([^\/]+)$/);
   if (purMatch && req.method === "GET") return getPurchaseReturn(db, res, actor, purMatch[1]);
   if (purMatch && req.method === "PATCH") return updatePurchaseReturn(db, req, res, actor, purMatch[1]);
@@ -338,6 +551,29 @@ async function handleApi(db, req, res, url) {
 
   // Inventory Transactions
   if (pathname === "/api/inventory-transactions" && req.method === "GET") return listInventoryTransactions(db, res, actor, url);
+
+  // M13 — Inventory Scrap (operational stock destruction)
+  if (pathname === '/api/inventory-scraps' && req.method === 'GET') return listInventoryScraps(db, res, actor, url);
+  if (pathname === '/api/inventory-scraps' && req.method === 'POST') return createInventoryScrap(db, req, res, actor);
+  const scrapReverseMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)\/reverse$/);
+  if (scrapReverseMatch && req.method === 'POST') return reverseInventoryControl(db, req, res, actor, 'INVENTORY_SCRAP', scrapReverseMatch[1]);
+  const scrapMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)$/);
+  if (scrapMatch && req.method === 'GET') return getInventoryScrap(db, res, actor, scrapMatch[1]);
+  if (scrapMatch && req.method === 'PATCH') return updateInventoryScrap(db, req, res, actor, scrapMatch[1]);
+  const scrapActionMatch = pathname.match(/^\/api\/inventory-scraps\/([^/]+)\/(confirm|cancel)$/);
+  if (scrapActionMatch && req.method === 'POST') {
+    const sid = scrapActionMatch[1];
+    if (scrapActionMatch[2] === 'confirm') return confirmInventoryScrap(db, res, actor, sid);
+    return cancelInventoryScrap(db, res, actor, sid);
+  }
+
+  // M13 — Inventory Month-End (period closing + read-only snapshot)
+  if (pathname === '/api/inventory-period-closures' && req.method === 'GET') return listInventoryPeriodClosures(db, res, actor);
+  if (pathname === '/api/inventory-period-closures' && req.method === 'POST') return closeInventoryPeriod(db, req, res, actor);
+  const periodActionMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)\/(reopen)$/);
+  if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, req, res, actor, periodActionMatch[1]);
+  const periodMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)$/);
+  if (periodMatch && req.method === 'GET') return getInventoryPeriodClosure(db, res, actor, periodMatch[1]);
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);
@@ -354,6 +590,20 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/settlement/suppliers' && req.method === 'GET') return listSettlementParties(db, res, actor, url, 'SUPPLIER');
   if (pathname === '/api/accounts-receivable' && req.method === 'GET') return listReceivablesM8(db, res, actor, url);
   if (pathname === '/api/accounts-receivable/statement' && req.method === 'GET') return customerStatement(db, res, actor, url);
+  if (pathname === '/api/settlement/reconciliation' && req.method === 'GET') return settlementReconciliationCheck(db, res, actor);
+  if (pathname === '/api/settlement/account-reconciliation' && req.method === 'GET') return settlementAccountReconciliation(db, res, actor);
+  if (pathname === '/api/settlement/unapplied-balances' && req.method === 'GET') return listUnappliedBalances(db, res, actor, url);
+  if (pathname === '/api/settlement/balance-applications' && req.method === 'POST') return applyUnappliedBalance(db, req, res, actor);
+  const balanceApplicationReverse = pathname.match(/^\/api\/settlement\/balance-applications\/([^/]+)\/reverse$/);
+  if (balanceApplicationReverse && req.method === 'POST') return reverseBalanceApplication(db, req, res, actor, balanceApplicationReverse[1]);
+  if (pathname === '/api/financial-refunds' && req.method === 'POST') return createRefund(db, req, res, actor, generateVoucher);
+  const refundReverse = pathname.match(/^\/api\/financial-refunds\/([^/]+)\/reverse$/);
+  if (refundReverse && req.method === 'POST') return reverseRefund(db, req, res, actor, refundReverse[1], generateVoucher);
+  if (pathname === '/api/financial-write-offs' && req.method === 'POST') return createWriteOff(db, req, res, actor);
+  const writeOffAction = pathname.match(/^\/api\/financial-write-offs\/([^/]+)\/(submit|confirm|reject)$/);
+  if (writeOffAction && req.method === 'POST') return actOnWriteOff(db, req, res, actor, writeOffAction[1], writeOffAction[2], generateVoucher);
+  const writeOffReverse = pathname.match(/^\/api\/financial-write-offs\/([^/]+)\/reverse$/);
+  if (writeOffReverse && req.method === 'POST') return reverseWriteOff(db, req, res, actor, writeOffReverse[1], generateVoucher);
   const arMatch = pathname.match(/^\/api\/accounts-receivable\/([^/]+)$/);
   if (arMatch && req.method === 'GET') return getReceivableM8(db, res, actor, arMatch[1]);
 
@@ -371,6 +621,9 @@ async function handleApi(db, req, res, url) {
   const pcMatch = pathname.match(/^\/api\/payment-collections\/([^/]+)$/);
   if (pcMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'COLLECTION', pcMatch[1]);
   if (pcMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'COLLECTION', pcMatch[1]);
+  if (pcMatch && req.method === 'DELETE') return deleteSettlementDocument(db, res, actor, 'COLLECTION', pcMatch[1]);
+  const pcReverse = pathname.match(/^\/api\/payment-collections\/([^/]+)\/reverse$/);
+  if (pcReverse && req.method === 'POST') return reverseSettlementDocument(db, req, res, actor, 'COLLECTION', pcReverse[1], generateVoucher);
 
   // ============ Payment Disbursements ============
   if (pathname === '/api/payment-disbursements' && req.method === 'GET') return listSettlementDocuments(db, res, actor, url, 'PAYMENT');
@@ -380,8 +633,57 @@ async function handleApi(db, req, res, url) {
   const pdMatch = pathname.match(/^\/api\/payment-disbursements\/([^/]+)$/);
   if (pdMatch && req.method === 'GET') return getSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
   if (pdMatch && req.method === 'PATCH') return updateSettlementDocument(db, req, res, actor, 'PAYMENT', pdMatch[1]);
+  if (pdMatch && req.method === 'DELETE') return deleteSettlementDocument(db, res, actor, 'PAYMENT', pdMatch[1]);
+  const pdReverse = pathname.match(/^\/api\/payment-disbursements\/([^/]+)\/reverse$/);
+  if (pdReverse && req.method === 'POST') return reverseSettlementDocument(db, req, res, actor, 'PAYMENT', pdReverse[1], generateVoucher);
+
+  // M14 — Sales / Purchase Discount (operational finance adjustment)
+  if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor, url);
+  if (pathname === '/api/sales-discounts' && req.method === 'POST') return createSalesDiscount(db, req, res, actor);
+  const salesDiscountMatch = pathname.match(/^\/api\/sales-discounts\/([^/]+)$/);
+  if (salesDiscountMatch && req.method === 'GET') return getSalesDiscount(db, res, actor, salesDiscountMatch[1]);
+  if (salesDiscountMatch && req.method === 'PATCH') return updateSalesDiscount(db, req, res, actor, salesDiscountMatch[1]);
+  const salesDiscountAction = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/(confirm|cancel)$/);
+  if (salesDiscountAction && req.method === 'POST') {
+    const id = salesDiscountAction[1];
+    if (salesDiscountAction[2] === 'confirm') return confirmSalesDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
+    return cancelSalesDiscount(db, res, actor, id);
+  }
+  const voucherReverseMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/reverse$/);
+  if (voucherReverseMatch && req.method === 'POST') return reverseManualVoucher(db, req, res, actor, voucherReverseMatch[1]);
+  const salesDiscountReverse = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/reverse$/);
+  if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
+
+  if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor, url);
+  if (pathname === '/api/purchase-discounts' && req.method === 'POST') return createPurchaseDiscount(db, req, res, actor);
+  const purchaseDiscountMatch = pathname.match(/^\/api\/purchase-discounts\/([^/]+)$/);
+  if (purchaseDiscountMatch && req.method === 'GET') return getPurchaseDiscount(db, res, actor, purchaseDiscountMatch[1]);
+  if (purchaseDiscountMatch && req.method === 'PATCH') return updatePurchaseDiscount(db, req, res, actor, purchaseDiscountMatch[1]);
+  const purchaseDiscountAction = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/(confirm|cancel)$/);
+  if (purchaseDiscountAction && req.method === 'POST') {
+    const id = purchaseDiscountAction[1];
+    if (purchaseDiscountAction[2] === 'confirm') return confirmPurchaseDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
+    return cancelPurchaseDiscount(db, res, actor, id);
+  }
+  const purchaseDiscountReverse = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/reverse$/);
+  if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
 
+
+  // ============ Product Routings ============
+  if (pathname === '/api/product-routings' && req.method === 'GET') return listProductRoutings(db, res, actor, url);
+  if (pathname === '/api/product-routings' && req.method === 'POST') return createProductRouting(db, req, res, actor);
+  const productRoutingAction = pathname.match(/^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/);
+  if (productRoutingAction && req.method === 'POST') return changeProductRoutingStatus(db, req, res, actor, productRoutingAction[1], productRoutingAction[2]);
+  const productRoutingOperation = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/);
+  if (productRoutingOperation && req.method === 'PATCH') return updateProductRoutingOperation(db, req, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
+  if (productRoutingOperation && req.method === 'DELETE') return deleteProductRoutingOperation(db, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
+  const productRoutingOperations = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations$/);
+  if (productRoutingOperations && req.method === 'POST') return createProductRoutingOperation(db, req, res, actor, productRoutingOperations[1]);
+  const productRoutingMatch = pathname.match(/^\/api\/product-routings\/([^/]+)$/);
+  if (productRoutingMatch && req.method === 'GET') return getProductRouting(db, res, actor, productRoutingMatch[1]);
+  if (productRoutingMatch && req.method === 'PATCH') return updateProductRouting(db, req, res, actor, productRoutingMatch[1]);
+  if (productRoutingMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'routing', productRoutingMatch[1]);
 
   // ============ BOM ============
   if (pathname === "/api/boms" && req.method === "GET") return listBoms(db, res, actor, url);
@@ -389,6 +691,7 @@ async function handleApi(db, req, res, url) {
   const bomMatch = pathname.match(/^\/api\/boms\/(.+)$/);
   if (bomMatch && req.method === "GET") return getBom(db, res, actor, bomMatch[1]);
   if (bomMatch && req.method === "POST") return updateBom(db, req, res, actor, bomMatch[1]);
+  if (bomMatch && req.method === "DELETE") return deleteMasterRecord(db, res, actor, 'bom', bomMatch[1]);
 
   // ============ Production Orders ============
   if (pathname === "/api/production-orders" && req.method === "GET") return listProductionOrders(db, res, actor, url);
@@ -396,6 +699,21 @@ async function handleApi(db, req, res, url) {
   const mOatch = pathname.match(/^\/api\/production-orders\/(.+)$/);
   if (mOatch && req.method === "GET") return getProductionOrder(db, res, actor, mOatch[1]);
   if (mOatch && req.method === "POST") return changeProductionOrderState(db, req, res, actor, mOatch[1]);
+  const executionMatch = pathname.match(/^\/api\/manufacturing\/orders\/([^/]+)\/execution$/);
+  if (executionMatch && req.method === 'GET') return getManufacturingExecution(db, res, actor, executionMatch[1]);
+  if (pathname === '/api/manufacturing/operation-reports' && req.method === 'POST') return createOperationReport(db, req, res, actor);
+  const operationReportAction = pathname.match(/^\/api\/manufacturing\/operation-reports\/([^/]+)\/(confirm|reverse|cancel)$/);
+  if (operationReportAction && req.method === 'POST') return operationReportAction[2] === 'confirm'
+    ? confirmOperationReport(db, req, res, actor, operationReportAction[1])
+    : operationReportAction[2] === 'reverse' ? reverseOperationReport(db, req, res, actor, operationReportAction[1])
+      : cancelOperationReport(db, res, actor, operationReportAction[1]);
+  const operationAction = pathname.match(/^\/api\/manufacturing\/operations\/([^/]+)\/(complete|cancel)$/);
+  if (operationAction && req.method === 'POST') return operationAction[2] === 'complete' ? completeOperation(db, res, actor, operationAction[1]) : cancelOperation(db, res, actor, operationAction[1]);
+  if (pathname === '/api/manufacturing/reports/wip' && req.method === 'GET') return manufacturingWipReport(db, res, actor);
+  if (pathname === '/api/manufacturing/reports/yield' && req.method === 'GET') return manufacturingYieldReport(db, res, actor);
+  if (pathname === '/api/manufacturing/reports/capacity' && req.method === 'GET') return manufacturingCapacityReport(db, res, actor, url);
+  if (pathname === '/api/manufacturing/reports/cost' && req.method === 'GET') return manufacturingCostReport(db, res, actor);
+  if (pathname === '/api/manufacturing/costs/reconcile' && req.method === 'GET') return reconcileProductionCosts(db, res, actor);
 
   // ============ Production Material Issue (M6) ============
   if (pathname === "/api/production-material-issues" && req.method === "GET") return listProductionMaterialIssues(db, res, actor, url);
@@ -404,12 +722,16 @@ async function handleApi(db, req, res, url) {
   const pmiMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)$/);
   if (pmiMatch && req.method === "GET") return getProductionMaterialIssue(db, res, actor, pmiMatch[1]);
   if (pmiMatch && req.method === "PATCH") return updateProductionMaterialIssue(db, req, res, actor, pmiMatch[1]);
+  if (pmiMatch && req.method === "DELETE") return deleteProductionMaterialIssue(db, res, actor, pmiMatch[1]);
   const pmiActionMatch = pathname.match(/^\/api\/production-material-issues\/([^/]+)\/(confirm|cancel)$/);
   if (pmiActionMatch && req.method === "POST") {
     return pmiActionMatch[2] === 'confirm'
-      ? confirmProductionMaterialIssue(db, res, actor, pmiActionMatch[1])
+      ? confirmProductionMaterialIssue(db, req, res, actor, pmiActionMatch[1])
       : cancelProductionMaterialIssue(db, res, actor, pmiActionMatch[1]);
   }
+  if (pathname === "/api/production-material-returns" && req.method === "POST") return createProductionMaterialReturn(db, req, res, actor);
+  const pmrConfirmMatch = pathname.match(/^\/api\/production-material-returns\/([^/]+)\/confirm$/);
+  if (pmrConfirmMatch && req.method === "POST") return confirmProductionMaterialReturn(db, res, actor, pmrConfirmMatch[1]);
 
   // ============ Production Receipt (M6) ============
   if (pathname === "/api/production-receipts" && req.method === "GET") return listProductionReceipts(db, res, actor, url);
@@ -417,12 +739,16 @@ async function handleApi(db, req, res, url) {
   const prxMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)$/);
   if (prxMatch && req.method === "GET") return getProductionReceipt(db, res, actor, prxMatch[1]);
   if (prxMatch && req.method === "PATCH") return updateProductionReceipt(db, req, res, actor, prxMatch[1]);
+  if (prxMatch && req.method === "DELETE") return deleteProductionReceipt(db, res, actor, prxMatch[1]);
   const prxActionMatch = pathname.match(/^\/api\/production-receipts\/([^/]+)\/(confirm|cancel)$/);
   if (prxActionMatch && req.method === "POST") {
     return prxActionMatch[2] === 'confirm'
-      ? confirmProductionReceipt(db, res, actor, prxActionMatch[1])
+      ? confirmProductionReceipt(db, req, res, actor, prxActionMatch[1])
       : cancelProductionReceipt(db, res, actor, prxActionMatch[1]);
   }
+  if (pathname === "/api/production-receipt-reversals" && req.method === "POST") return createProductionReceiptReversal(db, req, res, actor);
+  const prrConfirmMatch = pathname.match(/^\/api\/production-receipt-reversals\/([^/]+)\/confirm$/);
+  if (prrConfirmMatch && req.method === "POST") return confirmProductionReceiptReversal(db, res, actor, prrConfirmMatch[1]);
 
   // ============ Cost Management ============
   if (pathname === '/api/product-costs/products' && req.method === 'GET') return listCostProducts(db, res, actor);
@@ -478,26 +804,27 @@ async function handleApi(db, req, res, url) {
 async function login(db, req, res) {
   const ip = getClientIp(req);
   const now = new Date();
+  const body = await readJson(req);
+  assertAllowedFields(body, ['username', 'password']);
+  const username = requiredText(body.username, '用户名', 50).toLowerCase();
+  const password = requiredText(body.password, '密码', 100);
   
   // Check if account is locked due to too many failed attempts
   const lockedAttempt = db.prepare(`
     SELECT * FROM login_attempts 
     WHERE username = ? AND success = 0 AND locked_until > ?
     ORDER BY updated_at DESC LIMIT 1
-  `).get(req.body?.username || '', now.toISOString());
+  `).get(username, now.toISOString());
   
   if (lockedAttempt) {
     const remainingMinutes = Math.ceil((new Date(lockedAttempt.locked_until) - now) / 60000);
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((new Date(lockedAttempt.locked_until) - now) / 1000))));
     return send(res, 429, { 
       error: '登录失败次数过多，请稍后再试',
       code: 'ACCOUNT_LOCKED',
       retryAfter: remainingMinutes
     });
   }
-  
-  const body = await readJson(req);
-  const username = requiredText(body.username, '用户名', 50);
-  const password = requiredText(body.password, '密码', 100);
   
   const row = db.prepare(`
     SELECT u.*, r.name role_name, r.code role_code FROM users u JOIN roles r ON r.id=u.role_id
@@ -692,6 +1019,7 @@ function listProjectManagerCandidates(db, res, actor) {
 async function createUser(db, req, res, actor) {
   allow(actor, 'USERS_MANAGE');
   const body = await readJson(req);
+  assertAllowedFields(body, ['username', 'displayName', 'password', 'roleId']);
   const username = requiredCode(body.username, '登录账号').toLowerCase();
   const displayName = requiredText(body.displayName, '用户姓名', 40);
   const passwordText = requiredText(body.password, '初始密码', 100);
@@ -710,9 +1038,11 @@ async function updateUser(db, req, res, actor, userId) {
   const current = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
   if (!current) throw new HttpError(404, '用户不存在');
   const body = await readJson(req);
+  assertAllowedFields(body, ['displayName', 'password', 'roleId', 'active']);
   const displayName = requiredText(body.displayName ?? current.display_name, '用户姓名', 40);
   const roleId = body.roleId ?? current.role_id;
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
+  if (body.active !== undefined && typeof body.active !== 'boolean') throw new HttpError(400, '启用状态必须为布尔值');
+  const active = body.active === undefined ? current.active : body.active ? 1 : 0;
   ensureRole(db, roleId);
   if (userId === actor.id && !active) throw new HttpError(400, '不能停用当前登录账号');
   transaction(db, () => {
@@ -721,7 +1051,9 @@ async function updateUser(db, req, res, actor, userId) {
       if (String(body.password).length < 6) throw new HttpError(400, '密码至少需要 6 位');
       const password = hashPassword(String(body.password));
       db.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').run(password.hash, password.salt, userId);
-      if (userId !== actor.id) db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+    }
+    if (userId !== actor.id && (body.password || roleId !== current.role_id || active !== current.active)) {
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
     }
     audit(db, actor.id, 'UPDATE', 'USER', userId, displayName);
   });
@@ -731,7 +1063,7 @@ async function updateUser(db, req, res, actor, userId) {
 function listSuppliers(db, res, actor, url) {
   allowAny(actor, ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,active,created_at createdAt,updated_at updatedAt
+  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
     FROM suppliers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { suppliers });
@@ -742,8 +1074,8 @@ async function createSupplier(db, req, res, actor) {
   const body = await readJson(req);
   const supplier = supplierInput(body);
   const supplierId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
-    .run(supplierId, supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, now, now);
+  db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)`)
+    .run(supplierId, supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, now, now);
   audit(db, actor.id, 'CREATE', 'SUPPLIER', supplierId, supplier.code);
   return send(res, 201, { id: supplierId });
 }
@@ -754,8 +1086,8 @@ async function updateSupplier(db, req, res, actor, supplierId) {
   if (!current) throw new HttpError(404, '供应商不存在');
   const body = await readJson(req); const supplier = supplierInput({ ...current, ...body });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE suppliers SET code=?,name=?,contact=?,phone=?,address=?,email=?,active=?,updated_at=? WHERE id=?')
-    .run(supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, active, new Date().toISOString(), supplierId);
+  db.prepare('UPDATE suppliers SET code=?,name=?,contact=?,phone=?,address=?,email=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
+    .run(supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, active, new Date().toISOString(), supplierId);
   audit(db, actor.id, 'UPDATE', 'SUPPLIER', supplierId, supplier.code);
   return send(res, 200, { ok: true });
 }
@@ -767,14 +1099,15 @@ function supplierInput(body) {
     contact: optionalText(body.contact, 50),
     phone: optionalText(body.phone, 30),
     address: optionalText(body.address, 200),
-    email: optionalText(body.email, 100)
+    email: optionalText(body.email, 100),
+    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days)
   };
 }
 
 function listCustomers(db, res, actor, url) {
   allowAny(actor, ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const customers = db.prepare(`SELECT id,code,name,contact,phone,address,active,created_at createdAt,updated_at updatedAt
+  const customers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
     FROM customers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { customers });
@@ -785,8 +1118,8 @@ async function createCustomer(db, req, res, actor) {
   const body = await readJson(req);
   const customer = customerInput(body);
   const customerId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)`)
-    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, now, now);
+  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
+    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, now, now);
   audit(db, actor.id, 'CREATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 201, { id: customerId });
 }
@@ -797,8 +1130,8 @@ async function updateCustomer(db, req, res, actor, customerId) {
   if (!current) throw new HttpError(404, '客户不存在');
   const body = await readJson(req); const customer = customerInput({ ...current, ...body });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,active=?,updated_at=? WHERE id=?')
-    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, active, new Date().toISOString(), customerId);
+  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
+    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, active, new Date().toISOString(), customerId);
   audit(db, actor.id, 'UPDATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 200, { ok: true });
 }
@@ -806,8 +1139,8 @@ async function updateCustomer(db, req, res, actor, customerId) {
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT id,code,name,unit,price_cents priceCents,stock_quantity stockQuantity,active,
-    created_at createdAt,updated_at updatedAt FROM products WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search)
+  const products = db.prepare(`SELECT p.id,p.code,p.name,p.unit,p.base_uom_code baseUomCode,p.purchase_uom_code purchaseUomCode,p.sales_uom_code salesUomCode,p.price_cents priceCents,p.standard_manufacturing_cost_cents standardManufacturingCostCents,COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id=p.id),0) stockQuantity,p.active,p.tracking_policy trackingPolicy,p.shelf_life_days shelfLifeDays,p.tracking_effective_at trackingEffectiveAt,p.valuation_method valuationMethod,p.inventory_classification inventoryClassification,
+    p.created_at createdAt,p.updated_at updatedAt FROM products p WHERE p.code LIKE ? OR p.name LIKE ? ORDER BY p.code`).all(search, search)
     .map((row) => ({ ...row, active: Boolean(row.active) }));
   return send(res, 200, { products });
 }
@@ -816,8 +1149,11 @@ async function createProduct(db, req, res, actor) {
   allow(actor, 'PRODUCTS_MANAGE');
   const body = await readJson(req); const product = productInput(body);
   const productId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)`)
-    .run(productId, product.code, product.name, product.unit, product.priceCents, product.stockQuantity, now, now);
+  const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
+  const classification = ['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(body.inventoryClassification) ? body.inventoryClassification : 'OTHER_INVENTORY';
+  const baseUom=String(body.baseUomCode||product.unit).trim().toUpperCase(); db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,now,now);
+  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,1,?,?)`)
+    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, now, now);
   audit(db, actor.id, 'CREATE', 'PRODUCT', productId, product.code);
   return send(res, 201, { id: productId });
 }
@@ -827,11 +1163,16 @@ async function updateProduct(db, req, res, actor, productId) {
   const current = db.prepare('SELECT * FROM products WHERE id=?').get(productId);
   if (!current) throw new HttpError(404, '货品不存在');
   const body = await readJson(req);
+  if (body.stockQuantity !== undefined || body.stock_quantity !== undefined) throw new HttpError(409, '货品库存数量只读，请通过库存业务单据变更');
   const product = productInput({ code: body.code ?? current.code, name: body.name ?? current.name, unit: body.unit ?? current.unit,
-    priceCents: body.priceCents ?? current.price_cents, stockQuantity: body.stockQuantity ?? current.stock_quantity });
+    priceCents: body.priceCents ?? current.price_cents, stockQuantity: current.stock_quantity });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE products SET code=?,name=?,unit=?,price_cents=?,stock_quantity=?,active=?,updated_at=? WHERE id=?')
-    .run(product.code, product.name, product.unit, product.priceCents, product.stockQuantity, active, new Date().toISOString(), productId);
+  const standardCost = Number(body.standardManufacturingCostCents ?? current.standard_manufacturing_cost_cents); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
+  const classification = body.inventoryClassification ?? current.inventory_classification;
+  if (!['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(classification)) throw new HttpError(400, '库存分类不正确');
+  const baseUom=String(body.baseUomCode??current.base_uom_code??product.unit).trim().toUpperCase(); if(baseUom!==current.base_uom_code&&db.prepare('SELECT 1 FROM inventory_transactions WHERE product_id=? LIMIT 1').get(productId))throw new HttpError(409,'已有历史交易的产品不可变更基础单位'); const updatedAt=new Date().toISOString();db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,updatedAt,updatedAt);
+  db.prepare('UPDATE products SET code=?,name=?,unit=?,base_uom_code=?,purchase_uom_code=?,sales_uom_code=?,price_cents=?,standard_manufacturing_cost_cents=?,inventory_classification=?,active=?,updated_at=? WHERE id=?')
+    .run(product.code, product.name, baseUom,baseUom,body.purchaseUomCode??current.purchase_uom_code,body.salesUomCode??current.sales_uom_code, product.priceCents, standardCost, classification, active, updatedAt, productId);
   audit(db, actor.id, 'UPDATE', 'PRODUCT', productId, product.code);
   return send(res, 200, { ok: true });
 }
@@ -839,6 +1180,8 @@ async function updateProduct(db, req, res, actor, productId) {
 function listOrders(db, res, actor, url) {
   allow(actor, 'ORDERS_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && STATUS_LABELS[status]) { where.push('so.status=?'); params.push(status); }
   const search = url.searchParams.get('search')?.trim();
@@ -851,7 +1194,10 @@ function getOrder(db, res, actor, orderId) {
   const order = orderRows(db, 'WHERE so.id=?', [orderId], '')[0];
   if (!order) throw new HttpError(404, '销售订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
-    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo
+    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.document_uom_code documentUomCode,i.document_quantity_num documentQuantityNumerator,
+    i.document_quantity_den documentQuantityDenominator,i.conversion_numerator conversionNumerator,
+    i.conversion_denominator conversionDenominator,i.base_quantity_num baseQuantityNumerator,i.base_quantity_den baseQuantityDenominator
     FROM sales_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
   order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
     FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='SALES_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
@@ -863,8 +1209,13 @@ async function createOrder(db, req, res, actor) {
   const body = await readJson(req); const input = orderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makeOrderNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?)`).run(orderId, orderNo, input.customerId, input.totalCents, input.remark, actor.id, now, now);
+    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at,
+        order_date,requested_delivery_date,payment_terms,payment_terms_days,ship_to_contact_name,ship_to_phone,ship_to_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      orderId, orderNo, input.customerId, input.totalCents, input.remark, actor.id, now, now,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+      input.shipToContactName, input.shipToPhone, input.shipToAddress,
+    );
     saveOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'CREATE', 'SALES_ORDER', orderId, `创建订单 ${orderNo}`);
   });
@@ -879,8 +1230,13 @@ async function updateOrder(db, req, res, actor, orderId) {
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = orderInput(db, body); const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=? WHERE id=?")
-      .run(input.customerId, input.totalCents, input.remark, now, orderId);
+    db.prepare(`UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
+        order_date=?,requested_delivery_date=?,payment_terms=?,payment_terms_days=?,ship_to_contact_name=?,ship_to_phone=?,ship_to_address=?
+      WHERE id=?`).run(
+      input.customerId, input.totalCents, input.remark, now,
+      input.orderDate, input.requestedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+      input.shipToContactName, input.shipToPhone, input.shipToAddress, orderId,
+    );
     db.prepare('DELETE FROM sales_order_items WHERE order_id=?').run(orderId);
     saveOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'SALES_ORDER', orderId, `修改订单 ${current.order_no}`);
@@ -891,6 +1247,8 @@ async function updateOrder(db, req, res, actor, orderId) {
 
 function generateVoucher(db, sourceType, sourceId, entries, actor, voucherDate = new Date().toISOString().slice(0, 10)) {
   checkPeriodNotClosedForVoucher(db, voucherDate, '生成业务');
+  const existing = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+  if (existing) return existing.id;
   if (!Array.isArray(entries) || entries.length < 2) throw new HttpError(400, '凭证分录不完整');
   let debitTotal = 0;
   let creditTotal = 0;
@@ -904,8 +1262,8 @@ function generateVoucher(db, sourceType, sourceId, entries, actor, voucherDate =
   const voucherId = id();
   const now = new Date().toISOString();
   const voucherNo = makeVoucherNo();
-  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?)`)
-    .run(voucherId, voucherNo, sourceType, sourceId, voucherDate, '', actor.id, now);
+  db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,approved_at,approver_id,period) VALUES(?,?,?,?,?,?,?,?,?,?,'POSTED','SYSTEM',?,?,?)`)
+    .run(voucherId, voucherNo, sourceType, sourceId, voucherDate, voucherDate, '', actor.id, now, now, now, actor.id, voucherDate.slice(0,7));
   const stmt = db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,?,?)');
   for (const e of entries) stmt.run(id(), voucherId, e.subjectId, e.direction, e.amountCents, e.summary || '');
   return voucherId;
@@ -919,6 +1277,24 @@ async function changeOrderState(db, req, res, actor, orderId, action) {
     allow(actor, 'ORDERS_SUBMIT');
     if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
     if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    // V1.3 Phase 1: commercial contract gate. SUBMITTED sales orders must
+    // carry order date, requested delivery date, ship-to contact/phone/
+    // address and payment terms so reviewers can evaluate the commitment
+    // and MRP / delivery planning has a real need date.
+    if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+    if (!order.requested_delivery_date) throw new HttpError(400, '提交前请填写要求交期');
+    if (!order.ship_to_contact_name) throw new HttpError(400, '提交前请填写收货联系人');
+    if (!order.ship_to_phone) throw new HttpError(400, '提交前请填写收货电话');
+    if (!order.ship_to_address) throw new HttpError(400, '提交前请填写收货地址');
+    if (!order.payment_terms) throw new HttpError(400, '提交前请填写付款条件');
+    if (order.requested_delivery_date < order.order_date) throw new HttpError(400, '要求交期不能早于订单日期');
+    const lines = db.prepare('SELECT quantity, unit_price_cents FROM sales_order_items WHERE order_id=?').all(orderId);
+    if (!lines.length) throw new HttpError(400, '销售订单至少需要一条明细');
+    for (const line of lines) {
+      if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents) || line.unit_price_cents <= 0) {
+        throw new HttpError(400, '提交前请确认每行数量和单价均大于 0');
+      }
+    }
     db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
     audit(db, actor.id, 'SUBMIT', 'SALES_ORDER', orderId, `提交订单 ${order.order_no}`);
   } else {
@@ -942,7 +1318,10 @@ async function changeOrderState(db, req, res, actor, orderId, action) {
 function orderRows(db, where, params, tail) {
   return db.prepare(`SELECT so.id,so.order_no orderNo,so.status,so.total_cents totalCents,so.remark,
       so.rejection_reason rejectionReason,so.created_at createdAt,so.updated_at updatedAt,so.submitted_at submittedAt,
-      so.reviewed_at reviewedAt,c.id customerId,c.code customerCode,c.name customerName,
+      so.reviewed_at reviewedAt,
+      so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,so.payment_terms_days paymentTermsDays,
+      so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
+      c.id customerId,c.code customerCode,c.name customerName,c.contact customerContact,c.phone customerPhone,c.address customerAddress,
       creator.display_name creatorName,reviewer.display_name reviewerName,
       (SELECT count(*) FROM sales_order_items i WHERE i.order_id=so.id) itemCount,
       (SELECT count(*) FROM sales_deliveries sd WHERE sd.sales_order_id=so.id) deliveryCount
@@ -951,30 +1330,89 @@ function orderRows(db, where, params, tail) {
     ${where} ${tail}`).all(...params).map((row) => ({ ...row, statusLabel: STATUS_LABELS[row.status] }));
 }
 
+// Normalize a YYYY-MM-DD-ish business date string. Returns null for
+// empty input so the caller can decide whether the field is required
+// (e.g. required at SUBMIT, optional in DRAFT).
+function readBusinessDate(value) {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (s === '') return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new HttpError(400, '日期格式必须为 YYYY-MM-DD');
+  const parsed = new Date(`${s}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== s) {
+    throw new HttpError(400, '日期不正确');
+  }
+  return s;
+}
+
+function readSnapshotText(value, label, max) {
+  if (value === null || value === undefined) return '';
+  return optionalText(String(value), max || 200) || '';
+}
+
 function orderInput(db, body) {
   const customerId = requiredText(body.customerId, '客户', 100);
-  const customer = db.prepare('SELECT id FROM customers WHERE id=? AND active=1').get(customerId);
+  const customer = db.prepare('SELECT id, contact, phone, address, payment_terms_days FROM customers WHERE id=? AND active=1').get(customerId);
   if (!customer) throw new HttpError(400, '客户不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '销售订单至少需要一条明细');
+  // V1.3 Phase 1: order date + requested delivery date + ship-to / payment
+  // snapshot. DRAFT can persist with empty / null dates (legacy behaviour);
+  // SUBMIT is gated separately.
+  const orderDate = readBusinessDate(body.orderDate ?? body.order_date);
+  const requestedDeliveryDate = readBusinessDate(body.requestedDeliveryDate ?? body.requested_delivery_date);
+  if (orderDate && requestedDeliveryDate && requestedDeliveryDate < orderDate) {
+    throw new HttpError(400, '要求交期不能早于订单日期');
+  }
+  // Snapshot defaults to current customer master values if the form
+  // did not provide them — the document owns its own copy after save.
+  const shipToContactName = readSnapshotText(body.shipToContactName ?? body.ship_to_contact_name, '收货联系人', 50) || (customer.contact || '');
+  const shipToPhone = readSnapshotText(body.shipToPhone ?? body.ship_to_phone, '收货电话', 30) || (customer.phone || '');
+  const shipToAddress = readSnapshotText(body.shipToAddress ?? body.ship_to_address, '收货地址', 200) || (customer.address || '');
+  const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
+  const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? customer.payment_terms_days);
   const items = body.items.map((item, index) => {
-    const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
+    const product = db.prepare('SELECT id,price_cents,base_uom_code,sales_uom_code FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
-    const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
+    const snapshot = quantitySnapshot(db, product.id, {
+      quantityNumerator: item.quantityNumerator ?? item.quantity,
+      quantityDenominator: item.quantityDenominator ?? 1,
+      uomCode: item.uomCode || product.sales_uom_code || product.base_uom_code,
+    }, orderDate || new Date().toISOString().slice(0, 10));
+    const quantity = snapshot.base.num / snapshot.base.den;
+    const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
     if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents: Math.round(quantity * unitPriceCents), lineNo: index + 1 };
+    const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1,
+      documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
+      conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
+      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
   });
-  return { customerId, remark: optionalText(body.remark, 500), items, totalCents: items.reduce((sum, item) => sum + item.amountCents, 0) };
+  return {
+    customerId, remark: optionalText(body.remark, 500), items,
+    totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
+    orderDate, requestedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, shipToContactName, shipToPhone, shipToAddress,
+  };
 }
 
 function saveOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const statement = db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+    item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
+    item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
 function customerInput(body) {
   return { code: requiredCode(body.code, '客户编码'), name: requiredText(body.name, '客户名称', 100),
-    contact: optionalText(body.contact, 50), phone: optionalText(body.phone, 30), address: optionalText(body.address, 200) };
+    contact: optionalText(body.contact, 50), phone: optionalText(body.phone, 30), address: optionalText(body.address, 200),
+    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days) };
+}
+
+function paymentTermsDays(value) {
+  const n = value === undefined || value === null || value === '' ? 0 : Number(value);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 3650) throw new HttpError(400, '付款条款天数必须是 0–3650 的整数');
+  return n;
 }
 
 function productInput(body) {
@@ -1025,6 +1463,8 @@ function makeOrderNo() { const now = new Date(); return `SO-${now.toISOString().
 function listPurchaseOrders(db, res, actor, url) {
   allow(actor, 'PURCHASE_ORDERS_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && PURCHASE_STATUS_LABELS[status]) { where.push('po.status=?'); params.push(status); }
   const search = url.searchParams.get('search')?.trim();
@@ -1037,7 +1477,11 @@ function getPurchaseOrder(db, res, actor, orderId) {
   const order = purchaseOrderRows(db, 'WHERE po.id=?', [orderId], '')[0];
   if (!order) throw new HttpError(404, '采购订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
-    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo
+    i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.document_uom_code documentUomCode,i.document_quantity_num documentQuantityNumerator,
+    i.document_quantity_den documentQuantityDenominator,i.conversion_numerator conversionNumerator,
+    i.conversion_denominator conversionDenominator,i.base_quantity_num baseQuantityNumerator,i.base_quantity_den baseQuantityDenominator,
+    i.purchase_requisition_item_id purchaseRequisitionItemId
     FROM purchase_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
   order.history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
     FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='PURCHASE_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
@@ -1049,8 +1493,13 @@ async function createPurchaseOrder(db, req, res, actor) {
   const body = await readJson(req); const input = purchaseOrderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?)`).run(orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now);
+    db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
+        order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+      input.supplierContactName, input.supplierContactPhone, input.supplierAddress,
+    );
     savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'CREATE', 'PURCHASE_ORDER', orderId, `创建采购订单 ${orderNo}`);
   });
@@ -1064,11 +1513,36 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   if (!['DRAFT', 'REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以修改');
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
+  if (current.purchase_requisition_id) {
+    if (body.purchaseRequisitionId !== undefined && body.purchaseRequisitionId !== current.purchase_requisition_id) throw new HttpError(409, '请购单来源不可修改');
+    const stored = db.prepare('SELECT purchase_requisition_item_id,product_id,quantity FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+    if (stored.length !== input.items.length) throw new HttpError(409, '来源请购明细不可增删');
+    input.items.forEach((item, index) => {
+      const sourceId = sourceLineId(body.items[index], 'purchaseRequisitionItemId', 'purchase_requisition_item_id');
+      const old = stored[index];
+      if (!sourceId || sourceId !== old.purchase_requisition_item_id || item.productId !== old.product_id || item.quantity !== Number(old.quantity)) {
+        throw new HttpError(409, '来源请购明细、货品和数量不可修改');
+      }
+      item.purchaseRequisitionItemId = sourceId;
+    });
+  }
   transaction(db, () => {
-    db.prepare("UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=? WHERE id=?")
-      .run(input.supplierId, input.totalCents, input.remark, now, orderId);
+    db.prepare(`UPDATE purchase_orders SET supplier_id=?,total_cents=?,remark=?,status='DRAFT',rejection_reason='',updated_at=?,
+        order_date=?,expected_delivery_date=?,payment_terms=?,payment_terms_days=?,supplier_contact_name=?,supplier_contact_phone=?,supplier_address=?
+      WHERE id=?`).run(
+      input.supplierId, input.totalCents, input.remark, now,
+      input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
+      input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
+    );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
-    savePurchaseOrderItems(db, orderId, input.items);
+    if (current.purchase_requisition_id) {
+      const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,
+        document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+        item.purchaseRequisitionItemId, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
+        item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
+    } else savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
   });
   return send(res, 200, { ok: true });
@@ -1082,6 +1556,28 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
   if (action === 'submit') {
     if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '只有草稿或已驳回订单可以提交');
     if (order.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的订单');
+    // V1.3 Phase 1 commercial contract gate. SUBMITTED purchase orders
+    // must carry order date, expected delivery date, supplier contact /
+    // phone / address, payment terms, and a positive unit price on
+    // every line. A DRAFT generated from a PR with no estimate may
+    // temporarily have unit_price_cents = 0; the user must enter the
+    // final price before SUBMIT.
+    if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+    if (!order.expected_delivery_date) throw new HttpError(400, '提交前请填写预计交期');
+    if (!order.supplier_contact_name) throw new HttpError(400, '提交前请填写供应商联系人');
+    if (!order.supplier_contact_phone) throw new HttpError(400, '提交前请填写供应商电话');
+    if (!order.supplier_address) throw new HttpError(400, '提交前请填写供应商地址');
+    if (!order.payment_terms) throw new HttpError(400, '提交前请填写付款条件');
+    if (order.expected_delivery_date < order.order_date) throw new HttpError(400, '预计交期不能早于订单日期');
+    {
+      const items = db.prepare('SELECT quantity, unit_price_cents FROM purchase_order_items WHERE order_id=?').all(orderId);
+      if (!items.length) throw new HttpError(400, '采购订单至少需要一条明细');
+      for (const line of items) {
+        if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents) || line.unit_price_cents <= 0) {
+          throw new HttpError(400, '提交前请确认每行数量和单价均大于 0');
+        }
+      }
+    }
     db.prepare("UPDATE purchase_orders SET status='SUBMITTED',submitted_at=?,rejection_reason='',updated_at=? WHERE id=?").run(now, now, orderId);
     audit(db, actor.id, 'SUBMIT', 'PURCHASE_ORDER', orderId, `提交采购订单 ${order.order_no}`);
   } else if (action === 'approve') {
@@ -1103,7 +1599,10 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
 function purchaseOrderRows(db, where, params, tail) {
   return db.prepare(`SELECT po.id,po.order_no orderNo,po.status,po.total_cents totalCents,po.remark,
       po.rejection_reason rejectionReason,po.created_at createdAt,po.updated_at updatedAt,po.submitted_at submittedAt,
-      po.reviewed_at reviewedAt,s.id supplierId,s.code supplierCode,s.name supplierName,
+      po.reviewed_at reviewedAt,po.purchase_requisition_id purchaseRequisitionId,
+      po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,po.payment_terms_days paymentTermsDays,
+      po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
+      s.id supplierId,s.code supplierCode,s.name supplierName,s.contact supplierContact,s.phone supplierPhone,s.address supplierAddressMaster,
       creator.display_name creatorName,reviewer.display_name reviewerName,
       (SELECT count(*) FROM purchase_order_items i WHERE i.order_id=po.id) itemCount,
       (SELECT count(*) FROM purchase_receipts pr WHERE pr.purchase_order_id=po.id) receiptCount
@@ -1128,6 +1627,8 @@ function getSalesOrderWorkflow(db, res, actor, orderId) {
   allow(actor, 'ORDERS_VIEW');
   const order = db.prepare(`SELECT so.id,so.order_no documentNo,so.status,so.created_at createdAt,
     so.submitted_at submittedAt,so.reviewed_at reviewedAt,so.total_cents amountCents,
+    so.order_date orderDate,so.requested_delivery_date requestedDeliveryDate,so.payment_terms paymentTerms,
+    so.ship_to_contact_name shipToContactName,so.ship_to_phone shipToPhone,so.ship_to_address shipToAddress,
     c.id partyId,c.name partyName FROM sales_orders so JOIN customers c ON c.id=so.customer_id WHERE so.id=?`).get(orderId);
   if (!order) throw new HttpError(404, '销售订单不存在');
   const deliveries = db.prepare(`SELECT id,delivery_no documentNo,status,delivery_date documentDate,total_cents amountCents
@@ -1143,6 +1644,8 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
   allow(actor, 'PURCHASE_ORDERS_VIEW');
   const order = db.prepare(`SELECT po.id,po.order_no documentNo,po.status,po.created_at createdAt,
     po.submitted_at submittedAt,po.reviewed_at reviewedAt,po.total_cents amountCents,
+    po.order_date orderDate,po.expected_delivery_date expectedDeliveryDate,po.payment_terms paymentTerms,
+    po.supplier_contact_name supplierContactName,po.supplier_contact_phone supplierContactPhone,po.supplier_address supplierAddress,
     s.id partyId,s.name partyName FROM purchase_orders po JOIN suppliers s ON s.id=po.supplier_id WHERE po.id=?`).get(orderId);
   if (!order) throw new HttpError(404, '采购订单不存在');
   const receipts = db.prepare(`SELECT id,receipt_no documentNo,status,receipt_date documentDate,total_cents amountCents
@@ -1156,23 +1659,64 @@ function getPurchaseOrderWorkflow(db, res, actor, orderId) {
 
 function purchaseOrderInput(db, body) {
   const supplierId = requiredText(body.supplierId, '供应商', 100);
-  const supplier = db.prepare('SELECT id FROM suppliers WHERE id=? AND active=1').get(supplierId);
+  const supplier = db.prepare('SELECT id, contact, phone, address, email, payment_terms_days FROM suppliers WHERE id=? AND active=1').get(supplierId);
   if (!supplier) throw new HttpError(400, '供应商不存在或已停用');
   if (!Array.isArray(body.items) || body.items.length === 0) throw new HttpError(400, '采购订单至少需要一条明细');
+  // V1.3 Phase 1: order date + expected delivery date + supplier /
+  // payment snapshot. DRAFT can persist with empty / null dates; SUBMIT
+  // is gated separately.
+  const orderDate = readBusinessDate(body.orderDate ?? body.order_date);
+  const expectedDeliveryDate = readBusinessDate(body.expectedDeliveryDate ?? body.expected_delivery_date);
+  if (orderDate && expectedDeliveryDate && expectedDeliveryDate < orderDate) {
+    throw new HttpError(400, '预计交期不能早于订单日期');
+  }
+  const supplierContactName = readSnapshotText(body.supplierContactName ?? body.supplier_contact_name, '供应商联系人', 50) || (supplier.contact || '');
+  const supplierContactPhone = readSnapshotText(body.supplierContactPhone ?? body.supplier_contact_phone, '供应商电话', 30) || (supplier.phone || '');
+  const supplierAddress = readSnapshotText(body.supplierAddress ?? body.supplier_address, '供应商地址', 200) || (supplier.address || '');
+  const paymentTerms = readSnapshotText(body.paymentTerms ?? body.payment_terms, '付款条件', 200);
+  const termsDays = paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days ?? supplier.payment_terms_days);
   const items = body.items.map((item, index) => {
-    const product = db.prepare('SELECT id,price_cents FROM products WHERE id=? AND active=1').get(item.productId);
+    const product = db.prepare('SELECT id,price_cents,base_uom_code,purchase_uom_code FROM products WHERE id=? AND active=1').get(item.productId);
     if (!product) throw new HttpError(400, `第 ${index + 1} 行货品不存在或已停用`);
-    const quantity = Number(item.quantity); const unitPriceCents = Number(item.unitPriceCents ?? product.price_cents);
-    if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须大于 0`);
-    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents: Math.round(quantity * unitPriceCents), lineNo: index + 1 };
+    const snapshot = quantitySnapshot(db, product.id, {
+      quantityNumerator: item.quantityNumerator ?? item.quantity,
+      quantityDenominator: item.quantityDenominator ?? 1,
+      uomCode: item.uomCode || product.purchase_uom_code || product.base_uom_code,
+    }, orderDate || new Date().toISOString().slice(0, 10));
+    const quantity = snapshot.base.num / snapshot.base.den;
+    const hasExplicitPrice = item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '';
+    const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : Number(product.price_cents || 0);
+    // V1.3 Phase 1: a DRAFT may temporarily carry 0 unit price (a
+    // generated PO from a PR without an estimate is the canonical
+    // example). The submit gate enforces unit price > 0 — see
+    // changePurchaseOrderState. Non-integer cents are rejected here
+    // because the input value must round-trip as integer cents.
+    if (!Number.isFinite(unitPriceCents) || unitPriceCents < 0) {
+      throw new HttpError(400, `第 ${index + 1} 行单价不正确`);
+    }
+    if (!Number.isInteger(unitPriceCents)) {
+      throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
+    }
+    const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1,
+      documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
+      conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
+      baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
   });
-  return { supplierId, remark: optionalText(body.remark, 500), items, totalCents: items.reduce((sum, item) => sum + item.amountCents, 0) };
+  return {
+    supplierId, remark: optionalText(body.remark, 500), items,
+    totalCents: items.reduce((sum, item) => sum + item.amountCents, 0),
+    orderDate, expectedDeliveryDate, paymentTerms, paymentTermsDays: termsDays, supplierContactName, supplierContactPhone, supplierAddress,
+  };
 }
 
 function savePurchaseOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
+    item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
+    item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
 // ============ Warehouses ============
@@ -1203,6 +1747,10 @@ async function updateWarehouse(db, req, res, actor, warehouseId) {
   const address = optionalText(body.address ?? current.address, 200);
   const manager = optionalText(body.manager ?? current.manager, 50);
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
+  if (current.active && !active) {
+    const stock = db.prepare('SELECT 1 FROM inventory WHERE warehouse_id=? AND quantity<>0 LIMIT 1').get(warehouseId);
+    if (stock) throw new HttpError(409, '仓库仍有库存，清零或转移库存后才能停用', { code: 'WAREHOUSE_NOT_EMPTY' });
+  }
   db.prepare('UPDATE warehouses SET name=?,address=?,manager=?,active=?,updated_at=? WHERE id=?').run(name, address, manager, active, new Date().toISOString(), warehouseId);
   audit(db, actor.id, 'UPDATE', 'WAREHOUSE', warehouseId, name);
   return send(res, 200, { ok: true });
@@ -1427,6 +1975,8 @@ async function calculateMRP(db, req, res, actor) {
 function listInventoryChecks(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_CHECK', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ic.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && INVENTORY_CHECK_STATUS[status]) { where.push('ic.status=?'); params.push(status); }
   const sql = `SELECT ic.*,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,
@@ -1453,9 +2003,12 @@ async function createInventoryCheck(db, req, res, actor) {
   const systemQuantity = inv.quantity;
   const difference = counted - systemQuantity;
   const checkId = id(); const now = new Date().toISOString(); const checkNo = makeInventoryCheckNo();
-  db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
-    VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
-  audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
+  transaction(db, () => {
+    db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
+      VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
+    saveTrackedAllocations(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId, quantity: Math.abs(difference), allocations: body.trackingAllocations || body.tracking_allocations || [] });
+    audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
+  });
   return send(res, 201, { id: checkId, checkNo, status: 'DRAFT' });
 }
 
@@ -1494,12 +2047,14 @@ function saveAdjustmentItems(db, adjustmentId, items) {
 
 function listInventoryAdjustments(db, res, actor, url) {
   allow(actor, 'INVENTORY_ADJUSTMENT_MANAGE');
-  const status = url.searchParams.get('status'); const params = []; let where = '';
-  if (status && INVENTORY_ADJUSTMENT_STATUS[status]) { where = 'WHERE ia.status=?'; params.push(status); }
+  const status = url.searchParams.get('status'); const params = []; const clauses = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_ADJUSTMENT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'ia.id' });
+  if (archiveFilter.clause) clauses.push(archiveFilter.clause);
+  if (status && INVENTORY_ADJUSTMENT_STATUS[status]) { clauses.push('ia.status=?'); params.push(status); }
   const rows = db.prepare(`SELECT ia.*,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName,
     (SELECT COUNT(*) FROM inventory_adjustment_items WHERE adjustment_id=ia.id) itemCount
     FROM inventory_adjustments ia JOIN warehouses w ON w.id=ia.warehouse_id JOIN users creator ON creator.id=ia.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by ${where} ORDER BY ia.created_at DESC`).all(...params)
+    LEFT JOIN users confirmed ON confirmed.id=ia.confirmed_by ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY ia.created_at DESC`).all(...params)
     .map((row) => ({ ...row, statusLabel: INVENTORY_ADJUSTMENT_STATUS[row.status] }));
   return send(res, 200, { inventoryAdjustments: rows });
 }
@@ -1525,6 +2080,7 @@ async function createInventoryAdjustment(db, req, res, actor) {
   transaction(db, () => {
     db.prepare("INSERT INTO inventory_adjustments(id,adjustment_no,warehouse_id,status,reason,adjustment_date,creator_id,created_at,updated_at) VALUES(?,?,?,'DRAFT',?,?,?,?,?)").run(adjustmentId, adjustmentNo, body.warehouseId, reason, adjustmentDate, actor.id, now, now);
     saveAdjustmentItems(db, adjustmentId, items); audit(db, actor.id, 'CREATE', 'INVENTORY_ADJUSTMENT', adjustmentId, `创建库存调整 ${adjustmentNo}`);
+    for (const [index, item] of items.entries()) saveTrackedAllocations(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.productId, quantity: Math.abs(item.quantityDelta), allocations: body.items[index].trackingAllocations || body.items[index].tracking_allocations || [] });
   });
   return send(res, 201, { id: adjustmentId, adjustmentNo, status: 'DRAFT' });
 }
@@ -1552,16 +2108,21 @@ function changeInventoryAdjustmentState(db, res, actor, adjustmentId, action) {
   if (action === 'confirm') transaction(db, () => {
     const locked = db.prepare('SELECT * FROM inventory_adjustments WHERE id=?').get(adjustmentId);
     if (locked.status !== 'DRAFT') throw new HttpError(409, '库存调整单已处理');
-    const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId);
+    assertFinancialPeriodsOpen(db,locked.adjustment_date);
+    const items = db.prepare('SELECT * FROM inventory_adjustment_items WHERE adjustment_id=? ORDER BY line_no').all(adjustmentId); const voucherEntries=[];
     for (const item of items) {
       const before = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id)?.quantity || 0;
       const after = before + item.quantity_delta;
       if (!Number.isFinite(after) || after < 0) throw new HttpError(409, '调整后库存不能为负数');
+      postTrackedMovement(db, { sourceType: 'INVENTORY_ADJUSTMENT', sourceId: adjustmentId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: Math.abs(item.quantity_delta), direction: item.quantity_delta > 0 ? 'IN' : 'OUT', businessDate: locked.adjustment_date });
       const balance = adjustInventory(db, locked.warehouse_id, item.product_id, item.quantity_delta, now);
       db.prepare('UPDATE inventory_adjustment_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, balance, item.id);
-      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?)`).run(id(), locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now);
+      const transactionId=id(); db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+        VALUES(?,?,?,?,?,?,'INVENTORY_ADJUSTMENT',?,?,?,?,?,?)`).run(transactionId, locked.warehouse_id, item.product_id, Math.abs(item.quantity_delta), item.quantity_delta > 0 ? 'IN' : 'OUT', balance, adjustmentId, locked.adjustment_no, locked.reason, actor.id, now,locked.adjustment_date);
+      const movements=item.quantity_delta>0?receivePositiveSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_GAIN',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate:locked.adjustment_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:-Number(item.quantity_delta),movementType:'INVENTORY_ADJUSTMENT_LOSS',sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,sourceItemId:item.id,inventoryTransactionId:transactionId});
+      const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0); const invRole=inventoryAccountRole(db,item.product_id); if(item.quantity_delta>0){voucherEntries.push({role:invRole,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount});}else{voucherEntries.push({role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role:invRole,direction:'CREDIT',amountCents:amount});}
     }
+    createSystemVoucher(db,{sourceType:'INVENTORY_ADJUSTMENT',sourceId:adjustmentId,businessDate:locked.adjustment_date,actorId:actor.id,entries:voucherEntries});
     db.prepare("UPDATE inventory_adjustments SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, adjustmentId);
     audit(db, actor.id, 'CONFIRM', 'INVENTORY_ADJUSTMENT', adjustmentId, `确认库存调整 ${locked.adjustment_no}`);
   });
@@ -1590,6 +2151,8 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (!inventory) throw new HttpError(400, '该仓库没有此货品的库存记录');
     db.prepare('UPDATE inventory_checks SET warehouse_id=?,product_id=?,system_quantity=?,actual_quantity=?,difference=?,reason=? WHERE id=?')
       .run(body.warehouseId, body.productId, inventory.quantity, actualQuantity, actualQuantity - inventory.quantity, optionalText(body.reason, 200), checkId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='INVENTORY_CHECK' AND source_id=?").run(checkId);
+    saveTrackedAllocations(db,{sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,productId:body.productId,quantity:Math.abs(actualQuantity-inventory.quantity),allocations:body.trackingAllocations||body.tracking_allocations||[]});
     audit(db, actor.id, 'UPDATE', 'INVENTORY_CHECK', checkId, '修改盘点单 ' + check.check_no);
   } else if (action === 'SUBMIT') {
     allow(actor, 'INVENTORY_CHECK_CREATE');
@@ -1602,13 +2165,20 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (check.status !== 'SUBMITTED') throw new HttpError(409, '只有已提交盘点单可以审批');
     if (check.creator_id === actor.id) throw new HttpError(409, '盘点单创建人不能审批自己的单据');
     transaction(db, () => {
+      const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
       const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(check.warehouse_id, check.product_id);
       if (!current) throw new HttpError(409, '库存记录不存在');
       if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
+      if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate: now.slice(0, 10) });
       db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
       db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
-      if (check.difference !== 0) db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?)")
-        .run(id(), check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now);
+      if (check.difference !== 0) {
+        const transactionId=id(); db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?,?)")
+          .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now,businessDate);
+        const movements=check.difference>0?receivePositiveSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:Number(check.difference),movementType:'INVENTORY_COUNT_GAIN',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:-Number(check.difference),movementType:'INVENTORY_COUNT_SHORTAGE',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId});
+        const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0), role=inventoryAccountRole(db,check.product_id);
+        createSystemVoucher(db,{sourceType:'INVENTORY_COUNT',sourceId:checkId,businessDate,actorId:actor.id,entries:check.difference>0?[{role,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount}]:[{role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role,direction:'CREDIT',amountCents:amount}]});
+      }
       audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity}`);
     });
   } else throw new HttpError(400, '无效操作');
@@ -1631,6 +2201,8 @@ const INVENTORY_TRANSFER_STATUS = {
 function listInventoryTransfers(db, res, actor, url) {
   allow(actor, 'INVENTORY_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('INVENTORY_TRANSFER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'it.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const status = url.searchParams.get('status');
   if (status && INVENTORY_TRANSFER_STATUS[status]) { where.push('it.status=?'); params.push(status); }
   const sql = `SELECT it.*,fw.code fromWarehouseCode,fw.name fromWarehouseName,tw.code toWarehouseCode,tw.name toWarehouseName,
@@ -1683,10 +2255,110 @@ function normalizeDocumentDate(value, label) {
   return value;
 }
 
-function replaceLogisticsItems(db, table, foreignKey, documentId, items) {
+function replaceLogisticsItems(db, table, foreignKey, documentId, items, sourceColumn = null) {
   db.prepare(`DELETE FROM ${table} WHERE ${foreignKey}=?`).run(documentId);
-  const statement = db.prepare(`INSERT INTO ${table}(id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)`);
-  for (const item of items) statement.run(id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo);
+  const hasUomSnapshot = db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name='document_uom_code'`).get(table);
+  const uomColumns = hasUomSnapshot
+    ? ',document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den'
+    : '';
+  const columns = sourceColumn
+    ? `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no,${sourceColumn}${uomColumns}`
+    : `id,${foreignKey},product_id,quantity,unit_price_cents,amount_cents,line_no${uomColumns}`;
+  const placeholderCount = 7 + (sourceColumn ? 1 : 0) + (hasUomSnapshot ? 7 : 0);
+  const statement = db.prepare(`INSERT INTO ${table}(${columns}) VALUES(${Array(placeholderCount).fill('?').join(',')})`);
+  for (const item of items) {
+    const values = [id(), documentId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo];
+    if (sourceColumn) values.push(item.sourceItemId);
+    if (hasUomSnapshot) values.push(item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
+      item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
+    statement.run(...values);
+  }
+}
+
+function configureTrackedDraftLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems, businessDate }) {
+  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
+  for (const [index, item] of persisted.entries()) {
+    freezeQualityPolicy(db, { sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, businessDate });
+    saveTrackedAllocations(db, {
+      sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
+      allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
+    });
+  }
+}
+
+function configureTrackedDocumentLines(db, { sourceType, sourceId, itemTable, foreignKey, rawItems }) {
+  const persisted = db.prepare(`SELECT * FROM ${itemTable} WHERE ${foreignKey}=? ORDER BY line_no,id`).all(sourceId);
+  for (const [index, item] of persisted.entries()) saveTrackedAllocations(db, {
+    sourceType, sourceId, sourceItemId: item.id, productId: item.product_id, quantity: item.quantity,
+    allocations: rawItems?.[index]?.trackingAllocations || rawItems?.[index]?.tracking_allocations || [],
+  });
+}
+
+function sourceLineId(item, camel, snake) {
+  return item?.[camel] ?? item?.[snake] ?? item?.sourceItemId ?? item?.source_item_id ?? null;
+}
+
+function normalizeSourcedLogisticsItems(db, items, {
+  sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake,
+}) {
+  if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加来源明细');
+  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents,document_uom_code,document_quantity_num,
+    document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den
+    FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
+  let totalCents = 0;
+  const seen = new Set();
+  const normalized = items.map((item, index) => {
+    const itemId = sourceLineId(item, sourceIdCamel, sourceIdSnake);
+    if (!itemId || seen.has(itemId)) throw new HttpError(400, `第 ${index + 1} 行来源明细无效或重复`);
+    seen.add(itemId);
+    const source = sourceStmt.get(itemId, sourceHeaderId);
+    if (!source) throw new HttpError(400, `第 ${index + 1} 行来源明细不属于来源单据`);
+    if (item.productId !== undefined && item.productId !== source.product_id) throw new HttpError(400, `第 ${index + 1} 行货品与来源不一致`);
+    if (item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '' && Number(item.unitPriceCents) !== source.unit_price_cents) {
+      throw new HttpError(400, `第 ${index + 1} 行单价与来源商业价格不一致`);
+    }
+    const quantity = Number(item.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) throw new HttpError(400, `第 ${index + 1} 行数量必须为正整数`);
+    const conversionNumerator = Number(source.conversion_numerator || 1);
+    const conversionDenominator = Number(source.conversion_denominator || 1);
+    const documentQuantity = rational(BigInt(quantity) * BigInt(conversionDenominator), conversionNumerator);
+    const baseQuantity = rational(quantity, 1);
+    const amountCents = roundRational(BigInt(documentQuantity.num) * BigInt(source.unit_price_cents), documentQuantity.den);
+    totalCents += amountCents;
+    if (!Number.isSafeInteger(totalCents)) throw new HttpError(400, '单据金额超出安全范围');
+    return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1,
+      sourceQuantity: Number(source.quantity), documentUomCode: source.document_uom_code,
+      documentQuantityNumerator: documentQuantity.num, documentQuantityDenominator: documentQuantity.den,
+      conversionNumerator, conversionDenominator, baseQuantityNumerator: baseQuantity.num, baseQuantityDenominator: baseQuantity.den };
+  });
+  return { items: normalized, totalCents };
+}
+
+function assertImmutableSourceItems(db, table, foreignKey, documentId, sourceColumn, items) {
+  const stored = db.prepare(`SELECT ${sourceColumn} id FROM ${table} WHERE ${foreignKey}=? ORDER BY line_no`).all(documentId).map((row) => row.id);
+  const incoming = items.map((item) => item.sourceItemId);
+  if (stored.length !== incoming.length || stored.some((value, index) => value !== incoming[index])) {
+    throw new HttpError(409, '来源明细不可修改；请取消草稿后重新创建');
+  }
+}
+
+function confirmedQuantity(db, { itemTable, sourceColumn, headerTable, headerForeignKey, status = 'CONFIRMED' }, sourceItemId, excludeHeaderId = null) {
+  let sql = `SELECT COALESCE(SUM(i.quantity),0) quantity FROM ${itemTable} i JOIN ${headerTable} h ON h.id=i.${headerForeignKey} WHERE i.${sourceColumn}=? AND h.status=?`;
+  const params = [sourceItemId, status];
+  if (excludeHeaderId) { sql += ' AND h.id<>?'; params.push(excludeHeaderId); }
+  return Number(db.prepare(sql).get(...params).quantity);
+}
+
+function assertRemainingQuantity(db, input, quantityConfig, label) {
+  for (const item of input.items) {
+    const already = confirmedQuantity(db, quantityConfig, item.sourceItemId);
+    if (already + item.quantity > item.sourceQuantity) throw new HttpError(409, `${label}数量超过来源剩余可执行数量`);
+  }
+}
+
+function fulfillmentState(executed, sourceQuantity, labels) {
+  if (executed <= 0) return labels[0];
+  return executed >= sourceQuantity ? labels[2] : labels[1];
 }
 
 function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
@@ -1699,7 +2371,8 @@ function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
     if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) throw new HttpError(409, '单据明细数量或单价不正确');
     const amountCents = quantity * unitPriceCents;
     if (!Number.isSafeInteger(amountCents) || amountCents < 0) throw new HttpError(409, '单据明细金额不正确');
-    if (item.amount_cents !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
+    if (Number(item.amount_cents) !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
+    item.amount_cents = amountCents;
     totalCents += amountCents;
     if (!Number.isSafeInteger(totalCents)) throw new HttpError(409, '单据金额超出安全范围');
   }
@@ -1713,6 +2386,85 @@ function adjustInventory(db, warehouseId, productId, quantityChange, now) {
       quantity=inventory.quantity+excluded.quantity,
       updated_at=excluded.updated_at`).run(id(), warehouseId, productId, quantityChange, now);
   return db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity;
+}
+
+const INVENTORY_CONTROL_REVERSAL = Object.freeze({
+  INVENTORY_ADJUSTMENT: { table: 'inventory_adjustments', status: 'CONFIRMED', permission: 'INVENTORY_ADJUSTMENT_MANAGE', voucherSourceType: 'INVENTORY_ADJUSTMENT' },
+  INVENTORY_SCRAP: { table: 'inventory_scraps', status: 'CONFIRMED', permission: 'INVENTORY_SCRAP_MANAGE', voucherSourceType: 'INVENTORY_SCRAP' },
+  INVENTORY_TRANSFER: { table: 'inventory_transfers', status: 'TRANSFERRED', permission: 'INVENTORY_TRANSFER_APPROVE', voucherSourceType: 'INVENTORY_TRANSFER' },
+  INVENTORY_CHECK: { table: 'inventory_checks', status: 'APPROVED', requestPermission: 'INVENTORY_CHECK_CREATE', confirmPermission: 'INVENTORY_CHECK_APPROVE', voucherSourceType: 'INVENTORY_COUNT' },
+});
+
+async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId, routeAction = null) {
+  const config = INVENTORY_CONTROL_REVERSAL[sourceType];
+  if (!config) throw new HttpError(400, '不支持的库存冲销类型');
+  const body = await readJson(req);
+  const requestedAction = String(routeAction || body.action || (sourceType === 'INVENTORY_CHECK' ? 'REQUEST' : 'CONFIRM')).toUpperCase();
+  const original = db.prepare(`SELECT * FROM ${config.table} WHERE id=?`).get(sourceId);
+  if (!original) throw new HttpError(404, '原库存单据不存在');
+  if (original.status !== config.status) throw new HttpError(409, '只有已生效库存单据可以冲销');
+  const existing = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+
+  if (sourceType === 'INVENTORY_CHECK' && requestedAction === 'REQUEST') {
+    allow(actor, config.requestPermission);
+    if (existing) return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+    const reason = requiredText(body.reason, '盘点冲销原因', 200);
+    const businessDate = normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
+    assertFinancialPeriodsOpen(db, businessDate);
+    const reversalId = id(); const now = new Date().toISOString();
+    db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
+    audit(db, actor.id, 'REQUEST_REVERSAL', sourceType, sourceId, `申请冲销：${reason}`);
+    return send(res, 201, { id: reversalId, status: 'DRAFT' });
+  }
+
+  if (sourceType === 'INVENTORY_CHECK') {
+    allow(actor, config.confirmPermission);
+    if (!existing) throw new HttpError(409, '请先由仓库提交盘点冲销申请');
+    if (existing.status === 'CONFIRMED') return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+    if (existing.creator_id === actor.id) throw new HttpError(409, '盘点冲销申请人不能审核自己的申请');
+  } else {
+    allow(actor, config.permission);
+    if (existing) return send(res, 200, { id: existing.id, status: existing.status, replayed: true });
+  }
+
+  const reason = sourceType === 'INVENTORY_CHECK' ? existing.reason : requiredText(body.reason, '冲销原因', 200);
+  const businessDate = sourceType === 'INVENTORY_CHECK' ? existing.business_date : normalizeDocumentDate(body.businessDate || new Date().toISOString().slice(0, 10), '冲销日期');
+  assertFinancialPeriodsOpen(db, businessDate);
+  const reversalId = existing?.id || id(); const reversalSourceType = `${sourceType}_REVERSAL`; const now = new Date().toISOString();
+  transaction(db, () => {
+    const lockedExisting = db.prepare('SELECT * FROM inventory_control_reversals WHERE source_type=? AND source_id=?').get(sourceType, sourceId);
+    if (lockedExisting?.status === 'CONFIRMED') return;
+    if (!lockedExisting) db.prepare("INSERT INTO inventory_control_reversals(id,source_type,source_id,business_date,reason,status,creator_id,created_at) VALUES(?,?,?,?,?,'DRAFT',?,?)").run(reversalId, sourceType, sourceId, businessDate, reason, actor.id, now);
+    const originalTransactions = db.prepare('SELECT * FROM inventory_transactions WHERE source_type=? AND source_id=? ORDER BY CASE direction WHEN \'OUT\' THEN 0 ELSE 1 END,created_at,id').all(sourceType, sourceId);
+    if (!originalTransactions.length) throw new HttpError(409, '原单没有可冲销的库存事件');
+    const netByStock = new Map();
+    for (const item of originalTransactions) {
+      const key = `${item.warehouse_id}\u0000${item.product_id}`;
+      const delta = item.direction === 'IN' ? -Number(item.quantity_change) : Number(item.quantity_change);
+      netByStock.set(key, (netByStock.get(key) || 0) + delta);
+    }
+    for (const [key, delta] of netByStock) {
+      const [warehouseId, productId] = key.split('\u0000');
+      const current = Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId)?.quantity || 0);
+      if (current + delta < -1e-9) throw new HttpError(409, '原入库数量已不可用，不能冲销');
+    }
+    reverseTrackedSource(db, { originalSourceType: sourceType, originalSourceId: sourceId, reversalSourceType, reversalSourceId: reversalId, businessDate });
+    const transactionIdByOriginal = new Map();
+    for (const item of originalTransactions) {
+      const direction = item.direction === 'IN' ? 'OUT' : 'IN';
+      const delta = direction === 'IN' ? Number(item.quantity_change) : -Number(item.quantity_change);
+      const balance = adjustInventory(db, item.warehouse_id, item.product_id, delta, now);
+      const reversalTransactionId = id();
+      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(reversalTransactionId, item.warehouse_id, item.product_id, Math.abs(Number(item.quantity_change)), direction, balance, reversalSourceType, reversalId, `REV-${sourceId}`, reason, actor.id, now, businessDate);
+      transactionIdByOriginal.set(item.id, reversalTransactionId);
+    }
+    reverseValuationSource(db, { originalSourceType: sourceType, originalSourceId: sourceId, reversalSourceType, reversalSourceId: reversalId, businessDate, transactionIdByOriginal });
+    reverseSystemVoucher(db, { originalSourceType: config.voucherSourceType, originalSourceId: sourceId, reversalSourceType: `${config.voucherSourceType}_REVERSAL`, reversalSourceId: reversalId, businessDate, actorId: actor.id, reason });
+    db.prepare("UPDATE inventory_control_reversals SET status='CONFIRMED',reviewer_id=? WHERE id=?").run(sourceType === 'INVENTORY_CHECK' ? actor.id : null, reversalId);
+    audit(db, actor.id, 'REVERSE', sourceType, sourceId, `冲销 ${sourceId}：${reason}`);
+  });
+  return send(res, 200, { id: reversalId, status: 'CONFIRMED' });
 }
 
 async function createInventoryTransfer(db, req, res, actor) {
@@ -1736,7 +2488,7 @@ async function createInventoryTransfer(db, req, res, actor) {
     db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at)
       VALUES(?,?,?,?,'DRAFT',?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now);
     const stmt = db.prepare('INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES(?,?,?,?)');
-    for (const item of items) stmt.run(id(), transferId, item.productId, Number(item.quantity));
+    for (const item of items) { const itemId = id(); stmt.run(itemId, transferId, item.productId, Number(item.quantity)); saveTrackedAllocations(db, { sourceType: 'INVENTORY_TRANSFER', sourceId: transferId, sourceItemId: itemId, productId: item.productId, quantity: Number(item.quantity), allocations: item.trackingAllocations || item.tracking_allocations || [] }); }
     audit(db, actor.id, 'CREATE', 'INVENTORY_TRANSFER', transferId, `创建调拨单 ${transferNo}`);
   });
   return send(res, 201, { id: transferId, transferNo });
@@ -1765,27 +2517,26 @@ async function changeInventoryTransferState(db, req, res, actor, transferId, act
   if (action === 'transfer') {
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以确认');
     const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
+    const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
     transaction(db, () => {
       for (const item of items) {
         const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
         if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
+        transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate: now.slice(0, 10) });
         const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, now);
         const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, now);
         const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
           (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
-        insertTransaction.run(id(), transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
-        insertTransaction.run(id(), transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
+        const outTransactionId=id(); const inTransactionId=id();
+        insertTransaction.run(outTransactionId, transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
+        insertTransaction.run(inTransactionId, transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
+        const issued=issueSourceValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.from_warehouse_id,quantity:Number(item.quantity),movementType:'TRANSFER_OUT',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:outTransactionId});
+        issued.forEach((m)=>receiveValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.to_warehouse_id,lotId:m.lotId,serialId:m.serialId,quantity:-m.quantityDelta,valueCents:-m.valueDeltaCents,movementType:'TRANSFER_IN',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:inTransactionId,valuationBasis:m.valuationMethod==='LEGACY_UNVALUED'?'LEGACY_UNVALUED':'TRANSFER_CARRYING_VALUE'}));
       }
       db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
       audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
-      // Generate accounting voucher for inventory transfer
-      const totalAmt = items.reduce((s, i) => { const inv = db.prepare('SELECT price_cents FROM products WHERE id=?').get(i.product_id); return s + Math.round(i.quantity * (inv?.price_cents || 0)); }, 0);
-      const entries3 = [
-        { subjectId: 'subject-004', direction: 'DEBIT', amountCents: totalAmt, summary: `调拨入库 ${transfer.transfer_no}` },
-        { subjectId: 'subject-004', direction: 'CREDIT', amountCents: totalAmt, summary: `调拨出库 ${transfer.transfer_no}` }
-      ];
-      generateVoucher(db, 'INVENTORY_TRANSFER', transferId, entries3, actor);
+      // 同一公司内仓库调拨仅改变估值维度，不形成损益或公司总存货 GL。
     });
   } else if (action === 'cancel') {
     if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
@@ -1808,6 +2559,8 @@ function listAccountingSubjects(db, res, actor) {
 function listAccountingVouchers(db, res, actor, url) {
   allow(actor, 'ACCOUNTING_VIEW');
   const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('ACCOUNTING_VOUCHER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'av.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
   const sourceType = url.searchParams.get('source_type');
   if (sourceType) { where.push('av.source_type=?'); params.push(sourceType); }
   const sql = `SELECT av.*, u.display_name creatorName
@@ -1843,23 +2596,36 @@ function checkPeriodNotClosedForVoucher(db, voucherDate, operation) {
 }
 
 async function createAccountingVoucher(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'VOUCHER_SUBMIT');
   const body = await readJson(req);
   const { voucherDate, remark, entries } = body;
-  
+
   // 检查期间是否已关闭
   const effectiveDate = voucherDate || new Date().toISOString().slice(0, 10);
   checkPeriodNotClosedForVoucher(db, effectiveDate, '录入');
-  
+
   if (!entries || !Array.isArray(entries) || entries.length < 2) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
-  
-  // 验证借贷平衡
+
+  // V1.3 Phase 1: integer-cent integrity. Every entry must be a
+  // positive safe-integer number of cents; the ledger never accepts
+  // fractional cents, zero, negative, or non-numeric values.
+  for (const [index, e] of entries.entries()) {
+    if (!e || (e.direction !== 'DEBIT' && e.direction !== 'CREDIT')) {
+      throw new HttpError(400, `第 ${index + 1} 行分录方向不正确`);
+    }
+    const amount = Number(e.amountCents);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new HttpError(400, `第 ${index + 1} 行金额必须为正整数（分）`);
+    }
+  }
+
+  // 验证借贷平衡 (V1.3 Phase 1: EXACT match; no 1-cent tolerance).
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
-  
-  if (Math.abs(debitTotal - creditTotal) > 1) {
+
+  if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡，借方合计：' + debitTotal + '，贷方合计：' + creditTotal);
   }
   
@@ -1883,7 +2649,7 @@ async function createAccountingVoucher(db, req, res, actor) {
   return send(res, 201, { id: voucherId, voucherNo });
 }
 async function updateAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'VOUCHER_SUBMIT');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -1910,10 +2676,21 @@ async function updateAccountingVoucher(db, req, res, actor, voucherId) {
     throw new HttpError(400, '凭证分录至少需要两条');
   }
 
+  // V1.3 Phase 1: integer-cent integrity and exact debit/credit match.
+  for (const [index, e] of entries.entries()) {
+    if (!e || (e.direction !== 'DEBIT' && e.direction !== 'CREDIT')) {
+      throw new HttpError(400, `第 ${index + 1} 行分录方向不正确`);
+    }
+    const amount = Number(e.amountCents);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new HttpError(400, `第 ${index + 1} 行金额必须为正整数（分）`);
+    }
+  }
+
   const debitTotal = entries.filter(e => e.direction === 'DEBIT').reduce((s, e) => s + Number(e.amountCents), 0);
   const creditTotal = entries.filter(e => e.direction === 'CREDIT').reduce((s, e) => s + Number(e.amountCents), 0);
 
-  if (Math.abs(debitTotal - creditTotal) > 1) {
+  if (debitTotal !== creditTotal) {
     throw new HttpError(400, '借贷不平衡');
   }
 
@@ -1993,7 +2770,7 @@ async function submitAccountingVoucher(db, req, res, actor, voucherId) {
 }
 
 async function approveAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'VOUCHER_APPROVE');
+  if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -2021,7 +2798,7 @@ async function approveAccountingVoucher(db, req, res, actor, voucherId) {
 }
 
 async function rejectAccountingVoucher(db, req, res, actor, voucherId) {
-  allow(actor, 'VOUCHER_APPROVE');
+  if(actor.roleCode!=='REVIEWER') allow(actor, 'VOUCHER_APPROVE');
   const voucher = db.prepare('SELECT * FROM accounting_vouchers WHERE id = ?').get(voucherId);
   if (!voucher) throw new HttpError(404, '凭证不存在');
 
@@ -2232,11 +3009,11 @@ function listCashJournals(db, res, actor, url) {
 }
 
 async function createCashJournal(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'CASH_JOURNALS_MANAGE');
   const body = await readJson(req);
   const { journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, journal_date, remark } = body;
   
-  if (!amount_cents || amount_cents <= 0) throw new HttpError(400, '请输入正确的金额');
+  if (!Number.isSafeInteger(amount_cents) || amount_cents <= 0) throw new HttpError(400, '金额必须为正整数分');
   if (!journal_date) throw new HttpError(400, '请选择日期');
   
   const journalId = id();
@@ -2246,15 +3023,15 @@ async function createCashJournal(db, req, res, actor) {
   transaction(db, () => {
     db.prepare(`INSERT INTO cash_journals(id, journal_no, journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, operator_id, journal_date, remark, created_at)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, Math.round(amount_cents * 100), direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
+      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, amount_cents, direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
     
     // 更新银行账户余额
     if (bank_id && account_type === 'BANK') {
-      const change = direction === 'IN' ? Math.round(amount_cents * 100) : -Math.round(amount_cents * 100);
+      const change = direction === 'IN' ? amount_cents : -amount_cents;
       db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, bank_id);
     }
     
-    audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}元`);
+    audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}分`);
   });
   
   return send(res, 201, { id: journalId, journalNo });
@@ -2298,18 +3075,19 @@ function listBankAccounts(db, res, actor) {
 }
 
 async function createBankAccount(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
   const body = await readJson(req);
-  const { bank_name, account_no, account_name, account_type, initial_balance } = body;
+  const { bank_name, account_no, account_name, account_type, initial_balance_cents = 0 } = body;
   
   if (!bank_name || !account_no || !account_name) throw new HttpError(400, '请填写完整的银行信息');
+  if (!Number.isSafeInteger(initial_balance_cents)) throw new HttpError(400, '期初余额必须为整数分');
   
   const accountId = id();
   const now = new Date().toISOString();
   
   db.prepare(`INSERT INTO bank_accounts(id, bank_name, account_no, account_name, account_type, balance_cents, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', Math.round((initial_balance || 0) * 100), now, now);
+    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', initial_balance_cents, now, now);
   
   return send(res, 201, { id: accountId });
 }
@@ -2326,7 +3104,7 @@ function getBankAccount(db, res, actor, accountId) {
 }
 
 async function updateBankAccount(db, req, res, actor, accountId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BANK_ACCOUNTS_MANAGE');
   const account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(accountId);
   if (!account) throw new HttpError(404, '账户不存在');
   
@@ -2366,18 +3144,20 @@ function listBills(db, res, actor, url) {
 }
 
 async function createBill(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'BILLS_MANAGE');
   const body = await readJson(req);
-  const { bill_no, bill_type, direction, face_amount, bank_id, drawer_name, drawer_bank, payee_name, issue_date, due_date, holder_id, remark } = body;
+  const { bill_no, bill_type, direction, face_amount_cents, bank_id, drawer_name, drawer_bank, payee_name, issue_date, due_date, holder_id, remark } = body;
   
-  if (!bill_no || !face_amount || !issue_date || !due_date) throw new HttpError(400, '请填写完整的票据信息');
+  if (!issue_date || !due_date) throw new HttpError(400, '请填写完整的票据信息');
+  if (!Number.isSafeInteger(face_amount_cents) || face_amount_cents <= 0) throw new HttpError(400, '票面金额必须为正整数分');
   
   const billId = id();
   const now = new Date().toISOString();
+  const effectiveBillNo = bill_no || `BILL-${Date.now().toString(36).toUpperCase()}`;
   
   db.prepare(`INSERT INTO bills(id, bill_no, bill_type, direction, face_amount_cents, bank_id, drawer_name, drawer_bank, payee_name, holder, holder_id, issue_date, due_date, status, remark, created_at, updated_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`)
-    .run(billId, bill_no, bill_type || 'DRAFT', direction || 'RECEIVABLE', Math.round(face_amount * 100), bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
+    .run(billId, effectiveBillNo, bill_type || 'DRAFT', direction || 'RECEIVABLE', face_amount_cents, bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
   
   return send(res, 201, { id: billId });
 }
@@ -2448,7 +3228,7 @@ function listFixedAssets(db, res, actor, url) {
 }
 
 async function createFixedAsset(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const body = await readJson(req);
   const { asset_code, asset_name, asset_type, spec, unit, purchase_date, purchase_amount, service_years, depreciation_method, residual_value, location, custodian, remark } = body;
   
@@ -2483,7 +3263,7 @@ function getFixedAsset(db, res, actor, assetId) {
 }
 
 async function updateFixedAsset(db, req, res, actor, assetId) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(assetId);
   if (!asset) throw new HttpError(404, '资产不存在');
   
@@ -2500,7 +3280,7 @@ async function updateFixedAsset(db, req, res, actor, assetId) {
 }
 
 async function calculateDepreciation(db, req, res, actor) {
-  allow(actor, 'ACCOUNTING_VIEW');
+  allow(actor, 'FIXED_ASSETS_MANAGE');
   const body = await readJson(req);
   const { asset_id, depreciation_amount } = body;
   
@@ -2751,8 +3531,11 @@ function listPurchaseReceipts(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(pr.receipt_no LIKE ? OR s.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_RECEIPT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
-  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;  const receipts = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
+  const sql = `SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_receipt_items WHERE receipt_id = pr.id) itemCount FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ${where} ORDER BY pr.created_at DESC LIMIT 100`;
+  const receipts = db.prepare(sql).all(...params).map(row => { const billed=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills b ON b.id=i.bill_id WHERE i.receipt_id=? AND b.status IN ('DRAFT','POSTED','WAITING_MATCH')").get(row.id).n); const received=Number(db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM purchase_receipt_items WHERE receipt_id=?').get(row.id).n); return ({ ...row, billedQuantity:billed,remainingBillQuantity:Math.max(0,received-billed),billMatchStatus:billed<=0?'UNBILLED':billed<received?'PARTIALLY_BILLED':'BILLED', statusLabel: RECEIPT_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'IQC', row.id) }); });
   return send(res, 200, { purchaseReceipts: receipts });
 }
 
@@ -2760,17 +3543,24 @@ async function createPurchaseReceipt(db, req, res, actor) {
   allow(actor, 'PURCHASE_RECEIPTS_MANAGE');
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
+  const billingMode = body.billingMode || 'LEGACY_DIRECT';
+  if (!['SEPARATE','AUTO_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效采购计费模式');
   const receiptDate = normalizeDocumentDate(body?.receiptDate || new Date().toISOString().slice(0, 10), '收货日期');
-  requireActiveReference(db, 'suppliers', supplierId, '供应商');
+  if (!purchaseOrderId) throw new HttpError(400, '正常采购收货必须选择已审批采购订单');
+  const source = db.prepare("SELECT * FROM purchase_orders WHERE id=?").get(purchaseOrderId);
+  if (!source) throw new HttpError(400, '采购订单不存在');
+  if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批采购订单可以收货');
+  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购订单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (purchaseOrderId && !db.prepare('SELECT 1 FROM purchase_orders WHERE id=?').get(purchaseOrderId)) throw new HttpError(400, '采购订单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: purchaseOrderId, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
   const receiptId = id();
   const now = new Date().toISOString();
   const receiptNo = 'PR' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId || null, supplierId, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items);
+    db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now, billingMode);
+    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: items, businessDate: receiptDate });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
   });
   return send(res, 201, { id: receiptId, receiptNo });
@@ -2780,11 +3570,16 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   allowAny(actor, ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE']);
   const receipt = db.prepare('SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, po.order_no poNo FROM purchase_receipts pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by LEFT JOIN purchase_orders po ON po.id = pr.purchase_order_id WHERE pr.id = ?').get(receiptId);
   if (!receipt) throw new HttpError(404, '采购入库单不存在');
-  receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId);
+  receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.purchase_order_item_id purchaseOrderItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId).map((item) => { const receivedQuantity = item.purchaseOrderItemId ? confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, item.purchaseOrderItemId) : 0; const orderedQuantity = item.purchaseOrderItemId ? Number(db.prepare('SELECT quantity FROM purchase_order_items WHERE id=?').get(item.purchaseOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, receivedQuantity, remainingQuantity: Math.max(0, orderedQuantity - receivedQuantity), fulfillmentState: fulfillmentState(receivedQuantity, orderedQuantity, ['NOT_RECEIVED','PARTIALLY_RECEIVED','FULLY_RECEIVED']) }; });
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
+  receipt.qualityState = deriveQualityState(db, 'IQC', receiptId);
+  receipt.items = receipt.items.map((item) => ({ ...item, qualityState: receipt.qualityState }));
+  receipt.items = receipt.items.map((item) => { const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills b ON b.id=i.bill_id WHERE i.receipt_item_id=? AND b.status IN ('DRAFT','POSTED','WAITING_MATCH')").get(item.id).n); return {...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)}; });
+  const receiptBilled=receipt.items.reduce((sum,item)=>sum+item.billedQuantity,0),receiptQuantity=receipt.items.reduce((sum,item)=>sum+Number(item.quantity),0);
+  receipt.billingSummary={status:receiptBilled<=0?'UNBILLED':receiptBilled<receiptQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:receiptBilled,remainingQuantity:Math.max(0,receiptQuantity-receiptBilled),grniCents:receipt.billing_mode==='LEGACY_DIRECT'?0:receipt.total_cents};
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
-    downstream: db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),
+    downstream: [...db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),...db.prepare('SELECT DISTINCT b.id,b.bill_no documentNo,b.status FROM supplier_bills b JOIN supplier_bill_items i ON i.bill_id=b.id WHERE i.receipt_id=? ORDER BY b.created_at').all(receiptId).map(row=>({...row,type:'SUPPLIER_BILL'}))],
     finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor),
     subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId) : null,
     direct: !receipt.poNo,
@@ -2798,14 +3593,20 @@ async function updatePurchaseReceipt(db, req, res, actor, receiptId) {
   if (!current) throw new HttpError(404, '采购入库单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'suppliers', body.supplierId, '供应商');
+  if (body.purchaseOrderId !== undefined && body.purchaseOrderId !== current.purchase_order_id) throw new HttpError(409, '采购订单来源不可修改');
+  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
   requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'purchase_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.purchase_order_id, sourceIdCamel: 'purchaseOrderItemId', sourceIdSnake: 'purchase_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, '收货');
+  assertImmutableSourceItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, 'purchase_order_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE purchase_receipts SET supplier_id=?,warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.supplierId, body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
-    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items);
+    db.prepare('UPDATE purchase_receipts SET warehouse_id=?,receipt_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(body.warehouseId, normalizeDocumentDate(body.receiptDate || current.receipt_date, '收货日期'), optionalText(body.remark, 500), input.totalCents, now, receiptId);
+    db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").run(receiptId);
+    replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: body.items, businessDate: body.receiptDate || current.receipt_date });
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RECEIPT', receiptId, '修改采购入库 ' + current.receipt_no);
   });
   return send(res, 200, { ok: true, id: receiptId, receiptNo: current.receipt_no, totalCents: input.totalCents });
@@ -2819,22 +3620,50 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
   const action = body.action;
   const now = new Date().toISOString();
   if (action === 'confirm') {
+    const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${receiptId}`); const fingerprint = requestFingerprint({ action });
+    const replay = idempotencyReplay(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      checkPeriodNotClosedForVoucher(db, locked.receipt_date, '生成业务');
+      if (!locked.purchase_order_id) throw new HttpError(409, '旧版无来源采购入库不可确认，请使用库存调整单');
+      const po = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(locked.purchase_order_id);
+      if (!po || po.status !== 'APPROVED') throw new HttpError(409, '来源采购订单不存在或未审批');
+      if (locked.supplier_id !== po.supplier_id) throw new HttpError(409, '入库供应商与来源采购订单不一致');
+      assertQualityGate(db, 'IQC', receiptId);
+      assertFinancialPeriodsOpen(db, locked.receipt_date);
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_receipt_items', 'receipt_id', receiptId);
+      const inventoryEntries=[];
       for (const item of authoritative.items) {
-        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?)').run(id(), receipt.warehouse_id, item.product_id, item.quantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now);
+        const sourceItem = db.prepare('SELECT * FROM purchase_order_items WHERE id=? AND order_id=?').get(item.purchase_order_item_id, po.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '入库明细与采购订单来源不一致');
+        const already = confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, sourceItem.id, receiptId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '收货数量超过采购订单剩余可收数量');
+        // Inventory, valuation and inventory_transactions always use base
+        // UOM quantity; document UOM / price stay on the document line.
+        // Legacy / seed rows that pre-date Phase 6E may not have base
+        // snapshots filled; fall back to the document quantity, which by
+        // Phase 0 contract equals the base quantity when no conversion is
+        // configured.
+        const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
+          ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
+          : Number(item.quantity);
+        postTrackedMovement(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceItemId: item.id, productId: item.product_id, warehouseId: receipt.warehouse_id, quantity: baseQuantity, direction: 'IN', businessDate: locked.receipt_date });
+        const balance = adjustInventory(db, receipt.warehouse_id, item.product_id, baseQuantity, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'PURCHASE_RECEIPT\',?,?,?,?,?,?)').run(transactionId, receipt.warehouse_id, item.product_id, baseQuantity, balance, receiptId, receipt.receipt_no, '采购入库', actor.id, now, locked.receipt_date);
+        receiveSourceValue(db,{ businessDate:locked.receipt_date,productId:item.product_id,warehouseId:receipt.warehouse_id,quantity:baseQuantity,valueCents:Number(item.amount_cents),movementType:'PURCHASE_RECEIPT',sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,sourceItemId:item.id,inventoryTransactionId:transactionId,valuationBasis:'APPROVED_PO_PRICE' });
+        inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
       }
       db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
-      const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
-      generateVoucher(db, 'PURCHASE_RECEIPT', receiptId, [
-        { subjectId: 'subject-004', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName },
-        { subjectId: 'subject-005', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购入库 ' + receipt.receipt_no + ' ' + supplierName }
-      ], actor, locked.receipt_date);
-      ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      if (locked.billing_mode === 'LEGACY_DIRECT') {
+        const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
+        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
+        ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      } else {
+        createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'GRNI',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购收货 GRNI '+receipt.receipt_no}]});
+        if (locked.billing_mode === 'AUTO_BILL') autoBillReceipt(db, receiptId, actor.id, `AUTO_BILL:${receiptId}`);
+      }
+      saveIdempotency(db, 'PURCHASE_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RECEIPT', receiptId, '确认采购入库 ' + receipt.receipt_no);
     });
   } else if (action === 'cancel') {
@@ -2853,9 +3682,11 @@ function listSalesDeliveries(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(sd.delivery_no LIKE ? OR c.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('SALES_DELIVERY', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'sd.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sd.status = ?'; params.push(status); }
   const sql = 'SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM sales_delivery_items WHERE delivery_id = sd.id) itemCount FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by WHERE ' + where + ' ORDER BY sd.created_at DESC LIMIT 100';
-  const deliveries = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: DELIVERY_STATUS[row.status] || row.status }));
+  const deliveries = db.prepare(sql).all(...params).map(row => { const billed=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices v ON v.id=i.invoice_id WHERE i.delivery_id=? AND v.status IN ('DRAFT','POSTED')").get(row.id).n); const delivered=Number(db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM sales_delivery_items WHERE delivery_id=?').get(row.id).n); return ({ ...row,billedQuantity:billed,remainingBillQuantity:Math.max(0,delivered-billed),billingStatus:billed<=0?'UNBILLED':billed<delivered?'PARTIALLY_BILLED':'BILLED', statusLabel: DELIVERY_STATUS[row.status] || row.status, qualityState: deriveQualityState(db, 'OQC', row.id) }); });
   return send(res, 200, { salesDeliveries: deliveries });
 }
 
@@ -2863,11 +3694,17 @@ async function createSalesDelivery(db, req, res, actor) {
   allow(actor, 'SALES_DELIVERIES_MANAGE');
   const body = await readJson(req);
   const { salesOrderId, customerId, warehouseId, remark, items } = body;
+  const billingMode = body.billingMode || 'LEGACY_DIRECT';
+  if (!['SEPARATE','DIRECT_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效销售计费模式');
   const deliveryDate = normalizeDocumentDate(body?.deliveryDate || new Date().toISOString().slice(0, 10), '发货日期');
-  requireActiveReference(db, 'customers', customerId, '客户');
+  if (!salesOrderId) throw new HttpError(400, '正常销售出货必须选择已审批销售订单');
+  const source = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(salesOrderId);
+  if (!source) throw new HttpError(400, '销售订单不存在');
+  if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批销售订单可以出货');
+  if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售订单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (salesOrderId && !db.prepare('SELECT 1 FROM sales_orders WHERE id=?').get(salesOrderId)) throw new HttpError(400, '销售订单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: salesOrderId, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
   for (const item of input.items) {
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
@@ -2876,8 +3713,9 @@ async function createSalesDelivery(db, req, res, actor) {
   const now = new Date().toISOString();
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId || null, customerId, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items);
+    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now, billingMode);
+    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: items, businessDate: deliveryDate });
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
   });
   return send(res, 201, { id: deliveryId, deliveryNo });
@@ -2887,11 +3725,15 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   allowAny(actor, ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE']);
   const delivery = db.prepare('SELECT sd.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, so.order_no soNo FROM sales_deliveries sd JOIN customers c ON c.id = sd.customer_id JOIN warehouses w ON w.id = sd.warehouse_id JOIN users creator ON creator.id = sd.creator_id LEFT JOIN users confirmed ON confirmed.id = sd.confirmed_by LEFT JOIN sales_orders so ON so.id = sd.sales_order_id WHERE sd.id = ?').get(deliveryId);
   if (!delivery) throw new HttpError(404, '销售出库单不存在');
-  delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId);
+  delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.sales_order_item_id salesOrderItemId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId).map((item) => { const deliveredQuantity = item.salesOrderItemId ? confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.salesOrderItemId) : 0; const orderedQuantity = item.salesOrderItemId ? Number(db.prepare('SELECT quantity FROM sales_order_items WHERE id=?').get(item.salesOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, deliveredQuantity, remainingQuantity: Math.max(0, orderedQuantity - deliveredQuantity), fulfillmentState: fulfillmentState(deliveredQuantity, orderedQuantity, ['NOT_DELIVERED','PARTIALLY_DELIVERED','FULLY_DELIVERED']) }; });
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
+  delivery.qualityState = deriveQualityState(db, 'OQC', deliveryId);
+  delivery.items = delivery.items.map((item) => ({ ...item, qualityState: delivery.qualityState }));
+  delivery.items=delivery.items.map(item=>{const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices v ON v.id=i.invoice_id WHERE i.delivery_item_id=? AND v.status IN ('DRAFT','POSTED')").get(item.id).n);return{...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)};});
+  const deliveryBilled=delivery.items.reduce((sum,item)=>sum+item.billedQuantity,0),deliveryQuantity=delivery.items.reduce((sum,item)=>sum+Number(item.quantity),0);delivery.billingSummary={status:deliveryBilled<=0?'UNBILLED':deliveryBilled<deliveryQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:deliveryBilled,remainingQuantity:Math.max(0,deliveryQuantity-deliveryBilled)};
   delivery.relationships = {
     upstream: delivery.sales_order_id && delivery.soNo ? [{ type: 'SALES_ORDER', id: delivery.sales_order_id, documentNo: delivery.soNo }] : [],
-    downstream: db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),
+    downstream: [...db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at").all(deliveryId, deliveryId).map((row) => ({ ...row, type: 'SALES_RETURN' })),...db.prepare('SELECT DISTINCT v.id,v.invoice_no documentNo,v.status FROM sales_invoices v JOIN sales_invoice_items i ON i.invoice_id=v.id WHERE i.delivery_id=? ORDER BY v.created_at').all(deliveryId).map(row=>({...row,type:'SALES_INVOICE'}))],
     finance: workflowVoucher(db, 'SALES_DELIVERY', deliveryId, actor),
     subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(deliveryId) : null,
     direct: !delivery.soNo,
@@ -2905,14 +3747,20 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
   if (!current) throw new HttpError(404, '销售出库单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'customers', body.customerId, '客户');
+  if (body.salesOrderId !== undefined && body.salesOrderId !== current.sales_order_id) throw new HttpError(409, '销售订单来源不可修改');
+  if (body.customerId !== undefined && body.customerId !== current.customer_id) throw new HttpError(409, '来源客户不可修改');
   requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.sales_order_id, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
+  assertImmutableSourceItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, 'sales_order_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE sales_deliveries SET customer_id=?,warehouse_id=?,delivery_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.customerId, body.warehouseId, normalizeDocumentDate(body.deliveryDate || current.delivery_date, '发货日期'), optionalText(body.remark, 500), input.totalCents, now, deliveryId);
-    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items);
+    db.prepare('UPDATE sales_deliveries SET warehouse_id=?,delivery_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(body.warehouseId, normalizeDocumentDate(body.deliveryDate || current.delivery_date, '发货日期'), optionalText(body.remark, 500), input.totalCents, now, deliveryId);
+    db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
+    replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: body.items, businessDate: body.deliveryDate || current.delivery_date });
     audit(db, actor.id, 'UPDATE', 'SALES_DELIVERY', deliveryId, '修改销售出库 ' + current.delivery_no);
   });
   return send(res, 200, { ok: true, id: deliveryId, deliveryNo: current.delivery_no, totalCents: input.totalCents });
@@ -2926,24 +3774,49 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
   const action = body.action;
   const now = new Date().toISOString();
   if (action === 'confirm') {
+    const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${deliveryId}`); const fingerprint = requestFingerprint({ action });
+    const replay = idempotencyReplay(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      checkPeriodNotClosedForVoucher(db, locked.delivery_date, '生成业务');
+      if (!locked.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
+      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
+      if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
+      if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
+      assertQualityGate(db, 'OQC', deliveryId);
+      assertFinancialPeriodsOpen(db, locked.delivery_date);
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId);
+      let cogsCents=0; const cogsInventoryEntries=[];
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(item.sales_order_item_id, so.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
+        const already = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, sourceItem.id, deliveryId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '出货数量超过销售订单剩余可交数量');
+        // Inventory, valuation and COGS use the base-UOM quantity so that
+        // UOM conversions never inflate or deflate canonical inventory.
+        // Legacy / seed rows that pre-date Phase 6E may not have base
+        // snapshots filled; fall back to the document quantity, which by
+        // Phase 0 contract equals the base quantity when no conversion is
+        // configured.
+        const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
+          ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
+          : Number(item.quantity);
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
-        if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
-        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?)').run(id(), delivery.warehouse_id, item.product_id, item.quantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now);
+        if (!current || current.quantity < baseQuantity) throw new HttpError(400, '库存不足');
+        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });
+        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -baseQuantity, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, delivery.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
-      const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-      generateVoucher(db, 'SALES_DELIVERY', deliveryId, [
-        { subjectId: 'subject-003', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' ' + customerName },
-        { subjectId: 'subject-006', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售出库 ' + delivery.delivery_no + ' 确认收入' }
-      ], actor, locked.delivery_date);
-      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
+      if (locked.billing_mode === 'LEGACY_DIRECT') {
+        const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
+        createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+        ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
+      saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
   } else if (action === 'cancel') {
@@ -2962,6 +3835,8 @@ function listSalesReturns(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(sr.return_no LIKE ? OR c.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('SALES_RETURN', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'sr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND sr.status = ?'; params.push(status); }
   const sql = 'SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM return_order_items WHERE return_id = sr.id) itemCount FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by WHERE ' + where + ' ORDER BY sr.created_at DESC LIMIT 100';
   const returns = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RETURN_STATUS[row.status] || row.status }));
@@ -2973,16 +3848,22 @@ async function createSalesReturn(db, req, res, actor) {
   const body = await readJson(req);
   const { deliveryId, customerId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
-  requireActiveReference(db, 'customers', customerId, '客户');
+  if (!deliveryId) throw new HttpError(400, '正常销售退货必须选择已确认销售出货单');
+  const source = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
+  if (!source) throw new HttpError(400, '销售出库单不存在');
+  if (source.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认销售出货单可以退货');
+  if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售出货单不一致');
+  if (warehouseId !== undefined && warehouseId !== source.warehouse_id) throw new HttpError(400, '仓库与销售出货单不一致');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (deliveryId && !db.prepare('SELECT 1 FROM sales_deliveries WHERE id=?').get(deliveryId)) throw new HttpError(400, '销售出库单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_delivery_items', sourceHeaderColumn: 'delivery_id', sourceHeaderId: deliveryId, sourceIdCamel: 'deliveryItemId', sourceIdSnake: 'delivery_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, '退货');
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'SRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId || null, deliveryId || null, customerId, warehouseId, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items);
+    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId, deliveryId, source.customer_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'SALES_RETURN', sourceId: returnId, itemTable: 'return_order_items', foreignKey: 'return_id', rawItems: items });
     audit(db, actor.id, 'CREATE', 'SALES_RETURN', returnId, '创建销售退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -2992,11 +3873,11 @@ function getSalesReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, sd.delivery_no deliveryNo FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by LEFT JOIN sales_deliveries sd ON sd.id = COALESCE(sr.delivery_id,sr.source_id) WHERE sr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '销售退货单不存在');
-  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.delivery_item_id deliveryItemId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_receivables WHERE source_type='SALES_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.deliveryNo,
+    downstream: [], finance: workflowVoucher(db, 'SALES_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AR_VIEW', 'COLLECTION_MANAGE'].includes(p)) ? db.prepare("SELECT f.target_open_item_id id,ar.voucher_no documentNo,ar.status,f.amount_cents creditCents,f.applied_cents appliedCents,f.unapplied_cents unappliedCents FROM financial_credit_adjustments f JOIN account_receivables ar ON ar.id=f.target_open_item_id WHERE f.side='AR' AND f.source_type='SALES_RETURN' AND f.source_id=?").get(returnId) : null, direct: !ret.deliveryNo,
   };
   return send(res, 200, { salesReturn: ret });
 }
@@ -3007,14 +3888,17 @@ async function updateSalesReturn(db, req, res, actor, returnId) {
   if (!current) throw new HttpError(404, '销售退货单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'customers', body.customerId, '客户');
-  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  if (body.deliveryId !== undefined && body.deliveryId !== (current.delivery_id || current.source_id)) throw new HttpError(409, '销售出货来源不可修改');
+  if (body.customerId !== undefined && body.customerId !== current.customer_id) throw new HttpError(409, '来源客户不可修改');
+  if (body.warehouseId !== undefined && body.warehouseId !== current.warehouse_id) throw new HttpError(409, '来源仓库不可修改');
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_delivery_items', sourceHeaderColumn: 'delivery_id', sourceHeaderId: current.delivery_id || current.source_id, sourceIdCamel: 'deliveryItemId', sourceIdSnake: 'delivery_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, '退货');
+  assertImmutableSourceItems(db, 'return_order_items', 'return_id', returnId, 'delivery_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE return_orders SET customer_id=?,warehouse_id=?,return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.customerId, body.warehouseId, normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
-    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items);
+    db.prepare('UPDATE return_orders SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
     audit(db, actor.id, 'UPDATE', 'SALES_RETURN', returnId, '修改销售退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -3031,19 +3915,34 @@ async function confirmSalesReturn(db, req, res, actor, returnId) {
     transaction(db, () => {
       const locked = db.prepare("SELECT * FROM return_orders WHERE id=? AND source_type='SALES'").get(returnId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
+      const deliveryId = locked.delivery_id || locked.source_id;
+      if (!deliveryId) throw new HttpError(409, '旧版无来源销售退货不可确认');
+      const delivery = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
+      if (!delivery || delivery.status !== 'CONFIRMED') throw new HttpError(409, '来源销售出货单不存在或未确认');
+      if (locked.customer_id !== delivery.customer_id || locked.warehouse_id !== delivery.warehouse_id) throw new HttpError(409, '退货客户或仓库与来源出货单不一致');
+      assertFinancialPeriodsOpen(db, locked.return_date);
       const authoritative = authoritativeLogisticsTotal(db, 'return_order_items', 'return_id', returnId);
+      let restoredCogsCents=0; const restoredInventoryEntries=[];
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM sales_delivery_items WHERE id=? AND delivery_id=?').get(item.delivery_item_id, delivery.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '销售退货明细与来源出货明细不一致');
+        const already = confirmedQuantity(db, { itemTable: 'return_order_items', sourceColumn: 'delivery_item_id', headerTable: 'return_orders', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源出货数量');
+        postTrackedMovement(db, { sourceType: 'SALES_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'IN', businessDate: locked.return_date, returnToHold: true });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'IN\',?,\'SALES_RETURN\',?,?,?,?,?,?)').run(transactionId, ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '销售退货', actor.id, now, locked.return_date);
+        const restored=restoreSourceValue(db,{ businessDate:locked.return_date,productId:item.product_id,warehouseId:ret.warehouse_id,quantity:Number(item.quantity),movementType:'SALES_RETURN_COGS_REVERSAL',sourceType:'SALES_RETURN',sourceId:returnId,sourceItemId:item.id,inventoryTransactionId:transactionId,originalSourceType:'SALES_DELIVERY',originalSourceId:deliveryId,originalSourceItemId:item.delivery_item_id }).reduce((s,x)=>s+x.valueDeltaCents,0); restoredCogsCents+=restored; restoredInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:restored,summary:'销售退货恢复存货 '+ret.return_no});
       }
       db.prepare('UPDATE return_orders SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);
       const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(ret.customer_id)?.name || '';
-      generateVoucher(db, 'SALES_RETURN', returnId, [
-        { subjectId: 'subject-006', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' 收入冲减' },
-        { subjectId: 'subject-003', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '销售退货 ' + ret.return_no + ' ' + customerName }
-      ], actor, locked.return_date);
-      ensureReceivableSource(db, { id: returnId, sourceType: 'SALES_RETURN', sourceNo: ret.return_no, partyId: ret.customer_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
+      createSystemVoucher(db,{sourceType:'SALES_RETURN',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[{role:'SALES_REVENUE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售退货 '+ret.return_no+' 收入冲减'},{role:'ACCOUNTS_RECEIVABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售退货 '+ret.return_no+' '+customerName}]});
+      createSystemVoucher(db,{ sourceType:'SALES_RETURN_COGS',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[...restoredInventoryEntries,{role:'COGS',direction:'CREDIT',amountCents:restoredCogsCents,summary:'销售退货冲减成本 '+ret.return_no}] });
+      const sourceTerms = delivery.sales_order_id ? db.prepare('SELECT payment_terms_days FROM sales_orders WHERE id=?').get(delivery.sales_order_id)?.payment_terms_days : null;
+      ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: delivery.delivery_date, paymentTermsDays: sourceTerms, effectCents: delivery.total_cents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
+      const sourceAr = db.prepare("SELECT id FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=? AND item_class='SOURCE'").get(deliveryId);
+      if (!sourceAr) throw new HttpError(409, '来源出货尚未生成权威应收');
+      applyCreditAdjustment(db, { side: 'AR', adjustmentType: 'RETURN', sourceType: 'SALES_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAr.id, partyId: ret.customer_id, businessDate: locked.return_date, amountCents: authoritative.totalCents, actorId: actor.id, createdAt: now });
       audit(db, actor.id, 'CONFIRM', 'SALES_RETURN', returnId, '确认销售退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
@@ -3062,6 +3961,8 @@ function listPurchaseReturns(db, res, actor, url) {
   const status = url.searchParams.get('status');
   let where = '(pr.return_no LIKE ? OR s.name LIKE ?)';
   const params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_RETURN', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pr.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status && ['DRAFT', 'CONFIRMED', 'CANCELLED'].includes(status)) { where += ' AND pr.status = ?'; params.push(status); }
   const sql = 'SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, (SELECT count(*) FROM purchase_return_items WHERE return_id = pr.id) itemCount FROM purchase_returns pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by WHERE ' + where + ' ORDER BY pr.created_at DESC LIMIT 100';
   const returns = db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: RETURN_STATUS[row.status] || row.status }));
@@ -3073,16 +3974,21 @@ async function createPurchaseReturn(db, req, res, actor) {
   const body = await readJson(req);
   const { receiptId, supplierId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
-  requireActiveReference(db, 'suppliers', supplierId, '供应商');
-  requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  if (receiptId && !db.prepare('SELECT 1 FROM purchase_receipts WHERE id=?').get(receiptId)) throw new HttpError(400, '采购入库单不存在');
-  const input = normalizeWarehouseItems(db, items);
+  if (!receiptId) throw new HttpError(400, '正常采购退货必须选择已确认采购入库单');
+  const source = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(receiptId);
+  if (!source) throw new HttpError(400, '采购入库单不存在');
+  if (source.status !== 'CONFIRMED') throw new HttpError(409, '只有已确认采购入库单可以退货');
+  if (supplierId !== undefined && supplierId !== source.supplier_id) throw new HttpError(400, '供应商与采购入库单不一致');
+  if (warehouseId !== undefined && warehouseId !== source.warehouse_id) throw new HttpError(400, '仓库与采购入库单不一致');
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'purchase_receipt_items', sourceHeaderColumn: 'receipt_id', sourceHeaderId: receiptId, sourceIdCamel: 'receiptItemId', sourceIdSnake: 'receipt_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, '退货');
   const returnId = id();
   const now = new Date().toISOString();
   const returnNo = 'PRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId || null, supplierId, warehouseId, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
-    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items);
+    db.prepare('INSERT INTO purchase_returns(id,return_no,receipt_id,supplier_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, receiptId, source.supplier_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
+    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, itemTable: 'purchase_return_items', foreignKey: 'return_id', rawItems: items });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RETURN', returnId, '创建采购退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
@@ -3092,11 +3998,11 @@ function getPurchaseReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, prc.receipt_no receiptNo FROM purchase_returns pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by LEFT JOIN purchase_receipts prc ON prc.id = pr.receipt_id WHERE pr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '采购退货单不存在');
-  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.receipt_item_id receiptItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
-    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RETURN' AND source_id=?").get(returnId) : null, direct: !ret.receiptNo,
+    downstream: [], finance: workflowVoucher(db, 'PURCHASE_RETURN', returnId, actor), subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT f.target_open_item_id id,ap.voucher_no documentNo,ap.status,f.amount_cents creditCents,f.applied_cents appliedCents,f.unapplied_cents unappliedCents FROM financial_credit_adjustments f JOIN account_payables ap ON ap.id=f.target_open_item_id WHERE f.side='AP' AND f.source_type='PURCHASE_RETURN' AND f.source_id=?").get(returnId) : null, direct: !ret.receiptNo,
   };
   return send(res, 200, { purchaseReturn: ret });
 }
@@ -3107,14 +4013,17 @@ async function updatePurchaseReturn(db, req, res, actor, returnId) {
   if (!current) throw new HttpError(404, '采购退货单不存在');
   if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以修改');
   const body = await readJson(req);
-  requireActiveReference(db, 'suppliers', body.supplierId, '供应商');
-  requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeWarehouseItems(db, body.items);
+  if (body.receiptId !== undefined && body.receiptId !== current.receipt_id) throw new HttpError(409, '采购入库来源不可修改');
+  if (body.supplierId !== undefined && body.supplierId !== current.supplier_id) throw new HttpError(409, '来源供应商不可修改');
+  if (body.warehouseId !== undefined && body.warehouseId !== current.warehouse_id) throw new HttpError(409, '来源仓库不可修改');
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'purchase_receipt_items', sourceHeaderColumn: 'receipt_id', sourceHeaderId: current.receipt_id, sourceIdCamel: 'receiptItemId', sourceIdSnake: 'receipt_item_id' });
+  assertRemainingQuantity(db, input, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, '退货');
+  assertImmutableSourceItems(db, 'purchase_return_items', 'return_id', returnId, 'receipt_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare('UPDATE purchase_returns SET supplier_id=?,warehouse_id=?,return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
-      .run(body.supplierId, body.warehouseId, normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
-    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items);
+    db.prepare('UPDATE purchase_returns SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
+      .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RETURN', returnId, '修改采购退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -3131,21 +4040,39 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM purchase_returns WHERE id=?').get(returnId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      checkPeriodNotClosedForVoucher(db, locked.return_date, '生成业务');
+      if (!locked.receipt_id) throw new HttpError(409, '旧版无来源采购退货不可确认');
+      const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(locked.receipt_id);
+      if (!receipt || receipt.status !== 'CONFIRMED') throw new HttpError(409, '来源采购入库单不存在或未确认');
+      if (locked.supplier_id !== receipt.supplier_id || locked.warehouse_id !== receipt.warehouse_id) throw new HttpError(409, '退货供应商或仓库与来源入库单不一致');
+      assertFinancialPeriodsOpen(db, locked.return_date);
       const authoritative = authoritativeLogisticsTotal(db, 'purchase_return_items', 'return_id', returnId);
+      let carryingValueCents=0; const carryingEntries=[];
       for (const item of authoritative.items) {
+        const sourceItem = db.prepare('SELECT * FROM purchase_receipt_items WHERE id=? AND receipt_id=?').get(item.receipt_item_id, receipt.id);
+        if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '采购退货明细与来源入库明细不一致');
+        const already = confirmedQuantity(db, { itemTable: 'purchase_return_items', sourceColumn: 'receipt_item_id', headerTable: 'purchase_returns', headerForeignKey: 'return_id' }, sourceItem.id, returnId);
+        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '退货数量超过来源入库数量');
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(ret.warehouse_id, item.product_id);
         if (!current || current.quantity < item.quantity) throw new HttpError(400, '库存不足');
+        postTrackedMovement(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceItemId: item.id, productId: item.product_id, warehouseId: ret.warehouse_id, quantity: item.quantity, direction: 'OUT', businessDate: locked.return_date });
         const balance = adjustInventory(db, ret.warehouse_id, item.product_id, -item.quantity, now);
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?)').run(id(), ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now);
+        const transactionId=id();
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'PURCHASE_RETURN\',?,?,?,?,?,?)').run(transactionId, ret.warehouse_id, item.product_id, item.quantity, balance, returnId, ret.return_no, '采购退货', actor.id, now, locked.return_date);
+        const carrying=issueSourceValue(db,{ businessDate:locked.return_date,productId:item.product_id,warehouseId:ret.warehouse_id,quantity:Number(item.quantity),movementType:'PURCHASE_RETURN',sourceType:'PURCHASE_RETURN',sourceId:returnId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); carryingValueCents+=carrying; carryingEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:carrying,summary:'移除存货账面价值 '+ret.return_no});
       }
       db.prepare('UPDATE purchase_returns SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);
       const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(ret.supplier_id)?.name || '';
-      generateVoucher(db, 'PURCHASE_RETURN', returnId, [
-        { subjectId: 'subject-005', direction: 'DEBIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no + ' ' + supplierName },
-        { subjectId: 'subject-004', direction: 'CREDIT', amountCents: authoritative.totalCents, summary: '采购退货 ' + ret.return_no }
-      ], actor, locked.return_date);
-      ensurePayableSource(db, { id: returnId, sourceType: 'PURCHASE_RETURN', sourceNo: ret.return_no, partyId: ret.supplier_id, businessDate: locked.return_date, effectCents: -authoritative.totalCents, creatorId: ret.creator_id, createdAt: ret.created_at });
+      const variance=authoritative.totalCents-carryingValueCents;
+      createSystemVoucher(db,{ sourceType:'PURCHASE_RETURN',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[
+        {role:'ACCOUNTS_PAYABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'采购退货 '+ret.return_no+' '+supplierName},
+        ...carryingEntries,
+        ...(variance>0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'CREDIT',amountCents:variance,summary:'采购退货差异'}]:variance<0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'DEBIT',amountCents:-variance,summary:'采购退货差异'}]:[])
+      ]});
+      const sourceTerms = receipt.purchase_order_id ? db.prepare('SELECT payment_terms_days FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)?.payment_terms_days : null;
+      ensurePayableSource(db, { id: receipt.id, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, paymentTermsDays: sourceTerms, effectCents: receipt.total_cents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+      const sourceAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE'").get(locked.receipt_id);
+      if (!sourceAp) throw new HttpError(409, '来源入库尚未生成权威应付');
+      applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: authoritative.totalCents, actorId: actor.id, createdAt: now });
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
@@ -3158,24 +4085,52 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
 
 // ============ Inventory Transactions ============
 
-function listInventoryTransactions(db, res, actor, url) {
-  allow(actor, 'INVENTORY_VIEW');
+function nextIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return null;
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+export function buildInventoryTransactionsQuery(url) {
   const warehouseId = url.searchParams.get('warehouse');
   const productId = url.searchParams.get('product');
   const direction = url.searchParams.get('direction');
   const sourceType = url.searchParams.get('type');
   const startDate = url.searchParams.get('startDate');
   const endDate = url.searchParams.get('endDate');
-  const search = `%${url.searchParams.get('search') || ''}%`;
+  const rawSearch = (url.searchParams.get('search') || '').trim();
+  // Phase 7C EXPLAIN evidence (scripts/mysql-phase7c-slow-query-diagnostics.mjs):
+  // a non-empty search term MUST still use LIKE '%term%'; an empty/missing
+  // search term MUST NOT generate LIKE '%%' predicates that defeat the
+  // existing index on products.code and force a 600K-row scan.
+  const search = rawSearch ? `%${rawSearch}%` : '';
   let where = []; let params = [];
-  where.push('(t.source_no LIKE ? OR p.code LIKE ? OR p.name LIKE ?)'); params.push(search, search, search);
+  if (rawSearch) {
+    where.push('(t.source_no LIKE ? OR p.code LIKE ? OR p.name LIKE ?)');
+    params.push(search, search, search);
+  }
   if (warehouseId) { where.push('t.warehouse_id = ?'); params.push(warehouseId); }
   if (productId) { where.push('t.product_id = ?'); params.push(productId); }
   if (['IN', 'OUT'].includes(direction)) { where.push('t.direction = ?'); params.push(direction); }
   if (sourceType) { where.push('t.source_type = ?'); params.push(sourceType); }
-  if (startDate) { where.push('DATE(t.created_at) >= ?'); params.push(startDate); }
-  if (endDate) { where.push('DATE(t.created_at) <= ?'); params.push(endDate); }
+  if (startDate) {
+    where.push(/^\d{4}-\d{2}-\d{2}$/.test(startDate) ? 't.created_at >= ?' : 'DATE(t.created_at) >= ?');
+    params.push(startDate);
+  }
+  if (endDate) {
+    const exclusiveEnd = nextIsoDate(endDate);
+    where.push(exclusiveEnd ? 't.created_at < ?' : 'DATE(t.created_at) <= ?');
+    params.push(exclusiveEnd || endDate);
+  }
   const sql = "SELECT t.*,t.source_type tx_type,t.source_no ref_no,CASE WHEN t.direction='OUT' THEN -t.quantity_change ELSE t.quantity_change END quantity,t.balance_after balance,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id " + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
+  return { sql, params };
+}
+
+function listInventoryTransactions(db, res, actor, url) {
+  allow(actor, 'INVENTORY_VIEW');
+  const { sql, params } = buildInventoryTransactionsQuery(url);
   const inventoryTransactions = db.prepare(sql).all(...params);
   return send(res, 200, { inventoryTransactions, transactions: inventoryTransactions });
 }
@@ -3251,20 +4206,29 @@ function listCustomerLookup(db, res, actor, url) {
 // dropdown selection without a follow-up /api/orders/:id call (which
 // would require ORDERS_VIEW).
 function listSalesOrderSourceLookup(db, res, actor, url) {
-  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  // V1.3 Phase 1: sales uses ORDERS_CREATE (rather than the logistics
+  // execute rights it no longer holds) to source approved sales orders
+  // for downstream PR / PO prefill; warehouse / return managers still
+  // have their dedicated logistics permissions for the legacy path.
+  allowAny(actor, ['ORDERS_CREATE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
   const headerStmt = db.prepare(`
     SELECT so.id, so.order_no orderNo, so.status, so.total_cents totalCents, so.created_at createdAt,
            c.id customerId, c.code customerCode, c.name customerName
     FROM sales_orders so
     JOIN customers c ON c.id = so.customer_id
     WHERE so.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
       AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
     ORDER BY so.created_at DESC
     LIMIT 100
   `);
   const itemStmt = db.prepare(`
-    SELECT soi.product_id productId, soi.quantity, soi.unit_price_cents unitPriceCents,
+    SELECT soi.id salesOrderItemId, soi.product_id productId, soi.quantity orderedQuantity,
+           soi.quantity-COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) deliveredQuantity,
+           soi.unit_price_cents unitPriceCents,
            p.code productCode, p.name productName, p.unit
     FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
     WHERE soi.order_id = ?
@@ -3277,24 +4241,33 @@ function listSalesOrderSourceLookup(db, res, actor, url) {
   return send(res, 200, { orders });
 }
 
-// Symmetric to listSalesOrderSourceLookup but for the Purchase Receipt
-// form. Gated by the logistics permission that authorizes creating /
-// managing Purchase Receipt — no PURCHASE_ORDERS_VIEW required.
+// Symmetric to listSalesOrderSourceLookup but for the Purchase Order
+// prefill (used by purchase-receipt, sales-delivery/PR/PO generation).
+// V1.3 Phase 1: sales uses PURCHASE_ORDERS_CREATE (rather than the
+// logistics execute rights it no longer holds) to source approved
+// purchase orders for downstream PR / PO prefill; warehouse / return
+// managers still have their dedicated logistics permissions for the
+// legacy path.
 function listPurchaseOrderSourceLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  allowAny(actor, ['PURCHASE_ORDERS_CREATE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
   const headerStmt = db.prepare(`
     SELECT po.id, po.order_no orderNo, po.status, po.total_cents totalCents, po.created_at createdAt,
            s.id supplierId, s.code supplierCode, s.name supplierName
     FROM purchase_orders po
     JOIN suppliers s ON s.id = po.supplier_id
     WHERE po.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
       AND (po.order_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)
     ORDER BY po.created_at DESC
     LIMIT 100
   `);
   const itemStmt = db.prepare(`
-    SELECT poi.product_id productId, poi.quantity, poi.unit_price_cents unitPriceCents,
+    SELECT poi.id purchaseOrderItemId, poi.product_id productId, poi.quantity orderedQuantity,
+           poi.quantity-COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) receivedQuantity,
+           poi.unit_price_cents unitPriceCents,
            p.code productCode, p.name productName, p.unit
     FROM purchase_order_items poi JOIN products p ON p.id = poi.product_id
     WHERE poi.order_id = ?
@@ -3349,6 +4322,8 @@ function listPaymentCollections(db, res, actor, url) {
   const customerId = url.searchParams.get('customer');
   let where = '(pc.collection_no LIKE ? OR c.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PAYMENT_COLLECTION', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pc.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (customerId) { where += ' AND pc.customer_id = ?'; params.push(customerId); }
   const sql = 'SELECT pc.id, pc.collection_no collectionNo, pc.amount_cents amountCents, pc.payment_method paymentMethod, pc.collection_date collectionDate, pc.remark, c.code customerCode, c.name customerName FROM payment_collections pc JOIN customers c ON c.id = pc.customer_id WHERE ' + where + ' ORDER BY pc.created_at DESC LIMIT 100';
   return send(res, 200, { collections: db.prepare(sql).all(...params) });
@@ -3402,6 +4377,8 @@ function listPaymentDisbursements(db, res, actor, url) {
   const supplierId = url.searchParams.get('supplier');
   let where = '(pd.disbursement_no LIKE ? OR s.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PAYMENT_DISBURSEMENT', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pd.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (supplierId) { where += ' AND pd.supplier_id = ?'; params.push(supplierId); }
   const sql = 'SELECT pd.*, s.code supplierCode, s.name supplierName, creator.display_name creatorName FROM payment_disbursements pd JOIN suppliers s ON s.id = pd.supplier_id JOIN users creator ON creator.id = pd.creator_id WHERE ' + where + ' ORDER BY pd.created_at DESC LIMIT 100';
   return send(res, 200, { disbursements: db.prepare(sql).all(...params) });
@@ -3488,11 +4465,12 @@ function validateBomPayload(db, body, options = {}) {
     if (componentId === parentProductId) throw new HttpError(400, 'BOM物料不能引用父项产品本身');
     if (seen.has(componentId)) throw new HttpError(400, 'BOM物料不能重复');
     seen.add(componentId);
-    const component = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(componentId);
+    const component = db.prepare('SELECT id,base_uom_code,tracking_policy FROM products WHERE id=? AND active=1').get(componentId);
     if (!component) throw new HttpError(400, `第${index + 1}行物料不存在或已停用`);
+    const uomCode=String(item.uomCode??item.uom_code??component.base_uom_code);let numerator=1,denominator=1;if(uomCode!==component.base_uom_code){const conversion=db.prepare("SELECT numerator,denominator FROM product_uom_conversions WHERE product_id=? AND uom_code=? AND active=1 ORDER BY version DESC LIMIT 1").get(componentId,uomCode);if(!conversion)throw new HttpError(409,`第${index+1}行缺少 UOM 换算`);numerator=conversion.numerator;denominator=conversion.denominator;}const documentQuantity=requirePositiveQuantity(item.quantity, `第${index + 1}行用量`);const baseQuantity=documentQuantity*numerator/denominator;if(component.tracking_policy==='SERIAL'&&!Number.isInteger(baseQuantity))throw new HttpError(409,'SERIAL BOM 基础数量必须为整数');
     return {
       productId: componentId,
-      quantity: requirePositiveQuantity(item.quantity, `第${index + 1}行用量`),
+      quantity: baseQuantity, uomCode, conversionNumerator:numerator, conversionDenominator:denominator,
       scrapRate: requireScrapRate(item.scrapRate ?? item.scrap_rate, `第${index + 1}行损耗率`),
     };
   });
@@ -3509,10 +4487,10 @@ async function createBom(db, req, res, actor) {
   transaction(db, () => {
     db.prepare("UPDATE boms SET status='DISCONTINUED',updated_at=? WHERE product_id=? AND status='ACTIVE'").run(now, bom.productId);
     db.prepare('INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(bomId, bom.productId, bom.version, 'ACTIVE', bom.remark, actor.id, now, now);
-    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
+    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator) VALUES(?,?,?,?,?,?,?,?,?)');
     let lineNo = 1;
     for (const item of bom.items) {
-      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++,item.uomCode,item.conversionNumerator,item.conversionDenominator);
     }
     audit(db, actor.id, 'CREATE', 'BOM', bomId, '创建物料清单 BOM-' + bom.version);
   });
@@ -3546,10 +4524,10 @@ async function updateBom(db, req, res, actor, bomId) {
   const bom = validateBomPayload(db, body, { existingProductId: current.product_id });
   transaction(db, () => {
     db.prepare('DELETE FROM bom_items WHERE bom_id=?').run(bomId);
-    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
+    const itemStmt = db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no,uom_code_snapshot,conversion_numerator,conversion_denominator) VALUES(?,?,?,?,?,?,?,?,?)');
     let lineNo = 1;
     for (const item of bom.items) {
-      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++);
+      itemStmt.run(id(), bomId, item.productId, item.quantity, item.scrapRate, lineNo++,item.uomCode,item.conversionNumerator,item.conversionDenominator);
     }
     db.prepare('UPDATE boms SET remark=?,updated_at=? WHERE id=?').run(bom.remark, now, bomId);
     audit(db, actor.id, 'UPDATE', 'BOM', bomId, '更新BOM');
@@ -3559,12 +4537,44 @@ async function updateBom(db, req, res, actor, bomId) {
 
 // ============ Production Orders ============
 
+function snapshotProductionOrder(db, orderId, productId, bomId, quantity, routingId = null) {
+  const bom = db.prepare("SELECT * FROM boms WHERE id=? AND product_id=? AND status='ACTIVE'").get(bomId, productId);
+  if (!bom) throw new HttpError(409, '制令单需要与成品匹配的有效 BOM');
+  const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
+  if (!bomItems.length) throw new HttpError(409, 'BOM 没有物料明细，不能下达或开工');
+  if (!db.prepare('SELECT 1 FROM production_order_items WHERE order_id=?').get(orderId)) {
+    const insert = db.prepare(`INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot)
+      VALUES(?,?,?,?,0,?,?,?,?)`);
+    for (const item of bomItems) {
+      const perUnit = Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+      insert.run(id(), orderId, item.product_id, perUnit * Number(quantity), item.line_no, item.id, perUnit, Number(item.scrap_rate || 0));
+    }
+  }
+  let routing = routingId ? db.prepare("SELECT * FROM product_routings WHERE id=? AND product_id=? AND status='ACTIVE'").get(routingId, productId) : db.prepare("SELECT * FROM product_routings WHERE product_id=? AND status='ACTIVE'").get(productId);
+  db.prepare('UPDATE production_orders SET bom_version_snapshot=?,routing_id_snapshot=?,routing_version_snapshot=? WHERE id=?')
+    .run(bom.version || '', routing?.id || null, routing?.version || '', orderId);
+  if (routing && !db.prepare('SELECT 1 FROM production_order_routing_snapshots WHERE production_order_id=?').get(orderId)) {
+    const insert = db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+    const now = new Date().toISOString();
+    for (const op of db.prepare('SELECT * FROM product_routing_operations WHERE routing_id=? ORDER BY sequence_no').all(routing.id)) {
+      insert.run(id(), orderId, routing.id, op.sequence_no, op.operation_code, op.operation_name, op.work_center, op.setup_minutes, op.run_minutes_per_unit, op.notes, now);
+    }
+  }
+}
+
+async function reverseManualVoucher(db,req,res,actor,voucherId){
+  allow(actor,'VOUCHER_SUBMIT'); const original=db.prepare('SELECT * FROM accounting_vouchers WHERE id=?').get(voucherId); if(!original)throw new HttpError(404,'凭证不存在'); if(original.voucher_origin!=='MANUAL'||original.source_type!=='MANUAL'||original.status!=='POSTED')throw new HttpError(409,'只能冲销已过账手工凭证'); if(db.prepare('SELECT 1 FROM accounting_vouchers WHERE reversal_of_id=?').get(voucherId))throw new HttpError(409,'手工凭证已经冲销'); const body=await readJson(req); const reason=requiredText(body.reason,'冲销原因',500); const businessDate=normalizeDocumentDate(body.businessDate||new Date().toISOString().slice(0,10),'冲销日期'); checkPeriodNotClosedForVoucher(db,businessDate,'冲销'); const entries=db.prepare('SELECT * FROM accounting_entries WHERE voucher_id=? ORDER BY line_no,id').all(voucherId); const reversalId=id(),now=new Date().toISOString(),voucherNo=makeVoucherNo(); transaction(db,()=>{db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,business_date,remark,creator_id,created_at,updated_at,status,voucher_origin,reversal_of_id,submitted_at,submitted_by,period) VALUES(?,?,?,?,?,?,?,?,?,?,'SUBMITTED','MANUAL',?,?,?,?,?)`).run(reversalId,voucherNo,'MANUAL_REVERSAL',reversalId,businessDate,businessDate,reason,actor.id,now,now,voucherId,now,actor.id,businessDate.slice(0,7)); const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); entries.forEach((e,i)=>stmt.run(id(),reversalId,e.subject_id,e.direction==='DEBIT'?'CREDIT':'DEBIT',e.amount_cents,`冲销 ${original.voucher_no} ${e.summary||''}`,i+1)); audit(db,actor.id,'REVERSE_REQUEST','ACCOUNTING_VOUCHER',reversalId,reason);}); return send(res,201,{id:reversalId,voucherNo,status:'SUBMITTED',reversalOfId:voucherId});
+}
+
 function listProductionOrders(db, res, actor, url) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const status = url.searchParams.get('status');
   let where = '(po.order_no LIKE ? OR p.name LIKE ?)';
   let params = [search, search];
+  const archiveFilter = lifecycleArchiveFilter('PRODUCTION_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
+  if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND po.status = ?'; params.push(status); }
   const sql = 'SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName, (SELECT sum(consumed_quantity) FROM production_order_items WHERE order_id=po.id) totalConsumed, (SELECT sum(quantity) FROM production_outputs WHERE order_id=po.id) totalOutput FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE ' + where + ' ORDER BY po.created_at DESC LIMIT 100';
   return send(res, 200, { orders: db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: PO_STATUS[row.status] || row.status })) });
@@ -3583,21 +4593,14 @@ async function createProductionOrder(db, req, res, actor) {
     if (!bom) throw new HttpError(400, 'BOM不存在');
     if (bom.status !== 'ACTIVE') throw new HttpError(400, '只能使用启用的BOM');
     if (bom.product_id !== productId) throw new HttpError(400, 'BOM与生产产品不匹配');
-  }
+  } else throw new HttpError(400, '手工制令单必须选择有效 BOM');
   const now = new Date().toISOString();
   const poId = id();
   const poNo = 'MO-' + Date.now().toString(36).toUpperCase();
   transaction(db, () => {
-    db.prepare('INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(poId, poNo, productId, bomId || null, orderQuantity, 'PENDING', plannedStart || null, plannedFinish || null, optionalText(remark, 500), actor.id, now, now);
-    if (bomId) {
-      const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId);
-      const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no) VALUES(?,?,?,?,0,?)');
-      let lineNo = 1;
-      for (const item of bomItems) {
-        const requiredQty = item.quantity * orderQuantity * (1 + item.scrap_rate);
-        itemStmt.run(id(), poId, item.product_id, requiredQty, lineNo++);
-      }
-    }
+    db.prepare(`INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at,source_type)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'MANUAL')`).run(poId, poNo, productId, bomId, orderQuantity, 'PENDING', plannedStart || null, plannedFinish || null, optionalText(remark, 500), actor.id, now, now);
+    snapshotProductionOrder(db, poId, productId, bomId, orderQuantity, body.routingId || null);
     audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, '创建生产工单 ' + poNo);
   });
   return send(res, 200, { id: poId, orderNo: poNo });
@@ -3605,9 +4608,30 @@ async function createProductionOrder(db, req, res, actor) {
 
 function getProductionOrder(db, res, actor, poId) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW');
-  const order = db.prepare('SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE po.id=?').get(poId);
+  const order = db.prepare(`SELECT po.*, p.code productCode, p.name productName, b.version bomVersion,
+    creator.display_name creatorName, routing.id activeRoutingId,
+    routing.routing_code activeRoutingCode, routing.routing_name activeRoutingName,
+    routing.version activeRoutingVersion
+    FROM production_orders po
+    JOIN products p ON p.id=po.product_id
+    LEFT JOIN boms b ON b.id=po.bom_id
+    JOIN users creator ON creator.id=po.creator_id
+    LEFT JOIN product_routings routing ON routing.product_id=po.product_id AND routing.status='ACTIVE'
+    WHERE po.id=?`).get(poId);
   if (!order) throw new HttpError(404, '生产工单不存在');
   order.items = db.prepare('SELECT poi.*, p.code productCode, p.name productName, p.unit, p.stock_quantity availableStock FROM production_order_items poi JOIN products p ON p.id=poi.product_id WHERE poi.order_id=? ORDER BY poi.line_no').all(poId);
+  const materialSummary = productionRequirementSummary(db, poId);
+  order.items = order.items.map((item) => ({ ...item, ...materialSummary.find((summary) => summary.id === item.id) }));
+  order.netReceived = productionNetReceived(db, poId);
+  order.remainingReceivable = Math.max(0, Number(order.quantity) - order.netReceived);
+  order.materialSupportedMaximum = materialSummary.length ? Math.min(...materialSummary.map((item) => item.quantityPerUnit > 0 ? item.netIssued / item.quantityPerUnit : Number(order.quantity))) : 0;
+  order.maximumAdditionalReceipt = Math.max(0, Math.min(order.remainingReceivable, order.materialSupportedMaximum - order.netReceived));
+  order.sourceInstruction = order.production_instruction_id ? db.prepare('SELECT id,instruction_no,status FROM production_instructions WHERE id=?').get(order.production_instruction_id) : null;
+  order.routingSnapshot = db.prepare('SELECT * FROM production_order_routing_snapshots WHERE production_order_id=? ORDER BY sequence_no').all(poId);
+  order.materialIssues = db.prepare('SELECT id,issue_no issueNo,status,issue_date issueDate FROM production_material_issues WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.materialReturns = db.prepare('SELECT id,return_no returnNo,status,return_date returnDate FROM production_material_returns WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.productionReceipts = db.prepare('SELECT id,receipt_no receiptNo,status,quantity,receipt_date receiptDate FROM production_receipts WHERE production_order_id=? ORDER BY created_at').all(poId);
+  order.receiptReversals = db.prepare('SELECT id,reversal_no reversalNo,status,quantity,reversal_date reversalDate FROM production_receipt_reversals WHERE production_order_id=? ORDER BY created_at').all(poId);
   order.outputs = db.prepare('SELECT * FROM production_outputs WHERE order_id=? ORDER BY created_at DESC').all(poId);
   order.statusLabel = PO_STATUS[order.status] || order.status;
   return send(res, 200, { order });
@@ -3622,17 +4646,36 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
   if (action === 'start') {
     allow(actor, 'PRODUCTION_ORDERS_START');
     if (order.status !== 'PENDING') throw new HttpError(409, '只有待开工的工单可以开工');
-    db.prepare("UPDATE production_orders SET status='IN_PROGRESS',actual_start=?,updated_at=? WHERE id=?").run(now, now, poId);
-    audit(db, actor.id, 'START', 'PRODUCTION_ORDER', poId, '生产工单开工 ' + order.order_no);
+    transaction(db, () => {
+      if (order.source_type === 'INSTRUCTION') {
+        const source = db.prepare(`SELECT h.status,i.product_id FROM production_instruction_items i JOIN production_instructions h ON h.id=i.instruction_id WHERE i.id=? AND h.id=?`).get(order.production_instruction_item_id, order.production_instruction_id);
+        if (!source || source.status !== 'RELEASED' || source.product_id !== order.product_id) throw new HttpError(409, '生产指令来源无效或未下达');
+      } else if (order.source_type !== 'MANUAL' || order.production_instruction_id || order.production_instruction_item_id) throw new HttpError(409, '手工制令单来源标识无效');
+      snapshotProductionOrder(db, order.id, order.product_id, order.bom_id, order.quantity, order.routing_id_snapshot);
+      snapshotManufacturingExecution(db, order.id);
+      db.prepare("UPDATE production_orders SET status='IN_PROGRESS',actual_start=?,updated_at=? WHERE id=?").run(now, now, poId);
+      audit(db, actor.id, 'START', 'PRODUCTION_ORDER', poId, '生产工单开工 ' + order.order_no);
+    });
   } else if (action === 'complete') {
     allow(actor, 'PRODUCTION_ORDERS_COMPLETE');
     if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单可以完工');
-    db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId);
-    audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no);
+    const routed = assertRoutedCompletion(db, poId);
+    const netReceived = productionNetReceived(db, poId);
+    if (!routed && Math.abs(netReceived - Number(order.quantity)) > 1e-9) throw new HttpError(409, `净入库 ${netReceived} 必须等于计划数量 ${order.quantity}`);
+    for (const item of productionRequirementSummary(db, poId)) {
+      const required = Number(order.quantity) * Number(item.quantityPerUnit);
+      if (item.netIssued + 1e-9 < required) throw new HttpError(409, `${item.productCode} 净领料 ${item.netIssued} 小于完工需求 ${required}`);
+    }
+    const drafts = Number(db.prepare("SELECT (SELECT COUNT(*) FROM production_material_issues WHERE production_order_id=? AND status='DRAFT')+(SELECT COUNT(*) FROM production_receipts WHERE production_order_id=? AND status='DRAFT') total").get(poId, poId).total);
+    if (drafts) throw new HttpError(409, '存在未处理的草稿领料或生产入库，请先确认、取消或删除');
+    transaction(db, () => { const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate); const residual=Number(db.prepare('SELECT COALESCE(SUM(amount_cents),0) n FROM production_wip_movements WHERE production_order_id=?').get(poId).n); if(residual!==0){ const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_COMPLETION_VARIANCE',sourceId:poId,businessDate,actorId:actor.id,entries:residual>0?[{role:'MANUFACTURING_VARIANCE',direction:'DEBIT',amountCents:residual},{role:'WIP',direction:'CREDIT',amountCents:residual}]:[{role:'WIP',direction:'DEBIT',amountCents:-residual},{role:'MANUFACTURING_VARIANCE',direction:'CREDIT',amountCents:-residual}]}); postWipMovement(db,{productionOrderId:poId,businessDate,movementType:'COMPLETION_VARIANCE',amountCents:-residual,sourceType:'PRODUCTION_ORDER_COMPLETION',sourceId:poId,voucherId}); } db.prepare("UPDATE production_orders SET status='COMPLETED',actual_finish=?,updated_at=? WHERE id=?").run(now, now, poId); deriveProductionCost(db, poId, true); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER', poId, '生产工单完工 ' + order.order_no); });
   } else if (action === 'cancel') {
     allowAny(actor, ['PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START']);
     if (order.status === 'COMPLETED') throw new HttpError(409, '已完工的工单不能取消');
     if (order.status === 'CANCELLED') return send(res, 200, { ok: true, status: 'CANCELLED' });
+    if (!['DRAFT', 'PENDING', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '当前状态不可取消');
+    if (productionNetReceived(db, poId) > 1e-9 || productionRequirementSummary(db, poId).some((item) => Math.abs(item.netIssued) > 1e-9)) throw new HttpError(409, '制令单仍有净库存影响，必须先退料或冲销至零');
+    if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_order_id=? AND status='CONFIRMED'").get(poId)) throw new HttpError(409, '制令单已有确认报工历史，必须先完整冲销报工后才能取消');
     db.prepare("UPDATE production_orders SET status='CANCELLED',updated_at=? WHERE id=?").run(now, poId);
     audit(db, actor.id, 'CANCEL', 'PRODUCTION_ORDER', poId, '取消生产工单 ' + order.order_no);
   } else {

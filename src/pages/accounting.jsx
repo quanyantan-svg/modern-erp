@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import { centsToYuanInput, yuanToCents } from '../lib/money.js';
 
 function currentPeriod() {
@@ -22,13 +22,13 @@ const VOUCHER_SOURCE_LABELS = {
 };
 function voucherSourceLabel(type) {
   if (!type) return '—';
-  return VOUCHER_SOURCE_LABELS[type] || type;
+  return VOUCHER_SOURCE_LABELS[type] || '其他业务来源';
 }
 
 const VOUCHER_STATUS_LABELS = {
-  ENTERED: '已录入',
+  ENTERED: '草稿',
   SUBMITTED: '待审批',
-  POSTED: '已过账',
+  POSTED: '已审批',
   REJECTED: '已驳回',
 };
 // Map raw status to existing CSS class. POSTED reuses .status.completed
@@ -509,7 +509,7 @@ export function Accounting({ user, notify }) {
   const showReport = can(user, 'REPORT_VIEW');
   const canCreateVoucher = can(user, 'ACCOUNTING_VIEW');
   const showPeriod = can(user, 'PERIOD_CLOSE_VIEW');
-  return <Panel title="财务凭证" subtitle="总账与业务单据的桥接">
+  return <Panel title="财务凭证">
     <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}{showPeriod && <button className={tab === 'period' ? 'active' : ''} onClick={() => setTab('period')}>会计期间</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
     {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号" action={canCreateVoucher && <button className="primary" onClick={() => setEditing({})}>＋ 新建凭证</button>}/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>状态</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{voucherSourceLabel(v.source_type)}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td><Badge type={VOUCHER_STATUS_BADGE[v.status]?.type}>{VOUCHER_STATUS_LABELS[v.status] || v.status}</Badge></td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
@@ -560,7 +560,7 @@ function CashManagement({ user, notify }) {
   const billTypeMap = { DRAFT: '银行承兑', ACCEPTANCE: '商业承兑', LC: '信用证' };
   const billStatusMap = { PENDING: '待处理', ENDORSED: '已背书', DISCOUNTED: '已贴现', PAID: '已到期', CANCELLED: '已作废' };
   
-  return <Panel title="出纳管理" subtitle="现金日记账、银行日记账与票据管理">
+  return <Panel title="出纳管理">
     <div className="tabs" style={{marginBottom: '16px', display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-default)', paddingBottom: '12px'}}>
       <button className={tab === 'journals' ? 'primary' : 'secondary'} onClick={() => setTab('journals')}>日记账</button>
       <button className={tab === 'accounts' ? 'primary' : 'secondary'} onClick={() => setTab('accounts')}>银行账户</button>
@@ -657,10 +657,10 @@ function CashJournalForm({ bankAccounts, value, onClose, onSave, notify }) {
   });
   
   async function save() {
-    if (!form.amount_cents) { notify('请输入金额', 'error'); return; }
+    if (!form.amount_cents || Number(form.amount_cents) <= 0) { notify('金额必须大于 0', 'error'); return; }
     try {
       await api('/api/cash-journals', { method: 'POST', body: form });
-      notify('保存成功');
+      notify('已保存');
       onSave();
     } catch (e) { notify(e.message, 'error'); }
   }
@@ -779,7 +779,7 @@ function VoucherModal({ subjects, value, onClose, onSaved, notify }) {
       if (e.direction === 'DEBIT') debit += cents; else credit += cents;
     }
     const diff = Math.abs(debit - credit);
-    if (diff > 1) return { validation: `借贷不平衡:借方 ${debit / 100} 元 / 贷方 ${credit / 100} 元`, debitTotal: debit, creditTotal: credit };
+    if (diff !== 0) return { validation: `借贷不平衡:借方 ${debit / 100} 元 / 贷方 ${credit / 100} 元`, debitTotal: debit, creditTotal: credit };
     return { validation: null, debitTotal: debit, creditTotal: credit };
   })();
 
@@ -887,7 +887,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
   }
   async function reject() {
     const reason = rejectionReason.trim();
-    if (!reason) { notify('请输入驳回原因', 'error'); return; }
+    if (!reason) { notify('驳回时必须填写原因', 'error'); return; }
     try {
       await api(`/api/accounting-vouchers/${value.id}/reject`, { method: 'POST', body: { rejectionReason: reason } });
       notify('凭证已驳回');
@@ -896,7 +896,6 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
     } catch (e) { notify(e.message, 'error'); }
   }
   async function remove() {
-    if (!window.confirm('确认删除该凭证？此操作不可撤销。')) return;
     try {
       await api(`/api/accounting-vouchers/${value.id}`, { method: 'DELETE' });
       notify('凭证已删除');
@@ -929,7 +928,7 @@ function VoucherDetail({ user, value, onClose, onChanged, onEdit, formatMoney, n
       {canApprove && <button type="button" className="primary" onClick={approve}>审批通过</button>}
       {canApprove && <button type="button" className="danger-button" onClick={() => setRejecting(true)}>驳回</button>}
       {editable && <button type="button" className="secondary" onClick={() => onEdit?.(value)}>编辑</button>}
-      {deletable && <button type="button" className="danger-button" onClick={remove}>删除</button>}
+      {deletable && <ConfirmAction destructive buttonLabel="删除" title={`删除凭证 ${value.voucher_no}？`} message="删除后将无法恢复。" confirmLabel="删除" onConfirm={remove}/>}
     </div>}
     {isReadOnly && <p className="dim full" style={{ marginTop: 12 }}>已过账凭证为只读。</p>}
   </Modal>;

@@ -1,16 +1,202 @@
 # 项目状态快照
 
-> 更新：2026-09-17 (M9 Final ERP Polish)
+> 更新：2026-09-25 (V1.3 — Phase 6E Commercial Go-Live)
+
+## V1.3 Phase 6E — 商业计费、税、UOM 与 Go-Live
+
+- **Status:** COMPLETE — 分次开票、商业计费、GRNI/3-way match、税、UOM、Go-Live、CSV 导入导出、文档编号、MRP 改进和系统对账一次落地。
+- 销售权威链路：`Sales Order → Sales Delivery → Sales Invoice → AR / Revenue / Output Tax`；
+- 采购权威链路：`Purchase Order → Purchase Receipt → GRNI → Supplier Bill → AP / Input Tax / PPV`；
+- 兼容模式：`LEGACY_DIRECT`（既有直接开票）、`DIRECT_BILL`、`AUTO_BILL`；新流程默认为 `SEPARATE`；
+- 关键不变：整数分、Phase 0–6D schema、迁移 ID、业务/权限合同；未引入多币种、APS、完整 MES/QMS、法定税务合规或里程碑开票；
+- 新增模块：`server/modules/commercial-golive.js`、`server/migrations/v13-phase6e-commercial-golive.js`、`server/v13-phase6e-commercial-golive.test.js`；
+- 新增 UI：`src/pages/commercial-go-live.jsx` 提供销售发票、供应商账单和 Go-Live 受控上线；
+- Phase 6D System Health 扩展：`SALES_INVOICE_TO_AR_GL`、`SUPPLIER_BILL_TO_AP_GL`、`RECEIPT_GRNI_TO_GL`、`OUTPUT_TAX_TO_GL`、`INPUT_TAX_TO_GL`、`UOM_DOCUMENT_TO_BASE`、`SERIAL_BASE_QUANTITY_INTEGER`；
+- Focused：`pnpm test` 全部 **1355 / 265 suites / 0 failed**（新增 11 个 6E 验收 + 7 个 6D system health 校验回归）；
+- `pnpm build` PASS；`git diff --check` 仅 Windows CRLF 提示；
+- 无 tag、push、production 接触；
+- 详细文档：`docs/V1.3-PHASE6E-COMMERCIAL-GOLIVE.md`。
+
+> **更新：2026-09-20 (P3 — iOS-inspired Commercial UI Design System)**
 
 ## 阶段与分支
 
-- 阶段：Cloud Refactor Phase 2(Final Acceptance 完成)
-- 分支：refactor/cloud-deployment
-- 基准提交：a2e1f7e (docs: establish cloud refactor documentation)
+- 阶段：v1.1 Productization — Final Acceptance
+- 分支：feature/v1.1-productization
+- 稳定基线：99bc18f (`v1.1.0-rc.1`)
+- 最终验收 HEAD：454986e `test(release): harden productization acceptance checks`
 
 ## 当前生产验收状态
 
-> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`.** 本次 rc.3 稳定化未 tag、未 push、未 deploy，也未移动任何已有 tag。
+> **Immutable candidates: `v1.0.0`, `v1.0.1-rc.1`, `v1.0.1-rc.2`, `v1.0.1-rc.4`, `v1.1.0-rc.1`.** v1.1 final-acceptance 与 productization 阶段未 tag、未 push、未 deploy，也未移动任何已有 tag。
+
+### V1.1 Productization Final Acceptance
+
+> **Status:** COMPLETE — frozen teacher flow + first-start DB index fix + empty-DB UX coverage.
+
+- 数据库迁移首启动修复：`fix(db): restore voucher source index on first startup` (b61fa0e)。`migrateVoucherWorkflow` 的 `accounting_vouchers` 表重建分支在第一次 `createDatabase` 调用时只重建了 `idx_vouchers_status`，遗漏 `idx_vouchers_source`；与状态索引一起补建后，源索引从首次启动即存在，无需二次启动才能补齐。迁移 ID 仍仅 M10–M14；schema 二次启动零漂移、`integrity_check=ok`、`foreign_key_check=0 rows`。
+- 教师业务流集成验收（`scripts/v1-1-teacher-fixture.mjs`）覆盖：销售 / 计划 / 采购 / 生产 / 出库 / 退货 / 调拨 / 报废 / 盘点 / 月结 完整链路；最终 FG = 20，AR = 0，AP = 0，DB 完整性 / FK 全部通过。
+- 空数据库 UX 验收（`scripts/v1-1-empty-db-ux.mjs`）覆盖：客户 / 销售订单 / 需求预测 / MRP 运算 / 物料需求计划 / 库存查询 / 审批中心 七个空白页 HTTP 200 + 接口形状校验通过。
+- 修复 + 工具提交：`b61fa0e fix(db)`、`454986e test(release)`；前者独立提交，后者合并 P2 Edge 文案 + 动画等待微调、两处 EOF 空白收紧、四个 V1.1 验收脚本。
+- Focused：`pnpm test` → **1222 tests / 234 suites / 0 failed**；`pnpm build` PASS（637.48 kB JS / 73.38 kB CSS，gzip 147.72 / 13.04 kB）；`git diff --check` 仅 Windows CRLF 提示。
+- P1 / P2 / P3 / P4 阶段产出保持冻结，未变更任何业务、权限、API、迁移 ID。
+- 无 tag、push、deploy。
+- **V1.1 PRODUCTIZATION FINAL ACCEPTANCE = PASS**
+- **READY TO TAG RC = YES**
+
+### P3 — iOS-inspired Commercial UI Design System
+
+> **Status:** COMPLETE — presentation/component/responsive UX only; P4 copy normalization remains open.
+
+- `src/styles.css` 统一 semantic tokens：app/grouped/surface/elevated 背景、四级文字、separator/border、accent 与 success/warning/danger/info、shadow、radius、4–40px spacing；字体使用系统栈，不引入字体二进制。
+- `src/components/design-system.jsx` 提供页面/分区标题、GroupedList/ListRow、FormSection/FormRow 与语义字段、四级按钮、IconButton、SegmentedControl、BottomActionBar、SummaryCard；`ui.jsx` 的搜索、状态、空态、错误、加载、弹层、确认和操作菜单复用同一视觉合同。
+- 移动底栏固定为五等分 `消息 / 签核 / 应用 / 云翼 / 我的`；全部使用统一线性 SVG，支持 top/bottom safe area，云翼为真实可进入的克制占位入口，不制造未实现业务。
+- 应用启动器按概览、基础资料、计划与生产、销售、采购、库存、质量、财务、决策报表、项目、系统分组；输入仍为经过 `visibleNav` 过滤的授权集合，未新增或绕过 RBAC。
+- `<768`：16px 页边距、48px 输入/主按钮、44px 最小交互控件、单列表单、底部 sheet 弹层；遗留桌面表格在 `.mobile-application-view` 内转换为记录卡片，不再用整页横向滚动。P1 Material Plan 等已有专用移动卡片继续优先。
+- `768–1023` 保留自适应单列字段与收窄桌面壳；`>=1024` 保留固定侧栏、紧凑表格、sticky header 和完整桌面生产力布局。
+- 真实 Edge 隔离数据库验收：`test_admin / test_sales / test_reviewer / test_warehouse / test_accounting` × `375×667 / 414×896 / 1024×768` 共 15 个组合；移动五栏等宽，375/414 整页 overflow 均为 0，可见交互控件最小观测高度 71px；1024 显示侧栏且隐藏底栏；角色入口无越权。
+- 真实页面检查并截图：375 launcher/customer/material plan/inventory/finance/approval，414 launcher/order/approval，1024 business overview/material plan/customer/finance；截图仅作为 `.tmp` 验收产物，不提交。
+- 浏览器观测：ReferenceError 0、TypeError 0、Unhandled Promise Rejection 0、unexpected 400/403/404/500 0。
+- 权限注册仍为 **113**；审批中心仍且仅为 `SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER`；业务 API、数据库 schema、库存/会计/MRP/折让语义均未变。
+- Focused：143 tests / 16 suites / 0 failed（`server/p3-ui-design-system.test.js` + `server/mobile-shell.test.js` + `server/mobile-application-launcher.test.js` + `server/mobile-approval-center.test.js`）；新增 `scripts/p3-ui-acceptance.mjs`。
+- Build：PASS；CSS 73.38 kB（gzip 13.04 kB），JS 632.46 kB（gzip 145.71 kB），保留既有 >500 kB warning。
+- **P3 IOS UI SYSTEM COMPLETE = YES**
+- **READY FOR P4 COPY / POLISH = YES**
+
+### P2 — Safe Delete / Disable / Archive Data Lifecycle
+
+> **Status:** IMPLEMENTATION COMPLETE — no schema change; P3/P4 not started.
+
+- 主数据统一为「无引用可删除；有引用只能停用；停用后可重新启用」：客户、供应商、货品、仓库使用既有 `active`；BOM 使用 `ACTIVE / DISCONTINUED`；制品工序标准使用 `ACTIVE / INACTIVE`。
+- 删除前显式检查实际依赖，不依赖原始外键异常；冲突返回稳定的 `RECORD_REFERENCED`，不会向用户泄漏表名、列名或 SQLite 错误。仓库有任意库存/历史引用不可删除，非零库存时也不可停用。
+- 新增且仅新增五类草稿删除：销售订单、采购订单、请购单、需求预测、库存调整单。全部要求既有 MANAGE/CREATE 权限、`DRAFT`、无下游/库存/会计/AR/AP 痕迹，并在单事务内删除自身明细与表头、写入删除审计。
+- MRP 运算、生产/采购指令、制令单、出入库/退货、调拨/盘点/报废/月结、生产领料/入库、收付款、折让、AR/AP 与会计凭证均未新增删除入口；既有业务取消、退货、反结账与凭证状态规则不变。
+- UI 提供紧凑 `···` 主数据操作菜单（编辑 / 启用或停用 / 删除）及复用的非浏览器原生删除确认；确认明确对象与不可恢复性，阻断删除显示产品安全原因；正常新单选择继续过滤 inactive 主数据，历史详情仍通过关联显示原名称。
+- 权限注册仍为 **113**；审批中心仍且仅为 `SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER`；五角色未扩权。
+- Focused：`server/p2-data-lifecycle.test.js` 覆盖无引用删除、有引用阻断、停用/启用、历史可读、选择器过滤、五类草稿删除、五类非草稿阻断、下游阻断、库存/流水/凭证/AR/AP 不变量、权限/审批合同和无 SQL 错误泄漏。
+- Real Edge：`scripts/p2-data-lifecycle-acceptance.mjs` 使用隔离临时 DB，在 375×667 / 414×896 / 1024×768 实际完成客户删除、引用阻断、停用/启用、草稿订单删除和非草稿 409；确认界面不裁切、无横向溢出，按钮触控高度不低于 44px。
+- Full：`pnpm test` → **1208 tests / 233 suites / 0 failed**；`pnpm build` PASS；`git diff --check` PASS（仅 Windows CRLF 提示）。
+- 无 tag、push、deploy。
+- **P2 DATA LIFECYCLE COMPLETE = YES**
+- **READY FOR P3 IOS UI SYSTEM = YES**
+
+### P1 — Forecast / MRP Run / Material Requirements Plan IA
+
+> **Status:** FROZEN AND PASS — productization baseline. No schema change. No M11/M12 algorithm change.
+
+- 三个产品概念清晰分离：`需求预测`（人输入的未来需求，forecast）/ `MRP 运算`（系统计算，run）/ `物料需求计划`（计算结果只读视图，material plan）；
+- 后端无变更。复用现有 `planning_forecasts` / `mrp_runs` / `mrp_run_results` / `mrp_run_components` / `mrp_run_pegging` 与既有 `/api/planning/*` 路由；
+- 新增 `src/lib/status.js` 集中状态 / 需求模式 / 建议类型 / 警告文案（`FORECAST_STATUS_LABEL` / `MRP_RUN_STATUS_LABEL` / `MRP_DEMAND_MODE_LABEL` / `SUGGESTION_TYPE_LABEL` / `WARNING_LABEL`），全部 `Object.freeze`，禁止内联枚举值泄漏；
+- 拆分 `src/pages/planning.jsx` 为：
+  - `src/pages/forecasts.jsx` — 需求预测（新建 / 编辑 / 详情 / 生效 / 取消）
+  - `src/pages/mrp-runs.jsx` — MRP 运算（列表 / 运行 / 详情 / 开始计算 / 取消 / 「查看物料需求计划」主操作）
+  - `src/pages/material-requirements-plan.jsx` — 物料需求计划（结果只读视图、筛选、排序、追溯、M12 转换动作）
+- 物料需求计划采用「按需求日期 / 按物料」分组与排序；移动端卡片，桌面端保留稠密表格；4 个筛选 chip：`全部` / `缺料` / `生产建议` / `采购建议`；零库存行展示为「库存充足」卡片，不显示 `0.000000`；
+- 追溯视图（`为什么是这个数量？`）用真实 pegging / component / demand 数据解释算式：销售订单需求 + 需求预测 = 毛需求；毛需求 − 现有库存 − 在途采购 − 在途生产 = 净需求；
+- `src/App.jsx` 新增 `mrp-runs` / `material-requirements-plan` 路由；navGroups 新增 `计划与生产` 组合并把生产 / 采购指令 / 请购单合并到该组；`mrp` 旧 key 作为向后兼容别名路由到 `MaterialRequirementsPlan`；
+- `src/navigation/applicationMetadata.js` 新增 `计划与生产` 移动组，含 `需求预测` / `MRP 运算` / `物料需求计划` / `生产指令` / `采购指令` / `请购单`，从 `基础资料` 组移除 `forecasts` / `mrp` / `material-requirements-plan`；
+- `src/pages/business-overview.jsx` 计划链节点重写为 `需求预测 → MRP 运算 → 物料需求计划 → 生产指令 / 采购指令 → 制令单 / 请购单 / 采购订单`，不再暗示「需求预测 = MRP」；
+- `src/pages/planning-documents.jsx` 中 `来源 MRP` 文案更新为 `来源物料需求计划`，链接 `page="material-requirements-plan"`；编辑器中 `来源 MRP 计算` 更新为 `来源 MRP 运算`；
+- Focused：`server/p1-material-plan.test.js` → **39 tests / 0 failed**，覆盖状态映射、筛选 chip 语义、排序、追溯文案、金色算术（FG MAKE 100 / PCB BUY 70 / CASE 无）、M11 net-before-explosion 回归（FG net 15 / A 30 / B 45）、launcher 三条规划条目、桌面 navGroups、`mrp` 向后兼容别名、业务总览计划链三段、Mobile Material Plan 端不显示桌面稠密表等；
+- Real Edge 153 headless：`scripts/p1-planning-acceptance.mjs` 在隔离临时 DB 上完成「销售 100 + 预测 20 + FG 库存 20」确定性 fixture，MRP `SALES_PLUS_FORECAST` 执行后 FG MAKE 100、组件 PCB BUY 70、CASE 库存充足；375×667 / 414×896 / 1024×768 在 `/forecasts` / `/mrp-runs` / `/material-requirements-plan` / `/business-overview` 全部加载，Edge exit = 0 共 12 次；侧效应不变量 `inventory_transactions = 0` / `accounting_vouchers = 0` / `purchase_orders = 0` / `production_orders = 0`；筛选逻辑在服务端结果上 4 种 chip 全 PASS；
+- Full：`pnpm test` → **1190 tests / 230 suites / 0 failed**（基线 1151 + 39 P1 focused）；
+- Build：`pnpm build` PASS（`627.02 kB JS / 63.33 kB CSS`）；
+- `git diff --check`：仅 Windows CRLF 提示，无真实 whitespace 错误；
+- 已修改既有测试以反映新的 launcher 分组：`server/mobile-application-launcher.test.js`（admin / reviewer 期望 page set、11 个 product group）、`server/m6-production-workflow.test.js`（mobile label 文案 `需求预测` / `MRP 运算` / `物料需求计划`）；
+- 不动：M11 net-before-explosion、M12 转换语义、五角色权限、money cents、stock atomicity、canonical inventory ledger、closed-period accounting、AR/AP history、voucher balancing；
+- 无 tag、push、deploy；
+- **P1 FORECAST / MRP IA COMPLETE = YES**
+- **READY FOR P2 DATA LIFECYCLE = YES**
+
+### M14 — Sales / Purchase Discount / Allowance
+
+- 两族新文档：`sales_discounts` / `purchase_discounts`；append-only 表；不重写既有 AR / AP / 凭证；
+- 复用 M8 canonical AR / AP 子账模型：confirmed 折让通过 `ensureSubledger('AR' | 'AP', { sourceType: 'SALES_DISCOUNT' | 'PURCHASE_DISCOUNT', effectCents: -amount_cents })` 创建独立的负向调整行；`UNIQUE(source_type, source_id)` 保证一次确认一次调整行；
+- 生命周期：`DRAFT → CONFIRMED / CANCELLED`；DRAFT 可编辑、可取消；CONFIRMED / CANCELLED 不可变；二次 confirm 返回 409；
+- 凭证：confirmed 后原子写入一条 canonical 凭证。Sales discount：`Dr 6001 / Cr 1122`；Purchase discount：`Dr 2202 / Cr 1405`；与 Sales Return / Purchase Return 完全相同的科目映射，零新硬编码科目；
+- 来源额度：折让金额 + 历史销售退货调整 + 历史销售折让 ≤ 来源正数应收；同供应商 / 同客户硬约束；
+- **结算安全门（fix(finance)）**：在 `confirmSettlementDocument` 中新增客户级 / 供应商级净欠款检查（`SUM(amount_cents + adjustment_cents - paid_cents - write_off_cents)`）。例 `AR +10000 / Discount -2000` 时，collection 8001 → 409；8000 → 200。原本 M8 的「按行 outstanding」检查在 discount 引入后会被「贷项」绕过，M14 修掉了这个洞；
+- 后结算贷项：AR +10000 / collection 8000 / discount 3000 → 客户净 -1000 贷项；历史 8000 收款分配原样保留；后续可发生 AR 抵消；
+- 未来 AR 抵消：客户贷 -1000 + 新 AR 5000 → 净 4000；collection 4000 → 200；4001 → 409；
+- 审批中心不受影响：`SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER` 五个文档族不变；`SALES_DISCOUNT` 与 `PURCHASE_DISCOUNT` **不进入**审批中心；
+- 库存 / MRP / 制造影响：NONE；折让不写 `inventory_transactions`、不改 BOM / 路线 / 制令单；
+- 权限：新增 2 个窄权限 `SALES_DISCOUNT_MANAGE` / `PURCHASE_DISCOUNT_MANAGE`，注册权限 111 → **113**；`role-admin` 继承全部，`role-accounting` 获得两个 MANAGE 以匹配「财务全权」合同；`role-sales` / `role-reviewer` / `role-warehouse` 不持有任何 M14 权限；
+- UI：教师可见业务总览在销售链新增「销售折让」、采购链新增「采购折让」节点，使用 canonical `AppLink`；导航组「仓储库存」加入两张卡片（仍按可见权限过滤）；`src/pages/discounts.jsx` 提供列表 / 详情 / 编辑器，含客户 / 供应商选择 + 来源应收 / 应付筛选 + 剩余可折让额度展示；
+- Focused：`server/m14-discounts.test.js` → **15 tests / 4 suites / 0 failed**，覆盖权限注册 113、5 角色合同、DRAFT 生命周期、确认唯一一条负向调整 + 凭证、二次确认 409、跨客户 / 非正数来源拒绝、来源额度上限、pre-settle 8000/8001、post-settle 客户贷项、future offset、statement 含 SALES_DISCOUNT / PURCHASE_DISCOUNT 行类型、审批中心隔离、legacy DB 重新打开幂等、库存 / BOM / 路线 / 制令单零影响；
+- Full：`pnpm test` → **1151 tests / 230 suites / 0 failed**（基线 ≥1136 / ≥226）；
+- M11 / M12 / M13 regression rerun：M11 + M12 + M13 combined **109 tests / 24 suites / 0 failed**；
+- Build：`pnpm build` PASS（`617.77 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成 `/sales-discounts`、`/purchase-discounts`、`/accounts-receivable`、`/accounts-payable`、`/approvals` 的 SPA 下钻验收；Edge exit = 0 在 15 个页面 × 3 视口 = 45 次截图；五角色权限合同、`403` 隔离、console / 500 sweep 通过；
+- M14 acceptance script `scripts/m14-discounts-acceptance.mjs` 在隔离临时 DB 上跑过完整 88 个 audit check + 5 个页面 × 3 视口 = 15 次 Edge headless 截图：7 条 canonical flow（pre-settle 8000/8001 / post-settle 客户贷项 -1000 / future offset 4000/4001 / pre-settle AP 10000/10001 / post-settle 供应商贷项 -1000）全部 PASS；凭证 6001/1122 与 2202/1405 借贷平衡且整数分；APPROVAL_DOCUMENT_TYPES 与五个 canonical 文档族一致；CLOSED 期间 confirm → 409、AR/AP 与 voucher delta = 0；唯一安全门修复 `confirmSettlementDocument` 引入的「未应用预收」绕过；
+- 无 tag、push、deploy。
+
+### M13 — Inventory Scrap & Inventory Month-End
+
+- 新增两族对 canonical `inventory` + `inventory_transactions` 的扩展：**库存报废**（`inventory_scraps` + `inventory_scrap_items`）与**存货月结**（`inventory_period_closures` + `inventory_period_snapshots`），均为 append-only 表，不引入平行库存账；
+- 库存报废：`DRAFT → CONFIRMED / CANCELLED`；CONFIRMED 在同一事务内重新校验每行库存，任一行不足整张回滚；每行产生恰好一条 `direction='OUT' / source_type='INVENTORY_SCRAP'` 的库存异动，第二次确认返回 409，CONFIRMED 后 PATCH / cancel 全部 409；不生成任何会计凭证（报废会计评估 = DEFERRED，不伪造任意损失科目）；CAN 修改、CONFIRM、cancel 仅需 `INVENTORY_SCRAP_MANAGE`；
+- 存货月结：仅 admin，按月结账生成只读快照；期末数量 = `inventory.quantity − Σ(期末后 IN 异动) + Σ(期末后 OUT 异动)`，期内 IN / OUT 数量从 `inventory_transactions.created_at` 期间内聚合得出；快照表上有唯一索引 `(closure_id, warehouse_id, product_id)`，重结在单一事务内重建，不重复；关闭与反向结账对 `inventory` / `inventory_transactions` / `accounting_vouchers` 全部 0 写入；
+- 时间顺序：第一次结账可任意选择已结束月份；之后必须严格晚于最近 `CLOSED period_key`；重复关闭 409；仅最近 `CLOSED` 期间可被反结账 200，反结账后再结账 200；旧期间反结账返回 409；
+- 权限：新增 4 个窄权限 `INVENTORY_SCRAP_VIEW / MANAGE / INVENTORY_PERIOD_CLOSE_VIEW / MANAGE`，注册权限 107 → **111**；`role-admin` 继承全部，`role-warehouse` 仅获得两 VIEW + 报废 MANAGE（不获得月结），`role-sales` / `role-reviewer` / `role-accounting` 不持有任何 M13 权限；
+- 审批中心不受影响：`SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER` 五个文档族不变；`INVENTORY_SCRAP` 与 `INVENTORY_PERIOD_CLOSURE` **不进入**审批中心；
+- UI：教师可见业务总览在库存链新增「库存报废」「存货月结」节点，使用 canonical `AppLink`；导航组「仓储库存」增加 库存报废 / 存货月结 两张移动卡片；库存报废单支持 DRAFT 编辑 / 取消 / 确认，详情页带读写区分；存货月结支持执行月结、查看详情、反结账（仅最近 CLOSED）；决策报表「库存异动明细」增加 `INVENTORY_SCRAP` 来源过滤；
+- Focused：`server/m13-inventory-extensions.test.js` → **16 tests / 4 suites / 0 failed**，覆盖权限注册 111、5 角色合同、草稿生命周期、CONFIRMED 一次唯一 OUT、原子多行库存短缺回滚、二次确认 409、CONFIRMED 不可改 / 不可取消、月结写入 0、快照不可变重建、反结账仅最近 CLOSED、重结无重复行、legacy DB 重新打开幂等、M11 net-before-explosion 算术回归 15/30/45；
+- Full：`pnpm test` → **1136 tests / 226 suites / 0 failed**（基线 ≥1120 / ≥222）；
+- Build：`pnpm build` PASS（`598.87 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成「库存报废草稿→确认」「库存不足原子回滚」「执行月结→反结账→重结」三条 SPA 下钻验收；五角色权限合同、`403` 隔离、console / 500 sweep 通过；
+- 无 tag、push、deploy。
+
+### M12 — Production / Purchase Instruction & Purchase Requisition
+
+- 在 M11 不可变 MRP 快照之上新增三类计划单据：`production_instructions` / `production_instruction_items`、`purchase_instructions` / `purchase_instruction_items`、`purchase_requisitions` / `purchase_requisition_items`；新表均为 append-only，不重写 `mrp_run_results`；
+- 三个新生命周期：生产指令 `DRAFT → RELEASED → CANCELLED`、采购指令 `DRAFT → RELEASED → CANCELLED`、请购单 `DRAFT → SUBMITTED → APPROVED / REJECTED → CANCELLED`；
+- 部分下达：同一 MRP 建议（MAKE 或 BUY）可被多条指令分批下达（建议 100 = 60 + 40）；剩余 `0` 时第 `+1` 次返回 `409`；MRP 建议数量本身永远不被修改；`/api/planning/mrp/runs/:id` 现在携带只读 `converted_quantity` / `remaining_quantity` 元数据；
+- 显式生成下游单据：RELEASED 生产指令 → 制令单（创建时显式选择 itemId，一对一幂等），APPROVED 已完成后才能下达制令单，否则 `409`；RELEASED 采购指令 → 请购单（自动 back-link 到 instruction item），APPROVED 请购单 → 采购订单（用户显式选择供应商，PO 以 DRAFT 创建并走既有审批 / 入库 / AP / 付款流程）；
+- 仅消费对应建议：生产指令 `MRP.suggestion_type === 'MAKE' && net_requirement > 0`，采购指令 `BUY && net_requirement > 0`，否则 `400`；MRP DRAFT run `409`；
+- 取消规则：DRAFT 取消直接 `200`；RELEASED / APPROVED 取消仅当未生成下游单据时成功；存在下游 PO / 制令单时 `409`；
+- 审批中心新增 `PURCHASE_REQUISITION` 文档族；与 `SALES_ORDER` / `PURCHASE_ORDER` / `INVENTORY_CHECK` / `ACCOUNTING_VOUCHER` 并列；创建人自审 `409`；驳回必填原因；其他四个审批族保持原状；
+- 权限：注册 7 个新窄权限 `PRODUCTION_INSTRUCTION_VIEW/MANAGE`、`PURCHASE_INSTRUCTION_VIEW/MANAGE`、`PURCHASE_REQUISITION_VIEW/MANAGE/APPROVE`，从 `100` 增至 `107`；`admin` 继承全部，`role-reviewer` 经决策获得 `PURCHASE_REQUISITION_VIEW` 与 `PURCHASE_REQUISITION_APPROVE`（理由：与既有 `PURCHASE_ORDERS_APPROVE` 对称），`role-sales` / `role-warehouse` / `role-accounting` 全部不获得任何 M12 权限；
+- 库存影响 = NONE，会计影响 = NONE，生产 / 采购单据写入仅在用户显式触发「生成制令单」/「生成请购单」/「生成采购订单」按钮时发生；
+- 完整路由：`GET/POST /api/production-instructions[/:id[/release|cancel|generate-production-order]]`、`/api/purchase-instructions[/:id[/release|cancel]]`、`/api/purchase-requisitions[/:id[/submit|approve|reject|cancel|generate-purchase-order]]`；
+- UI：教师可见业务总览新增「计划与物料需求」链 `销售订单 → 计划预测 → MRP → 生产指令 → 制令单` 与 `MRP → 采购指令 → 请购单 → 采购订单`，所有节点为 canonical `AppLink`；MRP 结果明细新增「已下达 / 剩余」列；生产指令 / 采购指令 / 请购单均支持列表 / 详情 / 编辑 / 下达 / 取消 / 生成下游 / AppLink 跨单据导航；
+- 移动端：基础资料 / 采购管理 / 生产管理组均暴露 `生产指令`、`采购指令`、`请购单` 入口；窄屏 375 / 414 / 1024 均无横向溢出；
+- Focused：`server/m12-planning-documents.test.js` → **36 tests / 9 suites / 0 failed**，覆盖 MAKE / BUY 资格、部分下达、`409` 过量下达、下游单据生成幂等、MRP 元数据计算、取消规则、审批中心集成、五角色权限契约、库存 / 会计零影响、MRP 算术回归（FG 净需求 15 / 组件 30 / 45 不变）、数据库重开幂等；
+- Full：`pnpm test` → **1120 tests / 222 suites / 0 failed**（基线 ≥1084 / ≥213）；
+- Build：`pnpm build` PASS（`582.91 kB JS / 58.10 kB CSS`）；`git diff --check` PASS（仅 CRLF 提示）；
+- 真实 Edge 153 headless 在 375×667 / 414×896 / 1024×768 完成「MRP MAKE → 生产指令 → 制令单」与「MRP BUY → 采购指令 → 请购单 → 采购订单」两条链路的 SPA 下钻与跨单据导航验收；五角色权限验证、`403` / `409` 隔离、console / 500 sweep 通过；
+- 旧 `mrp_plans` / `mrp_plan_items` / `mrp-plans` 端点保持 legacy 兼容面；
+- 无 tag、push、deploy。
+
+### M10 — Product Routing Standard / 制品工序标准
+
+- 新增产品级路线主数据：`product_routings` 保存产品、路线编码/名称、版本、启停状态与备注；`product_routing_operations` 保存确定性的正整数顺序号、工序编码/名称、简单工作中心文本、准备时间与单位运行时间；
+- 路线与 BOM 是产品下的同级主数据，不嵌入 BOM，也不改变 BOM 语义；旧 `routing_operations`（BOM-bound API-only）保留为兼容面，并在启动时一次性、幂等迁移为停用历史路线；
+- 每个产品最多一条 `ACTIVE` 路线，旧产品允许没有路线；工序始终按 `sequence_no` 排序，重复顺序、负工时、缺失产品/名称与非法编码由后端拒绝；
+- 复用既有 `ROUTING_VIEW` / `ROUTING_MANAGE` 双权限，注册权限仍为 100；五角色中仅 `test_admin` 可见和管理，sales/reviewer/warehouse/accounting 均无路线权限；
+- 新增完整 REST API、基础资料桌面入口与移动应用卡片，支持搜索、产品/状态筛选、详情、增删改工序、顺序号重排、启用/停用；货品页、制令单详情和业务总览均使用 canonical SPA 导航关联；
+- 路线是规划主数据：库存影响 = NONE，会计影响 = NONE，审批中心影响 = NONE；未实现 MRP、工序级执行、报工、设备、产能或工序成本；
+- Focused：13 tests / 4 suites / PASS；Full：1027 tests / 202 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
+- Real Edge 153：375×667、414×896、1024×768 均完成列表/详情/编辑/排序/启停验收，无页面横向溢出；console error = 0，unexpected 400/403/404/500 = 0；使用隔离 DB，未修改生产数据；无 tag、push、deploy。
+
+### M11 — Forecast & MRP / 计划预测与物料需求计划
+
+- 新增 `planning_forecasts`（DRAFT/ACTIVE/CANCELLED）与 `planning_forecast_items` 主数据；MRP canonical 路径下 `mrp_runs`（DRAFT/COMPLETED/CANCELLED）、`mrp_run_demands`、`mrp_run_results`、`mrp_run_components`、`mrp_run_pegging` 是只追加的不可变快照；旧 `mrp_plans` / `mrp_plan_items` 保留作为兼容面，UI 不再挂载；
+- 销售需求 = `APPROVED 销售订单明细 − CONFIRMED 销售出货明细（按订单头关联）`，文档级未交付；销售退货不重新打开需求；非 APPROVED 订单不进入 MRP；采购供应 = `APPROVED 采购订单明细 − CONFIRMED 采购入库明细（按入库单关联采购订单）`；直纳入库不计未来供应；采购退货不重建 PO 供应；生产供应 = `PENDING/IN_PROGRESS 制令单数量 − CONFIRMED 生产入库数量`；COMPLETED / CANCELLED 工单不计入。
+- 库存源为 `inventory` 跨全仓库汇总（教学语境明确企业可用库存，不做仓库级 MRP）；销售/采购/生产三大供应维度不重复计数 CONFIRMED 业务单据；
+- BOM 展开支持多层级、循环检测、深度上限 12；组件在聚合后净库存与在途供应，避免按父级分别消耗同一条库存；Make = 有 ACTIVE BOM，Buy = 无 BOM；MAKE 建议缺少 ACTIVE 路线时附加 `ROUTING_MISSING` 警告，不阻断物料计算；MRP 原子执行：BOM 校验失败 / 循环 / 长度越界时不写任何结果行，运行保持 DRAFT；
+- **净需求前置 BOM 展开（NET-BEFORE-EXPLOSION）**：每个 MAKE 父项先以 `gross − on_hand − open_po − open_prod` 计算净需求，仅当净需求 > 0 才以净需求驱动 BOM 展开；父项净需求 ≤ 0 或非 MAKE 时不贡献任何子项需求；多层级递归中每一层都对自己的净需求而非毛需求进行二次展开；共享组件仍按父项贡献累加后再统一净需求，避免按父级分别消耗同一条库存；
+- COMPLETED MRP 不可执行、PATCH / 不可修改、不可取消；之后预测取消、库存变化都不再改写已完成的运行；新计算必须新建运行；
+- 需求来源支持 `SALES_ORDERS` / `FORECAST` / `SALES_PLUS_FORECAST` 三种模式；SALES_PLUS_FORECAST 为累加关系，状态视图在销售展示中说明两个独立贡献维度；
+- 权限：复用既有 `MRP_VIEW` / `MRP_MANAGE`（已存在），注册权限数仍为 100；五角色中仅 `test_admin` 具备计划预测 / MRP 变能力；其他四角色无 MRP 变更权限；
+- 库存 = NONE，会计 = NONE，审批中心 = NONE，生产 / 采购 / 请购 / 领料单据创建 = 0；
+- UI：教师可见业务总览新增「计划与物料需求」链；应用组加入 计划预测 / MRP 物料需求计划；桌面 / 移动两端均完成列表 / 编辑 / 详情 / 结果追溯验证；移动端 375×667 无横向溢出，主操作可见于底部导航之上；
+- Focused：57 tests / 11 suites / PASS（含 9 项 NET-BEFORE-EXPLOSION 热修回归）；Full：1084 tests / 213 suites / 0 failed；`pnpm build` 与 `git diff --check` PASS；
+- 真实 Edge 153 headless 在 375×667、414×896、1024×768 完成 `/planning/mrp` 加载与确定性算例（销售 10、预测 10、FG 库存 3、FG 在制 2、FG BOM A×2 B×3）回归：FG 净需求 15、MAKE 建议 15、A 毛组件需求 30、B 毛组件需求 45、BOM_EXPLOSION 锁定 A=30 / B=45，与 M11 算术契约一致；库存流水 / 会计凭证 / 采购订单 / 生产订单均无新建；
+- 保留旧 API 作为内部兼容面，旧 MRP 历史数据无破坏；
+- 无 tag、push、deploy。
+
+### M11 — Product Routing Standard / 制品工序标准（M10 历史段，已在新段下）
+
+- M11 不涉及 M10 的具体范围；M10 制品工序标准已完整收口，新段在 M10 之上叠加 Forecast + MRP canonical。
 
 ### M9 — Final ERP Polish
 
@@ -267,3 +453,14 @@
 - 期间结账（Month Closing）已实现并验证
 - Year-End Carry Forward / 完整年结逻辑 NOT_VERIFIED，未在本阶段实现
 - 后续重构任务应单独评估年结流程，不应与月结混淆
+
+## V1.1 Productization P4 — 产品文案与语言体系
+
+- **状态：COMPLETE（2026-09-21）**。P1 / P2 / P3 保持冻结并通过；本阶段不代表 V1.1 最终发布验收完成。
+- 建立 `src/lib/status.js` 的基础状态与领域状态映射：预测的 `ACTIVE` 显示“已生效”，主数据的 `ACTIVE` 显示“启用”，制令单的 `PENDING / IN_PROGRESS` 显示“待生产 / 生产中”。
+- 建立 `src/lib/copy.js` 的五角色显示名、稳定业务冲突文案与 HTTP / 网络 / 数据库错误安全映射；普通界面不再直接展示状态码或数据库诊断。
+- 统一主数据用语为“产品”，BOM / MRP / 生产上下文继续使用“物料”；销售、采购、库存、财务和决策报表采用教师口径。
+- 可见金额统一为 `¥95,000.00` 风格；数量最多保留 6 位有效小数且不补无意义尾零；详细时间统一为 `YYYY-MM-DD HH:mm`。
+- 原生 `window.confirm` / `confirm` 已从产品源码移除，订单提交、订单审批、凭证删除、活动删除与固定资产折旧使用可访问确认弹层。
+- P4 契约测试覆盖底部五标签、三层计划名称、五项决策报表名称、五角色显示名、状态映射、生命周期冲突和已知坏文案。
+- 明确保留的 UX 延后项：决策报表的客户 / 供应商 / 产品 / 仓库筛选仍按业务编码输入；改为选择器需要增加查询交互，超出纯文案阶段。

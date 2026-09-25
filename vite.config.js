@@ -15,6 +15,17 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: 'dist'
+    outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalized = id.replaceAll('\\', '/');
+          if (normalized.includes('/node_modules/react') || normalized.includes('/node_modules/scheduler')) return 'react-vendor';
+          if (normalized.includes('/node_modules/lucide-react')) return 'icons-vendor';
+          const page = normalized.match(/\/src\/pages\/([^/]+)\.jsx$/)?.[1];
+          if (page) return `page-${page}`;
+        },
+      },
+    },
   }
 });

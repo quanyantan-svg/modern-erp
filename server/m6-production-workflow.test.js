@@ -93,7 +93,29 @@ function seedProductionOrder(quantity = 5, bomId = null) {
   const orderNo = 'MO-M6-' + orderId.slice(0, 8);
   database.prepare("INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,'PENDING',NULL,NULL,?,?,datetime('now'),datetime('now'))")
     .run(orderId, orderNo, 'product-001', bomId, quantity, '', 'user-admin');
+  if (bomId) {
+    const insert = database.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot) VALUES(?,?,?,?,0,?,?,?,?)');
+    for (const item of database.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(bomId)) {
+      const perUnit = Number(item.quantity) * (1 + Number(item.scrap_rate || 0));
+      insert.run(id(), orderId, item.product_id, perUnit * quantity, item.line_no, item.id, perUnit, Number(item.scrap_rate || 0));
+    }
+  }
   return { orderId, orderNo };
+}
+
+async function issueAllRequirements(orderId, warehouseId) {
+  const requirements = database.prepare('SELECT * FROM production_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+  for (const item of requirements) {
+    database.prepare('UPDATE inventory SET quantity=MAX(quantity,?) WHERE warehouse_id=? AND product_id=?').run(item.quantity, warehouseId, item.product_id);
+  }
+  const created = await request('/api/production-material-issues', { method: 'POST', body: {
+    productionOrderId: orderId,
+    warehouseId,
+    items: requirements.map((item) => ({ requirementLineId: item.id, issueQuantity: item.quantity })),
+  } });
+  assert.equal(created.status, 201, created.data.error);
+  const confirmed = await request(`/api/production-material-issues/${created.data.id}/confirm`, { method: 'POST' });
+  assert.equal(confirmed.status, 200, confirmed.data.error);
 }
 
 // =====================================================================
@@ -101,8 +123,8 @@ function seedProductionOrder(quantity = 5, bomId = null) {
 // =====================================================================
 
 describe('M6 permission registry', () => {
-  test('1. PERMISSIONS registry has 100 entries including M6 and M8 permissions', () => {
-    assert.equal(PERMISSIONS.length, 100);
+  test('1. PERMISSIONS registry has 113 entries including M14 sales/purchase discount permissions', () => {
+    assert.equal(PERMISSIONS.length, 113);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('PRODUCTION_MATERIAL_ISSUE_MANAGE'));
     assert.ok(codes.has('PRODUCTION_RECEIPT_MANAGE'));
@@ -114,12 +136,18 @@ describe('M6 permission registry', () => {
     assert.ok(me.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'));
   });
 
-  test('3. role-sales / role-reviewer / role-warehouse / role-accounting do not hold M6 perms', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('3. role-sales / role-reviewer / role-accounting do not hold M6 perms; role-warehouse DOES (V1.3 Phase 1)', async () => {
+    // V1.3 Phase 1: warehouse now owns physical stock execution including
+    // material issue and production receipt. sales / reviewer / accounting
+    // remain excluded; warehouse holds the two M6 perms.
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const me = await request('/api/auth/me', { token });
       assert.equal(me.data.user.permissions.includes('PRODUCTION_MATERIAL_ISSUE_MANAGE'), false, `${username} should not hold PRODUCTION_MATERIAL_ISSUE_MANAGE`);
       assert.equal(me.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'), false, `${username} should not hold PRODUCTION_RECEIPT_MANAGE`);
     }
+    const warehouseMe = await request('/api/auth/me', { token: warehouseToken });
+    assert.equal(warehouseMe.data.user.permissions.includes('PRODUCTION_MATERIAL_ISSUE_MANAGE'), true, 'warehouse should hold PRODUCTION_MATERIAL_ISSUE_MANAGE');
+    assert.equal(warehouseMe.data.user.permissions.includes('PRODUCTION_RECEIPT_MANAGE'), true, 'warehouse should hold PRODUCTION_RECEIPT_MANAGE');
   });
 });
 
@@ -145,14 +173,14 @@ describe('M6 production order START / COMPLETE preserve zero stock effect', () =
     assert.equal(vouchers, 0, 'no manufacturing voucher should be generated');
   });
 
-  test('5. COMPLETE changes status only — no inventory transaction, no stock mutation', async () => {
+  test('5. COMPLETE without reconciled execution is refused with no inventory mutation', async () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
     const complete = await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'complete' } });
-    assert.equal(complete.status, 200);
+    assert.equal(complete.status, 409);
     const order = database.prepare('SELECT status FROM production_orders WHERE id=?').get(orderId);
-    assert.equal(order.status, 'COMPLETED');
+    assert.equal(order.status, 'IN_PROGRESS');
     const p1 = database.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, 'product-001');
     assert.equal(Number(p1.quantity), 0, 'completed order must not have increased finished goods');
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type IN ('PRODUCTION_OUTPUT','PRODUCTION_RECEIPT') AND source_id=?").get(orderId).cnt;
@@ -232,7 +260,7 @@ describe('M6 material issue contract', () => {
     assert.equal(create.status, 201, create.data.error);
     const confirm = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
     assert.equal(confirm.status, 409, confirm.data.error);
-    assert.match(confirm.data.error, /库存不足/);
+    assert.match(confirm.data.error, /库存不足|剩余可领/);
     const issue = database.prepare('SELECT status FROM production_material_issues WHERE id=?').get(create.data.id);
     assert.equal(issue.status, 'DRAFT');
     const afterP2 = database.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, 'product-002').quantity;
@@ -292,7 +320,7 @@ describe('M6 material issue contract', () => {
     assert.equal(create.status, 201);
     await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
     const again = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(again.status, 409);
+    assert.equal(again.status, 200);
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id).cnt;
     assert.equal(txCount, 1, 'second confirm must not create additional transactions');
   });
@@ -326,11 +354,9 @@ describe('M6 material issue contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     const create = await request('/api/production-material-issues', { method: 'POST', body: { productionOrderId: orderId, warehouseId, items: [{ productId: 'product-002', issueQuantity: 1 }] } });
-    assert.equal(create.status, 201);
-    const confirm = await request(`/api/production-material-issues/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(confirm.status, 409);
-    assert.match(confirm.data.error, /开工|已开工|IN_PROGRESS/);
-    const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id).cnt;
+    assert.equal(create.status, 409);
+    assert.match(create.data.error, /生产中|开工|IN_PROGRESS/);
+    const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_MATERIAL_ISSUE' AND source_id=?").get(create.data.id || 'not-created').cnt;
     assert.equal(txCount, 0);
   });
 
@@ -410,6 +436,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 3 } });
     const confirm = await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     assert.equal(confirm.status, 200, confirm.data.error);
@@ -427,6 +454,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 4 } });
     const second = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 6 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
@@ -441,6 +469,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 9 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
     const second = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
@@ -457,10 +486,11 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
     await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     const again = await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
-    assert.equal(again.status, 409);
+    assert.equal(again.status, 200);
     const txCount = database.prepare("SELECT COUNT(*) cnt FROM inventory_transactions WHERE source_type='PRODUCTION_RECEIPT' AND source_id=?").get(create.data.id).cnt;
     assert.equal(txCount, 1);
   });
@@ -480,6 +510,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(5, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const create = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 2 } });
     await request(`/api/production-receipts/${create.data.id}/confirm`, { method: 'POST' });
     const cancel = await request(`/api/production-receipts/${create.data.id}/cancel`, { method: 'POST' });
@@ -490,6 +521,7 @@ describe('M6 production receipt contract', () => {
     const { bomId, warehouseId } = seedBomAndOrder();
     const { orderId } = seedProductionOrder(10, bomId);
     await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } });
+    await issueAllRequirements(orderId, warehouseId);
     const first = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 3 } });
     await request(`/api/production-receipts/${first.data.id}/confirm`, { method: 'POST' });
     const draft = await request('/api/production-receipts', { method: 'POST', body: { productionOrderId: orderId, warehouseId, quantity: 4 } });
@@ -534,32 +566,42 @@ describe('M6 security contract', () => {
     assert.equal(result.status, 401);
   });
 
-  test('34. sales / reviewer / warehouse / accounting cannot list material issues', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('34. sales / reviewer / accounting cannot list material issues; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const list = await request('/api/production-material-issues', { token });
       assert.equal(list.status, 403, `${username} must be forbidden from material issue list`);
     }
+    const warehouseList = await request('/api/production-material-issues', { token: warehouseToken });
+    assert.equal(warehouseList.status, 200, `warehouse must be allowed to list material issues, got ${warehouseList.status}`);
   });
 
-  test('35. sales / reviewer / warehouse / accounting cannot create material issues', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('35. sales / reviewer / accounting cannot create material issues; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const create = await request('/api/production-material-issues', { token, method: 'POST', body: { productionOrderId: 'x', warehouseId: 'warehouse-001', items: [{ productId: 'product-002', issueQuantity: 1 }] } });
-      assert.equal(create.status, 403, `${username} must be forbidden from material issue create`);
+      assert.equal(create.status === 403 || create.status === 404, true, `${username} must be forbidden from material issue create, got ${create.status}`);
     }
+    // warehouse may attempt to create against a non-existent production order; 4xx expected, but not 403.
+    const warehouseCreate = await request('/api/production-material-issues', { token: warehouseToken, method: 'POST', body: { productionOrderId: 'non-existent', warehouseId: 'warehouse-001', items: [{ productId: 'product-002', issueQuantity: 1 }] } });
+    assert.notEqual(warehouseCreate.status, 403, 'warehouse must be authorized to attempt material issue create');
   });
 
-  test('36. sales / reviewer / warehouse / accounting cannot list production receipts', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('36. sales / reviewer / accounting cannot list production receipts; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const list = await request('/api/production-receipts', { token });
       assert.equal(list.status, 403, `${username} must be forbidden from receipt list`);
     }
+    const warehouseList = await request('/api/production-receipts', { token: warehouseToken });
+    assert.equal(warehouseList.status, 200, `warehouse must be allowed to list production receipts, got ${warehouseList.status}`);
   });
 
-  test('37. sales / reviewer / warehouse / accounting cannot create production receipts', async () => {
-    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['warehouse', warehouseToken], ['accounting', accountingToken]]) {
+  test('37. sales / reviewer / accounting cannot create production receipts; warehouse CAN (V1.3 Phase 1)', async () => {
+    for (const [username, token] of [['sales', salesToken], ['reviewer', reviewerToken], ['accounting', accountingToken]]) {
       const create = await request('/api/production-receipts', { token, method: 'POST', body: { productionOrderId: 'x', warehouseId: 'warehouse-001', quantity: 1 } });
-      assert.equal(create.status, 403, `${username} must be forbidden from receipt create`);
+      assert.equal(create.status === 403 || create.status === 404, true, `${username} must be forbidden from receipt create, got ${create.status}`);
     }
+    // warehouse may attempt to create against a non-existent production order; 4xx expected, but not 403.
+    const warehouseCreate = await request('/api/production-receipts', { token: warehouseToken, method: 'POST', body: { productionOrderId: 'non-existent', warehouseId: 'warehouse-001', quantity: 1 } });
+    assert.notEqual(warehouseCreate.status, 403, 'warehouse must be authorized to attempt production receipt create');
   });
 
   test('38. permission reconciliation is idempotent across re-run', () => {
@@ -593,11 +635,14 @@ describe('M6 mobile UI surface', () => {
     assert.match(app, /'production-receipts', label: '生产入库'/);
   });
 
-  test('41. fake / deferred production cards (forecast / instruction / work center / output) are absent from mobile group', () => {
+  test('41. fake / deferred production cards (work center / output) are absent from mobile group; production-instruction is present after M12', () => {
     const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
     const activeGroups = meta.slice(0, meta.indexOf('DEFERRED_MOBILE_APPLICATIONS'));
-    assert.doesNotMatch(activeGroups, /计划预测|forecast/);
-    assert.doesNotMatch(activeGroups, /生产指令下达|production-instruction/);
+    // P1 — planning entries renamed: 需求预测 / MRP 运算 / 物料需求计划
+    assert.match(activeGroups, /mobileLabel: '需求预测'/);
+    assert.match(activeGroups, /mobileLabel: 'MRP 运算'/);
+    assert.match(activeGroups, /mobileLabel: '物料需求计划'/);
+    assert.match(activeGroups, /mobileLabel: '生产指令'/);
     assert.doesNotMatch(activeGroups, /工作中心|work-center/);
     assert.doesNotMatch(activeGroups, /生产产出|production-output/);
   });

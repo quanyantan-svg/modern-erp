@@ -436,6 +436,11 @@ describe('Production Orders', () => {
 
   test('完工生产工单', async () => {
     if (!orderId) return;
+    const requirement = database.prepare('SELECT * FROM production_order_items WHERE order_id=?').get(orderId);
+    const now = new Date().toISOString();
+    database.prepare("INSERT INTO production_material_issues(id,issue_no,production_order_id,warehouse_id,status,issue_date,remark,creator_id,created_at,updated_at,confirmed_by,confirmed_at) VALUES('app-test-issue','PMI-APP-TEST',?,'warehouse-001','CONFIRMED','2026-09-01','','user-admin',?,?, 'user-admin',?)").run(orderId, now, now, now);
+    database.prepare("INSERT INTO production_material_issue_items(id,issue_id,product_id,planned_quantity,issue_quantity,line_no,requirement_line_id) VALUES('app-test-issue-item','app-test-issue',?,?,?,1,?)").run(requirement.product_id, requirement.quantity, requirement.quantity, requirement.id);
+    database.prepare("INSERT INTO production_receipts(id,receipt_no,production_order_id,warehouse_id,quantity,status,receipt_date,remark,creator_id,created_at,updated_at,confirmed_by,confirmed_at,product_id) VALUES('app-test-receipt','PR-APP-TEST',?,'warehouse-001',10,'CONFIRMED','2026-09-01','','user-admin',?,?, 'user-admin',?,?)").run(orderId, now, now, now, productId);
     
     const completeRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
       method: 'POST',
@@ -488,6 +493,7 @@ describe('Production Orders', () => {
       },
       body: JSON.stringify({
         productId: productId,
+        bomId: bomId,
         quantity: 5,
       }),
     });

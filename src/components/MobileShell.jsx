@@ -3,7 +3,7 @@
 // Responsibilities:
 //   - mobile top bar
 //   - main content container
-//   - bottom navigation (4 enabled tabs + 1 disabled tab)
+//   - canonical five-tab bottom navigation
 //   - safe-area spacing
 //   - active tab state
 //   - current page title
@@ -13,64 +13,38 @@
 // It does not know how sales orders, inventory or vouchers work.
 //
 // M1 contract:
-//   - 4 active tabs: messages / approvals / apps / profile
-//   - 1 disabled tab: directory ("敬请期待")
-//   - disabled tab does not navigate, does not throw
+//   - 5 active tabs: messages / approvals / apps / cloud / profile
 //   - bottom nav stays fixed, respects safe-area-inset-bottom
 //   - active state clearly visible
 //   - touch targets >= 44x44 CSS px
 //   - usable at 320px width
 
 import { useCallback } from 'react';
-
-// Reusable inline SVG icon (matches existing App.jsx style).
-const MobileIcon = ({ d, size = 22, strokeWidth = 1.8 }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={strokeWidth}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden="true"
-  >
-    <path d={d} />
-  </svg>
-);
+import { Icon } from './icons.jsx';
 
 const TAB_ICONS = {
-  messages: (
-    <MobileIcon d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+  messages: <Icon name="message" size={24}/>,
+  approvals: <Icon name="approval" size={24}/>,
+  apps: <Icon name="apps" size={24}/>,
+  cloud: (
+    <Icon name="cloud" size={24}/>
   ),
-  approvals: (
-    <MobileIcon d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-  ),
-  apps: (
-    <MobileIcon d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
-  ),
-  directory: (
-    <MobileIcon d="M17 20h5v-2a3 3 0 0 0-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 0 1 5.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 0 1 9.288 0M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM7 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" />
-  ),
-  profile: (
-    <MobileIcon d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
-  ),
+  profile: <Icon name="user" size={24}/>,
 };
 
 const TABS = [
   { key: 'messages', label: '消息', icon: 'messages', enabled: true },
-  { key: 'approvals', label: '审批', icon: 'approvals', enabled: true },
+  { key: 'approvals', label: '签核', icon: 'approvals', enabled: true },
   { key: 'apps', label: '应用', icon: 'apps', enabled: true },
-  { key: 'directory', label: '通讯录', icon: 'directory', enabled: false, hint: '敬请期待' },
+  { key: 'cloud', label: '云翼', icon: 'cloud', enabled: true },
   { key: 'profile', label: '我的', icon: 'profile', enabled: true },
 ];
 
 // MobileHeader — top bar of the mobile shell.
 //   Shows: optional back action + page title + optional right action.
-function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction }) {
+function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction, root }) {
   return (
-    <header className="mobile-header" data-testid="mobile-header">
+    <header className={`mobile-header${root ? ' mobile-header--root' : ''}`} data-testid="mobile-header">
       <div className="mobile-header__brand">
         {backAction ? (
           <button
@@ -80,7 +54,7 @@ function MobileHeader({ brand, pageTitle, pageSubtitle, backAction, rightAction 
             aria-label="返回应用"
             onClick={backAction}
           >
-            <MobileIcon d="M15 18l-6-6 6-6" size={22} />
+            <Icon name="back" size={22} />
           </button>
         ) : null}
         <div>
@@ -205,6 +179,7 @@ export default function MobileShell({
         pageSubtitle={pageSubtitle}
         backAction={backAction}
         rightAction={rightAction}
+        root={activeTab === 'apps' && !backAction}
       />
       <main className="mobile-main" data-testid="mobile-main">
         {children}

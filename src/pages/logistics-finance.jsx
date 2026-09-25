@@ -1,26 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
-function LogisticsActions({ existing, onClose, onAction }) {
+function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityLabel, qualityState }) {
   return <div className="form-actions full">
     <button type="button" className="secondary" onClick={onClose}>关闭</button>
+    {existing && qualityAction && <button type="button" className="secondary" onClick={qualityAction}>{qualityLabel}</button>}
+    {existing && qualityState && <span className="muted">质量状态：{qualityState.label}</span>}
     {existing && <button type="button" className="danger-button" onClick={() => onAction('cancel')}>取消单据</button>}
     {existing && <button type="button" className="approve-button" onClick={() => onAction('confirm')}>确认单据</button>}
     <button className="primary">{existing ? '保存修改' : '保存草稿'}</button>
   </div>;
 }
 
-const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
-export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVERY: 'sales-deliveries', SALES_RETURN: 'returns', PURCHASE_ORDER: 'purchase-orders', PURCHASE_RECEIPT: 'purchase-receipts', PURCHASE_RETURN: 'returns', ACCOUNTING_VOUCHER: 'accounting' }[type]);
+const relationshipLabel = (type) => ({ SALES_ORDER: '销售订单', SALES_DELIVERY: '销售出货', SALES_RETURN: '销售退货', SALES_INVOICE: '销售发票', PURCHASE_ORDER: '采购订单', PURCHASE_RECEIPT: '采购入库', PURCHASE_RETURN: '采购退货', SUPPLIER_BILL: '供应商账单', ACCOUNTING_VOUCHER: '会计凭证' }[type] || '关联单据');
+export const relationshipPage = (type) => ({ SALES_ORDER: 'orders', SALES_DELIVERY: 'sales-deliveries', SALES_RETURN: 'returns', SALES_INVOICE: 'sales-invoices', PURCHASE_ORDER: 'purchase-orders', PURCHASE_RECEIPT: 'purchase-receipts', PURCHASE_RETURN: 'returns', SUPPLIER_BILL: 'supplier-bills', ACCOUNTING_VOUCHER: 'accounting' }[type]);
 
 export function RelationshipSections({ detail }) {
   const relation = detail.relationships || { upstream: [], downstream: [] };
-  const directLabel = detail.delivery_no ? '直接出货（未关联销售订单）' : detail.receipt_no ? '直接入库（未关联采购订单）' : '直接退货 / 补录（未关联来源单）';
+  const directLabel = detail.delivery_no ? 'Legacy / Source unavailable（旧版出货）' : detail.receipt_no ? 'Legacy / Source unavailable（旧版入库）' : 'Legacy / Source unavailable（旧版退货）';
   return <>
     <section className="document-relations" data-testid="document-relations"><h4>关联单据</h4>
-      {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>直接业务</small></div>}
+      {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>仅兼容读取，不可重新过账</small></div>}
       {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div>}
     </section>
     {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{relation.finance.status}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
@@ -30,7 +32,8 @@ export function RelationshipSections({ detail }) {
 
 function ReadOnlyDocument({ detail, onClose, partyName }) {
   return <div>
-    <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || detail.status}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    <div className="detail-grid"><div><span>往来单位</span><strong>{partyName}</strong></div><div><span>状态</span><strong>{detail.statusLabel || '状态待确认'}</strong></div><div><span>金额</span><strong>{money(detail.total_cents)}</strong></div></div>
+    {detail.billingSummary && <div className="billing-strip"><div><span>计费状态</span><strong>{detail.billingSummary.status}</strong></div><div><span>已计费</span><strong>{quantity(detail.billingSummary.billedQuantity)}</strong></div><div><span>待计费</span><strong>{quantity(detail.billingSummary.remainingQuantity)}</strong></div>{detail.billingSummary.grniCents!==undefined&&<div><span>GRNI</span><strong>{money(detail.billingSummary.grniCents)}</strong></div>}</div>}
     <RelationshipSections detail={detail}/>
     <table className="line-table"><thead><tr><th>货品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td>{item.productCode} - {item.productName}</td><td>{quantity(item.quantity)}</td><td>{money(item.unitPriceCents)}</td><td>{money(item.amountCents)}</td></tr>)}</tbody></table>
     <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button></div>
@@ -45,10 +48,10 @@ export function PurchaseReceipts({ user, notify }) {
   const [view, setView] = useState(target?.page === 'purchase-receipts' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="采购入库单" subtitle="采购到货入仓记录，与采购订单联动" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增采购入库</button>}>
+  return <Panel title="采购入库单" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增采购入库</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有采购入库记录"/>}</div>
     {view && <PurchaseReceiptModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -60,7 +63,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
-  const [form, setForm] = useState({ purchaseOrderId: "", supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [form, setForm] = useState({ purchaseOrderId: "", supplierId: "", warehouseId: "", receiptDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
   useEffect(() => {
     // Each fetch carries its own .catch so a single 403 (e.g. supplier
     // lookup unavailable for the role) does not cascade-reject the
@@ -68,7 +71,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/suppliers").then((r) => setSuppliers(r.suppliers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api("/api/lookup/purchase-orders-source").then((r) => setPurchaseOrders(r.purchaseOrders || [])).catch((e) => notify("来源采购订单加载失败，请重试；仍可选择直接入库。", "error"));
+    api("/api/lookup/purchase-orders-source").then((r) => setPurchaseOrders(r.purchaseOrders || [])).catch((e) => notify("来源采购订单加载失败，请重试。", "error"));
     if (value.id) api("/api/purchase-receipts/" + value.id).then((r) => setDetail(r.purchaseReceipt)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
@@ -80,6 +83,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
         supplierId: detail.supplier_id || "",
         warehouseId: detail.warehouse_id || "",
         receiptDate: detail.receipt_date || "",
+        billingMode: detail.billing_mode || "SEPARATE",
         remark: detail.remark || "",
         items: detail.items || [],
       });
@@ -92,46 +96,54 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) {
         await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form });
-        notify("保存成功");
+        notify("采购入库单更改已保存");
       } else {
         await api("/api/purchase-receipts", { method: "POST", body: form });
-        notify("创建成功");
+        notify("采购入库单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: PR line unit price is entered in yuan. The form
+  // stores integer cents (the API/DB contract) but the input is yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const choosePurchaseOrder = (purchaseOrderId) => {
     if (!purchaseOrderId) return setForm((current) => ({ ...current, purchaseOrderId: "" }));
     const order = purchaseOrders.find((o) => o.id === purchaseOrderId);
     if (!order) return;
-    setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
+    setForm((current) => ({ ...current, purchaseOrderId, supplierId: order.supplierId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ purchaseOrderItemId: item.purchaseOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, receivedQuantity: item.receivedQuantity, unitPriceCents: item.unitPriceCents })) }));
   };
-  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/purchase-receipts/" + value.id, { method: "PATCH", body: form }); await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const changeState = async (action) => { try { await api("/api/purchase-receipts/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const createQuality = async () => { try { await api('/api/iqc', { method: 'POST', body: { purchase_receipt_id: value.id } }); notify('IQC 检验草稿已创建，请前往来料检验完成检验'); const response = await api('/api/purchase-receipts/' + value.id); setDetail(response.purchaseReceipt); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="采购入库单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑采购入库单" : "新增采购入库单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
-    {!value.id && <label className="full">来源采购订单（可选）<select value={form.purchaseOrderId} onChange={(e) => void choosePurchaseOrder(e.target.value)}><option value="">直接入库（不关联采购订单）</option>{purchaseOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.supplierName}</option>)}</select><small>可随时清除来源，直接入库仍然有效</small></label>}
-    <label>供应商<select value={form.supplierId} onChange={(e) => setForm({...form, supplierId: e.target.value})} required><option value="">选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
+    {!value.id && <label className="full">来源采购订单（必选）<select value={form.purchaseOrderId} onChange={(e) => void choosePurchaseOrder(e.target.value)} required><option value="">选择已审批采购订单</option>{purchaseOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.supplierName}</option>)}</select><small>独立库存更正请使用库存调整、调拨、报废或盘点单。</small></label>}
+    <label>供应商<select value={form.supplierId} disabled required><option value="">由采购订单带入</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>收货日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({...form, receiptDate: e.target.value})} required/></label>
+    <label>计费模式<select value={form.billingMode} onChange={(e)=>setForm({...form,billingMode:e.target.value})}><option value="SEPARATE">收货后独立账单（GRNI）</option><option value="AUTO_BILL">收货后自动建账单</option></select></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-    <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+    <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
-          <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
+          <td><select value={item.productId} disabled required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>{item.orderedQuantity !== undefined && <small>订购 {quantity(item.orderedQuantity)} · 已收 {quantity(item.receivedQuantity || 0)} · 剩余 {quantity(item.orderedQuantity-(item.receivedQuantity || 0))}</small>}</td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td>{money(item.unitPriceCents)}</td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
-          <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
+          <td/>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 IQC 复检' : '创建 IQC'} qualityState={detail?.qualityState}/>
   </form></Modal>;
 }
 // SalesDeliveries
@@ -143,10 +155,10 @@ export function SalesDeliveries({ user, notify }) {
   const [view, setView] = useState(target?.page === 'sales-deliveries' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="销售出货单" subtitle="发货给客户的出库记录，与销售订单联动" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增销售出货</button>}>
+  return <Panel title="销售出货单" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增销售出货</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有销售出货记录"/>}</div>
     {view && <SalesDeliveryModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -158,14 +170,14 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [salesOrders, setSalesOrders] = useState([]);
-  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. customer lookup unavailable)
     // does not cascade-reject and silently disable the other selectors.
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api("/api/lookup/sales-orders-source").then((r) => setSalesOrders(r.orders || [])).catch((e) => notify("来源销售订单加载失败，请重试；仍可选择直接出货。", "error"));
+    api("/api/lookup/sales-orders-source").then((r) => setSalesOrders(r.orders || [])).catch((e) => notify("来源销售订单加载失败，请重试。", "error"));
     if (value.id) api("/api/sales-deliveries/" + value.id).then((r) => setDetail(r.salesDelivery)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
@@ -175,6 +187,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
         customerId: detail.customer_id || "",
         warehouseId: detail.warehouse_id || "",
         deliveryDate: detail.delivery_date || detail.receipt_date || "",
+        billingMode: detail.billing_mode || "SEPARATE",
         remark: detail.remark || "",
         items: detail.items || [],
       });
@@ -186,46 +199,53 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) {
         await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form });
-        notify("保存成功");
+        notify("销售出货单更改已保存");
       } else {
         await api("/api/sales-deliveries", { method: "POST", body: form });
-        notify("创建成功");
+        notify("销售出货单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: SD line unit price is entered in yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const chooseSalesOrder = (salesOrderId) => {
     if (!salesOrderId) return setForm((current) => ({ ...current, salesOrderId: "" }));
     const order = salesOrders.find((o) => o.id === salesOrderId);
     if (!order) return;
-    setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
+    setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ salesOrderItemId: item.salesOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, deliveredQuantity: item.deliveredQuantity, unitPriceCents: item.unitPriceCents })) }));
   };
-  const changeState = async (action) => { try { if (action === 'confirm') await api("/api/sales-deliveries/" + value.id, { method: "PATCH", body: form }); await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const changeState = async (action) => { try { await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
+  const createQuality = async () => { try { await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: value.id } }); notify('OQC 检验草稿已创建，请前往出货检验完成检验'); const response = await api('/api/sales-deliveries/' + value.id); setDetail(response.salesDelivery); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出货单" : "新增销售出货单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
-    {!value.id && <label className="full">来源销售订单（可选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)}><option value="">直接出货（不关联销售订单）</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>可随时清除来源，直接出货仍然有效</small></label>}
-    <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
+    {!value.id && <label className="full">来源销售订单（必选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)} required><option value="">选择已审批销售订单</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>独立库存更正请使用库存调整、调拨、报废或盘点单。</small></label>}
+    <label>客户<select value={form.customerId} disabled required><option value="">由销售订单带入</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>发货日期<input type="date" value={form.deliveryDate} onChange={(e) => setForm({...form, deliveryDate: e.target.value})} required/></label>
+    <label>计费模式<select value={form.billingMode} onChange={(e)=>setForm({...form,billingMode:e.target.value})}><option value="SEPARATE">出货后独立开票</option><option value="DIRECT_BILL">出货后自动开票</option></select></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-    <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+    <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
-          <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
+          <td><select value={item.productId} disabled required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>{item.orderedQuantity !== undefined && <small>订购 {quantity(item.orderedQuantity)} · 已发 {quantity(item.deliveredQuantity || 0)} · 剩余 {quantity(item.orderedQuantity-(item.deliveredQuantity || 0))}</small>}</td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td>{money(item.unitPriceCents)}</td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
-          <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
+          <td/>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 OQC 复检' : '创建 OQC'} qualityState={detail?.qualityState}/>
   </form></Modal>;
 }
 // Returns
@@ -243,7 +263,7 @@ export function Returns({ user, notify }) {
   };
   useEffect(() => { void load(); }, [tab, status]);
   const cols = ["单号", tab === "sales" ? "客户" : "供应商", "仓库", "金额", "状态", "制单人", ""];
-  return <Panel title="退货管理" subtitle="销售退货与采购退货的统一入口" action={can(user, "RETURNS_MANAGE") && <button className="primary" onClick={() => setView({ tab })}>＋ 新增退货单</button>}>
+  return <Panel title={tab === 'sales' ? '销售退货' : '采购退货'} action={can(user, "RETURNS_MANAGE") && <button className="primary" onClick={() => setView({ tab })}>＋ 新增退货单</button>}>
     <div className="segment-wrap"><div className="segment"><button className={tab === "sales" ? "active" : ""} onClick={() => setTab("sales")}>销售退货</button><button className={tab === "purchase" ? "active" : ""} onClick={() => setTab("purchase")}>采购退货</button></div></div>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr>{cols.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>
@@ -277,7 +297,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     api("/api/lookup/customers").then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, "error"));
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
-    api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch((e) => notify("来源单据加载失败，请重试；仍可选择直接退货 / 补录。", "error"));
+    api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch((e) => notify("来源单据加载失败，请重试。", "error"));
     if (value.id) {
       const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
       api(apiPath + "/" + value.id).then((r) => setDetail(tab === "sales" ? r.salesReturn : r.purchaseReturn)).catch((e) => notify(e.message, "error"));
@@ -302,40 +322,45 @@ function ReturnModal({ user, value, onClose, notify, api }) {
       const body = tab === "sales" ? { deliveryId: form.sourceId || null, customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { receiptId: form.sourceId || null, supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
       if (value.id) {
         await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "PATCH", body });
-        notify("保存成功");
+        notify("退货单更改已保存");
       } else {
         await api(tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns", { method: "POST", body });
-        notify("创建成功");
+        notify("退货单已创建");
       }
       onClose();
     } catch (e) { notify(e.message, "error"); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  // V1.3 Phase 1: return line unit price is entered in yuan.
+  const updateItemPriceCents = (i, nextCents) => {
+    const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
+    setItems(form.items.map((item, idx) => idx === i ? { ...item, unitPriceCents: safeCents } : item));
+  };
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const partyOptions = tab === "sales" ? customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>) : suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>);
   const chooseReturnSource = async (sourceId) => {
     if (!sourceId) return setForm((current) => ({ ...current, sourceId: '' }));
-    try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => ({ productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+    try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => ({ [tab === 'sales' ? 'deliveryItemId' : 'receiptItemId']: item.id, productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
   };
   const changeState = async (action) => { try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm') { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={tab === 'sales' ? detail.customerName : detail.supplierName} onClose={onClose}/></Modal>;
   return <Modal title={(value.id ? "编辑" : "新增") + (tab === "sales" ? "销售退货单" : "采购退货单")} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
-    {!value.id && <label className="full">来源{tab === 'sales' ? '销售出货' : '采购入库'}（可选）<select value={form.sourceId} onChange={(e) => void chooseReturnSource(e.target.value)}><option value="">直接退货 / 补录</option>{sources.map((source) => <option key={source.id} value={source.id}>{tab === 'sales' ? source.delivery_no : source.receipt_no} · {tab === 'sales' ? source.customerName : source.supplierName}</option>)}</select></label>}
-    <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} onChange={(e) => setForm({...form, partyId: e.target.value})} required><option value="">选择{tab === "sales" ? "客户" : "供应商"}</option>{partyOptions}</select></label>
-    <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
+    {!value.id && <label className="full">来源{tab === 'sales' ? '销售出货' : '采购入库'}（必选）<select value={form.sourceId} onChange={(e) => void chooseReturnSource(e.target.value)} required><option value="">选择已确认来源单</option>{sources.map((source) => <option key={source.id} value={source.id}>{tab === 'sales' ? source.delivery_no : source.receipt_no} · {tab === 'sales' ? source.customerName : source.supplierName}</option>)}</select></label>}
+    <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} disabled required><option value="">由来源单带入</option>{partyOptions}</select></label>
+    <label>仓库<select value={form.warehouseId} disabled required><option value="">由来源单带入</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>退货日期<input type="date" value={form.returnDate} onChange={(e) => setForm({...form, returnDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-    <div className="full"><div className="form-section-head"><span>明细行</span><button type="button" className="secondary" onClick={addItem}>＋ 增行</button></div>
-      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th><th/></tr></thead><tbody>
+    <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
+      <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
-          <td><select value={item.productId} onChange={(e) => updateItem(i, "productId", e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
+          <td><select value={item.productId} disabled required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
-          <td><input type="number" value={item.unitPriceCents} min="1" onChange={(e) => updateItem(i, "unitPriceCents", Number(e.target.value))} required/></td>
+          <td>{money(item.unitPriceCents)}</td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
-          <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>×</button></td>
+          <td/>
         </tr>)}
       </tbody></table>
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
@@ -365,9 +390,11 @@ export function InventoryTransactions({ user, notify }) {
     PRODUCTION_OUTPUT: "生产完工入库",
     PRODUCTION_ORDER: "生产领料",
     PRODUCTION_MATERIAL_ISSUE: "用料出库",
-    PRODUCTION_RECEIPT: "生产入库"
+    PRODUCTION_RECEIPT: "生产入库",
+    PRODUCTION_MATERIAL_RETURN: "生产退料",
+    PRODUCTION_RECEIPT_REVERSAL: "生产入库冲销"
   };
-  return <Panel title="库存异动" subtitle="所有库存变动的明细记录">
+  return <Panel title="库存异动">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部来源</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>
     <div className="toolbar movement-filters"><select value={filters.product} onChange={(e) => setFilters({ ...filters, product: e.target.value })}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={filters.warehouse} onChange={(e) => setFilters({ ...filters, warehouse: e.target.value })}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select><select value={filters.direction} onChange={(e) => setFilters({ ...filters, direction: e.target.value })}><option value="">全部方向</option><option value="IN">IN · 入库</option><option value="OUT">OUT · 出库</option></select><input aria-label="开始日期" type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}/><input aria-label="结束日期" type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}/></div>
     <div className="table-wrap"><table><thead><tr><th>时间</th><th>来源类型</th><th>来源单号</th><th>仓库</th><th>货品</th><th>方向</th><th className="number">数量</th><th className="number">变动后库存</th></tr></thead><tbody>
@@ -388,7 +415,7 @@ export function AccountsReceivable({ user, notify }) {
   return <Panel title="应收账款" subtitle="客户欠款，跟踪回款情况" action={can(user, 'AR_MANAGE') && <button className="primary" onClick={() => setView({})}>＋ 手工应收</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="OPEN">未收</option><option value="PARTIAL">部分收款</option><option value="CLOSED">已结清</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>来源单号</th><th>客户</th><th className="number">应收金额</th><th className="number">已收金额</th><th className="number">未收金额</th><th>状态</th><th>到期日</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.source_type === 'SALES_ORDER' ? '销售订单' : '销售出库'}</td><td>{item.customerName}</td><td className="number">{money(item.amount_cents)}</td><td className="number">{money(item.paid_cents)}</td><td className="number positive">{money(item.unpaidCents)}</td><td><Status status={item.status?.toLowerCase()} label={item.statusLabel}/></td><td>{item.due_date || '-'}</td></tr>)}
+      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.source_type === 'SALES_ORDER' ? '销售订单' : '销售出货'}</td><td>{item.customerName}</td><td className="number">{money(item.amount_cents)}</td><td className="number">{money(item.paid_cents)}</td><td className="number positive">{money(item.unpaidCents)}</td><td><Status status={item.status?.toLowerCase()} label={item.statusLabel}/></td><td>{item.due_date || '-'}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有应收账款记录"/>}</div>
     {view && <ARModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
   </Panel>;
@@ -407,13 +434,13 @@ function ARModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/accounts-receivable', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('应收账款已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
   return <Modal title={value.id ? '应收账款详情' : '手工创建应收'} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>客户<select value={form.customerId} onChange={(e) => setForm({...form, customerId: e.target.value})} required><option value="">选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
-    <label>应收金额<input type="number" value={form.amountCents} min="0" onChange={(e) => setForm({...form, amountCents: Number(e.target.value)})} required/></label>
+    <label>应收金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({...form, amountCents})} min={0.01} required/></label>
     <label>到期日<input type="date" value={form.dueDate} onChange={(e) => setForm({...form, dueDate: e.target.value})}/></label>
     <FormActions onClose={onClose} saveText={value.id ? '保存' : '创建'}/>
   </form></Modal>;
@@ -449,13 +476,13 @@ function APModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/accounts-payable', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('应付账款已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
   return <Modal title={value.id ? '应付账款详情' : '手工创建应付'} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     <label>供应商<select value={form.supplierId} onChange={(e) => setForm({...form, supplierId: e.target.value})} required><option value="">选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></label>
-    <label>应付金额<input type="number" value={form.amountCents} min="0" onChange={(e) => setForm({...form, amountCents: Number(e.target.value)})} required/></label>
+    <label>应付金额（元）<YuanField valueCents={form.amountCents} onChangeCents={(amountCents) => setForm({...form, amountCents})} min={0.01} required/></label>
     <label>到期日<input type="date" value={form.dueDate} onChange={(e) => setForm({...form, dueDate: e.target.value})}/></label>
     <FormActions onClose={onClose} saveText={value.id ? '保存' : '创建'}/>
   </form></Modal>;
@@ -497,7 +524,7 @@ function PCModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/payment-collections', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('收款单已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -513,8 +540,8 @@ function PCModal({ user, value, onClose, notify, api }) {
       <table className="line-table"><thead><tr><th>应收单</th><th className="number">未收金额</th><th className="number">本次收款</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.receivableId} onChange={(e) => updateItem(i, 'receivableId', e.target.value)} required><option value="">选择应收单</option>{receivables.map((ar) => <option key={ar.id} value={ar.id}>{(ar.source_type === 'SALES_ORDER' ? '订单' : '出库') + ' ' + money(ar.unpaidCents)}</option>)}</select></td>
-          <td className="number">{item.receivableId ? (receivables.find((r) => r.id === item.receivableId)?.unpaidCents || 0) : 0}</td>
-          <td><input type="number" value={item.amountCents} min="0" onChange={(e) => updateItem(i, 'amountCents', Number(e.target.value))} required/></td>
+          <td className="number">{money(item.receivableId ? (receivables.find((r) => r.id === item.receivableId)?.unpaidCents || 0) : 0)}</td>
+          <td><YuanField ariaLabel="本次收款（元）" valueCents={item.amountCents} min={0.01} onChangeCents={(value) => updateItem(i, 'amountCents', value)} required/></td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>x</button></td>
         </tr>)}
       </tbody></table>
@@ -560,7 +587,7 @@ function PDModal({ user, value, onClose, notify, api }) {
     try {
       if (value.id) { notify('编辑功能开发中'); onClose(); return; }
       await api('/api/payment-disbursements', { method: 'POST', body: form });
-      notify('创建成功');
+      notify('付款单已创建');
       onClose();
     } catch (e) { notify(e.message, 'error'); }
   };
@@ -576,8 +603,8 @@ function PDModal({ user, value, onClose, notify, api }) {
       <table className="line-table"><thead><tr><th>应付单</th><th className="number">未付金额</th><th className="number">本次付款</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.payableId} onChange={(e) => updateItem(i, 'payableId', e.target.value)} required><option value="">选择应付单</option>{payables.map((ap) => <option key={ap.id} value={ap.id}>{(ap.source_type === 'PURCHASE_ORDER' ? '订单' : '入库') + ' ' + money(ap.unpaidCents)}</option>)}</select></td>
-          <td className="number">{item.payableId ? (payables.find((p) => p.id === item.payableId)?.unpaidCents || 0) : 0}</td>
-          <td><input type="number" value={item.amountCents} min="0" onChange={(e) => updateItem(i, 'amountCents', Number(e.target.value))} required/></td>
+          <td className="number">{money(item.payableId ? (payables.find((p) => p.id === item.payableId)?.unpaidCents || 0) : 0)}</td>
+          <td><YuanField ariaLabel="本次付款（元）" valueCents={item.amountCents} min={0.01} onChangeCents={(value) => updateItem(i, 'amountCents', value)} required/></td>
           <td><button type="button" className="danger-text" onClick={() => removeItem(i)}>x</button></td>
         </tr>)}
       </tbody></table>

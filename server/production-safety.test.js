@@ -1,10 +1,33 @@
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { after, beforeEach, describe, test } from 'node:test';
 import { createDatabase, hashPassword, shouldSeedDemoData, verifyPassword } from './db.js';
+import { createDisposableSentinel, createTempDir, createTempDb, readSentinel } from './test-utils/temp-db.js';
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const RESET_SCRIPT = join(REPO, 'server', 'reset-data.js');
+const REPO_DEFAULT_DB = join(REPO, 'data', 'erp.db');
+
+function runReset({ env }) {
+  try {
+    const out = execFileSync('node', [RESET_SCRIPT], {
+      cwd: REPO,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 0, stdout: out.toString(), stderr: '' };
+  } catch (e) {
+    return {
+      status: e.status ?? 1,
+      stdout: (e.stdout || Buffer.alloc(0)).toString(),
+      stderr: (e.stderr || Buffer.alloc(0)).toString(),
+    };
+  }
+}
 
 let tempDir;
 
@@ -209,42 +232,137 @@ describe('Production Safety — createDatabase() in production', () => {
 });
 
 describe('Production Safety — reset-data guard', () => {
-  test('production: pnpm reset-data exits non-zero with error message', () => {
-    let stdout = '';
-    let stderr = '';
-    let code = 0;
-    try {
-      const out = execSync('node server/reset-data.js', {
-        cwd: process.cwd().replace(/\\server$/, ''),
-        env: { ...process.env, NODE_ENV: 'production' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      stdout = out.toString();
-      code = 0;
-    } catch (e) {
-      stdout = (e.stdout || Buffer.alloc(0)).toString();
-      stderr = (e.stderr || Buffer.alloc(0)).toString();
-      code = e.status || 1;
-    }
-    assert.notEqual(code, 0, 'reset-data must exit non-zero in production');
-    assert.ok(stderr.includes('生产环境禁止') || stdout.includes('生产环境禁止'), `expected error message, got stdout="${stdout}" stderr="${stderr}"`);
+  test('production: explicit ERP_DB_PATH + NODE_ENV=production still REFUSES', () => {
+    const target = createTempDir('reset-prod-guard');
+    const dbPath = join(target, 'should-be-removed.db');
+    const res = runReset({
+      env: {
+        NODE_ENV: 'production',
+        ERP_DB_PATH: dbPath,
+      },
+    });
+    assert.notEqual(res.status, 0, 'reset-data must exit non-zero in production');
+    assert.ok(
+      res.stderr.includes('生产环境禁止') || res.stdout.includes('生产环境禁止'),
+      `expected production guard message, got stdout="${res.stdout}" stderr="${res.stderr}"`,
+    );
   });
 
-  test('development: pnpm reset-data runs normally (no guard)', () => {
-    // 此测试只验证脚本在 dev 下不立即报错退出 —— 不创建实际文件
-    let code = 0;
-    let stderr = '';
-    try {
-      execSync('node server/reset-data.js', {
-        cwd: process.cwd().replace(/\\server$/, ''),
-        env: { ...process.env, NODE_ENV: 'development' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      stderr = (e.stderr || Buffer.alloc(0)).toString();
-      code = e.status || 1;
+  test('development: explicit temp ERP_DB_PATH → reset only that target', () => {
+    const target = createTempDir('reset-dev-explicit');
+    const dbPath = join(target, 'disposable.db');
+    // Seed the DB so we can prove it was reset.
+    {
+      const db = createDatabase(dbPath);
+      db.prepare("INSERT INTO permissions(code,name) VALUES ('X_TEST_GUARD','x-test-guard')").run();
+      db.close();
     }
-    // dev 下应该成功(可能文件不存在但不会因 guard 报错)
-    assert.equal(stderr.includes('生产环境禁止'), false, `dev should not hit the production guard, stderr="${stderr}"`);
+    assert.ok(existsSync(dbPath), 'precondition: DB file must exist');
+
+    const res = runReset({
+      env: {
+        NODE_ENV: 'development',
+        ERP_DB_PATH: dbPath,
+      },
+    });
+    assert.equal(res.status, 0, `reset-data should succeed with explicit ERP_DB_PATH, got stderr="${res.stderr}"`);
+    assert.equal(existsSync(dbPath), false, 'target DB file must be deleted');
+    assert.equal(existsSync(`${dbPath}-wal`), false, 'WAL sibling must be deleted (or absent)');
+    assert.equal(existsSync(`${dbPath}-shm`), false, 'SHM sibling must be deleted (or absent)');
+
+    try { rmSync(target, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('development: NO ERP_DB_PATH → REFUSE (no default-repo fallback)', () => {
+    const res = runReset({
+      env: {
+        NODE_ENV: 'development',
+      },
+    });
+    assert.notEqual(res.status, 0, 'reset-data must refuse when ERP_DB_PATH is absent');
+    const combined = `${res.stdout}\n${res.stderr}`;
+    assert.ok(
+      combined.includes('ERP_DB_PATH') || combined.includes('默认数据库') || combined.includes('隐式'),
+      `expected refuse-without-target message, got stdout="${res.stdout}" stderr="${res.stderr}"`,
+    );
+  });
+
+  test('development: ERP_DB_PATH pointing at the repository default DB → REFUSE', () => {
+    const res = runReset({
+      env: {
+        NODE_ENV: 'development',
+        ERP_DB_PATH: REPO_DEFAULT_DB,
+      },
+    });
+    assert.notEqual(res.status, 0, 'reset-data must refuse when targeted at the repo default DB');
+    const combined = `${res.stdout}\n${res.stderr}`;
+    assert.ok(
+      combined.includes('仓库默认数据库') || combined.includes('默认数据库'),
+      `expected repo-default refuse message, got stdout="${res.stdout}" stderr="${res.stderr}"`,
+    );
+  });
+});
+
+describe('Production Safety — reset-data sentinel regression (no repo default touched)', () => {
+  test('destructive reset preserves a sentinel file outside the target DB', () => {
+    // Sentinel represents developer data — it must be untouched after reset.
+    const sentinel = createDisposableSentinel({ label: 'developer-data', size: 8192 });
+    const before = readSentinel(sentinel.path);
+
+    // Target DB lives in a different temp directory.
+    const target = createTempDb({ label: 'reset-sentinel-target', filename: 'target.db' });
+    // Sanity: target DB exists before reset.
+    assert.ok(existsSync(target.dbPath), 'precondition: target DB must exist');
+    target.close();
+
+    const res = runReset({
+      env: {
+        NODE_ENV: 'development',
+        ERP_DB_PATH: target.dbPath,
+      },
+    });
+    assert.equal(res.status, 0, `reset-data must succeed with explicit temp target, got stderr="${res.stderr}"`);
+    assert.equal(existsSync(target.dbPath), false, 'target DB file must be deleted');
+    assert.equal(existsSync(target.walPath), false, 'target WAL must be deleted (or absent)');
+    assert.equal(existsSync(target.shmPath), false, 'target SHM must be deleted (or absent)');
+
+    // Sentinel must be byte-for-byte unchanged.
+    const after = readSentinel(sentinel.path);
+    assert.equal(after.size, before.size, 'sentinel size must not change');
+    assert.equal(after.sha256, before.sha256, 'sentinel SHA-256 must not change');
+
+    // Cleanup: delete sentinel dir, leave repo default DB alone.
+    sentinel.cleanup();
+    try { rmSync(target.dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('repo/data/erp.db / -wal / -shm are never selected by reset-data without an explicit, non-repo-local opt-in', () => {
+    // Confirm the guard invariants before invoking the script:
+    //   1) repo default DB path resolves to <repo>/data/erp.db
+    //   2) reset-data refuses when aimed at that path
+    //   3) the file does not exist (we are not running on a real workspace DB)
+    assert.equal(REPO_DEFAULT_DB, join(REPO, 'data', 'erp.db'));
+
+    // We do NOT create the repo default DB. If a future test accidentally
+    // does, this assertion will fail and force a maintainer review.
+    assert.equal(
+      existsSync(REPO_DEFAULT_DB),
+      false,
+      'this test requires the repo default DB to be absent; if a real DB exists, do NOT run the destructive suite against it',
+    );
+
+    // Confirm script REFUSES even with explicit ERP_DB_PATH = repo default.
+    const res = runReset({
+      env: {
+        NODE_ENV: 'development',
+        ERP_DB_PATH: REPO_DEFAULT_DB,
+      },
+    });
+    assert.notEqual(res.status, 0, 'reset-data must refuse when aimed at the repo default DB');
+
+    // The repo default DB is still absent (nothing was created, nothing was destroyed).
+    assert.equal(existsSync(REPO_DEFAULT_DB), false, 'repo default DB must remain absent after a refused run');
+    assert.equal(existsSync(`${REPO_DEFAULT_DB}-wal`), false, 'repo default -wal must remain absent');
+    assert.equal(existsSync(`${REPO_DEFAULT_DB}-shm`), false, 'repo default -shm must remain absent');
   });
 });

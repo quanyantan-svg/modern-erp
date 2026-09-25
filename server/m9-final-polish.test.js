@@ -35,7 +35,7 @@ function renderOverview(allowed = []) {
 }
 
 describe('M9 business overview', () => {
-  test('is mounted in desktop and mobile navigation without a new permission', () => {
+  test('is mounted in canonical navigation without a new permission', () => {
     assert.match(appSource, /key: 'business-overview',[^\n]+permission: 'DASHBOARD_VIEW'/);
     assert.match(appSource, /'business-overview': <BusinessOverview\/>/);
     assert.match(metadataSource, /page: 'business-overview', mobileLabel: '业务总览'/);
@@ -55,8 +55,8 @@ describe('M9 business overview', () => {
   });
 
   test('deferred concepts are never active links', () => {
-    const html = renderOverview(['orders', 'inventory', 'production-orders']);
-    for (const deferred of ['计划预测', 'MRP 执行', '请购', '库存报废', '库存月结', '销售折让', '采购折让']) {
+    const html = renderOverview(['orders', 'inventory', 'production-orders', 'forecasts', 'mrp', 'production-instructions', 'purchase-instructions', 'purchase-requisitions']);
+    for (const deferred of ['库存报废', '库存月结', '销售折让', '采购折让']) {
       assert.doesNotMatch(html, new RegExp(`href="[^"]+"[^>]*>[^<]*${deferred}`));
     }
   });
@@ -92,7 +92,7 @@ describe('M9 permission and terminology contracts', () => {
 
   test('visible labels use the frozen course vocabulary', () => {
     assert.match(appSource, /label: '销售出货'/);
-    assert.match(appSource, /label: '库存异动'/);
+    assert.match(appSource, /label: '库存异动明细'/);
     assert.match(appSource, /label: '制令单'/);
     assert.doesNotMatch(appSource, /label: '销售出库'|label: '库存流水'|label: '生产工单'/);
   });

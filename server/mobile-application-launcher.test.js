@@ -79,49 +79,67 @@ function applicationPagesFor(roleId) {
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
-    'customers', 'suppliers', 'products', 'warehouses', 'boms',
+    'customers', 'suppliers', 'products', 'warehouses',
+    'forecasts', 'mrp-runs', 'material-requirements-plan',
+    'production-instructions', 'purchase-instructions', 'purchase-requisitions',
+    'production-orders', 'material-issues', 'production-receipts', 'boms', 'product-routings',
     'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts',
-    'inventory', 'inventory-transactions', 'production-orders',
-    'material-issues', 'production-receipts',
-    'iqc', 'oqc', 'accounts-receivable', 'payment-collections',
-    'accounts-payable', 'payment-disbursements', 'accounting', 'cash-journals', 'bank-accounts',
+    'purchase-orders', 'purchase-receipts', 'returns',
+    'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions', 'traceability',
+    'iqc', 'oqc', 'quality-control-points', 'product-costs', 'cost-rates', 'sales-invoices', 'accounts-receivable', 'payment-collections',
+    'accounts-payable', 'supplier-bills', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'system-health', 'go-live', 'cash-journals', 'bank-accounts',
     'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
-    'workflows', 'users',
+    'projects', 'tasks', 'timesheets', 'workflows', 'users', 'data-cleanup', 'notifications',
   ],
+  // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers,
+  // SO/PO/PR create/submit) and CRM. Logistics execution pages
+  // (sales-deliveries, purchase-receipts, returns) are no longer in
+  // the sales surface — those moved to warehouse.
   'role-sales': [
-    'business-overview', 'customers', 'suppliers', 'products', 'warehouses',
-    'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts', 'inventory', 'inventory-transactions',
+    'business-overview', 'customers', 'suppliers', 'products',
+    'purchase-requisitions',
+    'orders', 'contacts', 'purchase-orders',
+    'notifications',
   ],
   'role-reviewer': [
-    'business-overview', 'customers', 'products', 'warehouses', 'orders', 'sales-deliveries',
-    'returns', 'purchase-orders', 'purchase-receipts', 'inventory',
-    'inventory-transactions',
+    'business-overview', 'customers', 'products', 'warehouses',
+    'purchase-requisitions',
+    'orders', 'sales-deliveries', 'returns',
+    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'traceability', 'notifications',
   ],
+  // V1.3 Phase 1: WAREHOUSE owns physical stock execution including
+  // material issue and production receipt; sales-deliveries / returns
+  // and purchase-receipts / returns move into the warehouse surface.
   'role-warehouse': [
-    'business-overview', 'products', 'warehouses', 'sales-deliveries', 'returns',
-    'purchase-receipts', 'inventory', 'inventory-transactions', 'iqc', 'oqc',
+    'business-overview', 'products', 'warehouses',
+    'production-orders', 'material-issues', 'production-receipts',
+    'sales-deliveries', 'returns',
+    'purchase-receipts', 'returns',
+    'inventory', 'inventory-scraps', 'inventory-transactions', 'traceability', 'iqc', 'oqc',
+    'notifications',
   ],
   'role-accounting': [
     'business-overview', 'orders', 'purchase-orders',
-    'accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements',
-    'accounting', 'cash-journals',
+    'sales-invoices', 'accounts-receivable', 'payment-collections', 'accounts-payable', 'supplier-bills', 'payment-disbursements',
+    'sales-discounts', 'purchase-discounts',
+    'accounting', 'system-health', 'go-live', 'cash-journals',
     'bank-accounts', 'bills', 'fixed-assets',
-    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
+    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'notifications',
   ],
 };
 
 describe('M2 application metadata', () => {
-  test('defines the ten teacher-aligned product groups in order', () => {
+  test('defines the teacher-aligned product groups in order (planning added by P1)', () => {
     assert.deepEqual(
       mobileGroups.map(({ key, label }) => [key, label]),
       [
-        ['overview', '业务导航'], ['master-data', '基础资料'], ['sales', '销售管理'],
-        ['purchasing', '采购管理'], ['inventory', '仓储库存'],
-        ['manufacturing', '生产管理'], ['quality', '质量管理'],
-        ['finance', '财务管理'], ['reports', '决策报表'],
-        ['system', '系统管理'],
+        ['overview', '概览'], ['master-data', '基础资料'],
+        ['planning', '计划与生产'],
+        ['sales', '销售'],
+        ['purchasing', '采购'], ['inventory', '库存'],
+        ['quality', '质量'],
+        ['finance', '财务'], ['reports', '决策报表'],
+        ['projects', '项目'], ['system', '系统'],
       ]
     );
   });
@@ -132,7 +150,7 @@ describe('M2 application metadata', () => {
     assert.doesNotMatch(metadataSource, /user\.username|username\s*===/);
   });
 
-  test('every application points to a canonical desktop nav page', () => {
+  test('every application points to a canonical navigation page', () => {
     const navPages = new Set(navGroups.flatMap((group) => group.items || []).map((item) => item.key));
     for (const item of mobileGroups.flatMap((group) => group.items)) {
       assert.ok(navPages.has(item.page), `unknown mobile page: ${item.page}`);
@@ -166,8 +184,16 @@ describe('M2 application metadata', () => {
     const labels = new Map(mobileGroups.flatMap((group) => group.items.map((item) => [item.page, item.mobileLabel])));
     assert.equal(labels.get('production-orders'), '制令单');
     assert.equal(labels.get('sales-deliveries'), '销售出货');
-    assert.equal(labels.get('inventory-transactions'), '库存异动');
+    assert.equal(labels.get('inventory-transactions'), '库存异动明细');
     assert.ok(!labels.has('制令单'));
+  });
+
+  test('sales and purchase returns are distinct launcher entries into one canonical page', () => {
+    const returns = mobileGroups.flatMap((group) => group.items).filter((item) => item.page === 'returns');
+    assert.deepEqual(returns.map((item) => [item.key, item.mobileLabel, item.target.documentType]), [
+      ['returns:sales', '销售退货', 'SALES_RETURN'],
+      ['returns:purchase', '采购退货', 'PURCHASE_RETURN'],
+    ]);
   });
 
   test('deferred and fake applications are absent from launcher items', () => {
@@ -217,9 +243,10 @@ describe('M2 canonical role application matrix', () => {
   }
 
   test('non-admin roles do not gain unsupported domains', () => {
-    assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users'].includes(page)));
+    assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'].includes(page)));
     assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users'].includes(page)));
-    assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users'].includes(page)));
+    assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'].includes(page)));
+    for (const role of ['role-sales', 'role-reviewer', 'role-warehouse', 'role-accounting']) assert.ok(!applicationPagesFor(role).includes('quality-control-points'));
   });
 });
 
@@ -248,7 +275,7 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(appSource, /function returnToMobileApplications\(\)[\s\S]*?setMobileApplication\(null\)[\s\S]*?setMobileTab\('apps'\)/);
   });
 
-  test('mobile defaults to Applications while desktop keeps dashboard default', () => {
+  test('the canonical shell defaults to Applications while preserving the page fallback', () => {
     assert.match(appSource, /useState\('apps'\)/);
     assert.match(appSource, /location\.hash\.slice\(1\) \|\| 'dashboard'/);
   });
@@ -270,9 +297,10 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(html, />销售活动</);
   });
 
-  test('directory remains the sole disabled bottom tab', async () => {
+  test('all five canonical bottom tabs are enabled', async () => {
     const tabs = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).MOBILE_TABS;
-    assert.deepEqual(tabs.filter((tab) => !tab.enabled).map((tab) => tab.key), ['directory']);
+    assert.deepEqual(tabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
+    assert.equal(tabs.every((tab) => tab.enabled), true);
   });
 
   test('320px grid has no fixed item width and labels clamp to two lines', () => {
@@ -282,11 +310,13 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.doesNotMatch(css, /\.mobile-launcher__item\s*\{[^}]*width:\s*\d+px/s);
   });
 
-  test('desktop shell and labels remain present', () => {
-    assert.match(appSource, /return <div className="app-shell">/);
+  test('canonical responsive shell and business labels remain present', () => {
+    assert.match(appSource, /<MobileShell\b/);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /className="sidebar"/);
     assert.match(appSource, /key: 'business-overview', label: '业务总览'/);
     assert.match(appSource, /key: 'production-orders', label: '制令单'/);
     assert.match(appSource, /key: 'sales-deliveries', label: '销售出货'/);
-    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动'/);
+    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动明细'/);
   });
 });

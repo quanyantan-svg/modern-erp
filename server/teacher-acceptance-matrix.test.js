@@ -322,9 +322,20 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
   });
 
   test('Sales CAN create + submit sales order', async () => {
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms.
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 100000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 5, unitPriceCents: 100000 }],
+      },
     });
     assert.equal(order.status, 201, order.body.error);
     const orderId = order.body.id;
@@ -335,7 +346,16 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
   test('Sales CANNOT approve or reject sales orders', async () => {
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 3, unitPriceCents: 150000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 3, unitPriceCents: 150000 }],
+      },
     });
     const orderId = order.body.id;
     await api(baseUrl, salesToken, `/api/orders/${orderId}/submit`, { method: 'POST' });
@@ -496,11 +516,22 @@ describe('Teacher Acceptance Matrix — test_reviewer', () => {
   });
 
   test('Sales creates + submits → Reviewer approves (full SoD)', async () => {
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms.
     const order = await api(baseUrl, salesToken, '/api/orders', {
       method: 'POST',
-      body: { customerId: 'customer-001', items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 50000 }] },
+      body: {
+        customerId: 'customer-001',
+        orderDate: '2026-09-22',
+        requestedDeliveryDate: '2026-10-10',
+        paymentTerms: '月结 30 天',
+        shipToContactName: '王女士',
+        shipToPhone: '13800000000',
+        shipToAddress: '上海市浦东新区张江路 88 号',
+        items: [{ productId: 'product-001', quantity: 1, unitPriceCents: 50000 }],
+      },
     });
-    assert.equal(order.status, 201);
+    assert.equal(order.status, 201, order.body.error);
     const orderId = order.body.id;
     await api(baseUrl, salesToken, `/api/orders/${orderId}/submit`, { method: 'POST' });
     const approve = await api(baseUrl, reviewerToken, `/api/orders/${orderId}/approve`, { method: 'POST' });
@@ -539,6 +570,22 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
   let baseUrl;
   let warehouseToken;
   let adminToken;
+  let sourceSequence = 0;
+  const seedQualitySource = (kind, quantities) => {
+    const key = `matrix-q-${++sourceSequence}`; const now = new Date().toISOString();
+    if (kind === 'IQC') {
+      db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,'APPROVED',10000,'','user-admin',?,?)").run(`po-${key}`, `PO-${key}`, 'supplier-001', now, now);
+      quantities.forEach((quantity, index) => db.prepare('INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)').run(`poi-${key}-${index}`, `po-${key}`, 'product-001', quantity, 100, quantity * 100, index + 1));
+      db.prepare("INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,'user-warehouse','DRAFT',?,'2026-09-23','','user-warehouse',?,?)").run(`pr-${key}`, `PR-${key}`, `po-${key}`, 'supplier-001', 'warehouse-001', quantities.reduce((a,b)=>a+b,0)*100, now, now);
+      quantities.forEach((quantity, index) => db.prepare('INSERT INTO purchase_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_order_item_id) VALUES(?,?,?,?,?,?,?,?)').run(`pri-${key}-${index}`, `pr-${key}`, 'product-001', quantity, 100, quantity * 100, index + 1, `poi-${key}-${index}`));
+      return `pr-${key}`;
+    }
+    db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES(?,?,?,'APPROVED',10000,'','user-admin',?,?)").run(`so-${key}`, `SO-${key}`, 'customer-001', now, now);
+    quantities.forEach((quantity, index) => db.prepare('INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?)').run(`soi-${key}-${index}`, `so-${key}`, 'product-001', quantity, 100, quantity * 100, index + 1));
+    db.prepare("INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,'user-warehouse','DRAFT',?,'2026-09-23','','user-warehouse',?,?)").run(`sd-${key}`, `SD-${key}`, `so-${key}`, 'customer-001', 'warehouse-001', quantities.reduce((a,b)=>a+b,0)*100, now, now);
+    quantities.forEach((quantity, index) => db.prepare('INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no,sales_order_item_id) VALUES(?,?,?,?,?,?,?,?)').run(`sdi-${key}-${index}`, `sd-${key}`, 'product-001', quantity, 100, quantity * 100, index + 1, `soi-${key}-${index}`));
+    return `sd-${key}`;
+  };
 
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'modern-erp-matrix-warehouse-'));
@@ -567,20 +614,14 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
   });
 
   test('Warehouse IQC: valid create → header + every item persists', async () => {
+    const receiptId = seedQualitySource('IQC', [60, 40]);
     const created = await api(baseUrl, warehouseToken, '/api/iqc', {
       method: 'POST',
       body: {
-        supplier_id: 'supplier-001',
+        purchase_receipt_id: receiptId,
         inspection_type: 'NORMAL',
-        total_quantity: 100,
         sample_quantity: 20,
-        qualified_quantity: 18,
-        reject_quantity: 2,
         remark: 'warehouse matrix',
-        items: [
-          { product_id: 'product-001', batch_no: 'B1', quantity: 60, sample_size: 12, qualified: 1, reject_reason: '' },
-          { product_id: 'product-001', batch_no: 'B2', quantity: 40, sample_size: 8, qualified: 0, reject_reason: '外观' },
-        ],
       },
     });
     assert.equal(created.status, 201);
@@ -590,24 +631,19 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
   });
 
   test('Warehouse IQC: complete → status COMPLETED + result + inspected_at', async () => {
+    const receiptId = seedQualitySource('IQC', [50]);
     const created = await api(baseUrl, warehouseToken, '/api/iqc', {
       method: 'POST',
       body: {
-        supplier_id: 'supplier-001',
+        purchase_receipt_id: receiptId,
         inspection_type: 'NORMAL',
-        total_quantity: 50,
         sample_quantity: 10,
-        qualified_quantity: 9,
-        reject_quantity: 1,
         remark: '',
-        items: [
-          { product_id: 'product-001', batch_no: 'C1', quantity: 50, sample_size: 10, qualified: 1, reject_reason: '' },
-        ],
       },
     });
     const complete = await api(baseUrl, warehouseToken, `/api/iqc/${created.body.id}/complete`, {
       method: 'POST',
-      body: { result: 'PASS', qualified_quantity: 9, reject_quantity: 1 },
+      body: { result: 'PASS', inspection_quantity: 50, passed_quantity: 50, failed_quantity: 0 },
     });
     assert.equal(complete.status, 200);
     const row = db.prepare('SELECT status,result,inspected_at FROM iqc_inspections WHERE id=?').get(created.body.id);
@@ -617,23 +653,20 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
   });
 
   test('Warehouse OQC: create + complete + edit locked', async () => {
+    const deliveryId = seedQualitySource('OQC', [80]);
     const created = await api(baseUrl, warehouseToken, '/api/oqc', {
       method: 'POST',
       body: {
-        customer_id: 'customer-001',
+        sales_delivery_id: deliveryId,
         inspection_type: 'NORMAL',
-        total_quantity: 80,
         sample_quantity: 16,
-        qualified_quantity: 16,
-        reject_quantity: 0,
         remark: '',
-        items: [{ product_id: 'product-001', batch_no: 'O1', quantity: 80, sample_size: 16, qualified: 1, reject_reason: '' }],
       },
     });
     assert.equal(created.status, 201);
     const complete = await api(baseUrl, warehouseToken, `/api/oqc/${created.body.id}/complete`, {
       method: 'POST',
-      body: { result: 'PASS', qualified_quantity: 16, reject_quantity: 0 },
+      body: { result: 'PASS', inspection_quantity: 80, passed_quantity: 80, failed_quantity: 0 },
     });
     assert.equal(complete.status, 200);
     const patch = await api(baseUrl, warehouseToken, `/api/oqc/${created.body.id}`, {
@@ -834,9 +867,9 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   });
 
   test('IQC / OQC / Contacts / Followups / SalesActivities / Production modals receive user and notify props', () => {
-    // IQC + OQC modals — receive user + notify
-    assert.match(qualitySource, /function\s+IQCModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
-    assert.match(qualitySource, /function\s+OQCModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
+    // The unified V1.3 quality page receives user + notify and passes execution rights into its source-driven modal.
+    assert.match(qualitySource, /function\s+QualityPage\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
+    assert.match(qualitySource, /function\s+QualityModal\s*\(\s*\{[^}]*\bnotify\b/);
     // CRM modals — ContactModal / FollowupModal / ActivityModal receive notify
     assert.match(crmSource, /function\s+ContactModal\s*\(\s*\{[^}]*\bnotify\b/);
     assert.match(crmSource, /function\s+FollowupModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
@@ -1055,7 +1088,9 @@ describe('Teacher Acceptance Matrix — Data integrity assertions', () => {
     assert.equal(db.prepare('SELECT count(*) c FROM oqc_inspection_items').get().c, beforeItems);
   });
 
-  test('IQC PATCH: items are replaced, not duplicated', async () => {
+  test('V1.3 IQC: standalone manual source rows are refused without partial writes', async () => {
+    const beforeHeaders = db.prepare('SELECT count(*) c FROM iqc_inspections').get().c;
+    const beforeItems = db.prepare('SELECT count(*) c FROM iqc_inspection_items').get().c;
     const created = await api(baseUrl, warehouseToken, '/api/iqc', {
       method: 'POST',
       body: {
@@ -1072,25 +1107,9 @@ describe('Teacher Acceptance Matrix — Data integrity assertions', () => {
         ],
       },
     });
-    const id = created.body.id;
-    const patch = await api(baseUrl, warehouseToken, `/api/iqc/${id}`, {
-      method: 'PATCH',
-      body: {
-        supplier_id: 'supplier-001',
-        inspection_type: 'NORMAL',
-        total_quantity: 30,
-        sample_quantity: 6,
-        qualified_quantity: 6,
-        reject_quantity: 0,
-        remark: '',
-        items: [
-          { product_id: 'product-001', batch_no: 'Y1', quantity: 30, sample_size: 6, qualified: 1, reject_reason: '' },
-        ],
-      },
-    });
-    assert.equal(patch.status, 200);
-    assert.equal(db.prepare('SELECT count(*) c FROM iqc_inspection_items WHERE iqc_id=?').get(id).c, 1);
-    assert.equal(db.prepare('SELECT count(*) c FROM iqc_inspections WHERE id=?').get(id).c, 1);
+    assert.equal(created.status, 400);
+    assert.equal(db.prepare('SELECT count(*) c FROM iqc_inspections').get().c, beforeHeaders);
+    assert.equal(db.prepare('SELECT count(*) c FROM iqc_inspection_items').get().c, beforeItems);
   });
 });
 

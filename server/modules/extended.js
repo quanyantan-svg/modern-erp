@@ -1,6 +1,7 @@
 ﻿import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
+import { systemHealth } from './financial-inventory.js';
 
 const IQC_OQC_STATUSES = ['PENDING', 'COMPLETED'];
 const IQC_OQC_RESULTS = ['PASS', 'FAIL'];
@@ -375,6 +376,8 @@ export async function closePeriod(db, req, res, actor, closureId) {
   const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
   if (!closure) throw new HttpError(404, "期间不存在");
   if (closure.status === "CLOSED") throw new HttpError(400, "期间已结账");
+  if(!db.prepare("SELECT 1 FROM inventory_period_closures WHERE period_key=? AND status='CLOSED'").get(closure.period)) throw new HttpError(409,'必须先完成对应存货期间结账');
+  const endDate=`${closure.period}-${String(new Date(Number(closure.period.slice(0,4)),Number(closure.period.slice(5,7)),0).getDate()).padStart(2,'0')}`; const health=systemHealth(db,{asOfDate:endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`会计结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
 
   // 执行统一的关闭前置检查
   const checklistResult = getPeriodClosureChecklist(db, closure.period);
@@ -396,7 +399,10 @@ export async function closePeriod(db, req, res, actor, closureId) {
 }
 
 export async function unclosePeriod(db, req, res, actor, closureId) {
-  allow(actor, "PERIOD_CLOSE_MANAGE");
+  if (actor.roleCode !== 'ADMIN') throw new HttpError(403, '仅系统管理员可执行会计期间重新打开');
+  const body = await readJson(req);
+  const reason = String(body.reason || '').trim();
+  if (!reason) throw new HttpError(400, '重新打开期间必须填写原因');
 
   const closure = db.prepare("SELECT * FROM period_closures WHERE id=?").get(closureId);
   if (!closure) throw new HttpError(404, "期间不存在");
@@ -404,10 +410,12 @@ export async function unclosePeriod(db, req, res, actor, closureId) {
 
   const now = new Date().toISOString();
   transaction(db, () => {
-    db.prepare("UPDATE period_closures SET status=?,closed_by=?,closed_at=?,checklist_passed=0 WHERE id=?")
-      .run("OPEN", actor.id, now, closureId);
+    db.prepare("INSERT INTO period_reopen_history(id,period_closure_id,period,previous_closed_by,previous_closed_at,reason,reopened_by,reopened_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run(id(), closureId, closure.period, closure.closed_by, closure.closed_at, reason, actor.id, now);
+    db.prepare("UPDATE period_closures SET status='OPEN',reopen_reason=?,checklist_passed=0 WHERE id=?")
+      .run(reason, closureId);
     db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,?,?,?,?,?)")
-      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}`, now);
+      .run(id(), actor.id, "UNCLOSE_PERIOD", "PERIOD_CLOSURE", closureId, `反结账期间 ${closure.period}：${reason}`, now);
   });
 
   return send(res, 200, { ok: true, message: "反结账成功" });
@@ -747,16 +755,22 @@ export async function createWorkCenter(db, req, res, actor) {
   const body = await readJson(req);
   const now = new Date().toISOString();
   const wcId = id();
-  db.prepare("INSERT INTO work_centers(id,code,name,type,capacity_hours,efficiency,unit_cost_cents,created_at) VALUES(?,?,?,?,?,?,?,?)")
-    .run(wcId, body.code, body.name, body.type || "ASSEMBLY", body.capacity_hours || 8, body.efficiency || 100, body.unit_cost_cents || 0, now);
+  const capacity = Math.max(0, Math.round(Number(body.dailyCapacityMinutes ?? body.daily_capacity_minutes ?? (Number(body.capacity_hours || 8) * 60))));
+  const laborRate = Math.max(0, Math.round(Number(body.laborRateCentsPerHour ?? body.labor_rate_cents_per_hour ?? 0)));
+  const overheadRate = Math.max(0, Math.round(Number(body.overheadRateCentsPerHour ?? body.overhead_rate_cents_per_hour ?? 0)));
+  db.prepare("INSERT INTO work_centers(id,code,name,type,capacity_hours,efficiency,unit_cost_cents,daily_capacity_minutes,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+    .run(wcId, body.code, body.name, body.type || "ASSEMBLY", capacity / 60, body.efficiency || 100, body.unit_cost_cents || 0, capacity, laborRate, overheadRate, now);
+  audit(db, actor.id, 'CREATE', 'WORK_CENTER', wcId, `${body.code} 能力 ${capacity} 分钟`);
   return send(res, 201, { id: wcId });
 }
 
 export async function updateWorkCenter(db, req, res, actor, wcId) {
   allow(actor, "WORK_CENTERS_MANAGE");
   const body = await readJson(req);
-  db.prepare("UPDATE work_centers SET name=?,type=?,capacity_hours=?,efficiency=?,unit_cost_cents=?,active=? WHERE id=?")
-    .run(body.name, body.type || "ASSEMBLY", body.capacity_hours || 8, body.efficiency || 100, body.unit_cost_cents || 0, body.active ? 1 : 0, wcId);
+  const capacity = Math.max(0, Math.round(Number(body.dailyCapacityMinutes ?? body.daily_capacity_minutes ?? (Number(body.capacity_hours || 8) * 60))));
+  db.prepare("UPDATE work_centers SET name=?,type=?,capacity_hours=?,efficiency=?,unit_cost_cents=?,daily_capacity_minutes=?,labor_rate_cents_per_hour=?,overhead_rate_cents_per_hour=?,active=? WHERE id=?")
+    .run(body.name, body.type || "ASSEMBLY", capacity / 60, body.efficiency || 100, body.unit_cost_cents || 0, capacity, Math.max(0, Math.round(Number(body.laborRateCentsPerHour ?? body.labor_rate_cents_per_hour ?? 0))), Math.max(0, Math.round(Number(body.overheadRateCentsPerHour ?? body.overhead_rate_cents_per_hour ?? 0))), body.active ? 1 : 0, wcId);
+  audit(db, actor.id, 'UPDATE', 'WORK_CENTER', wcId, `能力 ${capacity} 分钟及费率更新`);
   return send(res, 200, { ok: true });
 }
 
@@ -1488,12 +1502,32 @@ export function getBalanceSheet(db, res, actor, url) {
 
 export function getInventoryStatus(db, res, actor, url) {
   allow(actor, "REPORT_VIEW");
-  const items = db.prepare("SELECT p.id, p.code, p.name, p.unit, p.stock_quantity, p.reorder_point, p.min_stock, p.max_stock, w.name warehouse_name FROM inventory i JOIN products p ON p.id=i.product_id JOIN warehouses w ON w.id=i.warehouse_id ORDER BY p.code").all();
+  // Canonical stock truth lives in `inventory.quantity` (base UOM).  The
+  // legacy `products.stock_quantity` display column is never written by
+  // the canonical receipt / delivery / transfer / adjustment / scrap /
+  // production flows, so threshold checks must use SUM(inventory.quantity)
+  // per product rather than the stale display value.
+  const items = db.prepare(`
+    SELECT
+      p.id,
+      p.code,
+      p.name,
+      p.unit,
+      p.min_stock,
+      p.max_stock,
+      p.reorder_point,
+      COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id = p.id), 0) AS quantity
+    FROM products p
+    WHERE EXISTS (SELECT 1 FROM inventory i WHERE i.product_id = p.id)
+    ORDER BY p.code
+  `).all();
   const summary = { total: items.length, low: 0, normal: 0, over: 0 };
   for (const item of items) {
-    if (item.stock_quantity <= item.min_stock) { item.status = "LOW"; summary.low++; }
-    else if (item.stock_quantity >= item.max_stock) { item.status = "OVER"; summary.over++; }
+    const quantity = Number(item.quantity);
+    if (quantity <= Number(item.min_stock)) { item.status = "LOW"; summary.low++; }
+    else if (quantity >= Number(item.max_stock) && Number(item.max_stock) > 0) { item.status = "OVER"; summary.over++; }
     else { item.status = "NORMAL"; summary.normal++; }
+    item.quantity = quantity;
   }
   return send(res, 200, { items, summary });
 }

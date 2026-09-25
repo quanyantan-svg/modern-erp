@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 
 export async function runCrmSave(operation, onSaved, notify) {
   try {
@@ -26,7 +26,7 @@ export function Contacts({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="联系人管理" subtitle="客户和供应商联系人档案">
+    <Panel title="联系人管理">
       <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button>}/>
       <div className="table-wrap">
         <table>
@@ -123,20 +123,19 @@ export function Followups({ user, notify }) {
 
   useEffect(() => {
     api('/api/lookup/customers').then((r) => setCustomers(r.customers || [])).catch((e) => notify(e.message, 'error'));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [customerId]);
 
   const typeMap = { VISIT: '拜访', CALL: '电话', EMAIL: '邮件', MEETING: '会议', OTHER: '其他' };
 
   return (
-    <Panel title="客户跟进" subtitle="客户拜访和跟进记录">
+    <Panel title="客户跟进">
       <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button>}/>
       <div className="filters">
         <label>客户<select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
           <option value="">全部客户</option>
           {customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -216,13 +215,13 @@ export function SalesActivities({ user, notify }) {
     api(`/api/sales-activities?${params}`).then((r) => setItems(r.activities)).catch((e) => notify(e.message, 'error'));
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [status]);
 
   const typeMap = { CAMPAIGN: '市场活动', SEMINAR: '研讨会', EXHIBITION: '展会', VISIT: '拜访', OTHER: '其他' };
   const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
 
   return (
-    <Panel title="销售活动" subtitle="市场活动和展会管理">
+    <Panel title="销售活动">
       <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建活动</button>}/>
       <div className="filters">
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -232,7 +231,6 @@ export function SalesActivities({ user, notify }) {
           <option value="COMPLETED">已完成</option>
           <option value="CANCELLED">已取消</option>
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -249,7 +247,7 @@ export function SalesActivities({ user, notify }) {
                 <td><Badge type={item.status === 'COMPLETED' ? 'success' : item.status === 'CANCELLED' ? 'danger' : ''}>{statusMap[item.status]}</Badge></td>
                 <td>
                   {can(user, 'CRM_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}
-                  {can(user, 'CRM_MANAGE') && <button className="row-action danger" onClick={() => deleteActivity(item)}>删除</button>}
+                  {can(user, 'CRM_MANAGE') && <ConfirmAction className="row-action danger" destructive buttonLabel="删除" title={`删除“${item.title}”？`} message="该活动未关联业务单据，删除后无法恢复。" confirmLabel="删除" onConfirm={() => deleteActivity(item)}/>}
                 </td>
               </tr>
             ))}
@@ -262,7 +260,6 @@ export function SalesActivities({ user, notify }) {
   );
 
   async function deleteActivity(item) {
-    if (!confirm(`确认删除活动 "${item.title}"?`)) return;
     try {
       await api(`/api/sales-activities/${item.id}`, { method: 'DELETE' });
       notify('活动已删除');

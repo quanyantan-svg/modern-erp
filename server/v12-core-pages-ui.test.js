@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, test } from 'node:test';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (...parts) => readFileSync(join(root, ...parts), 'utf8');
+const css = read('src', 'styles.css');
+const app = read('src', 'App.jsx');
+const metadata = read('src', 'navigation', 'applicationMetadata.js');
+const pageSources = readdirSync(join(root, 'src', 'pages'))
+  .filter((name) => name.endsWith('.jsx'))
+  .map((name) => read('src', 'pages', name))
+  .join('\n');
+
+describe('V1.2 core page migration', () => {
+  test('launcher retains the canonical business groups', () => {
+    for (const label of ['概览', '基础资料', '计划与生产', '销售', '采购', '库存', '质量', '财务', '决策报表', '项目', '系统']) {
+      assert.match(metadata, new RegExp(`label: '${label}'`));
+    }
+  });
+
+  test('all required core ERP surfaces remain registered', () => {
+    const surface = app + metadata + pageSources;
+    for (const label of [
+      '产品', 'BOM', '客户', '供应商', '仓库', '制品工序标准',
+      '需求预测', 'MRP 运算', '物料需求计划', '生产指令', '采购指令', '请购单',
+      '制令单', '用料出库', '生产入库', '销售订单', '销售出货', '销售退货',
+      '采购订单', '采购入库', '采购退货', '库存查询', '库存调整', '库存调拨',
+      '库存报废', '库存盘点', '存货月结', 'IQC 来料检验', 'OQC 出货检验',
+      '应收账款', '应付账款', '销售折让', '采购折让', '收款单', '付款单', '会计凭证',
+      '采购统计', '采购未交', '销售统计', '销售未交', '库存异动明细',
+    ]) assert.ok(surface.includes(label), `missing core surface: ${label}`);
+  });
+
+  test('card lists and one-column forms are canonical at every viewport width', () => {
+    const canonical = css.slice(css.indexOf('/* Core ERP pages use the same compact touch layout'));
+    assert.ok(canonical.length > 500, 'canonical page override block must exist');
+    assert.match(canonical, /\.mobile-application-view \.form-grid,[\s\S]*grid-template-columns:minmax\(0,1fr\)/);
+    assert.match(canonical, /\.mobile-application-view \.table-wrap tbody tr \{[^}]*display:grid[^}]*border-radius:var\(--radius-lg\)/s);
+    assert.match(canonical, /\.modal,[\s\S]*width:min\(100%, var\(--app-max-width\)\)/);
+    assert.doesNotMatch(canonical, /@media\s*\(min-width/, 'canonical page structure must not branch at desktop widths');
+  });
+
+  test('forecast and routing pages no longer ship duplicate desktop/mobile lists', () => {
+    const forecasts = read('src', 'pages', 'forecasts.jsx');
+    const routing = read('src', 'pages', 'product-routing.jsx');
+    for (const source of [forecasts, routing]) {
+      assert.doesNotMatch(source, /list-desktop|list-mobile/);
+      assert.match(source, /<RecordList>/);
+      assert.match(source, /<RecordCard/);
+    }
+  });
+
+  test('decision reports use cards and an on-demand filter sheet, not tables', () => {
+    const reports = read('src', 'pages', 'decision-reports.jsx');
+    assert.doesNotMatch(reports, /<table\b/);
+    assert.match(reports, /<FilterSheet/);
+    assert.match(reports, /<FilterButton/);
+    assert.match(reports, /<RecordCard/);
+  });
+
+  test('sales and purchase returns have distinct launcher targets', () => {
+    assert.match(metadata, /key: 'returns:sales'[\s\S]*documentType: 'SALES_RETURN'/);
+    assert.match(metadata, /key: 'returns:purchase'[\s\S]*documentType: 'PURCHASE_RETURN'/);
+    assert.match(app, /navigateToPage\(item\.page, item\.target\)/);
+  });
+
+  test('boilerplate helper phrases are absent from product pages', () => {
+    for (const phrase of ['您可以在这里管理', '此页面用于', '请在此页面', '本模块主要用于']) {
+      assert.equal(pageSources.includes(phrase), false, `boilerplate helper copy remains: ${phrase}`);
+    }
+  });
+});

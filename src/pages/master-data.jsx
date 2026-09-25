@@ -1,8 +1,11 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { ActionMenu, Active, ConfirmAction, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { roleDisplayName } from '../lib/copy.js';
+import { yuanToNonNegativeCents } from '../lib/money.js';
+import { Icon } from '../components/icons.jsx';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -20,7 +23,7 @@ export function Login({ onLogin, notify }) {
           <strong>Modern ERP</strong>
         </div>
         <h2>登录</h2>
-        <p className="lead">使用您的账号进入企业资源计划系统。</p>
+        <p className="lead">企业运营管理平台</p>
         <form onSubmit={submit}>
           <label>账号<input autoFocus required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="username"/></label>
           <label>密码<input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password"/></label>
@@ -46,7 +49,7 @@ export function Dashboard({ user, notify }) {
   if (!data) return <Loading/>;
   const cards = [
     can(user, 'CUSTOMERS_VIEW') && ['客户总数', data.customerCount, '家', 'teal'],
-    can(user, 'PRODUCTS_VIEW') && ['在售货品', data.productCount, '项', 'blue'],
+    can(user, 'PRODUCTS_VIEW') && ['在售产品', data.productCount, '项', 'blue'],
     can(user, 'ORDERS_VIEW') && ['销售订单', data.orderCount, '张', 'orange'],
     can(user, 'ORDERS_APPROVE') && ['待我审批', data.pendingCount, '张', 'purple'],
   ].filter(Boolean);
@@ -58,29 +61,46 @@ export function Dashboard({ user, notify }) {
   return <>
     <div className="hero-card"><div><span className="pill">今日业务概览</span><h2>从业务总览理解完整 ERP</h2><p>审批确认业务授权，出入库负责执行，库存异动记录实物流转，应收应付与收付款完成财务闭环。</p></div>{can(user, 'ORDERS_VIEW') && <div className="hero-amount"><span>已审批订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div>}</div>
     <div className="stats-grid">{cards.map(([label, value, unit, color]) => <div className={`stat-card ${color}`} key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong><i/></div>)}</div>
-    <Panel title="常用工作" subtitle="按照当前角色权限显示可访问应用"><div className="dashboard-shortcuts">{shortcuts.map(([label, page]) => <AppLink key={page} page={page}>{label}<span>→</span></AppLink>)}</div></Panel>
-    {can(user, 'ORDERS_VIEW') && <Panel title="最近订单" subtitle="按创建时间显示最新五张销售订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
+    <Panel title="常用工作"><div className="dashboard-shortcuts">{shortcuts.map(([label, page]) => <AppLink key={page} page={page}>{label}<span>→</span></AppLink>)}</div></Panel>
+    {can(user, 'ORDERS_VIEW') && <Panel title="最近订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
       <OrderTable orders={data.recentOrders} compact/>
     </Panel>}
   </>;
+}
+
+function MasterActions({ item, label, endpoint, onEdit, onChanged, notify }) {
+  async function setActive(active) {
+    try {
+      await api(`${endpoint}/${item.id}`, { method: 'PATCH', body: { active } });
+      notify(`${label}已${active ? '启用' : '停用'}`); await onChanged();
+    } catch (error) { notify(error.message, 'error'); }
+  }
+  return <ActionMenu>
+    <button type="button" className="row-action" onClick={() => onEdit(item)}>编辑</button>
+    <button type="button" className="row-action" onClick={() => void setActive(!item.active)}>{item.active ? '停用' : '启用'}</button>
+    <ConfirmDelete label={label} message={`确定删除“${item.code} · ${item.name}”吗？删除后无法恢复。如已有业务引用，系统将阻止删除并建议停用。`} onConfirm={async () => {
+      try { await api(`${endpoint}/${item.id}`, { method: 'DELETE' }); notify(`${label}已删除`); await onChanged(); }
+      catch (error) { notify(error.message, 'error'); throw error; }
+    }}/>
+  </ActionMenu>;
 }
 
 export function Suppliers({ user, notify }) {
   const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
   const load = () => api(`/api/suppliers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.suppliers)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="供应商资料" subtitle="采购模块的基础档案，对应旧系统 SYS_SupplierA">
+  return <Panel title="供应商资料">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索供应商编码、名称或联系人" action={can(user, 'SUPPLIERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增供应商</button>}
     />
-    <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <MasterActions item={item} label="供应商" endpoint="/api/suppliers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到供应商资料"/>}</div>
     {editing && <SupplierModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('供应商资料已保存'); }} notify={notify}/>} 
   </Panel>;
 }
 
 function SupplierModal({ value, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', email: '', active: true, ...value });
+  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', email: '', paymentTermsDays: 0, active: true, ...value });
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/suppliers/${value.id}` : '/api/suppliers', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? '编辑供应商' : '新增供应商'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>供应商编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 SUP-003" required/></label>
@@ -89,6 +109,7 @@ function SupplierModal({ value, onClose, onSaved, notify }) {
     <label>联系电话<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}/></label>
     <label className="full">联系地址<input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })}/></label>
     <label className="full">电子邮箱<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@company.cn"/></label>
+    <label>付款条款天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })}/></label>
     {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该供应商</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
@@ -99,17 +120,17 @@ export function Customers({ user, notify }) {
   const load = () => api(`/api/customers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.customers)).catch((e) => notify(e.message, 'error'));
   // Effect 回调只能返回清理函数，不能直接返回 load() 产生的 Promise。
   useEffect(() => { void load(); }, []);
-  return <Panel title="客户资料" subtitle="销售订单引用的客户档案，类似旧系统 SYS_CusA">
+  return <Panel title="客户资料">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有找到客户资料"/>}</div>
+    <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+    </tbody></table>{!items.length && <Empty title="还没有客户" text="创建客户后，就可以建立销售订单。"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
   </Panel>;
 }
 
 function CustomerModal({ value, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', active: true, ...value });
+  const [form, setForm] = useState({ code: '', name: '', contact: '', phone: '', address: '', paymentTermsDays: 0, active: true, ...value });
   async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/customers/${value.id}` : '/api/customers', { method: value.id ? 'PATCH' : 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
   return <Modal title={value.id ? '编辑客户' : '新增客户'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>客户编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 CUS-003" required/></label>
@@ -117,6 +138,7 @@ function CustomerModal({ value, onClose, onSaved, notify }) {
     <label>联系人<input value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })}/></label>
     <label>联系电话<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}/></label>
     <label className="full">联系地址<input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })}/></label>
+    <label>付款条款天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })}/></label>
     {value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该客户</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
@@ -124,27 +146,29 @@ function CustomerModal({ value, onClose, onSaved, notify }) {
 
 export function Products({ user, notify }) {
   const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
+  const navigation = useAppNavigation();
   const load = () => api(`/api/products?search=${encodeURIComponent(search)}`).then((r) => setItems(r.products)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="货品资料" subtitle="订单明细引用的标准商品档案，类似旧系统 SYS_GoodInA">
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索货品编码或名称" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增货品</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">参考售价</th><th className="number">演示库存</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td>{can(user, 'PRODUCTS_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有找到货品资料"/>}</div>
-    {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('货品资料已保存'); }} notify={notify}/>} 
+  return <Panel title="产品">
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品名称或编码" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary compact-create" aria-label="新增产品" onClick={() => setEditing({})}>新增</button>}/>
+    <div className="table-wrap"><table><thead><tr><th>产品编码</th><th>产品名称</th><th>单位</th><th>库存跟踪方式</th><th className="number">参考售价</th><th className="number">当前库存</th><th>状态</th><th/></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{({ NONE: '不跟踪', LOT: '批次管理', SERIAL: '序列号管理' })[item.trackingPolicy] || '不跟踪'}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="产品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+    </tbody></table>{!items.length && <Empty title="还没有产品" text="新建产品后，即可用于销售、采购和库存业务。"/>}</div>
+    {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('产品资料已保存'); }} notify={notify}/>}
   </Panel>;
 }
 
 function ProductModal({ value, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ code: '', name: '', unit: '个', stockQuantity: 0, active: true, ...value, price: value.priceCents === undefined ? '' : value.priceCents / 100 });
-  async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/products/${value.id}` : '/api/products', { method: value.id ? 'PATCH' : 'POST', body: { ...form, priceCents: Math.round(Number(form.price) * 100) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
-  return <Modal title={value.id ? '编辑货品' : '新增货品'} onClose={onClose}><form className="form-grid" onSubmit={save}>
-    <label>货品编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 MAT-004" required/></label>
-    <label>货品名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required/></label>
+  const [form, setForm] = useState({ code: '', name: '', unit: '个', active: true, trackingPolicy: 'NONE', shelfLifeDays: '', trackingReason: '', ...value, price: value.priceCents === undefined ? '' : value.priceCents / 100, standardManufacturingCost: value.standardManufacturingCostCents === undefined ? '' : value.standardManufacturingCostCents / 100 });
+  async function save(e) { e.preventDefault(); try { await api(value.id ? `/api/products/${value.id}` : '/api/products', { method: value.id ? 'PATCH' : 'POST', body: { ...form, priceCents: yuanToNonNegativeCents(form.price), standardManufacturingCostCents: yuanToNonNegativeCents(form.standardManufacturingCost || 0) } }); if (value.id && (form.trackingPolicy !== (value.trackingPolicy || 'NONE') || String(form.shelfLifeDays || '') !== String(value.shelfLifeDays || ''))) { await api(`/api/products/${value.id}/tracking-policy`, { method: 'PATCH', body: { policy: form.trackingPolicy, shelfLifeDays: form.shelfLifeDays || null, reason: form.trackingReason } }); } onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  return <Modal title={value.id ? '编辑产品' : '新建产品'} onClose={onClose}><form className="form-grid" onSubmit={save}>
+    <label>产品编码<input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="例如 MAT-004" required/></label>
+    <label>产品名称<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="请输入产品名称" required/></label>
     <label>计量单位<input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} required/></label>
     <label>参考售价（元）<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} required/></label>
-    <label>演示库存<input type="number" min="0" step="0.01" value={form.stockQuantity} onChange={(e) => setForm({ ...form, stockQuantity: e.target.value })} required/></label>
-    {value.id && <label className="check"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该货品</label>}
+    <label>标准制造成本（元）<input type="number" min="0" step="0.01" value={form.standardManufacturingCost} onChange={(e) => setForm({ ...form, standardManufacturingCost: e.target.value })} placeholder="管理成本基准"/></label>
+    {value.id && <><div className="notice full">库存数量由仓库业务单据维护，不在产品资料中编辑。当前库存请查阅库存工作台或库存报表。</div><label>库存跟踪方式<select value={form.trackingPolicy} onChange={(e) => setForm({ ...form, trackingPolicy: e.target.value })}><option value="NONE">不跟踪</option><option value="LOT">批次管理</option><option value="SERIAL">序列号管理</option></select></label><label>保质期（天）<input type="number" min="1" step="1" value={form.shelfLifeDays || ''} onChange={(e) => setForm({ ...form, shelfLifeDays: e.target.value })} placeholder="可选"/></label><label className="full">变更原因<input value={form.trackingReason} onChange={(e) => setForm({ ...form, trackingReason: e.target.value })} placeholder="启用或变更跟踪方式时必填"/></label></>}
+    {value.id && <label className="check"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该产品</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
 }
@@ -155,12 +179,16 @@ export function Orders({ user, notify }) {
   const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
-  return <Panel title="销售订单" subtitle="从客户需求到审批确认的核心业务单据" action={can(user, 'ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建销售订单</button>}>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或客户名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
+  async function submitOrder(id) { try { await api(`/api/orders/${id}/submit`, { method: 'POST' }); notify('销售订单已提交'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
+  return <Panel title="销售订单">
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或客户名称" extra={<select aria-label="订单状态" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>} action={can(user, 'ORDERS_CREATE') && <button className="primary compact-create" aria-label="新增销售订单" onClick={() => setEditing({})}>新增</button>}/>
     <OrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
-      {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <ConfirmAction className="row-action strong" buttonLabel="提交" title="提交这张销售订单？" message="提交后，订单将进入审批流程。" confirmLabel="确认提交" onConfirm={() => submitOrder(order.id)}/>}
+      {can(user, 'ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="销售订单" onConfirm={async () => {
+        try { await api(`/api/orders/${order.id}`, { method: 'DELETE' }); notify('销售订单草稿已删除'); await load(); }
+        catch (error) { notify(error.message, 'error'); throw error; }
+      }}/>) }
     </>}/>
     {editing && <OrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('销售订单草稿已保存'); }} notify={notify}/>} 
     {viewing && <OrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
@@ -169,25 +197,82 @@ export function Orders({ user, notify }) {
 
 function OrderEditor({ order, onClose, onSaved, notify }) {
   const [customers, setCustomers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
-  const [form, setForm] = useState({ customerId: '', remark: '', items: [{ productId: '', quantity: 1, price: '' }] });
+  // V1.3 Phase 1: SO commercial contract — order date, requested delivery
+  // date, payment terms, ship-to contact/phone/address snapshot. The
+  // customer master provides defaults for the snapshot fields.
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({
+    customerId: '', orderDate: today, requestedDeliveryDate: '', paymentTerms: '', paymentTermsDays: 0,
+    shipToContactName: '', shipToPhone: '', shipToAddress: '',
+    remark: '', items: [{ productId: '', quantity: 1, price: '' }],
+  });
   useEffect(() => {
     Promise.all([api('/api/customers'), api('/api/products'), order.id ? api(`/api/orders/${order.id}`) : null]).then(([c, p, detail]) => {
       setCustomers(c.customers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
-      if (detail) setForm({ customerId: detail.order.customerId, remark: detail.order.remark, items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) });
+      if (detail) {
+        setForm({
+          customerId: detail.order.customerId,
+          orderDate: detail.order.orderDate || today,
+          requestedDeliveryDate: detail.order.requestedDeliveryDate || '',
+          paymentTerms: detail.order.paymentTerms || '',
+          paymentTermsDays: detail.order.paymentTermsDays ?? 0,
+          shipToContactName: detail.order.shipToContactName || '',
+          shipToPhone: detail.order.shipToPhone || '',
+          shipToAddress: detail.order.shipToAddress || '',
+          remark: detail.order.remark,
+          items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })),
+        });
+      }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
   }, []);
-  const total = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.price) || 0), 0), [form]);
+  // When the customer changes, prefill the ship-to / payment snapshot
+  // fields from the customer master if the user has not already typed
+  // a different value. The document owns the snapshot after save.
+  function applyCustomerSnapshot(customerId) {
+    const customer = customers.find((c) => c.id === customerId);
+    setForm((current) => ({
+      ...current,
+      customerId,
+      shipToContactName: current.shipToContactName || customer?.contact || '',
+      shipToPhone: current.shipToPhone || customer?.phone || '',
+      shipToAddress: current.shipToAddress || customer?.address || '',
+      paymentTermsDays: customer?.paymentTermsDays ?? 0,
+    }));
+  }
+  const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
   function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
   function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
-  async function save(e) { e.preventDefault(); try { await api(order.id ? `/api/orders/${order.id}` : '/api/orders', { method: order.id ? 'PUT' : 'POST', body: { ...form, items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: Math.round(Number(x.price) * 100) })) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api(order.id ? `/api/orders/${order.id}` : '/api/orders', {
+        method: order.id ? 'PUT' : 'POST',
+        body: {
+          ...form,
+          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+        },
+      });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建销售订单'} onClose={onClose} wide>
     {loading ? <Loading/> : <form onSubmit={save}>
-      <div className="form-grid order-head"><label>客户<select value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required><option value="">请选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label><label>订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label></div>
+      <div className="form-grid order-head">
+        <label>客户<select value={form.customerId} onChange={(e) => applyCustomerSnapshot(e.target.value)} required><option value="">请选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
+        <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
+        <label>要求交期<input type="date" value={form.requestedDeliveryDate} onChange={(e) => setForm({ ...form, requestedDeliveryDate: e.target.value })} required/></label>
+        <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>账期天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })} required/></label>
+        <label>收货联系人<input value={form.shipToContactName} onChange={(e) => setForm({ ...form, shipToContactName: e.target.value })} maxLength={50}/></label>
+        <label>收货电话<input value={form.shipToPhone} onChange={(e) => setForm({ ...form, shipToPhone: e.target.value })} maxLength={30}/></label>
+        <label className="full">收货地址<input value={form.shipToAddress} onChange={(e) => setForm({ ...form, shipToAddress: e.target.value })} maxLength={200}/></label>
+        <label className="full">订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label>
+      </div>
       <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价</span><span>金额</span><span/></div>
+      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价（元）</span><span>金额</span><span/></div>
         {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
       </div>
-      <div className="order-total"><span>订单合计</span><strong>{money(Math.round(total * 100))}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
+      <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;
 }
@@ -196,11 +281,11 @@ export function Approvals({ notify }) {
   const [orders, setOrders] = useState([]); const [viewing, setViewing] = useState(null); const [rejecting, setRejecting] = useState(null); const [reason, setReason] = useState('');
   const load = () => api('/api/orders?status=SUBMITTED').then((r) => setOrders(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  async function approve(order) { if (!confirm(`确定审批通过订单 ${order.orderNo} 吗？`)) return; try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('订单已审批通过'); load(); } catch (e) { notify(e.message, 'error'); } }
+  async function approve(order) { try { await api(`/api/orders/${order.id}/approve`, { method: 'POST' }); notify('销售订单已审批'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
   async function reject(e) { e.preventDefault(); try { await api(`/api/orders/${rejecting.id}/reject`, { method: 'POST', body: { reason } }); notify('订单已驳回'); setRejecting(null); setReason(''); load(); } catch (error) { notify(error.message, 'error'); } }
   return <>
-    <div className="approval-banner"><div className="approval-icon">✓</div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
-    <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><button className="approve-button" onClick={() => approve(order)}>通过</button></>}/></Panel>
+    <div className="approval-banner"><div className="approval-icon"><Icon name="approval" size={22}/></div><div><h2>待审批订单</h2><p>审批是业务授权，不等于出货。审批通过后订单仍需在后续流程生成出货单。</p></div><strong>{orders.length}<small>张待处理</small></strong></div>
+    <Panel title="审批队列" subtitle="制单人与审批人必须是不同用户"><OrderTable orders={orders} onView={setViewing} actions={(order) => <><button className="row-action danger" onClick={() => setRejecting(order)}>驳回</button><ConfirmAction className="approve-button" buttonLabel="审批通过" title="通过这张销售订单？" message={`订单 ${order.orderNo} 审批通过后可进入销售出货流程。`} confirmLabel="审批通过" onConfirm={() => approve(order)}/></>}/></Panel>
     {viewing && <OrderDetail id={viewing.id} onClose={() => setViewing(null)} notify={notify}/>} 
     {rejecting && <Modal title={`驳回 ${rejecting.orderNo}`} onClose={() => setRejecting(null)}><form onSubmit={reject}><label>驳回原因<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="请说明需要销售人员修改的内容" required/></label><FormActions onClose={() => setRejecting(null)} saveText="确认驳回" danger/></form></Modal>}
   </>;
@@ -224,13 +309,33 @@ export function orderWorkflowStages(order, trace, kind) {
 }
 
 function OrderDetail({ id, user, onClose, notify }) {
+  const isSales = true;
   const [order, setOrder] = useState(null);
   const [trace, setTrace] = useState(null);
   useEffect(() => { Promise.all([api(`/api/orders/${id}`), api(`/api/workflow/sales-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="销售订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.customerName}</h3><p>{order.customerCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
-    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <div className="detail-grid">
+      <div><span>{isSales ? '订单日期' : '订单日期'}</span><strong>{order.orderDate || '—'}</strong></div>
+      <div><span>{isSales ? '要求交期' : '预计交期'}</span><strong>{(isSales ? order.requestedDeliveryDate : order.expectedDeliveryDate) || '—'}</strong></div>
+      <div><span>付款条件</span><strong>{order.paymentTerms || '—'}</strong></div>
+      <div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div>
+      <div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div>
+      <div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div>
+      <div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div>
+    </div>
+    {isSales
+      ? <div className="detail-grid">
+          <div><span>收货联系人</span><strong>{order.shipToContactName || '—'}</strong></div>
+          <div><span>收货电话</span><strong>{order.shipToPhone || '—'}</strong></div>
+          <div className="full"><span>收货地址</span><strong>{order.shipToAddress || '—'}</strong></div>
+        </div>
+      : <div className="detail-grid">
+          <div><span>供应商联系人</span><strong>{order.supplierContactName || '—'}</strong></div>
+          <div><span>供应商电话</span><strong>{order.supplierContactPhone || '—'}</strong></div>
+          <div className="full"><span>供应商地址</span><strong>{order.supplierAddress || '—'}</strong></div>
+        </div>}
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'sales')}/>
     {order.status === 'SUBMITTED' && can(user, 'ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
@@ -245,9 +350,9 @@ export function UsersRoles({ user, notify }) {
   const [tab, setTab] = useState(defaultTab); const [users, setUsers] = useState([]); const [roles, setRoles] = useState([]); const [permissions, setPermissions] = useState([]); const [editingUser, setEditingUser] = useState(null); const [editingRole, setEditingRole] = useState(null);
   const load = () => Promise.all([can(user, 'USERS_MANAGE') ? api('/api/users') : null, can(user, 'ROLES_MANAGE') ? api('/api/roles') : null]).then(([u, r]) => { setUsers(u?.users || []); if (r) { setRoles(r.roles); setPermissions(r.permissions); } }).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="用户与角色" subtitle="角色是一组权限模板，用户通过角色获得功能权限" action={tab === 'users' ? can(user, 'USERS_MANAGE') && <button className="primary" onClick={() => setEditingUser({})}>＋ 新增用户</button> : can(user, 'ROLES_MANAGE') && <button className="primary" onClick={() => setEditingRole({ permissions: [] })}>＋ 新增角色</button>}>
+  return <Panel title="用户与角色" action={tab === 'users' ? can(user, 'USERS_MANAGE') && <button className="primary" onClick={() => setEditingUser({})}>＋ 新增用户</button> : can(user, 'ROLES_MANAGE') && <button className="primary" onClick={() => setEditingRole({ permissions: [] })}>＋ 新增角色</button>}>
     <div className="tabs">{can(user, 'USERS_MANAGE') && <button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理</button>}<button className={tab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色权限</button></div>
-    {tab === 'users' ? <div className="user-cards">{users.map((item) => <div className="user-card" key={item.id}><div className="avatar large">{item.displayName.slice(0,1)}</div><div><strong>{item.displayName}</strong><span className="mono">{item.username}</span></div><span className="role-chip">{item.roleName}</span><Active active={item.active}/><button className="row-action" onClick={() => setEditingUser(item)}>编辑</button></div>)}</div> : <div className="role-grid">{roles.map((role) => <div className="role-card" key={role.id}><div><span className="mono">{role.code}</span><h3>{role.name}</h3><p>{role.description}</p></div><div className="role-meta"><span>{role.user_count} 位用户</span><span>{role.permissions.length} 项权限</span></div>{can(user, 'ROLES_MANAGE') && <button className="secondary" onClick={() => setEditingRole(role)}>配置权限</button>}</div>)}</div>}
+    {tab === 'users' ? <div className="user-cards">{users.map((item) => <div className="user-card" key={item.id}><div className="avatar large">{item.displayName.slice(0,1)}</div><div><strong>{item.displayName}</strong><span className="mono">{item.username}</span></div><span className="role-chip">{roleDisplayName(item)}</span><Active active={item.active}/><button className="row-action" onClick={() => setEditingUser(item)}>编辑</button></div>)}</div> : <div className="role-grid">{roles.map((role) => <div className="role-card" key={role.id}><div><span className="mono">{role.code}</span><h3>{roleDisplayName({ roleId: role.id, roleCode: role.code, roleName: role.name })}</h3><p>{role.description}</p></div><div className="role-meta"><span>{role.user_count} 位用户</span><span>{role.permissions.length} 项权限</span></div>{can(user, 'ROLES_MANAGE') && <button className="secondary" onClick={() => setEditingRole(role)}>配置权限</button>}</div>)}</div>}
     {editingUser && <UserModal value={editingUser} roles={roles} onClose={() => setEditingUser(null)} onSaved={() => { setEditingUser(null); load(); notify('用户资料已保存'); }} notify={notify}/>} 
     {editingRole && <RoleModal value={editingRole} permissions={permissions} onClose={() => setEditingRole(null)} onSaved={() => { setEditingRole(null); load(); notify('角色权限已保存'); }} notify={notify}/>} 
   </Panel>;
@@ -273,12 +378,16 @@ export function PurchaseOrders({ user, notify }) {
   const [editing, setEditing] = useState(null); const [viewing, setViewing] = useState(target?.page === 'purchase-orders' && target.documentId ? { id: target.documentId } : null);
   const load = () => api(`/api/purchase-orders?search=${encodeURIComponent(search)}&status=${status}`).then((r) => setOrders(r.purchaseOrders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
-  async function submitOrder(id) { if (!confirm('提交后订单将进入主管审核，确定继续吗？')) return; try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('订单已提交审核'); load(); } catch (e) { notify(e.message, 'error'); } }
-  return <Panel title="采购订单" subtitle="向供应商采购货品的业务单据" action={can(user, 'PURCHASE_ORDERS_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建采购订单</button>}>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>}/>
+  async function submitOrder(id) { try { await api(`/api/purchase-orders/${id}/submit`, { method: 'POST' }); notify('采购订单已提交'); load(); } catch (e) { notify(e.message, 'error'); throw e; } }
+  return <Panel title="采购订单">
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索订单号或供应商名称" extra={<select aria-label="订单状态" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="SUBMITTED">待审批</option><option value="APPROVED">已审批</option><option value="REJECTED">已驳回</option></select>} action={can(user, 'PURCHASE_ORDERS_CREATE') && <button className="primary compact-create" aria-label="新增采购订单" onClick={() => setEditing({})}>新增</button>}/>
     <PurchaseOrderTable orders={orders} onView={setViewing} actions={(order) => <>
       {can(user, 'PURCHASE_ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action" onClick={() => setEditing(order)}>编辑</button>}
-      {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <button className="row-action strong" onClick={() => submitOrder(order.id)}>提交</button>}
+      {can(user, 'PURCHASE_ORDERS_SUBMIT') && ['DRAFT','REJECTED'].includes(order.status) && <ConfirmAction className="row-action strong" buttonLabel="提交" title="提交这张采购订单？" message="提交后，订单将进入审批流程。" confirmLabel="确认提交" onConfirm={() => submitOrder(order.id)}/>}
+      {can(user, 'PURCHASE_ORDERS_CREATE') && order.status === 'DRAFT' && (<ConfirmDelete label="采购订单" onConfirm={async () => {
+        try { await api(`/api/purchase-orders/${order.id}`, { method: 'DELETE' }); notify('采购订单草稿已删除'); await load(); }
+        catch (error) { notify(error.message, 'error'); throw error; }
+      }}/>) }
     </>}/>
     {editing && <PurchaseOrderEditor order={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('采购订单草稿已保存'); }} notify={notify}/>} 
     {viewing && <PurchaseOrderDetail id={viewing.id} user={user} onClose={() => setViewing(null)} notify={notify}/>}
@@ -287,37 +396,111 @@ export function PurchaseOrders({ user, notify }) {
 
 function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
   const [suppliers, setSuppliers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
-  const [form, setForm] = useState({ supplierId: '', remark: '', items: [{ productId: '', quantity: 1, price: '' }] });
+  // V1.3 Phase 1: PO commercial contract — order date, expected delivery
+  // date, payment terms, supplier contact/phone/address snapshot. The
+  // supplier master provides defaults for the snapshot fields.
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({
+    supplierId: '', orderDate: today, expectedDeliveryDate: '', paymentTerms: '', paymentTermsDays: 0,
+    supplierContactName: '', supplierContactPhone: '', supplierAddress: '',
+    remark: '', items: [{ productId: '', quantity: 1, price: '' }],
+  });
   useEffect(() => {
     Promise.all([api('/api/suppliers'), api('/api/products'), order.id ? api(`/api/purchase-orders/${order.id}`) : null]).then(([s, p, detail]) => {
       setSuppliers(s.suppliers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
-      if (detail) setForm({ supplierId: detail.order.supplierId, remark: detail.order.remark, items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) });
+      if (detail) {
+        setForm({
+          supplierId: detail.order.supplierId,
+          orderDate: detail.order.orderDate || today,
+          expectedDeliveryDate: detail.order.expectedDeliveryDate || '',
+          paymentTerms: detail.order.paymentTerms || '',
+          paymentTermsDays: detail.order.paymentTermsDays ?? 0,
+          supplierContactName: detail.order.supplierContactName || '',
+          supplierContactPhone: detail.order.supplierContactPhone || '',
+          supplierAddress: detail.order.supplierAddress || '',
+          remark: detail.order.remark,
+          items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })),
+        });
+      }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
   }, []);
-  const total = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.price) || 0), 0), [form]);
+  function applySupplierSnapshot(supplierId) {
+    const supplier = suppliers.find((s) => s.id === supplierId);
+    setForm((current) => ({
+      ...current,
+      supplierId,
+      supplierContactName: current.supplierContactName || supplier?.contact || '',
+      supplierContactPhone: current.supplierContactPhone || supplier?.phone || '',
+      supplierAddress: current.supplierAddress || supplier?.address || '',
+      paymentTermsDays: supplier?.paymentTermsDays ?? 0,
+    }));
+  }
+  const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
   function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
   function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
-  async function save(e) { e.preventDefault(); try { await api(order.id ? `/api/purchase-orders/${order.id}` : '/api/purchase-orders', { method: order.id ? 'PUT' : 'POST', body: { ...form, items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: Math.round(Number(x.price) * 100) })) } }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    try {
+      await api(order.id ? `/api/purchase-orders/${order.id}` : '/api/purchase-orders', {
+        method: order.id ? 'PUT' : 'POST',
+        body: {
+          ...form,
+          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+        },
+      });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建采购订单'} onClose={onClose} wide>
     {loading ? <Loading/> : <form onSubmit={save}>
-      <div className="form-grid order-head"><label>供应商<select value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })} required><option value="">请选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></label><label>订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label></div>
+      <div className="form-grid order-head">
+        <label>供应商<select value={form.supplierId} onChange={(e) => applySupplierSnapshot(e.target.value)} required><option value="">请选择供应商</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</select></label>
+        <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
+        <label>预计交期<input type="date" value={form.expectedDeliveryDate} onChange={(e) => setForm({ ...form, expectedDeliveryDate: e.target.value })} required/></label>
+        <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
+        <label>账期天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })} required/></label>
+        <label>供应商联系人<input value={form.supplierContactName} onChange={(e) => setForm({ ...form, supplierContactName: e.target.value })} maxLength={50}/></label>
+        <label>供应商电话<input value={form.supplierContactPhone} onChange={(e) => setForm({ ...form, supplierContactPhone: e.target.value })} maxLength={30}/></label>
+        <label className="full">供应商地址<input value={form.supplierAddress} onChange={(e) => setForm({ ...form, supplierAddress: e.target.value })} maxLength={200}/></label>
+        <label className="full">订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label>
+      </div>
       <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价</span><span>金额</span><span/></div>
+      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价（元）</span><span>金额</span><span/></div>
         {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
       </div>
-      <div className="order-total"><span>订单合计</span><strong>{money(Math.round(total * 100))}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
+      <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;
 }
 
 function PurchaseOrderDetail({ id, user, onClose, notify }) {
+  const isSales = false;
   const [order, setOrder] = useState(null);
   const [trace, setTrace] = useState(null);
   useEffect(() => { Promise.all([api(`/api/purchase-orders/${id}`), api(`/api/workflow/purchase-orders/${id}`)]).then(([detail, workflow]) => { setOrder(detail.order); setTrace(workflow); }).catch((e) => notify(e.message, 'error')); }, [id]);
   return <Modal title="采购订单详情" onClose={onClose} wide>{!order ? <Loading/> : <>
     <div className="detail-head"><div><span className="mono">{order.orderNo}</span><h3>{order.supplierName}</h3><p>{order.supplierCode} · 制单人：{order.creatorName}</p></div><Status status={order.status} label={order.statusLabel}/></div>
     {order.rejectionReason && <div className="reject-note"><strong>驳回原因</strong>{order.rejectionReason}</div>}
-    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div><div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div><div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div><div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div></div>
+    <div className="detail-grid">
+      <div><span>{isSales ? '订单日期' : '订单日期'}</span><strong>{order.orderDate || '—'}</strong></div>
+      <div><span>{isSales ? '要求交期' : '预计交期'}</span><strong>{(isSales ? order.requestedDeliveryDate : order.expectedDeliveryDate) || '—'}</strong></div>
+      <div><span>付款条件</span><strong>{order.paymentTerms || '—'}</strong></div>
+      <div><span>创建时间</span><strong>{dateTime(order.createdAt)}</strong></div>
+      <div><span>提交时间</span><strong>{dateTime(order.submittedAt)}</strong></div>
+      <div><span>审核人</span><strong>{order.reviewerName || '—'}</strong></div>
+      <div><span>审核时间</span><strong>{dateTime(order.reviewedAt)}</strong></div>
+    </div>
+    {isSales
+      ? <div className="detail-grid">
+          <div><span>收货联系人</span><strong>{order.shipToContactName || '—'}</strong></div>
+          <div><span>收货电话</span><strong>{order.shipToPhone || '—'}</strong></div>
+          <div className="full"><span>收货地址</span><strong>{order.shipToAddress || '—'}</strong></div>
+        </div>
+      : <div className="detail-grid">
+          <div><span>供应商联系人</span><strong>{order.supplierContactName || '—'}</strong></div>
+          <div><span>供应商电话</span><strong>{order.supplierContactPhone || '—'}</strong></div>
+          <div className="full"><span>供应商地址</span><strong>{order.supplierAddress || '—'}</strong></div>
+        </div>}
     <MobileWorkflowProgress stages={orderWorkflowStages(order, trace, 'purchase')}/>
     {order.status === 'SUBMITTED' && can(user, 'PURCHASE_ORDERS_APPROVE') && <AppLink className="secondary workflow-approval-link" page="approvals">前往审批</AppLink>}
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">数量</th><th>单位</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{order.items.map((item) => <tr key={item.id}><td>{item.lineNo}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.quantity}</td><td>{item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number"><strong>{money(item.amountCents)}</strong></td></tr>)}</tbody></table></div>
@@ -340,7 +523,7 @@ export function Warehouses({ user, notify }) {
   return <Panel title="仓库资料" subtitle="管理企业仓库档案">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索仓库编码或名称" action={can(user, 'WAREHOUSES_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增仓库</button>}/>
     <div className="table-wrap"><table><thead><tr><th>仓库编码</th><th>仓库名称</th><th>地址</th><th>管理员</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td className="dim">{item.address || '—'}</td><td>{item.manager || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'WAREHOUSES_MANAGE') && <button className="row-action" onClick={() => setEditing(item)}>编辑</button>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td className="dim">{item.address || '—'}</td><td>{item.manager || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'WAREHOUSES_MANAGE') && <MasterActions item={item} label="仓库" endpoint="/api/warehouses" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到仓库资料"/>}</div>
     {editing && <WarehouseModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('仓库资料已保存'); }} notify={notify}/>}
   </Panel>;
@@ -367,10 +550,10 @@ export function Inventory({ user, notify }) {
   useEffect(() => { Promise.all([api('/api/warehouses'), api('/api/products')]).then(([w, p]) => { setWarehouses(w.warehouses.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active)); }).catch((e) => notify(e.message, 'error')); }, []);
   const loadInventory = () => { let url = '/api/inventory'; const params = []; if (searchWh) params.push(`warehouse=${searchWh}`); if (searchPd) params.push(`product=${searchPd}`); if (params.length) url += '?' + params.join('&'); api(url).then((r) => setInventory(r.inventory)).catch((e) => notify(e.message, 'error')); };
   useEffect(() => { void loadInventory(); }, [searchWh, searchPd]);
-  return <Panel title="库存管理" subtitle="查询、盘点、调拨企业库存">
-    <div className="inventory-workbench" aria-label="仓储库存"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}><strong>库存查询</strong><small>查看当前库存</small></button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}><strong>库存调拨</strong><small>仓库间移动</small></button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}><strong>库存盘点</strong><small>账实对比</small></button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}><strong>库存调整</strong><small>杂项库存修正</small></button>}<AppLink page="inventory-transactions"><strong>库存异动</strong><small>全部变动轨迹</small></AppLink></div>
+  return <Panel title="库存查询">
+    <div className="inventory-workbench" aria-label="库存功能"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}>查询</button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}>调拨</button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}>盘点</button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}>调整</button>}<AppLink page="inventory-transactions">异动</AppLink></div>
     {tab === 'query' && <><div className="toolbar inventory-filters"><select value={searchPd} onChange={(e) => setSearchPd(e.target.value)}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={searchWh} onChange={(e) => setSearchWh(e.target.value)}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></div>
-      <div className="table-wrap"><table><thead><tr><th>仓库</th><th>货品编码</th><th>货品名称</th><th>单位</th><th className="number">当前库存</th><th>最近异动</th></tr></thead><tbody>{inventory.map((row) => <tr className="clickable" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><td>{row.warehouseName}</td><td className="mono">{row.productCode}</td><td><strong>{row.productName}</strong></td><td>{row.unit}</td><td className="number"><strong>{quantity(row.quantity)}</strong></td><td>{dateTime(row.recentMovementAt)}</td></tr>)}</tbody></table>{!inventory.length && <Empty text="没有找到库存记录"/>}</div></>}
+      <div className="inventory-records">{inventory.map((row) => <button type="button" className="inventory-record" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><span className="inventory-record__main"><strong>{row.productName}</strong><span className="mono">{row.productCode}</span></span><strong className="inventory-record__quantity">{quantity(row.quantity)} <small>{row.unit}</small></strong><span className="inventory-record__warehouse">{row.warehouseName}</span><Icon name="chevron" size={18}/></button>)}{!inventory.length && <Empty title="暂无库存记录" text="完成入库或调整后，将在这里显示。"/>}</div></>}
     {tab === 'check' && <InventoryChecks user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'transfer' && <InventoryTransfers user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'adjustment' && can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <InventoryAdjustments notify={notify} warehouses={warehouses} products={products} inventory={inventory}/>}
@@ -403,7 +586,7 @@ function InventoryAdjustments({ notify, warehouses, products, inventory }) {
     <p className="section-hint">用于人工修正、发现损坏、数据纠正或期初调整；正数增加库存，负数减少库存。</p>
     <div className="table-wrap"><table><thead><tr><th>调整单号</th><th>仓库</th><th>日期</th><th>状态</th><th>调整项</th><th>原因</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="clickable" onClick={() => void openDetail(item)}><td className="mono">{item.adjustment_no}</td><td>{item.warehouseName}</td><td>{item.adjustment_date}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.itemCount}</td><td>{item.reason}</td></tr>)}</tbody></table>{!items.length && <Empty text="没有库存调整记录"/>}</div>
     {editing && <InventoryAdjustmentModal value={editing} warehouses={warehouses} products={products} inventory={inventory} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load(); notify('库存调整单已保存'); }}/>}
-    {viewing && <InventoryAdjustmentDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
+    {viewing && <InventoryAdjustmentDetail value={viewing} notify={notify} onDeleted={() => { setViewing(null); void load(); }} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
   </>;
 }
 
@@ -427,13 +610,13 @@ function InventoryAdjustmentModal({ value, warehouses, products, inventory, noti
   </form></Modal>;
 }
 
-function InventoryAdjustmentDetail({ value, onClose, onEdit, onAction }) {
+function InventoryAdjustmentDetail({ value, notify, onDeleted, onClose, onEdit, onAction }) {
   const stages = [{ key: 'DRAFT', label: '草稿' }, { key: 'CONFIRMED', label: '已确认' }];
   return <Modal title="库存调整单详情" onClose={onClose} wide><div className="detail-head"><div><span className="mono">{value.adjustment_no}</span><h3>{value.warehouseName}</h3><p>{value.reason}</p></div><Status status={value.status} label={value.statusLabel}/></div>
     {value.status !== 'CANCELLED' && <MobileWorkflowProgress stages={stages} currentStatus={value.status} title="调整进度"/>}
     <div className="detail-grid"><div><span>调整日期</span><strong>{value.adjustment_date}</strong></div><div><span>创建人</span><strong>{value.creatorName}</strong></div><div><span>确认人</span><strong>{value.confirmedByName || '尚未确认'}</strong></div><div><span>确认时间</span><strong>{dateTime(value.confirmed_at)}</strong></div></div>
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th className="number">调整前</th><th className="number">调整数量</th><th className="number">调整后</th></tr></thead><tbody>{value.items.map((item) => <tr key={item.id}><td>{item.line_no}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{item.beforeQuantity ?? '确认时计算'}</td><td className={`number ${item.quantityDelta > 0 ? 'positive' : 'negative'}`}>{item.quantityDelta > 0 ? '+' : ''}{item.quantityDelta}</td><td className="number">{item.afterQuantity ?? '—'}</td></tr>)}</tbody></table></div>
-    {value.status === 'DRAFT' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button><button type="button" className="row-action" onClick={onEdit}>编辑</button><button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消调整</button><button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认调整</button></div>}
+    {value.status === 'DRAFT' && <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button><button type="button" className="row-action" onClick={onEdit}>编辑</button><ConfirmDelete label="库存调整单" onConfirm={async () => { try { await api(`/api/inventory-adjustments/${value.id}`, { method: 'DELETE' }); notify('库存调整单草稿已删除'); onDeleted(); } catch (error) { notify(error.message, 'error'); throw error; } }}/><button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消调整</button><button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认调整</button></div>}
     {value.status !== 'DRAFT' && <p className="section-hint">已确认或已取消的调整单只读；已确认差错请通过一张反向调整单纠正。</p>}
   </Modal>;
 }

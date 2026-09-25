@@ -34,7 +34,7 @@ export default function MobilePage({
     <section className="mobile-page" data-testid="mobile-page">
       {(title || actions) && (
         <header className="mobile-page__header">
-          <div style={{ minWidth: 0 }}>
+          <div className="mobile-page__heading">
             {title ? <div className="mobile-page__title">{title}</div> : null}
             {subtitle ? <div className="mobile-page__subtitle">{subtitle}</div> : null}
           </div>

@@ -13,7 +13,7 @@ export function Projects({ user, notify }) {
     api(`/api/projects?${params}`).then((r) => setItems(r.projects)).catch((e) => notify(e.message, 'error'));
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [status]);
 
   function viewDetail(item) {
     api(`/api/projects/${item.id}`).then((r) => setDetail(r.project)).catch((e) => notify(e.message, 'error'));
@@ -23,7 +23,7 @@ export function Projects({ user, notify }) {
   const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', SUSPENDED: '已暂停', COMPLETED: '已完成', CANCELLED: '已取消' };
 
   return (
-    <Panel title="项目立项" subtitle="项目信息管理">
+    <Panel title="项目立项">
       <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建项目</button>}/>
       <div className="filters">
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -32,7 +32,6 @@ export function Projects({ user, notify }) {
           <option value="IN_PROGRESS">进行中</option>
           <option value="COMPLETED">已完成</option>
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -156,21 +155,20 @@ export function ProjectTasks({ user, notify }) {
 
   useEffect(() => {
     api('/api/projects').then((r) => setProjects(r.projects || []));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [projectId]);
 
   const priorityMap = { LOW: '低', MEDIUM: '中', HIGH: '高', URGENT: '紧急' };
   const statusMap = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成' };
 
   return (
-    <Panel title="任务管理" subtitle="项目任务分配和进度跟踪">
+    <Panel title="任务管理">
       <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建任务</button>}/>
       <div className="filters">
         <label>所属项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
           <option value="">全部项目</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -256,18 +254,17 @@ export function Timesheets({ user, notify }) {
 
   useEffect(() => {
     api('/api/projects').then((r) => setProjects(r.projects || []));
-    void load();
   }, []);
+  useEffect(() => { void load(); }, [projectId]);
 
   return (
-    <Panel title="工时记录" subtitle="项目工时填报和统计">
+    <Panel title="工时记录">
       <Toolbar action={<button className="primary" onClick={() => setEditing({})}>＋ 记录工时</button>}/>
       <div className="filters">
         <label>项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
           <option value="">全部项目</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.project_no} - {p.name}</option>)}
         </select></label>
-        <button onClick={load}>查询</button>
       </div>
       <div className="table-wrap">
         <table>
@@ -360,7 +357,7 @@ export function Notifications({ user, notify }) {
   const typeColors = { INFO: '', WARNING: 'warning', SUCCESS: 'success', ERROR: 'danger' };
 
   return (
-    <Panel title="通知中心" subtitle="系统消息和提醒">
+    <Panel title="通知中心">
       <Toolbar action={<button className="secondary" onClick={markAllRead}>全部标为已读</button>}/>
       <div className="table-wrap">
         <table>
@@ -394,7 +391,7 @@ export function Workflows({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="审批流程" subtitle="定义和管理审批流程">
+    <Panel title="审批流程">
       <Toolbar action={can(user, 'WORKFLOW_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建流程</button>}/>
       <div className="table-wrap">
         <table>

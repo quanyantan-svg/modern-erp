@@ -18,6 +18,9 @@ export function approvalActionRequest(item, action, reason = '') {
   if (item.documentType === 'PURCHASE_ORDER') {
     return { path: `/api/purchase-orders/${id}/${action}`, options: { method: 'POST', ...(action === 'reject' ? { body: { reason } } : {}) } };
   }
+  if (item.documentType === 'PURCHASE_REQUISITION') {
+    return { path: `/api/purchase-requisitions/${id}/${action}`, options: { method: 'POST', ...(action === 'reject' ? { body: { reason } } : {}) } };
+  }
   if (item.documentType === 'INVENTORY_CHECK' && action === 'approve') {
     return { path: `/api/inventory-checks/${id}`, options: { method: 'PATCH', body: { action: 'APPROVE' } } };
   }
@@ -54,7 +57,7 @@ function StatusPill({ item }) {
   return <span className={`mobile-approval-status mobile-approval-status--${item.status.toLowerCase()}`}>{item.statusLabel}</span>;
 }
 
-export function ApprovalCard({ item, busy, onSelect, onAction }) {
+export function ApprovalCard({ item, onSelect }) {
   return (
     <article className="mobile-approval-card" data-testid={`approval-card-${item.key}`}>
       <button type="button" className="mobile-approval-card__content" onClick={() => onSelect(item)}>
@@ -70,21 +73,15 @@ export function ApprovalCard({ item, busy, onSelect, onAction }) {
           {item.amountCents != null ? <b>{money(item.amountCents)}</b> : null}
         </span>
       </button>
-      {(item.canApprove || item.canReject) ? (
-        <div className="mobile-approval-card__actions">
-          {item.canReject ? <button type="button" className="secondary danger-text" disabled={busy} onClick={() => onAction(item, 'reject')}>驳回</button> : null}
-          {item.canApprove ? <button type="button" className="primary" disabled={busy} onClick={() => onAction(item, 'approve')}>通过</button> : null}
-        </div>
-      ) : null}
     </article>
   );
 }
 
-export function ApprovalListState({ loading, error, items, busy, onRetry, onSelect, onAction }) {
+export function ApprovalListState({ loading, error, items, onRetry, onSelect }) {
   if (loading) return <div className="mobile-approval-state" data-testid="approval-loading"><span className="spinner" />正在加载审批…</div>;
   if (error) return <div className="mobile-approval-state mobile-approval-state--error" data-testid="approval-error"><p>{error}</p><button type="button" className="secondary" onClick={onRetry}>重试</button></div>;
   if (!items.length) return <div className="mobile-approval-state" data-testid="approval-empty">当前没有符合条件的单据</div>;
-  return <div className="mobile-approval-list">{items.map((item) => <ApprovalCard key={item.key} item={item} busy={busy} onSelect={onSelect} onAction={onAction} />)}</div>;
+  return <div className="mobile-approval-list">{items.map((item) => <ApprovalCard key={item.key} item={item} onSelect={onSelect} />)}</div>;
 }
 
 function ApprovalDetail({ item, busy, onBack, onAction }) {
@@ -100,6 +97,16 @@ function ApprovalDetail({ item, busy, onBack, onAction }) {
         <div><dt>发起时间</dt><dd>{dateTime(item.submittedAt || item.createdAt)}</dd></div>
         {item.handlerName ? <div><dt>处理人</dt><dd>{item.handlerName}</dd></div> : null}
         {item.handledAt ? <div><dt>处理时间</dt><dd>{dateTime(item.handledAt)}</dd></div> : null}
+        {item.orderDate ? <div><dt>订单日期</dt><dd>{item.orderDate}</dd></div> : null}
+        {item.requestedDeliveryDate ? <div><dt>要求交期</dt><dd>{item.requestedDeliveryDate}</dd></div> : null}
+        {item.expectedDeliveryDate ? <div><dt>预计交期</dt><dd>{item.expectedDeliveryDate}</dd></div> : null}
+        {item.paymentTerms ? <div><dt>付款条件</dt><dd>{item.paymentTerms}</dd></div> : null}
+        {item.shipToContactName ? <div><dt>收货联系人</dt><dd>{item.shipToContactName}</dd></div> : null}
+        {item.shipToPhone ? <div><dt>收货电话</dt><dd>{item.shipToPhone}</dd></div> : null}
+        {item.shipToAddress ? <div><dt>收货地址</dt><dd>{item.shipToAddress}</dd></div> : null}
+        {item.supplierContactName ? <div><dt>供应商联系人</dt><dd>{item.supplierContactName}</dd></div> : null}
+        {item.supplierContactPhone ? <div><dt>供应商电话</dt><dd>{item.supplierContactPhone}</dd></div> : null}
+        {item.supplierAddress ? <div><dt>供应商地址</dt><dd>{item.supplierAddress}</dd></div> : null}
         {item.amountCents != null ? <div><dt>单据金额</dt><dd className="amount">{money(item.amountCents)}</dd></div> : null}
         <div><dt>摘要</dt><dd>{item.summary || '—'}</dd></div>
         {item.remark ? <div><dt>备注</dt><dd>{item.remark}</dd></div> : null}
@@ -111,7 +118,9 @@ function ApprovalDetail({ item, busy, onBack, onAction }) {
           {item.lines.map((line, index) => (
             <div className="mobile-approval-line" key={`${line.productName || line.subjectName}-${index}`}>
               <span>{line.productName || line.subjectName}</span>
-              <small>{line.summary || (line.quantity != null ? `${line.quantity} ${line.unit}` : line.direction === 'DEBIT' ? '借方' : '贷方')}</small>
+              <small>{line.summary || (line.quantity != null
+                ? `${line.quantity} ${line.unit}${line.unitPriceCents != null ? ` · 单价 ${money(line.unitPriceCents)}` : ''}`
+                : line.direction === 'DEBIT' ? '借方' : '贷方')}</small>
               {line.amountCents != null ? <b>{money(line.amountCents)}</b> : null}
             </div>
           ))}
@@ -188,8 +197,7 @@ export default function MobileApprovalCenter({ notify, onPendingCountChange }) {
   return (
     <section className="mobile-approval-center" data-testid="mobile-approval-center">
       <ApprovalTabs activeTab={activeTab} counts={counts} onChange={changeTab} />
-      <ApprovalListState loading={loading} error={error} items={items} busy={busy} onRetry={() => load(activeTab)} onSelect={setSelected} onAction={requestAction} />
-      {dialog ? <ActionDialog action={dialog.action} busy={busy} reason={reason} setReason={setReason} onCancel={() => !busy && setDialog(null)} onConfirm={confirmAction} /> : null}
+      <ApprovalListState loading={loading} error={error} items={items} onRetry={() => load(activeTab)} onSelect={setSelected} />
     </section>
   );
 }

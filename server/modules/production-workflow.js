@@ -1,404 +1,161 @@
-// M6 Production Workflow — explicit material issue & production receipt
-// documents. Production Order START/COMPLETE remain status transitions
-// only and never mutate inventory. Physical inventory movements happen
-// here through explicit, auditable DRAFT/CONFIRMED/CANCELLED documents.
-//
-// Authorization is consolidated to two narrow permissions:
-//   PRODUCTION_MATERIAL_ISSUE_MANAGE — 用料出库
-//   PRODUCTION_RECEIPT_MANAGE       — 生产入库
-// Both are admin-only in the current five-role contract.
-//
-// Source-type mapping (canonical ledger):
-//   PRODUCTION_MATERIAL_ISSUE → inventory_transactions.source_type, direction='OUT'
-//   PRODUCTION_RECEIPT        → inventory_transactions.source_type, direction='IN'
-
-import { HttpError, allow, optionalText, readJson, requiredText, send } from '../lib/http.js';
+// V1.3 Phase 4 — authoritative production stock execution.
+import { HttpError, allow, optionalText, readJson, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
+import { postTrackedMovement, reverseReceiptGenealogy, saveTrackedAllocations } from './traceability-quality.js';
+import { assertMaterialReturnAfterProcessing, assertRoutedReceiptLimit } from './manufacturing-execution.js';
+import { assertFinancialPeriodsOpen, consumeOriginalInboundValue, createSystemVoucher, inventoryAccountRole, issueSourceValue, postWipMovement, receiveSourceValue, restoreSourceValue } from './financial-inventory.js';
 
-const ISSUE_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
-const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
+const EPS = 1e-9;
+const STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
+const SOURCE = { ISSUE: 'PRODUCTION_MATERIAL_ISSUE', RETURN: 'PRODUCTION_MATERIAL_RETURN', RECEIPT: 'PRODUCTION_RECEIPT', RECEIPT_REVERSAL: 'PRODUCTION_RECEIPT_REVERSAL' };
+const positive = (value, label) => { const n = Number(value); if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `${label}必须大于 0`); return n; };
+const loadOrder = (db, orderId) => { const row = db.prepare('SELECT * FROM production_orders WHERE id=?').get(orderId); if (!row) throw new HttpError(404, '生产工单不存在'); return row; };
+const requireInProgress = (order) => { if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的制令单允许执行库存作业'); };
+const requireWarehouse = (db, warehouseId) => { if (!db.prepare('SELECT 1 FROM warehouses WHERE id=? AND active=1').get(warehouseId)) throw new HttpError(400, '请选择有效仓库'); };
+const docNo = (prefix) => `${prefix}-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(Date.now()).slice(-7)}${Math.floor(Math.random() * 90 + 10)}`;
+const inventoryQty = (db, warehouseId, productId) => Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId)?.quantity || 0);
 
-const SOURCE_TYPE_ISSUE = 'PRODUCTION_MATERIAL_ISSUE';
-const SOURCE_TYPE_RECEIPT = 'PRODUCTION_RECEIPT';
-
-function normalizePositiveQuantity(value, label) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) throw new HttpError(400, `${label}必须大于 0`);
-  return n;
+function adjustInventory(db, warehouseId, productId, delta, now) {
+  db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)
+    ON CONFLICT(warehouse_id,product_id) DO UPDATE SET quantity=inventory.quantity+excluded.quantity,updated_at=excluded.updated_at`)
+    .run(id(), warehouseId, productId, delta, now);
+  return inventoryQty(db, warehouseId, productId);
 }
 
-function normalizeNonNegativeQuantity(value, label) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) throw new HttpError(400, `${label}必须为非负数`);
-  return n;
+function postLedger(db, x) {
+  const transactionId=id(); db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_line_id,source_no,remark,creator_id,created_at,business_date)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(transactionId, x.warehouseId, x.productId, x.quantity, x.direction,
+    inventoryQty(db, x.warehouseId, x.productId), x.sourceType, x.sourceId, x.sourceLineId || null, x.sourceNo, x.remark, x.actorId, x.now,x.businessDate||x.now.slice(0,10)); return transactionId;
 }
 
-function loadProductionOrder(db, poId) {
-  const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(poId);
-  if (!order) throw new HttpError(404, '生产工单不存在');
-  return order;
+export function productionRequirementSummary(db, orderId) {
+  return db.prepare(`SELECT r.*,p.code productCode,p.name productName,p.unit,
+    COALESCE((SELECT SUM(i.issue_quantity) FROM production_material_issue_items i JOIN production_material_issues h ON h.id=i.issue_id WHERE i.requirement_line_id=r.id AND h.status='CONFIRMED'),0)
+    -COALESCE((SELECT SUM(i.quantity) FROM production_material_return_items i JOIN production_material_returns h ON h.id=i.return_id WHERE i.requirement_line_id=r.id AND h.status='CONFIRMED'),0) netIssued
+    FROM production_order_items r JOIN products p ON p.id=r.product_id WHERE r.order_id=? ORDER BY r.line_no`).all(orderId).map((r) => ({
+      ...r, requiredQuantity: Number(r.quantity), quantityPerUnit: Number(r.quantity_per_unit), netIssued: Number(r.netIssued),
+      remainingQuantity: Math.max(0, Number(r.quantity) - Number(r.netIssued)),
+    }));
 }
 
-function requireActiveWarehouse(db, warehouseId) {
-  const row = db.prepare('SELECT id FROM warehouses WHERE id=? AND active=1').get(warehouseId);
-  if (!row) throw new HttpError(400, '请选择有效仓库');
+export function productionNetReceived(db, orderId) {
+  const received = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipts WHERE production_order_id=? AND status='CONFIRMED'").get(orderId).total);
+  const reversed = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipt_reversals WHERE production_order_id=? AND status='CONFIRMED'").get(orderId).total);
+  return received - reversed;
 }
 
-function makeMaterialIssueNo() {
-  const now = new Date();
-  return `PMI-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
+function resolveRequirement(db, orderId, raw, index) {
+  let requirement;
+  if (raw.requirementLineId) requirement = db.prepare('SELECT * FROM production_order_items WHERE id=? AND order_id=?').get(raw.requirementLineId, orderId);
+  else if (raw.productId) { const rows = db.prepare('SELECT * FROM production_order_items WHERE order_id=? AND product_id=?').all(orderId, raw.productId); if (rows.length === 1) requirement = rows[0]; }
+  if (!requirement) throw new HttpError(400, `第 ${index + 1} 行不是制令单的有效物料需求行`);
+  if (raw.productId && raw.productId !== requirement.product_id) throw new HttpError(400, `第 ${index + 1} 行物料与需求行不匹配`);
+  return requirement;
 }
 
-function makeProductionReceiptNo() {
-  const now = new Date();
-  return `PR-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${String(now.getTime()).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
-}
-
-function normalizeIssueItemsPayload(db, rawItems) {
-  if (!Array.isArray(rawItems) || rawItems.length === 0) throw new HttpError(400, '请添加至少一条出库明细');
+function issueItems(db, orderId, rawItems) {
+  if (!Array.isArray(rawItems) || !rawItems.length) throw new HttpError(400, '请添加至少一条出库明细');
   const seen = new Set();
-  return rawItems.map((item, index) => {
-    if (!item || !item.productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(item.productId)) {
-      throw new HttpError(400, `第 ${index + 1} 行物料无效`);
-    }
-    if (seen.has(item.productId)) throw new HttpError(400, '同一物料不能重复');
-    seen.add(item.productId);
-    const planned = item.plannedQuantity != null ? normalizeNonNegativeQuantity(item.plannedQuantity, '计划用量') : 0;
-    const issue = normalizePositiveQuantity(item.issueQuantity, '本次出库量');
-    return { id: id(), productId: item.productId, plannedQuantity: planned, issueQuantity: issue, lineNo: index + 1 };
-  });
+  return rawItems.map((raw, index) => { const r = resolveRequirement(db, orderId, raw || {}, index); if (seen.has(r.id)) throw new HttpError(400, '同一需求行不能重复'); seen.add(r.id); return { id: id(), requirementLineId: r.id, productId: r.product_id, plannedQuantity: Number(r.quantity), issueQuantity: positive(raw.issueQuantity, '本次出库量'), trackingAllocations: raw.trackingAllocations || raw.tracking_allocations || [], lineNo: index + 1 }; });
 }
 
 function saveIssueItems(db, issueId, items) {
   db.prepare('DELETE FROM production_material_issue_items WHERE issue_id=?').run(issueId);
-  const insert = db.prepare('INSERT INTO production_material_issue_items(id,issue_id,product_id,planned_quantity,issue_quantity,line_no) VALUES(?,?,?,?,?,?)');
-  for (const item of items) insert.run(item.id, issueId, item.productId, item.plannedQuantity, item.issueQuantity, item.lineNo);
+  const stmt = db.prepare('INSERT INTO production_material_issue_items(id,issue_id,requirement_line_id,product_id,planned_quantity,issue_quantity,line_no) VALUES(?,?,?,?,?,?,?)');
+  for (const x of items) stmt.run(x.id, issueId, x.requirementLineId, x.productId, x.plannedQuantity, x.issueQuantity, x.lineNo);
 }
-
-function adjustInventory(db, warehouseId, productId, quantityChange, now) {
-  db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at)
-    VALUES(?,?,?,?,?)
-    ON CONFLICT(warehouse_id,product_id) DO UPDATE SET
-      quantity=inventory.quantity+excluded.quantity,
-      updated_at=excluded.updated_at`).run(id(), warehouseId, productId, quantityChange, now);
-  return db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity;
-}
-
-// ============ Material Issue ============
 
 export function listProductionMaterialIssues(db, res, actor, url) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const status = url.searchParams.get('status');
-  const params = [];
-  let where = '';
-  if (status && ISSUE_STATUS[status]) { where = 'WHERE pi.status=?'; params.push(status); }
-  const rows = db.prepare(`SELECT pi.*, po.order_no productionOrderNo, po.status productionOrderStatus,
-    p.code productCode, p.name productName,
-    w.code warehouseCode, w.name warehouseName,
-    creator.display_name creatorName, confirmed.display_name confirmedByName,
-    (SELECT COUNT(*) FROM production_material_issue_items WHERE issue_id=pi.id) itemCount
-    FROM production_material_issues pi
-    JOIN production_orders po ON po.id=pi.production_order_id
-    JOIN products p ON p.id=po.product_id
-    JOIN warehouses w ON w.id=pi.warehouse_id
-    JOIN users creator ON creator.id=pi.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=pi.confirmed_by
-    ${where}
-    ORDER BY pi.created_at DESC LIMIT 100`).all(...params)
-    .map((row) => ({ ...row, statusLabel: ISSUE_STATUS[row.status] || row.status }));
-  return send(res, 200, { materialIssues: rows });
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const status = url.searchParams.get('status'); const clauses = []; const params = [];
+  const archive = lifecycleArchiveFilter('PRODUCTION_MATERIAL_ISSUE', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'pi.id' });
+  if (archive.clause) clauses.push(archive.clause); if (status && STATUS[status]) { clauses.push('pi.status=?'); params.push(status); }
+  const rows = db.prepare(`SELECT pi.*,po.order_no productionOrderNo,po.status productionOrderStatus,p.code productCode,p.name productName,w.code warehouseCode,w.name warehouseName,
+    creator.display_name creatorName,confirmed.display_name confirmedByName,(SELECT COUNT(*) FROM production_material_issue_items WHERE issue_id=pi.id) itemCount
+    FROM production_material_issues pi JOIN production_orders po ON po.id=pi.production_order_id JOIN products p ON p.id=po.product_id JOIN warehouses w ON w.id=pi.warehouse_id
+    JOIN users creator ON creator.id=pi.creator_id LEFT JOIN users confirmed ON confirmed.id=pi.confirmed_by ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''} ORDER BY pi.created_at DESC LIMIT 100`).all(...params);
+  return send(res, 200, { materialIssues: rows.map((r) => ({ ...r, statusLabel: STATUS[r.status] || r.status })) });
 }
 
 export function getProductionMaterialIssue(db, res, actor, issueId) {
   allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const issue = db.prepare(`SELECT pi.*, po.order_no productionOrderNo, po.status productionOrderStatus,
-    p.code productCode, p.name productName,
-    w.code warehouseCode, w.name warehouseName,
-    creator.display_name creatorName, confirmed.display_name confirmedByName
-    FROM production_material_issues pi
-    JOIN production_orders po ON po.id=pi.production_order_id
-    JOIN products p ON p.id=po.product_id
-    JOIN warehouses w ON w.id=pi.warehouse_id
-    JOIN users creator ON creator.id=pi.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=pi.confirmed_by
-    WHERE pi.id=?`).get(issueId);
-  if (!issue) throw new HttpError(404, '用料出库单不存在');
-  issue.statusLabel = ISSUE_STATUS[issue.status] || issue.status;
-  issue.items = db.prepare(`SELECT mi.*, mi.product_id productId, mi.planned_quantity plannedQuantity,
-    mi.issue_quantity issueQuantity, mi.before_quantity beforeQuantity, mi.after_quantity afterQuantity,
-    p.code productCode, p.name productName, p.unit
-    FROM production_material_issue_items mi
-    JOIN products p ON p.id=mi.product_id
-    WHERE mi.issue_id=? ORDER BY mi.line_no`).all(issueId);
+  const issue = db.prepare(`SELECT pi.*,po.order_no productionOrderNo,po.status productionOrderStatus,p.code productCode,p.name productName,w.code warehouseCode,w.name warehouseName,
+    creator.display_name creatorName,confirmed.display_name confirmedByName FROM production_material_issues pi JOIN production_orders po ON po.id=pi.production_order_id JOIN products p ON p.id=po.product_id
+    JOIN warehouses w ON w.id=pi.warehouse_id JOIN users creator ON creator.id=pi.creator_id LEFT JOIN users confirmed ON confirmed.id=pi.confirmed_by WHERE pi.id=?`).get(issueId);
+  if (!issue) throw new HttpError(404, '用料出库单不存在'); issue.statusLabel = STATUS[issue.status] || issue.status;
+  issue.items = db.prepare(`SELECT i.*,i.requirement_line_id requirementLineId,i.product_id productId,i.planned_quantity plannedQuantity,i.issue_quantity issueQuantity,
+    i.before_quantity beforeQuantity,i.after_quantity afterQuantity,p.code productCode,p.name productName,p.unit FROM production_material_issue_items i JOIN products p ON p.id=i.product_id WHERE i.issue_id=? ORDER BY i.line_no`).all(issueId);
   return send(res, 200, { materialIssue: issue });
 }
 
 export function prefetchMaterialIssueFromBom(db, res, actor, url) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const productionOrderId = url.searchParams.get('productionOrderId');
-  if (!productionOrderId) throw new HttpError(400, '请提供生产工单');
-  const order = loadProductionOrder(db, productionOrderId);
-  if (!order.bom_id) {
-    return send(res, 200, {
-      productionOrderId: order.id,
-      productionOrderNo: order.order_no,
-      productCode: db.prepare('SELECT code FROM products WHERE id=?').get(order.product_id)?.code,
-      productName: db.prepare('SELECT name FROM products WHERE id=?').get(order.product_id)?.name,
-      hasBom: false,
-      bomId: null,
-      items: [],
-    });
-  }
-  const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(order.bom_id);
-  const items = bomItems.map((item) => {
-    const required = Number(item.quantity) * Number(order.quantity) * (1 + Number(item.scrap_rate || 0));
-    const product = db.prepare('SELECT id, code, name, unit FROM products WHERE id=?').get(item.product_id);
-    return {
-      productId: item.product_id,
-      productCode: product?.code || item.product_id,
-      productName: product?.name || '',
-      unit: product?.unit || '',
-      plannedQuantity: required,
-      issueQuantity: required,
-    };
-  });
-  return send(res, 200, {
-    productionOrderId: order.id,
-    productionOrderNo: order.order_no,
-    productCode: db.prepare('SELECT code FROM products WHERE id=?').get(order.product_id)?.code,
-    productName: db.prepare('SELECT name FROM products WHERE id=?').get(order.product_id)?.name,
-    hasBom: true,
-    bomId: order.bom_id,
-    items,
-  });
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const order = loadOrder(db, url.searchParams.get('productionOrderId')); const warehouseId = url.searchParams.get('warehouseId');
+  const items = productionRequirementSummary(db, order.id).map((x) => ({ requirementLineId: x.id, productId: x.product_id, productCode: x.productCode, productName: x.productName, unit: x.unit, plannedQuantity: x.requiredQuantity, netIssuedQuantity: x.netIssued, remainingQuantity: x.remainingQuantity, currentStock: warehouseId ? inventoryQty(db, warehouseId, x.product_id) : Number(db.prepare('SELECT COALESCE(SUM(quantity),0) total FROM inventory WHERE product_id=?').get(x.product_id).total), issueQuantity: x.remainingQuantity }));
+  return send(res, 200, { productionOrderId: order.id, productionOrderNo: order.order_no, productCode: db.prepare('SELECT code FROM products WHERE id=?').get(order.product_id)?.code, productName: db.prepare('SELECT name FROM products WHERE id=?').get(order.product_id)?.name, hasBom: items.length > 0, bomId: order.bom_id, items });
 }
 
 export async function createProductionMaterialIssue(db, req, res, actor) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const body = await readJson(req);
-  if (!body.productionOrderId) throw new HttpError(400, '请选择生产工单');
-  const order = loadProductionOrder(db, body.productionOrderId);
-  requireActiveWarehouse(db, body.warehouseId);
-  const items = normalizeIssueItemsPayload(db, body.items);
-  const issueDate = body.issueDate || new Date().toISOString().slice(0, 10);
-  const remark = optionalText(body.remark || '', 500);
-  const issueId = id();
-  const now = new Date().toISOString();
-  const issueNo = makeMaterialIssueNo();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO production_material_issues(id,issue_no,production_order_id,warehouse_id,status,issue_date,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,'DRAFT',?,?,?,?,?)`)
-      .run(issueId, issueNo, order.id, body.warehouseId, issueDate, remark, actor.id, now, now);
-    saveIssueItems(db, issueId, items);
-    audit(db, actor.id, 'CREATE', 'MATERIAL_ISSUE', issueId, `创建用料出库 ${issueNo}`);
-  });
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const body = await readJson(req); const order = loadOrder(db, body.productionOrderId); requireInProgress(order); requireWarehouse(db, body.warehouseId);
+  const items = issueItems(db, order.id, body.items); const issueId = id(); const issueNo = docNo('PMI'); const now = new Date().toISOString();
+  transaction(db, () => { db.prepare("INSERT INTO production_material_issues(id,issue_no,production_order_id,warehouse_id,status,issue_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,'DRAFT',?,?,?,?,?)").run(issueId, issueNo, order.id, body.warehouseId, body.issueDate || now.slice(0, 10), optionalText(body.remark || '', 500), actor.id, now, now); saveIssueItems(db, issueId, items); for (const item of items) saveTrackedAllocations(db, { sourceType: SOURCE.ISSUE, sourceId: issueId, sourceItemId: item.id, productId: item.productId, quantity: item.issueQuantity, allocations: item.trackingAllocations }); audit(db, actor.id, 'CREATE', 'MATERIAL_ISSUE', issueId, `创建用料出库 ${issueNo}`); });
   return send(res, 201, { id: issueId, issueNo, status: 'DRAFT' });
 }
 
 export async function updateProductionMaterialIssue(db, req, res, actor, issueId) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const current = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId);
-  if (!current) throw new HttpError(404, '用料出库单不存在');
-  if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以修改');
-  const body = await readJson(req);
-  if (!body.productionOrderId || body.productionOrderId !== current.production_order_id) {
-    throw new HttpError(400, '出库单所关联的生产工单不能变更');
-  }
-  requireActiveWarehouse(db, body.warehouseId);
-  const items = normalizeIssueItemsPayload(db, body.items);
-  const issueDate = body.issueDate || current.issue_date || new Date().toISOString().slice(0, 10);
-  const remark = optionalText(body.remark || '', 500);
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare(`UPDATE production_material_issues SET warehouse_id=?, issue_date=?, remark=?, updated_at=? WHERE id=?`)
-      .run(body.warehouseId, issueDate, remark, now, issueId);
-    saveIssueItems(db, issueId, items);
-    audit(db, actor.id, 'UPDATE', 'MATERIAL_ISSUE', issueId, `修改用料出库 ${current.issue_no}`);
-  });
-  return send(res, 200, { ok: true });
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const current = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId); if (!current) throw new HttpError(404, '用料出库单不存在'); if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以修改');
+  const body = await readJson(req); if (body.productionOrderId !== current.production_order_id) throw new HttpError(400, '出库单来源制令单不可变更'); requireInProgress(loadOrder(db, current.production_order_id)); requireWarehouse(db, body.warehouseId); const items = issueItems(db, current.production_order_id, body.items); const now = new Date().toISOString();
+  transaction(db, () => { db.prepare('DELETE FROM tracked_source_allocations WHERE source_type=? AND source_id=?').run(SOURCE.ISSUE, issueId); db.prepare('UPDATE production_material_issues SET warehouse_id=?,issue_date=?,remark=?,updated_at=? WHERE id=?').run(body.warehouseId, body.issueDate || current.issue_date, optionalText(body.remark || '', 500), now, issueId); saveIssueItems(db, issueId, items); for (const item of items) saveTrackedAllocations(db, { sourceType: SOURCE.ISSUE, sourceId: issueId, sourceItemId: item.id, productId: item.productId, quantity: item.issueQuantity, allocations: item.trackingAllocations }); audit(db, actor.id, 'UPDATE', 'MATERIAL_ISSUE', issueId, `修改用料出库 ${current.issue_no}`); }); return send(res, 200, { ok: true });
 }
 
-export function confirmProductionMaterialIssue(db, res, actor, issueId) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    const locked = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId);
-    if (!locked) throw new HttpError(404, '用料出库单不存在');
-    if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以确认');
-    // M6 operational rule: material issue may only be confirmed while the
-    // production order is IN_PROGRESS. Historical PENDING orders that were
-    // not yet started must be started before material can be issued.
-    const order = db.prepare('SELECT status FROM production_orders WHERE id=?').get(locked.production_order_id);
-    if (!order) throw new HttpError(409, '关联生产工单不存在');
-    if (order.status !== 'IN_PROGRESS') {
-      throw new HttpError(409, '只有已开工的生产工单才能确认用料出库');
-    }
-    const items = db.prepare('SELECT * FROM production_material_issue_items WHERE issue_id=? ORDER BY line_no').all(issueId);
-    if (items.length === 0) throw new HttpError(409, '出库单没有明细，无法确认');
-    for (const item of items) {
-      const beforeRow = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id);
-      const before = Number(beforeRow?.quantity || 0);
-      if (before < Number(item.issue_quantity)) {
-        const product = db.prepare('SELECT code,name FROM products WHERE id=?').get(item.product_id);
-        throw new HttpError(409, `${product?.code || item.product_id} 库存不足，需要 ${item.issue_quantity}，实际 ${before.toFixed(3)}`);
-      }
-      const after = adjustInventory(db, locked.warehouse_id, item.product_id, -Number(item.issue_quantity), now);
-      db.prepare('UPDATE production_material_issue_items SET before_quantity=?, after_quantity=? WHERE id=?')
-        .run(before, after, item.id);
-      db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-        VALUES(?,?,?,?,'OUT',?,?,?,?,?,?,?)`)
-        .run(id(), locked.warehouse_id, item.product_id, Number(item.issue_quantity), after, SOURCE_TYPE_ISSUE, issueId, locked.issue_no, '用料出库', actor.id, now);
-    }
-    db.prepare(`UPDATE production_material_issues SET status='CONFIRMED', confirmed_by=?, confirmed_at=?, updated_at=? WHERE id=?`)
-      .run(actor.id, now, now, issueId);
-    audit(db, actor.id, 'CONFIRM', 'MATERIAL_ISSUE', issueId, `确认用料出库 ${locked.issue_no}`);
-  });
-  return send(res, 200, { ok: true });
+export function confirmProductionMaterialIssue(db, req, res, actor, issueId) {
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const now = new Date().toISOString(); const key = String(req.headers['idempotency-key'] || `document-${issueId}`); const fingerprint = requestFingerprint({ action: 'confirm' }); const replay = idempotencyReplay(db, 'MATERIAL_ISSUE_CONFIRM', issueId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
+  transaction(db, () => { const issue = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId); if (!issue) throw new HttpError(404, '用料出库单不存在'); if (issue.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以确认'); requireInProgress(loadOrder(db, issue.production_order_id)); assertFinancialPeriodsOpen(db,issue.issue_date);
+    const rows = db.prepare('SELECT * FROM production_material_issue_items WHERE issue_id=? ORDER BY line_no').all(issueId); if (!rows.length) throw new HttpError(409, '出库单没有明细'); const summary = new Map(productionRequirementSummary(db, issue.production_order_id).map((x) => [x.id, x]));
+    for (const row of rows) { const r = summary.get(row.requirement_line_id); if (!r || r.product_id !== row.product_id) throw new HttpError(409, '用料需求来源已失效'); if (Number(row.issue_quantity) > r.remainingQuantity + EPS) throw new HttpError(409, `${r.productCode} 剩余可领 ${r.remainingQuantity}，本次 ${row.issue_quantity} 超出`); const stock = inventoryQty(db, issue.warehouse_id, row.product_id); if (stock + EPS < Number(row.issue_quantity)) throw new HttpError(409, `${r.productCode} 库存不足，需要 ${row.issue_quantity}，实际 ${stock}`); }
+    const baseline=db.prepare('SELECT component_snapshot_json FROM production_cost_baselines WHERE production_order_id=?').get(issue.production_order_id); if(!baseline) throw new HttpError(409,'生产工单缺少冻结成本基线'); const costs=new Map(JSON.parse(baseline.component_snapshot_json||'[]').map(x=>[x.product_id,Number(x.unit_cost_cents)])); const voucherEntries=[]; let standardTotal=0;
+    for (const row of rows) { postTrackedMovement(db, { sourceType: SOURCE.ISSUE, sourceId: issue.id, sourceItemId: row.id, productId: row.product_id, warehouseId: issue.warehouse_id, quantity: row.issue_quantity, direction: 'OUT', businessDate: issue.issue_date }); const before = inventoryQty(db, issue.warehouse_id, row.product_id); const after = adjustInventory(db, issue.warehouse_id, row.product_id, -Number(row.issue_quantity), now); db.prepare('UPDATE production_material_issue_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, after, row.id); const transactionId=postLedger(db, { warehouseId: issue.warehouse_id, productId: row.product_id, quantity: Number(row.issue_quantity), direction: 'OUT', sourceType: SOURCE.ISSUE, sourceId: issue.id, sourceLineId: row.id, sourceNo: issue.issue_no, remark: '用料出库', actorId: actor.id, now,businessDate:issue.issue_date }); const carrying=issueSourceValue(db,{businessDate:issue.issue_date,productId:row.product_id,warehouseId:issue.warehouse_id,quantity:Number(row.issue_quantity),movementType:'MATERIAL_ISSUE',sourceType:SOURCE.ISSUE,sourceId:issue.id,sourceItemId:row.id,inventoryTransactionId:transactionId,productionOrderId:issue.production_order_id}).reduce((s,x)=>s-x.valueDeltaCents,0); const standard=Math.round(Number(row.issue_quantity)*Number(costs.get(row.product_id)||0)); standardTotal+=standard; voucherEntries.push({role:'WIP',direction:'DEBIT',amountCents:standard},{role:inventoryAccountRole(db,row.product_id),direction:'CREDIT',amountCents:carrying}); if(carrying>standard)voucherEntries.push({role:'MATERIAL_PRICE_VARIANCE',direction:'DEBIT',amountCents:carrying-standard}); else if(standard>carrying)voucherEntries.push({role:'MATERIAL_PRICE_VARIANCE',direction:'CREDIT',amountCents:standard-carrying}); }
+    const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_MATERIAL_ISSUE',sourceId:issue.id,businessDate:issue.issue_date,actorId:actor.id,entries:voucherEntries}); if(standardTotal!==0)postWipMovement(db,{productionOrderId:issue.production_order_id,businessDate:issue.issue_date,movementType:'MATERIAL_STANDARD_ABSORPTION',amountCents:standardTotal,sourceType:SOURCE.ISSUE,sourceId:issue.id,voucherId});
+    db.prepare("UPDATE production_material_issues SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, issue.id); saveIdempotency(db, 'MATERIAL_ISSUE_CONFIRM', issueId, key, fingerprint, { ok: true, id: issueId, status: 'CONFIRMED' }); audit(db, actor.id, 'CONFIRM', 'MATERIAL_ISSUE', issue.id, `确认用料出库 ${issue.issue_no}`); }); return send(res, 200, { ok: true });
 }
 
-export function cancelProductionMaterialIssue(db, res, actor, issueId) {
-  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
-  const issue = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId);
-  if (!issue) throw new HttpError(404, '用料出库单不存在');
-  if (issue.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以取消');
-  const now = new Date().toISOString();
-  db.prepare("UPDATE production_material_issues SET status='CANCELLED', updated_at=? WHERE id=?")
-    .run(now, issueId);
-  audit(db, actor.id, 'CANCEL', 'MATERIAL_ISSUE', issueId, `取消用料出库 ${issue.issue_no}`);
-  return send(res, 200, { ok: true });
+export function cancelProductionMaterialIssue(db, res, actor, issueId) { allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const x = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId); if (!x) throw new HttpError(404, '用料出库单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿出库单可以取消'); db.prepare("UPDATE production_material_issues SET status='CANCELLED',updated_at=? WHERE id=?").run(new Date().toISOString(), issueId); audit(db, actor.id, 'CANCEL', 'MATERIAL_ISSUE', issueId, `取消用料出库 ${x.issue_no}`); return send(res, 200, { ok: true }); }
+export function deleteProductionMaterialIssue(db, res, actor, issueId) { allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const x = db.prepare('SELECT * FROM production_material_issues WHERE id=?').get(issueId); if (!x) throw new HttpError(404, '用料出库单不存在'); if (!['DRAFT', 'CANCELLED'].includes(x.status)) throw new HttpError(409, '已确认出库单不可删除，请使用生产退料'); transaction(db, () => { db.prepare('DELETE FROM production_material_issues WHERE id=?').run(issueId); audit(db, actor.id, 'DELETE', 'MATERIAL_ISSUE', issueId, `删除未过账用料出库 ${x.issue_no}`); }); return send(res, 200, { ok: true }); }
+
+export async function createProductionMaterialReturn(db, req, res, actor) {
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const body = await readJson(req); const issue = db.prepare("SELECT * FROM production_material_issues WHERE id=? AND status='CONFIRMED'").get(body.originalIssueId); if (!issue) throw new HttpError(409, '只能对已确认用料出库创建退料'); requireInProgress(loadOrder(db, issue.production_order_id)); if (!Array.isArray(body.items) || !body.items.length) throw new HttpError(400, '请添加退料明细');
+  const items = body.items.map((raw, i) => { const original = db.prepare('SELECT * FROM production_material_issue_items WHERE id=? AND issue_id=?').get(raw.originalIssueItemId, issue.id); if (!original) throw new HttpError(400, `第 ${i + 1} 行原出库明细无效`); return { id: id(), original, quantity: positive(raw.quantity, '退料数量'), lineNo: i + 1 }; }); const returnId = id(); const returnNo = docNo('PMR'); const now = new Date().toISOString();
+  transaction(db, () => { db.prepare("INSERT INTO production_material_returns(id,return_no,original_issue_id,production_order_id,warehouse_id,status,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,'DRAFT',?,?,?,?,?)").run(returnId, returnNo, issue.id, issue.production_order_id, issue.warehouse_id, body.returnDate || now.slice(0, 10), optionalText(body.remark || '', 500), actor.id, now, now); const stmt = db.prepare('INSERT INTO production_material_return_items(id,return_id,original_issue_item_id,requirement_line_id,product_id,quantity,line_no) VALUES(?,?,?,?,?,?,?)'); for (const [index, x] of items.entries()) { stmt.run(x.id, returnId, x.original.id, x.original.requirement_line_id, x.original.product_id, x.quantity, x.lineNo); saveTrackedAllocations(db, { sourceType: SOURCE.RETURN, sourceId: returnId, sourceItemId: x.id, productId: x.original.product_id, quantity: x.quantity, allocations: body.items[index].trackingAllocations || body.items[index].tracking_allocations || [] }); } audit(db, actor.id, 'CREATE', 'MATERIAL_RETURN', returnId, `创建生产退料 ${returnNo}`); }); return send(res, 201, { id: returnId, returnNo, status: 'DRAFT' });
 }
 
-// ============ Production Receipt ============
-
-export function listProductionReceipts(db, res, actor, url) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const status = url.searchParams.get('status');
-  const params = [];
-  let where = '';
-  if (status && RECEIPT_STATUS[status]) { where = 'WHERE pr.status=?'; params.push(status); }
-  const rows = db.prepare(`SELECT pr.*, po.order_no productionOrderNo, po.status productionOrderStatus,
-    po.quantity plannedQuantity,
-    p.code productCode, p.name productName,
-    w.code warehouseCode, w.name warehouseName,
-    creator.display_name creatorName, confirmed.display_name confirmedByName
-    FROM production_receipts pr
-    JOIN production_orders po ON po.id=pr.production_order_id
-    JOIN products p ON p.id=po.product_id
-    JOIN warehouses w ON w.id=pr.warehouse_id
-    JOIN users creator ON creator.id=pr.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=pr.confirmed_by
-    ${where}
-    ORDER BY pr.created_at DESC LIMIT 100`).all(...params)
-    .map((row) => ({ ...row, statusLabel: RECEIPT_STATUS[row.status] || row.status }));
-  return send(res, 200, { productionReceipts: rows });
+export function confirmProductionMaterialReturn(db, res, actor, returnId) {
+  allow(actor, 'PRODUCTION_MATERIAL_ISSUE_MANAGE'); const now = new Date().toISOString(); transaction(db, () => { const h = db.prepare('SELECT * FROM production_material_returns WHERE id=?').get(returnId); if (!h) throw new HttpError(404, '生产退料单不存在'); if (h.status !== 'DRAFT') throw new HttpError(409, '只有草稿退料单可以确认'); requireInProgress(loadOrder(db, h.production_order_id)); assertFinancialPeriodsOpen(db,h.return_date); const items = db.prepare('SELECT * FROM production_material_return_items WHERE return_id=?').all(returnId);
+    for (const x of items) { const original = db.prepare(`SELECT i.*,h.production_order_id,h.warehouse_id,h.status issue_status FROM production_material_issue_items i JOIN production_material_issues h ON h.id=i.issue_id WHERE i.id=?`).get(x.original_issue_item_id); if (!original || original.issue_status !== 'CONFIRMED' || original.production_order_id !== h.production_order_id || original.warehouse_id !== h.warehouse_id || original.product_id !== x.product_id || original.requirement_line_id !== x.requirement_line_id) throw new HttpError(409, '退料来源与原出库不匹配'); const returned = Number(db.prepare("SELECT COALESCE(SUM(i.quantity),0) total FROM production_material_return_items i JOIN production_material_returns h ON h.id=i.return_id WHERE i.original_issue_item_id=? AND h.status='CONFIRMED'").get(original.id).total); const supported = Number(db.prepare("SELECT COALESCE(SUM(allocated_quantity),0) n FROM production_genealogy_allocations WHERE material_issue_item_id=? AND status='ACTIVE'").get(original.id).n); if (returned + Number(x.quantity) > Number(original.issue_quantity) - supported + EPS) throw new HttpError(409, '退料数量超过未被已确认成品谱系占用的数量'); const current = productionRequirementSummary(db, h.production_order_id).find((r) => r.id === x.requirement_line_id); assertMaterialReturnAfterProcessing(db, x.requirement_line_id, Number(current?.netIssued || 0) - Number(x.quantity)); }
+    const baseline=db.prepare('SELECT component_snapshot_json FROM production_cost_baselines WHERE production_order_id=?').get(h.production_order_id); const costs=new Map(JSON.parse(baseline?.component_snapshot_json||'[]').map(x=>[x.product_id,Number(x.unit_cost_cents)])); const entries=[];let standardTotal=0;
+    for (const x of items) { const original=db.prepare('SELECT * FROM production_material_issue_items WHERE id=?').get(x.original_issue_item_id); postTrackedMovement(db, { sourceType: SOURCE.RETURN, sourceId: h.id, sourceItemId: x.id, productId: x.product_id, warehouseId: h.warehouse_id, quantity: x.quantity, direction: 'IN', businessDate: h.return_date }); const before = inventoryQty(db, h.warehouse_id, x.product_id); const after = adjustInventory(db, h.warehouse_id, x.product_id, Number(x.quantity), now); db.prepare('UPDATE production_material_return_items SET before_quantity=?,after_quantity=? WHERE id=?').run(before, after, x.id); const transactionId=postLedger(db, { warehouseId: h.warehouse_id, productId: x.product_id, quantity: Number(x.quantity), direction: 'IN', sourceType: SOURCE.RETURN, sourceId: h.id, sourceLineId: x.id, sourceNo: h.return_no, remark: '生产退料', actorId: actor.id, now,businessDate:h.return_date }); const carrying=restoreSourceValue(db,{businessDate:h.return_date,productId:x.product_id,warehouseId:h.warehouse_id,quantity:Number(x.quantity),movementType:'MATERIAL_RETURN',sourceType:SOURCE.RETURN,sourceId:h.id,sourceItemId:x.id,inventoryTransactionId:transactionId,productionOrderId:h.production_order_id,originalSourceType:SOURCE.ISSUE,originalSourceId:original.issue_id,originalSourceItemId:original.id}).reduce((s,m)=>s+m.valueDeltaCents,0); const standard=Math.round(Number(x.quantity)*Number(costs.get(x.product_id)||0));standardTotal+=standard;entries.push({role:inventoryAccountRole(db,x.product_id),direction:'DEBIT',amountCents:carrying},{role:'WIP',direction:'CREDIT',amountCents:standard});if(carrying>standard)entries.push({role:'MATERIAL_PRICE_VARIANCE',direction:'CREDIT',amountCents:carrying-standard});else if(standard>carrying)entries.push({role:'MATERIAL_PRICE_VARIANCE',direction:'DEBIT',amountCents:standard-carrying}); }
+    const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_MATERIAL_RETURN',sourceId:h.id,businessDate:h.return_date,actorId:actor.id,entries});if(standardTotal)postWipMovement(db,{productionOrderId:h.production_order_id,businessDate:h.return_date,movementType:'MATERIAL_RETURN',amountCents:-standardTotal,sourceType:SOURCE.RETURN,sourceId:h.id,voucherId});
+    db.prepare("UPDATE production_material_returns SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, returnId); audit(db, actor.id, 'CONFIRM', 'MATERIAL_RETURN', returnId, `确认生产退料 ${h.return_no}`); }); return send(res, 200, { ok: true });
 }
 
-export function getProductionReceipt(db, res, actor, receiptId) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const receipt = db.prepare(`SELECT pr.*, po.order_no productionOrderNo, po.status productionOrderStatus,
-    po.quantity plannedQuantity,
-    p.code productCode, p.name productName,
-    w.code warehouseCode, w.name warehouseName,
-    creator.display_name creatorName, confirmed.display_name confirmedByName
-    FROM production_receipts pr
-    JOIN production_orders po ON po.id=pr.production_order_id
-    JOIN products p ON p.id=po.product_id
-    JOIN warehouses w ON w.id=pr.warehouse_id
-    JOIN users creator ON creator.id=pr.creator_id
-    LEFT JOIN users confirmed ON confirmed.id=pr.confirmed_by
-    WHERE pr.id=?`).get(receiptId);
-  if (!receipt) throw new HttpError(404, '生产入库单不存在');
-  receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
-  receipt.cumulativeReceived = db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipts WHERE production_order_id=? AND status='CONFIRMED' AND id<>?")
-    .get(receipt.production_order_id, receiptId).total;
-  return send(res, 200, { productionReceipt: receipt });
-}
+export function listProductionReceipts(db, res, actor, url) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const status = url.searchParams.get('status'); const params = []; const where = status && STATUS[status] ? (params.push(status), 'WHERE pr.status=?') : ''; const rows = db.prepare(`SELECT pr.*,po.order_no productionOrderNo,po.status productionOrderStatus,po.quantity plannedQuantity,p.code productCode,p.name productName,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName FROM production_receipts pr JOIN production_orders po ON po.id=pr.production_order_id JOIN products p ON p.id=pr.product_id JOIN warehouses w ON w.id=pr.warehouse_id JOIN users creator ON creator.id=pr.creator_id LEFT JOIN users confirmed ON confirmed.id=pr.confirmed_by ${where} ORDER BY pr.created_at DESC LIMIT 100`).all(...params); return send(res, 200, { productionReceipts: rows.map((x) => ({ ...x, statusLabel: STATUS[x.status] || x.status })) }); }
 
-export async function createProductionReceipt(db, req, res, actor) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const body = await readJson(req);
-  if (!body.productionOrderId) throw new HttpError(400, '请选择生产工单');
-  const order = loadProductionOrder(db, body.productionOrderId);
-  requireActiveWarehouse(db, body.warehouseId);
-  const quantity = normalizePositiveQuantity(body.quantity, '本次入库数量');
-  const receiptDate = body.receiptDate || new Date().toISOString().slice(0, 10);
-  const remark = optionalText(body.remark || '', 500);
-  const receiptId = id();
-  const now = new Date().toISOString();
-  const receiptNo = makeProductionReceiptNo();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO production_receipts(id,receipt_no,production_order_id,warehouse_id,quantity,status,receipt_date,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,'DRAFT',?,?,?,?,?)`)
-      .run(receiptId, receiptNo, order.id, body.warehouseId, quantity, receiptDate, remark, actor.id, now, now);
-    audit(db, actor.id, 'CREATE', 'PRODUCTION_RECEIPT', receiptId, `创建生产入库 ${receiptNo}`);
-  });
-  return send(res, 201, { id: receiptId, receiptNo, status: 'DRAFT' });
-}
+export function getProductionReceipt(db, res, actor, receiptId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const x = db.prepare(`SELECT pr.*,po.order_no productionOrderNo,po.status productionOrderStatus,po.quantity plannedQuantity,p.code productCode,p.name productName,w.code warehouseCode,w.name warehouseName,creator.display_name creatorName,confirmed.display_name confirmedByName FROM production_receipts pr JOIN production_orders po ON po.id=pr.production_order_id JOIN products p ON p.id=pr.product_id JOIN warehouses w ON w.id=pr.warehouse_id JOIN users creator ON creator.id=pr.creator_id LEFT JOIN users confirmed ON confirmed.id=pr.confirmed_by WHERE pr.id=?`).get(receiptId); if (!x) throw new HttpError(404, '生产入库单不存在'); x.statusLabel = STATUS[x.status] || x.status; x.cumulativeReceived = productionNetReceived(db, x.production_order_id); return send(res, 200, { productionReceipt: x }); }
 
-export async function updateProductionReceipt(db, req, res, actor, receiptId) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const current = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId);
-  if (!current) throw new HttpError(404, '生产入库单不存在');
-  if (current.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以修改');
-  const body = await readJson(req);
-  if (!body.productionOrderId || body.productionOrderId !== current.production_order_id) {
-    throw new HttpError(400, '入库单所关联的生产工单不能变更');
-  }
-  requireActiveWarehouse(db, body.warehouseId);
-  const quantity = normalizePositiveQuantity(body.quantity, '本次入库数量');
-  const receiptDate = body.receiptDate || current.receipt_date || new Date().toISOString().slice(0, 10);
-  const remark = optionalText(body.remark || '', 500);
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    db.prepare(`UPDATE production_receipts SET warehouse_id=?, quantity=?, receipt_date=?, remark=?, updated_at=? WHERE id=?`)
-      .run(body.warehouseId, quantity, receiptDate, remark, now, receiptId);
-    audit(db, actor.id, 'UPDATE', 'PRODUCTION_RECEIPT', receiptId, `修改生产入库 ${current.receipt_no}`);
-  });
-  return send(res, 200, { ok: true });
-}
+export async function createProductionReceipt(db, req, res, actor) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const body = await readJson(req); const order = loadOrder(db, body.productionOrderId); requireInProgress(order); requireWarehouse(db, body.warehouseId); const quantity = positive(body.quantity, '本次入库数量'); if (body.productId && body.productId !== order.product_id) throw new HttpError(400, '生产入库成品与制令单不匹配'); const receiptId = id(); const receiptNo = docNo('PR'); const now = new Date().toISOString(); transaction(db, () => { db.prepare("INSERT INTO production_receipts(id,receipt_no,production_order_id,product_id,warehouse_id,quantity,status,receipt_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,'DRAFT',?,?,?,?,?)").run(receiptId, receiptNo, order.id, order.product_id, body.warehouseId, quantity, body.receiptDate || now.slice(0, 10), optionalText(body.remark || '', 500), actor.id, now, now); saveTrackedAllocations(db, { sourceType: SOURCE.RECEIPT, sourceId: receiptId, sourceItemId: receiptId, productId: order.product_id, quantity, allocations: body.trackingAllocations || body.tracking_allocations || [] }); audit(db, actor.id, 'CREATE', 'PRODUCTION_RECEIPT', receiptId, `创建生产入库 ${receiptNo}`); }); return send(res, 201, { id: receiptId, receiptNo, status: 'DRAFT' }); }
 
-export function confirmProductionReceipt(db, res, actor, receiptId) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    const locked = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId);
-    if (!locked) throw new HttpError(404, '生产入库单不存在');
-    if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以确认');
-    const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(locked.production_order_id);
-    if (!order) throw new HttpError(409, '关联生产工单不存在');
-    // M6: overproduction is conservative — block when confirmed cumulative
-    // receipts would exceed planned order quantity.
-    const cumulativeRow = db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipts WHERE production_order_id=? AND status='CONFIRMED'")
-      .get(locked.production_order_id);
-    const cumulative = Number(cumulativeRow?.total || 0);
-    if (cumulative + Number(locked.quantity) > Number(order.quantity) + 1e-9) {
-      throw new HttpError(409, `累计入库 ${cumulative} + 本次 ${locked.quantity} 已超过计划数量 ${order.quantity}`);
-    }
-    const beforeRow = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, order.product_id);
-    const before = Number(beforeRow?.quantity || 0);
-    const after = adjustInventory(db, locked.warehouse_id, order.product_id, Number(locked.quantity), now);
-    db.prepare('UPDATE production_receipts SET before_quantity=?, after_quantity=?, status=?, confirmed_by=?, confirmed_at=?, updated_at=? WHERE id=?')
-      .run(before, after, 'CONFIRMED', actor.id, now, now, receiptId);
-    db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-      VALUES(?,?,?,?,'IN',?,?,?,?,?,?,?)`)
-      .run(id(), locked.warehouse_id, order.product_id, Number(locked.quantity), after, SOURCE_TYPE_RECEIPT, receiptId, locked.receipt_no, '生产入库', actor.id, now);
-    audit(db, actor.id, 'CONFIRM', 'PRODUCTION_RECEIPT', receiptId, `确认生产入库 ${locked.receipt_no}`);
-  });
-  return send(res, 200, { ok: true });
-}
+export async function updateProductionReceipt(db, req, res, actor, receiptId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const x = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId); if (!x) throw new HttpError(404, '生产入库单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以修改'); const body = await readJson(req); if (body.productionOrderId !== x.production_order_id) throw new HttpError(400, '生产入库来源制令单不可变更'); requireInProgress(loadOrder(db, x.production_order_id)); requireWarehouse(db, body.warehouseId); const quantity = positive(body.quantity, '本次入库数量'); transaction(db, () => { db.prepare('UPDATE production_receipts SET warehouse_id=?,quantity=?,receipt_date=?,remark=?,updated_at=? WHERE id=?').run(body.warehouseId, quantity, body.receiptDate || x.receipt_date, optionalText(body.remark || '', 500), new Date().toISOString(), receiptId); db.prepare('DELETE FROM tracked_source_allocations WHERE source_type=? AND source_id=?').run(SOURCE.RECEIPT, receiptId); saveTrackedAllocations(db, { sourceType: SOURCE.RECEIPT, sourceId: receiptId, sourceItemId: receiptId, productId: x.product_id, quantity, allocations: body.trackingAllocations || body.tracking_allocations || [] }); audit(db, actor.id, 'UPDATE', 'PRODUCTION_RECEIPT', receiptId, `修改生产入库 ${x.receipt_no}`); }); return send(res, 200, { ok: true }); }
 
-export function cancelProductionReceipt(db, res, actor, receiptId) {
-  allow(actor, 'PRODUCTION_RECEIPT_MANAGE');
-  const receipt = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId);
-  if (!receipt) throw new HttpError(404, '生产入库单不存在');
-  if (receipt.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以取消');
-  const now = new Date().toISOString();
-  db.prepare("UPDATE production_receipts SET status='CANCELLED', updated_at=? WHERE id=?")
-    .run(now, receiptId);
-  audit(db, actor.id, 'CANCEL', 'PRODUCTION_RECEIPT', receiptId, `取消生产入库 ${receipt.receipt_no}`);
-  return send(res, 200, { ok: true });
-}
+function assertReceiptCoverage(db, order, quantity) { const next = productionNetReceived(db, order.id) + quantity; if (next > Number(order.quantity) + EPS) throw new HttpError(409, `累计净入库 ${next} 超过计划数量 ${order.quantity}`); const requirements = productionRequirementSummary(db, order.id); if (!requirements.length) throw new HttpError(409, '制令单缺少物料需求快照'); for (const r of requirements) { const need = next * r.quantityPerUnit; if (r.netIssued + EPS < need) throw new HttpError(409, `${r.productCode} 净领料 ${r.netIssued} 不足以支持累计入库 ${next}，需要 ${need}`); } }
 
-export const PRODUCTION_WORKFLOW_STATUS_LABELS = { ISSUE: ISSUE_STATUS, RECEIPT: RECEIPT_STATUS };
-export const PRODUCTION_WORKFLOW_SOURCE_TYPES = { ISSUE: SOURCE_TYPE_ISSUE, RECEIPT: SOURCE_TYPE_RECEIPT };
+export function confirmProductionReceipt(db, req, res, actor, receiptId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const now = new Date().toISOString(); const key = String(req.headers['idempotency-key'] || `document-${receiptId}`); const fingerprint = requestFingerprint({ action: 'confirm' }); const replay = idempotencyReplay(db, 'PRODUCTION_RECEIPT_CONFIRM', receiptId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true }); transaction(db, () => { const x = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId); if (!x) throw new HttpError(404, '生产入库单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以确认'); const order = loadOrder(db, x.production_order_id); requireInProgress(order); assertFinancialPeriodsOpen(db,x.receipt_date); if (x.product_id !== order.product_id) throw new HttpError(409, '生产入库成品来源不匹配'); assertReceiptCoverage(db, order, Number(x.quantity)); assertRoutedReceiptLimit(db, order.id, Number(x.quantity)); const baseline=db.prepare('SELECT standard_unit_cents FROM production_cost_baselines WHERE production_order_id=?').get(order.id); if(!baseline) throw new HttpError(409,'生产工单缺少冻结标准成本'); const valueCents=Math.round(Number(x.quantity)*Number(baseline.standard_unit_cents)); postTrackedMovement(db, { sourceType: SOURCE.RECEIPT, sourceId: x.id, sourceItemId: x.id, productId: x.product_id, warehouseId: x.warehouse_id, quantity: x.quantity, direction: 'IN', businessDate: x.receipt_date }); const before = inventoryQty(db, x.warehouse_id, x.product_id); const after = adjustInventory(db, x.warehouse_id, x.product_id, Number(x.quantity), now); db.prepare("UPDATE production_receipts SET before_quantity=?,after_quantity=?,status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(before, after, actor.id, now, now, x.id); const transactionId=postLedger(db, { warehouseId: x.warehouse_id, productId: x.product_id, quantity: Number(x.quantity), direction: 'IN', sourceType: SOURCE.RECEIPT, sourceId: x.id, sourceNo: x.receipt_no, remark: '生产入库', actorId: actor.id, now,businessDate:x.receipt_date }); receiveSourceValue(db,{businessDate:x.receipt_date,productId:x.product_id,warehouseId:x.warehouse_id,quantity:Number(x.quantity),valueCents,movementType:'PRODUCTION_RECEIPT',sourceType:SOURCE.RECEIPT,sourceId:x.id,sourceItemId:x.id,inventoryTransactionId:transactionId,productionOrderId:order.id,valuationBasis:'FROZEN_STANDARD_MANUFACTURING_COST'}); const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_RECEIPT',sourceId:x.id,businessDate:x.receipt_date,actorId:actor.id,entries:[{role:inventoryAccountRole(db,x.product_id),direction:'DEBIT',amountCents:valueCents},{role:'WIP',direction:'CREDIT',amountCents:valueCents}]}); if(valueCents!==0)postWipMovement(db,{productionOrderId:order.id,businessDate:x.receipt_date,movementType:'FG_CAPITALIZATION',amountCents:-valueCents,sourceType:SOURCE.RECEIPT,sourceId:x.id,sourceItemId:x.id,voucherId}); saveIdempotency(db, 'PRODUCTION_RECEIPT_CONFIRM', receiptId, key, fingerprint, { ok: true, id: receiptId, status: 'CONFIRMED' }); audit(db, actor.id, 'CONFIRM', 'PRODUCTION_RECEIPT', x.id, `确认生产入库 ${x.receipt_no}`); }); return send(res, 200, { ok: true }); }
+
+export function cancelProductionReceipt(db, res, actor, receiptId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const x = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId); if (!x) throw new HttpError(404, '生产入库单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿入库单可以取消'); db.prepare("UPDATE production_receipts SET status='CANCELLED',updated_at=? WHERE id=?").run(new Date().toISOString(), receiptId); audit(db, actor.id, 'CANCEL', 'PRODUCTION_RECEIPT', receiptId, `取消生产入库 ${x.receipt_no}`); return send(res, 200, { ok: true }); }
+export function deleteProductionReceipt(db, res, actor, receiptId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const x = db.prepare('SELECT * FROM production_receipts WHERE id=?').get(receiptId); if (!x) throw new HttpError(404, '生产入库单不存在'); if (!['DRAFT', 'CANCELLED'].includes(x.status)) throw new HttpError(409, '已确认生产入库不可删除，请使用入库冲销'); transaction(db, () => { db.prepare('DELETE FROM production_receipts WHERE id=?').run(receiptId); audit(db, actor.id, 'DELETE', 'PRODUCTION_RECEIPT', receiptId, `删除未过账生产入库 ${x.receipt_no}`); }); return send(res, 200, { ok: true }); }
+
+export async function createProductionReceiptReversal(db, req, res, actor) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const body = await readJson(req); const receipt = db.prepare("SELECT * FROM production_receipts WHERE id=? AND status='CONFIRMED'").get(body.originalReceiptId); if (!receipt) throw new HttpError(409, '只能冲销已确认生产入库'); requireInProgress(loadOrder(db, receipt.production_order_id)); const quantity = positive(body.quantity, '冲销数量'); const reversalId = id(); const reversalNo = docNo('PRR'); const now = new Date().toISOString(); transaction(db, () => { db.prepare("INSERT INTO production_receipt_reversals(id,reversal_no,original_receipt_id,production_order_id,product_id,warehouse_id,quantity,status,reversal_date,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'DRAFT',?,?,?,?,?)").run(reversalId, reversalNo, receipt.id, receipt.production_order_id, receipt.product_id, receipt.warehouse_id, quantity, body.reversalDate || now.slice(0, 10), optionalText(body.remark || '', 500), actor.id, now, now); saveTrackedAllocations(db, { sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: reversalId, sourceItemId: reversalId, productId: receipt.product_id, quantity, allocations: body.trackingAllocations || body.tracking_allocations || [] }); audit(db, actor.id, 'CREATE', 'PRODUCTION_RECEIPT_REVERSAL', reversalId, `创建生产入库冲销 ${reversalNo}`); }); return send(res, 201, { id: reversalId, reversalNo, status: 'DRAFT' }); }
+
+export function confirmProductionReceiptReversal(db, res, actor, reversalId) { allow(actor, 'PRODUCTION_RECEIPT_MANAGE'); const now = new Date().toISOString(); transaction(db, () => { const x = db.prepare('SELECT * FROM production_receipt_reversals WHERE id=?').get(reversalId); if (!x) throw new HttpError(404, '生产入库冲销单不存在'); if (x.status !== 'DRAFT') throw new HttpError(409, '只有草稿冲销单可以确认'); requireInProgress(loadOrder(db, x.production_order_id)); assertFinancialPeriodsOpen(db,x.reversal_date); const receipt = db.prepare("SELECT * FROM production_receipts WHERE id=? AND status='CONFIRMED'").get(x.original_receipt_id); if (!receipt || receipt.production_order_id !== x.production_order_id || receipt.product_id !== x.product_id || receipt.warehouse_id !== x.warehouse_id) throw new HttpError(409, '冲销来源与原生产入库不匹配'); const reversed = Number(db.prepare("SELECT COALESCE(SUM(quantity),0) total FROM production_receipt_reversals WHERE original_receipt_id=? AND status='CONFIRMED'").get(receipt.id).total); if (reversed + Number(x.quantity) > Number(receipt.quantity) + EPS) throw new HttpError(409, '冲销数量超过原入库未冲销数量'); const before = inventoryQty(db, x.warehouse_id, x.product_id); if (before + EPS < Number(x.quantity)) throw new HttpError(409, '成品库存不足，无法冲销'); postTrackedMovement(db, { sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: x.id, sourceItemId: x.id, productId: x.product_id, warehouseId: x.warehouse_id, quantity: x.quantity, direction: 'OUT', businessDate: x.reversal_date }); const identityIds = db.prepare('SELECT COALESCE(serial_id,lot_id) id FROM tracked_source_allocations WHERE source_type=? AND source_id=?').all(SOURCE.RECEIPT_REVERSAL, x.id).map((row) => row.id); reverseReceiptGenealogy(db, receipt.id, identityIds); const after = adjustInventory(db, x.warehouse_id, x.product_id, -Number(x.quantity), now); db.prepare("UPDATE production_receipt_reversals SET before_quantity=?,after_quantity=?,status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(before, after, actor.id, now, now, x.id); const transactionId=postLedger(db, { warehouseId: x.warehouse_id, productId: x.product_id, quantity: Number(x.quantity), direction: 'OUT', sourceType: SOURCE.RECEIPT_REVERSAL, sourceId: x.id, sourceNo: x.reversal_no, remark: '生产入库冲销', actorId: actor.id, now,businessDate:x.reversal_date }); const valueCents=consumeOriginalInboundValue(db,{businessDate:x.reversal_date,productId:x.product_id,warehouseId:x.warehouse_id,quantity:Number(x.quantity),movementType:'PRODUCTION_RECEIPT_REVERSAL',sourceType:SOURCE.RECEIPT_REVERSAL,sourceId:x.id,sourceItemId:x.id,inventoryTransactionId:transactionId,productionOrderId:x.production_order_id,originalSourceType:SOURCE.RECEIPT,originalSourceId:receipt.id,originalSourceItemId:receipt.id}).reduce((s,m)=>s-m.valueDeltaCents,0); const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_RECEIPT_REVERSAL',sourceId:x.id,businessDate:x.reversal_date,actorId:actor.id,entries:[{role:'WIP',direction:'DEBIT',amountCents:valueCents},{role:inventoryAccountRole(db,x.product_id),direction:'CREDIT',amountCents:valueCents}]}); if(valueCents)postWipMovement(db,{productionOrderId:x.production_order_id,businessDate:x.reversal_date,movementType:'FG_CAPITALIZATION_REVERSAL',amountCents:valueCents,sourceType:SOURCE.RECEIPT_REVERSAL,sourceId:x.id,sourceItemId:x.id,voucherId}); audit(db, actor.id, 'CONFIRM', 'PRODUCTION_RECEIPT_REVERSAL', x.id, `确认生产入库冲销 ${x.reversal_no}`); }); return send(res, 200, { ok: true }); }
+
+export const PRODUCTION_WORKFLOW_STATUS_LABELS = { ISSUE: STATUS, RECEIPT: STATUS };
+export const PRODUCTION_WORKFLOW_SOURCE_TYPES = SOURCE;

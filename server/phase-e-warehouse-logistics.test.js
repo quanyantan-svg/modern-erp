@@ -325,6 +325,8 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     const acH = hashPassword('ac-pr-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
       VALUES('user-ac-pr','accounting','财务',?,?,'role-accounting',1,?)`).run(acH.hash, acH.salt, now);
+    db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('po-pr','PO-PR','sup-1','APPROVED',20000,'','user-wh-pr',?,?)").run(now, now);
+    db.prepare("INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('poi-pr','po-pr','p-1',4,5000,20000,1)").run();
 
     warehouseToken = (await (await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -352,7 +354,7 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     // create
     res = await fetch(`${baseUrl}/api/purchase-receipts`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ supplierId: 'sup-1', warehouseId: 'wh-1', items: [{ productId: 'p-1', quantity: 4, unitPriceCents: 5000 }] }),
+      body: JSON.stringify({ purchaseOrderId: 'po-pr', supplierId: 'sup-1', warehouseId: 'wh-1', items: [{ purchaseOrderItemId: 'poi-pr', productId: 'p-1', quantity: 4, unitPriceCents: 5000 }] }),
     });
     assert.equal(res.status, 201);
     const created = await res.json();
@@ -362,6 +364,10 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     assert.equal(row0.confirmed_by, null);
     assert.equal(row0.total_cents, 20000);
     assert.ok(row0.receipt_date, 'receipt_date populated');
+
+    const iqc = await (await fetch(`${baseUrl}/api/iqc`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ purchase_receipt_id: created.id }) })).json();
+    res = await fetch(`${baseUrl}/api/iqc/${iqc.id}/complete`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ result: 'PASS', inspection_quantity: 4, passed_quantity: 4, failed_quantity: 0 }) });
+    assert.equal(res.status, 200);
 
     // confirm (consumes PURCHASE_RECEIPTS_MANAGE — warehouse has it)
     res = await fetch(`${baseUrl}/api/purchase-receipts/${created.id}`, {
@@ -378,12 +384,12 @@ describe('v1.0.1 — warehouse purchase-receipt full path', () => {
     const inv = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-1' AND product_id='p-1'").get();
     assert.equal(inv.quantity, 4);
 
-    // repeated confirm 409
+    // repeated confirm replays the committed idempotent result
     res = await fetch(`${baseUrl}/api/purchase-receipts/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'confirm' }),
     });
-    assert.equal(res.status, 409);
+    assert.equal(res.status, 200);
   });
 
   test('accounting cannot create purchase receipts (PURCHASE_RECEIPTS_MANAGE absent on role-accounting)', async () => {
@@ -434,6 +440,8 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
     const h = hashPassword('wh-sd-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
       VALUES('user-wh-sd','warehouse','仓管',?,?,'role-warehouse',1,?)`).run(h.hash, h.salt, now);
+    db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('so-sd','SO-SD','cus-1','APPROVED',9999000,'','user-wh-sd',?,?)").run(now, now);
+    db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('soi-sd','so-sd','p-1',9999,1000,9999000,1)").run();
     warehouseToken = (await (await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: 'warehouse', password: 'wh-sd-1234' }),
@@ -454,7 +462,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
 
     res = await fetch(`${baseUrl}/api/sales-deliveries`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ customerId: 'cus-1', warehouseId: 'wh-1', items: [{ productId: 'p-1', quantity: 3, unitPriceCents: 1000 }] }),
+      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 3, unitPriceCents: 1000 }] }),
     });
     assert.equal(res.status, 201);
     const created = await res.json();
@@ -463,6 +471,10 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
     assert.equal(row0.status, 'DRAFT');
     assert.equal(row0.confirmed_by, null);
     assert.ok(row0.delivery_date);
+
+    const oqc = await (await fetch(`${baseUrl}/api/oqc`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ sales_delivery_id: created.id }) })).json();
+    res = await fetch(`${baseUrl}/api/oqc/${oqc.id}/complete`, { method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ result: 'PASS', inspection_quantity: 3, passed_quantity: 3, failed_quantity: 0 }) });
+    assert.equal(res.status, 200);
 
     res = await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
@@ -480,7 +492,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'confirm' }),
     });
-    assert.equal(res.status, 409);
+    assert.equal(res.status, 200);
 
     // cancel path
     res = await fetch(`${baseUrl}/api/sales-deliveries/${created.id}`, {
@@ -493,7 +505,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
   test('create rejects over-quantity (stock validation)', async () => {
     const res = await fetch(`${baseUrl}/api/sales-deliveries`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ customerId: 'cus-1', warehouseId: 'wh-1', items: [{ productId: 'p-1', quantity: 9999, unitPriceCents: 1 }] }),
+      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 9999, unitPriceCents: 1000 }] }),
     });
     assert.equal(res.status, 400);
     const body = await res.json();
@@ -541,6 +553,10 @@ describe('v1.0.1 — warehouse returns full path (sales + purchase)', () => {
     const accountingHash = hashPassword('ac-rt-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
       VALUES('user-ac-rt','accounting','财务',?,?,'role-accounting',1,?)`).run(accountingHash.hash, accountingHash.salt, now);
+    db.prepare("INSERT INTO sales_deliveries(id,delivery_no,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at) VALUES('sd-rt','SD-RT','cus-r','wh-r','user-wh-rt',8000,'CONFIRMED','2026-09-01','','user-wh-rt',?,?)").run(now, now);
+    db.prepare("INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('sdi-rt','sd-rt','p-r',10,800,8000,1)").run();
+    db.prepare("INSERT INTO purchase_receipts(id,receipt_no,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at) VALUES('pr-rt','PR-RT','sup-r','wh-r','user-wh-rt',8000,'CONFIRMED','2026-09-01','','user-wh-rt',?,?)").run(now, now);
+    db.prepare("INSERT INTO purchase_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('pri-rt','pr-rt','p-r',10,800,8000,1)").run();
     accountingToken = (await (await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ username: 'accounting', password: 'ac-rt-1234' }),
@@ -559,8 +575,8 @@ describe('v1.0.1 — warehouse returns full path (sales + purchase)', () => {
     const res = await fetch(`${baseUrl}/api/sales-returns`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        customerId: 'cus-r', warehouseId: 'wh-r',
-        items: [{ productId: 'p-r', quantity: 2, unitPriceCents: 800 }],
+        deliveryId: 'sd-rt', customerId: 'cus-r', warehouseId: 'wh-r',
+        items: [{ deliveryItemId: 'sdi-rt', productId: 'p-r', quantity: 2, unitPriceCents: 800 }],
       }),
     });
     assert.equal(res.status, 201, `create sales return must succeed, got ${res.status}`);
@@ -569,9 +585,8 @@ describe('v1.0.1 — warehouse returns full path (sales + purchase)', () => {
     assert.equal(row.status, 'DRAFT');
     assert.equal(row.customer_id, 'cus-r');
     assert.ok(row.return_date);
-    assert.equal(row.delivery_id, null, 'no delivery referenced; delivery_id is null');
-    // source_id may be null too (frontend Modal already sends deliveryId as null)
-    assert.ok(row.source_id === null || typeof row.source_id === 'string');
+    assert.equal(row.delivery_id, 'sd-rt');
+    assert.equal(row.source_id, 'sd-rt');
 
     const confirmed = await fetch(`${baseUrl}/api/sales-returns/${created.id}`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
@@ -590,8 +605,8 @@ describe('v1.0.1 — warehouse returns full path (sales + purchase)', () => {
     const res = await fetch(`${baseUrl}/api/purchase-returns`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        supplierId: 'sup-r', warehouseId: 'wh-r',
-        items: [{ productId: 'p-r', quantity: 1, unitPriceCents: 800 }],
+        receiptId: 'pr-rt', supplierId: 'sup-r', warehouseId: 'wh-r',
+        items: [{ receiptItemId: 'pri-rt', productId: 'p-r', quantity: 1, unitPriceCents: 800 }],
       }),
     });
     assert.equal(res.status, 201, `create purchase return must succeed, got ${res.status}`);
@@ -755,7 +770,8 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
 
   test('stale inaccessible hash renders the first visible page, not admin UsersRoles', () => {
     const app = readFileSync(join(srcDir, 'App.jsx'), 'utf8');
-    assert.match(app, /pages\[current\?\.key\]\s*\|\|\s*pages\.dashboard/);
+    assert.match(app, /if \(user && visibleNav\.length && !canNavigate\(page\)\) navigateToPage\(visibleNav\[0\]\.key/);
+    assert.match(app, /function navigateToPage[\s\S]*?const authorizedPage = visibleNav\.find/);
     assert.doesNotMatch(app, /className="page-content">\{pages\[page\]/);
   });
 });

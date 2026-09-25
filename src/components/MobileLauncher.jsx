@@ -18,26 +18,12 @@
 // Role visibility is resolved before this presentational component receives
 // its groups. It never evaluates roles or permissions itself.
 
-// Local minimal icon primitive for launcher fallback. Real icons are
-// passed in via the `icons` prop from App.jsx; this is only used if
-// an item's iconKey is missing from the supplied icon map.
-function FallbackIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z" />
-    </svg>
-  );
-}
+import { Icon } from './icons.jsx';
+
+const OPTICALLY_COMPACT_ICONS = new Set([
+  'customers', 'suppliers', 'products', 'warehouses', 'mrpRuns',
+  'planningDocuments', 'inventory', 'accounting', 'cleanup', 'notifications',
+]);
 
 // Group shape:
 //   { key, label, accent, items: [{ page, key, label, iconKey }] }
@@ -67,7 +53,7 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
         return (
           <div
             key={group.key || group.label}
-            className={`mobile-launcher__group mobile-launcher__group--${group.accent || 'slate'}`}
+            className={`mobile-launcher__group mobile-launcher__group--${group.accent || 'slate'} mobile-launcher__group--${group.key || 'other'}`}
             data-testid={`mobile-launcher-group-${group.label}`}
           >
             <h2 className="mobile-launcher__group-label">{group.label}</h2>
@@ -75,18 +61,22 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
               {group.items.map((item) => {
                 const icon = icons[item.iconKey];
                 const itemKey = item.page || item.key;
+                const reactKey = item.key || item.page;
                 return (
                   <button
                     type="button"
-                    key={itemKey}
+                    key={reactKey}
                     data-page={itemKey}
                     data-testid={`mobile-launcher-item-${itemKey}`}
                     className="mobile-launcher__item"
                     onClick={() => onItemSelect && onItemSelect(item)}
                     aria-label={`打开${item.label}`}
                   >
-                    <span className="mobile-launcher__item-icon" aria-hidden="true">
-                      {icon || <FallbackIcon />}
+                    <span
+                      className={`mobile-launcher__item-icon${OPTICALLY_COMPACT_ICONS.has(item.iconKey) ? ' mobile-launcher__item-icon--compact' : ''}`}
+                      aria-hidden="true"
+                    >
+                      {icon || <Icon name="apps" />}
                     </span>
                     <span className="mobile-launcher__item-label">{item.label}</span>
                   </button>

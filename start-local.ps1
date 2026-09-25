@@ -9,7 +9,11 @@ if ($nodeCommand) {
 }
 
 if (-not (Test-Path -LiteralPath $nodePath)) {
-    throw '未找到 Node.js。请安装 Node.js 22.13 或更高版本。'
+    throw '未找到 Node.js。请安装项目目标版本 Node.js 22.23.2。'
+}
+$nodeVersion = (& $nodePath --version).Trim()
+if ($nodeVersion -ne 'v22.23.2') {
+    throw "Node.js 版本不匹配：当前 $nodeVersion，项目要求 22.23.2。"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'dist\index.html'))) {
     throw '前端尚未构建。请先在项目目录运行 pnpm install 和 pnpm build。'

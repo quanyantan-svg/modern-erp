@@ -2,12 +2,11 @@
 //
 // These tests cover the M1 UI infrastructure contract:
 //   1. CSS breakpoint contract: 767 → mobile, 768 → non-mobile
-//   2. MobileShell renders bottom navigation with 4 enabled tabs + 1 disabled
-//   3. Disabled 通讯录 tab does not navigate and does not throw
-//   4. State preservation on resize (mobileTab + page survive layout switch)
+//   2. MobileShell renders the five canonical product tabs
+//   4. One canonical shell at every viewport width
 //   5. No duplicate hidden business page mounting
 //   6. Role permissions are not changed
-//   7. Desktop nav still renders at desktop layout
+//   7. Canonical navigation and page registry remain complete
 //   8. Local example assets are not imported into production bundle
 //
 // The tests intentionally avoid touching any server business handler
@@ -82,13 +81,10 @@ describe('CSS — mobile breakpoint contract', () => {
     );
   });
 
-  test('useMobile hook uses the same breakpoint as CSS', () => {
-    const hook = readSrc('hooks/useMediaQuery.js');
-    assert.match(
-      hook,
-      /\(max-width:\s*767\.98px\)/,
-      'useMobile hook must use the canonical 767.98px breakpoint'
-    );
+  test('viewport CSS never selects a second component tree', () => {
+    const app = readSrc('App.jsx');
+    assert.doesNotMatch(app, /useMobile|useDesktop|useMediaQuery|matchMedia|innerWidth/);
+    assert.doesNotMatch(css, /\.desktop-only|\.mobile-only|\.app-shell|\.sidebar|\.topbar/);
   });
 
   test('767px → mobile, 768px → non-mobile (boundary rule)', () => {
@@ -123,13 +119,13 @@ describe('CSS — mobile breakpoint contract', () => {
 // 2-3. MobileShell renders bottom navigation correctly
 // ---------------------------------------------------------------------------
 describe('MobileShell — bottom navigation', () => {
-  test('exports exactly 5 tabs (4 enabled + 1 disabled)', () => {
+  test('exports exactly 5 enabled canonical tabs', () => {
     assert.equal(MobileShellTabs.length, 5, 'MobileShell must render 5 tabs');
     const enabled = MobileShellTabs.filter((t) => t.enabled);
     const disabled = MobileShellTabs.filter((t) => !t.enabled);
-    assert.equal(enabled.length, 4, 'MobileShell must have 4 enabled tabs');
-    assert.equal(disabled.length, 1, 'MobileShell must have 1 disabled tab');
-    assert.equal(disabled[0].key, 'directory', 'The disabled tab must be 通讯录 / directory');
+    assert.equal(enabled.length, 5, 'MobileShell must have 5 enabled tabs');
+    assert.equal(disabled.length, 0, 'No canonical product tab is disabled');
+    assert.deepEqual(MobileShellTabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
   });
 
   test('renders the shell wrapper, header, main, and bottom nav', () => {
@@ -145,38 +141,26 @@ describe('MobileShell — bottom navigation', () => {
   test('renders all 5 bottom nav buttons with correct labels', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
     assert.match(html, /data-testid="bottom-tab-messages"[\s\S]*?>[\s\S]*?消息/);
-    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?审批/);
+    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?签核/);
     assert.match(html, /data-testid="bottom-tab-apps"[\s\S]*?>[\s\S]*?应用/);
-    assert.match(html, /data-testid="bottom-tab-directory"[\s\S]*?>[\s\S]*?通讯录/);
+    assert.match(html, /data-testid="bottom-tab-cloud"[\s\S]*?>[\s\S]*?云翼/);
     assert.match(html, /data-testid="bottom-tab-profile"[\s\S]*?>[\s\S]*?我的/);
   });
 
-  test('disabled 通讯录 tab is marked aria-disabled and has a hint', () => {
+  test('cloud tab is enabled and does not expose legacy placeholder copy', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
     assert.match(
       html,
-      /data-testid="bottom-tab-directory"[\s\S]*?aria-disabled="true"/,
-      'disabled directory tab must expose aria-disabled="true"'
+      /data-testid="bottom-tab-cloud"/,
+      'cloud tab must be rendered'
     );
-    assert.match(html, /bottom-tab-directory[\s\S]*?敬请期待/);
+    assert.doesNotMatch(html, /通讯录|敬请期待/);
   });
 
-  test('disabled 通讯录 onClick does not invoke onTabChange', () => {
+  test('legacy disabled branch cannot affect canonical tab contract', () => {
     const source = readSrc('components/MobileShell.jsx');
     // Find the disabled-button code path
-    assert.match(
-      source,
-      /if\s*\(\s*!tab\.enabled\s*\)\s*\{[\s\S]*?onClick=[\s\S]{0,80}?e\.preventDefault/,
-      'disabled tab onClick must call e.preventDefault()'
-    );
-    // The disabled branch must NOT call onTabChange
-    const disabledBranch = source.match(/if\s*\(\s*!tab\.enabled\s*\)\s*\{[\s\S]*?\}\s*\}/);
-    assert.ok(disabledBranch, 'disabled branch must exist');
-    assert.equal(
-      /onTabChange\s*\(/.test(disabledBranch[0]),
-      false,
-      'disabled branch must not invoke onTabChange'
-    );
+    assert.doesNotMatch(source, /key:\s*'directory'|label:\s*'通讯录'/);
   });
 
   test('active tab is visually marked with the active class', () => {
@@ -203,64 +187,33 @@ describe('MobileShell — bottom navigation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4-5. State preservation on resize + no duplicate business page mounting
+// 4-5. One canonical composition + no duplicate business page mounting
 // ---------------------------------------------------------------------------
-describe('App.jsx — responsive composition', () => {
+describe('App.jsx — unified responsive composition', () => {
   const appSource = readSrc('App.jsx');
 
-  test('uses the useMobile hook for layout switching', () => {
-    assert.match(appSource, /useMobile\(\)/, 'App.jsx must use the useMobile hook');
+  test('does not switch component trees with useMobile', () => {
+    assert.doesNotMatch(appSource, /useMobile\(\)/, 'App.jsx must use one component tree at every width');
+    assert.doesNotMatch(appSource, /if\s*\(\s*isMobile\s*\)/, 'viewport width must not choose a second app shell');
   });
 
-  test('desktop tree and mobile tree are NOT rendered simultaneously', () => {
-    assert.match(
-      appSource,
-      /if\s*\(\s*isMobile\s*\)\s*\{[\s\S]*?return\s*\([\s\S]*?MobileShell/,
-      'mobile branch must return <MobileShell> early'
-    );
-    assert.match(
-      appSource,
-      /return <div className="app-shell">/,
-      'desktop branch (app-shell) must remain as the fallthrough'
-    );
+  test('renders exactly one canonical MobileShell tree', () => {
+    assert.equal((appSource.match(/<MobileShell\b/g) || []).length, 1);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /<aside className="sidebar">/);
   });
 
-  test('mobile branch body does not reference the pages map', () => {
-    // The pages map can be defined anywhere, but the mobile branch
-    // body (the JSX returned from the if (isMobile) early-return)
-    // must NOT reference the pages variable or any business page
-    // component, so that no business page is mounted on mobile.
-    const mobileIdx = appSource.indexOf('if (isMobile)');
-    const mobileEnd = appSource.indexOf('return <div className="app-shell">', mobileIdx);
-    assert.ok(mobileIdx > 0, 'mobile branch must exist');
-    assert.ok(mobileEnd > mobileIdx, 'desktop branch must exist after mobile branch');
-    const mobileBranch = appSource.slice(mobileIdx, mobileEnd);
-    assert.equal(
-      /\bpages\[/.test(mobileBranch),
-      false,
-      'mobile branch must not index the pages map (would mount business components)'
-    );
-    // No business page component should appear in the mobile branch
-    const businessComponents = [
-      'Dashboard', 'Orders', 'Approvals', 'Customers', 'Suppliers',
-      'PurchaseOrders', 'Products', 'Warehouses', 'Inventory',
-      'Notifications', 'Accounting', 'ProductionOrders', 'Boms',
-    ];
-    for (const comp of businessComponents) {
-      assert.equal(
-        new RegExp(`<${comp}[\\s/>]`).test(mobileBranch),
-        false,
-        `mobile branch must not render <${comp}> directly`
-      );
-    }
+  test('canonical shell mounts the selected business page exactly once', () => {
+    assert.equal((appSource.match(/pages\[mobileApplication\.page\]/g) || []).length, 1);
+    assert.equal((appSource.match(/\{renderMobileContent\(\)\}/g) || []).length, 1);
   });
 
-  test('mobileTab state is preserved across resize (independent of page state)', () => {
+  test('tab and application state remain independent', () => {
     assert.match(appSource, /useState\('apps'\)/, 'mobileTab must default to "apps"');
     assert.match(appSource, /setMobileTab\(/, 'setMobileTab must be wired');
   });
 
-  test('directory tab is not in MOBILE_TAB_KEYS (cannot be navigated to)', () => {
+  test('tab navigation is filtered through MOBILE_TAB_KEYS', () => {
     assert.match(
       appSource,
       /MOBILE_TAB_KEYS\.has\(key\)/,
@@ -300,6 +253,14 @@ describe('App.jsx — responsive composition', () => {
       'WORKFLOW_VIEW', 'WORKFLOW_MANAGE', 'FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE',
       'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE',
       'AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE',
+      'PRODUCTION_INSTRUCTION_VIEW', 'PRODUCTION_INSTRUCTION_MANAGE',
+      'PURCHASE_INSTRUCTION_VIEW', 'PURCHASE_INSTRUCTION_MANAGE',
+      'PURCHASE_REQUISITION_VIEW', 'PURCHASE_REQUISITION_MANAGE',
+      'PURCHASE_REQUISITION_APPROVE',
+      'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE',
+      'INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE',
+      'SALES_DISCOUNT_MANAGE', 'PURCHASE_DISCOUNT_MANAGE',
+      'INVENTORY_ADJUSTMENT_MANAGE',
     ];
     const refs = new Set();
     const re = /\b([A-Z][A-Z0-9_]+_(?:VIEW|MANAGE|CREATE|SUBMIT|APPROVE|REJECT|START|COMPLETE))\b/g;
@@ -315,7 +276,7 @@ describe('App.jsx — responsive composition', () => {
 
   test('App.jsx does not call any business API endpoint from mobile branches', () => {
     const mobileIdx = appSource.indexOf('function renderMobileContent');
-    const mobileEnd = appSource.indexOf('// M1 responsive composition', mobileIdx);
+    const mobileEnd = appSource.indexOf('const tabLabel', mobileIdx);
     assert.ok(mobileIdx > 0 && mobileEnd > mobileIdx);
     const mobileBranch = appSource.slice(mobileIdx, mobileEnd);
     assert.equal(/\bapi\s*\(/.test(mobileBranch), false, 'Mobile branch must not call the api() helper');
@@ -330,31 +291,31 @@ describe('Permissions — canonical registry count', () => {
   test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 100, `PERMISSIONS array must have 100 entries (got ${perms.length})`);
+    assert.equal(perms.length, 113, `PERMISSIONS array must have 113 entries after M14 (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
   });
 
-  test('role-accounting has 18 permissions after four narrow M8 grants', () => {
+  test('role-accounting has 20 permissions after M8 + M14 narrow grants', () => {
     const dbSrc = readRoot('server/db.js');
     const accountingMatch = dbSrc.match(/'role-accounting':\s*\[([^\]]+)\]/);
     assert.ok(accountingMatch, 'role-accounting must exist in db.js');
     const count = (accountingMatch[1].match(/'/g) || []).length;
-    assert.equal(count / 2, 18, `role-accounting must have 18 permissions (got ${count / 2})`);
+    assert.equal(count / 2, 20, `role-accounting must have 20 permissions (got ${count / 2})`);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 7. Desktop nav still renders at desktop layout
+// 7. Canonical navigation remains available to the launcher and page registry
 // ---------------------------------------------------------------------------
-describe('Desktop shell — preserved', () => {
-  test('app-shell + sidebar + topbar are unchanged in App.jsx', () => {
+describe('Canonical shell — preserved', () => {
+  test('legacy desktop shell is absent and MobileShell owns page content', () => {
     const appSource = readSrc('App.jsx');
-    assert.match(appSource, /return <div className="app-shell">/);
-    assert.match(appSource, /<aside className="sidebar">/);
-    assert.match(appSource, /<header className="topbar">/);
-    assert.match(appSource, /<section className="page-content">/);
+    assert.doesNotMatch(appSource, /className="app-shell"/);
+    assert.doesNotMatch(appSource, /className="sidebar"/);
+    assert.doesNotMatch(appSource, /className="topbar"/);
+    assert.match(appSource, /<MobileShell[\s\S]*\{renderMobileContent\(\)\}[\s\S]*<\/MobileShell>/);
   });
 
   test('navGroups array still has all 10 group labels', () => {

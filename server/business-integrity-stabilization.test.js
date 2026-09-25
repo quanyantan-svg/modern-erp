@@ -19,6 +19,15 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     headers: { authorization: `Bearer ${tokens[role]}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const passQuality = async (sourceType, sourceId, quantity) => {
+    const kind = sourceType === 'PURCHASE_RECEIPT' ? 'iqc' : 'oqc';
+    const sourceField = kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id';
+    const createdResponse = await request(`/api/${kind}`, 'warehouse', 'POST', { [sourceField]: sourceId });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json();
+    const completed = await request(`/api/${kind}/${created.id}/complete`, 'warehouse', 'POST', { result: 'PASS', inspection_quantity: quantity, passed_quantity: quantity, failed_quantity: 0 });
+    assert.equal(completed.status, 200);
+  };
 
   beforeEach(async () => {
     const previous = process.env.NODE_ENV;
@@ -41,6 +50,14 @@ describe('v1.0.1-rc.3 business document integrity', () => {
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)')
         .run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('so-source','SO-SOURCE','cus','APPROVED',1234500,'','user-sales',?,?)").run(now, now);
+    db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('soi-source','so-source','p1',100,12345,1234500,1)").run();
+    db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('po-source','PO-SOURCE','sup','APPROVED',1234500,'','user-sales',?,?)").run(now, now);
+    db.prepare("INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('poi-source','po-source','p1',100,12345,1234500,1)").run();
+    db.prepare("INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at) VALUES('sd-source','SD-SOURCE','so-source','cus','wh','user-warehouse',1234500,'CONFIRMED','2026-09-01','','user-warehouse',?,?)").run(now, now);
+    db.prepare("INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('sdi-source','sd-source','p1',100,12345,1234500,1)").run();
+    db.prepare("INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,total_cents,status,receipt_date,remark,creator_id,created_at,updated_at) VALUES('pr-source','PR-SOURCE','po-source','sup','wh','user-warehouse',1234500,'CONFIRMED','2026-09-01','','user-warehouse',?,?)").run(now, now);
+    db.prepare("INSERT INTO purchase_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('pri-source','pr-source','p1',100,12345,1234500,1)").run();
     server = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((done) => server.listen(0, '127.0.0.1', done));
     baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -57,14 +74,14 @@ describe('v1.0.1-rc.3 business document integrity', () => {
   });
 
   const documents = [
-    { name: 'purchase receipt', path: '/api/purchase-receipts', table: 'purchase_receipts', itemTable: 'purchase_receipt_items', fk: 'receipt_id', party: { supplierId: 'sup' }, date: { receiptDate: '2026-09-03' }, delta: 1, voucher: 'PURCHASE_RECEIPT', result: 'purchaseReceipt' },
-    { name: 'sales delivery', path: '/api/sales-deliveries', table: 'sales_deliveries', itemTable: 'sales_delivery_items', fk: 'delivery_id', party: { customerId: 'cus' }, date: { deliveryDate: '2026-09-03' }, delta: -1, voucher: 'SALES_DELIVERY', result: 'salesDelivery' },
-    { name: 'sales return', path: '/api/sales-returns', table: 'return_orders', itemTable: 'return_order_items', fk: 'return_id', party: { customerId: 'cus' }, date: { returnDate: '2026-09-03' }, delta: 1, voucher: 'SALES_RETURN', result: 'salesReturn' },
-    { name: 'purchase return', path: '/api/purchase-returns', table: 'purchase_returns', itemTable: 'purchase_return_items', fk: 'return_id', party: { supplierId: 'sup' }, date: { returnDate: '2026-09-03' }, delta: -1, voucher: 'PURCHASE_RETURN', result: 'purchaseReturn' },
+    { name: 'purchase receipt', path: '/api/purchase-receipts', table: 'purchase_receipts', itemTable: 'purchase_receipt_items', fk: 'receipt_id', party: { purchaseOrderId: 'po-source', supplierId: 'sup' }, sourceItem: { purchaseOrderItemId: 'poi-source' }, date: { receiptDate: '2026-09-03' }, delta: 1, voucher: 'PURCHASE_RECEIPT', result: 'purchaseReceipt' },
+    { name: 'sales delivery', path: '/api/sales-deliveries', table: 'sales_deliveries', itemTable: 'sales_delivery_items', fk: 'delivery_id', party: { salesOrderId: 'so-source', customerId: 'cus' }, sourceItem: { salesOrderItemId: 'soi-source' }, date: { deliveryDate: '2026-09-03' }, delta: -1, voucher: 'SALES_DELIVERY', result: 'salesDelivery' },
+    { name: 'sales return', path: '/api/sales-returns', table: 'return_orders', itemTable: 'return_order_items', fk: 'return_id', party: { deliveryId: 'sd-source', customerId: 'cus' }, sourceItem: { deliveryItemId: 'sdi-source' }, date: { returnDate: '2026-09-03' }, delta: 1, voucher: 'SALES_RETURN', result: 'salesReturn' },
+    { name: 'purchase return', path: '/api/purchase-returns', table: 'purchase_returns', itemTable: 'purchase_return_items', fk: 'return_id', party: { receiptId: 'pr-source', supplierId: 'sup' }, sourceItem: { receiptItemId: 'pri-source' }, date: { returnDate: '2026-09-03' }, delta: -1, voucher: 'PURCHASE_RETURN', result: 'purchaseReturn' },
   ];
 
   for (const spec of documents) test(`${spec.name}: create, refresh, atomic edit, confirm and voucher use exact cents`, async () => {
-    const createBody = { ...spec.party, warehouseId: 'wh', ...spec.date, totalCents: 1, items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] };
+    const createBody = { ...spec.party, warehouseId: 'wh', ...spec.date, totalCents: 1, items: [{ ...spec.sourceItem, productId: 'p1', quantity: 2, unitPriceCents: 12345 }] };
     let response = await request(spec.path, 'warehouse', 'POST', createBody);
     assert.equal(response.status, 201);
     const created = await response.json();
@@ -80,34 +97,35 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(detail.items[0].productId, 'p1');
     assert.equal(detail.items[0].unitPriceCents, 12345);
 
-    const editBody = { ...spec.party, warehouseId: 'wh', ...spec.date, totalCents: 999999, remark: 'edited', items: [{ productId: 'p2', quantity: 3, unitPriceCents: 700 }] };
+    const editBody = { ...spec.party, warehouseId: 'wh', ...spec.date, totalCents: 999999, remark: 'edited', items: [{ ...spec.sourceItem, productId: 'p1', quantity: 3, unitPriceCents: 12345 }] };
     response = await request(`${spec.path}/${created.id}`, 'warehouse', 'PATCH', editBody);
     assert.equal(response.status, 200);
     const edited = db.prepare(`SELECT * FROM ${spec.table} WHERE id=?`).get(created.id);
-    assert.equal(edited.total_cents, 2100);
+    assert.equal(edited.total_cents, 37035);
     assert.equal(db.prepare(`SELECT count(*) count FROM ${spec.itemTable} WHERE ${spec.fk}=?`).get(created.id).count, 1);
-    assert.equal(db.prepare(`SELECT product_id,amount_cents FROM ${spec.itemTable} WHERE ${spec.fk}=?`).get(created.id).product_id, 'p2');
+    assert.equal(db.prepare(`SELECT product_id,amount_cents FROM ${spec.itemTable} WHERE ${spec.fk}=?`).get(created.id).product_id, 'p1');
 
-    response = await request(`${spec.path}/${created.id}`, 'warehouse', 'PATCH', { ...editBody, remark: 'must rollback', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 100 }, { productId: 'missing', quantity: 1, unitPriceCents: 100 }] });
+    response = await request(`${spec.path}/${created.id}`, 'warehouse', 'PATCH', { ...editBody, remark: 'must rollback', items: [{ ...spec.sourceItem, productId: 'missing', quantity: 1, unitPriceCents: 12345 }] });
     assert.equal(response.status, 400);
     assert.equal(db.prepare(`SELECT remark FROM ${spec.table} WHERE id=?`).get(created.id).remark, 'edited');
     assert.equal(db.prepare(`SELECT count(*) count FROM ${spec.itemTable} WHERE ${spec.fk}=?`).get(created.id).count, 1);
 
-    const before = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p2'").get().quantity;
+    const before = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
+    if (['PURCHASE_RECEIPT', 'SALES_DELIVERY'].includes(spec.voucher)) await passQuality(spec.voucher, created.id, 3);
     response = await request(`${spec.path}/${created.id}`, 'warehouse', 'POST', { action: 'confirm' });
     assert.equal(response.status, 200);
     assert.equal(db.prepare(`SELECT status,total_cents FROM ${spec.table} WHERE id=?`).get(created.id).status, 'CONFIRMED');
-    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p2'").get().quantity, before + spec.delta * 3);
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity, before + spec.delta * 3);
     const transaction = db.prepare('SELECT * FROM inventory_transactions WHERE source_type=? AND source_id=?').get(spec.voucher, created.id);
     assert.equal(transaction.quantity_change, 3);
     assert.equal(transaction.balance_after, before + spec.delta * 3);
     const voucher = db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(spec.voucher, created.id);
     const totals = db.prepare("SELECT SUM(CASE WHEN direction='DEBIT' THEN amount_cents ELSE 0 END) debit,SUM(CASE WHEN direction='CREDIT' THEN amount_cents ELSE 0 END) credit FROM accounting_entries WHERE voucher_id=?").get(voucher.id);
-    assert.equal(totals.debit, 2100);
-    assert.equal(totals.credit, 2100);
+    assert.equal(totals.debit, 37035);
+    assert.equal(totals.credit, 37035);
 
     response = await request(`${spec.path}/${created.id}`, 'warehouse', 'POST', { action: 'confirm' });
-    assert.equal(response.status, 409);
+    assert.equal(response.status, ['PURCHASE_RECEIPT', 'SALES_DELIVERY'].includes(spec.voucher) ? 200 : 409);
     assert.equal(db.prepare('SELECT count(*) count FROM inventory_transactions WHERE source_type=? AND source_id=?').get(spec.voucher, created.id).count, 1);
     assert.equal(db.prepare('SELECT count(*) count FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(spec.voucher, created.id).count, 1);
     assert.equal((await request(`${spec.path}/${created.id}`, 'warehouse', 'PATCH', editBody)).status, 409);
@@ -122,7 +140,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
   });
 
   test('draft cancellation has no stock or voucher effect and cancelled documents stay immutable', async () => {
-    const response = await request('/api/purchase-receipts', 'warehouse', 'POST', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 12345 }] });
+    const response = await request('/api/purchase-receipts', 'warehouse', 'POST', { purchaseOrderId: 'po-source', supplierId: 'sup', warehouseId: 'wh', items: [{ purchaseOrderItemId: 'poi-source', productId: 'p1', quantity: 1, unitPriceCents: 12345 }] });
     const created = await response.json();
     assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'warehouse', 'POST', { action: 'cancel' })).status, 200);
     assert.equal(db.prepare('SELECT status FROM purchase_receipts WHERE id=?').get(created.id).status, 'CANCELLED');
@@ -131,21 +149,24 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'warehouse', 'PATCH', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 1 }] })).status, 409);
   });
 
-  test('role-sales retains its existing legitimate logistics manage contract', async () => {
+  test('V1.3 Phase 1: role-sales no longer posts purchase receipts (logistics execution belongs to warehouse)', async () => {
+    // role-sales used to be able to create / edit / cancel purchase receipts.
+    // After V1.3 Phase 1 role remediation, sales owns commercial entry
+    // (customer/supplier master + SO/PR/PO create/submit) and CRM, but
+    // physical stock execution is restricted to warehouse / admin. So
+    // /api/purchase-receipts POST as sales must be 403, not 201.
     const response = await request('/api/purchase-receipts', 'sales', 'POST', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 1, unitPriceCents: 12345 }] });
-    assert.equal(response.status, 201);
-    const created = await response.json();
-    assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'sales', 'PATCH', { supplierId: 'sup', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] })).status, 200);
-    assert.equal((await request(`/api/purchase-receipts/${created.id}`, 'sales', 'POST', { action: 'cancel' })).status, 200);
+    assert.equal(response.status, 403, `sales POST /api/purchase-receipts must be 403 after V1.3, got ${response.status}`);
   });
 
   test('closed-period inbound and outbound confirmations roll back all effects', async () => {
     db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,status,created_at) VALUES('closed','2026-08',2026,8,'CLOSED',datetime('now'))").run();
     for (const [path, body, table] of [
-      ['/api/purchase-receipts', { supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-08-15', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 100 }] }, 'purchase_receipts'],
-      ['/api/sales-deliveries', { customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-08-15', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 100 }] }, 'sales_deliveries'],
+      ['/api/purchase-receipts', { purchaseOrderId: 'po-source', supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-08-15', items: [{ purchaseOrderItemId: 'poi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'purchase_receipts'],
+      ['/api/sales-deliveries', { salesOrderId: 'so-source', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-08-15', items: [{ salesOrderItemId: 'soi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'sales_deliveries'],
     ]) {
       const created = await (await request(path, 'warehouse', 'POST', body)).json();
+      await passQuality(path.includes('purchase') ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY', created.id, 2);
       const stockBefore = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
       const txBefore = db.prepare('SELECT count(*) count FROM inventory_transactions').get().count;
       const voucherBefore = db.prepare('SELECT count(*) count FROM accounting_vouchers').get().count;
@@ -177,13 +198,18 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(preserved.status, 'DRAFT');
     assert.equal(preserved.reason, 'keep me');
     assert.equal(legacy.prepare("SELECT count(*) count FROM permissions WHERE code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    // V1.3 Phase 1: INVENTORY_CHECK_APPROVE is held by both admin
+    // (all-permissions inheritance) and reviewer (canonical approver).
+    // warehouse must NOT hold it.
     assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-admin' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-reviewer' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
     assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE role_id='role-warehouse' AND permission_code='INVENTORY_CHECK_APPROVE'").get().count, 0);
     legacy.close();
 
     legacy = createDatabase(filename);
     assert.equal(legacy.prepare("SELECT count(*) count FROM inventory_checks WHERE id='legacy-check'").get().count, 1);
-    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").get().count, 1);
+    // Idempotency: a second open must not duplicate the row.
+    assert.equal(legacy.prepare("SELECT count(*) count FROM role_permissions WHERE permission_code='INVENTORY_CHECK_APPROVE'").get().count, 2);
     legacy.close();
   });
 
@@ -209,14 +235,29 @@ describe('v1.0.1-rc.3 business document integrity', () => {
   });
 
   test('sales order approval authorizes only; delivery confirmation is the single revenue trigger', async () => {
-    let response = await request('/api/orders', 'sales', 'POST', { customerId: 'cus', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
+    // V1.3 Phase 1: SO submit requires order_date, requested_delivery_date,
+    // ship-to contact/phone/address, and payment terms. The test now
+    // supplies them so SUBMIT passes; the assertion of "no voucher at
+    // approval" remains the focus of this case.
+    let response = await request('/api/orders', 'sales', 'POST', {
+      customerId: 'cus',
+      orderDate: '2026-09-22',
+      requestedDeliveryDate: '2026-10-10',
+      paymentTerms: '月结 30 天',
+      shipToContactName: '王女士',
+      shipToPhone: '13800000000',
+      shipToAddress: '上海市浦东新区张江路 88 号',
+      items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }],
+    });
     assert.equal(response.status, 201);
     const order = await response.json();
     assert.equal((await request(`/api/orders/${order.id}/submit`, 'sales', 'POST', {})).status, 200);
     assert.equal((await request(`/api/orders/${order.id}/approve`, 'reviewer', 'POST', {})).status, 200);
     assert.equal(db.prepare("SELECT count(*) count FROM accounting_vouchers WHERE source_type='SALES_ORDER' AND source_id=?").get(order.id).count, 0);
-    response = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: order.id, customerId: 'cus', warehouseId: 'wh', items: [{ productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
+    const orderItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(order.id).id;
+    response = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: order.id, customerId: 'cus', warehouseId: 'wh', items: [{ salesOrderItemId: orderItemId, productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
     const delivery = await response.json();
+    await passQuality('SALES_DELIVERY', delivery.id, 2);
     assert.equal((await request(`/api/sales-deliveries/${delivery.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
     assert.equal(db.prepare("SELECT count(*) count FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.id).count, 1);
   });
