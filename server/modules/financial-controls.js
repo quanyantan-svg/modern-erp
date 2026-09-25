@@ -27,8 +27,27 @@ export function requestFingerprint(value) {
 
 export function idempotencyReplay(db, operationType, documentId, key, fingerprint) {
   if (!key) throw new HttpError(400, '关键过账操作必须提供 Idempotency-Key');
-  const row = db.prepare('SELECT * FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?').get(operationType, documentId, key);
+  let lockName;
+  if (db?.dialect === 'mysql') {
+    lockName = `erp-idem-${createHash('sha256').update(`${operationType}\u001f${documentId}\u001f${key}`).digest('hex').slice(0, 48)}`;
+    const acquired = Number(db.prepare('SELECT GET_LOCK(?,10) acquired').get(lockName)?.acquired);
+    if (acquired !== 1) throw new HttpError(503, '幂等请求正在处理中，请重试');
+    db._idempotencyLocks ||= new Set();
+    db._idempotencyLocks.add(lockName);
+  }
+  let row;
+  try {
+    row = db.prepare('SELECT * FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?').get(operationType, documentId, key);
+  } catch (error) {
+    if (db?.dialect === 'mysql') {
+      try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } finally { db._idempotencyLocks.delete(lockName); }
+    }
+    throw error;
+  }
   if (!row) return null;
+  if (db?.dialect === 'mysql') {
+    try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } finally { db._idempotencyLocks.delete(lockName); }
+  }
   if (row.request_fingerprint !== fingerprint) throw new HttpError(409, '同一幂等键不能用于不同请求内容');
   return JSON.parse(row.result_json);
 }

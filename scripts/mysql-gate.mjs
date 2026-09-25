@@ -6,7 +6,7 @@ if (missing.length || process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
   console.error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE${missing.length ? ` (${missing.join(', ')} missing)` : ' (ERP_MYSQL_TEST_ALLOW_RESET=true required)'}`);
   process.exit(2);
 }
-if (!/(?:test|phase7a|disposable)/i.test(process.env.ERP_DB_NAME)) {
+if (!/(?:test|phase7[ab]|disposable)/i.test(process.env.ERP_DB_NAME)) {
   console.error(`Refusing MySQL integration tests for non-disposable database: ${process.env.ERP_DB_NAME}`);
   process.exit(2);
 }

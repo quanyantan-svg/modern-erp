@@ -31,7 +31,7 @@ const CONTROLS = [
 function assertSafe(sourcePath, config) {
   if (!isAbsolute(sourcePath)) throw new Error('SQLite conversion source must be an absolute path');
   if (resolve(sourcePath) === protectedDb) throw new Error('Refusing to convert the repository data/erp.db; use a disposable copy');
-  if (!/(?:test|phase7a|disposable)/i.test(config.database)) {
+  if (!/(?:test|phase7[ab]|disposable)/i.test(config.database)) {
     throw new Error(`Refusing conversion into non-disposable MySQL database: ${config.database}`);
   }
   if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {

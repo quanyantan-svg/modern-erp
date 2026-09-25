@@ -19,8 +19,10 @@ describe('V1.3 Phase 7A MySQL 8 compatibility gate', () => {
   test('fresh bootstrap is complete, repeatable, transactional and sequence-safe', () => {
     const db = mysql.db;
     assert.equal(db.dialect, 'mysql');
-    assert.equal(db.prepare('SHOW TABLES').all().length, 173);
+    assert.equal(db.prepare('SELECT @@transaction_isolation level').get().level, 'READ-COMMITTED');
+    assert.equal(db.prepare('SHOW TABLES').all().length, 174);
     assert.equal(db.prepare("SELECT version FROM mysql_backend_metadata WHERE version='v1.3-phase7a'").get().version, 'v1.3-phase7a');
+    assert.equal(db.prepare('SELECT purpose FROM mysql_transaction_gates WHERE gate_id=1').get().purpose, 'application-write');
 
     const first = transaction(db, () => allocateDocumentNumber(db, 'TST', '2026-09-25', 'mysql-seq-1'));
     const replay = transaction(db, () => allocateDocumentNumber(db, 'TST', '2026-09-25', 'mysql-seq-1'));

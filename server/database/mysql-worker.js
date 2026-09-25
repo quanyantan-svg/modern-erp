@@ -44,6 +44,10 @@ parentPort.on('message', async ({ action, payload, shared }) => {
         charset: 'utf8mb4',
       });
       await connection.query("SET time_zone = '+00:00'");
+      // READ COMMITTED avoids unnecessary gap locks for ERP point lookups while
+      // explicit row locks protect every mutable business invariant.
+      await connection.query('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
+      await connection.query('SET SESSION innodb_lock_wait_timeout = 2');
       encode(shared, { connected: true });
       return;
     }

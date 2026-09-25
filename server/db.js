@@ -1614,17 +1614,63 @@ function seed(db) {
   if (shouldSeedDemoData()) seedDemoData(db);
 }
 
-export function transaction(db, work) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = work();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+const MYSQL_RETRYABLE_TRANSACTION_CODES = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);
 
+export function isRetryableMySqlTransactionError(error) {
+  return MYSQL_RETRYABLE_TRANSACTION_CODES.has(error?.code)
+    || error?.errno === 1213
+    || error?.errno === 1205
+    || error?.sqlState === '40001';
+}
+
+function mysqlTransactionRetryLimit() {
+  const configured = Number(process.env.ERP_DB_TX_RETRY_MAX ?? 3);
+  return Number.isSafeInteger(configured) && configured >= 0 && configured <= 10 ? configured : 3;
+}
+
+function waitForTransactionRetry(attempt) {
+  const delayMs = Math.min(250, 20 * (2 ** attempt));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+
+function releaseMySqlIdempotencyLocks(db) {
+  if (db?.dialect !== 'mysql' || !db._idempotencyLocks?.size) return;
+  for (const lockName of db._idempotencyLocks) {
+    try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } catch {}
+  }
+  db._idempotencyLocks.clear();
+}
+
+export function transaction(db, work) {
+  const mysql = db?.dialect === 'mysql';
+  const retryLimit = mysql ? mysqlTransactionRetryLimit() : 0;
+  for (let attempt = 0; ; attempt += 1) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (mysql) {
+        // Global order: transaction gate first, then business rows. Holding the
+        // gate until COMMIT/ROLLBACK makes cross-table invariants atomic across
+        // every API process using this database.
+        const gate = db.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE').get();
+        if (!gate) throw new Error('MySQL transaction gate is unavailable');
+      }
+      const result = work();
+      db.exec('COMMIT');
+      releaseMySqlIdempotencyLocks(db);
+      return result;
+    } catch (error) {
+      try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+      if (!mysql || !isRetryableMySqlTransactionError(error) || attempt >= retryLimit) {
+        if (mysql && isRetryableMySqlTransactionError(error)) {
+          error.transactionRetryExhausted = true;
+          error.transactionAttempts = attempt + 1;
+        }
+        releaseMySqlIdempotencyLocks(db);
+        throw error;
+      }
+      waitForTransactionRetry(attempt);
+    }
+  }
 }
 export function id() {
   return randomUUID();

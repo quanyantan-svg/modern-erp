@@ -12,6 +12,7 @@
     "start": "node server/index.js",
     "test": "node --test",
     "test:mysql": "node scripts/mysql-gate.mjs",
+    "test:mysql:concurrency": "node scripts/mysql-concurrency-gate.mjs",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/backup-db.mjs",
     "restore-db": "node scripts/restore-db.mjs",

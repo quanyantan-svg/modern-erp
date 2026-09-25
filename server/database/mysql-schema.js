@@ -191,6 +191,19 @@ export function bootstrapMySql(adapter, snapshot) {
       adapter.exec("CREATE TABLE mysql_backend_metadata (version VARCHAR(32) PRIMARY KEY, completed_at VARCHAR(64) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
       adapter.prepare('INSERT INTO mysql_backend_metadata(version,completed_at) VALUES(?,?)').run('v1.3-phase7a', new Date().toISOString());
     }
+    // Phase 7B correctness gate. All application write transactions lock this
+    // singleton row before touching business rows, so independent Node
+    // processes cannot race an invariant that spans several tables. This is a
+    // deliberately conservative baseline; narrower locks can replace it after
+    // workload evidence without weakening correctness.
+    adapter.exec(`CREATE TABLE IF NOT EXISTS mysql_transaction_gates (
+      gate_id BIGINT NOT NULL,
+      purpose VARCHAR(64) NOT NULL,
+      updated_at VARCHAR(64) NOT NULL,
+      PRIMARY KEY (gate_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`);
+    adapter.prepare('INSERT IGNORE INTO mysql_transaction_gates(gate_id,purpose,updated_at) VALUES(1,?,?)')
+      .run('application-write', new Date().toISOString());
   } finally {
     adapter.exec('SET FOREIGN_KEY_CHECKS=1');
   }
