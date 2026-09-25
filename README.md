@@ -144,9 +144,10 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- Git release tag 是项目/发布版本的权威来源；当前为 v1.3.0。
-- document.md 和 solution.md 跟随当前 release context，不维护独立语义版本。
-- package.json 中的 2.4.0 是现存包元数据漂移，不代表当前发布版本；是否对齐为 1.3.0 应在独立变更中决定。
+- Git release tag 是项目发布版本的权威来源；最新发布基线为 v1.3.0。
+- package.json 的版本 1.3.0 镜像最新发布基线，不为维护提交建立另一套版本序列。
+- master 可以包含 v1.3.0 发布后的维护变更；使用 Git SHA 或 git describe 标识精确检出状态，不应把当前 HEAD 等同于 v1.3.0 标签提交。
+- document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
 
 ## 安全说明
 

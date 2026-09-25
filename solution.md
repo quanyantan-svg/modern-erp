@@ -407,11 +407,12 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 
 因此当前结论是 KEEP GLOBAL GATE：没有证据前不削弱正确性边界，同时不宣称已经认证企业级吞吐。未来只有在真实 benchmark、query plan 和完整回归支持下，才能改为确定性资源级锁。
 
-## 18. 已知技术债与批准边界
+## 18. 版本、已知技术债与批准边界
 
+- Git tag 标识项目发布版本，package.json.version 镜像最新发布基线；精确维护检出状态由 Git SHA 或 git describe 标识。
+- 当前 master 是 v1.3.0 发布后的维护状态；尚未声明 v1.3.1 或 V1.4 发布，当前 HEAD 不等同于 v1.3.0 标签提交。
 - server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
 - SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
-- package.json 版本 2.4.0 与 release tag v1.3.0 漂移；应在独立版本治理变更中决定是否对齐，不在文档恢复阶段修改。
 - docs/ 已分为 operations 当前专项指南与 archive 历史证据；两者均不得覆盖本文件和 document.md 的 canonical 合同。
 - 旧 archive 当前工作树已脱敏，但 Git 历史仍包含历史秘密；历史清理与凭据轮换不属于普通代码重构。
 - MySQL 生产备份/恢复、真实容量、分页收口和部署升级/回滚仍需环境化验收。

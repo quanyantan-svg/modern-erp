@@ -1,6 +1,6 @@
 {
   "name": "modern-erp-practice",
-  "version": "2.4.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "description": "方天 ERP 核心业务与管理能力的现代化模块化重构版本",
