@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../db.js';
+import { resolveDatabaseConfig } from '../database/config.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const defaultRepoDb = resolve(repoRoot, 'data', 'erp.db');
@@ -72,6 +73,46 @@ export function createTempDb({
   filename,
   production = false,
 } = {}) {
+  if (process.env.ERP_TEST_DB_BACKEND === 'mysql') {
+    if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
+      throw new Error('MySQL integration tests require ERP_MYSQL_TEST_ALLOW_RESET=true');
+    }
+    const config = resolveDatabaseConfig({ backend: 'mysql' });
+    if (!/(?:test|phase7a|disposable)/i.test(config.database)) {
+      throw new Error(`Refusing MySQL test reset for non-test database: ${config.database}`);
+    }
+    const previousSeed = process.env.ERP_SEED_DEMO;
+    const previousNode = process.env.NODE_ENV;
+    if (production) {
+      process.env.NODE_ENV = 'production';
+      process.env.ERP_SEED_DEMO = 'false';
+    }
+    let db;
+    try { db = createDatabase(config); }
+    finally {
+      if (production) {
+        if (previousSeed === undefined) delete process.env.ERP_SEED_DEMO; else process.env.ERP_SEED_DEMO = previousSeed;
+        if (previousNode === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previousNode;
+      }
+    }
+    let closed = false;
+    return {
+      dir: null, dbPath: null, walPath: null, shmPath: null, db,
+      close() { if (!closed) { db.close(); closed = true; } },
+      cleanup() {
+        if (closed) return;
+        try {
+          db.exec('SET FOREIGN_KEY_CHECKS=0');
+          for (const row of db.prepare('SHOW TABLES').all()) {
+            const table = Object.values(row)[0];
+            if (!/^[a-zA-Z0-9_]+$/.test(table)) throw new Error(`Unsafe MySQL table name: ${table}`);
+            db.exec(`DROP TABLE \`${table}\``);
+          }
+          db.exec('SET FOREIGN_KEY_CHECKS=1');
+        } finally { db.close(); closed = true; }
+      },
+    };
+  }
   const dir = createTempDir(label);
   const dbFilename = filename || `${label}.db`;
   const dbPath = join(dir, dbFilename);

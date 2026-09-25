@@ -1,5 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createMySqlDatabase } from './database/mysql-adapter.js';
+import { resolveDatabaseConfig } from './database/config.js';
 import { migrateExtendedSchema } from './migrations/extended-schema.js';
 import { migrateProductRoutingSchema } from './migrations/product-routing.js';
 import { migratePlanningSchema } from './migrations/planning-schema.js';
@@ -155,7 +157,7 @@ export function verifyPassword(password, salt, expectedHex) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-export function createDatabase(filename) {
+function createSqliteDatabase(filename) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
@@ -354,6 +356,23 @@ export function createDatabase(filename) {
   reconcileSettlementSubledgers(db);
 
   return db;
+}
+
+/**
+ * Open the configured database backend while preserving the synchronous
+ * domain-level contract used by the frozen V1.3 modules.
+ *
+ * A string remains the backwards-compatible SQLite path. Passing no value or
+ * an object uses the explicit ERP_DB_BACKEND configuration contract.
+ */
+export function createDatabase(target) {
+  if (typeof target === 'string') return createSqliteDatabase(target);
+  const config = resolveDatabaseConfig(target);
+  if (config.backend === 'sqlite') return createSqliteDatabase(config.path);
+  return createMySqlDatabase(config, {
+    createSqliteSnapshot: (filename) => createSqliteDatabase(filename),
+    seedDemo: shouldSeedDemoData(),
+  });
 }
 
 // Idempotent migration for purchase_receipts / sales_deliveries /

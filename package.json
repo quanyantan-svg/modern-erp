@@ -11,6 +11,7 @@
     "build": "vite build",
     "start": "node server/index.js",
     "test": "node --test",
+    "test:mysql": "node scripts/mysql-gate.mjs",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/backup-db.mjs",
     "restore-db": "node scripts/restore-db.mjs",
@@ -22,6 +23,7 @@
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",
     "lucide-react": "^1.47.0",
+    "mysql2": "^3.24.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "vite": "^7.1.0"

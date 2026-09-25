@@ -266,7 +266,7 @@ export function systemHealth(db, { asOfDate='9999-12-31' }={}) {
   const cogsValue=-Number(db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE movement_type IN ('SALES_DELIVERY_COGS','SALES_RETURN_COGS_REVERSAL') AND business_date<=?").get(asOfDate).n); checks.push(check('COGS_TO_GL',glRoleBalance(db,['COGS'],asOfDate)-cogsValue));
   const legacy=db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE valuation_status='LEGACY_UNVALUED' AND business_date<=?").get(asOfDate).n;
   checks.push(check('LEGACY_UNVALUED_MOVEMENTS',Number(legacy),[], 'Phase 6E 开账转换前不得权威结账'));
-  const duplicate=db.prepare("SELECT COUNT(*) n FROM (SELECT source_type,source_id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' GROUP BY source_type,source_id HAVING COUNT(*)>1)").get().n;
+  const duplicate=db.prepare("SELECT COUNT(*) n FROM (SELECT source_type,source_id FROM accounting_vouchers WHERE voucher_origin='SYSTEM' GROUP BY source_type,source_id HAVING COUNT(*)>1) x").get().n;
   checks.push(check('SYSTEM_VOUCHER_UNIQUENESS',Number(duplicate)));
   const completed=db.prepare("SELECT o.id FROM production_orders o WHERE o.status='COMPLETED' AND COALESCE((SELECT SUM(amount_cents) FROM production_wip_movements w WHERE w.production_order_id=o.id),0)<>0").all();
   checks.push(check('COMPLETED_ORDER_WIP_ZERO',completed.length,completed.map(x=>x.id)));

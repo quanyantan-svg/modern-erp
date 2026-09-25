@@ -8,7 +8,10 @@ import { createDatabase } from './db.js';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = join(root, 'data');
 if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
-const db = createDatabase(process.env.ERP_DB_PATH || join(dataDir, 'erp.db'));
+const backend = String(process.env.ERP_DB_BACKEND || 'sqlite').toLowerCase();
+const db = backend === 'sqlite'
+  ? createDatabase(process.env.ERP_DB_PATH || join(dataDir, 'erp.db'))
+  : createDatabase();
 const port = Number(process.env.PORT || 3001);
 const server = createServer(createApp(db, { distDir: join(root, 'dist') }));
 

@@ -285,7 +285,9 @@ export function manufacturingCapacityReport(db, res, actor, url) {
   allow(actor, 'PRODUCTION_ORDERS_VIEW'); const date = url.searchParams.get('date') || '';
   const rows = db.prepare(`SELECT work_center_id,work_center_code,work_center_name,planned_date,daily_capacity_minutes,
     SUM((setup_seconds+run_seconds_per_unit*planned_input_quantity)/60.0) planned_minutes
-    FROM production_order_operations WHERE work_center_id IS NOT NULL AND (?='' OR planned_date=?) GROUP BY work_center_id,planned_date ORDER BY planned_date,work_center_code`).all(date, date).map((row) => {
+    FROM production_order_operations WHERE work_center_id IS NOT NULL AND (?='' OR planned_date=?)
+    GROUP BY work_center_id,work_center_code,work_center_name,planned_date,daily_capacity_minutes
+    ORDER BY planned_date,work_center_code`).all(date, date).map((row) => {
       const actual = db.prepare(`SELECT COALESCE(SUM(r.machine_seconds),0)-COALESCE(SUM(v.machine_seconds),0) seconds FROM production_operation_reports r LEFT JOIN (SELECT original_report_id,SUM(machine_seconds) machine_seconds FROM production_operation_report_reversals GROUP BY original_report_id) v ON v.original_report_id=r.id WHERE r.status='CONFIRMED' AND r.production_operation_id IN (SELECT id FROM production_order_operations WHERE work_center_id=? AND planned_date=?)`).get(row.work_center_id, row.planned_date);
       const actualMinutes = Number(actual.seconds) / 60; return { ...row, planned_minutes: Math.ceil(row.planned_minutes), actual_minutes: Math.ceil(actualMinutes), planned_utilization_bps: row.daily_capacity_minutes ? Math.round(row.planned_minutes * 10000 / row.daily_capacity_minutes) : 0, actual_utilization_bps: row.daily_capacity_minutes ? Math.round(actualMinutes * 10000 / row.daily_capacity_minutes) : 0, overloaded: row.planned_minutes > row.daily_capacity_minutes + EPS };
     }); return send(res, 200, { rows });
