@@ -97,11 +97,16 @@ MySQL 8 需要：
     server/database/     MySQL adapter、worker、protocol 与 schema
     server/migrations/   增量 schema 迁移
     server/*.test.js     回归、合同与集成测试
-    scripts/             运行、管理、测试 gate 和验收工具
+    scripts/runtime/     开发运行入口
+    scripts/diagnostics/ 诊断、性能检查和历史调试工具
+    scripts/acceptance/  手工/浏览器验收工具
+    scripts/             管理和 MySQL gate/worker（后续分阶段整理）
     deploy/              Nginx 与 systemd 配置
     docs/operations/     当前专项运维与演示指南
     docs/archive/        历史审计、阶段与发布证据
     log/                 append-only 开发日志
+
+scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令名保持稳定；日常仍使用 `pnpm dev`、`pnpm test:mysql:performance` 等命令，不应依赖内部脚本路径。
 
 ## 测试与质量门
 

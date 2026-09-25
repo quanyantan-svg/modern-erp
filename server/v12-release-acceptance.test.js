@@ -15,7 +15,7 @@ const designSource = source('src/components/design-system.jsx');
 const uiSource = `${designSource}\n${source('src/components/ui.jsx')}`;
 const materialPlanSource = source('src/pages/material-requirements-plan.jsx');
 const lifecycleTestSource = source('server/v12-lifecycle-cleanup.test.js');
-const browserAcceptanceSource = source('scripts/p3-ui-acceptance.mjs');
+const browserAcceptanceSource = source('scripts/acceptance/p3-ui-acceptance.mjs');
 let tempDir;
 
 before(() => { tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-v12-release-')); });

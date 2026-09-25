@@ -12,9 +12,12 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { createApp } from '../server/app.js';
-import { createDatabase, id } from '../server/db.js';
+import { createApp } from '../../server/app.js';
+import { createDatabase, id } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const EDGE_VERSION = '153.0.4234.48';
@@ -1110,7 +1113,7 @@ async function main() {
   const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-p1-real-'));
   const dbPath = join(tempDir, 'erp.db');
   const db = createDatabase(dbPath);
-  const server = createServer(createApp(db, { distDir: resolve('dist') }));
+  const server = createServer(createApp(db, { distDir: resolve(repoRoot, 'dist') }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -1183,7 +1186,7 @@ async function main() {
     const emptyDbDir = mkdtempSync(join(tmpdir(), 'modern-erp-p1-empty-db-'));
     const emptyDbPath = join(emptyDbDir, 'erp.db');
     const emptyDb = createDatabase(emptyDbPath);
-    const emptyServer = createServer(createApp(emptyDb, { distDir: resolve('dist') }));
+    const emptyServer = createServer(createApp(emptyDb, { distDir: resolve(repoRoot, 'dist') }));
     await new Promise((r) => emptyServer.listen(0, '127.0.0.1', r));
     const emptyBaseUrl = `http://127.0.0.1:${emptyServer.address().port}`;
     try {

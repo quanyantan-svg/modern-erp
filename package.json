@@ -5,7 +5,7 @@
   "type": "module",
   "description": "方天 ERP 核心业务与管理能力的现代化模块化重构版本",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "dev": "node scripts/runtime/dev.mjs",
     "dev:api": "node --watch server/index.js",
     "dev:web": "vite",
     "build": "vite build",
@@ -13,7 +13,7 @@
     "test": "node --test",
     "test:mysql": "node scripts/mysql-gate.mjs",
     "test:mysql:concurrency": "node scripts/mysql-concurrency-gate.mjs",
-    "test:mysql:performance": "node scripts/mysql-phase7c-performance.mjs",
+    "test:mysql:performance": "node scripts/diagnostics/mysql-phase7c-performance.mjs",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/backup-db.mjs",
     "restore-db": "node scripts/restore-db.mjs",

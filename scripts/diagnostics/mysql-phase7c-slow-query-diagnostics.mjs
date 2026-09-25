@@ -1,4 +1,4 @@
-// scripts/mysql-phase7c-slow-query-diagnostics.mjs
+// scripts/diagnostics/mysql-phase7c-slow-query-diagnostics.mjs
 //
 // Read-only diagnostic for Phase 7C performance failures. Targets the
 // already-populated disposable MySQL database. Does NOT reset, does NOT
@@ -23,7 +23,7 @@
 
 import mysql from 'mysql2/promise';
 import { createHash } from 'node:crypto';
-import { resolveDatabaseConfig } from '../server/database/config.js';
+import { resolveDatabaseConfig } from '../../server/database/config.js';
 
 process.env.ERP_DB_BACKEND = 'mysql';
 

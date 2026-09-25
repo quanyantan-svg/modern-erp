@@ -1,9 +1,11 @@
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 const baseUrl = process.env.ERP_VISUAL_URL || 'http://127.0.0.1:5173';
-const outputDir = resolve(process.argv[2] || 'artifacts/v12-visual');
+const outputDir = process.argv[2] ? resolve(process.argv[2]) : resolve(repoRoot, 'artifacts/v12-visual');
 const edgePath = process.env.EDGE_PATH || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const widths = [375, 414, 768, 1024, 1440, 1600, 1920];
 const consoleErrors = [];

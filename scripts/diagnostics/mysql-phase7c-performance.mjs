@@ -1,8 +1,12 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
-import { resolveDatabaseConfig } from '../server/database/config.js';
+import { resolveDatabaseConfig } from '../../server/database/config.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+const workerPath = fileURLToPath(new URL('../mysql-concurrency-worker.mjs', import.meta.url));
 
 process.env.ERP_DB_BACKEND = 'mysql';
 process.env.ERP_TEST_DB_BACKEND = 'mysql';
@@ -23,8 +27,8 @@ if (!/(?:test|phase7c|disposable)/i.test(process.env.ERP_DB_NAME)) {
 class Session {
   constructor(index) {
     this.pending = new Map();
-    this.child = spawn(process.execPath, ['scripts/mysql-concurrency-worker.mjs'], {
-      cwd: process.cwd(), env: process.env, stdio: ['pipe', 'pipe', 'pipe'],
+    this.child = spawn(process.execPath, [workerPath], {
+      cwd: repoRoot, env: process.env, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
     this.child.stderr.on('data', (chunk) => { this.stderr += chunk; });

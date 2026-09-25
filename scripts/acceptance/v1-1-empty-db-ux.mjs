@@ -10,9 +10,12 @@ import { join, resolve as pathResolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { createApp } from '../server/app.js';
-import { createDatabase } from '../server/db.js';
+import { createApp } from '../../server/app.js';
+import { createDatabase } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 
@@ -65,7 +68,7 @@ async function main() {
   const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-empty-ux-'));
   const dbPath = join(tempDir, 'erp.db');
   const db = createDatabase(dbPath);
-  const server = createServer(createApp(db, { distDir: pathResolve('dist') }));
+  const server = createServer(createApp(db, { distDir: pathResolve(repoRoot, 'dist') }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;

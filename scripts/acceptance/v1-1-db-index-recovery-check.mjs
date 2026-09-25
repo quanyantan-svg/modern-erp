@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDatabase } from '../server/db.js';
+import { createDatabase } from '../../server/db.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'modern-erp-v1-1-recovery-'));
 const dbPath = join(dir, 'erp.db');

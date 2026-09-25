@@ -1,7 +1,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const [port = '9225', baseUrl = 'http://127.0.0.1:43110', outputDir = '.tmp/m10-browser/screenshots'] = process.argv.slice(2);
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const [port = '9225', baseUrl = 'http://127.0.0.1:43110', outputArg] = process.argv.slice(2);
+const outputDir = outputArg || join(repoRoot, '.tmp', 'm10-browser', 'screenshots');
 mkdirSync(outputDir, { recursive: true });
 
 async function waitFor(getter, label, timeout = 15000) {

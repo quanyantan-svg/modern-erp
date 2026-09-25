@@ -4101,7 +4101,7 @@ export function buildInventoryTransactionsQuery(url) {
   const startDate = url.searchParams.get('startDate');
   const endDate = url.searchParams.get('endDate');
   const rawSearch = (url.searchParams.get('search') || '').trim();
-  // Phase 7C EXPLAIN evidence (scripts/mysql-phase7c-slow-query-diagnostics.mjs):
+  // Phase 7C EXPLAIN evidence (scripts/diagnostics/mysql-phase7c-slow-query-diagnostics.mjs):
   // a non-empty search term MUST still use LIKE '%term%'; an empty/missing
   // search term MUST NOT generate LIKE '%%' predicates that defeat the
   // existing index on products.code and force a 600K-row scan.

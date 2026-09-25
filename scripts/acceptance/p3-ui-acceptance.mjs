@@ -6,8 +6,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createApp } from '../server/app.js';
-import { createDatabase, hashPassword } from '../server/db.js';
+import { fileURLToPath } from 'node:url';
+import { createApp } from '../../server/app.js';
+import { createDatabase, hashPassword } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const VIEWPORTS = [
@@ -27,7 +30,7 @@ const ROLES = [
   { label: 'accounting', username: 'test_accounting', roleId: 'role-accounting', must: ['accounting', 'accounts-receivable', 'accounts-payable', 'decision-reports', 'sales-discounts', 'purchase-discounts'], deny: ['inventory', 'production-orders', 'users', 'data-cleanup'] },
 ];
 const PASSWORD = 'P3-Isolated-Only-2026!';
-const outputDir = resolve('.tmp/p3-ui-acceptance');
+const outputDir = resolve(repoRoot, '.tmp/p3-ui-acceptance');
 mkdirSync(outputDir, { recursive: true });
 const failures = []; const observations = {}; const screenshots = [];
 function flag(label, ok, detail = '') { console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? ` — ${detail}` : ''}`); if (!ok) failures.push(label); }
@@ -185,7 +188,7 @@ db.prepare(`INSERT INTO mrp_run_demands(id,run_id,product_id,need_date,source_ty
 db.prepare(`INSERT INTO mrp_run_results(id,run_id,product_id,gross_sales_demand,gross_requirement,on_hand,net_requirement,suggestion_type,suggested_quantity,need_by_date,bom_level,warning) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
   'v12-browser-result', 'v12-browser-mrp', 'product-001', 10, 10, 0, 10, 'MAKE', 10, '2026-09-30', 0, '',
 );
-const server = createServer(createApp(db, { distDir: resolve('dist') }));
+const server = createServer(createApp(db, { distDir: resolve(repoRoot, 'dist') }));
 try { await new Promise((done) => server.listen(0, '127.0.0.1', done)); const baseUrl = `http://127.0.0.1:${server.address().port}`; for (const viewport of VIEWPORTS) await runViewport(baseUrl, viewport, isolated); }
 finally { await new Promise((done) => server.close(done)); db.close(); rmSync(isolated, { recursive: true, force: true }); }
 console.log(JSON.stringify({ browser: 'Microsoft Edge', viewports: VIEWPORTS.map((item) => item.width), roles: ROLES.map((item) => item.label), failures, screenshots, outputDir, observations }, null, 2));

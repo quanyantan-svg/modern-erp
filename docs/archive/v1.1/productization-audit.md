@@ -49,7 +49,7 @@
 
 ## Real product acceptance
 
-- Runner: `scripts/p3-ui-acceptance.mjs`; actual Microsoft Edge; isolated temporary SQLite acceptance DB; five ephemeral `test_*` users bound to the unchanged five roles.
+- Runner: `scripts/acceptance/p3-ui-acceptance.mjs`; actual Microsoft Edge; isolated temporary SQLite acceptance DB; five ephemeral `test_*` users bound to the unchanged five roles.
 - Matrix: five roles × 375×667 / 414×896 / 1024×768 = 15 combinations.
 - Results: canonical bottom labels and five equal columns PASS; role-specific launcher/sidebar visibility PASS; page overflow PASS; mobile visible control minimum observed height 71px; mobile bottom nav absent and sidebar present at 1024.
 - Diagnostics: ReferenceError 0; TypeError 0; unhandled rejection 0; unexpected 400/403/404/500 0.
@@ -821,11 +821,11 @@ No regression to existing 1151 tests / 230 suites.
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/v1-1-db-index-recovery-check.mjs` | Isolated DB schema-verification: fresh start has both indexes, second start is drift-free, integrity + FK clean |
-| `scripts/v1-1-empty-db-ux.mjs` | Empty-database UX acceptance for the seven representative blank surfaces |
-| `scripts/v1-1-teacher-fixture.mjs` | Full integrated teacher business chain (sales / planning / purchase / production / delivery / return / transfer / scrap / stocktake / month-end) |
-| `scripts/v1-1-debug-flow.mjs` | Minimal isolated debug helper used during acceptance recovery |
-| `scripts/p2-data-lifecycle-acceptance.mjs` | Updated P2 Edge acceptance wording (删除 / 取消) and animation-wait hardening |
+| `scripts/acceptance/v1-1-db-index-recovery-check.mjs` | Isolated DB schema-verification: fresh start has both indexes, second start is drift-free, integrity + FK clean |
+| `scripts/acceptance/v1-1-empty-db-ux.mjs` | Empty-database UX acceptance for the seven representative blank surfaces |
+| `scripts/acceptance/v1-1-teacher-fixture.mjs` | Full integrated teacher business chain (sales / planning / purchase / production / delivery / return / transfer / scrap / stocktake / month-end) |
+| `scripts/diagnostics/v1-1-debug-flow.mjs` | Minimal isolated debug helper used during acceptance recovery |
+| `scripts/acceptance/p2-data-lifecycle-acceptance.mjs` | Updated P2 Edge acceptance wording (删除 / 取消) and animation-wait hardening |
 
 ## Verification totals
 

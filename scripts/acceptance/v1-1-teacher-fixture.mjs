@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve as pathResolve } from 'node:path';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { createApp } from '../server/app.js';
-import { createDatabase, id } from '../server/db.js';
+import { createApp } from '../../server/app.js';
+import { createDatabase, id } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 function todayIso() { return new Date().toISOString().slice(0, 10); }
 
@@ -84,7 +87,7 @@ async function main() {
   const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-teacher-fixture-'));
   const dbPath = join(tempDir, 'erp.db');
   const db = createDatabase(dbPath);
-  const server = createServer(createApp(db, { distDir: pathResolve('dist') }));
+  const server = createServer(createApp(db, { distDir: pathResolve(repoRoot, 'dist') }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;

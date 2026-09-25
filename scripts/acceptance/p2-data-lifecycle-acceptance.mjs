@@ -5,8 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createApp } from '../server/app.js';
-import { createDatabase } from '../server/db.js';
+import { fileURLToPath } from 'node:url';
+import { createApp } from '../../server/app.js';
+import { createDatabase } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const VIEWPORTS = [{ name: '375x667', width: 375, height: 667 }, { name: '414x896', width: 414, height: 896 }, { name: '1024x768', width: 1024, height: 768 }];
@@ -116,7 +119,7 @@ async function runViewport(baseUrl, db, viewport, index) {
   }
 }
 
-const dir = mkdtempSync(join(tmpdir(), 'modern-erp-p2-acceptance-')); const db = createDatabase(join(dir, 'erp.db')); const server = createServer(createApp(db, { distDir: resolve('dist') }));
+const dir = mkdtempSync(join(tmpdir(), 'modern-erp-p2-acceptance-')); const db = createDatabase(join(dir, 'erp.db')); const server = createServer(createApp(db, { distDir: resolve(repoRoot, 'dist') }));
 try {
   await new Promise((done) => server.listen(0, '127.0.0.1', done)); const baseUrl = `http://127.0.0.1:${server.address().port}`;
   for (let i = 0; i < VIEWPORTS.length; i++) await runViewport(baseUrl, db, VIEWPORTS[i], i + 1);

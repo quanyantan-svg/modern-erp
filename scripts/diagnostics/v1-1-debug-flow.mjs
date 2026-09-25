@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { createApp } from '../server/app.js';
-import { createDatabase, id } from '../server/db.js';
+import { createApp } from '../../server/app.js';
+import { createDatabase, id } from '../../server/db.js';
+
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 async function api(baseUrl, path, { token, method = 'GET', body } = {}) {
   const headers = { ...(token ? { authorization: `Bearer ${token}` } : {}) };
@@ -23,7 +26,7 @@ async function main() {
   const tempDir = mkdtempSync(join(tmpdir(), 'modern-erp-debug-'));
   const dbPath = join(tempDir, 'erp.db');
   const db = createDatabase(dbPath);
-  const server = createServer(createApp(db, { distDir: resolve('dist') }));
+  const server = createServer(createApp(db, { distDir: resolve(repoRoot, 'dist') }));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
   const baseUrl = `http://127.0.0.1:${port}`;

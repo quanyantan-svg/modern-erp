@@ -9,7 +9,7 @@ const read = (...parts) => readFileSync(join(root, ...parts), 'utf8');
 const css = read('src', 'styles.css');
 const launcher = read('src', 'components', 'MobileLauncher.jsx');
 const shell = read('src', 'components', 'MobileShell.jsx');
-const visualAcceptance = read('scripts', 'v12-visual-acceptance.mjs');
+const visualAcceptance = read('scripts', 'acceptance', 'v12-visual-acceptance.mjs');
 
 describe('V1.2 premium visual polish round 3', () => {
   test('launcher uses a dense fixed two-line rhythm without reducing touch targets', () => {

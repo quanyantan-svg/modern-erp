@@ -53,10 +53,15 @@ MySQL 配置不完整时在连接前 fail closed。
 | server/migrations/ | 按业务阶段组织的增量迁移 |
 | server/lib/ | HTTP 校验/响应、审计和结构化日志 |
 | server/*.test.js | 单元、合同、回归和集成测试 |
-| scripts/ | 开发、管理、MySQL gate、诊断和验收工具 |
+| scripts/runtime/ | 开发运行入口；当前由 package.json 保持稳定命令别名 |
+| scripts/diagnostics/ | 性能诊断、benchmark 和历史调试工具 |
+| scripts/acceptance/ | 隔离数据库、浏览器和发布验收工具 |
+| scripts/ | 管理、MySQL gate/worker 及受保护工具；后续按独立安全阶段整理 |
 | deploy/ | Nginx 与 systemd 配置 |
 
 server/app.js 仍是较大的集中路由文件。新增复杂领域逻辑应优先进入 server/modules/，但本阶段不为目录美观迁移既有 handler。
+
+脚本从 package.json 或其他脚本启动子进程时，必须从 `import.meta.url` 推导仓库根目录并显式设置 `cwd` 或使用绝对目标路径，不得依赖调用者碰巧位于仓库根目录。ES module 的相对 import 仍以脚本文件自身为基准。浏览器验收脚本的临时数据库与截图位置必须继续保持隔离；结构移动不得改变验收业务流程。
 
 ## 4. HTTP 请求生命周期
 
@@ -353,6 +358,8 @@ server/*.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js �
 - pnpm test:mysql：schema/SQL 兼容与业务集成。
 - pnpm test:mysql:concurrency：多进程、多连接真实锁等待与竞态。
 - pnpm test:mysql:performance：1/5/10/20 writer 的 gate benchmark。
+
+`pnpm test:mysql:performance` 的 launcher 位于 `scripts/diagnostics/`，仍调用当前保留在 `scripts/` 根目录的 `mysql-concurrency-worker.mjs`；该 worker 与其 gate 的最终归类留给后续独立安全阶段。launcher 使用模块位置推导仓库根目录和 worker 绝对路径，避免受调用 CWD 影响。
 
 MySQL gate 要求全部连接变量、ERP_MYSQL_TEST_ALLOW_RESET=true，以及数据库名包含 test、phase7a/phase7c 或 disposable 等安全标识。缺失条件时必须拒绝执行。测试不得接触生产或未知数据库。
 

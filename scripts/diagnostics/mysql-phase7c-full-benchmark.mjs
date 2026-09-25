@@ -1,4 +1,4 @@
-// scripts/mysql-phase7c-full-benchmark.mjs
+// scripts/diagnostics/mysql-phase7c-full-benchmark.mjs
 //
 // Phase 7C full benchmark suite.
 //
@@ -27,10 +27,10 @@ import { createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import mysql from 'mysql2/promise';
 
-import { createApp } from '../server/app.js';
-import { transaction } from '../server/db.js';
-import { createTempDb } from '../server/test-utils/temp-db.js';
-import { resolveDatabaseConfig } from '../server/database/config.js';
+import { createApp } from '../../server/app.js';
+import { transaction } from '../../server/db.js';
+import { createTempDb } from '../../server/test-utils/temp-db.js';
+import { resolveDatabaseConfig } from '../../server/database/config.js';
 
 process.env.ERP_DB_BACKEND = 'mysql';
 process.env.ERP_TEST_DB_BACKEND = 'mysql';

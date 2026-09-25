@@ -1,7 +1,7 @@
 // v13-phase7c-performance.js
 //
 // Phase 7C performance indexes. Justified directly by the EXPLAIN
-// evidence captured by scripts/mysql-phase7c-slow-query-diagnostics.mjs
+// evidence captured by scripts/diagnostics/mysql-phase7c-slow-query-diagnostics.mjs
 // against the populated disposable Phase 7C dataset. No speculative
 // indexes — each index here corresponds to a measured production
 // query-plan finding.
