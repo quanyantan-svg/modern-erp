@@ -33,6 +33,28 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
   beforeEach(async () => {
     temp = createTempDb({ label: 'p6e-uat', production: true });
     db = temp.db;
+    // Precondition: the gate (scripts/mysql-gate.mjs resetMySql) is
+    // responsible for wiping every table in the disposable MySQL DB
+    // BEFORE this hook runs. If uat-c is already present, either the
+    // gate reset was bypassed (e.g. ERP_TEST_DB_BACKEND not propagated
+    // into the gate process), the previous pnpm test:mysql was
+    // interrupted before afterEach, or some other code path inserted
+    // this row. Diagnose loudly; never silently DELETE / IGNORE /
+    // UPSERT / randomize the id or weaken the PK.
+    const uatCustomerCount = Number(db.prepare("SELECT COUNT(*) AS n FROM customers WHERE id='uat-c'").get().n);
+    if (uatCustomerCount !== 0) {
+      const totalCustomers = Number(db.prepare('SELECT COUNT(*) AS n FROM customers').get().n);
+      const dbIdentity = db.dialect === 'mysql'
+        ? db.prepare('SELECT DATABASE() AS db, @@hostname AS host, CURRENT_USER() AS user').get()
+        : { db: '(sqlite)', host: '', user: '' };
+      throw new Error(
+        `UAT PRECONDITION FAILED: customer uat-c already exists before UAT fixture insertion. `
+        + `customers.id='uat-c' count=${uatCustomerCount} total customers=${totalCustomers} `
+        + `database=${dbIdentity.db} host=${dbIdentity.host} user=${dbIdentity.user}. `
+        + `The gate reset (scripts/mysql-gate.mjs resetMySql) did not produce a clean disposable MySQL DB; `
+        + `investigating before relaunch is required (no IGNORE / UPSERT / random id / PK weakening).`,
+      );
+    }
     const now = new Date().toISOString();
     db.prepare("INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('uat-c','CUAT','UAT Customer','Alice','13000000000','SZ',1,?,?)").run(now, now);
     db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES('uat-s','SUAT','UAT Supplier','Bob','13100000000','DG',1,?,?)").run(now, now);

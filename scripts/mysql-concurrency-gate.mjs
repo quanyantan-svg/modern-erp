@@ -6,7 +6,7 @@ if (missing.length || process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
   console.error(`MYSQL CONCURRENCY TEST ENVIRONMENT = UNAVAILABLE${missing.length ? ` (${missing.join(', ')} missing)` : ' (ERP_MYSQL_TEST_ALLOW_RESET=true required)'}`);
   process.exit(2);
 }
-if (!/(?:test|phase7b|disposable)/i.test(process.env.ERP_DB_NAME)) {
+if (!/(?:test|phase7[bc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
   console.error(`Refusing MySQL concurrency tests for non-disposable database: ${process.env.ERP_DB_NAME}`);
   process.exit(2);
 }

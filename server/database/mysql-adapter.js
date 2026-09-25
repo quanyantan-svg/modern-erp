@@ -1,5 +1,13 @@
 import { Worker } from 'node:worker_threads';
+import { createHash } from 'node:crypto';
 import { captureSqliteSnapshot, bootstrapMySql } from './mysql-schema.js';
+import { createStructuredLogger, safeSqlLabel } from '../lib/logger.js';
+import {
+  MYSQL_RESPONSE_HEADER_BYTES,
+  abandonWorkerRequest,
+  beginWorkerRequest,
+  readWorkerResponse,
+} from './mysql-worker-protocol.js';
 
 const RESPONSE_BYTES = 16 * 1024 * 1024;
 
@@ -69,11 +77,26 @@ class MySqlStatement {
 }
 
 export class MySqlSyncAdapter {
-  constructor(config) {
+  constructor(config, { workerUrl = new URL('./mysql-worker.js', import.meta.url), requestTimeoutMs = 60_000 } = {}) {
     this.dialect = 'mysql';
     this.isTransaction = false;
     this.closed = false;
-    this.worker = new Worker(new URL('./mysql-worker.js', import.meta.url), {
+    this.requestId = 0;
+    this.requestTimeoutMs = requestTimeoutMs;
+    const configuredSlowQueryMs = Number(process.env.SLOW_QUERY_MS || 500);
+    this.slowQueryMs = Number.isSafeInteger(configuredSlowQueryMs) && configuredSlowQueryMs >= 1 && configuredSlowQueryMs <= 300_000
+      ? configuredSlowQueryMs : 500;
+    this.logger = createStructuredLogger();
+    // One response buffer per adapter, reused across every _request call.
+    // Allocating a fresh large SharedArrayBuffer per call fragmented
+    // V8's ArrayBuffer pool and surfaced as "Array buffer allocation failed"
+    // under the 20-writer Phase 7C benchmark (real run: 224 otherUnclassified +
+    // 38 retryExhausted at 20 writers). Reusing the buffer keeps the same
+    // truncation cap and synchronous Atomics.wait/notify contract. The small
+    // header also carries request generations so late responses are discarded.
+    this.responseBuffer = new SharedArrayBuffer(MYSQL_RESPONSE_HEADER_BYTES + RESPONSE_BYTES);
+    this.responseState = beginWorkerRequest(this.responseBuffer, 0);
+    this.worker = new Worker(workerUrl, {
       type: 'module',
       // Test runners and hosting shells inject flags that Worker rejects.
       // The database worker needs no parent process flags.
@@ -84,15 +107,19 @@ export class MySqlSyncAdapter {
 
   _request(action, payload = {}) {
     if (this.closed && action !== 'close') throw new Error('MySQL database is closed');
-    const shared = new SharedArrayBuffer(8 + RESPONSE_BYTES);
-    const state = new Int32Array(shared, 0, 2);
-    this.worker.postMessage({ action, payload, shared });
-    const wait = Atomics.wait(state, 0, 0, 60_000);
-    if (wait === 'timed-out') throw new Error(`MySQL ${action} timed out after 60 seconds`);
-    const length = Atomics.load(state, 1);
-    const decoded = new TextDecoder().decode(new Uint8Array(shared, 8, length));
-    const response = decoded ? JSON.parse(decoded) : {};
-    if (Atomics.load(state, 0) === 2) {
+    this.requestId = this.requestId >= 0x7ffffffe ? 1 : this.requestId + 1;
+    const requestId = this.requestId;
+    const state = beginWorkerRequest(this.responseBuffer, requestId);
+    this.worker.postMessage({ action, payload, shared: this.responseBuffer, requestId });
+    const wait = Atomics.wait(state, 0, 0, this.requestTimeoutMs);
+    if (wait === 'timed-out') {
+      abandonWorkerRequest(state, requestId);
+      throw new Error(`MySQL ${action} timed out after ${this.requestTimeoutMs / 1000} seconds`);
+    }
+    const decoded = readWorkerResponse(this.responseBuffer, requestId);
+    if (!decoded) throw new Error(`MySQL ${action} returned an invalid response generation`);
+    const response = decoded.value;
+    if (decoded.status === 2) {
       const error = new Error(response.message || 'MySQL operation failed');
       Object.assign(error, response);
       throw error;
@@ -101,7 +128,19 @@ export class MySqlSyncAdapter {
   }
 
   _query(sql, params) {
-    return this._request('query', { sql, params });
+    const startedAt = performance.now();
+    try {
+      return this._request('query', { sql, params });
+    } finally {
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+      if (Number.isFinite(this.slowQueryMs) && durationMs >= this.slowQueryMs) {
+        this.logger.warn('slow_query', {
+          durationMs,
+          statement: safeSqlLabel(sql),
+          fingerprint: createHash('sha256').update(String(sql).replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 16),
+        });
+      }
+    }
   }
 
   prepare(sql) {

@@ -102,6 +102,7 @@ function execute(command) {
     return transaction(db, () => {
       const state = db.prepare('SELECT status FROM phase7b_concurrency_resources WHERE id=? FOR UPDATE').get(command.resourceId);
       if (state?.status !== 'ACTIVE') return { committed: false, reason: 'NOT_ACTIVE' };
+      if (command.delayMs) sleep(command.delayMs);
       db.prepare('UPDATE phase7b_concurrency_resources SET used_quantity=used_quantity+1,version=version+1 WHERE id=?').run(command.resourceId);
       return { committed: true };
     });
@@ -118,7 +119,9 @@ lines.on('line', (line) => {
     process.stdout.write(`${JSON.stringify({ id: request.id, ok: true, result })}\n`);
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ id: request?.id, ok: false, error: {
-      message: error.message, code: error.code, transactionRetryExhausted: error.transactionRetryExhausted || false,
+      message: error.message, code: error.code,
+      errno: error.errno, sqlState: error.sqlState, sqlMessage: error.sqlMessage,
+      transactionRetryExhausted: error.transactionRetryExhausted || false,
       transactionAttempts: error.transactionAttempts,
     } })}\n`);
   }

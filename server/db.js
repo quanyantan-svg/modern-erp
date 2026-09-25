@@ -19,6 +19,7 @@ import { migrateV13Phase6BTraceabilityQuality } from './migrations/v13-phase6b-t
 import { migrateV13Phase6CManufacturingExecution } from './migrations/v13-phase6c-manufacturing-execution.js';
 import { migrateV13Phase6DFinancialInventory } from './migrations/v13-phase6d-financial-inventory.js';
 import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-commercial-golive.js';
+import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 
 export const PERMISSIONS = [
@@ -353,6 +354,7 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6CManufacturingExecution(db);
   migrateV13Phase6DFinancialInventory(db);
   migrateV13Phase6ECommercialGoLive(db);
+  migrateV13Phase7cPerformance(db);
   reconcileSettlementSubledgers(db);
 
   return db;

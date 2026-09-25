@@ -1,5 +1,5 @@
 ﻿import { existsSync, readFileSync, statSync } from 'node:fs';
-import { extname, join, normalize } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export class HttpError extends Error {
   constructor(status, message, details) {
@@ -22,17 +22,30 @@ export function allowAny(actor, permissions) {
 export async function readJson(req) {
   const chunks = [];
   let size = 0;
+  const configuredLimit = Number(process.env.HTTP_JSON_LIMIT_BYTES || 1_000_000);
+  const limit = Number.isSafeInteger(configuredLimit) && configuredLimit >= 1_024 && configuredLimit <= 10_000_000
+    ? configuredLimit : 1_000_000;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1_000_000) throw new HttpError(413, '请求内容过大');
+    if (size > limit) throw new HttpError(413, '请求内容过大');
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  if (!contentType.startsWith('application/json')) throw new HttpError(415, '请求内容类型必须为 application/json');
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new HttpError(400, 'JSON 请求体必须为对象');
+    return parsed;
   } catch {
     throw new HttpError(400, '请求不是有效的 JSON');
   }
+}
+
+export function assertAllowedFields(body, allowed) {
+  const accepted = new Set(allowed);
+  const unexpected = Object.keys(body).filter((key) => !accepted.has(key));
+  if (unexpected.length) throw new HttpError(400, `请求包含不支持的字段: ${unexpected.join(', ')}`);
 }
 
 export function requiredText(value, label, maxLength) {
@@ -72,14 +85,18 @@ export function setSecurityHeaders(res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; font-src 'self' https://fonts.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'");
+  res.removeHeader('X-Powered-By');
 }
 
 export function serveStatic(res, pathname, distDir) {
   if (!distDir || !existsSync(distDir)) throw new HttpError(404, '前端尚未构建，请先运行 pnpm build');
   const requested = pathname === '/' ? 'index.html' : pathname.slice(1);
-  let file = normalize(join(distDir, requested));
-  if (!file.startsWith(normalize(distDir)) || !existsSync(file) || statSync(file).isDirectory()) {
+  const root = resolve(distDir);
+  let file = resolve(root, requested);
+  const traversal = relative(root, file);
+  if (traversal.startsWith('..') || isAbsolute(traversal) || !existsSync(file) || statSync(file).isDirectory()) {
     file = join(distDir, 'index.html');
   }
   const types = {

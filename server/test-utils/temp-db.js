@@ -78,7 +78,7 @@ export function createTempDb({
       throw new Error('MySQL integration tests require ERP_MYSQL_TEST_ALLOW_RESET=true');
     }
     const config = resolveDatabaseConfig({ backend: 'mysql' });
-    if (!/(?:test|phase7[ab]|disposable)/i.test(config.database)) {
+    if (!/(?:test|phase7[abc]|disposable)/i.test(config.database)) {
       throw new Error(`Refusing MySQL test reset for non-test database: ${config.database}`);
     }
     const previousSeed = process.env.ERP_SEED_DEMO;

@@ -6,7 +6,7 @@
 | 云服务器 | 腾讯云轻量应用服务器 Lighthouse |
 | 操作系统 | Ubuntu 22.04 LTS |
 | 数据库 | SQLite 3（应用内置，无需独立服务） |
-| 后端 | Node.js 22 LTS |
+| 后端 | Node.js 22.23.2 LTS |
 | 前端托管 | Nginx |
 | 部署方式 | Git代码拉取 |
 | 进程管理 | systemd |

@@ -1,24 +1,8 @@
 import { parentPort } from 'node:worker_threads';
 import mysql from 'mysql2/promise';
+import { encodeWorkerResponse } from './mysql-worker-protocol.js';
 
 let connection;
-
-function encode(shared, value, status = 1) {
-  const state = new Int32Array(shared, 0, 2);
-  const output = new Uint8Array(shared, 8);
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  if (bytes.length > output.length) {
-    const fallback = new TextEncoder().encode(JSON.stringify({ message: `MySQL adapter response exceeded ${output.length} bytes` }));
-    output.set(fallback.subarray(0, output.length));
-    Atomics.store(state, 1, Math.min(fallback.length, output.length));
-    Atomics.store(state, 0, 2);
-  } else {
-    output.set(bytes);
-    Atomics.store(state, 1, bytes.length);
-    Atomics.store(state, 0, status);
-  }
-  Atomics.notify(state, 0);
-}
 
 function serializableError(error) {
   return {
@@ -31,7 +15,7 @@ function serializableError(error) {
   };
 }
 
-parentPort.on('message', async ({ action, payload, shared }) => {
+parentPort.on('message', async ({ action, payload, shared, requestId }) => {
   try {
     if (action === 'connect') {
       connection = await mysql.createConnection({
@@ -48,14 +32,14 @@ parentPort.on('message', async ({ action, payload, shared }) => {
       // explicit row locks protect every mutable business invariant.
       await connection.query('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED');
       await connection.query('SET SESSION innodb_lock_wait_timeout = 2');
-      encode(shared, { connected: true });
+      encodeWorkerResponse(shared, requestId, { connected: true });
       return;
     }
     if (!connection) throw new Error('MySQL adapter is not connected');
     if (action === 'query') {
       const [rows] = await connection.query(payload.sql, payload.params || []);
-      if (Array.isArray(rows)) encode(shared, { rows });
-      else encode(shared, { result: { changes: rows.affectedRows || 0, lastInsertRowid: rows.insertId || 0 } });
+      if (Array.isArray(rows)) encodeWorkerResponse(shared, requestId, { rows });
+      else encodeWorkerResponse(shared, requestId, { result: { changes: rows.affectedRows || 0, lastInsertRowid: rows.insertId || 0 } });
       return;
     }
     if (action === 'allocateSequence') {
@@ -69,22 +53,22 @@ parentPort.on('message', async ({ action, payload, shared }) => {
         'SELECT next_value-1 allocated FROM document_sequences WHERE document_type=? AND period_key=?',
         [payload.documentType, payload.periodKey],
       );
-      encode(shared, { row: rows[0] });
+      encodeWorkerResponse(shared, requestId, { row: rows[0] });
       return;
     }
     if (action === 'exec') {
       await connection.query(payload.sql);
-      encode(shared, { ok: true });
+      encodeWorkerResponse(shared, requestId, { ok: true });
       return;
     }
     if (action === 'close') {
       await connection.end();
       connection = undefined;
-      encode(shared, { closed: true });
+      encodeWorkerResponse(shared, requestId, { closed: true });
       return;
     }
     throw new Error(`Unknown MySQL worker action: ${action}`);
   } catch (error) {
-    encode(shared, serializableError(error), 2);
+    encodeWorkerResponse(shared, requestId, serializableError(error), 2);
   }
 });

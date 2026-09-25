@@ -1,5 +1,6 @@
 ﻿import { createHash, randomBytes } from 'node:crypto';
 import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
+import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import {
   createContact, createFollowup, createProject, createProjectTask, createSalesActivity,
@@ -109,6 +110,7 @@ import {
 import { autoBillReceipt, autoInvoiceDelivery, commercialApiHandler, quantitySnapshot, rational, roundRational } from './modules/commercial-golive.js';
 import {
   HttpError,
+  assertAllowedFields,
   allow,
   allowAny,
   bearer,
@@ -120,48 +122,80 @@ import {
   serveStatic,
   setSecurityHeaders,
 } from './lib/http.js';
+import { createStructuredLogger } from './lib/logger.js';
 import { deleteDraftDocument, deleteMasterRecord } from './modules/data-lifecycle.js';
 import {
   archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, lifecycleArchiveFilter,
   listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
 
-const SESSION_HOURS = Number(process.env.SESSION_HOURS || 12);
-const LOGIN_MAX_ATTEMPTS = Number(process.env.LOGIN_MAX_ATTEMPTS || 5);
-const LOGIN_LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
-const TOKEN_LENGTH = Number(process.env.TOKEN_LENGTH || 32);
+function boundedInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value ?? fallback);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+const SESSION_HOURS = boundedInteger(process.env.SESSION_HOURS, 12, 1, 168);
+const LOGIN_MAX_ATTEMPTS = boundedInteger(process.env.LOGIN_MAX_ATTEMPTS, 5, 3, 20);
+const LOGIN_LOCK_MINUTES = boundedInteger(process.env.LOGIN_LOCK_MINUTES, 15, 1, 1_440);
+const TOKEN_LENGTH = boundedInteger(process.env.TOKEN_LENGTH, 32, 32, 64);
 const STATUS_LABELS = { DRAFT: '草稿', SUBMITTED: '待审核', APPROVED: '已审核', REJECTED: '已驳回' };
 const PURCHASE_STATUS_LABELS = STATUS_LABELS;
 
 export function createApp(db, options = {}) {
   const distDir = options.distDir;
+  const logger = options.logger === undefined ? null : options.logger;
+  const slowRequestMs = boundedInteger(options.slowRequestMs ?? process.env.SLOW_REQUEST_MS, 1_000, 10, 300_000);
 
   return async function app(req, res) {
+    const startedAt = performance.now();
+    const suppliedRequestId = String(req.headers['x-request-id'] || '');
+    const requestId = /^[A-Za-z0-9._-]{8,100}$/.test(suppliedRequestId) ? suppliedRequestId : randomUUID();
+    req.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
     setSecurityHeaders(res);
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+    res.once('finish', () => {
+      if (!logger) return;
+      const durationMs = Math.round((performance.now() - startedAt) * 100) / 100;
+      const fields = { requestId, method: req.method, route: url.pathname, status: res.statusCode, durationMs, userId: req.actor?.id ?? null };
+      if (durationMs >= slowRequestMs) logger.warn('slow_request', fields);
+      else if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) logger.info('mutation_request', fields);
+    });
     if (req.method === 'OPTIONS') return send(res, 204, null);
 
-    const url = new URL(req.url, 'http://localhost');
     try {
       if (url.pathname.startsWith('/api/')) {
         return await handleApi(db, req, res, url);
       }
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
-      if (error instanceof HttpError) return send(res, error.status, { error: error.message, details: error.details });
-      if (String(error.message).includes('UNIQUE constraint failed')) return send(res, 409, { error: '编号或账号已存在，请更换后重试' });
-      console.error(error);
-      return send(res, 500, { error: '服务器内部错误' });
+      if (error instanceof HttpError) return send(res, error.status, { error: error.message, details: error.details, requestId });
+      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message))) return send(res, 409, { error: '编号或账号已存在，请更换后重试', requestId });
+      (logger || createStructuredLogger()).error('unhandled_request_error', {
+        requestId, method: req.method, route: url.pathname, userId: req.actor?.id ?? null,
+        category: error?.code || error?.name || 'Error', stack: error?.stack || String(error),
+      });
+      return send(res, 500, { error: '服务器内部错误', requestId });
     }
   };
 }
 
 async function handleApi(db, req, res, url) {
   const { pathname } = url;
-  if (req.method === 'GET' && pathname === '/api/health') return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
+  if (req.method === 'GET' && (pathname === '/api/health' || pathname === '/api/health/live')) return send(res, 200, { status: 'ok', service: 'modern-erp-api' });
+  if (req.method === 'GET' && pathname === '/api/health/ready') {
+    try {
+      db.prepare('SELECT 1 ready').get();
+      return send(res, 200, { status: 'ready', database: 'reachable' });
+    } catch {
+      return send(res, 503, { status: 'not_ready', database: 'unreachable', requestId: req.requestId });
+    }
+  }
   if (req.method === 'POST' && pathname === '/api/auth/login') return login(db, req, res);
 
   if (req.method === 'POST' && pathname === '/api/auth/logout') return logout(db, req, res);
   const actor = authenticate(db, req);
+  req.actor = actor;
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
   if (req.method === 'GET' && pathname === '/api/system-health') return systemHealthHandler(db, res, actor, url);
@@ -770,26 +804,27 @@ async function handleApi(db, req, res, url) {
 async function login(db, req, res) {
   const ip = getClientIp(req);
   const now = new Date();
+  const body = await readJson(req);
+  assertAllowedFields(body, ['username', 'password']);
+  const username = requiredText(body.username, '用户名', 50).toLowerCase();
+  const password = requiredText(body.password, '密码', 100);
   
   // Check if account is locked due to too many failed attempts
   const lockedAttempt = db.prepare(`
     SELECT * FROM login_attempts 
     WHERE username = ? AND success = 0 AND locked_until > ?
     ORDER BY updated_at DESC LIMIT 1
-  `).get(req.body?.username || '', now.toISOString());
+  `).get(username, now.toISOString());
   
   if (lockedAttempt) {
     const remainingMinutes = Math.ceil((new Date(lockedAttempt.locked_until) - now) / 60000);
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((new Date(lockedAttempt.locked_until) - now) / 1000))));
     return send(res, 429, { 
       error: '登录失败次数过多，请稍后再试',
       code: 'ACCOUNT_LOCKED',
       retryAfter: remainingMinutes
     });
   }
-  
-  const body = await readJson(req);
-  const username = requiredText(body.username, '用户名', 50);
-  const password = requiredText(body.password, '密码', 100);
   
   const row = db.prepare(`
     SELECT u.*, r.name role_name, r.code role_code FROM users u JOIN roles r ON r.id=u.role_id
@@ -984,6 +1019,7 @@ function listProjectManagerCandidates(db, res, actor) {
 async function createUser(db, req, res, actor) {
   allow(actor, 'USERS_MANAGE');
   const body = await readJson(req);
+  assertAllowedFields(body, ['username', 'displayName', 'password', 'roleId']);
   const username = requiredCode(body.username, '登录账号').toLowerCase();
   const displayName = requiredText(body.displayName, '用户姓名', 40);
   const passwordText = requiredText(body.password, '初始密码', 100);
@@ -1002,9 +1038,11 @@ async function updateUser(db, req, res, actor, userId) {
   const current = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
   if (!current) throw new HttpError(404, '用户不存在');
   const body = await readJson(req);
+  assertAllowedFields(body, ['displayName', 'password', 'roleId', 'active']);
   const displayName = requiredText(body.displayName ?? current.display_name, '用户姓名', 40);
   const roleId = body.roleId ?? current.role_id;
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
+  if (body.active !== undefined && typeof body.active !== 'boolean') throw new HttpError(400, '启用状态必须为布尔值');
+  const active = body.active === undefined ? current.active : body.active ? 1 : 0;
   ensureRole(db, roleId);
   if (userId === actor.id && !active) throw new HttpError(400, '不能停用当前登录账号');
   transaction(db, () => {
@@ -1013,7 +1051,9 @@ async function updateUser(db, req, res, actor, userId) {
       if (String(body.password).length < 6) throw new HttpError(400, '密码至少需要 6 位');
       const password = hashPassword(String(body.password));
       db.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').run(password.hash, password.salt, userId);
-      if (userId !== actor.id) db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+    }
+    if (userId !== actor.id && (body.password || roleId !== current.role_id || active !== current.active)) {
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
     }
     audit(db, actor.id, 'UPDATE', 'USER', userId, displayName);
   });
@@ -4045,24 +4085,52 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
 
 // ============ Inventory Transactions ============
 
-function listInventoryTransactions(db, res, actor, url) {
-  allow(actor, 'INVENTORY_VIEW');
+function nextIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) return null;
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+export function buildInventoryTransactionsQuery(url) {
   const warehouseId = url.searchParams.get('warehouse');
   const productId = url.searchParams.get('product');
   const direction = url.searchParams.get('direction');
   const sourceType = url.searchParams.get('type');
   const startDate = url.searchParams.get('startDate');
   const endDate = url.searchParams.get('endDate');
-  const search = `%${url.searchParams.get('search') || ''}%`;
+  const rawSearch = (url.searchParams.get('search') || '').trim();
+  // Phase 7C EXPLAIN evidence (scripts/mysql-phase7c-slow-query-diagnostics.mjs):
+  // a non-empty search term MUST still use LIKE '%term%'; an empty/missing
+  // search term MUST NOT generate LIKE '%%' predicates that defeat the
+  // existing index on products.code and force a 600K-row scan.
+  const search = rawSearch ? `%${rawSearch}%` : '';
   let where = []; let params = [];
-  where.push('(t.source_no LIKE ? OR p.code LIKE ? OR p.name LIKE ?)'); params.push(search, search, search);
+  if (rawSearch) {
+    where.push('(t.source_no LIKE ? OR p.code LIKE ? OR p.name LIKE ?)');
+    params.push(search, search, search);
+  }
   if (warehouseId) { where.push('t.warehouse_id = ?'); params.push(warehouseId); }
   if (productId) { where.push('t.product_id = ?'); params.push(productId); }
   if (['IN', 'OUT'].includes(direction)) { where.push('t.direction = ?'); params.push(direction); }
   if (sourceType) { where.push('t.source_type = ?'); params.push(sourceType); }
-  if (startDate) { where.push('DATE(t.created_at) >= ?'); params.push(startDate); }
-  if (endDate) { where.push('DATE(t.created_at) <= ?'); params.push(endDate); }
+  if (startDate) {
+    where.push(/^\d{4}-\d{2}-\d{2}$/.test(startDate) ? 't.created_at >= ?' : 'DATE(t.created_at) >= ?');
+    params.push(startDate);
+  }
+  if (endDate) {
+    const exclusiveEnd = nextIsoDate(endDate);
+    where.push(exclusiveEnd ? 't.created_at < ?' : 'DATE(t.created_at) <= ?');
+    params.push(exclusiveEnd || endDate);
+  }
   const sql = "SELECT t.*,t.source_type tx_type,t.source_no ref_no,CASE WHEN t.direction='OUT' THEN -t.quantity_change ELSE t.quantity_change END quantity,t.balance_after balance,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id " + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
+  return { sql, params };
+}
+
+function listInventoryTransactions(db, res, actor, url) {
+  allow(actor, 'INVENTORY_VIEW');
+  const { sql, params } = buildInventoryTransactionsQuery(url);
   const inventoryTransactions = db.prepare(sql).all(...params);
   return send(res, 200, { inventoryTransactions, transactions: inventoryTransactions });
 }
