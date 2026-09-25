@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 dist/
 data/
 *.db
@@ -10,3 +11,4 @@ data/
 backups/
 .claude/settings.local.json
 .tmp/
+example/

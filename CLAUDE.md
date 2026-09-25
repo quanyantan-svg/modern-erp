@@ -1,39 +1,11 @@
 @AGENTS.md
 
-# Claude Code Project Instructions
+# Claude Code Project Entry
 
-This is the Modern ERP long-running refactor project.
+AGENTS.md 是本仓库唯一权威的开发与 AI 治理政策。Claude 必须在执行项目任务前完整读取并遵守它；本文件不复制项目治理规则。
 
-Before every development task:
+Claude 特定说明：
 
-1. Read completely:
-   - README.md
-   - document.md
-   - solution.md
-   - docs/00-project-status.md
-   - docs/02-feature-matrix.md
-
-2. Read the latest 3 existing daily logs under log/.
-
-3. Inspect:
-   - git status
-   - current branch
-   - git log --oneline -10
-
-4. Follow the project's Modern ERP Refactor workflow.
-
-5. Treat repository files and Git history as the source of truth, not previous chat context.
-
-6. Work on one logical task at a time.
-
-7. Verification before implementation for PARTIAL / NOT_VERIFIED features.
-
-8. Do not modify unrelated modules.
-
-9. Do not mark a feature IMPLEMENTED until focused tests and regression tests pass.
-
-10. Do not commit automatically unless explicitly instructed.
-
-11. Production deployment must come from Git. Never directly edit production business code.
-
-12. Do not introduce PostgreSQL, Redis, Express/Koa, Docker, PM2, microservices, or other infrastructure without explicit approval.
+- 仓库文件与 Git 历史优先于先前对话记忆。
+- 工具权限白名单属于本机配置，不扩大任务授权，也不覆盖 AGENTS.md 的安全边界。
+- 生产环境、外部服务、push、tag、部署、数据库重置和 Git 历史重写仍需用户明确批准。

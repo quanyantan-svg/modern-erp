@@ -1,977 +1,409 @@
-# Modern ERP 技术实现文档
+# Modern ERP 当前技术设计与实现
 
-## 1. 文档目的
+## 1. 范围与设计原则
 
-本文档说明 Modern ERP 如何实现，包括系统结构、模块职责、数据迁移、核心业务规则和验证方式。功能范围与验收标准见 [document.md](./document.md)，运行方式见 [README.md](./README.md)。
+本文档是 Modern ERP 唯一当前技术设计和实现参考，描述 V1.3 的架构、模块责任、数据关系、事务、安全、测试和运行边界。功能合同见 document.md；docs/ 下的阶段文档和审计属于支持性或历史证据。
 
-## 2. 总体架构
+设计原则：
 
-```text
-React 页面
-    │ JSON / HTTP
-    ▼
-Node.js API 路由与后端权限校验
-    │
-    ├─ 业务处理器与状态转换
-    ├─ 审计记录
-    └─ SQLite 事务与迁移
-```
+- 以实际代码和数据库约束为权威，旧设计与实现冲突时以当前实现为准。
+- HTTP 层负责解析、认证、路由和响应；领域模块负责业务不变量；数据库事务负责原子性。
+- 单据、库存、身份、价值、子账、总账、审计和幂等结果共享业务事务。
+- 前端不作为授权或金额计算权威。
+- SQLite 与 MySQL 8 实现相同业务接口，但允许数据库适配层采用不同并发机制。
+- 历史经济事件不可由启动迁移或 GET/CHECK 请求静默修复。
+- 先保证正确性，再以可验证证据优化吞吐。
 
-前端负责交互和展示，不直接访问数据库，也不作为权限与金额计算的可信来源。后端完成认证、授权、输入校验、业务计算和事务控制。
+## 2. 运行与部署架构
 
-## 3. 代码结构与职责
+运行链路：
 
-### 3.1 前端
+    Browser
+      → Nginx :80/:443 policy
+      → Node.js 22.23.2 on 127.0.0.1:3001
+      → native HTTP router
+      → SQLite or MySQL 8 backend
 
-| 路径 | 职责 |
-| --- | --- |
-| `src/main.jsx` | React 应用入口 |
-| `src/App.jsx` | 登录态恢复、导航、页面装配和全局提示 |
-| `src/api.js` | Token 管理、统一请求和未认证事件 |
-| `src/components/ui.jsx` | 表格、弹窗、工具栏、状态和空数据等公共组件 |
-| `src/pages/master-data.jsx` | 工作台、基础资料、订单和用户角色页面 |
-| `src/pages/logistics-finance.jsx` | 入出库、退货、库存流水和账款页面 |
-| `src/pages/accounting.jsx` | 会计凭证页面 |
-| `src/pages/treasury-cost.jsx` | 出纳、银行、票据、资产和成本页面 |
-| `src/pages/manufacturing.jsx` | BOM、MRP 和生产工单页面 |
-| `src/pages/quality.jsx` | IQC 和 OQC 页面 |
-| `src/pages/crm.jsx` | 联系人、跟进和销售活动页面 |
-| `src/pages/projects-workflow.jsx` | 项目、任务、工时、通知和审批页面 |
+前端由 Vite 构建到 dist/。生产 Node 进程同时提供 API、静态资源和 SPA fallback；当前 Nginx 配置使用单一 location / 反向代理，不再单独实现第二套静态/API 路由。
 
-页面通过 `api()` 访问后端。权限菜单由用户权限决定，但真正的授权仍由 API 执行。
+主服务由 deploy/systemd/modern-erp.service 管理，环境来自 /etc/modern-erp/env。备份 timer 调用 SQLite 备份脚本。项目不使用 Express、Koa、PM2、Docker 或 Redis。
 
-### 3.2 后端
+数据库后端由 ERP_DB_BACKEND 选择：
 
-| 路径 | 职责 |
-| --- | --- |
-| `server/index.js` | 创建数据库和 HTTP 服务，处理优雅关闭 |
-| `server/app.js` | HTTP 应用入口、认证和主要 API 路由装配 |
-| `server/lib/http.js` | JSON 解析、响应、安全头、权限辅助和静态资源服务 |
-| `server/lib/audit.js` | 统一写入审计日志 |
-| `server/modules/business.js` | CRM、项目、任务、工时、通知和工作流处理器 |
-| `server/modules/extended.js` | 财务扩展、MRP、质量、OA、预警和报表处理器 |
-| `server/db.js` | SQLite 连接、基础表迁移、兼容列升级和种子数据 |
-| `server/migrations/extended-schema.js` | 扩展业务表的幂等迁移 |
-| `server/reset-data.js` | 删除本地演示数据库 |
+- sqlite：本地开发、测试和兼容运行，路径由 ERP_DB_PATH 指定。
+- mysql：MySQL 8 一等运行路径，需要 host、port、database、user、password 和可选 SSL。
 
-`server/app.js` 仍包含部分基础业务处理器。后续继续重构时，应逐步迁移到按领域划分的模块，避免重新形成单文件聚集。
+MySQL 配置不完整时在连接前 fail closed。
 
-## 4. 请求处理流程
+## 3. 仓库结构与入口
 
-```text
-请求进入
-  ├─ OPTIONS：直接返回 204
-  ├─ /api/auth/login：校验账号密码并签发 Token
-  ├─ 其他 /api/*：认证 Token → 构造用户权限 → 分发业务处理器
-  └─ 非 API：从 dist/ 提供静态文件或回退到 index.html
-```
+| 路径 | 责任 |
+|---|---|
+| src/main.jsx | React 启动入口 |
+| src/App.jsx | 应用壳、权限化导航和页面选择 |
+| src/api.js | Bearer Token、请求封装和安全错误映射 |
+| src/pages/ | 业务页面 |
+| src/components/ | 通用与移动端组件 |
+| src/lib/ | 金额、状态和产品文案 |
+| server/index.js | 配置数据库、创建 HTTP server、优雅关闭 |
+| server/app.js | 原生 HTTP 路由、认证分发及仍未拆出的核心 handler |
+| server/db.js | SQLite schema/seed、权限、共享 transaction 和数据库创建 |
+| server/modules/ | 领域服务、工作流和 reconciliation |
+| server/database/ | MySQL 配置、同步 adapter、worker、protocol 和 schema bootstrap |
+| server/migrations/ | 按业务阶段组织的增量迁移 |
+| server/lib/ | HTTP 校验/响应、审计和结构化日志 |
+| server/*.test.js | 单元、合同、回归和集成测试 |
+| scripts/ | 开发、管理、MySQL gate、诊断和验收工具 |
+| deploy/ | Nginx 与 systemd 配置 |
 
-异常处理规则：
+server/app.js 仍是较大的集中路由文件。新增复杂领域逻辑应优先进入 server/modules/，但本阶段不为目录美观迁移既有 handler。
 
-- 业务输入错误返回 400；
-- 未认证返回 401；
-- 无权限返回 403；
-- 资源不存在返回 404；
-- 唯一键冲突返回 409；
-- 未预期错误记录到服务端并返回 500。
+## 4. HTTP 请求生命周期
 
-## 5. 认证、权限与审计
+createApp(db, options) 创建原生 HTTP request handler。典型流程：
 
-### 5.1 密码与会话
+1. 为请求生成或验证 X-Request-Id。
+2. 设置 CSP、nosniff、DENY frame、no-referrer、Permissions-Policy 和 API no-store 等响应头。
+3. 解析 URL、method 和 Bearer Token。
+4. 对受保护 API 加载 session、用户、角色和权限；过期、注销或禁用用户会话被拒绝。
+5. 路由到 server/app.js handler 或 server/modules/ 领域 handler。
+6. readJson 强制 application/json、对象 body 和大小上限；敏感端点使用字段 allowlist。
+7. allow/allowAny 校验精确权限。
+8. handler 校验输入、状态和来源，并在需要时进入 transaction。
+9. HttpError 转换为受控业务响应；未知错误记录 request ID 和安全上下文，客户端只收到通用错误和 request ID。
+10. 非 API GET 在 production 从 dist 提供静态文件，并通过路径包含检查防止越界；未知 SPA route 回退 index.html。
 
-- 密码使用 scrypt 和随机盐生成哈希；
-- 登录后生成随机 Token，数据库只保存 SHA-256 Token 哈希；
-- 每次受保护请求根据 Token 查询用户、角色和权限；
-- 退出时删除对应会话记录。
+前端可隐藏无权入口，但手写 API 请求仍会由后端返回 401/403。
 
-### 5.2 RBAC
+## 5. 认证、RBAC、SOD 与审计
 
-```text
-用户 → 角色 → 角色权限关联 → 权限代码
-```
+### 5.1 会话与密码
 
-`allow()` 校验单项权限，`allowAny()` 校验候选权限集合。新增接口必须在处理器内部声明所需权限，不能只依赖前端隐藏菜单。
+- 登录 Token 使用 crypto.randomBytes 生成，数据库只保存 SHA-256 digest。
+- 密码使用随机盐和 Node scrypt。
+- SESSION_HOURS 控制绝对有效期。
+- 登录失败按标准化用户名累计并锁定；锁定响应包含 Retry-After。
+- logout 删除 session；用户密码、角色或 active 变化会撤销已有 session。
+- Authorization、Cookie、密码、Token、secret 和数据库密码字段由 logger 递归脱敏。
+
+### 5.2 权限模型
+
+users → roles → role_permissions。五个正常角色由 server/db.js seedSchema 建立，ADMIN 获得注册权限全集，其他角色使用显式权限列表。
+
+canonical 审批中心由 server/modules/approvals.js 维护五个文档适配器。审批查询根据 actor 权限、创建人和状态组合过滤；具体状态变化仍由对应领域 handler 执行。
+
+职责分离：
+
+- SALES 创建/提交销售、采购和请购；
+- REVIEWER 审核销售、采购、请购和库存盘点；
+- WAREHOUSE 执行实物流；
+- ACCOUNTING 处理子账、结算和手工凭证；
+- 当前五角色模型中 ADMIN 承担 VOUCHER_APPROVE，但 create/approve 同人仍被拒绝。
 
 ### 5.3 审计
 
-关键操作通过 `audit()` 写入操作用户、动作、实体类型、实体 ID、说明和时间。审计失败应使相关事务失败，避免业务成功但轨迹缺失。
+server/lib/audit.js 向 audit_logs 写入用户、动作、实体、实体 ID、摘要和时间。审计必须在关键业务事务中调用，使业务写入与审计一起提交或回滚。结构化运行日志与不可变业务审计是不同系统。
+
+## 6. 数据库抽象
+
+### 6.1 SQLite 路径
+
+createDatabase 使用 Node node:sqlite DatabaseSync，启用 foreign_keys，并运行基础 schema、兼容迁移和增量业务迁移。SQLite transaction() 发出 BEGIN IMMEDIATE，在单文件数据库写锁下执行工作，随后 COMMIT；异常时 ROLLBACK。
+
+SQLite 是完整回归和本地开发基线，不等于 SQLite-only 产品限制。生产环境默认不 seed demo 数据，除非显式 ERP_SEED_DEMO=true。
+
+### 6.2 MySQL adapter、worker 与 protocol
+
+resolveDatabaseConfig 校验 ERP_DB_BACKEND 和所有 MySQL 连接参数。createMySqlDatabase：
+
+1. 从 SQLite schema 创建兼容 snapshot；
+2. 创建 MySqlSyncAdapter；
+3. 由 mysql-schema.js 在 MySQL 中 bootstrap schema、索引、约束、迁移标记和 transaction gate；
+4. 失败时关闭 adapter，不返回半初始化连接。
+
+MySqlSyncAdapter 为保持既有同步 db.prepare().run/get/all 调用合同，把 mysql2 异步连接封装在 worker thread：
+
+- 主线程向 mysql-worker.js 发送 query、exec、sequence 或 close 请求；
+- 每个 adapter 复用一个 SharedArrayBuffer；
+- 主线程通过 Atomics.wait 同步等待；
+- protocol header 保存状态、长度、active request generation 和 response generation；
+- 请求超时后 abandon 当前 generation；
+- worker 只有在 generation 仍为 active 时才能发布和唤醒响应；
+- 迟到响应被丢弃，不能覆盖或唤醒后续请求；
+- 响应大小有固定上限，超限作为受控错误返回。
+
+这就是 MySQL timeout-generation protocol。它解决超时后旧响应污染下一请求的问题，不代表网络或数据库操作可以无限期阻塞。
 
-## 6. 数据库与迁移
+SQL adapter 只翻译项目明确使用的 SQLite 方言，例如 BEGIN IMMEDIATE、INSERT OR IGNORE、ON CONFLICT、部分 PRAGMA 查询和序列分配。新 SQL 必须同时验证两种方言，不能假设任意 SQLite 语法都可自动翻译。
 
-### 6.1 初始化顺序
+### 6.3 迁移
 
-`createDatabase()` 按以下顺序运行：
+- server/db.js 保留基础 schema、seed 和部分历史兼容迁移。
+- server/migrations/ 按生命周期、计划、路由、折让和 V1.3 Phase 1–7C 组织幂等迁移。
+- 迁移增加表、列、索引、角色权限和迁移标记，不为无法证明的旧来源、批次、序列号或成本伪造历史。
+- MySQL bootstrap 以 schema snapshot 和 MySQL 专用约束建立等价结构。
+- 应用启动不得执行业务余额自动修复；reconciliation 默认为 CHECK-only。
 
-1. 打开 SQLite 并启用外键；
-2. 启用 WAL 日志模式；
-3. 执行基础表迁移；
-4. 执行 `migrateExtendedSchema()`；
-5. 规范化历史成本费率表；
-6. 写入权限、角色、用户和基础演示数据；
-7. 为已有数据库补充兼容列并回填必要字段。
+## 7. 领域模块责任图
 
-迁移使用 `CREATE TABLE IF NOT EXISTS` 和受控列升级，保证全新数据库和已有开发数据库均可启动。
+| 模块 | 主要责任 |
+|---|---|
+| approvals.js | 五类审批查询与标准化详情 |
+| planning.js | Forecast、MRP、net-before-explosion、pegging |
+| planning-documents.js | 生产/采购指令、请购及下游生成 |
+| production-workflow.js | 制令、领退料、生产入库及冲销 |
+| manufacturing-execution.js | 工序快照、报工、良率、WIP/成本分析 |
+| authoritative-quality.js | IQC/OQC 单据、快照、PASS/FAIL/STALE |
+| quality-gates.js | QCP 解析、抽样、免检和物流门禁 |
+| traceability-quality.js | LOT/SERIAL 分配、HOLD/RELEASE、谱系和追溯 |
+| inventory-extensions.js | 盘点、调整、调拨、报废和存货期间 |
+| financial-inventory.js | 数量价值、valuation、WIP、GL 对账与 System Health |
+| settlement-core.js | AR/AP open-item 派生和缓存刷新 |
+| settlement.js | 收款、付款、分配与冲销 |
+| financial-controls.js | 预收预付、应用、退款、write-off、幂等和账户移动 |
+| discounts.js | 遗留折让合同及显式冲销 |
+| commercial-golive.js | Invoice/Bill、税、UOM、贷项、期初、导入导出和编号 |
+| lifecycle-engine.js / data-lifecycle.js | 安全草稿删除、引用检查和例外清理 |
+| decision-reports.js | 销售、采购、未履行和库存异动报告 |
+| extended.js / business.js | 财务扩展、CRM、项目/OA 和仍在迁移的领域能力 |
 
-### 6.2 主要数据域
+## 8. Canonical 来源图与调用关系
 
-| 数据域 | 代表性表 |
-| --- | --- |
-| 认证权限 | `users`、`roles`、`permissions`、`role_permissions`、`sessions` |
-| 基础资料 | `customers`、`suppliers`、`products`、`warehouses` |
-| 销售采购 | `sales_orders`、`sales_order_items`、`purchase_orders`、`purchase_order_items` |
-| 库存物流 | `inventory`、`inventory_transactions`、入出库与退货相关表 |
-| 财务 | `accounting_subjects`、`accounting_vouchers`、`accounting_entries`、应收应付相关表 |
-| 辅助核算 | `departments`、`aux_projects`、`currencies`、`voucher_words` |
-| 生产 | `boms`、`product_routings`、`product_routing_operations`、`production_orders`、`mrp_plans`；旧 `work_centers` / `routing_operations` 保留兼容 |
-| 质量 | `iqc_inspections`、`oqc_inspections`、`supplier_evaluations` |
-| 管理扩展 | `contacts`、`projects`、`project_tasks`、`notifications`、OA 与预警相关表 |
-| 审计 | `audit_logs` |
+### 8.1 商业和物流
 
-项目辅助核算使用 `aux_projects`，项目管理使用 `projects`，两者用途不同，不得混用。
+    Sales Order (approved)
+      → Sales Delivery draft + source lines
+      → OQC policy/snapshot/PASS
+      → confirm delivery
+         → inventory quantity + identity + valuation + COGS voucher
+      → Sales Invoice
+         → AR + revenue + output tax voucher
+      → collection / credit / refund / write-off / reversal
 
-## 7. 核心实现规则
+    Purchase Requisition (approved)
+      → Purchase Order (approved)
+      → Purchase Receipt draft + source lines
+      → IQC policy/snapshot/PASS
+      → confirm receipt
+         → inventory quantity + identity + valuation + GRNI voucher
+      → Supplier Bill + 3-way match
+         → AP + input tax + PPV/GRNI voucher
+      → payment / credit / refund / write-off / reversal
 
-### 7.1 单据与明细事务
+物流 handler 在事务内再次读取来源头、来源行和已确认累计量。来源价格由服务器继承，不接受仓库端重新定价。
 
-订单、入出库和其他包含明细的单据使用事务写入。后端重新读取货品价格或校验提交值，并重新计算总额，避免依赖前端结果。
+### 8.2 计划和制造
 
-### 7.2 状态机
+    Active Forecast + approved Sales Orders
+      → immutable MRP Run
+      → MAKE/BUY results + pegging
+      → Production/Purchase Instructions
+      → Production Order or Purchase Requisition
 
-销售和采购订单只允许规定的状态转换。状态处理器在修改前读取当前记录，校验状态、权限及驳回原因，并写入审计信息。
+    Production Order start
+      → BOM/Routing/Cost snapshots
+      → Material Issue/Return
+      → Operation Reports/Reversals
+      → Production Receipt/Reversal
+      → Completion + WIP/variance closure
 
-### 7.3 库存
+MRP 不产生库存或财务副作用。库存副作用只发生在仓库确认的执行单据；制令开工/完工本身不移动库存。
 
-库存以仓库和货品组合维护。采购入库增加库存，销售出库减少库存，退货和调拨根据方向写入对应流水。订单审核只表示业务约定，不直接改变实物库存。
+### 8.3 财务
 
-### 7.4 会计与金额
+    business source
+      → source-unique SYSTEM voucher
+      → accounting entries
+      → POSTED-only reports
 
-金额统一使用整数分保存。会计凭证包含凭证头和多条分录，业务凭证保留来源类型与来源 ID，便于追溯。财务期间由凭证日期派生并用于报表和期间控制。
+    Sales Invoice / Supplier Bill
+      → positive AR/AP source item
+      → immutable credits + confirmed allocations + reversals + write-off
+      → derived open amount/status cache
 
-### 7.5 MRP
+来源业务、子账、凭证和结算账户移动通过 source_type/source_id 及唯一约束连接。手工凭证使用独立 ENTERED/SUBMITTED/POSTED/REJECTED 工作流。
 
-MRP 根据需求来源读取销售订单明细，结合现有库存和计划收货计算净需求，生成 `mrp_plan_items`。计划执行时可将待处理建议转化为采购业务数据。
+## 9. 事务、锁与幂等
 
-### 7.6 供应商评分
+transaction(db, work) 是共享原子边界：
 
-综合评分计算规则：
+- SQLite：BEGIN IMMEDIATE 串行化写事务。
+- MySQL：START TRANSACTION 后 SELECT mysql_transaction_gates(gate_id=1) FOR UPDATE，并持有到 COMMIT/ROLLBACK。
 
-```text
-综合评分 = 质量 × 40% + 交期 × 30% + 价格 × 20% + 服务 × 10%
-```
+MySQL 单例 transaction gate 使不同 Node 进程、worker 和连接的所有应用写事务串行进入跨表不变量区。它优先保证当前复杂库存/财务不变量的正确性，但也限制无关写事务并行度。
 
+MySQL 对 ER_LOCK_DEADLOCK、ER_LOCK_WAIT_TIMEOUT、errno 1213/1205 或 SQLSTATE 40001 重试完整 transaction callback。ERP_DB_TX_RETRY_MAX 默认 3，允许 0–10；退避为 20、40、80 毫秒并封顶 250 毫秒。业务校验错误不重试；最终耗尽会标记 attempts。
 
-### 7.7 凭证审核流程
+持久幂等由 idempotency_records 保存 operation、document、key、request fingerprint 和成功结果。MySQL 在事务前以 operation/document/key 派生的 GET_LOCK advisory lock 关闭首次并发竞态；事务完成或最终回滚后 RELEASE_LOCK。
 
-凭证审核是财务模块的状态机扩展，确保 creator 和 approver 角色分离。
+唯一约束仍是凭证来源、单据分配、身份和自然键的最后防线。不得用进程内 mutex 作为跨进程正确性依据。
 
-#### 状态定义
+## 10. 库存身份、数量与估值
 
-| 状态 | 说明 | 可执行动作 |
-|------|------|------------|
-| ENTERED | 录入完成 | submit |
-| SUBMITTED | 待审核 | approve / reject |
-| POSTED | 已审核 | — |
-| REJECTED | 已驳回 | edit 然后 ENTERED |
+### 10.1 数量与身份
 
-#### 状态转换规则
+- inventory：warehouse_id + product_id 的 canonical 数量。
+- inventory_transactions：每次确认产生的不可变数量流水，保存来源、方向、业务日期和余额。
+- inventory_lot_balances：LOT 仓库余额。
+- inventory_serials：SERIAL 唯一身份、仓库和生命周期。
+- tracked_inventory_movements / tracked_source_allocations：数量流水到批次/序列号的扩展证据。
 
-- `submitAccountingVoucher`：ENTERED / REJECTED → SUBMITTED；需要 `VOUCHER_SUBMIT` 权限；
-- `approveAccountingVoucher`：SUBMITTED → POSTED；需要 `VOUCHER_APPROVE` 权限；审核人不得为凭证创建人；
-- `rejectAccountingVoucher`：SUBMITTED → REJECTED；需要 `VOUCHER_APPROVE` 权限；驳回原因必填；
-- `updateAccountingVoucher`：REJECTED → ENTERED（自动重置）；ENTERED 可正常修改；SUBMITTED / POSTED 拒绝修改；
-- `deleteAccountingVoucher`：仅 ENTERED / REJECTED 可删除；SUBMITTED / POSTED 拒绝删除；
+postTrackedMovement 在业务事务中验证身份集合、可用性和数量。HOLD 仍计入 on-hand，但不计入 available。调拨改变位置不改变公司总量。
 
-#### 权限设计
+### 10.2 估值
 
-- `VOUCHER_SUBMIT`：提交凭证；
-- `VOUCHER_APPROVE`：审核和驳回凭证；
-- 默认情况下录入人和审核人为不同角色；`creator_id` 记录凭证创建人；`submitted_by` 记录提交人；
+- inventory_valuation_movements 是价值权威历史。
+- inventory_valuation_balances 是事务维护缓存。
+- NONE 使用移动加权池；LOT 使用批次池；SERIAL 使用特定价值。
+- issueValue/receiveValue/restoreOriginalValue 等操作与数量移动共享事务。
+- 全量耗尽强制数量和值同时归零；退货/冲销引用原价值事件，不按当前平均价重算。
+- LEGACY_UNVALUED 不被迁移静默估价，并会阻断权威关账。
 
-#### SQLite 迁移
+System Health 比较 canonical 数量、身份聚合、valuation movement/cache 和库存 GL；只返回差异，不修复。
 
-通过 `migrateVoucherWorkflow()` 完成，兼容已有数据库：
+## 11. 财务子账、总账与对账
 
-1. 通过 `ALTER TABLE` 添加 `rejection_reason`、`submitted_at`、`submitted_by` 列（如不存在）；
-2. 检测 `accounting_vouchers` 表的 CHECK 约束是否包含 `'ENTERED'`；
-3. 如不包含，重建表并更新 CHECK 约束为 `CHECK(status IN ('ENTERED','SUBMITTED','POSTED','REJECTED'))`；
-4. 重建后保留已有数据，缺失状态字段的记录默认填充为 `'POSTED'`（已有凭证视为已审核）；
-5. 幂等执行，已迁移的数据库不会重复迁移；
+account_receivables/account_payables 保存正向来源及派生缓存。financial_credit_adjustments、settlement allocations/reversals、balance applications、refunds 和 write-offs 构成不可变历史。
 
-#### 审计日志
+settlement-core 按历史重新计算：
 
-- SUBMIT 操作写入动作 `SUBMIT`，说明包含凭证号；
-- APPROVE 操作写入动作 `APPROVE`，记录 `approver_id`；
-- REJECT 操作写入动作 `REJECT`，记录驳回原因；
-- UPDATE 操作在重新提交时写入说明包含 "重新提交后生效"；
+    open = original
+      - effective credits
+      - effective allocations
+      - balance applications
+      - effective write-offs
+      + reversals
 
-#### 报表过滤行为
+open 不得为负。确认收付款时，settlement.js 在事务中重新读取 draft、party、每个 source open、分配合计和账户，再创建凭证、移动、缓存和审计。
 
-- `getTrialBalance()` 和财务汇总接口只查询 `status = 'POSTED'` 的凭证；
-- 录入中（ENTERED）和待审核（SUBMITTED）的凭证不参与期间汇总；
+系统凭证通过 source type/id 唯一。generate/createSystemVoucher 负责期间门禁、科目角色解析、借贷严格相等和 POSTED 写入。财务报表只查询 POSTED。
 
-#### API 路由
+System Health 对 inventory value、WIP、GRNI、AR、AP、税、COGS、cash/bank 和来源单据执行 GL reconciliation。关闭期间前必须无阻断差异；存货期间先关，会计期间后关。
 
-- `POST /api/accounting-vouchers/:id/submit` — 提交凭证
-- `POST /api/accounting-vouchers/:id/approve` — 审核凭证
-- `POST /api/accounting-vouchers/:id/reject` — 驳回凭证（需 `reason` 字段）
-- `PATCH /api/accounting-vouchers/:id` — 修改凭证（仅 ENTERED / REJECTED）
-- `DELETE /api/accounting-vouchers/:id` — 删除凭证（仅 ENTERED / REJECTED）
+## 12. 制造、WIP 与成本
 
-### 7.8 期间关闭流程
+制令开工从当前有效 BOM、路线、工作中心和成本创建不可变快照：
 
-期间关闭（Period Closing）是凭证审核之上的财务控制层，确保已结期间内的凭证状态稳定。
+- 物料需求 = planned quantity × snapshot usage；
+- 工序保存 sequence、work center、setup/run seconds、capacity 和 rate；
+- 标准成本保存材料、人工、制造费用和单位成本。
 
-#### 期间状态
+领料按冻结标准成本 Dr WIP / Cr inventory；生产入库按冻结单位成本 Dr finished inventory / Cr WIP。operation report 记录良品、报废和人工/设备时间。冲销记录保留原 report 并按依赖顺序恢复。
 
-| 状态 | 说明 |
-|------|------|
-| OPEN | 未结，可正常录入/修改/审核凭证 |
-| CLOSED | 已结，期间内凭证操作被后端拒绝（409 冲突） |
+manufacturing-execution 计算：
 
-#### 期间表
+- 工序可用投入和下游消耗；
+- 良率、报废率和预期差异；
+- 工作中心计划/实际负荷；
+- AUTHORITATIVE/PARTIAL/ESTIMATED 材料证据；
+- 人工、制造费用、总成本和制造差异。
 
-`period_closures` 表（`server/migrations/extended-schema.js`）：
+缺失设备时间时制造费用和依赖它的总成本保持 null，不用零替代。完工时制造差异显式过账并要求 WIP 归零。
 
-| 字段 | 说明 |
-|------|------|
-| `id` | 主键 |
-| `period` | 期间标识，格式 `YYYY-MM`，唯一 |
-| `period_year` / `period_month` | 年/月 |
-| `closure_type` | `MONTH` / 其他；本阶段仅实现月结 |
-| `status` | `OPEN` / `CLOSED` |
-| `closed_by` / `closed_at` | 结账人与结账时间 |
-| `checklist_passed` | 结账前置检查是否通过 |
-| `created_at` | 创建时间 |
+## 13. 开票、税、UOM、期初与导入导出
 
-#### 结账前置检查
+commercial-golive.js 集中 V1.3 商业层：
 
-`getPeriodClosureChecklist(db, period)` 检查期间内是否存在以下状态的凭证：
+- quantitySnapshot 使用版本化 UOM 精确分数，并保存单据/基本数量快照。
+- calculateLineTax 和 roundRational 使用 BigInt 分数与 round-half-up，单据税为行税之和。
+- create/postSalesInvoice 连接已交付未开票量，并生成 AR/Revenue/Output Tax。
+- create/match/postSupplierBill 完成 PO/Receipt/Bill 匹配，生成 AP/Input Tax/GRNI/PPV。
+- createCommercialCreditNote 按原单净额/税额比例生成不可变反向商业记录。
+- allocateDocumentNumber 使用数据库序列和幂等分配。
+- opening_batches 提供 validate/submit/approve/post/activate。
+- stageCsvImport、validateImport、commitImport 提供分阶段原子导入。
+- canonicalExport 从 canonical inventory、AR/AP、POSTED GL、税或 System Health 导出。
 
-- ENTERED（录入中）—— 必须先提交或删除
-- SUBMITTED（待审核）—— 必须先审核或驳回
-- REJECTED（已驳回）—— 必须修改并重新提交或删除
+Go-Live 激活与普通首笔业务共享事务 gate，避免期初状态和正常过账交叉。激活后期初入口关闭。
 
-任一不通过，结账请求被拒绝（400 错误，包含失败项详情）。
+## 14. 错误、安全与可观测性
 
-#### 结账 / 反结账事务一致性
+- HttpError 用于预期 4xx/409；未知错误不把 SQL、stack 或 secret 返回客户端。
+- readJson 限制 body 大小、Content-Type 和对象形状。
+- SQL 参数通过 prepare 绑定；敏感用户字段使用 allowlist。
+- 静态路径用 path.relative containment 校验。
+- logger 输出单行 JSON：timestamp、level、service、event 和安全元数据。
+- 每个响应带 X-Request-Id；调用方 request ID 必须满足受限格式。
+- 慢请求按 SLOW_REQUEST_MS 记录，慢 MySQL 查询按 SLOW_QUERY_MS 记录；只记录标签、时长和 SQL fingerprint。
+- GET /api/health/live 只检查进程；/api/health/ready 执行最小数据库探针；/api/health 保留兼容 alias。
+- /api/system-health 需要权限，只执行业务 reconciliation，不用于 readiness。
 
-`closePeriod` 与 `unclosePeriod` 使用 `transaction(db, ...)` 包装：
+## 15. 测试架构与 gate
 
-1. `UPDATE period_closures SET status=...` —— 状态变更
-2. `INSERT INTO audit_logs(...)` —— 写入审计日志（动作 `CLOSE_PERIOD` / `UNCLOSE_PERIOD`）
+### 15.1 默认回归
 
-任意一步失败则整个事务回滚，确保状态变更与审计日志原子。
+server/*.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js 或系统临时目录创建隔离 SQLite 数据库。测试必须证明仓库默认 data/erp.db 不被访问或删除。
 
-#### CLOSED 期间凭证保护
+测试层次：
 
-凭证的以下操作在执行时调用 `checkPeriodNotClosedForVoucher(db, voucherDate, operation)`：
+- 领域 focused tests：状态、金额、来源、权限和回滚。
+- 合同测试：五角色、五审批族、schema/migration、前端源结构。
+- 集成/UAT：跨模块业务链、期间关闭和 reconciliation。
+- UI/浏览器工具：在隔离数据库和临时输出目录运行。
 
-- `createAccountingVoucher` —— 录入
-- `updateAccountingVoucher` —— 修改
-- `deleteAccountingVoucher` —— 删除
-- `submitAccountingVoucher` —— 提交
-- `approveAccountingVoucher` —— 审核
-- `rejectAccountingVoucher` —— 驳回
+默认完成 gate：
 
-若期间已 CLOSED，操作被拒绝（409 冲突，提示「会计期间 YYYY-MM 已结账，禁止 X 凭证」）。
+    focused node --test ...
+    pnpm test
+    pnpm build
+    git diff --check
 
-#### API 路由
+### 15.2 MySQL gate
 
-- `GET /api/period-closures?year=YYYY` — 列出指定年的期间记录
-- `POST /api/period-closures` — 创建期间记录（`year`、`month`）
-- `POST /api/period-closures/:id/close` — 结账（执行前置检查 + 状态变更）
-- `POST /api/period-closures/:id/unclose` — 反结账
-- `GET /api/period-closures/closure-checklist?period=YYYY-MM` — 查询结账前置检查项
+- pnpm test:mysql：schema/SQL 兼容与业务集成。
+- pnpm test:mysql:concurrency：多进程、多连接真实锁等待与竞态。
+- pnpm test:mysql:performance：1/5/10/20 writer 的 gate benchmark。
 
-#### 报表过滤行为
+MySQL gate 要求全部连接变量、ERP_MYSQL_TEST_ALLOW_RESET=true，以及数据库名包含 test、phase7a/phase7c 或 disposable 等安全标识。缺失条件时必须拒绝执行。测试不得接触生产或未知数据库。
 
-- 试算平衡表（`getTrialBalance`）、财务汇总（`getFinancialSummary`）、科目余额（`getSubjectLedger`）、日余额（`getDailyBalance`）仅查询 `status = 'POSTED'` 的凭证；
-- 已结期间内的 ENTERED / SUBMITTED / REJECTED 凭证不参与期间汇总。
+## 16. 部署、备份、恢复与管理操作
 
-#### 范围限制
+部署入口：
 
-- 仅实现月结（`closure_type = 'MONTH'`）；年结 / Year-End Carry Forward NOT_VERIFIED，不在本阶段范围。
+- deploy/systemd/modern-erp.service：modern-erp 用户、/opt/modern-erp、/etc/modern-erp/env、Node server/index.js。
+- deploy/nginx/modern-erp.conf：Nginx → 127.0.0.1:3001 单一代理。
+- deploy/systemd/modern-erp-backup.service/timer：调用 scripts/backup-db.mjs。
 
-### 7.9 利润表
+SQLite：
 
-利润表（Income Statement / Profit & Loss）将凭证审核 + 期间关闭之上形成的 POSTED 数据，按月份聚合成经营成果。
+- backup-db.mjs 使用 VACUUM INTO 生成一致快照、校验 integrity_check 并执行 retention。
+- restore-db.mjs 验证备份、生成 safety backup、处理 WAL/SHM、恢复后再次校验；生产要求显式确认且应在维护窗口停服务。
+- reset-data.js 在 NODE_ENV=production 下 fail closed。
 
-#### Handler
+MySQL：
 
-`getIncomeStatement(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`（已存在于 `server/db.js:66`）。
+- 当前仓库提供 schema bootstrap、SQLite-to-MySQL 转换和测试 gate。
+- SQLite VACUUM 备份/恢复工具不是 MySQL 生产备份方案；MySQL 生产备份、恢复演练、升级/回滚和灾备必须由后续独立运维方案确认。
 
-#### SQL 聚合
+setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆盖和弱演示密码，不被应用启动自动调用。
 
-期间过滤使用 `voucher_date` 范围：
+全量生产数据重置属于受保护的破坏性管理流程，必须有备份和明确批准；普通开发 reset 命令不能替代它。
 
-```sql
-voucher_date >= period + '-01'
-AND voucher_date <= LAST_DAY(period)
-```
+## 17. 性能与并发特征
 
-避免依赖 `accounting_vouchers.period` 列（手工凭证可能为 NULL）。
+已确认：
 
-每科目净额（沿用试算平衡表 / 会计余额的方向规则）：
+- Vite 页面/vendor 拆包消除了原主 bundle 超 500 kB 警告。
+- MySQL 独立 session 通过数据库 gate，而不是单进程队列，保证跨进程写正确性。
+- 唯一约束、advisory idempotency lock、transaction retry 和请求 generation 共同处理重复与并发失败。
+- 部分高风险查询有索引、上限和慢查询观测。
 
-| Subject Type | 净额 |
-|--------------|------|
-| REVENUE | `credit_cents - debit_cents` |
-| EXPENSE | `debit_cents - credit_cents` |
-| ASSET / LIABILITY / EQUITY | 利润表不参与 |
+当前限制：
 
-凭证状态过滤：
+- 全局 transaction gate 串行化所有写事务，即使文档互不相关。
+- 没有 disposable MySQL 环境的运行不能作为性能通过证据。
+- 真实 10k 产品、50k 单据、百万流水等目标数据集的 EXPLAIN ANALYZE 和端点 p95 尚未形成正式证据。
+- 一些旧主数据/分析列表仍无默认分页。
+- 读取不受写 gate 快照串行化；所有权威 mutation recheck 必须留在 transaction 内。
 
-```sql
-accounting_vouchers.status = 'POSTED'
-```
+因此当前结论是 KEEP GLOBAL GATE：没有证据前不削弱正确性边界，同时不宣称已经认证企业级吞吐。未来只有在真实 benchmark、query plan 和完整回归支持下，才能改为确定性资源级锁。
 
-排除 ENTERED / SUBMITTED / REJECTED。
+## 18. 已知技术债与批准边界
 
-#### 期间状态
-
-OPEN / CLOSED 期间均允许查询。利润表 handler **不调用** `checkPeriodNotClosed*` 系列写保护函数（只读操作）。
-
-#### API
-
-```
-GET /api/reports/income-statement?period=YYYY-MM
-```
-
-- `period` 缺失 → 400
-- `period` 非 `YYYY-MM` 格式 → 400
-- 无 `REPORT_VIEW` → 403
-- 合法请求 → 200
-
-#### Response
-
-```json
-{
-  "period": "2026-08",
-  "periodRange": { "startDate": "2026-08-01", "endDate": "2026-08-31" },
-  "revenue": 100000,
-  "expense": 60000,
-  "profit": 40000,
-  "sections": [
-    {
-      "name": "营业收入",
-      "type": "REVENUE",
-      "subtotal": 100000,
-      "subjects": [
-        { "code": "6001", "name": "主营业务收入", "amount": 100000 }
-      ]
-    },
-    {
-      "name": "营业成本与费用",
-      "type": "EXPENSE",
-      "subtotal": 60000,
-      "subjects": [
-        { "code": "6401", "name": "主营业务成本", "amount": 60000 }
-      ]
-    }
-  ]
-}
-```
-
-- 金额单位:与项目其它报表一致,使用 `cents`(整数分)
-- 零发生额科目不返回
-- `sections[]` 顺序固定:REVENUE 在前,EXPENSE 在后
-
-#### Schema 限制
-
-当前 `accounting_subjects.type` 仅支持 `ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE`,**没有独立 COST 类型**。`主营业务成本`（subject-007）当前归类为 EXPENSE,因此利润表展示口径合并为「营业成本与费用」,不强行区分成本 / 销售费用 / 管理费用 / 财务费用。
-
-#### 不在本任务范围
-
-- 本年累计 / 同比 / 环比 / 多月对比
-- 资产负债表 / 现金流量表
-- 年结 / Year-End Carry Forward
-- BI / 自定义报表设计器
-- 新增 COST / TAX / SELLING_EXPENSE 等科目类型
-- 修改 `createAccountingVoucher` 补 `period` 列
-
-#### UI
-
-最小集成于 `src/pages/accounting.jsx` 报表 tab,沿用现有 API 调用与权限风格。前端隐藏菜单由 `REPORT_VIEW` 控制,但 **API 权限仍是最终安全边界**。
-
-### 7.10 资产负债表
-
-资产负债表（Balance Sheet）反映截至指定期间月末的财务状况，是 as-of / period-end 时点报表，与利润表（period-based）的口径不同。
-
-#### Handler
-
-`getBalanceSheet(db, res, actor, url)` 实现于 `server/modules/extended.js`，权限校验 `REPORT_VIEW`。
-
-#### 期间语义
-
-- 入参：`period=YYYY-MM`
-- `asOfDate = LAST_DAY(period)`（月末）
-- 所有余额按 `voucher_date <= asOfDate` 累计计算
-- 不显示「期初余额」列（资产负债表标准形态，仅显示期末时点）
-
-#### 期末余额计算
-
-沿用 `getAccountingBalances` 的方向规则：
-
-| Subject Type | 净额公式 |
-|--------------|---------|
-| ASSET | `debit_total - credit_total` |
-| LIABILITY | `credit_total - debit_total` |
-| EQUITY | `credit_total - debit_total` |
-
-聚合 SQL：
-
-```sql
-SUM(CASE WHEN e.direction = 'CREDIT' THEN e.amount_cents ELSE 0 END) AS credit_total,
-SUM(CASE WHEN e.direction = 'DEBIT'  THEN e.amount_cents ELSE 0 END) AS debit_total
-FROM accounting_entries e
-JOIN accounting_vouchers v ON v.id = e.voucher_id
-JOIN accounting_subjects s ON s.id = e.subject_id
-WHERE v.status = 'POSTED'
-  AND v.voucher_date <= ?
-  AND s.type IN ('ASSET', 'LIABILITY', 'EQUITY')
-GROUP BY s.id
-```
-
-#### 未结转损益（Unclosed Accumulated Profit）
-
-当前系统**没有自动损益结转**机制。`本年利润` 或 `利润分配` 之类的 EQUITY 子科目也不存在。为使扩展恒等式成立，资产负债表引入虚拟行「未结转损益」：
-
-```sql
-SELECT
-  SUM(CASE WHEN e.direction='CREDIT' THEN e.amount_cents ELSE 0 END)
-  - SUM(CASE WHEN e.direction='DEBIT'  THEN e.amount_cents ELSE 0 END) AS revenue_net
-FROM accounting_entries e
-JOIN accounting_vouchers v ON v.id = e.voucher_id
-JOIN accounting_subjects s ON s.id = e.subject_id
-WHERE v.status = 'POSTED'
-  AND v.voucher_date <= ?
-  AND s.type = 'REVENUE';
-
--- 同理 expense_net = debit_total - credit_total (EXPENSE)
-
-unclosed_profit = revenue_net - expense_net
-```
-
-**统计范围**：所有 `status='POSTED'` 且 `voucher_date <= asOfDate` 的 REVENUE / EXPENSE 分录。**自数据库可见最早起累计**，不假设会计年度起点为 1 月 1 日（当前 schema 无 fiscal year 字段）。
-
-**该虚拟行不写入数据库**，仅为查询展示用。
-
-#### 扩展会计恒等式
-
-由于未结转损益是虚拟行，标准恒等式 `A = L + E` 在当前系统下形式化为：
-
-```
-Assets = Liabilities + Posted Equity + Unclosed Profit
-```
-
-#### API
-
-```
-GET /api/reports/balance-sheet?period=YYYY-MM
-```
-
-- `period` 缺失 → 400
-- `period` 非 `YYYY-MM` → 400
-- 月份超出 01-12 → 400
-- 无 `REPORT_VIEW` → 403
-- 合法请求 → 200
-
-#### Response
-
-```json
-{
-  "period": "2026-08",
-  "asOfDate": "2026-08-31",
-  "assets": {
-    "total": 1000000,
-    "subjects": [
-      { "code": "1001", "name": "库存现金", "amount": 50000 },
-      { "code": "1002", "name": "银行存款", "amount": 800000 }
-    ]
-  },
-  "liabilities": {
-    "total": 200000,
-    "subjects": [
-      { "code": "2202", "name": "应付账款", "amount": 200000 }
-    ]
-  },
-  "equity": {
-    "postedEquity": 500000,
-    "unclosedProfit": 300000,
-    "total": 800000,
-    "subjects": [
-      { "code": "4001", "name": "实收资本", "amount": 500000 }
-    ]
-  },
-  "totalAssets": 1000000,
-  "totalLiabilitiesAndEquity": 1000000,
-  "difference": 0,
-  "equationValid": true
-}
-```
-
-#### equationValid 规则
-
-```javascript
-const totalAssets = assets.total;
-const totalLiabilitiesAndEquity = liabilities.total + equity.postedEquity + equity.unclosedProfit;
-const difference = totalAssets - totalLiabilitiesAndEquity;
-const equationValid = difference === 0;
-```
-
-- 使用整数（cents）严格比较，无浮点容差
-- `equationValid` 为正式响应字段，每次请求均返回
-- UI 必须如实展示 `difference` 与 `equationValid`，不平衡时不隐藏差额，不强制修改数字使等式成立
-
-#### EQUITY 测试数据
-
-当前全局 seed 中无 EQUITY 科目。测试 fixture 在 `before()` 中通过直接 DB 插入：
-
-```sql
-INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active)
-VALUES ('subject-4001', '4001', '实收资本', 'EQUITY', 'CREDIT', 1)
-```
-
-**不修改全局 production demo seed**——除非 `document.md` 明确要求默认系统必须存在 EQUITY 科目。
-
-#### UI
-
-最小集成于 `src/pages/accounting.jsx`，新增 `资产负债表` tab：
-
-- 期间选择器 + 查询按钮
-- 三段表格：资产 / 负债 / 权益
-- 权益段含「未结转损益」虚拟行（不可编辑、不持久化）
-- 顶部显示 `equationValid` 状态与 `difference`
-- 平衡时：「资产 = 负债 + 权益」（绿色指示）
-- 不平衡时：明显显示差额（如红色横幅 + 差额金额）
-- 不通过修改报表数字强行让等式成立
-
-#### Schema 限制
-
-当前 `accounting_subjects` 与 `accounting_vouchers` schema 不包含：
-- fiscal_year / 会计年度字段
-- opening_balance / 期初余额表
-- 本年利润 / 利润分配 EQUITY 子科目
-- year-end / 期间结转凭证生成机制
-
-因此资产负债表只能做到「as-of 期间末累计 + 未结转损益虚拟展示」，不能等同于企业级完整资产负债表。
-
-#### 不在本任务范围
-
-- 现金流量表
-- 年结 / Year-End Carry Forward / 自动结转
-- 损益结转凭证生成
-- 独立 opening_balance 表
-- 本年累计对比 / 同比 / 环比
-- 新增 EQUITY 子类型（本年利润、利润分配等）
-- 多组织 / 多账套 / 多币种
-- BI / 自定义报表设计器
-- 修改 `createAccountingVoucher` period 字段
-- 修改全局 demo seed（仅测试 fixture 添加 EQUITY）
-评分结果按阈值划分为 A、B、C、D 等级。
-
-### 7.11 财务报表一致性收口
-
-#### 共享 Income Calculation Helper
-
-`calculateIncomeForPeriod(db, period)`（`server/modules/extended.js`）：
-
-- 纯业务 helper，不接收 `res`，不做 HTTP 权限校验，不发送 response
-- 入参 `period` 为 `YYYY-MM`，缺省回退当前月；非法格式抛 `Error`
-- SQL 使用 `voucher_date` 月份范围 + `status='POSTED'`
-- REVENUE = `credit − debit`，EXPENSE = `debit − credit`
-- 返回 `{ period, periodRange, revenue, expense, profit }`
-
-#### 修正后的 Financial Summary
-
-`getFinancialSummary()` 调用 `calculateIncomeForPeriod` 获取 income 三项，再加 AR/AP 字段：
-
-```javascript
-const income = calculateIncomeForPeriod(db, period);
-const ar = ...;  // accounts_receivable（独立语义）
-const ap = ...;  // accounts_payable（独立语义）
-return { period, revenue, expense, profit, accounts_receivable, accounts_payable };
-```
-
-**修正点**:
-- ❌ `v.period` 列 → ✅ `voucher_date` 月份范围
-- ❌ `SUM(amount_cents)` 忽略方向 → ✅ direction-aware
-- ❌ 销售退回虚增收入 → ✅ 正确减收入
-
-**保留字段**:
-- `period` / `revenue` / `expense` / `profit`
-- `accounts_receivable` / `accounts_payable`（与 Income Statement 独立）
-
-#### 报表权限统一
-
-| 报表 | 权限 |
-|------|------|
-| Income Statement | `REPORT_VIEW` |
-| Balance Sheet | `REPORT_VIEW` |
-| Trial Balance | `REPORT_VIEW` |
-| Financial Summary | `REPORT_VIEW` |
-| 凭证操作 / 余额 / 账簿 | `ACCOUNTING_VIEW` |
-
-**`role-accounting` 调整**:
-- + `REPORT_VIEW`
-- 保留 `ACCOUNTING_VIEW` / `ORDERS_VIEW` / `PURCHASE_ORDERS_VIEW` / 出纳 / 银行 / 票据 / 固定资产 等原有权限
-
-#### Trial Balance UI
-
-最小集成于 `src/pages/accounting.jsx` `试算平衡表` tab：
-
-- 期间选择器 + 查询按钮
-- 每科目表格：期初 / 本期借方 / 本期贷方 / 期末
-- 顶部本期借贷发生额校验：`totalPeriodDebit === totalPeriodCredit`
-- 平衡显示绿色 `借方发生额 = 贷方发生额`，不平衡显示差额
-- loading / error / empty 状态
-
-仅做本期借贷发生额校验，**不**与资产负债表的 `Assets = Liabilities + Equity` 混为一谈。
-
-#### Financial Summary UI
-
-**不创建 UI**。保持后端 API 修正即可。不得声称"用户可在浏览器查看 Financial Summary"。
-
-#### Deferred
-
-- `getAccountingLedger`：POSTED 过滤缺失 + 无 API 路由 → 标记 DEFERRED，后续独立处理
-- Demo data expansion：0 POSTED vouchers + 0 EQUITY subjects → DEMO READINESS ISSUE，不在本任务范围
-
-### 7.12 Production Safety（Phase 2A）
-
-#### Demo Seed Gating
-
-`createDatabase()` 启动时拆分为两阶段 seed：
-
-- `seedSchema(db)` —— **始终执行**：permissions、roles、role_permissions、accounting_subjects（系统运行必需）
-- `seedDemoData(db)` —— **条件执行**：demo 账号（admin/admin123 等弱密码）、demo 业务数据、demo 销售订单
-
-是否执行 demo seed 由 `shouldSeedDemoData()` 决定：
-
-```javascript
-function shouldSeedDemoData() {
-  if (process.env.ERP_SEED_DEMO === 'true') return true;  // 强制种子（任意环境）
-  if (process.env.NODE_ENV === 'production') return false;  // 生产禁止
-  return true;  // dev/test 默认（保持现有体验）
-```
-
-**生产语义**：`NODE_ENV=production` 时即使数据库为空也**不会**自动创建弱密码账号；如需演示部署可显式 `ERP_SEED_DEMO=true` 覆盖。
-
-#### reset-data 生产保护
-
-`server/reset-data.js` 起始处加入：
-
-```javascript
-if (process.env.NODE_ENV === 'production') {
-  console.error('错误：生产环境禁止执行 reset-data。');
-  process.exit(1);
-}
-```
-
-删除 SQLite 文件等破坏性操作在生产环境被硬阻断，不依赖交互式确认。
-
-#### 环境变量
-
-`process.env` 直接读取，**不引入 dotenv**。生产环境变量由 systemd `EnvironmentFile` 注入。
-
-实际支持的 env 列表见 `.env.example`：
-
-| 变量 | 用途 | 默认 |
-|------|------|------|
-| `NODE_ENV` | `development` / `production` | — |
-| `PORT` | HTTP 监听端口 | 3001 |
-| `ERP_DB_PATH` | SQLite 数据库绝对路径 | `./data/erp.db` |
-| `SESSION_HOURS` | 会话有效期（小时） | 12 |
-| `LOGIN_MAX_ATTEMPTS` | 登录失败锁定阈值 | 5 |
-| `LOGIN_LOCK_MINUTES` | 锁定时长（分钟） | 15 |
-| `TOKEN_LENGTH` | Token 字节长度 | 32 |
-| `ERP_SEED_DEMO` | demo 种子开关 | dev: `true`；prod: `false` |
-
-#### 生产数据库路径
-
-- 开发：`./data/erp.db`（项目内）
-- 生产：`/var/lib/modern-erp/erp.db`（与源代码分离）
-- 必须确保父目录存在并由 `erp` 用户拥有
-
-#### 不在本任务范围
-
-- 进程管理（systemd unit 模板）→ Phase 2C
-- Nginx 反向代理配置 → Phase 2C
-- 备份 / 恢复 → Phase 2B
-- 首次管理员初始化流程 → Phase 2C
-- HTTPS / 监控 / 安全组
-
-### 7.13 Backup / Restore（Phase 2B）
-
-#### 工具
-
-- `scripts/backup-db.mjs` — 导出 `runBackup({ dbPath, backupDir, retention, now })`
-- `scripts/restore-db.mjs` — 导出 `runRestore({ backupPath, dbPath, backupDir, isProduction, confirm })`
-- `pnpm backup-db` / `pnpm restore-db` — CLI 入口
-
-#### 一致性策略
-
-Node `node:sqlite` (>= 22.13) 的 `DatabaseSync` **不暴露** C `sqlite3_backup_*` API。本项目使用 SQLite 官方一致的 `VACUUM INTO <path>` 命令：
-
-- `VACUUM INTO` 在内部完成 WAL checkpoint，将所有已提交事务物化到新文件
-- 新备份文件**没有** `-wal` / `-shm` 旁路文件，自包含
-- 与正在运行的应用连接不冲突(读+写 vs 读+写指向不同文件)
-
-#### 文件命名
-
-`erp-YYYYMMDD-HHmmss.db`（本地时间戳），safety 备份 `safety-YYYYMMDD-HHmmss.db`。
-
-#### 生产恢复保护
-
-`NODE_ENV=production` 必须显式传入 `--confirm-restore`，否则立即拒绝：
-
-```javascript
-if (isProduction && !confirm) {
-  return { success: false, error: '生产环境必须显式传入 --confirm-restore ...' };
-}
-```
-
-#### 恢复流程
-
-1. 验证备份文件存在 + 大小 > 0
-2. 打开备份执行 `PRAGMA integrity_check`（必须 `ok`）
-3. 拒绝 backup 与 target 相同（防止覆盖）
-4. 创建 safety 备份（VACUUM INTO safetyPath）
-5. 删除 target 的 `-wal` / `-shm`
-6. VACUUM INTO `<target>.restore.tmp` 后 rename 到 target
-7. 恢复后再次 `PRAGMA integrity_check`
-8. 任意验证失败 → 停止恢复 → target 未修改
-
-#### 关键安全保证
-
-- `pnpm backup-db` 失败时**自动清理**备份文件
-- `pnpm restore-db` 任何步骤失败**不修改** target DB
-- `safety-` 备份保证可回滚到执行恢复前一刻
-- 生产恢复不依赖交互式提示，可被 SSH / systemd ExecStart 安全调用
-
-#### 不在本任务范围
-
-- 备份调度（systemd timer / cron）→ Phase 2C
-- 备份加密 / 远程上传 → 后续
-- 备份保留策略自动化（已包含 retention 默认 30）
-- 自动服务启停（恢复后由运维手动重启）
-
-### 7.14 First Admin Bootstrap（Phase 2C-1）
-
-Phase 2A 阻断了生产环境的 demo seed 自动创建,空生产 DB 因此无管理员可登录。`scripts/setup-admin.mjs` 是创建首个管理员的**唯一**显式路径。
-
-#### 用法
-
-```bash
-node scripts/setup-admin.mjs --username admin --password 'Strong-Production-Pwd-2026!'
-# 或
-pnpm setup-admin -- --username admin --password 'Strong-Production-Pwd-2026!'
-```
-
-#### 工具设计
-
-导出 `setupAdmin({ dbPath, username, password, displayName, now })` 供测试。CLI 主入口处理 `process.argv` 解析与 isMainModule 检测(跨平台)。
-
-#### 安全规则
-
-| 规则 | 实现 |
-|------|------|
-| `username` 必填 | `if (!username || !username.trim()) reject` |
-| `password` 必填 | `if (!password) reject` |
-| 密码长度 ≥ 12 | `if (password.length < 12) reject` |
-| 拒绝已知弱密码 | `WEAK_DEMO_PASSWORDS` 黑名单(case-insensitive) |
-| 用户已存在拒绝覆盖 | `SELECT id FROM users WHERE username = ?` 检查 |
-| admin role 不存在失败 | `SELECT id FROM roles WHERE code='ADMIN'` 检查 |
-| 不输出明文密码 | CLI 输出仅 username / userId / role |
-| 不写入文件 / 日志 | 工具仅 `INSERT INTO users` |
-| 失败返回 non-zero | `process.exit(1)` |
-
-#### 行为约束
-
-- ✅ 允许 `NODE_ENV=production` 下运行 —— 显式生产初始化工具
-- ❌ **应用启动绝不自动调用** —— `server/index.js` 不导入此脚本
-- ✅ 复用现有 `hashPassword` 函数(无新算法)
-- ✅ 使用现有 users / roles schema,userId 固定为 `user-admin-init`
-- ✅ 不创建 demo 业务数据 / 其他 demo 用户
-
-#### 完整生产初始化序列
-
-```
-deploy → start service (empty DB + schema created)
-  → explicit setup-admin → login → use ERP
-```
-
-#### 不在本任务范围
-
-- 自动服务启停 → Phase 2C-2A systemd
-- 批量用户创建 / 密码重置 → 后续
-- 多管理员并行创建 → 后续(当前每次只创建 1 个)
-评分结果按阈值划分为 A、B、C、D 等级。
-
-### 7.15 systemd Service + Backup Timer（Phase 2C-2A）
-
-本阶段新增最小生产 systemd 文件,不引入 PM2 / Docker / Nginx / HTTPS。
-
-#### 主应用服务
-
-`deploy/systemd/modern-erp.service`:
-
-- `User=modern-erp` / `Group=modern-erp`;
-- `WorkingDirectory=/opt/modern-erp`;
-- `EnvironmentFile=/etc/modern-erp/env`;
-- `ExecStart=/usr/bin/node server/index.js`(等价于当前 `pnpm start` 的 Node production 启动入口);
-- `Restart=on-failure`, `RestartSec=5s`;
-- `KillSignal=SIGTERM`,与 `server/index.js` 当前 SIGTERM graceful shutdown 兼容;
-- 不设置 `HOST`,Node 继续绑定 `127.0.0.1:3001`。
-
-#### 备份服务与 timer
-
-`deploy/systemd/modern-erp-backup.service` 为 `Type=oneshot`,使用同一 `modern-erp` 用户和 `/etc/modern-erp/env`,仅调用:
-
-```text
-/usr/bin/node scripts/backup-db.mjs
-```
-
-不调用 restore,不停止主应用服务。
-
-`deploy/systemd/modern-erp-backup.timer`:
-
-- `OnCalendar=*-*-* 02:30:00`;
-- `Persistent=true`;
-- `Unit=modern-erp-backup.service`。
-
-#### 生产目录假设
-
-- Application: `/opt/modern-erp`;
-- Database: `/var/lib/modern-erp/erp.db`;
-- Backups: `/var/backups/modern-erp`;
-- Environment: `/etc/modern-erp/env`;
-- Service user: `modern-erp`。
-
-`/etc/modern-erp/env` 至少包含 `NODE_ENV=production`, `PORT=3001`, `ERP_DB_PATH=/var/lib/modern-erp/erp.db`, `ERP_BACKUP_DIR=/var/backups/modern-erp` 和当前 session/login 配置。
-
-#### 验证
-
-新增 `server/systemd.test.js` 静态验证 unit 文件结构、路径、`ExecStart`、`EnvironmentFile`、`User/Group`、timer 到 service 的映射、backup script 存在且 backup service 不调用 restore。Windows 环境不运行 `systemctl`;Ubuntu 上线前仍需执行 `systemd-analyze verify`。
-
-### 7.16 Nginx Reverse Proxy（Phase 2C-2B）
-
-本阶段新增最小 HTTP reverse proxy 配置,不配置 HTTPS / Certbot / 域名 / Tencent Cloud 操作。
-
-#### 架构
-
-```text
-Browser → Nginx :80 → http://127.0.0.1:3001 → Node ERP
-```
-
-Node 仍然负责 API、production `dist` 和 React SPA fallback。Nginx 不直接 serve `dist/`,也不为 `/api`、`/assets` 或 SPA routes 创建第二套路由。
-
-#### 配置
-
-`deploy/nginx/modern-erp.conf` 只包含一个 server block 和一个 `location /`:
-
-- `listen 80`;
-- `listen [::]:80`;
-- `server_name _`;
-- `client_max_body_size 1m`;
-- `proxy_pass http://127.0.0.1:3001`;
-- proxy headers:`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`;
-- timeout:`proxy_connect_timeout 10s`, `proxy_send_timeout 60s`, `proxy_read_timeout 60s`。
-
-不添加复杂缓存规则,不添加 websocket 配置,不开放 Node 的 `3001` 公网访问。
-
-#### 验证
-
-新增 `server/nginx.test.js` 静态验证 Nginx 配置文件存在、HTTP listen、单一 `location /`、统一 proxy、必要 headers、body size、timeout,并防止出现 `root` / `alias` / `try_files` / `/api` 分流 / HTTPS / websocket 相关配置。Windows 环境不运行 `nginx -t`;Ubuntu 上线前仍需执行 `nginx -t` 并分别检查:
-
-```text
-curl http://127.0.0.1:3001/api/health
-curl http://127.0.0.1/api/health
-```
-
-### 7.17 Warehouse & Logistics Stabilization（v1.0.1 candidate）
-
-仓储新增弹窗不再在 render path 同步调用 `setForm`；详情到达后由独立 effect 初始化表单。供应商与客户选择器分别使用 `/api/lookup/suppliers` 和 `/api/lookup/customers`，只返回 `id/code/name`，并由对应入库、出库或退货管理权限守卫，不授予仓库角色完整客户/供应商模块权限。各依赖请求独立捕获错误并通过 `notify` 呈现。
-
-`createDatabase()` 的幂等迁移统一 `purchase_receipts`、`sales_deliveries`、`return_orders`、`purchase_returns`、`inventory_transfers` 与 `inventory_transactions` 的运行时列和状态约束。旧 `SUBMITTED` 物流草稿迁移为可操作的 `DRAFT`；旧库存流水的 `type/quantity` 转换为 `direction/quantity_change`，原记录保留。确认动作使用库存 upsert、写入余额后的库存流水，并在事务内重新校验出库数量。
-
-实际创建依赖如下：采购入库需要供应商、仓库、货品（采购订单链接可选）；销售出库需要客户、仓库、货品（销售订单链接可选）；销售/采购退货需要对应往来单位、仓库、货品（来源出库/入库链接可选）；库存调拨需要源仓、目标仓、货品和源仓库存。仓库角色通过窄查询端点闭合这些依赖，仍不持有客户、供应商、订单、会计、期间、用户、角色或生产管理权限。
-
-App 对无权访问的陈旧 hash 使用 `current.key` 渲染首个可见页面，避免短暂挂载 `UsersRoles` 等不可访问组件并触发 `/api/users`、`/api/roles` 请求。
-
-### 7.18 Cost P0 Containment（Post-v1.0.0 Teacher Acceptance）
-
-Standard Cost 的唯一公共请求/响应契约使用 camelCase：`productId`、`materialCostCents`、`laborCostCents`、`overheadCostCents`、`standardCostCents`、`effectiveDate`、`remark`。四个金额字段都是非负安全整数分，`standardCostCents` 必须严格等于三个组成项之和；缺失、负数、非整数、非有限值、无效日期或不一致总额返回正常 400，不进行默认补零或元/分二次换算。前端只在元输入边界用精确字符串解析生成整数分，例如 `153.45` 元严格生成 `15345` 分。
-
-新标准成本版本在仓库统一的 `BEGIN IMMEDIATE` 事务中完成：验证字段与产品、将旧 ACTIVE 版本改为 HISTORICAL、插入新 ACTIVE 版本、写审计记录并提交。任一步骤失败均回滚。标准成本与 `products.price_cents`（产品销售价）完全解耦；成本写入不得修改销售价。列表筛选的唯一查询参数为 `productId`。产品选择器使用 `GET /api/product-costs/products`，只返回 `id/code/name`。
-
-Cost Rate 公共契约使用 `rateType`、`rateValue`、`unit`、`effectiveDate`、`remark`，映射到 canonical SQLite 列 `rate_type`、`rate_value`、`unit`、`effective_date`、`remark`。允许的类型为 `MATERIAL_RATE`、`LABOR_RATE`、`OVERHEAD_RATE`。旧 `code/name/category/rate_cents_per_hour/active` 布局只在启动迁移时读取；迁移保留有意义的行，将旧分值除以 100 转为规范费率值，并将旧类别映射为 `*_RATE`。迁移后 GET/POST/PATCH 不再查询旧列，重复启动幂等。
-
-成本资源 GET 需要 `COST_VIEW` 或 `COST_MANAGE`，POST/PATCH 需要 `COST_MANAGE`；`PRODUCTS_VIEW` 和 `ACCOUNTING_VIEW` 都不是 Cost API 的替代授权。当前 `role-accounting` 没有 `COST_VIEW/COST_MANAGE`，本阶段不扩权，角色归属决策保持 PENDING。已有但未路由、未验证的 Production Cost 计算继续延后到 Manufacturing/Cost Integration，本阶段不暴露。
-
-### 7.19 Manufacturing Stabilization（Post-v1.0.0 Teacher Acceptance）
-
-制造域的 v1.0.1 支持面明确收口：浏览器教师验收只承诺 BOM 与 Production Orders；API-only 仅保留现有 routed 基础合同（MRP plan list/create/generate、legacy MRP calculate/bom-explode、work centers、routing operations、labor records）。Production Output、Production Cost、未挂载的 MRP Calculator UI、未路由的 MRP detail/update/execute lifecycle 均为 DEFERRED，不作为 teacher-ready 功能。
-
-BOM 使用生产工单 canonical 权限，不引入 `BOM_MANAGE`：列表/详情为 `PRODUCTION_ORDERS_VIEW`，创建/编辑/停用为 `PRODUCTION_ORDERS_CREATE`。BOM 状态只允许 `ACTIVE` 与 `DISCONTINUED`。创建新 BOM 时事务内停用同产品旧 ACTIVE BOM、插入 header 与全部 items，并写审计；编辑时事务内替换 items，避免重复行或半写。DISCONTINUED BOM 不可编辑。校验覆盖父项产品、至少一条组件、组件产品存在且启用、数量大于 0、损耗率 0..1、重复组件和自引用。
-
-Production Order Core 保留历史状态机：`PENDING → IN_PROGRESS → COMPLETED`，取消仍只允许非 COMPLETED 工单。`complete` 表示流程完工，不自动产生 finished-goods inventory receipt。生产入库/领料类库存影响继续延后到 Production Output 安全重设计。新增的 hardening 仅限输入校验、BOM 与产品匹配校验、未知 action 返回 400、非法重复转换返回 409、重复 cancel 返回已取消。
-
-MRP canonical contract：`/api/mrp-plans/generate` 输入为 `plan_id + demand_type=SALES_ORDER + demand_source_id`；需求来源为销售订单明细；BOM 来源为最新 `ACTIVE` BOM 并递归展开，`DISCONTINUED` BOM 不参与；当前库存来源为 `inventory` 按产品汇总；在途来源为 `purchase_receipts` header 与 `purchase_receipt_items` 明细 join 后按 `pri.product_id` 汇总；输出写入 `mrp_plan_items.gross_requirement/on_hand/scheduled_receipt/planned_order_quantity`。生成过程在事务中删除同计划旧明细并重建，避免旧结果叠加。
-
-Routing list 不再引用不存在的 `b.bom_code`，改返回 BOM version 与产品 code/name。Production Output 不注册 `PRODUCTION_OUTPUT`，且 `/api/production-outputs` 不再 routed；当前 unsafe handler 留作内部 deferred 代码，不进入公开 mutation surface。Production Cost 仍未路由/未接 UI，继续延后，不修改 Standard Cost / Cost Rate 合同。
-
-### 7.20 Product Routing Standard（M10 / v1.1）
-
-`product_routings` 是产品级路线头，字段包含产品、路线编码/名称、版本、`ACTIVE/INACTIVE`、备注及创建/更新时间；SQLite partial unique index 保证同一产品最多一条 `ACTIVE` 路线。产品没有路线仍然合法。
-
-`product_routing_operations` 是路线工序明细，`sequence_no` 必须是正整数且路线内唯一，查询始终显式按 `sequence_no` 排序。工序保存编码、名称、简单工作中心文本、非负准备时间和非负单位运行时间；这些时间仅供规划，不生成成本或执行记录。
-
-旧 `routing_operations` 以 BOM 为父级并强制引用 `work_centers`，与产品级路线头不兼容，因此被归类为 `LEGACY / HIDDEN`。启动迁移按旧 BOM 分组生成停用历史 `product_routings`，并将旧工时和工作中心名称复制到新明细；旧表继续保留以维持 v1.0 API 与 `production_labor_records` 外键。迁移使用确定性 ID 和 `INSERT OR IGNORE`，重复启动不重复数据。
-
-公开 API 使用 `/api/product-routings`，覆盖列表/详情/创建/修改、启用/停用和工序增删改；读取需要 `ROUTING_VIEW` 或 `ROUTING_MANAGE`，写入需要 `ROUTING_MANAGE`。现有五角色中 admin 通过 all-permissions 获得全部能力，其他四角色不获授权，注册权限数保持 100。
-
-制品工序标准与 BOM 是同级主数据。它不修改库存、不生成会计凭证、不进入 Approval Center，也不改变 `PENDING → IN_PROGRESS → COMPLETED / CANCELLED` 的制令单状态机。制令单详情仅只读显示产品当前启用路线；工序级执行、报工、设备、产能和成本均延期。
-
-## 8. API 设计约定
-
-- 资源列表使用 `GET /api/<resource>`；
-- 新建资源使用 `POST /api/<resource>`；
-- 局部更新使用 `PATCH /api/<resource>/:id`；
-- 状态动作使用 `POST /api/<resource>/:id/<action>`；
-- 搜索、状态和日期范围通过查询参数传递；
-- 成功响应返回 JSON 对象，错误响应至少包含 `error` 字段。
-
-具体路由以 `server/app.js` 的分发代码为准，文档不重复维护易过期的完整路由表。
-
-## 9. 测试与验证
-
-`server/app.test.js` 使用临时目录和全新 SQLite 数据库启动随机端口服务，当前覆盖：
-
-- 健康检查和生产构建后的静态入口；
-- 销售账号登录和工作台访问；
-- 普通用户访问管理接口时返回 403；
-- CRM、项目、部门、MRP、质量、OA、预警和报表等扩展接口成功迁移并查询。
-
-标准验证命令：
-
-```powershell
-pnpm build
-pnpm test
-```
-
-后续应增加状态机异常、事务回滚、库存不足、凭证平衡、期间关闭和浏览器端到端测试。
-
-## 10. 运维与仓库约定
-
-- `dist/`、`data/`、数据库、日志、备份和 `.env` 不进入 Git；
-- 本地数据通过 `pnpm reset-data` 删除并在下次启动时重建；
-- 正式环境必须更换演示密码，并补充 HTTPS、密钥管理、备份恢复和监控；
-- 代码变化若影响功能范围，应修改 `document.md`；若影响架构或实现，应修改本文档。
-
-## 11. 当前技术边界
-
-- SQLite 和原生 HTTP 服务适合本地验证，正式高并发部署需要重新评估；
-- 后端基础业务仍有继续按领域拆分的空间；
-- 自动化测试目前以接口冒烟为主，尚未达到完整业务回归覆盖；
-- 尚未实现原生产数据迁移和新旧系统总量核对。
+- server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
+- SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
+- package.json 版本 2.4.0 与 release tag v1.3.0 漂移；应在独立版本治理变更中决定是否对齐，不在文档恢复阶段修改。
+- docs/ 中仍存在第二套旧规格和版本阶段文档；在 Phase 2B 完成归档前，以本文件和 document.md 为准。
+- 旧 archive 当前工作树已脱敏，但 Git 历史仍包含历史秘密；历史清理与凭据轮换不属于普通代码重构。
+- MySQL 生产备份/恢复、真实容量、分页收口和部署升级/回滚仍需环境化验收。
+- 多公司、多币种、年结、政府电子发票、APS、完整 MES/OEE/QMS 和期初 WIP 属于明确未支持范围，不得通过 UI 或文档暗示已实现。
