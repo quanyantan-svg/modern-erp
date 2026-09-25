@@ -98,9 +98,11 @@ MySQL 8 需要：
     server/migrations/   增量 schema 迁移
     server/*.test.js     回归、合同与集成测试
     scripts/runtime/     开发运行入口
+    scripts/admin/       备份、恢复、首个管理员与受保护的数据转换工具
+    scripts/gates/       MySQL 功能/并发 gate 及其子进程 worker
     scripts/diagnostics/ 诊断、性能检查和历史调试工具
     scripts/acceptance/  手工/浏览器验收工具
-    scripts/             管理和 MySQL gate/worker（后续分阶段整理）
+    scripts/             仅保留受保护、未纳入常规分类的历史生产重置资料
     deploy/              Nginx 与 systemd 配置
     docs/operations/     当前专项运维与演示指南
     docs/archive/        历史审计、阶段与发布证据

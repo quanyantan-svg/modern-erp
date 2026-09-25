@@ -6,10 +6,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, beforeEach, describe, test } from 'node:test';
 import { createDatabase, verifyPassword } from './db.js';
-import { setupAdmin } from '../scripts/setup-admin.mjs';
+import { setupAdmin } from '../scripts/admin/setup-admin.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SETUP_ADMIN_SCRIPT = join(REPO, 'scripts', 'setup-admin.mjs');
+const SETUP_ADMIN_SCRIPT = join(REPO, 'scripts', 'admin', 'setup-admin.mjs');
 
 let workRoot;
 let testCounter = 0;
@@ -246,7 +246,7 @@ describe('First Admin Bootstrap — application startup non-interference', () =>
 describe('First Admin Bootstrap — CLI wiring', () => {
   test('package.json has setup-admin script', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts['setup-admin'], 'node scripts/setup-admin.mjs');
+    assert.equal(pkg.scripts['setup-admin'], 'node scripts/admin/setup-admin.mjs');
   });
 
   test('script file exists', () => {

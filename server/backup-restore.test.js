@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { createDatabase } from './db.js';
-import { runBackup } from '../scripts/backup-db.mjs';
-import { runRestore } from '../scripts/restore-db.mjs';
+import { runBackup } from '../scripts/admin/backup-db.mjs';
+import { runRestore } from '../scripts/admin/restore-db.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -322,13 +322,13 @@ describe('Restore Tool — safety', () => {
 
 describe('Backup CLI scripts', () => {
   test('scripts exist and are executable', () => {
-    assert.ok(existsSync(join(REPO, 'scripts', 'backup-db.mjs')));
-    assert.ok(existsSync(join(REPO, 'scripts', 'restore-db.mjs')));
+    assert.ok(existsSync(join(REPO, 'scripts', 'admin', 'backup-db.mjs')));
+    assert.ok(existsSync(join(REPO, 'scripts', 'admin', 'restore-db.mjs')));
   });
 
   test('package.json scripts wired', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts['backup-db'], 'node scripts/backup-db.mjs');
-    assert.equal(pkg.scripts['restore-db'], 'node scripts/restore-db.mjs');
+    assert.equal(pkg.scripts['backup-db'], 'node scripts/admin/backup-db.mjs');
+    assert.equal(pkg.scripts['restore-db'], 'node scripts/admin/restore-db.mjs');
   });
 });

@@ -2,10 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { createDatabase } from '../server/db.js';
-import { resolveDatabaseConfig } from '../server/database/config.js';
+import { createDatabase } from '../../server/db.js';
+import { resolveDatabaseConfig } from '../../server/database/config.js';
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const protectedDb = resolve(repoRoot, 'data', 'erp.db');
 const quote = (name) => `\`${String(name).replaceAll('`', '``')}\``;
 
@@ -115,7 +115,7 @@ export function convertSqliteToMySql({ sourcePath, mysqlConfig } = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const position = process.argv.indexOf('--sqlite');
   if (position < 0 || !process.argv[position + 1]) {
-    console.error('Usage: node scripts/convert-sqlite-to-mysql.mjs --sqlite <absolute-disposable-v1.3.db>');
+    console.error('Usage: node scripts/admin/convert-sqlite-to-mysql.mjs --sqlite <absolute-disposable-v1.3.db>');
     process.exitCode = 2;
   } else {
     try { console.log(JSON.stringify(convertSqliteToMySql({ sourcePath: process.argv[position + 1] }), null, 2)); }

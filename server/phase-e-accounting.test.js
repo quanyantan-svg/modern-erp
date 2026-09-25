@@ -205,7 +205,7 @@ describe('Phase E — existing DB permission reconciliation', () => {
       try {
         // Bare-minimum schema: only create the table the seed touches.
         // Simulates the path setup-admin takes in production.
-        const setupMod = await import('../scripts/setup-admin.mjs');
+        const setupMod = await import('../scripts/admin/setup-admin.mjs');
         setupMod.setupAdmin({ dbPath: join(otherDir, 'erp.db'), username: 'prod-admin', password: 'S3cure-Production-Pwd-1' });
         // Re-open via createDatabase to trigger seedSchema + role_permissions reconciliation.
         const { DatabaseSync } = await import('node:sqlite');

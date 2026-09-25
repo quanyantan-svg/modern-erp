@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// scripts/restore-db.mjs
+// scripts/admin/restore-db.mjs
 //
 // Cross-platform SQLite restore tool.
 //
 // Usage:
-//   node scripts/restore-db.mjs <backup-file> [--confirm-restore]
+//   node scripts/admin/restore-db.mjs <backup-file> [--confirm-restore]
 //
 // Behaviour:
 //   1. Verify backup file exists and is a valid SQLite DB (integrity_check = ok)
@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function timestamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -150,7 +150,7 @@ export function runRestore({
 function main() {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.error('用法: node scripts/restore-db.mjs <backup-file> [--confirm-restore]');
+    console.error('用法: node scripts/admin/restore-db.mjs <backup-file> [--confirm-restore]');
     process.exit(2);
   }
   const backupArg = args[0];

@@ -75,7 +75,7 @@ MySQL 参数不完整时应用会 fail closed。数据库账号应使用最小�
     ERP_DB_PATH=/var/lib/modern-erp/erp.db
     ERP_BACKUP_DIR=/var/backups/modern-erp
 
-SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不得放入应用源码目录。`scripts/backup-db.mjs` 和 `scripts/restore-db.mjs` 仅适用于 SQLite，不得用于 MySQL。
+SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不得放入应用源码目录。`scripts/admin/backup-db.mjs` 和 `scripts/admin/restore-db.mjs` 仅适用于 SQLite，不得用于 MySQL。
 
 ## 5. systemd
 
@@ -121,11 +121,13 @@ SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不�
 
     pnpm setup-admin -- --username <operator-name> --password '<provided-securely>'
 
+该稳定命令调用 `scripts/admin/setup-admin.mjs`；不要绕过命令中的密码强度、既有用户和 ADMIN 角色检查。
+
 不要把真实密码直接写入可共享的命令、工单或日志。普通演示账号的安全说明见 [demo-accounts.md](./demo-accounts.md)。
 
 ## 9. 备份、恢复与发布检查
 
-- SQLite：使用仓库备份/恢复脚本，并在维护窗口验证完整性与 safety backup。
+- SQLite：使用 `scripts/admin/backup-db.mjs` / `scripts/admin/restore-db.mjs`（或稳定的 `pnpm backup-db` / `pnpm restore-db` 命令），并在维护窗口验证完整性与 safety backup。
 - MySQL：使用组织批准的 MySQL 工具和 runbook；当前 SQLite 脚本不适用。
 - 发布前：确认目标 commit/tag、环境变量权限、数据库备份、迁移策略、回滚方案、`pnpm test`、`pnpm build`、systemd 和 Nginx 配置。
 - 发布后：检查 live/ready、登录、关键只读查询、结构化日志和反向代理。

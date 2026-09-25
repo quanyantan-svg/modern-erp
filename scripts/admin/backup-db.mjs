@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/backup-db.mjs
+// scripts/admin/backup-db.mjs
 //
 // Cross-platform SQLite online backup tool.
 //
@@ -20,7 +20,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function timestamp(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');

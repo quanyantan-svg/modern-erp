@@ -6,7 +6,7 @@ import mysql from 'mysql2/promise';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
-const workerPath = fileURLToPath(new URL('../mysql-concurrency-worker.mjs', import.meta.url));
+const workerPath = fileURLToPath(new URL('../gates/mysql-concurrency-worker.mjs', import.meta.url));
 
 process.env.ERP_DB_BACKEND = 'mysql';
 process.env.ERP_TEST_DB_BACKEND = 'mysql';
@@ -105,7 +105,7 @@ function classifyError(error, errorClasses) {
   // _request allocates per call. The pool cannot survive bootstrap + 36 setup
   // INSERTs without fragmenting the ArrayBuffer allocator (RangeError observed
   // at mysql-adapter.js:93 from the harness INSERT loop). Each writer subprocess
-  // still owns its own MySqlSyncAdapter (see scripts/mysql-concurrency-worker.mjs).
+  // still owns its own MySqlSyncAdapter (see scripts/gates/mysql-concurrency-worker.mjs).
   const conn = await mysql.createConnection(mysqlConfig);
   const sessions = Array.from({ length: 20 }, (_, index) => new Session(index + 1));
   try {

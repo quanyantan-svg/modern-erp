@@ -11,13 +11,13 @@
     "build": "vite build",
     "start": "node server/index.js",
     "test": "node --test",
-    "test:mysql": "node scripts/mysql-gate.mjs",
-    "test:mysql:concurrency": "node scripts/mysql-concurrency-gate.mjs",
+    "test:mysql": "node scripts/gates/mysql-gate.mjs",
+    "test:mysql:concurrency": "node scripts/gates/mysql-concurrency-gate.mjs",
     "test:mysql:performance": "node scripts/diagnostics/mysql-phase7c-performance.mjs",
     "reset-data": "node server/reset-data.js",
-    "backup-db": "node scripts/backup-db.mjs",
-    "restore-db": "node scripts/restore-db.mjs",
-    "setup-admin": "node scripts/setup-admin.mjs"
+    "backup-db": "node scripts/admin/backup-db.mjs",
+    "restore-db": "node scripts/admin/restore-db.mjs",
+    "setup-admin": "node scripts/admin/setup-admin.mjs"
   },
   "engines": {
     "node": "22.23.2"

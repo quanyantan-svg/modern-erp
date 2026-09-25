@@ -33,7 +33,7 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
   beforeEach(async () => {
     temp = createTempDb({ label: 'p6e-uat', production: true });
     db = temp.db;
-    // Precondition: the gate (scripts/mysql-gate.mjs resetMySql) is
+    // Precondition: the gate (scripts/gates/mysql-gate.mjs resetMySql) is
     // responsible for wiping every table in the disposable MySQL DB
     // BEFORE this hook runs. If uat-c is already present, either the
     // gate reset was bypassed (e.g. ERP_TEST_DB_BACKEND not propagated
@@ -51,7 +51,7 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
         `UAT PRECONDITION FAILED: customer uat-c already exists before UAT fixture insertion. `
         + `customers.id='uat-c' count=${uatCustomerCount} total customers=${totalCustomers} `
         + `database=${dbIdentity.db} host=${dbIdentity.host} user=${dbIdentity.user}. `
-        + `The gate reset (scripts/mysql-gate.mjs resetMySql) did not produce a clean disposable MySQL DB; `
+        + `The gate reset (scripts/gates/mysql-gate.mjs resetMySql) did not produce a clean disposable MySQL DB; `
         + `investigating before relaunch is required (no IGNORE / UPSERT / random id / PK weakening).`,
       );
     }

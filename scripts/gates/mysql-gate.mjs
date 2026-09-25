@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process';
-import { createDatabase } from '../server/db.js';
-import { resolveDatabaseConfig } from '../server/database/config.js';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDatabase } from '../../server/db.js';
+import { resolveDatabaseConfig } from '../../server/database/config.js';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 const missing = required.filter((name) => !process.env[name]);
@@ -122,8 +126,8 @@ function tee(stream, target, capture) {
   console.error('CHILD ERP_DB_USER =', childEnv.ERP_DB_USER);
   for (const file of files) {
     const capture = { value: '' };
-    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', file], {
-      cwd: process.cwd(),
+    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', resolve(repoRoot, file)], {
+      cwd: repoRoot,
       env: childEnv,
       stdio: ['inherit', 'pipe', 'pipe'],
     });

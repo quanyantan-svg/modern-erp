@@ -5,7 +5,7 @@ import { after, before, describe, test } from 'node:test';
 import { createDatabase, transaction } from './db.js';
 import { createTempDb, createTempDir } from './test-utils/temp-db.js';
 import { allocateDocumentNumber } from './modules/commercial-golive.js';
-import { convertSqliteToMySql } from '../scripts/convert-sqlite-to-mysql.mjs';
+import { convertSqliteToMySql } from '../scripts/admin/convert-sqlite-to-mysql.mjs';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 for (const name of required) if (!process.env[name]) throw new Error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE (${name} missing)`);

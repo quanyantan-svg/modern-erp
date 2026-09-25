@@ -54,9 +54,11 @@ MySQL 配置不完整时在连接前 fail closed。
 | server/lib/ | HTTP 校验/响应、审计和结构化日志 |
 | server/*.test.js | 单元、合同、回归和集成测试 |
 | scripts/runtime/ | 开发运行入口；当前由 package.json 保持稳定命令别名 |
+| scripts/admin/ | SQLite 备份/恢复、首个管理员初始化与受保护的数据转换工具 |
+| scripts/gates/ | MySQL 功能/并发 gate 和 JSON-lines 并发 worker |
 | scripts/diagnostics/ | 性能诊断、benchmark 和历史调试工具 |
 | scripts/acceptance/ | 隔离数据库、浏览器和发布验收工具 |
-| scripts/ | 管理、MySQL gate/worker 及受保护工具；后续按独立安全阶段整理 |
+| scripts/ | 仅保留受保护、未跟踪且 release-locked 的历史生产重置资料 |
 | deploy/ | Nginx 与 systemd 配置 |
 
 server/app.js 仍是较大的集中路由文件。新增复杂领域逻辑应优先进入 server/modules/，但本阶段不为目录美观迁移既有 handler。
@@ -359,7 +361,7 @@ server/*.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js �
 - pnpm test:mysql:concurrency：多进程、多连接真实锁等待与竞态。
 - pnpm test:mysql:performance：1/5/10/20 writer 的 gate benchmark。
 
-`pnpm test:mysql:performance` 的 launcher 位于 `scripts/diagnostics/`，仍调用当前保留在 `scripts/` 根目录的 `mysql-concurrency-worker.mjs`；该 worker 与其 gate 的最终归类留给后续独立安全阶段。launcher 使用模块位置推导仓库根目录和 worker 绝对路径，避免受调用 CWD 影响。
+`pnpm test:mysql` 和 `pnpm test:mysql:concurrency` 的 launcher 位于 `scripts/gates/`；并发 gate 与 `scripts/diagnostics/mysql-phase7c-performance.mjs` 都调用 `scripts/gates/mysql-concurrency-worker.mjs`。launcher 使用模块位置推导仓库根目录、测试文件和 worker 绝对路径，并显式设置子进程 `cwd`，避免受调用 CWD 影响；传入子进程的 MySQL 测试环境与 reset 防护保持不变。
 
 MySQL gate 要求全部连接变量、ERP_MYSQL_TEST_ALLOW_RESET=true，以及数据库名包含 test、phase7a/phase7c 或 disposable 等安全标识。缺失条件时必须拒绝执行。测试不得接触生产或未知数据库。
 
@@ -369,12 +371,12 @@ MySQL gate 要求全部连接变量、ERP_MYSQL_TEST_ALLOW_RESET=true，以及�
 
 - deploy/systemd/modern-erp.service：modern-erp 用户、/opt/modern-erp、/etc/modern-erp/env、Node server/index.js。
 - deploy/nginx/modern-erp.conf：Nginx → 127.0.0.1:3001 单一代理。
-- deploy/systemd/modern-erp-backup.service/timer：调用 scripts/backup-db.mjs。
+- deploy/systemd/modern-erp-backup.service/timer：调用 scripts/admin/backup-db.mjs。
 
 SQLite：
 
-- backup-db.mjs 使用 VACUUM INTO 生成一致快照、校验 integrity_check 并执行 retention。
-- restore-db.mjs 验证备份、生成 safety backup、处理 WAL/SHM、恢复后再次校验；生产要求显式确认且应在维护窗口停服务。
+- scripts/admin/backup-db.mjs 使用 VACUUM INTO 生成一致快照、校验 integrity_check 并执行 retention。
+- scripts/admin/restore-db.mjs 验证备份、生成 safety backup、处理 WAL/SHM、恢复后再次校验；生产要求显式确认且应在维护窗口停服务。
 - reset-data.js 在 NODE_ENV=production 下 fail closed。
 
 MySQL：
@@ -382,7 +384,7 @@ MySQL：
 - 当前仓库提供 schema bootstrap、SQLite-to-MySQL 转换和测试 gate。
 - SQLite VACUUM 备份/恢复工具不是 MySQL 生产备份方案；MySQL 生产备份、恢复演练、升级/回滚和灾备必须由后续独立运维方案确认。
 
-setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆盖和弱演示密码，不被应用启动自动调用。
+scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆盖和弱演示密码，不被应用启动自动调用。scripts/admin/convert-sqlite-to-mysql.mjs 只允许绝对 disposable SQLite 副本与显式启用 reset guard 的测试 MySQL 目标，不得用于仓库默认数据库或未知生产库。
 
 全量生产数据重置属于受保护的破坏性管理流程，必须有备份和明确批准；普通开发 reset 命令不能替代它。
 

@@ -8,4 +8,4 @@ User=modern-erp
 Group=modern-erp
 WorkingDirectory=/opt/modern-erp
 EnvironmentFile=/etc/modern-erp/env
-ExecStart=/usr/bin/node scripts/backup-db.mjs
+ExecStart=/usr/bin/node scripts/admin/backup-db.mjs

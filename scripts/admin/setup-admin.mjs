@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/setup-admin.mjs
+// scripts/admin/setup-admin.mjs
 //
 // Explicit one-time first administrator bootstrap.
 //
@@ -11,7 +11,7 @@
 //   must never be called from normal application startup.
 //
 // Usage:
-//   node scripts/setup-admin.mjs --username admin --password <secret>
+//   node scripts/admin/setup-admin.mjs --username admin --password <secret>
 //   pnpm setup-admin -- --username admin --password <secret>
 //
 // Production behaviour:
@@ -27,12 +27,12 @@
 //   - never echoes the password to stdout / stderr
 //   - never writes the password to disk
 
-import { createDatabase, hashPassword } from '../server/db.js';
+import { createDatabase, hashPassword } from '../../server/db.js';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const WEAK_DEMO_PASSWORDS = new Set([
   'admin123', 'sales123', 'review123', 'warehouse123', 'accounting123',

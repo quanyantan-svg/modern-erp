@@ -59,8 +59,8 @@ describe('systemd deployment files', () => {
     assert.equal(directive(unit, 'Group'), 'modern-erp');
     assert.equal(directive(unit, 'WorkingDirectory'), '/opt/modern-erp');
     assert.equal(directive(unit, 'EnvironmentFile'), '/etc/modern-erp/env');
-    assert.equal(directive(unit, 'ExecStart'), '/usr/bin/node scripts/backup-db.mjs');
-    assert.ok(existsSync(join(root, 'scripts', 'backup-db.mjs')));
+    assert.equal(directive(unit, 'ExecStart'), '/usr/bin/node scripts/admin/backup-db.mjs');
+    assert.ok(existsSync(join(root, 'scripts', 'admin', 'backup-db.mjs')));
     assert.doesNotMatch(unit, /restore-db|systemctl\s+stop|modern-erp\.service/);
   });
 

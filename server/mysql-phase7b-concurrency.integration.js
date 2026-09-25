@@ -2,16 +2,21 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createTempDb } from './test-utils/temp-db.js';
 import { systemHealth } from './modules/financial-inventory.js';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const concurrencyWorkerPath = join(repoRoot, 'scripts', 'gates', 'mysql-concurrency-worker.mjs');
 
 class AppInstance {
   constructor(name, env = {}) {
     this.name = name;
     this.pending = new Map();
-    this.child = spawn(process.execPath, ['scripts/mysql-concurrency-worker.mjs'], {
-      cwd: process.cwd(), env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
+    this.child = spawn(process.execPath, [concurrencyWorkerPath], {
+      cwd: repoRoot, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.stderr = '';
     this.child.stderr.on('data', (chunk) => { this.stderr += chunk; });

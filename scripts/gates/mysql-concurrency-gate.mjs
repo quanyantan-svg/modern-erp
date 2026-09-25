@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 const missing = required.filter((name) => !process.env[name]);
@@ -11,8 +15,8 @@ if (!/(?:test|phase7[bc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
   process.exit(2);
 }
 
-const child = spawn(process.execPath, ['--test', 'server/mysql-phase7b-concurrency.integration.js'], {
-  cwd: process.cwd(), env: { ...process.env, ERP_TEST_DB_BACKEND: 'mysql', NODE_ENV: 'test', ERP_SEED_DEMO: 'false' }, stdio: 'inherit',
+const child = spawn(process.execPath, ['--test', resolve(repoRoot, 'server/mysql-phase7b-concurrency.integration.js')], {
+  cwd: repoRoot, env: { ...process.env, ERP_TEST_DB_BACKEND: 'mysql', NODE_ENV: 'test', ERP_SEED_DEMO: 'false' }, stdio: 'inherit',
 });
 child.on('exit', (code) => {
   if (code === 0) console.log('MYSQL CONCURRENCY TESTS = PASS');
