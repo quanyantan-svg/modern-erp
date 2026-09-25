@@ -102,13 +102,16 @@ MySQL 8 需要：
     scripts/gates/       MySQL 功能/并发 gate 及其子进程 worker
     scripts/diagnostics/ 诊断、性能检查和历史调试工具
     scripts/acceptance/  手工/浏览器验收工具
-    scripts/             仅保留受保护、未纳入常规分类的历史生产重置资料
+    scripts/             不提供当前 V1.3 可直接执行的生产全量重置工具
     deploy/              Nginx 与 systemd 配置
     docs/operations/     当前专项运维与演示指南
     docs/archive/        历史审计、阶段与发布证据
+    docs/archive/v1.2/   V1.2 审计与视觉验收历史证据
     log/                 append-only 开发日志
 
 scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令名保持稳定；日常仍使用 `pnpm dev`、`pnpm test:mysql:performance` 等命令，不应依赖内部脚本路径。
+
+当前仓库不提供适用于 V1.3 的可直接执行生产全量数据重置工具。此类破坏性操作必须使用单独评审、与目标环境匹配并获得明确批准的流程；`pnpm reset-data` 只面向仓库外的一次性开发/测试 SQLite 数据库。
 
 ## 测试与质量门
 

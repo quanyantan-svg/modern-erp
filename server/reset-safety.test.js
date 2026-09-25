@@ -15,7 +15,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +31,14 @@ import {
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const RESET_SCRIPT = join(REPO, 'server', 'reset-data.js');
 const REPO_DEFAULT_DB = join(REPO, 'data', 'erp.db');
+const RESET_SOURCE = readFileSync(RESET_SCRIPT, 'utf8');
 const tempDirs = new Set();
+
+test('current guidance does not advertise the historical V1.2 production reset script', () => {
+  assert.doesNotMatch(RESET_SOURCE, /scripts\/production-full-data-reset\.mjs/);
+  assert.match(RESET_SOURCE, /不提供可直接执行的 V1\.3 生产全量重置工具/);
+  assert.match(RESET_SOURCE, /一次性开发\/测试数据库/);
+});
 
 function runReset(env) {
   try {

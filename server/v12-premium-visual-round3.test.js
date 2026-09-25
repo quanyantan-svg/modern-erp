@@ -34,4 +34,11 @@ describe('V1.2 premium visual polish round 3', () => {
     assert.match(visualAcceptance, /fullPage:\s*true/);
     for (const position of ['top', 'middle', 'bottom']) assert.match(visualAcceptance, new RegExp(`launcher-${position}`));
   });
+
+  test('generated visual evidence defaults to ignored temporary output while preserving an explicit output override', () => {
+    assert.match(visualAcceptance, /process\.argv\[2\]\s*\?\s*resolve\(process\.argv\[2\]\)/);
+    assert.match(visualAcceptance, /resolve\(repoRoot, '\.tmp\/v12-visual'\)/);
+    assert.doesNotMatch(visualAcceptance, /artifacts\/v12-visual/);
+    assert.match(visualAcceptance, /mkdir\(outputDir, \{ recursive: true \}\)/);
+  });
 });

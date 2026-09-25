@@ -8,15 +8,15 @@
 //      → Without an explicit ERP_DB_PATH, the script REFUSES (exits non-zero)
 //        and never touches any database. This prevents a test or one-off
 //        command from accidentally removing the repository default DB.
-//   2. NODE_ENV=production → REFUSE always. Production data resets are
-//      handled by scripts/production-full-data-reset.mjs with backup /
-//      confirmation / dual-control guards. The legacy guard is preserved.
+//   2. NODE_ENV=production → REFUSE always. This repository does not ship a
+//      current V1.3 production full-data-reset tool. Any production-destructive
+//      reset requires a separately reviewed, environment-specific procedure,
+//      backup/recovery evidence, and explicit approval.
 //   3. The resolved target MUST NOT be the repository default database
 //      (<repo>/data/erp.db). This is a last-line guard against a caller
 //      that explicitly points ERP_DB_PATH at the developer workspace.
 //   4. The resolved target MUST live outside the repository root.
-//      Resetting a DB inside the repo (other than via the explicit
-//      production runbook) is never a normal operation.
+//      Resetting a DB inside the repo is never a normal operation.
 //   5. If the path looks like a production path (contains "production"
 //      or "live", or matches a sentinel-allowlisted override) AND the
 //      ERP_RESET_PRODUCTION_OK=YES environment sentinel is NOT set,
@@ -43,13 +43,13 @@ function refuse(code, ...messages) {
   process.exit(code);
 }
 
-// Production must never run through this script. The canonical
-// production reset path is scripts/production-full-data-reset.mjs.
+// Production must never run through this script. No directly executable V1.3
+// production full-data-reset tool is provided by this repository.
 if (process.env.NODE_ENV === 'production') {
   refuse(
     1,
     '错误：生产环境禁止执行 reset-data。',
-    '如需重置数据,请使用 scripts/production-full-data-reset.mjs 并通过 backup / restore 流程。',
+    '生产破坏性重置必须使用单独评审、与目标环境匹配并明确批准的流程;当前仓库不提供可直接执行的 V1.3 生产全量重置工具。',
   );
 }
 
@@ -82,8 +82,8 @@ if (target === defaultRepoDb) {
 
 // Never allow the path to live inside the repository. This is a belt-and-braces
 // guard: even if a caller points ERP_DB_PATH at a sibling file under
-// <repo>/data, we refuse. The reset script is for temporary / production
-// databases only.
+// <repo>/data, we refuse. The reset script is only for disposable temporary
+// databases outside the repository.
 const insideRepo =
   target === repoRoot ||
   target.startsWith(repoRoot + sep) ||
@@ -94,7 +94,7 @@ if (insideRepo) {
     2,
     `错误：reset-data 拒绝操作仓库内部路径: ${target}`,
     `仓库根目录: ${repoRoot}`,
-    '请使用仓库外的临时或生产数据库路径。',
+    '请仅使用仓库外的一次性临时数据库路径。',
   );
 }
 
@@ -106,7 +106,7 @@ if (looksProduction && process.env.ERP_RESET_PRODUCTION_OK !== 'YES') {
   refuse(
     2,
     `错误：路径疑似生产数据库(${target}),但缺少 ERP_RESET_PRODUCTION_OK=YES 哨兵。`,
-    '生产数据重置请使用 scripts/production-full-data-reset.mjs。',
+    'reset-data 仅用于仓库外的一次性开发/测试数据库;生产破坏性操作需要独立评审和明确批准。',
   );
 }
 

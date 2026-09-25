@@ -58,12 +58,12 @@ MySQL 配置不完整时在连接前 fail closed。
 | scripts/gates/ | MySQL 功能/并发 gate 和 JSON-lines 并发 worker |
 | scripts/diagnostics/ | 性能诊断、benchmark 和历史调试工具 |
 | scripts/acceptance/ | 隔离数据库、浏览器和发布验收工具 |
-| scripts/ | 仅保留受保护、未跟踪且 release-locked 的历史生产重置资料 |
 | deploy/ | Nginx 与 systemd 配置 |
+| docs/archive/v1.2/ | V1.2 审计、视觉验收和发布上下文历史证据，不是当前产品事实 |
 
 server/app.js 仍是较大的集中路由文件。新增复杂领域逻辑应优先进入 server/modules/，但本阶段不为目录美观迁移既有 handler。
 
-脚本从 package.json 或其他脚本启动子进程时，必须从 `import.meta.url` 推导仓库根目录并显式设置 `cwd` 或使用绝对目标路径，不得依赖调用者碰巧位于仓库根目录。ES module 的相对 import 仍以脚本文件自身为基准。浏览器验收脚本的临时数据库与截图位置必须继续保持隔离；结构移动不得改变验收业务流程。
+脚本从 package.json 或其他脚本启动子进程时，必须从 `import.meta.url` 推导仓库根目录并显式设置 `cwd` 或使用绝对目标路径，不得依赖调用者碰巧位于仓库根目录。ES module 的相对 import 仍以脚本文件自身为基准。浏览器验收脚本的临时数据库与截图位置必须继续保持隔离；默认生成截图写入被忽略的 `.tmp/`，不能混入 `docs/archive/` 的版本化历史证据；结构移动不得改变验收业务流程。
 
 ## 4. HTTP 请求生命周期
 
@@ -386,7 +386,7 @@ MySQL：
 
 scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆盖和弱演示密码，不被应用启动自动调用。scripts/admin/convert-sqlite-to-mysql.mjs 只允许绝对 disposable SQLite 副本与显式启用 reset guard 的测试 MySQL 目标，不得用于仓库默认数据库或未知生产库。
 
-全量生产数据重置属于受保护的破坏性管理流程，必须有备份和明确批准；普通开发 reset 命令不能替代它。
+当前仓库不提供适用于 V1.3 的可直接执行生产全量数据重置工具。全量生产数据重置必须使用单独评审、与目标 schema 和部署环境匹配、具有备份/恢复证据并获得明确批准的环境化流程；`server/reset-data.js` 只允许仓库外的一次性开发/测试 SQLite 数据库，不能替代生产流程。
 
 ## 17. 性能与并发特征
 
