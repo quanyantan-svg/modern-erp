@@ -12,9 +12,10 @@
 
 ## 使用规则
 
-- 当前功能需求以仓库根目录 document.md 为准。
-- 当前技术设计以仓库根目录 solution.md 为准。
-- 运行、构建与入口信息以仓库根目录 README.md 为准。
+- 当前功能需求以仓库根目录 [document.md](../../../document.md) 为准。
+- 当前技术设计以仓库根目录 [solution.md](../../../solution.md) 为准。
+- 运行、构建与入口信息以仓库根目录 [README.md](../../../README.md) 为准。
+- 上级归档规则见 [docs/archive/README.md](../README.md)。
 - 归档中的命令不得直接用于当前或生产环境。
 - 包含系统、组织、连接或账号信息的内容在分享前必须再次做安全审查。
 

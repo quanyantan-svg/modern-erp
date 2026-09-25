@@ -15,7 +15,7 @@
 - Focused：`pnpm test` 全部 **1355 / 265 suites / 0 failed**（新增 11 个 6E 验收 + 7 个 6D system health 校验回归）；
 - `pnpm build` PASS；`git diff --check` 仅 Windows CRLF 提示；
 - 无 tag、push、production 接触；
-- 详细文档：`docs/V1.3-PHASE6E-COMMERCIAL-GOLIVE.md`。
+- 详细文档：`docs/archive/v1.3/phases/V1.3-PHASE6E-COMMERCIAL-GOLIVE.md`。
 
 > **更新：2026-09-20 (P3 — iOS-inspired Commercial UI Design System)**
 
@@ -206,7 +206,7 @@
 - 教师可见术语统一为“审批、销售出货、采购入库、库存异动、制令单、用料出库、生产入库、应收账款、应付账款、收款单、付款单”；后端 permission、API、数据库标识均未改名；
 - 五个演示角色保持不变，权限注册数保持 100；没有新增角色、权限、业务表或迁移；
 - 本地演示数据继续由现有开发种子提供，生产环境 `NODE_ENV=production + ERP_SEED_DEMO=false` 明确禁止自动演示种子；不增加危险的数据重置工具；
-- 教师演示流程见 `docs/09-demo-business-flow.md`；Focused 118 tests / 21 suites、Full 1014 tests / 198 suites 均 0 failed，`pnpm build` 与 whitespace check 通过；Microsoft Edge 153 在 375×667、414×896、1024×768 完成五角色、业务总览、代表业务页和财务工作台验收，运行时异常及意外 400/403/404/500 均为 0；无 tag、push、deploy。
+- 教师演示流程现位于 `docs/operations/demo-business-flow.md`；Focused 118 tests / 21 suites、Full 1014 tests / 198 suites 均 0 failed，`pnpm build` 与 whitespace check 通过；Microsoft Edge 153 在 375×667、414×896、1024×768 完成五角色、业务总览、代表业务页和财务工作台验收，运行时异常及意外 400/403/404/500 均为 0；无 tag、push、deploy。
 
 ### M8 — AR/AP Settlement
 
@@ -327,7 +327,7 @@
 
 - **当前已验收生产候选**: `v0.9.10`
 - **对应 commit**: `3064442 fix(accounting): expose period closing workflow`
-- **最终验收文档**: `docs/07-production-acceptance.md`(已扩展 Phase C / D / E / F 综合结论,A / B 历史 evidence-locked 段落保留)
+- **最终验收文档**: `docs/archive/v0.9/production-acceptance.md`(已扩展 Phase C / D / E / F 综合结论,A / B 历史 evidence-locked 段落保留)
 - **Phase A** — Deployment: PASS
 - **Phase B** — Authentication / Permission: PASS(evidence-locked;来自 `v0.9.2` 历史 record,未被重写)
 - **Phase C** — Master Data: PASS
@@ -379,7 +379,7 @@
 - ✅ 结算凭证按科目编码映射并受关账期间保护；
 - ✅ 启动回填幂等，旧财务表无损兼容；
 - ✅ 权限总数 100，仍为五角色模型；
-- 详细审计与口径见 `docs/08-ar-ap-settlement.md`。
+- 详细审计与口径见 `docs/archive/v1.1/ar-ap-settlement.md`。
 
 - CRM 定向：`server/crm-stabilization.test.js`，**19 tests / 3 suites**；
 - 成本定向：`server/cost-stabilization.test.js`，**32 tests / 4 suites**；
@@ -391,7 +391,7 @@
 
 - **Release**: `v0.9.10`
 - **Commit**: `3064442`
-- **Phase A — Deployment Baseline**: ✅ PASS(详见 `docs/07-production-acceptance.md`)
+- **Phase A — Deployment Baseline**: ✅ PASS(详见 `docs/archive/v0.9/production-acceptance.md`)
 - **Phase B — Authentication & Permission**: ✅ **`PASS — EVIDENCE LOCKED`**(来自 `v0.9.2` 历史 record,未被重写)
 - **Phase C — Master Data CRUD**: ✅ PASS
 - **Phase D — Core ERP**: ✅ PASS

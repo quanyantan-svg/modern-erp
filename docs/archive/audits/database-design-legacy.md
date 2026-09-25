@@ -279,5 +279,5 @@
 ---
 
 ## 6. 参考文档
-- docs/03-architecture.md - 目标架构
-- docs/04-refactor-plan.md - 重构计划
+- docs/archive/audits/architecture-legacy.md - 历史目标架构
+- docs/archive/audits/refactor-plan.md - 历史重构计划

@@ -99,7 +99,8 @@ MySQL 8 需要：
     server/*.test.js     回归、合同与集成测试
     scripts/             运行、管理、测试 gate 和验收工具
     deploy/              Nginx 与 systemd 配置
-    docs/                运维、专项参考和历史/发布证据
+    docs/operations/     当前专项运维与演示指南
+    docs/archive/        历史审计、阶段与发布证据
     log/                 append-only 开发日志
 
 ## 测试与质量门
@@ -119,9 +120,9 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 - Nginx：deploy/nginx/modern-erp.conf
 - 主服务：deploy/systemd/modern-erp.service
 - 备份服务和 timer：deploy/systemd/modern-erp-backup.*
-- 现有详细指南：[docs/06-deployment.md](./docs/06-deployment.md)
+- 当前详细指南：[docs/operations/deployment.md](./docs/operations/deployment.md)
 
-详细部署指南仍包含部分 SQLite 历史说明；在后续文档归档阶段完成 MySQL 生产流程收口前，应同时以 .env.example、部署配置和 [solution.md](./solution.md) 为准。
+部署指南区分 MySQL 8 目标生产路径与 SQLite 本地/兼容路径；MySQL 生产备份、恢复和容量仍需目标环境单独验收。
 
 ## Canonical 文档
 
@@ -129,7 +130,7 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 - [solution.md](./solution.md)：唯一当前技术设计/实现来源。
 - [AGENTS.md](./AGENTS.md)：唯一当前开发与 AI 治理政策。
 - log/YYYY-MM-DD.md：只追加的开发历史。
-- docs/：支持性运维资料和历史证据，不是第二套当前规格。
+- [docs/](./docs/)：专项运维资料与历史证据索引，不是第二套当前规格。
 
 ## 版本语义
 

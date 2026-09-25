@@ -42,7 +42,7 @@ describe('V1.3 Phase 5 settlement schema and product contract', () => {
 
   test('UI and documentation expose explainable open-item details without new approval families', () => {
     const ui = readFileSync(new URL('../src/pages/settlement.jsx', import.meta.url), 'utf8');
-    const docs = readFileSync(new URL('../docs/V1.3-PHASE5-SETTLEMENT-INTEGRITY.md', import.meta.url), 'utf8');
+    const docs = readFileSync(new URL('../docs/archive/v1.3/phases/V1.3-PHASE5-SETTLEMENT-INTEGRITY.md', import.meta.url), 'utf8');
     const approvals = readFileSync(new URL('./modules/approvals.js', import.meta.url), 'utf8');
     for (const text of ['原始', '贷项调整', '到期日', '自动核销', '创建冲销']) assert.ok(ui.includes(text), text);
     assert.ok(docs.includes('unapplied_cents'));

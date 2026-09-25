@@ -26,7 +26,7 @@
 
 ### SOURCE CHANGES = phase-specific
 
-- **Audit phase** (HEAD `3b375e5`): the audit deliverable `docs/03-v1.1-productization-audit.md` only. No code, no SQL.
+- **Audit phase** (HEAD `3b375e5`): the audit deliverable now archived at `docs/archive/v1.1/productization-audit.md` only. No code, no SQL.
 - **P1 implementation phase** (next commit on branch): frontend only — three new pages, status lib, mobile launcher regrouping, business-overview update, planning-documents cross-link fixes, focused test, browser acceptance script. **Zero database changes.** **Zero permission changes.** **Zero backend business-logic changes.**
 
 ---
@@ -841,7 +841,7 @@ No regression to existing 1151 tests / 230 suites.
 
 ## Final acceptance doc commit
 
-- `docs: record v1.1 productization final acceptance` — updates `docs/00-project-status.md`, `docs/02-feature-matrix.md`, and this audit doc
+- `docs: record v1.1 productization final acceptance` — updates the files now archived at `docs/archive/project-status-history.md`, `docs/archive/v1.1/feature-matrix.md`, and this audit doc
 
 ## Known non-blocking deferred items
 

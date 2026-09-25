@@ -195,5 +195,5 @@ Thumbs.db
 ---
 
 ## 8. 参考文档
-- docs/04-refactor-plan.md - 重构计划
-- docs/06-deployment.md - 部署指南
+- docs/archive/audits/refactor-plan.md - 历史重构计划
+- docs/operations/deployment.md - 当前部署指南

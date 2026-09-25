@@ -195,6 +195,6 @@
 ---
 
 ## 6. 参考文档
-- \docs/00-system-audit.md\ - 系统审计报告
-- \docs/02-feature-matrix.md\ - 功能矩阵
-- \docs/03-architecture.md\ - 目标架构
+- \docs/archive/audits/system-audit.md\ - 系统审计报告
+- \docs/archive/v1.1/feature-matrix.md\ - 历史功能矩阵
+- \docs/archive/audits/architecture-legacy.md\ - 历史目标架构

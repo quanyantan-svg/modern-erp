@@ -266,7 +266,7 @@ REDIS_URL=redis://localhost:6379
 ---
 
 ## 参考文档
-- \docs/00-system-audit.md\ - 系统审计报告
-- \docs/01-requirements.md\ - 需求规格
-- \docs/05-database.md\ - 数据库设计
-- \docs/06-deployment.md\ - 部署指南
+- \docs/archive/audits/system-audit.md\ - 系统审计报告
+- \docs/archive/audits/requirements-legacy.md\ - 历史需求规格
+- \docs/archive/audits/database-design-legacy.md\ - 历史数据库设计
+- \docs/operations/deployment.md\ - 当前部署指南

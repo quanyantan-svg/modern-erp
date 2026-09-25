@@ -4,7 +4,7 @@
 //
 // 1. Bootstraps a disposable MySQL 8 database with the frozen V1.3 schema.
 // 2. Populates a realistic SME-scale dataset sized to the Phase 7C required
-//    profile (docs/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:98-106)
+//    profile (docs/archive/v1.3/phases/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:98-106)
 //    using raw mysql2 multi-row inserts so fixture generation does not pay
 //    the per-call MySqlSyncAdapter round-trip cost.
 // 3. Boots the API server in-process and measures representative routes.
@@ -49,7 +49,7 @@ if (!/(?:test|phase7[abc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
 }
 
 // Dataset scale sized to the Phase 7C required acceptance profile
-// (docs/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:98-106).
+// (docs/archive/v1.3/phases/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:98-106).
 // Every minimum is met or exceeded. salesInvoices / supplierBills must each
 // be ≥ their corresponding AR / AP count so that account_receivables.source_id
 // and account_payables.source_id stay unique under the UNIQUE(source_type,
@@ -156,7 +156,7 @@ function preflightFinancialFixtures() {
 }
 
 // Provisional SME acceptance thresholds from
-// docs/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:90.
+// docs/archive/v1.3/phases/V1.3-PHASE7C-SECURITY-PERFORMANCE-OBSERVABILITY.md:90.
 const THRESHOLDS = {
   errorRate: 0.01,
   readP95Ms: 500,

@@ -157,7 +157,7 @@
 ---
 
 ## 6. 参考文档
-- docs/00-system-audit.md - 系统审计报告
-- docs/01-requirements.md - 需求规格
-- docs/02-feature-matrix.md - 功能矩阵
-- docs/04-refactor-plan.md - 重构计划
+- docs/archive/audits/system-audit.md - 系统审计报告
+- docs/archive/audits/requirements-legacy.md - 历史需求规格
+- docs/archive/v1.1/feature-matrix.md - 历史功能矩阵
+- docs/archive/audits/refactor-plan.md - 历史重构计划

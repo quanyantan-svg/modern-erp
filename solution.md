@@ -403,7 +403,7 @@ setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆�
 - server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
 - SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
 - package.json 版本 2.4.0 与 release tag v1.3.0 漂移；应在独立版本治理变更中决定是否对齐，不在文档恢复阶段修改。
-- docs/ 中仍存在第二套旧规格和版本阶段文档；在 Phase 2B 完成归档前，以本文件和 document.md 为准。
+- docs/ 已分为 operations 当前专项指南与 archive 历史证据；两者均不得覆盖本文件和 document.md 的 canonical 合同。
 - 旧 archive 当前工作树已脱敏，但 Git 历史仍包含历史秘密；历史清理与凭据轮换不属于普通代码重构。
 - MySQL 生产备份/恢复、真实容量、分页收口和部署升级/回滚仍需环境化验收。
 - 多公司、多币种、年结、政府电子发票、APS、完整 MES/OEE/QMS 和期初 WIP 属于明确未支持范围，不得通过 UI 或文档暗示已实现。
