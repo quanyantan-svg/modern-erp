@@ -710,3 +710,127 @@ Tests：
 - README.md：不需要修改（采购流程描述未改变）。
 - document.md：R4-R1 已固化需求，本阶段不重写。
 - 历史文档（`docs/archive/*`、`log/*`）一律保留。
+
+### 20.14 R4-R2B — 采购来源链 cardinality / schema 校正（R4-R3A 触发的设计修订）
+
+R4-R2A 通过只读审计发现 R4-R2 §20.3 / §20.9 在 schema 约束上结论错误：现行迁移 `server/migrations/planning-documents-schema.js:179-183` 的唯一索引方向与 R4-R1 / R4-R2 已批准的多行来源链路模型冲突。本节是 R4-R3A 之后的更正设计，取代 §20.3 中 “不引入新 schema” 与 §20.9 中 “MYSQL SCHEMA CHANGE REQUIRED = NO” 的两条结论。R4-R1 业务需求保持不变。
+
+#### 20.14.1 正确的 domain cardinality
+
+| 关系 | Cardinality |
+|---|---|
+| `purchase_instructions` 1 → `purchase_instruction_items` N | 一对多 |
+| `purchase_requisitions` 1 → `purchase_requisition_items` N | 一对多 |
+| `purchase_instruction_items` 1 → 0..1 `purchase_requisition_item` | 一对多对多（PUI 行至多被一个 PR 行消费） |
+| `purchase_requisition_item` 0..1 → 1 `purchase_instruction_item` | PR 行可保留 0 个或 1 个来源 PUI 身份 |
+| 多 `purchase_instruction_items` 行共享同一个 `purchase_requisition_id` | **允许**（approved multi-line source-chain 模型的硬性要求） |
+
+#### 20.14.2 现有错误约束（与已批准模型冲突）
+
+`server/migrations/planning-documents-schema.js:179-183`：
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_instruction_items_requisition
+  ON purchase_instruction_items(purchase_requisition_id)
+  WHERE purchase_requisition_id IS NOT NULL;
+```
+
+单列 UNIQUE 方向错误地把 "PUI 行被消费" 表达成 "一个 PR 最多只能被一个 PUI 行回链"。这与 R4-R1 已批准的多行来源链路模型（一个 PR 可包含多个来源 PUI 行）直接冲突。R4-R3 实施时不得不使用 “首行保留 source 标识、其他行置 null” 的 workaround，违反 R4-R1 “来源参考必须保留” 与 R4-R2 §20.3 “每行携带 purchaseInstructionItemId”。
+
+#### 20.14.3 正确的 database 约束模型
+
+A. 去除 `purchase_instruction_items.purchase_requisition_id` 的唯一性 — 仍可保留非唯一索引以支持 PUI → PR 回链查询。
+
+B. 在 `purchase_requisition_items.purchase_instruction_item_id`（注意：是 PR items 表上的前向字段，不是 PUI 表）上增加部分唯一约束：
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_requisition_items_pui
+  ON purchase_requisition_items(purchase_instruction_item_id)
+  WHERE purchase_instruction_item_id IS NOT NULL;
+```
+
+这正好表达 “一个 PUI 行至多被一个 PR 行消费” 的反向 cardinality，同时不限制 “一个 PR 可包含多个 PUI 行”。
+
+双后端兼容：与现有 `idx_purchase_requisitions_po` 等部分唯一索引同型，SQLite 直接接受；MySQL 由 `server/database/mysql-schema.js` 的 generated-column-with-SHA2-digest 路径处理（已在 v13-phase7c performance 等迁移中使用同型约束）。
+
+#### 20.14.4 并发 / 重复消费保护
+
+新的 `UNIQUE(purchase_requisition_items.purchase_instruction_item_id) WHERE NOT NULL` 是数据库级并发安全网：两个并发 `createPurchaseRequisition` 同时尝试消费同一 PUI 行时，第二个 INSERT 命中 UNIQUE 约束并使事务回滚，避免 race。
+
+现有应用级友好错误检查 `createPurchaseRequisition` 中 `if (pii.purchase_requisition_id) throw new HttpError(409, '该采购指令明细已经生成过请购单')`（`planning-documents.js:704`）保留不变 — 它对正常串行请求给出可读的中文错误信息，DB 级 UNIQUE 是其并发安全网。不需要额外的条件 UPDATE。
+
+#### 20.14.5 迁移设计
+
+新建 `server/migrations/r4-purchase-source-cardinality.js`，导出 `migrateR4PurchaseSourceCardinality(db)`，由 `server/db.js` 的迁移序列调用（约 line 175 之后）。迁移执行步骤（顺序敏感）：
+
+1. **前置条件检查**（fail-closed）：运行
+   ```sql
+   SELECT purchase_instruction_item_id, COUNT(*) cnt
+     FROM purchase_requisition_items
+    WHERE purchase_instruction_item_id IS NOT NULL
+    GROUP BY purchase_instruction_item_id
+   HAVING COUNT(*) > 1;
+   ```
+   若返回任何行，迁移**停止**并抛出明确错误（不静默删除或重写业务数据）。错误信息应列出重复的 `purchase_instruction_item_id` 与数量，要求人工评审。
+
+2. **删除错误唯一索引**：
+   ```sql
+   DROP INDEX IF EXISTS idx_purchase_instruction_items_requisition;
+   ```
+
+3. **保留非唯一查找索引**（保持现有 PUI → PR 回链查询性能）：
+   ```sql
+   CREATE INDEX IF NOT EXISTS idx_purchase_instruction_items_requisition_lookup
+     ON purchase_instruction_items(purchase_requisition_id);
+   ```
+
+4. **新增正确方向的部分唯一约束**：
+   ```sql
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_requisition_items_pui
+     ON purchase_requisition_items(purchase_instruction_item_id)
+     WHERE purchase_instruction_item_id IS NOT NULL;
+   ```
+
+幂等性：每个 DDL 自身已 `IF EXISTS` / `IF NOT EXISTS`，重复运行不会破坏。前置检查在已修复数据库上永远返回空，安全。
+
+#### 20.14.6 现有生产数据兼容性
+
+- 现有 `purchase_requisition_items` 行若存在重复 `purchase_instruction_item_id`，前置检查会拦截并要求人工评审。R4-R3A 仅做了 schema 审计、未实际查询生产数据库；该前置条件在实施阶段必须先由用户在受保护 disposable 副本或直接 production read-only 视角下确认。
+- 现有 `purchase_instruction_items.purchase_requisition_id` 非空值不受迁移影响（旧索引被 DROP，值保留；新非唯一索引覆盖相同列）。
+- 现有生产 PO `PO-20260926-67857530` 不涉及 PR 行级 schema 变化，仍可按 R4-R3 §UAT-FUNC-004 修复恢复 — REPLACEMENT PO REQUIRED = NO。
+- 部署顺序：迁移必须在应用重启前完成；这是非破坏性 schema 演进（同型处理参考 `v13-phase4-production-integrity.js:23` 已有的 `DROP INDEX IF EXISTS idx_production_instruction_items_production_order`，该迁移走的是同一路径）。
+
+#### 20.14.7 修正后的前端映射
+
+R4-R3 中 “`purchaseInstructionItemId: index === 0 ? source.id : null`” workaround 必须删除。每个 source item 必须无条件携带其 `purchaseInstructionItemId`：
+
+```jsx
+const mappedItems = sourceItems.map((source) => ({
+  productId: source.product_id,
+  quantity: Number(source.quantity) || 0,
+  purchaseInstructionItemId: source.id,
+  preferredSupplierId: '',
+  unitPriceCents: Number(productById.get(source.product_id)?.priceCents) || 0,
+  amountCents: Math.round(quantity * unitPriceCents),
+}));
+```
+
+UAT-FUNC-004 PO 编辑修复保持独立有效，不受本节影响。
+
+#### 20.14.8 修正后的回归测试计划
+
+新增到 `server/uat-r4-purchase-source-chain.test.js`：
+
+- A. 多 PUI → 单 PR：构造一个 PUI 含 3 条 item 的 fixture（产品 / 数量 / need_by_date 各异），通过 `POST /api/purchase-requisitions` 创建单 PR 含 3 个 PR item，每条携带不同 `purchaseInstructionItemId`。
+- B. 验证 3 条 PR item 都返回 `purchaseInstructionItemId === <source pii.id>`，对应 3 条 PUI 行的 `purchase_requisition_id` 都更新为该 PR header id。
+- C. 重复消费：再次尝试以同一 PUI 行创建另一个 PR → 409（应用级）+ DB 级 UNIQUE 双层保护。
+- D. 不同 PUI 行各自独立：每条 PUI 行只被消费一次，再次提交包含其中任意一条 PUI 行的 PR → 拒绝。
+- E. 不允许 first-line-only 行为回归：上述 A 的 3 条 PR item 必须全部保留 `purchaseInstructionItemId`，不允许在测试中接受 “首行携带、其他置 null” 的退化形态。
+- F. PO 编辑回归（UAT-FUNC-004）独立保持：保留现有 E/F/G/H/I/J/K/L 测试。
+- G. 库存副作用 = 0：保留现有 M1。
+- H. 手工 PO 不受影响：保留现有 L。
+
+测试中必须显式断言每个 PR item 的 `purchase_instruction_item_id` 与对应 PUI item id 完全相等，不允许任何 “first-line-only” 退化解。
+
+#### 20.14.9 R4-R3 WIP 处置
+
+R4-R3 实施期间的 WIP（含 “首行保留 source 标识” workaround）已 stash 在 `wip/r4-r3-before-source-cardinality-fix`（commit master 工作树，commit-style stash entry）。R4-R2B 不恢复 stash；后续 R4-R3 实施阶段在 schema 修复合并后从 stash 弹出 worktree，逐项修正 “首行保留” workaround 与测试中 “first-line-only” 路径，再独立 commit。
