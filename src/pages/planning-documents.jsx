@@ -532,6 +532,79 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
     api('/api/suppliers').then((res) => setSuppliers(res.suppliers || []));
     api('/api/purchase-instructions?status=RELEASED').then((res) => setInstructions(res.instructions || []));
   }, []);
+  // UAT R4 (UAT-FUNC-003): when a source Purchase Instruction is
+  // selected, auto-carry source items into the PR draft. A stale
+  // earlier fetch must not overwrite a newer source selection; the
+  // `cancelled` flag below is closed over by the previous effect's
+  // cleanup before the next effect runs. Clearing the source
+  // strips `purchaseInstructionItemId` from existing items but
+  // preserves already-typed product / quantity / price so the operator
+  // does not lose work.
+  useEffect(() => {
+    const sourceId = form.sourceInstructionId;
+    let cancelled = false;
+    if (!sourceId) {
+      setForm((current) => {
+        if (!current.items.some((item) => item.purchaseInstructionItemId)) return current;
+        return {
+          ...current,
+          items: current.items.map((item) => {
+            const { purchaseInstructionItemId, ...rest } = item;
+            return rest;
+          }),
+        };
+      });
+      return undefined;
+    }
+    (async () => {
+      try {
+        const detail = await api(`/api/purchase-instructions/${sourceId}`);
+        if (cancelled) return;
+        const instruction = detail.instruction || {};
+        const sourceItems = Array.isArray(instruction.items) ? instruction.items : [];
+        const productById = new Map(products.map((p) => [p.id, p]));
+        // UAT R4 (R4-R2B corrected): every mapped item carries its own
+        // purchaseInstructionItemId. The schema's forward unique index
+        // `idx_purchase_requisition_items_pui` enforces "one PUI item
+        // -> at most one PR item" without restricting the inverse
+        // cardinality, so a single PR may legitimately carry multiple
+        // source-line identities back to distinct PUI items.
+        const mappedItems = sourceItems.map((source) => {
+          const product = productById.get(source.product_id);
+          const unitPriceCents = Number(product?.priceCents) || 0;
+          const quantity = Number(source.quantity) || 0;
+          return {
+            productId: source.product_id,
+            quantity,
+            purchaseInstructionItemId: source.id,
+            preferredSupplierId: '',
+            unitPriceCents,
+            amountCents: Math.round(quantity * unitPriceCents),
+          };
+        });
+        // Deterministic required_date rule (R4-R2A): earliest
+        // non-empty need_by_date across the selected PUI items,
+        // falling back to planned_date. Computed by set semantics,
+        // never by array order.
+        const candidateDates = sourceItems
+          .map((source) => source.need_by_date || source.mrpNeedByDate)
+          .filter((value) => value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+        let earliest = null;
+        for (const value of candidateDates) {
+          if (!earliest || value < earliest) earliest = value;
+        }
+        const fallback = instruction.planned_date && /^\d{4}-\d{2}-\d{2}$/.test(instruction.planned_date)
+          ? instruction.planned_date
+          : '';
+        const requiredDate = earliest || fallback;
+        setForm((current) => ({ ...current, requiredDate, items: mappedItems }));
+      } catch (error) {
+        if (cancelled) return;
+        notify(error.message, 'error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [form.sourceInstructionId, products, notify]);
   const addItem = () => setForm((current) => ({ ...current, items: [...current.items, { productId: '', quantity: '', preferredSupplierId: '', unitPriceCents: 0, amountCents: 0 }] }));
   const updateItem = (index, field, value) => setForm((current) => ({
     ...current,
@@ -586,6 +659,7 @@ function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
         preferredSupplierId: item.preferredSupplierId || null,
         unitPriceCents: Math.trunc(Number(item.unitPriceCents) || 0),
         amountCents: Math.trunc(Number(item.amountCents) || 0),
+        purchaseInstructionItemId: item.purchaseInstructionItemId || null,
       })),
     };
     if (!body.items.length) { notify('请至少添加一条明细', 'error'); return; }

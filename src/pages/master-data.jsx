@@ -432,7 +432,16 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
           supplierContactPhone: detail.order.supplierContactPhone || '',
           supplierAddress: detail.order.supplierAddress || '',
           remark: detail.order.remark,
-          items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })),
+          // UAT R4 (UAT-FUNC-004): preserve canonical source-line
+          // identity for source-derived POs so unchanged source lines
+          // are not misclassified as a mutation by backend immutability
+          // validation.
+          items: detail.order.items.map((x) => ({
+            productId: x.productId,
+            quantity: x.quantity,
+            price: x.unitPriceCents / 100,
+            purchaseRequisitionItemId: x.purchaseRequisitionItemId || null,
+          })),
         });
       }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
@@ -458,7 +467,15 @@ function PurchaseOrderEditor({ order, onClose, onSaved, notify }) {
         method: order.id ? 'PUT' : 'POST',
         body: {
           ...form,
-          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+          items: form.items.map((x) => ({
+            productId: x.productId,
+            quantity: Number(x.quantity),
+            unitPriceCents: yuanToNonNegativeCents(x.price),
+            // UAT R4 (UAT-FUNC-004): carry canonical source-line
+            // identity through to PUT body. Backend sourceLineId
+            // resolver accepts camel / snake / sourceItemId.
+            purchaseRequisitionItemId: x.purchaseRequisitionItemId || null,
+          })),
         },
       });
       onSaved();
