@@ -23,9 +23,11 @@ Modern ERP 以单组织业务为边界，支持从主数据、销售、采购、
 - 库存、账款和总账影响在事务内保持一致；
 - 关键经济事件不可通过普通编辑或硬删除改写；
 - SQLite 与 MySQL 8 路径保持相同业务合同；
-- 通过测试、审计日志和 System Health 提供可重复验证。
+- 通过测试、审计日志与 System Health 内部/诊断能力提供可重复验证；System Health 仅作为后端/诊断能力保留，不在最终用户可见产品范围内。
 
 当前支持 SQLite 本地/测试兼容运行和 MySQL 8 一等运行后端。项目不声称已经取得任意生产负载下的企业级容量认证。
+
+最终用户可见产品范围有意与原始 ERP 业务流程图对齐，主线覆盖主数据、销售、采购、生产、库存、财务/会计和决策报表；受控 Go-Live 用户前端从最终用户可见产品范围移除，但其后端实现、相关数据库结构与历史文档/证据仍保留为后端/内部能力（见第 15、16、19 节）。
 
 ## 3. 角色、权限与职责分离
 
@@ -40,6 +42,10 @@ Modern ERP 以单组织业务为边界，支持从主数据、销售、采购、
 | ACCOUNTING | AR/AP、收付款、折让/贷项、退款、核销、手工凭证创建和提交、财务报表 | 不执行库存或制造；不能审批自己创建的凭证 |
 
 前端菜单隐藏只改善体验；每个 API 必须在后端独立授权。VIEW 权限不得隐式授予 CREATE、MANAGE、APPROVE、POST 或 REVERSE。
+
+ADMIN 必须能够通过用户管理 UI 为上述五个 canonical 角色（ADMIN、SALES、REVIEWER、WAREHOUSE、ACCOUNTING）创建用户；用户创建与编辑请求必须严格遵循后端 create-user / update-user 合同中显式允许的字段，前端表单状态不得泄漏未支持字段进入 API 载荷；现有后端严格字段校验不得为了容纳意外前端字段而弱化。
+
+首个 ADMIN 初始化（operator 显式调用 `pnpm setup-admin`）必须支持当前配置的数据库后端：MySQL 生产环境必须在 MySQL 中创建 ADMIN，SQLite 环境保留既有受支持行为。任何情况下都必须保持显式 operator 调用，禁止应用启动时自动执行；必须保留最小密码策略、弱/演示密码拒绝、既有用户拒绝、ADMIN 角色校验、安全密码哈希以及明文密码不记录/不持久化。canonical 五角色模型不变。
 
 审批中心只包含五类授权事件：
 
@@ -222,6 +228,8 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - canonical export 支持库存、AR、AP、GL、税和 System Health。
 - demo seed、reset-data 或产品 stock_quantity 不得替代受控期初流程。
 
+受控 Go-Live 用户前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）从最终用户可见 ERP 产品范围移除；后端 Go-Live / import 实现、相关数据库结构、历史文档与证据均保留为后端/内部能力，不得因前端移除而被破坏性清理。
+
 ## 16. 报表与 System Health
 
 支持试算平衡表、利润表、资产负债表、经营/销售/采购分析、未履行、库存异动、AR/AP 对账、税、WIP、制造分析和追溯查询。
@@ -231,6 +239,8 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - 库存报表使用 inventory 和 valuation，而不是 legacy products.stock_quantity。
 - System Health 对数量、身份、价值、WIP、GRNI、AR、AP、税、COGS、现金银行、UOM、凭证唯一性、期间顺序和结算未结项执行 CHECK-only 对账。
 - System Health 不在启动时自动修复业务历史。
+
+系统健康 / 核对（System Health / Reconciliation）用户前端从最终用户可见 ERP 产品范围移除：不得保留应用启动卡、常规导航入口或可达前端路由。后端 reconciliation 逻辑、相关数据库结构与 server API 仍保留为后端/内部诊断能力，仍按 CHECK-only 语义运行、不在启动时自动修复业务历史。
 
 ## 17. 安全与非功能需求
 
@@ -270,6 +280,8 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - 期初 WIP 迁移；
 - 面向外部客户/供应商的门户；
 - 已隐藏的旧 Production Output、旧 MRP Calculator，以及尚未形成受支持 UI 的辅助生产成本/工时界面；
+- 用户可见的 System Health / 核对前端（应用启动卡、常规导航入口、可达前端路由）；
+- 用户可见的受控 Go-Live 前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）；
 - 在真实大规模 MySQL 数据和目标硬件上的生产容量认证。
 
 ## 20. 聚焦变更历史
@@ -278,3 +290,4 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - V1.2：完成移动生命周期与视觉重建，并暴露流程完整性缺口。
 - V1.3：完成来源完整性、质量门禁、生产执行、结算与财务控制、批序列追溯、制造/WIP/估值、商业开票/税/UOM/Go-Live，以及 MySQL 兼容、并发和安全可观测性加固。
 - 2026-09-26：恢复本文档为唯一当前功能/业务规范；历史阶段叙述保留在 docs/ 和 Git 历史中。
+- 2026-09-26 UAT R1：记录生产 UAT 后的需求决策。ADMIN 用户管理 UI 创建用户被后端不支持的 `active` 字段阻塞；`scripts/admin/setup-admin.mjs` 在 `ERP_DB_BACKEND=mysql` 的生产环境错误选择 SQLite 路径；System Health / 核对 用户前端与受控 Go-Live 用户前端从最终用户可见 ERP 产品范围移除，后端 reconciliation 与 Go-Live/import 实现、相关数据库结构、历史文档与证据保持不变；canonical 五角色模型不变。本阶段仅更新需求文档，未进入实现。
