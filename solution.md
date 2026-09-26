@@ -107,7 +107,23 @@ canonical 审批中心由 server/modules/approvals.js 维护五个文档适配�
 - ACCOUNTING 处理子账、结算和手工凭证；
 - 当前五角色模型中 ADMIN 承担 VOUCHER_APPROVE，但 create/approve 同人仍被拒绝。
 
-### 5.3 审计
+### 5.3 用户管理 API 载荷合同
+
+`server/app.js` 的 `createUser`（`POST /api/users`）与 `updateUser`（`PATCH /api/users/:id`）使用 `assertAllowedFields` 严格字段白名单。`active` 是 update-only 字段：CREATE 不接受，由后端在 `INSERT` 中 hard-code `active=1` 写入；UPDATE 接受并由 `body.active` 决定 0/1。
+
+| Endpoint | 允许字段 | 拒绝字段 |
+|---|---|---|
+| `POST /api/users` | `username`、`displayName`、`password`、`roleId` | `active`（硬编码 1）、`username` 之外的任何键 |
+| `PATCH /api/users/:id` | `displayName`、`password`、`roleId`、`active` | `username`、白名单外任何键 |
+
+前端 `UserModal`（`src/pages/master-data.jsx`）不得用整页 `form` 状态做盲发，必须构造与上述合同一致的显式载荷：
+
+- 创建载荷：`{ username, displayName, password, roleId }`，不包含 `active`。
+- 更新载荷：`{ displayName, password, roleId, active }`；当 `password` 为空字符串或未填写时，从载荷中移除该键，由后端保留原密码。
+
+后端 `assertAllowedFields` 与现有 `readJson` 错误合同（`请求包含不支持的字段: <fields>`，由 `server/lib/http.js` 抛出）保持不变；不得为了容忍前端整对象提交而弱化。后端 admin gate（`USERS_MANAGE`）与五个 canonical 角色（ADMIN / SALES / REVIEWER / WAREHOUSE / ACCOUNTING）保持不变。
+
+### 5.4 审计
 
 server/lib/audit.js 向 audit_logs 写入用户、动作、实体、实体 ID、摘要和时间。审计必须在关键业务事务中调用，使业务写入与审计一起提交或回滚。结构化运行日志与不可变业务审计是不同系统。
 
@@ -115,9 +131,11 @@ server/lib/audit.js 向 audit_logs 写入用户、动作、实体、实体 ID、
 
 ### 6.1 SQLite 路径
 
-createDatabase 使用 Node node:sqlite DatabaseSync，启用 foreign_keys，并运行基础 schema、兼容迁移和增量业务迁移。SQLite transaction() 发出 BEGIN IMMEDIATE，在单文件数据库写锁下执行工作，随后 COMMIT；异常时 ROLLBACK。
+`server/db.js` 的 `createDatabase(target)` 通过参数形态选择后端：`typeof target === 'string'` 走向后兼容的 SQLite 显式路径，直接打开目标文件；`target` 为缺省或对象时调用 `resolveDatabaseConfig(target)`，按 `ERP_DB_BACKEND` 决定 SQLite 或 MySQL 分支。SQLite 分支使用 Node `node:sqlite` 的 `DatabaseSync`，启用 `foreign_keys`，并运行基础 schema、兼容迁移和增量业务迁移。SQLite `transaction()` 发出 `BEGIN IMMEDIATE`，在单文件数据库写锁下执行工作，随后 `COMMIT`；异常时 `ROLLBACK`。
 
-SQLite 是完整回归和本地开发基线，不等于 SQLite-only 产品限制。生产环境默认不 seed demo 数据，除非显式 ERP_SEED_DEMO=true。
+SQLite 是完整回归和本地开发基线，不等于 SQLite-only 产品限制。生产环境默认不 seed demo 数据，除非显式 `ERP_SEED_DEMO=true`。
+
+operator 脚本（如 `scripts/admin/setup-admin.mjs`）必须按当前后端选择参数形态：SQLite 用字符串并按需 `mkdirSync` 父目录；MySQL 用缺省或对象参数，让 `resolveDatabaseConfig` 读取 `ERP_DB_*`，并跳过 SQLite 父目录创建。MySQL 环境向 `createDatabase` 传递 SQLite 路径字符串会误入 SQLite 分支。
 
 ### 6.2 MySQL adapter、worker 与 protocol
 
@@ -386,6 +404,14 @@ MySQL：
 
 scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密码、拒绝覆盖和弱演示密码，不被应用启动自动调用。scripts/admin/convert-sqlite-to-mysql.mjs 只允许绝对 disposable SQLite 副本与显式启用 reset guard 的测试 MySQL 目标，不得用于仓库默认数据库或未知生产库。
 
+`setup-admin` 必须在当前配置的数据库后端下工作，并按 §6.1 的 `createDatabase(target)` 参数语义分派：
+
+- 后端选择：脚本读取 `ERP_DB_BACKEND`。`backend === 'sqlite'`（默认）走 SQLite 路径；`backend === 'mysql'` 走 MySQL 路径。任何情况下都不得用 SQLite 路径字符串误入 SQLite 分支。
+- SQLite 路径：`dbPath = process.env.ERP_DB_PATH || <repo>/data/erp.db`；`createDatabase(dbPath)`（字符串参数）；打开前 `mkdirSync(dirname(dbPath), { recursive: true })`。
+- MySQL 路径：不构造 SQLite 路径字符串；调用 `createDatabase()`（缺省参数）让 `resolveDatabaseConfig` 读取 `ERP_DB_HOST/PORT/NAME/USER/PASSWORD`；跳过 `ensureDbDir`（MySQL 不需要文件系统 DB 目录）。
+- 函数签名：保留 `setupAdmin({ dbPath, username, password, rootDir })` 形式作为测试入口（dbPath 用于 SQLite 直接注入）；operator CLI 入口按上述后端选择规则调用。
+- 必须保留的既有合同：用户名必填、密码必填、`MIN_PASSWORD_LENGTH = 12`、`WEAK_DEMO_PASSWORDS` 弱演示密码集合拒绝、ADMIN 角色存在校验、已存在用户拒绝、`hashPassword`（scrypt + 随机盐）、明文密码不记录/不持久化、显式 operator 调用禁止应用启动自动调用、退出码语义（成功 0、失败 1）不变。
+
 当前仓库不提供适用于 V1.3 的可直接执行生产全量数据重置工具。全量生产数据重置必须使用单独评审、与目标 schema 和部署环境匹配、具有备份/恢复证据并获得明确批准的环境化流程；`server/reset-data.js` 只允许仓库外的一次性开发/测试 SQLite 数据库，不能替代生产流程。
 
 ## 17. 性能与并发特征
@@ -417,3 +443,64 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 - 旧 archive 当前工作树已脱敏，但 Git 历史仍包含历史秘密；历史清理与凭据轮换不属于普通代码重构。
 - MySQL 生产备份/恢复、真实容量、分页收口和部署升级/回滚仍需环境化验收。
 - 多公司、多币种、年结、政府电子发票、APS、完整 MES/OEE/QMS 和期初 WIP 属于明确未支持范围，不得通过 UI 或文档暗示已实现。
+
+## 19. UAT R2 前端可见范围与设计调整
+
+### 19.1 范围与不变量
+
+R2 移除两个用户可见页面（`system-health`、`go-live`），不调整后端 reconciliation、Go-Live / import、商业结算（Sales Invoice / Supplier Bill）、税、UOM 服务、相关数据库表与 server API。不新增业务角色；canonical 五角色不变。R1 已固化的需求（document.md §2 §3 §15 §16 §19 §20）保持。
+
+### 19.2 前端文件删除与修改
+
+整文件删除：
+
+- `src/pages/system-health.jsx`：单一 `SystemHealth` 默认导出，唯一消费者是 `src/App.jsx` 的路由表项；无其他导入。
+
+文件级修改：
+
+- `src/pages/commercial-go-live.jsx`：删除 `GoLive` 具名导出与对应 JSX 体（顶部 `<Panel>`、`api('/api/opening-batches')`、`api('/api/imports')` 等 stage/validate/commit 调用）；保留 `SalesInvoices` 与 `SupplierBills` 两个具名导出（同文件承载）。
+- `src/App.jsx`：删除 `import SystemHealth`；从 `launcherIconNames` 删除 `'health'` 标记；删除 `system-health` 与 `go-live` 桌面 `navGroups` 项；删除两个对应路由表项；从 `import { GoLive, SalesInvoices, SupplierBills }` 删除 `GoLive` 标记（保留 `SalesInvoices`、`SupplierBills`）。`ic.health` 失去两个唯一引用但本身保留在 `icons.jsx` 不清理。
+- `src/navigation/applicationMetadata.js`：删除 `MOBILE_APPLICATION_GROUPS` 中 `system-health` 与 `go-live` 两项。
+- `src/styles.css`：删除 `.go-live-rail*`、`.go-live-workbench*`、`.eyebrow`、`.opening-row` 等仅 GoLive 使用的选择器；保留 `.billing-strip`、`.commercial-totals`、`.source-facts`（被 `SalesInvoices` / `SupplierBills` 复用）。`system-health-page` 不存在 CSS 规则，无需清理。
+
+不动的部分：
+
+- `src/pages/decision-reports.jsx` 的 `.decision-report__reconciliation` 卡片（库存期间对账 UI，独立于 System Health）。
+- 后端 handler、路由、表、模块、SQL migration。
+
+### 19.3 其他 `/api/imports` 前端消费者
+
+无。`/api/imports` 在前端的全部三个调用点（`stage` / `validate` / `commit`）都位于 `commercial-go-live.jsx` 的 `GoLive` 组件内。`/api/opening-batches` 也仅由 `GoLive` 调用。删除 `GoLive` 即清空两族后端 API 在用户可见前端的所有引用，不会影响其他 ERP 模块。
+
+### 19.4 应用启动卡、桌面导航与移动应用注册
+
+- 应用启动卡：`launcherIconNames` 删除 `'health'` 后，`system-health` 启动卡不再渲染；`go-live` 本无独立启动卡条目。
+- 桌面导航：财务组 `navGroups` 减少两个卡片，不重新平衡其余顺序。
+- 移动应用：`MOBILE_APPLICATION_GROUPS` 的 finance 组减少两个应用，不重新平衡其余顺序。
+- 图标：`ic.health` 删除两个引用后无消费者；保留在 `icons.jsx` 不清理，避免引入不相关的清理。
+
+### 19.5 测试计划
+
+用户载荷合同（新建 `server/uat-r2-user-payload.test.js`）：
+
+- `assertAllowedFields(['username','displayName','password','roleId'])` 在对象包含 `active` 时抛出 400 `请求包含不支持的字段: active`（验证 CREATE 严格合同不被弱化）。
+- `assertAllowedFields(['displayName','password','roleId','active'])` 在对象仅含 `active` 时不抛出（验证 PATCH 合同不变）。
+- `createUser` handler 在收到 `active` 字段时返回 400 与原错误文本一致。
+- `updateUser` handler 在 PATCH 载荷不包含 `password` 键时保留原密码（`body.password === undefined` 分支）。
+
+setup-admin 后端扩展（现有 `server/setup-admin.test.js`）：
+
+- 在 `process.env.ERP_DB_BACKEND='mysql'` 下，验证 `setupAdmin` 内部调用 `createDatabase()` 而非 `createDatabase(string)`，且不触发 `mkdirSync` SQLite 父目录。可通过 stub 或 spy 实现，无须 live MySQL。
+- 现有 SQLite focused tests 保持通过；`MIN_PASSWORD_LENGTH`、`WEAK_DEMO_PASSWORDS`、ADMIN 角色校验、已存在用户拒绝、明文密码不记录合同不变。
+
+前端移除（现有 `server/mobile-application-launcher.test.js`）：
+
+- 从 `role-admin` 与 `role-accounting` 期望导航页列表中删除 `'system-health'` 与 `'go-live'` 两个标记。
+
+受影响既有 focused tests 必须 0 failed；`pnpm test` 全量回归必须 0 failed；`pnpm build` 通过；`git diff --check` 通过。仅在具备受保护 disposable MySQL 环境时才运行 `pnpm test:mysql`，不得把未知或生产数据库用于测试。
+
+### 19.6 README 与 document.md
+
+- README.md：实现阶段需要在"当前支持"清单与项目地图中确认 System Health / Go-Live 不再列为用户可见模块；后端能力（reconciliation、opening batches、CSV import）继续保留。
+- document.md：R1 已完成需求更新；实现阶段不重写。
+- 历史文档（`docs/archive/*`、`log/*`）一律保留，不动。
