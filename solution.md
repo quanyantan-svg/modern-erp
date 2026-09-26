@@ -504,3 +504,209 @@ setup-admin 后端扩展（现有 `server/setup-admin.test.js`）：
 - README.md：实现阶段需要在"当前支持"清单与项目地图中确认 System Health / Go-Live 不再列为用户可见模块；后端能力（reconciliation、opening batches、CSV import）继续保留。
 - document.md：R1 已完成需求更新；实现阶段不重写。
 - 历史文档（`docs/archive/*`、`log/*`）一律保留，不动。
+
+## 20. UAT R4 设计：采购来源链衔接与源型 PO 编辑
+
+本节是 Phase R4-R2 的技术设计，仅在设计阶段记录，不触动实现。R4-R1 的需求已在 document.md §7 / §8 / §20 固化（commit `37fd954`）。本节为 R4-R3 实施提供精确的调用链、合同、根因与最小修复边界。
+
+### 20.1 数据模型与现有来源字段
+
+Purchase Instruction（`server/modules/planning-documents.js`，`purchase_instructions` / `purchase_instruction_items`）：
+
+- header：`id`、`instruction_no`、`mrp_run_id`、`status` (`DRAFT` / `RELEASED` / `CANCELLED`)、`planned_date`、`notes`、`created_by`。
+- items：`id`、`instruction_id`、`mrp_result_id`、`product_id`、`quantity`、`need_by_date`、`purchase_requisition_id`（回链，null 表示尚未生成请购）。
+
+Purchase Requisition（`server/modules/planning-documents.js`，`purchase_requisitions` / `purchase_requisition_items`）：
+
+- header：`id`、`requisition_no`、`source_instruction_id`（回链）、`status` (`DRAFT` / `SUBMITTED` / `APPROVED` / `REJECTED` / `CANCELLED`)、`request_date`、`required_date`、`notes`、`creator_id`、`purchase_order_id`（回链）。
+- items：`id`、`requisition_id`、`product_id`、`quantity`、`preferred_supplier_id`、`unit_price_cents`、`amount_cents`、`purchase_instruction_item_id`（回链到 PUI 明细）。
+
+Purchase Order（`server/app.js`，`purchase_orders` / `purchase_order_items`）：
+
+- header：`id`、`order_no`、`supplier_id`、`status`、`order_date`、`expected_delivery_date`、`payment_terms`、`payment_terms_days`、`supplier_contact_name/phone/address`、`purchase_requisition_id`（回链）、`creator_id`、`total_cents`、`remark`。
+- items：`id`、`order_id`、`product_id`、`quantity`、`unit_price_cents`、`amount_cents`、`line_no`、`purchase_requisition_item_id`（回链到 PR 明细），外加 V1.3 Phase 1 引入的 UOM / 数量分数快照（`document_uom_code` / `document_quantity_num` / `document_quantity_den` / `conversion_*` / `base_quantity_num` / `base_quantity_den`）。
+
+已有来源字段（实施只需复用，不需要迁移）：
+
+- PR 行级 source：`purchase_requisitions.source_instruction_id` + `purchase_requisition_items.purchase_instruction_item_id`。
+- PO 行级 source：`purchase_orders.purchase_requisition_id` + `purchase_order_items.purchase_requisition_item_id`。
+
+source product：`product_id`（在 PR / PO 行上复制自上游）。
+source quantity：`quantity`（在 PR / PO 行上复制自上游，PO 生成时由服务端从 PR 复制；编辑 PUT 时服务端再次读取并存对比）。
+
+### 20.2 UAT-FUNC-003 根因 — MRP / 采购指令 → 请购单只部分衔接
+
+调用链：
+
+- 已有快捷路径：`src/pages/planning-documents.jsx` 的 `PurchaseInstructionDetail` 行内 “生成请购单” 按钮（line 416-440）已经构造完整 `POST /api/purchase-requisitions` body，包含 `sourceInstructionId`、`items: [{ productId, quantity, purchaseInstructionItemId }]`，后端 `createPurchaseRequisition`（`planning-documents.js:661`）按现有校验链路写入，来源链路完整。
+- 失效路径：`src/pages/planning-documents.jsx` 的 `PurchaseRequisitionCreate` 模态（line 518 起）打开后，`form` 初始 items 为空；当用户在 `来源采购指令` 下拉中选择 PUI 时，**没有 useEffect 拉取 `GET /api/purchase-instructions/:id` 来填充 items**，操作员只能手工点击 “＋ 增加” 并填写 productId / quantity / unitPriceCents，再点保存。
+
+根因分类：选项 A（source 对象未传递到 PR 模态）+ 选项 B（source 即使可选中，表单 initializer 也不会加载 PUI 明细）组合。`source_instruction_id` 字段本身已存在于 PR header，但 PR items 与 PUI items 之间没有自动联动。
+
+### 20.3 PR 自动衔接最小设计
+
+源日期模型：
+
+- `purchase_instructions` header 仅含 `planned_date`，没有 header 级 “要求到货日”。`purchase_instruction_items` 行级保留 `need_by_date`（可为 null）。
+- `purchase_requisitions` header 强制单一 `required_date`；`purchase_requisition_items` 不带自己的 `need_by_date`。当前 `createPurchaseRequisition` 校验（`planning-documents.js:704`）要求 `required_date` 与每条来源 item 的 `need_by_date` 严格相等 —— 即当 PUI items 中存在非空 `need_by_date` 时，PR header 的单一 `required_date` 必须与之匹配；为不引入 schema 变更，本设计不改变这一单值约束。
+
+PR 自动衔接的前端最小修改：
+
+- `useEffect` 监听 `form.sourceInstructionId` 变化。若非空，调 `GET /api/purchase-instructions/:id` 并将返回的 `items[]` 映射为 form items，每行携带 `productId`、`quantity`、`purchaseInstructionItemId`、`unitPriceCents`（取 `product.priceCents` 默认值）、`amountCents = quantity * unitPriceCents`。
+- `required_date` 默认值的确定性聚合规则：从 PUI items 中筛选 `need_by_date` 非空值，取**最早日期**（按 `YYYY-MM-DD` 字典序 / 时间序等价）；若全部为空，回退 `planned_date`。规则按集合而非顺序计算，避免依赖首条 item 的偶然顺序。
+- 操作员仍可在表单里覆盖 `required_date` / 改 quantity / unitPriceCents / preferredSupplierId；任何数量修改显式发生在 PR 行上，不回写 PUI。后端 `createPurchaseRequisition` 已 enforce `quantity <= pii.quantity` 与 `purchase_requisition_id` 反向唯一约束；`required_date` 不与来源 item 的 `need_by_date` 一致时由后端拒绝，操作员可改 `required_date` 重新提交或调整来源。
+- 当 `sourceInstructionId` 清空（手工创建），form items 保持空白，不强制来源链路；`required_date` 默认按 today / 空字符串维持既有行为。
+
+不引入新 schema；现有 `purchase_requisitions.source_instruction_id` 与 `purchase_requisition_items.purchase_instruction_item_id` 已足够。
+
+### 20.4 PR → PO 创建合同
+
+`POST /api/purchase-requisitions/:id/generate-purchase-order`（`server/modules/planning-documents.js:842` 的 `generatePurchaseOrderFromRequisition`）：
+
+- 仅 `APPROVED` 且 `purchase_order_id IS NULL` 的 PR 可触发。
+- 必填 body：`supplierId`。
+- 可选：`orderDate`、`expectedDeliveryDate`、`paymentTerms`、`supplierContactName`、`supplierContactPhone`、`supplierAddress`。
+- 服务端从 PR items 复制 `product_id`、`quantity`、`unit_price_cents`，逐行写入 PO items，并写入 `purchase_requisition_item_id`（行级回链）。
+- PO header 写入 `purchase_requisition_id`（头级回链）。
+- 当前实现 INSERT 列不包含 `payment_terms_days`，新建源型 PO 默认 0；保存草稿时由操作员补齐。
+
+### 20.5 PO 更新合同与不可变边界
+
+`PUT /api/purchase-orders/:id`（`server/app.js:1509` 的 `updatePurchaseOrder`）：
+
+权限：`PURCHASE_ORDERS_CREATE`，且仅 `DRAFT` / `REJECTED` 状态，且仅 `creator_id === actor.id` 或 `ADMIN`。
+
+源型 PO 不可变（`current.purchase_requisition_id` 非空时，line 1516-1527）：
+
+- 头：`purchase_requisition_id`（PUT body 提供不同值 → 409）。
+- 行：`purchase_requisition_item_id`（缺失或变更 → 409）、`product_id`（与 stored 不等 → 409）、`quantity`（与 `Number(stored.quantity)` 不等 → 409）。
+- 行集合大小必须一致（line 1519：增删行 → 409）。
+
+源型 PO 可编辑：
+
+- header：`supplierId`、`orderDate`、`expectedDeliveryDate`、`paymentTerms`、`paymentTermsDays`、`supplierContactName/Phone/Address`、`remark`。
+- 行：`unitPriceCents`（每行）。
+
+非源型 PO 没有上述行级不可变约束；前端传不带 `purchaseRequisitionItemId` 的 items 时走 `savePurchaseOrderItems`（line 1545）路径，行为不变。
+
+### 20.6 UAT-FUNC-004 根因 — PO 编辑死锁
+
+调用链：
+
+- `src/pages/master-data.jsx` 的 `PurchaseOrderEditor`（line 410-486）：
+  - 初始化 line 425-436：`setForm({ ..., items: detail.order.items.map((x) => ({ productId: x.productId, quantity: x.quantity, price: x.unitPriceCents / 100 })) })` —— 这一步丢弃了 `purchaseRequisitionItemId`。
+  - 保存 line 457-462：`items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) }))` —— PUT body 同样不包含 source 标识。
+- `server/app.js` `updatePurchaseOrder`（line 1520-1527）：`sourceId = sourceLineId(body.items[index], 'purchaseRequisitionItemId', 'purchase_requisition_item_id')`，因前端未携带，返回 `null`；`!sourceId` 为真，立即触发 409 “来源请购明细、货品和数量不可修改”，即使操作员只改过 `paymentTerms` / `paymentTermsDays`，与 productId / quantity 完全无关。
+
+根因分类：选项 F（前端序列化 PUT 载荷时漏掉了应保留的源行标识）。后端 immutability 校验本身正确；问题在前后端载荷合同不一致。
+
+quantity 整数 round-trip 不会引入 drift：当 `uomCode === base_uom_code`（默认）时，`quantitySnapshot` 走 `server/modules/commercial-golive.js:68` 的 `doc = rational(num, 1)` → `base = multiplyRational(doc, {1,1})` → `quantity = base.num / base.den`，整数 quantity 精确还原。
+
+### 20.7 选定 PO 更新设计
+
+设计实质（不使用此前 “Option A / B / C” 标签中任何一项，原 Option A 定义为“header-only update / omit immutable lines”，与本设计不同）：
+
+- `PurchaseOrderEditor` 继续按现有合同发送完整的 PO item payload（`productId` / `quantity` / `unitPriceCents`）；不在 PUT body 中省略 items。
+- 唯一新增的载荷字段：每行 item 携带 `purchaseRequisitionItemId`，从已加载的 `detail.order.items` 透传到 PUT body。
+- 源型 PO 的 productId 与 quantity 由前端保持原值；后端 immutability 校验（`server/app.js:1520-1527`）保持不变 —— 修复的是“源标识缺失导致未变更的源行被误判为 mutation”这一前端载荷丢失，而不是放宽校验。
+- 后端 `sourceLineId` 解析路径（`server/app.js:2297`）已支持 camel / snake / `sourceItemId` / `source_item_id` 四种写法，前端使用 camel `purchaseRequisitionItemId` 即可。
+- 不引入 header-only / line-only 分路径：现有 PUT 路径对源型 / 非源型 PO 都成立，仅 item 字段的可变范围由 backend 决定。
+
+边界：
+
+- 不可变字段（`purchase_requisition_item_id` / `productId` / `quantity`）继续由后端严格校验；前端不修改、不省略。
+- `unitPriceCents` 允许修改，因为源型 PO 的合同只把 product / quantity 定义为不可变。
+- 不得为绕过校验而放宽后端；不得在 PUT 之外新增旁路。
+- `purchase_order_items` 表在 update 期间被 `DELETE FROM purchase_order_items WHERE order_id=?` 全删再 INSERT（line 1537），PO 行的 `id` 会变化；下游 `purchase_receipts` 与 `purchase_receipt_items` 通过 `purchase_order_id` 与新 PO 行 `product_id` / `quantity` 重新匹配；这与 R4-R1 之前的现有行为一致，不在本设计中扩展。
+
+### 20.8 付款条件 / 付款天数语义
+
+字段与校验：
+
+- `payment_terms` (text, max 200)：`readSnapshotText` 任意字符串。
+- `payment_terms_days` (integer 0–3650)：`paymentTermsDays` helper（`server/app.js:1412-1416`）拒绝非安全整数 / 负值 / > 3650。
+- 提交（`changePurchaseOrderState`，`server/app.js:1551-1597`）：line 1570 强制 `payment_terms` 非空；`payment_terms_days` 没有非零强制。
+
+UAT 验收数据建议：
+
+- `payment_terms = '月结 30 天'`
+- `payment_terms_days = 30`
+
+允许 `payment_terms = '现金'` 配合 `payment_terms_days = 0`，但语义不一致时建议同时调整。
+
+### 20.9 数据库 / schema 影响
+
+**MYSQL SCHEMA CHANGE REQUIRED = NO**。
+
+理由：
+
+- PR / PO 的 source 字段（`source_instruction_id`、`purchase_instruction_item_id`、`purchase_requisition_id`）均已存在。
+- 修复仅在前端保留现有 source 标识的透传；后端合同保持不变。
+- 没有数据迁移；现有数据完全兼容。
+
+### 20.10 现有生产 PO 兼容性
+
+**EXISTING PO-20260926-67857530 RESUMABLE AFTER FIX = YES**。
+**REPLACEMENT PO REQUIRED = NO**。
+
+- PO 当前处于 DRAFT；`purchase_order_items` 行已写入并保留 `purchase_requisition_item_id`。
+- 修复后操作员重新打开编辑器 → 表单 items 携带 `purchaseRequisitionItemId` → PUT body 由前端补全 source 标识 → 后端校验通过 → 保存成功 → 提交。
+- 不需要取消 / 重建 PO；不需要数据迁移。
+- 在 R4-R3 实施阶段不得触生产数据；R4-R2 仅记录设计结论。
+
+### 20.11 回归测试计划
+
+新建 `server/uat-r4-purchase-source-chain.test.js`（与 R2 类似命名），按需求 A–J 覆盖：
+
+A. Purchase Instruction → PR auto-carry
+- 后端：在 PR 创建时携带 `purchaseInstructionItemId` 与 `sourceInstructionId`，写入 `purchase_requisition_items.purchase_instruction_item_id`。
+- 前端 contract：通过 fixture 模拟 `PurchaseRequisitionCreate` useEffect 联动，调 `GET /api/purchase-instructions/:id` 后应能填充 items。
+
+B. 不依赖手工重打
+- 生成的 PR 可直接进入 submit；不需要操作员重打 product / quantity。
+
+C. 源型 PO header edit
+- 创建 APPROVED PR → 生成 PO；模拟操作员改 `paymentTerms` + `paymentTermsDays`；PUT `updatePurchaseOrder` 返回 200。
+
+D. 源型 PO 不可改 product
+- PUT body 携带与 stored 不同 `productId` → 409。
+
+E. 源型 PO 不可改 quantity
+- PUT body 携带与 stored 不同 `quantity` → 409。
+
+F. 未变更 source lines 不触发 immutable error
+- 改 `paymentTerms` / `paymentTermsDays`、items 原样携带 `purchaseRequisitionItemId` → 200。
+
+G. PO 提交
+- 补齐 `payment_terms` 后 `submit` 成功 → 状态 `SUBMITTED`。
+
+H. 手工创建 PO 回归
+- 不携带 `purchaseRequisitionItemId` 的 PUT（无源 PR 的 PO）仍能正常编辑 / 提交。
+
+I. 后端 strict-source 校验保留
+- 现有 `server/m12-planning-documents.test.js` 等不动；新增测试覆盖 `updatePurchaseOrder` 对缺失 source 标识的 409。
+
+J. 库存副作用 = 0
+- PR / PO 任何编辑与审批路径中 `inventory_transactions` 行数不变；`accounting_vouchers` 行数不变。
+
+实施阶段 `pnpm --config.verify-deps-before-run=false test` 全量 0 failed；`pnpm --config.verify-deps-before-run=false build` 通过；`git diff --check` 通过。
+
+### 20.12 实施范围 / 文件清单
+
+Frontend：
+
+- `src/pages/master-data.jsx`：在 `PurchaseOrderEditor` 的初始化和保存 map 中各加一行 `purchaseRequisitionItemId: x.purchaseRequisitionItemId`，不改动其他字段。
+- `src/pages/planning-documents.jsx`：在 `PurchaseRequisitionCreate` 增加一个 `useEffect` 监听 `form.sourceInstructionId`，调用 `GET /api/purchase-instructions/:id` 自动填充 items；处理 loading / 错误 / 已填项防覆盖。
+
+Backend：不动；现有 `purchaseOrderInput` / `updatePurchaseOrder` / `sourceLineId` / `paymentTermsDays` / `createPurchaseRequisition` / `generatePurchaseOrderFromRequisition` 均保持。
+
+Tests：
+
+- 新建 `server/uat-r4-purchase-source-chain.test.js`。
+- 不修改任何既有测试。
+
+### 20.13 README / document 影响
+
+- README.md：不需要修改（采购流程描述未改变）。
+- document.md：R4-R1 已固化需求，本阶段不重写。
+- 历史文档（`docs/archive/*`、`log/*`）一律保留。
