@@ -253,3 +253,82 @@ describe('First Admin Bootstrap — CLI wiring', () => {
     assert.ok(existsSync(SETUP_ADMIN_SCRIPT));
   });
 });
+
+describe('First Admin Bootstrap — configured MySQL backend (no live MySQL required)', () => {
+  test('backend=mysql calls createDatabase() with NO SQLite path and skips ensureDbDir', () => {
+    const calls = [];
+    const stubEnsureDbDir = (...args) => { calls.push({ name: 'ensureDbDir', args }); };
+    const stubCreateDatabase = (...args) => {
+      calls.push({ name: 'createDatabase', args });
+      // Deliberately throw: we want to prove the dispatch without opening a real DB.
+      throw new Error('STUB_MYSQL_NOT_OPENED');
+    };
+
+    const result = setupAdmin({
+      backend: 'mysql',
+      username: 'admin',
+      password: 'S3cure-Production-Pwd',
+      createDatabaseFn: stubCreateDatabase,
+      ensureDbDirFn: stubEnsureDbDir,
+    });
+
+    assert.equal(result.success, false, 'must fail because the stub refused to open MySQL');
+    assert.ok(result.error.includes('STUB_MYSQL_NOT_OPENED'),
+      `expected stub failure surfaced, got: ${result.error}`);
+
+    const ensureDbDirCalls = calls.filter((c) => c.name === 'ensureDbDir');
+    assert.equal(ensureDbDirCalls.length, 0,
+      'ensureDbDir must NOT run when backend is configured MySQL');
+
+    const createDbCalls = calls.filter((c) => c.name === 'createDatabase');
+    assert.equal(createDbCalls.length, 1, 'createDatabase must be invoked exactly once');
+    assert.equal(createDbCalls[0].args.length, 0,
+      'createDatabase must be called with NO SQLite path string when backend is mysql');
+  });
+
+  test('backend=mysql still rejects weak password and duplicate-username before opening DB', () => {
+    const calls = [];
+    const stubEnsureDbDir = (...args) => { calls.push({ name: 'ensureDbDir', args }); };
+    const stubCreateDatabase = (...args) => {
+      calls.push({ name: 'createDatabase', args });
+      throw new Error('STUB_MYSQL_NOT_OPENED');
+    };
+
+    const weak = setupAdmin({
+      backend: 'mysql',
+      username: 'admin',
+      password: 'warehouse123',
+      createDatabaseFn: stubCreateDatabase,
+      ensureDbDirFn: stubEnsureDbDir,
+    });
+    assert.equal(weak.success, false);
+    assert.ok(weak.error.includes('弱'), `weak-password rejection must surface a 弱 password error: ${weak.error}`);
+    assert.equal(calls.length, 0, 'weak-password rejection must short-circuit before any DB call');
+
+    const missingUser = setupAdmin({
+      backend: 'mysql',
+      username: '',
+      password: 'S3cure-Production-Pwd',
+      createDatabaseFn: stubCreateDatabase,
+      ensureDbDirFn: stubEnsureDbDir,
+    });
+    assert.equal(missingUser.success, false);
+    assert.ok(missingUser.error.includes('username'));
+    assert.equal(calls.length, 0, 'missing-username rejection must short-circuit before any DB call');
+  });
+
+  test('backend omitted (default sqlite) preserves original SQLite string path behavior', () => {
+    const dbPath = makeDb(`mysql-default-${testCounter}.db`);
+    const result = setupAdmin({
+      dbPath,
+      username: 'admin',
+      password: 'S3cure-Production-Pwd',
+      // backend, createDatabaseFn, ensureDbDirFn all default — must use SQLite.
+    });
+    assert.equal(result.success, true, `setup failed: ${JSON.stringify(result)}`);
+    const db = createDatabase(dbPath);
+    const row = db.prepare('SELECT username FROM users WHERE username = ?').get('admin');
+    db.close();
+    assert.ok(row, 'user must be persisted in SQLite default path');
+  });
+});

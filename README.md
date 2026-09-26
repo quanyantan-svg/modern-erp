@@ -10,7 +10,7 @@ Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学�
 - Forecast、MRP、生产/采购指令、请购和生产执行；
 - IQC/OQC、批次/序列号、库存追溯与生产谱系；
 - 存货估值、WIP、总账、税、商业开票和期间关闭；
-- 期初批次、受控 Go-Live、CSV 导入和 canonical export；
+- 期初批次、CSV 导入和 canonical export；System Health / 核对与受控 Go-Live 用户前端不在最终可见 ERP 范围内，后端 reconciliation、期初与 Go-Live / import 能力保留；
 - SQLite 本地/测试路径与 MySQL 8 运行路径。
 
 完整业务合同见 [document.md](./document.md)，技术设计见 [solution.md](./solution.md)。

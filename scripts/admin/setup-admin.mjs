@@ -69,6 +69,9 @@ export function setupAdmin({
   password,
   displayName = '系统管理员',
   now = new Date(),
+  backend = String(process.env.ERP_DB_BACKEND || 'sqlite').toLowerCase(),
+  createDatabaseFn = createDatabase,
+  ensureDbDirFn = ensureDbDir,
 } = {}) {
   if (!username || typeof username !== 'string' || !username.trim()) {
     return { success: false, error: '必须提供 --username 参数' };
@@ -85,11 +88,16 @@ export function setupAdmin({
     return { success: false, error: '拒绝使用已知弱密码(包括 demo 演示密码)' };
   }
 
-  ensureDbDir(dbPath);
-
   let db;
   try {
-    db = createDatabase(dbPath);
+    if (backend === 'mysql') {
+      // MySQL production: rely on configured ERP_DB_* env via createDatabase(),
+      // and skip SQLite-only parent-directory mkdir.
+      db = createDatabaseFn();
+    } else {
+      ensureDbDirFn(dbPath);
+      db = createDatabaseFn(dbPath);
+    }
   } catch (e) {
     return { success: false, error: `无法打开数据库: ${e.message}` };
   }

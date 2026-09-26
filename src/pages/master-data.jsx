@@ -360,7 +360,20 @@ export function UsersRoles({ user, notify }) {
 
 function UserModal({ value, roles, onClose, onSaved, notify }) {
   const [form, setForm] = useState({ username: '', displayName: '', password: '', roleId: roles[0]?.id || '', active: true, ...value });
-  async function save(e) { e.preventDefault(); try { const body = { ...form }; if (value.id && !body.password) delete body.password; await api(value.id ? `/api/users/${value.id}` : '/api/users', { method: value.id ? 'PATCH' : 'POST', body }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    try {
+      let body;
+      if (value.id) {
+        body = { displayName: form.displayName, roleId: form.roleId, active: form.active };
+        if (form.password) body.password = form.password;
+      } else {
+        body = { username: form.username, displayName: form.displayName, password: form.password, roleId: form.roleId };
+      }
+      await api(value.id ? `/api/users/${value.id}` : '/api/users', { method: value.id ? 'PATCH' : 'POST', body });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={value.id ? '编辑用户' : '新增用户'} onClose={onClose}><form className="form-grid" onSubmit={save}><label>登录账号<input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} disabled={Boolean(value.id)} required/></label><label>用户姓名<input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} required/></label><label>{value.id ? '重置密码（留空不修改）' : '初始密码'}<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required={!value.id}/></label><label>所属角色<select value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })}>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>{value.id && <label className="check full"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该用户</label>}<FormActions onClose={onClose}/></form></Modal>;
 }
 

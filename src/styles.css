@@ -775,10 +775,7 @@ tfoot td {
 .commercial-totals>div:last-child{background:#eff8f4;color:#174a37}.commercial-totals dd{font-size:1.1rem}
 .source-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;padding:1rem 1.1rem;border-radius:18px;background:#f5f7f9}
 .source-facts>div{display:flex;flex-direction:column;gap:.35rem}.source-facts p{margin:0;color:var(--muted,#64748b)}
-.go-live-rail{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:.5rem;list-style:none;padding:0;margin:0 0 1.5rem}
-.go-live-rail li{display:flex;align-items:center;gap:.5rem;color:#718096;font-size:.8rem}.go-live-rail li span{display:grid;place-items:center;width:2rem;height:2rem;border-radius:10px;background:#eef1f4;font-family:ui-monospace,monospace}.go-live-rail li.active{color:#174a37;font-weight:600}.go-live-rail li.active span{background:#dcefe6}
-.go-live-workbench{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(16rem,.7fr);gap:2rem;align-items:start}.go-live-workbench>div{display:grid;gap:1rem}.go-live-workbench label{display:grid;gap:.45rem}.go-live-workbench textarea{font-family:ui-monospace,monospace;resize:vertical}.go-live-workbench aside{padding:1.35rem;border-radius:20px;background:#19251f;color:#eef7f2;box-shadow:0 18px 44px rgba(25,55,42,.16)}.go-live-workbench aside>strong{display:block;font-size:1.7rem;letter-spacing:-.03em;margin:.4rem 0}.go-live-workbench aside p{color:#b9c9c0;line-height:1.6}.eyebrow{text-transform:uppercase;font-size:.7rem;letter-spacing:.13em;color:#8fb7a4}.opening-row{display:flex;justify-content:space-between;gap:1rem;padding:.75rem 0;border-top:1px solid rgba(255,255,255,.1)}
-@media(max-width:720px){.billing-strip,.commercial-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.source-facts,.go-live-workbench{grid-template-columns:1fr}.go-live-rail{display:flex;overflow-x:auto;padding-bottom:.5rem}.go-live-rail li{flex:0 0 auto}.go-live-workbench aside{order:-1}.commercial-totals>div:last-child{grid-column:1/-1}}
+@media(max-width:720px){.billing-strip,.commercial-totals{grid-template-columns:repeat(2,minmax(0,1fr))}.source-facts{grid-template-columns:1fr}.commercial-totals>div:last-child{grid-column:1/-1}}
 
 /* ============================================================
    Mobile Shell (M1)

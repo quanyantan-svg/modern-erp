@@ -102,8 +102,6 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
       { page: 'sales-discounts', mobileLabel: '销售折让', iconKey: 'salesDiscount' },
       { page: 'purchase-discounts', mobileLabel: '采购折让', iconKey: 'purchaseDiscount' },
       { page: 'accounting', mobileLabel: '会计凭证 / 财务报表', iconKey: 'accounting' },
-      { page: 'system-health', mobileLabel: '系统健康 / 核对', iconKey: 'health' },
-      { page: 'go-live', mobileLabel: 'Go-Live 受控上线', iconKey: 'health' },
       { page: 'cash-journals', mobileLabel: '现金日记账', iconKey: 'cashJournals' },
       { page: 'bank-accounts', mobileLabel: '银行账户', iconKey: 'bankAccounts' },
       { page: 'bills', mobileLabel: '票据管理', iconKey: 'bills' },
