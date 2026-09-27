@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
 
 export async function runCrmSave(operation, onSaved, notify) {
   try {
@@ -27,7 +28,12 @@ export function Contacts({ user, notify }) {
 
   return (
     <Panel title="联系人管理">
-      <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button>}/>
+      <BusinessPageHeader
+        title="联系人管理"
+        context="维护客户与供应商的主联系人；后续销售订单与采购订单可引用。"
+        primaryAction={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button> : null}
+      />
+      <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={null}/>
       <div className="table-wrap">
         <table>
           <thead><tr><th>姓名</th><th>性别</th><th>职位</th><th>电话</th><th>手机</th><th>邮箱</th><th>所属单位</th><th>主联系人</th><th/></tr></thead>
@@ -47,7 +53,9 @@ export function Contacts({ user, notify }) {
             ))}
           </tbody>
         </table>
-        {!items.length && <Empty text="暂无联系人"/>}
+        {!items.length && (search
+          ? <BusinessState kind="NO_RESULTS" title="没有符合搜索条件的联系人" description="可调整关键词或清除搜索条件后重试。" />
+          : <BusinessState kind="EMPTY" title="暂无联系人" description="新增联系人后可关联到客户或供应商。" action={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button> : null} />)}
       </div>
       {editing && <ContactModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('联系人已保存'); }} />}
     </Panel>
@@ -130,7 +138,12 @@ export function Followups({ user, notify }) {
 
   return (
     <Panel title="客户跟进">
-      <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button>}/>
+      <BusinessPageHeader
+        title="客户跟进"
+        context="按客户与跟进日期维护拜访、电话、邮件等记录。"
+        primaryAction={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button> : null}
+      />
+      <Toolbar action={null}/>
       <div className="filters">
         <label>客户<select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
           <option value="">全部客户</option>
@@ -155,7 +168,9 @@ export function Followups({ user, notify }) {
             ))}
           </tbody>
         </table>
-        {!items.length && <Empty text="暂无跟进记录"/>}
+        {!items.length && (customerId
+          ? <BusinessState kind="NO_RESULTS" title="所选客户暂无跟进记录" description="可切换客户或新增跟进。" />
+          : <BusinessState kind="EMPTY" title="暂无跟进记录" description="按客户与跟进日期记录拜访、电话、邮件等。"/>)}
       </div>
       {editing && <FollowupModal customers={customers} user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('跟进记录已保存'); }} />}
     </Panel>

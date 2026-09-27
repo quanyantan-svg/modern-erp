@@ -9,8 +9,8 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
-import { RecordCard, RecordList } from '../components/design-system.jsx';
-import { forecastStatusLabel } from '../lib/status.js';
+import { RecordCard, RecordList, BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
+import { presentStatus } from '../lib/presentation.js';
 
 function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
@@ -66,8 +66,9 @@ function toForecastForm(forecast) {
 }
 
 function statusBadgeType(status) {
-  if (status === 'ACTIVE') return 'approved';
-  if (status === 'CANCELLED') return 'rejected';
+  const presentation = presentStatus(status, 'forecast.status');
+  if (presentation.tone === 'success') return 'approved';
+  if (presentation.tone === 'muted' || presentation.tone === 'danger') return 'rejected';
   return 'draft';
 }
 
@@ -102,9 +103,14 @@ export default function Forecasts({ user, notify }) {
   const handleRefresh = () => load();
 
   return <>
+    <BusinessPageHeader
+      title="需求预测"
+      context="按期间活动维护需求预测；仅 ACTIVE 预测会被 MRP 消耗。"
+      primaryAction={canManage ? <button type="button" className="primary" onClick={handleNew}>＋ 新建预测</button> : null}
+      secondaryActions={<button type="button" className="secondary" onClick={handleRefresh}>刷新</button>}
+    />
     <Panel
       title="需求预测"
-      action={canManage && <button type="button" className="primary" onClick={handleNew}>＋ 新建预测</button>}
     >
       <Toolbar
         search={search}
@@ -123,7 +129,7 @@ export default function Forecasts({ user, notify }) {
           key={row.id}
           title={row.forecast_name}
           subtitle={row.forecast_code}
-          status={<Status status={statusBadgeType(row.status)} label={forecastStatusLabel(row.status)}/>}
+          status={<Status status={statusBadgeType(row.status)} label={presentStatus(row.status, 'forecast.status').label}/>}
           facts={[
             { label: '预测期间', value: `${row.period_start} ~ ${row.period_end}` },
             { label: '明细', value: `${row.item_count} 项` },
@@ -132,7 +138,9 @@ export default function Forecasts({ user, notify }) {
           ]}
           onClick={() => setViewingId(row.id)}
         />)}
-        {!filtered.length && <Empty text={rows.length === 0 ? '还没有需求预测。创建预测后，可将其纳入 MRP 运算。' : '没有符合筛选条件的预测'}/>}
+        {!filtered.length && (rows.length === 0
+          ? <BusinessState kind="EMPTY" title="还没有需求预测" description="创建预测后，可将其纳入 MRP 运算。" action={canManage ? <button type="button" className="primary" onClick={handleNew}>＋ 新建预测</button> : null} />
+          : <BusinessState kind="NO_RESULTS" title="没有符合筛选条件的预测" description="可调整状态或清除搜索条件后重试。" />)}
       </RecordList>
     </Panel>
 

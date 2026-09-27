@@ -9,12 +9,12 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
-import { DetailSection, EmptyState, KeyValueRow, RecordCard, RecordList } from '../components/design-system.jsx';
+import { DetailSection, EmptyState, KeyValueRow, RecordCard, RecordList, BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
 import {
   demandModeHint,
   demandModeLabel,
-  mrpRunStatusLabel,
 } from '../lib/status.js';
+import { presentStatus } from '../lib/presentation.js';
 
 function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
@@ -55,8 +55,9 @@ function toRunForm(run) {
 }
 
 function statusBadgeType(status) {
-  if (status === 'COMPLETED') return 'approved';
-  if (status === 'CANCELLED') return 'rejected';
+  const presentation = presentStatus(status);
+  if (presentation.tone === 'success') return 'approved';
+  if (presentation.tone === 'muted' || presentation.tone === 'danger') return 'rejected';
   return 'draft';
 }
 
@@ -89,9 +90,14 @@ export default function MrpRuns({ user, notify }) {
   const handleRefresh = () => load();
 
   return <>
+    <BusinessPageHeader
+      title="MRP 运算"
+      context="按需求来源与期间计算生产建议与采购建议；只读快照不影响库存或会计。"
+      primaryAction={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 运行 MRP 运算</button> : null}
+      secondaryActions={<button type="button" className="secondary" onClick={handleRefresh}>刷新</button>}
+    />
     <Panel
       title="MRP 运算"
-      action={canManage && <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 运行 MRP 运算</button>}
     >
       <Toolbar
         search={search}
@@ -112,7 +118,7 @@ export default function MrpRuns({ user, notify }) {
             key={row.id}
             title={row.run_name}
             subtitle={row.run_code}
-            status={<Status status={statusBadgeType(row.status)} label={mrpRunStatusLabel(row.status)}/>}
+            status={<Status status={statusBadgeType(row.status)} label={presentStatus(row.status).label}/>}
             facts={[
               { label: '期间', value: `${row.horizon_start} ~ ${row.horizon_end}` },
               { label: '需求来源', value: demandModeLabel(row.demand_source_mode) },
@@ -122,7 +128,9 @@ export default function MrpRuns({ user, notify }) {
             onClick={() => setViewingId(row.id)}
           />;
         })}
-        {!filtered.length && <Empty text={rows.length === 0 ? '还没有 MRP 运算。创建一次运算，系统会计算生产与采购需求。' : '没有符合筛选条件的 MRP 运算'}/>}
+        {!filtered.length && (rows.length === 0
+          ? <BusinessState kind="EMPTY" title="还没有 MRP 运算" description="创建一次运算后，系统会计算生产建议与采购建议。" action={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 运行 MRP 运算</button> : null} />
+          : <BusinessState kind="NO_RESULTS" title="没有符合筛选条件的 MRP 运算" description="可调整状态或清除搜索条件后重试。" />)}
       </RecordList>
     </Panel>
 
@@ -227,7 +235,7 @@ function MrpRunDetail({ runId, onClose, onRerun, onChanged, notify }) {
       <KeyValueRow label="期间" value={`${run.horizon_start} ~ ${run.horizon_end}`}/>
       <KeyValueRow label="需求来源" value={demandModeLabel(run.demand_source_mode)}/>
       {run.forecast_code && <KeyValueRow label="预测来源" value={run.forecast_code}/>}
-      <KeyValueRow label="状态"><Status status={statusBadgeType(run.status)} label={mrpRunStatusLabel(run.status)}/></KeyValueRow>
+      <KeyValueRow label="状态"><Status status={statusBadgeType(run.status)} label={presentStatus(run.status).label}/></KeyValueRow>
     </DetailSection>
     {completedZero ? <EmptyState
       title="本次计算期间内没有可纳入的需求"

@@ -1,12 +1,54 @@
 ﻿import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, relative, resolve } from 'node:path';
 
+const BUSINESS_CATEGORY_BY_STATUS = Object.freeze({
+  400: 'VALIDATION',
+  401: 'PERMISSION_DENIED',
+  403: 'PERMISSION_DENIED',
+  404: 'VALIDATION',
+  409: 'BUSINESS_RULE_BLOCKED',
+  413: 'VALIDATION',
+  415: 'VALIDATION',
+});
+
 export class HttpError extends Error {
   constructor(status, message, details) {
     super(message);
     this.status = status;
     this.details = details;
+    if (details && typeof details === 'object' && !Array.isArray(details)) {
+      if (typeof details.code === 'string') this.code = details.code;
+      if (typeof details.resolution === 'string') this.resolution = details.resolution;
+    }
+    if (!this.code) this.code = BUSINESS_CATEGORY_BY_STATUS[status] || 'INTERNAL_ERROR';
   }
+}
+
+// V1.4-E1 canonical structured-error serializer. Existing clients that read
+// `error` continue to work; new clients can opt into `code/message/details/
+// resolution/requestId` without breaking legacy consumers.
+export function serializeError(error, requestId) {
+  const safe = {
+    error: '服务器内部错误',
+    code: 'INTERNAL_ERROR',
+    message: '服务器内部错误',
+    details: undefined,
+    resolution: undefined,
+    requestId,
+  };
+  if (error instanceof HttpError) {
+    safe.status = error.status;
+    safe.error = error.message;
+    safe.code = error.code || BUSINESS_CATEGORY_BY_STATUS[error.status] || 'INTERNAL_ERROR';
+    safe.message = error.message;
+    safe.details = error.details;
+    if (error.resolution) safe.resolution = error.resolution;
+  } else if (error && typeof error === 'object' && typeof error.message === 'string') {
+    safe.error = '服务器内部错误';
+    safe.message = '服务器内部错误';
+    if (error.code) safe.code = String(error.code);
+  }
+  return safe;
 }
 
 export function allow(actor, permission) {

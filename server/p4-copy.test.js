@@ -17,7 +17,10 @@ test('P4 — canonical mobile and planning terminology', () => {
 });
 
 test('P4 — five canonical visible role labels', () => {
-  assert.deepEqual(Object.values(ROLE_DISPLAY_NAME).slice(0, 5), ['系统管理员', '销售人员', '审批人员', '仓库人员', '财务人员']);
+  // V1.4-C §3 freezes REVIEWER's visible label as 业务审核员 to express
+  // the cross-sales/purchase/requisition/stocktake review scope; the
+  // backend code role-reviewer is unchanged.
+  assert.deepEqual(Object.values(ROLE_DISPLAY_NAME).slice(0, 5), ['系统管理员', '销售人员', '业务审核员', '仓库人员', '财务人员']);
 });
 
 test('P4 — centralized status and planning labels never echo raw values', () => {

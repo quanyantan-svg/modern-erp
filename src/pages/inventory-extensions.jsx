@@ -3,10 +3,9 @@ import { api } from '../api.js';
 import {
   Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime, quantity,
 } from '../components/ui.jsx';
+import { BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-
-const SCRAP_STATUS_LABEL = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
-const PERIOD_STATUS_LABEL = { CLOSED: '已结账', REOPENED: '已反结账' };
+import { presentStatus } from '../lib/presentation.js';
 
 function useInventoryScraps(notify) {
   const [rows, setRows] = useState([]);
@@ -63,7 +62,7 @@ export function InventoryScraps({ user, notify }) {
   return <Panel title="库存报废" subtitle="DRAFT 草稿可编辑，确认后扣减库存并写入库存异动；已确认与已取消单据只读">
     <Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_SCRAP_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建报废单</button>}/>
     <p className="section-hint">报废单确认时按仓库 + 货品校验库存，任一行不足则整张单据回滚。</p>
-    <div className="table-wrap"><table><thead><tr><th>报废单号</th><th>状态</th><th>报废日期</th><th className="number">明细数</th><th className="number">报废数量</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}><td className="mono">{row.scrapNo}</td><td><Status status={row.status} label={SCRAP_STATUS_LABEL[row.status] || row.status}/></td><td>{row.scrapDate}</td><td className="number">{row.itemCount}</td><td className="number">{quantity(row.totalQuantity)}</td><td>{row.reason || '—'}</td><td>{row.creatorName}</td><td className="dim">{dateTime(row.confirmedAt)}</td></tr>)}</tbody></table>{!rows.length && <Empty text="没有库存报废记录"/>}</div>
+    <div className="table-wrap"><table><thead><tr><th>报废单号</th><th>状态</th><th>报废日期</th><th className="number">明细数</th><th className="number">报废数量</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}><td className="mono">{row.scrapNo}</td><td><Status status={row.status} label={presentStatus(row.status).label}/></td><td>{row.scrapDate}</td><td className="number">{row.itemCount}</td><td className="number">{quantity(row.totalQuantity)}</td><td>{row.reason || '—'}</td><td>{row.creatorName}</td><td className="dim">{dateTime(row.confirmedAt)}</td></tr>)}</tbody></table>{!rows.length && <BusinessState kind="EMPTY" title="没有库存报废记录" description="确认报废后会扣减库存并写入库存异动表。"/>}</div>
     {editing && <InventoryScrapModal value={editing} warehouses={warehouses} products={products} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); notify('报废单已保存'); }}/>}
     {viewing && <InventoryScrapDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
   </Panel>;
@@ -196,7 +195,7 @@ export function InventoryMonthEnd({ user, notify }) {
       const canReopenThis = canManage && row.status === 'CLOSED' && (!latestClosed || latestClosed.period_key === row.period_key);
       return <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
         <td className="mono">{row.period_key}</td>
-        <td><Status status={row.status} label={PERIOD_STATUS_LABEL[row.status] || row.status}/></td>
+        <td><Status status={row.status} label={presentStatus(row.status, 'period.status').label}/></td>
         <td className="dim">{dateTime(row.closed_at)}</td>
         <td>{row.closedByName}</td>
         <td className="number">{row.snapshotCount}</td>
@@ -204,7 +203,7 @@ export function InventoryMonthEnd({ user, notify }) {
         <td>{row.reopenedByName || '—'}</td>
         <td>{canReopenThis && <button type="button" className="row-action" onClick={(event) => { event.stopPropagation(); void reopen(row); }}>反结账</button>}</td>
       </tr>;
-    })}</tbody></table>{!rows.length && <Empty text="尚未执行存货月结"/>}</div>
+    })}</tbody></table>{!rows.length && <BusinessState kind="EMPTY" title="尚未执行存货月结" description="对已结束自然月执行结账后，将生成只读快照并冻结该月库存影响。"/>}</div>
     {showCloseForm && <CloseInventoryPeriodModal notify={notify} onClose={() => setShowCloseForm(false)} onSaved={() => { setShowCloseForm(false); reload(); notify('存货月结已保存'); }}/>}
     {viewing && <InventoryPeriodClosureDetail value={viewing} onClose={() => setViewing(null)}/>}
   </Panel>;

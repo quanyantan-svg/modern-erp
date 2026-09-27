@@ -1,8 +1,93 @@
 import { Icon } from './icons.jsx';
 import { statusLabel } from '../lib/status.js';
+import { presentStatus } from '../lib/presentation.js';
 
 export function PageHeader({ title, subtitle, action, large = false }) { return <header className={`page-header${large ? ' page-header--large' : ''}`}><div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{action && <div className="page-header__action">{action}</div>}</header>; }
 export function SectionHeader({ title, subtitle, action }) { return <header className="section-header"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</header>; }
+
+// V1.4-E1: canonical page header. Page bodies pass `context` (e.g. business
+// scope or date basis) and `status` so the header itself, not the body, owns
+// that surface. The single `primaryAction` is the page's main call-to-
+// action; `secondaryActions` are subordinate and visually demoted.
+export function BusinessPageHeader({
+  title,
+  context,
+  status,
+  statusContext,
+  primaryAction,
+  secondaryActions,
+  meta,
+  back,
+  help,
+}) {
+  const statusNode = (() => {
+    if (!status) return null;
+    const presentation = presentStatus(status, statusContext);
+    return (
+      <span
+        className={`status-chip status-chip--${presentation.tone}`}
+        data-group={presentation.group}
+        title={presentation.groupLabel}
+      >
+        {presentation.label}
+      </span>
+    );
+  })();
+  const secondary = Array.isArray(secondaryActions) ? secondaryActions : secondaryActions ? [secondaryActions] : [];
+  return (
+    <header className="page-header page-header--business">
+      <div className="page-header__leading">
+        {back && <span className="page-header__back">{back}</span>}
+        <div>
+          <h1>{title}</h1>
+          {context && <p className="page-header__context">{context}</p>}
+        </div>
+      </div>
+      <div className="page-header__trailing">
+        {meta && <div className="page-header__meta">{meta}</div>}
+        {statusNode}
+        {secondary.length > 0 && (
+          <div className="page-header__secondary">{secondary}</div>
+        )}
+        {help && <span className="page-header__help">{help}</span>}
+        {primaryAction && (
+          <div className="page-header__action page-header__action--primary">
+            {primaryAction}
+          </div>
+        )}
+      </div>
+    </header>
+  );
+}
+
+// V1.4-E1: action hierarchy wrapper. The single primary slot enforces
+// "usually one obvious primary action" from solution.md §21.9.1. Destructive
+// actions are routed to a separate slot so they cannot be visually confused
+// with the page's main submission.
+export function BusinessActionBar({
+  primary,
+  secondary,
+  destructive,
+  navigation,
+  layout = 'inline',
+}) {
+  return (
+    <div className={`business-action-bar business-action-bar--${layout}`}>
+      {navigation && <div className="business-action-bar__nav">{navigation}</div>}
+      {secondary && (
+        <div className="business-action-bar__secondary">
+          {Array.isArray(secondary) ? secondary : [secondary]}
+        </div>
+      )}
+      {primary && <div className="business-action-bar__primary">{primary}</div>}
+      {destructive && (
+        <div className="business-action-bar__destructive">
+          {Array.isArray(destructive) ? destructive : [destructive]}
+        </div>
+      )}
+    </div>
+  );
+}
 export function GroupedList({ title, children, className = '' }) { return <section className={`grouped-section ${className}`}>{title && <h2>{title}</h2>}<div className="grouped-list">{children}</div></section>; }
 export function ListRow({ title, subtitle, meta, status, onClick, children }) { const Tag = onClick ? 'button' : 'div'; return <Tag type={onClick ? 'button' : undefined} className="list-row" onClick={onClick}><div className="list-row__content"><strong>{title}</strong>{subtitle && <span>{subtitle}</span>}{children}</div><div className="list-row__aside">{status}{meta && <small>{meta}</small>}{onClick && <Icon name="chevron" size={18}/>}</div></Tag>; }
 export function FormSection({ title, description, children }) { return <fieldset className="form-section"><legend>{title}</legend>{description && <p>{description}</p>}<div className="form-section__body">{children}</div></fieldset>; }
@@ -38,6 +123,122 @@ export function DangerSheet({ title = '请确认', message, confirmLabel = '确�
 export function InlineAlert({ tone = 'info', title, children }) { return <div className={`inline-alert inline-alert--${tone}`} role={tone === 'danger' ? 'alert' : 'status'}>{title && <strong>{title}</strong>}<div>{children}</div></div>; }
 export function EmptyState({ title = '暂无数据', description, action }) { return <div className="canonical-empty-state"><Icon name="inbox" size={28}/><strong>{title}</strong>{description && <p>{description}</p>}{action}</div>; }
 export function Skeleton({ lines = 3 }) { return <div className="skeleton" role="status" aria-label="加载中">{Array.from({ length: lines }, (_, index) => <span key={index}/>)}</div>; }
+
+// V1.4-E1 canonical state component. Distinguishes the seven reasons a list
+// surface might be blank without forcing every page to invent its own copy.
+// `kind` selects the pre-built template; `title` and `description` may
+// override the copy per page. `action` is the optional recovery link.
+const STATE_PRESETS = Object.freeze({
+  LOADING: {
+    icon: 'inbox',
+    title: '正在载入',
+    description: '请稍候，正在加载业务数据。',
+    tone: 'info',
+  },
+  EMPTY: {
+    icon: 'inbox',
+    title: '尚无业务数据',
+    description: '当前列表中没有任何记录。',
+    tone: 'muted',
+  },
+  NO_RESULTS: {
+    icon: 'search',
+    title: '当前条件无匹配',
+    description: '没有符合筛选条件的记录，可尝试调整或清除筛选。',
+    tone: 'muted',
+  },
+  PREREQUISITE_REQUIRED: {
+    icon: 'info',
+    title: '需要先完成前置条件',
+    description: '当前操作依赖尚未建立的数据或业务流程。',
+    tone: 'warning',
+  },
+  PERMISSION_DENIED: {
+    icon: 'info',
+    title: '没有查看此内容的权限',
+    description: '当前账号缺少访问此页面的业务权限，请联系管理员。',
+    tone: 'warning',
+  },
+  BUSINESS_BLOCKED: {
+    icon: 'error',
+    title: '业务规则不允许此操作',
+    description: '当前状态或数据不满足业务校验。',
+    tone: 'danger',
+  },
+  ERROR: {
+    icon: 'error',
+    title: '加载失败',
+    description: '暂时无法完成，请稍后重试。',
+    tone: 'danger',
+  },
+});
+
+export function BusinessState({ kind = 'EMPTY', title, description, action, requestId, details }) {
+  const preset = STATE_PRESETS[kind] || STATE_PRESETS.EMPTY;
+  const finalTitle = title || preset.title;
+  const finalDescription = description || preset.description;
+  const iconName = preset.icon;
+  return (
+    <div className={`business-state business-state--${preset.tone}`} role={preset.tone === 'danger' ? 'alert' : 'status'}>
+      <Icon name={iconName} size={28} />
+      <strong>{finalTitle}</strong>
+      <p>{finalDescription}</p>
+      {action && <div className="business-state__action">{action}</div>}
+      {kind === 'ERROR' && requestId && (
+        <small className="business-state__request">请求编号：{requestId}</small>
+      )}
+      {kind === 'ERROR' && details && (
+        <details className="business-state__details">
+          <summary>查看技术详情</summary>
+          <pre>{typeof details === 'string' ? details : JSON.stringify(details, null, 2)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+// V1.4-E1 responsive list primitive. The same data, status and actions feed
+// both the desktop row layout and a stacked mobile card. Pages compose
+// `renderDesktopRow` and `renderMobileCard` instead of duplicating shapes.
+export function ResponsiveBusinessList({
+  items,
+  isLoading,
+  state,
+  renderDesktopRow,
+  renderMobileCard,
+  renderEmpty,
+  keyOf,
+  className = '',
+}) {
+  if (isLoading) {
+    return state && <BusinessState kind="LOADING" />;
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    if (state) return state;
+    if (renderEmpty) return renderEmpty();
+    return <BusinessState kind="EMPTY" />;
+  }
+  return (
+    <div className={`responsive-business-list ${className}`}>
+      <div className="responsive-business-list__desktop" role="table">
+        {items.map((item, index) => (
+          <div key={keyOf ? keyOf(item, index) : index} role="row">
+            {renderDesktopRow(item, index)}
+          </div>
+        ))}
+      </div>
+      <div className="responsive-business-list__mobile">
+        {items.map((item, index) => (
+          <div key={keyOf ? `m-${keyOf(item, index)}` : `m-${index}`}>
+            {renderMobileCard(item, index)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export { presentStatus, STATUS_GROUPS, ACTION_VERBS } from '../lib/presentation.js';
 export function RelationshipCard({ label, documentNo, status, onClick }) { return <button type="button" className="relationship-card" onClick={onClick}><div><span>{label}</span><strong>{documentNo}</strong></div>{status}{onClick && <Icon name="chevron" size={18}/>}</button>; }
 export function LifecycleBadge({ archived, classification }) { const text = archived ? '已归档' : ({ SAFE_DELETE: '可直接删除', SAFE_CHAIN_DELETE: '可整链删除', SAFE_REVERSAL_CLEANUP: '可回滚后清理', ARCHIVE_ONLY: '只能归档', BLOCKED: '当前无法删除' }[classification] || '生命周期待分析'); return <span className={`lifecycle-badge lifecycle-badge--${archived ? 'archived' : String(classification || 'unknown').toLowerCase()}`}>{text}</span>; }
 export function DependencyGraphSheet({ graph, onClose, actions }) { return <Sheet title="业务链分析" onClose={onClose} className="dependency-graph-sheet"><div className="dependency-graph-list">{graph?.nodes?.map((node) => <article key={node.key} className={node.selectedForCleanup ? 'is-selected' : 'is-dependent'}><header><strong>{node.documentNo}</strong><StatusChip status={node.status}/></header><span>{node.label}</span><small>{node.effective ? '已有业务影响' : '无库存或财务影响'}{node.period ? ` · ${node.period}` : ''}</small></article>)}</div>{graph?.blockers?.map((blocker) => <InlineAlert key={blocker.code} tone="danger">{blocker.message}</InlineAlert>)}{actions && <BottomActionBar>{actions}</BottomActionBar>}</Sheet>; }

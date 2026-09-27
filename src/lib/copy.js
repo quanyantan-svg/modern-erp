@@ -1,12 +1,12 @@
 export const ROLE_DISPLAY_NAME = Object.freeze({
   'role-admin': '系统管理员',
   'role-sales': '销售人员',
-  'role-reviewer': '审批人员',
+  'role-reviewer': '业务审核员',
   'role-warehouse': '仓库人员',
   'role-accounting': '财务人员',
   ADMIN: '系统管理员',
   SALES: '销售人员',
-  REVIEWER: '审批人员',
+  REVIEWER: '业务审核员',
   WAREHOUSE: '仓库人员',
   ACCOUNTING: '财务人员',
 });
@@ -38,4 +38,76 @@ export function safeErrorMessage({ status, code, serverMessage, network = false 
   if (status === 400) return '请检查填写内容';
   if (status === 409) return '当前状态已发生变化，请刷新后重试';
   return '暂时无法完成，请稍后重试';
+}
+
+// V1.4-E1 structured-error interpretation layer. Translates the new
+// `{ code, message, details, resolution, requestId }` envelope (and the
+// legacy `{ error }` shape) into a presentation-ready object the page can
+// render without losing requestId or fallback semantics.
+export const ERROR_CATEGORIES = Object.freeze({
+  PERMISSION: 'permission',
+  VALIDATION: 'validation',
+  BUSINESS_RULE: 'business_rule',
+  MISSING_PREREQUISITE: 'missing_prerequisite',
+  NETWORK: 'network',
+  SERVER: 'server',
+  UNKNOWN: 'unknown',
+});
+
+const PERMISSION_CODES = new Set(['PERMISSION_DENIED']);
+const MISSING_PREREQUISITE_CODES = new Set([
+  'MISSING_PREREQUISITE',
+  'PREREQUISITE_REQUIRED',
+  'PERIOD_CLOSED',
+  'TRACKING_ALLOCATION_REQUIRED',
+  'SOURCE_UNAVAILABLE',
+]);
+const VALIDATION_CODES = new Set(['INVALID_DOCUMENT_STATE', 'INVALID_INPUT']);
+
+function categoryForStatus(status, code) {
+  if (PERMISSION_CODES.has(code)) return ERROR_CATEGORIES.PERMISSION;
+  if (MISSING_PREREQUISITE_CODES.has(code)) return ERROR_CATEGORIES.MISSING_PREREQUISITE;
+  if (VALIDATION_CODES.has(code)) return ERROR_CATEGORIES.VALIDATION;
+  if (status === 401 || status === 403) return ERROR_CATEGORIES.PERMISSION;
+  if (status === 404) return ERROR_CATEGORIES.MISSING_PREREQUISITE;
+  if (status === 400 || status === 413 || status === 415) return ERROR_CATEGORIES.VALIDATION;
+  if (status === 409) return ERROR_CATEGORIES.BUSINESS_RULE;
+  if (status >= 500) return ERROR_CATEGORIES.SERVER;
+  return ERROR_CATEGORIES.UNKNOWN;
+}
+
+export function classifyApiError(error) {
+  if (!error) {
+    return {
+      category: ERROR_CATEGORIES.UNKNOWN,
+      message: '操作未完成',
+      resolution: undefined,
+      requestId: undefined,
+      raw: undefined,
+    };
+  }
+  if (error?.name === 'TypeError' && /fetch/i.test(error.message || '')) {
+    return {
+      category: ERROR_CATEGORIES.NETWORK,
+      message: safeErrorMessage({ network: true }),
+      resolution: '请检查网络后重试',
+      requestId: undefined,
+      raw: error,
+    };
+  }
+  const status = typeof error.status === 'number' ? error.status : 0;
+  const code = error.code || (error.details && error.details.code) || '';
+  const serverMessage = error.message;
+  const requestId = error.requestId;
+  const resolution = error.resolution || (error.details && error.details.resolution) || undefined;
+  const category = categoryForStatus(status, code);
+  return {
+    category,
+    code,
+    status,
+    message: safeErrorMessage({ status, code, serverMessage }),
+    resolution,
+    requestId,
+    raw: error,
+  };
 }

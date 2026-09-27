@@ -289,8 +289,12 @@ test('P1 forecasts: permanent helper subtitle is removed while empty state remai
 
 test('P1 forecasts: page uses centralized forecast status label', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/forecasts.jsx'), 'utf8');
-  assertContains(source, "from '../lib/status.js'");
-  assertContains(source, 'forecastStatusLabel');
+  // V1.4-E1 status presentation moves through presentation.js; the page
+  // must still route its forecast status display through the centralized
+  // helper rather than echo raw backend enum strings.
+  assertContains(source, "from '../lib/presentation.js'");
+  assertContains(source, 'presentStatus');
+  assertContains(source, "'forecast.status'");
 });
 
 test('P1 forecasts: action button uses 开始计算 / 生效 / 取消 lifecycle', () => {

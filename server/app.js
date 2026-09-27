@@ -119,6 +119,7 @@ import {
   requiredCode,
   requiredText,
   send,
+  serializeError,
   serveStatic,
   setSecurityHeaders,
 } from './lib/http.js';
@@ -169,13 +170,18 @@ export function createApp(db, options = {}) {
       }
       return serveStatic(res, url.pathname, distDir);
     } catch (error) {
-      if (error instanceof HttpError) return send(res, error.status, { error: error.message, details: error.details, requestId });
-      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message))) return send(res, 409, { error: '编号或账号已存在，请更换后重试', requestId });
+      if (error instanceof HttpError) {
+        const safe = serializeError(error, requestId);
+        return send(res, error.status, safe);
+      }
+      if (/UNIQUE constraint failed|ER_DUP_ENTRY/i.test(String(error.message))) {
+        return send(res, 409, serializeError(new HttpError(409, '编号或账号已存在，请更换后重试'), requestId));
+      }
       (logger || createStructuredLogger()).error('unhandled_request_error', {
         requestId, method: req.method, route: url.pathname, userId: req.actor?.id ?? null,
         category: error?.code || error?.name || 'Error', stack: error?.stack || String(error),
       });
-      return send(res, 500, { error: '服务器内部错误', requestId });
+      return send(res, 500, serializeError(error, requestId));
     }
   };
 }

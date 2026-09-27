@@ -1,13 +1,17 @@
-import { safeErrorMessage } from './lib/copy.js';
+import { safeErrorMessage, classifyApiError } from './lib/copy.js';
 
 const TOKEN_KEY = 'modern_erp_token';
 
 export class ApiError extends Error {
-  constructor(message, status = 0, code = '') {
-    super(message);
+  constructor({ message, status = 0, code = '', details, resolution, requestId, cause }) {
+    super(message || '操作未完成');
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.details = details;
+    this.resolution = resolution;
+    this.requestId = requestId;
+    this.cause = cause;
   }
 }
 
@@ -25,8 +29,14 @@ export async function api(path, options = {}) {
   let response;
   try {
     response = await fetch(path, { ...options, headers });
-  } catch {
-    throw new ApiError(safeErrorMessage({ network: true }));
+  } catch (cause) {
+    const wrapped = new ApiError({
+      message: safeErrorMessage({ network: true }),
+      status: 0,
+      code: 'NETWORK_FAILURE',
+      cause,
+    });
+    throw wrapped;
   }
   if (response.status === 401 && path !== '/api/auth/login') {
     setToken('');
@@ -34,8 +44,29 @@ export async function api(path, options = {}) {
   }
   const data = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = data?.details?.code || data?.code || '';
-    throw new ApiError(safeErrorMessage({ status: response.status, code, serverMessage: data?.error }), response.status, code);
+    // V1.4-E1: prefer the canonical structured envelope; fall back to
+    // legacy `error` field for any endpoint that has not migrated yet.
+    const payload = data || {};
+    const message = payload.message || payload.error || '';
+    const code = payload.code || (payload.details && payload.details.code) || '';
+    throw new ApiError({
+      message: safeErrorMessage({
+        status: response.status,
+        code,
+        serverMessage: message,
+      }),
+      status: response.status,
+      code,
+      details: payload.details,
+      resolution: payload.resolution || (payload.details && payload.details.resolution),
+      requestId: payload.requestId || response.headers.get('X-Request-Id'),
+    });
   }
   return data;
+}
+
+// Convenience: re-exported interpreter so pages do not need a second import
+// when they only have the ApiError instance.
+export function interpretApiError(error) {
+  return classifyApiError(error);
 }
