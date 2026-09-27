@@ -6,6 +6,8 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 import { roleDisplayName } from '../lib/copy.js';
 import { yuanToNonNegativeCents } from '../lib/money.js';
 import { Icon } from '../components/icons.jsx';
+import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import { trackingPresentation, withProductTracking } from '../lib/tracking.js';
 
 export function Login({ onLogin, notify }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -152,7 +154,7 @@ export function Products({ user, notify }) {
   return <Panel title="产品">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品名称或编码" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary compact-create" aria-label="新增产品" onClick={() => setEditing({})}>新增</button>}/>
     <div className="table-wrap"><table><thead><tr><th>产品编码</th><th>产品名称</th><th>单位</th><th>库存跟踪方式</th><th className="number">参考售价</th><th className="number">当前库存</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td>{({ NONE: '不跟踪', LOT: '批次管理', SERIAL: '序列号管理' })[item.trackingPolicy] || '不跟踪'}</td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="产品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td><span className="tracking-badge">{trackingPresentation(item.trackingPolicy).label}</span></td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="产品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty title="还没有产品" text="新建产品后，即可用于销售、采购和库存业务。"/>}</div>
     {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('产品资料已保存'); }} notify={notify}/>}
   </Panel>;
@@ -167,7 +169,10 @@ function ProductModal({ value, onClose, onSaved, notify }) {
     <label>计量单位<input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} required/></label>
     <label>参考售价（元）<input type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} required/></label>
     <label>标准制造成本（元）<input type="number" min="0" step="0.01" value={form.standardManufacturingCost} onChange={(e) => setForm({ ...form, standardManufacturingCost: e.target.value })} placeholder="管理成本基准"/></label>
-    {value.id && <><div className="notice full">库存数量由仓库业务单据维护，不在产品资料中编辑。当前库存请查阅库存工作台或库存报表。</div><label>库存跟踪方式<select value={form.trackingPolicy} onChange={(e) => setForm({ ...form, trackingPolicy: e.target.value })}><option value="NONE">不跟踪</option><option value="LOT">批次管理</option><option value="SERIAL">序列号管理</option></select></label><label>保质期（天）<input type="number" min="1" step="1" value={form.shelfLifeDays || ''} onChange={(e) => setForm({ ...form, shelfLifeDays: e.target.value })} placeholder="可选"/></label><label className="full">变更原因<input value={form.trackingReason} onChange={(e) => setForm({ ...form, trackingReason: e.target.value })} placeholder="启用或变更跟踪方式时必填"/></label></>}
+    {value.id && <div className="notice full">库存数量由仓库业务单据维护，不在产品资料中编辑。当前库存请查阅库存工作台或库存报表。</div>}
+    <fieldset className="tracking-policy-options"><legend>库存跟踪</legend>{['NONE', 'LOT', 'SERIAL'].map((policy) => { const copy = trackingPresentation(policy); return <label className="tracking-policy-option" key={policy}><input type="radio" name="trackingPolicy" checked={form.trackingPolicy === policy} onChange={() => setForm({ ...form, trackingPolicy: policy, trackingReason: '' })}/><span><strong>{copy.label}</strong><small>{copy.description}</small></span></label>; })}</fieldset>
+    {form.trackingPolicy !== 'NONE' && <label>保质期（天）<input type="number" min="1" step="1" value={form.shelfLifeDays || ''} onChange={(e) => setForm({ ...form, shelfLifeDays: e.target.value })} placeholder="可选"/></label>}
+    {value.id && (form.trackingPolicy !== (value.trackingPolicy || 'NONE') || String(form.shelfLifeDays || '') !== String(value.shelfLifeDays || '')) && <label className="full">变更原因<input value={form.trackingReason} onChange={(e) => setForm({ ...form, trackingReason: e.target.value })} placeholder="说明跟踪策略变更原因" required/></label>}
     {value.id && <label className="check"><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })}/> 启用该产品</label>}
     <FormActions onClose={onClose}/>
   </form></Modal>;
@@ -621,7 +626,7 @@ function InventoryAdjustments({ notify, warehouses, products, inventory }) {
 }
 
 function InventoryAdjustmentModal({ value, warehouses, products, inventory, notify, onClose, onSaved }) {
-  const initialItems = value.items?.map((item) => ({ productId: item.productId, quantityDelta: item.quantityDelta })) || [{ productId: '', quantityDelta: '' }];
+  const initialItems = value.items?.map((item) => ({ productId: item.productId, quantityDelta: item.quantityDelta, trackingAllocations: item.trackingAllocations || [] })) || [{ productId: '', quantityDelta: '', trackingAllocations: [] }];
   const [form, setForm] = useState({ warehouseId: value.warehouse_id || '', adjustmentDate: value.adjustment_date || new Date().toISOString().slice(0, 10), reason: value.reason || '', items: initialItems });
   const [warehouseStock, setWarehouseStock] = useState(inventory);
   useEffect(() => { if (form.warehouseId) api(`/api/inventory?warehouse=${encodeURIComponent(form.warehouseId)}`).then((r) => setWarehouseStock(r.inventory || [])).catch((e) => notify(e.message, 'error')); else setWarehouseStock([]); }, [form.warehouseId]);
@@ -635,7 +640,7 @@ function InventoryAdjustmentModal({ value, warehouses, products, inventory, noti
   return <Modal title={value.id ? '编辑库存调整单' : '新建库存调整单'} onClose={onClose} wide><form onSubmit={save}>
     <div className="form-grid order-head"><label>仓库<select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">请选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>调整日期<input type="date" value={form.adjustmentDate} onChange={(e) => setForm({ ...form, adjustmentDate: e.target.value })} required/></label><label className="full">调整原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="必填，如：发现损坏、数据纠正、期初调整" required/></label></div>
     <div className="line-title"><div><strong>调整明细</strong><small className="block">输入变化量：正数增加库存，负数减少库存；系统在确认时计算调整前后数量。</small></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantityDelta: '' }] })}>＋ 添加一行</button></div>
-    <div className="line-table adjustment-lines"><div className="line-row line-header"><span>#</span><span>货品</span><span>当前库存</span><span>调整数量 (+/-)</span><span/></div>{form.items.map((line, index) => <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => updateLine(index, { productId: e.target.value })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><span className="number">{line.productId ? currentStock(line.productId) ?? 0 : '—'}</span><input type="number" step="0.01" value={line.quantityDelta} onChange={(e) => updateLine(index, { quantityDelta: e.target.value })} placeholder="如 5 或 -3" required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>)}</div>
+    <div className="line-table adjustment-lines"><div className="line-row line-header"><span>#</span><span>货品</span><span>当前库存</span><span>调整数量 (+/-)</span><span/></div>{form.items.map((line, index) => <div className="tracking-line" key={index}><div className="line-row"><span>{index + 1}</span><select value={line.productId} onChange={(e) => updateLine(index, withProductTracking(line, e.target.value))} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><span className="number">{line.productId ? currentStock(line.productId) ?? 0 : '—'}</span><input type="number" step="0.01" value={line.quantityDelta} onChange={(e) => updateLine(index, { quantityDelta: e.target.value, trackingAllocations: [] })} placeholder="如 5 或 -3" required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div><TrackingAllocationEditor product={products.find((p) => p.id === line.productId)} warehouseId={form.warehouseId} quantity={Math.abs(Number(line.quantityDelta) || 0)} businessDate={form.adjustmentDate} direction={Number(line.quantityDelta) > 0 ? 'IN' : 'OUT'} value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(index, { trackingAllocations })} notify={notify}/></div>)}</div>
     <FormActions onClose={onClose} saveText="保存草稿"/>
   </form></Modal>;
 }
@@ -669,7 +674,13 @@ function InventoryCheckModal({ value, warehouses, products, onClose, onSaved, no
     businessDate: value.business_date || value.businessDate || todayIso(),
     actualQuantity: value.actual_quantity ?? '',
     reason: value.reason || '',
+    trackingAllocations: value.trackingAllocations || [],
   });
+  const [systemQuantity, setSystemQuantity] = useState(Number(value.system_quantity || 0));
+  useEffect(() => {
+    if (!form.warehouseId || !form.productId) { setSystemQuantity(0); return; }
+    api(`/api/inventory?warehouse=${encodeURIComponent(form.warehouseId)}&product=${encodeURIComponent(form.productId)}`).then((result) => setSystemQuantity(Number(result.inventory?.[0]?.quantity || 0))).catch((error) => notify(error.message, 'error'));
+  }, [form.warehouseId, form.productId]);
   async function save(e) {
     e.preventDefault();
     if (!form.businessDate) { notify('请填写盘点业务日期', 'error'); return; }
@@ -681,10 +692,11 @@ function InventoryCheckModal({ value, warehouses, products, onClose, onSaved, no
   }
   return <Modal title={value.id ? '编辑盘点单' : '新建盘点单'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">请选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
-    <label>货品<select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>
+    <label>货品<select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value, trackingAllocations: [] })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>
     <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
     <label>实际盘点数量<input type="number" min="0" step="0.01" value={form.actualQuantity} onChange={(e) => setForm({ ...form, actualQuantity: e.target.value })} required/></label>
     <label className="full">盘点原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="如：年度盘点、发现异常等"/></label>
+    <TrackingAllocationEditor product={products.find((p) => p.id === form.productId)} warehouseId={form.warehouseId} quantity={Math.abs((Number(form.actualQuantity) || 0) - systemQuantity)} businessDate={form.businessDate} direction={(Number(form.actualQuantity) || 0) >= systemQuantity ? 'IN' : 'OUT'} value={form.trackingAllocations || []} onChange={(trackingAllocations) => setForm({ ...form, trackingAllocations })} notify={notify}/>
     <FormActions onClose={onClose}/>
   </form></Modal>;
 }
@@ -741,7 +753,7 @@ function InventoryTransferModal({ value, warehouses, products, onClose, onSaved,
     </div>
     <div className="line-title"><div><strong>调拨明细</strong></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1 }] })}>＋ 添加一行</button></div>
     <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span/></div>
-      {form.items.map((line, idx) => <div className="line-row" key={idx}><span>{idx + 1}</span><select value={line.productId} onChange={(e) => updateLine(idx, { productId: e.target.value })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value })} required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) })}>×</button></div>)}
+      {form.items.map((line, idx) => <div className="tracking-line" key={idx}><div className="line-row"><span>{idx + 1}</span><select value={line.productId} onChange={(e) => updateLine(idx, withProductTracking(line, e.target.value))} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value, trackingAllocations: [] })} required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) })}>×</button></div><TrackingAllocationEditor product={products.find((p) => p.id === line.productId)} warehouseId={form.fromWarehouseId} quantity={line.quantity} businessDate={form.businessDate} direction="OUT" value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(idx, { trackingAllocations })} notify={notify}/></div>)}
     </div>
     <div className="order-total"><span>合计</span><strong>{total}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
   </form></Modal>;

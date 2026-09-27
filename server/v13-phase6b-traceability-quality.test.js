@@ -111,7 +111,7 @@ describe('V1.3 Phase 6B lot, serial, genealogy and configurable quality', () => 
   });
 
   test('UI and documentation expose Chinese tracking controls, mobile trace directions and legacy honesty', () => {
-    const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8'); const page = readFileSync(new URL('../src/pages/traceability.jsx', import.meta.url), 'utf8'); const master = readFileSync(new URL('../src/pages/master-data.jsx', import.meta.url), 'utf8');
-    assert.match(app, /批次与序列号追溯/); assert.match(page, /向前追溯/); assert.match(page, /向后追溯/); assert.match(master, /批次管理/); assert.match(master, /序列号管理/);
+    const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8'); const page = readFileSync(new URL('../src/pages/traceability.jsx', import.meta.url), 'utf8'); const master = readFileSync(new URL('../src/pages/master-data.jsx', import.meta.url), 'utf8'); const tracking = readFileSync(new URL('../src/lib/tracking.js', import.meta.url), 'utf8');
+    assert.match(app, /批次与序列号追溯/); assert.match(page, /向前追溯/); assert.match(page, /向后追溯/); assert.match(master, /trackingPresentation/); assert.match(tracking, /批次管理/); assert.match(tracking, /序列号管理/);
   });
 });

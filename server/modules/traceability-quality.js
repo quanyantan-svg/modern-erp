@@ -26,10 +26,20 @@ function openStockDocuments(db, productId) {
     ['purchase_receipts', 'purchase_receipt_items', 'receipt_id'], ['sales_deliveries', 'sales_delivery_items', 'delivery_id'],
     ['return_orders', 'return_order_items', 'return_id'], ['purchase_returns', 'purchase_return_items', 'return_id'],
     ['production_material_issues', 'production_material_issue_items', 'issue_id'],
+    ['production_material_returns', 'production_material_return_items', 'return_id'],
+    ['inventory_transfers', 'inventory_transfer_items', 'transfer_id'],
     ['inventory_adjustments', 'inventory_adjustment_items', 'adjustment_id'],
+    ['inventory_scraps', 'inventory_scrap_items', 'scrap_id'],
   ];
-  return specs.some(([header, items, fk]) => db.prepare(`SELECT 1 FROM ${items} i JOIN ${header} h ON h.id=i.${fk} WHERE i.product_id=? AND h.status='DRAFT' LIMIT 1`).get(productId));
+  if (specs.some(([header, items, fk]) => db.prepare(`SELECT 1 FROM ${items} i JOIN ${header} h ON h.id=i.${fk} WHERE i.product_id=? AND h.status='DRAFT' LIMIT 1`).get(productId))) return true;
+  return Boolean(
+    db.prepare("SELECT 1 FROM inventory_checks WHERE product_id=? AND status IN ('DRAFT','SUBMITTED') LIMIT 1").get(productId)
+    || db.prepare("SELECT 1 FROM production_receipts WHERE product_id=? AND status='DRAFT' LIMIT 1").get(productId)
+    || db.prepare("SELECT 1 FROM production_receipt_reversals WHERE product_id=? AND status='DRAFT' LIMIT 1").get(productId),
+  );
 }
+
+const trackingError = (status, code, message, resolution) => new HttpError(status, message, { code, resolution });
 
 export function changeTrackingPolicy(db, actor, productId, { policy, shelfLifeDays = null, reason }) {
   if (actor.roleCode !== 'ADMIN') throw new HttpError(403, '只有管理员可以配置库存跟踪方式');
@@ -42,7 +52,7 @@ export function changeTrackingPolicy(db, actor, productId, { policy, shelfLifeDa
   if (!why) throw new HttpError(400, '请填写跟踪策略变更原因');
   if (next !== product.tracking_policy) {
     const movement = db.prepare('SELECT 1 FROM tracked_inventory_movements WHERE product_id=? LIMIT 1').get(productId);
-    if (movement && product.tracking_policy !== next) throw new HttpError(409, '已有批次/序列号库存流水，禁止变更跟踪方式');
+    if (movement && product.tracking_policy !== next) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', '已有批次/序列号库存流水，禁止变更跟踪方式', '保留当前跟踪方式以维持历史身份一致性');
     const stock = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) n FROM inventory WHERE product_id=?').get(productId).n);
     if (stock > EPS) throw new HttpError(409, '启用批次/序列号管理前库存必须为 0');
     if (openStockDocuments(db, productId)) throw new HttpError(409, '存在使用该货品的库存草稿单据，不能变更跟踪方式');
@@ -68,9 +78,15 @@ export function deriveExpiry(manufactureDate, shelfLifeDays) {
 }
 
 function normalizedAllocations(product, quantity, allocations) {
-  if (product.tracking_policy === 'NONE') return [];
+  if (product.tracking_policy === 'NONE') {
+    if (Array.isArray(allocations) && allocations.length) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', '不跟踪货品不能提交批次或序列号', '清除该行的跟踪身份后重试');
+    return [];
+  }
   if (Math.abs(Number(quantity)) < EPS && (!allocations || allocations.length === 0)) return [];
-  if (!Array.isArray(allocations) || !allocations.length) throw new HttpError(409, '跟踪货品必须填写批次或序列号身份');
+  if (!Array.isArray(allocations) || !allocations.length) {
+    const code = product.tracking_policy === 'LOT' ? 'LOT_REQUIRED' : 'SERIAL_REQUIRED';
+    throw trackingError(409, code, product.tracking_policy === 'LOT' ? '该货品必须填写批次分配' : '该货品必须填写序列号', product.tracking_policy === 'LOT' ? '选择或录入批次，并使批次数量合计等于单据数量' : '录入与单据数量一致的唯一序列号');
+  }
   if (product.tracking_policy === 'LOT') {
     const rows = allocations.map((x) => ({
       lotId: x.lotId || null, lotCode: String(x.lotCode || '').trim(), quantity: num(x.quantity, '批次数量', true),
@@ -78,16 +94,16 @@ function normalizedAllocations(product, quantity, allocations) {
       supplierLotReference: String(x.supplierLotReference || '').trim() || null,
     }));
     if (rows.some((x) => !x.lotId && !x.lotCode)) throw new HttpError(400, '批次分配必须引用批次或填写批次号');
-    if (Math.abs(rows.reduce((s, x) => s + x.quantity, 0) - Number(quantity)) > EPS) throw new HttpError(409, '批次数量合计必须等于单据行数量');
+    if (Math.abs(rows.reduce((s, x) => s + x.quantity, 0) - Number(quantity)) > EPS) throw trackingError(409, 'TRACKING_QUANTITY_MISMATCH', '批次数量合计必须等于单据行数量', '调整批次分配数量后重试');
     return rows;
   }
-  if (!Number.isSafeInteger(Number(quantity))) throw new HttpError(409, '序列号管理货品数量必须为整数');
+  if (!Number.isSafeInteger(Number(quantity))) throw trackingError(409, 'TRACKING_QUANTITY_MISMATCH', '序列号管理货品数量必须为整数', '将基本单位数量调整为整数');
   const rows = allocations.map((x) => ({ serialId: x.serialId || null, serialNumber: String(x.serialNumber || '').trim(), quantity: 1,
     lotId: x.lotId || null, manufactureDate: x.manufactureDate || null,
     expiryDate: x.expiryDate || deriveExpiry(x.manufactureDate, product.shelf_life_days) }));
-  if (rows.length !== Number(quantity) || rows.some((x) => !x.serialId && !x.serialNumber)) throw new HttpError(409, '序列号数量必须与单据行数量完全一致');
+  if (rows.length !== Number(quantity) || rows.some((x) => !x.serialId && !x.serialNumber)) throw trackingError(409, 'TRACKING_QUANTITY_MISMATCH', '序列号数量必须与单据行数量完全一致', '逐个补齐序列号，使已录数与应录数一致');
   const keys = rows.map((x) => x.serialId || x.serialNumber);
-  if (new Set(keys).size !== keys.length) throw new HttpError(409, '序列号不能重复');
+  if (new Set(keys).size !== keys.length) throw trackingError(409, 'SERIAL_DUPLICATE', '序列号不能重复', '删除重复序列号后重试');
   return rows;
 }
 
@@ -112,10 +128,44 @@ export function trackingSnapshot(db, sourceType, sourceId, sourceItemId) {
     FROM tracked_source_allocations WHERE source_type=? AND source_id=? AND source_item_id=? ORDER BY COALESCE(lot_id,planned_lot_code),COALESCE(serial_id,planned_serial_number)`).all(sourceType, sourceId, sourceItemId));
 }
 
+export function sourceTrackingAllocations(db, sourceType, sourceId, sourceItemId) {
+  return db.prepare(`SELECT a.lot_id lotId,l.lot_code lotCode,a.serial_id serialId,s.serial_number serialNumber,
+      a.planned_lot_code plannedLotCode,a.planned_serial_number plannedSerialNumber,a.quantity,
+      a.manufacture_date manufactureDate,a.expiry_date expiryDate,a.supplier_lot_reference supplierLotReference,
+      a.posted,a.reversed
+    FROM tracked_source_allocations a
+    LEFT JOIN inventory_lots l ON l.id=a.lot_id
+    LEFT JOIN inventory_serials s ON s.id=a.serial_id
+    WHERE a.source_type=? AND a.source_id=? AND a.source_item_id=? ORDER BY a.created_at,a.id`)
+    .all(sourceType, sourceId, sourceItemId)
+    .map((row) => ({ ...row, lotCode: row.lotCode || row.plannedLotCode || '', serialNumber: row.serialNumber || row.plannedSerialNumber || '' }));
+}
+
+function sourceDocument(db, sourceType, sourceId) {
+  const specs = {
+    PURCHASE_RECEIPT: ['purchase_receipts', 'receipt_no', '采购入库'],
+    SALES_DELIVERY: ['sales_deliveries', 'delivery_no', '销售出货'],
+    SALES_RETURN: ['return_orders', 'return_no', '销售退货'],
+    PURCHASE_RETURN: ['purchase_returns', 'return_no', '采购退货'],
+    INVENTORY_TRANSFER: ['inventory_transfers', 'transfer_no', '库存调拨'],
+    INVENTORY_CHECK: ['inventory_checks', 'check_no', '库存盘点'],
+    INVENTORY_ADJUSTMENT: ['inventory_adjustments', 'adjustment_no', '库存调整'],
+    INVENTORY_SCRAP: ['inventory_scraps', 'scrap_no', '库存报废'],
+    PRODUCTION_MATERIAL_ISSUE: ['production_material_issues', 'issue_no', '用料出库'],
+    PRODUCTION_MATERIAL_RETURN: ['production_material_returns', 'return_no', '生产退料'],
+    PRODUCTION_RECEIPT: ['production_receipts', 'receipt_no', '生产入库'],
+    PRODUCTION_RECEIPT_REVERSAL: ['production_receipt_reversals', 'reversal_no', '生产入库冲销'],
+  };
+  const spec = specs[sourceType];
+  if (!spec || !sourceId) return { sourceDocumentNo: null, sourceDocumentLabel: sourceType || '历史来源', sourceEvidence: false };
+  const row = db.prepare(`SELECT ${spec[1]} documentNo FROM ${spec[0]} WHERE id=?`).get(sourceId);
+  return { sourceDocumentNo: row?.documentNo || null, sourceDocumentLabel: spec[2], sourceEvidence: Boolean(row?.documentNo) };
+}
+
 function getOrCreateLot(db, product, allocation, source, at) {
   let lot = allocation.lot_id ? db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(allocation.lot_id) : null;
   if (!lot && allocation.planned_lot_code) lot = db.prepare('SELECT * FROM inventory_lots WHERE product_id=? AND lot_code=?').get(product.id, allocation.planned_lot_code);
-  if (lot && lot.product_id !== product.id) throw new HttpError(409, '批次与货品不匹配');
+  if (lot && lot.product_id !== product.id) throw trackingError(409, 'TRACKING_IDENTITY_CONFLICT', '批次与货品不匹配', '重新选择属于当前货品的批次');
   if (!lot) {
     const lotId = id();
     db.prepare(`INSERT INTO inventory_lots(id,product_id,lot_code,manufacture_date,expiry_date,supplier_lot_reference,created_source_type,created_source_id,created_source_item_id,status,created_at)
@@ -128,17 +178,17 @@ function getOrCreateLot(db, product, allocation, source, at) {
 function changeLotBalance(db, warehouseId, productId, lotId, delta, at) {
   const current = Number(db.prepare('SELECT quantity FROM inventory_lot_balances WHERE warehouse_id=? AND lot_id=?').get(warehouseId, lotId)?.quantity || 0);
   const next = current + delta;
-  if (next < -EPS) throw new HttpError(409, '批次可用数量不足');
+  if (next < -EPS) throw trackingError(409, 'LOT_NOT_AVAILABLE', '批次可用数量不足', '减少数量或选择当前仓库中库存充足的批次');
   db.prepare(`INSERT INTO inventory_lot_balances(warehouse_id,product_id,lot_id,quantity,updated_at) VALUES(?,?,?,?,?)
     ON CONFLICT(warehouse_id,lot_id) DO UPDATE SET quantity=excluded.quantity,updated_at=excluded.updated_at`).run(warehouseId, productId, lotId, Math.max(0, next), at);
   return next;
 }
 
 function assertAvailableLot(lot, onDate) {
-  if (!lot) throw new HttpError(409, '批次不存在');
-  if (lot.status === 'HOLD') throw new HttpError(409, 'HOLD 批次不可用于正常出库');
-  if (lot.status !== 'AVAILABLE') throw new HttpError(409, '批次当前不可用');
-  if (isExpired(lot, onDate)) throw new HttpError(409, '过期批次不可用于正常出库');
+  if (!lot) throw trackingError(409, 'LOT_NOT_AVAILABLE', '批次不存在', '刷新批次列表后重新选择');
+  if (lot.status === 'HOLD') throw trackingError(409, 'LOT_NOT_AVAILABLE', '冻结（HOLD）批次不可用于正常出库', '选择可用批次，或先按权限解除冻结');
+  if (lot.status !== 'AVAILABLE') throw trackingError(409, 'LOT_NOT_AVAILABLE', '批次当前不可用', '选择状态为可用的批次');
+  if (isExpired(lot, onDate)) throw trackingError(409, 'LOT_NOT_AVAILABLE', '过期批次不可用于正常出库', '选择未过期批次或更正业务日期');
 }
 
 function assertReturnProvenance(db, sourceType, sourceId, allocations) {
@@ -175,7 +225,7 @@ export function postTrackedMovement(db, { sourceType, sourceId, sourceItemId, pr
     } else {
       let serial = a.serial_id ? db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(a.serial_id) : null;
       if (direction === 'IN' && !serial) {
-        if (db.prepare('SELECT 1 FROM inventory_serials WHERE product_id=? AND serial_number=?').get(productId, a.planned_serial_number)) throw new HttpError(409, '序列号已存在，禁止重复入库');
+        if (db.prepare('SELECT 1 FROM inventory_serials WHERE product_id=? AND serial_number=?').get(productId, a.planned_serial_number)) throw trackingError(409, 'SERIAL_DUPLICATE', '序列号已存在，禁止重复入库', '更正重复序列号后重试');
         const serialId = id();
         db.prepare(`INSERT INTO inventory_serials(id,product_id,serial_number,lot_id,manufacture_date,expiry_date,created_source_type,created_source_id,created_source_item_id,lifecycle_state,current_warehouse_id,updated_at,created_at)
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(serialId, productId, a.planned_serial_number, a.lot_id, a.manufacture_date, a.expiry_date, sourceType, sourceId, sourceItemId, returnToHold ? 'HOLD' : 'AVAILABLE', warehouseId, at, at);
@@ -184,8 +234,8 @@ export function postTrackedMovement(db, { sourceType, sourceId, sourceItemId, pr
         if (!['DELIVERED','CONSUMED'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号已在库或不可重复入库');
         db.prepare("UPDATE inventory_serials SET lifecycle_state=?,current_warehouse_id=?,updated_at=? WHERE id=?").run(returnToHold ? 'HOLD' : 'AVAILABLE', warehouseId, at, serial.id);
       } else {
-        if (!serial || serial.product_id !== productId || serial.current_warehouse_id !== warehouseId || serial.lifecycle_state !== 'AVAILABLE') throw new HttpError(409, '序列号不在指定仓库或当前不可用');
-        if (isExpired(serial, businessDate)) throw new HttpError(409, '过期序列号不可用于正常出库');
+        if (!serial || serial.product_id !== productId || serial.current_warehouse_id !== warehouseId || serial.lifecycle_state !== 'AVAILABLE') throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号不在指定仓库或当前不可用', '刷新序列号列表并选择当前仓库中的可用序列号');
+        if (isExpired(serial, businessDate)) throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '过期序列号不可用于正常出库', '选择未过期序列号或更正业务日期');
         const state = sourceType === 'SALES_DELIVERY' ? 'DELIVERED' : sourceType.includes('SCRAP') ? 'SCRAPPED' : 'CONSUMED';
         db.prepare('UPDATE inventory_serials SET lifecycle_state=?,current_warehouse_id=NULL,updated_at=? WHERE id=?').run(state, at, serial.id);
       }
@@ -238,7 +288,7 @@ export function reverseTrackedSource(db, { originalSourceType, originalSourceId,
           changeLotBalance(db, source.warehouse_id, source.product_id, source.lot_id, Number(source.quantity), at);
         } else {
           const serial = db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(destination.serial_id);
-          if (!serial || serial.current_warehouse_id !== destination.warehouse_id || serial.lifecycle_state !== 'AVAILABLE') throw new HttpError(409, '调拨序列号已不在目标仓可用状态');
+          if (!serial || serial.current_warehouse_id !== destination.warehouse_id || serial.lifecycle_state !== 'AVAILABLE') throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '调拨序列号已不在目标仓可用状态', '刷新库存位置后重试');
           db.prepare('UPDATE inventory_serials SET current_warehouse_id=?,updated_at=? WHERE id=?').run(source.warehouse_id, at, serial.id);
         }
         for (const [row, direction] of [[destination, 'OUT'], [source, 'IN']]) db.prepare(`INSERT INTO tracked_inventory_movements(id,source_type,source_id,source_item_id,product_id,warehouse_id,direction,quantity,lot_id,serial_id,business_date,created_at)
@@ -253,7 +303,7 @@ export function reverseTrackedSource(db, { originalSourceType, originalSourceId,
       } else if (row.serial_id) {
         const serial = db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(row.serial_id);
         if (direction === 'OUT') {
-          if (!serial || serial.current_warehouse_id !== row.warehouse_id || !['AVAILABLE','HOLD'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号已不可用，不能冲销原入库');
+          if (!serial || serial.current_warehouse_id !== row.warehouse_id || !['AVAILABLE','HOLD'].includes(serial.lifecycle_state)) throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号已不可用，不能冲销原入库', '核对序列号当前位置及后续业务后重试');
           db.prepare("UPDATE inventory_serials SET lifecycle_state='CONSUMED',current_warehouse_id=NULL,updated_at=? WHERE id=?").run(at, serial.id);
         } else {
           if (!serial || serial.current_warehouse_id !== null || !['CONSUMED','SCRAPPED'].includes(serial.lifecycle_state)) throw new HttpError(409, '序列号已发生不兼容后续事件，不能恢复');
@@ -376,17 +426,61 @@ export function reverseReceiptGenealogy(db, outputReceiptId, outputIdentityIds =
 
 export function traceIdentity(db, identityType, identityId, direction = 'BACKWARD', includeReversed = false) {
   const type = String(identityType).toUpperCase(); if (!['LOT','SERIAL'].includes(type)) throw new HttpError(400, '跟踪身份类型无效');
-  const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const identity = db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(identityId); if (!identity) throw new HttpError(404, '跟踪身份不存在');
+  const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials';
+  const identity = type === 'LOT'
+    ? db.prepare(`SELECT i.*,p.code productCode,p.name productName,
+        COALESCE((SELECT SUM(quantity) FROM inventory_lot_balances WHERE lot_id=i.id),0) currentQuantity
+      FROM inventory_lots i JOIN products p ON p.id=i.product_id WHERE i.id=?`).get(identityId)
+    : db.prepare(`SELECT i.*,p.code productCode,p.name productName,w.code currentWarehouseCode,w.name currentWarehouseName
+      FROM inventory_serials i JOIN products p ON p.id=i.product_id LEFT JOIN warehouses w ON w.id=i.current_warehouse_id WHERE i.id=?`).get(identityId);
+  if (!identity) throw new HttpError(404, '跟踪身份不存在');
   const key = type === 'LOT' ? 'lot_id' : 'serial_id';
   const movementStatus = includeReversed ? '' : ' AND reversed=0';
   const genealogyStatus = includeReversed ? '' : " AND status='ACTIVE'";
-  const movements = db.prepare(`SELECT * FROM tracked_inventory_movements WHERE ${key}=?${movementStatus} ORDER BY created_at`).all(identityId);
+  const movements = db.prepare(`SELECT m.*,w.code warehouseCode,w.name warehouseName FROM tracked_inventory_movements m LEFT JOIN warehouses w ON w.id=m.warehouse_id WHERE ${key}=?${movementStatus} ORDER BY m.created_at`).all(identityId)
+    .map((row) => ({ ...row, ...sourceDocument(db, row.source_type, row.source_id) }));
   const genealogy = direction === 'FORWARD'
     ? db.prepare(`SELECT * FROM production_genealogy_allocations WHERE input_${key}=?${genealogyStatus} ORDER BY created_at`).all(identityId)
     : db.prepare(`SELECT * FROM production_genealogy_allocations WHERE output_${key}=?${genealogyStatus} ORDER BY created_at`).all(identityId);
   const outputIds = genealogy.map((x) => x.output_serial_id || x.output_lot_id).filter(Boolean);
-  const downstream = outputIds.flatMap((oid) => db.prepare(`SELECT m.*,d.delivery_no,c.id customer_id,c.name customer_name FROM tracked_inventory_movements m LEFT JOIN sales_deliveries d ON d.id=m.source_id AND m.source_type='SALES_DELIVERY' LEFT JOIN customers c ON c.id=d.customer_id WHERE (m.lot_id=? OR m.serial_id=?)${movementStatus} ORDER BY m.created_at`).all(oid, oid));
-  return { identity, direction, includeReversed, movements, genealogy, downstream, legacyNotice: movements.length ? null : '历史记录：未启用批次/序列号管理' };
+  const genealogyRows = genealogy.map((row) => {
+    const order = db.prepare('SELECT order_no FROM production_orders WHERE id=?').get(row.production_order_id);
+    const input = row.input_lot_id
+      ? db.prepare('SELECT lot_code code FROM inventory_lots WHERE id=?').get(row.input_lot_id)
+      : db.prepare('SELECT serial_number code FROM inventory_serials WHERE id=?').get(row.input_serial_id);
+    const output = row.output_lot_id
+      ? db.prepare('SELECT lot_code code FROM inventory_lots WHERE id=?').get(row.output_lot_id)
+      : db.prepare('SELECT serial_number code FROM inventory_serials WHERE id=?').get(row.output_serial_id);
+    return { ...row, productionOrderNo: order?.order_no || null, inputIdentityCode: input?.code || null, outputIdentityCode: output?.code || null };
+  });
+  const downstream = outputIds.flatMap((oid) => db.prepare(`SELECT m.*,d.delivery_no,c.code customerCode,c.name customerName FROM tracked_inventory_movements m LEFT JOIN sales_deliveries d ON d.id=m.source_id AND m.source_type='SALES_DELIVERY' LEFT JOIN customers c ON c.id=d.customer_id WHERE (m.lot_id=? OR m.serial_id=?)${movementStatus} ORDER BY m.created_at`).all(oid, oid).map((row) => ({ ...row, ...sourceDocument(db, row.source_type, row.source_id) })));
+  const creation = sourceDocument(db, identity.created_source_type, identity.created_source_id);
+  const provenance = !movements.length || !creation.sourceEvidence
+    ? { code: 'LEGACY_INCOMPLETE', label: '历史数据 / 来源信息不完整' }
+    : movements.every((row) => row.sourceEvidence)
+      ? { code: 'COMPLETE', label: '完整来源' }
+      : { code: 'PARTIAL', label: '部分来源' };
+  return { identity, direction, includeReversed, movements, genealogy: genealogyRows, downstream, creation, provenance, legacyNotice: provenance.code === 'LEGACY_INCOMPLETE' ? provenance.label : null };
+}
+
+export function listTrackingIdentities(db, identityType, search = '') {
+  const type = String(identityType || 'LOT').toUpperCase();
+  if (!['LOT', 'SERIAL'].includes(type)) throw new HttpError(400, '跟踪身份类型无效');
+  const term = `%${String(search).trim()}%`;
+  if (type === 'LOT') return db.prepare(`SELECT l.id,l.lot_code identityCode,l.status,p.code productCode,p.name productName,
+      COALESCE(SUM(b.quantity),0) currentQuantity,GROUP_CONCAT(DISTINCT w.code) warehouseCodes,
+      MAX(m.business_date) latestMovementDate
+    FROM inventory_lots l JOIN products p ON p.id=l.product_id
+    LEFT JOIN inventory_lot_balances b ON b.lot_id=l.id LEFT JOIN warehouses w ON w.id=b.warehouse_id AND b.quantity>0
+    LEFT JOIN tracked_inventory_movements m ON m.lot_id=l.id AND m.reversed=0
+    WHERE l.lot_code LIKE ? OR p.code LIKE ? OR p.name LIKE ?
+    GROUP BY l.id,l.lot_code,l.status,p.code,p.name ORDER BY latestMovementDate DESC,l.lot_code LIMIT 100`).all(term, term, term);
+  return db.prepare(`SELECT s.id,s.serial_number identityCode,s.lifecycle_state status,p.code productCode,p.name productName,
+      CASE WHEN s.current_warehouse_id IS NULL THEN 0 ELSE 1 END currentQuantity,w.code warehouseCodes,
+      (SELECT MAX(business_date) FROM tracked_inventory_movements WHERE serial_id=s.id AND reversed=0) latestMovementDate
+    FROM inventory_serials s JOIN products p ON p.id=s.product_id LEFT JOIN warehouses w ON w.id=s.current_warehouse_id
+    WHERE s.serial_number LIKE ? OR p.code LIKE ? OR p.name LIKE ?
+    ORDER BY latestMovementDate DESC,s.serial_number LIMIT 100`).all(term, term, term);
 }
 
 export function trackedAvailability(db, productId, warehouseId, businessDate = today()) {
@@ -413,6 +507,7 @@ export function listQcpHandler(db, res, actor) { if (actor.roleCode !== 'ADMIN')
 export function reconcileTrackingHandler(db, res, actor) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, reconcileTrackedInventory(db)); }
 export function traceHandler(db, res, actor, url) { allowAny(actor, ['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW','ORDERS_VIEW']); const type = String(url.searchParams.get('type') || '').toUpperCase(); let identityId = url.searchParams.get('id'); const code = url.searchParams.get('code'); if (!identityId && code) { const table = type === 'LOT' ? 'inventory_lots' : 'inventory_serials'; const column = type === 'LOT' ? 'lot_code' : 'serial_number'; identityId = db.prepare(`SELECT id FROM ${table} WHERE ${column}=? AND (? IS NULL OR product_id=?)`).get(code, url.searchParams.get('productId'), url.searchParams.get('productId'))?.id; } return send(res, 200, traceIdentity(db, type, identityId, url.searchParams.get('direction') || 'BACKWARD', url.searchParams.get('includeReversed') === 'true')); }
 export function availabilityHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, trackedAvailability(db, url.searchParams.get('productId'), url.searchParams.get('warehouseId'), url.searchParams.get('businessDate') || today())); }
+export function listTrackingIdentitiesHandler(db, res, actor, url) { allow(actor, 'INVENTORY_VIEW'); return send(res, 200, { identities: listTrackingIdentities(db, url.searchParams.get('type'), url.searchParams.get('search')) }); }
 export async function genealogyHandler(db, req, res, actor) { return send(res, 201, allocateGenealogy(db, actor, await readJson(req))); }
 
 export const TRACKING_POLICIES = POLICIES;

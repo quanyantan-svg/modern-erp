@@ -9,6 +9,8 @@ import {
 } from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { presentStatus } from '../lib/presentation.js';
+import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import { withProductTracking } from '../lib/tracking.js';
 
 function useInventoryScraps(notify) {
   const [rows, setRows] = useState([]);
@@ -73,7 +75,7 @@ export function InventoryScraps({ user, notify }) {
 
 function InventoryScrapModal({ value, warehouses, products, notify, onClose, onSaved }) {
   const initialItems = value.items?.length
-    ? value.items.map((item) => ({ warehouseId: item.warehouseId, productId: item.productId, quantity: item.quantity, reason: item.reason || '' }))
+    ? value.items.map((item) => ({ warehouseId: item.warehouseId, productId: item.productId, quantity: item.quantity, reason: item.reason || '', trackingAllocations: item.trackingAllocations || [] }))
     : [{ warehouseId: '', productId: '', quantity: '', reason: '' }];
   const [form, setForm] = useState({
     scrapDate: value.scrap_date || today(),
@@ -98,6 +100,7 @@ function InventoryScrapModal({ value, warehouses, products, notify, onClose, onS
           productId: item.productId,
           quantity: Number(item.quantity),
           reason: item.reason || '',
+          trackingAllocations: item.trackingAllocations || [],
         })),
       };
       const url = value.id ? `/api/inventory-scraps/${value.id}` : '/api/inventory-scraps';
@@ -117,20 +120,20 @@ function InventoryScrapModal({ value, warehouses, products, notify, onClose, onS
       <div className="line-title"><div><strong>报废明细</strong><small className="block">每个仓库 + 货品仅允许一行；数量必须为正数，确认时校验库存。</small></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { warehouseId: '', productId: '', quantity: '', reason: '' }] })}>＋ 添加一行</button></div>
       <div className="line-table scrap-lines">
         <div className="line-row line-header"><span>#</span><span>仓库</span><span>货品</span><span className="number">数量</span><span>原因</span><span/></div>
-        {form.items.map((line, index) => <div className="line-row" key={index}>
+        {form.items.map((line, index) => <div className="tracking-line" key={index}><div className="line-row">
           <span>{index + 1}</span>
           <select value={line.warehouseId} onChange={(e) => updateLine(index, { warehouseId: e.target.value })} required>
             <option value="">请选择仓库</option>
             {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
           </select>
-          <select value={line.productId} onChange={(e) => updateLine(index, { productId: e.target.value })} required>
+          <select value={line.productId} onChange={(e) => updateLine(index, withProductTracking(line, e.target.value))} required>
             <option value="">请选择货品</option>
             {products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
           </select>
-          <input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} placeholder="如 5" required/>
+          <input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value, trackingAllocations: [] })} placeholder="如 5" required/>
           <input value={line.reason} onChange={(e) => updateLine(index, { reason: e.target.value })} maxLength={200} placeholder="可选"/>
           <button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button>
-        </div>)}
+        </div><TrackingAllocationEditor product={products.find((product) => product.id === line.productId)} warehouseId={line.warehouseId} quantity={line.quantity} businessDate={form.scrapDate} direction="OUT" value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(index, { trackingAllocations })} notify={notify}/></div>)}
       </div>
       <FormActions onClose={onClose} saveText="保存草稿"/>
     </form>

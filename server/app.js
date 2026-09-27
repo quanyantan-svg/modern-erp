@@ -101,9 +101,10 @@ import {
   reverseOperationalReturn, settlementAccountReconciliation,
 } from './modules/financial-controls.js';
 import {
-  availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler,
+  availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
-  reverseTrackedSource, saveTrackedAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
+  reverseTrackedSource, saveTrackedAllocations, sourceTrackingAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
+  TRACKING_POLICIES,
 } from './modules/traceability-quality.js';
 import {
   assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
@@ -257,6 +258,7 @@ async function handleApi(db, req, res, url) {
   if (identityHoldMatch && req.method === 'POST') return holdIdentityHandler(db, req, res, actor, identityHoldMatch[1], identityHoldMatch[2]);
   if (pathname === '/api/tracking/reconcile' && req.method === 'GET') return reconcileTrackingHandler(db, res, actor);
   if (pathname === '/api/tracking/availability' && req.method === 'GET') return availabilityHandler(db, res, actor, url);
+  if (pathname === '/api/tracking/identities' && req.method === 'GET') return listTrackingIdentitiesHandler(db, res, actor, url);
   if (pathname === '/api/traceability' && req.method === 'GET') return traceHandler(db, res, actor, url);
   if (pathname === '/api/production-genealogy' && req.method === 'POST') return genealogyHandler(db, req, res, actor);
   if (pathname === '/api/quality-control-points' && req.method === 'GET') return listQcpHandler(db, res, actor);
@@ -1163,10 +1165,14 @@ async function createProduct(db, req, res, actor) {
   const productId = id(); const now = new Date().toISOString();
   const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
   const classification = ['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(body.inventoryClassification) ? body.inventoryClassification : 'OTHER_INVENTORY';
+  const trackingPolicy = String(body.trackingPolicy || body.tracking_policy || 'NONE').toUpperCase();
+  if (!TRACKING_POLICIES.includes(trackingPolicy)) throw new HttpError(400, '库存跟踪方式无效', { code: 'TRACKING_POLICY_MISMATCH', resolution: '请选择不跟踪、批次管理或序列号管理' });
+  const shelfLifeDays = body.shelfLifeDays === '' || body.shelfLifeDays == null ? null : Number(body.shelfLifeDays);
+  if (shelfLifeDays !== null && (!Number.isSafeInteger(shelfLifeDays) || shelfLifeDays <= 0)) throw new HttpError(400, '保质期必须为正整数天');
   const baseUom=String(body.baseUomCode||product.unit).trim().toUpperCase(); db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,now,now);
-  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,1,?,?)`)
-    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, now, now);
-  audit(db, actor.id, 'CREATE', 'PRODUCT', productId, product.code);
+  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,tracking_policy,shelf_life_days,tracking_effective_at,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,1,?,?)`)
+    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, trackingPolicy, shelfLifeDays, now, now, now);
+  audit(db, actor.id, 'CREATE', 'PRODUCT', productId, `${product.code}; tracking=${trackingPolicy}`);
   return send(res, 201, { id: productId });
 }
 
@@ -1997,7 +2003,7 @@ function listInventoryChecks(db, res, actor, url) {
     JOIN warehouses w ON w.id=ic.warehouse_id JOIN products p ON p.id=ic.product_id
     JOIN users creator ON creator.id=ic.creator_id LEFT JOIN users reviewer ON reviewer.id=ic.reviewer_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ic.created_at DESC`;
-  const checks = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_CHECK_STATUS[row.status] }));
+  const checks = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_CHECK_STATUS[row.status], trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_CHECK', row.id, row.id) }));
   return send(res, 200, { inventoryChecks: checks });
 }
 
@@ -2083,7 +2089,8 @@ function getInventoryAdjustment(db, res, actor, adjustmentId) {
   if (!adjustment) throw new HttpError(404, '库存调整单不存在');
   adjustment.statusLabel = INVENTORY_ADJUSTMENT_STATUS[adjustment.status];
   adjustment.items = db.prepare(`SELECT i.*,i.product_id productId,i.quantity_delta quantityDelta,i.before_quantity beforeQuantity,i.after_quantity afterQuantity,
-    p.code productCode,p.name productName,p.unit FROM inventory_adjustment_items i JOIN products p ON p.id=i.product_id WHERE i.adjustment_id=? ORDER BY i.line_no`).all(adjustmentId);
+    p.code productCode,p.name productName,p.unit FROM inventory_adjustment_items i JOIN products p ON p.id=i.product_id WHERE i.adjustment_id=? ORDER BY i.line_no`).all(adjustmentId)
+    .map((item) => ({ ...item, trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_ADJUSTMENT', adjustmentId, item.id) }));
   return send(res, 200, { inventoryAdjustment: adjustment });
 }
 
@@ -2541,7 +2548,8 @@ function getInventoryTransfer(db, res, actor, transferId) {
     WHERE it.id=?`).get(transferId);
   if (!transfer) throw new HttpError(404, '调拨单不存在');
   transfer.items = db.prepare(`SELECT ti.*,p.code productCode,p.name productName,p.unit
-    FROM inventory_transfer_items ti JOIN products p ON p.id=ti.product_id WHERE ti.transfer_id=?`).all(transferId);
+    FROM inventory_transfer_items ti JOIN products p ON p.id=ti.product_id WHERE ti.transfer_id=?`).all(transferId)
+    .map((item) => ({ ...item, trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_TRANSFER', transferId, item.id) }));
   transfer.statusLabel = INVENTORY_TRANSFER_STATUS[transfer.status];
   applyInventoryTransferCompatibility(transfer);
   return send(res, 200, { transfer });
@@ -3680,7 +3688,7 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   receipt.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.purchase_order_item_id purchaseOrderItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_receipt_items pri JOIN products p ON p.id = pri.product_id WHERE pri.receipt_id = ? ORDER BY pri.line_no').all(receiptId).map((item) => { const receivedQuantity = item.purchaseOrderItemId ? confirmedQuantity(db, { itemTable: 'purchase_receipt_items', sourceColumn: 'purchase_order_item_id', headerTable: 'purchase_receipts', headerForeignKey: 'receipt_id' }, item.purchaseOrderItemId) : 0; const orderedQuantity = item.purchaseOrderItemId ? Number(db.prepare('SELECT quantity FROM purchase_order_items WHERE id=?').get(item.purchaseOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, receivedQuantity, remainingQuantity: Math.max(0, orderedQuantity - receivedQuantity), fulfillmentState: fulfillmentState(receivedQuantity, orderedQuantity, ['NOT_RECEIVED','PARTIALLY_RECEIVED','FULLY_RECEIVED']) }; });
   receipt.statusLabel = RECEIPT_STATUS[receipt.status] || receipt.status;
   receipt.qualityState = deriveQualityState(db, 'IQC', receiptId);
-  receipt.items = receipt.items.map((item) => ({ ...item, qualityState: receipt.qualityState }));
+  receipt.items = receipt.items.map((item) => ({ ...item, qualityState: receipt.qualityState, trackingAllocations: sourceTrackingAllocations(db, 'PURCHASE_RECEIPT', receiptId, item.id) }));
   receipt.items = receipt.items.map((item) => { const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills b ON b.id=i.bill_id WHERE i.receipt_item_id=? AND b.status IN ('DRAFT','POSTED','WAITING_MATCH')").get(item.id).n); return {...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)}; });
   const receiptBilled=receipt.items.reduce((sum,item)=>sum+item.billedQuantity,0),receiptQuantity=receipt.items.reduce((sum,item)=>sum+Number(item.quantity),0);
   receipt.billingSummary={status:receiptBilled<=0?'UNBILLED':receiptBilled<receiptQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:receiptBilled,remainingQuantity:Math.max(0,receiptQuantity-receiptBilled),grniCents:receipt.billing_mode==='LEGACY_DIRECT'?0:receipt.total_cents};
@@ -3835,7 +3843,7 @@ function getSalesDelivery(db, res, actor, deliveryId) {
   delivery.items = db.prepare('SELECT sdi.*,sdi.product_id productId,sdi.sales_order_item_id salesOrderItemId,sdi.unit_price_cents unitPriceCents,sdi.amount_cents amountCents,sdi.line_no lineNo,p.code productCode,p.name productName,p.unit FROM sales_delivery_items sdi JOIN products p ON p.id = sdi.product_id WHERE sdi.delivery_id = ? ORDER BY sdi.line_no').all(deliveryId).map((item) => { const deliveredQuantity = item.salesOrderItemId ? confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.salesOrderItemId) : 0; const orderedQuantity = item.salesOrderItemId ? Number(db.prepare('SELECT quantity FROM sales_order_items WHERE id=?').get(item.salesOrderItemId)?.quantity || 0) : 0; return { ...item, orderedQuantity, deliveredQuantity, remainingQuantity: Math.max(0, orderedQuantity - deliveredQuantity), fulfillmentState: fulfillmentState(deliveredQuantity, orderedQuantity, ['NOT_DELIVERED','PARTIALLY_DELIVERED','FULLY_DELIVERED']) }; });
   delivery.statusLabel = DELIVERY_STATUS[delivery.status] || delivery.status;
   delivery.qualityState = deriveQualityState(db, 'OQC', deliveryId);
-  delivery.items = delivery.items.map((item) => ({ ...item, qualityState: delivery.qualityState }));
+  delivery.items = delivery.items.map((item) => ({ ...item, qualityState: delivery.qualityState, trackingAllocations: sourceTrackingAllocations(db, 'SALES_DELIVERY', deliveryId, item.id) }));
   delivery.items=delivery.items.map(item=>{const billedQuantity=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices v ON v.id=i.invoice_id WHERE i.delivery_item_id=? AND v.status IN ('DRAFT','POSTED')").get(item.id).n);return{...item,billedQuantity,remainingBillQuantity:Math.max(0,Number(item.quantity)-billedQuantity)};});
   const deliveryBilled=delivery.items.reduce((sum,item)=>sum+item.billedQuantity,0),deliveryQuantity=delivery.items.reduce((sum,item)=>sum+Number(item.quantity),0);delivery.billingSummary={status:deliveryBilled<=0?'UNBILLED':deliveryBilled<deliveryQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:deliveryBilled,remainingQuantity:Math.max(0,deliveryQuantity-deliveryBilled)};
   delivery.relationships = {
@@ -3980,7 +3988,7 @@ function getSalesReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT sr.*, c.code customerCode, c.name customerName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, sd.delivery_no deliveryNo FROM return_orders sr JOIN customers c ON c.id = sr.customer_id JOIN warehouses w ON w.id = sr.warehouse_id JOIN users creator ON creator.id = sr.creator_id LEFT JOIN users confirmed ON confirmed.id = sr.confirmed_by LEFT JOIN sales_deliveries sd ON sd.id = COALESCE(sr.delivery_id,sr.source_id) WHERE sr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '销售退货单不存在');
-  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.delivery_item_id deliveryItemId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT sri.*,sri.product_id productId,sri.delivery_item_id deliveryItemId,sri.unit_price_cents unitPriceCents,sri.amount_cents amountCents,sri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM return_order_items sri JOIN products p ON p.id = sri.product_id WHERE sri.return_id = ? ORDER BY sri.line_no').all(returnId).map((item) => ({ ...item, trackingAllocations: sourceTrackingAllocations(db, 'SALES_RETURN', returnId, item.id) }));
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.deliveryNo ? [{ type: 'SALES_DELIVERY', id: ret.delivery_id || ret.source_id, documentNo: ret.deliveryNo }] : [],
@@ -4005,7 +4013,9 @@ async function updateSalesReturn(db, req, res, actor, returnId) {
   transaction(db, () => {
     db.prepare('UPDATE return_orders SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
       .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='SALES_RETURN' AND source_id=?").run(returnId);
     replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'SALES_RETURN', sourceId: returnId, itemTable: 'return_order_items', foreignKey: 'return_id', rawItems: body.items });
     audit(db, actor.id, 'UPDATE', 'SALES_RETURN', returnId, '修改销售退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -4105,7 +4115,7 @@ function getPurchaseReturn(db, res, actor, returnId) {
   allowAny(actor, ['RETURNS_VIEW', 'RETURNS_MANAGE']);
   const ret = db.prepare('SELECT pr.*, s.code supplierCode, s.name supplierName, w.code warehouseCode, w.name warehouseName, creator.display_name creatorName, confirmed.display_name confirmedByName, prc.receipt_no receiptNo FROM purchase_returns pr JOIN suppliers s ON s.id = pr.supplier_id JOIN warehouses w ON w.id = pr.warehouse_id JOIN users creator ON creator.id = pr.creator_id LEFT JOIN users confirmed ON confirmed.id = pr.confirmed_by LEFT JOIN purchase_receipts prc ON prc.id = pr.receipt_id WHERE pr.id = ?').get(returnId);
   if (!ret) throw new HttpError(404, '采购退货单不存在');
-  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.receipt_item_id receiptItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId);
+  ret.items = db.prepare('SELECT pri.*,pri.product_id productId,pri.receipt_item_id receiptItemId,pri.unit_price_cents unitPriceCents,pri.amount_cents amountCents,pri.line_no lineNo,p.code productCode,p.name productName,p.unit FROM purchase_return_items pri JOIN products p ON p.id = pri.product_id WHERE pri.return_id = ? ORDER BY pri.line_no').all(returnId).map((item) => ({ ...item, trackingAllocations: sourceTrackingAllocations(db, 'PURCHASE_RETURN', returnId, item.id) }));
   ret.statusLabel = RETURN_STATUS[ret.status] || ret.status;
   ret.relationships = {
     upstream: ret.receipt_id && ret.receiptNo ? [{ type: 'PURCHASE_RECEIPT', id: ret.receipt_id, documentNo: ret.receiptNo }] : [],
@@ -4130,7 +4140,9 @@ async function updatePurchaseReturn(db, req, res, actor, returnId) {
   transaction(db, () => {
     db.prepare('UPDATE purchase_returns SET return_date=?,remark=?,total_cents=?,updated_at=? WHERE id=?')
       .run(normalizeDocumentDate(body.returnDate || current.return_date, '退货日期'), optionalText(body.remark, 500), input.totalCents, now, returnId);
+    db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='PURCHASE_RETURN' AND source_id=?").run(returnId);
     replaceLogisticsItems(db, 'purchase_return_items', 'return_id', returnId, input.items, 'receipt_item_id');
+    configureTrackedDocumentLines(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, itemTable: 'purchase_return_items', foreignKey: 'return_id', rawItems: body.items });
     audit(db, actor.id, 'UPDATE', 'PURCHASE_RETURN', returnId, '修改采购退货 ' + current.return_no);
   });
   return send(res, 200, { ok: true, id: returnId, returnNo: current.return_no, totalCents: input.totalCents });
@@ -4231,7 +4243,7 @@ export function buildInventoryTransactionsQuery(url) {
     where.push(exclusiveEnd ? 't.created_at < ?' : 'DATE(t.created_at) <= ?');
     params.push(exclusiveEnd || endDate);
   }
-  const sql = "SELECT t.*,t.source_type tx_type,t.source_no ref_no,CASE WHEN t.direction='OUT' THEN -t.quantity_change ELSE t.quantity_change END quantity,t.balance_after balance,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id " + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
+  const sql = "SELECT t.*,t.source_type tx_type,t.source_no ref_no,CASE WHEN t.direction='OUT' THEN -t.quantity_change ELSE t.quantity_change END quantity,t.balance_after balance,w.code warehouseCode,w.name warehouseName,p.code productCode,p.name productName,p.unit,p.tracking_policy trackingPolicy,(SELECT GROUP_CONCAT(COALESCE(l.lot_code,s.serial_number,a.planned_lot_code,a.planned_serial_number)) FROM tracked_source_allocations a LEFT JOIN inventory_lots l ON l.id=a.lot_id LEFT JOIN inventory_serials s ON s.id=a.serial_id WHERE a.source_type=t.source_type AND a.source_id=t.source_id AND a.product_id=t.product_id) trackingIdentities FROM inventory_transactions t JOIN warehouses w ON w.id = t.warehouse_id JOIN products p ON p.id = t.product_id " + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY t.created_at DESC LIMIT 200';
   return { sql, params };
 }
 

@@ -80,7 +80,7 @@ import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
-import { postTrackedMovement, saveTrackedAllocations } from './traceability-quality.js';
+import { postTrackedMovement, saveTrackedAllocations, sourceTrackingAllocations } from './traceability-quality.js';
 import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, issueSourceValue, systemHealth } from './financial-inventory.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -227,7 +227,7 @@ export function getInventoryScrap(db, res, actor, scrapId) {
   const header = fetchScrapHeader(db, scrapId);
   if (!header) throw new HttpError(404, '库存报废单不存在');
   header.statusLabel = SCRAP_STATUS[header.status] || header.status;
-  header.items = fetchScrapItems(db, scrapId).map((row) => ({ ...row, quantity: Number(row.quantity) }));
+  header.items = fetchScrapItems(db, scrapId).map((row) => ({ ...row, quantity: Number(row.quantity), trackingAllocations: sourceTrackingAllocations(db, 'INVENTORY_SCRAP', scrapId, row.id) }));
   return send(res, 200, { inventoryScrap: header });
 }
 

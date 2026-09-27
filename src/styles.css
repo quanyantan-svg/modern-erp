@@ -2282,6 +2282,33 @@ tfoot td {
   .inventory-period-audit span { text-align:left; }
 }
 
+/* V1.4-E4 bounded tracking allocation pattern. */
+.tracking-editor { grid-column: 1 / -1; margin: .65rem 0; padding: .85rem; border: 1px solid var(--border, #d8dde6); border-radius: 12px; background: var(--surface-soft, #f8fafc); }
+.tracking-line { display: contents; }
+.tracking-editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; margin-bottom: .7rem; }
+.tracking-editor > header small { display: block; margin-top: .2rem; color: var(--muted, #667085); }
+.tracking-count { white-space: nowrap; padding: .25rem .55rem; border-radius: 999px; background: #fff1d6; color: #8a5700; font-size: .78rem; font-weight: 700; }
+.tracking-count.complete { background: #e7f7ee; color: #17663a; }
+.tracking-lot-list, .tracking-serial-list { display: grid; gap: .5rem; }
+.tracking-lot-row { display: grid; grid-template-columns: minmax(150px, 1.4fr) minmax(90px, .6fr) minmax(130px, .8fr) 36px; gap: .45rem; align-items: center; }
+.tracking-serial-entry { display: grid; gap: .35rem; }
+.tracking-serial-entry textarea { min-height: 5.5rem; resize: vertical; }
+.tracking-serial-list { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); max-height: 14rem; overflow: auto; }
+.tracking-serial-option { display: grid; grid-template-columns: auto 1fr auto; gap: .45rem; align-items: center; min-height: 40px; padding: .45rem .55rem; border: 1px solid var(--border, #d8dde6); border-radius: 9px; background: white; }
+.tracking-serial-option.disabled { opacity: .55; }
+.tracking-policy-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .55rem; grid-column: 1 / -1; }
+.tracking-policy-option { display: grid; grid-template-columns: auto 1fr; gap: .5rem; align-items: start; padding: .7rem; border: 1px solid var(--border, #d8dde6); border-radius: 10px; }
+.tracking-policy-option small { display: block; margin-top: .2rem; color: var(--muted, #667085); line-height: 1.35; }
+.tracking-badge { display: inline-flex; padding: .18rem .48rem; border-radius: 999px; background: #eef2ff; color: #3949a0; font-size: .78rem; font-weight: 700; }
+
+@media (max-width: 680px) {
+  .tracking-policy-options { grid-template-columns: 1fr; }
+  .tracking-editor > header { display: grid; }
+  .tracking-lot-row { grid-template-columns: 1fr minmax(82px, .45fr) 36px; }
+  .tracking-lot-row input[type="date"] { grid-column: 1 / -1; }
+  .tracking-serial-list { grid-template-columns: 1fr; max-height: none; }
+}
+
 .status-chip, .lifecycle-badge { width:max-content; max-width:100%; display:inline-flex; align-items:center; min-height:26px; padding:3px 9px; border-radius:999px; background:var(--neutral-soft); color:var(--neutral); font-size:12px; font-weight:700; white-space:nowrap; }
 .status-chip--approved, .status-chip--confirmed, .status-chip--completed, .status-chip--posted, .status-chip--active { background:var(--success-soft); color:#18743b; }
 .status-chip--submitted, .status-chip--pending, .status-chip--in_progress { background:var(--warning-soft); color:#8a5c00; }

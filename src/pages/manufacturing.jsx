@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import { copySourceAllocations } from '../lib/tracking.js';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -457,7 +459,9 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
   const [detail, setDetail] = useState(value.id ? null : value);
   const [warehouses, setWarehouses] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [products, setProducts] = useState([]);
   const [prefill, setPrefill] = useState(null);
+  const [returnDraft, setReturnDraft] = useState(null);
   const [form, setForm] = useState({ productionOrderId: '', warehouseId: '', issueDate: new Date().toISOString().slice(0, 10), remark: '', items: [] });
   const refresh = () => {
     if (value.id) api('/api/production-material-issues/' + value.id).then((r) => setDetail(r.materialIssue)).catch((e) => notify(e.message, 'error'));
@@ -465,6 +469,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
   useEffect(() => {
     api('/api/warehouses').then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, 'error'));
     api('/api/production-orders').then((r) => setOrders(r.orders || [])).catch((e) => notify(e.message, 'error'));
+    api('/api/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
     if (value.id) refresh();
   }, []);
   useEffect(() => {
@@ -479,6 +484,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
           productId: it.productId,
           plannedQuantity: it.plannedQuantity,
           issueQuantity: it.issueQuantity,
+          trackingAllocations: it.trackingAllocations || [],
         })),
       });
     }
@@ -526,13 +532,11 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
       refresh();
     } catch (e) { notify(e.message, 'error'); }
   };
-  const returnMaterial = async (item) => {
-    const raw = window.prompt(`退料数量（原出库 ${quantity(item.issueQuantity)}）`, String(item.issueQuantity));
-    if (raw == null) return;
+  const returnMaterial = async () => {
     try {
-      const created = await api('/api/production-material-returns', { method: 'POST', body: { originalIssueId: value.id, items: [{ originalIssueItemId: item.id, quantity: Number(raw) }] } });
+      const created = await api('/api/production-material-returns', { method: 'POST', body: { originalIssueId: value.id, items: [{ originalIssueItemId: returnDraft.item.id, quantity: Number(returnDraft.quantity), trackingAllocations: returnDraft.trackingAllocations }] } });
       await api('/api/production-material-returns/' + created.id + '/confirm', { method: 'POST' });
-      notify('生产退料已确认'); refresh();
+      notify('生产退料已确认'); setReturnDraft(null); refresh();
     } catch (e) { notify(e.message, 'error'); }
   };
   const deleteIssue = async () => {
@@ -563,7 +567,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
           <td className="number">{Number(it.issueQuantity).toFixed(3)} {it.unit}</td>
           <td className="number">{it.beforeQuantity == null ? '-' : Number(it.beforeQuantity).toFixed(3)}</td>
           <td className="number">{it.afterQuantity == null ? '-' : Number(it.afterQuantity).toFixed(3)}</td>
-          <td>{status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button type="button" className="secondary" onClick={() => returnMaterial(it)}>生产退料</button>}</td>
+          <td>{status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button type="button" className="secondary" onClick={() => setReturnDraft({ item: it, quantity: it.issueQuantity, trackingAllocations: copySourceAllocations(it.trackingAllocations || []) })}>生产退料</button>}</td>
         </tr>)}
       </tbody></table>
       <div className="form-actions" style={{marginTop:'1rem'}}>
@@ -574,6 +578,11 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
         </>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>
+      {returnDraft && <Modal title="生产退料身份" onClose={() => setReturnDraft(null)}><form className="form-grid" onSubmit={(event) => { event.preventDefault(); void returnMaterial(); }}>
+        <label>退料数量<input type="number" min="0.001" max={returnDraft.item.issueQuantity} step="0.001" value={returnDraft.quantity} onChange={(event) => setReturnDraft({ ...returnDraft, quantity: Number(event.target.value), trackingAllocations: [] })}/></label>
+        <TrackingAllocationEditor product={products.find((product) => product.id === returnDraft.item.productId)} warehouseId={detail.warehouseId} quantity={returnDraft.quantity} businessDate={new Date().toISOString().slice(0, 10)} direction="RETURN_IN" value={returnDraft.trackingAllocations} sourceAllocations={returnDraft.item.trackingAllocations || []} onChange={(trackingAllocations) => setReturnDraft({ ...returnDraft, trackingAllocations })} notify={notify}/>
+        <FormActions onClose={() => setReturnDraft(null)} saveText="确认退料"/>
+      </form></Modal>}
     </> : <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <label>制令单<select value={form.productionOrderId} onChange={(e) => { setForm({ ...form, productionOrderId: e.target.value, items: [] }); setPrefill(null); }} required>
         <option value="">选择制令单</option>
@@ -594,9 +603,10 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
             <td className="number">{quantity(item.netIssuedQuantity || 0)}</td>
             <td className="number">{quantity(item.remainingQuantity || 0)}</td>
             <td className="number">{quantity(item.currentStock || 0)}</td>
-            <td><input type="number" value={item.issueQuantity} min="0.001" step="0.001" onChange={(e) => setItems(form.items.map((it, idx) => idx === i ? { ...it, issueQuantity: Number(e.target.value) } : it))} required/></td>
+            <td><input type="number" value={item.issueQuantity} min="0.001" step="0.001" onChange={(e) => setItems(form.items.map((it, idx) => idx === i ? { ...it, issueQuantity: Number(e.target.value), trackingAllocations: [] } : it))} required/></td>
           </tr>)}
         </tbody></table>
+        {form.items.map((item, i) => <TrackingAllocationEditor key={`issue-tracking-${item.requirementLineId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.issueQuantity} businessDate={form.issueDate} direction="OUT" value={item.trackingAllocations || []} onChange={(trackingAllocations) => setItems(form.items.map((row, index) => index === i ? { ...row, trackingAllocations } : row))} notify={notify}/>)}
         {!form.items.length && <div style={{textAlign:'center', padding:'0.5rem', color:'#999'}}>{prefill?.hasBom ? '点击「＋ 增行」从 BOM 带出用料' : '选择制令单后手工添加出库物料'}</div>}
       </div>
       <FormActions onClose={onClose} saveText="保存草稿"/>
@@ -642,7 +652,9 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
   const [detail, setDetail] = useState(value.id ? null : value);
   const [warehouses, setWarehouses] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [products, setProducts] = useState([]);
   const [orderSummary, setOrderSummary] = useState(null);
+  const [reversalDraft, setReversalDraft] = useState(null);
   const [form, setForm] = useState({ productionOrderId: '', warehouseId: '', quantity: 1, receiptDate: new Date().toISOString().slice(0, 10), remark: '' });
   const refresh = () => {
     if (value.id) api('/api/production-receipts/' + value.id).then((r) => setDetail(r.productionReceipt)).catch((e) => notify(e.message, 'error'));
@@ -650,6 +662,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
   useEffect(() => {
     api('/api/warehouses').then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, 'error'));
     api('/api/production-orders').then((r) => setOrders(r.orders || [])).catch((e) => notify(e.message, 'error'));
+    api('/api/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
     if (value.id) refresh();
   }, []);
   useEffect(() => {
@@ -660,6 +673,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         quantity: detail.quantity,
         receiptDate: detail.receiptDate || new Date().toISOString().slice(0, 10),
         remark: detail.remark || '',
+        trackingAllocations: detail.trackingAllocations || [],
       });
     }
   }, [detail]);
@@ -668,7 +682,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
   }, [form.productionOrderId]);
   const save = async () => {
     try {
-      const payload = { productionOrderId: form.productionOrderId, warehouseId: form.warehouseId, quantity: form.quantity, receiptDate: form.receiptDate, remark: form.remark };
+      const payload = { productionOrderId: form.productionOrderId, warehouseId: form.warehouseId, quantity: form.quantity, receiptDate: form.receiptDate, remark: form.remark, trackingAllocations: form.trackingAllocations || [] };
       if (value.id) {
         await api('/api/production-receipts/' + value.id, { method: 'PATCH', body: payload });
         notify('生产入库单更改已保存');
@@ -694,12 +708,10 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
     } catch (e) { notify(e.message, 'error'); }
   };
   const reverseReceipt = async () => {
-    const raw = window.prompt(`冲销数量（原入库 ${quantity(detail.quantity)}）`, String(detail.quantity));
-    if (raw == null) return;
     try {
-      const created = await api('/api/production-receipt-reversals', { method: 'POST', body: { originalReceiptId: value.id, quantity: Number(raw) } });
+      const created = await api('/api/production-receipt-reversals', { method: 'POST', body: { originalReceiptId: value.id, quantity: Number(reversalDraft.quantity), trackingAllocations: reversalDraft.trackingAllocations } });
       await api('/api/production-receipt-reversals/' + created.id + '/confirm', { method: 'POST' });
-      notify('生产入库冲销已确认'); refresh();
+      notify('生产入库冲销已确认'); setReversalDraft(null); refresh();
     } catch (e) { notify(e.message, 'error'); }
   };
   const deleteReceipt = async () => {
@@ -732,11 +744,16 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
           <button className="danger-button" onClick={cancelReceipt}>取消</button>
           <button className="danger-text" onClick={deleteReceipt}>删除草稿</button>
         </>}
-        {status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button className="danger-button" onClick={reverseReceipt}>入库冲销</button>}
+        {status === 'CONFIRMED' && detail.productionOrderStatus === 'IN_PROGRESS' && <button className="danger-button" onClick={() => setReversalDraft({ quantity: detail.quantity, trackingAllocations: copySourceAllocations(detail.trackingAllocations || []) })}>入库冲销</button>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>
+      {reversalDraft && <Modal title="生产入库冲销身份" onClose={() => setReversalDraft(null)}><form className="form-grid" onSubmit={(event) => { event.preventDefault(); void reverseReceipt(); }}>
+        <label>冲销数量<input type="number" min="0.001" max={detail.quantity} step="0.001" value={reversalDraft.quantity} onChange={(event) => setReversalDraft({ ...reversalDraft, quantity: Number(event.target.value), trackingAllocations: [] })}/></label>
+        <TrackingAllocationEditor product={products.find((product) => product.id === detail.product_id)} warehouseId={detail.warehouseId} quantity={reversalDraft.quantity} businessDate={new Date().toISOString().slice(0, 10)} direction="OUT" value={reversalDraft.trackingAllocations} onChange={(trackingAllocations) => setReversalDraft({ ...reversalDraft, trackingAllocations })} notify={notify}/>
+        <FormActions onClose={() => setReversalDraft(null)} saveText="确认冲销"/>
+      </form></Modal>}
     </> : <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-      <label>制令单<select value={form.productionOrderId} onChange={(e) => setForm({ ...form, productionOrderId: e.target.value })} required>
+      <label>制令单<select value={form.productionOrderId} onChange={(e) => setForm({ ...form, productionOrderId: e.target.value, trackingAllocations: [] })} required>
         <option value="">选择制令单</option>
         {orderOptions.map((o) => <option key={o.id} value={o.id}>{o.order_no} · {o.productName} · {o.statusLabel || o.status}</option>)}
       </select></label>
@@ -744,10 +761,11 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         <option value="">选择仓库</option>
         {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
       </select></label>
-      <label>本次入库数量<input type="number" value={form.quantity} min="0.001" step="0.001" onChange={(e) => setForm({ ...form, quantity: Number(e.target.value) })} required/></label>
+      <label>本次入库数量<input type="number" value={form.quantity} min="0.001" step="0.001" onChange={(e) => setForm({ ...form, quantity: Number(e.target.value), trackingAllocations: [] })} required/></label>
       {orderSummary && <div className="full" style={{padding:'0.75rem', background:'var(--bg-grouped)', borderRadius:'4px'}}>计划 {quantity(orderSummary.quantity)} · 已净入库 {quantity(orderSummary.netReceived || 0)} · 剩余 {quantity(orderSummary.remainingReceivable || 0)} · 当前物料最多支持新增入库 {quantity(orderSummary.maximumAdditionalReceipt || 0)}</div>}
       <label>入库日期<input type="date" value={form.receiptDate} onChange={(e) => setForm({ ...form, receiptDate: e.target.value })}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
+      <TrackingAllocationEditor product={products.find((product) => product.id === (orderSummary?.product_id || orderSummary?.productId || orders.find((order) => order.id === form.productionOrderId)?.product_id))} warehouseId={form.warehouseId} quantity={form.quantity} businessDate={form.receiptDate} direction="IN" value={form.trackingAllocations || []} onChange={(trackingAllocations) => setForm({ ...form, trackingAllocations })} notify={notify}/>
       <FormActions onClose={onClose} saveText="保存草稿"/>
     </form>}
   </Modal>;

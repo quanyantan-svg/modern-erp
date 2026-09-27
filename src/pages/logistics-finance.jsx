@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
+import { copySourceAllocations } from '../lib/tracking.js';
 
 function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityLabel, qualityState }) {
   return <div className="form-actions full">
@@ -85,7 +87,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
         receiptDate: detail.receipt_date || "",
         billingMode: detail.billing_mode || "SEPARATE",
         remark: detail.remark || "",
-        items: detail.items || [],
+        items: (detail.items || []).map((item) => ({ ...item, sourceAllocations: copySourceAllocations(item.trackingAllocations) })),
       });
     }
     // intentional: only run when `detail` first arrives
@@ -105,7 +107,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
     } catch (e) { notify(e.message, "error"); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
-  const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val, ...(field === 'quantity' ? { trackingAllocations: [] } : {}) } : item));
   // V1.3 Phase 1: PR line unit price is entered in yuan. The form
   // stores integer cents (the API/DB contract) but the input is yuan.
   const updateItemPriceCents = (i, nextCents) => {
@@ -141,6 +143,7 @@ function PurchaseReceiptModal({ user, value, onClose, notify, api }) {
           <td/>
         </tr>)}
       </tbody></table>
+      {form.items.map((item, i) => <TrackingAllocationEditor key={`receipt-tracking-${item.purchaseOrderItemId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.receiptDate} direction="IN" value={item.trackingAllocations || []} onChange={(trackingAllocations) => updateItem(i, 'trackingAllocations', trackingAllocations)} notify={notify}/>)}
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
     <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 IQC 复检' : '创建 IQC'} qualityState={detail?.qualityState}/>
@@ -208,7 +211,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     } catch (e) { notify(e.message, "error"); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
-  const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
+  const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val, ...(field === 'quantity' ? { trackingAllocations: [] } : {}) } : item));
   // V1.3 Phase 1: SD line unit price is entered in yuan.
   const updateItemPriceCents = (i, nextCents) => {
     const safeCents = Number.isFinite(nextCents) ? Math.max(0, Math.trunc(nextCents || 0)) : 0;
@@ -243,6 +246,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
           <td/>
         </tr>)}
       </tbody></table>
+      {form.items.map((item, i) => <TrackingAllocationEditor key={`delivery-tracking-${item.salesOrderItemId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.deliveryDate} direction="OUT" value={item.trackingAllocations || []} onChange={(trackingAllocations) => updateItem(i, 'trackingAllocations', trackingAllocations)} notify={notify}/>)}
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
     <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 OQC 复检' : '创建 OQC'} qualityState={detail?.qualityState}/>
@@ -311,7 +315,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
         warehouseId: detail.warehouse_id || "",
         returnDate: detail.return_date || "",
         remark: detail.remark || "",
-        items: detail.items || [],
+        items: (detail.items || []).map((item) => ({ ...item, sourceAllocations: copySourceAllocations(item.trackingAllocations) })),
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -342,7 +346,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const partyOptions = tab === "sales" ? customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>) : suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>);
   const chooseReturnSource = async (sourceId) => {
     if (!sourceId) return setForm((current) => ({ ...current, sourceId: '' }));
-    try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => ({ [tab === 'sales' ? 'deliveryItemId' : 'receiptItemId']: item.id, productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) })); } catch (e) { notify(e.message, 'error'); }
+    try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => { const sourceAllocations = copySourceAllocations(item.trackingAllocations); return { [tab === 'sales' ? 'deliveryItemId' : 'receiptItemId']: item.id, productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents, sourceAllocations, trackingAllocations: sourceAllocations }; }) })); } catch (e) { notify(e.message, 'error'); }
   };
   const changeState = async (action) => { try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm') { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={tab === 'sales' ? detail.customerName : detail.supplierName} onClose={onClose}/></Modal>;
@@ -363,6 +367,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
           <td/>
         </tr>)}
       </tbody></table>
+      {form.items.map((item, i) => <TrackingAllocationEditor key={`return-tracking-${item.deliveryItemId || item.receiptItemId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.returnDate} direction={tab === 'sales' ? 'RETURN_IN' : 'OUT'} value={item.trackingAllocations || []} sourceAllocations={item.sourceAllocations || []} onChange={(trackingAllocations) => updateItem(i, 'trackingAllocations', trackingAllocations)} notify={notify}/>)}
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
     <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
@@ -397,8 +402,8 @@ export function InventoryTransactions({ user, notify }) {
   return <Panel title="库存异动">
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或货品" extra={<select value={type} onChange={(e) => setType(e.target.value)}><option value="">全部来源</option>{Object.entries(typeMap).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}/>
     <div className="toolbar movement-filters"><select value={filters.product} onChange={(e) => setFilters({ ...filters, product: e.target.value })}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={filters.warehouse} onChange={(e) => setFilters({ ...filters, warehouse: e.target.value })}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select><select value={filters.direction} onChange={(e) => setFilters({ ...filters, direction: e.target.value })}><option value="">全部方向</option><option value="IN">IN · 入库</option><option value="OUT">OUT · 出库</option></select><input aria-label="开始日期" type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}/><input aria-label="结束日期" type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}/></div>
-    <div className="table-wrap"><table><thead><tr><th>时间</th><th>来源类型</th><th>来源单号</th><th>仓库</th><th>货品</th><th>方向</th><th className="number">数量</th><th className="number">变动后库存</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{sourcePage(item.tx_type) && item.source_id ? <AppLink page={sourcePage(item.tx_type)} documentId={item.source_id} documentType={item.tx_type}>{item.ref_no}</AppLink> : (item.ref_no || '—')}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{quantity(item.quantity_change)}</td><td className="number">{quantity(item.balance)}</td></tr>)}
+    <div className="table-wrap"><table><thead><tr><th>时间</th><th>来源类型</th><th>来源单号</th><th>仓库</th><th>货品</th><th>批次 / 序列号</th><th>方向</th><th className="number">数量</th><th className="number">变动后库存</th></tr></thead><tbody>
+      {items.map((item) => <tr key={item.id}><td>{dateTime(item.created_at)}</td><td><Status status={item.tx_type?.toLowerCase()} label={typeMap[item.tx_type] || '库存异动'}/></td><td className="mono">{sourcePage(item.tx_type) && item.source_id ? <AppLink page={sourcePage(item.tx_type)} documentId={item.source_id} documentType={item.tx_type}>{item.ref_no}</AppLink> : (item.ref_no || '—')}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="mono">{item.trackingPolicy === 'NONE' ? '—' : (item.trackingIdentities || '历史记录未采集')}</td><td>{item.direction}</td><td className={"number " + (item.direction === 'IN' ? "positive" : "negative")}>{quantity(item.quantity_change)}</td><td className="number">{quantity(item.balance)}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有库存异动记录"/>}</div>
   </Panel>;
 }
