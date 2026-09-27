@@ -81,11 +81,13 @@ import {
   snapshotManufacturingExecution,
 } from './modules/manufacturing-execution.js';
 import {
-  cancelInventoryScrap, closeInventoryPeriod, confirmInventoryScrap,
-  createInventoryScrap, getInventoryPeriodClosure, getInventoryScrap,
-  listInventoryPeriodClosures, listInventoryScraps,
-  reopenInventoryPeriod, updateInventoryScrap,
+  cancelInventoryScrap, confirmInventoryScrap, createInventoryScrap, getInventoryScrap,
+  listInventoryScraps, updateInventoryScrap,
 } from './modules/inventory-extensions.js';
+import {
+  checkInventoryPeriodClose, closeInventoryPeriod, getInventoryPeriodClosure,
+  getInventoryPeriodStatus, listInventoryPeriodClosures, reopenInventoryPeriod,
+} from './modules/inventory-period-close.js';
 import {
   cancelPurchaseDiscount, cancelSalesDiscount, confirmPurchaseDiscount,
   confirmSalesDiscount, createPurchaseDiscount, createSalesDiscount,
@@ -577,6 +579,8 @@ async function handleApi(db, req, res, url) {
 
   // M13 — Inventory Month-End (period closing + read-only snapshot)
   if (pathname === '/api/inventory-period-closures' && req.method === 'GET') return listInventoryPeriodClosures(db, res, actor);
+  if (pathname === '/api/inventory-period-closures/status' && req.method === 'GET') return getInventoryPeriodStatus(db, res, actor);
+  if (pathname === '/api/inventory-period-closures/check' && req.method === 'POST') return checkInventoryPeriodClose(db, req, res, actor);
   if (pathname === '/api/inventory-period-closures' && req.method === 'POST') return closeInventoryPeriod(db, req, res, actor);
   const periodActionMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)\/(reopen)$/);
   if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, req, res, actor, periodActionMatch[1]);

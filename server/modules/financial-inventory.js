@@ -4,12 +4,40 @@ import { HttpError, allowAny, send } from '../lib/http.js';
 const EPS = 1e-9;
 export const VALUATION_BY_TRACKING = Object.freeze({ NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' });
 
+function nextPeriodKey(period) {
+  const [year, month] = period.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function closedThrough(rows, key) {
+  const periods = rows.map((row) => row[key]).filter(Boolean).sort();
+  if (!periods.length) return null;
+  let cutoff = periods[0];
+  for (let index = 1; index < periods.length; index += 1) {
+    if (periods[index] !== nextPeriodKey(cutoff)) break;
+    cutoff = periods[index];
+  }
+  return cutoff;
+}
+
 export function assertFinancialPeriodsOpen(db, businessDate) {
   const date = String(businessDate || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, '业务日期格式不正确');
-  const period = date.slice(0, 7);
-  if (db.prepare("SELECT 1 FROM inventory_period_closures WHERE period_key=? AND status='CLOSED'").get(period)) throw new HttpError(409, `存货期间 ${period} 已结账`);
-  if (db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED'").get(period)) throw new HttpError(409, `会计期间 ${period} 已结账`);
+  const inventoryCutoff = closedThrough(db.prepare("SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key").all(), 'period_key');
+  if (inventoryCutoff && date <= `${inventoryCutoff}-31`) {
+    throw new HttpError(409, `存货期间已结至 ${inventoryCutoff}`, {
+      code: 'INVENTORY_PERIOD_CLOSED',
+      resolution: '使用未结期间的业务日期，或先按治理流程反结账。',
+    });
+  }
+  const accountingCutoff = closedThrough(db.prepare("SELECT period FROM period_closures WHERE status='CLOSED' ORDER BY period").all(), 'period');
+  if (accountingCutoff && date <= `${accountingCutoff}-31`) {
+    throw new HttpError(409, `会计期间已结至 ${accountingCutoff}`, {
+      code: 'FINANCIAL_PERIOD_CLOSED',
+      resolution: '使用未结期间的业务日期，或先按治理流程反结账。',
+    });
+  }
 }
 
 export function valuationMethod(db, productId) {

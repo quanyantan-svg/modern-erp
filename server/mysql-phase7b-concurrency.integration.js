@@ -127,6 +127,20 @@ describe('V1.3 Phase 7B real MySQL concurrency and transaction hardening', () =>
     }
   });
 
+  test('concurrent E3 period close is idempotent with one closure and one snapshot set', async () => {
+    const at = '2026-09-27T08:00:00.000Z';
+    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+      VALUES('e3-race-user','e3-race-user','E3 Race User','x','x','role-admin',1,?)`).run(at);
+    const command = { action: 'inventory-period-close', period: '2026-06', actorId: 'e3-race-user', today: '2026-09-27' };
+    const results = await race([command, command]);
+    assert.equal(results.length, 2);
+    assert.equal(new Set(results.map((result) => result.id)).size, 1);
+    assert.equal(results.filter((result) => result.repeated).length, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_period_closures WHERE period_key='2026-06'").get().n, 1);
+    const closureId = results[0].id;
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closureId).n, 0);
+  });
+
   test('concurrent E2 transfer confirmation is single-effect across app processes', async () => {
     const at = '2026-09-27T08:00:00.000Z';
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)

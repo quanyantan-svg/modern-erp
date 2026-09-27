@@ -3,7 +3,10 @@ import { api } from '../api.js';
 import {
   Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime, quantity,
 } from '../components/ui.jsx';
-import { BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
+import {
+  BusinessActionBar, BusinessPageHeader, BusinessState, DestructiveButton, InlineAlert,
+  PrimaryButton, RecordCard, RecordList, SecondaryButton, StatusChip, SummaryCard,
+} from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { presentStatus } from '../lib/presentation.js';
 
@@ -169,62 +172,113 @@ function InventoryScrapDetail({ value, onClose, onEdit, onAction }) {
 
 export function InventoryMonthEnd({ user, notify }) {
   const { rows, reload } = useInventoryPeriodClosures(notify);
+  const [status, setStatus] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [showCloseForm, setShowCloseForm] = useState(false);
+  const [reopening, setReopening] = useState(null);
   const canManage = can(user, 'INVENTORY_PERIOD_CLOSE_MANAGE');
-  const latestClosed = rows.find((row) => row.status === 'CLOSED');
+
+  const reloadStatus = () => api('/api/inventory-period-closures/status').then((result) => setStatus(result.status)).catch((error) => notify(error.message, 'error'));
+  useEffect(() => { void reloadStatus(); }, []);
 
   async function openDetail(row) {
     try { const result = await api(`/api/inventory-period-closures/${row.id}`); setViewing(result.inventoryPeriodClosure); }
     catch (error) { notify(error.message, 'error'); }
   }
 
-  async function reopen(row) {
-    if (!canManage) { notify('没有权限反结账', 'error'); return; }
+  async function reopen(row, reason) {
     try {
-      await api(`/api/inventory-period-closures/${row.id}/reopen`, { method: 'POST' });
+      await api(`/api/inventory-period-closures/${row.id}/reopen`, { method: 'POST', body: { reason } });
       notify(`期间 ${row.period_key} 已反结账`);
-      reload();
+      setReopening(null);
+      await Promise.all([reload(), reloadStatus()]);
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="存货月结" subtitle="按月冻结库存期间并生成只读快照；不影响库存数量与会计期间">
-    <Toolbar search={() => {}} placeholder="" action={canManage && <button className="primary" onClick={() => setShowCloseForm(true)}>＋ 执行月结</button>}/>
-    <p className="section-hint">期末库存 = 当前库存 − 期末之后发生的净异动；不重新计算库存价值，仅记录数量快照。月结不影响会计期间，不进入审批中心。</p>
-    <div className="table-wrap"><table><thead><tr><th>期间</th><th>状态</th><th>结账时间</th><th>结账人</th><th className="number">快照条目</th><th>反结时间</th><th>反结人</th><th/></tr></thead><tbody>{rows.map((row) => {
-      const canReopenThis = canManage && row.status === 'CLOSED' && (!latestClosed || latestClosed.period_key === row.period_key);
-      return <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
-        <td className="mono">{row.period_key}</td>
-        <td><Status status={row.status} label={presentStatus(row.status, 'period.status').label}/></td>
-        <td className="dim">{dateTime(row.closed_at)}</td>
-        <td>{row.closedByName}</td>
-        <td className="number">{row.snapshotCount}</td>
-        <td className="dim">{dateTime(row.reopened_at)}</td>
-        <td>{row.reopenedByName || '—'}</td>
-        <td>{canReopenThis && <button type="button" className="row-action" onClick={(event) => { event.stopPropagation(); void reopen(row); }}>反结账</button>}</td>
-      </tr>;
-    })}</tbody></table>{!rows.length && <BusinessState kind="EMPTY" title="尚未执行存货月结" description="对已结束自然月执行结账后，将生成只读快照并冻结该月库存影响。"/>}</div>
-    {showCloseForm && <CloseInventoryPeriodModal notify={notify} onClose={() => setShowCloseForm(false)} onSaved={() => { setShowCloseForm(false); reload(); notify('存货月结已保存'); }}/>}
+  return <div className="inventory-period-page">
+    <BusinessPageHeader
+      title="存货期间结账"
+      context="先运行预检查，再冻结已结束自然月的存货数量快照。结账不会修改库存流水或会计凭证。"
+      status={status?.latestStatus}
+      meta={status?.closedThrough ? `已结至 ${status.closedThrough}` : '尚无结账基线'}
+      primaryAction={canManage && <PrimaryButton type="button" disabled={!status?.canClose} onClick={() => setShowCloseForm(true)}>执行月结</PrimaryButton>}
+    />
+    <div className="inventory-period-summary">
+      <SummaryCard label="最近期间" value={status?.latestPeriod || '—'} detail={status?.latestStatus === 'REOPENED' ? '等待重新结账' : '最近操作记录'}/>
+      <SummaryCard label="下一可结期间" value={status?.nextClosablePeriod || '—'} detail="仅允许连续的已结束自然月"/>
+      <SummaryCard label="历史记录" value={rows.length} detail="含结账与反结账轨迹"/>
+    </div>
+    <InlineAlert>快照只读取权威 <code>business_date</code>。遗留日期无法验证、负库存、未完成单据或一致性差异都会阻止结账。</InlineAlert>
+    {rows.length ? <RecordList className="inventory-period-list">{rows.map((row) => {
+      const canReopenThis = canManage && row.status === 'CLOSED' && status?.latestPeriod === row.period_key;
+      return <RecordCard key={row.id} title={row.period_key} subtitle={`结账人 ${row.closedByName} · ${dateTime(row.closed_at)}`}
+        status={<StatusChip status={row.status} domain="period.status"/>}
+        facts={[
+          { label: '快照条目', value: row.snapshotCount },
+          { label: '预检查', value: row.closeChecks?.overallStatus || '—' },
+          { label: '反结时间', value: dateTime(row.reopened_at) },
+          { label: '反结人', value: row.reopenedByName || '—' },
+        ]}
+        onClick={() => void openDetail(row)}
+        actions={<BusinessActionBar secondary={<SecondaryButton type="button" onClick={() => void openDetail(row)}>查看详情</SecondaryButton>}
+          destructive={canReopenThis && <DestructiveButton type="button" onClick={() => setReopening(row)}>反结账</DestructiveButton>}/>}/>; })}</RecordList>
+      : <BusinessState kind="EMPTY" title="尚未执行存货月结" description="运行预检查并结账后，这里会显示只读快照与完整审计历史。" action={canManage && status?.canClose ? <PrimaryButton type="button" onClick={() => setShowCloseForm(true)}>执行首次月结</PrimaryButton> : null}/>}
+    {showCloseForm && <CloseInventoryPeriodModal initialPeriod={status?.nextClosablePeriod} notify={notify} onClose={() => setShowCloseForm(false)} onSaved={async () => { setShowCloseForm(false); await Promise.all([reload(), reloadStatus()]); notify('存货月结已完成'); }}/>}
+    {reopening && <ReopenInventoryPeriodModal row={reopening} onClose={() => setReopening(null)} onConfirm={(reason) => reopen(reopening, reason)}/>}
     {viewing && <InventoryPeriodClosureDetail value={viewing} onClose={() => setViewing(null)}/>}
-  </Panel>;
+  </div>;
 }
 
-function CloseInventoryPeriodModal({ notify, onClose, onSaved }) {
-  const [period, setPeriod] = useState(currentPeriodKey());
-  async function save(event) {
-    event.preventDefault();
-    try { await api('/api/inventory-period-closures', { method: 'POST', body: { period, notes: '' } }); onSaved(); }
-    catch (error) { notify(error.message, 'error'); }
+function CloseInventoryPeriodModal({ initialPeriod, notify, onClose, onSaved }) {
+  const [period, setPeriod] = useState(initialPeriod || currentPeriodKey());
+  const [notes, setNotes] = useState('');
+  const [precheck, setPrecheck] = useState(null);
+  const [confirmWarnings, setConfirmWarnings] = useState(false);
+  const [checking, setChecking] = useState(false);
+  async function check() {
+    setChecking(true);
+    try {
+      const result = await api('/api/inventory-period-closures/check', { method: 'POST', body: { period } });
+      setPrecheck(result.precheck); setConfirmWarnings(false);
+    } catch (error) { notify(error.message, 'error'); }
+    finally { setChecking(false); }
   }
+  async function save(event) { event.preventDefault(); try {
+    await api('/api/inventory-period-closures', { method: 'POST', body: { period, notes, confirmWarnings } }); onSaved();
+  } catch (error) { notify(error.message, 'error'); } }
+  const warning = precheck?.overallStatus === 'WARNING';
+  const ready = precheck && precheck.overallStatus !== 'BLOCKED' && (!warning || confirmWarnings);
   return <Modal title="执行存货月结" onClose={onClose}>
     <form onSubmit={save}>
       <div className="form-grid order-head">
-        <label>期间 (YYYY-MM)<input value={period} onChange={(e) => setPeriod(e.target.value)} placeholder="2026-08" pattern="\d{4}-(0[1-9]|1[0-2])" required/></label>
-        <p className="full section-hint">建议结账已结束的自然月；系统会按库存与库存异动计算期末数量并写入快照，且不修改库存或凭证。</p>
+        <label>期间 (YYYY-MM)<input value={period} onChange={(event) => { setPeriod(event.target.value); setPrecheck(null); }} placeholder="2026-08" pattern="\d{4}-(0[1-9]|1[0-2])" required/></label>
+        <label className="full">结账备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={200}/></label>
       </div>
-      <FormActions onClose={onClose} saveText="结账"/>
+      {!precheck && <BusinessState kind="EMPTY" title="尚未运行预检查" description="结账前必须检查期间顺序、库存、单据、追踪身份与财务一致性。"/>}
+      {precheck && <PrecheckResults value={precheck}/>}
+      {warning && <label className="inventory-period-warning-confirm"><input type="checkbox" checked={confirmWarnings} onChange={(event) => setConfirmWarnings(event.target.checked)}/>我已审阅并接受上述非阻断警告</label>}
+      <BusinessActionBar secondary={[<SecondaryButton key="cancel" type="button" onClick={onClose}>取消</SecondaryButton>, <SecondaryButton key="check" type="button" disabled={checking} onClick={() => void check()}>{checking ? '检查中…' : '运行预检查'}</SecondaryButton>]}
+        primary={<PrimaryButton type="submit" disabled={!ready}>确认结账</PrimaryButton>}/>
     </form>
   </Modal>;
+}
+
+function PrecheckResults({ value }) {
+  const tone = value.overallStatus === 'PASS' ? 'success' : value.overallStatus === 'WARNING' ? 'warning' : 'danger';
+  return <div className="inventory-precheck"><InlineAlert tone={tone} title={`预检查：${value.overallStatus}`}>阻断 {value.summary.blockingCount} · 警告 {value.summary.warningCount} · 通过 {value.summary.passCount}</InlineAlert>
+    <div className="inventory-precheck__list">{value.checks.map((check) => <article key={check.code} className={`inventory-precheck__item is-${check.status.toLowerCase()}`}>
+      <div><strong>{check.title}</strong><small>{check.code}</small></div><span>{check.status}{check.count ? ` · ${check.count}` : ''}</span>
+      {check.status === 'FAIL' && <p>{check.resolution}</p>}
+    </article>)}</div></div>;
+}
+
+function ReopenInventoryPeriodModal({ row, onClose, onConfirm }) {
+  const [reason, setReason] = useState('');
+  return <Modal title={`反结账 ${row.period_key}`} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(reason); }}>
+    <InlineAlert tone="warning">只能反结最近已结期间；同月会计期间必须为打开状态。快照保留并将在重结时重建。</InlineAlert>
+    <label>反结账原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={200} required/></label>
+    <BusinessActionBar secondary={<SecondaryButton type="button" onClick={onClose}>取消</SecondaryButton>} destructive={<DestructiveButton type="submit" disabled={!reason.trim()}>确认反结账</DestructiveButton>}/>
+  </form></Modal>;
 }
 
 function InventoryPeriodClosureDetail({ value, onClose }) {
@@ -237,7 +291,9 @@ function InventoryPeriodClosureDetail({ value, onClose }) {
       <div><span>结账人</span><strong>{value.closedByName}</strong></div>
       <div><span>反结时间</span><strong>{dateTime(value.reopened_at)}</strong></div>
       <div><span>反结人</span><strong>{value.reopenedByName || '—'}</strong></div>
+      <div><span>反结原因</span><strong>{value.reopen_reason || '—'}</strong></div>
     </div>
+    {value.closeChecks && <PrecheckResults value={value.closeChecks}/>}
     <h4>期间汇总</h4>
     <div className="detail-grid">
       <div><span>仓库数</span><strong>{value.summary?.warehouseCount || 0}</strong></div>
@@ -245,6 +301,8 @@ function InventoryPeriodClosureDetail({ value, onClose }) {
       <div><span>期内入库数量</span><strong>{quantity(value.summary?.totalInQuantity || 0)}</strong></div>
       <div><span>期内出库数量</span><strong>{quantity(value.summary?.totalOutQuantity || 0)}</strong></div>
     </div>
+    <h4>审计历史</h4>
+    <div className="inventory-period-audit">{value.audits?.map((entry) => <div key={entry.id}><strong>{entry.action}</strong><span>{entry.actorName || '系统'} · {dateTime(entry.created_at)}</span><p>{entry.detail}</p></div>)}</div>
     <div className="table-wrap inset">
       <table>
         <thead><tr><th>仓库</th><th>货品</th><th className="number">本期入库</th><th className="number">本期出库</th><th className="number">期末数量</th></tr></thead>

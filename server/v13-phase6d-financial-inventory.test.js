@@ -64,6 +64,10 @@ describe('V1.3 Phase 6D financial inventory valuation',()=>{
   test('closed inventory or accounting period blocks before mutation',()=>{
     db.prepare("INSERT INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes) VALUES('p6d-close','2026-10','CLOSED','user-admin',?,'')").run(at); assert.throws(()=>assertFinancialPeriodsOpen(db,'2026-10-01'),/存货期间/);
     db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,status,created_at) VALUES('p6d-ac','2026-11',2026,11,'CLOSED',?)").run(at); assert.throws(()=>assertFinancialPeriodsOpen(db,'2026-11-01'),/会计期间/);
+    // The period guards are shared state. Remove this test's synthetic closes
+    // so later valuation/reversal cases continue in an intentionally open period.
+    db.prepare("DELETE FROM inventory_period_closures WHERE id='p6d-close'").run();
+    db.prepare("DELETE FROM period_closures WHERE id='p6d-ac'").run();
   });
 
   test('inventory-control reversal mirrors original value and system voucher exactly once',()=>{

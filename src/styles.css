@@ -2254,6 +2254,34 @@ tfoot td {
 .sheet .bottom-action-bar { bottom:0; margin:20px -16px -16px; padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)); border-top:1px solid var(--separator); background:var(--bg-surface); }
 .sheet .bottom-action-bar > * { flex:1; }
 
+/* V1.4-E3 inventory period close */
+.inventory-period-page { display:grid; gap:20px; min-width:0; }
+.inventory-period-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.inventory-period-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.inventory-period-list .record-card { min-height:210px; }
+.inventory-precheck { display:grid; gap:12px; margin:16px 0; }
+.inventory-precheck__list { display:grid; gap:8px; }
+.inventory-precheck__item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; padding:11px 12px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--bg-surface); }
+.inventory-precheck__item > div { display:grid; gap:2px; }
+.inventory-precheck__item small { color:var(--text-tertiary); font-family:var(--font-mono); }
+.inventory-precheck__item > span { color:var(--text-secondary); font-weight:700; }
+.inventory-precheck__item.is-fail > span { color:var(--danger); }
+.inventory-precheck__item p { grid-column:1 / -1; margin:4px 0 0; color:var(--text-secondary); }
+.inventory-period-warning-confirm { display:flex; align-items:flex-start; gap:9px; margin:12px 0; padding:12px; border-radius:var(--radius-md); background:var(--warning-soft); }
+.inventory-period-warning-confirm input { width:auto; margin-top:3px; }
+.inventory-period-audit { display:grid; gap:8px; }
+.inventory-period-audit > div { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; padding:11px 0; border-bottom:1px solid var(--separator); }
+.inventory-period-audit span { color:var(--text-secondary); text-align:right; }
+.inventory-period-audit p { grid-column:1 / -1; margin:0; color:var(--text-secondary); }
+
+@media (max-width: 760px) {
+  .inventory-period-summary, .inventory-period-list { grid-template-columns:1fr; }
+  .inventory-period-list .record-card { min-height:0; }
+  .inventory-precheck__item { grid-template-columns:1fr; }
+  .inventory-period-audit > div { grid-template-columns:1fr; }
+  .inventory-period-audit span { text-align:left; }
+}
+
 .status-chip, .lifecycle-badge { width:max-content; max-width:100%; display:inline-flex; align-items:center; min-height:26px; padding:3px 9px; border-radius:999px; background:var(--neutral-soft); color:var(--neutral); font-size:12px; font-weight:700; white-space:nowrap; }
 .status-chip--approved, .status-chip--confirmed, .status-chip--completed, .status-chip--posted, .status-chip--active { background:var(--success-soft); color:#18743b; }
 .status-chip--submitted, .status-chip--pending, .status-chip--in_progress { background:var(--warning-soft); color:#8a5c00; }

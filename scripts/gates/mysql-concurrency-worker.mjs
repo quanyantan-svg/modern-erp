@@ -5,6 +5,7 @@ import { transaction } from '../../server/db.js';
 import { allocateDocumentNumber } from '../../server/modules/commercial-golive.js';
 import { idempotencyReplay, saveIdempotency } from '../../server/modules/financial-controls.js';
 import { confirmInventoryTransfer } from '../../server/app.js';
+import { closeInventoryPeriodCommand } from '../../server/modules/inventory-period-close.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
@@ -31,6 +32,11 @@ function saveEffect(key, payload, resourceId, kind, result) {
 }
 
 function execute(command) {
+  if (command.action === 'inventory-period-close') {
+    return closeInventoryPeriodCommand(db, { id: command.actorId }, {
+      period: command.period, confirmWarnings: Boolean(command.confirmWarnings), notes: command.notes || '',
+    }, { today: command.today });
+  }
   if (command.action === 'inventory-transfer-confirm') {
     return confirmInventoryTransfer(db, { id: command.actorId }, command.transferId);
   }

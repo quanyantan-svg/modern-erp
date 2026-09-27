@@ -286,24 +286,23 @@ describe('M13 — Inventory Month-End', () => {
     assert.equal(getInventoryQty(wh, prod), beforeInv);
     assert.equal(database.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n, beforeTx);
     assert.equal(countVouchers(), beforeVouchers);
-    assert.match(close.data.error, /健康检查/);
+    assert.equal(close.data.code, 'INVENTORY_CONSISTENCY_ERROR');
     assert.equal(database.prepare("SELECT COUNT(*) n FROM inventory_period_closures WHERE period_key='2026-08'").get().n, 0);
   });
 
-  test('9. forward chronological order: close 2026-09 after 2026-08 succeeds; close 2026-07 rejected', async () => {
-    database.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory;');
-    const close08 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-08' } });
-    assert.equal(close08.status, 200, JSON.stringify(close08.data));
-    const close09 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-09' } });
-    assert.equal(close09.status, 200, JSON.stringify(close09.data));
-    // Backward: 2026-07 rejected (latest CLOSED is 2026-09).
+  test('9. forward chronological order: close 2026-07 after 2026-06 succeeds; close 2026-05 rejected', async () => {
+    database.exec("UPDATE inventory_scraps SET status='CANCELLED' WHERE status='DRAFT'; DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory; DELETE FROM inventory_period_snapshots; DELETE FROM inventory_period_closures;");
+    const close06 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-06' } });
+    assert.equal(close06.status, 200, JSON.stringify(close06.data));
     const close07 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-07' } });
-    assert.equal(close07.status, 409);
+    assert.equal(close07.status, 200, JSON.stringify(close07.data));
+    const close05 = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-05' } });
+    assert.equal(close05.status, 409);
   });
 
   test('10. valuation mismatch refuses reclose and preserves the existing close snapshot', async () => {
     // Use a dedicated warehouse+product; populate movements spanning
-    // 2026-09 (which is now CLOSED from test 9).
+    // 2026-07 (which is now CLOSED from test 9).
     const wh = ensureWarehouse('WH-P2');
     const prod = ensureProduct('P-P2');
     setInventory(wh, prod, 0);
@@ -312,56 +311,61 @@ describe('M13 — Inventory Month-End', () => {
         source_type, source_id, source_no, remark, creator_id, created_at)
       VALUES(?, ?, ?, ?, ?, ?, 'TEST', ?, '', '', ?, ?)
     `);
-    // 2026-09 in-period movements
-    insertTx.run(id(), wh, prod, 20, 'IN', 20, 'src1', null, '2026-09-05 09:00:00');
-    insertTx.run(id(), wh, prod, 5, 'IN', 25, 'src2', null, '2026-09-20 09:00:00');
-    insertTx.run(id(), wh, prod, 8, 'OUT', 17, 'src3', null, '2026-09-30 09:00:00');
+    // Deliberately legacy/unknown movements demonstrate the fail-closed reclose.
+    insertTx.run(id(), wh, prod, 20, 'IN', 20, 'src1', null, '2026-07-05 09:00:00');
+    insertTx.run(id(), wh, prod, 5, 'IN', 25, 'src2', null, '2026-07-20 09:00:00');
+    insertTx.run(id(), wh, prod, 8, 'OUT', 17, 'src3', null, '2026-07-31 09:00:00');
     // After-period movements
     insertTx.run(id(), wh, prod, 10, 'IN', 27, 'src4', null, '2026-10-05 09:00:00');
     insertTx.run(id(), wh, prod, 4, 'OUT', 23, 'src5', null, '2026-10-10 09:00:00');
     setInventory(wh, prod, 23);
     const list = (await request('/api/inventory-period-closures', { token: adminToken })).data.inventoryPeriodClosures;
-    const closure09 = list.find((row) => row.period_key === '2026-09');
-    const beforeSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure09.id).n;
-    const reclose = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-09' } });
+    const closure07 = list.find((row) => row.period_key === '2026-07');
+    const beforeSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure07.id).n;
+    const reclose = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-07' } });
     assert.equal(reclose.status, 409, JSON.stringify(reclose.data));
-    assert.match(reclose.data.error, /健康检查/);
-    assert.equal(database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure09.id).n, beforeSnapshots);
+    assert.equal(reclose.data.code, 'INVENTORY_CONSISTENCY_ERROR');
+    assert.equal(database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure07.id).n, beforeSnapshots);
   });
 
   test('11. only the latest CLOSED period may be reopened; older underneath a newer one is rejected', async () => {
-    // Current state: 2026-08 CLOSED, 2026-09 CLOSED.
+    // Current state: 2026-06 CLOSED, 2026-07 CLOSED.
     const list = (await request('/api/inventory-period-closures', { token: adminToken })).data.inventoryPeriodClosures;
-    const closure08 = list.find((row) => row.period_key === '2026-08');
-    // Reopen 2026-08 -> rejected (latest CLOSED is 2026-09).
-    const reopenOld = await request(`/api/inventory-period-closures/${closure08.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '测试期间顺序' } });
+    const closure06 = list.find((row) => row.period_key === '2026-06');
+    const reopenOld = await request(`/api/inventory-period-closures/${closure06.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '测试期间顺序' } });
     assert.equal(reopenOld.status, 409);
-    // Reopen 2026-09 -> allowed.
-    const closure09 = list.find((row) => row.period_key === '2026-09');
-    const reopenNew = await request(`/api/inventory-period-closures/${closure09.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '测试重开' } });
+    const closure07 = list.find((row) => row.period_key === '2026-07');
+    const reopenNew = await request(`/api/inventory-period-closures/${closure07.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '测试重开' } });
     assert.equal(reopenNew.status, 200);
-    // Reopen 2026-09 again -> 409 (already REOPENED).
-    const reopenNewAgain = await request(`/api/inventory-period-closures/${closure09.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '重复重开' } });
+    const reopenNewAgain = await request(`/api/inventory-period-closures/${closure07.id}/reopen`, { token: adminToken, method: 'POST', body: { reason: '重复重开' } });
     assert.equal(reopenNewAgain.status, 409);
   });
 
   test('12. reclose rebuilds the snapshot without accumulating duplicate rows', async () => {
-    // After test 11: 2026-09 is REOPENED.
+    // After test 11: 2026-07 is REOPENED.
     const list = (await request('/api/inventory-period-closures', { token: adminToken })).data.inventoryPeriodClosures;
-    const closure09 = list.find((row) => row.period_key === '2026-09');
-    const beforeSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure09.id).n;
+    const closure07 = list.find((row) => row.period_key === '2026-07');
+    const beforeSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure07.id).n;
     database.exec('DELETE FROM inventory_valuation_movements; DELETE FROM inventory_valuation_balances; DELETE FROM inventory_transactions; DELETE FROM inventory;');
-    const reclose = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-09' } });
+    const reclose = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-07' } });
     assert.equal(reclose.status, 200, JSON.stringify(reclose.data));
-    const detail = (await request(`/api/inventory-period-closures/${closure09.id}`, { token: adminToken })).data.inventoryPeriodClosure;
+    const detail = (await request(`/api/inventory-period-closures/${closure07.id}`, { token: adminToken })).data.inventoryPeriodClosure;
     // No new rows beyond what was there before.
-    const afterSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure09.id).n;
+    const afterSnapshots = database.prepare('SELECT COUNT(*) n FROM inventory_period_snapshots WHERE closure_id=?').get(closure07.id).n;
     assert.equal(afterSnapshots, beforeSnapshots);
     assert.equal(detail.status, 'CLOSED');
+    assert.equal(detail.reopen_reason, '测试重开');
+    assert.ok(detail.audits.length >= 3);
   });
 
   test('13. month-end does not enter Approval Center; warehouse role cannot manage period closures', async () => {
-    const close = await request('/api/inventory-period-closures', { token: warehouseToken, method: 'POST', body: { period: '2026-11' } });
+    const status = await request('/api/inventory-period-closures/status', { token: adminToken });
+    assert.equal(status.status, 200);
+    assert.equal(status.data.status.latestPeriod, '2026-07');
+    const precheck = await request('/api/inventory-period-closures/check', { token: adminToken, method: 'POST', body: { period: '2026-08' } });
+    assert.equal(precheck.status, 200);
+    assert.ok(Array.isArray(precheck.data.precheck.checks));
+    const close = await request('/api/inventory-period-closures', { token: warehouseToken, method: 'POST', body: { period: '2026-08' } });
     assert.equal(close.status, 403);
     const approvals = await request('/api/approvals?tab=pending&limit=200', { token: adminToken });
     assert.equal(approvals.status, 200);
@@ -374,7 +378,7 @@ describe('M13 — Inventory Month-End', () => {
     const beforeInv = database.prepare('SELECT COUNT(*) n FROM inventory').get().n;
     const beforeTx = database.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n;
     const beforeVouchers = countVouchers();
-    const close = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-11' } });
+    const close = await request('/api/inventory-period-closures', { token: adminToken, method: 'POST', body: { period: '2026-08' } });
     assert.equal(close.status, 200, JSON.stringify(close.data));
     assert.equal(database.prepare('SELECT COUNT(*) n FROM inventory').get().n, beforeInv);
     assert.equal(database.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n, beforeTx);
