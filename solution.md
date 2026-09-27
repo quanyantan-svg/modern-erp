@@ -2,7 +2,7 @@
 
 ## 1. 范围与设计原则
 
-本文档是 Modern ERP 唯一当前技术设计和实现参考，描述 V1.3 的架构、模块责任、数据关系、事务、安全、测试和运行边界。功能合同见 document.md；docs/ 下的阶段文档和审计属于支持性或历史证据。
+本文档是 Modern ERP 唯一当前技术设计和实现参考。§2–§20 描述 V1.3 已实现的架构、模块责任、数据关系、事务、安全、测试和运行边界；§21 是待运营方确认、尚未实施的 `[V1.4-D]` 目标设计。功能合同见 document.md；docs/ 下的阶段文档和审计属于支持性或历史证据。目标设计与当前实现不一致时，实施前必须以标明版本和状态的章节为准，不得把目标设计误报为已上线能力。
 
 设计原则：
 
@@ -12,6 +12,7 @@
 - 前端不作为授权或金额计算权威。
 - SQLite 与 MySQL 8 实现相同业务接口，但允许数据库适配层采用不同并发机制。
 - 历史经济事件不可由启动迁移或 GET/CHECK 请求静默修复。
+- 业务日期、来源身份和历史状态只能从可证明事实迁移；未知值必须保持未知并在 UI/报表披露。
 - 先保证正确性，再以可验证证据优化吞吐。
 
 ## 2. 运行与部署架构
@@ -834,3 +835,468 @@ UAT-FUNC-004 PO 编辑修复保持独立有效，不受本节影响。
 #### 20.14.9 R4-R3 WIP 处置
 
 R4-R3 实施期间的 WIP（含 “首行保留 source 标识” workaround）已 stash 在 `wip/r4-r3-before-source-cardinality-fix`（commit master 工作树，commit-style stash entry）。R4-R2B 不恢复 stash；后续 R4-R3 实施阶段在 schema 修复合并后从 stash 弹出 worktree，逐项修正 “首行保留” workaround 与测试中 “first-line-only” 路径，再独立 commit。
+
+## 21. [V1.4-D] 业务一致性、库存关账与产品交互目标设计
+
+### 21.1 设计状态、边界与整体结构
+
+本节把 document.md 已冻结的 V1.4-C 要求转换为实现设计。状态为 **DESIGN — NOT IMPLEMENTED**；运营方确认本节前，不得据此修改应用、schema、迁移、测试或部署。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
+
+V1.4 的共同调用结构为：
+
+    React 业务页 / 移动卡片
+      → src/api.js 统一请求与结构化错误
+      → server/app.js 路由、认证、精确权限
+      → server/modules/ 领域查询或命令
+      → 同一 transaction 内的状态、数量、身份、价值、审计
+      → SQLite / MySQL 8 等价约束
+
+本节只纳入冻结范围：库存期间关账、产品跟踪模式呈现、C01–C05、有限的交互一致性和相应移动适配。完整销售/采购逐行驾驶舱、复杂成本关账、多组织、多币种、仓位/LPN、工作流设计器、PDA 配置器、APS、完整 MES/QMS 均不进入 V1.4。
+
+### 21.2 库存期间关账
+
+#### 21.2.1 业务模型与期间关系
+
+- **库存关账**：对一个已经结束的自然月运行只读检查，在同一受控事务中复核通过后，保存该月库存快照和检查证据，并把该月及以前日期标记为不可再发生库存影响。它是库存期间控制，不进入 Approval Center，也不产生库存、估值或会计分录。
+- **反关账**：由有权限人员对最近一个已关库存期间执行的受控重开。必须填写原因、二次确认并保留操作者、时间和原因；它不删除原快照和原关账审计，也不自动反开会计期间。
+- **关账截止日** `closedThroughDate`：连续 CLOSED 链中最后期间的自然月末。所有库存影响命令必须在写入前拒绝 `businessDate <= closedThroughDate`；不能只检查“业务日期所在月份是否恰好有一条 CLOSED 记录”。
+- **当前开放库存期间**：`closedThroughDate` 后的第一个自然月。若从未关账，系统没有伪造的截止日；第一次成功关账建立控制基线，此后只能按自然月严格连续关账。
+- **下一可关账期间**：已有基线时为最后 CLOSED 期间的下一个月；最近期间处于 REOPENED 时只能先重关同一期间。第一次关账可选择任一已经结束的自然月作为明确基线，不能选择当前月或未来月。`nextCloseablePeriod` 约束期间推进，不排斥对现有 CLOSED 同月执行不推进期间的幂等重关。
+- 每个 `period_key` 只保留一条 `inventory_period_closures` 记录；不同月份可依次关账。对已 CLOSED 的同月重复关账是允许的幂等操作：重新运行权威预检，通过后复用原 closure identity，删除并重建/替换同一快照集合，不新增期间记录、不再次推进期间。业务状态未变化时重建结果必须等价；并发或重复请求不得产生重复 closure/snapshot。REOPENED 的同月重关是另一条显式路径，同样复用原期间记录、重新预检并重建其快照。
+- 财务期间与库存期间继续使用现有两套**不同领域的控制记录**，不再新建第三套系统：会计月结前仍须确认同月库存已关；库存反关账前，同月会计期间必须已开放。反关账不会跨域自动重开财务期间。
+- 只能反开最近一个 CLOSED 库存期间；存在更晚 CLOSED 期间时禁止反开较早期间。反开后 `closedThroughDate` 回退到上一个仍 CLOSED 的月末，后续库存写入仍受该截止日保护。
+
+#### 21.2.2 预关账检查模型
+
+领域模块新增一个共享的只读 `runInventoryCloseChecks(db, period, actor)`；预检接口和最终关账命令调用同一函数，避免 UI 与提交时口径分叉。返回结构：
+
+```text
+period, periodStart, periodEnd, closedThroughDate, nextCloseablePeriod
+overallStatus: PASS | WARNING | BLOCKED
+checks[]: {
+  code, label,
+  severity: BLOCKING | WARNING,
+  status: PASS | FAIL,
+  count,
+  description,
+  resolutionHint,
+  drillDown?: { target, filters }
+}
+checkedAt
+```
+
+检查项只来自现有可证明能力：
+
+| code | 严重度 | 事实来源与含义 | 可处理路径 |
+|---|---|---|---|
+| `PERIOD_SEQUENCE` | BLOCKING | 目标月必须已结束；推进期间时须等于 `nextCloseablePeriod`，REOPENED 时须重关该期间；已存在 CLOSED 同月是允许的幂等重关例外且不推进链 | 选择 `nextCloseablePeriod`、重关已反开的期间，或对目标 CLOSED 同月执行幂等重关 |
+| `NEGATIVE_INVENTORY` | BLOCKING | `inventory` 中数量小于零，或现有估值检查发现负值/残值异常 | 下钻库存异常并用受控业务单纠正 |
+| `PENDING_INVENTORY_DOCUMENTS` | BLOCKING | 目标月末前仍为草稿/待处理的库存影响单据；缺业务日期且无法证明属于以后期间的 legacy 开放单也阻断 | 完成、取消或基于证据修复业务日期 |
+| `UNFINISHED_STOCKTAKE` | BLOCKING | 目标月末前的盘点处于 DRAFT/SUBMITTED 等未完成状态 | 完成审批或取消盘点 |
+| `INVENTORY_CONSISTENCY` | BLOCKING | 现有 System Health 中数量缓存、库存流水、跟踪身份、估值余额之间的阻断性差异 | 下钻健康检查；不自动修复 |
+| `FINANCIAL_SYSTEM_HEALTH` | BLOCKING | 与存货相关的系统凭证、库存价值与总账、WIP/GRNI 等既有 BLOCKING 检查失败 | 按检查 code 进入有权限的业务异常页，或联系 ADMIN/ACCOUNTING；不恢复最终用户 System Health 入口 |
+| `LEGACY_BUSINESS_DATE_UNKNOWN` | BLOCKING | 构建目标期快照/流量所需的 legacy 库存事件没有可证明业务日期 | 只允许基于权威来源的受控数据修复；不得回退 `created_at` |
+| `INACTIVE_OR_LEGACY_REFERENCE` | WARNING | 已停用主数据或非阻断历史说明，不影响数量/价值真相 | 可继续，但确认框展示警告摘要 |
+
+`PASS` 是单项状态，不另作 severity。任何 BLOCKING/FAIL 使 `overallStatus=BLOCKED`，服务端和客户端都不能绕过；只有 WARNING/FAIL 时为 `WARNING`，用户可在明确勾选“已阅读警告”后继续。预检不写业务、审计、快照或修复数据。检查的 `drillDown` 只包含业务目标和安全筛选，不返回任意 SQL、内部表名或未授权标识。
+
+最终关账必须在持有数据库写事务/相应 MySQL 串行化锁后重新运行相同检查，不能信任先前浏览器结果。若预检后事实变化，返回最新检查集和 `PRECHECK_BLOCKED`，零副作用。首次关账、已 CLOSED 同月幂等重关及 REOPENED 同月重关均进入同一事务命令：复用已存在的同月 closure identity（首次关账才新建），删除该 closure 旧快照、按权威业务日期重建、写 `close_checks_json`、更新 CLOSED/closed_by/closed_at 并审计；整个过程一次提交或全部回滚。已 CLOSED 不是同月请求的自动冲突条件；只有不同期间不连续、期间未结束或其他业务状态无效时返回相应错误。
+
+#### 21.2.3 页面与移动流程
+
+库存关账页采用统一 BusinessPageHeader，顶部只保留一个主动作“执行关账检查”，并展示：当前开放期间、关账截止日、下一可关账期间。检查结果使用 `PeriodCloseCheckList` 分组显示通过、警告、阻断数量；每项给出说明、解决建议和有权限时的下钻动作。
+
+流程为：选择允许的期间 → 执行检查 → 阅读结果 → 无阻断时出现“确认关账” → 二次确认展示期间、截止日、警告及“此日期以前库存业务将被阻止” → 提交关账。最近 CLOSED 期间详情提供“重新执行同月关账”入口，明确说明将复检并替换同一快照、不会推进期间或新建记录；它调用相同 close 命令。检查结果发生变化时留在本页并刷新结果，不显示原始 409/System Health 字符串。移动端采用纵向检查卡和底部固定主动作，不使用横向表格。
+
+反关账是独立的 destructive action，只在最近 CLOSED 期间详情中出现；打开独立确认面板，要求输入非空原因，并显示“不会自动反开会计期间”和重开后的截止日。历史详情展示关账人/时间、完整检查快照、反关账人/时间/原因及重关记录状态，技术 UUID 不作为主标题。
+
+#### 21.2.4 API、权限与稳定错误
+
+沿用现有 `/api/inventory-period-closures` 资源：
+
+| 接口 | 权限 | 合同 |
+|---|---|---|
+| `GET /api/inventory-period-closures/status` | `INVENTORY_PERIOD_CLOSE_VIEW` | 返回当前开放期间、`closedThroughDate`、`nextCloseablePeriod`、最近 closure；无写入 |
+| `POST /api/inventory-period-closures/check` | `INVENTORY_PERIOD_CLOSE_VIEW` | body `{ period }`；返回结构化检查，不审计为业务操作 |
+| `POST /api/inventory-period-closures` | `INVENTORY_PERIOD_CLOSE_MANAGE` | body `{ period, notes?, confirmWarnings? }`；事务内复检，通过后复用现有 close/快照表 |
+| `POST /api/inventory-period-closures/:id/reopen` | `INVENTORY_PERIOD_CLOSE_MANAGE` | body `{ reason }`；只允许最近 CLOSED 且会计期间已开放 |
+| `GET /api/inventory-period-closures/:id` | `INVENTORY_PERIOD_CLOSE_VIEW` | 返回 closure、解析后的检查快照、快照汇总和 reopen 审计 |
+
+稳定业务错误至少包括：`PERIOD_NOT_ENDED`、`PERIOD_SEQUENCE_INVALID`、`PRECHECK_BLOCKED`、`PRECHECK_WARNING_CONFIRMATION_REQUIRED`、`FINANCIAL_PERIOD_CLOSED`、`INVENTORY_CONSISTENCY_ERROR`、`PERIOD_NOT_LATEST`、`REOPEN_REASON_REQUIRED`。同月已 CLOSED 的重复 close 不得仅因该状态返回 `PERIOD_ALREADY_CLOSED`；校验错误用 400，权限用 403，不存在用 404，状态/业务冲突用 409，未知内部错误用安全 500。
+
+现有 `inventory_period_closures`、`inventory_period_snapshots`、`close_checks_json`、`reopen_reason`、closed/reopened actor/time 字段足够，库存关账本身 **NO SCHEMA CHANGE**。旧 closure 无 `close_checks_json` 时显示“历史关账未保存结构化检查”，不伪造 PASS。现有对账健康函数由关账适配层筛选存货相关 BLOCKING 项，不复制一套计算。
+
+### 21.3 产品跟踪模式、交易分配与追溯
+
+#### 21.3.1 单一产品模型
+
+`products.tracking_policy` 是唯一 canonical 模式，枚举保持 `NONE | LOT | SERIAL`；不增加 `is_lot_enabled`、`is_serial_enabled` 等平行布尔字段。legacy 产品继续由既有默认 `NONE` 读取。跟踪策略变更继续通过现有受控 API 和历史表，只有零库存、无开放执行、无已发生跟踪移动时允许；历史跟踪事件永远按其已记录身份展示，不随当前产品设置隐藏或改写。
+
+产品编辑器以单选“无跟踪 / 批次 / 序列号”呈现，并解释后果。V1.4 不重写跟踪引擎，不迁移已有 lot/serial 身份，不为 NONE 产品制造占位身份。
+
+#### 21.3.2 统一交易组件与验证
+
+新增复用 `TrackingAllocationEditor`，输入为产品、仓库、方向、数量、业务日期、来源上下文与当前 allocations；内部使用已有跟踪可用量 API，输出现有 `trackingAllocations` 合同。它只在所选产品模式需要时渲染：
+
+- `NONE`：表单不展示批次/序列号控件，请求省略 allocations；服务端对非空 allocations 返回 `TRACKING_NOT_REQUIRED`，避免静默丢弃用户输入。
+- `LOT`：入库事件允许录入/选择批次及可选生产/到期信息，分配数量之和必须等于业务数量；出库事件只能选择该仓可用、非 HOLD、未过期批次，数量不能超过可用量。
+- `SERIAL`：业务数量必须是整数，分配序列号个数必须精确等于数量；产品内序列号保持全局唯一，入库不得重复创建，出库必须位于指定仓且可用。
+
+各业务流程统一规则：采购入库/生产入库创建或接收身份；调拨在同一事务中移动原身份；生产领料和销售出货消耗指定身份；销售退货、采购退货和冲销必须引用可证明的原始身份，不允许换号替代；调整、报废和盘点按实际增减方向创建/选择身份，并保持数量、身份和估值原子一致。只在当前后端已支持的这些动作中接入组件，不扩展新业务对象。
+
+服务端仍是权威：保存草稿可记录分配意图，确认时必须重新检查模式、精确数量、唯一性、仓库位置、HOLD/有效期和期间开放状态；任一行失败则整单数量、身份、价值、状态和审计全部回滚。稳定错误使用 `TRACKING_ALLOCATION_REQUIRED`、`TRACKING_QUANTITY_MISMATCH`、`SERIAL_DUPLICATE`、`TRACKED_IDENTITY_UNAVAILABLE`、`TRACKED_IDENTITY_HOLD`、`TRACKED_IDENTITY_EXPIRED`。
+
+#### 21.3.3 追溯页面与 legacy 诚实性
+
+追溯查询继续只使用 `tracked_inventory_movements`、来源分配和 genealogy 表中可证明关系，不用产品/日期相似性猜测父子关系。每个事件卡在可得时显示：业务单号和可授权链接、业务日期、仓库、方向/数量、源/目标批次或序列号、上游/下游来源及反向关系；`created_at` 仅放在审计详情。
+
+没有可靠来源、业务日期或 genealogy 的记录显示统一 InlineAlert：`历史数据 / 来源信息不完整`，并逐项指出缺失字段。它可以显示已证明的孤立库存事件，但不能生成虚构链路；查询无匹配身份与“身份存在但历史不完整”使用不同空状态。
+
+移动端 LOT 采用搜索/扫码后选择与数量输入，SERIAL 支持逐一扫码、粘贴批量校验和已录/应录计数；NONE 项目完全不占据跟踪区域。卡片首屏保留产品、数量、仓库、业务日期和验证状态，长身份列表进入详情面板。
+
+### 21.4 C01 — canonical 业务日期
+
+#### 21.4.1 日期映射
+
+业务日期解析集中到服务端 `business-date.js`（名称为设计意图），报告、导出、库存关账和期间门禁共享，不在各 SQL 中任意 `COALESCE(..., created_at)`：
+
+| 业务对象 / 事件 | 权威业务日期 | 允许 fallback | legacy 处理 | 报表用途 |
+|---|---|---|---|---|
+| 销售订单 | `sales_orders.order_date` | 否 | 空值标“业务日期缺失”并从期间活动排除 | 销售订单金额/数量期间 |
+| 销售出货 | `sales_deliveries.delivery_date` | 否 | 同上 | 销售出货期间、库存 OUT |
+| 销售退货 | `return_orders.return_date`（销售类型） | 否 | 同上 | 销售退货期间、库存 IN |
+| 采购订单 | `purchase_orders.order_date` | 否 | 同上 | 采购订单金额/数量期间 |
+| 采购入库 | `purchase_receipts.receipt_date` | 否 | 同上 | 采购入库期间、库存 IN |
+| 采购退货 | `return_orders.return_date`（采购类型） | 否 | 同上 | 采购退货期间、库存 OUT |
+| 库存流水 | 已证明来源单据日期；V1.4 新写入的 `inventory_transactions.business_date` | 否 | 无来源证明的旧值为 `LEGACY_UNKNOWN`，不得因恰好等于创建日而当成权威日期 | 库存异动、关账流量/快照 |
+| 库存调拨 | `inventory_transfers.business_date` | 否 | 新字段为空时显示缺失；不从 created/updated 推测 | OUT/IN 两端同一业务日 |
+| 生产领料 | `production_material_issues.issue_date` | 否 | 空值标缺失 | 库存 OUT、生产执行 |
+| 生产退料 | `production_material_returns.return_date` | 否 | 空值标缺失 | 库存 IN、生产执行 |
+| 生产完工 | `production_orders.actual_finish` | 否 | 这是既有完工事件事实；不从 created/submitted/approved 时间推测 | 工单完工活动；完工入库另用 receipt date |
+| 生产完工入库 | `production_receipts.receipt_date`；冲销用 `reversal_date` | 否 | 空值标缺失 | 库存 IN/OUT、WIP 活动 |
+| 库存盘点生效 | `inventory_checks.business_date` | 否 | 空值标缺失 | 盘盈盘亏流水、期间检查 |
+| 库存调整 | `inventory_adjustments.adjustment_date` | 否 | 空值标缺失 | 库存异动 |
+| 库存报废 | `inventory_scraps.scrap_date` | 否 | 空值标缺失 | 库存 OUT |
+
+销售/采购统计是“期间活动”而非订单 cohort：同一 `from/to` 对订单、物流和退货子指标分别应用各自日期，响应 `dateBasis` 明示每个指标的字段。未交按 `requested_delivery_date`、未收按 `expected_delivery_date` 判断到期与逾期；订单日期可作为单独辅助筛选，不能冒充承诺日期。自然日范围首尾均包含，统一按保存的 `YYYY-MM-DD` 比较，不把服务器本地时间截断后混入口径。
+
+桌面、移动、API 和导出调用同一查询服务与过滤 DTO。每份响应/导出头包含 `dateBasis`、查询范围、生成时间和 legacy 排除数量；缺权威日期记录可通过“日期缺失”区单独查看，但不混入有日期的期间 KPI。
+
+#### 21.4.2 写入与 legacy 来源可信度
+
+V1.4 不在 `inventory_transactions` 持久化 `business_date_origin`。服务端建立固定、受测试的 canonical source-date registry，以 `source_type/source_id → canonical source object → authoritative business date` 解析库存流水日期，并在 DTO/报表查询结果中产生 `EXPLICIT | SOURCE_DERIVED | LEGACY_UNKNOWN` 准确度分类。只有来源类型、来源 id、唯一来源记录和来源业务日期均可证明时才返回 `SOURCE_DERIVED`；新命令明确提供且与 canonical 来源一致时可返回 `EXPLICIT`。无法证明时一律为 `LEGACY_UNKNOWN`，即使旧 `inventory_transactions.business_date` 恰好等于创建日也不得视为可信。
+
+`inventory_transfers.business_date`、`inventory_checks.business_date` 以 nullable 列加入以兼容旧行；V1.4 新建/确认路径在应用层强制非空，旧行不从时间戳回填。生产工单完工复用既有 `production_orders.actual_finish`，成品库存入库复用 `production_receipts.receipt_date`，不增加重复的 `completion_date`。若未来需要可独立编辑、与实际完工时间不同的业务完工日，必须先形成新的需求决策。
+
+所有库存影响命令使用规范化后的权威业务日期调用 `assertFinancialPeriodsOpen`；该门禁改为检查日期是否小于等于库存/会计各自的已关截止日，而不是只查同月一条记录。已确认事件的业务日期不可普通编辑，纠错继续走现有反向/冲销流程。
+
+### 21.5 C02 — BusinessEntitySelector
+
+`BusinessEntitySelector` 是客户、供应商、产品和仓库共用的受控单选组件。用户输入只用于搜索，只有选择候选项后才形成筛选值；显示值统一为 `编码 · 名称`，已停用历史项追加 `（已停用）`，网络请求只传 canonical `id`。V1.4 不支持多选，也不把未匹配的自由文本静默当成全量或内部 ID。
+
+交互状态包括：空选择、输入搜索、加载、结果、无匹配、已选、清除、权限拒绝和网络失败。桌面使用可搜索 popover/listbox；移动使用底部全屏选择面板，保持搜索框、当前选择和清除动作可达。键盘、焦点、屏幕阅读标签与触控目标沿用现有 design-system 的可访问性合同。
+
+后端新增最小只读查找资源：
+
+```text
+GET /api/lookups/business-entities
+  ?type=CUSTOMER|SUPPLIER|PRODUCT|WAREHOUSE
+  &usage=REPORT_SALES|REPORT_PURCHASE|REPORT_INVENTORY
+  &q=<code-or-name>
+  &selectedId=<optional historical hydration>
+  &limit=<bounded>
+
+{ items: [{ id, code, name, active, label }], hasMore }
+```
+
+`type` 与 `usage` 必须经固定 registry 映射到表、可搜索列、active 规则和所需权限，禁止把客户端值拼接为表名/列名。V1.4 只注册上述报告 usage：要求 `REPORT_VIEW` 与对应领域可见权限的交集，并返回 active 与 inactive 供历史报告筛选。`selectedId` 只用于在有权报告上下文中回显历史引用，不能绕过领域授权或枚举对象。查询对 code 前缀和 name 包含做有界、转义后的参数化匹配；同名对象以 code 区分。通用 `TRANSACTION_*` lookup 和全站交易选择器框架明确延后，不进入 V1.4。
+
+报告 URL/API 仍可接收既有 `customerId/supplierId/productId/warehouseId` 参数以兼容合法书签，但 UI 不再要求用户知道这些值。旧的伪“编码”自由文本不建立第二套后端解析路径；无效 id 返回 `BUSINESS_ENTITY_NOT_FOUND` 或明确空结果。此项无业务数据迁移。
+
+### 21.6 C03 — 销售未交与采购未收逐行履约
+
+#### 21.6.1 查询模型与公式
+
+`decision-reports` 抽取共享的行级履约查询，销售与采购分别以 APPROVED `sales_order_items` / `purchase_order_items` 为基表，使用已存在的 `sales_delivery_items.sales_order_item_id` 和 `purchase_receipt_items.purchase_order_item_id` 聚合：
+
+```text
+orderedQuantity  = order line quantity
+executedQuantity = SUM(confirmed, source-linked execution line quantity)
+remainingQuantity = orderedQuantity - executedQuantity
+fulfillmentStatus = NOT_STARTED | PARTIAL | FULFILLED
+overdueDays = remainingQuantity > 0 && commitmentDate < businessToday
+              ? calendar-day difference : 0
+```
+
+`executedQuantity` 只纳入状态为 CONFIRMED、来源行身份明确、尚未被该业务对象支持的 canonical 执行冲销撤销的出货/入库行。当前系统没有销售出货/采购入库专用冲销对象，V1.4 不用普通退货或库存冲销猜测一个不存在的“订单义务重开”；普通销售退货、采购退货及其反向操作均不扣减 executedQuantity。未来若新增显式、来源行级的物流执行冲销，必须先更新 document/solution，再由该权威关系扣减。
+
+若聚合结果大于订货量，返回 `accuracyStatus=INCONSISTENT` 和一致性错误，不把负剩余强行截成零。已履行行默认隐藏，`includeFulfilled=true` 时显示。默认排序：逾期且剩余大于零优先，其次 commitmentDate 升序，再按订单号、行号稳定排序。销售 commitmentDate 为 `requested_delivery_date`，采购为 `expected_delivery_date`；缺失日期显示“承诺日期缺失”，不产生虚假逾期天数。
+
+主响应行至少包含：订单/单据业务号、订单行 identity、伙伴 code/name、产品 code/name、ordered/executed/remaining、commitmentDate、overdueDays、fulfillmentStatus、accuracyStatus、contributionCount。主响应不默认内联全部下游贡献。金额不是履约数量的替代，不把履约状态解释为开票、AR/AP 或结算状态。
+
+#### 21.6.2 legacy 与下钻
+
+V1.3 后新增的正常物流行必须有来源行；legacy 下游行若 `*_order_item_id` 为空，禁止按订单号、产品、伙伴、日期或数量猜测归属。它们进入独立 `legacyUnattributed` 汇总，并使相关报表响应携带 `accuracyNotice`；逐行准确结果只累计有来源记录。页面显示“历史数据 / 来源行缺失，以下未归属执行未计入逐行数量”，并允许有权限用户查看未归属业务单号，不将其随机分摊给订单行。
+
+用户显式展开行时，唯一 canonical lazy drill-down 为 `GET /api/reports/:reportKey/lines/:orderItemId/contributions`；`reportKey` 只允许冻结的销售未交/采购未收 registry 值。响应返回构成 `executedQuantity` 的权威 confirmed、未被 canonical execution reversal 撤销的下游单据/行：业务号、行号、数量、业务日期、状态及有权限时的 SPA 链接；贡献数量合计必须等于主行 `executedQuantity`。DRAFT、CANCELLED、已有效冲销或无来源行的记录不得进入贡献。服务端在返回每个链接/字段前复核目标领域权限；无权时只返回受控数量摘要。不提供竞争性的第二贡献 API，也不扩展为发票、AR/AP、结算全程驾驶舱。
+
+API 逐步把旧订单头字段保留在兼容窗口内并标记 deprecated，新 `lines[]` 是 canonical。旧 `deliveryState/receiptState` 不再驱动新 UI；发布说明明确记录粒度变化。此项是 QUERY/API/UI CHANGE，现有来源列和索引足够，不新增派生状态列或缓存表。
+
+### 21.7 C04 — 两层业务总览与订单阶段
+
+#### 21.7.1 Level 1 主流程
+
+Level 1 是所有有总览入口用户可理解、移动友好的静态主链，不显示受保护业务数量：
+
+```text
+销售：销售订单 → 出货 → 应收 → 收款/结清
+采购：MRP/采购指令 → 请购 → 采购订单 → 入库 → 应付 → 付款/结清
+制造：MRP → 生产指令/制令 → 领料 → 完工入库
+```
+
+连接线必须显示边界提示：出货后仍需销售发票/商业确认才形成 AR；入库先形成库存/GRNI，供应商账单过账后才形成 AP；订单审批只授权后续执行，不等于已履约。质量、发票/账单等真实中间阶段可用简短注记，不为图形对称新增业务对象。
+
+#### 21.7.2 Level 2 canonical 阶段
+
+Level 2 从某个主链或订单详情展开，复用/扩展现有 `/api/workflow/sales-orders/:id` 和 purchase counterpart。销售阶段按存在的对象呈现订单审批、出货来源、OQC、销售发票、AR、收款/核销；采购呈现采购指令/请购、PO 审批、采购入库、IQC、GRNI 说明、供应商账单、AP、付款/核销；制造呈现 MRP/指令/制令、领料、报工/质量摘要、完工入库。没有 canonical 对象的阶段只显示流程说明，不制造记录或链接。
+
+每个节点返回统一 envelope：
+
+```text
+{
+  key, label, description,
+  access: PROCESS_ONLY | SUMMARY_ALLOWED | DETAIL_ALLOWED | ACTION_ALLOWED,
+  state?, statusGroup?, summary?, records?, links?, actions?
+}
+```
+
+- `PROCESS_ONLY`：只返回 label/description，服务端不查询受保护域。
+- `SUMMARY_ALLOWED`：可返回经授权的状态/数量摘要，不返回业务标识。
+- `DETAIL_ALLOWED`：可返回授权字段与可打开链接。
+- `ACTION_ALLOWED`：在详情权限上，再按精确 capability 和单据状态返回动作。
+
+服务端先计算节点授权，再决定是否查询对应表；不能先加载全部数据再靠 React 隐藏。SPA 直接访问目标详情仍由目标 API 二次授权。现有 workflow voucher 的脱敏思路保留，但改成上述一致 envelope。订单页删除“来源可选”提示，改为“出货/入库必须引用已批准订单行”；C04 只校正阶段、状态说明和链接，不构建 C06/C07 完整逐行驾驶舱。
+
+### 21.8 C05 — 库存调拨执行与兼容
+
+#### 21.8.1 状态、权限与 API 语义
+
+canonical 生命周期保持 `DRAFT → TRANSFERRED`，草稿可 `CANCELLED`；这是 WAREHOUSE 的双仓物理执行，不是第六审批族，不进入 Approval Center。创建人与确认人允许相同，但两次动作分别授权、分别审计。
+
+选定权限策略：
+
+- 保留 `INVENTORY_TRANSFER_CREATE`，用于新建/编辑/取消 DRAFT。
+- 新增 canonical `INVENTORY_TRANSFER_CONFIRM`，用于确认调拨及非盘点调拨冲销。
+- `INVENTORY_TRANSFER_APPROVE` 在 V1.4 作为 deprecated alias 保留；后端统一的 `allowInventoryTransferConfirm` 接受 CONFIRM 或旧 APPROVE，避免旧角色/集成突然失权。新权限管理 UI 不再提供旧 code，日志记录 alias 使用；最早在下一主版本、完成使用审计和公告后移除。
+- canonical WAREHOUSE 与 ADMIN seed 增加 CONFIRM；不把确认能力授予 REVIEWER、SALES 或 ACCOUNTING。兼容迁移不删除任何既有自定义角色的旧授权。
+
+外部 canonical 动作路径保持 `POST /api/inventory-transfers/:id/transfer` 以避免破坏调用方，业务语义和文案统一为“确认调拨 / CONFIRM”；V1.4 不增加第二条 `/confirm` 路径。新 handler、DTO、UI、测试和权限检查使用 `INVENTORY_TRANSFER_CONFIRM`，只有显式兼容检查可以出现旧 `INVENTORY_TRANSFER_APPROVE`。重复确认返回 409 `DUPLICATE_CONFIRMATION`，不再次写库存。取消路径改由 CREATE 能力保护，只允许 DRAFT。
+
+#### 21.8.2 数据、事务与审计映射
+
+调拨草稿保存 `business_date`，在 DRAFT 可由有 CREATE 能力者修改，确认后不可改。确认事务依次锁定/重读草稿、检查权威业务日期和关账截止日、验证源仓数量与 LOT/SERIAL、移动双仓数量、跟踪身份和仓库维度价值、写两端相同业务日期的库存流水、更新 TRANSFERRED、记录确认人与时间、写审计；任何失败全部回滚。公司总数量和总存货价值守恒，不产生 AR/AP、收入、费用或公司级存货净分录。
+
+为最小兼容，不新增重复的确认人/确认时间列：
+
+- `creator_id/created_at` 对外映射 `createdBy/createdAt`。
+- 仅当技术状态为 TRANSFERRED 时，现有 `reviewer_id` 映射为 `confirmedBy`，该次原子状态更新后的 `updated_at` 映射为 `confirmedAt`；UI 只称“确认人/执行人”。
+- CANCELLED 行的相同 legacy 字段只映射为 `cancelledBy/cancelledAt`，绝不显示“审核人”。
+- 新增 nullable `business_date` 是必要 schema 变化；legacy 空值显示“业务日期缺失”，不从 `created_at/updated_at` 推测。
+
+历史 `SUBMITTED/APPROVED` 保留技术原值、只读且无确认/取消动作。UI 分别显示“历史待处理（未证明已调拨）”和“历史已批准（不等于已调拨）”，详情同时展示 `legacyTechnicalStatus`。若完整的双端库存流水能证明移动，只能增加独立提示“发现库存移动证据”，仍不改写或重标为 TRANSFERRED；不完整/无证据则明确未知，交后续受控数据治理，不做启动迁移。
+
+### 21.9 小型、可执行的产品交互系统
+
+#### 21.9.1 页面骨架与动作层级
+
+在现有 `design-system.jsx`、`MobilePage`、卡片和状态组件上收敛，不重写全部页面。业务页的标准结构为：
+
+1. `BusinessPageHeader`：业务标题、简短上下文/口径、一个主动作；返回与帮助是导航动作。
+2. 搜索/筛选区：常用条件直接显示，次要条件进入现有 `FilterSheet`；已应用条件可清除。
+3. `ResponsiveBusinessList`：桌面表/列表与移动卡片共享数据、状态和动作模型。
+4. 详情/来源：使用抽屉或详情页，`SourceDocumentLink` 始终显示业务号，不显示 UUID。
+5. `BusinessState`：加载、空、权限、业务阻断和网络错误占据一致位置。
+6. 移动端主动作放入 `MobilePage` bottom action bar，不能因长列表滚出可达范围。
+
+动作层级：`PRIMARY` 每页通常只有一个当前主动作；`SECONDARY` 是保存、筛选、导出等辅助动作；`DESTRUCTIVE` 使用危险色、原因与二次确认；`NAVIGATION` 使用链接/轻按钮且不伪装提交。多个业务动作同时存在时，按当前状态选择一个 primary，其余进入 secondary/menu，不展示多个同权重实心按钮。
+
+#### 21.9.2 Canonical 动作词和状态组
+
+| 词语 | 只用于 |
+|---|---|
+| 新增 / 保存草稿 | 创建或保存仍可编辑、无业务效果的 DRAFT |
+| 提交 / 撤回 | 进入或退出授权审批队列；撤回只在规则允许且未审核时 |
+| 审核 / 驳回 | REVIEWER/会计复核的授权决定，不用于库存物理动作 |
+| 确认入库 / 确认出库 / 确认领料 / 确认完工 / 确认调拨 | 会产生对应业务、库存或价值效果的明确执行动作 |
+| 关闭 | 终止后续正常处理但不抹除历史；必须由具体领域定义 |
+| 作废 | 对未生效单据的受控终止，不等同删除 |
+| 冲销 / 反向调拨 / 退料等 | 对已生效事实建立显式反向记录；按钮必须说出对象，不使用“处理/执行/OK/提交完成” |
+
+前端 `src/lib/status.js`（或同职责模块）集中把 backend enum 映射为中文 label、semantic tone 和所属状态组，页面不直接显示 enum。至少分开：
+
+- 审批：草稿、待审核、已审核、已驳回。
+- 履约/执行：未开始、部分、已履行/已入库/已调拨、已冲销。
+- 商业/会计：未开票、部分开票、已开票；未过账、已过账、已冲销。
+- 结算：未结、部分结清、已结清、已核销。
+
+同一对象可以并列显示多个 `DocumentStatusGroup`，不把它们压成一个万能 badge。历史/准确度标记采用中性或警告语义，不冒充业务状态。页面标题、卡片和链接优先显示单据号、主数据 code/name；UUID 仅在受控诊断/管理员详情中出现。
+
+`role-reviewer` 后端 code 保持不变，用户可见名称统一为“业务审核员”或等价的跨销售/采购/请购/盘点独立审核表述，不再显示成只负责销售的“销售主管”。这只是显示术语修正，不改变角色权限或审批族。
+
+#### 21.9.3 公共组件边界
+
+| 组件/模式 | 责任 | 复用基础 |
+|---|---|---|
+| `BusinessPageHeader` / `BusinessActionBar` | 页面上下文与唯一主动作、移动固定动作 | PageHeader、MobilePage |
+| `BusinessEntitySelector` | C02 单选及所有状态 | SearchField、FilterSheet |
+| `DocumentStatusGroup` | 多维状态映射 | StatusChip |
+| `ResponsiveBusinessList` / `MobileBusinessCard` | 桌面/移动同模型不同布局 | RecordCard、现有列表 |
+| `SourceDocumentLink` | 权限感知的业务号链接 | App navigation target |
+| `BusinessErrorState` / `EmptyState` | 结构化错误、空状态与恢复动作 | InlineAlert、EmptyState、ErrorState |
+| `FulfillmentProgress` | 订货/执行/剩余与逾期 | KPI/进度基础组件 |
+| `PeriodCloseCheckList` | 关账检查分组、下钻和阻断摘要 | SectionHeader、InlineAlert |
+| `TrackingAllocationEditor` | 按 NONE/LOT/SERIAL 呈现已有分配合同 | 表单、选择面板、移动卡 |
+
+先在 V1.4 涉及页面使用这些模式；未触及页面只在后续修改时迁移，避免一次性全站重写。
+
+#### 21.9.4 空、错、载入和移动规则
+
+`BusinessState` 必须区分：
+
+- 真空数据：“尚无调拨单”，给有权限用户明确新增动作。
+- 筛选无结果：“当前条件无匹配”，提供清除筛选。
+- 缺前置条件：“请先维护产品跟踪策略/完成来源单据”，链接到允许的下一步。
+- 权限不足：说明所需业务权限，不渲染受保护详情或动作。
+- 业务规则阻断：展示结构化 message、原因、resolution 和安全下钻，例如关账 blocker。
+- 网络/服务器错误：提供 requestId、重试，不泄漏 SQL/stack。
+
+核心移动卡只放业务号、伙伴（适用时）、产品/来源、计划或剩余数量、关键业务日期、状态和下一动作；长技术字段进入详情。桌面表可以增加辅助列，但两端共用 API、权限、状态映射和错误合同。核心决策/动作信息不得依赖横向滚动，来源单据不可在移动布局中被省略。
+
+### 21.10 后端错误合同
+
+现有 `HttpError` 和安全 500 机制增量扩展为：
+
+```json
+{
+  "error": "兼容旧客户端的消息字符串",
+  "code": "PRECHECK_BLOCKED",
+  "message": "存在阻断项，不能关账",
+  "details": {},
+  "resolution": "处理阻断项后重新执行关账检查",
+  "requestId": "..."
+}
+```
+
+`error` 在 V1.4 保留；新客户端优先读取 `code/message/details/resolution`，`src/api.js` 的 `ApiError` 保留这些字段。未知异常只返回 `INTERNAL_ERROR`、通用 message 和 requestId；唯一约束/SQL/stack 先在服务端结构化日志中记录，再映射为安全业务错误。
+
+触及的 V1.4 endpoint 必须使用稳定 code：期间类见 §21.2.4；来源类 `SOURCE_UNAVAILABLE`、`SOURCE_QUANTITY_EXHAUSTED`、`SOURCE_LINEAGE_MISSING`；状态类 `INVALID_DOCUMENT_STATE`、`DUPLICATE_CONFIRMATION`；权限类 `PERMISSION_DENIED`；主数据 `BUSINESS_ENTITY_NOT_FOUND/INACTIVE`；跟踪类见 §21.3.2。HTTP 语义保持 400 输入、401 未认证、403 未授权、404 不存在、409 状态/业务冲突、500 安全内部错误。无需在 V1.4 一次改造所有旧 endpoint，但新公共序列化器必须向后兼容，后续触及即迁移。
+
+### 21.11 数据、schema 与兼容影响矩阵
+
+| 能力 | schema | query/API/UI | 兼容策略 |
+|---|---|---|---|
+| 库存关账状态/预检/重开 | **NO SCHEMA CHANGE** | 新 status/check；close/reopen 扩展；快照改用权威日期 | 复用 closure/snapshot/check JSON；旧检查缺失明确显示 |
+| 跟踪模式 | **NO SCHEMA CHANGE** | 交易 UI/校验和追溯展示变更 | 复用 `tracking_policy`、allocation/movement/genealogy；NONE 默认 |
+| C01 订单/物流/退货日期 | **QUERY CHANGE ONLY** | 统计按各自现有日期字段 | 不回退 created_at |
+| C01 调拨日期 | **MIGRATION REQUIRED** | 新写入、门禁、报表 | `inventory_transfers.business_date NULL`；旧行未知 |
+| C01 盘点日期 | **MIGRATION REQUIRED** | 新写入、批准门禁、报表 | `inventory_checks.business_date NULL`；旧行未知 |
+| C01 生产完工日期 | **NO SCHEMA CHANGE** | 完工命令与报告复用 `actual_finish`；成品入库复用 `receipt_date` | 不增加重复 completion date |
+| C01 库存流水日期可信度 | **QUERY/DTO CHANGE ONLY** | canonical source-date registry、关账/报表 | 不持久化 origin；无法证明即 `LEGACY_UNKNOWN` |
+| C02 业务对象选择 | **NO SCHEMA CHANGE** | 新 bounded lookup API + 公共组件 | 保留已有 id 参数；报告可见 inactive |
+| C03 行级未交/未收 | **QUERY/API CHANGE** | 聚合来源行、下钻 contribution | 复用现有 FK/index；legacy 未归属隔离 |
+| C04 两层总览 | **NO SCHEMA CHANGE** | workflow API envelope + UI | 无权节点 PROCESS_ONLY；无新业务对象 |
+| C05 调拨确认权限 | **PERMISSION DATA MIGRATION** | handler/UI 术语、alias | 新 CONFIRM；旧 APPROVE 保留 deprecated |
+| C05 确认审计 | **COMPATIBILITY MAPPING** | DTO/UI 映射 | TRANSFERRED 时 reviewer/updated 映射 confirmed；不重命名列 |
+| 全局 UX / 状态 / 错误 | **NO SCHEMA CHANGE** | 共享组件、映射和响应序列化 | 保留旧 `error` 字段，渐进迁移 |
+
+不新增履约缓存/状态列、第二套 tracking flags、第二套期间表、重复 confirmed actor/time、`production_orders.completion_date`、`inventory_transactions.business_date_origin` 或历史状态重写。行级履约现有来源索引已可用；实施时只在双后端 `EXPLAIN`/基准显示必要时另行评审普通复合索引，V1.4 迁移不预先创建无证据索引。
+
+### 21.12 SQLite / MySQL 迁移与 legacy 策略
+
+V1.4 设计一项范围受限的幂等添加式迁移（实现时可按仓库惯例拆成同一 slice 的模块），SQLite 与 MySQL adapter 都必须执行等价步骤。迁移范围仅包含 `inventory_transfers.business_date`、`inventory_checks.business_date` 和 `INVENTORY_TRANSFER_CONFIRM` 权限/canonical 角色映射；不包含 production completion、库存流水 provenance 或普通索引迁移。
+
+**前检：**统计 transfer/check 空日期、历史 SUBMITTED/APPROVED 调拨及持有旧 APPROVE 权限的角色；检查两个目标列和新权限是否已存在。另以只读 source-date registry 统计 inventory transaction 各 source type 可证明/不可证明数量，但不为此增加字段或修改流水。只报告 id/count，不输出敏感数据，不修改记录。
+
+**迁移：**
+
+1. 以幂等 column-existence guard 为 `inventory_transfers.business_date`、`inventory_checks.business_date` 增加 nullable DATE/TEXT-date 等价列；不回填 legacy 行，不增加未经查询计划证明的索引。
+2. 增加 `INVENTORY_TRANSFER_CONFIRM` 权限及说明，授予 canonical WAREHOUSE；ADMIN 继续通过全权限 reconciliation 获得。保留旧 APPROVE code、role mapping 和外部合同，不批量删除/改名；重复运行不得产生重复权限或扩大其他角色权限。
+3. 更新新写入路径后，应用层要求新 transfer/check 具备权威日期。nullable 仅用于 legacy 兼容，不代表新数据允许缺失。库存流水可信度始终由 source-date registry 在应用/查询层解析，不执行 origin 字段迁移或历史日期回填。
+
+**后检：**验证两个新列和新权限各一份、没有新增 `production_orders.completion_date` 或 `inventory_transactions.business_date_origin`、未知日期行未被回填、角色未意外扩权、SQLite/MySQL schema 与 source-date registry 查询结果等价；运行 focused tests、全量回归、build 和受保护 disposable MySQL gate。
+
+**回滚：**这是添加式 schema。应用回滚时保留新列和权限数据，旧版本可忽略，避免 DROP COLUMN/删除历史权限造成二次风险；必要时只回滚应用读写路径。任何需要修正历史日期/状态的动作是单独、需批准的数据治理，不包含在启动迁移。迁移失败必须事务回滚并阻止启动，不能部分继续。
+
+MySQL 使用现有 migration helper 和参数化 SQL；日期保存与 SQLite 一致的 canonical 日值。本设计只有两个 nullable 日期列和权限数据，不需要 generated column 或普通索引。未知或生产数据库不用于 reset/gate。
+
+### 21.13 实施切片与依赖顺序
+
+每个切片在独立逻辑单元内完成实现、focused tests、文档/当日日志和 UAT checkpoint；前一切片验收后再进入下一项：
+
+| Slice | 范围与依赖 | 预计文件/模块 | 测试与 UAT checkpoint | 迁移 |
+|---|---|---|---|---|
+| V1.4-E1 公共合同与 UI 基础 | 结构化错误、状态分组、BusinessPageHeader/ActionBar、Responsive list/error state；不改业务结果 | `src/api.js`、`src/components/design-system.jsx`、`src/lib/status.js`、HTTP error serializer | 错误兼容、状态词、单主动作、关键移动组件 | 无 |
+| V1.4-E2 业务日期与调拨契约 | §21.4 日期 resolver/写入/门禁；§21.8 permission alias、business date、审计 DTO 和 legacy 只读 | `server/app.js`、financial/inventory helpers、db/migrations、inventory transfer UI | 跨月、截止日、同人创建确认、守恒、legacy/alias、SQLite/MySQL | 有，§21.12 |
+| V1.4-E3 库存关账 | 依赖 E2 的可信日期；status/check/close/reopen、PeriodCloseCheckList | inventory-extensions module/page、system health adapter、routes | 预检、连续关账、重关/反关、并发与零副作用 | 无新表/列 |
+| V1.4-E4 跟踪呈现 | 复用现有引擎，接 TrackingAllocationEditor 到已支持交易，改造 trace 页面 | traceability page/module、各相关业务表单 | NONE/LOT/SERIAL、身份/数量/价值原子性、legacy trace、移动扫码 | 无 |
+| V1.4-E5 报表日期与选择器 | 依赖 E1/E2；C01 期间活动查询、C02 lookup/selector、桌面移动导出同口径 | decision-reports module/page、lookup helper | code/name、inactive、权限、跨月、缺日期、导出一致 | 无 |
+| V1.4-E6 行级履约 | 依赖 E5 筛选/日期；C03 lines/contributions 和 legacy 隔离 | decision-reports module/page | 零/部分/全部、多次确认、普通退货、legacy、逾期 | 无 |
+| V1.4-E7 两层总览 | 依赖 E1 状态/页面；C04 Level 1/2、workflow envelope、订单来源文案 | business-overview、master-data workflow、workflow handlers | 主链、财务边界、节点授权与直接 API 拒绝 | 无 |
+| V1.4-E8 移动一致性验收 | 对 E2–E7 触及流程做卡片/底部动作/无横滚/来源可见收口；不扩新业务 | application metadata、MobilePage、触及页面 | 关键 viewport、角色任务、动作可达、术语回归 | 无 |
+
+E2 内部顺序固定为：1）添加式 schema migration 与 permission compatibility；2）backend canonical date resolver/write gate 与 transfer compatibility behavior；3）focused/兼容/事务测试；4）前端“确认调拨”术语和 UI 迁移；5）UAT checkpoint。后端兼容必须先于新 UI 依赖，前端不得先切到尚未注册的新权限。
+
+E5 内部顺序固定为：1）bounded business-object lookup；2）共享 `BusinessEntitySelector`；3）lookup/filter tests；4）迁移受影响的报告筛选器；5）接入期间活动 business-date 查询；6）验证桌面/移动/API/export 口径一致；7）UAT checkpoint。lookup/selector 必须先于报告筛选迁移，不能用临时自由文本或内部 ID 过渡。
+
+E2 先于 E3 是硬依赖：关账快照和截止门禁不能继续基于不可信日期。E5 先于 E6 让行级报表直接复用正确筛选和日期合同。E8 是受控收口，不借机重写未触及页面。
+
+### 21.14 测试策略与完成 gate
+
+#### 21.14.1 自动化分层
+
+- 领域单元：日期 resolver、履约公式、status/error mapping、check severity、权限 alias。
+- API/事务集成：真实 SQLite HTTP 路径，断言状态、响应 code、数据库副作用、审计和重复/并发行为。
+- UI 合同/组件：selector 所有状态、检查列表、状态分组、来源链接、移动卡和动作词。
+- 数据库兼容：legacy DB 重开、迁移幂等、schema 后检；MySQL 仅在受保护 disposable 环境运行现有 reset/gate。
+- 每个 slice 先 focused tests，再 `pnpm test`、`pnpm build`、`git diff --check`；不得通过删减/绕过测试制造通过。
+
+#### 21.14.2 必测矩阵
+
+**库存关账：**预检全 PASS、WARNING 明示确认、每种 BLOCKING、结束月限制、首次基线与严格连续；已 CLOSED 同月重复 close 成功且复用 closure identity、替换同一快照，业务状态不变时结果等价；重复/并发 close 不产生重复 closure/snapshot；REOPENED → CLOSED 重新预检并重建同一期间快照；日期 `<= closedThrough` 的所有库存写入被阻止、只反开最近期间、会计已关阻止反关、原因/actor/time/检查快照审计、VIEW/MANAGE 权限、失败零副作用、SQLite/MySQL 等价。
+
+**LOT/SERIAL：**NONE 表单隐藏且服务端拒绝多余分配；LOT 分配和调拨/领料/出货/退货/调整/报废/盘点保持身份及数量；SERIAL 整数、精确数量、全局唯一和仓库可用；HOLD/过期；重复确认；历史模式变化后仍可追溯；缺 provenance 只显示 legacy 提示；移动扫码计数。
+
+**C01：**9 月业务日期/10 月录入的跨月场景；订单、出货、退货各自期间活动；范围边界；missing legacy date 不回退；库存 transfer 两端同日；盘点/调整/报废/领料/完工；桌面、移动和导出相同；关账截止门禁；旧 guessed ledger 由 registry 返回未知；迁移不猜 transfer/check 日期，schema 后检证明不存在 `business_date_origin` 迁移/列。
+
+**C02：**code 前缀/name 片段、同名不同码、选择后传 id、无匹配、清除、inactive 在历史报告可见、selectedId 历史回显、特殊字符/limit、无权限不可枚举、移动面板；registry 不接受 `TRANSACTION_*` usage，既有新交易选择规则不因本 lookup 扩权或改变。
+
+**C03：**0/部分/全部；多张 confirmed 下游累计且不重复；lazy contribution drill-down 的贡献数量合计严格等于主行 `executedQuantity`；DRAFT/CANCELLED/已有效冲销/无来源行不进入贡献；普通退货与退货冲销均不重开；若未来有显式执行冲销则只按其来源行扣减；legacy 无来源不猜；超执行标一致性错误；缺承诺日期；逾期天数/默认排序；已履行默认隐藏；contributions 权限。
+
+**C04：**Level 1 三条顺序；文案不暗示出货=AR、入库=AP、审批=履约；Level 2 只用已有对象；PROCESS_ONLY 不触发受保护查询；summary/detail/action 四级授权；直接请求受保护详情仍 403；订单详情无“来源可选”。
+
+**C05：**同一 WAREHOUSE 创建/确认；CREATE 与 CONFIRM 分离；旧 APPROVE alias 兼容且无角色扩权，新行为/权限检查使用 CONFIRM；现有 `/api/inventory-transfers/:id/transfer` 保持唯一 canonical action path，路由集中不存在 `/confirm`；SALES/REVIEWER/ACCOUNTING 拒绝；重复/并发确认；关闭期间；库存不足；两仓数量、跟踪身份、仓库价值守恒；原子回滚；反向调拨；confirmed actor/date；legacy SUBMITTED/APPROVED 只读且不误判。
+
+**全局 UX：**禁用模糊动作词、物理执行不叫审核、用户页不显示 UUID、状态组不混并、六类空/错/加载状态、核心移动 viewport 无横滚且主动作/来源可达。源码字符串测试只能作为补充，关键行为使用组件或浏览器验收。
+
+### 21.15 端到端 UAT 场景
+
+复用电子制造场景，但只给确需身份管理的项目启用 tracking：成品控制器使用 SERIAL，关键 PCB 来料使用 LOT，包装辅料保持 NONE。
+
+1. ADMIN 建客户、供应商、仓库、产品、BOM/路线；验证产品模式、NONE 表单无跟踪噪声、业务对象按 code/name 查找。
+2. SALES 建带 9 月 30 日订单日期、10 月要求交期的销售订单，REVIEWER 审核；Level 1/2 正确区分授权与履约。
+3. 运行 MRP，生成采购指令→请购→PO 及生产指令/制令；保持行来源。
+4. WAREHOUSE 在明确 receipt date 接收 PCB LOT，完成 IQC；ACCOUNTING 过账供应商账单形成 AP，并执行部分付款/核销。
+5. WAREHOUSE 领用 PCB LOT、报工；工单完工使用既有 `actual_finish`，三个成品 SERIAL 的完工入库使用明确 `receipt_date`，验证 genealogy 只含可证明关联。
+6. 同一 WAREHOUSE 用户创建并确认带业务日期的调拨，验证文案为“确认调拨”、两仓数量/身份/价值守恒；重复确认被拒绝。
+7. 分两次出货形成销售订单行部分→全部履约，完成 OQC；普通销售退货不重开原订单剩余。销售发票过账后才形成 AR，部分收款/核销与折让按现有合同执行。
+8. 在桌面和移动查看 C01 期间活动、C02 选择器、C03 剩余/逾期/下游贡献和 C04 两层总览；业务日期跨月归属与导出一致，移动无核心横滚。
+9. 构造并修复一个可处理的关账 blocker，重新预检后关闭已结束自然月；验证日期不晚于截止日的库存动作被拒绝。先确认会计期间为开放，再以原因反关账并核验审计，最后重关且快照不重复。
+10. 全程以 SALES、REVIEWER、WAREHOUSE、ACCOUNTING、ADMIN 各自账号验证 PROCESS_ONLY 与受保护详情/动作边界；检查业务页不出现内部 UUID 或原始系统错误。
+
+UAT 断言数量、金额（整数分）、身份、价值、来源、业务日期、权限和审计；不要求所有产品启用 LOT/SERIAL，不把物流确认等同于 AR/AP。
+
+### 21.16 设计完成判定与未决项
+
+本设计已覆盖 V1.4-C 全部冻结项和库存关账/跟踪/全局一致性要求，未发现 document.md 内部矛盾。设计层开放阻断项为 **0**，需求问题为 **0**。仍需运营方确认本 §21 后方可进入 STAGE 3；这是一项工作流批准，不是设计缺口。
+
+实施阶段必须再次核对实际生产数据质量、双后端迁移演练和现有未提交用户工作。任何需要猜测业务日期、来源、历史调拨状态或 genealogy 的情况都必须 fail closed，并作为独立数据治理请求回报，不能扩大本设计授权。
