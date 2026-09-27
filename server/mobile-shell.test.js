@@ -291,7 +291,7 @@ describe('Permissions — canonical registry count', () => {
   test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 113, `PERMISSIONS array must have 113 entries after M14 (got ${perms.length})`);
+    assert.equal(perms.length, 114, `PERMISSIONS array must have 113 entries after M14 (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);

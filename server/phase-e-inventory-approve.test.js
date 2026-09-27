@@ -250,6 +250,7 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
       headers: { 'Authorization': `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         fromWarehouseId, toWarehouseId,
+        businessDate: '2026-09-27',
         items: [{ productId: 'p-1', quantity: qty }],
       }),
     });
@@ -264,6 +265,23 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
     const row = db.prepare('SELECT status, creator_id FROM inventory_transfers WHERE id=?').get(created.id);
     assert.equal(row.status, 'DRAFT');
     assert.equal(row.creator_id, 'user-wh');
+  });
+
+  test('new transfer without businessDate is rejected with zero side effects', async () => {
+    const beforeTransfers = db.prepare('SELECT COUNT(*) count FROM inventory_transfers').get().count;
+    const beforeAudit = db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_TRANSFER'").get().count;
+    const beforeSource = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-A' AND product_id='p-1'").get().quantity;
+    const response = await fetch(`${baseUrl}/api/inventory-transfers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${warehouseToken}` },
+      body: JSON.stringify({ fromWarehouseId: 'wh-A', toWarehouseId: 'wh-B', items: [{ productId: 'p-1', quantity: 1 }] }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.code, 'VALIDATION');
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM inventory_transfers').get().count, beforeTransfers);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_TRANSFER'").get().count, beforeAudit);
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-A' AND product_id='p-1'").get().quantity, beforeSource);
   });
 
   test('warehouse confirms transfer: status=TRANSFERRED, reviewer_id persisted, quantities update correctly', async () => {
@@ -299,7 +317,52 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
     });
     assert.equal(second.status, 409, 'second /transfer on same id must 409');
     const body = await second.json();
-    assert.match(body.error || '', /草稿/);
+    assert.match(body.error || '', /已确认|重复/);
+    assert.equal(body.code, 'DUPLICATE_CONFIRMATION');
+  });
+
+  test('closed businessDate blocks transfer confirmation with zero partial effects', async () => {
+    const created = await createTransfer(warehouseToken, 'wh-A', 'wh-B', 4);
+    db.prepare("INSERT INTO inventory_period_closures(id,period_key,status,closed_by,closed_at,notes) VALUES('e2-closed','2026-09','CLOSED','user-ad',datetime('now'),'e2 test')").run();
+    try {
+      const beforeSource = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-A' AND product_id='p-1'").get().quantity;
+      const beforeTarget = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-B' AND product_id='p-1'").get()?.quantity || 0;
+      const beforeAudit = db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_TRANSFER' AND entity_id=?").get(created.id).count;
+      const response = await fetch(`${baseUrl}/api/inventory-transfers/${created.id}/transfer`, { method: 'POST', headers: { Authorization: `Bearer ${warehouseToken}` }, body: '{}' });
+      assert.equal(response.status, 409);
+      assert.equal(db.prepare('SELECT status FROM inventory_transfers WHERE id=?').get(created.id).status, 'DRAFT');
+      assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-A' AND product_id='p-1'").get().quantity, beforeSource);
+      assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh-B' AND product_id='p-1'").get()?.quantity || 0, beforeTarget);
+      assert.equal(db.prepare("SELECT COUNT(*) count FROM inventory_transactions WHERE source_type='INVENTORY_TRANSFER' AND source_id=?").get(created.id).count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_TRANSFER' AND entity_id=?").get(created.id).count, beforeAudit);
+    } finally {
+      db.prepare("DELETE FROM inventory_period_closures WHERE id='e2-closed'").run();
+    }
+  });
+
+  test('legacy APPROVE-only warehouse mapping remains a confirm compatibility alias', async () => {
+    const created = await createTransfer(warehouseToken, 'wh-A', 'wh-B', 2);
+    db.prepare("DELETE FROM role_permissions WHERE role_id='role-warehouse' AND permission_code='INVENTORY_TRANSFER_CONFIRM'").run();
+    try {
+      const response = await fetch(`${baseUrl}/api/inventory-transfers/${created.id}/transfer`, { method: 'POST', headers: { Authorization: `Bearer ${warehouseToken}` }, body: '{}' });
+      assert.equal(response.status, 200);
+      assert.equal(db.prepare('SELECT status FROM inventory_transfers WHERE id=?').get(created.id).status, 'TRANSFERRED');
+    } finally {
+      db.prepare("INSERT OR IGNORE INTO role_permissions(role_id,permission_code) VALUES('role-warehouse','INVENTORY_TRANSFER_CONFIRM')").run();
+    }
+  });
+
+  test('legacy SUBMITTED and APPROVED statuses remain readable and stored unchanged', async () => {
+    for (const status of ['SUBMITTED', 'APPROVED']) {
+      const created = await createTransfer(warehouseToken, 'wh-A', 'wh-B', 1);
+      db.prepare('UPDATE inventory_transfers SET status=? WHERE id=?').run(status, created.id);
+      const response = await fetch(`${baseUrl}/api/inventory-transfers/${created.id}`, { headers: { Authorization: `Bearer ${warehouseToken}` } });
+      const body = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(body.transfer.status, status);
+      assert.equal(body.transfer.legacyTechnicalStatus, true);
+      assert.equal(db.prepare('SELECT status FROM inventory_transfers WHERE id=?').get(created.id).status, status);
+    }
   });
 
   test('cancel flow: DRAFT → CANCELLED, reviewer_id recorded, quantities unchanged', async () => {
@@ -368,20 +431,22 @@ describe('v1.0.1 — frontend action buttons use canonical transfer permission',
       /can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)\s*&&\s*<button[^>]*onClick=\{\(\)\s*=>\s*setEditing\(\{\}\)\}>＋\s*新建调拨单<\/button>/);
   });
 
-  test('"确认调拨" / "取消" buttons gated by canonical INVENTORY_TRANSFER_APPROVE', () => {
+  test('"确认调拨" is gated by canonical CONFIRM while draft cancellation stays on CREATE', () => {
     assert.match(accountingSrc,
-      /can\(user,\s*['"]INVENTORY_TRANSFER_APPROVE['"]\)\s*&&\s*t\.status\s*===\s*['"]DRAFT['"][\s\S]*?(?:取消|确认调拨)/);
+      /const canConfirmTransfer\s*=\s*can\(user,\s*['"]INVENTORY_TRANSFER_CONFIRM['"]\)[\s\S]*?canConfirmTransfer\s*&&\s*<button[\s\S]*?>确认调拨<\/button>/);
+    assert.match(accountingSrc,
+      /const canCancelTransfer\s*=\s*can\(user,\s*['"]INVENTORY_TRANSFER_CREATE['"]\)[\s\S]*?canCancelTransfer\s*&&\s*<button[\s\S]*?>取消<\/button>/);
   });
 
-  test('"确认调拨" / "取消" buttons are not rendered for actors without INVENTORY_TRANSFER_APPROVE', () => {
-    // Source-level guard: the only permission consulted for these buttons
-    // is INVENTORY_TRANSFER_APPROVE. No alternative permission code that
-    // could leak the action (e.g. INVENTORY_MANAGE or PRODUCTS_MANAGE) is
-    // permitted as a frontend bypass.
+  test('buttons accept only canonical CONFIRM or the explicit legacy APPROVE alias', () => {
+    // Source-level guard: canonical CONFIRM is primary and the sole alternate
+    // is the approved compatibility alias. Unrelated permissions cannot leak
+    // the action.
     const block = accountingSrc.slice(
       accountingSrc.indexOf('function InventoryTransfers'),
       accountingSrc.indexOf('function InventoryTransferModal'),
     );
+    assert.match(block, /INVENTORY_TRANSFER_CONFIRM/);
     assert.match(block, /INVENTORY_TRANSFER_APPROVE/);
     assert.doesNotMatch(block,
       /can\(user,\s*['"]PRODUCTS_MANAGE['"]/);

@@ -110,11 +110,19 @@ describe('M10 schema and legacy safety', () => {
 });
 
 describe('M10 permission and role contract', () => {
-  test('reuses registered ROUTING_VIEW and ROUTING_MANAGE without changing permission count', () => {
+  test('keeps routing permissions and includes the single canonical transfer-confirm permission', () => {
     const codes = PERMISSIONS.map(([code]) => code);
-    assert.equal(codes.length, 113);
+    assert.equal(codes.length, 114);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
+    assert.equal(codes.filter((code) => code === 'INVENTORY_TRANSFER_CONFIRM').length, 1);
+    assert.ok(codes.includes('INVENTORY_TRANSFER_APPROVE'), 'legacy alias remains registered');
+    for (const roleId of ['role-admin', 'role-warehouse']) {
+      assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get(roleId, 'INVENTORY_TRANSFER_CONFIRM').count, 1, roleId);
+    }
+    for (const roleId of ['role-sales', 'role-reviewer', 'role-accounting']) {
+      assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get(roleId, 'INVENTORY_TRANSFER_CONFIRM').count, 0, roleId);
+    }
   });
 
   test('admin can manage and four non-admin roles cannot view or mutate routing master data', async () => {

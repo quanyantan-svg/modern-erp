@@ -701,6 +701,7 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
       body: {
         fromWarehouseId: 'warehouse-001',
         toWarehouseId: 'warehouse-002',
+        businessDate: '2026-09-27',
         remark: 'matrix',
         items: [{ productId: 'product-001', quantity: 5 }],
       },

@@ -61,6 +61,24 @@ export function allowAny(actor, permissions) {
   }
 }
 
+// V1.4-E2: bounded compatibility wrapper for the inventory transfer confirm
+// capability. The canonical permission is INVENTORY_TRANSFER_CONFIRM.
+// INVENTORY_TRANSFER_APPROVE remains a deprecated alias during the V1.4
+// compatibility window so existing role grants do not lock out operators.
+// ADMIN keeps full-permission access via the existing reconciliation.
+const TRANSFER_CONFIRM_ALIASES = Object.freeze(['INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_TRANSFER_APPROVE']);
+
+export function allowInventoryTransferConfirm(actor) {
+  if (!actor || !Array.isArray(actor.permissions)) throw new HttpError(403, '没有执行此操作的权限');
+  const granted = actor.permissions.some((permission) => TRANSFER_CONFIRM_ALIASES.includes(permission));
+  if (!granted) throw new HttpError(403, '没有执行此操作的权限');
+}
+
+export function hasInventoryTransferConfirm(actor) {
+  if (!actor || !Array.isArray(actor.permissions)) return false;
+  return actor.permissions.some((permission) => TRANSFER_CONFIRM_ALIASES.includes(permission));
+}
+
 export async function readJson(req) {
   const chunks = [];
   let size = 0;
@@ -100,6 +118,27 @@ export function requiredText(value, label, maxLength) {
 export function optionalText(value, maxLength) {
   const text = String(value ?? '').trim();
   if (text.length > maxLength) throw new HttpError(400, `内容不能超过 ${maxLength} 个字符`);
+  return text;
+}
+
+// V1.4-E2: validates that an authoritative business date is provided in
+// YYYY-MM-DD form. Rejects empty / malformed / non-canonical values so the
+// rest of the system never receives an ambiguous timestamp.
+export function normalizeBusinessDate(value, label = '业务日期') {
+  if (value === undefined || value === null || value === '') {
+    throw new HttpError(400, `请填写${label}`);
+  }
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new HttpError(400, `${label}格式应为 YYYY-MM-DD`);
+  // Sanity check: calendar-valid month and day.
+  const [year, month, day] = text.split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    throw new HttpError(400, `${label}格式应为 YYYY-MM-DD`);
+  }
+  const probe = new Date(`${text}T00:00:00Z`);
+  if (Number.isNaN(probe.getTime()) || probe.getUTCFullYear() !== year || (probe.getUTCMonth() + 1) !== month || probe.getUTCDate() !== day) {
+    throw new HttpError(400, `${label}不是有效的日历日`);
+  }
   return text;
 }
 

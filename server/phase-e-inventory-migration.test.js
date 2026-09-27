@@ -190,6 +190,9 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
     assert.ok(cols.includes('remark'), 'remark column must exist after migration');
     assert.ok(cols.includes('updated_at'), 'updated_at column must exist after migration');
     assert.ok(cols.includes('reviewer_id'), 'reviewer_id column must exist after migration');
+    assert.ok(cols.includes('business_date'), 'business_date column must exist after migration');
+    const checkCols = db.prepare("PRAGMA table_info(inventory_checks)").all().map((c) => c.name);
+    assert.ok(checkCols.includes('business_date'), 'inventory_checks.business_date must exist after migration');
   });
 
   test('legacy inventory_transfers row is preserved with reviewer_id NULL', () => {
@@ -197,6 +200,7 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
     assert.ok(row, 'legacy row must still exist');
     assert.equal(row.status, 'DRAFT');
     assert.equal(row.reviewer_id, null);
+    assert.equal(row.business_date, null, 'legacy business date must remain unknown');
     // updated_at should be backfilled from created_at so runtime callers that
     // require a value don't see NULL/empty.
     assert.ok(row.updated_at && row.updated_at.length > 0, 'updated_at must be backfilled from created_at');
@@ -256,6 +260,7 @@ describe('Phase E — legacy inventory_transfers schema reconciled on canonical 
     // Admin receives INVENTORY_TRANSFER_APPROVE through the canonical admin-all
     // permission reconciliation ('role-admin': all). The migration repaired the
     // CHECK constraint so this UPDATE actually persists.
+    db.prepare("UPDATE inventory_transfers SET business_date='2026-09-27' WHERE id='it-legacy-1'").run();
     const res = await fetch(`${baseUrl}/api/inventory-transfers/it-legacy-1/transfer`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${adminToken}` },
     });

@@ -8,6 +8,7 @@ import { migratePlanningSchema } from './migrations/planning-schema.js';
 import { migratePlanningDocumentsSchema } from './migrations/planning-documents-schema.js';
 import { migrateInventoryExtensionsSchema } from './migrations/inventory-extensions-schema.js';
 import { migrateDiscountsSchema } from './migrations/discounts-schema.js';
+import { ensureV14E2CanonicalRolePermissions, ensureV14E2ConfirmPermission, migrateV14E2BusinessDate } from './migrations/v14-e2-business-date.js';
 import { migrateLifecycleSchema } from './migrations/lifecycle-schema.js';
 import { migrateV13Phase1Contracts } from './migrations/v13-phase1-contracts.js';
 import { migrateV13Phase2SourceIntegrity } from './migrations/v13-phase2-source-integrity.js';
@@ -49,6 +50,11 @@ export const PERMISSIONS = [
   ['INVENTORY_CHECK_APPROVE', '审批库存盘点单'],
   ['INVENTORY_TRANSFER_CREATE', '新建库存调拨单'],
   ['INVENTORY_TRANSFER_APPROVE', '审核库存调拨'],
+  // V1.4-E2: canonical confirmation capability for inventory transfer
+  // execution. Kept as a separate code so legacy APPROVE grants continue
+  // to satisfy the capability check during the compatibility window
+  // (see allowInventoryTransferConfirm).
+  ['INVENTORY_TRANSFER_CONFIRM', '确认库存调拨'],
   ['INVENTORY_ADJUSTMENT_MANAGE', '管理库存调整单'],
   ['PURCHASE_RECEIPTS_VIEW', '查看采购入库单'],
   ['PURCHASE_RECEIPTS_MANAGE', '管理采购入库单'],
@@ -357,9 +363,21 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6ECommercialGoLive(db);
   migrateV13Phase7cPerformance(db);
   migrateR4PurchaseSourceCardinality(db);
+  // V1.4-E2: authoritative business-date columns + canonical CONFIRM
+  // permission. Order matters: schema columns first so the permission
+  // seeder runs against a table set that already accepts the new field.
+  migrateV14E2BusinessDate(db);
   reconcileSettlementSubledgers(db);
 
   return db;
+}
+
+// V1.4-E2 permission reconciliation helper. Called from seed() after the
+// canonical role-permission mapping is written so legacy databases gain
+// the new permission row without forcing a schema rebuild.
+export function reconcileV14E2Permissions(db) {
+  ensureV14E2ConfirmPermission(db);
+  ensureV14E2CanonicalRolePermissions(db);
 }
 
 /**
@@ -1529,7 +1547,7 @@ function seedSchema(db) {
     // V1.3 Phase 1: WAREHOUSE owns physical stock execution including material
     // issue and production receipt. No MRP / no accounting / no self-approval of
     // inventory check (INVENTORY_CHECK_APPROVE is on reviewer only).
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
@@ -1615,6 +1633,7 @@ export function shouldSeedDemoData() {
 
 function seed(db) {
   seedSchema(db);
+  reconcileV14E2Permissions(db);
   if (shouldSeedDemoData()) seedDemoData(db);
 }
 

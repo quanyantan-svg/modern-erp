@@ -68,11 +68,11 @@ function seedFixtures() {
   }
 
   const insertCheck = db.prepare(`INSERT INTO inventory_checks
-    (id,check_no,warehouse_id,status,checked_at,creator_id,created_at,product_id,system_quantity,actual_quantity,difference,reason,reviewer_id,reviewed_at,remark)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  insertCheck.run('x-check-pending','IC-M3-PENDING','warehouse-001','SUBMITTED',future,'user-warehouse',future,'product-001',inventoryQuantity,inventoryQuantity + 2,2,'count',null,null,'');
-  insertCheck.run('m3-check-approved','IC-M3-APPROVED','warehouse-001','APPROVED',future,'user-warehouse',future,'product-001',10,12,2,'count','user-admin',handled,'');
-  insertCheck.run('m3-check-created','IC-M3-CREATED','warehouse-001','DRAFT',null,'user-admin',future,'product-001',10,10,0,'',null,null,'');
+    (id,check_no,warehouse_id,status,checked_at,creator_id,created_at,product_id,system_quantity,actual_quantity,difference,reason,reviewer_id,reviewed_at,remark,business_date)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  insertCheck.run('x-check-pending','IC-M3-PENDING','warehouse-001','SUBMITTED',future,'user-warehouse',future,'product-001',inventoryQuantity,inventoryQuantity + 2,2,'count',null,null,'','2099-06-01');
+  insertCheck.run('m3-check-approved','IC-M3-APPROVED','warehouse-001','APPROVED',future,'user-warehouse',future,'product-001',10,12,2,'count','user-admin',handled,'','2099-06-01');
+  insertCheck.run('m3-check-created','IC-M3-CREATED','warehouse-001','DRAFT',null,'user-admin',future,'product-001',10,10,0,'',null,null,'','2099-06-01');
 
   const insertVoucher = db.prepare(`INSERT INTO accounting_vouchers
     (id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at,status,period,approver_id,approved_at,updated_at,rejection_reason,submitted_at,submitted_by)

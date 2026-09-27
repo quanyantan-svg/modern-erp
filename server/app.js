@@ -113,7 +113,9 @@ import {
   assertAllowedFields,
   allow,
   allowAny,
+  allowInventoryTransferConfirm,
   bearer,
+  normalizeBusinessDate,
   optionalText,
   readJson,
   requiredCode,
@@ -1999,6 +2001,10 @@ async function createInventoryCheck(db, req, res, actor) {
   allow(actor, 'INVENTORY_CHECK_CREATE');
   const body = await readJson(req);
   const { warehouseId, productId, actualQuantity, reason } = body;
+  // V1.4-E2: every new stocktake declares an authoritative business date.
+  // Existing checked_at is the submit/event timestamp and cannot double as
+  // the stocktake business date (solution.md §21.4.1).
+  const businessDate = normalizeBusinessDate(body.businessDate || body.business_date, '盘点业务日期');
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
   if (!productId || !db.prepare('SELECT 1 FROM products WHERE id=? AND active=1').get(productId)) throw new HttpError(400, '请选择有效货品');
   if (actualQuantity === undefined || actualQuantity === null) throw new HttpError(400, '请填写实际盘点数量');
@@ -2010,12 +2016,12 @@ async function createInventoryCheck(db, req, res, actor) {
   const difference = counted - systemQuantity;
   const checkId = id(); const now = new Date().toISOString(); const checkNo = makeInventoryCheckNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at)
-      VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now);
+    db.prepare(`INSERT INTO inventory_checks(id,check_no,warehouse_id,product_id,system_quantity,actual_quantity,difference,reason,status,creator_id,created_at,business_date)
+      VALUES(?,?,?,?,?,?,?,?,\'DRAFT\',?,?,?)`).run(checkId, checkNo, warehouseId, productId, systemQuantity, counted, difference, optionalText(reason, 200), actor.id, now, businessDate);
     saveTrackedAllocations(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId, quantity: Math.abs(difference), allocations: body.trackingAllocations || body.tracking_allocations || [] });
     audit(db, actor.id, 'CREATE', 'INVENTORY_CHECK', checkId, `盘点差异: ${difference}`);
   });
-  return send(res, 201, { id: checkId, checkNo, status: 'DRAFT' });
+  return send(res, 201, { id: checkId, checkNo, status: 'DRAFT', businessDate });
 }
 
 function getInventoryDetail(db, res, actor, warehouseId, productId) {
@@ -2155,8 +2161,15 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (!Number.isFinite(actualQuantity) || actualQuantity < 0) throw new HttpError(400, '实际盘点数量不正确');
     const inventory = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(body.warehouseId, body.productId);
     if (!inventory) throw new HttpError(400, '该仓库没有此货品的库存记录');
-    db.prepare('UPDATE inventory_checks SET warehouse_id=?,product_id=?,system_quantity=?,actual_quantity=?,difference=?,reason=? WHERE id=?')
-      .run(body.warehouseId, body.productId, inventory.quantity, actualQuantity, actualQuantity - inventory.quantity, optionalText(body.reason, 200), checkId);
+    // V1.4-E2: business date is editable while DRAFT and only while DRAFT.
+    let businessDate = check.business_date;
+    if (body.businessDate || body.business_date) {
+      businessDate = normalizeBusinessDate(body.businessDate || body.business_date, '盘点业务日期');
+    } else if (!businessDate) {
+      throw new HttpError(400, '请填写盘点业务日期');
+    }
+    db.prepare('UPDATE inventory_checks SET warehouse_id=?,product_id=?,system_quantity=?,actual_quantity=?,difference=?,reason=?,business_date=? WHERE id=?')
+      .run(body.warehouseId, body.productId, inventory.quantity, actualQuantity, actualQuantity - inventory.quantity, optionalText(body.reason, 200), businessDate, checkId);
     db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='INVENTORY_CHECK' AND source_id=?").run(checkId);
     saveTrackedAllocations(db,{sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,productId:body.productId,quantity:Math.abs(actualQuantity-inventory.quantity),allocations:body.trackingAllocations||body.tracking_allocations||[]});
     audit(db, actor.id, 'UPDATE', 'INVENTORY_CHECK', checkId, '修改盘点单 ' + check.check_no);
@@ -2164,28 +2177,35 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     allow(actor, 'INVENTORY_CHECK_CREATE');
     if (check.status !== 'DRAFT') throw new HttpError(409, '只有草稿盘点单可以提交');
     if (check.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能提交自己创建的盘点单');
+    // V1.4-E2: checked_at is the submit/event timestamp and never substitutes
+    // for the authoritative business_date.
     db.prepare("UPDATE inventory_checks SET status='SUBMITTED',checked_at=? WHERE id=?").run(now, checkId);
     audit(db, actor.id, 'SUBMIT', 'INVENTORY_CHECK', checkId, '提交盘点单 ' + check.check_no);
   } else if (action === 'APPROVE') {
     allow(actor, 'INVENTORY_CHECK_APPROVE');
     if (check.status !== 'SUBMITTED') throw new HttpError(409, '只有已提交盘点单可以审批');
     if (check.creator_id === actor.id) throw new HttpError(409, '盘点单创建人不能审批自己的单据');
+    // V1.4-E2: approval uses the stored business_date for period-open and
+    // valuation. Legacy rows missing business_date are rejected to enforce
+    // solution.md §21.4.2.
+    const businessDate = check.business_date;
+    if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new HttpError(409, '盘点单缺少权威业务日期，无法审批');
     transaction(db, () => {
-      const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
+      assertFinancialPeriodsOpen(db, businessDate);
       const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(check.warehouse_id, check.product_id);
       if (!current) throw new HttpError(409, '库存记录不存在');
       if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
-      if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate: now.slice(0, 10) });
+      if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate });
       db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
       db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
       if (check.difference !== 0) {
         const transactionId=id(); db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?,?)")
-          .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now,businessDate);
+          .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now, businessDate);
         const movements=check.difference>0?receivePositiveSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:Number(check.difference),movementType:'INVENTORY_COUNT_GAIN',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId}):issueSourceValue(db,{businessDate,productId:check.product_id,warehouseId:check.warehouse_id,quantity:-Number(check.difference),movementType:'INVENTORY_COUNT_SHORTAGE',sourceType:'INVENTORY_CHECK',sourceId:checkId,sourceItemId:checkId,inventoryTransactionId:transactionId});
         const amount=movements.reduce((s,x)=>s+Math.abs(x.valueDeltaCents),0), role=inventoryAccountRole(db,check.product_id);
         createSystemVoucher(db,{sourceType:'INVENTORY_COUNT',sourceId:checkId,businessDate,actorId:actor.id,entries:check.difference>0?[{role,direction:'DEBIT',amountCents:amount},{role:'INVENTORY_GAIN_LOSS',direction:'CREDIT',amountCents:amount}]:[{role:'INVENTORY_GAIN_LOSS',direction:'DEBIT',amountCents:amount},{role,direction:'CREDIT',amountCents:amount}]});
       }
-      audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity}`);
+      audit(db, actor.id, 'APPROVE', 'INVENTORY_CHECK', checkId, `审核通过，库存调整为 ${check.actual_quantity} 业务日期 ${businessDate}`);
     });
   } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
@@ -2218,7 +2238,10 @@ function listInventoryTransfers(db, res, actor, url) {
     JOIN warehouses fw ON fw.id=it.from_warehouse_id JOIN warehouses tw ON tw.id=it.to_warehouse_id
     JOIN users creator ON creator.id=it.creator_id LEFT JOIN users reviewer ON reviewer.id=it.reviewer_id
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY it.created_at DESC`;
-  const transfers = db.prepare(sql).all(...params).map((row) => ({ ...row, statusLabel: INVENTORY_TRANSFER_STATUS[row.status] }));
+  const transfers = db.prepare(sql).all(...params).map((row) => {
+    applyInventoryTransferCompatibility(row);
+    return { ...row, statusLabel: INVENTORY_TRANSFER_STATUS[row.status] };
+  });
   return send(res, 200, { inventoryTransfers: transfers });
 }
 
@@ -2480,6 +2503,10 @@ async function createInventoryTransfer(db, req, res, actor) {
   if (!fromWarehouseId) throw new HttpError(400, '请选择源仓库');
   if (!toWarehouseId) throw new HttpError(400, '请选择目标仓库');
   if (fromWarehouseId === toWarehouseId) throw new HttpError(400, '源仓库和目标仓库不能相同');
+  // V1.4-E2: every new transfer must declare an authoritative business date.
+  // Empty / malformed values are rejected — never silently backfilled from
+  // created_at or updated_at per solution.md §21.4.2.
+  const businessDate = normalizeBusinessDate(body.businessDate || body.business_date);
   validateWarehouseItems(db, items);
   // Validate stock
   for (const item of items) {
@@ -2491,13 +2518,13 @@ async function createInventoryTransfer(db, req, res, actor) {
   }
   const transferId = id(); const now = new Date().toISOString(); const transferNo = makeInventoryTransferNo();
   transaction(db, () => {
-    db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,'DRAFT',?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now);
+    db.prepare(`INSERT INTO inventory_transfers(id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,business_date)
+      VALUES(?,?,?,?,'DRAFT',?,?,?,?,?)`).run(transferId, transferNo, fromWarehouseId, toWarehouseId, optionalText(remark, 200), actor.id, now, now, businessDate);
     const stmt = db.prepare('INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity) VALUES(?,?,?,?)');
     for (const item of items) { const itemId = id(); stmt.run(itemId, transferId, item.productId, Number(item.quantity)); saveTrackedAllocations(db, { sourceType: 'INVENTORY_TRANSFER', sourceId: transferId, sourceItemId: itemId, productId: item.productId, quantity: Number(item.quantity), allocations: item.trackingAllocations || item.tracking_allocations || [] }); }
     audit(db, actor.id, 'CREATE', 'INVENTORY_TRANSFER', transferId, `创建调拨单 ${transferNo}`);
   });
-  return send(res, 201, { id: transferId, transferNo });
+  return send(res, 201, { id: transferId, transferNo, businessDate });
 }
 
 function getInventoryTransfer(db, res, actor, transferId) {
@@ -2512,42 +2539,112 @@ function getInventoryTransfer(db, res, actor, transferId) {
   transfer.items = db.prepare(`SELECT ti.*,p.code productCode,p.name productName,p.unit
     FROM inventory_transfer_items ti JOIN products p ON p.id=ti.product_id WHERE ti.transfer_id=?`).all(transferId);
   transfer.statusLabel = INVENTORY_TRANSFER_STATUS[transfer.status];
+  applyInventoryTransferCompatibility(transfer);
   return send(res, 200, { transfer });
 }
 
+// V1.4-E2 DTO compatibility mapping (solution.md §21.8.2):
+//   * `reviewer_id` is the existing technical column. We never rename the
+//     storage, but the user-facing API surface uses semantically correct
+//     terms:
+//       - TRANSFERRED → confirmedBy / confirmedAt
+//       - CANCELLED  → cancelledBy / cancelledAt
+//   * Legacy technical statuses (SUBMITTED / APPROVED) stay read-only and
+//     surface their stored `reviewer_id` unchanged so we never silently
+//     rewrite historical audit data.
+//   * business_date is surfaced on every response. NULL means "业务日期缺失".
+function applyInventoryTransferCompatibility(transfer) {
+  if (!transfer) return;
+  const status = transfer.status;
+  const hasExecutor = !!transfer.reviewer_id;
+  if (status === 'TRANSFERRED') {
+    transfer.confirmedBy = transfer.reviewer_id || null;
+    transfer.confirmedByName = transfer.reviewerName || null;
+    transfer.confirmedAt = transfer.updated_at || null;
+    transfer.businessDateKnown = !!transfer.business_date;
+    transfer.businessDateMissing = !transfer.business_date;
+  } else if (status === 'CANCELLED') {
+    transfer.cancelledBy = transfer.reviewer_id || null;
+    transfer.cancelledByName = transfer.reviewerName || null;
+    transfer.cancelledAt = transfer.updated_at || null;
+    transfer.businessDateKnown = !!transfer.business_date;
+    transfer.businessDateMissing = !transfer.business_date;
+  } else {
+    transfer.businessDateKnown = !!transfer.business_date;
+    transfer.businessDateMissing = !transfer.business_date;
+  }
+  transfer.executorId = hasExecutor ? transfer.reviewer_id : null;
+  transfer.executorName = hasExecutor ? transfer.reviewerName : null;
+  transfer.legacyTechnicalStatus = (status === 'SUBMITTED' || status === 'APPROVED');
+}
+
+// Shared E2 command used by the HTTP route and the real multi-process MySQL
+// concurrency gate. Authorization remains at the route boundary; this command
+// owns the serialized state re-read and all physical/value side effects.
+export function confirmInventoryTransfer(db, actor, transferId, confirmedAt = new Date().toISOString()) {
+  return transaction(db, () => {
+    // Re-read after acquiring the shared SQLite/MySQL transaction gate.
+    // Reading before the gate lets two MySQL processes retain the same stale
+    // DRAFT snapshot and execute the physical movement twice.
+    const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
+    if (!transfer) throw new HttpError(404, '调拨单不存在');
+    if (transfer.status !== 'DRAFT') {
+      if (transfer.status === 'TRANSFERRED') {
+        throw new HttpError(409, '调拨单已确认，请勿重复操作', {
+          code: 'DUPLICATE_CONFIRMATION',
+          resolution: '刷新调拨单并查看已完成的确认记录',
+        });
+      }
+      throw new HttpError(409, '只有草稿状态的调拨单可以确认', { code: 'INVALID_DOCUMENT_STATE' });
+    }
+    // Confirm uses the stored authoritative date. Legacy NULL remains
+    // unknown and is never replaced with created_at / updated_at.
+    const businessDate = transfer.business_date;
+    if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
+      throw new HttpError(409, '调拨单缺少权威业务日期，无法确认', { code: 'SOURCE_LINEAGE_MISSING' });
+    }
+    assertFinancialPeriodsOpen(db, businessDate);
+    const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
+    for (const item of items) {
+      const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
+      if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
+      transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate });
+      const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, confirmedAt);
+      const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, confirmedAt);
+      const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
+        (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+      const outTransactionId=id(); const inTransactionId=id();
+      insertTransaction.run(outTransactionId, transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, confirmedAt, businessDate);
+      insertTransaction.run(inTransactionId, transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, confirmedAt, businessDate);
+      const issued=issueSourceValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.from_warehouse_id,quantity:Number(item.quantity),movementType:'TRANSFER_OUT',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:outTransactionId});
+      issued.forEach((m)=>receiveValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.to_warehouse_id,lotId:m.lotId,serialId:m.serialId,quantity:-m.quantityDelta,valueCents:-m.valueDeltaCents,movementType:'TRANSFER_IN',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:inTransactionId,valuationBasis:m.valuationMethod==='LEGACY_UNVALUED'?'LEGACY_UNVALUED':'TRANSFER_CARRYING_VALUE'}));
+    }
+    db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, confirmedAt, transferId);
+    audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no} 业务日期 ${businessDate}`);
+    // 同一公司内仓库调拨仅改变估值维度，不形成损益或公司总存货 GL。
+    return { id: transferId, status: 'TRANSFERRED', businessDate };
+  });
+}
+
 async function changeInventoryTransferState(db, req, res, actor, transferId, action) {
-  allow(actor, 'INVENTORY_TRANSFER_APPROVE');
-  const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
-  if (!transfer) throw new HttpError(404, '调拨单不存在');
   const now = new Date().toISOString();
   if (action === 'transfer') {
-    if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以确认');
-    const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
-    const businessDate=now.slice(0,10); assertFinancialPeriodsOpen(db,businessDate);
-    transaction(db, () => {
-      for (const item of items) {
-        const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
-        if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
-        transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate: now.slice(0, 10) });
-        const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, now);
-        const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, now);
-        const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
-          (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
-        const outTransactionId=id(); const inTransactionId=id();
-        insertTransaction.run(outTransactionId, transfer.from_warehouse_id, item.product_id, item.quantity, 'OUT', sourceBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨出库', actor.id, now);
-        insertTransaction.run(inTransactionId, transfer.to_warehouse_id, item.product_id, item.quantity, 'IN', targetBalance, 'INVENTORY_TRANSFER', transferId, transfer.transfer_no, '库存调拨入库', actor.id, now);
-        const issued=issueSourceValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.from_warehouse_id,quantity:Number(item.quantity),movementType:'TRANSFER_OUT',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:outTransactionId});
-        issued.forEach((m)=>receiveValue(db,{businessDate,productId:item.product_id,warehouseId:transfer.to_warehouse_id,lotId:m.lotId,serialId:m.serialId,quantity:-m.quantityDelta,valueCents:-m.valueDeltaCents,movementType:'TRANSFER_IN',sourceType:'INVENTORY_TRANSFER',sourceId:transferId,sourceItemId:item.id,inventoryTransactionId:inTransactionId,valuationBasis:m.valuationMethod==='LEGACY_UNVALUED'?'LEGACY_UNVALUED':'TRANSFER_CARRYING_VALUE'}));
-      }
-      db.prepare("UPDATE inventory_transfers SET status='TRANSFERRED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
-      audit(db, actor.id, 'TRANSFER', 'INVENTORY_TRANSFER', transferId, `确认调拨 ${transfer.transfer_no}`);
-      // 同一公司内仓库调拨仅改变估值维度，不形成损益或公司总存货 GL。
-    });
+    // V1.4-E2: capability gate accepts the canonical
+    // INVENTORY_TRANSFER_CONFIRM permission or its deprecated APPROVE alias.
+    allowInventoryTransferConfirm(actor);
+    confirmInventoryTransfer(db, actor, transferId, now);
   } else if (action === 'cancel') {
-    if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消');
-    db.prepare("UPDATE inventory_transfers SET status='CANCELLED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
-    audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
+    // Cancellation terminates an unexecuted draft and belongs to the CREATE
+    // capability, not the physical CONFIRM capability.
+    allow(actor, 'INVENTORY_TRANSFER_CREATE');
+    transaction(db, () => {
+      const transfer = db.prepare('SELECT * FROM inventory_transfers WHERE id=?').get(transferId);
+      if (!transfer) throw new HttpError(404, '调拨单不存在');
+      if (transfer.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的调拨单可以取消', { code: 'INVALID_DOCUMENT_STATE' });
+      db.prepare("UPDATE inventory_transfers SET status='CANCELLED',reviewer_id=?,updated_at=? WHERE id=?").run(actor.id, now, transferId);
+      audit(db, actor.id, 'CANCEL', 'INVENTORY_TRANSFER', transferId, `取消调拨 ${transfer.transfer_no}`);
+    });
   } else throw new HttpError(400, '无效操作');
   return send(res, 200, { ok: true });
 }

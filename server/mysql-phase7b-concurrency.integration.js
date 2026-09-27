@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createTempDb } from './test-utils/temp-db.js';
-import { systemHealth } from './modules/financial-inventory.js';
+import { createSystemVoucher, receiveValue, systemHealth } from './modules/financial-inventory.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const concurrencyWorkerPath = join(repoRoot, 'scripts', 'gates', 'mysql-concurrency-worker.mjs');
@@ -125,6 +125,57 @@ describe('V1.3 Phase 7B real MySQL concurrency and transaction hardening', () =>
       assert.equal(row(id).version, 1, kind);
       assert.equal(db.prepare('SELECT COUNT(*) n FROM phase7b_concurrency_effects WHERE resource_id=?').get(id).n, 1, kind);
     }
+  });
+
+  test('concurrent E2 transfer confirmation is single-effect across app processes', async () => {
+    const at = '2026-09-27T08:00:00.000Z';
+    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+      VALUES('e2-race-user','e2-race-user','E2 Race User','x','x','role-warehouse',1,?)`).run(at);
+    db.prepare(`INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES
+      ('e2-race-a','E2-RA','E2 Race A','','',1,?,?),
+      ('e2-race-b','E2-RB','E2 Race B','','',1,?,?)`).run(at, at, at, at);
+    db.prepare(`INSERT INTO products
+      (id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at,tracking_policy,valuation_method,inventory_classification)
+      VALUES('e2-race-product','E2-RP','E2 Race Product','TEST','EA',0,0,1,?,?,'NONE','MOVING_AVERAGE','OTHER_INVENTORY')`).run(at, at);
+    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES
+      ('e2-race-inv-a','e2-race-a','e2-race-product',10,?),
+      ('e2-race-inv-b','e2-race-b','e2-race-product',0,?)`).run(at, at);
+    db.prepare(`INSERT INTO inventory_transactions
+      (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
+      VALUES('e2-race-seed-tx','e2-race-a','e2-race-product',10,'IN',10,'E2_RACE_SEED','e2-race-seed','E2-RACE-SEED','',?,?,?)`)
+      .run('e2-race-user', at, '2026-09-27');
+    receiveValue(db, {
+      businessDate: '2026-09-27', productId: 'e2-race-product', warehouseId: 'e2-race-a',
+      quantity: 10, valueCents: 10000, movementType: 'E2_RACE_SEED',
+      sourceType: 'E2_RACE_SEED', sourceId: 'e2-race-seed', sourceItemId: 'e2-race-seed',
+      inventoryTransactionId: 'e2-race-seed-tx',
+    });
+    createSystemVoucher(db, {
+      sourceType: 'E2_RACE_SEED', sourceId: 'e2-race-seed', businessDate: '2026-09-27', actorId: 'e2-race-user',
+      entries: [
+        { role: 'OTHER_INVENTORY', direction: 'DEBIT', amountCents: 10000 },
+        { role: 'INVENTORY_GAIN_LOSS', direction: 'CREDIT', amountCents: 10000 },
+      ],
+    });
+    db.prepare(`INSERT INTO inventory_transfers
+      (id,transfer_no,from_warehouse_id,to_warehouse_id,status,remark,creator_id,created_at,updated_at,business_date)
+      VALUES('e2-race-transfer','E2-RACE-TRANSFER','e2-race-a','e2-race-b','DRAFT','',?,?,?,'2026-09-27')`).run('e2-race-user', at, at);
+    db.prepare(`INSERT INTO inventory_transfer_items(id,transfer_id,product_id,quantity)
+      VALUES('e2-race-item','e2-race-transfer','e2-race-product',7)`).run();
+
+    const command = { action: 'inventory-transfer-confirm', transferId: 'e2-race-transfer', actorId: 'e2-race-user' };
+    const results = await Promise.allSettled([apps[0].run(command), apps[1].run(command)]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    const rejection = results.find((result) => result.status === 'rejected');
+    assert.equal(rejection.reason.code, 'DUPLICATE_CONFIRMATION');
+    assert.equal(db.prepare("SELECT status FROM inventory_transfers WHERE id='e2-race-transfer'").get().status, 'TRANSFERRED');
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='e2-race-a' AND product_id='e2-race-product'").get().quantity, 3);
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='e2-race-b' AND product_id='e2-race-product'").get().quantity, 7);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='INVENTORY_TRANSFER' AND source_id='e2-race-transfer'").get().n, 2);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='TRANSFER' AND entity_type='INVENTORY_TRANSFER' AND entity_id='e2-race-transfer'").get().n, 1);
+    const totals = db.prepare("SELECT SUM(quantity) quantity,SUM(value_cents) value_cents FROM inventory_valuation_balances WHERE product_id='e2-race-product'").get();
+    assert.equal(totals.quantity, 10);
+    assert.equal(totals.value_cents, 10000);
   });
 
   test('NONE, LOT and SERIAL stock contention never over-consumes or reuses identity', async () => {

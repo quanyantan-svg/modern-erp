@@ -657,17 +657,32 @@ function InventoryChecks({ user, notify, warehouses, products }) {
   useEffect(() => { void load(); }, []);
   function changeState(check, action) { api(`/api/inventory-checks/${check.id}`, { method: 'PATCH', body: { action } }).then(() => { notify('盘点已提交审批'); load(); }).catch((e) => notify(e.message, 'error')); }
   return <><Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_CHECK_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建盘点单</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>盘点单号</th><th>仓库</th><th>货品</th><th>账面数量</th><th>实盘数量</th><th>差异数量</th><th>状态</th><th>制单人</th><th>时间</th><th/></tr></thead><tbody>{checks.map((c) => <tr key={c.id}><td className="mono">{c.check_no}</td><td>{c.warehouseName}</td><td>{c.productCode} {c.productName}</td><td className="number">{c.system_quantity}</td><td className="number">{c.actual_quantity}</td><td className={`number ${c.difference > 0 ? 'positive' : c.difference < 0 ? 'negative' : ''}`}>{c.difference > 0 ? '+' : ''}{c.difference}</td><td><Status status={c.status} label={c.statusLabel}/></td><td>{c.creatorName}</td><td className="dim">{dateTime(c.created_at)}</td><td>{c.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <><button className="row-action" onClick={() => setEditing(c)}>编辑</button><button className="approve-button" onClick={() => changeState(c, 'SUBMIT')}>提交审批</button></>}{c.status === 'SUBMITTED' && can(user, 'INVENTORY_CHECK_APPROVE') && <AppLink className="row-action strong" page="approvals">前往审批中心</AppLink>}{c.status === 'SUBMITTED' && !can(user, 'INVENTORY_CHECK_APPROVE') && <span className="dim">等待审批</span>}</td></tr>)}</tbody></table>{!checks.length && <Empty text="没有盘点记录"/>}</div>
+    <div className="table-wrap"><table><thead><tr><th>盘点单号</th><th>仓库</th><th>货品</th><th>账面数量</th><th>实盘数量</th><th>差异数量</th><th>状态</th><th>业务日期</th><th>制单人</th><th>时间</th><th/></tr></thead><tbody>{checks.map((c) => <tr key={c.id}><td className="mono">{c.check_no}</td><td>{c.warehouseName}</td><td>{c.productCode} {c.productName}</td><td className="number">{c.system_quantity}</td><td className="number">{c.actual_quantity}</td><td className={`number ${c.difference > 0 ? 'positive' : c.difference < 0 ? 'negative' : ''}`}>{c.difference > 0 ? '+' : ''}{c.difference}</td><td><Status status={c.status} label={c.statusLabel}/></td><td>{c.business_date || <span className="dim">业务日期缺失</span>}</td><td>{c.creatorName}</td><td className="dim">{dateTime(c.created_at)}</td><td>{c.status === 'DRAFT' && can(user, 'INVENTORY_CHECK_CREATE') && <><button className="row-action" onClick={() => setEditing(c)}>编辑</button><button className="approve-button" onClick={() => changeState(c, 'SUBMIT')}>提交审批</button></>}{c.status === 'SUBMITTED' && can(user, 'INVENTORY_CHECK_APPROVE') && <AppLink className="row-action strong" page="approvals">前往审批中心</AppLink>}{c.status === 'SUBMITTED' && !can(user, 'INVENTORY_CHECK_APPROVE') && <span className="dim">等待审批</span>}</td></tr>)}</tbody></table>{!checks.length && <Empty text="没有盘点记录"/>}</div>
     {editing && <InventoryCheckModal value={editing} warehouses={warehouses} products={products} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('盘点单已保存'); }} notify={notify}/>}
   </>;
 }
 
 function InventoryCheckModal({ value, warehouses, products, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ warehouseId: value.warehouse_id || '', productId: value.product_id || '', actualQuantity: value.actual_quantity ?? '', reason: value.reason || '' });
-  async function save(e) { e.preventDefault(); try { if (value.id) await api(`/api/inventory-checks/${value.id}`, { method: 'PATCH', body: { action: 'UPDATE', ...form } }); else await api('/api/inventory-checks', { method: 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  const [form, setForm] = useState({
+    warehouseId: value.warehouse_id || '',
+    productId: value.product_id || '',
+    businessDate: value.business_date || value.businessDate || todayIso(),
+    actualQuantity: value.actual_quantity ?? '',
+    reason: value.reason || '',
+  });
+  async function save(e) {
+    e.preventDefault();
+    if (!form.businessDate) { notify('请填写盘点业务日期', 'error'); return; }
+    try {
+      if (value.id) await api(`/api/inventory-checks/${value.id}`, { method: 'PATCH', body: { action: 'UPDATE', ...form, businessDate: form.businessDate } });
+      else await api('/api/inventory-checks', { method: 'POST', body: { ...form, businessDate: form.businessDate } });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title={value.id ? '编辑盘点单' : '新建盘点单'} onClose={onClose}><form className="form-grid" onSubmit={save}>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">请选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
     <label>货品<select value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>
+    <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
     <label>实际盘点数量<input type="number" min="0" step="0.01" value={form.actualQuantity} onChange={(e) => setForm({ ...form, actualQuantity: e.target.value })} required/></label>
     <label className="full">盘点原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="如：年度盘点、发现异常等"/></label>
     <FormActions onClose={onClose}/>
@@ -679,21 +694,51 @@ function InventoryTransfers({ user, notify, warehouses, products }) {
   const load = () => api('/api/inventory-transfers').then((r) => setTransfers(r.inventoryTransfers)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
   function openDetail(transfer) { api(`/api/inventory-transfers/${transfer.id}`).then((r) => setViewing(r.transfer)).catch((e) => notify(e.message, 'error')); }
+  // V1.4-E2: capability check uses the canonical CONFIRM permission. Legacy
+  // roles still holding only APPROVE keep working because the backend
+  // accepts APPROVE as a deprecated alias; we map both on the frontend so
+  // operators see the same button regardless of how their role was seeded.
+  const canConfirmTransfer = can(user, 'INVENTORY_TRANSFER_CONFIRM') || can(user, 'INVENTORY_TRANSFER_APPROVE');
+  const canCancelTransfer = can(user, 'INVENTORY_TRANSFER_CREATE');
   function changeState(id, action) { api(`/api/inventory-transfers/${id}/${action}`, { method: 'POST' }).then(() => { notify(action === 'transfer' ? '调拨已确认' : '调拨已取消'); load(); }).catch((e) => notify(e.message, 'error')); }
   return <><Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_TRANSFER_CREATE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建调拨单</button>}/>
-    <div className="table-wrap"><table><thead><tr><th>调拨单号</th><th>调出仓库</th><th>调入仓库</th><th>状态</th><th>创建人</th><th>日期</th><th/></tr></thead><tbody>{transfers.map((t) => <tr key={t.id} className="clickable" onClick={() => openDetail(t)}><td className="mono">{t.transfer_no}</td><td>{t.fromWarehouseName}</td><td>{t.toWarehouseName}</td><td><Status status={t.status} label={t.statusLabel}/></td><td>{t.creatorName}</td><td className="dim">{dateTime(t.createdAt)}</td><td onClick={(e) => e.stopPropagation()}>{can(user, 'INVENTORY_TRANSFER_APPROVE') && t.status === 'DRAFT' && <><button className="row-action danger" onClick={() => changeState(t.id, 'cancel')}>取消</button><button className="approve-button" onClick={() => changeState(t.id, 'transfer')}>确认调拨</button></>}</td></tr>)}</tbody></table>{!transfers.length && <Empty text="没有调拨记录"/>}</div>
+    <div className="table-wrap"><table><thead><tr><th>调拨单号</th><th>调出仓库</th><th>调入仓库</th><th>状态</th><th>业务日期</th><th>创建人</th><th>日期</th><th/></tr></thead><tbody>{transfers.map((t) => <tr key={t.id} className="clickable" onClick={() => openDetail(t)}><td className="mono">{t.transfer_no}</td><td>{t.fromWarehouseName}</td><td>{t.toWarehouseName}</td><td><Status status={t.status} label={t.statusLabel}/></td><td>{t.business_date || (t.businessDateMissing ? <span className="dim">业务日期缺失</span> : <span className="dim">—</span>)}</td><td>{t.creatorName}</td><td className="dim">{dateTime(t.createdAt)}</td><td onClick={(e) => e.stopPropagation()}>{t.status === 'DRAFT' && <>{canCancelTransfer && <button className="row-action danger" onClick={() => changeState(t.id, 'cancel')}>取消</button>}{canConfirmTransfer && <button className="approve-button" onClick={() => changeState(t.id, 'transfer')}>确认调拨</button>}</>}</td></tr>)}</tbody></table>{!transfers.length && <Empty text="没有调拨记录"/>}</div>
     {editing && <InventoryTransferModal value={editing} warehouses={warehouses} products={products} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('调拨单已保存'); }} notify={notify}/>}
     {viewing && <InventoryTransferDetail value={viewing} onClose={() => setViewing(null)}/>}
   </>;
 }
 
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function InventoryTransferModal({ value, warehouses, products, onClose, onSaved, notify }) {
-  const [form, setForm] = useState({ fromWarehouseId: '', toWarehouseId: '', remark: '', items: [{ productId: '', quantity: 1 }] });
+  const [form, setForm] = useState({
+    fromWarehouseId: '',
+    toWarehouseId: '',
+    businessDate: value.business_date || value.businessDate || todayIso(),
+    remark: '',
+    items: [{ productId: '', quantity: 1 }],
+  });
   const total = useMemo(() => form.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0), [form]);
   function updateLine(idx, patch) { setForm({ ...form, items: form.items.map((it, i) => i === idx ? { ...it, ...patch } : it) }); }
-  async function save(e) { e.preventDefault(); if (form.fromWarehouseId === form.toWarehouseId) { notify('源仓库和目标仓库不能相同', 'error'); return; } if (!form.items.length) { notify('请添加调拨货品', 'error'); return; } try { await api('/api/inventory-transfers', { method: 'POST', body: form }); onSaved(); } catch (error) { notify(error.message, 'error'); } }
+  async function save(e) {
+    e.preventDefault();
+    if (form.fromWarehouseId === form.toWarehouseId) { notify('源仓库和目标仓库不能相同', 'error'); return; }
+    if (!form.businessDate) { notify('请填写业务日期', 'error'); return; }
+    if (!form.items.length) { notify('请添加调拨货品', 'error'); return; }
+    try {
+      await api('/api/inventory-transfers', { method: 'POST', body: { ...form, businessDate: form.businessDate } });
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); }
+  }
   return <Modal title="新建调拨单" onClose={onClose} wide><form onSubmit={save}>
-    <div className="form-grid order-head"><label>源仓库<select value={form.fromWarehouseId} onChange={(e) => setForm({ ...form, fromWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label>目标仓库<select value={form.toWarehouseId} onChange={(e) => setForm({ ...form, toWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label><label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="调拨说明"/></label></div>
+    <div className="form-grid order-head">
+      <label>源仓库<select value={form.fromWarehouseId} onChange={(e) => setForm({ ...form, fromWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
+      <label>目标仓库<select value={form.toWarehouseId} onChange={(e) => setForm({ ...form, toWarehouseId: e.target.value })} required><option value="">请选择</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></label>
+      <label>业务日期<input type="date" value={form.businessDate} onChange={(e) => setForm({ ...form, businessDate: e.target.value })} required/></label>
+      <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="调拨说明"/></label>
+    </div>
     <div className="line-title"><div><strong>调拨明细</strong></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1 }] })}>＋ 添加一行</button></div>
     <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span/></div>
       {form.items.map((line, idx) => <div className="line-row" key={idx}><span>{idx + 1}</span><select value={line.productId} onChange={(e) => updateLine(idx, { productId: e.target.value })} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(idx, { quantity: e.target.value })} required/><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) })}>×</button></div>)}
@@ -703,9 +748,20 @@ function InventoryTransferModal({ value, warehouses, products, onClose, onSaved,
 }
 
 function InventoryTransferDetail({ value, onClose }) {
+  const isTransferred = value.status === 'TRANSFERRED';
+  const isCancelled = value.status === 'CANCELLED';
+  const businessDateLabel = value.business_date || (value.businessDateMissing ? '业务日期缺失' : '—');
   return <Modal title="调拨单详情" onClose={onClose} wide>{value ? <>
     <div className="detail-head"><div><span className="mono">{value.transfer_no}</span><h3>{value.fromWarehouseName} → {value.toWarehouseName}</h3><p>制单人：{value.creatorName}</p></div><Status status={value.status} label={value.statusLabel}/></div>
-    <div className="detail-grid"><div><span>创建时间</span><strong>{dateTime(value.createdAt)}</strong></div><div><span>执行人</span><strong>{value.reviewerName || '尚未执行'}</strong></div></div>
+    <div className="detail-grid">
+      <div><span>业务日期</span><strong>{businessDateLabel}</strong></div>
+      <div><span>创建时间</span><strong>{dateTime(value.createdAt)}</strong></div>
+      {isTransferred && <div><span>确认人</span><strong>{value.confirmedByName || value.reviewerName || '尚未确认'}</strong></div>}
+      {isTransferred && <div><span>确认时间</span><strong>{dateTime(value.confirmedAt || value.updated_at)}</strong></div>}
+      {isCancelled && <div><span>作废人</span><strong>{value.cancelledByName || value.reviewerName || '尚未作废'}</strong></div>}
+      {isCancelled && <div><span>作废时间</span><strong>{dateTime(value.cancelledAt || value.updated_at)}</strong></div>}
+      {!isTransferred && !isCancelled && <div><span>执行人</span><strong>{value.reviewerName || '尚未执行'}</strong></div>}
+    </div>
     <div className="table-wrap inset"><table><thead><tr><th>#</th><th>货品</th><th>单位</th><th className="number">调拨数量</th></tr></thead><tbody>{value.items?.map((item) => <tr key={item.id}><td>{item.line_no || item.id}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td>{item.unit}</td><td className="number"><strong>{item.quantity}</strong></td></tr>)}</tbody></table></div>
     {value.remark && <p className="remark"><b>备注：</b>{value.remark}</p>}
   </> : <Loading/> }</Modal>;

@@ -4,6 +4,7 @@ import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { transaction } from '../../server/db.js';
 import { allocateDocumentNumber } from '../../server/modules/commercial-golive.js';
 import { idempotencyReplay, saveIdempotency } from '../../server/modules/financial-controls.js';
+import { confirmInventoryTransfer } from '../../server/app.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
@@ -30,6 +31,9 @@ function saveEffect(key, payload, resourceId, kind, result) {
 }
 
 function execute(command) {
+  if (command.action === 'inventory-transfer-confirm') {
+    return confirmInventoryTransfer(db, { id: command.actorId }, command.transferId);
+  }
   if (command.action === 'hold') {
     return transaction(db, () => {
       sleep(command.ms);

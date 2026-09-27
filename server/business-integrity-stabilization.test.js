@@ -214,12 +214,12 @@ describe('v1.0.1-rc.3 business document integrity', () => {
   });
 
   test('stocktake follows DRAFT -> SUBMITTED -> APPROVED with role separation and traceable adjustment', async () => {
-    let response = await request('/api/inventory-checks', 'warehouse', 'POST', { warehouseId: 'wh', productId: 'p1', actualQuantity: 95, reason: 'count' });
+    let response = await request('/api/inventory-checks', 'warehouse', 'POST', { warehouseId: 'wh', productId: 'p1', actualQuantity: 95, reason: 'count', businessDate: '2026-09-22' });
     assert.equal(response.status, 201);
     const created = await response.json();
     assert.match(created.checkNo, /^IC-/);
     assert.equal(db.prepare('SELECT status,check_no FROM inventory_checks WHERE id=?').get(created.id).status, 'DRAFT');
-    assert.equal((await request(`/api/inventory-checks/${created.id}`, 'warehouse', 'PATCH', { action: 'UPDATE', warehouseId: 'wh', productId: 'p1', actualQuantity: 94, reason: 'recount' })).status, 200);
+    assert.equal((await request(`/api/inventory-checks/${created.id}`, 'warehouse', 'PATCH', { action: 'UPDATE', warehouseId: 'wh', productId: 'p1', actualQuantity: 94, reason: 'recount', businessDate: '2026-09-22' })).status, 200);
     assert.equal((await request(`/api/inventory-checks/${created.id}`, 'warehouse', 'PATCH', { action: 'APPROVE' })).status, 403);
     assert.equal((await request(`/api/inventory-checks/${created.id}`, 'warehouse', 'PATCH', { action: 'SUBMIT' })).status, 200);
     assert.equal(db.prepare('SELECT status FROM inventory_checks WHERE id=?').get(created.id).status, 'SUBMITTED');
@@ -232,6 +232,21 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal(movement.quantity_change, 6);
     assert.equal(movement.balance_after, 94);
     assert.equal((await request(`/api/inventory-checks/${created.id}`, 'admin', 'PATCH', { action: 'APPROVE' })).status, 409);
+  });
+
+  test('new stocktake without businessDate is rejected with zero side effects', async () => {
+    const beforeChecks = db.prepare('SELECT COUNT(*) count FROM inventory_checks').get().count;
+    const beforeInventory = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity;
+    const beforeMovements = db.prepare("SELECT COUNT(*) count FROM inventory_transactions WHERE source_type='INVENTORY_CHECK'").get().count;
+    const beforeAudit = db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_CHECK'").get().count;
+    const response = await request('/api/inventory-checks', 'warehouse', 'POST', { warehouseId: 'wh', productId: 'p1', actualQuantity: 93, reason: 'missing date' });
+    const body = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(body.code, 'VALIDATION');
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM inventory_checks').get().count, beforeChecks);
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='wh' AND product_id='p1'").get().quantity, beforeInventory);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM inventory_transactions WHERE source_type='INVENTORY_CHECK'").get().count, beforeMovements);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='INVENTORY_CHECK'").get().count, beforeAudit);
   });
 
   test('sales order approval authorizes only; delivery confirmation is the single revenue trigger', async () => {
