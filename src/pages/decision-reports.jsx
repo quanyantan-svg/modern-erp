@@ -15,7 +15,7 @@
 import { useEffect, useState } from 'react';
 import { api, download } from '../api.js';
 import { can, Empty, Loading, money } from '../components/ui.jsx';
-import { FilterButton, FilterSheet, FormRow, RecordCard, RecordList } from '../components/design-system.jsx';
+import { BusinessState, FilterButton, FilterSheet, FormRow, InlineAlert, RecordCard, RecordList, ResponsiveBusinessList } from '../components/design-system.jsx';
 import { BusinessEntitySelector } from '../components/business-entity-selector.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
@@ -119,6 +119,11 @@ function ReportFilters({ fields, values, onChange, onApply, onReset, dateBasis, 
               testId={`report-filter-${field.name}`}
               disabled={field.disabled}
             />
+          ) : field.kind === 'checkbox' ? (
+            <label className="report-checkbox">
+              <input type="checkbox" checked={Boolean(values[field.name])} onChange={(event) => onChange(field.name, event.target.checked ? 'true' : '')} data-testid={`report-filter-${field.name}`}/>
+              <span>{field.checkboxLabel || field.label}</span>
+            </label>
           ) : field.options ? (
             <select value={values[field.name] || ''} onChange={(event) => onChange(field.name, event.target.value)} data-testid={`report-filter-${field.name}`}>
               <option value="">全部</option>
@@ -275,7 +280,7 @@ function CustomerGroupingTable({ rows }) {
 // ---- Sales Outstanding Panel ----
 
 function SalesOutstandingPanel() {
-  const [filters, setFilters] = useState({ dateFrom: '', dateTo: '', customerId: '' });
+  const [filters, setFilters] = useState({ dateFrom: '', dateTo: '', customerId: '', includeFulfilled: '' });
   const [applied, setApplied] = useState({});
   const state = useReport('/api/reports/decision/sales-outstanding', applied);
 
@@ -286,67 +291,126 @@ function SalesOutstandingPanel() {
           { name: 'dateFrom', type: 'date', label: '要求交期起' },
           { name: 'dateTo', type: 'date', label: '要求交期止' },
           { name: 'customerId', kind: 'entity', entityType: 'CUSTOMER', usage: 'REPORT_SALES', label: '客户', placeholder: '搜索客户编码或名称' },
+          { name: 'includeFulfilled', kind: 'checkbox', label: '已履行行', checkboxLabel: '显示已履行' },
         ]}
         values={filters}
         onChange={(name, value) => setFilters((current) => ({ ...current, [name]: value }))}
         onApply={() => setApplied({ ...filters })}
-        onReset={() => { setFilters({ dateFrom: '', dateTo: '', customerId: '' }); setApplied({}); }}
+        onReset={() => { setFilters({ dateFrom: '', dateTo: '', customerId: '', includeFulfilled: '' }); setApplied({}); }}
         dateBasis={REPORT_DATE_BASIS['sales-outstanding']}
         exportEndpoint="/api/reports/decision/sales-outstanding"
         applied={applied}
       />
       <ReportBody state={state} render={(data) => (
-        <div className="decision-report__body" data-testid="sales-outstanding-body">
-          <p className="decision-report__accuracy" data-testid="sales-outstanding-accuracy">准确度：{data.accuracy}</p>
-          <p className="decision-report__notes" data-testid="sales-outstanding-notes">{data.accuracyNotes}</p>
-          {data.rows.length ? (
-            <div className="decision-report__cards" data-testid="sales-outstanding-list">
-              {data.rows.map((row) => <SalesOutstandingCard key={row.id} row={row} />)}
-            </div>
-          ) : (
-            <Empty text="当前条件下没有未出货订单" />
-          )}
-        </div>
+        <FulfillmentReportBody data={data} reportKey="sales-outstanding" applied={applied} />
       )} />
     </>
   );
 }
 
-function SalesOutstandingCard({ row }) {
+const FULFILLMENT_LABELS = {
+  UNFULFILLED: '未履行', PARTIAL: '部分履行', FULFILLED: '已履行', OVER_FULFILLED: '超量履行异常',
+};
+
+function FulfillmentReportBody({ data, reportKey, applied }) {
+  const isSales = reportKey === 'sales-outstanding';
+  const filtered = Object.entries(applied || {}).some(([key, value]) => key !== 'includeFulfilled' && Boolean(value));
+  let emptyState = null;
+  if (!data.rows.length) {
+    if (data.population?.hiddenFulfilledLines > 0) {
+      emptyState = <BusinessState kind="EMPTY" title="匹配行均已履行" description="已履行行默认隐藏；可在筛选中开启“显示已履行”。" />;
+    } else if (filtered) {
+      emptyState = <BusinessState kind="NO_RESULTS" title="当前条件无匹配" description="请调整要求交期/预计到货日或业务对象筛选。" />;
+    } else {
+      emptyState = <BusinessState kind="EMPTY" title={isSales ? '没有待出货订单行' : '没有待收货订单行'} description="当前已审批订单行均无剩余履约数量，或尚无已审批订单行。" />;
+    }
+  }
   return (
-    <div className="mobile-card decision-report-card" data-testid={`sales-outstanding-card-${row.id}`}>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单号</span>
-        <span className="mobile-card__row-value mono"><AppLink page="orders" documentId={row.id} documentType="SALES_ORDER">{row.order_no}</AppLink></span>
+    <div className="decision-report__body" data-testid={`${reportKey}-body`}>
+      <div className="decision-report__fulfillment-summary">
+        <span>逐行口径</span><strong>截至 {data.asOfDate}</strong>
+        <span>当前显示</span><strong>{data.rows.length} 行</strong>
       </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">客户</span>
-        <span className="mobile-card__row-value">{row.customerName}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单日期</span>
-        <span className="mobile-card__row-value dim">{row.orderDate || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">要求交期</span>
-        <span className="mobile-card__row-value dim">{row.commitmentDate || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单金额</span>
-        <span className="mobile-card__row-value"><strong>{money(row.total_cents)}</strong></span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">关联出货单</span>
-        <span className="mobile-card__row-value">{row.confirmedDeliveryCount} 张</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">最近出货日期</span>
-        <span className="mobile-card__row-value dim">{row.latestDeliveryDate?.slice(0, 10) || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">履行情况</span>
-        <span className={'mobile-card__row-value status-' + (row.fulfillmentState === 'DELIVERED' ? 'approved' : row.fulfillmentState === 'IN_PROGRESS' ? 'submitted' : 'draft')} data-testid={`sales-outstanding-state-${row.id}`}>{row.fulfillmentLabel}</span>
-      </div>
+      {data.accuracyNotice ? <InlineAlert tone="warning">{data.accuracyNotice}</InlineAlert> : null}
+      {data.rows.length ? <div className="fulfillment-row fulfillment-row--header" aria-hidden="true">
+        <span>{isSales ? '销售订单' : '采购订单'}</span><span>{isSales ? '客户' : '供应商'}</span><span>产品</span>
+        <span>订货</span><span>{isSales ? '已出货' : '已收货'}</span><span>剩余</span>
+        <span>{isSales ? '要求交期' : '预计到货'}</span><span>履行状态</span><span>逾期</span><span>明细</span>
+      </div> : null}
+      <ResponsiveBusinessList
+        items={data.rows}
+        state={emptyState}
+        keyOf={(row) => row.orderItemId}
+        className="fulfillment-list"
+        renderDesktopRow={(row) => <FulfillmentDesktopRow row={row} reportKey={reportKey} />}
+        renderMobileCard={(row) => <FulfillmentMobileCard row={row} reportKey={reportKey} />}
+      />
+    </div>
+  );
+}
+
+function FulfillmentDesktopRow({ row, reportKey }) {
+  const isSales = reportKey === 'sales-outstanding';
+  const party = isSales ? row.customer : row.supplier;
+  const executed = isSales ? row.fulfilledQuantity : row.receivedQuantity;
+  return (
+    <div className={`fulfillment-row${row.overdue ? ' fulfillment-row--overdue' : ''}`} data-testid={`${reportKey}-row-${row.orderItemId}`}>
+      <span className="mono"><AppLink page={isSales ? 'orders' : 'purchase-orders'} documentId={row.orderId} documentType={isSales ? 'SALES_ORDER' : 'PURCHASE_ORDER'}>{row.orderNumber} / {row.lineNumber}</AppLink></span>
+      <span>{party.code} · {party.name}</span>
+      <span>{row.product.code} · {row.product.name}</span>
+      <span>{row.orderedQuantity}</span><span>{executed}</span><strong>{row.remainingQuantity}</strong>
+      <span>{row.commitmentDate || '未设置交期'}</span>
+      <span className={`fulfillment-status fulfillment-status--${row.fulfillmentStatus.toLowerCase()}`}>{FULFILLMENT_LABELS[row.fulfillmentStatus]}</span>
+      <span className={row.overdue ? 'fulfillment-overdue' : 'dim'}>{row.overdue ? `逾期 ${row.overdueDays} 天` : '未逾期'}</span>
+      <ContributionDisclosure row={row} reportKey={reportKey} />
+    </div>
+  );
+}
+
+function FulfillmentMobileCard({ row, reportKey }) {
+  const isSales = reportKey === 'sales-outstanding';
+  const party = isSales ? row.customer : row.supplier;
+  const executed = isSales ? row.fulfilledQuantity : row.receivedQuantity;
+  return (
+    <article className={`mobile-card decision-report-card fulfillment-card${row.overdue ? ' fulfillment-card--overdue' : ''}`} data-testid={`${reportKey}-card-${row.orderItemId}`}>
+      <header><AppLink page={isSales ? 'orders' : 'purchase-orders'} documentId={row.orderId} documentType={isSales ? 'SALES_ORDER' : 'PURCHASE_ORDER'}>{row.orderNumber} / 行 {row.lineNumber}</AppLink><span className={`fulfillment-status fulfillment-status--${row.fulfillmentStatus.toLowerCase()}`}>{FULFILLMENT_LABELS[row.fulfillmentStatus]}</span></header>
+      <strong>{row.product.code} · {row.product.name}</strong>
+      <span>{party.code} · {party.name}</span>
+      <div className="fulfillment-card__primary"><span>剩余数量</span><strong>{row.remainingQuantity}</strong></div>
+      <div className="fulfillment-card__facts"><span>订货 {row.orderedQuantity}</span><span>{isSales ? '已出货' : '已收货'} {executed}</span></div>
+      <div className="fulfillment-card__facts"><span>{isSales ? '要求交期' : '预计到货'}：{row.commitmentDate || '未设置交期'}</span><span className={row.overdue ? 'fulfillment-overdue' : 'dim'}>{row.overdue ? `逾期 ${row.overdueDays} 天` : '未逾期'}</span></div>
+      {row.legacyAccuracyLimited ? <InlineAlert tone="warning">历史数据 / 来源信息不完整，履行数量可能不完整</InlineAlert> : null}
+      {row.fulfillmentStatus === 'OVER_FULFILLED' ? <InlineAlert tone="danger">检测到超量履行 {row.overFulfilledQuantity}，请核查历史数据</InlineAlert> : null}
+      <ContributionDisclosure row={row} reportKey={reportKey} />
+    </article>
+  );
+}
+
+function ContributionDisclosure({ row, reportKey }) {
+  const [open, setOpen] = useState(false);
+  const [state, setState] = useState({ status: 'idle', data: null, error: '' });
+  async function toggle() {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    if (state.status !== 'idle') return;
+    setState({ status: 'loading', data: null, error: '' });
+    try {
+      const data = await api(`/api/reports/${reportKey}/lines/${encodeURIComponent(row.orderItemId)}/contributions`);
+      setState({ status: 'success', data, error: '' });
+    } catch (error) {
+      setState({ status: 'error', data: null, error: error?.message || '履约明细加载失败' });
+    }
+  }
+  return (
+    <div className="fulfillment-contributions">
+      <button type="button" className="link-button" onClick={toggle}>{open ? '收起履约明细' : `查看履约明细（${row.contributionCount}）`}</button>
+      {open && state.status === 'loading' ? <small>正在加载履约明细…</small> : null}
+      {open && state.status === 'error' ? <InlineAlert tone="danger">{state.error}</InlineAlert> : null}
+      {open && state.data ? <div className="fulfillment-contributions__list">
+        {state.data.contributions.map((item) => <div key={item.sourceLineId}><strong>{item.sourceDocumentNumber}</strong><span>{item.businessDate || '业务日期缺失'} · 数量 {item.quantity}{item.warehouse ? ` · ${item.warehouse.code}` : ''}</span></div>)}
+        {!state.data.contributions.length ? <small>没有可证明的履约贡献</small> : null}
+        {state.data.informationalItems.map((item) => <InlineAlert key={item.code} tone="warning">{item.message}</InlineAlert>)}
+      </div> : null}
     </div>
   );
 }
@@ -419,7 +483,7 @@ function SupplierGroupingTable({ rows }) {
 // ---- Purchase Outstanding Panel ----
 
 function PurchaseOutstandingPanel() {
-  const [filters, setFilters] = useState({ dateFrom: '', dateTo: '', supplierId: '' });
+  const [filters, setFilters] = useState({ dateFrom: '', dateTo: '', supplierId: '', includeFulfilled: '' });
   const [applied, setApplied] = useState({});
   const state = useReport('/api/reports/decision/purchase-outstanding', applied);
 
@@ -430,68 +494,20 @@ function PurchaseOutstandingPanel() {
           { name: 'dateFrom', type: 'date', label: '预计到货日起' },
           { name: 'dateTo', type: 'date', label: '预计到货日止' },
           { name: 'supplierId', kind: 'entity', entityType: 'SUPPLIER', usage: 'REPORT_PURCHASE', label: '供应商', placeholder: '搜索供应商编码或名称' },
+          { name: 'includeFulfilled', kind: 'checkbox', label: '已履行行', checkboxLabel: '显示已履行' },
         ]}
         values={filters}
         onChange={(name, value) => setFilters((current) => ({ ...current, [name]: value }))}
         onApply={() => setApplied({ ...filters })}
-        onReset={() => { setFilters({ dateFrom: '', dateTo: '', supplierId: '' }); setApplied({}); }}
+        onReset={() => { setFilters({ dateFrom: '', dateTo: '', supplierId: '', includeFulfilled: '' }); setApplied({}); }}
         dateBasis={REPORT_DATE_BASIS['purchase-outstanding']}
         exportEndpoint="/api/reports/decision/purchase-outstanding"
         applied={applied}
       />
       <ReportBody state={state} render={(data) => (
-        <div className="decision-report__body" data-testid="purchase-outstanding-body">
-          <p className="decision-report__accuracy" data-testid="purchase-outstanding-accuracy">准确度：{data.accuracy}</p>
-          <p className="decision-report__notes" data-testid="purchase-outstanding-notes">{data.accuracyNotes}</p>
-          {data.rows.length ? (
-            <div className="decision-report__cards" data-testid="purchase-outstanding-list">
-              {data.rows.map((row) => <PurchaseOutstandingCard key={row.id} row={row} />)}
-            </div>
-          ) : (
-            <Empty text="当前条件下没有未入库订单" />
-          )}
-        </div>
+        <FulfillmentReportBody data={data} reportKey="purchase-outstanding" applied={applied} />
       )} />
     </>
-  );
-}
-
-function PurchaseOutstandingCard({ row }) {
-  return (
-    <div className="mobile-card decision-report-card" data-testid={`purchase-outstanding-card-${row.id}`}>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单号</span>
-        <span className="mobile-card__row-value mono"><AppLink page="purchase-orders" documentId={row.id} documentType="PURCHASE_ORDER">{row.order_no}</AppLink></span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">供应商</span>
-        <span className="mobile-card__row-value">{row.supplierName}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单日期</span>
-        <span className="mobile-card__row-value dim">{row.orderDate || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">预计到货日</span>
-        <span className="mobile-card__row-value dim">{row.commitmentDate || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">订单金额</span>
-        <span className="mobile-card__row-value"><strong>{money(row.total_cents)}</strong></span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">关联入库单</span>
-        <span className="mobile-card__row-value">{row.confirmedReceiptCount} 张</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">最近入库日期</span>
-        <span className="mobile-card__row-value dim">{row.latestReceiptDate?.slice(0, 10) || '业务日期缺失'}</span>
-      </div>
-      <div className="mobile-card__row">
-        <span className="mobile-card__row-label">履行情况</span>
-        <span className={'mobile-card__row-value status-' + (row.fulfillmentState === 'RECEIVED' ? 'approved' : row.fulfillmentState === 'IN_PROGRESS' ? 'submitted' : 'draft')} data-testid={`purchase-outstanding-state-${row.id}`}>{row.fulfillmentLabel}</span>
-      </div>
-    </div>
   );
 }
 

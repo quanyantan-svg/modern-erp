@@ -9,10 +9,12 @@
 //     directly. Rows without that authoritative value fall into the
 //     `legacyMissing` bucket.
 //
-// Outstanding reports:
-//   * sales-outstanding filters by requested_delivery_date and purchase-
-//     outstanding filters by expected_delivery_date. No E6 line-level
-//     redesign is included here.
+// Outstanding reports (V1.4-E6):
+//   * each row is one approved order line;
+//   * only confirmed execution rows with an exact source-line identity
+//     contribute to fulfilled / received quantity;
+//   * ordinary returns never reopen the original order obligation;
+//   * source-incomplete legacy execution is disclosed, never guessed.
 //
 // Filter transport (C02):
 //   * Reports accept canonical internal IDs as their entity filter
@@ -29,6 +31,7 @@ import { allowAny, HttpError, send } from '../lib/http.js';
 
 const MAX_REPORT_ROWS = 500;
 const MAX_EXPORT_ROWS = 5000;
+const QUANTITY_EPSILON = 1e-9;
 
 function parseDateParam(value, label) {
   if (!value) return null;
@@ -84,7 +87,12 @@ function buildOrderFilters(url) {
   if (status && !['DRAFT', 'SUBMITTED', 'APPROVED', 'REJECTED'].includes(status)) {
     throw new HttpError(400, 'status 不是有效订单状态');
   }
-  return { dateFrom, dateTo, customerId, supplierId, status };
+  const includeFulfilledValue = url.searchParams.get('includeFulfilled');
+  if (includeFulfilledValue && !['true', 'false'].includes(includeFulfilledValue)) {
+    throw new HttpError(400, 'includeFulfilled 必须为 true 或 false');
+  }
+  const asOfDate = parseDateParam(url.searchParams.get('asOfDate'), '截至日期') || new Date().toISOString().slice(0, 10);
+  return { dateFrom, dateTo, customerId, supplierId, status, includeFulfilled: includeFulfilledValue === 'true', asOfDate };
 }
 
 function buildInventoryFilters(url) {
@@ -125,6 +133,8 @@ function buildFilterEcho(db, filters) {
   if (filters.status) out.status = filters.status;
   if (filters.direction) out.direction = filters.direction;
   if (filters.sourceType) out.sourceType = filters.sourceType;
+  if (filters.includeFulfilled != null) out.includeFulfilled = Boolean(filters.includeFulfilled);
+  if (filters.asOfDate) out.asOfDate = filters.asOfDate;
   return out;
 }
 
@@ -301,84 +311,211 @@ export function getSalesSummary(db, res, actor, url) {
   });
 }
 
-// ---------- 2. Sales Outstanding (Document Level) ----------
+// ---------- 2 / 4. Line-level fulfillment (V1.4-E6) ----------
+
+const FULFILLMENT_REPORTS = Object.freeze({
+  'sales-outstanding': {
+    kind: 'sales',
+    orderTable: 'sales_orders', itemTable: 'sales_order_items', partyTable: 'customers',
+    partyIdColumn: 'customer_id', partyFilter: 'customerId', partyKey: 'customer',
+    executionTable: 'sales_deliveries', executionItemTable: 'sales_delivery_items',
+    executionHeaderFk: 'delivery_id', executionOrderFk: 'sales_order_id', sourceItemColumn: 'sales_order_item_id',
+    documentNoColumn: 'delivery_no', businessDateColumn: 'delivery_date',
+    commitmentColumn: 'requested_delivery_date', commitmentKey: 'requiredDeliveryDate',
+    executedKey: 'fulfilledQuantity', executionLabel: '销售出货',
+  },
+  'purchase-outstanding': {
+    kind: 'purchase',
+    orderTable: 'purchase_orders', itemTable: 'purchase_order_items', partyTable: 'suppliers',
+    partyIdColumn: 'supplier_id', partyFilter: 'supplierId', partyKey: 'supplier',
+    executionTable: 'purchase_receipts', executionItemTable: 'purchase_receipt_items',
+    executionHeaderFk: 'receipt_id', executionOrderFk: 'purchase_order_id', sourceItemColumn: 'purchase_order_item_id',
+    documentNoColumn: 'receipt_no', businessDateColumn: 'receipt_date',
+    commitmentColumn: 'expected_delivery_date', commitmentKey: 'expectedReceiptDate',
+    executedKey: 'receivedQuantity', executionLabel: '采购入库',
+  },
+});
+
+function calendarDayDifference(from, to) {
+  return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+}
+
+function classifyFulfillment(ordered, executed) {
+  if (executed > ordered + QUANTITY_EPSILON) return 'OVER_FULFILLED';
+  if (executed <= QUANTITY_EPSILON) return 'UNFULFILLED';
+  if (executed + QUANTITY_EPSILON < ordered) return 'PARTIAL';
+  return 'FULFILLED';
+}
+
+function lineSort(left, right) {
+  if (left.overdue !== right.overdue) return left.overdue ? -1 : 1;
+  const leftMissing = !left.commitmentDate;
+  const rightMissing = !right.commitmentDate;
+  if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+  if (left.commitmentDate !== right.commitmentDate) return String(left.commitmentDate || '').localeCompare(String(right.commitmentDate || ''));
+  if (left.orderNumber !== right.orderNumber) return left.orderNumber.localeCompare(right.orderNumber);
+  if (left.lineNumber !== right.lineNumber) return left.lineNumber - right.lineNumber;
+  return left.orderItemId.localeCompare(right.orderItemId);
+}
+
+function buildFulfillmentWhere(config, filters) {
+  const where = ["o.status = 'APPROVED'"];
+  const params = [];
+  if (filters.dateFrom) { where.push(`o.${config.commitmentColumn} IS NOT NULL AND o.${config.commitmentColumn} <> '' AND o.${config.commitmentColumn} >= ?`); params.push(filters.dateFrom); }
+  if (filters.dateTo) { where.push(`o.${config.commitmentColumn} IS NOT NULL AND o.${config.commitmentColumn} <> '' AND o.${config.commitmentColumn} <= ?`); params.push(filters.dateTo); }
+  if (filters[config.partyFilter]) { where.push(`o.${config.partyIdColumn} = ?`); params.push(filters[config.partyFilter]); }
+  return { where, params };
+}
+
+function queryLegacyUnattributed(db, config, filters) {
+  const where = ["e.status = 'CONFIRMED'", `ei.${config.sourceItemColumn} IS NULL`];
+  const params = [];
+  if (filters[config.partyFilter]) { where.push(`e.${config.partyIdColumn} = ?`); params.push(filters[config.partyFilter]); }
+  const documents = db.prepare(`
+    SELECT e.id AS documentId, e.${config.documentNoColumn} AS documentNumber,
+           e.${config.executionOrderFk} AS orderId, COUNT(ei.id) AS lineCount
+    FROM ${config.executionTable} e
+    JOIN ${config.executionItemTable} ei ON ei.${config.executionHeaderFk} = e.id
+    WHERE ${where.join(' AND ')}
+    GROUP BY e.id, e.${config.documentNoColumn}, e.${config.executionOrderFk}
+    ORDER BY e.${config.documentNoColumn}, e.id
+    LIMIT 50
+  `).all(...params);
+  const total = Number(db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM ${config.executionTable} e
+    JOIN ${config.executionItemTable} ei ON ei.${config.executionHeaderFk} = e.id
+    WHERE ${where.join(' AND ')}
+  `).get(...params).count);
+  return { count: total, documents };
+}
+
+function queryFulfillmentLines(db, reportKey, filters, limit) {
+  const config = FULFILLMENT_REPORTS[reportKey];
+  const { where, params } = buildFulfillmentWhere(config, filters);
+  const executionAggregate = `
+      SELECT ei.${config.sourceItemColumn} AS orderItemId,
+             SUM(ei.quantity) AS executedQuantity, COUNT(*) AS contributionCount
+      FROM ${config.executionItemTable} ei
+      JOIN ${config.executionTable} e ON e.id = ei.${config.executionHeaderFk}
+      WHERE e.status = 'CONFIRMED' AND ei.${config.sourceItemColumn} IS NOT NULL
+      GROUP BY ei.${config.sourceItemColumn}`;
+  const visibilityClause = filters.includeFulfilled ? '' : `
+      AND (COALESCE(exec.executedQuantity, 0) < oi.quantity - ${QUANTITY_EPSILON}
+        OR COALESCE(exec.executedQuantity, 0) > oi.quantity + ${QUANTITY_EPSILON})`;
+  const raw = db.prepare(`
+    SELECT o.id AS orderId, o.order_no AS orderNumber, o.order_date AS orderDate,
+           o.${config.commitmentColumn} AS commitmentDate,
+           oi.id AS orderItemId, oi.line_no AS lineNumber, oi.quantity AS orderedQuantity,
+           party.id AS partyId, party.code AS partyCode, party.name AS partyName,
+           p.id AS productId, p.code AS productCode, p.name AS productName, p.unit AS productUnit,
+           COALESCE(exec.executedQuantity, 0) AS executedQuantity,
+           COALESCE(exec.contributionCount, 0) AS contributionCount,
+           COALESCE(legacy.legacyLineCount, 0) AS legacyLineCount
+    FROM ${config.orderTable} o
+    JOIN ${config.itemTable} oi ON oi.order_id = o.id
+    JOIN ${config.partyTable} party ON party.id = o.${config.partyIdColumn}
+    JOIN products p ON p.id = oi.product_id
+    LEFT JOIN (${executionAggregate}) exec ON exec.orderItemId = oi.id
+    LEFT JOIN (
+      SELECT e.${config.executionOrderFk} AS orderId, COUNT(ei.id) AS legacyLineCount
+      FROM ${config.executionTable} e
+      JOIN ${config.executionItemTable} ei ON ei.${config.executionHeaderFk} = e.id
+      WHERE e.status = 'CONFIRMED' AND ei.${config.sourceItemColumn} IS NULL
+        AND e.${config.executionOrderFk} IS NOT NULL
+      GROUP BY e.${config.executionOrderFk}
+    ) legacy ON legacy.orderId = o.id
+    WHERE ${where.join(' AND ')}${visibilityClause}
+    ORDER BY o.order_no, oi.line_no, oi.id
+    LIMIT ?
+  `).all(...params, limit);
+
+  const population = db.prepare(`
+    SELECT COUNT(*) AS matchingLines,
+           COALESCE(SUM(CASE WHEN COALESCE(exec.executedQuantity, 0) >= oi.quantity - ${QUANTITY_EPSILON}
+                              AND COALESCE(exec.executedQuantity, 0) <= oi.quantity + ${QUANTITY_EPSILON}
+                         THEN 1 ELSE 0 END), 0) AS fulfilledLines
+    FROM ${config.orderTable} o
+    JOIN ${config.itemTable} oi ON oi.order_id = o.id
+    LEFT JOIN (${executionAggregate}) exec ON exec.orderItemId = oi.id
+    WHERE ${where.join(' AND ')}
+  `).get(...params);
+
+  const allRows = raw.map((row) => {
+    const orderedQuantity = Number(row.orderedQuantity);
+    const executedQuantity = Number(row.executedQuantity);
+    const fulfillmentStatus = classifyFulfillment(orderedQuantity, executedQuantity);
+    const overFulfilledQuantity = fulfillmentStatus === 'OVER_FULFILLED' ? executedQuantity - orderedQuantity : 0;
+    const remainingQuantity = fulfillmentStatus === 'OVER_FULFILLED' ? 0 : Math.max(orderedQuantity - executedQuantity, 0);
+    const commitmentDate = row.commitmentDate || null;
+    const overdue = remainingQuantity > QUANTITY_EPSILON && Boolean(commitmentDate) && commitmentDate < filters.asOfDate;
+    const legacyAccuracyLimited = Number(row.legacyLineCount) > 0;
+    const accuracyStatus = fulfillmentStatus === 'OVER_FULFILLED' ? 'INCONSISTENT' : legacyAccuracyLimited ? 'LIMITED' : 'COMPLETE';
+    const party = { id: row.partyId, code: row.partyCode, name: row.partyName };
+    return {
+      id: row.orderId,
+      order_no: row.orderNumber,
+      orderId: row.orderId,
+      orderNumber: row.orderNumber,
+      orderItemId: row.orderItemId,
+      lineNumber: Number(row.lineNumber),
+      orderDate: row.orderDate || null,
+      [config.partyKey]: party,
+      product: { id: row.productId, code: row.productCode, name: row.productName, unit: row.productUnit },
+      orderedQuantity,
+      executedQuantity,
+      [config.executedKey]: executedQuantity,
+      remainingQuantity,
+      overFulfilledQuantity,
+      commitmentDate,
+      [config.commitmentKey]: commitmentDate,
+      commitmentDateMissing: !commitmentDate,
+      fulfillmentStatus,
+      overdue,
+      overdueDays: overdue ? calendarDayDifference(commitmentDate, filters.asOfDate) : null,
+      accuracyStatus,
+      legacyAccuracyLimited,
+      legacyReason: legacyAccuracyLimited ? 'LEGACY_SOURCE_MISSING' : null,
+      contributionCount: Number(row.contributionCount),
+    };
+  }).sort(lineSort);
+  const rows = allRows;
+  return {
+    rows,
+    population: {
+      matchingLines: Number(population.matchingLines),
+      hiddenFulfilledLines: filters.includeFulfilled ? 0 : Number(population.fulfilledLines),
+      returnedLines: rows.length,
+    },
+    legacyUnattributed: queryLegacyUnattributed(db, config, filters),
+  };
+}
+
+function fulfillmentResponse(db, reportKey, filters, limit) {
+  const config = FULFILLMENT_REPORTS[reportKey];
+  const result = queryFulfillmentLines(db, reportKey, filters, limit);
+  const limitedRows = result.rows.filter((row) => row.accuracyStatus !== 'COMPLETE').length;
+  return {
+    ...result,
+    filters: buildFilterEcho(db, filters),
+    reportKey,
+    granularity: 'ORDER_LINE',
+    accuracy: limitedRows || result.legacyUnattributed.count ? 'LIMITED' : 'COMPLETE',
+    accuracyNotice: result.legacyUnattributed.count
+      ? `历史数据 / 来源行缺失：${result.legacyUnattributed.count} 条已确认${config.executionLabel}明细未计入逐行履约数量。`
+      : null,
+    asOfDate: filters.asOfDate,
+    dateBasis: {
+      rangeFilter: config.kind === 'sales' ? '要求交期（sales_orders.requested_delivery_date）' : '预计到货日（purchase_orders.expected_delivery_date）',
+      commitmentDate: config.kind === 'sales' ? '要求交期；缺失时显示“未设置交期”' : '预计到货日；缺失时显示“未设置交期”',
+      overdue: `剩余数量大于 0 且承诺日期早于截至日期 ${filters.asOfDate}`,
+    },
+  };
+}
 
 export function getSalesOutstanding(db, res, actor, url) {
   requireReportVisibilityWithSales(actor);
-  const filters = buildOrderFilters(url);
-  const customerId = filters.customerId;
-
-  const where = ["so.status = 'APPROVED'"];
-  const params = [];
-  if (filters.dateFrom) { where.push("so.requested_delivery_date IS NOT NULL AND so.requested_delivery_date <> '' AND so.requested_delivery_date >= ?"); params.push(filters.dateFrom); }
-  if (filters.dateTo) { where.push("so.requested_delivery_date IS NOT NULL AND so.requested_delivery_date <> '' AND so.requested_delivery_date <= ?"); params.push(filters.dateTo); }
-  if (customerId) { where.push('so.customer_id = ?'); params.push(customerId); }
-
-  const rows = db.prepare(`
-    SELECT
-      so.id,
-      so.order_no,
-      so.status,
-      so.total_cents,
-      so.created_at,
-      so.order_date,
-      so.requested_delivery_date,
-      so.remark,
-      so.rejection_reason,
-      c.id AS customerId,
-      c.code AS customerCode,
-      c.name AS customerName,
-      (SELECT COUNT(*) FROM sales_deliveries sd
-        WHERE sd.sales_order_id = so.id AND sd.status = 'CONFIRMED') AS confirmedDeliveryCount,
-      (SELECT MAX(sd.delivery_date) FROM sales_deliveries sd
-        WHERE sd.sales_order_id = so.id AND sd.status = 'CONFIRMED' AND sd.delivery_date IS NOT NULL AND sd.delivery_date <> '') AS latestDeliveryDate,
-      (SELECT COUNT(*) FROM sales_deliveries sd
-        WHERE sd.sales_order_id = so.id AND sd.status = 'DRAFT') AS draftDeliveryCount
-    FROM sales_orders so
-    JOIN customers c ON c.id = so.customer_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY CASE WHEN so.requested_delivery_date IS NULL OR so.requested_delivery_date = '' THEN 1 ELSE 0 END,
-             so.requested_delivery_date ASC, so.order_no ASC
-    LIMIT ?
-  `).all(...params, MAX_REPORT_ROWS);
-
-  const enriched = rows.map((row) => {
-    let fulfillmentState = 'NOT_STARTED';
-    let fulfillmentLabel = '尚未出货';
-    if (row.confirmedDeliveryCount > 0) {
-      fulfillmentState = 'DELIVERED';
-      fulfillmentLabel = '已有出货记录';
-    } else if (row.draftDeliveryCount > 0) {
-      fulfillmentState = 'IN_PROGRESS';
-      fulfillmentLabel = '草稿出库单进行中';
-    }
-    return {
-      ...row,
-      orderDate: row.order_date || null,
-      commitmentDate: row.requested_delivery_date || null,
-      commitmentDateMissing: !row.requested_delivery_date,
-      fulfillmentState,
-      fulfillmentLabel,
-    };
-  });
-
-  return send(res, 200, {
-    rows: enriched,
-    filters: buildFilterEcho(db, filters),
-    accuracy: 'DOCUMENT_LEVEL',
-    dateBasis: {
-      rangeFilter: '要求交期（sales_orders.requested_delivery_date）',
-      orderDate: '订单日期（sales_orders.order_date）',
-      shipmentLinked: '已确认出货按 sales_deliveries.delivery_date',
-      commitmentDate: '要求交期；缺失时显示"业务日期缺失"',
-    },
-    accuracyNotes: [
-      '本表为文档级口径，仅显示已审批销售订单与已确认出货单之间的关联计数与最新出货日期。',
-      '本阶段保持文档级口径，不在 E5 中引入逐行未出库数量计算；',
-      '日期范围按 requested_delivery_date 起止日包含过滤；缺失要求交期的 legacy 订单只在未限定日期时显示，并明确标记。',
-      '逐行订货/已执行/剩余数量计算属于 E6，本阶段不改变文档级粒度。',
-    ].join(''),
-  });
+  return send(res, 200, fulfillmentResponse(db, 'sales-outstanding', buildOrderFilters(url), MAX_REPORT_ROWS));
 }
 
 // ---------- 3. Purchase Statistics ----------
@@ -515,83 +652,84 @@ export function getPurchaseSummary(db, res, actor, url) {
   });
 }
 
-// ---------- 4. Purchase Outstanding (Document Level) ----------
-
 export function getPurchaseOutstanding(db, res, actor, url) {
   requireReportVisibilityWithPurchase(actor);
-  const filters = buildOrderFilters(url);
-  const supplierId = filters.supplierId;
+  return send(res, 200, fulfillmentResponse(db, 'purchase-outstanding', buildOrderFilters(url), MAX_REPORT_ROWS));
+}
 
-  const where = ["po.status = 'APPROVED'"];
-  const params = [];
-  if (filters.dateFrom) { where.push("po.expected_delivery_date IS NOT NULL AND po.expected_delivery_date <> '' AND po.expected_delivery_date >= ?"); params.push(filters.dateFrom); }
-  if (filters.dateTo) { where.push("po.expected_delivery_date IS NOT NULL AND po.expected_delivery_date <> '' AND po.expected_delivery_date <= ?"); params.push(filters.dateTo); }
-  if (supplierId) { where.push('po.supplier_id = ?'); params.push(supplierId); }
-
-  const rows = db.prepare(`
-    SELECT
-      po.id,
-      po.order_no,
-      po.status,
-      po.total_cents,
-      po.created_at,
-      po.order_date,
-      po.expected_delivery_date,
-      po.remark,
-      po.rejection_reason,
-      s.id AS supplierId,
-      s.code AS supplierCode,
-      s.name AS supplierName,
-      (SELECT COUNT(*) FROM purchase_receipts pr
-        WHERE pr.purchase_order_id = po.id AND pr.status = 'CONFIRMED') AS confirmedReceiptCount,
-      (SELECT MAX(pr.receipt_date) FROM purchase_receipts pr
-        WHERE pr.purchase_order_id = po.id AND pr.status = 'CONFIRMED' AND pr.receipt_date IS NOT NULL AND pr.receipt_date <> '') AS latestReceiptDate,
-      (SELECT COUNT(*) FROM purchase_receipts pr
-        WHERE pr.purchase_order_id = po.id AND pr.status = 'DRAFT') AS draftReceiptCount
-    FROM purchase_orders po
-    JOIN suppliers s ON s.id = po.supplier_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY CASE WHEN po.expected_delivery_date IS NULL OR po.expected_delivery_date = '' THEN 1 ELSE 0 END,
-             po.expected_delivery_date ASC, po.order_no ASC
-    LIMIT ?
-  `).all(...params, MAX_REPORT_ROWS);
-
-  const enriched = rows.map((row) => {
-    let fulfillmentState = 'NOT_STARTED';
-    let fulfillmentLabel = '尚未入库';
-    if (row.confirmedReceiptCount > 0) {
-      fulfillmentState = 'RECEIVED';
-      fulfillmentLabel = '已有入库记录';
-    } else if (row.draftReceiptCount > 0) {
-      fulfillmentState = 'IN_PROGRESS';
-      fulfillmentLabel = '草稿入库单进行中';
-    }
-    return {
-      ...row,
-      orderDate: row.order_date || null,
-      commitmentDate: row.expected_delivery_date || null,
-      commitmentDateMissing: !row.expected_delivery_date,
-      fulfillmentState,
-      fulfillmentLabel,
-    };
-  });
-
+export function getFulfillmentContributions(db, res, actor, reportKey, orderItemId) {
+  const config = FULFILLMENT_REPORTS[reportKey];
+  if (!config) {
+    throw new HttpError(400, '不支持的履约报表类型', {
+      code: 'UNSUPPORTED_REPORT_KEY',
+      resolution: '请从销售未交或采购未收报表打开履约明细',
+    });
+  }
+  if (config.kind === 'sales') requireReportVisibilityWithSales(actor);
+  else requireReportVisibilityWithPurchase(actor);
+  if (!orderItemId || orderItemId.length > 200) {
+    throw new HttpError(400, '订单行标识无效', { code: 'VALIDATION' });
+  }
+  const orderLine = db.prepare(`
+    SELECT oi.id AS orderItemId, oi.order_id AS orderId, oi.line_no AS lineNumber,
+           oi.quantity AS orderedQuantity, o.order_no AS orderNumber
+    FROM ${config.itemTable} oi
+    JOIN ${config.orderTable} o ON o.id = oi.order_id
+    WHERE oi.id = ? AND o.status = 'APPROVED'
+  `).get(orderItemId);
+  if (!orderLine) {
+    throw new HttpError(404, '订单行不存在或当前不可访问', {
+      code: 'REPORT_LINE_NOT_FOUND',
+      resolution: '返回报表并重新选择可访问的订单行',
+    });
+  }
+  const contributions = db.prepare(`
+    SELECT e.id AS sourceDocumentId, e.${config.documentNoColumn} AS sourceDocumentNumber,
+           ei.id AS sourceLineId, ei.line_no AS sourceLineNumber, ei.quantity,
+           e.${config.businessDateColumn} AS businessDate, e.status,
+           w.id AS warehouseId, w.code AS warehouseCode, w.name AS warehouseName
+    FROM ${config.executionItemTable} ei
+    JOIN ${config.executionTable} e ON e.id = ei.${config.executionHeaderFk}
+    LEFT JOIN warehouses w ON w.id = e.warehouse_id
+    WHERE ei.${config.sourceItemColumn} = ? AND e.status = 'CONFIRMED'
+    ORDER BY e.${config.businessDateColumn}, e.${config.documentNoColumn}, ei.line_no, ei.id
+  `).all(orderItemId).map((row) => ({
+    sourceDocumentType: config.kind === 'sales' ? 'SALES_DELIVERY' : 'PURCHASE_RECEIPT',
+    sourceDocumentLabel: config.executionLabel,
+    sourceDocumentId: row.sourceDocumentId,
+    sourceDocumentNumber: row.sourceDocumentNumber,
+    sourceLineId: row.sourceLineId,
+    sourceLineNumber: Number(row.sourceLineNumber),
+    businessDate: row.businessDate || null,
+    quantity: Number(row.quantity),
+    warehouse: row.warehouseId ? { id: row.warehouseId, code: row.warehouseCode, name: row.warehouseName } : null,
+    status: row.status,
+    linkage: 'EXACT_ORDER_LINE',
+  }));
+  const legacy = db.prepare(`
+    SELECT COUNT(ei.id) AS count
+    FROM ${config.executionTable} e
+    JOIN ${config.executionItemTable} ei ON ei.${config.executionHeaderFk} = e.id
+    WHERE e.status = 'CONFIRMED' AND e.${config.executionOrderFk} = ?
+      AND ei.${config.sourceItemColumn} IS NULL
+  `).get(orderLine.orderId);
+  const executedQuantity = contributions.reduce((sum, row) => sum + row.quantity, 0);
   return send(res, 200, {
-    rows: enriched,
-    filters: buildFilterEcho(db, filters),
-    accuracy: 'DOCUMENT_LEVEL',
-    dateBasis: {
-      rangeFilter: '预计到货日（purchase_orders.expected_delivery_date）',
-      orderDate: '订单日期（purchase_orders.order_date）',
-      receiptLinked: '已确认入库按 purchase_receipts.receipt_date',
-      commitmentDate: '预计到货日；缺失时显示"业务日期缺失"',
+    reportKey,
+    orderLine: {
+      orderId: orderLine.orderId,
+      orderNumber: orderLine.orderNumber,
+      orderItemId: orderLine.orderItemId,
+      lineNumber: Number(orderLine.lineNumber),
+      orderedQuantity: Number(orderLine.orderedQuantity),
     },
-    accuracyNotes: [
-      '本表为文档级口径，仅显示已审批采购订单与已确认入库单之间的关联计数与最新入库日期。',
-      '本阶段保持文档级口径，不在 E5 中引入逐行未入库数量计算；',
-      '日期范围按 expected_delivery_date 起止日包含过滤；缺失预计到货日的 legacy 订单只在未限定日期时显示，并明确标记。',
-      '逐行订货/已执行/剩余数量计算属于 E6，本阶段不改变文档级粒度。',
-    ].join(''),
+    executedQuantity,
+    contributions,
+    accuracyStatus: Number(legacy.count) > 0 ? 'LIMITED' : 'COMPLETE',
+    informationalItems: Number(legacy.count) > 0 ? [{
+      code: 'LEGACY_SOURCE_MISSING',
+      message: `该订单存在 ${legacy.count} 条已确认${config.executionLabel}明细缺少来源行，未猜测归属且未计入贡献数量。`,
+    }] : [],
   });
 }
 
@@ -809,35 +947,19 @@ export function exportSalesOutstandingReport(db, res, actor, url) {
   readExportFormat(url);
   const filters = buildOrderFilters(url);
   const echo = buildFilterEcho(db, filters);
-
-  const where = ["so.status = 'APPROVED'"];
-  const params = [];
-  if (filters.dateFrom) { where.push("so.requested_delivery_date IS NOT NULL AND so.requested_delivery_date <> '' AND so.requested_delivery_date >= ?"); params.push(filters.dateFrom); }
-  if (filters.dateTo) { where.push("so.requested_delivery_date IS NOT NULL AND so.requested_delivery_date <> '' AND so.requested_delivery_date <= ?"); params.push(filters.dateTo); }
-  if (filters.customerId) { where.push('so.customer_id = ?'); params.push(filters.customerId); }
-
-  const rows = db.prepare(`
-    SELECT so.order_no AS orderNo, c.code AS customerCode, c.name AS customerName,
-           so.total_cents AS totalCents, so.order_date AS orderDate,
-           so.requested_delivery_date AS commitmentDate,
-           (SELECT COUNT(*) FROM sales_deliveries sd
-             WHERE sd.sales_order_id = so.id AND sd.status = 'CONFIRMED') AS confirmedDeliveryCount
-    FROM sales_orders so
-    JOIN customers c ON c.id = so.customer_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY CASE WHEN so.requested_delivery_date IS NULL OR so.requested_delivery_date = '' THEN 1 ELSE 0 END,
-             so.requested_delivery_date ASC, so.order_no ASC
-    LIMIT ?
-  `).all(...params, MAX_EXPORT_ROWS);
-
-  const header = ['订单号', '客户编码', '客户名称', '订单金额（分）', '订单日期', '要求交期', '已确认出货单数'];
+  const { rows, legacyUnattributed } = queryFulfillmentLines(db, 'sales-outstanding', filters, MAX_EXPORT_ROWS);
+  const header = ['销售订单', '行号', '客户编码', '客户名称', '产品编码', '产品名称', '订货数量', '已出货', '剩余数量', '要求交期', '履行状态', '是否逾期', '逾期天数', '准确度', '历史说明'];
   const tableLines = [header.map(csvEscape).join(',')];
   for (const row of rows) {
-    tableLines.push([row.orderNo, row.customerCode, row.customerName, row.totalCents, row.orderDate || '业务日期缺失', row.commitmentDate || '业务日期缺失', row.confirmedDeliveryCount].map(csvEscape).join(','));
+    tableLines.push([row.orderNumber, row.lineNumber, row.customer.code, row.customer.name, row.product.code, row.product.name,
+      row.orderedQuantity, row.fulfilledQuantity, row.remainingQuantity, row.commitmentDate || '未设置交期',
+      row.fulfillmentStatus, row.overdue ? '是' : '否', row.overdueDays ?? '', row.accuracyStatus,
+      row.legacyAccuracyLimited ? '历史数据 / 来源信息不完整，已确认出货可能未完整归属' : ''].map(csvEscape).join(','));
   }
 
   writeCsv(res, 'sales-outstanding.csv',
-    exportHeaderLines('销售未交（V1.4-E5 文档级）', filters, echo, '日期范围按 requested_delivery_date 起止日包含过滤；缺失值明确显示"业务日期缺失"。'),
+    [...exportHeaderLines('销售未交（V1.4-E6 订单行级）', filters, echo, `日期范围按 requested_delivery_date；截至 ${filters.asOfDate}；已履行${filters.includeFulfilled ? '显示' : '隐藏'}。`),
+      `# 未归属 legacy 出货明细: ${legacyUnattributed.count}`],
     tableLines);
 }
 
@@ -909,35 +1031,19 @@ export function exportPurchaseOutstandingReport(db, res, actor, url) {
   readExportFormat(url);
   const filters = buildOrderFilters(url);
   const echo = buildFilterEcho(db, filters);
-
-  const where = ["po.status = 'APPROVED'"];
-  const params = [];
-  if (filters.dateFrom) { where.push("po.expected_delivery_date IS NOT NULL AND po.expected_delivery_date <> '' AND po.expected_delivery_date >= ?"); params.push(filters.dateFrom); }
-  if (filters.dateTo) { where.push("po.expected_delivery_date IS NOT NULL AND po.expected_delivery_date <> '' AND po.expected_delivery_date <= ?"); params.push(filters.dateTo); }
-  if (filters.supplierId) { where.push('po.supplier_id = ?'); params.push(filters.supplierId); }
-
-  const rows = db.prepare(`
-    SELECT po.order_no AS orderNo, s.code AS supplierCode, s.name AS supplierName,
-           po.total_cents AS totalCents, po.order_date AS orderDate,
-           po.expected_delivery_date AS commitmentDate,
-           (SELECT COUNT(*) FROM purchase_receipts pr
-             WHERE pr.purchase_order_id = po.id AND pr.status = 'CONFIRMED') AS confirmedReceiptCount
-    FROM purchase_orders po
-    JOIN suppliers s ON s.id = po.supplier_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY CASE WHEN po.expected_delivery_date IS NULL OR po.expected_delivery_date = '' THEN 1 ELSE 0 END,
-             po.expected_delivery_date ASC, po.order_no ASC
-    LIMIT ?
-  `).all(...params, MAX_EXPORT_ROWS);
-
-  const header = ['订单号', '供应商编码', '供应商名称', '订单金额（分）', '订单日期', '预计到货日', '已确认入库单数'];
+  const { rows, legacyUnattributed } = queryFulfillmentLines(db, 'purchase-outstanding', filters, MAX_EXPORT_ROWS);
+  const header = ['采购订单', '行号', '供应商编码', '供应商名称', '产品编码', '产品名称', '订货数量', '已收货', '剩余数量', '预计到货日', '履行状态', '是否逾期', '逾期天数', '准确度', '历史说明'];
   const tableLines = [header.map(csvEscape).join(',')];
   for (const row of rows) {
-    tableLines.push([row.orderNo, row.supplierCode, row.supplierName, row.totalCents, row.orderDate || '业务日期缺失', row.commitmentDate || '业务日期缺失', row.confirmedReceiptCount].map(csvEscape).join(','));
+    tableLines.push([row.orderNumber, row.lineNumber, row.supplier.code, row.supplier.name, row.product.code, row.product.name,
+      row.orderedQuantity, row.receivedQuantity, row.remainingQuantity, row.commitmentDate || '未设置交期',
+      row.fulfillmentStatus, row.overdue ? '是' : '否', row.overdueDays ?? '', row.accuracyStatus,
+      row.legacyAccuracyLimited ? '历史数据 / 来源信息不完整，已确认入库可能未完整归属' : ''].map(csvEscape).join(','));
   }
 
   writeCsv(res, 'purchase-outstanding.csv',
-    exportHeaderLines('采购未交（V1.4-E5 文档级）', filters, echo, '日期范围按 expected_delivery_date 起止日包含过滤；缺失值明确显示"业务日期缺失"。'),
+    [...exportHeaderLines('采购未收（V1.4-E6 订单行级）', filters, echo, `日期范围按 expected_delivery_date；截至 ${filters.asOfDate}；已履行${filters.includeFulfilled ? '显示' : '隐藏'}。`),
+      `# 未归属 legacy 入库明细: ${legacyUnattributed.count}`],
     tableLines);
 }
 

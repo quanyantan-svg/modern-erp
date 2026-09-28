@@ -32,12 +32,20 @@ describe('V1.4-E5 MySQL report dates and business selectors', () => {
 
     db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at,order_date,requested_delivery_date)
       VALUES('e5-so','E5M-SO-001','e5-customer','APPROVED',10000,'e5-admin',?,?, '2026-09-30','2026-10-15')`).run(createdAt, createdAt);
+    db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no)
+      VALUES('e5-soi','e5-so','e5-product',10,1000,10000,1)`).run();
     db.prepare(`INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
       VALUES('e5-sd','E5M-SD-001','e5-so','e5-customer','e5-warehouse','e5-admin','CONFIRMED',10000,'2026-10-02','','e5-admin',?,?,?,'e5-admin')`).run(createdAt, createdAt, createdAt);
+    db.prepare(`INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no,sales_order_item_id)
+      VALUES('e5-sdi','e5-sd','e5-product',6,1000,6000,1,'e5-soi')`).run();
     db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,creator_id,created_at,updated_at,order_date,expected_delivery_date)
       VALUES('e5-po','E5M-PO-001','e5-supplier','APPROVED',20000,'e5-admin',?,?, '2026-09-30','2026-10-16')`).run(createdAt, createdAt);
+    db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no)
+      VALUES('e5-poi','e5-po','e5-product',10,2000,20000,1)`).run();
     db.prepare(`INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
       VALUES('e5-pr','E5M-PR-001','e5-po','e5-supplier','e5-warehouse','e5-admin','CONFIRMED',20000,'2026-10-03','','e5-admin',?,?,?,'e5-admin')`).run(createdAt, createdAt, createdAt);
+    db.prepare(`INSERT INTO purchase_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_order_item_id)
+      VALUES('e5-pri','e5-pr','e5-product',6,2000,12000,1,'e5-poi')`).run();
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
       VALUES('e5-tx','e5-warehouse','e5-product',1,'IN',1,'PURCHASE_RECEIPT','e5-pr','E5M-PR-001','','e5-admin',?,'2026-09-30')`).run(createdAt);
 

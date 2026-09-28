@@ -11,10 +11,8 @@
 //   - HTTP auth gates: 401 unauthenticated, 403 missing permission,
 //     200 success when authorised. REPORT_VIEW + report-specific domain
 //     visibility required for each endpoint.
-//   - Outstanding accuracy gate: capability B (document-level). The
-//     report MUST NOT silently claim exact residual quantity. Schema
-//     does not link delivery/receipt items to specific order items,
-//     so per-line outstanding is unsafe.
+//   - Outstanding accuracy gate: V1.4-E6 order-line reporting uses
+//     exact delivery/receipt source-line identities and never guesses.
 //   - Money contract: every money field is integer cents; net = out
 //     - return. The frontend formats via money(). No floating-point
 //     aggregation in handler SQL (SUM is integer).
@@ -241,7 +239,7 @@ describe('M7 — sales summary end-to-end', () => {
 // Section 3: Sales Outstanding — accuracy gate
 // ============================================================
 
-describe('M7 — sales outstanding end-to-end (Capability B)', () => {
+describe('M7 — sales outstanding end-to-end (E6 order-line)', () => {
   let baseUrl;
   let database;
   let server;
@@ -271,29 +269,30 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  test('200 admin returns both seeded orders', async () => {
+  test('200 admin returns unfulfilled order lines by default', async () => {
     const res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     assert.equal(res.status, 200);
     const data = await res.json();
-    assert.equal(data.accuracy, 'DOCUMENT_LEVEL');
-    assert.match(data.accuracyNotes, /文档级口径/);
-    const orderNos = data.rows.map((r) => r.order_no).sort();
-    assert.deepEqual(orderNos, ['SO-OUT-001', 'SO-STD-001']);
+    assert.equal(data.granularity, 'ORDER_LINE');
+    const orderNos = data.rows.map((r) => r.orderNumber).sort();
+    assert.deepEqual(orderNos, ['SO-OUT-001']);
   });
 
-  test('approved order with linked delivery shows DELIVERED state', async () => {
-    const res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding', {
+  test('approved order with linked delivery is hidden by default and visible as FULFILLED on request', async () => {
+    let res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
-    const data = await res.json();
-    const linked = data.rows.find((r) => r.order_no === 'SO-STD-001');
+    let data = await res.json();
+    assert.equal(data.rows.some((r) => r.orderNumber === 'SO-STD-001'), false);
+    res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding?includeFulfilled=true', { headers: { Authorization: 'Bearer ' + adminToken } });
+    data = await res.json();
+    const linked = data.rows.find((r) => r.orderNumber === 'SO-STD-001');
     assert.ok(linked, 'SO-STD-001 must appear');
-    assert.equal(linked.fulfillmentState, 'DELIVERED');
-    assert.equal(linked.fulfillmentLabel, '已有出货记录');
-    assert.equal(linked.confirmedDeliveryCount, 1);
-    assert.ok(linked.latestDeliveryDate, 'latestDeliveryDate must be populated');
+    assert.equal(linked.fulfillmentStatus, 'FULFILLED');
+    assert.equal(linked.fulfilledQuantity, 2);
+    assert.equal(linked.remainingQuantity, 0);
   });
 
   test('approved order without delivery shows NOT_STARTED', async () => {
@@ -301,12 +300,10 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    const noDelivery = data.rows.find((r) => r.order_no === 'SO-OUT-001');
+    const noDelivery = data.rows.find((r) => r.orderNumber === 'SO-OUT-001');
     assert.ok(noDelivery, 'SO-OUT-001 must appear');
-    assert.equal(noDelivery.fulfillmentState, 'NOT_STARTED');
-    assert.equal(noDelivery.fulfillmentLabel, '尚未出货');
-    assert.equal(noDelivery.confirmedDeliveryCount, 0);
-    assert.equal(noDelivery.latestDeliveryDate, null);
+    assert.equal(noDelivery.fulfillmentStatus, 'UNFULFILLED');
+    assert.equal(noDelivery.fulfilledQuantity, 0);
   });
 
   test('demo SUBMITTED order is NOT included in outstanding (only APPROVED)', async () => {
@@ -314,7 +311,7 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.equal(data.rows.find((r) => r.order_no === 'SO-DEMO-001'), undefined, 'demo SUBMITTED order must be excluded');
+    assert.equal(data.rows.find((r) => r.orderNumber === 'SO-DEMO-001'), undefined, 'demo SUBMITTED order must be excluded');
   });
 
   test('DRAFT orders are NOT included', async () => {
@@ -323,7 +320,7 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.equal(data.rows.find((r) => r.order_no === 'SO-DRAFT-001'), undefined);
+    assert.equal(data.rows.find((r) => r.orderNumber === 'SO-DRAFT-001'), undefined);
   });
 
   test('REJECTED orders are NOT included', async () => {
@@ -332,7 +329,7 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.equal(data.rows.find((r) => r.order_no === 'SO-REJ-001'), undefined);
+    assert.equal(data.rows.find((r) => r.orderNumber === 'SO-REJ-001'), undefined);
   });
 
   test('an unlinked direct delivery does NOT falsely fulfill an unrelated order', async () => {
@@ -344,18 +341,18 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
     });
     const data = await res.json();
     // SO-OUT-001 must still be NOT_STARTED even though an unlinked delivery exists.
-    const noDelivery = data.rows.find((r) => r.order_no === 'SO-OUT-001');
-    assert.equal(noDelivery.fulfillmentState, 'NOT_STARTED');
-    assert.equal(noDelivery.confirmedDeliveryCount, 0);
+    const noDelivery = data.rows.find((r) => r.orderNumber === 'SO-OUT-001');
+    assert.equal(noDelivery.fulfillmentStatus, 'UNFULFILLED');
+    assert.equal(noDelivery.fulfilledQuantity, 0);
   });
 
-  test('capability B accuracyNotes explicitly preserves the E5 document-level boundary', async () => {
+  test('response declares canonical E6 order-line granularity', async () => {
     const res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.match(data.accuracyNotes, /文档级/);
-    assert.match(data.accuracyNotes, /E6/);
+    assert.equal(data.granularity, 'ORDER_LINE');
+    assert.equal(data.reportKey, 'sales-outstanding');
   });
 });
 
@@ -453,7 +450,7 @@ describe('M7 — purchase summary end-to-end', () => {
 // Section 5: Purchase Outstanding — accuracy gate
 // ============================================================
 
-describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
+describe('M7 — purchase outstanding end-to-end (E6 order-line)', () => {
   let baseUrl;
   let database;
   let server;
@@ -482,16 +479,18 @@ describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  test('approved PO with linked receipt shows RECEIVED', async () => {
-    const res = await fetch(baseUrl + '/api/reports/decision/purchase-outstanding', {
+  test('approved PO with linked receipt is hidden by default and visible as FULFILLED on request', async () => {
+    let res = await fetch(baseUrl + '/api/reports/decision/purchase-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
-    const data = await res.json();
-    assert.equal(data.accuracy, 'DOCUMENT_LEVEL');
-    const linked = data.rows.find((r) => r.order_no === 'PO-STD-001');
+    let data = await res.json();
+    assert.equal(data.rows.some((r) => r.orderNumber === 'PO-STD-001'), false);
+    res = await fetch(baseUrl + '/api/reports/decision/purchase-outstanding?includeFulfilled=true', { headers: { Authorization: 'Bearer ' + adminToken } });
+    data = await res.json();
+    const linked = data.rows.find((r) => r.orderNumber === 'PO-STD-001');
     assert.ok(linked, 'PO-STD-001 must appear');
-    assert.equal(linked.fulfillmentState, 'RECEIVED');
-    assert.equal(linked.confirmedReceiptCount, 1);
+    assert.equal(linked.fulfillmentStatus, 'FULFILLED');
+    assert.equal(linked.receivedQuantity, 1);
   });
 
   test('approved PO without receipt shows NOT_STARTED', async () => {
@@ -499,10 +498,10 @@ describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    const noReceipt = data.rows.find((r) => r.order_no === 'PO-OUT-001');
+    const noReceipt = data.rows.find((r) => r.orderNumber === 'PO-OUT-001');
     assert.ok(noReceipt);
-    assert.equal(noReceipt.fulfillmentState, 'NOT_STARTED');
-    assert.equal(noReceipt.confirmedReceiptCount, 0);
+    assert.equal(noReceipt.fulfillmentStatus, 'UNFULFILLED');
+    assert.equal(noReceipt.receivedQuantity, 0);
   });
 
   test('DRAFT / REJECTED purchase orders are NOT included', async () => {
@@ -512,8 +511,8 @@ describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.equal(data.rows.find((r) => r.order_no === 'PO-DRAFT-001'), undefined);
-    assert.equal(data.rows.find((r) => r.order_no === 'PO-REJ-001'), undefined);
+    assert.equal(data.rows.find((r) => r.orderNumber === 'PO-DRAFT-001'), undefined);
+    assert.equal(data.rows.find((r) => r.orderNumber === 'PO-REJ-001'), undefined);
   });
 
   test('an unlinked direct receipt does NOT falsely fulfill an unrelated PO', async () => {
@@ -522,18 +521,18 @@ describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    const noReceipt = data.rows.find((r) => r.order_no === 'PO-OUT-001');
-    assert.equal(noReceipt.fulfillmentState, 'NOT_STARTED');
-    assert.equal(noReceipt.confirmedReceiptCount, 0);
+    const noReceipt = data.rows.find((r) => r.orderNumber === 'PO-OUT-001');
+    assert.equal(noReceipt.fulfillmentStatus, 'UNFULFILLED');
+    assert.equal(noReceipt.receivedQuantity, 0);
   });
 
-  test('capability B accuracyNotes explicitly preserves the E5 document-level boundary', async () => {
+  test('response declares canonical E6 order-line granularity', async () => {
     const res = await fetch(baseUrl + '/api/reports/decision/purchase-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.match(data.accuracyNotes, /文档级/);
-    assert.match(data.accuracyNotes, /E6/);
+    assert.equal(data.granularity, 'ORDER_LINE');
+    assert.equal(data.reportKey, 'purchase-outstanding');
   });
 });
 
@@ -789,8 +788,9 @@ describe('M7 — frontend wiring', () => {
 
   test('outstanding order numbers use canonical permission-aware SPA links', () => {
     const src = readSrc('pages/decision-reports.jsx');
-    assert.match(src, /<AppLink page="orders" documentId=\{row\.id\} documentType="SALES_ORDER">\{row\.order_no\}<\/AppLink>/);
-    assert.match(src, /<AppLink page="purchase-orders" documentId=\{row\.id\} documentType="PURCHASE_ORDER">\{row\.order_no\}<\/AppLink>/);
+    assert.match(src, /page=\{isSales \? 'orders' : 'purchase-orders'\}/);
+    assert.match(src, /documentId=\{row\.orderId\}/);
+    assert.match(src, /\{row\.orderNumber\}/);
   });
 
   test('DecisionReports page exposes KPI cards and accurate-gate disclaimer', () => {
@@ -803,8 +803,7 @@ describe('M7 — frontend wiring', () => {
     assert.match(src, /KpiCard/);
     // Money must be formatted via money() (frontend never receives raw cents as text).
     assert.match(src, /money\(data\.summary\.orderCents\)/);
-    // accuracy disclaimer is rendered.
-    assert.match(src, /data\.accuracyNotes/);
+    assert.match(src, /data\.accuracyNotice/);
   });
 
   test('DecisionReports filters validate dates and reject empty payloads', () => {
@@ -871,6 +870,11 @@ async function seedSalesFixture(database) {
     VALUES
       ('sd-std-001', 'SD-STD-001', 'order-std-001', 'customer-001', 'warehouse-001', 'user-admin', 'CONFIRMED', 519800, '2026-09-10', '', 'user-admin', ?, ?, ?, 'user-admin')
   `).run(now, now, now);
+  database.prepare(`
+    INSERT OR REPLACE INTO sales_delivery_items
+      (id, delivery_id, product_id, quantity, unit_price_cents, amount_cents, line_no, sales_order_item_id)
+    VALUES ('sdi-std-001', 'sd-std-001', 'product-001', 2, 259900, 519800, 1, 'soi-001')
+  `).run();
 }
 
 async function seedApprovedOrderWithoutDelivery(database, id, orderNo) {
@@ -880,6 +884,9 @@ async function seedApprovedOrderWithoutDelivery(database, id, orderNo) {
     VALUES
       (?, ?, 'customer-001', 'APPROVED', 123400, '', 'user-admin', '2026-09-12', '2026-09-12', '2026-09-12', '2026-09-12')
   `).run(id, orderNo);
+  database.prepare(`INSERT OR REPLACE INTO sales_order_items
+    (id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no)
+    VALUES (?, ?, 'product-001', 2, 61700, 123400, 1)`).run(`${id}-item`, id);
 }
 
 async function seedPurchaseFixture(database) {
@@ -902,6 +909,11 @@ async function seedPurchaseFixture(database) {
     VALUES
       ('pr-std-001', 'PR-STD-001', 'po-std-001', 'supplier-001', 'warehouse-001', 'user-admin', 'CONFIRMED', 300000, '2026-09-10', '', 'user-admin', ?, ?, ?, 'user-admin')
   `).run(now, now, now);
+  database.prepare(`
+    INSERT OR REPLACE INTO purchase_receipt_items
+      (id, receipt_id, product_id, quantity, unit_price_cents, amount_cents, line_no, purchase_order_item_id)
+    VALUES ('pri-std-001', 'pr-std-001', 'product-001', 1, 300000, 300000, 1, 'poi-001')
+  `).run();
 }
 
 async function seedApprovedPurchaseWithoutReceipt(database, id, orderNo) {
@@ -911,6 +923,9 @@ async function seedApprovedPurchaseWithoutReceipt(database, id, orderNo) {
     VALUES
       (?, ?, 'supplier-001', 'APPROVED', 123400, '', 'user-admin', '2026-09-12', '2026-09-12', '2026-09-12', '2026-09-12')
   `).run(id, orderNo);
+  database.prepare(`INSERT OR REPLACE INTO purchase_order_items
+    (id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no)
+    VALUES (?, ?, 'product-001', 2, 61700, 123400, 1)`).run(`${id}-item`, id);
 }
 
 async function seedInventoryMovements(database) {

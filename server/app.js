@@ -31,7 +31,7 @@ import {
 import { assertQualityGate, deriveQualityState } from './modules/quality-gates.js';
 import {
   getInventoryMovements, getPurchaseOutstanding, getPurchaseSummary,
-  getSalesOutstanding, getSalesSummary,
+  getSalesOutstanding, getSalesSummary, getFulfillmentContributions,
   exportSalesSummaryReport, exportSalesOutstandingReport,
   exportPurchaseSummaryReport, exportPurchaseOutstandingReport,
   exportInventoryMovementsReport,
@@ -512,6 +512,10 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/reports/decision/purchase-summary' && req.method === 'GET') return getPurchaseSummary(db, res, actor, url);
   if (pathname === '/api/reports/decision/purchase-outstanding' && req.method === 'GET') return getPurchaseOutstanding(db, res, actor, url);
   if (pathname === '/api/reports/decision/inventory-movements' && req.method === 'GET') return getInventoryMovements(db, res, actor, url);
+  const fulfillmentContributionsMatch = pathname.match(/^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/);
+  if (fulfillmentContributionsMatch && req.method === 'GET') {
+    return getFulfillmentContributions(db, res, actor, fulfillmentContributionsMatch[1], fulfillmentContributionsMatch[2]);
+  }
   // V1.4-E5: CSV exports re-use the same authoritative business-date
   // query semantics and the resolved entity filter labels.
   if (pathname === '/api/reports/decision/sales-summary/export' && req.method === 'GET') return exportSalesSummaryReport(db, res, actor, url);

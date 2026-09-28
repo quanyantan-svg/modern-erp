@@ -576,6 +576,7 @@ test.describe('E5 unfulfilled reports — authoritative commitment dates', () =>
       INSERT INTO sales_orders(id, order_no, customer_id, status, total_cents, creator_id, created_at, updated_at, order_date, requested_delivery_date)
       VALUES ('so-out', 'SO-OUT-001', 'cust-001', 'APPROVED', 12300, 'user-admin', '2026-10-01T09:00:00', '2026-10-01T09:00:00', '2026-09-15', '2026-09-30')
     `).run();
+    ctx.database.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('so-out-item','so-out','prod-001',10,1230,12300,1)`).run();
     const res = await fetch(ctx.baseUrl + '/api/reports/decision/sales-outstanding?dateFrom=2026-09-30&dateTo=2026-09-30', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
@@ -591,6 +592,7 @@ test.describe('E5 unfulfilled reports — authoritative commitment dates', () =>
       INSERT INTO purchase_orders(id, order_no, supplier_id, status, total_cents, creator_id, created_at, updated_at, order_date, expected_delivery_date)
       VALUES ('po-out', 'PO-OUT-001', 'supp-001', 'APPROVED', 12300, 'user-admin', '2026-10-01T09:00:00', '2026-10-01T09:00:00', '2026-09-15', '2026-09-30')
     `).run();
+    ctx.database.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('po-out-item','po-out','prod-001',10,1230,12300,1)`).run();
     const res = await fetch(ctx.baseUrl + '/api/reports/decision/purchase-outstanding?dateFrom=2026-09-30&dateTo=2026-09-30', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
@@ -606,6 +608,7 @@ test.describe('E5 unfulfilled reports — authoritative commitment dates', () =>
       INSERT INTO sales_orders(id, order_no, customer_id, status, total_cents, creator_id, created_at, updated_at, order_date)
       VALUES ('so-out-legacy', 'SO-OUT-LEGACY', 'cust-001', 'APPROVED', 100, 'user-admin', '2026-09-01', '2026-09-01', '2026-09-01')
     `).run();
+    ctx.database.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('so-out-legacy-item','so-out-legacy','prod-001',1,100,100,1)`).run();
     const allResponse = await fetch(ctx.baseUrl + '/api/reports/decision/sales-outstanding', { headers: { Authorization: 'Bearer ' + adminToken } });
     const allData = await allResponse.json();
     const legacy = allData.rows.find((item) => item.id === 'so-out-legacy');
@@ -633,6 +636,7 @@ test.describe('E5 export consistency — same filters, same semantics, resolved 
       INSERT INTO sales_orders(id, order_no, customer_id, status, total_cents, creator_id, created_at, updated_at, order_date, requested_delivery_date)
       VALUES ('so-export', 'SO-EXP-001', 'cust-001', 'APPROVED', 99900, 'user-admin', '2026-10-01T09:00:00', '2026-10-01T09:00:00', '2026-09-15', '2026-09-30')
     `).run();
+    ctx.database.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('so-export-item','so-export','prod-001',10,9990,99900,1)`).run();
   });
 
   test.after(async () => {
@@ -658,12 +662,13 @@ test.describe('E5 export consistency — same filters, same semantics, resolved 
       INSERT INTO sales_orders(id, order_no, customer_id, status, total_cents, creator_id, created_at, updated_at, order_date)
       VALUES ('so-out-exp', 'SO-OUT-EXP-001', 'cust-001', 'APPROVED', 12300, 'user-admin', '2026-09-15T09:00:00', '2026-09-15T09:00:00', '2026-09-15')
     `).run();
+    ctx.database.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('so-out-exp-item','so-out-exp','prod-001',10,1230,12300,1)`).run();
     const res = await fetch(ctx.baseUrl + '/api/reports/decision/sales-outstanding/export?customerId=cust-001', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     assert.equal(res.status, 200);
     const body = await res.text();
-    assert.match(body, /业务日期缺失/);
+    assert.match(body, /未设置交期/);
     assert.match(body, /SO-OUT-EXP-001/);
   });
 
