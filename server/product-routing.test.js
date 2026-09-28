@@ -228,7 +228,7 @@ describe('M10 frontend and navigation contracts', () => {
   });
 
   test('product, production-order and business overview integrations use product routing as sibling master data', () => {
-    assert.match(overview, /\['制品工序标准', 'product-routings'\]/);
+    assert.match(overview, /node\('routing', '制品工序标准', 'product-routings'\)/);
     assert.match(manufacturing, /activeRoutingId/);
     assert.match(manufacturing, /page="product-routings"/);
   });

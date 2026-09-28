@@ -15,7 +15,7 @@ export function useAppNavigation() {
   return useContext(AppNavigationContext);
 }
 
-export function AppLink({ page, documentId, documentType, children, onClick, ...props }) {
+export function AppLink({ page, documentId, documentType, target, children, onClick, ...props }) {
   const { canNavigate, navigateToPage } = useAppNavigation();
   if (!canNavigate(page)) return <span {...props}>{children}</span>;
   return <a
@@ -24,7 +24,7 @@ export function AppLink({ page, documentId, documentType, children, onClick, ...
     onClick={(event) => {
       event.preventDefault();
       onClick?.(event);
-      navigateToPage(page, documentId ? { documentId, documentType } : null);
+      navigateToPage(page, documentId ? { documentId, documentType } : (target || null));
     }}
   >{children}</a>;
 }

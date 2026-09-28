@@ -307,9 +307,13 @@ export function orderWorkflowStages(order, trace, kind) {
     { key: 'order', label: isSales ? '销售订单已创建' : '采购订单已创建', state: 'completed', documentNo: order.orderNo },
     { key: 'submit', label: '已提交', state: submitted ? 'completed' : order.status === 'REJECTED' ? 'current' : 'current', hint: submitted ? '' : order.status === 'REJECTED' ? '已驳回，修改后可重新提交' : '待提交' },
     { key: 'approve', label: '审批', state: approved ? 'completed' : submitted ? 'current' : 'pending', hint: submitted && !approved ? '等待审批' : '' },
-    { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, documentId: logistics[0]?.id, documentType: logistics[0]?.type, pageKey: logistics.length ? (isSales ? 'sales-deliveries' : 'purchase-receipts') : null, hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `尚未关联${isSales ? '销售出货' : '采购入库'}（来源可选）` },
+    { key: 'quality', label: isSales ? 'OQC 质量门禁' : 'IQC 质量门禁', state: logistics.length ? 'current' : 'pending', pageKey: isSales ? 'oqc' : 'iqc', hint: `需要质检时，在${isSales ? '出货' : '入库'}确认前完成` },
+    { key: 'logistics', label: isSales ? '销售出货' : '采购入库', state: logistics.length ? 'completed' : approved ? 'current' : 'pending', documentNo: logistics[0]?.documentNo, documentId: logistics[0]?.id, documentType: logistics[0]?.type, pageKey: isSales ? 'sales-deliveries' : 'purchase-receipts', hint: logistics.length ? `已关联 ${logistics.length} 张${isSales ? '出货单' : '入库单'}` : `必须引用已批准订单行生成${isSales ? '出货单' : '入库单'}` },
     { key: 'return', label: isSales ? '销售退货' : '采购退货', state: returns.length ? 'completed' : 'optional', documentNo: returns[0]?.documentNo, documentId: returns[0]?.id, documentType: returns[0]?.type, pageKey: returns.length ? 'returns' : null, hint: returns.length ? `已关联 ${returns.length} 张退货单` : '如发生' },
-    { key: 'voucher', label: '财务凭证', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, documentId: voucher?.id, documentType: voucher?.type, pageKey: voucher?.documentNo ? 'accounting' : null, hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生财务记录' : '' },
+    { key: 'commercial', label: isSales ? '销售发票' : '供应商账单', state: 'pending', pageKey: isSales ? 'sales-invoices' : 'supplier-bills', hint: `商业单据独立于${isSales ? '出货' : '入库'}确认` },
+    { key: 'subledger', label: isSales ? '应收账款' : '应付账款', state: 'pending', pageKey: isSales ? 'accounts-receivable' : 'accounts-payable', hint: `${isSales ? '发票' : '账单'}过账后形成，不等同于物流完成` },
+    { key: 'settlement', label: isSales ? '收款 / 核销' : '付款 / 核销', state: 'pending', pageKey: isSales ? 'payment-collections' : 'payment-disbursements', hint: '结算状态与履约状态分别维护' },
+    { key: 'voucher', label: '会计处理', state: voucher ? 'completed' : 'pending', documentNo: voucher?.documentNo, documentId: voucher?.id, documentType: voucher?.type, pageKey: 'accounting', hint: voucher?.type === 'FINANCIAL_RECORD' ? '已产生受保护的会计记录' : '各业务事件按独立来源形成凭证' },
   ];
 }
 

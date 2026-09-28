@@ -41,24 +41,23 @@ describe('M9 business overview', () => {
     assert.match(metadataSource, /page: 'business-overview', mobileLabel: '业务总览'/);
   });
 
-  test('renders the five real business chains with teacher-facing terminology', () => {
+  test('renders the teacher-facing principal business areas and stages', () => {
     const html = renderOverview([]);
-    for (const label of ['销售链', '采购链', '库存链', '生产链', '财务结算链']) assert.match(html, new RegExp(label));
-    for (const label of ['销售出货', '采购入库', '库存异动', '制令单', '应收账款', '应付账款', '收款单', '付款单']) assert.match(html, new RegExp(label));
+    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '财务衔接', '经营报表']) assert.match(html, new RegExp(label));
+    for (const label of ['仓库出货', '仓库验收', '存货月结', '制令单', '应收结账', '应付结账']) assert.match(html, new RegExp(label));
   });
 
   test('authorized nodes are canonical links and unauthorized nodes are read-only', () => {
     const html = renderOverview(['orders']);
     assert.match(html, /href="#orders"/);
-    assert.match(html, /aria-disabled="true"/);
+    assert.match(html, /business-process-node is-compact is-readonly/);
     assert.doesNotMatch(html, /href="#accounts-receivable"/);
   });
 
-  test('deferred concepts are never active links', () => {
-    const html = renderOverview(['orders', 'inventory', 'production-orders', 'forecasts', 'mrp', 'production-instructions', 'purchase-instructions', 'purchase-requisitions']);
-    for (const deferred of ['库存报废', '库存月结', '销售折让', '采购折让']) {
-      assert.doesNotMatch(html, new RegExp(`href="[^"]+"[^>]*>[^<]*${deferred}`));
-    }
+  test('implemented inventory controls use their current canonical routes', () => {
+    const html = renderOverview(['inventory-scraps', 'inventory-month-end']);
+    assert.match(html, /href="#inventory-scraps"/);
+    assert.match(html, /href="#inventory-month-end"/);
   });
 
   test('all overview destinations are registered canonical page keys', () => {
