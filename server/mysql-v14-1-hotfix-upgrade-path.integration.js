@@ -208,9 +208,9 @@ describe('V1.4.1 hotfix — MySQL V1.3 → V1.4 existing-database upgrade path',
     // a second run without duplicating schema or mutation.
     db.exec('DROP TABLE IF EXISTS upstream_safety');
     db.exec(`CREATE TABLE upstream_safety (
-      id TEXT PRIMARY KEY,
-      legacy_value TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT ''
+      id VARCHAR(128) PRIMARY KEY,
+      legacy_value TEXT NOT NULL,
+      created_at TEXT NOT NULL
     )`);
     db.prepare("INSERT INTO upstream_safety(id, legacy_value, created_at) VALUES('safety-1', 'legacy', ?)").run(at);
 
