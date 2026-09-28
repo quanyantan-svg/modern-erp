@@ -437,7 +437,7 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 ## 18. 版本、已知技术债与批准边界
 
 - Git tag 标识项目发布版本，package.json.version 镜像最新发布基线；精确维护检出状态由 Git SHA 或 git describe 标识。
-- 当前 master 是 V1.4 发布基线；尚未声明 v1.4.1 或后续维护版本，当前 HEAD 携带 v1.4.0 release-preparation 元数据，等待 future annotated tag 指向 release-preparation commit 而非 E8 implementation baseline。
+- 当前 master 是 V1.4.1 发布基线；当前 HEAD 携带 v1.4.1 release-preparation 元数据，等待 future annotated tag 指向 release-preparation commit 而非 E8 implementation baseline。
 - server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
 - SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
 - docs/ 已分为 operations 当前专项指南与 archive 历史证据；两者均不得覆盖本文件和 document.md 的 canonical 合同。
@@ -840,7 +840,7 @@ R4-R3 实施期间的 WIP（含 “首行保留 source 标识” workaround）�
 
 ### 21.1 设计状态、边界与整体结构
 
-本节是 V1.4 的 immutable 实现合同（design contract）。状态为 **IMPLEMENTED BY E1–E8**；释放基线为 v1.4.0。本节技术内容等同于已上线能力，任何后续修改都应被视作对设计合同的扩展并随对应设计评审更新。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
+本节是 V1.4 的 immutable 实现合同（design contract）。状态为 **IMPLEMENTED BY E1–E8**；释放基线为 v1.4.1。本节技术内容等同于已上线能力，任何后续修改都应被视作对设计合同的扩展并随对应设计评审更新。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
 
 V1.4 的共同调用结构为：
 

@@ -8,7 +8,7 @@
 - 后端：Node.js 22.23.2 原生 HTTP API，不使用 Express/Koa。
 - 数据库：SQLite 保留本地开发与完整回归兼容路径；MySQL 8 是一等运行后端和目标生产路径。
 - 部署：Nginx 反向代理 + systemd 服务，不使用 PM2。
-- 当前发布上下文以 Git release tag 为准；当前基线为 V1.4。
+- 当前发布上下文以 Git release tag 为准；当前基线为 V1.4.1。
 
 ## 2. 修改应用代码前的必读与检查
 

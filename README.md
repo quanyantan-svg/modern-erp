@@ -1,6 +1,6 @@
 # Modern ERP
 
-Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前项目发布基线为 **V1.4**，Git release tag 是项目发布版本的权威来源。
+Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前项目发布基线为 **V1.4.1**，Git release tag 是项目发布版本的权威来源。
 
 ## 当前支持
 
@@ -144,9 +144,9 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- Git release tag 是项目发布版本的权威来源；最新发布基线为 v1.4.0。
-- package.json 的版本 1.4.0 镜像最新发布基线，不为维护提交建立另一套版本序列。
-- master 可以包含 v1.4.0 发布后的维护变更；使用 Git SHA 或 git describe 标识精确检出状态，不应把当前 HEAD 等同于 v1.4.0 标签提交。
+- Git release tag 是项目发布版本的权威来源；最新发布基线为 v1.4.1。
+- package.json 的版本 1.4.1 镜像最新发布基线，不为维护提交建立另一套版本序列。
+- master 可以包含 v1.4.1 发布后的维护变更；使用 Git SHA 或 git describe 标识精确检出状态，不应把当前 HEAD 等同于 v1.4.1 标签提交。
 - document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
 
 ## 安全说明
