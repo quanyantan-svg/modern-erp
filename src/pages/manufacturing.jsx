@@ -4,6 +4,7 @@ import { Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, 
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
+import { presentBusinessValue } from '../lib/presentation.js';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -416,7 +417,7 @@ export function ManufacturingAnalytics({ user, notify }) {
   return <Panel title="生产执行分析" subtitle="WIP、良率、产能与管理成本均由权威生产事件派生">
     <div className="tabs"><button className={tab==='wip'?'active':''} onClick={() => setTab('wip')}>在制</button><button className={tab==='yield'?'active':''} onClick={() => setTab('yield')}>良率 / 报废</button><button className={tab==='capacity'?'active':''} onClick={() => setTab('capacity')}>产能</button>{can(user,'PRODUCTION_COSTS_VIEW') && <button className={tab==='cost'?'active':''} onClick={() => setTab('cost')}>生产成本</button>}</div>
     {analyticalOnly && <p className="hint">生产成本为管理分析，不等同于财务库存计价，也不会自动生成总账凭证。</p>}
-    <div className="mobile-card-list">{data.map((row, index) => <article className="mobile-card" key={row.orderId || `${row.work_center_id}-${row.planned_date}` || index}><h3>{row.orderNo || row.work_center_name || '生产分析'}</h3>{tab==='wip' && <><div className="mobile-card__row"><span>计划 / 物料支持</span><strong>{quantity(row.plannedQuantity)} / {quantity(row.materialSupportedQuantity)}</strong></div><div className="mobile-card__row"><span>当前工序</span><strong>{row.currentOperation || '—'}</strong></div><div className="mobile-card__row"><span>末工序良品 / 报废</span><strong>{quantity(row.finalGood)} / {quantity(row.scrap)}</strong></div></>}{tab==='yield' && <><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(row.goodQuantity)} / {quantity(row.scrapQuantity)}</strong></div><div className="mobile-card__row"><span>良率 / 报废率</span><strong>{(row.yieldBps/100).toFixed(2)}% / {(row.scrapRateBps/100).toFixed(2)}%</strong></div></>}{tab==='capacity' && <><div className="mobile-card__row"><span>日期</span><strong>{row.planned_date || '—'}</strong></div><div className="mobile-card__row"><span>能力 / 计划 / 实际</span><strong>{row.daily_capacity_minutes} / {row.planned_minutes} / {row.actual_minutes} 分钟</strong></div><div className="mobile-card__row"><span>负荷</span><strong>{row.overloaded ? '超负荷' : '正常'}</strong></div></>}{tab==='cost' && <><div className="mobile-card__row"><span>标准总成本</span><strong>{money(row.baseline?.standard_total_cents || 0)}</strong></div><div className="mobile-card__row"><span>实际/暂估总成本</span><strong>{row.totalCostCents == null ? '证据不完整' : money(row.totalCostCents)}</strong></div><div className="mobile-card__row"><span>成本证据</span><strong>{row.materialQuality}</strong></div></>}</article>)}</div>
+    <div className="mobile-card-list">{data.map((row, index) => <article className="mobile-card" key={row.orderId || `${row.work_center_id}-${row.planned_date}` || index}><h3>{row.orderNo || row.work_center_name || '生产分析'}</h3>{tab==='wip' && <><div className="mobile-card__row"><span>计划 / 物料支持</span><strong>{quantity(row.plannedQuantity)} / {quantity(row.materialSupportedQuantity)}</strong></div><div className="mobile-card__row"><span>当前工序</span><strong>{row.currentOperation || '—'}</strong></div><div className="mobile-card__row"><span>末工序良品 / 报废</span><strong>{quantity(row.finalGood)} / {quantity(row.scrap)}</strong></div></>}{tab==='yield' && <><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(row.goodQuantity)} / {quantity(row.scrapQuantity)}</strong></div><div className="mobile-card__row"><span>良率 / 报废率</span><strong>{(row.yieldBps/100).toFixed(2)}% / {(row.scrapRateBps/100).toFixed(2)}%</strong></div></>}{tab==='capacity' && <><div className="mobile-card__row"><span>计划日期</span><strong>{row.planned_date || '—'}</strong></div><div className="mobile-card__row"><span>能力 / 计划 / 实际</span><strong>{row.daily_capacity_minutes} / {row.planned_minutes} / {row.actual_minutes} 分钟</strong></div><div className="mobile-card__row"><span>负荷</span><strong>{row.overloaded ? '超负荷' : '正常'}</strong></div></>}{tab==='cost' && <><div className="mobile-card__row"><span>标准总成本</span><strong>{money(row.baseline?.standard_total_cents || 0)}</strong></div><div className="mobile-card__row"><span>实际/暂估总成本</span><strong>{row.totalCostCents == null ? '证据不完整' : money(row.totalCostCents)}</strong></div><div className="mobile-card__row"><span>成本证据</span><strong>{presentBusinessValue('costEvidence', row.materialQuality).label}</strong></div></>}</article>)}</div>
     {!data.length && <Empty text="暂无生产分析数据"/>}
   </Panel>;
 }
@@ -440,7 +441,7 @@ export function MaterialIssues({ user, notify }) {
   const filtered = items.filter((item) => !search || item.issueNo.includes(search) || (item.productionOrderNo || '').includes(search));
   return <Panel title="用料出库" subtitle="生产领料登记，确认出库后扣减组件库存" action={canManage && <button className="primary" onClick={() => setView({ create: true })}>＋ 新建出库单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索出库单号或制令单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>出库单号</th><th>制令单号</th><th>仓库</th><th>日期</th><th>状态</th><th className="number">物料项</th><th>创建人</th></tr></thead><tbody>
+    <div className="table-wrap"><table><thead><tr><th>出库单号</th><th>制令单号</th><th>仓库</th><th>领料日期</th><th>状态</th><th className="number">物料项</th><th>创建人</th></tr></thead><tbody>
       {filtered.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}>
         <td className="mono">{item.issueNo}</td>
         <td className="mono">{item.productionOrderNo}</td>
@@ -554,7 +555,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
         <label>制令单<span className="mono">{detail.productionOrderNo}</span></label>
         <label>制品<span>{detail.productCode} - {detail.productName}</span></label>
         <label>仓库<span>{detail.warehouseName}</span></label>
-        <label>日期<span>{detail.issueDate || '-'}</span></label>
+        <label>领料日期<span>{detail.issueDate || '-'}</span></label>
         <label>创建人<span>{detail.creatorName}</span></label>
         <label>确认人<span>{detail.confirmedByName || '-'}</span></label>
         <label className="full">备注<span>{detail.remark || '-'}</span></label>
@@ -592,7 +593,7 @@ function MaterialIssueModal({ user, value, onClose, notify, api }) {
         <option value="">选择仓库</option>
         {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}
       </select></label>
-      <label>日期<input type="date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })}/></label>
+      <label>领料日期<input type="date" value={form.issueDate} onChange={(e) => setForm({ ...form, issueDate: e.target.value })}/></label>
       <label className="full">备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })}/></label>
       {prefill && !prefill.hasBom && <div className="full" style={{padding:'0.5rem', background:'var(--bg-grouped)', borderRadius:'4px'}}>未关联 BOM，需手工选择用料</div>}
       <div className="full"><div className="form-section-head"><span>权威需求行</span></div>
@@ -633,7 +634,7 @@ export function ProductionReceipts({ user, notify }) {
   const filtered = items.filter((item) => !search || item.receiptNo.includes(search) || (item.productionOrderNo || '').includes(search));
   return <Panel title="生产入库" subtitle="成品入库登记，确认后增加制品库存" action={canManage && <button className="primary" onClick={() => setView({ create: true })}>＋ 新建入库单</button>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索入库单号或制令单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>入库单号</th><th>制令单号</th><th>制品</th><th>仓库</th><th className="number">本次入库</th><th>日期</th><th>状态</th></tr></thead><tbody>
+    <div className="table-wrap"><table><thead><tr><th>入库单号</th><th>制令单号</th><th>制品</th><th>仓库</th><th className="number">本次入库</th><th>入库日期</th><th>状态</th></tr></thead><tbody>
       {filtered.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}>
         <td className="mono">{item.receiptNo}</td>
         <td className="mono">{item.productionOrderNo}</td>
@@ -733,7 +734,7 @@ function ProductionReceiptModal({ user, value, onClose, notify, api }) {
         <label>仓库<span>{detail.warehouseName}</span></label>
         <label>入库前库存<span>{detail.beforeQuantity == null ? '-' : Number(detail.beforeQuantity).toFixed(3)}</span></label>
         <label>入库后库存<span>{detail.afterQuantity == null ? '-' : Number(detail.afterQuantity).toFixed(3)}</span></label>
-        <label>日期<span>{detail.receiptDate || '-'}</span></label>
+        <label>入库日期<span>{detail.receiptDate || '-'}</span></label>
         <label>创建人<span>{detail.creatorName}</span></label>
         <label>确认人<span>{detail.confirmedByName || '-'}</span></label>
         <label className="full">备注<span>{detail.remark || '-'}</span></label>

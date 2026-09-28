@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { trackingPolicyOf, trackingPresentation } from '../lib/tracking.js';
+import { presentStatus } from '../lib/presentation.js';
 
 const number = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
 
@@ -58,6 +59,6 @@ export default function TrackingAllocationEditor({ product, warehouseId, quantit
     </div>}
     {policy === 'SERIAL' && inbound && !returning && <label className="tracking-serial-entry">序列号（每行一个，也可粘贴逗号分隔内容）<textarea value={serialText} onChange={(event) => setInboundSerials(event.target.value)} rows={Math.min(6, Math.max(3, number(quantity)))}/></label>}
     {policy === 'SERIAL' && returning && <div className="tracking-serial-list">{sourceAllocations.map((serial) => <label key={serial.serialId} className="tracking-serial-option"><input type="checkbox" checked={value.some((row) => row.serialId === serial.serialId)} onChange={(event) => toggleSerial({ id: serial.serialId, serial_number: serial.serialNumber }, event.target.checked)}/><span>{serial.serialNumber}</span><small>原单身份</small></label>)}</div>}
-    {policy === 'SERIAL' && !inbound && <div className="tracking-serial-list">{(availability?.serials || []).map((serial) => <label key={serial.id} className={serial.available ? 'tracking-serial-option' : 'tracking-serial-option disabled'}><input type="checkbox" disabled={!serial.available} checked={value.some((row) => row.serialId === serial.id)} onChange={(event) => toggleSerial(serial, event.target.checked)}/><span>{serial.serial_number}</span><small>{serial.lifecycle_state}</small></label>)}{availability && !(availability.serials || []).length && <p className="dim">当前仓库没有序列号身份。</p>}</div>}
+    {policy === 'SERIAL' && !inbound && <div className="tracking-serial-list">{(availability?.serials || []).map((serial) => <label key={serial.id} className={serial.available ? 'tracking-serial-option' : 'tracking-serial-option disabled'}><input type="checkbox" disabled={!serial.available} checked={value.some((row) => row.serialId === serial.id)} onChange={(event) => toggleSerial(serial, event.target.checked)}/><span>{serial.serial_number}</span><small>{presentStatus(serial.lifecycle_state, 'tracking.status').label}</small></label>)}{availability && !(availability.serials || []).length && <p className="dim">当前仓库没有序列号身份。</p>}</div>}
   </section>;
 }

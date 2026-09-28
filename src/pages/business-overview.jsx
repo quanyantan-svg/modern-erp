@@ -10,7 +10,7 @@ export const BUSINESS_OVERVIEW_GROUPS = [
     description: '维护原始项目要求的六类主数据；这些资料彼此关联，但不是强制顺序。',
     level1: [node('product', '货品资料', 'products'), node('bom', 'BOM', 'boms'), node('customer', '客户资料', 'customers'), node('supplier', '供应商资料', 'suppliers'), node('warehouse', '仓库资料', 'warehouses'), node('routing', '制品工序标准', 'product-routings')],
     level2: [
-      node('product-detail', '产品与追踪策略', 'products', '维护产品、单位及 NONE / LOT / SERIAL 追踪策略。'),
+      node('product-detail', '产品与追踪策略', 'products', '维护产品、单位及不跟踪 / 批次管理 / 序列号管理策略。'),
       node('bom-detail', 'BOM 用料结构', 'boms', '为 MRP 与制令冻结提供用料来源。'),
       node('routing-detail', '工艺路线与工序', 'product-routings', '定义制品加工顺序与工作中心标准。'),
       node('customer-detail', '客户资料', 'customers', '建立销售使用的客户资料。'),

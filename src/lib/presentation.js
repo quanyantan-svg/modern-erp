@@ -34,6 +34,13 @@ export const STATUS_TONES = Object.freeze({
   OPEN: 'warning',
   OVERDUE: 'danger',
   HOLD: 'warning',
+  AVAILABLE: 'success',
+  CONSUMED: 'muted',
+  DELIVERED: 'info',
+  SCRAPPED: 'danger',
+  SETTLED: 'success',
+  PARTIALLY_SETTLED: 'info',
+  WAITING_MATCH: 'warning',
   EXPIRED: 'danger',
   INACTIVE: 'muted',
   UNKNOWN: 'muted',
@@ -64,6 +71,13 @@ const GROUP_FOR_STATUS = Object.freeze({
   EXPIRED: STATUS_GROUPS.TRACKING,
   OVERDUE: STATUS_GROUPS.SETTLEMENT,
   REVERSED: STATUS_GROUPS.SETTLEMENT,
+  AVAILABLE: STATUS_GROUPS.TRACKING,
+  CONSUMED: STATUS_GROUPS.TRACKING,
+  DELIVERED: STATUS_GROUPS.TRACKING,
+  SCRAPPED: STATUS_GROUPS.TRACKING,
+  SETTLED: STATUS_GROUPS.SETTLEMENT,
+  PARTIALLY_SETTLED: STATUS_GROUPS.SETTLEMENT,
+  WAITING_MATCH: STATUS_GROUPS.SETTLEMENT,
 });
 
 const GROUP_LABEL = Object.freeze({
@@ -87,6 +101,7 @@ const CONTEXT_OVERRIDES = Object.freeze({
   'quality.status': { PENDING: '待检验' },
   'period.status': { OPEN: '未结账', CLOSED: '已结账' },
   'master.status': { ACTIVE: '启用', INACTIVE: '已停用', DISCONTINUED: '已停用' },
+  'tracking.status': { HOLD: '已冻结' },
   'reviewer.role': { label: '业务审核员' },
 });
 
@@ -115,7 +130,40 @@ const CANONICAL_LABEL = Object.freeze({
   HOLD: '已占用',
   EXPIRED: '已过期',
   OVERDUE: '已逾期',
+  AVAILABLE: '可用',
+  CONSUMED: '已领用',
+  DELIVERED: '已交付',
+  SCRAPPED: '已报废',
+  SETTLED: '已结清',
+  PARTIALLY_SETTLED: '部分结清',
+  WAITING_MATCH: '待匹配',
 });
+
+const BUSINESS_VALUE_LABELS = Object.freeze({
+  taxMode: Object.freeze({ NO_TAX: '不含税', EXCLUSIVE: '价外税', INCLUSIVE: '价内税' }),
+  billingMode: Object.freeze({ SEPARATE: '分离开票', DIRECT_BILL: '直接开票', AUTO_BILL: '自动开票' }),
+  inventoryDirection: Object.freeze({ IN: '入库', OUT: '出库' }),
+  samplingMode: Object.freeze({ FULL: '全检', FIXED_QUANTITY: '固定数量', PERCENTAGE: '百分比' }),
+  costEvidence: Object.freeze({ AUTHORITATIVE: '权威证据', PARTIAL: '部分证据', ESTIMATED: '暂估证据' }),
+});
+
+const BUSINESS_VALUE_FALLBACKS = Object.freeze({
+  taxMode: '税模式待确认',
+  billingMode: '计费模式待确认',
+  inventoryDirection: '方向待确认',
+  samplingMode: '抽样方式待确认',
+  costEvidence: '成本证据待确认',
+});
+
+export function presentBusinessValue(family, value) {
+  const raw = value == null ? '' : String(value).toUpperCase();
+  const label = BUSINESS_VALUE_LABELS[family]?.[raw];
+  return {
+    raw,
+    label: label || (raw ? (BUSINESS_VALUE_FALLBACKS[family] || '待确认') : '—'),
+    known: Boolean(label),
+  };
+}
 
 function resolveContextLabel(status, context) {
   if (!context) return undefined;

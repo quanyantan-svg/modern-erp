@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // V1.4-E1 — status presentation + canonical action vocabulary.
 // These tests import the browser-target modules through Node's ESM loader.
 const presentation = await import('./presentation.js');
-const { presentStatus, STATUS_GROUPS, ACTION_VERBS, isCanonicalVerb } = presentation;
+const { presentStatus, presentBusinessValue, STATUS_GROUPS, ACTION_VERBS, isCanonicalVerb } = presentation;
 
 test('presentStatus maps known backend enums to canonical labels', () => {
   assert.equal(presentStatus('DRAFT').label, '草稿');
@@ -33,6 +33,16 @@ test('presentStatus honours context overrides for master/forecast/period', () =>
   assert.equal(presentStatus('CLOSED', 'period.status').label, '已结账');
   assert.equal(presentStatus('ACTIVE', 'master.status').label, '启用');
   assert.equal(presentStatus('INACTIVE', 'master.status').label, '已停用');
+  assert.equal(presentStatus('HOLD', 'tracking.status').label, '已冻结');
+});
+
+test('shared business value presenter hides internal enum codes', () => {
+  assert.equal(presentBusinessValue('taxMode', 'INCLUSIVE').label, '价内税');
+  assert.equal(presentBusinessValue('billingMode', 'SEPARATE').label, '分离开票');
+  assert.equal(presentBusinessValue('inventoryDirection', 'OUT').label, '出库');
+  assert.equal(presentBusinessValue('samplingMode', 'FIXED_QUANTITY').label, '固定数量');
+  assert.equal(presentBusinessValue('costEvidence', 'ESTIMATED').label, '暂估证据');
+  assert.equal(presentBusinessValue('taxMode', 'FUTURE_MODE').label, '税模式待确认');
 });
 
 test('presentStatus unknown status returns labelled fallback', () => {

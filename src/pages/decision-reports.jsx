@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from 'react';
 import { api, download } from '../api.js';
-import { can, Empty, Loading, money } from '../components/ui.jsx';
+import { can, money } from '../components/ui.jsx';
 import { BusinessState, FilterButton, FilterSheet, FormRow, InlineAlert, RecordCard, RecordList, ResponsiveBusinessList } from '../components/design-system.jsx';
 import { BusinessEntitySelector } from '../components/business-entity-selector.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
@@ -150,7 +150,7 @@ function useReport(endpoint, appliedFilters) {
     const query = params.toString();
     api(endpoint + (query ? '?' + query : ''))
       .then((data) => { if (active) setState({ status: 'success', data, error: null }); })
-      .catch((error) => { if (active) setState({ status: 'error', data: null, error: error.message || '查询失败' }); });
+      .catch((error) => { if (active) setState({ status: 'error', data: null, error }); });
     return () => { active = false; };
   }, [endpoint, JSON.stringify(appliedFilters)]);
   return state;
@@ -159,9 +159,9 @@ function useReport(endpoint, appliedFilters) {
 // ---------- 1. Sales Summary ----------
 
 function ReportBody({ state, render }) {
-  if (state.status === 'loading') return <Loading />;
-  if (state.status === 'error') return <Empty title="加载失败" text={state.error || '暂时无法获取数据，请稍后重试。'} />;
-  if (!state.data) return <Empty text="暂无数据" />;
+  if (state.status === 'loading') return <BusinessState kind="LOADING" title="正在加载决策报表" description="正在按业务日期口径汇总，请稍候。" />;
+  if (state.status === 'error') return <BusinessState kind="ERROR" title="决策报表加载失败" description={[state.error?.message || '暂时无法获取数据。', state.error?.resolution].filter(Boolean).join(' ')} requestId={state.error?.requestId} details={state.error?.details} />;
+  if (!state.data) return <BusinessState kind="EMPTY" title="暂无报表数据" description="当前业务范围内还没有可汇总的数据。" />;
   return render(state.data);
 }
 
@@ -179,7 +179,7 @@ export default function DecisionReports({ user, notify }) {
   const visibleTabs = REPORT_TABS.filter((tab) => canViewDecisionReport(user, tab.key));
 
   if (!visibleTabs.length) {
-    return <Empty text="当前角色没有可查看的决策报表权限" />;
+    return <BusinessState kind="PERMISSION_DENIED" title="当前角色无法查看决策报表" description="请联系管理员分配对应业务报表权限。" />;
   }
 
   const currentTab = visibleTabs.find((tab) => tab.key === activeTab) || visibleTabs[0];
@@ -259,7 +259,7 @@ function SalesSummaryPanel() {
 }
 
 function CustomerGroupingTable({ rows }) {
-  if (!rows.length) return <Empty text="当前条件下没有客户分组数据" />;
+  if (!rows.length) return <BusinessState kind="NO_RESULTS" title="没有客户分组数据" description="请调整期间、客户或状态筛选条件。" />;
   return (
     <RecordList className="decision-report__cards" data-testid="sales-summary-by-customer">
       {rows.map((row) => <RecordCard
@@ -462,7 +462,7 @@ function PurchaseSummaryPanel() {
 }
 
 function SupplierGroupingTable({ rows }) {
-  if (!rows.length) return <Empty text="当前条件下没有供应商分组数据" />;
+  if (!rows.length) return <BusinessState kind="NO_RESULTS" title="没有供应商分组数据" description="请调整期间、供应商或状态筛选条件。" />;
   return (
     <RecordList className="decision-report__cards" data-testid="purchase-summary-by-supplier">
       {rows.map((row) => <RecordCard
@@ -571,7 +571,7 @@ function InventoryMovementsPanel() {
               />)}
             </RecordList>
           ) : (
-            <Empty text="当前条件下没有库存异动记录" />
+            <BusinessState kind="NO_RESULTS" title="没有库存异动记录" description="请调整业务日期、产品、仓库或方向筛选条件。" />
           )}
         </div>
       )} />

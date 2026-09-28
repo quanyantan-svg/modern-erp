@@ -1,3 +1,5 @@
+import { BusinessState } from './design-system.jsx';
+
 // M1 Mobile Page — reusable container for future M2+ work.
 //
 // Provides standard mobile page structure:
@@ -44,15 +46,15 @@ export default function MobilePage({
 
       {bodyState === 'loading' ? (
         <div className={bodyClassName} data-testid="mobile-page-loading">
-          {loadingText}
+          <BusinessState kind="LOADING" title={loadingText} />
         </div>
       ) : bodyState === 'empty' ? (
         <div className={bodyClassName} data-testid="mobile-page-empty">
-          {emptyText}
+          <BusinessState kind="EMPTY" title={emptyText} />
         </div>
       ) : bodyState === 'error' ? (
         <div className={bodyClassName} data-testid="mobile-page-error">
-          {errorText}
+          <BusinessState kind="ERROR" title={errorText} />
         </div>
       ) : (
         <div className={bodyClassName} data-testid="mobile-page-body">
