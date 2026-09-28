@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto';
 import { captureSqliteSnapshot, bootstrapMySql } from './mysql-schema.js';
 import { createStructuredLogger, safeSqlLabel } from '../lib/logger.js';
 import {
+  ensureV14E2CanonicalRolePermissions,
+  ensureV14E2ConfirmPermission,
+  migrateV14E2BusinessDate,
+} from '../migrations/v14-e2-business-date.js';
+import {
   MYSQL_RESPONSE_HEADER_BYTES,
   abandonWorkerRequest,
   beginWorkerRequest,
@@ -177,6 +182,19 @@ export function createMySqlDatabase(config, { createSqliteSnapshot, seedDemo = f
   });
   try {
     bootstrapMySql(adapter, snapshot);
+    // V1.4.1 hotfix — apply the V1.4-E2 additive migration against the LIVE
+    // MySQL adapter. bootstrapMySql only manages CREATE TABLE IF NOT EXISTS,
+    // which is a no-op for tables that already exist on an upgraded database;
+    // on a fresh bootstrap the new columns are already part of the snapshot
+    // (each addNullableTextColumn is idempotent — see
+    // server/migrations/v14-e2-business-date.js). Re-running the same one
+    // authoritative migration implementation guarantees that an existing
+    // V1.3-style MySQL database gains the two business-date columns and the
+    // canonical INVENTORY_TRANSFER_CONFIRM permission / role mapping without
+    // duplicating schema or permission rows.
+    migrateV14E2BusinessDate(adapter);
+    ensureV14E2ConfirmPermission(adapter);
+    ensureV14E2CanonicalRolePermissions(adapter);
     return adapter;
   } catch (error) {
     adapter.close();

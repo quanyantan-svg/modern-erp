@@ -1229,6 +1229,22 @@ V1.4 设计一项范围受限的幂等添加式迁移（实现时可按仓库惯
 
 MySQL 使用现有 migration helper 和参数化 SQL；日期保存与 SQLite 一致的 canonical 日值。本设计只有两个 nullable 日期列和权限数据，不需要 generated column 或普通索引。未知或生产数据库不用于 reset/gate。
 
+#### 21.12.1 [V1.4.1 — DESIGN CLOSURE] MySQL existing-database 升级路径
+
+公共 tag `v1.4.0` 上线后从真实生产 UAT 中观察到：V1.4-E2 迁移对**已经具备 `mysql_backend_metadata` 完成标记的 live MySQL 数据库**不生效。原因不在迁移本身，而在 `createMySqlDatabase` 的连线：
+
+- `captureSqliteSnapshot(createSqliteSnapshot, seedDemo)` 捕获一个全新的 SQLite 数据库；该 SQLite 经过完整迁移链（`migrate(db)` → `seed(db)` → `reconcileV14E2Permissions`），因此快照已经包含 V1.4 列和权限 / role mapping 行。
+- `bootstrapMySql(adapter, snapshot)` 对每个 `snapshot.tables[i]` 走 `CREATE TABLE IF NOT EXISTS` —— 对已存在的 V1.3 MySQL 表而言是 **no-op**，不会新增 `business_date` 列。
+- `bootstrapMySql` 只在 `complete=false`（全新 DB）时把 snapshot 行的列定义写进 DDL；已存在 DB 走 `INSERT IGNORE` 循环，因此 `permissions` / `role_permissions` 行（包括 `INVENTORY_TRANSFER_CONFIRM`）恰好被 `INSERT IGNORE` 灌进老库 —— 这是为什么生产中权限 OK、而 `business_date` 列缺失。
+
+修复设计（不影响 §21.12 的范围/合同）：
+
+- 在 `server/database/mysql-adapter.js` 的 `createMySqlDatabase` 中，于 `bootstrapMySql(adapter, snapshot)` 之后追加一步：直接对 **`adapter`** 调用唯一权威实现 `migrateV14E2BusinessDate(adapter)` / `ensureV14E2ConfirmPermission(adapter)` / `ensureV14E2CanonicalRolePermissions(adapter)`。不复制 SQL、不引入第二套迁移路径；既有迁移函数自身的列-存在性 guard 和 `INSERT OR IGNORE` 已经是幂等的，所以 fresh + upgrade + 重复 init 三条路径共用同一份权威代码。
+- 不修改 `bootstrapMySql` 自身以避免把它扩展成不受控的 schema-diff 引擎；升级路径只承接确实已在 SQLite 迁移链里出现的、§21.12 列出的两个 additive 列和新的确认权限/角色映射。
+- 不为 `production_orders.completion_date` 或 `inventory_transactions.business_date_origin` 添列；不引入新 index；不重建 `inventory_transfers` / `inventory_checks`；不回填 legacy business_date；legacy 行保持 NULL（`业务日期缺失`）。
+- 实施切片 `V1.4.1`：在 master 提交并跑过 `server/mysql-v14-1-hotfix-upgrade-path.integration.js`（V1.3-shaped disposable MySQL DB + 二次 init 幂等）+ 既有 SQLite 回归 + 受保护 disposable MySQL gate；行为合同、API、角色、审批族、permission data migration 都不变。
+- v1.4.1 Git tag 不在本提交中创建；本提交的 `package.json` 版本保持 1.4.0 不动；不 push / 不 deploy。
+
 ### 21.13 实施切片与依赖顺序
 
 每个切片在独立逻辑单元内完成实现、focused tests、文档/当日日志和 UAT checkpoint；前一切片验收后再进入下一项：
