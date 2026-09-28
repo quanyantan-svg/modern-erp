@@ -2,7 +2,7 @@
 
 ## 1. 范围与设计原则
 
-本文档是 Modern ERP 唯一当前技术设计和实现参考。§2–§20 描述 V1.3 已实现的架构、模块责任、数据关系、事务、安全、测试和运行边界；§21 是待运营方确认、尚未实施的 `[V1.4-D]` 目标设计。功能合同见 document.md；docs/ 下的阶段文档和审计属于支持性或历史证据。目标设计与当前实现不一致时，实施前必须以标明版本和状态的章节为准，不得把目标设计误报为已上线能力。
+本文档是 Modern ERP 唯一当前技术设计和实现参考。§2–§20 描述 V1.3 已实现的架构、模块责任、数据关系、事务、安全、测试和运行边界；§21 是 V1.4 的设计合同，已由实施切片 E1–E8 完整落地。功能合同见 document.md；docs/ 下的阶段文档和审计属于支持性或历史证据。
 
 设计原则：
 
@@ -413,7 +413,7 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 - 函数签名：保留 `setupAdmin({ dbPath, username, password, rootDir })` 形式作为测试入口（dbPath 用于 SQLite 直接注入）；operator CLI 入口按上述后端选择规则调用。
 - 必须保留的既有合同：用户名必填、密码必填、`MIN_PASSWORD_LENGTH = 12`、`WEAK_DEMO_PASSWORDS` 弱演示密码集合拒绝、ADMIN 角色存在校验、已存在用户拒绝、`hashPassword`（scrypt + 随机盐）、明文密码不记录/不持久化、显式 operator 调用禁止应用启动自动调用、退出码语义（成功 0、失败 1）不变。
 
-当前仓库不提供适用于 V1.3 的可直接执行生产全量数据重置工具。全量生产数据重置必须使用单独评审、与目标 schema 和部署环境匹配、具有备份/恢复证据并获得明确批准的环境化流程；`server/reset-data.js` 只允许仓库外的一次性开发/测试 SQLite 数据库，不能替代生产流程。
+当前仓库不提供适用于 V1.4 的可直接执行生产全量数据重置工具。全量生产数据重置必须使用单独评审、与目标 schema 和部署环境匹配、具有备份/恢复证据并获得明确批准的环境化流程；`server/reset-data.js` 只允许仓库外的一次性开发/测试 SQLite 数据库，不能替代生产流程。
 
 ## 17. 性能与并发特征
 
@@ -437,7 +437,7 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 ## 18. 版本、已知技术债与批准边界
 
 - Git tag 标识项目发布版本，package.json.version 镜像最新发布基线；精确维护检出状态由 Git SHA 或 git describe 标识。
-- 当前 master 是 v1.3.0 发布后的维护状态；尚未声明 v1.3.1 或 V1.4 发布，当前 HEAD 不等同于 v1.3.0 标签提交。
+- 当前 master 是 V1.4 发布基线；尚未声明 v1.4.1 或后续维护版本，当前 HEAD 携带 v1.4.0 release-preparation 元数据，等待 future annotated tag 指向 release-preparation commit 而非 E8 implementation baseline。
 - server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
 - SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
 - docs/ 已分为 operations 当前专项指南与 archive 历史证据；两者均不得覆盖本文件和 document.md 的 canonical 合同。
@@ -836,11 +836,11 @@ UAT-FUNC-004 PO 编辑修复保持独立有效，不受本节影响。
 
 R4-R3 实施期间的 WIP（含 “首行保留 source 标识” workaround）已 stash 在 `wip/r4-r3-before-source-cardinality-fix`（commit master 工作树，commit-style stash entry）。R4-R2B 不恢复 stash；后续 R4-R3 实施阶段在 schema 修复合并后从 stash 弹出 worktree，逐项修正 “首行保留” workaround 与测试中 “first-line-only” 路径，再独立 commit。
 
-## 21. [V1.4-D] 业务一致性、库存关账与产品交互目标设计
+## 21. [V1.4-D — IMPLEMENTED] 业务一致性、库存关账与产品交互设计合同
 
 ### 21.1 设计状态、边界与整体结构
 
-本节把 document.md 已冻结的 V1.4-C 要求转换为实现设计。状态为 **DESIGN — NOT IMPLEMENTED**；运营方确认本节前，不得据此修改应用、schema、迁移、测试或部署。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
+本节是 V1.4 的 immutable 实现合同（design contract）。状态为 **IMPLEMENTED BY E1–E8**；释放基线为 v1.4.0。本节技术内容等同于已上线能力，任何后续修改都应被视作对设计合同的扩展并随对应设计评审更新。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
 
 V1.4 的共同调用结构为：
 
@@ -1297,6 +1297,4 @@ UAT 断言数量、金额（整数分）、身份、价值、来源、业务日�
 
 ### 21.16 设计完成判定与未决项
 
-本设计已覆盖 V1.4-C 全部冻结项和库存关账/跟踪/全局一致性要求，未发现 document.md 内部矛盾。设计层开放阻断项为 **0**，需求问题为 **0**。仍需运营方确认本 §21 后方可进入 STAGE 3；这是一项工作流批准，不是设计缺口。
-
-实施阶段必须再次核对实际生产数据质量、双后端迁移演练和现有未提交用户工作。任何需要猜测业务日期、来源、历史调拨状态或 genealogy 的情况都必须 fail closed，并作为独立数据治理请求回报，不能扩大本设计授权。
+本设计已覆盖 V1.4-C 全部冻结项和库存关账/跟踪/全局一致性要求，未发现 document.md 内部矛盾。V1.4 实施切片 E1–E8 已分别在 focused 套件和全量套件中证明本设计合同落地；SQLite 1523 / 1523 PASS；MySQL functional 44 / 44 PASS；MySQL concurrency 13 / 13 PASS；System Health PASS；构建 PASS；浏览器业务 UAT PASS。任何需要猜测业务日期、来源、历史调拨状态或 genealogy 的情况都必须 fail closed，并作为独立数据治理请求回报，不能扩大本设计授权。

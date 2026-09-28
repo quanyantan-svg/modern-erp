@@ -1,6 +1,6 @@
 # Modern ERP
 
-Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前项目发布基线为 **V1.3**，Git release tag 是项目发布版本的权威来源。
+Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前项目发布基线为 **V1.4**，Git release tag 是项目发布版本的权威来源。
 
 ## 当前支持
 
@@ -102,7 +102,7 @@ MySQL 8 需要：
     scripts/gates/       MySQL 功能/并发 gate 及其子进程 worker
     scripts/diagnostics/ 诊断、性能检查和历史调试工具
     scripts/acceptance/  手工/浏览器验收工具
-    scripts/             不提供当前 V1.3 可直接执行的生产全量重置工具
+    scripts/             不提供当前 V1.4 可直接执行的生产全量重置工具
     deploy/              Nginx 与 systemd 配置
     docs/operations/     当前专项运维与演示指南
     docs/archive/        历史审计、阶段与发布证据
@@ -111,7 +111,7 @@ MySQL 8 需要：
 
 scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令名保持稳定；日常仍使用 `pnpm dev`、`pnpm test:mysql:performance` 等命令，不应依赖内部脚本路径。
 
-当前仓库不提供适用于 V1.3 的可直接执行生产全量数据重置工具。此类破坏性操作必须使用单独评审、与目标环境匹配并获得明确批准的流程；`pnpm reset-data` 只面向仓库外的一次性开发/测试 SQLite 数据库。
+当前仓库不提供适用于 V1.4 的可直接执行生产全量数据重置工具。此类破坏性操作必须使用单独评审、与目标环境匹配并获得明确批准的流程；`pnpm reset-data` 只面向仓库外的一次性开发/测试 SQLite 数据库。
 
 ## 测试与质量门
 
@@ -144,9 +144,9 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- Git release tag 是项目发布版本的权威来源；最新发布基线为 v1.3.0。
-- package.json 的版本 1.3.0 镜像最新发布基线，不为维护提交建立另一套版本序列。
-- master 可以包含 v1.3.0 发布后的维护变更；使用 Git SHA 或 git describe 标识精确检出状态，不应把当前 HEAD 等同于 v1.3.0 标签提交。
+- Git release tag 是项目发布版本的权威来源；最新发布基线为 v1.4.0。
+- package.json 的版本 1.4.0 镜像最新发布基线，不为维护提交建立另一套版本序列。
+- master 可以包含 v1.4.0 发布后的维护变更；使用 Git SHA 或 git describe 标识精确检出状态，不应把当前 HEAD 等同于 v1.4.0 标签提交。
 - document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
 
 ## 安全说明
