@@ -156,15 +156,15 @@ describe('M7 — sales summary end-to-end', () => {
     const data = await res.json();
     assert.equal(data.moneyUnit, 'cents');
     // The seeded APPROVED order contributes exactly 519800 cents / 1 approved row /
-    // 1 confirmed delivery worth 519800 cents. The demo seed also creates an
-    // additional SUBMITTED order; approvedOrderCount must therefore be 1 (the
-    // SUBMITTED demo order does not count as approved).
+    // 1 confirmed delivery worth 519800 cents. The legacy demo SUBMITTED order has
+    // no authoritative order_date and is therefore disclosed separately, not
+    // included in period-activity metrics.
     assert.equal(data.summary.approvedOrderCount, 1, 'only the seeded APPROVED order must be counted as approved');
     assert.equal(data.summary.deliveryCount, 1);
     assert.equal(data.summary.deliveryCents, 519800);
     assert.equal(data.summary.returnCents, 0);
     assert.equal(data.summary.netShipmentCents, 519800);
-    assert.equal(data.summary.orderCents, 519800 + 684300, 'orderCents = seeded APPROVED 519800 + demo SUBMITTED 684300');
+    assert.equal(data.summary.orderCents, 519800);
     // Notes must explicitly say "订单金额不等于已实现收入".
     assert.match(data.notes, /订单金额/);
     // Money fields are all integer cents (no float drift).
@@ -349,13 +349,13 @@ describe('M7 — sales outstanding end-to-end (Capability B)', () => {
     assert.equal(noDelivery.confirmedDeliveryCount, 0);
   });
 
-  test('capability B accuracyNotes explicitly mentions schema limitation', async () => {
+  test('capability B accuracyNotes explicitly preserves the E5 document-level boundary', async () => {
     const res = await fetch(baseUrl + '/api/reports/decision/sales-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.match(data.accuracyNotes, /sales_delivery_items/);
-    assert.match(data.accuracyNotes, /sales_order_items/);
+    assert.match(data.accuracyNotes, /文档级/);
+    assert.match(data.accuracyNotes, /E6/);
   });
 });
 
@@ -527,13 +527,13 @@ describe('M7 — purchase outstanding end-to-end (Capability B)', () => {
     assert.equal(noReceipt.confirmedReceiptCount, 0);
   });
 
-  test('capability B accuracyNotes explicitly mentions schema limitation', async () => {
+  test('capability B accuracyNotes explicitly preserves the E5 document-level boundary', async () => {
     const res = await fetch(baseUrl + '/api/reports/decision/purchase-outstanding', {
       headers: { Authorization: 'Bearer ' + adminToken },
     });
     const data = await res.json();
-    assert.match(data.accuracyNotes, /purchase_receipt_items/);
-    assert.match(data.accuracyNotes, /purchase_order_items/);
+    assert.match(data.accuracyNotes, /文档级/);
+    assert.match(data.accuracyNotes, /E6/);
   });
 });
 
@@ -652,8 +652,8 @@ describe('M7 — inventory movements end-to-end', () => {
       ON CONFLICT(warehouse_id, product_id) DO UPDATE SET quantity=excluded.quantity, updated_at=excluded.updated_at
     `).run();
     database.prepare(`
-      INSERT INTO inventory_transactions(id, warehouse_id, product_id, quantity_change, direction, balance_after, source_type, source_id, source_no, created_at)
-      VALUES ('m7-reconcile-latest', 'warehouse-001', 'product-001', 1, 'IN', 109, 'INVENTORY_ADJUSTMENT', 'm7-reconcile-source', 'ADJ-RECONCILE', '2098-01-01T10:00:00')
+      INSERT INTO inventory_transactions(id, warehouse_id, product_id, quantity_change, direction, balance_after, source_type, source_id, source_no, created_at, business_date)
+      VALUES ('m7-reconcile-latest', 'warehouse-001', 'product-001', 1, 'IN', 109, 'INVENTORY_ADJUSTMENT', 'm7-reconcile-source', 'ADJ-RECONCILE', '2098-01-01T10:00:00', '2098-01-01')
     `).run();
     const res = await fetch(baseUrl + '/api/reports/decision/inventory-movements?productId=product-001&warehouseId=warehouse-001', {
       headers: { Authorization: 'Bearer ' + adminToken },
@@ -855,9 +855,9 @@ async function seedSalesFixture(database) {
   // One APPROVED order with a CONFIRMED delivery.
   database.prepare(`
     INSERT OR REPLACE INTO sales_orders
-      (id, order_no, customer_id, status, total_cents, remark, creator_id, created_at, updated_at, submitted_at, reviewed_at)
+      (id, order_no, customer_id, status, total_cents, remark, creator_id, created_at, updated_at, submitted_at, reviewed_at, order_date)
     VALUES
-      ('order-std-001', 'SO-STD-001', 'customer-001', 'APPROVED', 519800, '', 'user-admin', ?, ?, ?, ?)
+      ('order-std-001', 'SO-STD-001', 'customer-001', 'APPROVED', 519800, '', 'user-admin', ?, ?, ?, ?, '2026-09-01')
   `).run(now, now, now, now);
   database.prepare(`
     INSERT OR REPLACE INTO sales_order_items
@@ -886,9 +886,9 @@ async function seedPurchaseFixture(database) {
   const now = new Date().toISOString();
   database.prepare(`
     INSERT OR REPLACE INTO purchase_orders
-      (id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at, submitted_at, reviewed_at)
+      (id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at, submitted_at, reviewed_at, order_date)
     VALUES
-      ('po-std-001', 'PO-STD-001', 'supplier-001', 'APPROVED', 300000, '', 'user-admin', ?, ?, ?, ?)
+      ('po-std-001', 'PO-STD-001', 'supplier-001', 'APPROVED', 300000, '', 'user-admin', ?, ?, ?, ?, '2026-09-01')
   `).run(now, now, now, now);
   database.prepare(`
     INSERT OR REPLACE INTO purchase_order_items
@@ -929,9 +929,9 @@ async function seedInventoryMovements(database) {
   for (const m of movements) {
     database.prepare(`
       INSERT INTO inventory_transactions
-        (id, warehouse_id, product_id, quantity_change, direction, balance_after, source_type, source_id, source_no, remark, creator_id, created_at)
+        (id, warehouse_id, product_id, quantity_change, direction, balance_after, source_type, source_id, source_no, remark, creator_id, created_at, business_date)
       VALUES
-        (?, 'warehouse-001', 'product-001', ?, ?, ?, ?, ?, ?, '', NULL, ?)
+        (?, 'warehouse-001', 'product-001', ?, ?, ?, ?, ?, ?, '', NULL, ?, '2026-09-15')
     `).run(m.id, m.qty, m.direction, 100 + m.qty, m.type, m.id, m.no, now);
   }
 }

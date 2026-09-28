@@ -40,6 +40,7 @@ const childEnv = {
 };
 
 const files = [
+  'server/mysql-v14-e5.integration.js',
   'server/mysql-v14-e3.integration.js',
   'server/mysql-v14-e2.integration.js',
   'server/v13-phase6e-acceptance-uat.test.js',

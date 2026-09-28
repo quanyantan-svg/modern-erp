@@ -32,7 +32,11 @@ import { assertQualityGate, deriveQualityState } from './modules/quality-gates.j
 import {
   getInventoryMovements, getPurchaseOutstanding, getPurchaseSummary,
   getSalesOutstanding, getSalesSummary,
+  exportSalesSummaryReport, exportSalesOutstandingReport,
+  exportPurchaseSummaryReport, exportPurchaseOutstandingReport,
+  exportInventoryMovementsReport,
 } from './modules/decision-reports.js';
+import { searchBusinessEntities } from './modules/lookups.js';
 import { listApprovals } from './modules/approvals.js';
 import {
   activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
@@ -508,6 +512,13 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/reports/decision/purchase-summary' && req.method === 'GET') return getPurchaseSummary(db, res, actor, url);
   if (pathname === '/api/reports/decision/purchase-outstanding' && req.method === 'GET') return getPurchaseOutstanding(db, res, actor, url);
   if (pathname === '/api/reports/decision/inventory-movements' && req.method === 'GET') return getInventoryMovements(db, res, actor, url);
+  // V1.4-E5: CSV exports re-use the same authoritative business-date
+  // query semantics and the resolved entity filter labels.
+  if (pathname === '/api/reports/decision/sales-summary/export' && req.method === 'GET') return exportSalesSummaryReport(db, res, actor, url);
+  if (pathname === '/api/reports/decision/sales-outstanding/export' && req.method === 'GET') return exportSalesOutstandingReport(db, res, actor, url);
+  if (pathname === '/api/reports/decision/purchase-summary/export' && req.method === 'GET') return exportPurchaseSummaryReport(db, res, actor, url);
+  if (pathname === '/api/reports/decision/purchase-outstanding/export' && req.method === 'GET') return exportPurchaseOutstandingReport(db, res, actor, url);
+  if (pathname === '/api/reports/decision/inventory-movements/export' && req.method === 'GET') return exportInventoryMovementsReport(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
   // Accounting Voucher Workflow
   const voucherActionMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/(submit|approve|reject)$/);
@@ -592,6 +603,8 @@ async function handleApi(db, req, res, url) {
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);
   if (pathname === "/api/lookup/customers" && req.method === "GET") return listCustomerLookup(db, res, actor, url);
+  // V1.4-E5 C02 — bounded business-object lookup used by report filter selectors.
+  if (pathname === "/api/lookups/business-entities" && req.method === "GET") return searchBusinessEntities(db, res, actor, url);
   // Scoped source-document lookups for Sales Delivery / Purchase Receipt forms.
   // Read-only minimal projections of APPROVED source orders so the warehouse
   // role can populate the optional source selector without gaining broad

@@ -2231,7 +2231,53 @@ tfoot td {
 .mobile-application-view .business-flow__step { display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
 .mobile-application-view .business-flow__node { width:100%; min-width:0; }
 .mobile-application-view .business-flow__arrow { transform:rotate(90deg); justify-self:center; }
-.report-filter-trigger { display:flex; justify-content:flex-end; margin-bottom:12px; }
+.report-filter-trigger { display:flex; justify-content:flex-end; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.report-export-button { min-height:44px; padding:0 14px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-surface); color:var(--text-secondary); font-weight:600; }
+.report-export-button:hover { border-color:var(--accent); color:var(--accent); }
+.report-export-control { display:flex; align-items:center; gap:8px; }
+.report-export-error { color:var(--danger); font-size:12px; max-width:240px; }
+.report-filter__date-basis { margin:0 0 12px; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--bg-subtle); color:var(--text-secondary); font-size:12px; line-height:1.5; }
+
+/* V1.4-E5 C02 — shared BusinessEntitySelector. Used by all five
+   canonical decision reports as their customer / supplier / product /
+   warehouse filter. Single-select, code-or-name search, internal-id
+   transport. Layout works on desktop and narrow viewports without
+   horizontal scroll. */
+.business-entity-selector { position:relative; display:grid; gap:6px; min-width:0; }
+.business-entity-selector__label { font-size:13px; color:var(--text-secondary); font-weight:600; }
+.business-entity-selector__control { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:stretch; min-width:0; }
+.business-entity-selector__trigger { min-height:48px; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-surface); color:var(--text-primary); text-align:left; font:inherit; cursor:pointer; min-width:0; }
+.business-entity-selector__control:has(.business-entity-selector__chip-clear) .business-entity-selector__trigger { border-radius:var(--radius-md) 0 0 var(--radius-md); }
+.business-entity-selector__trigger:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.business-entity-selector--disabled .business-entity-selector__trigger { cursor:not-allowed; background:var(--bg-subtle); color:var(--text-tertiary); }
+.business-entity-selector__placeholder { color:var(--text-tertiary); font-weight:500; }
+.business-entity-selector__chip { display:inline-flex; align-items:center; gap:6px; min-width:0; width:100%; }
+.business-entity-selector__chip-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.business-entity-selector__chip-clear { min-width:44px; min-height:48px; padding:0; border:1px solid var(--border-default); border-left:0; border-radius:0 var(--radius-md) var(--radius-md) 0; background:var(--bg-surface); color:var(--text-tertiary); font-size:18px; line-height:1; cursor:pointer; }
+.business-entity-selector__chip-clear:hover { background:var(--bg-subtle); color:var(--text-primary); }
+.business-entity-selector__panel { position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:var(--z-sheet,50); min-width:240px; max-height:min(60dvh,420px); display:flex; flex-direction:column; gap:8px; padding:10px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-surface); box-shadow:var(--shadow-md); }
+.business-entity-selector__panel-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.business-entity-selector__panel-close { width:40px; height:40px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--text-secondary); font-size:22px; cursor:pointer; }
+.business-entity-selector__search { min-height:40px; padding:0 10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:var(--bg-surface); font:inherit; }
+.business-entity-selector__search:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.business-entity-selector__results { display:grid; gap:4px; overflow:auto; min-height:0; }
+.business-entity-selector__status { padding:10px 12px; border:1px dashed var(--border-subtle); border-radius:var(--radius-sm); color:var(--text-tertiary); font-size:13px; display:flex; flex-direction:column; gap:8px; }
+.business-entity-selector__status--error { color:var(--danger); border-color:var(--danger); }
+.business-entity-selector__inline-clear { align-self:flex-start; padding:4px 10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); background:var(--bg-surface); color:var(--text-primary); font:inherit; cursor:pointer; }
+.business-entity-selector__option { min-height:44px; display:flex; align-items:center; gap:10px; padding:0 12px; border:1px solid transparent; border-radius:var(--radius-sm); background:transparent; color:var(--text-primary); text-align:left; font:inherit; cursor:pointer; }
+.business-entity-selector__option:hover, .business-entity-selector__option--active { background:var(--bg-subtle); border-color:var(--border-subtle); }
+.business-entity-selector__option-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.business-entity-selector__option--inactive { color:var(--text-secondary); }
+.business-entity-selector__option-flag { font-size:11px; padding:2px 6px; border:1px solid var(--border-subtle); border-radius:8px; color:var(--warning); background:var(--bg-subtle); white-space:nowrap; }
+
+@media (max-width: 640px) {
+  .business-entity-selector__panel { position:fixed; inset:0; z-index:calc(var(--z-sheet,50) + 1); width:100%; min-width:0; max-height:none; border:0; border-radius:0; padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px)); }
+  .business-entity-selector__search { min-height:48px; }
+  .business-entity-selector__option { min-height:48px; }
+  .business-entity-selector__results { flex:1; }
+  .report-export-control { width:100%; flex-wrap:wrap; }
+  .report-export-button { flex:1; }
+}
 
 .search-field { min-height:48px; display:flex; align-items:center; gap:8px; padding:0 12px; border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--bg-surface); }
 .search-field:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
