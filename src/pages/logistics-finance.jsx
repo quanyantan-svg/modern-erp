@@ -4,7 +4,7 @@ import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, 
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
-import { presentBusinessValue } from '../lib/presentation.js';
+import { presentBusinessValue, presentStatus } from '../lib/presentation.js';
 import { ActionMenu, BusinessAction, BusinessAuditSection, BusinessContentSection, BusinessDangerZone, BusinessPageHeader, BusinessPageShell, BusinessRelationSection, BusinessState, CompactRecord, CompactRecordList, DangerSheet, HelpDisclosure, SearchField, SegmentedControl, StatusChip } from '../components/design-system.jsx';
 
 function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityLabel, qualityState }) {
@@ -40,7 +40,7 @@ export function RelationshipSections({ detail }) {
       {relation.upstream?.length ? <div><span>上游单据</span>{relation.upstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div> : relation.direct && <div className="direct-business"><span>上游单据</span><strong>{directLabel}</strong><small>仅兼容读取，不可重新过账</small></div>}
       {relation.downstream?.length > 0 && <div><span>下游单据</span>{relation.downstream.map((item) => <AppLink key={item.id} page={relationshipPage(item.type)} documentId={item.id} documentType={item.type}>{relationshipLabel(item.type)} <b className="mono">{item.documentNo}</b></AppLink>)}</div>}
     </section>
-    {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{relation.finance.status}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
+    {relation.finance && <section className="finance-trace"><h4>财务影响</h4>{relation.finance.type === 'FINANCIAL_RECORD' ? <p>已产生财务记录</p> : <div className="detail-grid"><div><span>凭证号</span><strong className="mono">{relation.finance.documentNo}</strong></div><div><span>状态</span><strong>{presentStatus(relation.finance.status).label}</strong></div><div><span>金额</span><strong>{money(relation.finance.amountCents)}</strong></div></div>}</section>}
     {relation.subledger && <section className="finance-trace"><h4>往来结算</h4><AppLink page={detail.customer_id ? 'accounts-receivable' : 'accounts-payable'} documentId={relation.subledger.id}><span>{detail.customer_id ? '应收记录' : '应付记录'}</span> <strong className="mono">{relation.subledger.documentNo}</strong></AppLink></section>}
   </>;
 }
@@ -235,13 +235,14 @@ export function SalesDeliveries({ user, notify }) {
   const [view, setView] = useState(target?.page === 'sales-deliveries' && target.documentId ? { id: target.documentId } : null);
   const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
   useEffect(() => { void load(); }, [status]);
-  return <Panel title="销售出货单" action={can(user, "SALES_DELIVERIES_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增销售出货</button>}>
+  return <BusinessPageShell className="sales-deliveries-v15" width="rail">
+    <BusinessPageHeader title="销售出货" primaryAction={can(user, "SALES_DELIVERIES_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建销售出货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售出货承接已审批销售订单；需要检验时先完成 OQC，确认出库后才影响库存。订单审批不等于实际出货。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有销售出货记录"/>}</div>
     {view && <SalesDeliveryModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function SalesDeliveryModal({ user, value, onClose, notify, api }) {
@@ -344,7 +345,8 @@ export function Returns({ user, notify }) {
   };
   useEffect(() => { void load(); }, [tab, status]);
   const cols = ["单号", tab === "sales" ? "客户" : "供应商", "仓库", "金额", "状态", "制单人", ""];
-  return <Panel title={tab === 'sales' ? '销售退货' : '采购退货'} action={can(user, "RETURNS_MANAGE") && <button className="primary" onClick={() => setView({ tab })}>＋ 新增退货单</button>}>
+  return <BusinessPageShell className="returns-v15" width="rail">
+    <BusinessPageHeader title="退货管理" context={tab === 'sales' ? '销售退货' : '采购退货'} primaryAction={can(user, "RETURNS_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({ tab })}>新建{tab === 'sales' ? '销售' : '采购'}退货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售退货引用已确认销售出货；采购退货引用已确认采购入库。两类退货保持各自来源和库存方向。</p></HelpDisclosure>}/>
     <div className="segment-wrap"><div className="segment"><button className={tab === "sales" ? "active" : ""} onClick={() => setTab("sales")}>销售退货</button><button className={tab === "purchase" ? "active" : ""} onClick={() => setTab("purchase")}>采购退货</button></div></div>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr>{cols.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>
@@ -359,7 +361,7 @@ export function Returns({ user, notify }) {
       </tr>)}
     </tbody></table>{!items.length && <Empty text="没有退货记录"/>}</div>
     {view && <ReturnModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function ReturnModal({ user, value, onClose, notify, api }) {

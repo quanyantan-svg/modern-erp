@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Badge, Empty, Loading, Modal, Panel, Toolbar, can } from '../components/ui.jsx';
+import { BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 import { presentBusinessValue } from '../lib/presentation.js';
 
 const STATUS_LABEL = { DRAFT: '草稿', PENDING: '旧版待检验', COMPLETED: '已完成', CANCELLED: '已取消' };
@@ -15,7 +16,8 @@ function QualityPage({ user, notify, kind }) {
   const load = () => { setLoading(true); api(`/api/${kind}${status ? `?status=${status}` : ''}`).then((data) => setItems(data.inspections || [])).catch((error) => notify(error.message, 'error')).finally(() => setLoading(false)); };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
   const open = (id) => api(`/api/${kind}/${id}`).then((data) => setSelected(data.inspection)).catch((error) => notify(error.message, 'error'));
-  return <Panel title={`${upper} ${kind === 'iqc' ? '来料检验' : '出货检验'}`}>
+  return <BusinessPageShell className={`${kind}-queue-v15`} width="rail">
+    <BusinessPageHeader title={`${upper} ${kind === 'iqc' ? '来料检验' : '出货检验'}`} context={kind === 'iqc' ? '采购入库内部质量任务' : '销售出货内部质量任务'} help={<HelpDisclosure summary="检验说明"><p>{kind === 'iqc' ? 'IQC 是采购入库确认前的质量门禁。' : 'OQC 是销售出库确认前的质量门禁。'}检验本身不移动库存，也不属于业务审批。</p></HelpDisclosure>}/>
     <Toolbar action={<span className="muted">请从{kind === 'iqc' ? '采购入库草稿' : '销售出库草稿'}创建检验单</span>}/>
     <div className="filters"><label>状态<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部</option><option value="DRAFT">草稿</option><option value="COMPLETED">已完成</option><option value="CANCELLED">已取消</option></select></label></div>
     <div className="table-wrap"><table><thead><tr><th>检验单号</th><th>来源单据</th><th>{kind === 'iqc' ? '供应商' : '客户'}</th><th>检验员</th><th>送检数量</th><th>状态</th><th>结果</th><th/></tr></thead><tbody>
@@ -28,7 +30,7 @@ function QualityPage({ user, notify, kind }) {
       notify={notify}
       onClose={() => { setSelected(null); load(); }}
     />}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function QualityModal({ kind, inspection, canManage, notify, onClose }) {
@@ -39,7 +41,7 @@ function QualityModal({ kind, inspection, canManage, notify, onClose }) {
   const complete = async () => { try { await api(`/api/${kind}/${inspection.id}/complete`, { method: 'POST', body: { ...form, inspection_quantity: inspection.total_quantity } }); notify(form.result === 'PASS' ? '检验已完成：合格' : '检验已完成：不合格'); onClose(); } catch (error) { notify(error.message, 'error'); } };
   const cancel = async () => { try { await api(`/api/${kind}/${inspection.id}/cancel`, { method: 'POST', body: {} }); notify('检验草稿已取消'); onClose(); } catch (error) { notify(error.message, 'error'); } };
   return <Modal title={`${kind.toUpperCase()} 检验单 ${inspection[`${kind}_no`]}`} onClose={onClose} wide>
-    {!inspection.authoritative && <div className="notice danger">LEGACY / UNLINKED INSPECTION（旧版未关联检验，仅供读取，不能满足质量门禁）</div>}
+    {!inspection.authoritative && <div className="notice danger">历史未关联检验（仅供读取，不能满足质量门禁）</div>}
     <div className="detail-grid"><div><span>来源订单</span><strong className="mono">{inspection.source_order_no || '—'}</strong></div><div><span>来源单据</span><strong className="mono">{inspection.source_document_no || '未关联'}</strong></div><div><span>状态</span><strong>{STATUS_LABEL[inspection.status] || inspection.status}</strong></div><div><span>{kind === 'iqc' ? '供应商' : '客户'}</span><strong>{inspection.supplier_name || inspection.customer_name}</strong></div><div><span>仓库</span><strong>{inspection.source_warehouse_code ? `${inspection.source_warehouse_code} - ${inspection.source_warehouse_name}` : '—'}</strong></div><div><span>{kind === 'iqc' ? '收货日期' : '发货日期'}</span><strong>{inspection.source_business_date || '—'}</strong></div><div><span>检验员</span><strong>{inspection.inspector_name || '—'}</strong></div></div>
     <h4>来源明细（只读）</h4><table className="line-table"><thead><tr><th>产品</th><th>规格</th><th>数量</th><th>仓库</th><th>批次</th></tr></thead><tbody>{inspection.items.map((item) => <tr key={item.id}><td>{item.product_code} - {item.product_name}</td><td>{item.specification || '—'}</td><td>{item.snapshot_quantity ?? item.quantity} {item.unit}</td><td>{item.snapshot_warehouse_id || '—'}</td><td>{item.snapshot_batch_no || '—'}</td></tr>)}</tbody></table>
     <h4>检验信息</h4><div className="form-grid">

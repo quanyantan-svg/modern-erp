@@ -3621,3 +3621,44 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
     gap: 3px;
   }
 }
+
+/* V1.5 D3 — sales, purchase and quality operations. */
+.mobile-shell:has(.sales-deliveries-v15),
+.mobile-shell:has(.returns-v15),
+.mobile-shell:has(.iqc-queue-v15),
+.mobile-shell:has(.oqc-queue-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.sales-deliveries-v15,
+.returns-v15,
+.iqc-queue-v15,
+.oqc-queue-v15 {
+  min-width: 0;
+}
+
+.sales-deliveries-v15 > .toolbar,
+.returns-v15 > .toolbar,
+.iqc-queue-v15 > .toolbar,
+.oqc-queue-v15 > .toolbar,
+.canonical-list-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sales-deliveries-v15 .table-wrap,
+.returns-v15 .table-wrap,
+.iqc-queue-v15 .table-wrap,
+.oqc-queue-v15 .table-wrap {
+  border-radius: 0;
+}
+
+.sales-deliveries-v15 .page-header h1,
+.returns-v15 .page-header h1,
+.iqc-queue-v15 .page-header h1,
+.oqc-queue-v15 .page-header h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
