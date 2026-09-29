@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
-import { RecordCard, RecordList, BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
+import { RecordCard, RecordList, BusinessPageHeader, BusinessPageShell, BusinessState, HelpDisclosure } from '../components/design-system.jsx';
 import { presentStatus } from '../lib/presentation.js';
 
 function fmtQty(value) {
@@ -102,10 +102,10 @@ export default function Forecasts({ user, notify }) {
   const handleNew = () => setCreateOpen(true);
   const handleRefresh = () => load();
 
-  return <>
+  return <BusinessPageShell className="forecasts-v15" width="rail">
     <BusinessPageHeader
-      title="需求预测"
-      context="按期间活动维护需求预测；仅 ACTIVE 预测会被 MRP 消耗。"
+      title="计划预测"
+      help={<HelpDisclosure summary="预测说明"><p>按期间活动维护需求预测；只有已生效预测会被 MRP 消耗。</p></HelpDisclosure>}
       primaryAction={canManage ? <button type="button" className="primary" onClick={handleNew}>＋ 新建预测</button> : null}
       secondaryActions={<button type="button" className="secondary" onClick={handleRefresh}>刷新</button>}
     />
@@ -156,7 +156,7 @@ export default function Forecasts({ user, notify }) {
       onSaved={() => { setCreateOpen(false); void handleRefresh(); notify('预测已创建'); }}
       notify={notify}
     />}
-  </>;
+  </BusinessPageShell>;
 }
 
 function ForecastEditor({ value, onClose, onSaved, notify }) {

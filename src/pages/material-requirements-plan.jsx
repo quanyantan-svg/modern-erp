@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { Empty, Loading, Panel } from '../components/ui.jsx';
-import { BottomActionBar, EmptyState, SecondaryButton, SegmentedControl, Sheet } from '../components/design-system.jsx';
+import { BottomActionBar, BusinessPageShell, EmptyState, SecondaryButton, SegmentedControl, Sheet } from '../components/design-system.jsx';
 import {
   demandModeLabel,
   suggestionTypeLabel,
@@ -175,28 +175,28 @@ export default function MaterialRequirementsPlan({ notify }) {
   if (runs === null) return <Loading/>;
 
   if (runs.length === 0) {
-    return <Panel title="物料需求计划">
+    return <BusinessPageShell className="material-plan-v15" width="rail"><Panel title="MRP · 物料建议">
       <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
       <div className="form-actions full">
         <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
       </div>
-    </Panel>;
+    </Panel></BusinessPageShell>;
   }
 
   const completedRuns = runs.filter((r) => r.status === 'COMPLETED');
   if (completedRuns.length === 0) {
-    return <Panel title="物料需求计划">
+    return <BusinessPageShell className="material-plan-v15" width="rail"><Panel title="MRP · 物料建议">
       <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
       <div className="form-actions full">
         <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
       </div>
-    </Panel>;
+    </Panel></BusinessPageShell>;
   }
 
   if (!run) return <Loading/>;
 
-  return <>
-    <Panel title="物料需求计划">
+  return <BusinessPageShell className="material-plan-v15" width="rail">
+    <Panel title="MRP · 物料建议">
       <label className="material-run-selector">
         <span>MRP 运算</span>
         <select aria-label="切换 MRP 运算" value={selectedRunId || ''} onChange={(e) => setSelectedRunId(e.target.value)}>
@@ -229,7 +229,7 @@ export default function MaterialRequirementsPlan({ notify }) {
       row={traceRow}
       onClose={() => setTraceRow(null)}
     />}
-  </>;
+  </BusinessPageShell>;
 }
 
 function MaterialSummary({ summary, run }) {

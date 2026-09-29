@@ -3702,3 +3702,41 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   font-size: 22px;
   line-height: 1.2;
 }
+
+/* V1.5 D5 — planning and production share one compact operating rail. */
+.mobile-shell:has(.forecasts-v15),
+.mobile-shell:has(.mrp-runs-v15),
+.mobile-shell:has(.material-plan-v15),
+.mobile-shell:has(.planning-documents-v15),
+.mobile-shell:has(.production-orders-v15),
+.mobile-shell:has(.material-issues-v15),
+.mobile-shell:has(.production-receipts-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.forecasts-v15,
+.mrp-runs-v15,
+.material-plan-v15,
+.planning-documents-v15,
+.production-orders-v15,
+.material-issues-v15,
+.production-receipts-v15 {
+  min-width: 0;
+}
+
+.planning-documents-v15 > .segmented-control {
+  margin-bottom: 14px;
+}
+
+.planning-documents-v15 > .panel,
+.material-plan-v15 > .panel {
+  border-radius: 0;
+}
+
+@media (max-width: 520px) {
+  .planning-documents-v15 > .segmented-control {
+    overflow-x: auto;
+    grid-template-columns: repeat(3, minmax(92px, 1fr));
+  }
+}

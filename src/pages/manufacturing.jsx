@@ -5,6 +5,7 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
 import { presentBusinessValue } from '../lib/presentation.js';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -290,13 +291,14 @@ export function ProductionOrders({ user, notify }) {
       setView({ id: target.documentId });
     }
   }, [target]);
-  return <Panel title="制令单" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建制令单</button>}>
+  return <BusinessPageShell className="production-orders-v15" width="rail">
+    <BusinessPageHeader title="制令单" primaryAction={can(user, 'PRODUCTION_ORDERS_CREATE') && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建制令单</BusinessAction>} help={<HelpDisclosure summary="生产说明"><p>制令单承接已下达生产指令，开工后冻结 BOM、工序与成本快照。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索工单号或产品" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="PENDING">待生产</option><option value="IN_PROGRESS">生产中</option><option value="COMPLETED">已完成</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>工单号</th><th>产品</th><th className="number">数量</th><th>计划开始</th><th>状态</th><th>完工</th></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={PO_STATUS_LABELS[item.status] || item.statusLabel}/></td><td className="number">{quantity(item.totalOutput)}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有制令单"/>}</div>
     {view && <ProductionOrderModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function ProductionOrderModal({ user, value, onClose, notify, api }) {
@@ -439,7 +441,8 @@ export function MaterialIssues({ user, notify }) {
   }, [target]);
   const canManage = can(user, 'PRODUCTION_MATERIAL_ISSUE_MANAGE');
   const filtered = items.filter((item) => !search || item.issueNo.includes(search) || (item.productionOrderNo || '').includes(search));
-  return <Panel title="用料出库" subtitle="生产领料登记，确认出库后扣减组件库存" action={canManage && <button className="primary" onClick={() => setView({ create: true })}>＋ 新建出库单</button>}>
+  return <BusinessPageShell className="material-issues-v15" width="rail">
+    <BusinessPageHeader title="用料出库" primaryAction={canManage && <BusinessAction hierarchy="primary" onClick={() => setView({ create: true })}>新建出库单</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>用料出库引用制令单，确认领料后才扣减组件库存并形成 WIP。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索出库单号或制令单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>出库单号</th><th>制令单号</th><th>仓库</th><th>领料日期</th><th>状态</th><th className="number">物料项</th><th>创建人</th></tr></thead><tbody>
       {filtered.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}>
@@ -453,7 +456,7 @@ export function MaterialIssues({ user, notify }) {
       </tr>)}
     </tbody></table>{!filtered.length && <Empty text="没有用料出库单"/>}</div>
     {view && <MaterialIssueModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function MaterialIssueModal({ user, value, onClose, notify, api }) {
@@ -632,7 +635,8 @@ export function ProductionReceipts({ user, notify }) {
   }, [target]);
   const canManage = can(user, 'PRODUCTION_RECEIPT_MANAGE');
   const filtered = items.filter((item) => !search || item.receiptNo.includes(search) || (item.productionOrderNo || '').includes(search));
-  return <Panel title="生产入库" subtitle="成品入库登记，确认后增加制品库存" action={canManage && <button className="primary" onClick={() => setView({ create: true })}>＋ 新建入库单</button>}>
+  return <BusinessPageShell className="production-receipts-v15" width="rail">
+    <BusinessPageHeader title="生产入库" primaryAction={canManage && <BusinessAction hierarchy="primary" onClick={() => setView({ create: true })}>新建入库单</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>生产入库引用制令单和可证明的生产执行结果，确认后增加制品库存并结转 WIP。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索入库单号或制令单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>入库单号</th><th>制令单号</th><th>制品</th><th>仓库</th><th className="number">本次入库</th><th>入库日期</th><th>状态</th></tr></thead><tbody>
       {filtered.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}>
@@ -646,7 +650,7 @@ export function ProductionReceipts({ user, notify }) {
       </tr>)}
     </tbody></table>{!filtered.length && <Empty text="没有生产入库单"/>}</div>
     {view && <ProductionReceiptModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function ProductionReceiptModal({ user, value, onClose, notify, api }) {

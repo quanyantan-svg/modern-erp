@@ -12,6 +12,7 @@ import { api } from '../api.js';
 import { Badge, can, ConfirmDelete, Empty, FormActions, Loading, Modal, money, Panel, Status, Toolbar, YuanField } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { planningDocumentTabForPage } from '../navigation/planningDocumentNavigation.js';
+import { BusinessPageHeader, BusinessPageShell, HelpDisclosure, SegmentedControl } from '../components/design-system.jsx';
 
 const PI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS_LABELS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -848,16 +849,13 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
 export function PlanningDocumentsHub({ user, notify }) {
   const { currentPage, navigateToPage } = useAppNavigation();
   const tab = planningDocumentTabForPage(currentPage);
-  return <Panel title="计划单据"
-    action={<div className="planning-tabs">
-      <button className={tab === 'production-instructions' ? 'active' : ''} onClick={() => navigateToPage('production-instructions')}>生产指令</button>
-      <button className={tab === 'purchase-instructions' ? 'active' : ''} onClick={() => navigateToPage('purchase-instructions')}>采购指令</button>
-      <button className={tab === 'purchase-requisitions' ? 'active' : ''} onClick={() => navigateToPage('purchase-requisitions')}>请购单</button>
-    </div>}>
+  return <BusinessPageShell className="planning-documents-v15" width="rail">
+    <BusinessPageHeader title={tab === 'production-instructions' ? '生产指令' : tab === 'purchase-instructions' ? '采购指令' : '请购单'} help={<HelpDisclosure summary="来源说明"><p>指令承接 MRP 建议；生产指令下达后生成制令单，采购指令下达后生成请购单。</p></HelpDisclosure>}/>
+    <SegmentedControl label="计划单据" value={tab} onChange={navigateToPage} options={[{value:'production-instructions',label:'生产指令'},{value:'purchase-instructions',label:'采购指令'},{value:'purchase-requisitions',label:'请购单'}]}/>
     {tab === 'production-instructions' && <ProductionInstructionsPage user={user} notify={notify}/>}
     {tab === 'purchase-instructions' && <PurchaseInstructionsPage user={user} notify={notify}/>}
     {tab === 'purchase-requisitions' && <PurchaseRequisitionsPage user={user} notify={notify}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 export default PlanningDocumentsHub;

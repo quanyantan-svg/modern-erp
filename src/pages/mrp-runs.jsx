@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { can, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar } from '../components/ui.jsx';
-import { DetailSection, EmptyState, KeyValueRow, RecordCard, RecordList, BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
+import { DetailSection, EmptyState, KeyValueRow, RecordCard, RecordList, BusinessPageHeader, BusinessPageShell, BusinessState, HelpDisclosure } from '../components/design-system.jsx';
 import {
   demandModeHint,
   demandModeLabel,
@@ -89,10 +89,11 @@ export default function MrpRuns({ user, notify }) {
 
   const handleRefresh = () => load();
 
-  return <>
+  return <BusinessPageShell className="mrp-runs-v15" width="rail">
     <BusinessPageHeader
-      title="MRP 运算"
-      context="按需求来源与期间计算生产建议与采购建议；只读快照不影响库存或会计。"
+      title="MRP"
+      context="运算历史"
+      help={<HelpDisclosure summary="运算说明"><p>MRP 按需求来源与期间计算生产建议与采购建议；运算快照不影响库存或会计。</p></HelpDisclosure>}
       primaryAction={canManage ? <button type="button" className="primary" onClick={() => setCreating(true)}>＋ 运行 MRP 运算</button> : null}
       secondaryActions={<button type="button" className="secondary" onClick={handleRefresh}>刷新</button>}
     />
@@ -151,7 +152,7 @@ export default function MrpRuns({ user, notify }) {
       }}
       notify={notify}
     />}
-  </>;
+  </BusinessPageShell>;
 }
 
 function MrpRunEditor({ value, onClose, onSaved, notify }) {
