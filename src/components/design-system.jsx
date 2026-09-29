@@ -11,6 +11,7 @@ export function SectionHeader({ title, subtitle, action }) { return <header clas
 // action; `secondaryActions` are subordinate and visually demoted.
 export function BusinessPageHeader({
   title,
+  breadcrumb,
   context,
   status,
   statusContext,
@@ -19,6 +20,9 @@ export function BusinessPageHeader({
   meta,
   back,
   help,
+  overflowActions,
+  statusSlot,
+  collapseSecondaryOnMobile = false,
 }) {
   const statusNode = (() => {
     if (!status) return null;
@@ -39,16 +43,18 @@ export function BusinessPageHeader({
       <div className="page-header__leading">
         {back && <span className="page-header__back">{back}</span>}
         <div>
+          {breadcrumb && <div className="page-header__breadcrumb" aria-label="面包屑">{breadcrumb}</div>}
           <h1>{title}</h1>
           {context && <p className="page-header__context">{context}</p>}
         </div>
       </div>
       <div className="page-header__trailing">
         {meta && <div className="page-header__meta">{meta}</div>}
-        {statusNode}
+        {statusSlot || statusNode}
         {secondary.length > 0 && (
-          <div className="page-header__secondary">{secondary}</div>
+          <div className={`page-header__secondary${collapseSecondaryOnMobile ? ' page-header__secondary--collapsible' : ''}`}>{secondary}</div>
         )}
+        {overflowActions && <div className="page-header__overflow">{overflowActions}</div>}
         {help && <span className="page-header__help">{help}</span>}
         {primaryAction && (
           <div className="page-header__action page-header__action--primary">
@@ -58,6 +64,36 @@ export function BusinessPageHeader({
       </div>
     </header>
   );
+}
+
+export function BusinessPageShell({ children, className = '', width = 'wide' }) {
+  return <main className={`business-page-shell business-page-shell--${width} ${className}`.trim()}>{children}</main>;
+}
+
+export function BusinessStatusGroup({ items = [], label = '业务状态' }) {
+  return <div className="business-status-group" aria-label={label}>{items.map((item) => {
+    const presentation = presentStatus(item.status, item.context);
+    return <span className="business-status-group__item" key={item.key || item.label}><small>{item.label}</small><span className={`status-chip status-chip--${presentation.tone}`}>{presentation.label}</span></span>;
+  })}</div>;
+}
+
+export function BusinessDetailLayout({ children, rail, className = '' }) {
+  return <div className={`business-detail-layout ${className}`.trim()}><div className="business-detail-layout__main">{children}</div>{rail && <aside className="business-detail-layout__rail">{rail}</aside>}</div>;
+}
+
+export function BusinessContentSection({ title, description, action, tone = 'default', children, className = '' }) {
+  return <section className={`business-content-section business-content-section--${tone} ${className}`.trim()}><header><div><h2>{title}</h2>{description && <p>{description}</p>}</div>{action}</header><div className="business-content-section__body">{children}</div></section>;
+}
+
+export function BusinessSummarySection(props) { return <BusinessContentSection {...props} tone="summary" />; }
+export function BusinessRelationSection(props) { return <BusinessContentSection {...props} tone="relation" />; }
+export function BusinessAuditSection(props) { return <BusinessContentSection {...props} tone="audit" />; }
+export function BusinessDangerZone(props) { return <BusinessContentSection {...props} tone="danger" />; }
+export function HelpDisclosure({ summary = '查看说明', children }) { return <details className="help-disclosure"><summary>{summary}</summary><div>{children}</div></details>; }
+
+export function BusinessAction({ hierarchy = 'secondary', disabledReason, children, className = '', ...props }) {
+  const classes = { primary: 'primary', secondary: 'secondary', tertiary: 'ghost', danger: 'danger-button' };
+  return <span className="business-action"><button className={`${classes[hierarchy] || classes.secondary} ${className}`.trim()} title={disabledReason || props.title} {...props}>{children}</button>{disabledReason && <small>{disabledReason}</small>}</span>;
 }
 
 // V1.4-E1: action hierarchy wrapper. The single primary slot enforces
@@ -147,6 +183,12 @@ const STATE_PRESETS = Object.freeze({
     description: '没有符合筛选条件的记录，可尝试调整或清除筛选。',
     tone: 'muted',
   },
+  FILTER_EMPTY: {
+    icon: 'search',
+    title: '当前条件无匹配',
+    description: '没有符合筛选条件的记录，可尝试调整或清除筛选。',
+    tone: 'muted',
+  },
   PREREQUISITE_REQUIRED: {
     icon: 'info',
     title: '需要先完成前置条件',
@@ -157,6 +199,12 @@ const STATE_PRESETS = Object.freeze({
     icon: 'info',
     title: '没有查看此内容的权限',
     description: '当前账号缺少访问此页面的业务权限，请联系管理员。',
+    tone: 'warning',
+  },
+  PERMISSION_LIMITED: {
+    icon: 'info',
+    title: '可查看的内容受限',
+    description: '当前账号只能查看已授权的业务范围。',
     tone: 'warning',
   },
   BUSINESS_BLOCKED: {
@@ -173,7 +221,7 @@ const STATE_PRESETS = Object.freeze({
   },
 });
 
-export function BusinessState({ kind = 'EMPTY', title, description, action, requestId, details }) {
+export function BusinessState({ kind = 'EMPTY', title, description, action, retry, retryLabel = '重试', requestId, details }) {
   const preset = STATE_PRESETS[kind] || STATE_PRESETS.EMPTY;
   const finalTitle = title || preset.title;
   const finalDescription = description || preset.description;
@@ -184,6 +232,7 @@ export function BusinessState({ kind = 'EMPTY', title, description, action, requ
       <strong>{finalTitle}</strong>
       <p>{finalDescription}</p>
       {action && <div className="business-state__action">{action}</div>}
+      {retry && <div className="business-state__action"><SecondaryButton type="button" onClick={retry}>{retryLabel}</SecondaryButton></div>}
       {kind === 'ERROR' && requestId && (
         <small className="business-state__request">请求编号：{requestId}</small>
       )}

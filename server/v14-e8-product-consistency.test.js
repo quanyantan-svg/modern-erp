@@ -4,16 +4,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { MOBILE_APPLICATION_GROUPS } from '../src/navigation/applicationMetadata.js';
+import { ROUTE_PRESENTATIONS, DISABLED_ROUTE_PRESENTATIONS } from '../src/navigation/presentationMetadata.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const source = (path) => readFileSync(resolve(root, path), 'utf8');
 
 test('E8 audits the complete current user-facing application catalogue', () => {
-  const app = source('src/App.jsx');
   const disabled = new Set(['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']);
-  const pages = new Set(MOBILE_APPLICATION_GROUPS.flatMap((group) => group.items.map((item) => item.page)).filter((page) => !disabled.has(page)));
-  assert.equal(pages.size, 48);
-  for (const page of disabled) assert.match(app, new RegExp(`key: '${page}'[^\\n]+enabled: false`));
+  const pages = new Set(ROUTE_PRESENTATIONS.map((item) => item.route));
+  assert.equal(pages.size, 53);
+  assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);
   }

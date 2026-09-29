@@ -1,3 +1,5 @@
+import { presentationForRoute } from './presentationMetadata.js';
+
 // Mobile product information architecture.
 //
 // Permissions deliberately do not live here. Each item points at one existing
@@ -158,6 +160,7 @@ export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
       if (!navigationItem || !isItemVisible(metadata)) return [];
       return [{
         ...navigationItem,
+        presentation: presentationForRoute(metadata.page),
         page: navigationItem.key,
         label: metadata.mobileLabel || navigationItem.label,
         iconKey: metadata.iconKey,

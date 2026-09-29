@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { BusinessPageHeader } from '../components/design-system.jsx';
 import { useAppNavigation, AppLink } from '../navigation/AppNavigationContext.jsx';
+import { presentationForRoute } from '../navigation/presentationMetadata.js';
 
-const node = (key, label, page, description, target) => ({ key, label, page, description, target });
+const node = (key, label, page, description, target) => ({ key, label, page, description, target, presentation: presentationForRoute(page) });
 
 export const BUSINESS_OVERVIEW_GROUPS = [
   {

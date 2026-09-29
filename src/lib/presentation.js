@@ -16,6 +16,7 @@ export const STATUS_GROUPS = Object.freeze({
   MASTER: 'master',
   TRACKING: 'tracking',
   UNKNOWN: 'unknown',
+  LIFECYCLE: 'lifecycle',
 });
 
 export const STATUS_TONES = Object.freeze({
@@ -44,6 +45,9 @@ export const STATUS_TONES = Object.freeze({
   EXPIRED: 'danger',
   INACTIVE: 'muted',
   UNKNOWN: 'muted',
+  ARCHIVED: 'muted',
+  BLOCKED: 'danger',
+  EXCEPTION: 'danger',
 });
 
 const GROUP_FOR_STATUS = Object.freeze({
@@ -78,6 +82,9 @@ const GROUP_FOR_STATUS = Object.freeze({
   SETTLED: STATUS_GROUPS.SETTLEMENT,
   PARTIALLY_SETTLED: STATUS_GROUPS.SETTLEMENT,
   WAITING_MATCH: STATUS_GROUPS.SETTLEMENT,
+  ARCHIVED: STATUS_GROUPS.LIFECYCLE,
+  BLOCKED: STATUS_GROUPS.LIFECYCLE,
+  EXCEPTION: STATUS_GROUPS.LIFECYCLE,
 });
 
 const GROUP_LABEL = Object.freeze({
@@ -89,6 +96,7 @@ const GROUP_LABEL = Object.freeze({
   [STATUS_GROUPS.MASTER]: '主数据',
   [STATUS_GROUPS.TRACKING]: '身份跟踪',
   [STATUS_GROUPS.UNKNOWN]: '状态',
+  [STATUS_GROUPS.LIFECYCLE]: '生命周期',
 });
 
 // Context-sensitive label overrides. The same internal enum may carry a
@@ -137,6 +145,9 @@ const CANONICAL_LABEL = Object.freeze({
   SETTLED: '已结清',
   PARTIALLY_SETTLED: '部分结清',
   WAITING_MATCH: '待匹配',
+  ARCHIVED: '已归档',
+  BLOCKED: '已阻断',
+  EXCEPTION: '异常',
 });
 
 const BUSINESS_VALUE_LABELS = Object.freeze({
