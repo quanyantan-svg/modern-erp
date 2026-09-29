@@ -218,13 +218,12 @@ test('P1 launcher: 基础资料 no longer contains forecasts or mrp items', () =
 // 6. App.jsx navGroups — three distinct canonical entries, label rename
 // ---------------------------------------------------------------------------
 
-test('P1 navGroups: canonical navigation uses 需求预测 / MRP 运算 / 物料需求计划 labels', () => {
+test('P1 navGroups: V1.5 navigation uses 计划预测 / MRP / MRP · 物料建议 labels', () => {
   const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
-  assertContains(appSource, "key: 'forecasts', label: '需求预测'");
-  assertContains(appSource, "key: 'mrp-runs', label: 'MRP 运算'");
-  assertContains(appSource, "key: 'material-requirements-plan', label: '物料需求计划'");
-  // Old ambiguous labels are gone from navGroups
-  assert.ok(!appSource.includes("label: '计划预测'"), 'old 计划预测 label still in navGroups');
+  assertContains(appSource, "key: 'forecasts', label: '计划预测'");
+  assertContains(appSource, "key: 'mrp-runs', label: 'MRP'");
+  assertContains(appSource, "key: 'material-requirements-plan', label: 'MRP · 物料建议'");
+  // Older ambiguous combined label remains absent.
   assert.ok(!appSource.includes("label: 'MRP 物料需求计划'"), 'old MRP 物料需求计划 label still in navGroups');
 });
 
@@ -364,7 +363,7 @@ test('P1 material plan: trace sheet shows user-friendly explanation', () => {
 test('P1 material plan: routing titles use exact product names', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
   // Page title appears as Panel title prop
-  assertContains(source, 'title="物料需求计划"');
+  assertContains(source, 'title="MRP · 物料建议"');
   // Trace modal title pattern (per-product trace)
   assertContains(source, 'title={`${row.product_name} · 计算依据`}');
 });
@@ -496,8 +495,9 @@ test('P1 planning hub derives its active tab from currentPage and navigates tabs
   const hubSource = readFileSync(resolve(repoRoot, 'src/pages/planning-documents.jsx'), 'utf8');
   const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
   assertContains(hubSource, 'planningDocumentTabForPage(currentPage)');
-  assertContains(hubSource, "navigateToPage('production-instructions')");
-  assertContains(hubSource, "navigateToPage('purchase-instructions')");
+  assertContains(hubSource, 'onChange={navigateToPage}');
+  assertContains(hubSource, "value:'production-instructions'");
+  assertContains(hubSource, "value:'purchase-instructions'");
   assertContains(appSource, 'currentPage: page');
   assertContains(appSource, "useState(location.hash.slice(1) || 'dashboard')");
   assertContains(appSource, "navigateToPage(location.hash.slice(1) || 'dashboard'");

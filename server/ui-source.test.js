@@ -95,7 +95,6 @@ describe('UI source — route surface preserved', () => {
       ['Customers', 'pages/master-data.jsx'],
       ['Products', 'pages/master-data.jsx'],
       ['Orders', 'pages/master-data.jsx'],
-      ['Approvals', 'pages/master-data.jsx'],
       ['UsersRoles', 'pages/master-data.jsx'],
       ['PurchaseOrders', 'pages/master-data.jsx'],
       ['Warehouses', 'pages/master-data.jsx'],
@@ -131,6 +130,7 @@ describe('UI source — route surface preserved', () => {
         || new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`).test(src);
       assert.ok(exportMatch, `${module} must still export ${name}`);
     }
+    assert.ok(app.includes('MobileApprovalCenter'), 'App.jsx must use the canonical aggregated approval center');
   });
 
   test('M8 AR/AP and settlement pages are mounted and advertised in App.jsx', () => {

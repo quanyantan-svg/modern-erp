@@ -37,11 +37,11 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     ['traceability', '批次 / 序列号追溯', 'traceability', 'secondary'],
   ] },
   { key: 'analytics', label: '经营分析', kind: 'domain', items: [
-    ['decision-reports', '销售分析', 'reports', 'primary', null, null, 'sales-summary'],
-    ['decision-reports', '采购分析', 'reports', 'primary', null, null, 'purchase-summary'],
-    ['decision-reports', '库存分析', 'reports', 'primary', null, null, 'inventory-movements'],
-    ['decision-reports', '销售未交', 'reports', 'secondary', null, null, 'sales-outstanding'],
-    ['decision-reports', '采购未收', 'reports', 'secondary', null, null, 'purchase-outstanding'],
+    ['decision-reports', '销售统计分析', 'reports', 'primary', null, null, 'sales-summary'],
+    ['decision-reports', '采购统计分析', 'reports', 'primary', null, null, 'purchase-summary'],
+    ['decision-reports', '库存异动明细', 'reports', 'primary', null, null, 'inventory-movements'],
+    ['decision-reports', '销售未出货', 'reports', 'secondary', null, null, 'sales-outstanding'],
+    ['decision-reports', '采购未交货', 'reports', 'secondary', null, null, 'purchase-outstanding'],
   ] },
   { key: 'workspace', label: '工作区', kind: 'utility', items: [
     ['business-overview', '业务总览', 'overview', 'shortcut'], ['accounting', '会计凭证 / 财务报表', 'accounting', 'finance'],

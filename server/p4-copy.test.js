@@ -11,9 +11,9 @@ test('P4 — canonical mobile and planning terminology', () => {
   const shell = source('src/components/MobileShell.jsx');
   for (const label of ['消息', '签核', '应用', '云翼', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
   const app = source('src/App.jsx');
-  for (const term of ['需求预测', 'MRP 运算', '物料需求计划']) assert.match(app, new RegExp(term));
+  for (const term of ['计划预测', "label: 'MRP'", 'MRP · 物料建议']) assert.match(app, new RegExp(term));
   const metadata = source('src/navigation/applicationMetadata.js');
-  for (const term of ['采购分析', '采购未收', '销售分析', '销售未交', '库存分析']) assert.match(metadata, new RegExp(term));
+  for (const term of ['采购统计分析', '采购未交货', '销售统计分析', '销售未出货', '库存异动明细']) assert.match(metadata, new RegExp(term));
 });
 
 test('P4 — five canonical visible role labels', () => {
@@ -50,6 +50,6 @@ test('P4 — safe lifecycle and transport messages', () => {
 test('P4 — targeted surfaces contain no legacy known-bad copy', () => {
   const files = ['src/App.jsx', 'src/pages/master-data.jsx', 'src/pages/accounting.jsx', 'src/pages/decision-reports.jsx', 'src/pages/planning-documents.jsx'];
   const combined = files.map(source).join('\n');
-  for (const legacy of ['云翼服务正在建设', '销售未出货', '采购未交货', '客户ID', '供应商ID', 'MAKE 建议', 'BUY 建议', '确认计提本月折旧?']) assert.doesNotMatch(combined, new RegExp(legacy));
+  for (const legacy of ['云翼服务正在建设', '客户ID', '供应商ID', 'MAKE 建议', 'BUY 建议', '确认计提本月折旧?']) assert.doesNotMatch(combined, new RegExp(legacy));
   assert.doesNotMatch(combined, /window\.confirm|(?<![A-Za-z])confirm\(/);
 });

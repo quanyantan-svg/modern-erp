@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getToken, setToken } from './api.js';
-import { Login, Dashboard, Suppliers, Customers, Products, Orders, Approvals, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
+import { Login, Dashboard, Suppliers, Customers, Products, Orders, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
 import { Accounting } from './pages/accounting.jsx';
 import DecisionReports, { canViewDecisionReport } from './pages/decision-reports.jsx';
 import { PurchaseReceipts, SalesDeliveries, Returns, InventoryTransactions } from './pages/logistics-finance.jsx';
@@ -57,23 +57,23 @@ export const navGroups = [
   ]},
   { label: '销售与采购', items: [
     { key: 'orders', label: '销售订单', icon: ic.orders, any: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
-    { key: 'approvals', label: '订单审批', icon: ic.approvals, permission: 'ORDERS_APPROVE' },
+    { key: 'approvals', label: '业务审批', icon: ic.approvals, permission: 'ORDERS_APPROVE' },
     { key: 'purchase-orders', label: '采购订单', icon: ic.purchaseOrders, any: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE'] },
   ]},
   { label: '基础资料', items: [
-    { key: 'suppliers', label: '供应商', icon: ic.suppliers, any: ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE'] },
-    { key: 'customers', label: '客户', icon: ic.customers, any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
-    { key: 'products', label: '产品', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
-    { key: 'warehouses', label: '仓库', icon: ic.warehouses, any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
+    { key: 'suppliers', label: '供应商资料', icon: ic.suppliers, any: ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE'] },
+    { key: 'customers', label: '客户资料', icon: ic.customers, any: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
+    { key: 'products', label: '货品资料', icon: ic.products, any: ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE'] },
+    { key: 'warehouses', label: '仓库资料', icon: ic.warehouses, any: ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE'] },
   ]},
   { label: '仓储物流', items: [
-    { key: 'inventory', label: '库存查询', icon: ic.inventory, any: ['INVENTORY_VIEW'] },
+    { key: 'inventory', label: '库存作业', icon: ic.inventory, any: ['INVENTORY_VIEW'] },
     { key: 'purchase-receipts', label: '采购入库', icon: ic.purchaseReceipts, any: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
     { key: 'sales-deliveries', label: '销售出货', icon: ic.salesDeliveries, any: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
     { key: 'returns', label: '退货管理', icon: ic.returns, any: ['RETURNS_VIEW', 'RETURNS_MANAGE'] },
     { key: 'inventory-transactions', label: '库存异动明细', icon: ic.inventoryTransactions, any: ['INVENTORY_VIEW'] },
     { key: 'traceability', label: '批次与序列号追溯', icon: ic.traceability, any: ['INVENTORY_VIEW', 'PURCHASE_RECEIPTS_VIEW', 'SALES_DELIVERIES_VIEW'] },
-    { key: 'inventory-scraps', label: '库存报废', icon: ic.inventoryScrap, any: ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE'] },
+    { key: 'inventory-scraps', label: '存货报废', icon: ic.inventoryScrap, any: ['INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE'] },
     { key: 'inventory-month-end', label: '存货月结', icon: ic.inventoryPeriod, any: ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'] },
     { key: 'sales-discounts', label: '销售折让', icon: ic.salesDiscount, any: ['SALES_DISCOUNT_MANAGE'] },
     { key: 'purchase-discounts', label: '采购折让', icon: ic.purchaseDiscount, any: ['PURCHASE_DISCOUNT_MANAGE'] },
@@ -91,8 +91,8 @@ export const navGroups = [
     { key: 'bills', label: '票据管理', icon: ic.bills, any: ['BILLS_VIEW', 'BILLS_MANAGE'], enabled: false },
     { key: 'fixed-assets', label: '固定资产', icon: ic.fixedAssets, any: ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE'], enabled: false },
   ]},
-  { label: '决策报表', items: [
-    { key: 'decision-reports', label: '决策报表', icon: ic.reports, any: ['REPORT_VIEW'] },
+  { label: '经营分析', items: [
+    { key: 'decision-reports', label: '经营分析', icon: ic.reports, any: ['REPORT_VIEW'] },
   ]},
   { label: '生产制造', items: [
     { key: 'boms', label: 'BOM 清单', icon: ic.boms, any: ['PRODUCTION_ORDERS_CREATE'] },
@@ -103,19 +103,19 @@ export const navGroups = [
     { key: 'manufacturing-analytics', label: '生产执行分析', icon: ic.reports, any: ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_COSTS_VIEW'] },
   ]},
   { label: '计划与生产', items: [
-    { key: 'forecasts', label: '需求预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
-    { key: 'mrp-runs', label: 'MRP 运算', icon: ic.mrpRuns, any: ['MRP_VIEW', 'MRP_MANAGE'] },
-    { key: 'material-requirements-plan', label: '物料需求计划', icon: ic.materialPlan, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'forecasts', label: '计划预测', icon: ic.forecasts, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'mrp-runs', label: 'MRP', icon: ic.mrpRuns, any: ['MRP_VIEW', 'MRP_MANAGE'] },
+    { key: 'material-requirements-plan', label: 'MRP · 物料建议', icon: ic.materialPlan, any: ['MRP_VIEW', 'MRP_MANAGE'] },
     { key: 'production-instructions', label: '生产指令', icon: ic.planningDocuments, any: ['PRODUCTION_INSTRUCTION_VIEW'] },
     { key: 'purchase-instructions', label: '采购指令', icon: ic.planningDocuments, any: ['PURCHASE_INSTRUCTION_VIEW'] },
     { key: 'purchase-requisitions', label: '请购单', icon: ic.planningDocuments, any: ['PURCHASE_REQUISITION_VIEW'] },
   ]},
   { label: '成本与质量', items: [
     { key: 'product-costs', label: '标准成本', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
-    { key: 'cost-rates', label: '费用项目', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
+    { key: 'cost-rates', label: '成本费率', icon: ic.costAccounting, any: ['COST_VIEW', 'COST_MANAGE'] },
     { key: 'iqc', label: 'IQC来料检验', icon: ic.iqc, any: ['IQC_VIEW', 'IQC_MANAGE'] },
     { key: 'oqc', label: 'OQC出货检验', icon: ic.oqc, any: ['OQC_VIEW', 'OQC_MANAGE'] },
-    { key: 'quality-control-points', label: '质量控制点', icon: ic.iqc, any: ['USERS_MANAGE'] },
+    { key: 'quality-control-points', label: '质量规则', icon: ic.iqc, any: ['USERS_MANAGE'] },
   ]},
   { label: '项目管理', items: [
     { key: 'projects', label: '项目立项', icon: ic.projects, any: ['PROJECT_VIEW', 'PROJECT_MANAGE'] },
@@ -205,7 +205,7 @@ export default function App() {
     'business-overview': <BusinessOverview/>,
     dashboard: <Dashboard user={user} notify={notify}/>,
     orders: <Orders user={user} notify={notify}/>,
-    approvals: <Approvals notify={notify}/>,
+    approvals: <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} standaloneTitle/>,
     customers: <Customers user={user} notify={notify}/>,
     suppliers: <Suppliers user={user} notify={notify}/>,
     'purchase-orders': <PurchaseOrders user={user} notify={notify}/>,
@@ -296,14 +296,7 @@ export default function App() {
 
   function renderMobileContent() {
     if (mobileTab === 'messages') {
-      return (
-        <MobilePage
-          title="消息"
-          subtitle="系统通知与业务提醒"
-          bodyState="empty"
-          emptyText="暂无新消息"
-        />
-      );
+      return pages.notifications;
     }
     if (mobileTab === 'approvals') {
       return <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} />;

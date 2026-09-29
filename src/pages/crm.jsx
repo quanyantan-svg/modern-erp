@@ -138,10 +138,11 @@ export function Followups({ user, notify }) {
   const typeMap = { VISIT: '拜访', CALL: '电话', EMAIL: '邮件', MEETING: '会议', OTHER: '其他' };
 
   return (
-    <Panel title="客户跟进">
+    <BusinessPageShell className="followups-v15" width="rail">
       <BusinessPageHeader
         title="客户跟进"
         context="按客户与跟进日期维护拜访、电话、邮件等记录。"
+        help={<HelpDisclosure summary="跟进说明"><p>跟进记录属于客户关系过程，不改变订单、应收或审批状态。</p></HelpDisclosure>}
         primaryAction={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增跟进</button> : null}
       />
       <Toolbar action={null}/>
@@ -174,7 +175,7 @@ export function Followups({ user, notify }) {
           : <BusinessState kind="EMPTY" title="暂无跟进记录" description="按客户与跟进日期记录拜访、电话、邮件等。"/>)}
       </div>
       {editing && <FollowupModal customers={customers} user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('跟进记录已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 
@@ -237,7 +238,8 @@ export function SalesActivities({ user, notify }) {
   const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', COMPLETED: '已完成', CANCELLED: '已取消' };
 
   return (
-    <Panel title="销售活动">
+    <BusinessPageShell className="sales-activities-v15" width="rail">
+      <BusinessPageHeader title="销售活动" help={<HelpDisclosure summary="活动说明"><p>活动预算与实际费用用于 CRM 管理分析，不自动形成应收、付款或会计凭证。</p></HelpDisclosure>}/>
       <Toolbar action={can(user, 'CRM_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建活动</button>}/>
       <div className="filters">
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -272,7 +274,7 @@ export function SalesActivities({ user, notify }) {
         {!items.length && <Empty text="暂无销售活动"/>}
       </div>
       {editing && <ActivityModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('活动已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 
   async function deleteActivity(item) {

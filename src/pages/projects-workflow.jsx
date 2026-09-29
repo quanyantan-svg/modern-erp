@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
+import { BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 
 export function Projects({ user, notify }) {
   const [items, setItems] = useState([]);
@@ -23,7 +24,8 @@ export function Projects({ user, notify }) {
   const statusMap = { PLANNING: '计划中', IN_PROGRESS: '进行中', SUSPENDED: '已暂停', COMPLETED: '已完成', CANCELLED: '已取消' };
 
   return (
-    <Panel title="项目立项">
+    <BusinessPageShell className="projects-v15" width="rail">
+      <BusinessPageHeader title="项目立项" help={<HelpDisclosure summary="项目说明"><p>项目承载预算、负责人和时间范围，任务与工时作为下级执行记录。</p></HelpDisclosure>}/>
       <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建项目</button>}/>
       <div className="filters">
         <label>状态<select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -58,7 +60,7 @@ export function Projects({ user, notify }) {
       </div>
       {editing && <ProjectModal user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('项目已保存'); }} />}
       {detail && <ProjectDetailModal project={detail} onClose={() => setDetail(null)}/>}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 
@@ -162,7 +164,8 @@ export function ProjectTasks({ user, notify }) {
   const statusMap = { PENDING: '待开始', IN_PROGRESS: '进行中', COMPLETED: '已完成' };
 
   return (
-    <Panel title="任务管理">
+    <BusinessPageShell className="project-tasks-v15" width="rail">
+      <BusinessPageHeader title="任务管理" help={<HelpDisclosure summary="任务说明"><p>任务必须归属项目，并独立维护负责人、优先级、状态与进度。</p></HelpDisclosure>}/>
       <Toolbar action={can(user, 'PROJECT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建任务</button>}/>
       <div className="filters">
         <label>所属项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
@@ -191,7 +194,7 @@ export function ProjectTasks({ user, notify }) {
         {!items.length && <Empty text="暂无任务"/>}
       </div>
       {editing && <TaskModal projects={projects} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('任务已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 
@@ -258,7 +261,8 @@ export function Timesheets({ user, notify }) {
   useEffect(() => { void load(); }, [projectId]);
 
   return (
-    <Panel title="工时记录">
+    <BusinessPageShell className="timesheets-v15" width="rail">
+      <BusinessPageHeader title="工时记录" help={<HelpDisclosure summary="工时说明"><p>工时按项目、人员与工作日期记录，可计费标记仅用于管理分析。</p></HelpDisclosure>}/>
       <Toolbar action={<button className="primary" onClick={() => setEditing({})}>＋ 记录工时</button>}/>
       <div className="filters">
         <label>项目<select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
@@ -285,7 +289,7 @@ export function Timesheets({ user, notify }) {
         {!items.length && <Empty text="暂无工时记录"/>}
       </div>
       {editing && <TimesheetModal projects={projects} user={user} notify={notify} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('工时已记录'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 
@@ -357,7 +361,8 @@ export function Notifications({ user, notify }) {
   const typeColors = { INFO: '', WARNING: 'warning', SUCCESS: 'success', ERROR: 'danger' };
 
   return (
-    <Panel title="通知中心">
+    <BusinessPageShell className="notifications-v15" width="rail">
+      <BusinessPageHeader title="通知中心" context={`${unreadCount} 条未读`} help={<HelpDisclosure summary="通知说明"><p>桌面通知中心与移动端“消息”共享同一数据源和已读状态。</p></HelpDisclosure>}/>
       <Toolbar action={<button className="secondary" onClick={markAllRead}>全部标为已读</button>}/>
       <div className="table-wrap">
         <table>
@@ -376,7 +381,7 @@ export function Notifications({ user, notify }) {
         </table>
         {!items.length && <Empty text="暂无通知"/>}
       </div>
-    </Panel>
+    </BusinessPageShell>
   );
 }
 

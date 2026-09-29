@@ -3847,3 +3847,71 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   overflow-x: auto;
   border-radius: 0;
 }
+
+/* V1.5 D9 — extension, system and global active-route closure. */
+.mobile-shell {
+  --app-max-width: 680px;
+  --page-max-width: 680px;
+}
+
+.mobile-application-view,
+.mobile-application-view > *,
+.dashboard-v15,
+.approval-workspace-v15,
+.projects-v15,
+.project-tasks-v15,
+.timesheets-v15,
+.contacts-v15,
+.followups-v15,
+.sales-activities-v15,
+.notifications-v15,
+.users-roles-v15 {
+  min-width: 0;
+  max-width: 680px;
+}
+
+.mobile-application-view {
+  width: 100%;
+  max-width: 680px;
+  margin-inline: auto;
+}
+
+.approval-workspace-v15 {
+  display: grid;
+  gap: 18px;
+  width: 100%;
+}
+
+.approval-workspace-v15__header {
+  display: grid;
+  gap: 5px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.approval-workspace-v15__header span,
+.approval-workspace-v15__header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.approval-workspace-v15__header h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.projects-v15 .table-wrap,
+.project-tasks-v15 .table-wrap,
+.timesheets-v15 .table-wrap,
+.followups-v15 .table-wrap,
+.sales-activities-v15 .table-wrap,
+.notifications-v15 .table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 0;
+}
+
+.mobile-application-view :where(h1, h2, h3, p, strong, td, th, dd) {
+  overflow-wrap: anywhere;
+}

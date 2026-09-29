@@ -738,9 +738,9 @@ describe('M7 — inventory source label map', () => {
 // ============================================================
 
 describe('M7 — frontend wiring', () => {
-  test('App.jsx declares a 决策报表 navigation group gated by REPORT_VIEW', () => {
+  test('App.jsx declares an 经营分析 navigation group gated by REPORT_VIEW', () => {
     const src = readSrc('App.jsx');
-    assert.match(src, /label:\s*'决策报表'[\s\S]{0,200}any:\s*\['REPORT_VIEW'\]/);
+    assert.match(src, /label:\s*'经营分析'[\s\S]{0,200}any:\s*\['REPORT_VIEW'\]/);
   });
 
   test('App.jsx routes decision-reports to DecisionReports component', () => {

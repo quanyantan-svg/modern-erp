@@ -77,14 +77,15 @@ export function Dashboard({ user, notify }) {
     ['销售出货', 'sales-deliveries'], ['仓储库存', 'inventory'], ['制令单', 'production-orders'],
     ['应收账款', 'accounts-receivable'], ['应付账款', 'accounts-payable'], ['决策报表', 'decision-reports'],
   ].filter(([, page]) => navigation.canNavigate(page));
-  return <>
-    <div className="hero-card"><div><span className="pill">今日业务概览</span><h2>从业务总览理解完整 ERP</h2><p>审批确认业务授权，出入库负责执行，库存异动记录实物流转，应收应付与收付款完成财务闭环。</p></div>{can(user, 'ORDERS_VIEW') && <div className="hero-amount"><span>已审批订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div>}</div>
+  return <BusinessPageShell className="dashboard-v15" width="rail">
+    <BusinessPageHeader title="工作台" context="我的业务入口" help={<HelpDisclosure summary="工作台说明"><p>指标与快捷入口按当前角色权限展示；业务总览提供跨域关系，工作台聚焦当前用户可执行的日常工作。</p></HelpDisclosure>}/>
+    {can(user, 'ORDERS_VIEW') && <div className="hero-card"><div><span className="pill">今日业务</span><h2>已审批销售订单</h2></div><div className="hero-amount"><span>订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div></div>}
     <div className="stats-grid">{cards.map(([label, value, unit, color]) => <div className={`stat-card ${color}`} key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong><i/></div>)}</div>
     <Panel title="常用工作"><div className="dashboard-shortcuts">{shortcuts.map(([label, page]) => <AppLink key={page} page={page}>{label}<span>→</span></AppLink>)}</div></Panel>
     {can(user, 'ORDERS_VIEW') && <Panel title="最近订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
       <OrderTable orders={data.recentOrders} compact/>
     </Panel>}
-  </>;
+  </BusinessPageShell>;
 }
 
 function MasterActions({ item, label, endpoint, onEdit, onChanged, notify }) {
@@ -1006,12 +1007,13 @@ export function UsersRoles({ user, notify }) {
   const [tab, setTab] = useState(defaultTab); const [users, setUsers] = useState([]); const [roles, setRoles] = useState([]); const [permissions, setPermissions] = useState([]); const [editingUser, setEditingUser] = useState(null); const [editingRole, setEditingRole] = useState(null);
   const load = () => Promise.all([can(user, 'USERS_MANAGE') ? api('/api/users') : null, can(user, 'ROLES_MANAGE') ? api('/api/roles') : null]).then(([u, r]) => { setUsers(u?.users || []); if (r) { setRoles(r.roles); setPermissions(r.permissions); } }).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="用户与角色" action={tab === 'users' ? can(user, 'USERS_MANAGE') && <button className="primary" onClick={() => setEditingUser({})}>＋ 新增用户</button> : can(user, 'ROLES_MANAGE') && <button className="primary" onClick={() => setEditingRole({ permissions: [] })}>＋ 新增角色</button>}>
+  return <BusinessPageShell className="users-roles-v15" width="rail">
+    <BusinessPageHeader title="用户与权限" context={tab === 'users' ? '用户管理' : '角色权限'} primaryAction={tab === 'users' ? can(user, 'USERS_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditingUser({})}>新增用户</BusinessAction> : can(user, 'ROLES_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditingRole({ permissions: [] })}>新增角色</BusinessAction>} help={<HelpDisclosure summary="权限说明"><p>用户通过角色取得权限；停用用户不删除其历史业务与审计记录。</p></HelpDisclosure>}/>
     <div className="tabs">{can(user, 'USERS_MANAGE') && <button className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户管理</button>}<button className={tab === 'roles' ? 'active' : ''} onClick={() => setTab('roles')}>角色权限</button></div>
     {tab === 'users' ? <div className="user-cards">{users.map((item) => <div className="user-card" key={item.id}><div className="avatar large">{item.displayName.slice(0,1)}</div><div><strong>{item.displayName}</strong><span className="mono">{item.username}</span></div><span className="role-chip">{roleDisplayName(item)}</span><Active active={item.active}/><button className="row-action" onClick={() => setEditingUser(item)}>编辑</button></div>)}</div> : <div className="role-grid">{roles.map((role) => <div className="role-card" key={role.id}><div><span className="mono">{role.code}</span><h3>{roleDisplayName({ roleId: role.id, roleCode: role.code, roleName: role.name })}</h3><p>{role.description}</p></div><div className="role-meta"><span>{role.user_count} 位用户</span><span>{role.permissions.length} 项权限</span></div>{can(user, 'ROLES_MANAGE') && <button className="secondary" onClick={() => setEditingRole(role)}>配置权限</button>}</div>)}</div>}
     {editingUser && <UserModal value={editingUser} roles={roles} onClose={() => setEditingUser(null)} onSaved={() => { setEditingUser(null); load(); notify('用户资料已保存'); }} notify={notify}/>} 
     {editingRole && <RoleModal value={editingRole} permissions={permissions} onClose={() => setEditingRole(null)} onSaved={() => { setEditingRole(null); load(); notify('角色权限已保存'); }} notify={notify}/>} 
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function UserModal({ value, roles, onClose, onSaved, notify }) {

@@ -151,7 +151,7 @@ function ActionDialog({ action, busy, reason, setReason, onCancel, onConfirm }) 
   );
 }
 
-export default function MobileApprovalCenter({ notify, onPendingCountChange }) {
+export default function MobileApprovalCenter({ notify, onPendingCountChange, standaloneTitle = false }) {
   const [activeTab, setActiveTab] = useState('pending');
   const [items, setItems] = useState([]);
   const [counts, setCounts] = useState({});
@@ -195,7 +195,8 @@ export default function MobileApprovalCenter({ notify, onPendingCountChange }) {
   if (selected) return <><ApprovalDetail item={selected} busy={busy} onBack={() => setSelected(null)} onAction={requestAction} />{dialog ? <ActionDialog action={dialog.action} busy={busy} reason={reason} setReason={setReason} onCancel={() => !busy && setDialog(null)} onConfirm={confirmAction} /> : null}</>;
 
   return (
-    <section className="mobile-approval-center" data-testid="mobile-approval-center">
+    <section className={`mobile-approval-center${standaloneTitle ? ' approval-workspace-v15' : ''}`} data-testid="mobile-approval-center">
+      {standaloneTitle ? <header className="approval-workspace-v15__header"><span>跨域工作流</span><h1>业务审批</h1><p>统一处理销售订单、采购订单、请购单、库存盘点与会计凭证。</p></header> : null}
       <ApprovalTabs activeTab={activeTab} counts={counts} onChange={changeTab} />
       <ApprovalListState loading={loading} error={error} items={items} onRetry={() => load(activeTab)} onSelect={setSelected} />
     </section>

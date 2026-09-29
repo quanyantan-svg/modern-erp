@@ -18,7 +18,7 @@ test('D4 keeps invoice bill discount bank and accounting surfaces on the canonic
   assert.match(discounts, /className="sales-discounts-v15" width="rail"/);
   assert.match(discounts, /className="purchase-discounts-v15" width="rail"/);
   assert.match(read('src/pages/treasury-cost.jsx'), /className="bank-accounts-v15" width="rail"/);
-  assert.match(read('src/pages/accounting.jsx'), /className="accounting-v15" width="rail"/);
+  assert.match(read('src/pages/accounting.jsx'), /className=\{`accounting-v15\$\{/);
 });
 
 test('D4 removes raw POSTED copy from financial report empty states', () => {
