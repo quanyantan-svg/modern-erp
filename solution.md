@@ -437,7 +437,7 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 ## 18. 版本、已知技术债与批准边界
 
 - Git tag 标识项目发布版本，package.json.version 镜像最新发布基线；精确维护检出状态由 Git SHA 或 git describe 标识。
-- 当前 master 是 V1.4.1 发布基线；当前 HEAD 携带 v1.4.1 release-preparation 元数据，等待 future annotated tag 指向 release-preparation commit 而非 E8 implementation baseline。
+- 当前 master 是 V1.5.0 发布候选基线；当前 HEAD 携带 v1.5.0 release-preparation 元数据，等待 future annotated tag 指向 release-preparation commit 而非 D10 implementation baseline。
 - server/app.js 和若干页面仍过大，路由/页面拆分需要独立设计和回归。
 - SQLite schema、历史 imperative migrations 与 MySQL bootstrap 并存，新增迁移必须验证双路径。
 - docs/ 已分为 operations 当前专项指南与 archive 历史证据；两者均不得覆盖本文件和 document.md 的 canonical 合同。
@@ -840,7 +840,7 @@ R4-R3 实施期间的 WIP（含 “首行保留 source 标识” workaround）�
 
 ### 21.1 设计状态、边界与整体结构
 
-本节是 V1.4 的 immutable 实现合同（design contract）。状态为 **IMPLEMENTED BY E1–E8**；释放基线为 v1.4.1。本节技术内容等同于已上线能力，任何后续修改都应被视作对设计合同的扩展并随对应设计评审更新。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
+本节是 V1.4 的 immutable 实现合同（design contract）。状态为 **IMPLEMENTED BY E1–E8**；释放基线为 v1.4.1 / 当前生产基线 v1.5.0 完整继承。本节技术内容等同于已上线能力，任何后续修改都应被视作对设计合同的扩展并随对应设计评审更新。设计复用现有原生 HTTP、RBAC、审计、事务、SQLite/MySQL adapter、库存流水、估值、跟踪分配、来源行和期间表，不引入第二套期间、库存、审批或追溯系统。
 
 V1.4 的共同调用结构为：
 
@@ -1319,7 +1319,7 @@ UAT 断言数量、金额（整数分）、身份、价值、来源、业务日�
 
 ### 22.1 设计状态、原则与兼容边界
 
-本节是 document.md §21 已批准需求的 STAGE 2 产品与技术设计，起点为 `fa6f4dde54a0361d7c591500c68f67ce6bb66add`。当前发布基线仍是 v1.4.1（发布基线提交 `8bfd253f6cfde545fa7392a2cc0e92f210cb60ef`）；本节不表示 V1.5 已实现或发布。V1.5 的架构原则固定为：**流程图是业务语义模型，不是字面路由树**。现有后端实体、数据库表、API 身份和 53 个启用路由保持稳定；展示层可以重命名、重组、合并导航、隐藏次级入口并按上下文披露内部步骤，但不得为复刻流程图标签创建重复业务实现或重复顶层路由。
+本节是 document.md §21 已批准需求的 STAGE 2 产品与技术设计，起点为 `fa6f4dde54a0361d7c591500c68f67ce6bb66add`。设计冻结时上一发布基线为 v1.4.1（发布基线提交 `8bfd253f6cfde545fa7392a2cc0e92f210cb60ef`）；本节不表示 V1.5 已实现或发布。V1.5 的架构原则固定为：**流程图是业务语义模型，不是字面路由树**。现有后端实体、数据库表、API 身份和 53 个启用路由保持稳定；展示层可以重命名、重组、合并导航、隐藏次级入口并按上下文披露内部步骤，但不得为复刻流程图标签创建重复业务实现或重复顶层路由。
 
 V1.5 复用现有 React/Vite、`src/App.jsx`、`applicationMetadata.js`、`AppNavigationContext`、共享呈现组件、原生 HTTP、RBAC、`transaction()`、`audit()`、`lifecycle-engine.js` 和 `lifecycle_archives`。五角色、五审批族、C01–C05、库存调拨确认、LOT/SERIAL、存货月结、履约、报表口径和 V1.4.1 MySQL existing-database hotfix 均为不可破坏边界。
 
