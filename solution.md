@@ -1314,3 +1314,343 @@ UAT 断言数量、金额（整数分）、身份、价值、来源、业务日�
 ### 21.16 设计完成判定与未决项
 
 本设计已覆盖 V1.4-C 全部冻结项和库存关账/跟踪/全局一致性要求，未发现 document.md 内部矛盾。V1.4 实施切片 E1–E8 已分别在 focused 套件和全量套件中证明本设计合同落地；SQLite 1523 / 1523 PASS；MySQL functional 44 / 44 PASS；MySQL concurrency 13 / 13 PASS；System Health PASS；构建 PASS；浏览器业务 UAT PASS。任何需要猜测业务日期、来源、历史调拨状态或 genealogy 的情况都必须 fail closed，并作为独立数据治理请求回报，不能扩大本设计授权。
+
+## 22. [V1.5 — DESIGN FROZEN] 流程对齐产品与技术设计
+
+### 22.1 设计状态、原则与兼容边界
+
+本节是 document.md §21 已批准需求的 STAGE 2 产品与技术设计，起点为 `fa6f4dde54a0361d7c591500c68f67ce6bb66add`。当前发布基线仍是 v1.4.1（发布基线提交 `8bfd253f6cfde545fa7392a2cc0e92f210cb60ef`）；本节不表示 V1.5 已实现或发布。V1.5 的架构原则固定为：**流程图是业务语义模型，不是字面路由树**。现有后端实体、数据库表、API 身份和 53 个启用路由保持稳定；展示层可以重命名、重组、合并导航、隐藏次级入口并按上下文披露内部步骤，但不得为复刻流程图标签创建重复业务实现或重复顶层路由。
+
+V1.5 复用现有 React/Vite、`src/App.jsx`、`applicationMetadata.js`、`AppNavigationContext`、共享呈现组件、原生 HTTP、RBAC、`transaction()`、`audit()`、`lifecycle-engine.js` 和 `lifecycle_archives`。五角色、五审批族、C01–C05、库存调拨确认、LOT/SERIAL、存货月结、履约、报表口径和 V1.4.1 MySQL existing-database hotfix 均为不可破坏边界。
+
+### 22.2 Canonical 导航与信息架构
+
+#### 22.2.1 单一导航元数据模型
+
+实施时把当前分散在 `navGroups`、`MOBILE_APPLICATION_GROUPS`、启动器图标和业务总览节点中的展示信息收敛到一份 presentation registry。每个启用路由记录 `route`、`title`、`domain`、`semanticLevel`、`template`、`permissions`、`launcherPlacement`、`mobilePlacement`、`desktopPlacement` 和可选 `contextTargets`；桌面、移动、应用页和总览从同一 registry 派生，但后端权限仍是授权权威。历史 `mrp` hash 只作为兼容 alias，不计入 53 个启用导航路由，也不显示成独立入口。
+
+七个主领域固定为：基础资料、销售、计划 / MRP、生产、采购、库存、经营分析。财务能力通过 ACCOUNTING 角色工作区以及销售/采购结算节点进入，不构成第八主领域。
+
+#### 22.2.2 Mobile shell
+
+- 保留现有底部壳结构，并将“应用”作为七领域启动入口、“审批”作为统一业务审批、“消息”直接打开真实 `notifications` 内容；删除当前静态“暂无新消息”重复空壳。“云翼 / 我的”等既有壳能力不参与 ERP 主领域计数。
+- 应用首屏按七领域纵向分区，每域默认显示 2–4 个主要入口；次级入口在域内“展开全部”显示。进入某个业务路由后使用现有返回应用机制，不复制页面。
+- 无权限入口默认隐藏；业务总览中的无权限流程节点可保留 `PROCESS_ONLY` 说明态，但不请求受保护数据、不提供动作。
+- 审批底栏直接复用同一 `MobileApprovalCenter` 数据模型；桌面审批页也改用同一五族列表、详情和动作合同。
+
+#### 22.2.3 Desktop shell
+
+- 左侧主导航按“业务总览 / 应用 / 七领域”组织；选中领域后呈现该领域主要入口，次级能力进入组内“更多”。桌面不继续展示当前 11 组、53 项同权重菜单墙。
+- 顶部提供全局通知入口、当前角色工作区入口和用户菜单。ACCOUNTING 的财务工作区显示 AR、AP、发票、账单、收付款、凭证、银行账户和财务报表快捷方式，但页面仍归属销售、采购、经营分析或角色工作区。
+- 宽屏内容区域最大建议宽度 1440px；列表使用表格与可选详情侧栏，详情使用主内容 + 280–320px 关系/状态侧轨，不把手机卡片拉伸铺满。
+
+#### 22.2.4 应用启动器的七领域内容
+
+| 领域 | 首屏主要入口 | 展开后的次级 / 上下文入口 |
+|---|---|---|
+| 基础资料 | 货品资料、客户资料、供应商资料、仓库资料 | BOM、制品工序标准从生产域的配置入口进入；银行账户从财务工作区进入 |
+| 销售 | 销售订单、销售出货、应收结算 | 退货、销售发票、收款 / 核销、销售折让；联系人从客户上下文或更多业务进入；OQC 仅从出货上下文进入 |
+| 计划 / MRP | 计划预测、MRP、生产指令、采购指令 | MRP 运算历史、物料建议作为 MRP 子视图；请购单也可由采购域进入 |
+| 生产 | 生产指令、制令单、用料出库、生产入库 | BOM、制品工序标准、生产执行分析；标准成本和成本费率进入“高级设置” |
+| 采购 | 采购指令、请购单、采购订单、采购入库 | 应付结算、供应商账单、付款 / 核销、采购折让；IQC 仅从采购入库上下文进入 |
+| 库存 | 库存作业、存货报废、存货月结、批次 / 序列号追溯 | 调整、调拨、盘点是“库存作业”的子能力；库存异动明细以经营分析为主入口并保留库存上下文深链 |
+| 经营分析 | 经营分析 | 五张决策报表作为同页子视图；生产执行分析可作为制造分析快捷入口 |
+
+“更多业务”固定承载项目、任务、工时，以及 CRM 的联系人、客户跟进、销售活动。“高级设置”固定承载标准成本、成本费率、质量规则和生产基础配置的次级入口。“系统设置”固定承载用户与权限；通知中心由全局通知 / 移动消息进入，不占七领域主首屏。
+
+#### 22.2.5 已知重复导航的冻结解法
+
+- **MRP**：唯一主产品入口显示“MRP”，默认进入 `mrp-runs`；`mrp-runs` 为“运算历史 / 新建运算”子视图，`material-requirements-plan` 为“物料建议”子视图，两条既有 route 都保留深链，不显示两个主图标；legacy `#mrp` 继续重定向兼容。
+- **库存异动**：经营分析中的“库存异动明细”为唯一主报告入口；`inventory-transactions` 作为库存作业上下文深链继续可达，不显示第二个主图标。
+- **审批**：产品概念统一为“业务审批”，桌面与移动共享 `/api/approvals` 及五个 canonical family；桌面不再只表现销售订单。
+- **消息**：移动“消息”和桌面通知图标都进入真实 `notifications` 路由；移除静态空消息页。
+- **采购入库 / 仓库验收 / IQC**：主标题和主入口为“采购入库”；“仓库验收”只作为流程语义提示；IQC 是入库详情内的质量门禁和待检队列深链。
+- **销售出货 / 仓库出货 / OQC**：主标题和主入口为“销售出货”；OQC 是出货详情内的质量门禁和待检队列深链。
+- **AR / AP**：主流程节点分别为“应收结算”“应付结算”；发票、账单、收付款 / 核销和折让是内部子能力或 ACCOUNTING 工作区快捷方式。
+- **生产**：用户术语固定为“制令单 / 用料出库 / 生产入库”，后端 production-order、material-issue、production-receipt 身份不改。
+
+### 22.3 全部 53 个启用路由的展示设计矩阵
+
+缩写：层级 `P/S/H` = 主入口 / 次级入口 / 主启动器隐藏但上下文或角色入口可达；移动 `域/展/上下文/审批/消息/角色/更多/设置`；桌面含义相同。改造级 `L3` = 结构重建，`L2` = 套用模板并重组信息，`L1` = 共享样式与状态收口。语义层使用 §21 冻结枚举。每行恰好对应一个启用 route；五个 disabled route 不计入矩阵。
+
+| # | 当前 route | 当前标题 | V1.5 标题 | 语义域 / 层级 | 模板 | P/S/H | 父级或上下文入口 | 移动 | 桌面 | 改造 | 文案动作 | 状态动作 | 特别说明 |
+|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 01 | `business-overview` | 业务总览 | 业务总览 | 跨域 / FLOW_SUPPORTING | WORKFLOW | P | 全局 | 域首屏 | 全局 | L3 | 删除常驻边界段落 | 节点计数+异常 | 原型 2 |
+| 02 | `dashboard` | 工作台 | 工作台 | 跨域 / FLOW_SUPPORTING | WORKFLOW | S | 角色工作区 | 角色 | 角色 | L2 | 压缩欢迎与说明 | 待办按维度 | 不替代总览 |
+| 03 | `orders` | 销售订单 | 销售订单 | 销售 / FLOW_PRIMARY | LIST | P | 销售 | 域 | 域 | L2 | 帮助抽屉 | 审批+履约分离 | 详情/表单套子模板 |
+| 04 | `approvals` | 订单审批 | 业务审批 | 跨域 / FLOW_SUPPORTING | WORKFLOW | P | 全局审批 | 审批 | 审批 | L3 | 只保留任务说明 | 五族统一 | 与移动同合同 |
+| 05 | `purchase-orders` | 采购订单 | 采购订单 | 采购 / FLOW_PRIMARY | LIST | P | 采购 | 域 | 域 | L2 | 帮助抽屉 | 审批+收货分离 | 来源身份不变 |
+| 06 | `suppliers` | 供应商 | 供应商资料 | 基础资料 / FLOW_PRIMARY | LIST | P | 基础资料 | 域 | 域 | L2 | 删除重复说明 | 启用/停用 | — |
+| 07 | `customers` | 客户 | 客户资料 | 基础资料 / FLOW_PRIMARY | LIST | P | 基础资料 | 域 | 域 | L2 | 删除重复说明 | 启用/停用 | — |
+| 08 | `products` | 产品 | 货品资料 | 基础资料 / FLOW_PRIMARY | LIST | P | 基础资料 | 域 | 域 | L2 | 跟踪解释进帮助 | 启用+跟踪维度 | 后端 product 不改名 |
+| 09 | `warehouses` | 仓库 | 仓库资料 | 基础资料 / FLOW_PRIMARY | LIST | P | 基础资料 | 域 | 域 | L2 | 删除重复说明 | 启用/停用 | — |
+| 10 | `inventory` | 库存查询 | 库存作业 | 库存 / FLOW_PRIMARY | WORKFLOW | P | 库存 | 域 | 域 | L2 | 子能力说明折叠 | 库存/盘点/调拨分维度 | 调整/调拨/盘点子视图 |
+| 11 | `purchase-receipts` | 采购入库 | 采购入库 | 采购 / FLOW_PRIMARY | LIST | P | 采购 | 域 | 域 | L3 | 仓库验收作副标题 | IQC+执行分离 | 原型 3/4 |
+| 12 | `sales-deliveries` | 销售出货 | 销售出货 | 销售 / FLOW_PRIMARY | LIST | P | 销售 | 域 | 域 | L2 | OQC 说明上下文化 | OQC+执行分离 | — |
+| 13 | `returns` | 退货管理 | 退货管理 | 销售/采购 / FLOW_SUPPORTING | LIST | S | 出货/入库详情 | 展 | 展 | L2 | 反向语义进帮助 | 类型+执行 | 保留单 route |
+| 14 | `inventory-transactions` | 库存异动明细 | 库存异动明细 | 经营分析 / REPORT | REPORT | H | 库存作业深链 | 上下文 | 上下文 | L2 | 方法折叠 | 方向/来源，不用单状态 | 主报告在 28 |
+| 15 | `traceability` | 批次与序列号追溯 | 批次 / 序列号追溯 | 库存 / FLOW_SUPPORTING | REPORT | P | 库存 | 域 | 域 | L2 | legacy 说明按需 | 身份状态 | — |
+| 16 | `inventory-scraps` | 库存报废 | 存货报废 | 库存 / FLOW_PRIMARY | LIST | P | 库存 | 域 | 域 | L2 | 原因帮助 | 执行状态 | — |
+| 17 | `inventory-month-end` | 存货月结 | 存货月结 | 库存 / FLOW_PRIMARY | WORKFLOW | P | 库存 | 域 | 域 | L2 | 检查解释折叠 | 期间+阻断 | 保持 E3 合同 |
+| 18 | `sales-discounts` | 销售折让 | 销售折让 | 销售 / FLOW_INTERNAL_STEP | LIST | H | 应收结算 | 上下文 | 上下文 | L2 | 方法进帮助 | 商业+冲销 | — |
+| 19 | `purchase-discounts` | 采购折让 | 采购折让 | 采购 / FLOW_INTERNAL_STEP | LIST | H | 应付结算 | 上下文 | 上下文 | L2 | 方法进帮助 | 商业+冲销 | — |
+| 20 | `sales-invoices` | 销售发票 | 销售发票 | 销售 / FLOW_INTERNAL_STEP | LIST | S | 应收结算/财务工作区 | 展 | 角色 | L2 | 过账解释折叠 | 商业+过账 | — |
+| 21 | `accounts-receivable` | 应收账款 | 应收结算 | 销售 / FLOW_PRIMARY | WORKFLOW | P | 销售 | 域 | 域/角色 | L2 | 结算方法按需 | 商业+结算 | AR 主节点 |
+| 22 | `payment-collections` | 收款单 | 收款 / 核销 | 销售 / FLOW_INTERNAL_STEP | LIST | H | 应收结算 | 上下文 | 角色 | L2 | 分配说明折叠 | 确认+核销 | — |
+| 23 | `accounts-payable` | 应付账款 | 应付结算 | 采购 / FLOW_PRIMARY | WORKFLOW | S | 采购 | 展 | 域/角色 | L2 | 结算方法按需 | 商业+结算 | AP 主节点 |
+| 24 | `supplier-bills` | 供应商账单 | 供应商账单 | 采购 / FLOW_INTERNAL_STEP | LIST | S | 应付结算/财务工作区 | 展 | 角色 | L2 | 三单匹配帮助 | 商业+过账 | — |
+| 25 | `payment-disbursements` | 付款单 | 付款 / 核销 | 采购 / FLOW_INTERNAL_STEP | LIST | H | 应付结算 | 上下文 | 角色 | L2 | 分配说明折叠 | 确认+核销 | — |
+| 26 | `accounting` | 会计凭证 | 会计凭证 | 经营分析 / FLOW_SUPPORTING | LIST | S | 财务工作区 | 角色 | 角色 | L2 | 会计帮助按需 | 录入+审批+过账 | 五族中含手工凭证 |
+| 27 | `bank-accounts` | 银行账户 | 银行账户 | 基础资料 / ADVANCED_CONFIGURATION | CONFIG | H | 财务工作区设置 | 角色 | 角色 | L1 | 保留最小帮助 | 启用/停用 | 非第八领域 |
+| 28 | `decision-reports` | 决策报表 | 经营分析 | 经营分析 / REPORT | REPORT | P | 经营分析 | 域 | 域 | L2 | 方法进筛选帮助 | 不伪造总状态 | 五报表子视图 |
+| 29 | `boms` | BOM 清单 | BOM | 生产 / ADVANCED_CONFIGURATION | CONFIG | S | 生产配置 | 展 | 展 | L2 | 版本解释按需 | 版本+生效 | — |
+| 30 | `product-routings` | 制品工序标准 | 制品工序标准 | 生产 / ADVANCED_CONFIGURATION | CONFIG | S | 生产配置 | 展 | 展 | L2 | 版本解释按需 | 版本+生效 | — |
+| 31 | `production-orders` | 制令单 | 制令单 | 生产 / FLOW_PRIMARY | LIST | P | 生产 | 域 | 域 | L2 | 生产边界进帮助 | 执行+完工 | 后端名不改 |
+| 32 | `material-issues` | 用料出库 | 用料出库 | 生产 / FLOW_PRIMARY | LIST | P | 生产 | 域 | 域 | L2 | 跟踪帮助按需 | 执行+冲销 | — |
+| 33 | `production-receipts` | 生产入库 | 生产入库 | 生产 / FLOW_PRIMARY | LIST | P | 生产 | 域 | 域 | L2 | WIP 说明按需 | 执行+冲销 | — |
+| 34 | `manufacturing-analytics` | 生产执行分析 | 生产执行分析 | 经营分析 / REPORT | REPORT | S | 生产/经营分析 | 展 | 展 | L2 | 方法折叠 | 证据可信度 | — |
+| 35 | `forecasts` | 需求预测 | 计划预测 | 计划 / MRP / FLOW_PRIMARY | LIST | P | 计划 / MRP | 域 | 域 | L2 | 需求模式进帮助 | 草稿/生效/取消 | — |
+| 36 | `mrp-runs` | MRP 运算 | MRP | 计划 / MRP / FLOW_PRIMARY | WORKFLOW | P | 计划 / MRP | 域 | 域 | L2 | 运算解释按需 | 运算+异常 | 唯一 MRP 主入口 |
+| 37 | `material-requirements-plan` | 物料需求计划 | MRP · 物料建议 | 计划 / MRP / FLOW_INTERNAL_STEP | REPORT | H | MRP 子视图 | 上下文 | 上下文 | L2 | 建议口径折叠 | 建议类型+警告 | 深链保留 |
+| 38 | `production-instructions` | 生产指令 | 生产指令 | 计划/生产 / FLOW_PRIMARY | LIST | P | 计划 / MRP、生产 | 域 | 域 | L2 | 来源帮助按需 | 下达+下游 | — |
+| 39 | `purchase-instructions` | 采购指令 | 采购指令 | 计划/采购 / FLOW_PRIMARY | LIST | P | 计划 / MRP、采购 | 域 | 域 | L2 | 来源帮助按需 | 下达+下游 | — |
+| 40 | `purchase-requisitions` | 请购单 | 请购单 | 采购 / FLOW_PRIMARY | LIST | P | 采购 | 域 | 域 | L2 | 来源帮助按需 | 审批+下游 | — |
+| 41 | `product-costs` | 标准成本 | 标准成本 | 生产 / ADVANCED_CONFIGURATION | CONFIG | H | 高级设置 | 设置 | 设置 | L2 | 成本口径进帮助 | 版本+生效 | — |
+| 42 | `cost-rates` | 费用项目 | 成本费率 | 生产 / ADVANCED_CONFIGURATION | CONFIG | H | 高级设置 | 设置 | 设置 | L2 | 费率说明按需 | 版本+生效 | 展示层改名 |
+| 43 | `iqc` | IQC来料检验 | IQC 来料检验 | 采购 / FLOW_INTERNAL_STEP | WORKFLOW | H | 采购入库 | 上下文 | 上下文 | L2 | 检验规则折叠 | 质量+门禁 | 非同级主节点 |
+| 44 | `oqc` | OQC出货检验 | OQC 出货检验 | 销售 / FLOW_INTERNAL_STEP | WORKFLOW | H | 销售出货 | 上下文 | 上下文 | L2 | 检验规则折叠 | 质量+门禁 | 非同级主节点 |
+| 45 | `quality-control-points` | 质量控制点 | 质量规则 | 生产/采购/销售 / ADVANCED_CONFIGURATION | CONFIG | H | 高级设置 | 设置 | 设置 | L2 | 规则说明按需 | 版本+生效 | 展示层改名 |
+| 46 | `projects` | 项目立项 | 项目立项 | 更多业务 / EXTENSION_BUSINESS | LIST | S | 更多业务 | 更多 | 更多 | L2 | 删除介绍块 | 项目状态 | 保留能力 |
+| 47 | `tasks` | 任务管理 | 任务管理 | 更多业务 / EXTENSION_BUSINESS | LIST | S | 项目 | 更多 | 更多 | L2 | 删除介绍块 | 任务状态 | 保留能力 |
+| 48 | `timesheets` | 工时记录 | 工时记录 | 更多业务 / EXTENSION_BUSINESS | LIST | S | 项目/任务 | 更多 | 更多 | L2 | 删除介绍块 | 提交状态 | 保留能力 |
+| 49 | `contacts` | 联系人管理 | 联系人 | 更多业务 / EXTENSION_BUSINESS | LIST | S | 客户/更多业务 | 更多 | 更多 | L2 | 删除介绍块 | 启用/关系 | 客户详情可深链 |
+| 50 | `followups` | 客户跟进 | 客户跟进 | 更多业务 / EXTENSION_BUSINESS | LIST | S | CRM | 更多 | 更多 | L2 | 删除介绍块 | 跟进状态 | 保留能力 |
+| 51 | `activities` | 销售活动 | 销售活动 | 更多业务 / EXTENSION_BUSINESS | LIST | S | CRM | 更多 | 更多 | L2 | 删除介绍块 | 活动状态 | 保留能力 |
+| 52 | `notifications` | 通知中心 | 通知中心 | 系统 / SYSTEM_SUPPORT | LIST | H | 全局通知 | 消息 | 全局 | L2 | 空态简化 | 已读/未读+业务类别 | 替换空消息壳 |
+| 53 | `users` | 用户与角色 | 用户与权限 | 系统 / SYSTEM_SUPPORT | CONFIG | H | 系统设置 | 设置 | 设置 | L2 | 权限解释按需 | 启用+角色 | 仅 ADMIN |
+
+禁用的 `cash-journals`、`bills`、`fixed-assets`、`workflows`、`data-cleanup` 保持禁用，不计入 53；本设计不借机启用它们。测试不得再把 48 条移动元数据误称为完整活动路由目录。
+
+### 22.4 V1.5 视觉系统冻结
+
+#### 22.4.1 字体与数字
+
+- 沿用现有系统字体栈，不引入远程字体。页面标题：桌面 28px/34、移动 24px/30、600；区块标题 18px/26、600；小节标题 15px/22、600；正文 14px/22、400；次级元数据 12px/18、400。
+- 金额、数量和关键 KPI 使用 24–32px、600，并启用 tabular numerals；单据号 13–14px、500，可使用现有等宽字体。不得用超大数字装饰无业务意义的卡片。
+
+#### 22.4.2 间距、密度与表面
+
+- 页面横向 padding：手机 16px，平板 20–24px，桌面 32px；页面主区块间距手机 24px、桌面 32px；区块内部 16–20px；列表行最小高 48px，移动可点击目标不小于 44×44px。
+- 默认页面使用中性背景 + 一层白色操作表面。连续业务内容优先靠标题、分隔线和留白分组；只有可独立点击、可比较或需要提升层级的对象才用卡片。
+- 表单小节、详情每一段、卡片内部不得再次套卡。边框使用 1px `--border-default/subtle`；普通内容不用阴影，浮层/侧板使用 `--shadow-2`，模态使用 `--shadow-3`。圆角以 10/12/16px 三档收口。
+
+#### 22.4.3 色彩与状态
+
+- 保留现有品牌蓝：主操作、选中导航、可点击链接。绿色只表示确认成功 / 有效 / 完成；琥珀表示待处理、警告或需要注意；红色只表示驳回、阻断、异常和危险动作；灰色表示草稿、取消、归档、不可用或次级信息。
+- 状态呈现扩展 `presentStatus`，不创建第二套枚举。标准状态：DRAFT=灰；SUBMITTED/PENDING=琥珀；APPROVED/CONFIRMED=蓝或绿（按维度）；COMPLETED=绿；REJECTED=红；CANCELLED=低对比灰；ARCHIVED=中性灰虚线/归档图标；BLOCKED/EXCEPTION=红。
+- 单个徽标不得混淆不同业务维度。需要时由 `BusinessStatusGroup` 分列显示审批状态、执行状态、商业状态、结算状态；仅存在一个维度的简单对象继续使用单个 `StatusChip`。
+
+#### 22.4.4 动作层级与响应式
+
+- 每页一个明显 primary；secondary 用于保存之外的常用动作；tertiary 用于帮助/返回/次级导航；danger 与主操作物理分离；低频、归档和其他危险动作进入 overflow 或 Danger Zone。
+- 手机单列、无页面级横向溢出；表格切换业务卡片，重要动作可使用安全区上方 sticky action region。桌面优先表格、分栏和侧轨；不得把移动卡片等宽拉到 1400px。
+
+### 22.5 共享组件架构
+
+实施只演进 `src/components/design-system.jsx`、`ui.jsx`、`lib/presentation.js` 和现有导航组件，不并行建立第二套 design system。
+
+| 概念 | 决策 | 现有基础与边界 |
+|---|---|---|
+| BusinessPageShell | DO_NOT_CREATE | App/MobileShell 已负责壳；页面用语义 section + header，避免巨型包装器 |
+| BusinessPageHeader | EXTEND | 增加 breadcrumbs、状态组、overflow；保留单 primary |
+| BusinessToolbar | EXTEND | 从现有 `Toolbar` 收敛主操作、搜索与视图动作 |
+| BusinessFilterBar | EXTEND | 复用 `SearchField`、`FilterButton`、`FilterSheet`，不复制筛选状态机 |
+| BusinessStateSummary | CREATE | 仅聚合可行动数量/异常，不做装饰 KPI |
+| BusinessList | EXTEND | `ResponsiveBusinessList` 继续负责桌面/移动互斥呈现 |
+| BusinessListCard | REUSE | 复用 `RecordCard`，只补统一动作槽和 archived 视觉 |
+| BusinessTable | EXTEND | 作为 `ResponsiveBusinessList` 的桌面 renderer，不创建独立数据层 |
+| BusinessDetailHeader | EXTEND | 复用 `BusinessPageHeader` 的 back/status/actions 能力 |
+| BusinessSummary | EXTEND | 复用 `SummaryCard`、`KeyValueRow`，限制为关键业务事实 |
+| BusinessSection | REUSE | 复用 `DetailSection`，以分隔线/留白为主 |
+| BusinessRelationSection | EXTEND | 抽取现有 `RelationshipSections`，统一上游/下游/财务深链 |
+| BusinessAuditSection | CREATE | 统一 actor/time/action/history，只读且默认折叠 |
+| BusinessDangerZone | CREATE | 取消、归档、恢复上下文的隔离区域 |
+| BusinessState（加载/空/错） | REUSE | 保留现有七类 content state；不与单据状态命名混用 |
+| BusinessStatusGroup | CREATE | 组合多个 `presentStatus` 结果，禁止把多维压成一枚 badge |
+| BusinessEmptyState | DO_NOT_CREATE | 由现有 `BusinessState kind=EMPTY/NO_RESULTS` 表达 |
+| BusinessErrorState | DO_NOT_CREATE | 由现有 `BusinessState kind=ERROR/BUSINESS_BLOCKED` 表达 |
+| BusinessLoadingState | DO_NOT_CREATE | 由现有 `BusinessState kind=LOADING` 表达 |
+| WorkflowLane | EXTEND | 从业务总览 track 演进，负责桌面 lane / 移动 step 切换 |
+| WorkflowNode | EXTEND | 从现有 `ProcessNode` 演进，保留 active / PROCESS_ONLY 授权语义 |
+| WorkflowStepList | CREATE | 移动纵向步骤容器，数据与 WorkflowLane 共用 |
+| ArchiveAction | CREATE | 负责资格加载、确认文案、提交和结构化错误展示，不自行判定资格 |
+| HelpDisclosure | CREATE | 基于原生 details/sheet，将长说明移出常驻页面 |
+
+### 22.6 六类 canonical 页面模板合同
+
+#### 22.6.1 LIST
+
+桌面顺序为页头 / 唯一主操作 → 搜索和筛选 → 可选状态摘要 → 表格或紧凑列表 → 行上下文动作；移动为页头 → 紧凑筛选 → 必要的状态 chips → 单列业务卡 → 一个与状态相关的行主动作 + overflow。主信息只含业务号、往来单位/业务对象、权威业务日期、金额/数量、仓库/产品（适用时）、简洁状态和下一动作；operator、创建时间、UUID、实现元数据进入详情。
+
+#### 22.6.2 DETAIL
+
+顺序固定为身份+多维状态 → 业务摘要 → 明细行 → 当前工作流 → 关联单据 → 审计历史 → Danger Zone。桌面可使用主文档 + 280–320px 状态/关系侧轨；移动为单文档流，关联和审计默认折叠。不得给每个小节再套 card。
+
+#### 22.6.3 FORM
+
+顺序为来源选择 → 不可变来源事实 → 可编辑头 → 明细行 → 条件跟踪/质量/税等业务区 → 保存草稿。保存、提交审批、确认执行和商业过账必须是不同命令与确认文案；前端永远不代替后端校验来源、金额或状态。
+
+#### 22.6.4 WORKFLOW
+
+显示流程、当前节点、待办、阻断和下一动作，详细事实按需展开。节点是否可点击由权限和可达 route 决定；`PROCESS_ONLY` 节点不加载数据。审批、执行、商业、结算维度不得压成一条虚假的“总进度”。
+
+#### 22.6.5 REPORT
+
+顺序为标题/范围 → 筛选 → 已应用条件 → KPI → 结果 → 导出；方法说明只在筛选 sheet 或 HelpDisclosure 中显示。屏幕与导出必须复用相同业务日期、对象和权限查询。
+
+#### 22.6.6 CONFIG
+
+顺序为对象列表 → 版本 → 适用范围 → 当前有效状态 → 新建版本/变更动作。历史版本只读；不得把变更历史伪装成普通 CRUD 覆盖。
+
+### 22.7 四个先行原型
+
+#### 22.7.1 原型 1 — 应用页
+
+- 手机：七个域纵向排列；域头含名称、最多一个简短待办/异常摘要和展开按钮；每域默认 2–4 个主入口，次级入口展开显示。底部提供“更多业务”“高级设置”“系统设置”，仅在有可见子项时出现。
+- 桌面：左列七领域紧凑流程索引；中列显示选中领域的 2–4 个主工作流入口和次级入口；右列只显示当前角色待办、最近入口、异常摘要各一小组，不复制 dashboard。
+- 权限过滤由 canonical registry + 当前 `visibleNav` 共同完成；禁用 route 不渲染。点击只调用 `navigateToPage`，不新建页面实现。
+
+#### 22.7.2 原型 2 — 业务总览
+
+- 桌面只显示 SALES、PRODUCTION、PURCHASE 三条 lane：销售订单 → 销售出货/退货 → 应收结算；MRP → 生产指令 → 制令单 → 用料出库 → 生产入库；MRP → 采购指令 → 请购单 → 采购订单 → 采购入库 → 应付结算。
+- 下方使用基础资料、库存作业、经营分析三个紧凑 supporting group。每个节点最多显示名称、待办数/简洁状态及异常标记，不常驻 eyebrow、description、boundary 段落。
+- IQC/OQC、审批细节、发票/账单、收付款和折让通过节点展开或详情深链披露。无权限节点显示中性流程说明，不出现空洞卡片、不请求数据。
+- 手机把当前可见 lane 改为纵向步骤链，支持 lane 切换；禁止压缩横向箭头图。
+
+#### 22.7.3 原型 3 — 采购入库列表
+
+- 标题“采购入库”，次级提示可为“仓库验收”；primary 固定“新建采购入库”。顶部为搜索、全部状态筛选和常用快捷状态（待编辑 / 待检验 / 待确认 / 已完成）。
+- 桌面列：入库单号、供应商、仓库、收货日期、总数量/金额、IQC 状态、执行状态、下一动作。移动卡只保留同一组核心事实。
+- 行动作：DRAFT=继续编辑；待检验=完成检验；可确认=确认入库；CONFIRMED/完成=查看；CANCELLED=查看，且仅服务端返回 `archiveEligibility.allowed=true` 时在 overflow 显示“删除”。取消记录使用低对比灰，不使用大面积红卡。
+- 明确支持 LOADING、EMPTY、NO_RESULTS、ERROR、PERMISSION_DENIED；错误显示安全 message/resolution/requestId。默认列表排除 archived；“显示已归档”是可选筛选。
+
+#### 22.7.4 原型 4 — 采购入库详情
+
+- 头部：入库单号、多维状态、唯一当前主动作。摘要：供应商、仓库、收货业务日期、总数量/金额。主体依次为来源采购订单、明细行、IQC 状态/检验记录/下一质量动作、确认与库存效果、供应商账单/AP 关系、审计历史、Danger Zone。
+- 桌面主文档显示明细，右侧窄轨显示当前流程、质量和商业关系；手机单列，摘要优先，来源/商业关系/审计可折叠，只有状态明确且有用时才 sticky 主动作。
+- DRAFT 的取消与保存分离；非 DRAFT 只读。CANCELLED 的“删除”在 Danger Zone/overflow，点击后先加载服务端资格，再显示“从业务列表移除”确认；归档详情默认只读并显示归档人、时间、原因及 ADMIN 恢复上下文。
+
+### 22.8 已取消单据归档技术设计
+
+#### 22.8.1 复用边界与模块职责
+
+不创建第二套归档表或服务。`lifecycle_archives` 继续是归档事实；`audit_logs` 继续是动作审计；`lifecycleArchiveFilter()` 继续负责活动列表默认排除。`lifecycle-engine.js` 的 `LIFECYCLE_ENTITIES` 扩展为显式策略 registry，每种类型除表/单号/状态/日期外还记录 `archivePhase`、`archivePermissionAny`、可选 `viewPermissionAny` 和领域依赖 adapter。
+
+新增领域函数概念边界（名称可按实现风格调整）：
+
+- `analyzeArchiveEligibility(db, actor, entityType, entityId)`：只读、显式返回资格和 blocker；与物理 cleanup classification 分开，不能把 `ARCHIVE_ONLY` 当作业务归档已安全。
+- `archiveCancelledDocument(db, actor, input)`：唯一归档命令，在 transaction 内重新读取和复核全部事实后写 archive + audit。
+- `restoreArchivedDocument(db, actor, input)`：受控恢复命令，在 transaction 内验证 active archive、原记录和恢复约束。
+- `lifecycleArchiveFilter()`：保持默认隐藏；`includeArchived=true` 必须先通过该领域 view 权限，不得因为查询参数绕过授权。
+
+物理 `cleanupLifecycleGraph()` 继续只属于 ADMIN 数据治理；业务页面永远不调用 `/api/lifecycle/cleanup`。
+
+#### 22.8.2 归档事务与失败行为
+
+归档命令严格按以下顺序执行：认证 → registry 解析 entity type → 领域归档权限 → 开启 `transaction()` → 重新读取原记录和 active archive → 要求当前状态恰为 `CANCELLED` → 构建生命周期依赖图 → 检查下游来源链 → 检查 `inventory_transactions` → 检查 `tracked_inventory_movements` / allocations / serial-lot 状态影响 → 检查 `inventory_valuation_movements` / value balances → 检查 AR/AP/voucher/settlement/discount 依赖 → 检查会计与库存关闭期间 → 写 `lifecycle_archives` → 在同一事务写 `audit(...,'ARCHIVE',...)` → 提交。任一检查失败则全部回滚；禁止静默归档。
+
+Phase 1 的采购入库只有在 `CANCELLED` 且零库存、零跟踪、零估值、零财务效果、无必须保留的 IQC 或下游退货/账单/来源链依赖时允许归档。IQC 若只是未完成且已按领域合同随取消失效，也仍先按显式 dependency rule 返回 blocker；D1 不自动删除、改写或归档 IQC。
+
+#### 22.8.3 授权模型
+
+选择方案 A：**复用现有领域 mutation 权限 + registry 中的归档策略**，不新增广泛 `ARCHIVE_*` 权限。理由是 V1.5 Phase 1 只有采购入库，现有 `PURCHASE_RECEIPTS_MANAGE` 已精确代表创建/编辑/取消该领域单据的人；新增权限会要求 permission data migration 与角色映射，却不能增加安全性。归档检查仍是独立 policy，不等于持有 MANAGE 就能绕过状态或依赖。
+
+- Phase 1 归档：`PURCHASE_RECEIPTS_MANAGE` 或 ADMIN；普通 `PURCHASE_RECEIPTS_VIEW` 不足。
+- REVIEWER 不因审批权限获得归档权；审批权限不出现在 `archivePermissionAny`。
+- 恢复和全局归档可见性：Phase 1 仅 ADMIN（现有 `USERS_MANAGE`）可执行恢复并查看跨域归档治理视图；领域用户可查看自己有 view 权限的归档详情，但不能恢复。
+- 若后续事实证明某领域的现有 MANAGE 同时包含不应拥有归档权的角色，再在对应后续设计中增加窄域权限；不得预先授予宽泛全局权限。
+
+#### 22.8.4 Phase 覆盖
+
+| 分类 | entity / 能力 | 决定与前置条件 |
+|---|---|---|
+| `ARCHIVE_PHASE_1` | `PURCHASE_RECEIPT` | D1 唯一首批；解决已观察 CANCELLED 入库单无法从列表移除的问题 |
+| `ARCHIVE_LATER` | `PLANNING_FORECAST`、`MRP_RUN`、`PRODUCTION_INSTRUCTION`、`PURCHASE_INSTRUCTION`、`PURCHASE_REQUISITION`、`SALES_ORDER`、`PURCHASE_ORDER` | 各域确认下游来源链和 domain permission 后分批开启 |
+| `ARCHIVE_LATER` | IQC、OQC | 当前不在 `LIFECYCLE_ENTITIES`；需先定义状态/来源 adapter，不能用表名旁路 registry |
+| `ARCHIVE_LATER` | `SALES_DELIVERY`、`SALES_RETURN`、`PURCHASE_RETURN` | 需证明取消时零库存、跟踪、估值及商业影响 |
+| `ARCHIVE_LATER` | `PRODUCTION_ORDER`、`PRODUCTION_MATERIAL_ISSUE`、`PRODUCTION_RECEIPT` | 需覆盖 BOM/工序/WIP/跟踪/估值依赖 |
+| `ARCHIVE_LATER` | `INVENTORY_ADJUSTMENT`、`INVENTORY_TRANSFER`、`INVENTORY_SCRAP`、`INVENTORY_CHECK` | 需覆盖调拨两端、盘点/期间、身份与价值依赖；已调拨或已审批盘点绝不合格 |
+| `ARCHIVE_LATER` | `SALES_DISCOUNT`、`PURCHASE_DISCOUNT`、`PAYMENT_COLLECTION`、`PAYMENT_DISBURSEMENT` | 财务影响更高，待 settlement/reversal 依赖 adapter 完整后再开放 |
+| `NOT_ELIGIBLE` | Sales Invoice、Supplier Bill、`ACCOUNT_RECEIVABLE`、`ACCOUNT_PAYABLE`、`ACCOUNTING_VOUCHER` | V1.5 不开放普通归档；商业/会计来源、子账和凭证必须持续可见 |
+| `NOT_ELIGIBLE` | 任意 `REJECTED`、非 `CANCELLED`、已确认/已过账/已完成/有业务效果记录 | Phase 1 状态合同硬拒绝；物理清理仍仅 ADMIN 治理路径 |
+
+#### 22.8.5 归档与恢复 UX
+
+- 默认业务列表通过 `lifecycleArchiveFilter` 隐藏 active archive；显式“显示已归档”需领域 view 权限。归档行使用中性“已归档”，不再显示取消红色强调。
+- 普通 overflow 可显示“删除”，确认标题必须是“从业务列表移除”，正文明确“单据将归档，原单、明细、取消记录与审计历史保留；管理员可在符合条件时恢复”。不得出现“永久删除”。
+- 归档详情只读，显示 archive actor/time/reason。ADMIN 可看到“恢复到业务列表”；恢复成功只把 `lifecycle_archives.active` 设为 0，绝不改变原单状态、行、取消证据或业务账。
+- 恢复在 transaction 内重新读取；要求 archive active、原记录存在、类型仍启用、状态仍为 `CANCELLED`。不满足时返回 `RESTORE_BLOCKED`；重复恢复返回明确冲突，不静默成功。
+
+### 22.9 API、错误与数据库设计
+
+#### 22.9.1 API 选择
+
+沿用仓库已经存在的 canonical lifecycle route style，不新增每页一条 route，也不创建第二套 resource router：
+
+- `GET /api/lifecycle/analyze?entityType=PURCHASE_RECEIPT&entityId=<id>`：升级为按 registry 领域授权，返回 `archiveEligibility` 和安全 blockers；ADMIN cleanup 分析需要显式治理模式且仍要求 `USERS_MANAGE`。
+- `POST /api/lifecycle/archive`：body `{ entityType, entityId, reason }`；`reason` 为 1–500 字符。响应 `{ ok, entityType, entityId, documentNo, archived: true, archivedAt, archiveEligibility }`。
+- `POST /api/lifecycle/restore`：body `{ entityType, entityId, reason? }`；Phase 1 仅 ADMIN。响应 `{ ok, entityType, entityId, documentNo, archived: false, restoredAt }`。
+- 采购入库列表继续使用 `GET /api/purchase-receipts`，新增/统一 `includeArchived=true` 与 archive metadata；详情 `GET /api/purchase-receipts/:id` 对有领域 view 权限者可返回 archived 记录并附 `archiveState/archiveEligibility`。默认列表不返回 archived。
+
+保留旧 URL 使 data-cleanup 历史调用不破坏，但业务模式和 ADMIN cleanup 模式必须走不同 policy 分支；不得让 `includeExternal`、`confirm` 等 cleanup 参数进入普通 archive 合同。
+
+#### 22.9.2 结构化错误
+
+复用 §21.10 的 `HttpError` envelope 与安全 `requestId`。稳定 code：`NOT_FOUND`(404)、`INVALID_STATE`(409)、`FORBIDDEN`(403)、`DOWNSTREAM_DEPENDENCY`(409)、`STOCK_EFFECT_EXISTS`(409)、`TRACKING_EFFECT_EXISTS`(409)、`FINANCIAL_DEPENDENCY`(409)、`CLOSED_PERIOD`(409)、`ALREADY_ARCHIVED`(409)、`RESTORE_BLOCKED`(409)。`details` 只包含安全 blocker code、关联单号/类型和允许的 resolution target，不返回 SQL、表名或未授权对象；所有失败零副作用。
+
+#### 22.9.3 数据库决定
+
+**DATABASE CHANGE REQUIRED = NO**。现有 `lifecycle_archives` 已保存 `(entity_type, entity_id)` 唯一身份、document number、archive/restore actor/time、reason 和 active；`audit_logs` 保存动作历史；现有 active index 支持默认过滤。不增加 archive 表、不在各业务表扩散 `deleted_at`、不物理删除普通归档记录。SQLite 与 MySQL 使用同一 SQL adapter/transaction 合同。若实施审计发现当前表无法满足冻结字段，必须停止 D1 并回到设计，不得临时加列。
+
+### 22.10 测试与验收设计
+
+#### 22.10.1 导航与展示
+
+- 建立权威 53-route fixture，从 canonical registry 与 `navGroups` 启用集合双向比对：每条恰好一个矩阵记录、可通过主/次/上下文入口到达、无意外丢失；disabled 5 条保持禁用；legacy `mrp` alias 不重复计数。
+- 断言七主领域、MRP 单主入口、库存异动单主报告入口、业务审批严格五族、移动消息打开 `notifications`、IQC/OQC 不成为主域同级图标、扩展业务不占首屏。
+- 共享状态测试覆盖九种语义状态及多维状态组；文案测试禁止将归档描述成永久删除。
+
+#### 22.10.2 响应式
+
+全部 53 条 active route 在 375×812、768×1024、1280×800 至少各完成自动 smoke；四个原型另做真实浏览器视觉基线。每条断言无页面级横向溢出、主操作可见、loading/empty/error 可渲染；有数据的 LIST/DETAIL 还断言业务号、业务日期、状态和下一动作可见。桌面验证表格/侧轨，不能只验证手机卡被拉伸。
+
+#### 22.10.3 采购入库归档
+
+- `CANCELLED` + 零效果 → 归档成功；DRAFT / CONFIRMED / REJECTED → `INVALID_STATE`。
+- CANCELLED + IQC 必须保留依赖 → `DOWNSTREAM_DEPENDENCY`；+库存流水 → `STOCK_EFFECT_EXISTS`；+跟踪 → `TRACKING_EFFECT_EXISTS`；+估值/AR/AP/凭证/结算 → `FINANCIAL_DEPENDENCY`；关闭期间 → `CLOSED_PERIOD`。
+- 非 `PURCHASE_RECEIPTS_MANAGE` 的领域用户与 REVIEWER → 403；WAREHOUSE/ADMIN 按现有角色映射验证；直接 API 与 UI 都不能绕过。
+- 归档两次 → `ALREADY_ARCHIVED`；默认列表隐藏、`includeArchived` 可见且仍受 view 权限；详情只读；audit 与原始行/取消 actor/time 全部保留。
+- ADMIN restore 在安全状态成功；重复恢复或状态异常 → `RESTORE_BLOCKED`。模拟 archive/audit 中途失败必须整体回滚。
+- SQLite focused + 完整回归；MySQL 只在受保护 disposable 环境验证同样事务/过滤/并发合同。
+
+#### 22.10.4 V1.4.1 回归门禁
+
+C01–C05、五角色、五审批族、调拨 WAREHOUSE 确认、LOT/SERIAL、月结、履约、报表定义和 MySQL existing-database hotfix测试全部保持。实现批次均先 focused，再 `pnpm test`、`pnpm build`、`git diff --check`；涉及数据库 adapter/API 的批次在有保护环境时运行 MySQL functional/concurrency gate。
+
+### 22.11 实施批次与视觉评审门禁
+
+| 批次 | 边界 | 停止条件 |
+|---|---|---|
+| D0 | canonical route metadata、设计 token、共享模板/状态/导航基础；不改业务结果 | 53-route fixture 和共享组件 focused 通过 |
+| D1 | 现有 lifecycle 子系统内加入领域归档资格、授权、结构化 API；只开放采购入库并补测试，不做广泛 UI rollout | purchase receipt archive/restore 双后端合同就绪 |
+| D2 | 仅实现四个原型：应用页、业务总览、采购入库列表、采购入库详情 | **立即停止，提交运营方视觉评审** |
+| D3 | 销售/采购操作单据 | 仅在四原型获批后开始 |
+| D4 | AR/AP 结算呈现；不开放 NOT_ELIGIBLE 财务归档 | 同上 |
+| D5 | 计划/生产 | 同上 |
+| D6 | 库存 | 同上 |
+| D7 | 主数据/配置 | 同上 |
+| D8 | 报表 | 同上 |
+| D9 | 扩展业务/系统 | 同上 |
+| D10 | 全 53 route 一致性、响应式和可达性审计 | 全量 gate 与人工验收 |
+
+D2 完成后必须 STOP。运营方确认前不得进入 D3+。若视觉方向被要求调整，先只修改四个原型和共享基础，重新冻结获批模式，再推广到其余页面；原型获批后成为 V1.5 canonical 视觉参考。任何批次不得借 UX 改造扩大 ERP 业务范围、启用 disabled route、改变后端实体身份或绕过 V1.4.1 合同。
