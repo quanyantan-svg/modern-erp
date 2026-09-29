@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, YuanField, can, dateTime, money } from '../components/ui.jsx';
 import { yuanToNonNegativeCents } from '../lib/money.js';
-import { BusinessAction, BusinessPageHeader, BusinessPageShell } from '../components/design-system.jsx';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 
 export function CashJournals({ user, notify }) {
   const [items, setItems] = useState([]);
@@ -448,7 +448,8 @@ export function ProductCosts({ user, notify }) {
   useEffect(() => { void load(); }, [productId]);
 
   return (
-    <Panel title="产品标准成本">
+    <BusinessPageShell className="product-costs-v15" width="rail">
+      <BusinessPageHeader title="产品标准成本" help={<HelpDisclosure summary="成本说明"><p>标准成本按货品与生效日期保存版本，用于管理分析，不回写历史库存或会计事实。</p></HelpDisclosure>}/>
       <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 设置标准成本</button>}/>
       <div className="filters">
         <label>产品<select value={productId} onChange={(e) => setProductId(e.target.value)}>
@@ -477,7 +478,7 @@ export function ProductCosts({ user, notify }) {
         {!items.length && <Empty text="暂无标准成本数据"/>}
       </div>
       {editing && <ProductCostModal products={products} value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('标准成本已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 
@@ -532,7 +533,8 @@ export function CostRates({ user, notify }) {
   const rateTypes = { MATERIAL_RATE: '材料费率', LABOR_RATE: '人工费率', OVERHEAD_RATE: '制造费用率' };
 
   return (
-    <Panel title="费用项目">
+    <BusinessPageShell className="cost-rates-v15" width="rail">
+      <BusinessPageHeader title="成本费率" help={<HelpDisclosure summary="费率说明"><p>维护材料、人工与制造费用的生效版本，供标准成本和生产分析引用。</p></HelpDisclosure>}/>
       <Toolbar action={can(user, 'COST_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增费用项目</button>}/>
       <div className="table-wrap">
         <table>
@@ -553,7 +555,7 @@ export function CostRates({ user, notify }) {
         {!items.length && <Empty text="暂无费用项目"/>}
       </div>
       {editing && <CostRateModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('费用项目已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 

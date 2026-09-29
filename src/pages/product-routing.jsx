@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { ConfirmDelete, Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime } from '../components/ui.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { RecordCard, RecordList } from '../components/design-system.jsx';
+import { BusinessPageHeader, BusinessPageShell, HelpDisclosure, RecordCard, RecordList } from '../components/design-system.jsx';
 
 const STATUS_LABELS = { ACTIVE: '启用', INACTIVE: '停用' };
 
@@ -76,11 +76,8 @@ export default function ProductRoutings({ user, notify }) {
     </select>
   </div>;
 
-  return <Panel
-    title="制品工序标准"
-    subtitle="定义制品经过的工序顺序与计划标准工时；不改变库存、会计或审批状态"
-    action={canManage && <button className="primary" onClick={() => setSelected({ create: true, productId })}>＋ 新建路线</button>}
-  >
+  return <BusinessPageShell className="product-routings-v15" width="rail">
+    <BusinessPageHeader title="制品工序标准" primaryAction={canManage && <button className="primary" onClick={() => setSelected({ create: true, productId })}>新建路线</button>} help={<HelpDisclosure summary="配置说明"><p>定义制品工序顺序与计划标准工时；启用路线供计划与生产快照引用，不改变库存、会计或审批状态。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品、路线编码或名称" extra={filters}/>
     <RecordList>
       {routings.map((routing) => <RecordCard
@@ -106,7 +103,7 @@ export default function ProductRoutings({ user, notify }) {
       onClose={() => setSelected(null)}
       onSaved={() => { setSelected(null); void load(); }}
     />}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }) {

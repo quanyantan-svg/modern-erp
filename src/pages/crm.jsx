@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
-import { BusinessPageHeader, BusinessState } from '../components/design-system.jsx';
+import { BusinessPageHeader, BusinessPageShell, BusinessState, HelpDisclosure } from '../components/design-system.jsx';
 
 export async function runCrmSave(operation, onSaved, notify) {
   try {
@@ -27,10 +27,11 @@ export function Contacts({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="联系人管理">
+    <BusinessPageShell className="contacts-v15" width="rail">
       <BusinessPageHeader
         title="联系人管理"
-        context="维护客户与供应商的主联系人；后续销售订单与采购订单可引用。"
+        context="客户与供应商辅助资料"
+        help={<HelpDisclosure summary="资料说明"><p>维护客户与供应商的联系人；订单和后续 CRM 业务可引用，联系人不替代客户或供应商主数据。</p></HelpDisclosure>}
         primaryAction={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button> : null}
       />
       <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索姓名或电话" action={null}/>
@@ -58,7 +59,7 @@ export function Contacts({ user, notify }) {
           : <BusinessState kind="EMPTY" title="暂无联系人" description="新增联系人后可关联到客户或供应商。" action={can(user, 'CRM_MANAGE') ? <button type="button" className="primary" onClick={() => setEditing({})}>＋ 新增联系人</button> : null} />)}
       </div>
       {editing && <ContactModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('联系人已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 

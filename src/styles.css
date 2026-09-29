@@ -3774,3 +3774,43 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* V1.5 D7 — master data and versioned configuration. */
+.mobile-shell:has(.suppliers-v15),
+.mobile-shell:has(.customers-v15),
+.mobile-shell:has(.products-v15),
+.mobile-shell:has(.warehouses-v15),
+.mobile-shell:has(.boms-v15),
+.mobile-shell:has(.product-routings-v15),
+.mobile-shell:has(.product-costs-v15),
+.mobile-shell:has(.cost-rates-v15),
+.mobile-shell:has(.quality-rules-v15),
+.mobile-shell:has(.contacts-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.suppliers-v15,
+.customers-v15,
+.products-v15,
+.warehouses-v15,
+.boms-v15,
+.product-routings-v15,
+.product-costs-v15,
+.cost-rates-v15,
+.quality-rules-v15,
+.contacts-v15 {
+  min-width: 0;
+}
+
+.suppliers-v15 .table-wrap,
+.customers-v15 .table-wrap,
+.products-v15 .table-wrap,
+.warehouses-v15 .table-wrap,
+.boms-v15 .table-wrap,
+.product-costs-v15 .table-wrap,
+.cost-rates-v15 .table-wrap,
+.quality-rules-v15 .table-wrap,
+.contacts-v15 .table-wrap {
+  border-radius: 0;
+}

@@ -20,7 +20,8 @@ describe('Quality permissions and V1.3 UI contract', () => {
     const source = readFileSync(resolve('src/pages/quality.jsx'), 'utf8');
     assert.match(source, /请从.*采购入库草稿.*销售出库草稿.*创建检验单/s);
     assert.match(source, /来源明细（只读）/);
-    assert.match(source, /LEGACY \/ UNLINKED INSPECTION/);
+    assert.match(source, /历史未关联检验（仅供读取，不能满足质量门禁）/);
+    assert.doesNotMatch(source, /LEGACY \/ UNLINKED INSPECTION/);
     assert.match(source, /inspection_quantity/);
     assert.match(source, /defect_reason/);
     assert.match(source, /disposition/);

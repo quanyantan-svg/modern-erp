@@ -22,13 +22,14 @@ export function Boms({ user, notify }) {
     api('/api/products').then((r) => setProducts(r.products)).catch((e) => notify(e.message, 'error'));
     void load();
   }, [filterProduct]);
-  return <Panel title="BOM清单" action={can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => setView({})}>＋ 新建BOM</button>}>
+  return <BusinessPageShell className="boms-v15" width="rail">
+    <BusinessPageHeader title="BOM" primaryAction={can(user, 'PRODUCTION_ORDERS_CREATE') && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建 BOM</BusinessAction>} help={<HelpDisclosure summary="版本说明"><p>BOM 按产品与版本管理；只有启用版本进入计划与生产快照，历史版本保持可追溯。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索BOM" extra={<select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}><option value="">全部产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>}/>
     <div className="table-wrap"><table><thead><tr><th>BOM版本</th><th>产品</th><th>状态</th><th>物料项</th><th>备注</th><th>创建人</th></tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.productCode}-v{item.version}</td><td>{item.productName}</td><td><Status status={item.status?.toLowerCase()} label={item.status === 'ACTIVE' ? '启用' : item.status === 'DISCONTINUED' ? '停用' : '草稿'}/></td><td className="number">{item.itemCount}</td><td>{item.remark || '-'}</td><td>{item.creatorName}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有BOM记录"/>}</div>
     {view && <BomModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api} products={products}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function BomModal({ user, value, onClose, notify, api, products }) {

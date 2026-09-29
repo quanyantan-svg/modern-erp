@@ -108,14 +108,15 @@ export function Suppliers({ user, notify }) {
   const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
   const load = () => api(`/api/suppliers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.suppliers)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="供应商资料">
+  return <BusinessPageShell className="suppliers-v15" width="rail">
+    <BusinessPageHeader title="供应商资料" help={<HelpDisclosure summary="主数据说明"><p>供应商编码、结算条款与联系方式供采购及应付业务引用；停用不删除历史引用。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索供应商编码、名称或联系人" action={can(user, 'SUPPLIERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增供应商</button>}
     />
     <div className="table-wrap"><table><thead><tr><th>供应商编码</th><th>供应商名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>邮箱</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.email || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'SUPPLIERS_MANAGE') && <MasterActions item={item} label="供应商" endpoint="/api/suppliers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到供应商资料"/>}</div>
     {editing && <SupplierModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('供应商资料已保存'); }} notify={notify}/>} 
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function SupplierModal({ value, onClose, onSaved, notify }) {
@@ -139,13 +140,14 @@ export function Customers({ user, notify }) {
   const load = () => api(`/api/customers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.customers)).catch((e) => notify(e.message, 'error'));
   // Effect 回调只能返回清理函数，不能直接返回 load() 产生的 Promise。
   useEffect(() => { void load(); }, []);
-  return <Panel title="客户资料">
+  return <BusinessPageShell className="customers-v15" width="rail">
+    <BusinessPageHeader title="客户资料" help={<HelpDisclosure summary="主数据说明"><p>客户编码、结算条款与联系方式供销售及应收业务引用；停用不删除历史引用。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
     <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty title="还没有客户" text="创建客户后，就可以建立销售订单。"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function CustomerModal({ value, onClose, onSaved, notify }) {
@@ -168,13 +170,14 @@ export function Products({ user, notify }) {
   const navigation = useAppNavigation();
   const load = () => api(`/api/products?search=${encodeURIComponent(search)}`).then((r) => setItems(r.products)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="产品">
+  return <BusinessPageShell className="products-v15" width="rail">
+    <BusinessPageHeader title="货品资料" help={<HelpDisclosure summary="主数据说明"><p>货品资料承载计量、售价、制造成本与库存跟踪策略；库存数量由业务单据维护。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索产品名称或编码" action={can(user, 'PRODUCTS_MANAGE') && <button className="primary compact-create" aria-label="新增产品" onClick={() => setEditing({})}>新增</button>}/>
     <div className="table-wrap"><table><thead><tr><th>产品编码</th><th>产品名称</th><th>单位</th><th>库存跟踪方式</th><th className="number">参考售价</th><th className="number">当前库存</th><th>状态</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.unit}</td><td><span className="tracking-badge">{trackingPresentation(item.trackingPolicy).label}</span></td><td className="number">{money(item.priceCents)}</td><td className="number">{item.stockQuantity}</td><td><Active active={item.active}/></td><td className="actions">{navigation.canNavigate('product-routings') && <button className="row-action" onClick={() => navigation.navigateToPage('product-routings', { productId: item.id })}>工序标准</button>}{can(user, 'PRODUCTS_MANAGE') && <MasterActions item={item} label="产品" endpoint="/api/products" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty title="还没有产品" text="新建产品后，即可用于销售、采购和库存业务。"/>}</div>
     {editing && <ProductModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('产品资料已保存'); }} notify={notify}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function ProductModal({ value, onClose, onSaved, notify }) {
@@ -1428,13 +1431,14 @@ export function Warehouses({ user, notify }) {
   const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
   const load = () => api(`/api/warehouses?search=${encodeURIComponent(search)}`).then((r) => setItems(r.warehouses)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title="仓库资料" subtitle="管理企业仓库档案">
+  return <BusinessPageShell className="warehouses-v15" width="rail">
+    <BusinessPageHeader title="仓库资料" help={<HelpDisclosure summary="主数据说明"><p>维护可用于库存业务的仓库档案；停用仓库不会移除历史库存证据。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索仓库编码或名称" action={can(user, 'WAREHOUSES_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增仓库</button>}/>
     <div className="table-wrap"><table><thead><tr><th>仓库编码</th><th>仓库名称</th><th>地址</th><th>管理员</th><th>状态</th><th/></tr></thead><tbody>
       {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td className="dim">{item.address || '—'}</td><td>{item.manager || '—'}</td><td><Active active={item.active}/></td><td>{can(user, 'WAREHOUSES_MANAGE') && <MasterActions item={item} label="仓库" endpoint="/api/warehouses" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有找到仓库资料"/>}</div>
     {editing && <WarehouseModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('仓库资料已保存'); }} notify={notify}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function WarehouseModal({ value, onClose, onSaved, notify }) {
