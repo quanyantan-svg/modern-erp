@@ -3299,3 +3299,325 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   .receipt-source-list a strong { max-width:100%; }
   .purchase-receipt-detail .page-header__trailing { justify-content:flex-start; }
 }
+
+/* ============================================================
+   V1.5 D3-A — Sales / Purchase order rollout
+   Canonical LIST + DETAIL rail.
+   ============================================================ */
+
+.mobile-shell:has(.sales-orders-v15),
+.mobile-shell:has(.purchase-orders-v15),
+.mobile-shell:has(.order-document-detail) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+  box-shadow:
+    0 0 0 1px rgba(48, 65, 80, .04),
+    0 18px 54px rgba(34, 53, 70, .10);
+}
+
+.sales-orders-v15,
+.purchase-orders-v15,
+.order-document-detail {
+  min-width: 0;
+  color: #18232d;
+}
+
+.sales-orders-v15 *,
+.purchase-orders-v15 *,
+.order-document-detail * {
+  min-width: 0;
+}
+
+.sales-orders-v15 .page-header h1,
+.purchase-orders-v15 .page-header h1 {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.order-list-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.order-list-toolbar .search-field {
+  width: 100%;
+}
+
+.order-list-toolbar .segmented-control {
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.order-record-list .compact-record {
+  padding-right: 44px;
+}
+
+.order-record-list .compact-record__open {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.order-record-list .compact-record__metadata {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.order-document-detail {
+  gap: 18px;
+}
+
+.order-document-detail .page-header--business {
+  flex-wrap: wrap;
+}
+
+.order-document-detail .page-header__leading {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.order-document-detail .page-header__leading h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 18px;
+}
+
+.order-document-detail .page-header__context {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: #65727e;
+}
+
+.order-document-detail .page-header__trailing {
+  flex: 1 1 240px;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.order-document-flow {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.order-document-detail .business-content-section {
+  overflow: visible;
+  border: 0;
+  border-bottom: 1px solid #e2e7ea;
+  border-radius: 0;
+  background: transparent;
+}
+
+.order-document-detail .business-content-section:last-child {
+  border-bottom: 0;
+}
+
+.order-document-detail .business-content-section > header {
+  padding: 20px 0 11px;
+  border: 0;
+}
+
+.order-document-detail .business-content-section > header h2 {
+  color: #53616d;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.order-document-detail .business-content-section > header p {
+  margin: 3px 0 0;
+  color: #7b8791;
+  font-size: 12px;
+}
+
+.order-document-detail .business-content-section__body {
+  padding: 0 0 21px;
+}
+
+.order-document-detail .business-content-section--audit {
+  border-style: solid;
+}
+
+.order-summary-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.order-summary-row {
+  display: grid;
+  grid-template-columns:
+    minmax(110px, .65fr)
+    minmax(0, 1.35fr);
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.order-summary-row:last-child {
+  border-bottom: 0;
+}
+
+.order-summary-row dt {
+  color: #6f7c87;
+  font-size: 12px;
+}
+
+.order-summary-row dd {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #293641;
+  font-size: 13px;
+  font-weight: 550;
+  text-align: right;
+}
+
+.order-summary-row dd small {
+  color: #7b8791;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.order-summary-row--long {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 3px;
+  padding: 11px 0;
+}
+
+.order-summary-row--long dt {
+  color: #778491;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.order-summary-row--long dd {
+  justify-items: start;
+  text-align: left;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.order-line-records .compact-record {
+  padding: 15px 0;
+}
+
+.order-line-records .compact-record__metadata {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.order-line-records .compact-record__metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.order-line-records .compact-record__metrics > div:last-child {
+  text-align: right;
+}
+
+.order-detail-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0 2px;
+  border-top: 1px solid #dfe5e8;
+}
+
+.order-detail-total span {
+  color: #65727e;
+  font-size: 13px;
+}
+
+.order-detail-total strong {
+  color: #18232d;
+  font-size: 20px;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+
+.order-audit-list {
+  display: grid;
+}
+
+.order-audit-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid #edf0f2;
+}
+
+.order-audit-row:last-child {
+  border-bottom: 0;
+}
+
+.order-audit-row > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.order-audit-row strong {
+  color: #293641;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.order-audit-row span {
+  color: #87929c;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.order-audit-row p {
+  margin: 0;
+  color: #65727e;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .order-list-toolbar .segmented-control {
+    overflow-x: auto;
+    grid-template-columns: repeat(5, minmax(82px, 1fr));
+  }
+
+  .order-record-list .compact-record__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .order-record-list .compact-record__metrics > div:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .order-document-detail .page-header__trailing {
+    justify-content: flex-start;
+  }
+
+  .order-summary-row {
+    grid-template-columns:
+      minmax(88px, .55fr)
+      minmax(0, 1.45fr);
+  }
+
+  .order-summary-row--long {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .order-audit-row > div {
+    display: grid;
+    gap: 3px;
+  }
+}
