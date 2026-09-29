@@ -622,9 +622,9 @@ describe('M6 security contract', () => {
 describe('M6 mobile UI surface', () => {
   test('39. mobile manufacturing group exposes 制令单 / 用料出库 / 生产入库', () => {
     const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
-    assert.match(meta, /'material-issues', mobileLabel: '用料出库'/);
-    assert.match(meta, /'production-receipts', mobileLabel: '生产入库'/);
-    assert.match(meta, /mobileLabel: '制令单'/);
+    assert.match(meta, /\['material-issues', '用料出库'/);
+    assert.match(meta, /\['production-receipts', '生产入库'/);
+    assert.match(meta, /\['production-orders', '制令单'/);
   });
 
   test('40. mobile production cards are real — Production Order / Material Issue / Production Receipt route registration in App.jsx', () => {
@@ -638,11 +638,10 @@ describe('M6 mobile UI surface', () => {
   test('41. fake / deferred production cards (work center / output) are absent from mobile group; production-instruction is present after M12', () => {
     const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
     const activeGroups = meta.slice(0, meta.indexOf('DEFERRED_MOBILE_APPLICATIONS'));
-    // P1 — planning entries renamed: 需求预测 / MRP 运算 / 物料需求计划
-    assert.match(activeGroups, /mobileLabel: '需求预测'/);
-    assert.match(activeGroups, /mobileLabel: 'MRP 运算'/);
-    assert.match(activeGroups, /mobileLabel: '物料需求计划'/);
-    assert.match(activeGroups, /mobileLabel: '生产指令'/);
+    assert.match(activeGroups, /\['forecasts', '计划预测'/);
+    assert.match(activeGroups, /\['mrp-runs', 'MRP'/);
+    assert.match(activeGroups, /\['material-requirements-plan', '物料建议'/);
+    assert.match(activeGroups, /\['production-instructions', '生产指令'/);
     assert.doesNotMatch(activeGroups, /工作中心|work-center/);
     assert.doesNotMatch(activeGroups, /生产产出|production-output/);
   });

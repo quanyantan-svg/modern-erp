@@ -38,19 +38,19 @@ describe('M9 business overview', () => {
   test('is mounted in canonical navigation without a new permission', () => {
     assert.match(appSource, /key: 'business-overview',[^\n]+permission: 'DASHBOARD_VIEW'/);
     assert.match(appSource, /'business-overview': <BusinessOverview\/>/);
-    assert.match(metadataSource, /page: 'business-overview', mobileLabel: '业务总览'/);
+    assert.match(metadataSource, /\['business-overview', '业务总览'/);
   });
 
   test('renders the teacher-facing principal business areas and stages', () => {
     const html = renderOverview([]);
-    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '财务衔接', '经营报表']) assert.match(html, new RegExp(label));
-    for (const label of ['仓库出货', '仓库验收', '存货月结', '制令单', '应收结账', '应付结账']) assert.match(html, new RegExp(label));
+    for (const label of ['销售履约', '生产执行', '采购履约', '基础资料', '库存作业', '经营分析']) assert.match(html, new RegExp(label));
+    for (const label of ['出货 / 退货', '采购入库', '制令单', '应收结算', '应付结算']) assert.match(html, new RegExp(label));
   });
 
   test('authorized nodes are canonical links and unauthorized nodes are read-only', () => {
     const html = renderOverview(['orders']);
     assert.match(html, /href="#orders"/);
-    assert.match(html, /business-process-node is-compact is-readonly/);
+    assert.match(html, /flow-node is-readonly/);
     assert.doesNotMatch(html, /href="#accounts-receivable"/);
   });
 
@@ -82,11 +82,14 @@ describe('M9 permission and terminology contracts', () => {
     for (const operational of ['SALES_DELIVERY', 'PURCHASE_RECEIPT', 'MATERIAL_ISSUE', 'PRODUCTION_RECEIPT', 'PAYMENT_COLLECTION']) assert.doesNotMatch(approvalsSource, new RegExp(operational));
   });
 
-  test('mobile finance cards are grouped under finance rather than master data', () => {
-    const master = metadataSource.match(/key: 'master-data',[\s\S]*?\n  },/)[0];
-    const finance = metadataSource.match(/key: 'finance',[\s\S]*?\n  },/)[0];
+  test('finance is contextual rather than an eighth primary domain', () => {
+    const masterStart = metadataSource.indexOf("{ key: 'master-data'");
+    const salesStart = metadataSource.indexOf("{ key: 'sales'");
+    assert.ok(masterStart >= 0 && salesStart > masterStart);
+    const master = metadataSource.slice(masterStart, salesStart);
     assert.doesNotMatch(master, /accounts-receivable|payment-collections|accounts-payable|payment-disbursements/);
-    for (const page of ['accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements']) assert.match(finance, new RegExp(page));
+    assert.doesNotMatch(metadataSource, /key: 'finance', label:/);
+    for (const page of ['accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements']) assert.match(metadataSource, new RegExp(page));
   });
 
   test('visible labels use the frozen course vocabulary', () => {

@@ -189,12 +189,12 @@ test('P1 material plan: page source uses centralized status labels (no raw enum 
 // 5. Mobile launcher — three distinct planning entries, no duplicate
 // ---------------------------------------------------------------------------
 
-test('P1 launcher: 计划与生产 group exposes 需求预测 / MRP 运算 / 物料需求计划', () => {
+test('P1 launcher: 计划 / MRP domain exposes forecast, MRP and material suggestions', () => {
   const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationMetadata.js'), 'utf8');
-  assertContains(launcherSource, "label: '计划与生产'");
-  assertContains(launcherSource, "page: 'forecasts', mobileLabel: '需求预测'");
-  assertContains(launcherSource, "page: 'mrp-runs', mobileLabel: 'MRP 运算'");
-  assertContains(launcherSource, "page: 'material-requirements-plan', mobileLabel: '物料需求计划'");
+  assertContains(launcherSource, "label: '计划 / MRP'");
+  assertContains(launcherSource, "['forecasts', '计划预测'");
+  assertContains(launcherSource, "['mrp-runs', 'MRP'");
+  assertContains(launcherSource, "['material-requirements-plan', '物料建议'");
 });
 
 test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础资料', () => {
@@ -254,25 +254,16 @@ test('P1 routes: mrp is kept as a backwards-compat alias for material-requiremen
 // 7. Business Overview — distinct concepts, no "需求预测 = MRP" implication
 // ---------------------------------------------------------------------------
 
-test('P1 business overview: planning chain shows 需求预测 → MRP 运算 → 物料需求计划', () => {
+test('P1 business overview: MRP anchors production and purchasing flows', () => {
   const overviewSource = readFileSync(resolve(repoRoot, 'src/pages/business-overview.jsx'), 'utf8');
-  assertContains(overviewSource, "'需求预测', 'forecasts'");
-  assertContains(overviewSource, "'MRP 运算', 'mrp-runs'");
-  assertContains(overviewSource, "'物料需求计划', 'material-requirements-plan'");
+  assertContains(overviewSource, "'production-mrp', 'MRP', 'mrp-runs'");
+  assertContains(overviewSource, "'purchase-mrp', 'MRP', 'mrp-runs'");
 });
 
-test('P1 business overview: planning chain does NOT imply 需求预测 = MRP', () => {
+test('P1 business overview: forecast and material suggestions remain catalogue entries rather than false flow stages', () => {
   const overviewSource = readFileSync(resolve(repoRoot, 'src/pages/business-overview.jsx'), 'utf8');
-  // Locate the planning chain block by splitting on the next chain's `key:`
-  const start = overviewSource.indexOf("key: 'planning'");
-  assert.ok(start >= 0, 'planning chain present');
-  const nextChain = overviewSource.indexOf("key: 'finance'", start);
-  const block = overviewSource.slice(start, nextChain > 0 ? nextChain : undefined);
-  assertContains(block, "'需求预测'");
-  assertContains(block, "'MRP 运算'");
-  assertContains(block, "'物料需求计划'");
-  // legacy "MRP" alone must not be a node label
-  assert.ok(!block.match(/\['MRP'\s*,\s*'mrp'\]/), 'legacy MRP node present in planning chain');
+  assert.ok(!overviewSource.includes("'forecasts'"));
+  assert.ok(!overviewSource.includes("'material-requirements-plan'"));
 });
 
 // ---------------------------------------------------------------------------

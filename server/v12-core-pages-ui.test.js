@@ -16,7 +16,7 @@ const pageSources = readdirSync(join(root, 'src', 'pages'))
 
 describe('V1.2 core page migration', () => {
   test('launcher retains the canonical business groups', () => {
-    for (const label of ['概览', '基础资料', '计划与生产', '销售', '采购', '库存', '质量', '财务', '决策报表', '项目', '系统']) {
+    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析', '工作区', '高级设置', '更多业务', '系统设置']) {
       assert.match(metadata, new RegExp(`label: '${label}'`));
     }
   });
@@ -62,8 +62,8 @@ describe('V1.2 core page migration', () => {
   });
 
   test('sales and purchase returns have distinct launcher targets', () => {
-    assert.match(metadata, /key: 'returns:sales'[\s\S]*documentType: 'SALES_RETURN'/);
-    assert.match(metadata, /key: 'returns:purchase'[\s\S]*documentType: 'PURCHASE_RETURN'/);
+    assert.match(metadata, /\['returns', '销售退货'[\s\S]*documentType: 'SALES_RETURN'[\s\S]*'returns:sales'/);
+    assert.match(metadata, /\['returns', '采购退货'[\s\S]*documentType: 'PURCHASE_RETURN'[\s\S]*'returns:purchase'/);
     assert.match(app, /navigateToPage\(item\.page, item\.target\)/);
   });
 

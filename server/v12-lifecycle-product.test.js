@@ -95,7 +95,7 @@ describe('Data cleanup product wiring', () => {
   test('launcher and page use the canonical USERS_MANAGE gate', () => {
     assert.match(appSource, /key:\s*['"]data-cleanup['"][\s\S]*?permission:\s*['"]USERS_MANAGE['"]/);
     assert.match(appSource, /['"]data-cleanup['"]:\s*<DataCleanup/);
-    assert.match(metadataSource, /page:\s*['"]data-cleanup['"][\s\S]*?mobileLabel:\s*['"]数据整理['"]/);
+    assert.match(metadataSource, /\['data-cleanup', '数据整理'/);
   });
 
   test('cleanup UX uses one sheet at a time and requires destructive reasons', () => {

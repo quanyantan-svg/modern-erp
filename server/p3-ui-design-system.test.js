@@ -48,7 +48,7 @@ describe('P3 global design system', () => {
   });
 
   test('launcher has calm business group names and permission filtering remains external', () => {
-    for (const label of ['销售', '采购', '计划与生产', '库存', '财务', '决策报表', '基础资料', '系统']) assert.match(metadata, new RegExp(`label: '${label}'`));
+    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析', '系统设置']) assert.match(metadata, new RegExp(`label: '${label}'`));
     assert.doesNotMatch(metadata, /permission\s*:/);
   });
 

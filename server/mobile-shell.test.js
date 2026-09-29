@@ -410,12 +410,14 @@ describe('MobileLauncher — visual primitive', () => {
   test('renders items inside a group', () => {
     const groups = [
       {
+        key: 'master-data',
         label: '基础资料',
+        kind: 'domain',
         items: [
-          { key: 'products', label: '货品', iconKey: 'products' },
-          { key: 'customers', label: '客户', iconKey: 'customers' },
-          { key: 'warehouses', label: '仓库', iconKey: 'warehouses' },
-          { key: 'suppliers', label: '供应商', iconKey: 'suppliers' },
+          { key: 'products', label: '货品', iconKey: 'products', tier: 'primary' },
+          { key: 'customers', label: '客户', iconKey: 'customers', tier: 'primary' },
+          { key: 'warehouses', label: '仓库', iconKey: 'warehouses', tier: 'primary' },
+          { key: 'suppliers', label: '供应商', iconKey: 'suppliers', tier: 'primary' },
         ],
       },
     ];
@@ -431,7 +433,7 @@ describe('MobileLauncher — visual primitive', () => {
     const src = readSrc('components/MobileLauncher.jsx');
     assert.match(
       src,
-      /onItemSelect\s*&&\s*onItemSelect\(item\)/,
+      /onItemSelect\?\.\(item\)/,
       'MobileLauncher must invoke onItemSelect when an item is clicked'
     );
   });

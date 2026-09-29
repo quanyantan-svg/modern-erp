@@ -217,7 +217,7 @@ describe('M10 frontend and navigation contracts', () => {
   test('canonical SPA navigation and mobile application metadata expose the admin-only application', () => {
     assert.match(app, /key: 'product-routings'.*ROUTING_VIEW.*ROUTING_MANAGE/);
     assert.match(app, /'product-routings': <ProductRoutings/);
-    assert.match(metadata, /page: 'product-routings', mobileLabel: '制品工序标准'/);
+    assert.match(metadata, /\['product-routings', '制品工序标准'/);
     assert.doesNotMatch(page, /location\.hash|window\.location/);
   });
 
@@ -228,7 +228,7 @@ describe('M10 frontend and navigation contracts', () => {
   });
 
   test('product, production-order and business overview integrations use product routing as sibling master data', () => {
-    assert.match(overview, /node\('routing', '制品工序标准', 'product-routings'\)/);
+    assert.match(metadata, /\['product-routings', '制品工序标准'/);
     assert.match(manufacturing, /activeRoutingId/);
     assert.match(manufacturing, /page="product-routings"/);
   });

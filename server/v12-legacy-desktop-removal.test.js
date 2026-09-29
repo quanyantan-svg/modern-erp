@@ -31,6 +31,7 @@ describe('V1.2 canonical interface cleanup', () => {
 
   test('navigation metadata describes one application information architecture', () => {
     assert.doesNotMatch(metadataSource, /desktop navigation/i);
-    assert.match(metadataSource, /already-authorized `visibleNav`/);
+    assert.match(metadataSource, /Authorization still comes only/);
+    assert.match(metadataSource, /authorizedByPage/);
   });
 });

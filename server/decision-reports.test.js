@@ -750,11 +750,7 @@ describe('M7 — frontend wiring', () => {
 
   test('applicationMetadata exposes all 5 decision report cards', () => {
     const src = readSrc('navigation/applicationMetadata.js');
-    assert.match(src, /mobileLabel:\s*'销售统计'/);
-    assert.match(src, /mobileLabel:\s*'销售未交'/);
-    assert.match(src, /mobileLabel:\s*'采购统计'/);
-    assert.match(src, /mobileLabel:\s*'采购未交'/);
-    assert.match(src, /mobileLabel:\s*'库存异动明细'/);
+    for (const key of ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']) assert.match(src, new RegExp(`'${key}'`));
   });
 
   test('DEFERRED_MOBILE_APPLICATIONS no longer lists the five decision reports', () => {
@@ -770,7 +766,7 @@ describe('M7 — frontend wiring', () => {
   test('buildMobileApplicationGroups forwards reportKey so each card has a unique key', () => {
     const src = readSrc('navigation/applicationMetadata.js');
     assert.match(src, /reportKey:\s*metadata\.reportKey/);
-    assert.match(src, /metadata\.reportKey\s*\?\s*navigationItem\.key\s*\+\s*':'\s*\+\s*metadata\.reportKey/);
+    assert.match(src, /metadata\.reportKey\s*\?\s*`\$\{navigationItem\.key\}:\$\{metadata\.reportKey\}`/);
   });
 
   test('App.jsx forwards reportKey via navigation target', () => {

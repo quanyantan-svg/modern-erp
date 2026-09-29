@@ -5,6 +5,7 @@ import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.js
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
 import { presentBusinessValue } from '../lib/presentation.js';
+import { ActionMenu, BusinessAction, BusinessAuditSection, BusinessContentSection, BusinessDangerZone, BusinessDetailLayout, BusinessPageHeader, BusinessPageShell, BusinessRelationSection, BusinessState, DangerSheet, HelpDisclosure, RecordCard, SearchField, SegmentedControl, StatusChip } from '../components/design-system.jsx';
 
 function LogisticsActions({ existing, onClose, onAction, qualityAction, qualityLabel, qualityState }) {
   return <div className="form-actions full">
@@ -48,16 +49,77 @@ export function PurchaseReceipts({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [view, setView] = useState(target?.page === 'purchase-receipts' && target.documentId ? { id: target.documentId } : null);
-  const load = () => api("/api/purchase-receipts?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.purchaseReceipts || [])).catch((e) => notify(e.message, "error"));
-  useEffect(() => { void load(); }, [status]);
-  return <Panel title="采购入库单" action={can(user, "PURCHASE_RECEIPTS_MANAGE") && <button className="primary" onClick={() => setView({})}>＋ 新增采购入库</button>}>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或供应商" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.receipt_no}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "PURCHASE_RECEIPTS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有采购入库记录"/>}</div>
-    {view && <PurchaseReceiptModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </Panel>;
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [selectedId, setSelectedId] = useState(target?.page === 'purchase-receipts' ? target.documentId || null : null);
+  const [editor, setEditor] = useState(null);
+  const [state, setState] = useState('LOADING');
+  const load = async () => {
+    setState('LOADING');
+    try {
+      const params = new URLSearchParams({ search, status, includeArchived: String(includeArchived) });
+      const response = await api('/api/purchase-receipts?' + params);
+      setItems(response.purchaseReceipts || []);
+      setState((response.purchaseReceipts || []).length ? 'READY' : 'EMPTY');
+    } catch (error) { setState('ERROR'); notify(error.message, 'error'); }
+  };
+  useEffect(() => { void load(); }, [status, includeArchived]);
+  if (selectedId) return <><PurchaseReceiptDetail id={selectedId} user={user} notify={notify} onBack={() => { setSelectedId(null); void load(); }} onEdit={() => setEditor({ id: selectedId })} onChanged={load}/>{editor && <PurchaseReceiptModal user={user} value={editor} onClose={() => { setEditor(null); void load(); }} notify={notify} api={api}/>}</>;
+  return <BusinessPageShell className="purchase-receipts-prototype" width="wide">
+    <BusinessPageHeader title="采购入库" context="记录到货、质量验收与库存入账" primaryAction={can(user, 'PURCHASE_RECEIPTS_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditor({})}>新增采购入库</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>采购入库必须来自已审批采购订单；确认后才影响库存。已取消且无业务影响的记录可从正常列表移除。</p></HelpDisclosure>}/>
+    <section className="receipt-list-toolbar" aria-label="采购入库筛选">
+      <SearchField value={search} onChange={setSearch} onSubmit={load} placeholder="搜索单号或供应商"/>
+      <SegmentedControl label="单据状态" value={status} onChange={setStatus} options={[{value:'',label:'全部'},{value:'DRAFT',label:'草稿'},{value:'CONFIRMED',label:'已确认'},{value:'CANCELLED',label:'已取消'}]}/>
+      <label className="receipt-archive-filter"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)}/>显示已移除</label>
+    </section>
+    {state === 'LOADING' && <BusinessState kind="LOADING" title="正在加载采购入库"/>}
+    {state === 'ERROR' && <BusinessState kind="ERROR" title="采购入库加载失败" description="请检查连接后重试。" retry={load}/>}
+    {state === 'EMPTY' && <BusinessState kind="EMPTY" title="没有符合条件的采购入库" description={includeArchived ? '当前筛选中也没有已移除记录。' : '可以调整筛选，或新建一张采购入库单。'} action={can(user, 'PURCHASE_RECEIPTS_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditor({})}>新增采购入库</BusinessAction>}/>
+    }
+    {state === 'READY' && <>
+      <div className="receipt-list-table"><table><thead><tr><th>入库单号</th><th>供应商</th><th>仓库</th><th>收货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th aria-label="操作"/></tr></thead><tbody>
+        {items.map((item) => <tr key={item.id} className={`${item.status === 'CANCELLED' ? 'is-cancelled ' : ''}${item.archiveState?.archived ? 'is-archived' : ''}`} onClick={() => setSelectedId(item.id)}><td><strong className="mono">{item.receipt_no}</strong>{item.archiveState?.archived && <small>已从业务列表移除</small>}</td><td>{item.supplierName}</td><td>{item.warehouseName}</td><td>{item.receipt_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label || '无需检验'}</td><td><StatusChip status={item.status}>{item.statusLabel}</StatusChip></td><td onClick={(event) => event.stopPropagation()}><ActionMenu>{<button type="button" onClick={() => setSelectedId(item.id)}>查看详情</button>}{can(user, 'PURCHASE_RECEIPTS_MANAGE') && item.status === 'DRAFT' && <button type="button" onClick={() => setEditor({ id: item.id })}>编辑草稿</button>}</ActionMenu></td></tr>)}
+      </tbody></table></div>
+      <div className="receipt-card-list">{items.map((item) => <RecordCard key={item.id} className={`${item.status === 'CANCELLED' ? 'is-cancelled ' : ''}${item.archiveState?.archived ? 'is-archived' : ''}`} title={item.receipt_no} subtitle={item.supplierName} status={<StatusChip status={item.status}>{item.statusLabel}</StatusChip>} facts={[{label:'仓库',value:item.warehouseName},{label:'收货日期',value:item.receipt_date},{label:'金额',value:money(item.total_cents)},{label:'质量',value:item.qualityState?.label || '无需检验'}]} onClick={() => setSelectedId(item.id)}>{item.archiveState?.archived && <p className="receipt-card__archive">已从业务列表移除</p>}</RecordCard>)}</div>
+    </>}
+    {editor && <PurchaseReceiptModal user={user} value={editor} onClose={() => { setEditor(null); void load(); }} notify={notify} api={api}/>
+    }
+  </BusinessPageShell>;
+}
+
+function PurchaseReceiptDetail({ id, user, notify, onBack, onEdit, onChanged }) {
+  const [detail, setDetail] = useState(null);
+  const [loadState, setLoadState] = useState('LOADING');
+  const [confirm, setConfirm] = useState(null);
+  const [archiveReason, setArchiveReason] = useState('已取消单据不再参与日常业务处理');
+  const reload = async () => { try { setLoadState('LOADING'); const response = await api('/api/purchase-receipts/' + id); setDetail(response.purchaseReceipt); setLoadState('READY'); } catch (error) { setLoadState('ERROR'); notify(error.message, 'error'); } };
+  useEffect(() => { void reload(); }, [id]);
+  const act = async (action) => { try { await api('/api/purchase-receipts/' + id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '入库单已确认' : '入库单已取消'); setConfirm(null); await reload(); await onChanged?.(); } catch (error) { notify(error.message, 'error'); } };
+  const prepareArchive = async () => { try { const response = await api(`/api/lifecycle/analyze?entityType=PURCHASE_RECEIPT&entityId=${encodeURIComponent(id)}`); const eligibility = response.archiveEligibility; setDetail((current) => ({ ...current, archiveEligibility: eligibility })); if (!eligibility.allowed) return notify(eligibility.blockers?.[0]?.message || '当前单据不能移除', 'error'); setConfirm('archive'); } catch (error) { notify(error.message, 'error'); } };
+  const archive = async () => { try { await api('/api/lifecycle/archive', { method: 'POST', body: { entityType: 'PURCHASE_RECEIPT', entityId: id, reason: archiveReason } }); notify('已从业务列表移除'); setConfirm(null); await reload(); await onChanged?.(); } catch (error) { notify(error.message, 'error'); } };
+  const restore = async () => { try { await api('/api/lifecycle/restore', { method: 'POST', body: { entityType: 'PURCHASE_RECEIPT', entityId: id, reason: '恢复正常列表可见性' } }); notify('已恢复到业务列表，单据仍为已取消'); setConfirm(null); await reload(); await onChanged?.(); } catch (error) { notify(error.message, 'error'); } };
+  if (loadState === 'LOADING') return <BusinessPageShell><BusinessState kind="LOADING" title="正在加载采购入库详情"/></BusinessPageShell>;
+  if (loadState === 'ERROR' || !detail) return <BusinessPageShell><BusinessState kind="ERROR" title="采购入库详情加载失败" retry={reload} action={<button type="button" className="secondary" onClick={onBack}>返回列表</button>}/></BusinessPageShell>;
+  const archived = detail.archiveState?.archived;
+  const canManage = can(user, 'PURCHASE_RECEIPTS_MANAGE');
+  const canRestore = can(user, 'USERS_MANAGE');
+  const rail = <>
+    <BusinessContentSection title="执行摘要"><dl className="receipt-summary-list"><div><dt>供应商</dt><dd>{detail.supplierName}</dd></div><div><dt>收货仓库</dt><dd>{detail.warehouseName}</dd></div><div><dt>收货日期</dt><dd>{detail.receipt_date}</dd></div><div><dt>单据金额</dt><dd>{money(detail.total_cents)}</dd></div><div><dt>制单人</dt><dd>{detail.creatorName}</dd></div></dl></BusinessContentSection>
+    <BusinessAuditSection title="状态记录"><dl className="receipt-summary-list"><div><dt>质量</dt><dd>{detail.qualityState?.label || '无需检验'}</dd></div><div><dt>计费</dt><dd>{detail.billingSummary?.status || '—'}</dd></div>{detail.confirmedByName && <div><dt>确认人</dt><dd>{detail.confirmedByName}</dd></div>}{archived && <div><dt>移除原因</dt><dd>{detail.archiveState.reason || '—'}</dd></div>}</dl></BusinessAuditSection>
+  </>;
+  return <BusinessPageShell className={`purchase-receipt-detail${detail.status === 'CANCELLED' ? ' is-cancelled' : ''}${archived ? ' is-archived' : ''}`} width="wide">
+    <BusinessPageHeader title={detail.receipt_no} breadcrumb={<button type="button" className="link-button" onClick={onBack}>采购入库 / 返回列表</button>} context={`${detail.supplierName} · ${detail.receipt_date}`} statusSlot={<div className="business-status-group" aria-label="业务状态"><span className="business-status-group__item"><small>单据</small><StatusChip status={detail.status}>{detail.statusLabel}</StatusChip></span><span className="business-status-group__item"><small>列表</small><StatusChip status={archived ? 'ARCHIVED' : 'ACTIVE'}>{archived ? '已移除' : '正常显示'}</StatusChip></span></div>} primaryAction={canManage && detail.status === 'DRAFT' && <BusinessAction hierarchy="primary" onClick={() => setConfirm('confirm')}>确认入库</BusinessAction>} secondaryActions={canManage && detail.status === 'DRAFT' ? <BusinessAction onClick={onEdit}>编辑草稿</BusinessAction> : null}/>
+    {archived && <div className="receipt-archive-banner"><strong>已从业务列表移除</strong><span>这不会删除单据，也不会改变“已取消”状态。</span>{canRestore && <BusinessAction onClick={() => setConfirm('restore')}>恢复列表可见性</BusinessAction>}</div>}
+    <BusinessDetailLayout rail={rail}>
+      <BusinessContentSection title="入库明细" description={`${detail.items?.length || 0} 行货品`}><div className="receipt-detail-lines"><table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价</th><th className="number">金额</th></tr></thead><tbody>{(detail.items || []).map((item) => <tr key={item.id}><td><strong>{item.productName}</strong><small>{item.productCode}</small></td><td className="number">{quantity(item.quantity)} {item.unit}</td><td className="number">{money(item.unitPriceCents)}</td><td className="number">{money(item.amountCents)}</td></tr>)}</tbody></table></div></BusinessContentSection>
+      <BusinessRelationSection title="关联与财务"><RelationshipSections detail={detail}/></BusinessRelationSection>
+      {detail.status === 'CANCELLED' && !archived && <BusinessDangerZone title="已取消单据" description="只有未产生下游、库存、追溯或财务影响的已取消单据，才能从日常业务列表移除。"><div className="receipt-archive-eligibility"><p>{detail.archiveEligibility?.allowed ? '服务端初步检查：可以移除。操作前会再次验证。' : (detail.archiveEligibility?.blockers?.[0]?.message || '需要重新检查移除资格。')}</p>{canManage && <BusinessAction hierarchy="danger" onClick={prepareArchive}>从业务列表移除</BusinessAction>}</div></BusinessDangerZone>}
+      {detail.status === 'DRAFT' && <BusinessDangerZone title="取消单据" description="取消后不可继续编辑或确认。"><BusinessAction hierarchy="danger" onClick={() => setConfirm('cancel')}>取消这张单据</BusinessAction></BusinessDangerZone>}
+    </BusinessDetailLayout>
+    {confirm === 'confirm' && <DangerSheet title="确认采购入库" confirmLabel="确认并影响库存" onClose={() => setConfirm(null)} onConfirm={() => act('confirm')} message="确认后将按单据明细增加库存，并执行既有质量与财务规则；该操作不能通过编辑撤回。"/>}
+    {confirm === 'cancel' && <DangerSheet title="取消采购入库" confirmLabel="确认取消" onClose={() => setConfirm(null)} onConfirm={() => act('cancel')} message="取消后单据将只读，不会增加库存。"/>}
+    {confirm === 'archive' && <DangerSheet title="从业务列表移除" confirmLabel="确认移除" onClose={() => setConfirm(null)} onConfirm={archive}><p>移除只影响正常业务列表的可见性，不删除单据或审计记录。</p><label className="receipt-archive-reason">移除原因<textarea value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} maxLength="500" required/></label></DangerSheet>}
+    {confirm === 'restore' && <DangerSheet title="恢复列表可见性" confirmLabel="确认恢复" onClose={() => setConfirm(null)} onConfirm={restore} message="恢复后单据会重新出现在正常业务列表中，但仍保持“已取消”，不会恢复库存或财务效果。"/>}
+  </BusinessPageShell>;
 }
 
 function PurchaseReceiptModal({ user, value, onClose, notify, api }) {

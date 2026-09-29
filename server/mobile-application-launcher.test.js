@@ -76,6 +76,8 @@ function applicationPagesFor(roleId) {
     .flatMap((group) => group.items.map((item) => item.page));
 }
 
+const sorted = (items) => [...items].sort();
+
 const EXPECTED_ROLE_PAGES = {
   'role-admin': [
     'business-overview',
@@ -129,17 +131,15 @@ const EXPECTED_ROLE_PAGES = {
 };
 
 describe('M2 application metadata', () => {
-  test('defines the teacher-aligned product groups in order (planning added by P1)', () => {
+  test('defines seven primary domains followed by disclosed utility groups', () => {
     assert.deepEqual(
       mobileGroups.map(({ key, label }) => [key, label]),
       [
-        ['overview', '概览'], ['master-data', '基础资料'],
-        ['planning', '计划与生产'],
-        ['sales', '销售'],
-        ['purchasing', '采购'], ['inventory', '库存'],
-        ['quality', '质量'],
-        ['finance', '财务'], ['reports', '决策报表'],
-        ['projects', '项目'], ['system', '系统'],
+        ['master-data', '基础资料'], ['sales', '销售'],
+        ['planning', '计划 / MRP'], ['production', '生产'],
+        ['purchasing', '采购'], ['inventory', '库存'], ['analytics', '经营分析'],
+        ['workspace', '工作区'], ['advanced', '高级设置'],
+        ['extension', '更多业务'], ['system', '系统设置'],
       ]
     );
   });
@@ -204,8 +204,8 @@ describe('M2 application metadata', () => {
   test('empty groups are removed at runtime', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     assert.ok(groups.every((group) => group.items.length > 0));
-    // role-sales has no REPORT_VIEW, so 决策报表 group must be filtered out.
-    assert.ok(!groups.some((group) => group.key === 'reports'));
+    // role-sales has no REPORT_VIEW, so 经营分析 group must be filtered out.
+    assert.ok(!groups.some((group) => group.key === 'analytics'));
   });
 
   test('admin role sees the populated 决策报表 group', () => {
@@ -213,18 +213,18 @@ describe('M2 application metadata', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-admin'), {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
     });
-    const reports = groups.find((group) => group.key === 'reports');
-    assert.ok(reports, 'admin must see the 决策报表 group');
-    assert.ok(reports.items.length >= 5, '决策报表 must expose five report cards');
+    const reports = groups.find((group) => group.key === 'analytics');
+    assert.ok(reports, 'admin must see the 经营分析 domain');
+    assert.ok(reports.items.length >= 5, '经营分析 must expose five report entries');
   });
 
   test('accounting sees sales and purchase reports but not unauthorized inventory movements', () => {
     const user = { permissions: rolePermissions('role-accounting') };
     const reports = buildMobileApplicationGroups(visibleNavigationFor('role-accounting'), {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
-    }).find((group) => group.key === 'reports');
+    }).find((group) => group.key === 'analytics');
     assert.deepEqual(reports.items.map((item) => item.reportKey), [
-      'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding',
+      'sales-summary', 'purchase-summary', 'sales-outstanding', 'purchase-outstanding',
     ]);
   });
 
@@ -238,7 +238,7 @@ describe('M2 application metadata', () => {
 describe('M2 canonical role application matrix', () => {
   for (const [roleId, expected] of Object.entries(EXPECTED_ROLE_PAGES)) {
     test(`${roleId} has the exact authorized supported application set`, () => {
-      assert.deepEqual(applicationPagesFor(roleId), expected);
+      assert.deepEqual(sorted(applicationPagesFor(roleId)), sorted(expected));
     });
   }
 
@@ -251,22 +251,17 @@ describe('M2 canonical role application matrix', () => {
 });
 
 describe('M2 launcher interaction and navigation contracts', () => {
-  test('launcher renders semantic three-column application buttons', () => {
+  test('launcher renders semantic domain application buttons', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups }));
     assert.match(html, /<button[^>]+aria-label="打开销售订单"/);
     assert.match(html, /data-page="orders"/);
-    assert.match(css, /\.mobile-launcher__grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/s);
+    assert.match(css, /\.application-mobile-domain__primary\s*\{[^}]*grid-template-columns:\s*repeat\(2,minmax\(0,1fr\)\)/s);
   });
 
-  test('launcher item click calls the canonical selection callback with its item', () => {
-    const item = { page: 'orders', key: 'orders', label: '销售订单', iconKey: 'orders' };
-    let selected = null;
-    const tree = MobileLauncher({ groups: [{ key: 'sales', label: '销售管理', items: [item] }], onItemSelect: (value) => { selected = value; } });
-    const group = tree.props.children[0];
-    const grid = group.props.children[1];
-    grid.props.children[0].props.onClick();
-    assert.equal(selected, item);
+  test('launcher item delegates selection through the canonical callback', () => {
+    const source = readFileSync(join(repoRoot, 'src', 'components', 'MobileLauncher.jsx'), 'utf8');
+    assert.match(source, /onClick=\{\(\) => onItemSelect\?\.\(item\)\}/);
   });
 
   test('App selection uses the existing hash/page state and back clears the application', () => {

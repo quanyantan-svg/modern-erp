@@ -13,7 +13,7 @@ test('P4 — canonical mobile and planning terminology', () => {
   const app = source('src/App.jsx');
   for (const term of ['需求预测', 'MRP 运算', '物料需求计划']) assert.match(app, new RegExp(term));
   const metadata = source('src/navigation/applicationMetadata.js');
-  for (const term of ['采购统计', '采购未交', '销售统计', '销售未交', '库存异动明细']) assert.match(metadata, new RegExp(term));
+  for (const term of ['采购分析', '采购未收', '销售分析', '销售未交', '库存分析']) assert.match(metadata, new RegExp(term));
 });
 
 test('P4 — five canonical visible role labels', () => {
