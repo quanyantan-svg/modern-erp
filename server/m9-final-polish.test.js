@@ -50,7 +50,7 @@ describe('M9 business overview', () => {
   test('authorized nodes are canonical links and unauthorized nodes are read-only', () => {
     const html = renderOverview(['orders']);
     assert.match(html, /href="#orders"/);
-    assert.match(html, /flow-node is-readonly/);
+    assert.match(html, /flow-step is-readonly/);
     assert.doesNotMatch(html, /href="#accounts-receivable"/);
   });
 

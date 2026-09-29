@@ -1654,3 +1654,270 @@ C01–C05、五角色、五审批族、调拨 WAREHOUSE 确认、LOT/SERIAL、�
 | D10 | 全 53 route 一致性、响应式和可达性审计 | 全量 gate 与人工验收 |
 
 D2 完成后必须 STOP。运营方确认前不得进入 D3+。若视觉方向被要求调整，先只修改四个原型和共享基础，重新冻结获批模式，再推广到其余页面；原型获批后成为 V1.5 canonical 视觉参考。任何批次不得借 UX 改造扩大 ERP 业务范围、启用 disabled route、改变后端实体身份或绕过 V1.4.1 合同。
+
+## 23. [V1.5 D2.2 — DESIGN] 四原型最终视觉打磨
+
+### 23.1 起点与冻结边界
+
+本节是 `document.md §22` 已批准需求的 STAGE 2 — DESIGN，起点为 `473ff51`。本节仅在 V1.5 D2.1 已通过的四个原型（应用页、业务总览、采购入库列表、采购入库详情）上做最终视觉打磨，不改变信息架构、不修改 680px 单轨模型、不进入 D3、不修改其余 49 个启用路由（除不可避免的、视觉中性且显式报告的共享样式副作用）。不修改后端、API、数据库或业务逻辑。
+
+复用现有组件、token 和 React/Vite 实现，不引入新框架，不重新启动品牌。MobileLauncher.jsx、business-overview.jsx、logistics-finance.jsx（PurchaseReceipts + PurchaseReceiptDetail）、MobileShell.jsx 与现有 `src/styles.css` 共享设计 token 是唯一落点。
+
+### 23.2 应用页（MobileLauncher.jsx）
+
+#### 23.2.1 顶部标题去重
+
+- 顶部应用栏已显示"应用"作为该页唯一强身份。MobileLauncher 当前内部又渲染 `<h1>应用</h1>` 与副标题"按业务流程进入工作流"，必须收口为不渲染大型 h1 重复。
+- 内部仅保留一个短小上下文小标"业务目录"作为可选 eyebrow；不得再出现"应用"作为 h1。
+
+#### 23.2.2 英文设计系统口吻收口
+
+- 删除 `APPLICATIONS`、`ROLE WORKSPACE`、`SUPPORTING`、`SALES`、`PRODUCTION`、`PURCHASE` 等英文小标。
+- 工作区标题从"我的工作区"改为"快捷入口"。
+- 中文主标题如"销售履约"、"生产执行"、"采购履约"保持中文业务语言；不引回英文标签。
+
+#### 23.2.3 七领域面板
+
+- 保持完全对齐的七行网格（固定索引列、固定标签列对齐、统一行高、统一字号、激活态仅靠权重/颜色/底面区分），不修改激活态字号或行几何。
+- 弱化外层大容器：移除单一巨型边框卡片表达，改用底面/分隔线/间距形成"左侧导航 + 中部主区域 + 右侧次级入口"三轨。
+- 激活行：保留极淡着色底面（如底面 #ffffff + 内嵌左侧条带），无激活字色加重。
+- 未激活行：纯中性、无边框、无阴影；鼠标悬停仅改变底面/字色。
+
+#### 23.2.4 主入口块（application-item）
+
+- 从偏卡片的形态（min-height 64–92px、显式底面、内嵌图标盒）收口为统一企业导航行：
+  - 图标盒固定尺寸 36×36（已满足，不变）；
+  - 标题；
+  - 可选次要信息；
+  - 雪佛龙箭头（仅在紧凑模式显示）；
+  - 底面透明，分隔线分隔；不使用独立大块背景。
+- 不破坏现有 `application-item--compact` 路径（用于工作区与"更多能力"）。
+
+#### 23.2.5 工作区（application-shortcuts）
+
+- 重命名：`<h2>我的工作区</h2>` → `<h2>快捷入口</h2>`。
+- 结构偏好：分行列项（业务总览 / 财务工具 / 高级设置 / 更多业务 / 系统设置），使用统一列表行 + 细底部分隔线；不重复使用独立圆角容器。
+- 不在视觉上与主七领域流程竞争；保持次级信息层级。
+
+#### 23.2.6 复用与边界
+
+- 复用现有 `presentationMetadata.js` 与 `applicationMetadata.js`，不修改 domain 注册表或路由。
+- 仅修改 `MobileLauncher.jsx` 与对应样式 token；不改 `App.jsx`、导航上下文、可见性逻辑。
+- 移动壳顶部已显示"应用"，内部不再次设置 `<h1>`；上下文 eyebrow "业务目录" 可选并以小字显示。
+- 不修改 launch pad icon 注册表。
+
+### 23.3 业务总览（business-overview.jsx）
+
+#### 23.3.1 三条流程链（680px 单轨内垂直流）
+
+- SALES：销售订单 → 销售出货/退货 → 应收结算。
+- PRODUCTION：MRP → 生产指令 → 制令单 → 用料出库 → 生产入库。
+- PURCHASE：MRP → 采购指令 → 请购单 → 采购订单 → 采购入库 → 应付结算。
+
+#### 23.3.2 视觉语言
+
+- 使用可见但克制的连接线（编号节点标记 + 垂直线 + 节点标题 + 可选简洁状态/待办数 + 雪佛龙箭头）。
+- 不为每个节点使用独立浮动卡片（节点沿垂直序列排列在 680px 轨内）。
+- 颜色仅作为克制重音：
+  - 销售：--flow-accent `#346d96`，极淡底面；
+  - 生产：--flow-accent `#36766c`，极淡底面；
+  - 采购：--flow-accent `#a66b22`，极淡底面。
+- 背景大多为中性；连接线/节点保持可读；颜色不得是唯一语义指标（节点还必须有形状/编号/标题区分）。
+- 流之间使用分隔线分组，不再使用大色块瓷砖墙。
+
+#### 23.3.3 节点交互
+
+- 节点整体可交互。删除每个节点下"进入应用"重复文案。
+- 仅保留：编号 + 标题 + 雪佛龙箭头 + 可选待办/状态；如节点无权限，使用中性只读态（不显示"无权限"噪音，使用 `aria-label` 表达）。
+
+#### 23.3.4 永久正文移出主表面
+
+- 移除 `<div className="flow-overview__legend"><b>审批 ≠ 履约 · 物流 ≠ 结算 · 结算 ≠ 凭证</b></div>` 在主流程表面的常驻显示。
+- 改为：主标题"业务总览"+ 元数据"3 条主流程"+"流程说明 >"（HelpDisclosure）。流程说明中包含上述边界叙述。
+
+#### 23.3.5 支撑业务（SUPPORTING）
+
+- SUPPORTING 区（基础资料 / 库存作业 / 经营分析）使用与主流程相同的低密度分组；不重复使用英文小标。
+- 单条支撑链接结构：标题 + 雪佛龙箭头。
+
+### 23.4 采购入库列表（logistics-finance.jsx PurchaseReceipts）
+
+#### 23.4.1 标题与副标题
+
+- 主标题"采购入库"，删除上下文副标题"记录到货、质量验收与库存入账"。
+- 该叙述如仍有用，仅保留在 HelpDisclosure"业务说明"内。
+- 主操作保留"新增采购入库"。
+
+#### 23.4.2 归档筛选术语
+
+- 文案：`显示已移除` → `显示已归档`。
+- 视觉强调：归档行使用低对比灰，仍带原始单号 + 状态，不显示"已删除"。
+- 行 action 中如使用"删除"，其确认文案必须保持"从业务列表移除"语义（与详情 Danger Zone 一致）。
+- API/数据合同不变（`includeArchived=true`、archiveState 等保持）。
+
+#### 23.4.3 单据号单行 + 省略
+
+- CompactRecord 标题当前使用 `<strong>{item.receipt_no}</strong>`，已具备换行控制；D2.2 必须显式确保长单据号单行显示且超过 30 字符省略（`overflow:hidden; text-overflow:ellipsis; white-space:nowrap`），完整值通过 `title` 属性或详情链接可访问。
+- 供应商/仓库/货品名允许换行（保留 `overflow-wrap:anywhere`）。
+
+#### 23.4.4 长文本安全
+
+- 长供应商名 / 长仓库名 / 长货品名 / 长单据号 / 长中文状态文案 / 归档动作必须在 390、680、桌面宽度下不造成页面级横向溢出。
+- 沿用现有 `compact-record__open`、`compact-record__identity` 的 `overflow-wrap:anywhere`。
+
+### 23.5 采购入库详情（logistics-finance.jsx PurchaseReceiptDetail）
+
+#### 23.5.1 长值字段排版
+
+- 长值（供应商全称 / 收货仓库全称 / 备注 / 来源说明等）：渲染为 `行：标题 / 行：长值（下方左对齐）`。
+- 短值（收货日期 / 单据金额 / 制单人 / 状态等）：保留 `行：标题 ← 短值（右侧）`。
+- 不强制长文本进入右对齐窄列。
+
+#### 23.5.2 密度与字号权重
+
+- 减少节间上下间距（`--section-spacing` → 当前 desktop 32px 收口为 22–24px，mobile 24px 收口为 16–18px）。
+- 收口标题间隙：BusinessContentSection 标题与正文间距从大改小。
+- 不使用重复分隔线（同一节内不再加额外横线）。
+- 字号权重分级：
+  - 页面标题（BusinessPageHeader h1）：保持既有 700 粗体。
+  - 区块标题（BusinessContentSection h2）：600。
+  - 业务值：500–600。
+  - 正文：400–500。
+  - 次要元数据：400。
+- 数值合计（单据金额）可保留略强强调（600）但不超粗。
+
+#### 23.5.3 原始枚举本地化
+
+- `detail.billingSummary.status` 当前可能为 `UNBILLED / PARTIALLY_BILLED / BILLED`：
+  - `UNBILLED` → "未开账"（采购入库常见，因为账单后于入库）。
+  - `PARTIALLY_BILLED` → "部分开账"。
+  - `BILLED` → "已开账"。
+- 不修改后端 API 字段名或数据库值；前端 UI 仅在详情页呈现层做翻译。
+- 同段审计：商业与财务关系块中的 raw 字段（如 voucher `status`）若为 `POSTED/ENTERED/SUBMITTED/REJECTED` 等原始后端枚举，必须经 `presentStatus()` 走 canonical 标签；非 `voucher` 来源的 raw 状态文本（如"已产生财务记录"）保持现有展示。
+
+#### 23.5.4 CANCELLED 危险区域收敛
+
+- 既有 `BusinessDangerZone` 节名为"已取消单据"，description 完整保留；D2.2 收敛其视觉权重：
+  - 容器边框使用极淡 `--semantic-danger` 变体（border 1px + 极淡背景）替代当前较重的红边框。
+  - 不出现大号亮红主按钮。
+  - 危险动作"从业务列表移除"使用 outline 样式或次级破坏性按钮层级。
+  - 描述保持简洁："该单据将归档并保留审计记录。"
+- 最终确认对话框（`DangerSheet`）保持最强危险表达。
+
+#### 23.5.5 归档确认语义
+
+- 标题保持"从业务列表移除"（不改为"删除"或"永久删除"）。
+- 正文：
+  ```
+  该采购入库单将从正常业务列表中移除，并保留在归档记录中。
+  原单据、明细和审计记录不会被删除，有权限的管理员可以恢复。
+  ```
+- 按钮：`取消` / `从列表移除`。
+- 不得出现"永久删除 / 彻底删除 / 不可恢复"。
+
+### 23.6 底部导航（MobileShell.jsx）
+
+#### 23.6.1 内容安全
+
+- 在真实浏览器验证：内容容器 `mobile-main` 必须包含足够底部安全间距 = `mobile-bottom-nav height` + `env(safe-area-inset-bottom)` + 适度内容内边距。
+- 不只是简单增加空白：保留原视觉密度，但确保最后节/动作不被底部导航遮挡。
+- D2.2 不修改 `bottom-tab` 文案或路由；仅在必要时调整视觉层级与安全间距。
+
+#### 23.6.2 视觉权重
+
+- 底部选项卡栏视觉权重不得高于页面内容；激活态使用现有 `mobile-bottom-nav__item--active` 样式（已有），不增加装饰。
+- 通知徽章（`mobile-bottom-nav__badge`）：位置在图标右上角，视觉紧凑；不影响整体视觉权重。
+- 边框/分隔线：现有顶部细线已足够，不增加第二层。
+
+### 23.7 卡片与边框数量收口
+
+四个原型全部可见边框/卡片审计：
+
+- 业务总览的 `flow-lane`：当前有 1px border + shadow；D2.2 移除独立外层卡片，改为分隔线分组。
+- 应用页 `application-desktop-workspace`：当前是单一巨型边框卡片；改为三轨表面，每轨仅必要分隔线。
+- 采购入库列表 CompactRecord：保持紧凑行 + 分隔线（已符合）。
+- 采购入库详情 `receipt-document-flow`：当前是带边框白卡；改为透明 + 节分隔线分组（如仍需视觉高程，使用极轻外层高程 ≤ 1 级）。
+- 业务总览 / 应用页 / 列表 / 详情：始终回答"是否真的需要这个 box？"
+
+### 23.8 视觉深度
+
+- 维持：克制外层表面高程（最多 1 级）、克制边框（仅必要处 1px）、柔和中性背景（`--bg-surface` + 极轻 `--bg-surface-2`）、一致重音（`--accent`）、精致悬停/焦点（200ms 内）、清晰分隔线（`--border-subtle`）。
+- 不通过装饰色彩补偿朴素；高端感来自精度。
+
+### 23.9 可访问性
+
+- 保持：可见焦点（`:focus-visible`）、键盘导航（`button` + `aria-pressed`/`aria-current`）、可访问图标标签（`aria-label`）、状态不仅靠颜色、破坏性确认（DangerSheet）、可用移动触目标（≥ 44×44px）。
+- 流程节点作为可交互元素：保留 `<button>` 或 `<a>` 语义；无权限节点使用 `aria-label` 表达。
+
+### 23.10 响应式与溢出
+
+- 测试视口：390px（移动）、680px（窄桌面/平板）、1280–1440px（桌面居中轨）。
+- 显式验证长供应商、长仓库、长单据号、长货品名、长中文状态文案、归档动作、流程节点标签。
+- 仍使用 680px canonical rail：`--app-max-width:680px` + `.business-page-shell--rail { width:100%; max-width:680px }`。
+- 任何长值仍需走 `overflow-wrap:anywhere` 或 `text-overflow:ellipsis`，不得造成页面级横向溢出。
+
+### 23.11 测试与验收
+
+#### 23.11.1 focused 测试
+
+新建 `server/v15-d22-final-visual-polish.test.js`（与 D2.1 同名风格）：
+
+- 应用页：
+  - 七领域网格保留（`application-domain-nav` 索引 / 标签 / 指示器；不修改行高 / 字号）。
+  - 激活态字号、行高不变。
+  - 不再有大号 `<h1>应用</h1>` 重复。
+  - 工作区标题为"快捷入口"。
+  - 英文小标 `APPLICATIONS / ROLE WORKSPACE / SUPPORTING / SALES / PRODUCTION / PURCHASE` 已删除。
+- 业务总览：
+  - 流程序列保留：SALES 三步、PRODUCTION 五步、PURCHASE 六步。
+  - 流程连接线 / 步骤结构存在（`flow-lane__arrow` 或同级视觉）。
+  - "进入应用"重复文案已从节点删除。
+  - 永久边界正文（审批 ≠ 履约 / 物流 ≠ 结算 / 结算 ≠ 凭证）从主表面删除。
+  - HelpDisclosure "流程说明" 仍可用。
+- 采购入库列表：
+  - "显示已归档" 替代 "显示已移除"。
+  - 归档行为不变（API 与 store 不变）。
+  - 长单据号不强制换行（CSS / 组件契约）。
+- 采购入库详情：
+  - 后端枚举本地化：`UNBILLED` → "未开账" 等。
+  - 取消归档动作保持安全（DangerSheet 仍调用 archive）。
+  - 归档确认文案：标题"从业务列表移除"、正文保持、不出现"永久删除"。
+
+#### 23.11.2 全量与构建
+
+- focused 通过后运行 `pnpm test`（默认 SQLite）：0 failed / 0 cancelled / 0 skipped / 0 todo。
+- `pnpm build`：PASS。
+- `git diff --check`：PASS。
+- 仅在具有受保护 disposable MySQL 环境时运行 MySQL gate；D2.2 不引入后端变化，默认不跑 MySQL gate。
+
+#### 23.11.3 视觉评审
+
+扩展 `scripts/acceptance/v15-d2-visual-review.mjs` 以支持 D2.2 截图：application-desktop / application-mobile / business-overview-desktop / business-overview-mobile / purchase-receipts-desktop / purchase-receipts-mobile / purchase-receipt-detail-desktop / purchase-receipt-detail-mobile / long-text-detail / long-text-list。
+
+### 23.12 实施范围与文件清单
+
+Frontend：
+
+- `src/components/MobileLauncher.jsx`：删除内部 h1 重复、英文小标、改"我的工作区"为"快捷入口"、主入口块收口为导航行。
+- `src/pages/business-overview.jsx`：三条流程链垂直化、删除永久边界正文、节点去除"进入应用"、HelpDisclosure 流程说明保留。
+- `src/pages/logistics-finance.jsx`：列表删除副标题、改"显示已归档"、详情长值字段排版、密度与字号权重、UNBILLED 等本地化、Danger Zone 收敛。
+- `src/components/MobileShell.jsx`：仅在必要时调整底部导航视觉层级与安全间距。
+- `src/styles.css`：上述对应样式 token 调整。
+- `server/v15-d22-final-visual-polish.test.js`（新增 focused）。
+- `scripts/acceptance/v15-d2-visual-review.mjs`（扩展截图）。
+- `log/2026-09-29.md`（追加本批次条目）。
+
+不修改：
+
+- 后端 server/。
+- schema / migration / index。
+- API 命名或行为合同。
+- 角色 / 审批族。
+- document.md / solution.md / README.md 现有内容（除追加 §23 节）。
+- 其余 49 个启用路由的页面/组件。
+
+### 23.13 阶段状态与门禁
+
+- D2.2 focused 通过 + `pnpm test` + `pnpm build` + `git diff --check` 通过 → 可提交 exact-file stage。
+- D2.2 提交后 STOP；不进入 D3+；不 push / tag / deploy。
+- 截图通过运营方最终视觉评审才进入 D3。

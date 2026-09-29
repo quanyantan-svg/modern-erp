@@ -25,9 +25,9 @@ test('D2 mobile application hierarchy discloses secondary and utility entries', 
 
 test('D2 overview remains permission-safe and contains three flow lanes', () => {
   const overview = read('src/pages/business-overview.jsx');
-  assert.match(overview, /code: 'SALES'/);
-  assert.match(overview, /code: 'PRODUCTION'/);
-  assert.match(overview, /code: 'PURCHASE'/);
+  assert.match(overview, /title: '销售履约'/);
+  assert.match(overview, /title: '生产执行'/);
+  assert.match(overview, /title: '采购履约'/);
   assert.match(overview, /navigation\.canNavigate/);
   assert.doesNotMatch(overview, /\bapi\s*\(/);
 });
@@ -40,7 +40,7 @@ test('D2 purchase receipt list and detail use D1 lifecycle contracts truthfully'
     '/api/lifecycle/restore',
     'includeArchived',
   ]) assert.match(page, new RegExp(contract.replace(/[?]/g, '\\?')));
-  assert.match(page, /移除只影响正常业务列表的可见性，不删除单据或审计记录/);
+  assert.match(page, /从正常业务列表中移除/);
   assert.match(page, /仍保持“已取消”/);
   assert.match(page, /can\(user, 'USERS_MANAGE'\)/);
   assert.match(page, /receipt-document-flow/);

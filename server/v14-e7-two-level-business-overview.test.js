@@ -36,14 +36,14 @@ function render(allowed = []) {
 
 describe('V1.5 D2 flow-aligned business overview', () => {
   test('presents exactly the three frozen principal lanes', () => {
-    assert.deepEqual(flows.map((flow) => [flow.code, flow.title]), [
-      ['SALES', '销售履约'], ['PRODUCTION', '生产执行'], ['PURCHASE', '采购履约'],
+    assert.deepEqual(flows.map((flow) => [flow.key, flow.title]), [
+      ['sales', '销售履约'], ['production', '生产执行'], ['purchase', '采购履约'],
     ]);
     assert.equal(flows.some((flow) => flow.key === 'finance'), false);
   });
 
   test('keeps canonical stages in their correct sequence', () => {
-    assert.deepEqual(flows[0].steps.map((item) => item.label), ['销售订单', '出货 / 退货', '应收结算']);
+    assert.deepEqual(flows[0].steps.map((item) => item.label), ['销售订单', '销售出货 / 退货', '应收结算']);
     assert.deepEqual(flows[1].steps.map((item) => item.label), ['MRP', '生产指令', '制令单', '用料出库', '生产入库']);
     assert.deepEqual(flows[2].steps.map((item) => item.label), ['MRP', '采购指令', '请购单', '采购订单', '采购入库', '应付结算']);
   });
@@ -51,10 +51,12 @@ describe('V1.5 D2 flow-aligned business overview', () => {
   test('authorized nodes link while unauthorized nodes remain explanatory', () => {
     const html = render(['orders']);
     assert.match(html, /href="#orders"/);
-    assert.match(html, /销售订单[\s\S]*进入应用/);
-    assert.match(html, /应收结算[\s\S]*无权限/);
+    assert.match(html, /aria-label="进入销售订单"/);
+    assert.match(html, /应收结算[\s\S]*无权限|无权限[\s\S]*应收结算/);
     assert.doesNotMatch(html, /href="#accounts-receivable"/);
     assert.doesNotMatch(overviewSource, /\bapi\s*\(/);
+    // D2.2: repetitive "进入应用" copy removed from every node.
+    assert.doesNotMatch(html, /<small[^>]*>进入应用<\/small>/);
   });
 
   test('every lane destination remains a current enabled route', () => {

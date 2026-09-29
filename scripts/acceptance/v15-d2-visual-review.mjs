@@ -98,8 +98,8 @@ try {
   };
   await capture(token, 'purchase-receipt-detail-mobile', mobile, 'purchase-receipts', openDetail('PR-D2-001'));
   await capture(token, 'purchase-receipt-detail-desktop', desktop, 'purchase-receipts', openDetail('PR-D2-001'));
-  await capture(token, 'long-text-list-680', rail, 'purchase-receipts');
-  await capture(token, 'long-text-detail-680', rail, 'purchase-receipts', openDetail('PR-D2-LONG-20260929-000000000000000001'));
+  await capture(token, 'long-text-list', rail, 'purchase-receipts');
+  await capture(token, 'long-text-detail', rail, 'purchase-receipts', openDetail('PR-D2-LONG-20260929-000000000000000001'));
   console.log(JSON.stringify({ ok: true, screenshots }, null, 2));
 } finally {
   await browser?.close();
