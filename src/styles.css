@@ -3740,3 +3740,37 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
     grid-template-columns: repeat(3, minmax(92px, 1fr));
   }
 }
+
+/* V1.5 D6 — inventory operations, evidence and period control. */
+.mobile-shell:has(.inventory-operations-v15),
+.mobile-shell:has(.inventory-transactions-v15),
+.mobile-shell:has(.traceability-v15),
+.mobile-shell:has(.inventory-scraps-v15),
+.mobile-shell:has(.inventory-month-end-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.inventory-operations-v15,
+.inventory-transactions-v15,
+.traceability-v15,
+.inventory-scraps-v15,
+.inventory-month-end-v15 {
+  min-width: 0;
+}
+
+.inventory-operations-v15 .inventory-workbench,
+.inventory-transactions-v15 .movement-filters {
+  overflow-x: auto;
+}
+
+.inventory-transactions-v15 .table-wrap,
+.inventory-scraps-v15 .table-wrap {
+  border-radius: 0;
+}
+
+@media (max-width: 520px) {
+  .inventory-period-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

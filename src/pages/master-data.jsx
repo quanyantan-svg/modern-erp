@@ -1458,7 +1458,8 @@ export function Inventory({ user, notify }) {
   useEffect(() => { Promise.all([api('/api/warehouses'), api('/api/products')]).then(([w, p]) => { setWarehouses(w.warehouses.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active)); }).catch((e) => notify(e.message, 'error')); }, []);
   const loadInventory = () => { let url = '/api/inventory'; const params = []; if (searchWh) params.push(`warehouse=${searchWh}`); if (searchPd) params.push(`product=${searchPd}`); if (params.length) url += '?' + params.join('&'); api(url).then((r) => setInventory(r.inventory)).catch((e) => notify(e.message, 'error')); };
   useEffect(() => { void loadInventory(); }, [searchWh, searchPd]);
-  return <Panel title="库存查询">
+  return <BusinessPageShell className="inventory-operations-v15" width="rail">
+    <BusinessPageHeader title="库存作业" context={tab === 'query' ? '即时库存' : tab === 'transfer' ? '库存调拨' : tab === 'check' ? '库存盘点' : '库存调整'} help={<HelpDisclosure summary="作业说明"><p>库存查询、调拨、盘点与调整共享同一工作面；调拨与调整的确认是库存生效动作，不代表业务审批。</p></HelpDisclosure>}/>
     <div className="inventory-workbench" aria-label="库存功能"><button className={tab === 'query' ? 'active' : ''} onClick={() => setTab('query')}>查询</button><button className={tab === 'transfer' ? 'active' : ''} onClick={() => setTab('transfer')}>调拨</button><button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}>盘点</button>{can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <button className={tab === 'adjustment' ? 'active' : ''} onClick={() => setTab('adjustment')}>调整</button>}<AppLink page="inventory-transactions">异动</AppLink></div>
     {tab === 'query' && <><div className="toolbar inventory-filters"><select value={searchPd} onChange={(e) => setSearchPd(e.target.value)}><option value="">全部货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><select value={searchWh} onChange={(e) => setSearchWh(e.target.value)}><option value="">全部仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select></div>
       <div className="inventory-records">{inventory.map((row) => <button type="button" className="inventory-record" onClick={() => setStockDetail(row)} key={row.warehouse_id + '-' + row.product_id}><span className="inventory-record__main"><strong>{row.productName}</strong><span className="mono">{row.productCode}</span></span><strong className="inventory-record__quantity">{quantity(row.quantity)} <small>{row.unit}</small></strong><span className="inventory-record__warehouse">{row.warehouseName}</span><Icon name="chevron" size={18}/></button>)}{!inventory.length && <Empty title="暂无库存记录" text="完成入库或调整后，将在这里显示。"/>}</div></>}
@@ -1466,7 +1467,7 @@ export function Inventory({ user, notify }) {
     {tab === 'transfer' && <InventoryTransfers user={user} notify={notify} warehouses={warehouses} products={products}/>}
     {tab === 'adjustment' && can(user, 'INVENTORY_ADJUSTMENT_MANAGE') && <InventoryAdjustments notify={notify} warehouses={warehouses} products={products} inventory={inventory}/>}
     {stockDetail && <InventoryStockDetail value={stockDetail} onClose={() => setStockDetail(null)} notify={notify}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function InventoryStockDetail({ value, onClose, notify }) {

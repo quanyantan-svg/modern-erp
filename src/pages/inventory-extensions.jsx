@@ -4,7 +4,7 @@ import {
   Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime, quantity,
 } from '../components/ui.jsx';
 import {
-  BusinessActionBar, BusinessPageHeader, BusinessState, DestructiveButton, InlineAlert,
+  BusinessActionBar, BusinessPageHeader, BusinessPageShell, BusinessState, DestructiveButton, HelpDisclosure, InlineAlert,
   PrimaryButton, RecordCard, RecordList, SecondaryButton, StatusChip, SummaryCard,
 } from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
@@ -64,13 +64,14 @@ export function InventoryScraps({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="库存报废" subtitle="草稿可编辑，确认后扣减库存并写入库存异动；已确认与已取消单据只读">
-    <Toolbar search={() => {}} placeholder="" action={can(user, 'INVENTORY_SCRAP_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建报废单</button>}/>
+  return <BusinessPageShell className="inventory-scraps-v15" width="rail">
+    <BusinessPageHeader title="存货报废" primaryAction={can(user, 'INVENTORY_SCRAP_MANAGE') && <button className="primary" onClick={() => setEditing({})}>新建报废单</button>} help={<HelpDisclosure summary="业务说明"><p>草稿可编辑；确认后扣减库存并写入库存异动。确认是库存生效动作，不是审批动作。</p></HelpDisclosure>}/>
+    <Toolbar search={() => {}} placeholder=""/>
     <p className="section-hint">报废单确认时按仓库 + 货品校验库存，任一行不足则整张单据回滚。</p>
     <div className="table-wrap"><table><thead><tr><th>报废单号</th><th>状态</th><th>报废日期</th><th className="number">明细数</th><th className="number">报废数量</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}><td className="mono">{row.scrapNo}</td><td><Status status={row.status} label={presentStatus(row.status).label}/></td><td>{row.scrapDate}</td><td className="number">{row.itemCount}</td><td className="number">{quantity(row.totalQuantity)}</td><td>{row.reason || '—'}</td><td>{row.creatorName}</td><td className="dim">{dateTime(row.confirmedAt)}</td></tr>)}</tbody></table>{!rows.length && <BusinessState kind="EMPTY" title="没有库存报废记录" description="确认报废后会扣减库存并写入库存异动表。"/>}</div>
     {editing && <InventoryScrapModal value={editing} warehouses={warehouses} products={products} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); notify('报废单已保存'); }}/>}
     {viewing && <InventoryScrapDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function InventoryScrapModal({ value, warehouses, products, notify, onClose, onSaved }) {
@@ -198,10 +199,11 @@ export function InventoryMonthEnd({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <div className="inventory-period-page">
+  return <BusinessPageShell className="inventory-period-page inventory-month-end-v15" width="rail">
     <BusinessPageHeader
       title="存货期间结账"
-      context="先运行预检查，再冻结已结束自然月的存货数量快照。结账不会修改库存流水或会计凭证。"
+      context="存货期间控制"
+      help={<HelpDisclosure summary="月结边界"><p>先运行预检查，再冻结已结束自然月的存货数量快照。结账不会修改库存流水或会计凭证。</p></HelpDisclosure>}
       status={status?.latestStatus}
       meta={status?.closedThrough ? `已结至 ${status.closedThrough}` : '尚无结账基线'}
       primaryAction={canManage && <PrimaryButton type="button" disabled={!status?.canClose} onClick={() => setShowCloseForm(true)}>执行月结</PrimaryButton>}
@@ -229,7 +231,7 @@ export function InventoryMonthEnd({ user, notify }) {
     {showCloseForm && <CloseInventoryPeriodModal initialPeriod={status?.nextClosablePeriod} notify={notify} onClose={() => setShowCloseForm(false)} onSaved={async () => { setShowCloseForm(false); await Promise.all([reload(), reloadStatus()]); notify('存货月结已完成'); }}/>}
     {reopening && <ReopenInventoryPeriodModal row={reopening} onClose={() => setReopening(null)} onConfirm={(reason) => reopen(reopening, reason)}/>}
     {viewing && <InventoryPeriodClosureDetail value={viewing} onClose={() => setViewing(null)}/>}
-  </div>;
+  </BusinessPageShell>;
 }
 
 function CloseInventoryPeriodModal({ initialPeriod, notify, onClose, onSaved }) {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { BusinessPageHeader, BusinessState, InlineAlert } from '../components/design-system.jsx';
+import { BusinessPageHeader, BusinessPageShell, BusinessState, HelpDisclosure, InlineAlert } from '../components/design-system.jsx';
 import { presentBusinessValue, presentStatus } from '../lib/presentation.js';
 
 const trackingStateLabel = (value) => presentStatus(value, 'tracking.status').label;
@@ -22,8 +22,8 @@ export default function Traceability({ notify }) {
     catch (error) { notify(error.message, 'error'); }
     finally { setLoading(false); }
   }
-  return <section className="panel traceability-page">
-    <BusinessPageHeader title="批次 / 序列号追溯" context="只展示已存在的身份、来源单据、库存移动与生产谱系证据。"/>
+  return <BusinessPageShell className="traceability-page traceability-v15" width="rail">
+    <BusinessPageHeader title="批次 / 序列号追溯" context="库存证据查询" help={<HelpDisclosure summary="追溯边界"><p>只展示已存在的身份、来源单据、库存移动与生产谱系证据，不根据相似数量或日期推测关系。</p></HelpDisclosure>}/>
     <form className="toolbar traceability-search" onSubmit={search}>
       <select aria-label="身份类型" value={query.type} onChange={(event) => { setQuery({ ...query, type: event.target.value, id: '' }); setResult(null); }}><option value="LOT">批次</option><option value="SERIAL">序列号</option></select>
       <input aria-label="身份标识" value={query.id} onChange={(event) => setQuery({ ...query, id: event.target.value })} placeholder="输入批次号或序列号" required/>
@@ -39,5 +39,5 @@ export default function Traceability({ notify }) {
       <article className="mobile-card"><h3>生产谱系</h3>{result.genealogy.length ? result.genealogy.map((edge) => <div className="mobile-card__row" key={edge.id}><span>生产工单 {edge.productionOrderNo || '单号缺失'}<small className="block">{edge.inputIdentityCode || '上游身份缺失'} → {edge.outputIdentityCode || '下游身份缺失'}</small></span><strong>{edge.allocated_quantity}</strong></div>) : <p>没有权威谱系分配；系统不会生成推测关系。</p>}</article>
       <article className="mobile-card"><h3>下游影响</h3>{result.downstream.length ? result.downstream.map((movement) => <div className="mobile-card__row" key={movement.id}><span>{movement.sourceDocumentNo || '来源信息不完整'}<small className="block">{movement.customerCode ? `${movement.customerCode} · ${movement.customerName}` : movement.sourceDocumentLabel}</small></span><strong>{directionLabel(movement.direction)} {movement.quantity}</strong></div>) : <p>暂无可证明的下游交付或库存移动。</p>}</article>
     </div>}
-  </section>;
+  </BusinessPageShell>;
 }
