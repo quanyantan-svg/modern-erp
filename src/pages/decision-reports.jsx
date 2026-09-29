@@ -15,15 +15,15 @@
 import { useEffect, useState } from 'react';
 import { api, download } from '../api.js';
 import { can, money } from '../components/ui.jsx';
-import { BusinessState, FilterButton, FilterSheet, FormRow, InlineAlert, RecordCard, RecordList, ResponsiveBusinessList } from '../components/design-system.jsx';
+import { BusinessPageHeader, BusinessPageShell, BusinessState, FilterButton, FilterSheet, FormRow, HelpDisclosure, InlineAlert, RecordCard, RecordList, ResponsiveBusinessList } from '../components/design-system.jsx';
 import { BusinessEntitySelector } from '../components/business-entity-selector.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 
 const REPORT_TABS = [
-  { key: 'sales-summary', label: '销售统计', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
-  { key: 'sales-outstanding', label: '销售未交', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
-  { key: 'purchase-summary', label: '采购统计', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
-  { key: 'purchase-outstanding', label: '采购未交', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+  { key: 'sales-summary', label: '销售统计分析', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+  { key: 'sales-outstanding', label: '销售未出货', usage: 'REPORT_SALES', domainPermissions: ['ORDERS_VIEW', 'ORDERS_CREATE', 'ORDERS_SUBMIT', 'ORDERS_APPROVE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+  { key: 'purchase-summary', label: '采购统计分析', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+  { key: 'purchase-outstanding', label: '采购未交货', usage: 'REPORT_PURCHASE', domainPermissions: ['PURCHASE_ORDERS_VIEW', 'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_SUBMIT', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
   { key: 'inventory-movements', label: '库存异动明细', usage: 'REPORT_INVENTORY', domainPermissions: ['INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE'] },
 ];
 
@@ -185,7 +185,8 @@ export default function DecisionReports({ user, notify }) {
   const currentTab = visibleTabs.find((tab) => tab.key === activeTab) || visibleTabs[0];
 
   return (
-    <section className="decision-reports" data-testid="decision-reports">
+    <BusinessPageShell className="decision-reports decision-reports-v15" width="rail" data-testid="decision-reports">
+      <BusinessPageHeader title="经营分析" context={currentTab.label} help={<HelpDisclosure summary="报表口径"><p>筛选、摘要和明细使用各业务域的权威业务日期；导出沿用当前筛选，不以审计时间替代业务日期。</p></HelpDisclosure>}/>
       <div className="decision-reports__tabs" role="tablist" data-testid="decision-reports-tabs">
         {visibleTabs.map((tab) => (
           <button
@@ -208,7 +209,7 @@ export default function DecisionReports({ user, notify }) {
         {currentTab.key === 'purchase-outstanding' && <PurchaseOutstandingPanel />}
         {currentTab.key === 'inventory-movements' && <InventoryMovementsPanel />}
       </div>
-    </section>
+    </BusinessPageShell>
   );
 }
 

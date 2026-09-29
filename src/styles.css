@@ -3814,3 +3814,36 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .contacts-v15 .table-wrap {
   border-radius: 0;
 }
+
+/* V1.5 D8 — decision and operating reports. */
+.mobile-shell:has(.decision-reports-v15),
+.mobile-shell:has(.manufacturing-analytics-v15),
+.mobile-shell:has(.financial-reports-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.decision-reports-v15,
+.manufacturing-analytics-v15,
+.financial-reports-v15 {
+  min-width: 0;
+}
+
+.decision-reports-v15 .decision-reports__tabs,
+.manufacturing-analytics-v15 > .tabs,
+.financial-reports-v15 > .tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.decision-reports-v15 .responsive-business-list,
+.manufacturing-analytics-v15 .mobile-card-list {
+  min-width: 0;
+}
+
+.decision-reports-v15 .table-wrap,
+.financial-reports-v15 .table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 0;
+}
