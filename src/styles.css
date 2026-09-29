@@ -3084,7 +3084,8 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .mobile-bottom-nav__label { line-height:15px; }
 
 /* V1.5 D0 shared business-page foundations. */
-.business-page-shell { width:min(100%,var(--page-max-width)); margin-inline:auto; padding:var(--page-padding-desktop); display:grid; gap:var(--section-spacing); min-width:0; }
+.business-page-shell { width:min(100%,var(--page-max-width)); margin-inline:auto; padding:var(--page-padding-desktop); display:grid; gap:var(--section-spacing); min-width:0; grid-template-columns:minmax(0,1fr); }
+.business-page-shell > * { min-width:0; }
 .page-header__breadcrumb { color:var(--text-muted); font-size:12px; margin-bottom:var(--spacing-compact); }
 .page-header__overflow { display:flex; align-items:center; }
 .business-status-group { display:flex; flex-wrap:wrap; gap:var(--spacing-compact); align-items:center; }
