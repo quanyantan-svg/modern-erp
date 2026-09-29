@@ -49,35 +49,20 @@ export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, 
   const more = selected?.items.filter((item) => item.tier !== 'primary') || [];
 
   return <section className="mobile-launcher application-workspace" data-testid="mobile-launcher" aria-label="应用">
-    <div className="application-mobile-domains">
-      {domains.map((group) => {
-        const primaryItems = group.items.filter((item) => item.tier === 'primary').slice(0, 4);
-        const disclosedItems = group.items.filter((item) => !primaryItems.includes(item));
-        return <section key={group.key} className="application-mobile-domain" data-testid={`mobile-launcher-group-${group.label}`}>
-          <h2>{group.label}</h2>
-          <div className="application-mobile-domain__primary">{primaryItems.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect}/>)}</div>
-          {disclosedItems.length > 0 && <details className="application-mobile-domain__more"><summary>更多{group.label}应用 <span>{disclosedItems.length}</span></summary><div>{disclosedItems.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div></details>}
-        </section>;
-      })}
-      {shortcutItems.length > 0 && <section className="application-mobile-domain application-mobile-domain--shortcuts" data-testid={`mobile-launcher-group-${shortcuts.label}`}><h2>{shortcuts.label}</h2><div className="application-mobile-domain__primary">{shortcutItems.map((item) => <ApplicationItem key={item.key || item.page} item={item} icons={icons} onItemSelect={onItemSelect}/>)}</div></section>}
+    <header className="application-workspace__header"><div><span>APPLICATIONS</span><h1>应用</h1></div><small>按业务流程进入工作</small></header>
+    <nav className="application-domain-nav" aria-label="业务领域">
+      <p>业务领域</p>
+      <div>{domains.map((group, index) => <button type="button" key={group.key} data-testid={`mobile-launcher-group-${group.label}`} className={selected?.key === group.key ? 'is-selected' : ''} aria-current={selected?.key === group.key ? 'page' : undefined} onClick={() => setSelectedKey(group.key)}><span className="application-domain-nav__index">{String(index + 1).padStart(2, '0')}</span><span className="application-domain-nav__label">{group.label}</span><span className="application-domain-nav__indicator" aria-hidden="true">→</span></button>)}</div>
+    </nav>
+    <section className="application-domain-content" aria-live="polite">
+      <header><div><span>当前领域</span><h2>{selected?.label}</h2></div><small>{primary.length} 个主要入口</small></header>
+      <div className="application-domain-content__primary">{primary.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect}/>)}</div>
+      {more.length > 0 && <details className="application-domain-content__more"><summary>更多{selected?.label}能力 <span>{more.length}</span></summary><div>{more.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div></details>}
+    </section>
+    <aside className="application-shortcuts">
+      <header><div><span>ROLE WORKSPACE</span><h2>我的工作区</h2></div><small>常用入口与设置</small></header>
+      <div className="application-shortcuts__primary">{shortcutItems.map((item) => <ApplicationItem key={item.key || item.page} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div>
       <UtilityGroups groups={disclosedUtilities} icons={icons} onItemSelect={onItemSelect}/>
-    </div>
-
-    <div className="application-desktop-workspace">
-      <nav className="application-domain-nav" aria-label="业务领域">
-        <p>业务领域</p>
-        {domains.map((group, index) => <button type="button" key={group.key} className={selected?.key === group.key ? 'is-selected' : ''} aria-current={selected?.key === group.key ? 'page' : undefined} onClick={() => setSelectedKey(group.key)}><span>{String(index + 1).padStart(2, '0')}</span>{group.label}</button>)}
-      </nav>
-      <main className="application-domain-content">
-        <header><div><span>应用目录</span><h1>{selected?.label}</h1></div><small>{primary.length} 个主要入口</small></header>
-        <div className="application-domain-content__primary">{primary.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect}/>)}</div>
-        {more.length > 0 && <section className="application-domain-content__more"><h2>更多业务</h2><div>{more.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div></section>}
-      </main>
-      <aside className="application-shortcuts">
-        <div><span>快速进入</span><h2>我的工作区</h2></div>
-        {shortcutItems.map((item) => <ApplicationItem key={item.key || item.page} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}
-        <UtilityGroups groups={disclosedUtilities} icons={icons} onItemSelect={onItemSelect}/>
-      </aside>
-    </div>
+    </aside>
   </section>;
 }

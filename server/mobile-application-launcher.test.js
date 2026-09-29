@@ -254,9 +254,10 @@ describe('M2 launcher interaction and navigation contracts', () => {
   test('launcher renders semantic domain application buttons', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups }));
-    assert.match(html, /<button[^>]+aria-label="打开销售订单"/);
-    assert.match(html, /data-page="orders"/);
-    assert.match(css, /\.application-mobile-domain__primary\s*\{[^}]*grid-template-columns:\s*repeat\(2,minmax\(0,1fr\)\)/s);
+    assert.match(html, /<button[^>]+aria-label="打开货品资料"/);
+    assert.match(html, /data-testid="mobile-launcher-group-销售"/);
+    assert.match(html, /application-domain-nav__index">02/);
+    assert.match(css, /\.application-domain-nav button\s*\{[^}]*grid-template-columns:32px minmax\(0,1fr\) 22px/s);
   });
 
   test('launcher item delegates selection through the canonical callback', () => {

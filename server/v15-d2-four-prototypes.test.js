@@ -16,11 +16,11 @@ test('D2 application workspace exposes exactly seven primary domains', () => {
 
 test('D2 mobile application hierarchy discloses secondary and utility entries', () => {
   const launcher = read('src/components/MobileLauncher.jsx');
-  assert.match(launcher, /application-mobile-domain__more/);
   assert.match(launcher, /UtilityGroups/);
-  assert.match(launcher, /application-desktop-workspace/);
   assert.match(launcher, /application-domain-nav/);
+  assert.match(launcher, /application-domain-content__more/);
   assert.match(launcher, /application-shortcuts/);
+  assert.doesNotMatch(launcher, /application-desktop-workspace|application-mobile-domains/);
 });
 
 test('D2 overview remains permission-safe and contains three flow lanes', () => {
@@ -43,15 +43,14 @@ test('D2 purchase receipt list and detail use D1 lifecycle contracts truthfully'
   assert.match(page, /移除只影响正常业务列表的可见性，不删除单据或审计记录/);
   assert.match(page, /仍保持“已取消”/);
   assert.match(page, /can\(user, 'USERS_MANAGE'\)/);
-  assert.match(page, /BusinessDetailLayout/);
-  assert.match(page, /receipt-card-list/);
+  assert.match(page, /receipt-document-flow/);
+  assert.match(page, /CompactRecordList/);
 });
 
 test('D2 responsive styles cover mobile, tablet workspace, and desktop', () => {
   const css = read('src/styles.css');
   assert.match(css, /@media \(max-width: 767px\)/);
-  assert.match(css, /@media \(max-width: 899px\)/);
-  assert.match(css, /@media \(min-width: 900px\)/);
-  assert.match(css, /\.receipt-card-list/);
-  assert.match(css, /\.application-desktop-workspace/);
+  assert.match(css, /--app-max-width:680px/);
+  assert.match(css, /\.compact-record-list/);
+  assert.match(css, /\.application-domain-nav__index/);
 });

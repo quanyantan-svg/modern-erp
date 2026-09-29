@@ -41,8 +41,8 @@ function SupportingLink({ item }) {
 }
 
 export default function BusinessOverview() {
-  return <BusinessPageShell className="flow-overview" width="wide">
-    <BusinessPageHeader title="业务总览" context="从需求到履约与结算的三个核心业务流" meta={<span>3 条主流程</span>} help={<HelpDisclosure summary="流程说明"><p>箭头表示通常的业务先后关系，不代表审批、实物执行与财务过账会自动合并。</p></HelpDisclosure>}/>
+  return <BusinessPageShell className="flow-overview" width="rail">
+    <BusinessPageHeader title="业务总览" meta={<span>3 条主流程</span>} help={<HelpDisclosure summary="流程说明"><p>箭头表示通常的业务先后关系，不代表审批、实物执行与财务过账会自动合并。</p></HelpDisclosure>}/>
     <div className="flow-overview__legend"><span><i/>可进入</span><span><i className="is-readonly"/>无权限，仅显示流程位置</span><b>审批 ≠ 履约 · 物流 ≠ 结算 · 结算 ≠ 凭证</b></div>
     <div className="flow-lanes">
       {BUSINESS_FLOWS.map((flow) => <section className={`flow-lane flow-lane--${flow.accent}`} key={flow.key}>
