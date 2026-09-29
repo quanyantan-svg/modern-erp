@@ -3622,6 +3622,46 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   }
 }
 
+/* V1.5 D4 — AR/AP settlement stays contextual to sales and purchase. */
+.mobile-shell:has(.receivables-v15),
+.mobile-shell:has(.payables-v15),
+.mobile-shell:has(.collections-v15),
+.mobile-shell:has(.payments-v15),
+.mobile-shell:has(.sales-invoices-v15),
+.mobile-shell:has(.supplier-bills-v15),
+.mobile-shell:has(.sales-discounts-v15),
+.mobile-shell:has(.purchase-discounts-v15),
+.mobile-shell:has(.bank-accounts-v15),
+.mobile-shell:has(.accounting-v15) {
+  --app-max-width: 680px;
+  background: #fbfcfd;
+}
+
+.receivables-v15,
+.payables-v15,
+.collections-v15,
+.payments-v15,
+.sales-invoices-v15,
+.supplier-bills-v15,
+.sales-discounts-v15,
+.purchase-discounts-v15,
+.bank-accounts-v15,
+.accounting-v15 {
+  min-width: 0;
+}
+
+.receivables-v15 .settlement-summary,
+.payables-v15 .settlement-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 520px) {
+  .receivables-v15 .settlement-summary,
+  .payables-v15 .settlement-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* V1.5 D3 — sales, purchase and quality operations. */
 .mobile-shell:has(.sales-deliveries-v15),
 .mobile-shell:has(.returns-v15),

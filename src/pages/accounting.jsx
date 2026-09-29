@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money } from '../components/ui.jsx';
 import { centsToYuanInput, yuanToCents } from '../lib/money.js';
+import { BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 
 function currentPeriod() {
   const d = new Date();
@@ -80,7 +81,7 @@ function IncomeStatement({ user, notify }) {
         <div className="is-summary-card"><span>营业成本与费用</span><strong className="negative">{money(data.expense)}</strong></div>
         <div className="is-summary-card"><span>营业利润</span><strong className={data.profit >= 0 ? 'positive' : 'negative'}>{money(data.profit)}</strong></div>
       </div>
-      {isEmpty && <Empty text={`期间 ${data.period} 无 POSTED 凭证,无利润表数据`} />}
+      {isEmpty && <Empty text={`期间 ${data.period} 无已过账凭证，无利润表数据`} />}
       {!isEmpty && data.sections.map((section) => (
         <div key={section.type} className="is-section">
           <h3>{section.name} <small className="dim">（{section.type}）</small></h3>
@@ -156,7 +157,7 @@ function BalanceSheet({ user, notify }) {
           ? <><strong>资产 = 负债 + 权益</strong><span className="dim">（恒等式成立，差额 {money(data.difference)}）</span></>
           : <><strong>⚠ 资产 ≠ 负债 + 权益</strong><span className="dim">（差额 {money(data.difference)}，请检查未结转损益或凭证数据）</span></>}
       </div>
-      {isEmpty && <Empty text={`截至 ${data.asOfDate} 无 POSTED 凭证,无资产负债表数据`} />}
+      {isEmpty && <Empty text={`截至 ${data.asOfDate} 无已过账凭证，无资产负债表数据`} />}
       {!isEmpty && <>
         {renderSection('资产', data.assets, 'assets')}
         {renderSection('负债', data.liabilities, 'liabilities')}
@@ -470,7 +471,7 @@ function TrialBalanceReport({ user, notify }) {
                 </td>
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={6}><Empty text={`期间 ${period} 无 POSTED 凭证`} /></td></tr>}
+            {!rows.length && <tr><td colSpan={6}><Empty text={`期间 ${period} 无已过账凭证`} /></td></tr>}
           </tbody>
           <tfoot>
             <tr className="subtotal-row">
@@ -509,7 +510,8 @@ export function Accounting({ user, notify }) {
   const showReport = can(user, 'REPORT_VIEW');
   const canCreateVoucher = can(user, 'ACCOUNTING_VIEW');
   const showPeriod = can(user, 'PERIOD_CLOSE_VIEW');
-  return <Panel title="财务凭证">
+  return <BusinessPageShell className="accounting-v15" width="rail">
+    <BusinessPageHeader title="会计凭证" context="结算相关凭证与财务报表" help={<HelpDisclosure summary="会计说明"><p>业务结算与会计过账保持独立；财务报表只纳入已过账凭证。</p></HelpDisclosure>}/>
     <div className="tabs"><button className={tab === 'subjects' ? 'active' : ''} onClick={() => setTab('subjects')}>会计科目</button><button className={tab === 'vouchers' ? 'active' : ''} onClick={() => setTab('vouchers')}>凭证列表</button>{showReport && <button className={tab === 'income' ? 'active' : ''} onClick={() => setTab('income')}>利润表</button>}{showReport && <button className={tab === 'balance' ? 'active' : ''} onClick={() => setTab('balance')}>资产负债表</button>}{showReport && <button className={tab === 'trial' ? 'active' : ''} onClick={() => setTab('trial')}>试算平衡表</button>}{showPeriod && <button className={tab === 'period' ? 'active' : ''} onClick={() => setTab('period')}>会计期间</button>}</div>
     {tab === 'subjects' && <div className="table-wrap"><table><thead><tr><th>科目编码</th><th>科目名称</th><th>类型</th><th>余额方向</th></tr></thead><tbody>{subjects.map((s) => <tr key={s.id}><td className="mono">{s.code}</td><td><strong>{s.name}</strong></td><td>{s.type === 'ASSET' ? '资产' : s.type === 'LIABILITY' ? '负债' : s.type === 'EQUITY' ? '所有者权益' : s.type === 'REVENUE' ? '收入' : '成本'}</td><td>{s.direction === 'DEBIT' ? '借方' : '贷方'}</td></tr>)}</tbody></table></div>}
     {tab === 'vouchers' && <><Toolbar search={() => {}} placeholder="搜索凭证号" action={canCreateVoucher && <button className="primary" onClick={() => setEditing({})}>＋ 新建凭证</button>}/><div className="table-wrap"><table><thead><tr><th>凭证号</th><th>来源</th><th>凭证日期</th><th>制单人</th><th>状态</th><th>创建时间</th><th/></tr></thead><tbody>{vouchers.map((v) => <tr key={v.id}><td className="mono">{v.voucher_no}</td><td>{voucherSourceLabel(v.source_type)}</td><td>{v.voucher_date}</td><td>{v.creatorName}</td><td><Badge type={VOUCHER_STATUS_BADGE[v.status]?.type}>{VOUCHER_STATUS_LABELS[v.status] || v.status}</Badge></td><td className="dim">{dateTime(v.created_at)}</td><td><button className="row-action" onClick={() => { api(`/api/accounting-vouchers/${v.id}`).then((r) => setViewing(r.voucher)).catch((e) => notify(e.message, 'error')); }}>查看</button></td></tr>)}</tbody></table>{!vouchers.length && <Empty text="没有凭证记录"/>}</div></>}
@@ -519,7 +521,7 @@ export function Accounting({ user, notify }) {
     {tab === 'period' && showPeriod && <PeriodManagement user={user} notify={notify} />}
     {editing && <VoucherModal subjects={subjects} value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); loadVouchers(); notify('凭证已保存'); }} notify={notify}/>}
     {viewing && <VoucherDetail user={user} value={viewing} onClose={() => setViewing(null)} onChanged={() => { setViewing(null); loadVouchers(); }} onEdit={(voucher) => { setEditing(voucher); setViewing(null); }} formatMoney={formatMoney} notify={notify}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 

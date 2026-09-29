@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Active, Badge, ConfirmAction, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, YuanField, can, dateTime, money } from '../components/ui.jsx';
 import { yuanToNonNegativeCents } from '../lib/money.js';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell } from '../components/design-system.jsx';
 
 export function CashJournals({ user, notify }) {
   const [items, setItems] = useState([]);
@@ -111,8 +112,8 @@ export function BankAccounts({ user, notify }) {
   useEffect(() => { void load(); }, []);
 
   return (
-    <Panel title="银行账户">
-      <Toolbar action={can(user, 'BANK_ACCOUNTS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增账户</button>}/>
+    <BusinessPageShell className="bank-accounts-v15" width="rail">
+      <BusinessPageHeader title="银行账户" context="结算账户配置" primaryAction={can(user, 'BANK_ACCOUNTS_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditing({})}>新增账户</BusinessAction>}/>
       <div className="table-wrap">
         <table>
           <thead><tr><th>开户银行</th><th>账号</th><th>户名</th><th className="number">余额</th><th>状态</th><th/></tr></thead>
@@ -132,7 +133,7 @@ export function BankAccounts({ user, notify }) {
         {!items.length && <Empty text="暂无银行账户"/>}
       </div>
       {editing && <BankAccountModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('银行账户已保存'); }} />}
-    </Panel>
+    </BusinessPageShell>
   );
 }
 

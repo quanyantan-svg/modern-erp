@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { Loading, Modal, Panel, Status, money, quantity } from '../components/ui.jsx';
-import { BusinessState } from '../components/design-system.jsx';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell, BusinessState, HelpDisclosure } from '../components/design-system.jsx';
 import { presentBusinessValue, presentStatus } from '../lib/presentation.js';
 
 function Totals({ net = 0, tax = 0, gross = 0 }) {
@@ -13,9 +13,10 @@ function CommercialList({ kind, notify }) {
   const [rows, setRows] = useState(null); const [open, setOpen] = useState(false);
   const load = () => api(endpoint).then(r => setRows(sales ? r.salesInvoices : r.supplierBills)).catch(e => notify(e.message, 'error'));
   useEffect(() => { void load(); }, []);
-  return <Panel title={sales ? '销售发票' : '供应商账单'} subtitle={sales ? '交付与计费分离；发票是 AR、收入与销项税的权威来源' : '收货先记 GRNI；账单匹配后生成 AP、进项税与价差'} action={<button className="primary" onClick={() => setOpen(true)}>＋ {sales ? '从出货开票' : '从收货建账单'}</button>}>
+  return <BusinessPageShell className={sales ? 'sales-invoices-v15' : 'supplier-bills-v15'} width="rail">
+    <BusinessPageHeader title={sales ? '销售发票' : '供应商账单'} primaryAction={<BusinessAction hierarchy="primary" onClick={() => setOpen(true)}>{sales ? '从出货开票' : '从收货建账单'}</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>{sales ? '交付与计费分离；销售发票是应收、收入与销项税的权威来源。' : '采购入库先记录库存与 GRNI；供应商账单匹配后形成应付、进项税与价差。'}</p></HelpDisclosure>}/>
     {rows === null ? <Loading/> : <div className="table-wrap"><table><thead><tr><th>单号</th><th>{sales ? '客户' : '供应商'}</th><th>{sales ? '发票日期' : '账单日期'}</th><th>税模式</th><th className="number">净额</th><th className="number">税额</th><th className="number">含税</th><th>状态</th></tr></thead><tbody>{rows.map(row=><tr key={row.id}><td className="mono">{sales?row.invoice_no:row.bill_no}</td><td>{sales?row.customerName:row.supplierName}</td><td>{sales?row.invoice_date:row.bill_date}</td><td>{presentBusinessValue('taxMode', row.tax_mode).label}</td><td className="number">{money(row.net_cents)}</td><td className="number">{money(row.tax_cents)}</td><td className="number"><strong>{money(row.gross_cents)}</strong></td><td><Status status={row.status.toLowerCase()} label={presentStatus(row.status).label}/></td></tr>)}</tbody></table>{!rows.length&&<BusinessState kind="EMPTY" title={sales?'暂无销售发票':'暂无供应商账单'} description={sales?'已过账的销售发票会显示在这里。':'已过账的供应商账单会显示在这里。'}/>}</div>}
-    {open&&<SourceBillingModal sales={sales} onClose={()=>{setOpen(false);void load();}} notify={notify}/>}</Panel>;
+    {open&&<SourceBillingModal sales={sales} onClose={()=>{setOpen(false);void load();}} notify={notify}/>}</BusinessPageShell>;
 }
 
 function SourceBillingModal({ sales, onClose, notify }) {

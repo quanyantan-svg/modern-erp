@@ -4,6 +4,7 @@ import {
   Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, YuanField, can, dateTime, money,
 } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
 
 const SALES_STATUS_LABEL = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PURCHASE_STATUS_LABEL = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -67,9 +68,8 @@ export function SalesDiscounts({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="销售折让">
-    <Toolbar search={() => {}} placeholder="" action={can(user, 'SALES_DISCOUNT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建折让</button>}/>
-    <p className="section-hint">折让金额不得超过来源应收剩余可折让额度（销售退货 + 历史折让之和不超过原应收）。</p>
+  return <BusinessPageShell className="sales-discounts-v15" width="rail">
+    <BusinessPageHeader title="销售折让" primaryAction={can(user, 'SALES_DISCOUNT_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditing({})}>新建销售折让</BusinessAction>} help={<HelpDisclosure summary="额度说明"><p>折让金额不得超过来源应收的剩余可折让额度；销售退货与历史折让共同占用该额度。</p></HelpDisclosure>}/>
     <div className="table-wrap"><table>
       <thead><tr><th>折让单号</th><th>状态</th><th>客户</th><th>来源应收</th><th>业务日期</th><th className="number">折让金额</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead>
       <tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
@@ -86,7 +86,7 @@ export function SalesDiscounts({ user, notify }) {
     </table>{!rows.length && <Empty text="没有销售折让记录"/>}</div>
     {editing && <SalesDiscountModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); notify('销售折让已保存'); }}/>}
     {viewing && <SalesDiscountDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function SalesDiscountModal({ value, notify, onClose, onSaved }) {
@@ -214,9 +214,8 @@ export function PurchaseDiscounts({ user, notify }) {
     } catch (error) { notify(error.message, 'error'); }
   }
 
-  return <Panel title="采购折让">
-    <Toolbar search={() => {}} placeholder="" action={can(user, 'PURCHASE_DISCOUNT_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新建折让</button>}/>
-    <p className="section-hint">折让金额不得超过来源应付剩余可折让额度（采购退货 + 历史折让之和不超过原应付）。</p>
+  return <BusinessPageShell className="purchase-discounts-v15" width="rail">
+    <BusinessPageHeader title="采购折让" primaryAction={can(user, 'PURCHASE_DISCOUNT_MANAGE') && <BusinessAction hierarchy="primary" onClick={() => setEditing({})}>新建采购折让</BusinessAction>} help={<HelpDisclosure summary="额度说明"><p>折让金额不得超过来源应付的剩余可折让额度；采购退货与历史折让共同占用该额度。</p></HelpDisclosure>}/>
     <div className="table-wrap"><table>
       <thead><tr><th>折让单号</th><th>状态</th><th>供应商</th><th>来源应付</th><th>业务日期</th><th className="number">折让金额</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead>
       <tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}>
@@ -233,7 +232,7 @@ export function PurchaseDiscounts({ user, notify }) {
     </table>{!rows.length && <Empty text="没有采购折让记录"/>}</div>
     {editing && <PurchaseDiscountModal value={editing} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); notify('采购折让已保存'); }}/>}
     {viewing && <PurchaseDiscountDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
-  </Panel>;
+  </BusinessPageShell>;
 }
 
 function PurchaseDiscountModal({ value, notify, onClose, onSaved }) {
