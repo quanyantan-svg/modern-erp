@@ -21,7 +21,11 @@ export const LIFECYCLE_ENTITIES = Object.freeze({
   PRODUCTION_INSTRUCTION: { table: 'production_instructions', number: 'instruction_no', status: 'status', date: 'planned_date', label: '生产指令' },
   PLANNING_FORECAST: { table: 'planning_forecasts', number: 'forecast_code', status: 'status', date: 'period_start', label: '需求预测' },
   MRP_RUN: { table: 'mrp_runs', number: 'run_code', status: 'status', date: 'horizon_start', label: 'MRP运算' },
-  PURCHASE_RECEIPT: { table: 'purchase_receipts', number: 'receipt_no', status: 'status', date: 'receipt_date', label: '采购入库' },
+  PURCHASE_RECEIPT: {
+    table: 'purchase_receipts', number: 'receipt_no', status: 'status', date: 'receipt_date', label: '采购入库',
+    archivePhase: 'ARCHIVE_PHASE_1', archivePermissionAny: ['PURCHASE_RECEIPTS_MANAGE'],
+    viewPermissionAny: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'],
+  },
   SALES_DELIVERY: { table: 'sales_deliveries', number: 'delivery_no', status: 'status', date: 'delivery_date', label: '销售出货' },
   SALES_RETURN: { table: 'return_orders', number: 'return_no', status: 'status', date: 'return_date', label: '销售退货' },
   PURCHASE_RETURN: { table: 'purchase_returns', number: 'return_no', status: 'status', date: 'return_date', label: '采购退货' },
@@ -147,6 +151,140 @@ function financeEffects(db, entityType, entityId) {
 
 function archiveState(db, entityType, entityId) {
   return db.prepare('SELECT active,archived_at,reason FROM lifecycle_archives WHERE entity_type=? AND entity_id=?').get(entityType, entityId) || null;
+}
+
+function hasAnyPermission(actor, permissions) {
+  return Boolean(actor && Array.isArray(actor.permissions) && permissions.some((permission) => actor.permissions.includes(permission)));
+}
+
+function assertPurchaseReceiptArchivePermission(actor) {
+  if (!hasAnyPermission(actor, LIFECYCLE_ENTITIES.PURCHASE_RECEIPT.archivePermissionAny)) {
+    throw new HttpError(403, '没有归档采购入库单的权限', { code: 'FORBIDDEN' });
+  }
+}
+
+function safeBlocker(code, message, relation, documentNo) {
+  return { code, message, relation, ...(documentNo ? { documentNo } : {}) };
+}
+
+function purchaseReceiptArchiveBlockers(db, receipt) {
+  const blockers = [];
+  const receiptId = receipt.id;
+  const iqc = db.prepare('SELECT id,iqc_no,status FROM iqc_inspections WHERE purchase_receipt_id=? OR receipt_id=? LIMIT 1').get(receiptId, receiptId);
+  if (iqc) blockers.push(safeBlocker('DOWNSTREAM_DEPENDENCY', '采购入库单存在来料检验记录，不能归档。', 'IQC', iqc.iqc_no || iqc.id));
+  const purchaseReturn = db.prepare('SELECT id,return_no,status FROM purchase_returns WHERE receipt_id=? LIMIT 1').get(receiptId);
+  if (purchaseReturn) blockers.push(safeBlocker('DOWNSTREAM_DEPENDENCY', '采购入库单存在采购退货关系，不能归档。', 'PURCHASE_RETURN', purchaseReturn.return_no || purchaseReturn.id));
+  const supplierBill = db.prepare(`
+    SELECT b.id,b.bill_no,b.status FROM supplier_bills b
+    JOIN supplier_bill_items i ON i.bill_id=b.id WHERE i.receipt_id=? LIMIT 1
+  `).get(receiptId);
+  if (supplierBill) blockers.push(safeBlocker('FINANCIAL_DEPENDENCY', '采购入库单存在供应商账单关系，不能归档。', 'SUPPLIER_BILL', supplierBill.bill_no || supplierBill.id));
+  const payable = db.prepare("SELECT id,voucher_no,status FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? LIMIT 1").get(receiptId);
+  if (payable) blockers.push(safeBlocker('FINANCIAL_DEPENDENCY', '采购入库单存在应付账款关系，不能归档。', 'ACCOUNT_PAYABLE', payable.voucher_no || payable.id));
+  const voucher = db.prepare("SELECT id,voucher_no,status FROM accounting_vouchers WHERE source_type='PURCHASE_RECEIPT' AND source_id=? LIMIT 1").get(receiptId);
+  if (voucher) blockers.push(safeBlocker('FINANCIAL_DEPENDENCY', '采购入库单存在会计凭证关系，不能归档。', 'ACCOUNTING_VOUCHER', voucher.voucher_no || voucher.id));
+  if (db.prepare("SELECT 1 FROM inventory_transactions WHERE source_type='PURCHASE_RECEIPT' AND source_id=? LIMIT 1").get(receiptId)) {
+    blockers.push(safeBlocker('STOCK_EFFECT_EXISTS', '采购入库单存在库存流水，不能归档。', 'INVENTORY_TRANSACTION'));
+  }
+  if (db.prepare("SELECT 1 FROM tracked_inventory_movements WHERE source_type='PURCHASE_RECEIPT' AND source_id=? LIMIT 1").get(receiptId)) {
+    blockers.push(safeBlocker('TRACKING_EFFECT_EXISTS', '采购入库单存在批次或序列号移动，不能归档。', 'TRACKING_MOVEMENT'));
+  }
+  if (db.prepare("SELECT 1 FROM inventory_valuation_movements WHERE source_type='PURCHASE_RECEIPT' AND source_id=? LIMIT 1").get(receiptId)) {
+    blockers.push(safeBlocker('FINANCIAL_DEPENDENCY', '采购入库单存在存货估值流水，不能归档。', 'INVENTORY_VALUATION'));
+  }
+  const period = periodOf(receipt.receipt_date);
+  if (isPeriodClosed(db, period)) blockers.push(safeBlocker('CLOSED_PERIOD', '采购入库单所属期间已经关闭，不能归档。', 'CLOSED_PERIOD', period));
+  if (!receipt.purchase_order_id || !db.prepare('SELECT 1 FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)) {
+    blockers.push(safeBlocker('DOWNSTREAM_DEPENDENCY', '采购订单来源链不完整，不能归档。', 'SOURCE_CHAIN'));
+  } else if (db.prepare(`
+    SELECT 1 FROM purchase_receipt_items pri
+    LEFT JOIN purchase_order_items poi ON poi.id=pri.purchase_order_item_id AND poi.order_id=?
+    WHERE pri.receipt_id=? AND (pri.purchase_order_item_id IS NULL OR poi.id IS NULL) LIMIT 1
+  `).get(receipt.purchase_order_id, receiptId)) {
+    blockers.push(safeBlocker('DOWNSTREAM_DEPENDENCY', '采购入库明细的采购订单来源链不完整，不能归档。', 'SOURCE_CHAIN'));
+  }
+  return blockers;
+}
+
+export function analyzeArchiveEligibility(db, actor, entityType, entityId) {
+  const normalizedType = normalizeEntityType(entityType);
+  const normalizedId = requiredText(entityId, '业务记录', 100);
+  if (normalizedType !== 'PURCHASE_RECEIPT' || LIFECYCLE_ENTITIES[normalizedType].archivePhase !== 'ARCHIVE_PHASE_1') {
+    throw new HttpError(409, '当前业务类型尚未开放归档', { code: 'INVALID_STATE' });
+  }
+  assertPurchaseReceiptArchivePermission(actor);
+  const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(normalizedId);
+  if (!receipt) throw new HttpError(404, '采购入库单不存在', { code: 'NOT_FOUND' });
+  if (receipt.status !== 'CANCELLED') return {
+    allowed: false, entityType: normalizedType, entityId: normalizedId, documentNo: receipt.receipt_no,
+    status: receipt.status, archived: false,
+    blockers: [safeBlocker('INVALID_STATE', '只有已取消的采购入库单可以归档。', 'STATUS')],
+  };
+  const archived = archiveState(db, normalizedType, normalizedId)?.active === 1;
+  const blockers = archived
+    ? [safeBlocker('ALREADY_ARCHIVED', '采购入库单已经归档。', 'ARCHIVE')]
+    : purchaseReceiptArchiveBlockers(db, receipt);
+  return {
+    allowed: blockers.length === 0,
+    entityType: normalizedType,
+    entityId: normalizedId,
+    documentNo: receipt.receipt_no,
+    status: receipt.status,
+    archived,
+    blockers,
+  };
+}
+
+export function archiveCancelledDocument(db, actor, input) {
+  const entityType = normalizeEntityType(input.entityType);
+  const entityId = requiredText(input.entityId, '业务记录', 100);
+  const reason = requiredText(input.reason, '归档原因', 500);
+  let result;
+  transaction(db, () => {
+    const eligibility = analyzeArchiveEligibility(db, actor, entityType, entityId);
+    if (!eligibility.allowed) {
+      const blocker = eligibility.blockers[0];
+      throw new HttpError(409, blocker.message, { code: blocker.code, blockers: eligibility.blockers });
+    }
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO lifecycle_archives(entity_type,entity_id,document_no,archived_by,archived_at,reason,restored_by,restored_at,active)
+      VALUES(?,?,?,?,?,?,NULL,NULL,1)
+      ON CONFLICT(entity_type,entity_id) DO UPDATE SET
+        document_no=excluded.document_no,archived_by=excluded.archived_by,archived_at=excluded.archived_at,
+        reason=excluded.reason,restored_by=NULL,restored_at=NULL,active=1
+    `).run(entityType, entityId, eligibility.documentNo, actor.id, now, reason);
+    audit(db, actor.id, 'ARCHIVE', entityType, entityId, `归档 ${eligibility.documentNo}：${reason}；status=CANCELLED；visibility=ACTIVE->ARCHIVED`);
+    result = { ok: true, entityType, entityId, documentNo: eligibility.documentNo, archived: true, archivedAt: now, archiveEligibility: eligibility };
+  });
+  return result;
+}
+
+export function restoreArchivedDocument(db, actor, input) {
+  if (!hasAnyPermission(actor, ['USERS_MANAGE'])) {
+    throw new HttpError(403, '只有管理员可以恢复归档记录', { code: 'FORBIDDEN' });
+  }
+  const entityType = normalizeEntityType(input.entityType);
+  const entityId = requiredText(input.entityId, '业务记录', 100);
+  const reason = optionalText(input.reason, 500);
+  if (entityType !== 'PURCHASE_RECEIPT' || LIFECYCLE_ENTITIES[entityType].archivePhase !== 'ARCHIVE_PHASE_1') {
+    throw new HttpError(409, '当前业务类型尚未开放恢复', { code: 'RESTORE_BLOCKED' });
+  }
+  let result;
+  transaction(db, () => {
+    const receipt = db.prepare('SELECT * FROM purchase_receipts WHERE id=?').get(entityId);
+    if (!receipt) throw new HttpError(409, '采购入库原始记录不存在，不能恢复', { code: 'RESTORE_BLOCKED' });
+    const current = archiveState(db, entityType, entityId);
+    if (!current?.active || receipt.status !== 'CANCELLED') {
+      throw new HttpError(409, '采购入库单当前不能恢复', { code: 'RESTORE_BLOCKED' });
+    }
+    const now = new Date().toISOString();
+    const changed = db.prepare('UPDATE lifecycle_archives SET active=0,restored_by=?,restored_at=? WHERE entity_type=? AND entity_id=? AND active=1').run(actor.id, now, entityType, entityId);
+    if (Number(changed.changes) !== 1) throw new HttpError(409, '采购入库单当前不能恢复', { code: 'RESTORE_BLOCKED' });
+    audit(db, actor.id, 'RESTORE', entityType, entityId, `恢复 ${receipt.receipt_no} 到业务列表${reason ? `：${reason}` : ''}；status=CANCELLED；visibility=ARCHIVED->ACTIVE`);
+    result = { ok: true, entityType, entityId, documentNo: receipt.receipt_no, archived: false, restoredAt: now };
+  });
+  return result;
 }
 
 function buildNode(db, entityType, entityId, selectedForCleanup, relationship = 'ROOT') {
@@ -373,9 +511,14 @@ export function analyzeLifecycleGraph(db, { entityType, entityId, includeExterna
 }
 
 export function lifecycleAnalysis(db, res, actor, url) {
+  const requestedType = normalizeEntityType(url.searchParams.get('entityType'));
+  if (requestedType === 'PURCHASE_RECEIPT') {
+    const archiveEligibility = analyzeArchiveEligibility(db, actor, requestedType, url.searchParams.get('entityId'));
+    return send(res, 200, { archiveEligibility });
+  }
   allow(actor, 'USERS_MANAGE');
   const graph = analyzeLifecycleGraph(db, {
-    entityType: url.searchParams.get('entityType'),
+    entityType: requestedType,
     entityId: url.searchParams.get('entityId'),
     includeExternal: url.searchParams.get('includeExternal') === 'true',
   });
@@ -383,9 +526,12 @@ export function lifecycleAnalysis(db, res, actor, url) {
 }
 
 export async function archiveLifecycleRecord(db, req, res, actor) {
-  allow(actor, 'USERS_MANAGE');
   const body = await readJson(req);
   const entityType = normalizeEntityType(body.entityType);
+  if (entityType === 'PURCHASE_RECEIPT') {
+    return send(res, 200, archiveCancelledDocument(db, actor, { ...body, entityType }));
+  }
+  allow(actor, 'USERS_MANAGE');
   const entityId = requiredText(body.entityId, '业务记录', 100);
   const reason = optionalText(body.reason, 500);
   const node = buildNode(db, entityType, entityId, false);
@@ -404,9 +550,12 @@ export async function archiveLifecycleRecord(db, req, res, actor) {
 }
 
 export async function restoreLifecycleRecord(db, req, res, actor) {
-  allow(actor, 'USERS_MANAGE');
   const body = await readJson(req);
   const entityType = normalizeEntityType(body.entityType);
+  if (entityType === 'PURCHASE_RECEIPT') {
+    return send(res, 200, restoreArchivedDocument(db, actor, { ...body, entityType }));
+  }
+  allow(actor, 'USERS_MANAGE');
   const entityId = requiredText(body.entityId, '业务记录', 100);
   rowFor(db, entityType, entityId);
   const current = db.prepare('SELECT active FROM lifecycle_archives WHERE entity_type=? AND entity_id=?').get(entityType, entityId);
