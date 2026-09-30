@@ -71,8 +71,8 @@
   --v16-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas,
     monospace;
 
-  /* Bottom navigation */
-  --v16-bottom-nav-height: 56px;
+  /* Bottom navigation (matches legacy --bottom-nav-height) */
+  --v16-bottom-nav-height: 72px;
   --v16-bottom-nav-safe: env(safe-area-inset-bottom, 0px);
   --v16-mobile-main-padding-bottom: calc(
     var(--v16-bottom-nav-height) + var(--v16-bottom-nav-safe) + 16px

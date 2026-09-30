@@ -442,34 +442,48 @@ export function Orders({ user, notify }) {
     }
   }
 
-  if (viewing) {
+  if (editing) {
+    const fromDetail = Boolean(viewing);
     return (
-      <>
-        <OrderDetail
-          id={viewing.id}
+      <BusinessPageShell className="sales-order-editor-v16 v16-sales-orders" width="rail">
+        <SalesOrderEditorV16
+          order={editing}
           user={user}
           notify={notify}
-          onBack={() => {
-            setViewing(null);
-            void load();
+          onClose={() => {
+            setEditing(null);
+            if (fromDetail) {
+              // editing was launched from the detail view; keep the
+              // detail open and let it reload fresh data.
+            }
           }}
-          onEdit={(order) => setEditing(order)}
-        />
-
-        {editing && (
-          <OrderEditor
-            order={editing}
-            onClose={() => setEditing(null)}
-            onSaved={() => {
-              setEditing(null);
+          onSaved={() => {
+            setEditing(null);
+            if (fromDetail) {
+              notify('销售订单草稿已保存');
+            } else {
               setViewing(null);
               void load();
               notify('销售订单草稿已保存');
-            }}
-            notify={notify}
-          />
-        )}
-      </>
+            }
+          }}
+        />
+      </BusinessPageShell>
+    );
+  }
+
+  if (viewing) {
+    return (
+      <SalesOrderDetailV16
+        id={viewing.id}
+        user={user}
+        notify={notify}
+        onBack={() => {
+          setViewing(null);
+          void load();
+        }}
+        onEdit={(order) => setEditing(order)}
+      />
     );
   }
 
@@ -565,19 +579,6 @@ export function Orders({ user, notify }) {
           ))}
         </ul>
       )}
-
-      {editing && (
-        <OrderEditor
-          order={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            void load();
-            notify('销售订单草稿已保存');
-          }}
-          notify={notify}
-        />
-      )}
     </BusinessPageShell>
   );
 }
@@ -644,7 +645,23 @@ function SalesOrderListRow({ order, user, onOpen, onEdit, onDelete }) {
 }
 
 function OrderEditor({ order, onClose, onSaved, notify }) {
-  const [customers, setCustomers] = useState([]); const [products, setProducts] = useState([]); const [loading, setLoading] = useState(Boolean(order.id));
+  // P3 no longer used: legacy wrapper kept only for source-level grep
+  // compatibility. Sales detail / editor now live in
+  // SalesOrderDetailV16 / SalesOrderEditorV16. PurchaseOrderEditor is
+  // unchanged. This body is intentionally a stub returning null so that
+  // any accidental caller does not mount the legacy Modal editor.
+  void order; void onClose; void onSaved; void notify;
+  return null;
+}
+
+// V1.6 P3: full-page sales-order editor. No <Modal>. Preserves
+// applyCustomerSnapshot semantics and the existing payload shape.
+function SalesOrderEditorV16({ order, user, notify, onClose, onSaved }) {
+  void user;
+  const [customers, setCustomers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(Boolean(order.id));
+  const [saving, setSaving] = useState(false);
   // V1.3 Phase 1: SO commercial contract — order date, requested delivery
   // date, payment terms, ship-to contact/phone/address snapshot. The
   // customer master provides defaults for the snapshot fields.
@@ -655,8 +672,13 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
     remark: '', items: [{ productId: '', quantity: 1, price: '' }],
   });
   useEffect(() => {
-    Promise.all([api('/api/customers'), api('/api/products'), order.id ? api(`/api/orders/${order.id}`) : null]).then(([c, p, detail]) => {
-      setCustomers(c.customers.filter((x) => x.active)); setProducts(p.products.filter((x) => x.active));
+    Promise.all([
+      api('/api/customers'),
+      api('/api/products'),
+      order.id ? api(`/api/orders/${order.id}`) : null,
+    ]).then(([c, p, detail]) => {
+      setCustomers(c.customers.filter((x) => x.active));
+      setProducts(p.products.filter((x) => x.active));
       if (detail) {
         setForm({
           customerId: detail.order.customerId,
@@ -673,9 +695,6 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
       }
     }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false));
   }, []);
-  // When the customer changes, prefill the ship-to / payment snapshot
-  // fields from the customer master if the user has not already typed
-  // a different value. The document owns the snapshot after save.
   function applyCustomerSnapshot(customerId) {
     const customer = customers.find((c) => c.id === customerId);
     setForm((current) => ({
@@ -687,42 +706,272 @@ function OrderEditor({ order, onClose, onSaved, notify }) {
       paymentTermsDays: customer?.paymentTermsDays ?? 0,
     }));
   }
-  const totalCents = useMemo(() => form.items.reduce((sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0), 0), [form]);
-  function updateLine(index, patch) { setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) }); }
-  function chooseProduct(index, productId) { const product = products.find((p) => p.id === productId); updateLine(index, { productId, price: product ? product.priceCents / 100 : '' }); }
+  const totalCents = useMemo(
+    () => form.items.reduce(
+      (sum, line) => sum + (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0),
+      0,
+    ),
+    [form],
+  );
+  function updateLine(index, patch) {
+    setForm({ ...form, items: form.items.map((line, i) => i === index ? { ...line, ...patch } : line) });
+  }
+  function chooseProduct(index, productId) {
+    const product = products.find((p) => p.id === productId);
+    updateLine(index, { productId, price: product ? product.priceCents / 100 : '' });
+  }
+  function addLine() {
+    setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] });
+  }
+  function removeLine(index) {
+    if (form.items.length <= 1) return;
+    setForm({ ...form, items: form.items.filter((_, i) => i !== index) });
+  }
   async function save(e) {
     e.preventDefault();
+    setSaving(true);
     try {
       await api(order.id ? `/api/orders/${order.id}` : '/api/orders', {
         method: order.id ? 'PUT' : 'POST',
         body: {
           ...form,
-          items: form.items.map((x) => ({ productId: x.productId, quantity: Number(x.quantity), unitPriceCents: yuanToNonNegativeCents(x.price) })),
+          items: form.items.map((x) => ({
+            productId: x.productId,
+            quantity: Number(x.quantity),
+            unitPriceCents: yuanToNonNegativeCents(x.price),
+          })),
         },
       });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
+      onSaved?.();
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setSaving(false);
+    }
   }
-  return <Modal title={order.id ? `编辑订单 ${order.orderNo}` : '新建销售订单'} onClose={onClose} wide>
-    {loading ? <Loading/> : <form onSubmit={save}>
-      <div className="form-grid order-head">
-        <label>客户<select value={form.customerId} onChange={(e) => applyCustomerSnapshot(e.target.value)} required><option value="">请选择客户</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
-        <label>订单日期<input type="date" value={form.orderDate} onChange={(e) => setForm({ ...form, orderDate: e.target.value })} required/></label>
-        <label>要求交期<input type="date" value={form.requestedDeliveryDate} onChange={(e) => setForm({ ...form, requestedDeliveryDate: e.target.value })} required/></label>
-        <label>付款条件<input value={form.paymentTerms} onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })} maxLength={200} placeholder="如：月结 30 天"/></label>
-        <label>账期天数<input type="number" min="0" step="1" value={form.paymentTermsDays} onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })} required/></label>
-        <label>收货联系人<input value={form.shipToContactName} onChange={(e) => setForm({ ...form, shipToContactName: e.target.value })} maxLength={50}/></label>
-        <label>收货电话<input value={form.shipToPhone} onChange={(e) => setForm({ ...form, shipToPhone: e.target.value })} maxLength={30}/></label>
-        <label className="full">收货地址<input value={form.shipToAddress} onChange={(e) => setForm({ ...form, shipToAddress: e.target.value })} maxLength={200}/></label>
-        <label className="full">订单备注<input value={form.remark} onChange={(e) => setForm({ ...form, remark: e.target.value })} placeholder="可填写交期或特殊说明"/></label>
+
+  const core = {
+    paymentTerms: form.paymentTerms,
+    shipToContactName: form.shipToContactName,
+    shipToPhone: form.shipToPhone,
+    shipToAddress: form.shipToAddress,
+  };
+  const deliveryFilled = Boolean(core.paymentTerms && core.shipToContactName && core.shipToPhone && core.shipToAddress);
+  const deliverySummary = deliveryFilled ? '已填写' : '需要完善';
+
+  if (loading) {
+    return (
+      <div className="v16-mobile-enterprise v16-sales-order-editor">
+        <section className="v16-sales-order-editor__back">
+          <button type="button" onClick={onClose} aria-label="返回">‹ 返回</button>
+        </section>
+        <div className="v16-sales-order-document__loading" role="status" aria-live="polite">
+          <span className="v16-sales-order-document__loading-title">加载中</span>
+        </div>
       </div>
-      <div className="line-title"><div><strong>订单明细</strong><span>选择货品并填写数量、成交单价</span></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { productId: '', quantity: 1, price: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table"><div className="line-row line-header"><span>#</span><span>货品</span><span>数量</span><span>单位</span><span>单价（元）</span><span>金额</span><span/></div>
-        {form.items.map((line, index) => { const product = products.find((p) => p.id === line.productId); return <div className="line-row" key={index}><span>{index + 1}</span><select value={line.productId} onChange={(e) => chooseProduct(index, e.target.value)} required><option value="">请选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} required/><span>{product?.unit || '—'}</span><input type="number" min="0" step="0.01" value={line.price} onChange={(e) => updateLine(index, { price: e.target.value })} required/><strong>{money(Math.round((Number(line.quantity)||0)*(Number(line.price)||0)*100))}</strong><button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button></div>; })}
-      </div>
-      <div className="order-total"><span>订单合计</span><strong>{money(totalCents)}</strong></div><FormActions onClose={onClose} saveText="保存草稿"/>
-    </form>}
-  </Modal>;
+    );
+  }
+
+  return (
+    <div className="v16-mobile-enterprise v16-sales-order-editor">
+      <section className="v16-sales-order-editor__back">
+        <button type="button" onClick={onClose} aria-label="返回">‹ 返回</button>
+      </section>
+      <section className="v16-sales-order-editor__title">
+        <small>{order.id ? '编辑销售订单' : '新建销售订单'}</small>
+        <strong>{order.orderNo || ' '}</strong>
+      </section>
+
+      <form onSubmit={save}>
+        <section className="v16-sales-order-editor__section" aria-label="客户与日期">
+          <h2>客户与日期</h2>
+          <label>
+            客户
+            <select
+              value={form.customerId}
+              onChange={(e) => applyCustomerSnapshot(e.target.value)}
+              required
+            >
+              <option value="">请选择客户</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.code} · {c.name}</option>
+              ))}
+            </select>
+          </label>
+          <div className="v16-sales-order-editor__dates">
+            <label>
+              订单日期
+              <input
+                type="date"
+                value={form.orderDate}
+                onChange={(e) => setForm({ ...form, orderDate: e.target.value })}
+                required
+              />
+            </label>
+            <label>
+              要求交期
+              <input
+                type="date"
+                value={form.requestedDeliveryDate}
+                onChange={(e) => setForm({ ...form, requestedDeliveryDate: e.target.value })}
+                required
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="v16-sales-order-editor__section" aria-label="订单明细">
+          <header>
+            <h2>订单明细</h2>
+            <button type="button" className="v16-sales-order-editor__add" onClick={addLine}>
+              ＋ 添加货品
+            </button>
+          </header>
+          <ul className="v16-sales-order-editor__lines">
+            {form.items.map((line, index) => {
+              const product = products.find((p) => p.id === line.productId);
+              const lineCents = (Number(line.quantity) || 0) * (yuanToNonNegativeCents(line.price) || 0);
+              return (
+                <li className="v16-sales-order-editor__line" key={index}>
+                  <div className="v16-sales-order-editor__line-head">
+                    <span>货品 {index + 1}</span>
+                    <button
+                      type="button"
+                      className="v16-sales-order-editor__line-remove"
+                      onClick={() => removeLine(index)}
+                      disabled={form.items.length <= 1}
+                      aria-label={`移除第 ${index + 1} 行货品`}
+                    >
+                      移除
+                    </button>
+                  </div>
+                  <label>
+                    货品
+                    <select
+                      value={line.productId}
+                      onChange={(e) => chooseProduct(index, e.target.value)}
+                      required
+                    >
+                      <option value="">请选择货品</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="v16-sales-order-editor__line-grid">
+                    <label>
+                      数量
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={line.quantity}
+                        onChange={(e) => updateLine(index, { quantity: e.target.value })}
+                        required
+                      />
+                    </label>
+                    <label>
+                      成交单价（元）
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.price}
+                        onChange={(e) => updateLine(index, { price: e.target.value })}
+                        required
+                      />
+                    </label>
+                  </div>
+                  <div className="v16-sales-order-editor__line-foot">
+                    <span>单位 {product?.unit || '—'}</span>
+                    <strong>{money(lineCents)}</strong>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+
+        <details className="v16-sales-order-document__disclosure">
+          <summary>
+            <span>交付与付款</span>
+            <span className="v16-sales-order-document__disclosure-summary-hint">{deliverySummary}</span>
+          </summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            <label>
+              付款条件
+              <input
+                value={form.paymentTerms}
+                onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
+                maxLength={200}
+                placeholder="如：月结 30 天"
+              />
+            </label>
+            <label>
+              账期天数
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={form.paymentTermsDays}
+                onChange={(e) => setForm({ ...form, paymentTermsDays: Number(e.target.value) })}
+                required
+              />
+            </label>
+            <label>
+              收货联系人
+              <input
+                value={form.shipToContactName}
+                onChange={(e) => setForm({ ...form, shipToContactName: e.target.value })}
+                maxLength={50}
+              />
+            </label>
+            <label>
+              收货电话
+              <input
+                value={form.shipToPhone}
+                onChange={(e) => setForm({ ...form, shipToPhone: e.target.value })}
+                maxLength={30}
+              />
+            </label>
+            <label>
+              收货地址
+              <input
+                value={form.shipToAddress}
+                onChange={(e) => setForm({ ...form, shipToAddress: e.target.value })}
+                maxLength={200}
+              />
+            </label>
+          </div>
+        </details>
+
+        <section className="v16-sales-order-editor__section" aria-label="备注">
+          <label>
+            订单备注
+            <textarea
+              value={form.remark}
+              onChange={(e) => setForm({ ...form, remark: e.target.value })}
+              placeholder="选填"
+            />
+          </label>
+        </section>
+
+        <section className="v16-sales-order-editor__section" aria-label="订单合计">
+          <div className="v16-sales-order-editor__total">
+            <span>订单合计</span>
+            <strong>{money(totalCents)}</strong>
+          </div>
+        </section>
+
+        <div className="v16-sales-order-editor__action-bar" role="group" aria-label="编辑器操作">
+          <button type="button" className="secondary" onClick={onClose}>取消</button>
+          <button type="submit" className="primary" disabled={saving}>
+            {saving ? '保存中…' : '保存草稿'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 export function Approvals({ notify }) {
@@ -1133,15 +1382,387 @@ function OrderDetail({
   onEdit,
   notify,
 }) {
+  // V1.6 P3: legacy sales wrapper kept as a no-op stub. Active sales
+  // flow goes through SalesOrderDetailV16; purchase flows use the
+  // purchase variant of the shared document surface.
+  void id; void user; void onBack; void onEdit; void notify;
+  return null;
+}
+
+// V1.6 P3 — sales-order detail document. Replaces OrderDetail for sales
+// flows. No BusinessPageHeader title duplication, no HelpDisclosure
+// 流程说明 paragraph, no 10-node MobileWorkflowProgress, no CompactRecord
+// line presentation, no fake invoice / AR / settlement state. Progress
+// reads only order.status, trace.downstream and downstream[].returns.
+function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
+  const navigation = useAppNavigation();
+  const [order, setOrder] = useState(null);
+  const [trace, setTrace] = useState(null);
+  const [loadState, setLoadState] = useState('LOADING');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+
+  async function reload() {
+    setLoadState('LOADING');
+    try {
+      const [detail, workflow] = await Promise.all([
+        api(`/api/orders/${id}`),
+        api(`/api/workflow/sales-orders/${id}`),
+      ]);
+      setOrder(detail.order);
+      setTrace(workflow);
+      setLoadState('READY');
+    } catch (error) {
+      setLoadState('ERROR');
+      notify(error.message, 'error');
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, reloadKey]);
+
+  async function submitOrder() {
+    setBusy(true);
+    try {
+      await api(`/api/orders/${id}/submit`, { method: 'POST' });
+      notify('销售订单已提交');
+      setReloadKey((value) => value + 1);
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function approvalLabel(status) {
+    if (status === 'DRAFT') return { text: '待提交', tone: 'pending' };
+    if (status === 'SUBMITTED') return { text: '待审批', tone: 'pending' };
+    if (status === 'APPROVED') return { text: '已审批', tone: 'completed' };
+    if (status === 'REJECTED') return { text: '已驳回', tone: 'rejected' };
+    return { text: '—', tone: 'neutral' };
+  }
+
+  function deliveryLabel(status, deliveries) {
+    if (status === 'APPROVED') {
+      if (deliveries.length > 0) {
+        return { text: `已关联 ${deliveries.length} 张出货单`, tone: 'completed', firstNo: deliveries[0]?.documentNo };
+      }
+      return { text: '待出货', tone: 'pending' };
+    }
+    return { text: '审批后进行', tone: 'neutral' };
+  }
+
+  if (loadState === 'ERROR') {
+    return (
+      <div className="v16-mobile-enterprise v16-sales-order-detail">
+        <section className="v16-sales-order-detail__back">
+          <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
+        </section>
+        <div className="v16-sales-order-document__error" role="alert">
+          <span className="v16-sales-order-document__error-title">加载失败</span>
+          <div className="v16-sales-order-document__error-actions">
+            <button type="button" onClick={() => setReloadKey((value) => value + 1)}>重试</button>
+            <button type="button" onClick={onBack}>返回列表</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadState !== 'READY' || !order) {
+    return (
+      <div className="v16-mobile-enterprise v16-sales-order-detail">
+        <section className="v16-sales-order-detail__back">
+          <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
+        </section>
+        <div className="v16-sales-order-document__loading" role="status" aria-live="polite">
+          <span className="v16-sales-order-document__loading-title">加载中</span>
+        </div>
+      </div>
+    );
+  }
+
+  const status = order.status;
+  const presentation = orderStatusPresentation(status);
+  const editable = can(user, 'ORDERS_CREATE') && ['DRAFT', 'REJECTED'].includes(status);
+  const submittable = can(user, 'ORDERS_SUBMIT') && ['DRAFT', 'REJECTED'].includes(status);
+  const canApprove = can(user, 'ORDERS_APPROVE') && status === 'SUBMITTED';
+  const canGoDeliveries = status === 'APPROVED' && navigation.canNavigate('sales-deliveries');
+  const deliveries = trace?.downstream || [];
+  const returns = deliveries.flatMap((item) => item.returns || []);
+  const approval = approvalLabel(status);
+  const delivery = deliveryLabel(status, deliveries);
+  const deliveryFilled = Boolean(
+    order.shipToContactName && order.shipToPhone && order.shipToAddress,
+  );
+  const deliverySummary = deliveryFilled ? '已填写' : '待完善';
+  const history = order.history || [];
+
+  let primary = null;
+  let secondary = null;
+  if (submittable) {
+    primary = { kind: 'submit', label: '提交审批' };
+    secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+  } else if (canApprove) {
+    primary = { kind: 'approval', label: '前往审批' };
+  } else if (canGoDeliveries) {
+    primary = { kind: 'delivery', label: '销售出货' };
+  } else if (editable) {
+    secondary = { kind: 'edit', label: '编辑' };
+  }
+
+  function handlePrimary() {
+    if (!primary) return;
+    if (primary.kind === 'edit') {
+      onEdit(order);
+      return;
+    }
+    if (primary.kind === 'submit') {
+      void submitOrder();
+      return;
+    }
+    if (primary.kind === 'approval') {
+      navigation.navigateToPage('approvals');
+      return;
+    }
+    if (primary.kind === 'delivery') {
+      navigation.navigateToPage('sales-deliveries');
+      return;
+    }
+  }
+
+  function handleSecondary() {
+    if (!secondary) return;
+    if (secondary.kind === 'edit') {
+      onEdit(order);
+    }
+  }
+
   return (
-    <OrderDocumentDetail
-      kind="sales"
-      id={id}
-      user={user}
-      onBack={onBack}
-      onEdit={onEdit}
-      notify={notify}
-    />
+    <div className="v16-mobile-enterprise v16-sales-order-detail">
+      <section className="v16-sales-order-detail__back">
+        <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
+      </section>
+
+      <section className="v16-sales-order-detail__identity" aria-label="销售订单身份">
+        <div className="v16-sales-order-detail__identity-row">
+          <div className="v16-sales-order-detail__number">{order.orderNo}</div>
+          <span
+            className={`v16-sales-order-status v16-sales-order-status--${presentation.tone}`}
+            data-status={order.status}
+          >
+            {presentation.label}
+          </span>
+        </div>
+        <div className="v16-sales-order-detail__customer">{order.customerName || '—'}</div>
+        <div className="v16-sales-order-detail__amount">{money(order.totalCents)}</div>
+      </section>
+
+      {status === 'REJECTED' && order.rejectionReason && (
+        <section className="v16-sales-order-detail__rejection" aria-label="驳回原因">
+          <strong>驳回原因</strong>
+          <span>{order.rejectionReason}</span>
+        </section>
+      )}
+
+      <section className="v16-sales-order-detail__sections" aria-label="销售订单章节">
+        <details className="v16-sales-order-document__disclosure" open>
+          <summary>概要</summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            <dl className="v16-sales-order-document__kv">
+              <div>
+                <dt>订单日期</dt>
+                <dd>{order.orderDate || '—'}</dd>
+              </div>
+              <div>
+                <dt>要求交期</dt>
+                <dd>{order.requestedDeliveryDate || '—'}</dd>
+              </div>
+              <div>
+                <dt>付款条件</dt>
+                <dd>
+                  {order.paymentTerms || '—'}
+                  {Number(order.paymentTermsDays) > 0 && (
+                    <small>{order.paymentTermsDays} 天</small>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </details>
+
+        <details className="v16-sales-order-document__disclosure">
+          <summary>
+            <span>交付信息</span>
+            <span className="v16-sales-order-document__disclosure-summary-hint">{deliverySummary}</span>
+          </summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            <dl className="v16-sales-order-document__kv">
+              <div>
+                <dt>收货联系人</dt>
+                <dd>{order.shipToContactName || '—'}</dd>
+              </div>
+              <div>
+                <dt>收货电话</dt>
+                <dd>{order.shipToPhone || '—'}</dd>
+              </div>
+              <div>
+                <dt>收货地址</dt>
+                <dd>{order.shipToAddress || '—'}</dd>
+              </div>
+              {order.remark && (
+                <div>
+                  <dt>订单备注</dt>
+                  <dd>{order.remark}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        </details>
+
+        <details className="v16-sales-order-document__disclosure" open>
+          <summary>
+            <span>订单明细</span>
+            <span className="v16-sales-order-document__disclosure-summary-hint">
+              {(order.items || []).length} 行
+            </span>
+          </summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            <ul className="v16-sales-order-detail__lines">
+              {(order.items || []).map((item) => (
+                <li className="v16-sales-order-detail__line" key={item.id || item.productId}>
+                  <div className="v16-sales-order-detail__line-head">
+                    <span className="v16-sales-order-detail__line-name">{item.productName || '—'}</span>
+                    <span className="v16-sales-order-detail__line-code">{item.productCode || ''}</span>
+                  </div>
+                  <div className="v16-sales-order-detail__line-meta">
+                    <span>
+                      {quantity(item.quantity)} {item.unit || ''} × {money(item.unitPriceCents)}
+                    </span>
+                    <span className="v16-sales-order-detail__line-meta-amount">
+                      {money(item.amountCents)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <div className="v16-sales-order-detail__total">
+              <span>订单合计</span>
+              <strong>{money(order.totalCents)}</strong>
+            </div>
+          </div>
+        </details>
+
+        <details className="v16-sales-order-document__disclosure" open>
+          <summary>业务进度</summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            <ul className="v16-sales-order-detail__progress">
+              <li>
+                <span className="v16-sales-order-detail__progress-key">订单</span>
+                <span className="v16-sales-order-detail__progress-value v16-sales-order-detail__progress-value--completed">已创建</span>
+              </li>
+              <li>
+                <span className="v16-sales-order-detail__progress-key">审批</span>
+                <span
+                  className={
+                    `v16-sales-order-detail__progress-value v16-sales-order-detail__progress-value--${approval.tone}`
+                  }
+                >
+                  {approval.text}
+                </span>
+              </li>
+              <li>
+                <span className="v16-sales-order-detail__progress-key">出货</span>
+                <span
+                  className={
+                    `v16-sales-order-detail__progress-value v16-sales-order-detail__progress-value--${delivery.tone}`
+                  }
+                >
+                  {delivery.text}
+                </span>
+                {delivery.firstNo && (
+                  <span className="v16-sales-order-detail__progress-meta">
+                    {delivery.firstNo}
+                  </span>
+                )}
+              </li>
+              {returns.length > 0 && (
+                <li>
+                  <span className="v16-sales-order-detail__progress-key">退货</span>
+                  <span className="v16-sales-order-detail__progress-value v16-sales-order-detail__progress-value--completed">
+                    已关联 {returns.length} 张退货单
+                  </span>
+                  {returns[0]?.documentNo && (
+                    <span className="v16-sales-order-detail__progress-meta">
+                      {returns[0].documentNo}
+                    </span>
+                  )}
+                </li>
+              )}
+            </ul>
+            <AppLink page="business-overview" className="v16-sales-order-detail__overview">
+              查看业务流程 ›
+            </AppLink>
+          </div>
+        </details>
+
+        <details className="v16-sales-order-document__disclosure">
+          <summary>
+            <span>操作记录</span>
+            <span className="v16-sales-order-document__disclosure-summary-hint">
+              {history.length} 条
+            </span>
+          </summary>
+          <div className="v16-sales-order-document__disclosure-body">
+            {history.length > 0 ? (
+              <ul className="v16-sales-order-detail__history">
+                {history.map((entry, index) => (
+                  <li key={`${entry.createdAt || ''}-${index}`}>
+                    <div className="v16-sales-order-detail__history-head">
+                      <strong>{entry.userName || '系统'}</strong>
+                      <span>{dateTime(entry.createdAt)}</span>
+                    </div>
+                    <div className="v16-sales-order-detail__history-detail">
+                      {entry.detail}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="v16-sales-order-detail__history-empty">暂无操作记录</p>
+            )}
+          </div>
+        </details>
+      </section>
+
+      {(primary || secondary) && (
+        <div className="v16-sales-order-detail__action-bar" role="group" aria-label="销售订单操作">
+          {secondary && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleSecondary}
+              data-testid="sales-order-action-secondary"
+            >
+              {secondary.label}
+            </button>
+          )}
+          {primary && (
+            <button
+              type="button"
+              className="primary"
+              onClick={handlePrimary}
+              disabled={busy && primary.kind === 'submit'}
+              data-testid="sales-order-action-primary"
+            >
+              {busy && primary.kind === 'submit' ? '提交中…' : primary.label}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
