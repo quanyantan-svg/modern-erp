@@ -6,6 +6,7 @@ import './styles/v16-tokens.css';
 import './styles/v16-mobile-enterprise.css';
 import './styles/v16-sales-orders.css';
 import './styles/v16-sales-order-document.css';
+import './styles/v16-purchase-receipts.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode><App /></React.StrictMode>

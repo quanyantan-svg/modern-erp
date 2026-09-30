@@ -145,6 +145,7 @@ export default function App() {
   const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [documentBackAction, setDocumentBackAction] = useState(null);
+  const setHeaderBackAction = (action) => setDocumentBackAction(() => action);
   const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.enabled !== false && (item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)))) : [];
 
   function canNavigate(pageKey) {

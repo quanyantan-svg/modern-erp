@@ -15,8 +15,8 @@ test('D2.1 freezes one 680px rail for all four prototypes', () => {
   assert.match(css, /--app-max-width:680px/);
   assert.match(css, /\.business-page-shell--rail\s*\{[^}]*max-width:680px/);
   assert.match(overview, /className="flow-overview" width="rail"/);
-  assert.match(logistics, /className="purchase-receipts-prototype" width="rail"/);
-  assert.match(logistics, /className=\{`purchase-receipt-detail[\s\S]*?width="rail"/);
+  assert.match(logistics, /className="purchase-receipts-v16 v16-purchase-receipts" width="rail"/);
+  assert.match(logistics, /<PurchaseReceiptDetailV16/);
 });
 
 test('D2.1 application launcher is rebuilt as direct flowchart grids', () => {
@@ -37,8 +37,8 @@ test('D2.1 application launcher is rebuilt as direct flowchart grids', () => {
 test('D2.1 replaces receipt tables and detail side rail with structured records', () => {
   assert.match(design, /export function CompactRecordList/);
   assert.match(design, /export function CompactRecord/);
-  assert.match(logistics, /className="receipt-record-list"/);
-  assert.match(logistics, /className="receipt-document-flow"/);
+  assert.match(logistics, /className="v16-purchase-receipt-list"/);
+  assert.match(logistics, /className="v16-purchase-receipt-detail__sections"/);
   assert.doesNotMatch(logistics, /className="receipt-list-table"|<BusinessDetailLayout/);
   assert.doesNotMatch(logistics, /className="receipt-detail-lines"/);
 });

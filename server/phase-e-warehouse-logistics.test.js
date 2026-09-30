@@ -691,17 +691,17 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
     }
     return logistics.slice(start);
   }
-  const purchaseReceiptModal = extract('PurchaseReceiptModal');
+  const purchaseReceiptEditor = extract('PurchaseReceiptEditorV16');
   const salesDeliveryModal = extract('SalesDeliveryModal');
   const returnModal = extract('ReturnModal');
 
-  test('PurchaseReceiptModal loads suppliers via /api/lookup/suppliers (narrow)', () => {
-    assert.doesNotMatch(purchaseReceiptModal,
+  test('PurchaseReceiptEditorV16 loads suppliers via /api/lookup/suppliers (narrow)', () => {
+    assert.doesNotMatch(purchaseReceiptEditor,
       /Promise\.all\(\[\s*api\("\/api\/suppliers"/,
-      'purchaseReceiptModal must NOT use the broad /api/suppliers');
-    assert.match(purchaseReceiptModal,
-      /api\("\/api\/lookup\/suppliers"\)\.then\(\(r\)\s*=>\s*setSuppliers/,
-      'purchaseReceiptModal must use /api/lookup/suppliers');
+      'purchaseReceiptEditor must NOT use the broad /api/suppliers');
+    assert.match(purchaseReceiptEditor,
+      /api\(['"]\/api\/lookup\/suppliers['"]\)/,
+      'purchaseReceiptEditor must use /api/lookup/suppliers');
   });
 
   test('SalesDeliveryModal loads customers via /api/lookup/customers (narrow)', () => {
@@ -721,18 +721,26 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
   });
 
   test('Each fetch in the warehouse modals carries its own .catch', () => {
-    for (const modal of [purchaseReceiptModal, returnModal]) {
+    assert.match(purchaseReceiptEditor,
+      /api\(['"]\/api\/lookup\/suppliers['"]\)[\s\S]*?\.catch\(\(e\)\s*=>\s*notify\(e\.message,\s*['"]error['"]\)\)/,
+      'purchase receipt supplier lookup missing its own .catch');
+    for (const modal of [returnModal]) {
       assert.match(modal,
         /api\("\/api\/lookup\/suppliers"\)[\s\S]*?\.catch\(\(e\)\s*=>\s*notify\(e\.message,\s*"error"\)\)/,
         'lookup-suppliers missing its own .catch');
     }
-    for (const modal of [purchaseReceiptModal, salesDeliveryModal, returnModal]) {
+    for (const modal of [salesDeliveryModal, returnModal]) {
       assert.match(modal,
         /api\("\/api\/warehouses"\)[\s\S]*?\.catch\(\(e\)\s*=>\s*notify\(e\.message,\s*"error"\)\)/,
         'warehouses missing its own .catch');
       assert.match(modal,
         /api\("\/api\/products"\)[\s\S]*?\.catch\(\(e\)\s*=>\s*notify\(e\.message,\s*"error"\)\)/,
         'products missing its own .catch');
+    }
+    for (const endpoint of ['warehouses', 'products']) {
+      assert.match(purchaseReceiptEditor,
+        new RegExp(`api\\(['"]\\/api\\/${endpoint}['"]\\)[\\s\\S]*?\\.catch\\(\\(e\\)\\s*=>\\s*notify\\(e\\.message,\\s*['"]error['"]\\)\\)`),
+        `purchase receipt ${endpoint} lookup missing its own .catch`);
     }
     assert.match(salesDeliveryModal,
       /api\("\/api\/lookup\/customers"\)[\s\S]*?\.catch\(\(e\)\s*=>\s*notify\(e\.message,\s*"error"\)\)/,
@@ -743,7 +751,7 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
   });
 
   test('setForm anti-pattern eliminated in the three warehouse modals', () => {
-    for (const modal of [purchaseReceiptModal, salesDeliveryModal, returnModal]) {
+    for (const modal of [salesDeliveryModal, returnModal]) {
       assert.doesNotMatch(modal,
         /if \(detail && !form\.\w+\)\s+setForm\(/,
         'setForm must not be invoked inside the JSX render body');
@@ -751,6 +759,12 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
         /useEffect\(\(\)\s*=>\s*\{[\s\S]*?if \(detail[\s\S]*?setForm\(/,
         'setForm must be moved into a dedicated useEffect');
     }
+    assert.doesNotMatch(purchaseReceiptEditor,
+      /if \(detail && !form\.\w+\)\s+setForm\(/,
+      'setForm must not be invoked inside the JSX render body');
+    assert.match(purchaseReceiptEditor,
+      /useEffect\(\(\)\s*=>\s*\{[\s\S]*?if \(detailRes && detailRes\.purchaseReceipt\)[\s\S]*?setForm\(/,
+      'purchase receipt editor must initialize form state inside its loading effect');
   });
 
   test('WHITE-SCREEN SAFETY: lookup endpoints use workflow permissions and CRM lookup permissions', () => {

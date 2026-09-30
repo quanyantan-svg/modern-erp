@@ -22,7 +22,7 @@
 // Fix scope:
 //   - GET /api/lookup/sales-orders-source   (gated by SALES_DELIVERIES_MANAGE / RETURNS_MANAGE)
 //   - GET /api/lookup/purchase-orders-source (gated by PURCHASE_RECEIPTS_MANAGE / RETURNS_MANAGE)
-//   - logistics-finance.jsx PurchaseReceiptModal / SalesDeliveryModal
+//   - logistics-finance.jsx PurchaseReceiptEditorV16 / SalesDeliveryModal
 //     call the scoped lookups instead of the broad /api/orders and
 //     /api/purchase-orders endpoints. Source-prefill uses data already
 //     loaded by the lookup so the warehouse actor never has to call
@@ -393,18 +393,18 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       assert.doesNotMatch(modal, /api\("\/api\/orders"\s*\+\s*salesOrderId\)/, 'must not call /api/orders/:id for prefill');
     });
 
-    test('20. PurchaseReceiptModal uses /api/lookup/purchase-orders-source (scoped), not /api/purchase-orders', () => {
-      const modal = extractBlock(source, 'PurchaseReceiptModal');
-      assert.match(modal, /api\("\/api\/lookup\/purchase-orders-source"\)/, 'must use scoped lookup');
-      assert.doesNotMatch(modal, /api\("\/api\/purchase-orders\?status=APPROVED"\)/, 'must not call broad /api/purchase-orders');
-      assert.doesNotMatch(modal, /api\("\/api\/purchase-orders"\s*\+\s*purchaseOrderId\)/, 'must not call /api/purchase-orders/:id for prefill');
+    test('20. PurchaseReceiptEditorV16 uses /api/lookup/purchase-orders-source (scoped), not /api/purchase-orders', () => {
+      const modal = extractBlock(source, 'PurchaseReceiptEditorV16');
+      assert.match(modal, /api\(['"]\/api\/lookup\/purchase-orders-source['"]\)/, 'must use scoped lookup');
+      assert.doesNotMatch(modal, /api\(['"]\/api\/purchase-orders\?status=APPROVED['"]\)/, 'must not call broad /api/purchase-orders');
+      assert.doesNotMatch(modal, /api\(['"]\/api\/purchase-orders['"]\s*\+\s*purchaseOrderId\)/, 'must not call /api/purchase-orders/:id for prefill');
     });
 
     test('21. source selectors are required and direct logistics options are absent', () => {
       const sdModal = extractBlock(source, 'SalesDeliveryModal');
-      const prModal = extractBlock(source, 'PurchaseReceiptModal');
+      const prModal = extractBlock(source, 'PurchaseReceiptEditorV16');
       assert.match(sdModal, /来源销售订单（必选）/);
-      assert.match(prModal, /来源采购订单（必选）/);
+      assert.match(prModal, /来源采购订单[\s\S]*?<select[\s\S]*?required/);
       assert.doesNotMatch(sdModal, /直接出货（不关联销售订单）/);
       assert.doesNotMatch(prModal, /直接入库（不关联采购订单）/);
     });
@@ -424,10 +424,10 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
     test('24. lookup error is visible and controlled (notify with explicit message; no raw stack trace)', () => {
       const sdModal = extractBlock(source, 'SalesDeliveryModal');
-      const prModal = extractBlock(source, 'PurchaseReceiptModal');
+      const prModal = extractBlock(source, 'PurchaseReceiptEditorV16');
       // notify(...) with explanatory Chinese message + "error" tone
       assert.match(sdModal, /\.catch\(\(e\)\s*=>\s*notify\("来源销售订单加载失败，请重试。",\s*"error"\)\)/);
-      assert.match(prModal, /\.catch\(\(e\)\s*=>\s*notify\("来源采购订单加载失败，请重试。",\s*"error"\)\)/);
+      assert.match(prModal, /\.catch\(\(e\)\s*=>\s*notify\(['"]来源采购订单加载失败，请重试。['"],\s*['"]error['"]\)\)/);
       // returns modal also surfaces a controlled message
       const returnModal = extractBlock(source, 'ReturnModal');
       assert.match(returnModal, /notify\("来源单据加载失败，请重试。"/);
@@ -435,7 +435,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
     test('25. lookup error does not white-screen — no silent .catch(() => {}) on the source-document lookups', () => {
       const sdModal = extractBlock(source, 'SalesDeliveryModal');
-      const prModal = extractBlock(source, 'PurchaseReceiptModal');
+      const prModal = extractBlock(source, 'PurchaseReceiptEditorV16');
       const returnModal = extractBlock(source, 'ReturnModal');
       // The lookup source-document fetches must NOT silently swallow — they must surface via notify.
       assert.doesNotMatch(sdModal, /api\("\/api\/lookup\/sales-orders-source"\)[\s\S]{0,80}\.catch\(\(\)\s*=>\s*\{\s*\}\)/);

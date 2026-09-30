@@ -61,8 +61,8 @@ test('D2 purchase receipt list and detail use D1 lifecycle contracts truthfully'
   assert.match(page, /从正常业务列表中移除/);
   assert.match(page, /仍保持“已取消”/);
   assert.match(page, /can\(user, 'USERS_MANAGE'\)/);
-  assert.match(page, /receipt-document-flow/);
-  assert.match(page, /CompactRecordList/);
+  assert.match(page, /v16-purchase-receipt-detail__sections/);
+  assert.match(page, /className="v16-purchase-receipt-list"/);
 });
 
 test('D2 responsive styles cover mobile, tablet workspace, and desktop', () => {

@@ -58,32 +58,34 @@ test('D2.2 business overview turns tile groups into vertical step flow', () => {
 });
 
 test('D2.2 purchase receipt list removes header subtitle and updates archive wording', () => {
+  const receiptCss = read('src/styles/v16-purchase-receipts.css');
   // Subtitle "记录到货、质量验收与库存入账" removed from default header.
   assert.doesNotMatch(logistics, /context="记录到货、质量验收与库存入账"/);
-  assert.match(logistics, /title="采购入库"/);
+  assert.match(logistics, /className="purchase-receipts-v16 v16-purchase-receipts"/);
   // Archive filter wording updated.
-  assert.match(logistics, /显示已归档/);
+  assert.match(logistics, /归档记录/);
   assert.doesNotMatch(logistics, />显示已移除</);
   // Document number single-line + ellipsis in receipt record list.
-  assert.match(css, /\.receipt-record-list \.compact-record__open\s*\{[^}]*text-overflow:ellipsis[^}]*white-space:nowrap/s);
+  assert.match(receiptCss, /\.v16-purchase-receipt-row__number\s*\{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
   // Inline archive card text on the list updated.
-  assert.match(logistics, />已归档<\/p>/);
+  assert.match(logistics, /v16-purchase-receipt-row__archive">已归档<\/span>/);
 });
 
 test('D2.2 purchase receipt detail localizes billing status enum and refines danger zone', () => {
+  const receiptCss = read('src/styles/v16-purchase-receipts.css');
   // Localized billing status.
   assert.match(logistics, /BILLING_STATUS_LABELS[\s\S]*?UNBILLED:\s*'未开账'/);
   assert.match(logistics, /PARTIALLY_BILLED:\s*'部分开账'/);
   assert.match(logistics, /BILLED:\s*'已开账'/);
-  assert.match(logistics, /billingStatusLabel\(detail\.billingSummary\?\.status\)/);
+  assert.match(logistics, /billingStatusLabel\(billingStatus\)/);
   // Long-value layout class wired.
-  assert.match(logistics, /receipt-summary-row--long/);
-  assert.match(css, /\.receipt-summary-row--long\s*\{/);
+  assert.match(logistics, /v16-purchase-receipt-detail__source-row-value/);
+  assert.match(receiptCss, /\.v16-purchase-receipt-detail__source-row-value\s*\{/);
   // Danger zone refined: "管理" section, subtle border, not a giant red container.
-  assert.match(logistics, /title="管理"/);
-  assert.match(css, /\.purchase-receipt-detail \.business-content-section--danger\s*\{[^}]*background:#fff9f9/s);
+  assert.match(logistics, /<summary>管理<\/summary>/);
+  assert.match(receiptCss, /\.v16-purchase-receipt-detail__management-row\s*\{[^}]*border-bottom:/s);
   // Archive confirmation semantics preserved.
-  assert.match(logistics, /title="从业务列表移除"/);
+  assert.match(logistics, /title="从业务列表移除？"/);
   assert.match(logistics, /confirmLabel="从列表移除"/);
   assert.match(logistics, /从正常业务列表中移除/);
   assert.doesNotMatch(logistics, /永久删除|彻底删除|不可恢复/);
