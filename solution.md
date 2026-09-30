@@ -1921,3 +1921,224 @@ Frontend：
 - D2.2 focused 通过 + `pnpm test` + `pnpm build` + `git diff --check` 通过 → 可提交 exact-file stage。
 - D2.2 提交后 STOP；不进入 D3+；不 push / tag / deploy。
 - 截图通过运营方最终视觉评审才进入 D3。
+
+## 24. V1.6 P0+P1 — Mobile Enterprise UX Foundation 设计
+
+本节是 V1.6 P0+P1 的 STAGE 2 — DESIGN 冻结，需求来源是 document.md §22。本节只描述 P0/P1 的展示层实现策略，不复制源码；后端、API、数据库、角色、审批族、业务语义均不在本节重述。
+
+### 24.1 原型序列
+
+V1.6 共八个原型阶段：
+
+- P0 — 隔离的移动企业设计基础（design tokens + isolated CSS）；
+- P1 — 启动器 + 五项底部导航 + 工作台（本节设计的范围）；
+- P2 — 销售订单列表；
+- P3 — 销售订单详情/表单；
+- P4 — 采购入库；
+- P5 — MRP；
+- P6 — 库存作业；
+- P7 — 决策报表；
+- P8 — 流程图与原型一致性验收。
+
+只有在 P0–P8 全部通过运营方评审后才可规划 53 路由全站推广。本节是 P0+P1 单一范围的设计。
+
+### 24.2 样式隔离策略
+
+1. `src/styles.css` 视为既有 legacy / 基础样式；不得为 V1.6 重写或追加大段覆盖。
+2. V1.6 新建两个独立样式文件：`src/styles/v16-tokens.css`、`src/styles/v16-mobile-enterprise.css`。
+3. `src/main.jsx` 在既有 `import './styles.css'` 之后追加这两个新文件的 import；不删除或复制既有 styles.css 内容。
+4. 所有 V1.6 选择器必须限定在 `.v16-mobile-enterprise` 作用域或使用 `v16-*` 前缀；不得让 V1.6 规则泄漏到尚未改造的页面。
+5. 旧行为（legacy styles.css）在 P0/P1 改造面之外继续工作；CSS 迁移按后续阶段增量推进。
+
+### 24.3 V1.6 设计令牌
+
+应用：
+
+- `--v16-app-max-width: 680px`
+
+表面：
+
+- `--v16-bg: #F4F5F7`
+- `--v16-surface: #FFFFFF`
+- `--v16-surface-secondary: #F8F9FB`
+
+文字：
+
+- `--v16-text: #171A1F`
+- `--v16-text-secondary: #5F6672`
+- `--v16-text-tertiary: #8A919D`
+
+品牌：
+
+- `--v16-accent: #1769E0`
+- `--v16-accent-soft: rgba(23,105,224,.08)`
+
+语义：
+
+- `--v16-success: #2FA84F`
+- `--v16-warning: #E58A00`
+- `--v16-danger: #D9363E`
+
+结构：
+
+- `--v16-border: #E4E7EB`
+- `--v16-separator: rgba(54,62,74,.11)`
+
+圆角：
+
+- `--v16-radius-input: 10px`
+- `--v16-radius-button: 10px`
+- `--v16-radius-surface: 14px`
+- `--v16-radius-icon: 12px`
+
+间距阶梯：4 / 8 / 12 / 16 / 20 / 24 px。
+
+P0/P1 表面通常无装饰性渐变、无玻璃效果、无大型营销阴影、无「卡片套卡片」视觉；强阴影仅用于升起型 sheet / dialog / floating 控件。
+
+### 24.4 V1.6 排印
+
+- 顶部标题 17 / 600
+- 重要页面标题 20–22 / 650–700（按需）
+- 分区标题 15 / 600
+- 记录主标题 15 / 600
+- 正文 14 / 400–500
+- 次级 13 / 400–500
+- 元数据 12 / 400
+- 重要金额 20–24 / 650
+
+不使用装饰性英文大写 eyebrow。
+
+### 24.5 底部导航（P1A）
+
+`src/components/MobileShell.jsx` 与 `src/App.jsx`：
+
+1. 移除 `TABS` 中 `key: 'cloud'` 标签；新的 `TABS` 严格为 5 项：`messages / approvals / apps / workspace / profile`，对应标签 `消息 / 审批 / 应用 / 工作台 / 我的`。
+2. `App.jsx` 移除 `mobileTab === 'cloud'` 分支以及「更多企业协同能力正在规划中 / 当前版本暂未开放此功能」占位文案；该分支整体删除。
+3. 当 `mobileTab === 'workspace'` 时，`renderMobileContent` 必须返回真实的 Dashboard 工作台组件（通过 `<Dashboard ... mobileWorkspace />` 之类的受控 prop），不得让 shell 与内容重复渲染「工作台」标题。
+4. `#dashboard` 路由保留兼容入口；不删除该路由。
+5. 底部导航保留 `aria-current="page"`、触点 ≥ 44 × 44 px、固定定位、safe-area 适配。
+6. 审批徽标行为保持：通过 `tabBadges={{ approvals: pendingApprovalCount }}` 渲染。
+
+### 24.6 启动器（P1B）
+
+`src/components/MobileLauncher.jsx` + `src/navigation/applicationMetadata.js`：
+
+1. 删除 V1.5 中「业务领域 / 01–07 / 当前领域 / X 个主要入口 / 更多 XX 能力 / presentation.description」等以领域选择器为中心的交互和文案。
+2. 删除 `useState`-driven 的 `selectedKey` 状态机。
+3. 启动器根仍是 `aria-label="应用"`；不再额外渲染 `<h1>应用</h1>`。
+4. 启动器顺序：可选「常用」段 → 六大核心业务组（直接网格）→ 工具与次级入口。
+5. `applicationMetadata.js` 暴露六个 flowchart-aligned `kind: 'domain'` 业务组：
+   - `master-data` — 货品资料 / BOM / 客户资料 / 供应商资料 / 仓库资料 / 制品工序标准
+   - `sales` — 销售订单 / 销售出货 / 销售退货 / 应收结算 / 销售折让
+   - `production` — 计划预测 / MRP / 生产指令 / 制令单 / 用料出库 / 生产入库
+   - `purchasing` — 采购指令 / 请购单 / 采购订单 / 采购入库 / 采购退货 / 应付结算 / 采购折让
+   - `inventory` — 库存作业 / 存货报废 / 存货月结 / 库存异动 / 批次·序列号
+   - `analytics` — 五张决策报表（`sales-summary / sales-outstanding / purchase-summary / purchase-outstanding / inventory-movements`）
+6. IQC、OQC 不作为启动器顶层图块；material-requirements-plan 不作为启动器顶层图块（route 仍保留）。
+7. 「常用」段从已授权应用图块中按候选优先级 `orders / purchase-orders / purchase-receipts / sales-deliveries / inventory / mrp-runs` 自动构建，最多 3 项；不写入持久化偏好；不重复权限逻辑。
+8. 工具与次级入口以 `details/summary` 折叠列表形式呈现：`业务流程 / 财务工具 / 更多业务 / 高级设置 / 系统设置`。必须保留所有既有活动路由的可达性。
+9. 五个明确禁用路由（`cash-journals / bills / fixed-assets / workflows / data-cleanup`）继续以 `enabled: false` 形式出现在 navGroups，但不得出现在 P1 启动器作为可点击图块。
+10. `decision-reports` 节点必须保留既有 `reportKey` 目标行为；本阶段不改变其注册方式。
+
+### 24.7 应用图块视觉
+
+`src/styles/v16-mobile-enterprise.css` 提供：
+
+- 应用网格 3 列；列宽通过 `grid-template-columns: repeat(3, minmax(0, 1fr))` 与 `min-width: 0` 保证 320px 仍可容纳三列且无横向溢出。
+- 图块按钮：`min-height: 82px`（目标 82–88px）、`padding: 12px 8px`、无外框、无单图块阴影。
+- 图标容器：`width: 40px; height: 40px; border-radius: 12px; background: var(--v16-accent-soft); color: var(--v16-accent);` 内嵌 21–23 px 图标。
+- 标签：`font-size: 13px; line-height: 1.35; text-align: center; max-width: 100%;` 最多 2 行截断。
+- 不展示描述文字、不展示「主要入口」、不展示条目计数、不展示箭头。
+
+### 24.8 工作台（P1C）
+
+`src/pages/master-data.jsx` 中 `Dashboard` 组件：
+
+1. 删除 hero 卡片（`hero-card`、今日业务、已审批销售订单、订单金额、approvedAmountCents 等）。
+2. 删除 `stats-grid` 卡片墙（4 个彩虹 stat-card）。
+3. 删除「常用工作」Panel 装饰性 grid。
+4. 删除永久说明文案：「指标与快捷入口按当前角色权限展示；业务总览提供跨域关系，工作台聚焦当前用户可执行的日常工作。」
+5. 删除 `context="我的业务入口"` 与 `help` 中相关 HelpDisclosure。
+6. 渲染顺序：
+   - 待我审批（仅当 `data.pendingCount > 0` 时）→ 一个紧凑行动行；
+   - 最近业务（仅当 `data.recentOrders` 非空）→ 最多 4 行高密度记录；
+   - 常用操作 → 基于 `navigation.canNavigate` 的最多 6 个紧凑入口；候选优先级按 document.md §22.7。
+7. 引入 `mobileWorkspace` 受控 prop；当为 `true` 时不再重复渲染 `<BusinessPageHeader title="工作台" />`，避免与 `MobileShell` 标题重复。`App.jsx` 中从底部 `workspace` 标签进入时使用此 prop。
+8. 当 `mobileWorkspace === false`（即 `#dashboard` 路由被直接打开）时仍可渲染页头；二者并存即可。
+
+### 24.9 文案预算
+
+1. P0/P1 已转换页面 0 解释性段落。
+2. 普通空状态：标题 + 可选动作。
+3. 普通加载：`加载中…` 或等同克制文案。
+4. 不暴露内部术语 `canonical / FLOW_INTERNAL_STEP / business_date / lifecycle / snapshot / legacy accuracy / permission code`。
+5. 不展示装饰性英文 eyebrow。
+
+### 24.10 CSS 安全
+
+1. 业务内容不得用 `overflow-x: hidden` 盲目兜底。
+2. `mobile-shell / body` 允许保留其既有安全约束；但 P0/P1 内容本身必须自然适配 320px。
+3. 主内容 `padding-bottom` 至少 = 底部导航高度 + `safe-area-inset-bottom` + 合理内容呼吸空间。
+4. 通过既有 `tests/acceptance` 风格断言：每个 P0/P1 视口截图后 `document.documentElement.scrollWidth <= clientWidth`。
+
+### 24.11 可访问性
+
+1. 保持 `:focus-visible` 可见。
+2. `aria-current="page"` 在激活底部标签。
+3. 图标按钮必须具备 `aria-label`。
+4. 触点 ≥ 44 × 44 px。
+5. 状态不以颜色为唯一语义。
+6. 详情/折叠使用 `details/summary`，并保留键盘可达。
+
+### 24.12 测试策略
+
+新增 `server/v16-p1-mobile-enterprise-foundation.test.js`，至少覆盖：
+
+1. `MobileShell.MOBILE_TABS` 严格 5 项启用，标签为 `消息 / 审批 / 应用 / 工作台 / 我的`；`cloud` 不在启用标签集合中。
+2. `App.jsx` 不再渲染「云翼」占位 surface；`mobileTab === 'workspace'` 渲染真实 Dashboard。
+3. `MobileLauncher` 不再持有 `useState-selectedKey`，无 `业务领域` 编号 01–07 按钮、无 `当前领域`、无 `主要入口`、无 `presentation.description` 渲染。
+4. 启动器业务组严格六个：`基础资料 / 销售管理 / 生产管理 / 采购管理 / 库存管理 / 决策报表`；IQC/OQC 不作为顶层图块；material-requirements-plan 不作为顶层图块。
+5. 五张决策报表 `reportKey`（`sales-summary / sales-outstanding / purchase-summary / purchase-outstanding / inventory-movements`）仍存在。
+6. `Dashboard` 不再包含「工作台说明」「我的业务入口」字样或 hero 营销文案。
+7. V1.6 样式仅存在于 `v16-tokens.css` 与 `v16-mobile-enterprise.css`；`src/styles.css` 不得追加 V1.6 大块。
+8. `package.json` 版本仍为 `1.5.0`。
+9. 在既有断言被改动的位置（云翼 / 签核 / 启动器领域选择器）按真实新合同精确更新；不弱化不相关断言。
+
+`server/mobile-shell.test.js` 与 `server/mobile-application-launcher.test.js` 中针对旧 `cloud / 云翼 / 签核 / 业务领域 01–07` 的断言需要按新合同精确更新。
+
+### 24.13 数据流与调用关系
+
+1. 底部导航由 `MobileShell.MOBILE_TABS` 渲染；`App.jsx` 通过 `mobileTab` state 路由到 `renderMobileContent`。
+2. `renderMobileContent` 在 `mobileTab === 'workspace'` 时调用 `<Dashboard user={user} notify={notify} mobileWorkspace />`；在 `mobileTab === 'apps'` 时若无选中应用则渲染 `<MobileLauncher>`。
+3. `MobileLauncher` 通过 `buildMobileApplicationGroups(visibleNav, ...)` 获取已授权的分组；不再自行维护选中态。
+4. 启动器应用图块 `onClick` 通过 `handleMobileApplicationSelect` → `navigateToPage` 完成现有 hash/page 状态更新；保持既有权限校验与 toast 合同。
+
+### 24.14 事务、权限、错误行为
+
+1. 本阶段不引入任何后端事务、API 变更、数据库 schema 或权限变更。
+2. 启动器渲染依赖 `visibleNav` 与既有 `buildMobileApplicationGroups`，不引入第二个独立权限系统。
+3. 错误态：保持既有 `notify(error.message, 'error')` 与 `Loading / Empty` 区分；不引入新错误处理协议。
+
+### 24.15 阶段状态与门禁
+
+1. P0+P1 focused + 全量 `pnpm test` + `pnpm build` + `git diff --check` 通过 → 可 exact-file stage。
+2. 真实 Edge 在 320 / 390 / 430 / 680px 四个视口下截图无横向溢出且无未捕获错误 → 可提交。
+3. 提交后 STOP；不进入 P2–P8；不 push / tag / deploy；不动 package.json 版本；不动 README 当前已发布基线。
+4. 截图通过运营方视觉评审后才进入 P2。
+
+### 24.16 文件清单
+
+可能涉及的实现文件（最终以 exact-file stage 为准）：
+
+- `src/App.jsx`
+- `src/components/MobileShell.jsx`
+- `src/components/MobileLauncher.jsx`
+- `src/navigation/applicationMetadata.js`
+- `src/pages/master-data.jsx`（Dashboard）
+- `src/main.jsx`（追加两行 import）
+- `src/styles/v16-tokens.css`（新增）
+- `src/styles/v16-mobile-enterprise.css`（新增）
+- `server/v16-p1-mobile-enterprise-foundation.test.js`（新增）
+- `server/mobile-shell.test.js`（按新合同更新）
+- `server/mobile-application-launcher.test.js`（按新合同更新）
+- `log/2026-09-30.md`（追加阶段审计）
