@@ -6,9 +6,17 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 
 test('D3 keeps order approval separate from fulfillment', () => {
   const source = read('src/pages/master-data.jsx');
-  assert.match(source, /销售订单审批只代表业务授权，不等于已经出货/);
+  // V1.6 P2: the sales-order permanent list-page 流程说明 paragraph has been
+  // removed; the semantic separation between approval and fulfillment is now
+  // preserved through data presentation (the APPROVED fulfillment context).
+  assert.doesNotMatch(source, /销售订单审批只代表业务授权，不等于已经出货/);
+  assert.match(source, /v16-sales-order-fulfillment/);
+  assert.match(source, /function orderFulfillmentLabel/);
+  assert.match(source, /'待出货'/);
+  assert.match(source, /已关联 \$\{count\} 张出货单/);
+  // Purchase-orders permanent copy still expresses the same boundary.
   assert.match(source, /采购订单审批只代表业务授权，采购入库和供应商账单继续独立处理/);
-  assert.match(source, /className="sales-orders-v15"/);
+  assert.match(source, /className="sales-orders-v15/);
   assert.match(source, /className="purchase-orders-v15"/);
 });
 

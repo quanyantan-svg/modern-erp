@@ -328,6 +328,34 @@ const ORDER_STATUS_OPTIONS = [
   { value: 'REJECTED', label: '已驳回' },
 ];
 
+function orderStatusPresentation(status) {
+  if (status === 'DRAFT') return { label: '草稿', tone: 'draft' };
+  if (status === 'SUBMITTED') return { label: '待审批', tone: 'submitted' };
+  if (status === 'APPROVED') return { label: '已审批', tone: 'approved' };
+  if (status === 'REJECTED') return { label: '已驳回', tone: 'rejected' };
+  return { label: '—', tone: 'draft' };
+}
+
+function orderDeliveryDateLabel(value) {
+  if (!value) return '交期待填写';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '交期待填写';
+  const part = (n) => String(n).padStart(2, '0');
+  return `交期 ${part(date.getMonth() + 1)}-${part(date.getDate())}`;
+}
+
+function orderItemCountLabel(count) {
+  const n = Number(count) || 0;
+  return `${n} 项`;
+}
+
+function orderFulfillmentLabel(order) {
+  if (order.status !== 'APPROVED') return null;
+  const count = Number(order.deliveryCount) || 0;
+  if (count > 0) return `已关联 ${count} 张出货单`;
+  return '待出货';
+}
+
 function orderStageText(order, kind) {
   const isSales = kind === 'sales';
   const fulfillmentCount = Number(
@@ -367,12 +395,12 @@ export function Orders({ user, notify }) {
   );
   const [listState, setListState] = useState('LOADING');
 
-  async function load() {
+  async function load(nextSearch = search, nextStatus = status) {
     setListState('LOADING');
 
     try {
       const result = await api(
-        `/api/orders?search=${encodeURIComponent(search)}&status=${encodeURIComponent(status)}`,
+        `/api/orders?search=${encodeURIComponent(nextSearch)}&status=${encodeURIComponent(nextStatus)}`,
       );
 
       const next = result.orders || [];
@@ -380,7 +408,7 @@ export function Orders({ user, notify }) {
 
       if (next.length) {
         setListState('READY');
-      } else if (search || status) {
+      } else if (nextSearch || nextStatus) {
         setListState('NO_RESULTS');
       } else {
         setListState('EMPTY');
@@ -391,8 +419,14 @@ export function Orders({ user, notify }) {
     }
   }
 
+  function clearFilters() {
+    setSearch('');
+    setStatus('');
+    void load('', '');
+  }
+
   useEffect(() => {
-    void load();
+    void load(search, status);
     // status change intentionally reloads the current search scope.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
@@ -440,40 +474,28 @@ export function Orders({ user, notify }) {
   }
 
   return (
-    <BusinessPageShell className="sales-orders-v15" width="rail">
-      <BusinessPageHeader
-        title="销售订单"
-        primaryAction={
-          can(user, 'ORDERS_CREATE') && (
-            <BusinessAction
-              hierarchy="primary"
-              onClick={() => setEditing({})}
-            >
-              新建销售订单
-            </BusinessAction>
-          )
-        }
-        help={
-          <HelpDisclosure summary="流程说明">
-            <p>
-              销售订单审批只代表业务授权，不等于已经出货。
-              审批完成后，实际履约继续通过销售出货处理。
-            </p>
-          </HelpDisclosure>
-        }
-      />
-
-      <section
-        className="order-list-toolbar"
-        aria-label="销售订单筛选"
-      >
+    <BusinessPageShell className="sales-orders-v15 v16-sales-orders" width="rail">
+      <section className="v16-sales-order-command" aria-label="销售订单操作">
         <SearchField
           value={search}
           onChange={setSearch}
-          onSubmit={load}
+          onSubmit={() => load(search, status)}
           placeholder="搜索订单号或客户"
         />
+        {can(user, 'ORDERS_CREATE') && (
+          <button
+            type="button"
+            className="v16-sales-order-new"
+            onClick={() => setEditing({})}
+            aria-label="新建销售订单"
+            data-testid="sales-order-new"
+          >
+            新建
+          </button>
+        )}
+      </section>
 
+      <section className="v16-sales-order-segments" aria-label="状态筛选">
         <SegmentedControl
           label="订单状态"
           value={status}
@@ -483,126 +505,65 @@ export function Orders({ user, notify }) {
       </section>
 
       {listState === 'LOADING' && (
-        <BusinessState
-          kind="LOADING"
-          title="正在加载销售订单"
-        />
+        <div className="v16-sales-order-list-state" role="status" aria-live="polite">
+          <span className="v16-sales-order-list-state__title">加载中</span>
+        </div>
       )}
 
       {listState === 'ERROR' && (
-        <BusinessState
-          kind="ERROR"
-          title="销售订单加载失败"
-          description="请检查连接后重试。"
-          retry={load}
-        />
+        <div className="v16-sales-order-list-state" role="alert">
+          <span className="v16-sales-order-list-state__title">加载失败</span>
+          <button
+            type="button"
+            className="v16-sales-order-list-state__action"
+            onClick={() => load(search, status)}
+          >
+            重试
+          </button>
+        </div>
       )}
 
       {listState === 'EMPTY' && (
-        <BusinessState
-          kind="EMPTY"
-          title="还没有销售订单"
-          description="创建销售订单后，可以提交业务审批并安排后续出货。"
-          action={
-            can(user, 'ORDERS_CREATE') && (
-              <BusinessAction
-                hierarchy="primary"
-                onClick={() => setEditing({})}
-              >
-                新建销售订单
-              </BusinessAction>
-            )
-          }
-        />
+        <div className="v16-sales-order-list-state">
+          <span className="v16-sales-order-list-state__title">暂无销售订单</span>
+          {can(user, 'ORDERS_CREATE') && (
+            <button
+              type="button"
+              className="v16-sales-order-list-state__action v16-sales-order-list-state__action--primary"
+              onClick={() => setEditing({})}
+            >
+              新建销售订单
+            </button>
+          )}
+        </div>
       )}
 
       {listState === 'NO_RESULTS' && (
-        <BusinessState
-          kind="NO_RESULTS"
-          title="没有符合条件的销售订单"
-          description="可以调整搜索内容或订单状态。"
-        />
+        <div className="v16-sales-order-list-state">
+          <span className="v16-sales-order-list-state__title">没有匹配结果</span>
+          <button
+            type="button"
+            className="v16-sales-order-list-state__action"
+            onClick={clearFilters}
+          >
+            清除筛选
+          </button>
+        </div>
       )}
 
       {listState === 'READY' && (
-        <CompactRecordList className="order-record-list">
+        <ul className="v16-sales-order-list" role="list">
           {orders.map((order) => (
-            <CompactRecord
+            <SalesOrderListRow
               key={order.id}
-              title={order.orderNo}
-              subtitle={order.customerName}
-              status={
-                <StatusChip status={order.status}>
-                  {order.status === 'SUBMITTED'
-                    ? '待审批'
-                    : order.statusLabel}
-                </StatusChip>
-              }
-              metadata={[
-                {
-                  label: '当前阶段',
-                  value: orderStageText(order, 'sales'),
-                },
-                {
-                  label: '制单信息',
-                  value: (
-                    <>
-                      {order.creatorName || '—'}
-                      <span> · {dateTime(order.createdAt)}</span>
-                    </>
-                  ),
-                },
-              ]}
-              metrics={[
-                {
-                  label: '订单金额',
-                  value: money(order.totalCents),
-                },
-                {
-                  label: '货品明细',
-                  value: `${order.itemCount || 0} 项`,
-                },
-                {
-                  label: '销售出货',
-                  value: order.deliveryCount
-                    ? `${order.deliveryCount} 张`
-                    : '尚未出货',
-                },
-              ]}
+              order={order}
+              user={user}
               onOpen={() => setViewing({ id: order.id })}
-              action={
-                <CanonicalActionMenu label={`销售订单 ${order.orderNo} 的更多操作`}>
-                  <button
-                    type="button"
-                    onClick={() => setViewing({ id: order.id })}
-                  >
-                    查看详情
-                  </button>
-
-                  {can(user, 'ORDERS_CREATE') &&
-                    ['DRAFT', 'REJECTED'].includes(order.status) && (
-                      <button
-                        type="button"
-                        onClick={() => setEditing(order)}
-                      >
-                        编辑草稿
-                      </button>
-                    )}
-
-                  {can(user, 'ORDERS_CREATE') &&
-                    order.status === 'DRAFT' && (
-                      <ConfirmDelete
-                        label="销售订单"
-                        buttonLabel="删除草稿"
-                        message={`确定删除销售订单“${order.orderNo}”吗？未提交草稿删除后无法恢复。`}
-                        onConfirm={() => deleteOrder(order)}
-                      />
-                    )}
-                </CanonicalActionMenu>
-              }
+              onEdit={(row) => setEditing(row)}
+              onDelete={deleteOrder}
             />
           ))}
-        </CompactRecordList>
+        </ul>
       )}
 
       {editing && (
@@ -618,6 +579,67 @@ export function Orders({ user, notify }) {
         />
       )}
     </BusinessPageShell>
+  );
+}
+
+function SalesOrderListRow({ order, user, onOpen, onEdit, onDelete }) {
+  const presentation = orderStatusPresentation(order.status);
+  const fulfillment = orderFulfillmentLabel(order);
+  const rejection = order.status === 'REJECTED' ? order.rejectionReason : null;
+  const meta = `${orderDeliveryDateLabel(order.requestedDeliveryDate)} · ${money(order.totalCents)} · ${orderItemCountLabel(order.itemCount)}`;
+  const canCreate = can(user, 'ORDERS_CREATE');
+  const canEditDraft = canCreate && (order.status === 'DRAFT' || order.status === 'REJECTED');
+  const canDeleteDraft = canCreate && order.status === 'DRAFT';
+  return (
+    <li className="v16-sales-order-row" data-testid={`sales-order-row-${order.id}`}>
+      <button
+        type="button"
+        className="v16-sales-order-row__open"
+        onClick={onOpen}
+        aria-label={`查看销售订单 ${order.orderNo}`}
+      >
+        <span className="v16-sales-order-row__primary">
+          <span className="v16-sales-order-row__number">{order.orderNo}</span>
+          <span
+            className={`v16-sales-order-status v16-sales-order-status--${presentation.tone}`}
+            data-status={order.status}
+          >
+            {presentation.label}
+          </span>
+        </span>
+        <span className="v16-sales-order-row__secondary">{order.customerName || '—'}</span>
+        <span className="v16-sales-order-row__meta">{meta}</span>
+        {fulfillment && (
+          <span className="v16-sales-order-row__context v16-sales-order-fulfillment">
+            {fulfillment}
+          </span>
+        )}
+        {rejection && (
+          <span
+            className="v16-sales-order-row__context v16-sales-order-rejection"
+            title={rejection}
+          >
+            驳回：{rejection}
+          </span>
+        )}
+      </button>
+      <div className="v16-sales-order-row__overflow">
+        <CanonicalActionMenu label={`销售订单 ${order.orderNo} 的更多操作`}>
+          <button type="button" onClick={onOpen}>查看详情</button>
+          {canEditDraft && (
+            <button type="button" onClick={() => onEdit(order)}>编辑草稿</button>
+          )}
+          {canDeleteDraft && (
+            <ConfirmDelete
+              label="销售订单"
+              buttonLabel="删除草稿"
+              message={`确定删除销售订单“${order.orderNo}”吗？未提交草稿删除后无法恢复。`}
+              onConfirm={() => onDelete(order)}
+            />
+          )}
+        </CanonicalActionMenu>
+      </div>
+    </li>
   );
 }
 
