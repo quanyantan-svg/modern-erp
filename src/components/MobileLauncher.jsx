@@ -21,13 +21,14 @@ import {
 // The launcher itself owns no selection state. It is a presentational
 // shell over the items passed in.
 
-function ApplicationTile({ item, icons, onItemSelect }) {
+function ApplicationTile({ item, icons, module = 'brand', onItemSelect }) {
   const icon = icons[item.iconKey] || <Icon name="apps" size={22}/>;
   const key = item.key || item.page;
   return (
     <button
       type="button"
       data-page={item.page}
+      data-module={module}
       data-testid={`v16-launcher-tile-${key}`}
       className="v16-launcher-tile"
       aria-label={`打开${item.label}`}
@@ -39,13 +40,13 @@ function ApplicationTile({ item, icons, onItemSelect }) {
   );
 }
 
-function ApplicationGrid({ items, icons, onItemSelect }) {
+function ApplicationGrid({ items, icons, module, onItemSelect }) {
   if (!items.length) return null;
   return (
     <div className="v16-launcher-grid" role="list">
       {items.map((item) => (
         <div role="listitem" key={item.key || item.page}>
-          <ApplicationTile item={item} icons={icons} onItemSelect={onItemSelect} />
+          <ApplicationTile item={item} icons={icons} module={module} onItemSelect={onItemSelect} />
         </div>
       ))}
     </div>
@@ -61,7 +62,6 @@ function UtilityDisclosure({ group, icons, onItemSelect }) {
     >
       <summary>
         <span>{group.label}</span>
-        <span className="v16-utility__count">{group.items.length}</span>
       </summary>
       <div className="v16-utility__list">
         {group.items.map((item) => {
@@ -129,7 +129,7 @@ export default function MobileLauncher({
         {common.length > 0 && (
           <section className="v16-section v16-launcher-common" aria-label="常用">
             <div className="v16-section-title">常用</div>
-            <ApplicationGrid items={common} icons={icons} onItemSelect={onItemSelect} />
+            <ApplicationGrid items={common} icons={icons} module="brand" onItemSelect={onItemSelect} />
           </section>
         )}
 
@@ -138,10 +138,11 @@ export default function MobileLauncher({
             key={group.key}
             className="v16-section v16-launcher-group"
             aria-label={group.label}
+            data-module={group.module}
             data-testid={`v16-launcher-group-${group.key}`}
           >
             <div className="v16-section-title">{group.label}</div>
-            <ApplicationGrid items={group.items} icons={icons} onItemSelect={onItemSelect} />
+            <ApplicationGrid items={group.items} icons={icons} module={group.module} onItemSelect={onItemSelect} />
           </section>
         ))}
 

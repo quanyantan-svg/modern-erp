@@ -21,11 +21,9 @@ describe('V1.2 premium visual polish round 3', () => {
     assert.match(v16Css, /\.v16-launcher-tile__label\s*\{[^}]*line-height:\s*1\.35/s);
   });
 
-  test('V1.6 launcher tile icons use a soft accent background consistently', () => {
-    assert.match(v16Css, /\.v16-launcher-tile__icon\s*\{[^}]*background:\s*var\(--v16-accent-soft\)/s);
-    // V1.6 removed the "category leader tint" asymmetry; every tile uses
-    // the same soft accent background.
-    assert.match(v16Css, /\.v16-quick-action__icon\s*\{[^}]*background:\s*var\(--v16-accent-soft\)/s);
+  test('V1.6 launcher and workspace icons share the restrained module-tonal primitive', () => {
+    assert.match(v16Css, /\.v16-launcher-tile__icon\s*\{[^}]*background:\s*var\(--v16-module-gradient,[^}]*color:\s*var\(--v16-module-foreground,/s);
+    assert.match(v16Css, /\.v16-quick-action__icon\s*\{[^}]*background:\s*var\(--v16-module-gradient,[^}]*color:\s*var\(--v16-module-foreground,/s);
   });
 
   test('application root has its own compact header treatment and no forced back affordance', () => {

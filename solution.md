@@ -2142,3 +2142,16 @@ P0/P1 表面通常无装饰性渐变、无玻璃效果、无大型营销阴影�
 - `server/mobile-shell.test.js`（按新合同更新）
 - `server/mobile-application-launcher.test.js`（按新合同更新）
 - `log/2026-09-30.md`（追加阶段审计）
+
+### 24.17 V1.6 P1.1 视觉精修设计
+
+P1.1 在既有 P0+P1 组件与数据流上做局部展示层收口，不建立新导航或共享抽象层。
+
+1. `v16-tokens.css` 增加品牌及六个模块色 token；`v16-mobile-enterprise.css` 为每个模块定义预计算 RGBA 的 145deg 低透明度图标渐变、边框和分区标记。状态 chip 继续只读取既有 `accent/success/warning/danger` 语义 token，模块 token 不进入状态选择器。
+2. `applicationMetadata.js` 保留正式路由与 `reportKey`，仅把五张决策报表的 `mobileLabel` 改为启动器短标签；业务组对象携带稳定模块 key，组件不根据标签猜测颜色。
+3. `MobileLauncher` 把模块 key 作为 `data-module` 传给分区与图块；常用图块显式使用 `brand`，工具行移除可见数量但不改变 `details/summary`、子项或键盘行为。
+4. 应用页分区不增加卡片：核心组使用 22–24px 节奏、15px/600 标题和 3px 模块标记；三列图块保持 82–88px、40px 图标盒、13px 标签以及可见 focus。
+5. `Dashboard` 的待处理行使用单层横向布局（标题 / 数量 / chevron）；最近业务使用无外框的紧凑行并保留单号、客户、金额和 canonical 状态文案；常用操作携带显式模块 key，复用与启动器一致的图标盒和三列网格。
+6. 数据流、权限与事务边界不变：Dashboard 继续只读取现有 `/api/dashboard`，待处理仍由可信 `pendingCount` 与审批能力门控，最近业务仍最多 4 项，快捷操作仍由 `can(...)` 与 `navigation.canNavigate(...)` 共同过滤并最多 6 项。本阶段无后端事务或错误协议变化。
+7. 新增 P1.1 focused contract，覆盖六组结构、短标签与正式 target/reportKey、工具计数消失、模块 token/映射、工作台企业行与三列快捷入口、五项底部导航；同时运行既有 P1 套件保证结构未回退。
+8. 浏览器验收在 320 / 390 / 430 / 680px 对应用和工作台各截图一次，断言无水平溢出、底部导航碰撞、标签裁切或运行时错误；证据写入 `.tmp/v16-p11-visual/`。通过 focused、全量回归、构建与 `git diff --check` 后 exact-file stage，提交后停止，不进入 P2。

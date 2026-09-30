@@ -74,20 +74,20 @@ export function Dashboard({ user, notify, mobileWorkspace = false }) {
 
   // Capability-driven quick actions. Order matters; we keep at most six.
   const quickActionCandidates = [
-    { page: 'orders', label: '销售订单', icon: 'orders', capabilities: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
-    { page: 'customers', label: '客户资料', icon: 'customers', capabilities: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
-    { page: 'sales-deliveries', label: '销售出货', icon: 'salesDeliveries', capabilities: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
-    { page: 'approvals', label: '业务审批', icon: 'approvals', capabilities: ['ORDERS_APPROVE', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_REQUISITION_APPROVE', 'INVENTORY_CHECK_APPROVE', 'VOUCHER_APPROVE'] },
-    { page: 'business-overview', label: '业务流程', icon: 'overview', capabilities: ['DASHBOARD_VIEW'] },
-    { page: 'purchase-receipts', label: '采购入库', icon: 'purchaseReceipts', capabilities: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
-    { page: 'inventory', label: '库存作业', icon: 'inventory', capabilities: ['INVENTORY_VIEW'] },
-    { page: 'accounts-receivable', label: '应收结算', icon: 'accountsReceivable', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
-    { page: 'accounts-payable', label: '应付结算', icon: 'accountsPayable', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
-    { page: 'accounting', label: '会计凭证', icon: 'accounting', capabilities: ['ACCOUNTING_VIEW'] },
-    { page: 'payment-collections', label: '收款 / 核销', icon: 'paymentCollections', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
-    { page: 'payment-disbursements', label: '付款 / 核销', icon: 'paymentDisbursements', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
-    { page: 'users', label: '用户与权限', icon: 'users', capabilities: ['USERS_MANAGE', 'ROLES_MANAGE'] },
-    { page: 'bank-accounts', label: '银行账户', icon: 'bankAccounts', capabilities: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
+    { page: 'orders', label: '销售订单', icon: 'orders', module: 'sales', capabilities: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
+    { page: 'customers', label: '客户资料', icon: 'customers', module: 'master', capabilities: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
+    { page: 'sales-deliveries', label: '销售出货', icon: 'salesDeliveries', module: 'sales', capabilities: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+    { page: 'approvals', label: '业务审批', icon: 'approvals', module: 'brand', capabilities: ['ORDERS_APPROVE', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_REQUISITION_APPROVE', 'INVENTORY_CHECK_APPROVE', 'VOUCHER_APPROVE'] },
+    { page: 'business-overview', label: '业务流程', icon: 'overview', module: 'brand', capabilities: ['DASHBOARD_VIEW'] },
+    { page: 'purchase-receipts', label: '采购入库', icon: 'purchaseReceipts', module: 'purchasing', capabilities: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+    { page: 'inventory', label: '库存作业', icon: 'inventory', module: 'inventory', capabilities: ['INVENTORY_VIEW'] },
+    { page: 'accounts-receivable', label: '应收结算', icon: 'accountsReceivable', module: 'sales', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { page: 'accounts-payable', label: '应付结算', icon: 'accountsPayable', module: 'purchasing', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { page: 'accounting', label: '会计凭证', icon: 'accounting', module: 'brand', capabilities: ['ACCOUNTING_VIEW'] },
+    { page: 'payment-collections', label: '收款 / 核销', icon: 'paymentCollections', module: 'sales', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { page: 'payment-disbursements', label: '付款 / 核销', icon: 'paymentDisbursements', module: 'purchasing', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { page: 'users', label: '用户与权限', icon: 'users', module: 'master', capabilities: ['USERS_MANAGE', 'ROLES_MANAGE'] },
+    { page: 'bank-accounts', label: '银行账户', icon: 'bankAccounts', module: 'brand', capabilities: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
   ];
   const quickActions = quickActionCandidates
     .filter((action) => action.capabilities.some((code) => can(user, code)))
@@ -104,6 +104,7 @@ export function Dashboard({ user, notify, mobileWorkspace = false }) {
         <div className="v16-page v16-workspace">
           {showPending && (
             <section className="v16-workspace__section" aria-label="待处理">
+              <div className="v16-workspace__section-title">待处理</div>
               <button
                 type="button"
                 className="v16-task-row"
@@ -111,11 +112,11 @@ export function Dashboard({ user, notify, mobileWorkspace = false }) {
                 onClick={() => navigation.navigateToPage('approvals')}
                 aria-label={`待我审批 ${pendingCount} 项`}
               >
-                <span className="v16-task-row__main">
-                  <span className="v16-task-row__title">待我审批</span>
+                <span className="v16-task-row__title">待我审批</span>
+                <span className="v16-task-row__aside">
                   <span className="v16-task-row__meta">{pendingCount} 项</span>
+                  <span className="v16-task-row__chevron" aria-hidden="true">›</span>
                 </span>
-                <span className="v16-task-row__chevron" aria-hidden="true">›</span>
               </button>
             </section>
           )}
@@ -133,14 +134,17 @@ export function Dashboard({ user, notify, mobileWorkspace = false }) {
                     onClick={() => navigation.navigateToPage('orders', { documentId: order.id })}
                     aria-label={`查看订单 ${order.orderNo || ''}`}
                   >
-                    <span className="v16-record__primary">
-                      <span>{order.orderNo || '—'}</span>
-                      <span className="v16-status-pill">{order.statusLabel || order.status || '—'}</span>
+                    <span className="v16-record__content">
+                      <span className="v16-record__primary">
+                        <span>{order.orderNo || '—'}</span>
+                        <span className="v16-status-pill">{order.statusLabel || order.status || '—'}</span>
+                      </span>
+                      <span className="v16-record__secondary">
+                        <span>{order.customerName || '—'}</span>
+                        <span className="v16-record__amount">{money(order.totalCents || 0)}</span>
+                      </span>
                     </span>
-                    <span className="v16-record__secondary">
-                      <span>{order.customerName || '—'}</span>
-                      <span className="v16-record__amount">{money(order.totalCents || 0)}</span>
-                    </span>
+                    <span className="v16-record__chevron" aria-hidden="true">›</span>
                   </button>
                 ))}
               </div>
@@ -156,6 +160,7 @@ export function Dashboard({ user, notify, mobileWorkspace = false }) {
                     type="button"
                     key={action.page}
                     className="v16-quick-action"
+                    data-module={action.module}
                     data-testid={`dashboard-quick-${action.page}`}
                     aria-label={`打开${action.label}`}
                     onClick={() => navigation.navigateToPage(action.page)}

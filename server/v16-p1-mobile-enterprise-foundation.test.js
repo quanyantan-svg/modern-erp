@@ -330,9 +330,8 @@ describe('P0 — V1.6 style isolation', () => {
     }
   });
 
-  test('V1.6 style files do not use heavy marketing gradient/glass keywords', () => {
+  test('V1.6 style files do not use glass blur', () => {
     const css = readFileSync(join(stylesDir, 'v16-mobile-enterprise.css'), 'utf8');
-    assert.doesNotMatch(css, /linear-gradient\(/i);
     assert.doesNotMatch(css, /backdrop-filter\s*:\s*blur/i);
   });
 

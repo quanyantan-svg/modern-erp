@@ -17,6 +17,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'master-data',
     label: '基础资料',
     kind: 'domain',
+    module: 'master',
     items: [
       ['products', '货品资料', 'products'],
       ['boms', 'BOM', 'boms'],
@@ -30,6 +31,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'sales',
     label: '销售管理',
     kind: 'domain',
+    module: 'sales',
     items: [
       ['orders', '销售订单', 'orders'],
       ['sales-deliveries', '销售出货', 'salesDeliveries'],
@@ -42,6 +44,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'production',
     label: '生产管理',
     kind: 'domain',
+    module: 'production',
     items: [
       ['forecasts', '计划预测', 'forecasts'],
       ['mrp-runs', 'MRP', 'mrpRuns'],
@@ -55,6 +58,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'purchasing',
     label: '采购管理',
     kind: 'domain',
+    module: 'purchasing',
     items: [
       ['purchase-instructions', '采购指令', 'planningDocuments'],
       ['purchase-requisitions', '请购单', 'planningDocuments'],
@@ -69,6 +73,7 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'inventory',
     label: '库存管理',
     kind: 'domain',
+    module: 'inventory',
     items: [
       ['inventory', '库存作业', 'inventory'],
       ['inventory-scraps', '存货报废', 'inventoryScrap'],
@@ -81,12 +86,13 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
     key: 'analytics',
     label: '决策报表',
     kind: 'domain',
+    module: 'analytics',
     items: [
-      ['decision-reports', '销售统计分析表', 'reports', null, null, 'sales-summary'],
-      ['decision-reports', '销售未出货反应表', 'reports', null, null, 'sales-outstanding'],
-      ['decision-reports', '采购统计分析表', 'reports', null, null, 'purchase-summary'],
-      ['decision-reports', '采购未交货反应表', 'reports', null, null, 'purchase-outstanding'],
-      ['decision-reports', '存货异动明细表', 'reports', null, null, 'inventory-movements'],
+      ['decision-reports', '销售统计', 'reports', null, null, 'sales-summary', '销售统计分析表'],
+      ['decision-reports', '销售未出货', 'reports', null, null, 'sales-outstanding', '销售未出货反应表'],
+      ['decision-reports', '采购统计', 'reports', null, null, 'purchase-summary', '采购统计分析表'],
+      ['decision-reports', '采购未交货', 'reports', null, null, 'purchase-outstanding', '采购未交货反应表'],
+      ['decision-reports', '库存异动', 'reports', null, null, 'inventory-movements', '存货异动明细表'],
     ],
   },
   // Utility disclosures — collapsed at the bottom of the launcher.
@@ -146,13 +152,14 @@ export const MOBILE_APPLICATION_GROUPS = Object.freeze([
   },
 ].map((group) => Object.freeze({
   ...group,
-  items: Object.freeze(group.items.map(([page, mobileLabel, iconKey, key = null, target = null, reportKey = null]) => Object.freeze({
+  items: Object.freeze(group.items.map(([page, mobileLabel, iconKey, key = null, target = null, reportKey = null, formalLabel = null]) => Object.freeze({
     page,
     mobileLabel,
     iconKey,
     key: key || (reportKey ? `${page}:${reportKey}` : page),
     target,
     reportKey,
+    formalLabel,
   }))),
 })));
 
@@ -177,6 +184,7 @@ export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
     key: group.key,
     label: group.label,
     kind: group.kind,
+    module: group.module || null,
     items: group.items.flatMap((metadata) => {
       const navigationItem = authorizedByPage.get(metadata.page);
       if (!navigationItem || !isItemVisible(metadata)) return [];
@@ -188,6 +196,7 @@ export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
         iconKey: metadata.iconKey,
         key: metadata.key,
         reportKey: metadata.reportKey || null,
+        formalLabel: metadata.formalLabel || navigationItem.label,
         target: metadata.target || null,
       }];
     }),

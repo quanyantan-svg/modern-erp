@@ -29,9 +29,18 @@
   --v16-text-tertiary: #8A919D;
 
   /* Brand */
+  --v16-brand: #1769E0;
   --v16-accent: #1769E0;
   --v16-accent-soft: rgba(23, 105, 224, 0.08);
   --v16-accent-soft-strong: rgba(23, 105, 224, 0.16);
+
+  /* Module identity (never used as business-status semantics) */
+  --v16-module-master: #64748B;
+  --v16-module-sales: #1769E0;
+  --v16-module-production: #0F9F95;
+  --v16-module-purchasing: #5865D8;
+  --v16-module-inventory: #168AAD;
+  --v16-module-analytics: #7656D6;
 
   /* Semantic */
   --v16-success: #2FA84F;
