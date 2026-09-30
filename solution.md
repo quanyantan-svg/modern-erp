@@ -2155,3 +2155,243 @@ P1.1 在既有 P0+P1 组件与数据流上做局部展示层收口，不建立�
 6. 数据流、权限与事务边界不变：Dashboard 继续只读取现有 `/api/dashboard`，待处理仍由可信 `pendingCount` 与审批能力门控，最近业务仍最多 4 项，快捷操作仍由 `can(...)` 与 `navigation.canNavigate(...)` 共同过滤并最多 6 项。本阶段无后端事务或错误协议变化。
 7. 新增 P1.1 focused contract，覆盖六组结构、短标签与正式 target/reportKey、工具计数消失、模块 token/映射、工作台企业行与三列快捷入口、五项底部导航；同时运行既有 P1 套件保证结构未回退。
 8. 浏览器验收在 320 / 390 / 430 / 680px 对应用和工作台各截图一次，断言无水平溢出、底部导航碰撞、标签裁切或运行时错误；证据写入 `.tmp/v16-p11-visual/`。通过 focused、全量回归、构建与 `git diff --check` 后 exact-file stage，提交后停止，不进入 P2。
+
+## 25. V1.6 P2 — Mobile Enterprise 销售订单列表原型设计
+
+本节是 `document.md §24` 已批准需求的 STAGE 2 — DESIGN，起点为 `18a27134a4b49571112c218664163470b605c862`。P0+P1+P1.1 视觉 DNA 已冻结，本节只设计 P2 销售订单 LIST MODE 的实现策略，不重写既有组件、不变更后端 / API / 数据库 / 业务合同。P3 详情 / 表单、P4–P8 其他原型不在本节范围。
+
+### 25.1 范围与不变量
+
+实现范围严格限定为 `src/pages/master-data.jsx` 中 `Orders` 组件的 LIST MODE 分支，以及一个全新的隔离样式文件 `src/styles/v16-sales-orders.css`。`Orders` 组件的 `viewing` / `editing` 渲染分支（含 `OrderDetail`、`OrderEditor`）在 P2 必须保持视觉与功能不变，由 P3 单独处理。
+
+复用的现有原子：
+
+- `SearchField`（`src/components/design-system.jsx`）作为搜索输入；
+- `SegmentedControl` 作为状态段；
+- `StatusChip` / canonical 状态呈现走 `v16-status-pill` 文本样式；
+- `CanonicalActionMenu`（即 `details/summary`）作为 overflow；
+- `ConfirmDelete`（`src/components/ui.jsx`）保留草稿删除语义与确认消息；
+- `BusinessAction` 仅在 EMPTY 主动作场景复用；
+- `OrderDetail` / `OrderEditor` 完全不修改。
+
+### 25.2 样式隔离策略
+
+1. 新增 `src/styles/v16-sales-orders.css`，作用域限定于 `.v16-mobile-enterprise .v16-sales-orders` 或 `v16-sales-order-*` 前缀；不得写入 `src/styles.css`。
+2. `src/main.jsx` 在既有 `import './styles/v16-mobile-enterprise.css'` 之后追加 `import './styles/v16-sales-orders.css'`；最终顺序为 `./styles.css` → `./styles/v16-tokens.css` → `./styles/v16-mobile-enterprise.css` → `./styles/v16-sales-orders.css`。
+3. 选择器示例：`v16-sales-order-list`、`v16-sales-order-command`、`v16-sales-order-row`、`v16-sales-order-row__primary`、`v16-sales-order-row__secondary`、`v16-sales-order-row__meta`、`v16-sales-order-row__context`、`v16-sales-order-row__reject`、`v16-sales-order-row__open`、`v16-sales-order-row__overflow`、`v16-sales-order-status`（状态 chip）、`v16-sales-order-fulfillment`（履约上下文）、`v16-sales-order-rejection`（驳回原因）。
+4. 不使用宽泛全局选择器；不重写既有 `styles.css`；不在 `v16-mobile-enterprise.css` 末尾追加 P2 块。
+
+### 25.3 页面解剖
+
+在 `MobileShell` 的 `<header className="mobile-header">` 已展示「销售订单」页面标题的前提下，`Orders` LIST MODE 渲染：
+
+```text
+<BusinessPageShell className="sales-orders-v15" width="rail">
+  <div className="v16-mobile-enterprise v16-sales-orders">
+    <section className="v16-sales-order-command" aria-label="销售订单操作">
+      <SearchField placeholder="搜索订单号或客户" />
+      {can(user, 'ORDERS_CREATE') && <button className="primary v16-sales-order-new">新建</button>}
+    </section>
+    <section className="v16-sales-order-segments" aria-label="状态筛选">
+      <SegmentedControl options={ORDER_STATUS_OPTIONS} value={status} onChange={setStatus} label="订单状态" />
+    </section>
+    {state branches — LOADING / EMPTY / NO_RESULTS / ERROR / READY}
+    {READY && (
+      <ul className="v16-sales-order-list" role="list">
+        {orders.map((order) => <SalesOrderListRow ... />)}
+      </ul>
+    )}
+  </div>
+</BusinessPageShell>
+```
+
+`MobileShell` 页面标题已固定为「销售订单」；LIST MODE 正文不再渲染任何页面级 `<h1>`，亦不保留 V1.5 永久 `<HelpDisclosure summary="流程说明">` 段落。语义信息继续通过数据呈现表达，但不再常驻列表页空间。
+
+### 25.4 组件策略
+
+P2 不创建泛用 list framework。在 `src/pages/master-data.jsx` 内新增小专用函数组件 `SalesOrderListRow`（或等价函数），封装单行视觉与无障碍；保留现有 `useState` / `useEffect` / `load` 流，但封装为可注入 `nextSearch` / `nextStatus` 的轻 helper，便于 NO_RESULTS 的「清除筛选」动作。
+
+不在全局 `design-system.jsx` 中添加新组件；不修改 `CompactRecord` / `CompactRecordList` / `BusinessPageHeader` 的现有实现以避免影响其它页面。
+
+### 25.5 SalesOrderListRow 内部结构
+
+`article` 容器内：
+
+```text
+<article className="v16-sales-order-row">
+  <button className="v16-sales-order-row__open" onClick={() => onOpen(order)} aria-label={`查看销售订单 ${order.orderNo}`}>
+    <div className="v16-sales-order-row__primary">
+      <span className="v16-sales-order-row__number">{order.orderNo}</span>
+      <span className="v16-sales-order-status v16-sales-order-status--{tone}">{presentStatusLabel(order.status)}</span>
+    </div>
+    <div className="v16-sales-order-row__secondary">{order.customerName}</div>
+    <div className="v16-sales-order-row__meta">
+      {deliveryCommitmentLabel(order)} · {money(order.totalCents)} · {itemCountLabel(order)}
+    </div>
+    {order.status === 'APPROVED' && (
+      <div className="v16-sales-order-row__context v16-sales-order-fulfillment">
+        {fulfillmentLabel(order)}
+      </div>
+    )}
+    {order.status === 'REJECTED' && order.rejectionReason && (
+      <div className="v16-sales-order-row__context v16-sales-order-rejection">
+        驳回：{order.rejectionReason}
+      </div>
+    )}
+  </button>
+  <div className="v16-sales-order-row__overflow">
+    <CanonicalActionMenu label={`销售订单 ${order.orderNo} 的更多操作`}>
+      <button type="button" onClick={() => onOpen(order)}>查看详情</button>
+      {can(user,'ORDERS_CREATE') && ['DRAFT','REJECTED'].includes(order.status) && (
+        <button type="button" onClick={() => onEdit(order)}>编辑草稿</button>
+      )}
+      {can(user,'ORDERS_CREATE') && order.status === 'DRAFT' && (
+        <ConfirmDelete label="销售订单" buttonLabel="删除草稿" message={...} onConfirm={...} />
+      )}
+    </CanonicalActionMenu>
+  </div>
+</article>
+```
+
+主打开区是 `<button>`（不是 `<div onClick>`）；overflow 内嵌 `CanonicalActionMenu`（`details/summary`）保持键盘可达；`ConfirmDelete` 复用现有确认消息合同保留「为单据『…』吗？未提交草稿删除后无法恢复。」语义。
+
+### 25.6 数据流与调用关系
+
+- LIST 加载：复用 `GET /api/orders?search=&status=`；不新增字段；不修改后端。
+- 状态切换：用户点击 `SegmentedControl` → `setStatus(value)` → 触发 `useEffect([status])` → 调用 `load()`。
+- 搜索：`SearchField` 保留现有 `onSubmit` 触发 `load()`；不实施 search-as-you-type 网络请求。
+- 加载 helper：`load(nextSearch = search, nextStatus = status)` 允许 `NO_RESULTS → 清除筛选` 直接调用 `load('', '')` 重新拉取。
+- 进入详情：`onOpen(order)` 触发 `setViewing({ id: order.id })`，LIST MODE 整体被 `OrderDetail` 替换；`onBack` 调用既有 `setViewing(null)` 与 `void load()`。
+- 进入编辑：`onEdit(order)` 触发 `setEditing(order)`；LIST MODE 不直接挂载 `OrderEditor`，由上层结构挂载；行为与既有相同。
+
+### 25.7 状态 / 履约 / 驳回 / 交期 / 项数映射
+
+| 来源 | 行内展示 |
+|---|---|
+| `order.status` = `DRAFT` | `草稿` |
+| `order.status` = `SUBMITTED` | `待审批` |
+| `order.status` = `APPROVED` | `已审批` |
+| `order.status` = `REJECTED` | `已驳回` |
+| `order.deliveryCount === 0 && status === 'APPROVED'` | `待出货` |
+| `order.deliveryCount > 0 && status === 'APPROVED'` | `已关联 N 张出货单` |
+| `order.rejectionReason && status === 'REJECTED'` | `驳回：<reason>`（单行省略） |
+| `order.requestedDeliveryDate` 存在 | `交期 MM-DD` |
+| `order.requestedDeliveryDate` 缺失 | `交期待填写` |
+| `order.itemCount` | `N 项` |
+| `order.totalCents` | `¥X,XXX.XX`（`money`） |
+
+履约上下文必须基于 `deliveryCount` 严格映射；不得从 `deliveryCount > 0` 推断 `已完成 / 已全部出货 / 部分出货`；上述表达出现在源码即视为合同违反。
+
+### 25.8 列表行严格排除
+
+P2 正常列表行内不得出现以下任意字段：
+
+- `creatorName` / `reviewerName`；
+- `createdAt` / `updatedAt` / `submittedAt` / `reviewedAt`；
+- `customerCode` / 联系方式 / 地址；
+- 履约推断字段：`部分出货`、`已完成`、`已全部出货`。
+
+`orderStageText()` 仍是 P3 / 详情可复用函数，但 P2 列表行内不使用其原文，避免 `orderStageText` 把 `已审批，等待销售出货` / `已关联 N 张出货单` 等长文塞入列表首屏。
+
+### 25.9 列表状态文案
+
+- LOADING：`加载中`；
+- EMPTY：`暂无销售订单`；`ORDERS_CREATE` 时显示 `新建销售订单` 主动作；
+- NO_RESULTS：`没有匹配结果`；显示 `清除筛选` 动作，调用 `setSearch('')` + `setStatus('')` + `load('', '')`；
+- ERROR：`加载失败`；显示 `重试` 动作；
+- EMPTY 与 NO_RESULTS 文案必须独立；不得互相替换。
+
+### 25.10 长文本安全与可访问性
+
+- 订单号：`white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%`；
+- 客户名：单行省略；
+- 金额：`white-space: nowrap`；
+- 状态：固定在主识别行右侧，使用 `flex-shrink: 0`；订单号 `flex: 1 1 auto; min-width: 0`；
+- overflow：触点 ≥ 44 × 44 px；
+- 雪佛龙 / 主动作：永不出视口；
+- 顶部 / 段间 overflow 不可强行 `overflow-x: hidden`，但允许列表容器自身在五段式段容器内做局部限宽；
+- 行主打开区 `button`，`:focus-visible` 可见；
+- 状态段 `aria-pressed` 语义按现有 `SegmentedControl` 保持；
+- 搜索框 role / label 保留；
+- overflow `aria-label` 必须含订单号。
+
+### 25.11 模块色与状态色分离
+
+- 行背景：透明或沿用 `--v16-bg` / `--v16-surface`，禁止使用销售模块色作为行卡片背景；
+- 新建按钮：品牌 / 销售蓝；
+- 履约上下文：`--v16-module-sales` 文字 / 标记；
+- 状态 chip：保留既有 `--v16-success` / `--v16-warning` / `--v16-danger` / `--v16-text-tertiary` 等语义色；
+- 驳回原因：`--v16-danger` 文字克制；
+- 不得为状态段使用销售模块色；
+- 销售模块色与状态色严格分离。
+
+### 25.12 事务、权限与错误行为
+
+1. 本阶段不引入任何后端事务、API 变更、数据库 schema、迁移或权限变更；
+2. 列表加载通过 `api('/api/orders?...')` 走既有 `/api/orders` 路由，不新增 endpoint；
+3. 删除草稿走既有 `DELETE /api/orders/:id` 路由，错误仍由 `notify(error.message, 'error')` 反馈；
+4. 错误态保持 `LOADING / EMPTY / NO_RESULTS / ERROR` 四态分离，不合并；
+5. 任意 `try/catch` 不得静默吞掉错误。
+
+### 25.13 浏览器验收
+
+新增 `scripts/acceptance/v16-p2-sales-order-list.mjs`，输出 `.tmp/v16-p2-visual/`：
+
+- `sales-orders-320.png` / `sales-orders-390.png` / `sales-orders-430.png` / `sales-orders-680.png` 视口截图（viewport 844 高）；
+- `sales-orders-longtext-390.png` 含超长订单号 / 客户 / 金额 / 项数 / 驳回原因；
+- `sales-orders-empty-390.png` EMPTY 状态截图。
+
+主视口截图 `sales-orders-390.png` 与 `sales-orders-longtext-390.png` 用于运营方视觉评审。
+
+主视口截图不预先变更底部导航定位以避免误导视觉验收；若需要全页截图证据，应在不破坏正常视口截图的前提下额外补一次。
+
+### 25.14 Focused 源码合同测试
+
+新增 `server/v16-p2-sales-order-list.test.js`，使用 Node `node:test` + `node:fs`，以源码字面 + 正则断言覆盖以下 15 项：
+
+1. `Orders` LIST MODE 不再 import / 渲染 `CompactRecord` / `CompactRecordList`；
+2. LIST MODE 不再渲染 `BusinessPageHeader` `title="销售订单"`；
+3. LIST MODE 不再渲染永久 `<HelpDisclosure summary="流程说明">` 段落与 `销售订单审批只代表业务授权，不等于已经出货。` 文本；
+4. 状态过滤标签严格为 `全部 / 草稿 / 待审批 / 已审批 / 已驳回`；
+5. 列表 filter 中不存在 `待出货 / 部分出货 / 已出货 / 已完成` 字符串；
+6. 行内交期展示基于 `requestedDeliveryDate`；
+7. `createdAt` 不被用作交期回退；行内不出现 `交期` + `createdAt` 共生字面；
+8. 行内容包含 `orderNo`、`customerName`、`requestedDeliveryDate`、`totalCents`、`itemCount` 字段读取；
+9. APPROVED 履约上下文：源码同时含 `deliveryCount === 0` → `待出货` 与 `deliveryCount > 0` → `已关联 N 张出货单` 两条映射；
+10. 源码不得出现 `已完成` / `已全部出货` / `部分出货` 作为列表行内字面（与销售订单 LIST 分支）；
+11. `creatorName` / `createdAt` 不在 P2 行渲染分支内出现；
+12. `rejectionReason` 在 `status === 'REJECTED'` 分支内展示；
+13. 草稿 / 已驳回保留 overflow 内 `编辑草稿` 与 DRAFT `删除草稿` 行为，且仍使用既有 `ConfirmDelete`；
+14. P2 diff stat 不包含 `server/app.js` 或 `server/modules/*`；
+15. P1 / P1.1 五项底部导航 + 六组启动器 + 工作台三段在 diff 中保持不变（通过既有指纹在源码中仍存在）。
+
+### 25.15 阶段状态与门禁
+
+1. focused `v16-p2-sales-order-list.test.js` ≥ 15 项通过 + 全量 `pnpm test` 通过 + `pnpm build` 通过 + `git diff --check` 通过 → 可 exact-file stage。
+3. 真实 Edge 在 320 / 390 / 430 / 680px 四个视口下截图无横向溢出、无未捕获错误 → 可提交。
+4. 提交后 STOP；不进入 P3–P8；不 push / tag / deploy；不动 package.json 版本；不动 README 当前已发布基线；不动 v1.5.0 tag。
+5. 截图通过运营方视觉评审后才进入 P3。
+
+### 25.16 实施范围与文件清单
+
+可能涉及的实现文件（最终以 exact-file stage 为准）：
+
+- `document.md`（§24 P2 REQUIREMENT 追加，已提交）
+- `solution.md`（§25 P2 DESIGN 追加，已提交）
+- `log/2026-09-30.md`（P2 阶段追加，已提交）
+- `src/main.jsx`（追加一行 import）
+- `src/pages/master-data.jsx`（LIST MODE 重写 + `SalesOrderListRow` 局部组件；不动 `viewing`/`editing`/其他页面）
+- `src/styles/v16-sales-orders.css`（新增）
+- `server/v16-p2-sales-order-list.test.js`（新增）
+- `scripts/acceptance/v16-p2-sales-order-list.mjs`（新增）
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族；
+- `OrderDetail`、`OrderEditor`、`OrderModal`、`ConfirmDelete`、`BusinessAction`、`SegmentedControl`、`SearchField`、`StatusChip`、`CanonicalActionMenu`、`ActionMenu`；
+- `CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`HelpDisclosure`（组件本身不删除也不改 API，仅在 `Orders` LIST MODE 不再使用）；
+- `PurchaseOrders` / 其他页面；
+- P1 / P1.1 任何文件（`v16-tokens.css`、`v16-mobile-enterprise.css`、`MobileLauncher.jsx`、`MobileShell.jsx`、`App.jsx`、`applicationMetadata.js` 等）；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。

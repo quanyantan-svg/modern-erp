@@ -745,3 +745,188 @@ D2.2 至少生成以下视觉评审截图：application-desktop、application-mo
 ### 22.13 范围审计与非目标
 
 D2.2 默认不改变五个 canonical 角色、五个 canonical 审批族、C01–C05、调拨确认、LOT / SERIAL、月结、履约语义、报表定义、后端实体身份、API 命名或数据库表命名；不进入 D3+；不做全站推广；不修改其余 49 个启用路由（除不可避免的、视觉中性且显式报告的共享样式副作用）。
+
+## 24. V1.6 P2 — Mobile Enterprise 销售订单列表原型
+
+本节是 V1.6 P2 的 STAGE 1 — REQUIREMENT 冻结。起点为 P1.1 实现 commit `18a27134a4b49571112c218664163470b605c862`，P0+P1+P1.1 视觉 DNA 已冻结且不可重设计。P2 是首个真正的业务列表原型，验证 V1.6 mobile enterprise 视觉系统在真实企业列表上的表现。本节只追加 P2 的纯展示层需求；后端、API、数据库、角色、审批族、C01–C05 业务段、LOT/SERIAL、月结、履约语义、报表定义均不在本节重述。
+
+### 24.1 范围与不变量
+
+P2 严格只覆盖销售订单（route `orders`）LIST MODE：
+
+- 不重设计销售订单详情（`OrderDetail`）；
+- 不重设计销售订单新建/编辑表单（`OrderEditor`）；
+- 不重设计销售出货、采购订单、采购入库、MRP、库存、决策报表、业务总览；
+- 不重设计任何其他启用路由；
+- 不重设计 V1.5 已冻结的 53 路由矩阵与文档 §21、§22 视觉原则。
+
+LIST MODE 之外的 `viewing` / `editing` 渲染分支在 P2 必须保持视觉与功能不变，由 P3 单独负责。
+
+### 24.2 业务语义硬规则
+
+授权审批与实际履约属于不同维度，不得互相推断：
+
+- `APPROVED`（已审批）仅表示业务授权已完成，不表示已经出货或已完成；
+- `deliveryCount > 0` 仅表示存在至少一张关联的销售出货单，不构成行级履约完毕；
+- 不得从 `deliveryCount` 推断 `已完成` / `已全部出货` / `部分出货`；
+- 上述语义差异通过列表行内一条独立克制的「履约上下文」表达，不得膨胀为卡片或解释段。
+
+P2 的状态过滤只基于权威销售订单审批/文档状态：
+
+| 中文标签 | 筛选值 | 含义 |
+|---|---|---|
+| 全部 | `""` | 不加状态过滤 |
+| 草稿 | `DRAFT` | 创建但未提交 |
+| 待审批 | `SUBMITTED` | 已送审待授权人决策 |
+| 已审批 | `APPROVED` | 授权人已通过 |
+| 已驳回 | `REJECTED` | 授权人已否决 |
+
+不得新增 `待出货` / `部分出货` / `已出货` / `已完成` 作为 P2 的过滤标签；这些标签需要权威履约完成信息，属于后续阶段。
+
+### 24.3 主视口与布局硬性约束
+
+1. 主视口 390 × 844，用于 P2 视觉验收。
+2. 必须支持 320 / 390 / 430 / 680px 四档视口；320px 为最小宽度，必须通过。
+3. 应用最大宽度 680px；视口宽度 > 680px 时应用保持 `width: 100%; max-width: 680px; margin-inline: auto`，不展开为桌面 ERP 布局。
+4. 任何 P2 列表页都不得产生页面级水平滚动。
+5. 移动主内容底边距 ≥ 底部导航高度 + `safe-area-inset-bottom` + 合理内容呼吸空间；最后一条可点击内容不得被底部导航遮挡。
+6. 列表行正常目标高度 88–100 px；含 `已审批` 履约上下文或 `已驳回` 原因的行可略微增高，但不强制统一。
+7. 列表接受测试断言 `document.documentElement.scrollWidth <= clientWidth`。
+8. 列表在 390 × 844 的现实数据下至少可见 5 条正常销售订单行，不得通过缩字号作弊。
+
+### 24.4 列表页结构（V1.6 视觉 DNA）
+
+`MobileShell` 顶部已展示「销售订单」页面标题，列表正文不得重复渲染页面级 `<h1>销售订单</h1>`。
+
+按顺序渲染：
+
+1. 命令行：左侧现有 `SearchField`（placeholder = `搜索订单号或客户`）+ 右侧 `新建` 主按钮（仅在用户具有 `ORDERS_CREATE` 时渲染）。
+2. 五段式状态筛选：`全部 / 草稿 / 待审批 / 已审批 / 已驳回`；筛选值通过 `GET /api/orders?...&status=...` 走服务端过滤。
+3. 高密度企业行列表：每行展示 `orderNo + status + customerName + 业务 meta + 履约上下文（仅 APPROVED） / 驳回原因（仅 REJECTED） + overflow`；点击主区域进入 `OrderDetail`。
+4. 固定底部导航。
+
+P2 移除原 V1.5 列表页永久 `<HelpDisclosure summary="流程说明">` 段落；其语义通过数据呈现保留，但不再永久占用列表页空间。
+
+### 24.5 命令行（搜索 + 新建）
+
+- 搜索框：复用现有 `SearchField`，placeholder `搜索订单号或客户`；保留现有服务端搜索语义。
+- 新建按钮：仅在 `ORDERS_CREATE` 时渲染；按钮文案 `新建`（不得写为 `新建销售订单`，因 MobileShell 已展示页面标题）；最小高度 44 px，最小宽度约 60–68 px；行为保持 `setEditing({})`，不重新设计 OrderEditor。
+- 在 320px 下，搜索 + 新建按钮必须同行显示且不产生横向溢出。
+- 无 `ORDERS_CREATE` 时，搜索框占据全部可用宽度。
+
+### 24.6 五段式状态筛选
+
+- 段高 38–40 px；字号 12–13 px；五个段在 320–680px 全部可见且不产生横向滚动。
+- 活动段：白/抬起或克制品牌色内置于中性轨道；非活动段：中性文字。
+- 状态属于业务状态语义，不得使用销售模块色表达状态差异；不得把状态段染成「销售蓝」。
+
+### 24.7 销售订单企业行
+
+替换 `CompactRecord` 为专用企业行。`article` 内嵌：
+
+- 主打开区（button，键盘可达，触点 ≥ 44 px）；
+- 独立 overflow 操作菜单（button / summary，aria-label 含订单号）。
+
+主打开区点击调用 `setViewing({ id: order.id })`。
+
+行内容：
+
+1. 主识别（顶行）：`orderNo`（15 px / 600 / 单行省略） + canonical 状态 chip（紧凑语义色）。状态展示文案统一为：`DRAFT` → `草稿`、`SUBMITTED` → `待审批`、`APPROVED` → `已审批`、`REJECTED` → `已驳回`。不得暴露原始 enum 标签。
+2. 客户（第二行）：`customerName`（13.5–14 px / 常规–中等 / 次级文字 / 单行省略）。不得展示客户编码、联系人、电话、地址，这些归 P3 详情。
+3. 业务 meta（第三行）：`交期 MM-DD · ¥X,XXX.XX · N项`。当 `requestedDeliveryDate` 缺失时显示 `交期待填写`，不得用 `createdAt` 替代。
+4. 履约上下文（仅 APPROVED）：`deliveryCount === 0` → `待出货`；`deliveryCount > 0` → `已关联 N 张出货单`。使用克制的销售模块色文字 / 标记；这是 workflow accent，不是状态徽标。
+5. 驳回原因（仅 REJECTED）：`驳回：<reason>`；单行省略；危险语义文字克制使用。
+
+### 24.8 列表行严格不含的字段
+
+P2 正常列表行不得展示以下字段：
+
+- `creatorName`、`reviewerName`；
+- `createdAt`、`updatedAt`、`submittedAt`、`reviewedAt`；
+- 客户编码、联系方式、地址；
+- 临时 / 草稿 / 历史元数据墙。
+
+这些信息属于 P3 详情或审计抽屉，不得回到列表首屏扫描面。
+
+### 24.9 行视觉风格
+
+- 无外层圆角卡片；无阴影；无大面积边框；
+- 背景透明或沿用普通页面表面；
+- `border-bottom: 1px` 细分隔线；
+- 水平 padding 约 4 px（在页面已填充基础上叠加）；
+- 垂直 padding 10–12 px；
+- 销售模块色只允许出现在：新建主按钮、克制的 workflow accent 文字 / 标记、正常品牌交互态。
+- 不得使用销售模块色作行背景或行卡片。
+
+### 24.10 行操作
+
+- 主打开区点击：`查看详情`，调用 `setViewing({ id: order.id })`。
+- Overflow 菜单：复用现有 `CanonicalActionMenu` / `ActionMenu` 视觉，overflow 触点 ≥ 44 × 44 px；aria-label 含订单号。
+- 仅当用户具有 `ORDERS_CREATE`：
+  - `DRAFT` / `REJECTED` → `编辑草稿`（调用 `setEditing(order)`）；
+  - `DRAFT` → `删除草稿`（复用现有 `ConfirmDelete` 语义，确认标题保留）；
+  - `删除草稿` 不得作为红色行内按钮直接展示，必须保留在 overflow + 二次确认；
+  - 不得在列表加入提交 / 审批动作，那些归详情 / 审批中心。
+
+### 24.11 列表状态文案
+
+- LOADING：`加载中` 或同等克制文案；
+- EMPTY：`暂无销售订单`；若 `ORDERS_CREATE` 则可显示 `新建销售订单` 主动作；不得保留「创建销售订单后，可以提交业务审批并安排后续出货。」永久段落。
+- NO_RESULTS：`没有匹配结果`；显示 `清除筛选` 动作；不得保留多句解释。
+- ERROR：`加载失败`；显示 `重试` 动作；不得保留「请检查连接后重试。」永久段落。
+- EMPTY 与 NO_RESULTS 不得合并。
+
+### 24.12 长文本与溢出安全
+
+测试用例至少包括：超长订单号、超长中文客户名、超大金额、两位数项数、超长驳回原因。规则：
+
+- 订单号：单行省略；
+- 客户名：单行省略；
+- 金额：永不换行；
+- 状态：永不与订单号冲突；
+- overflow：始终可达；
+- 雪佛龙 / 主动作：永不离开视口；
+- 任何档位（320 / 390 / 430 / 680）都不得产生页面级横向溢出。
+
+### 24.13 可访问性
+
+- 行主打开区必须是 button 或等效可访问控件；
+- overflow 必须是 button / summary 且 `aria-label` 含订单号；
+- 新建按钮 `aria-label = 新建销售订单`；
+- 状态：不仅靠颜色；
+- `:focus-visible` 可见；
+- 触点 ≥ 44 × 44 px（新建 / 状态段 / 行主打开 / overflow / 底部导航）；
+- 状态段键盘可达，`aria-pressed` / `aria-current` 语义按现有 `SegmentedControl` 保持；
+- 搜索框具备 role / label；
+- 不得让 `article` / `div` 可点击而不响应键盘。
+
+### 24.14 不变更边界（V1.6 P2）
+
+1. 不修改 `server/app.js`、数据库适配、schema、迁移、角色、审批族、工作流端点、单据状态机、归档行为。
+2. 不修改 `OrderDetail`、`OrderEditor`、`OrderModal`、`ConfirmDelete` 等已存在组件的视觉与行为（仅删除 / 替换 LIST MODE 内的 `CompactRecord` / `CompactRecordList` / `BusinessPageHeader` 标题 / `HelpDisclosure` 流程说明）。
+3. 不为 P2 创建泛用 list framework；允许在 `master-data.jsx` 内新增小专用函数 `SalesOrderListRow` 或等效局部组件。
+4. 不影响采购订单（`PurchaseOrders`）及其他页面。
+5. 不修改 P1 启动器、P1 工作台、P1.1 模块识别色、底部五项导航、`v16-tokens.css`、`v16-mobile-enterprise.css`。
+6. 不进入 P3 详情 / 表单、P4–P8 其他业务原型；53 路由全站推广全部留待后续阶段。
+7. 不修改 `package.json` 版本；不动 v1.5.0 tag；不 push / tag / deploy。
+
+### 24.15 P2 验收门禁
+
+1. 视口 320 / 390 / 430 / 680px 通过；每档 `document.documentElement.scrollWidth <= clientWidth`；无未捕获浏览器错误、无 React console 错误。
+2. 在 390 × 844 的现实数据下，至少可见 5 条正常销售订单行；不得通过缩字号作弊。
+3. 状态过滤标签严格为 `全部 / 草稿 / 待审批 / 已审批 / 已驳回`，且 `待出货 / 部分出货 / 已出货 / 已完成` 不得作为过滤标签出现。
+4. 列表状态文案：EMPTY / NO_RESULTS / LOADING / ERROR 各自独立。
+5. 服务端合同不变：`GET /api/orders` 仍是唯一列表入口；不新增字段；不修改 `server/app.js`。
+6. P1 / P1.1 五项底部导航 + 六组启动器 + 工作台三段保持不变。
+7. `pnpm test` 通过；`pnpm build` 通过；`git diff --check` 通过；不引入新的失败用例。
+8. 浏览器验收脚本输出 `sales-orders-{320,390,430,680}.png` + `sales-orders-longtext-390.png` + `sales-orders-empty-390.png` 写入 `.tmp/v16-p2-visual/`。
+9. focused 源码合同测试 `server/v16-p2-sales-order-list.test.js` 通过 ≥ 15 项。
+10. 后端、API、数据库、迁移、业务逻辑、角色 / 权限、五类审批族、版本均不变化。
+
+### 24.16 P2 非目标
+
+1. 不修改五个 canonical 角色、五个 canonical 审批族、C01–C05 业务段。
+2. 不修改调拨确认、LOT / SERIAL、月结、履约、报表口径、后端实体身份、API 命名或数据库表名。
+3. 不实施 53 路由全站推广；P3–P8 全部留待后续阶段。
+4. 不进行 release prep、版本号变更、tag、push、deploy。
+5. 不重设计 OrderDetail / OrderEditor。
