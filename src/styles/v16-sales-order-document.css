@@ -26,44 +26,6 @@
   min-width: 0;
 }
 
-.v16-mobile-enterprise .v16-sales-order-detail__back,
-.v16-mobile-enterprise .v16-sales-order-editor__back {
-  display: flex;
-  align-items: center;
-  min-height: 32px;
-  min-width: 0;
-}
-
-.v16-mobile-enterprise .v16-sales-order-detail__back button,
-.v16-mobile-enterprise .v16-sales-order-editor__back button {
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  border: 0;
-  padding: var(--v16-space-1) 0;
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--v16-text-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--v16-space-1);
-  min-height: 32px;
-}
-
-.v16-mobile-enterprise .v16-sales-order-detail__back button:hover,
-.v16-mobile-enterprise .v16-sales-order-editor__back button:hover {
-  color: var(--v16-brand);
-}
-
-.v16-mobile-enterprise .v16-sales-order-detail__back button:focus-visible,
-.v16-mobile-enterprise .v16-sales-order-editor__back button:focus-visible {
-  outline: 2px solid var(--v16-brand);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
 /* ----- Identity (detail only) ----- */
 .v16-mobile-enterprise .v16-sales-order-detail__identity {
   display: flex;

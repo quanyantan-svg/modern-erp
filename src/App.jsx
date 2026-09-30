@@ -144,6 +144,7 @@ export default function App() {
   const [mobileApplication, setMobileApplication] = useState(null);
   const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [documentBackAction, setDocumentBackAction] = useState(null);
   const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.enabled !== false && (item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)))) : [];
 
   function canNavigate(pageKey) {
@@ -369,13 +370,13 @@ export default function App() {
   const tabLabel = MOBILE_TABS.find((tab) => tab.key === mobileTab)?.label || 'Modern ERP';
   const workspaceTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
   return (
-    <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage }}>
+    <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage, setHeaderBackAction }}>
       <MobileShell
         brand="Modern ERP"
         pageTitle={workspaceTitle}
         activeTab={mobileTab}
         onTabChange={handleMobileTabChange}
-        backAction={mobileApplication ? returnToMobileApplications : null}
+        backAction={documentBackAction || (mobileApplication ? returnToMobileApplications : null)}
         tabBadges={{ approvals: pendingApprovalCount }}
       >
         {renderMobileContent()}

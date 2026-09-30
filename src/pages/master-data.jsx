@@ -356,6 +356,22 @@ function orderFulfillmentLabel(order) {
   return '待出货';
 }
 
+// P3.1: payment terms presentation deduplicates the numeric days suffix
+// when paymentTerms already mentions the same number. Safe regex check is
+// sufficient — we do not attempt natural-language parsing.
+function orderPaymentTermsPresentation(paymentTerms, paymentTermsDays) {
+  const terms = String(paymentTerms || '').trim();
+  const days = Number(paymentTermsDays) || 0;
+  if (!terms && days <= 0) return '—';
+  if (terms && days > 0) {
+    const daysPattern = new RegExp(`${days}\\s*天`);
+    if (daysPattern.test(terms)) return terms;
+    return `${terms} · ${days}天`;
+  }
+  if (terms) return terms;
+  return `${days}天`;
+}
+
 function orderStageText(order, kind) {
   const isSales = kind === 'sales';
   const fulfillmentCount = Number(
@@ -382,7 +398,7 @@ function orderStageText(order, kind) {
 }
 
 export function Orders({ user, notify }) {
-  const { target } = useAppNavigation();
+  const { target, setHeaderBackAction } = useAppNavigation();
 
   const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState('');
@@ -424,6 +440,27 @@ export function Orders({ user, notify }) {
     setStatus('');
     void load('', '');
   }
+
+  function returnToList() {
+    setEditing(null);
+    setViewing(null);
+    void load();
+  }
+
+  function closeEditorOnly() {
+    setEditing(null);
+  }
+
+  // P3.1: surface exactly one MobileShell header back affordance.
+  // Detail / editor-from-list: back to list. Editor-from-detail: back to detail.
+  useEffect(() => {
+    const handler = editing
+      ? (viewing ? closeEditorOnly : returnToList)
+      : (viewing ? returnToList : null);
+    setHeaderBackAction(handler);
+    return () => setHeaderBackAction(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, viewing]);
 
   useEffect(() => {
     void load(search, status);
@@ -762,9 +799,6 @@ function SalesOrderEditorV16({ order, user, notify, onClose, onSaved }) {
   if (loading) {
     return (
       <div className="v16-mobile-enterprise v16-sales-order-editor">
-        <section className="v16-sales-order-editor__back">
-          <button type="button" onClick={onClose} aria-label="返回">‹ 返回</button>
-        </section>
         <div className="v16-sales-order-document__loading" role="status" aria-live="polite">
           <span className="v16-sales-order-document__loading-title">加载中</span>
         </div>
@@ -774,9 +808,6 @@ function SalesOrderEditorV16({ order, user, notify, onClose, onSaved }) {
 
   return (
     <div className="v16-mobile-enterprise v16-sales-order-editor">
-      <section className="v16-sales-order-editor__back">
-        <button type="button" onClick={onClose} aria-label="返回">‹ 返回</button>
-      </section>
       <section className="v16-sales-order-editor__title">
         <small>{order.id ? '编辑销售订单' : '新建销售订单'}</small>
         <strong>{order.orderNo || ' '}</strong>
@@ -1457,9 +1488,6 @@ function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
   if (loadState === 'ERROR') {
     return (
       <div className="v16-mobile-enterprise v16-sales-order-detail">
-        <section className="v16-sales-order-detail__back">
-          <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
-        </section>
         <div className="v16-sales-order-document__error" role="alert">
           <span className="v16-sales-order-document__error-title">加载失败</span>
           <div className="v16-sales-order-document__error-actions">
@@ -1474,9 +1502,6 @@ function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
   if (loadState !== 'READY' || !order) {
     return (
       <div className="v16-mobile-enterprise v16-sales-order-detail">
-        <section className="v16-sales-order-detail__back">
-          <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
-        </section>
         <div className="v16-sales-order-document__loading" role="status" aria-live="polite">
           <span className="v16-sales-order-document__loading-title">加载中</span>
         </div>
@@ -1542,10 +1567,6 @@ function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
 
   return (
     <div className="v16-mobile-enterprise v16-sales-order-detail">
-      <section className="v16-sales-order-detail__back">
-        <button type="button" onClick={onBack} aria-label="返回列表">‹ 返回列表</button>
-      </section>
-
       <section className="v16-sales-order-detail__identity" aria-label="销售订单身份">
         <div className="v16-sales-order-detail__identity-row">
           <div className="v16-sales-order-detail__number">{order.orderNo}</div>
@@ -1582,12 +1603,7 @@ function SalesOrderDetailV16({ id, user, notify, onBack, onEdit }) {
               </div>
               <div>
                 <dt>付款条件</dt>
-                <dd>
-                  {order.paymentTerms || '—'}
-                  {Number(order.paymentTermsDays) > 0 && (
-                    <small>{order.paymentTermsDays} 天</small>
-                  )}
-                </dd>
+                <dd>{orderPaymentTermsPresentation(order.paymentTerms, order.paymentTermsDays)}</dd>
               </div>
             </dl>
           </div>
