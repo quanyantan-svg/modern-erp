@@ -1387,3 +1387,561 @@ items: [...form.items, { productId: '', quantity: 1, price: '' }]
 3. 不实施 53 路由全站推广。
 4. 不进行 release prep、版本号变更、tag、push、deploy。
 5. 不进入 P4–P8。
+
+## 26. V1.6 P4 — Mobile Enterprise 采购入库（仓库验收）原型
+
+本节是 V1.6 P4 的 STAGE 1 — REQUIREMENT 冻结，起点为 P3.1 实现 commit `f694479`。P0/P1/P1.1/P2/P3/P3.1 视觉 DNA 与既有合同已冻结，本节只追加 P4 采购入库（用户可见的现代标签；对应原始流程图节点「仓库验收」）的纯展示层需求。后端、API、数据库、角色、审批族、C01–C05 业务段、LOT/SERIAL、月结、履约语义、报表定义均不在本节重述。
+
+### 26.1 范围与不变量
+
+P4 严格只覆盖采购入库（route `purchase-receipts`）：
+
+- 列表 LIST MODE；
+- 详情 DETAIL；
+- 编辑器 EDITOR（新建 / 编辑草稿）；
+- IQC 上下文展示（quality state 与 quality action）；
+- 已取消单据的安全归档 / 恢复 UX。
+
+不重设计：
+
+- 采购订单、采购请购、采购指令；
+- 独立 IQC 页面（standalone IQC page）；
+- 销售出货 / OQC；
+- 退货；
+- 应付结算；
+- 供应商账单；
+- 会计；
+- 库存作业页；
+- MRP；
+- 决策报表；
+- 业务总览；
+- 任何其他启用路由。
+
+不修改后端、API、数据库、角色、审批族、状态机或业务合同；不创建第二套独立的"仓库验收"顶层路由。
+
+### 26.2 业务语义硬规则
+
+- 采购入库（用户可见现代标签）对应原始流程图「仓库验收」节点；用户可见主标题保持 `采购入库`。
+- IQC 是采购入库的**内部门禁**，不是第六类审批族、不是顶层业务流节点、不是独立库存过账动作。
+- 库存数量变化仅在 `confirm` 后发生；服务端 quality gate（`assertQualityGate(IQC)`）是 confirm 的硬约束。
+- 列表归档是「从业务列表移除」软归档，不是物理删除；归档后原单据、明细、审计记录仍保留；仅具备 `USERS_MANAGE` 的管理员可恢复。
+- 恢复不改变 CANCELLED → DRAFT；不复活库存或财务效果。
+
+### 26.3 主视口与布局硬性约束
+
+1. 主视口 390 × 844；必须支持 320 / 390 / 430 / 680px；
+2. 应用最大宽度 680px；视口宽度 > 680px 时保持居中单轨；
+3. 任何 P4 详情 / 编辑器 / 列表页都不得产生页面级水平滚动；
+4. 详情 / 编辑器内容必须获得足够的底部安全间距：底部导航高度 + safe-area + 实际内容呼吸空间 + 固定动作栏高度；
+5. 编辑器 ≤ 360px 时日期字段必须纵向堆叠；
+6. 不得修改底部导航本身；动作栏定位沿用 P3 已冻结契约。
+
+### 26.4 列表 — 顶部结构
+
+`MobileShell` 顶部已展示页面标题「采购入库」，列表正文不得再渲染 `<h1>采购入库</h1>`。
+
+- 移除原 V1.5 `BusinessPageHeader` 与 `HelpDisclosure summary="业务说明">` 段落；
+- 列表顶部一行：
+  - `搜索单号或供应商` 搜索框；
+  - 在用户具有 `PURCHASE_RECEIPTS_MANAGE` 时显示紧凑 `新建` 主按钮（`aria-label="新增采购入库"`）。
+- 第二行：四段式状态筛选 `全部 / 草稿 / 已确认 / 已取消`，加上次级归档切换 `归档记录`。
+
+### 26.5 列表 — 状态文案
+
+- LOADING：`加载中`
+- EMPTY：`暂无采购入库`；若 `PURCHASE_RECEIPTS_MANAGE` 则显示 `新增采购入库` 主动作
+- NO_RESULTS：`没有匹配结果`，动作 `清除筛选`（清空 search / status / includeArchived 并重新加载）
+- ERROR：`加载失败`，动作 `重试`
+
+不得保留任何常驻解释段。
+
+### 26.6 列表 — 行
+
+替换 `CompactRecord` 为 P4 专用企业行：
+
+```
+PR-20260930-018                已确认
+福建精工电子有限公司
+原材料仓 · 09-30 · ¥3,600.00
+120 台 · IQC 检验合格              ⋯ >
+```
+
+- 主识别：单号 + canonical 状态 chip；
+- 客户：单行省略；
+- 第三行：`仓库 · MM-DD · 金额`；
+- 第四行：`数量上下文 · IQC 上下文`（IQC 仅做次级文本提示）；
+- 不得每行卡片；不得展示 GRNI / 财务 / 内部术语；
+- 不得展示 `creatorName` 等首屏不需要的元数据；
+- 归档行：保留 CANCELLED 状态 + `已归档` 次级 marker；
+- 行触点 ≥ 44 px；overflow 触点 ≥ 44 px；
+- 整行点击进入详情；overflow 提供 `查看详情`，DRAFT + 管理权限时提供 `编辑草稿`；不直接从列表触发归档 / 取消。
+
+### 26.7 列表 — 数量展示
+
+列表 API 返回 `billedQuantity` 与 `remainingBillQuantity`，两者之和为已收数量：
+
+```
+receivedQuantity = Number(billedQuantity || 0) + Number(remainingBillQuantity || 0)
+```
+
+展示策略：
+
+- 若列表返回的单位可用：展示 `数量 + 单位`，如 `120 台`；
+- 若无可信单位或多产品混单：展示 `itemCount`（`N 项`），不臆造单位；
+- 不得为本次 P4 修改后端 API 仅为了取得单位字段。
+
+### 26.8 列表 — IQC 上下文
+
+| 服务端 quality code | 列表文本 |
+|---|---|
+| WAIVED | `IQC 免检` |
+| NOT_INSPECTED | `IQC 未检验` |
+| INSPECTION_DRAFT | `IQC 检验中` |
+| PASS | `IQC 合格` |
+| FAIL | `IQC 不合格` |
+| STALE | `IQC 需复检` |
+
+- 不得使用模块色（采购蓝）表达 IQC 状态；
+- 不得渲染巨型徽标；采用克制次级文本 + 必要时 danger / warning；
+- 状态文本与颜色同时呈现；
+- 文档状态 chip 与 IQC 上下文分开展示。
+
+### 26.9 列表 — 归档过滤
+
+- 默认 `includeArchived = false`，列表不显示已归档；
+- `归档记录` 次级切换控件（按钮或 `aria-pressed`），不是四段式状态之一；
+- 切换到 `includeArchived = true` 时该控件进入 pressed 视觉态；
+- 不得将归档合并进四段式状态筛选；归档是可见性而非业务状态。
+
+### 26.10 详情 — 章节顺序
+
+严格按以下顺序：
+
+1. 概要
+2. 来源采购订单
+3. 入库明细
+4. 质量
+5. 结算与关联
+6. 操作记录
+7. 管理（仅在存在可执行动作时渲染）
+
+不得新增技术章节。
+
+### 26.11 详情 — 身份
+
+`MobileShell` 顶部已展示「采购入库」。详情正文不得再渲染 `<h1>采购入库</h1>`。
+
+返回按钮仅来自 `MobileShell` 头部（P3.1 已冻结）；不得再在详情正文内重复 `‹ 返回列表`。
+
+身份区：
+
+```
+PR-20260930-018              已确认
+福建精工电子有限公司
+¥3,600.00
+```
+
+- 单号：20–22px / 650 / 单行省略；
+- 状态：语义 chip（草稿 / 已确认 / 已取消）；
+- 供应商：14px / 最多两行；
+- 金额：22–24px / 650 / 深色文字；
+- 若归档：在状态 chip 旁追加 `已归档` 次级 marker；不得改变 `已取消` 主状态。
+
+### 26.12 详情 — 概要
+
+紧凑 Key/Value 行：
+
+- 收货仓库：`warehouseName`
+- 收货日期：`receipt_date`
+- 计费方式：`billing_mode` 本地化标签
+
+不再重复 `supplier` 与 `amount`（已在身份区）。
+
+计费模式本地化：
+
+| 后端枚举 | 展示文本 |
+|---|---|
+| SEPARATE | `独立建账` |
+| AUTO_BILL | `自动建账` |
+| LEGACY_DIRECT | `历史直接结算` |
+
+不得展示 raw enum；不得把 `GRNI` 作为常规首屏术语。
+
+### 26.13 详情 — 来源采购订单
+
+一行紧凑关系：
+
+- 若存在权威上游：`采购订单 PO-...`，可点击（受现有 `AppLink` 权限控制）。
+- 若缺失权威上游：`来源信息不完整`。
+
+不得永久展示 `旧版来源信息不完整，仅兼容读取。` 或类似技术兼容说明。
+
+### 26.14 详情 — 入库明细
+
+P3 同款高密度行：
+
+```
+产品名
+P-编码
+
+120 台 × ¥30.00                ¥3,600.00
+```
+
+若权威字段（`orderedQuantity / receivedQuantity / remainingQuantity`）可用：
+
+- 默认不展开三段数字；
+- 当 `orderedQuantity` / `receivedQuantity` / `remainingQuantity` 实质有助于业务理解时（订单 / 已收 / 剩余 三者中至少有一项与本次入库数量不同或来源有意义），在行下显示次级紧凑行：
+  - `采购 200 · 已收 120 · 剩余 80`
+- 不得从无关字段推断这些数字；不得显示「无来源 / 直接建账」之类的猜测文案。
+
+跟踪（tracking allocations）若存在：
+
+- 紧凑渐进披露 `批次 / 序列号 N 条 >`；
+- 不得倾倒原始结构；
+- 不得隐藏既有 `TrackingAllocationEditor` 入口。
+
+### 26.15 详情 — 质量章节（重大 P4 特征）
+
+标题：`质量`。
+
+展示：
+
+```
+IQC
+<quality state label>
+```
+
+quality state label 本地化：
+
+| 服务端 code | 展示文本 |
+|---|---|
+| WAIVED | `免检` |
+| NOT_INSPECTED | `未检验` |
+| INSPECTION_DRAFT | `检验中` |
+| PASS | `检验合格` |
+| FAIL | `检验不合格` |
+| STALE | `需复检` |
+
+不得永久展示 `IQC 是采购入库确认前的质量门禁。` 之类的解释段；动作应自身表达语义。
+
+### 26.16 详情 — 质量动作模型（仅 DRAFT 有效）
+
+| quality code | 操作 |
+|---|---|
+| WAIVED | confirm 可作为主操作 |
+| PASS | confirm 可作为主操作 |
+| NOT_INSPECTED | 主操作 `创建 IQC`，调用既有 `POST /api/iqc { purchase_receipt_id }`；成功 `notify('IQC 检验草稿已创建')` 并 reload |
+| INSPECTION_DRAFT | 主操作 `前往 IQC`（既有路由 `navigation.navigateToPage('iqc')`） |
+| FAIL | 主操作 `创建 IQC 复检`（复用 `POST /api/iqc`） |
+| STALE | 主操作 `创建 IQC 复检`（复用 `POST /api/iqc`） |
+
+P4 不得新增 IQC API；不得绕过服务端 quality gate。
+
+### 26.17 详情 — Confirm 动作
+
+仅 DRAFT + `quality.code === 'PASS' || 'WAIVED'` 时显示 primary `确认入库` + secondary `编辑`。
+
+确认弹窗：
+
+- 标题：`确认采购入库？`
+- 正文：`确认后将按本单数量增加库存，入库日期和来源采购订单将作为业务依据。`
+- 若 `billingMode === 'AUTO_BILL'`：追加 `当前设置会自动生成供应商账单。`
+- 按钮：`取消` / `确认入库`
+- 提交：`POST /api/purchase-receipts/:id { action: 'confirm' }`
+- 不得绕过服务端 quality gate；服务端失败时显示错误并 reload。
+
+### 26.18 详情 — CONFIRMED 状态
+
+- 无 edit、无 cancel、无 confirm 动作；
+- 质量信息仍作为历史事实保留；
+- 结算与关联章节展示权威供应商账单 / 应付关系；
+- 不得展示 `已完成` 之类的虚假完成文案；文档状态保持 `已确认`；
+- 操作记录章节如实展示 `制单人` / `确认人`。
+
+### 26.19 详情 — CANCELLED 状态
+
+- 无 edit、无 confirm；
+- 若未归档且 `PURCHASE_RECEIPTS_MANAGE`：管理章节显示 `从业务列表移除 >`；
+- 点击后调用既有 `GET /api/lifecycle/analyze?entityType=PURCHASE_RECEIPT&entityId=...`；
+- 若服务端返回 `allowed = false`：首条 blocker 经 `notify(...)` 弹出，不打开成功确认；
+- 若 `allowed = true`：打开既有安全确认 sheet。
+
+### 26.20 详情 — ARCHIVED 状态
+
+- 身份区显示主状态 `已取消` + 次级 marker `已归档`；
+- 管理章节：
+  - 若用户具备 `USERS_MANAGE`：显示 `恢复到业务列表 >`；
+  - 否则不渲染禁用按钮；
+- 操作记录章节可显示 `归档原因` 与 `归档时间`（仅当数据存在时）；
+- 不得永久展示 `原单据、明细与审计记录保留，未被删除。` 之类的横幅文案。
+
+### 26.21 归档确认
+
+沿用既有安全语义：
+
+- 标题：`从业务列表移除？`
+- 正文：`该采购入库单将从正常业务列表中移除，并保留在归档记录中。原单据、明细和审计记录不会被删除，有权限的管理员可以恢复。`
+- 文本框输入归档原因（≤ 500 字）；
+- 按钮：`取消` / `从列表移除`
+- 不得使用 `永久删除` / `彻底删除` / `不可恢复`。
+
+### 26.22 恢复确认
+
+- 标题：`恢复到业务列表？`
+- 正文：`恢复后该单据会重新出现在业务列表中，但仍保持「已取消」，不会恢复库存或财务效果。`
+- 按钮：`取消` / `确认恢复`
+- 不得修改服务端行为；恢复仅恢复列表可见性。
+
+### 26.23 详情 — 结算与关联
+
+默认折叠 / 紧凑展示：
+
+- `计费状态`（来自 `billingSummary.status`）按 P4 §26.12 本地化；
+- 供应商账单（来自 `relationships.downstream` 中 `SUPPLIER_BILL`）：`供应商账单 N 张 >`；
+- 应付记录（来自 `relationships.subledger`，权限允许）：`应付记录 >`；
+- 采购退货（来自 `relationships.downstream` 中 `PURCHASE_RETURN`）：`采购退货 N 张 >`；
+- 不得展示 `GRNI` / `voucher role` / `account codes` / 财务实现细节。
+
+会计凭证等深层信息可收入 `更多关联` 或操作记录，不得作为详情视觉中心。
+
+### 26.24 详情 — 操作记录
+
+`<details>` 渐进披露，summary `操作记录`。
+
+内部展示：
+
+- `制单人`
+- `确认人`（若存在）
+- `归档原因` / `归档时间`（若归档）
+
+不得称为 `审计状态`；不得伪造不存在的历史。
+
+### 26.25 详情 — 管理章节
+
+仅在存在可执行动作时渲染。
+
+- DRAFT：单行 `取消这张单据 >`，需服务端二次确认；
+- CANCELLED + 未归档 + `PURCHASE_RECEIPTS_MANAGE`：`从业务列表移除 >`，需资格检查；
+- ARCHIVED + `USERS_MANAGE`：`恢复到业务列表 >`。
+
+不得使用大型常驻红色 danger box；危险动作用克制的管理章节 + 二次确认。`已确认` 单据不渲染管理章节中的归档 / 恢复入口。
+
+### 26.26 详情 — 固定动作栏
+
+沿用 P3 已冻结的固定动作栏定位（`bottom: calc(--v16-bottom-nav-height + --v16-bottom-nav-safe + --v16-space-3)`）。
+
+DRAFT 动作矩阵：
+
+| quality code | secondary | primary |
+|---|---|---|
+| PASS | 编辑 | 确认入库 |
+| WAIVED | 编辑 | 确认入库 |
+| NOT_INSPECTED | 编辑 | 创建 IQC |
+| INSPECTION_DRAFT | 编辑 | 前往 IQC |
+| FAIL | 编辑 | 创建 IQC 复检 |
+| STALE | 编辑 | 创建 IQC 复检 |
+
+CONFIRMED / CANCELLED：固定动作栏仅在确实存在安全 primary 任务时呈现；归档 / 恢复不属于固定 primary，归入管理章节。
+
+### 26.27 编辑器 — 移除 Modal
+
+新建采购入库 / 编辑草稿必须不再使用 `<Modal wide>`；编辑器是真正的全屏移动任务页，渲染在 MobileShell 主内容轨道内。
+
+`PurchaseReceiptModal` 不被 P4 路径调用；P4 引入新的 `PurchaseReceiptEditorV16`。非 DRAFT 单据的只读视图由详情承担。
+
+不得全局修改 `Modal` 组件；不得重设计 `SalesDeliveryModal` / `ReturnModal`。
+
+### 26.28 编辑器 — 顶部结构
+
+- 返回按钮仅来自 `MobileShell` 头部（通过 `setHeaderBackAction` 注入）；
+- 任务身份：
+  - 新建：`新建采购入库`
+  - 编辑：`编辑采购入库 PR-...`
+- 不得再渲染页面级 `<h1>采购入库</h1>`。
+
+返回目标：
+
+- 列表新建/编辑 → 列表；
+- 详情编辑 → 同详情。
+
+### 26.29 编辑器 — 章节顺序
+
+严格：
+
+1. 来源采购订单
+2. 收货信息
+3. 入库明细
+4. 计费与备注
+5. 单据合计
+
+底部动作栏：`取消` / `保存草稿`。不引入 `确认入库` / `保存并确认` / `创建 IQC`。
+
+### 26.30 编辑器 — 来源采购订单
+
+新建：
+
+- 来源采购订单必选，使用既有 `GET /api/lookup/purchase-orders-source`；
+- 选项标签：`PO号 · 供应商`；
+- 选中后自动带入 supplier 与 items（保留 `purchaseOrderItemId / orderedQuantity / receivedQuantity`）；
+- 不得永久展示 `正常采购收货必须选择已审批采购订单。独立库存更正请使用库存调整、调拨、报废或盘点单。`；
+- 服务端验证不通过的，弹错误。
+
+供应商以只读紧凑字段展示；不允许编辑。
+
+### 26.31 编辑器 — 编辑既有源的不变性
+
+编辑现有 DRAFT：
+
+- 来源采购订单不可变（只读紧凑字段）；
+- 供应商不可变（只读紧凑字段）；
+- 仍按既有 payload 发送（不修改后端）；
+- 不得通过前端把来源字段重写成不同值。
+
+### 26.32 编辑器 — 收货信息
+
+可编辑：
+
+- 收货仓库（既有仓库 select）；
+- 收货日期（原生 `<input type="date">`）。
+
+触点 ≥ 44 px；≤ 360px 时日期字段可纵向堆叠。
+
+### 26.33 编辑器 — 入库明细（来源驱动）
+
+P4 采购入库行来源于已审批采购订单；不在编辑器新增任意货品行；不得新增 `+ 添加货品`。
+
+每一行沿用 P3 移动行编辑器：
+
+```
+产品名
+P-编码
+
+采购 200 · 已收 80 · 剩余 120
+
+本次入库
+[ 120 ]
+
+采购单价                  ¥30.00
+本次金额               ¥3,600.00
+```
+
+- 产品 select / 数量 / 单价 / 单位 / 计算金额；
+- 本次入库数量前端约束 `min > 0` 与可选 `max = orderedQuantity - receivedQuantity`，但服务端仍是权威；
+- 不得修改 `assertRemainingQuantity` 行为；
+- 数量变更时清除该行 `trackingAllocations`（既有行为）；
+- 每行下方挂 `TrackingAllocationEditor`，方向 `IN`，仓库 `form.warehouseId`，数量 `quantity`，业务日期 `form.receiptDate`；
+- `TrackingAllocationEditor` 既有逻辑保持不变；不得藏入不可达 UI。
+
+### 26.34 编辑器 — 计费与备注
+
+`<details>` 渐进披露，summary `计费与备注`。
+
+内部：
+
+- 计费模式 select；
+- 备注 textarea，`placeholder="选填"`；
+- 不引入 GRNI / 财务解释文案。
+
+### 26.35 编辑器 — 单据合计
+
+底部：`单据合计 ¥X,XXX.XX`，20–24px / 650 / 不换行 / top 分隔线。
+
+### 26.36 编辑器 — 动作栏
+
+固定在底部导航之上，沿用 P3 视觉合同：
+
+- `取消`（secondary）；
+- `保存草稿`（primary brand blue）。
+- 不引入 `确认入库` / `保存并确认` / `创建 IQC` 等动作；confirm 在保存后由详情触发。
+
+### 26.37 编辑器 — 保存行为
+
+- 从列表新建 / 编辑 → 保存：关闭编辑器 + 回到列表 + 重新加载列表；
+- 从详情编辑 → 保存：关闭编辑器 + 保持详情 + reload 详情（保持当前单据可见）。
+- 不修改后端 API。
+
+### 26.38 文案预算
+
+列表常驻解释段 = 0；详情常驻解释段 = 0；编辑器常驻解释段 = 0。
+
+不得展示 GRNI / `business_date` / `lifecycle` / `canonical` / `source-chain` / `snapshot` / `quality gate internals` 等技术术语。
+
+### 26.39 模块色 / 状态色
+
+`--v16-module-purchasing #5865D8` 仅用于：
+
+- 主上下文链接；
+- 来源关系标识；
+- 关注态；
+- 必要时的小型身份强调。
+
+不得用于文档状态 chip / 行背景 / 输入背景 / 动作栏背景。
+
+文档状态 / IQC 状态保持语义色。
+
+### 26.40 状态色
+
+| 维度 | 状态 | 色 |
+|---|---|---|
+| 文档 | DRAFT | 中性 |
+| 文档 | CONFIRMED | success |
+| 文档 | CANCELLED | 克制 danger |
+| 可见性 | ARCHIVED | 中性二级 |
+| IQC | PASS | success |
+| IQC | FAIL | danger |
+| IQC | STALE | warning |
+| IQC | NOT_INSPECTED | 中性 / 克制 warning |
+| IQC | WAIVED | 中性 / success |
+
+状态不仅靠颜色；文字始终存在。
+
+### 26.41 长内容安全
+
+测试：长单号 / 长供应商 / 长仓库 / 长采购订单号 / 大金额 / 长产品名 / 长产品编码 / 10+ 行 / 长备注 / 长归档原因 / 长 blocker 消息。
+
+规则：
+
+- 单号：单行省略；
+- 客户：列表单行；详情最多两行；
+- 仓库：按需换行；
+- 金额：不换行；
+- 动作栏：不溢出；
+- 不得产生页面级水平滚动。
+
+### 26.42 不变更边界（V1.6 P4）
+
+1. 不修改后端、API、数据库、迁移、角色、审批族、单据状态机、归档行为、MySQL 兼容路径；
+2. 不重设计采购订单、采购请购、采购指令、独立 IQC、销售出货、OQC、退货、应付、供应商账单、会计、库存作业、MRP、决策报表、业务总览；
+3. 不修改 `Modal` 组件、`CompactRecord` / `CompactRecordList` / `BusinessPageHeader` / `HelpDisclosure` 组件本身（仅停止在 P4 路径使用）；
+4. 不修改 `OrderDocumentDetail` 工作流阶段函数；
+5. 不修改 P0/P1/P1.1/P2/P3/P3.1 任何文件；
+6. 不修改 `package.json` 版本；不动 v1.5.0 tag；不 push / tag / deploy。
+
+### 26.43 P4 验收门禁
+
+1. 视口 320 / 390 / 430 / 680px 通过；每档 `document.documentElement.scrollWidth <= clientWidth`；
+2. 列表在 390 × 844 的现实数据下可见 ≥ 5 条正常行；不得缩字号作弊；
+3. 状态过滤严格为 `全部 / 草稿 / 已确认 / 已取消`；不混入 IQC；
+4. 列表不展示 `creatorName`；状态过滤中不出现 IQC；状态色与模块色分离；
+5. 详情章节顺序固定；不得新增 Finance / Accounting 章节；
+6. 详情仅展示授权关系；不暴露 GRNI / 财务实现细节；
+7. 详情 confirm 必须通过服务端 quality gate；
+8. 归档必须先调用 `analyze`，资格不允许时不打开成功确认；
+9. 归档 / 恢复文案不得使用 `永久删除` / `彻底删除` / `不可恢复`；
+10. 编辑器不再使用 Modal；不再使用 `line-table` / `line-header`；
+11. 来源采购订单必须存在；编辑现有 DRAFT 不可改来源；
+12. `TrackingAllocationEditor` 仍可用；跟踪 `IN` 方向 / 仓库 / 业务日期 / 数量保持；
+13. `PurchaseReceiptModal` 不被 P4 路径调用（非 DRAFT 只读视图由详情承担）；
+14. `pnpm test` 通过；`pnpm build` 通过；`git diff --check` 通过；
+15. 后端、API、数据库、迁移、业务逻辑、角色 / 权限、五类审批族、版本均不变化；
+16. focused 源码合同测试 `server/v16-p4-purchase-receipts.test.js` 通过 ≥ 31 项；
+17. 浏览器验收输出 `.tmp/v16-p4-visual/` 截图集；
+18. P2 / P3 / P3.1 既有合同保持不变。
+
+### 26.44 P4 非目标
+
+1. 不修改五个 canonical 角色、五个 canonical 审批族、C01–C05 业务段；
+2. 不修改调拨确认、LOT / SERIAL、月结、履约、报表口径、后端实体身份、API 命名或数据库表名；
+3. 不实施 53 路由全站推广；
+4. 不进行 release prep、版本号变更、tag、push、deploy；
+5. 不进入 P5–P8。

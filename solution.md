@@ -2784,3 +2784,555 @@ function Orders({ user, notify }) {
 - P0/P1/P1.1/P2 任何文件（`v16-tokens.css`、`v16-mobile-enterprise.css`、`v16-sales-orders.css`、`MobileLauncher.jsx`、`MobileShell.jsx`、`App.jsx`、`applicationMetadata.js`、`Orders` LIST MODE 视觉）；
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
+
+## 27. V1.6 P4 — Mobile Enterprise 采购入库（仓库验收）原型设计
+
+本节是 `document.md §26` 已批准需求的 STAGE 2 — DESIGN，起点为 `f694479`。P0/P1/P1.1/P2/P3/P3.1 视觉 DNA 与既有合同已冻结，本节只设计 P4 采购入库列表 / 详情 / 编辑器（含 IQC 上下文与安全归档 UX）的展示层实现策略，不重写既有组件、不变更后端 / API / 数据库 / 业务合同。P5–P8 不在本节范围。
+
+### 27.1 范围与不变量
+
+P4 实现范围（均位于 `src/pages/logistics-finance.jsx`）：
+
+- `PurchaseReceipts` 顶层三分支：`editor` → 全屏编辑器；`selectedId` → 详情；否则列表；
+- `PurchaseReceiptListRowV16` 替换 `CompactRecord` 列表行；
+- `PurchaseReceiptDetailV16` 替换 `PurchaseReceiptDetail` 既有 V1.5 / V1.6 章节包装；
+- `PurchaseReceiptEditorV16` 全屏任务页替换 `PurchaseReceiptModal` 用于新建 / 编辑草稿；
+- `PurchaseReceiptModal` / `PurchaseReceiptDetail` 保留为仅 stub 返回 `null`，避免任何代码路径意外触发旧 Modal；
+- `setHeaderBackAction`（P3.1 已引入）被 `PurchaseReceipts` 用于暴露唯一的 MobileShell 头部返回；
+- 新建隔离样式文件 `src/styles/v16-purchase-receipts.css`。
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族、IQC API、采购入库 / IQC / lifecycle / tracking / inventory / billing 业务规则；
+- `Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`BusinessPageShell`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection`、`BusinessDangerZone`、`HelpDisclosure`、`SegmentedControl`、`SearchField`、`StatusChip`、`InlineAlert`、`ActionMenu`、`FilterSheet`、`ConfirmAction`、`ConfirmDelete`、`ConfirmSheet`、`DangerSheet`、`RecordCard`、`RecordList`、`ListRow`、`KeyValueRow`、`SummaryCard`、`Panel`、`Toolbar`、`FilterButton`、`Tabs`、`EmptyState`、`Empty`、`Loading` 等设计系统组件本身；
+- P0/P1/P1.1/P2/P3/P3.1 任何文件（`v16-tokens.css`、`v16-mobile-enterprise.css`、`v16-sales-orders.css`、`v16-sales-order-document.css`、`MobileLauncher.jsx`、`MobileShell.jsx`、`App.jsx`、`applicationMetadata.js`、`Orders` LIST MODE 视觉、`AppNavigationContext`）；
+- `SalesDeliveryModal`、`ReturnModal`、`OrderDocumentDetail` 的工作流阶段函数 `orderWorkflowStages`；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。
+
+### 27.2 样式隔离策略
+
+1. 新增 `src/styles/v16-purchase-receipts.css`；
+2. `src/main.jsx` 在 `v16-sales-order-document.css` 之后追加 `import './styles/v16-purchase-receipts.css'`；
+3. 选择器作用域限定于 `.v16-mobile-enterprise .v16-purchase-receipts` / `.v16-mobile-enterprise .v16-purchase-receipt-detail` / `.v16-mobile-enterprise .v16-purchase-receipt-editor` 或 `v16-purchase-receipt-*` 前缀；
+4. 不写入 `src/styles.css`、`v16-mobile-enterprise.css`、`v16-sales-orders.css`、`v16-sales-order-document.css`；
+5. 模块色 `--v16-module-purchasing #5865D8` 沿用既有 token，不新增采购色。
+
+### 27.3 顶层分支
+
+```jsx
+function PurchaseReceipts({ user, notify }) {
+  const { setHeaderBackAction } = useAppNavigation();
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [selectedId, setSelectedId] = useState(...);
+  const [editor, setEditor] = useState(null);
+  const [listState, setListState] = useState('LOADING');
+
+  // P3.1: surface exactly one MobileShell header back affordance.
+  useEffect(() => {
+    const handler = editor
+      ? (selectedId ? closeEditorOnly : returnToList)
+      : (selectedId ? returnToList : null);
+    setHeaderBackAction(handler);
+    return () => setHeaderBackAction(null);
+  }, [editor, selectedId]);
+
+  async function load(...) { /* see §27.4 */ }
+
+  if (editor) return <PurchaseReceiptEditorV16 ... />;
+  if (selectedId) return <PurchaseReceiptDetailV16 ... />;
+  return <List ... />;
+}
+```
+
+### 27.4 列表 — 加载与状态分支
+
+```js
+async function load(nextSearch, nextStatus, nextArchived) {
+  setListState('LOADING');
+  try {
+    const params = new URLSearchParams({ search: ..., status: ..., includeArchived: String(...) });
+    const response = await api('/api/purchase-receipts?' + params);
+    const list = response.purchaseReceipts || [];
+    setItems(list);
+    if (list.length) setListState('READY');
+    else if (nextSearch || nextStatus || nextArchived) setListState('NO_RESULTS');
+    else setListState('EMPTY');
+  } catch (error) {
+    setListState('ERROR');
+    notify(error.message, 'error');
+  }
+}
+
+function clearFilters() {
+  setSearch('');
+  setStatus('');
+  setIncludeArchived(false);
+  void load('', '', false);
+}
+```
+
+四个状态分支分别显示 LOADING / EMPTY / NO_RESULTS / ERROR 文案与对应动作；与 P2 列表文案策略对齐。
+
+### 27.5 列表 — 行
+
+`PurchaseReceiptListRowV16`（新增）：
+
+```jsx
+<li className="v16-purchase-receipt-row" data-testid={`purchase-receipt-row-${item.id}`}>
+  <button
+    type="button"
+    className="v16-purchase-receipt-row__open"
+    onClick={() => onOpen(item)}
+    aria-label={`查看采购入库 ${item.receipt_no}`}
+  >
+    <span className="v16-purchase-receipt-row__primary">
+      <span className="v16-purchase-receipt-row__number">{item.receipt_no}</span>
+      <span className={`v16-purchase-receipt-status v16-purchase-receipt-status--${tone}`}>
+        {presentation.label}
+      </span>
+    </span>
+    <span className="v16-purchase-receipt-row__secondary">{item.supplierName}</span>
+    <span className="v16-purchase-receipt-row__meta">
+      {item.warehouseName} · {item.receipt_date} · {money(item.total_cents)}
+    </span>
+    <span className="v16-purchase-receipt-row__context">
+      {quantityContext(item)}
+      {quality ? ` · ${quality}` : ''}
+    </span>
+    {archived && (
+      <span className="v16-purchase-receipt-row__archive">已归档</span>
+    )}
+  </button>
+  <div className="v16-purchase-receipt-row__overflow">
+    <CanonicalActionMenu label={`采购入库 ${item.receipt_no} 的更多操作`}>
+      <button type="button" onClick={() => onOpen(item)}>查看详情</button>
+      {canCreate && item.status === 'DRAFT' && (
+        <button type="button" onClick={() => onEdit(item)}>编辑草稿</button>
+      )}
+    </CanonicalActionMenu>
+  </div>
+</li>
+```
+
+- 主识别行：单号 + 文档状态 chip；
+- 第二行：供应商（单行省略）；
+- 第三行：`仓库 · 收货日期 · 金额`；
+- 第四行：数量上下文 + IQC 上下文（合并到一行）；
+- 归档行：在 `<button>` 主识别下方追加 `已归档` 次级 marker；
+- 行背景透明；`border-bottom` 1px 分隔线；
+- 触点：行 open 区 ≥ 44 px；overflow 触点 ≥ 44 px；
+- 数量上下文：`receivedQuantity = Number(billedQuantity || 0) + Number(remainingBillQuantity || 0)`；若服务端返回的单位可信，显示 `N 单位`；否则 `itemCount 项`；
+- 不得展示 `creatorName` / `archiveState.blockers` 等首屏不需要字段。
+
+### 27.6 列表 — 状态 / 归档 / 数量策略
+
+- 文档状态：枚举 → tone（`draft` / `confirmed` / `cancelled`），复用 V1.6 已冻结的语义色；
+- 归档 marker：仅 `已归档` 文本，不替代文档状态；
+- 数量上下文：见 §27.5；
+- 状态过滤：`全部 / 草稿 / 已确认 / 已取消`；
+- 归档切换：单独次级按钮（`归档记录`），按 `aria-pressed` 切换 `includeArchived`；
+- 不得混入 IQC 进入状态过滤；
+- 不得把归档并入状态段。
+
+### 27.7 列表 — 状态文案
+
+- LOADING：`加载中`；
+- EMPTY：`暂无采购入库`；`PURCHASE_RECEIPTS_MANAGE` 时显示 `新增采购入库` 主动作；
+- NO_RESULTS：`没有匹配结果`；动作 `清除筛选`（清空 search / status / includeArchived 并 reload）；
+- ERROR：`加载失败`；动作 `重试`；
+- 不使用常驻解释段。
+
+### 27.8 详情 — 顶部结构
+
+`SalesOrderDetailV16` 的 P3 已冻结结构被复用为 P4 详情结构骨架；P4 引入 `PurchaseReceiptDetailV16`：
+
+```jsx
+<div className="v16-mobile-enterprise v16-purchase-receipt-detail">
+  <section className="v16-purchase-receipt-detail__identity">
+    <div className="v16-purchase-receipt-detail__identity-row">
+      <span className="v16-purchase-receipt-detail__number">{detail.receipt_no}</span>
+      <span className={`v16-purchase-receipt-status v16-purchase-receipt-status--${tone}`}>
+        {presentation.label}
+      </span>
+      {archived && <span className="v16-purchase-receipt-detail__archive">已归档</span>}
+    </div>
+    <span className="v16-purchase-receipt-detail__supplier">{detail.supplierName}</span>
+    <span className="v16-purchase-receipt-detail__amount">{money(detail.total_cents)}</span>
+  </section>
+  <section className="v16-purchase-receipt-detail__sections">
+    <details open>...</details> {/* 概要 */}
+    <details>...</details>           {/* 来源采购订单 */}
+    <details open>...</details>       {/* 入库明细 */}
+    <details>...</details>           {/* 质量 */}
+    <details>...</details>           {/* 结算与关联 */}
+    <details>...</details>           {/* 操作记录 */}
+    <details>...</details>           {/* 管理 */}
+  </section>
+  {(primary || secondary) && <ActionBar />}
+</div>
+```
+
+`PurchaseReceiptDetailV16` 不渲染 `<BusinessPageHeader>` / `business-status-group` / `BusinessContentSection` / `BusinessAuditSection` / `BusinessDangerZone`；唯一的返回按钮由 MobileShell 头部承担（通过 `setHeaderBackAction`）。
+
+### 27.9 详情 — 章节
+
+| # | 标题 | 内容 |
+|---|---|---|
+| 1 | 概要 | 收货仓库 / 收货日期 / 计费方式（本地化） |
+| 2 | 来源采购订单 | PO 行；缺失时 `来源信息不完整` |
+| 3 | 入库明细 | 高密度行；可选 `采购/已收/剩余` 次级行；tracking 紧凑披露 |
+| 4 | 质量 | IQC 状态标签 + 上下文 |
+| 5 | 结算与关联 | 计费状态 / 供应商账单 / 应付记录 / 采购退货 |
+| 6 | 操作记录 | 制单人 / 确认人 / 归档原因 / 归档时间 |
+| 7 | 管理 | 仅在存在可执行动作时渲染（取消 / 归档 / 恢复） |
+
+### 27.10 详情 — 质量章节
+
+```jsx
+<details open>
+  <summary>质量</summary>
+  <div className="v16-purchase-receipt-detail__quality">
+    <strong>IQC</strong>
+    <span className={`v16-purchase-receipt-quality v16-purchase-receipt-quality--${quality.code}`}>
+      {qualityLabel(detail.qualityState)}
+    </span>
+  </div>
+</details>
+```
+
+quality label 本地化见 §26.15；色阶使用 V1.6 已冻结语义色。不得展示 GRNI / 财务解释。
+
+### 27.11 详情 — 动作矩阵
+
+| 状态 | quality | secondary | primary |
+|---|---|---|---|
+| DRAFT | PASS | 编辑 | 确认入库 |
+| DRAFT | WAIVED | 编辑 | 确认入库 |
+| DRAFT | NOT_INSPECTED | 编辑 | 创建 IQC |
+| DRAFT | INSPECTION_DRAFT | 编辑 | 前往 IQC |
+| DRAFT | FAIL | 编辑 | 创建 IQC 复检 |
+| DRAFT | STALE | 编辑 | 创建 IQC 复检 |
+| CONFIRMED | — | — | 不渲染固定 primary |
+| CANCELLED + 未归档 + `PURCHASE_RECEIPTS_MANAGE` | — | — | 管理章节渲染 `从业务列表移除 >` |
+| ARCHIVED + `USERS_MANAGE` | — | — | 管理章节渲染 `恢复到业务列表 >` |
+
+固定动作栏在 `primary || secondary` 时渲染；沿用 P3 `position: fixed; bottom: calc(--v16-bottom-nav-height + --v16-bottom-nav-safe + --v16-space-3)`。
+
+### 27.12 详情 — Confirm 弹窗
+
+```jsx
+<ConfirmAction
+  title="确认采购入库？"
+  message={
+    billingMode === 'AUTO_BILL'
+      ? '确认后将按本单数量增加库存，入库日期和来源采购订单将作为业务依据。\n当前设置会自动生成供应商账单。'
+      : '确认后将按本单数量增加库存，入单日期和来源采购订单将作为业务依据。'
+  }
+  buttonLabel="确认入库"
+  confirmLabel="确认入库"
+  onConfirm={async () => {
+    await api(`/api/purchase-receipts/${id}`, { method: 'POST', body: { action: 'confirm' } });
+    notify('入库单已确认');
+    await reload();
+  }}
+/>
+```
+
+服务端 quality gate 失败时显示错误，不打开成功确认。
+
+### 27.13 详情 — IQC 创建与跳转
+
+```js
+async function createQuality() {
+  await api('/api/iqc', { method: 'POST', body: { purchase_receipt_id: id } });
+  notify('IQC 检验草稿已创建');
+  await reload();
+}
+
+function goIqc() {
+  navigation.navigateToPage('iqc');
+}
+```
+
+复用既有 `POST /api/iqc` 与 `navigation.navigateToPage('iqc')`；不修改服务端。
+
+### 27.14 详情 — 安全归档
+
+```js
+async function prepareArchive() {
+  const response = await api(
+    `/api/lifecycle/analyze?entityType=PURCHASE_RECEIPT&entityId=${encodeURIComponent(id)}`,
+  );
+  const eligibility = response.archiveEligibility;
+  setDetail((current) => ({ ...current, archiveEligibility: eligibility }));
+  if (!eligibility.allowed) {
+    return notify(eligibility.blockers?.[0]?.message || '当前单据不能移除', 'error');
+  }
+  setConfirm('archive');
+}
+
+async function archive() {
+  await api('/api/lifecycle/archive', {
+    method: 'POST',
+    body: { entityType: 'PURCHASE_RECEIPT', entityId: id, reason: archiveReason },
+  });
+  notify('已归档');
+  setConfirm(null);
+  await reload();
+  await onChanged?.();
+}
+
+async function restore() {
+  await api('/api/lifecycle/restore', {
+    method: 'POST',
+    body: { entityType: 'PURCHASE_RECEIPT', entityId: id, reason: '恢复正常列表可见性' },
+  });
+  notify('已恢复到业务列表，单据仍为已取消');
+  setConfirm(null);
+  await reload();
+  await onChanged?.();
+}
+```
+
+归档 / 恢复文案见 §26.21 / §26.22；服务端合同不变。
+
+### 27.15 编辑器 — 顶部结构
+
+```jsx
+<div className="v16-mobile-enterprise v16-purchase-receipt-editor">
+  <section className="v16-purchase-receipt-editor__title">
+    <small>{order.id ? '编辑采购入库' : '新建采购入库'}</small>
+    <strong>{order.receipt_no || ' '}</strong>
+  </section>
+  <form onSubmit={save}>
+    <section className="v16-purchase-receipt-editor__section">
+      <h2>来源采购订单</h2>
+      <label>来源采购订单
+        <select value={form.purchaseOrderId} onChange={(e) => choosePurchaseOrder(e.target.value)} required>
+          <option value="">选择已审批采购订单</option>
+          {purchaseOrders.map((o) => <option key={o.id} value={o.id}>{o.orderNo} · {o.supplierName}</option>)}
+        </select>
+      </label>
+      <label>供应商
+        <select value={form.supplierId} disabled required>
+          <option value="">由采购订单带入</option>
+          {suppliers.map((s) => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}
+        </select>
+      </label>
+    </section>
+
+    <section className="v16-purchase-receipt-editor__section">
+      <h2>收货信息</h2>
+      <label>收货仓库<select ... /></label>
+      <label>收货日期<input type="date" ... /></label>
+    </section>
+
+    <section className="v16-purchase-receipt-editor__section">
+      <h2>入库明细</h2>
+      <ul className="v16-purchase-receipt-editor__lines">
+        {form.items.map((item, i) => (
+          <li className="v16-purchase-receipt-editor__line" key={...}>
+            <header>
+              <span>明细 {i + 1}</span>
+            </header>
+            <label>产品<select disabled value={item.productId}>{...}</select></label>
+            <small>采购 {quantity(item.orderedQuantity)} · 已收 {quantity(item.receivedQuantity || 0)} · 剩余 {quantity((item.orderedQuantity || 0) - (item.receivedQuantity || 0))}</small>
+            <label>本次入库
+              <input type="number" min="1" max={(item.orderedQuantity || 0) - (item.receivedQuantity || 0)} value={item.quantity} onChange={...} required />
+            </label>
+            <footer>
+              <span>采购单价 {money(item.unitPriceCents)}</span>
+              <strong>{money(item.quantity * item.unitPriceCents)}</strong>
+            </footer>
+            <TrackingAllocationEditor product={...} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.receiptDate} direction="IN" value={item.trackingAllocations || []} onChange={...} notify={notify} />
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <details className="v16-purchase-receipt-editor__disclosure">
+      <summary>计费与备注</summary>
+      ...
+    </details>
+
+    <section className="v16-purchase-receipt-editor__total">
+      <span>单据合计</span>
+      <strong>{money(totalCents)}</strong>
+    </section>
+
+    <div className="v16-purchase-receipt-editor__action-bar">
+      <button type="button" className="secondary" onClick={onClose}>取消</button>
+      <button type="submit" className="primary">保存草稿</button>
+    </div>
+  </form>
+</div>
+```
+
+### 27.16 编辑器 — 保存行为
+
+```js
+async function save(e) {
+  e.preventDefault();
+  setSaving(true);
+  try {
+    if (order.id) {
+      await api(`/api/purchase-receipts/${order.id}`, { method: 'PATCH', body: form });
+      notify('采购入库草稿已保存');
+    } else {
+      const response = await api('/api/purchase-receipts', { method: 'POST', body: form });
+      const createdId = response?.purchaseReceipt?.id;
+      notify('采购入库草稿已保存');
+      if (createdId) {
+        onSaved?.({ id: createdId });
+        return;
+      }
+    }
+    onSaved?.();
+  } catch (error) {
+    notify(error.message, 'error');
+  } finally {
+    setSaving(false);
+  }
+}
+```
+
+`POST /api/purchase-receipts` 既有响应保持不变；若后端返回 `purchaseReceipt.id`，编辑器尝试直接进入详情；为安全起见（避免无谓 API 变更），若响应未暴露 ID 则 fallback 到列表 reload。
+
+### 27.17 编辑器 — 来源驱动
+
+```js
+function choosePurchaseOrder(purchaseOrderId) {
+  if (!purchaseOrderId) return setForm((current) => ({ ...current, purchaseOrderId: '' }));
+  const order = purchaseOrders.find((o) => o.id === purchaseOrderId);
+  if (!order) return;
+  setForm((current) => ({
+    ...current,
+    purchaseOrderId,
+    supplierId: order.supplierId,
+    items: (order.items || []).filter((item) => item.quantity > 0).map((item) => ({
+      purchaseOrderItemId: item.purchaseOrderItemId,
+      productId: item.productId,
+      quantity: item.quantity,
+      orderedQuantity: item.orderedQuantity,
+      receivedQuantity: item.receivedQuantity,
+      unitPriceCents: item.unitPriceCents,
+      trackingAllocations: copySourceAllocations(item.trackingAllocations),
+    })),
+  }));
+}
+```
+
+来源变更时 `trackingAllocations` 通过 `copySourceAllocations` 重建；行内 `quantity` 修改时清除该行 `trackingAllocations`（沿用既有 `updateItem` 行为）。
+
+### 27.18 TrackingAllocationEditor 接入
+
+- 方向：`IN`；
+- 仓库：`form.warehouseId`；
+- 数量：`item.quantity`；
+- 业务日期：`form.receiptDate`；
+- `value`：`item.trackingAllocations`；
+- `onChange`：更新对应行的 `trackingAllocations`。
+
+`TrackingAllocationEditor` 既有逻辑保持不变；不修改其内部 contract。
+
+### 27.19 数据流与调用关系
+
+- 列表：`GET /api/purchase-receipts?search=&status=&includeArchived=`；
+- 详情：`GET /api/purchase-receipts/:id`；
+- 提交 / 取消：`POST /api/purchase-receipts/:id { action: 'confirm' | 'cancel' }`；
+- IQC 创建：`POST /api/iqc { purchase_receipt_id }`；
+- 归档资格：`GET /api/lifecycle/analyze?entityType=PURCHASE_RECEIPT&entityId=`；
+- 归档：`POST /api/lifecycle/archive`；
+- 恢复：`POST /api/lifecycle/restore`；
+- 编辑器：新建 `POST /api/purchase-receipts`；保存 `PATCH /api/purchase-receipts/:id`；
+- 来源查询：`GET /api/lookup/purchase-orders-source`；
+- 既有辅助：`/api/warehouses`、`/api/customers` / `/api/suppliers`、`/api/products`。
+
+### 27.20 事务、权限与错误行为
+
+- 不引入任何后端事务 / API / 数据库变更；
+- `PURCHASE_RECEIPTS_MANAGE` 控制列表 `新建`、行内 `编辑草稿`、详情 DRAFT 取消、归档资格；
+- `USERS_MANAGE` 控制 `恢复到业务列表`；
+- 错误统一走既有 `notify(error.message, 'error')`；不在 UI 永久展示技术原因。
+
+### 27.21 Focused 源码合同测试
+
+新增 `server/v16-p4-purchase-receipts.test.js`，使用 `node:test` + `node:fs`，源码字面 + 正则断言覆盖 ≥ 31 项：
+
+1. 列表不再 import / 渲染 `CompactRecord` / `CompactRecordList`；
+2. 列表不再渲染 `BusinessPageHeader`；
+3. 列表不再含永久 `<HelpDisclosure summary="业务说明">` 段落；
+4. 状态过滤严格为 `全部 / 草稿 / 已确认 / 已取消`；
+5. 归档 marker 与文档状态分别渲染；
+6. 归档行保留 CANCELLED 主状态；
+7. 列表行读取 `receipt_no / supplierName / warehouseName / receipt_date / total_cents / itemCount / qualityState`；
+8. 列表不展示 `creatorName`；
+9. 详情不渲染 `business-status-group`；
+10. 详情不展示 `正常显示`；
+11. 章节顺序固定；
+12. IQC 仍由 qualityState 表达；
+13. confirm 仍调用 `POST /api/purchase-receipts/:id { action: 'confirm' }`；
+14. IQC 创建仍调用 `POST /api/iqc { purchase_receipt_id }`；
+15. confirm 不绕过质量门禁；
+16. 归档前调用 analyze；
+17. 归档仍走 lifecycle archive，非 DELETE；
+18. 恢复权限仍为 `USERS_MANAGE`；
+19. 归档文案不含 `永久删除 / 彻底删除 / 不可恢复`；
+20. 编辑器不再使用 `<Modal>`；
+21. 编辑器不再使用 `line-table / line-header`；
+22. 来源采购订单必填；
+23. 编辑 DRAFT 来源不可变；
+24. 供应商不可编辑；
+25. `TrackingAllocationEditor` 仍存在；
+26. `direction="IN"` 保持；
+27. 数量变更清除 tracking 行为保持；
+28. payload contract 未改（`POST /api/purchase-receipts`、`PATCH /api/purchase-receipts/:id`）；
+29. 编辑器不含 `保存并确认`；
+30. 后端文件未被改动（`server/app.js` 等）；
+31. P2 / P3 / P3.1 既有合同保持不变。
+
+### 27.22 浏览器验收
+
+新增 `scripts/acceptance/v16-p4-purchase-receipts.mjs`，输出 `.tmp/v16-p4-visual/`：
+
+- 列表：`purchase-receipts-{320,390,430,680}.png`；
+- 详情：`purchase-receipt-detail-{draft,confirmed,cancelled,archived,longtext}-{320,390,430,680}.png`；
+- 编辑器：`purchase-receipt-editor-{new,edit,longtext}-{320,390,430,680}.png`；
+- 必需证据：`purchase-receipts-390.png` + `purchase-receipt-detail-confirmed-390.png` + `purchase-receipt-editor-new-390.png` 作为运营方视觉评审证据。
+
+视口高度 844px；不得通过缩字号作弊满足 ≥ 44 px；不强行 `overflow-x: hidden`。
+
+### 27.23 阶段状态与门禁
+
+1. focused ≥ 31 项通过 + V1/P1.1/P2/P3/P3.1 套件保持通过 + 全量 `pnpm test` + `pnpm build` + `git diff --check` 通过 → 可 exact-file stage；
+2. 真实 Edge 在 320 / 390 / 430 / 680px 四个视口下截图无横向溢出、无未捕获错误 → 可提交；
+3. 提交后 STOP；不进入 P5–P8；不 push / tag / deploy；不动 package.json 版本；不动 README 当前已发布基线；不动 v1.5.0 tag；
+4. 截图通过运营方视觉评审后才进入 P5。
+
+### 27.24 实施范围与文件清单
+
+可能涉及的实现文件（最终以 exact-file stage 为准）：
+
+- `document.md`（§26 P4 REQUIREMENT 追加，已提交）
+- `solution.md`（§27 P4 DESIGN 追加，已提交）
+- `log/2026-09-30.md`（P4 阶段追加，已提交）
+- `src/main.jsx`（追加一行 import）
+- `src/pages/logistics-finance.jsx`（新增 `PurchaseReceiptListRowV16` / `PurchaseReceiptDetailV16` / `PurchaseReceiptEditorV16`；改写 `PurchaseReceipts` 顶层分支；stub `PurchaseReceiptModal` / `PurchaseReceiptDetail`；不修改 `SalesDeliveries`、`Returns`、`ReadOnlyDocument`、`LogisticsActions`、`RelationshipSections`、`SalesDeliveryModal`、`ReturnModal` 等其它功能）
+- `src/styles/v16-purchase-receipts.css`（新增）
+- `server/v16-p4-purchase-receipts.test.js`（新增）
+- `scripts/acceptance/v16-p4-purchase-receipts.mjs`（新增）
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族、IQC API、归档 / 恢复合同；
+- `Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`BusinessPageShell`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection`、`BusinessDangerZone`、`HelpDisclosure`、`SegmentedControl`、`SearchField`、`StatusChip`、`InlineAlert`、`ActionMenu`、`FilterSheet`、`ConfirmAction`、`ConfirmDelete`、`ConfirmSheet`、`DangerSheet`、`RecordCard`、`RecordList`、`ListRow`、`KeyValueRow`、`SummaryCard`、`Panel`、`Toolbar`、`FilterButton`、`Tabs`、`EmptyState`、`Empty`、`Loading` 等设计系统组件；
+- `SalesDeliveryModal`、`ReturnModal`、`OrderDocumentDetail` 工作流阶段函数 `orderWorkflowStages`；
+- P0/P1/P1.1/P2/P3/P3.1 任何文件；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。
