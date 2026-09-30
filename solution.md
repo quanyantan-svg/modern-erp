@@ -2395,3 +2395,392 @@ P2 正常列表行内不得出现以下任意字段：
 - P1 / P1.1 任何文件（`v16-tokens.css`、`v16-mobile-enterprise.css`、`MobileLauncher.jsx`、`MobileShell.jsx`、`App.jsx`、`applicationMetadata.js` 等）；
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
+
+## 26. V1.6 P3 — Mobile Enterprise 销售订单详情 + 编辑器原型设计
+
+本节是 `document.md §25` 已批准需求的 STAGE 2 — DESIGN，起点为 `6e72dbb`。P0/P1/P1.1/P2 视觉 DNA 与列表合同已冻结，本节只设计 P3 销售订单详情与编辑器的展示层实现策略，不重写既有组件、不变更后端 / API / 数据库 / 业务合同。P4–P8 不在本节范围。
+
+### 26.1 范围与不变量
+
+P3 实现范围：
+
+- `src/pages/master-data.jsx`：
+  - 新增 `SalesOrderDetailV16` 组件；
+  - `OrderDetail` 改用 `SalesOrderDetailV16`（不再走既有 `OrderDocumentDetail(kind="sales")`）；
+  - 销售 `OrderEditor` 改写为全屏移动任务页（移除 `<Modal>` 包装），不依赖 `OrderDocumentDetail`；
+  - `Orders` 顶层分支顺序：`editing` → `viewing` → LIST；
+  - 列表创建/编辑：`onSaved` 关闭编辑器 + 重载列表；
+  - 详情编辑：`onSaved` 关闭编辑器 + 保持 `viewing` 状态；
+  - `PurchaseOrderDetail` / `PurchaseOrderEditor` / `PurchaseOrders` 完全不动。
+- `src/styles/v16-sales-order-document.css`（新增）。
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族；
+- `MobileWorkflowProgress`、`Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`HelpDisclosure`、`InlineAlert`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection` 等组件本身；
+- `OrderDocumentDetail` 工作流阶段函数（保留 `orderWorkflowStages`，仅不在销售详情使用）；
+- P0/P1/P1.1/P2 任何文件；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。
+
+### 26.2 样式隔离策略
+
+1. 新增 `src/styles/v16-sales-order-document.css`；
+2. `src/main.jsx` 在 `v16-sales-orders.css` 之后追加 `import './styles/v16-sales-order-document.css'`；
+3. 选择器作用域限定于 `.v16-mobile-enterprise .v16-sales-order-detail` / `.v16-mobile-enterprise .v16-sales-order-editor` 或 `v16-sales-order-document-*` 前缀；
+4. 不写入 `src/styles.css`、`v16-mobile-enterprise.css`、`v16-sales-orders.css`；
+5. 不重写既有 `OrderDocumentDetail` / `PurchaseOrderDetail` 既有 CSS 选择器。
+
+### 26.3 Orders 顶层分支
+
+```text
+function Orders({ user, notify }) {
+  // 状态保持与 P2 兼容
+  const [editing, setEditing] = useState(null);
+  const [viewing, setViewing] = useState(...);
+
+  if (editing) {
+    return (
+      <BusinessPageShell className="sales-order-editor-v16 v16-sales-orders" width="rail">
+        <SalesOrderEditorV16
+          order={editing}
+          user={user}
+          notify={notify}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            const fromDetail = Boolean(viewing);
+            setEditing(null);
+            if (fromDetail) {
+              // keep viewing state; detail remount/reload will fetch fresh data
+            } else {
+              setViewing(null);
+              void load();
+              notify('销售订单草稿已保存');
+            }
+          }}
+        />
+      </BusinessPageShell>
+    );
+  }
+
+  if (viewing) {
+    return (
+      <SalesOrderDetailV16
+        id={viewing.id}
+        user={user}
+        notify={notify}
+        onBack={() => { setViewing(null); void load(); }}
+        onEdit={(order) => setEditing(order)}
+        onSubmitted={() => { /* detail reloads internally */ }}
+      />
+    );
+  }
+
+  return (/* P2 frozen LIST */);
+}
+```
+
+`SalesOrderDetailV16` 自身负责路由 detail → editor 的保存后 `viewing` 保持。
+
+### 26.4 SalesOrderDetailV16 — 顶部结构
+
+```jsx
+<div className="v16-mobile-enterprise v16-sales-order-detail">
+  <section className="v16-sales-order-detail__back">
+    <button type="button" onClick={onBack} aria-label="返回列表">
+      ‹ 返回列表
+    </button>
+  </section>
+
+  <section className="v16-sales-order-detail__identity">
+    <div className="v16-sales-order-detail__number">{order.orderNo}</div>
+    <span className={`v16-sales-order-status v16-sales-order-status--${tone}`}>
+      {label}
+    </span>
+    <div className="v16-sales-order-detail__customer">{order.customerName}</div>
+    <div className="v16-sales-order-detail__amount">{money(order.totalCents)}</div>
+  </section>
+
+  {order.status === 'REJECTED' && order.rejectionReason && (
+    <section className="v16-sales-order-detail__rejection" aria-label="驳回原因">
+      <strong>驳回原因</strong>
+      <span>{order.rejectionReason}</span>
+    </section>
+  )}
+
+  <section className="v16-sales-order-detail__sections">
+    <details className="v16-sales-order-document__disclosure" open>
+      <summary>概要</summary>
+      <dl className="v16-sales-order-document__kv">
+        ...
+      </dl>
+    </details>
+
+    <details className="v16-sales-order-document__disclosure">
+      <summary>交付信息 ... 已填写 / 待完善</summary>
+      ...
+    </details>
+
+    <details className="v16-sales-order-document__disclosure" open>
+      <summary>订单明细</summary>
+      <ul className="v16-sales-order-detail__lines">
+        {items.map((item) => <li>...</li>)}
+      </ul>
+      <div className="v16-sales-order-detail__total">
+        <span>订单合计</span>
+        <strong>{money(order.totalCents)}</strong>
+      </div>
+    </details>
+
+    <details className="v16-sales-order-document__disclosure" open>
+      <summary>业务进度</summary>
+      <ul className="v16-sales-order-detail__progress">
+        <li>订单 · 已创建</li>
+        <li>审批 · {approvalLabel(order.status)}</li>
+        <li>出货 · {deliveryLabel(order, trace)}</li>
+        {returnCount > 0 && <li>退货 · 已关联 N 张退货单</li>}
+      </ul>
+      <AppLink page="business-overview" className="v16-sales-order-detail__overview">
+        查看业务流程 ›
+      </AppLink>
+    </details>
+
+    <details className="v16-sales-order-document__disclosure">
+      <summary>操作记录 ... N 条</summary>
+      <ul className="v16-sales-order-detail__history">
+        {(order.history || []).map(...)}
+      </ul>
+      {!order.history?.length && <p className="muted">暂无操作记录</p>}
+    </details>
+  </section>
+
+  {hasAction && (
+    <div className="v16-sales-order-detail__action-bar">
+      {secondary && <button className="secondary" type="button" onClick={...}>{secondary}</button>}
+      <button className="primary" type="button" onClick={primary.onClick}>{primary.label}</button>
+    </div>
+  )}
+</div>
+```
+
+`SalesOrderDetailV16` 不渲染页面级 `<h1>`，不调用 `BusinessPageHeader`，不使用 `MobileWorkflowProgress`，不使用 `CompactRecord`，不使用 `BusinessContentSection` 家族。
+
+### 26.5 业务进度映射
+
+| 来源 | 展示 |
+|---|---|
+| `order.status === 'DRAFT'` | 订单 · 已创建；审批 · 待提交；出货 · 审批后进行 |
+| `order.status === 'SUBMITTED'` | 订单 · 已创建；审批 · 待审批；出货 · 审批后进行 |
+| `order.status === 'APPROVED'` 且 `deliveries.length === 0` | 订单 · 已创建；审批 · 已审批；出货 · 待出货 |
+| `order.status === 'APPROVED'` 且 `deliveries.length > 0` | 订单 · 已创建；审批 · 已审批；出货 · 已关联 N 张出货单 |
+| `order.status === 'REJECTED'` | 订单 · 已创建；审批 · 已驳回；出货 · 审批后进行 |
+| `deliveries.flatMap(returns).length > 0` | 退货 · 已关联 N 张退货单 |
+
+进度不得使用模块色表达状态；不得展示 `已完成 / 已全部出货 / 部分出货`。
+
+### 26.6 动作模型
+
+| 状态 | 条件 | secondary | primary |
+|---|---|---|---|
+| DRAFT / REJECTED | `can(user,'ORDERS_CREATE')` 且 `ORDERS_SUBMIT` | 编辑 | 提交审批 |
+| DRAFT / REJECTED | 仅 `ORDERS_CREATE` | 编辑 | — |
+| SUBMITTED | `can(user,'ORDERS_APPROVE')` 且 `navigation.canNavigate('approvals')` | — | 前往审批 |
+| APPROVED | `navigation.canNavigate('sales-deliveries')` | — | 销售出货 |
+| 其他 | — | — | 不渲染 |
+
+`SalesOrderDetailV16` 接受 `useAppNavigation()`，通过 `navigation.canNavigate(...)` 决定动作可达性。
+
+### 26.7 提交确认
+
+```jsx
+<ConfirmAction
+  title="提交这张销售订单？"
+  message="提交后将进入业务审批，审批通过后再进行销售出货。"
+  buttonLabel="提交审批"
+  confirmLabel="确认提交"
+  onConfirm={async () => {
+    await api(`/api/orders/${order.id}/submit`, { method: 'POST' });
+    notify('销售订单已提交');
+    await reload();
+  }}
+/>
+```
+
+不复用既有「提交后，单据进入业务审批；审批并不代表后续物流已经执行。」永久文案。
+
+### 26.8 SalesOrderEditorV16 — 全屏任务页
+
+```jsx
+<div className="v16-mobile-enterprise v16-sales-order-editor">
+  <section className="v16-sales-order-editor__back">
+    <button type="button" onClick={onClose} aria-label="返回">‹ 返回</button>
+  </section>
+  <section className="v16-sales-order-editor__title">
+    <small>{order.id ? '编辑销售订单' : '新建销售订单'}</small>
+    <strong>{order.orderNo || ' '}</strong>
+  </section>
+
+  <form onSubmit={save}>
+    <section className="v16-sales-order-editor__section">
+      <h2>客户与日期</h2>
+      <label>客户<select ...>{customers.map(...)}</select></label>
+      <div className="v16-sales-order-editor__dates">
+        <label>订单日期<input type="date" ... /></label>
+        <label>要求交期<input type="date" ... /></label>
+      </div>
+    </section>
+
+    <section className="v16-sales-order-editor__section">
+      <header>
+        <h2>订单明细</h2>
+        <button type="button" className="v16-sales-order-editor__add" onClick={addLine}>
+          ＋ 添加货品
+        </button>
+      </header>
+      <ul>
+        {items.map((line, i) => <LineEditor index={i} ... />)}
+      </ul>
+    </section>
+
+    <details className="v16-sales-order-document__disclosure" open={...}>
+      <summary>交付与付款 ... {summaryLabel}</summary>
+      ...
+    </details>
+
+    <section className="v16-sales-order-editor__section">
+      <label className="full">订单备注<textarea ... placeholder="选填" /></label>
+    </section>
+
+    <section className="v16-sales-order-editor__section v16-sales-order-editor__total">
+      <span>订单合计</span>
+      <strong>{money(totalCents)}</strong>
+    </section>
+  </form>
+
+  <div className="v16-sales-order-editor__action-bar">
+    <button type="button" className="secondary" onClick={onClose}>取消</button>
+    <button type="submit" className="primary">保存草稿</button>
+  </div>
+</div>
+```
+
+`SalesOrderEditorV16` 不使用 `<Modal>`，不渲染 `<h1>销售订单</h1>`。
+
+### 26.9 行编辑器
+
+```jsx
+<li className="v16-sales-order-editor__line">
+  <div className="v16-sales-order-editor__line-head">
+    <span>货品 {index + 1}</span>
+    {items.length > 1 && (
+      <button
+        type="button"
+        className="v16-sales-order-editor__line-remove"
+        onClick={removeLine}
+        aria-label={`移除第 ${index + 1} 行货品`}
+      >移除</button>
+    )}
+  </div>
+  <label>货品
+    <select value={line.productId} onChange={...} required>
+      <option value="">请选择货品</option>
+      {products.map(p => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
+    </select>
+  </label>
+  <div className="v16-sales-order-editor__line-grid">
+    <label>数量<input type="number" min="0.01" step="0.01" value={line.quantity} onChange={...} required /></label>
+    <label>成交单价（元）<input type="number" min="0" step="0.01" value={line.price} onChange={...} required /></label>
+  </div>
+  <div className="v16-sales-order-editor__line-foot">
+    <span>单位 {product?.unit || '—'}</span>
+    <strong>{money(lineAmountCents)}</strong>
+  </div>
+</li>
+```
+
+`qty × price` 通过 `yuanToNonNegativeCents` 转换为整数分后展示。
+
+### 26.10 数据流与调用关系
+
+- 详情加载：`GET /api/orders/:id` + `GET /api/workflow/sales-orders/:id` → `setOrder` / `setTrace`；
+- 提交：`POST /api/orders/:id/submit` → 重载；
+- 编辑保存：`POST /api/orders` 或 `PUT /api/orders/:id`（payload 与现有相同）；
+- 删除草稿：保留 P2 既有 `DELETE /api/orders/:id`；
+- 列表重载：保留 P2 既有 `load()` 行为。
+
+### 26.11 事务、权限与错误行为
+
+- 不引入任何后端事务 / API 变更 / 数据库 schema 变更 / 权限变更；
+- `can(user, 'ORDERS_*')` 与 `navigation.canNavigate(...)` 决定动作可达性；
+- 错误态：保留 `notify(error.message, 'error')`；
+- Loading / ERROR 状态文案统一为 `加载中` / `加载失败`，避免既有长标题。
+
+### 26.12 Focused 源码合同测试
+
+新增 `server/v16-p3-sales-order-document.test.js`，使用 Node `node:test` + `node:fs`，源码字面 + 正则断言覆盖 22 项：
+
+1. `OrderDetail` 不再走 `OrderDocumentDetail(kind="sales")`；
+2. `PurchaseOrderDetail` 仍走 `OrderDocumentDetail(kind="purchase")`；
+3. 销售详情不渲染 `BusinessPageHeader title="..."` 重复身份；
+4. 销售详情不渲染 `<HelpDisclosure summary="流程说明">`；
+5. 销售详情不渲染 `MobileWorkflowProgress`；
+6. 销售详情不含 `销售发票 / 应收账款 / 收款 / 核销` 字面状态行；
+7. 详情渲染字段：`orderNo`、`customerName`、`totalCents`、`orderDate`、`requestedDeliveryDate`、`paymentTerms`；
+8. 详情行渲染字段：`productName`、`productCode`、`quantity`、`unitPriceCents`、`amountCents`；
+9. 详情进度仅引用 `trace.downstream`；
+10. 退货仅从 `downstream[].returns` 派生；
+11. DRAFT / REJECTED 编辑入口保留；
+12. SUBMIT 仍调 `POST /api/orders/:id/submit`；
+13. APPROVED 销售出货导航不创建任何单据；
+14. `OrderEditor` 不再使用 `<Modal>` 包装；
+15. 销售编辑器不再渲染 `line-table` / `line-header`；
+16. `POST /api/orders` 与 `PUT /api/orders/:id` payload 形状保持不变；
+17. `applyCustomerSnapshot` 行为保持；
+18. 保存仍为 `保存草稿`，无 `保存并提交`；
+19. 不存在 `保存并提交` 字面动作；
+20. `PurchaseOrderEditor` 未被 P3 改动；
+21. P2 销售订单 LIST 合同保持（与 `v16-p2-sales-order-list.test.js` 重叠断言）；
+22. `server/app.js` 等后端文件未被改动（通过 `git status --porcelain` 校验）。
+
+### 26.13 浏览器验收
+
+新增 `scripts/acceptance/v16-p3-sales-order-document.mjs`，输出 `.tmp/v16-p3-visual/`：
+
+- 详情截图：`sales-order-detail-{draft,submitted,approved,rejected,longtext}-{320,390,430,680}.png`
+- 编辑器截图：`sales-order-editor-{new,edit,longtext}-{320,390,430,680}.png`
+- 必需证据：`sales-order-detail-approved-390.png` + `sales-order-editor-new-390.png` 作为运营方视觉评审证据。
+
+视口高度 844px；不得通过缩字号作弊满足 ≥ 44px；不得用 `overflow-x: hidden` 兜底。
+
+固定动作栏 `position: fixed` + `bottom: calc(var(--v16-bottom-nav-height) + var(--v16-bottom-nav-safe))`。
+
+### 26.14 阶段状态与门禁
+
+1. focused ≥ 22 项通过 + V1/P1.1/P2 套件保持通过 + 全量 `pnpm test` + `pnpm build` + `git diff --check` 通过 → 可 exact-file stage；
+2. 真实 Edge 在 320 / 390 / 430 / 680px 四个视口下截图无横向溢出、无未捕获错误 → 可提交；
+3. 提交后 STOP；不进入 P4–P8；不 push / tag / deploy；不动 package.json 版本；不动 README 当前已发布基线；不动 v1.5.0 tag；
+4. 截图通过运营方视觉评审后才进入 P4。
+
+### 26.15 实施范围与文件清单
+
+可能涉及的实现文件（最终以 exact-file stage 为准）：
+
+- `document.md`（§25 P3 REQUIREMENT 追加，已提交）
+- `solution.md`（§26 P3 DESIGN 追加，已提交）
+- `log/2026-09-30.md`（P3 阶段追加，已提交）
+- `src/main.jsx`（追加一行 import）
+- `src/pages/master-data.jsx`（新增 `SalesOrderDetailV16` + `SalesOrderEditorV16`；改写 `OrderDetail` 入口与 `OrderEditor`；不修改 `PurchaseOrderDetail` / `PurchaseOrderEditor` / `PurchaseOrders`）
+- `src/styles/v16-sales-order-document.css`（新增）
+- `server/v16-p3-sales-order-document.test.js`（新增）
+- `scripts/acceptance/v16-p3-sales-order-document.mjs`（新增）
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族；
+- `MobileWorkflowProgress`、`Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`HelpDisclosure`、`InlineAlert`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection`、`ConfirmAction`、`ConfirmDelete`、`ConfirmSheet`、`DangerSheet`、`ActionMenu`、`ActionSheet`、`Sheet`、`SearchField`、`SegmentedControl`、`StatusChip`、`InlineAlert`、`Empty`、`EmptyState`、`Loading`、`Modal`、`RecordCard`、`RecordList`、`ListRow`、`KeyValueRow`、`SummaryCard`、`Panel`、`Toolbar`、`FilterButton`、`FilterSheet`、`Tabs`、`MobileCrmApplication`、`MobilePage`、`MobileWorkflowProgress` 等组件；
+- `CompactRecord` / `CompactRecordList` 等仅停用在销售详情 / 编辑器，不删除不修改；
+- P0/P1/P1.1/P2 任何文件（`v16-tokens.css`、`v16-mobile-enterprise.css`、`v16-sales-orders.css`、`MobileLauncher.jsx`、`MobileShell.jsx`、`App.jsx`、`applicationMetadata.js`、`Orders` LIST MODE 视觉）；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。
