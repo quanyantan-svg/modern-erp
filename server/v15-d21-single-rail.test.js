@@ -19,14 +19,19 @@ test('D2.1 freezes one 680px rail for all four prototypes', () => {
   assert.match(logistics, /className=\{`purchase-receipt-detail[\s\S]*?width="rail"/);
 });
 
-test('D2.1 application uses one aligned seven-row domain selector', () => {
+test('D2.1 application launcher is rebuilt as direct flowchart grids', () => {
+  // V1.6 P1B replaces the seven-row numbered selector with six
+  // flowchart-aligned groups rendered as direct 3-column grids.
+  const v16Css = read('src/styles/v16-mobile-enterprise.css');
   assert.doesNotMatch(launcher, /application-desktop-workspace|application-mobile-domains/);
-  assert.match(launcher, /application-domain-nav__index/);
-  assert.match(launcher, /application-domain-nav__label/);
-  assert.match(launcher, /application-domain-nav__indicator/);
-  assert.match(css, /grid-template-columns:32px minmax\(0,1fr\) 22px/);
-  assert.match(css, /\.application-domain-nav button\.is-selected\s*\{[^}]*font-size:14px/);
-  assert.match(css, /\.application-domain-nav button\s*\{[^}]*height:48px/);
+  assert.match(launcher, /v16-launcher-grid/);
+  assert.match(launcher, /v16-launcher-group/);
+  assert.match(launcher, /v16-launcher-tile/);
+  assert.match(v16Css, /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+  // Numbered selector intentionally removed.
+  assert.doesNotMatch(launcher, /application-domain-nav__index/);
+  assert.doesNotMatch(launcher, /application-domain-nav__label/);
+  assert.doesNotMatch(launcher, /application-domain-nav__indicator/);
 });
 
 test('D2.1 replaces receipt tables and detail side rail with structured records', () => {

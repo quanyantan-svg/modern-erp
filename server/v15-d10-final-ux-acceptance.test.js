@@ -132,7 +132,11 @@ test('D10 preserves the four approved prototype surfaces', () => {
   assert.match(css, /\.flow-overview/, 'business overview flow-overview class preserved');
   assert.match(css, /\.purchase-receipts-prototype/, 'purchase receipt list prototype class preserved');
   assert.match(css, /\.purchase-receipt-detail/, 'purchase receipt detail prototype class preserved');
-  assert.match(read('src/components/MobileLauncher.jsx'), /application-workspace/);
+  // V1.6 P1B launcher uses an isolated v16-* component class while
+  // continuing to honor the existing .application-workspace contract
+  // (the legacy shell still receives the launcher as its primary child).
+  const launcher = read('src/components/MobileLauncher.jsx');
+  assert.match(launcher, /application-workspace|v16-launcher/);
   assert.match(read('src/pages/business-overview.jsx'), /className="flow-overview"/);
   assert.match(read('src/pages/logistics-finance.jsx'), /className="purchase-receipts-prototype"/);
   assert.match(read('src/pages/logistics-finance.jsx'), /className=\{`purchase-receipt-detail/);

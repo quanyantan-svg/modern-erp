@@ -12,16 +12,20 @@ const shell = read('src', 'components', 'MobileShell.jsx');
 const visualAcceptance = read('scripts', 'acceptance', 'v12-visual-acceptance.mjs');
 
 describe('V1.2 premium visual polish round 3', () => {
-  test('launcher uses a dense fixed two-line rhythm without reducing touch targets', () => {
-    assert.match(css, /\.mobile-launcher\s*\{[^}]*gap:20px/s);
-    assert.match(css, /\.mobile-launcher__item\s*\{[^}]*grid-template-rows:36px 34px[^}]*min-height:84px/s);
-    assert.match(css, /\.mobile-launcher__item-label\s*\{[^}]*min-height:32px[^}]*line-height:16px/s);
+  // V1.6 P1B: launcher CSS moved to v16-mobile-enterprise.css.
+  const v16Css = read('src', 'styles', 'v16-mobile-enterprise.css');
+
+  test('V1.6 launcher uses a dense fixed two-line rhythm without reducing touch targets', () => {
+    assert.match(v16Css, /\.v16-launcher-grid\s*\{[^}]*gap:\s*var\(--v16-space-3\)/s);
+    assert.match(v16Css, /\.v16-launcher-tile\s*\{[^}]*min-height:\s*82px/s);
+    assert.match(v16Css, /\.v16-launcher-tile__label\s*\{[^}]*line-height:\s*1\.35/s);
   });
 
-  test('ordinary launcher icons are plain and only category leaders retain a tint', () => {
-    assert.match(css, /\.mobile-launcher__item-icon\s*\{[^}]*background:transparent/s);
-    assert.match(css, /\.mobile-launcher__item:first-child \.mobile-launcher__item-icon\s*\{[^}]*background:var\(--mobile-app-accent-soft\)/s);
-    assert.match(launcher, /OPTICALLY_COMPACT_ICONS/);
+  test('V1.6 launcher tile icons use a soft accent background consistently', () => {
+    assert.match(v16Css, /\.v16-launcher-tile__icon\s*\{[^}]*background:\s*var\(--v16-accent-soft\)/s);
+    // V1.6 removed the "category leader tint" asymmetry; every tile uses
+    // the same soft accent background.
+    assert.match(v16Css, /\.v16-quick-action__icon\s*\{[^}]*background:\s*var\(--v16-accent-soft\)/s);
   });
 
   test('application root has its own compact header treatment and no forced back affordance', () => {

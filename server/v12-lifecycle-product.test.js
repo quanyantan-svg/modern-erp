@@ -92,10 +92,12 @@ describe('Lifecycle product APIs', () => {
 });
 
 describe('Data cleanup product wiring', () => {
-  test('launcher and page use the canonical USERS_MANAGE gate', () => {
+  test('data-cleanup route is wired with USERS_MANAGE gate but excluded from launcher tiles', () => {
+    // V1.6 P1B: data-cleanup continues to be a reachable disabled route
+    // via the navigation registry but is NOT a primary launcher tile.
     assert.match(appSource, /key:\s*['"]data-cleanup['"][\s\S]*?permission:\s*['"]USERS_MANAGE['"]/);
     assert.match(appSource, /['"]data-cleanup['"]:\s*<DataCleanup/);
-    assert.match(metadataSource, /\['data-cleanup', '数据整理'/);
+    assert.doesNotMatch(metadataSource, /\['data-cleanup', '数据整理'/);
   });
 
   test('cleanup UX uses one sheet at a time and requires destructive reasons', () => {

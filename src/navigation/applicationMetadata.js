@@ -1,82 +1,218 @@
 import { presentationForRoute } from './presentationMetadata.js';
 
-// V1.5 D2 application launcher hierarchy. Authorization still comes only
-// from App.jsx visibleNav; this file controls labels and disclosure.
+// V1.6 P1B — six flowchart-aligned core application groups.
+//
+// The launcher reads these definitions in `buildMobileApplicationGroups`.
+// This metadata is intersected with the authorized visibleNav, then rendered
+// resulting groups as direct application grids (no domain selector).
+//
+// Items in a `kind: 'domain'` group are the user-facing core tiles.
+// Items in a `kind: 'utility'` group are revealed only via the
+// collapsed utility disclosures at the bottom of the launcher.
+//
+// IQC, OQC and material-requirements-plan are intentionally NOT core
+// tiles — they remain reachable only as routes / contextual flows.
 export const MOBILE_APPLICATION_GROUPS = Object.freeze([
-  { key: 'master-data', label: '基础资料', kind: 'domain', items: [
-    ['products', '货品资料', 'products', 'primary'], ['customers', '客户资料', 'customers', 'primary'],
-    ['suppliers', '供应商资料', 'suppliers', 'primary'], ['warehouses', '仓库资料', 'warehouses', 'primary'],
-  ] },
-  { key: 'sales', label: '销售', kind: 'domain', items: [
-    ['orders', '销售订单', 'orders', 'primary'], ['sales-deliveries', '销售出货', 'salesDeliveries', 'primary'],
-    ['accounts-receivable', '应收结算', 'accounting', 'primary'], ['returns', '销售退货', 'returns', 'secondary', { documentType: 'SALES_RETURN' }, 'returns:sales'],
-    ['sales-invoices', '销售发票', 'accounting', 'secondary'], ['payment-collections', '收款 / 核销', 'cashJournals', 'secondary'],
-    ['sales-discounts', '销售折让', 'salesDiscount', 'secondary'], ['oqc', 'OQC 出货检验', 'oqc', 'contextual'],
-  ] },
-  { key: 'planning', label: '计划 / MRP', kind: 'domain', items: [
-    ['forecasts', '计划预测', 'forecasts', 'primary'], ['mrp-runs', 'MRP', 'mrpRuns', 'primary'],
-    ['production-instructions', '生产指令', 'planningDocuments', 'primary'], ['purchase-instructions', '采购指令', 'planningDocuments', 'primary'],
-    ['material-requirements-plan', '物料建议', 'materialPlan', 'secondary'],
-  ] },
-  { key: 'production', label: '生产', kind: 'domain', items: [
-    ['production-orders', '制令单', 'productionOrders', 'primary'], ['material-issues', '用料出库', 'salesDeliveries', 'primary'],
-    ['production-receipts', '生产入库', 'purchaseReceipts', 'primary'], ['boms', 'BOM', 'boms', 'secondary'],
-    ['product-routings', '制品工序标准', 'routings', 'secondary'],
-    ['product-costs', '标准成本', 'costAccounting', 'advanced'], ['cost-rates', '成本费率', 'costAccounting', 'advanced'],
-  ] },
-  { key: 'purchasing', label: '采购', kind: 'domain', items: [
-    ['purchase-requisitions', '请购单', 'planningDocuments', 'primary'], ['purchase-orders', '采购订单', 'purchaseOrders', 'primary'],
-    ['purchase-receipts', '采购入库', 'purchaseReceipts', 'primary'], ['accounts-payable', '应付结算', 'accounting', 'primary'],
-    ['returns', '采购退货', 'returns', 'secondary', { documentType: 'PURCHASE_RETURN' }, 'returns:purchase'],
-    ['supplier-bills', '供应商账单', 'accounting', 'secondary'], ['payment-disbursements', '付款 / 核销', 'bankAccounts', 'secondary'],
-    ['purchase-discounts', '采购折让', 'purchaseDiscount', 'secondary'], ['iqc', 'IQC 来料检验', 'iqc', 'contextual'],
-  ] },
-  { key: 'inventory', label: '库存', kind: 'domain', items: [
-    ['inventory', '库存作业', 'inventory', 'primary'], ['inventory-scraps', '存货报废', 'inventoryScrap', 'primary'],
-    ['inventory-month-end', '存货月结', 'inventoryPeriod', 'primary'], ['inventory-transactions', '库存异动明细', 'inventoryTransactions', 'primary'],
-    ['traceability', '批次 / 序列号追溯', 'traceability', 'secondary'],
-  ] },
-  { key: 'analytics', label: '经营分析', kind: 'domain', items: [
-    ['decision-reports', '销售统计分析', 'reports', 'primary', null, null, 'sales-summary'],
-    ['decision-reports', '采购统计分析', 'reports', 'primary', null, null, 'purchase-summary'],
-    ['decision-reports', '库存异动明细', 'reports', 'primary', null, null, 'inventory-movements'],
-    ['decision-reports', '销售未出货', 'reports', 'secondary', null, null, 'sales-outstanding'],
-    ['decision-reports', '采购未交货', 'reports', 'secondary', null, null, 'purchase-outstanding'],
-  ] },
-  { key: 'workspace', label: '工作区', kind: 'utility', items: [
-    ['business-overview', '业务总览', 'overview', 'shortcut'], ['accounting', '会计凭证 / 财务报表', 'accounting', 'finance'],
-    ['cash-journals', '现金日记账', 'cashJournals', 'finance'], ['bank-accounts', '银行账户', 'bankAccounts', 'finance'],
-    ['bills', '票据管理', 'bills', 'finance'], ['fixed-assets', '固定资产', 'fixedAssets', 'finance'],
-  ] },
-  { key: 'advanced', label: '高级设置', kind: 'utility', items: [
-    ['quality-control-points', '质量规则', 'iqc', 'advanced'],
-  ] },
-  { key: 'extension', label: '更多业务', kind: 'utility', items: [
-    ['projects', '项目立项', 'projects', 'extension'], ['tasks', '任务管理', 'tasks', 'extension'],
-    ['timesheets', '工时记录', 'timesheets', 'extension'], ['contacts', '客户关系', 'contacts', 'extension'],
-  ] },
-  { key: 'system', label: '系统设置', kind: 'utility', items: [
-    ['workflows', '审批流定义', 'approvals', 'system'], ['users', '用户与权限', 'users', 'system'],
-    ['data-cleanup', '数据整理', 'cleanup', 'system'], ['notifications', '通知中心', 'notifications', 'system'],
-  ] },
-].map((group) => Object.freeze({ ...group, items: Object.freeze(group.items.map(([page, mobileLabel, iconKey, tier, target = null, key = null, reportKey = null]) => Object.freeze({ page, mobileLabel, iconKey, tier, target, key, reportKey }))) })));
+  {
+    key: 'master-data',
+    label: '基础资料',
+    kind: 'domain',
+    items: [
+      ['products', '货品资料', 'products'],
+      ['boms', 'BOM', 'boms'],
+      ['customers', '客户资料', 'customers'],
+      ['suppliers', '供应商资料', 'suppliers'],
+      ['warehouses', '仓库资料', 'warehouses'],
+      ['product-routings', '制品工序标准', 'routings'],
+    ],
+  },
+  {
+    key: 'sales',
+    label: '销售管理',
+    kind: 'domain',
+    items: [
+      ['orders', '销售订单', 'orders'],
+      ['sales-deliveries', '销售出货', 'salesDeliveries'],
+      ['returns', '销售退货', 'returns', 'returns:sales', { documentType: 'SALES_RETURN' }],
+      ['accounts-receivable', '应收结算', 'accountsReceivable'],
+      ['sales-discounts', '销售折让', 'salesDiscount'],
+    ],
+  },
+  {
+    key: 'production',
+    label: '生产管理',
+    kind: 'domain',
+    items: [
+      ['forecasts', '计划预测', 'forecasts'],
+      ['mrp-runs', 'MRP', 'mrpRuns'],
+      ['production-instructions', '生产指令', 'planningDocuments'],
+      ['production-orders', '制令单', 'productionOrders'],
+      ['material-issues', '用料出库', 'salesDeliveries'],
+      ['production-receipts', '生产入库', 'purchaseReceipts'],
+    ],
+  },
+  {
+    key: 'purchasing',
+    label: '采购管理',
+    kind: 'domain',
+    items: [
+      ['purchase-instructions', '采购指令', 'planningDocuments'],
+      ['purchase-requisitions', '请购单', 'planningDocuments'],
+      ['purchase-orders', '采购订单', 'purchaseOrders'],
+      ['purchase-receipts', '采购入库', 'purchaseReceipts'],
+      ['returns', '采购退货', 'returns', 'returns:purchase', { documentType: 'PURCHASE_RETURN' }],
+      ['accounts-payable', '应付结算', 'accountsPayable'],
+      ['purchase-discounts', '采购折让', 'purchaseDiscount'],
+    ],
+  },
+  {
+    key: 'inventory',
+    label: '库存管理',
+    kind: 'domain',
+    items: [
+      ['inventory', '库存作业', 'inventory'],
+      ['inventory-scraps', '存货报废', 'inventoryScrap'],
+      ['inventory-month-end', '存货月结', 'inventoryPeriod'],
+      ['inventory-transactions', '库存异动', 'inventoryTransactions'],
+      ['traceability', '批次 / 序列号', 'traceability'],
+    ],
+  },
+  {
+    key: 'analytics',
+    label: '决策报表',
+    kind: 'domain',
+    items: [
+      ['decision-reports', '销售统计分析表', 'reports', null, null, 'sales-summary'],
+      ['decision-reports', '销售未出货反应表', 'reports', null, null, 'sales-outstanding'],
+      ['decision-reports', '采购统计分析表', 'reports', null, null, 'purchase-summary'],
+      ['decision-reports', '采购未交货反应表', 'reports', null, null, 'purchase-outstanding'],
+      ['decision-reports', '存货异动明细表', 'reports', null, null, 'inventory-movements'],
+    ],
+  },
+  // Utility disclosures — collapsed at the bottom of the launcher.
+  // All reachable active routes that are not core tiles must appear here
+  // (or remain reachable through bottom tabs / contextual navigation).
+  {
+    key: 'utility-flows',
+    label: '业务流程',
+    kind: 'utility',
+    items: [
+      ['business-overview', '业务总览', 'overview'],
+    ],
+  },
+  {
+    key: 'utility-finance',
+    label: '财务工具',
+    kind: 'utility',
+    items: [
+      ['sales-invoices', '销售发票', 'accounting'],
+      ['payment-collections', '收款 / 核销', 'paymentCollections'],
+      ['supplier-bills', '供应商账单', 'accounting'],
+      ['payment-disbursements', '付款 / 核销', 'paymentDisbursements'],
+      ['accounting', '会计凭证', 'accounting'],
+      ['bank-accounts', '银行账户', 'bankAccounts'],
+    ],
+  },
+  {
+    key: 'utility-extension',
+    label: '更多业务',
+    kind: 'utility',
+    items: [
+      ['projects', '项目立项', 'projects'],
+      ['tasks', '任务管理', 'tasks'],
+      ['timesheets', '工时记录', 'timesheets'],
+      ['contacts', '联系人管理', 'contacts'],
+      ['followups', '客户跟进', 'followups'],
+      ['activities', '销售活动', 'activities'],
+    ],
+  },
+  {
+    key: 'utility-advanced',
+    label: '高级设置',
+    kind: 'utility',
+    items: [
+      ['quality-control-points', '质量规则', 'iqc'],
+      ['product-costs', '标准成本', 'costAccounting'],
+      ['cost-rates', '成本费率', 'costAccounting'],
+    ],
+  },
+  {
+    key: 'utility-system',
+    label: '系统设置',
+    kind: 'utility',
+    items: [
+      ['users', '用户与权限', 'users'],
+    ],
+  },
+].map((group) => Object.freeze({
+  ...group,
+  items: Object.freeze(group.items.map(([page, mobileLabel, iconKey, key = null, target = null, reportKey = null]) => Object.freeze({
+    page,
+    mobileLabel,
+    iconKey,
+    key: key || (reportKey ? `${page}:${reportKey}` : page),
+    target,
+    reportKey,
+  }))),
+})));
 
 export const DEFERRED_MOBILE_APPLICATIONS = Object.freeze([]);
+
+// Priority order for the auto-built "常用" section. Only items the
+// current user is authorized to see are considered; at most three are
+// surfaced. The first matching item in this order wins.
+export const MOBILE_COMMON_PRIORITY = Object.freeze([
+  'orders',
+  'purchase-orders',
+  'purchase-receipts',
+  'sales-deliveries',
+  'inventory',
+  'mrp-runs',
+]);
 
 export function buildMobileApplicationGroups(visibleNav = [], options = {}) {
   const authorizedByPage = new Map(visibleNav.map((item) => [item.key, item]));
   const isItemVisible = options.isItemVisible || (() => true);
   return MOBILE_APPLICATION_GROUPS.map((group) => ({
-    key: group.key, label: group.label, kind: group.kind,
+    key: group.key,
+    label: group.label,
+    kind: group.kind,
     items: group.items.flatMap((metadata) => {
       const navigationItem = authorizedByPage.get(metadata.page);
       if (!navigationItem || !isItemVisible(metadata)) return [];
-      return [{ ...navigationItem,
-        presentation: presentationForRoute(metadata.page), page: navigationItem.key,
-        label: metadata.mobileLabel || navigationItem.label, iconKey: metadata.iconKey, tier: metadata.tier,
-        key: metadata.key || (metadata.reportKey ? `${navigationItem.key}:${metadata.reportKey}` : navigationItem.key),
-        reportKey: metadata.reportKey || null, target: metadata.target || null,
+      return [{
+        ...navigationItem,
+        presentation: presentationForRoute(metadata.page),
+        page: navigationItem.key,
+        label: metadata.mobileLabel || navigationItem.label,
+        iconKey: metadata.iconKey,
+        key: metadata.key,
+        reportKey: metadata.reportKey || null,
+        target: metadata.target || null,
       }];
     }),
   })).filter((group) => group.items.length > 0);
+}
+
+export function buildMobileCommonItems(visibleNav = [], options = {}) {
+  const authorizedByPage = new Map(visibleNav.map((item) => [item.key, item]));
+  const isItemVisible = options.isItemVisible || (() => true);
+  const items = [];
+  for (const page of MOBILE_COMMON_PRIORITY) {
+    if (items.length >= 3) break;
+    const navigationItem = authorizedByPage.get(page);
+    if (!navigationItem) continue;
+    const visible = isItemVisible({ page, reportKey: null, target: null });
+    if (!visible) continue;
+    items.push({
+      ...navigationItem,
+      page: navigationItem.key,
+      label: navigationItem.label,
+      iconKey: navigationItem.iconKey,
+      key: navigationItem.key,
+      reportKey: null,
+      target: null,
+    });
+  }
+  return items;
 }

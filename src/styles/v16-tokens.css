@@ -1,0 +1,71 @@
+/* ============================================================
+   V1.6 — Design tokens (foundation only)
+   Scope: V1.6 P0 mobile enterprise foundation.
+
+   This file MUST NOT be appended to the legacy styles.css.
+   It is loaded after styles.css via src/main.jsx and provides
+   tokens for the V1.6 mobile-enterprise layer.
+
+   Rules:
+   - selectors are scoped under .v16-mobile-enterprise
+     OR use the v16-* prefix.
+   - tokens are exported as CSS custom properties only.
+   - no component rules in this file (component rules live in
+     v16-mobile-enterprise.css).
+   ============================================================ */
+
+.v16-mobile-enterprise {
+  /* Application canvas */
+  --v16-app-max-width: 680px;
+
+  /* Surfaces */
+  --v16-bg: #F4F5F7;
+  --v16-surface: #FFFFFF;
+  --v16-surface-secondary: #F8F9FB;
+
+  /* Text */
+  --v16-text: #171A1F;
+  --v16-text-secondary: #5F6672;
+  --v16-text-tertiary: #8A919D;
+
+  /* Brand */
+  --v16-accent: #1769E0;
+  --v16-accent-soft: rgba(23, 105, 224, 0.08);
+  --v16-accent-soft-strong: rgba(23, 105, 224, 0.16);
+
+  /* Semantic */
+  --v16-success: #2FA84F;
+  --v16-warning: #E58A00;
+  --v16-danger: #D9363E;
+
+  /* Structure */
+  --v16-border: #E4E7EB;
+  --v16-separator: rgba(54, 62, 74, 0.11);
+
+  /* Radius */
+  --v16-radius-input: 10px;
+  --v16-radius-button: 10px;
+  --v16-radius-surface: 14px;
+  --v16-radius-icon: 12px;
+
+  /* Spacing */
+  --v16-space-1: 4px;
+  --v16-space-2: 8px;
+  --v16-space-3: 12px;
+  --v16-space-4: 16px;
+  --v16-space-5: 20px;
+  --v16-space-6: 24px;
+
+  /* Typography (mobile enterprise targets) */
+  --v16-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --v16-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas,
+    monospace;
+
+  /* Bottom navigation */
+  --v16-bottom-nav-height: 56px;
+  --v16-bottom-nav-safe: env(safe-area-inset-bottom, 0px);
+  --v16-mobile-main-padding-bottom: calc(
+    var(--v16-bottom-nav-height) + var(--v16-bottom-nav-safe) + 16px
+  );
+}

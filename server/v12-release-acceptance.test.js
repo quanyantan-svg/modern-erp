@@ -51,7 +51,8 @@ describe('V1.2 unified product acceptance contract', () => {
   test('one canonical shell and five fixed tabs serve every viewport', () => {
     assert.equal((appSource.match(/<MobileShell/g) || []).length, 1);
     assert.doesNotMatch(appSource, /isMobile|useDesktop|useMediaQuery|matchMedia|innerWidth/);
-    for (const label of ['消息', '签核', '应用', '云翼', '我的']) assert.match(shellSource, new RegExp(`label: '${label}'`));
+    // V1.6 P1A: cloud/云翼/签核 replaced by workspace/工作台/审批.
+    for (const label of ['消息', '审批', '应用', '工作台', '我的']) assert.match(shellSource, new RegExp(`label: '${label}'`));
     assert.equal((shellSource.match(/enabled: true/g) || []).length, 5);
   });
 

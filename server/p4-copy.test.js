@@ -9,11 +9,13 @@ const source = (path) => readFileSync(resolve(path), 'utf8');
 
 test('P4 — canonical mobile and planning terminology', () => {
   const shell = source('src/components/MobileShell.jsx');
-  for (const label of ['消息', '签核', '应用', '云翼', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
+  // V1.6 P1A: bottom nav strict five tabs, no cloud/签核/云翼.
+  for (const label of ['消息', '审批', '应用', '工作台', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
   const app = source('src/App.jsx');
   for (const term of ['计划预测', "label: 'MRP'", 'MRP · 物料建议']) assert.match(app, new RegExp(term));
   const metadata = source('src/navigation/applicationMetadata.js');
-  for (const term of ['采购统计分析', '采购未交货', '销售统计分析', '销售未出货', '库存异动明细']) assert.match(metadata, new RegExp(term));
+  // V1.6 P1B renames the launcher reports to flowchart-oriented labels.
+  for (const term of ['采购统计分析表', '采购未交货反应表', '销售统计分析表', '销售未出货反应表', '存货异动明细表']) assert.match(metadata, new RegExp(term));
 });
 
 test('P4 — five canonical visible role labels', () => {

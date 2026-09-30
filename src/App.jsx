@@ -301,16 +301,8 @@ export default function App() {
     if (mobileTab === 'approvals') {
       return <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} />;
     }
-    if (mobileTab === 'cloud') {
-      return (
-          <MobilePage title="云翼" subtitle="企业协同能力">
-          <section className="yunyi-portal" aria-labelledby="yunyi-title">
-            <div className="yunyi-portal__icon"><ProductIcon name="cloud" size={34}/></div>
-            <h2 id="yunyi-title">更多企业协同能力正在规划中</h2>
-            <p>当前版本暂未开放此功能。</p>
-          </section>
-        </MobilePage>
-      );
+    if (mobileTab === 'workspace') {
+      return <Dashboard user={user} notify={notify} mobileWorkspace />;
     }
     if (mobileTab === 'profile') {
       return (
@@ -347,28 +339,30 @@ export default function App() {
       );
     }
     if (mobileApplication) {
+      const applicationPage = mobileApplication.page === 'contacts'
+        ? <MobileCrmApplication user={user} notify={notify} />
+        : (mobileApplication.page === 'dashboard'
+          ? <Dashboard user={user} notify={notify} mobileWorkspace />
+          : pages[mobileApplication.page]);
       return (
         <section
           className="mobile-application-view"
           data-testid={`mobile-application-view-${mobileApplication.page}`}
           aria-label={mobileApplication.label}
         >
-          {mobileApplication.page === 'contacts'
-            ? <MobileCrmApplication user={user} notify={notify} />
-            : pages[mobileApplication.page]}
+          {applicationPage}
         </section>
       );
     }
     // The launcher consumes the permission-filtered canonical navigation.
     // Product metadata adds grouping and display terminology only.
     return (
-      <MobilePage>
-        <MobileLauncher
-          groups={mobileApplicationGroups}
-          icons={ic}
-          onItemSelect={handleMobileApplicationSelect}
-        />
-      </MobilePage>
+      <MobileLauncher
+        groups={mobileApplicationGroups}
+        visibleNav={visibleNav}
+        icons={ic}
+        onItemSelect={handleMobileApplicationSelect}
+      />
     );
   }
 

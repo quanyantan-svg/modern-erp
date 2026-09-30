@@ -54,36 +54,152 @@ export function Login({ onLogin, notify }) {
   </div>;
 }
 
-export function Dashboard({ user, notify }) {
+export function Dashboard({ user, notify, mobileWorkspace = false }) {
   const navigation = useAppNavigation();
   const [data, setData] = useState(null);
-  useEffect(() => { 
-    Promise.all([
-      api('/api/dashboard'),
-      can(user, 'INVENTORY_VIEW') ? api('/api/inventory/alerts') : Promise.resolve({ alerts: [] })
-    ]).then(([d, a]) => {
-      setData({...d, alerts: a});
-    }).catch((e) => notify(e.message, 'error')); 
+  useEffect(() => {
+    api('/api/dashboard')
+      .then((d) => setData(d))
+      .catch((e) => notify(e.message, 'error'));
   }, []);
-  if (!data) return <Loading/>;
-  const cards = [
-    can(user, 'CUSTOMERS_VIEW') && ['客户总数', data.customerCount, '家', 'teal'],
-    can(user, 'PRODUCTS_VIEW') && ['在售产品', data.productCount, '项', 'blue'],
-    can(user, 'ORDERS_VIEW') && ['销售订单', data.orderCount, '张', 'orange'],
-    can(user, 'ORDERS_APPROVE') && ['待我审批', data.pendingCount, '张', 'purple'],
-  ].filter(Boolean);
-  const shortcuts = [
-    ['业务总览', 'business-overview'], ['销售订单', 'orders'], ['订单审批', 'approvals'],
-    ['销售出货', 'sales-deliveries'], ['仓储库存', 'inventory'], ['制令单', 'production-orders'],
-    ['应收账款', 'accounts-receivable'], ['应付账款', 'accounts-payable'], ['决策报表', 'decision-reports'],
-  ].filter(([, page]) => navigation.canNavigate(page));
+  if (!data) return mobileWorkspace
+    ? <div className="v16-mobile-enterprise" data-testid="dashboard-mobile"><div className="v16-page"><div className="v16-loading">加载中…</div></div></div>
+    : <Loading/>;
+
+  // V1.6 P1C: workspace uses capability-driven sections only.
+  // Sections without reliable data are not rendered.
+  const canSeeOrders = can(user, 'ORDERS_VIEW');
+  const recentOrders = Array.isArray(data.recentOrders) ? data.recentOrders : [];
+  const pendingCount = Number(data.pendingCount || 0);
+
+  // Capability-driven quick actions. Order matters; we keep at most six.
+  const quickActionCandidates = [
+    { page: 'orders', label: '销售订单', icon: 'orders', capabilities: ['ORDERS_VIEW', 'ORDERS_CREATE'] },
+    { page: 'customers', label: '客户资料', icon: 'customers', capabilities: ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE'] },
+    { page: 'sales-deliveries', label: '销售出货', icon: 'salesDeliveries', capabilities: ['SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE'] },
+    { page: 'approvals', label: '业务审批', icon: 'approvals', capabilities: ['ORDERS_APPROVE', 'PURCHASE_ORDERS_APPROVE', 'PURCHASE_REQUISITION_APPROVE', 'INVENTORY_CHECK_APPROVE', 'VOUCHER_APPROVE'] },
+    { page: 'business-overview', label: '业务流程', icon: 'overview', capabilities: ['DASHBOARD_VIEW'] },
+    { page: 'purchase-receipts', label: '采购入库', icon: 'purchaseReceipts', capabilities: ['PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE'] },
+    { page: 'inventory', label: '库存作业', icon: 'inventory', capabilities: ['INVENTORY_VIEW'] },
+    { page: 'accounts-receivable', label: '应收结算', icon: 'accountsReceivable', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { page: 'accounts-payable', label: '应付结算', icon: 'accountsPayable', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { page: 'accounting', label: '会计凭证', icon: 'accounting', capabilities: ['ACCOUNTING_VIEW'] },
+    { page: 'payment-collections', label: '收款 / 核销', icon: 'paymentCollections', capabilities: ['AR_VIEW', 'COLLECTION_MANAGE'] },
+    { page: 'payment-disbursements', label: '付款 / 核销', icon: 'paymentDisbursements', capabilities: ['AP_VIEW', 'PAYMENT_MANAGE'] },
+    { page: 'users', label: '用户与权限', icon: 'users', capabilities: ['USERS_MANAGE', 'ROLES_MANAGE'] },
+    { page: 'bank-accounts', label: '银行账户', icon: 'bankAccounts', capabilities: ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE'] },
+  ];
+  const quickActions = quickActionCandidates
+    .filter((action) => action.capabilities.some((code) => can(user, code)))
+    .filter((action) => navigation.canNavigate(action.page))
+    .slice(0, 6);
+
+  const showPending = pendingCount > 0 && can(user, 'ORDERS_APPROVE') && navigation.canNavigate('approvals');
+  const showRecent = canSeeOrders && recentOrders.length > 0;
+  const showQuick = quickActions.length > 0;
+
+  if (mobileWorkspace) {
+    return (
+      <div className="v16-mobile-enterprise" data-testid="dashboard-workspace">
+        <div className="v16-page v16-workspace">
+          {showPending && (
+            <section className="v16-workspace__section" aria-label="待处理">
+              <button
+                type="button"
+                className="v16-task-row"
+                data-testid="dashboard-task-pending"
+                onClick={() => navigation.navigateToPage('approvals')}
+                aria-label={`待我审批 ${pendingCount} 项`}
+              >
+                <span className="v16-task-row__main">
+                  <span className="v16-task-row__title">待我审批</span>
+                  <span className="v16-task-row__meta">{pendingCount} 项</span>
+                </span>
+                <span className="v16-task-row__chevron" aria-hidden="true">›</span>
+              </button>
+            </section>
+          )}
+
+          {showRecent && (
+            <section className="v16-workspace__section" aria-label="最近业务">
+              <div className="v16-workspace__section-title">最近业务</div>
+              <div className="v16-record-list">
+                {recentOrders.slice(0, 4).map((order) => (
+                  <button
+                    type="button"
+                    key={order.id}
+                    className="v16-record"
+                    data-testid={`dashboard-recent-${order.id}`}
+                    onClick={() => navigation.navigateToPage('orders', { documentId: order.id })}
+                    aria-label={`查看订单 ${order.orderNo || ''}`}
+                  >
+                    <span className="v16-record__primary">
+                      <span>{order.orderNo || '—'}</span>
+                      <span className="v16-status-pill">{order.statusLabel || order.status || '—'}</span>
+                    </span>
+                    <span className="v16-record__secondary">
+                      <span>{order.customerName || '—'}</span>
+                      <span className="v16-record__amount">{money(order.totalCents || 0)}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {showQuick && (
+            <section className="v16-workspace__section" aria-label="常用操作">
+              <div className="v16-workspace__section-title">常用操作</div>
+              <div className="v16-quick-actions">
+                {quickActions.map((action) => (
+                  <button
+                    type="button"
+                    key={action.page}
+                    className="v16-quick-action"
+                    data-testid={`dashboard-quick-${action.page}`}
+                    aria-label={`打开${action.label}`}
+                    onClick={() => navigation.navigateToPage(action.page)}
+                  >
+                    <span className="v16-quick-action__icon" aria-hidden="true">
+                      <Icon name={action.icon} size={20}/>
+                    </span>
+                    <span className="v16-quick-action__label">{action.label}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {!showPending && !showRecent && !showQuick && (
+            <section className="v16-workspace__section" aria-label="工作台">
+              <div className="v16-empty">暂无待办</div>
+            </section>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return <BusinessPageShell className="dashboard-v15" width="rail">
-    <BusinessPageHeader title="工作台" context="我的业务入口" help={<HelpDisclosure summary="工作台说明"><p>指标与快捷入口按当前角色权限展示；业务总览提供跨域关系，工作台聚焦当前用户可执行的日常工作。</p></HelpDisclosure>}/>
-    {can(user, 'ORDERS_VIEW') && <div className="hero-card"><div><span className="pill">今日业务</span><h2>已审批销售订单</h2></div><div className="hero-amount"><span>订单金额</span><strong>{money(data.approvedAmountCents)}</strong></div></div>}
-    <div className="stats-grid">{cards.map(([label, value, unit, color]) => <div className={`stat-card ${color}`} key={label}><span>{label}</span><strong>{value}<small>{unit}</small></strong><i/></div>)}</div>
-    <Panel title="常用工作"><div className="dashboard-shortcuts">{shortcuts.map(([label, page]) => <AppLink key={page} page={page}>{label}<span>→</span></AppLink>)}</div></Panel>
-    {can(user, 'ORDERS_VIEW') && <Panel title="最近订单" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
-      <OrderTable orders={data.recentOrders} compact/>
+    <BusinessPageHeader title="工作台"/>
+    {showPending && (
+      <section className="dashboard-pending" aria-label="待我审批">
+        <button
+          type="button"
+          className="dashboard-pending__row"
+          onClick={() => navigation.navigateToPage('approvals')}
+        >
+          <span>待我审批</span>
+          <span className="dashboard-pending__count">{pendingCount} 项</span>
+          <span aria-hidden="true">›</span>
+        </button>
+      </section>
+    )}
+    {showQuick && (
+      <Panel title="常用操作"><div className="dashboard-shortcuts">{quickActions.map((action) => <AppLink key={action.page} page={action.page}>{action.label}<span>→</span></AppLink>)}</div></Panel>
+    )}
+    {showRecent && <Panel title="最近业务" action={<AppLink className="link-button" page="orders">查看全部 →</AppLink>}>
+      <OrderTable orders={recentOrders} compact/>
     </Panel>}
   </BusinessPageShell>;
 }

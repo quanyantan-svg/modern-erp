@@ -12,24 +12,27 @@ const css = read('src/styles.css');
 
 test('D2.2 application page removes duplicate title and English eyebrows', () => {
   // No duplicate large h1 inside launcher (mobile shell already shows "应用").
-  assert.doesNotMatch(launcher, /application-workspace__header[\s\S]{0,200}<h1>应用<\/h1>/);
+  assert.doesNotMatch(launcher, /<h1>应用<\/h1>/);
   assert.doesNotMatch(launcher, /<span>APPLICATIONS<\/span>/);
   assert.doesNotMatch(launcher, /<span>ROLE WORKSPACE<\/span>/);
-  // Workspace renamed.
-  assert.match(launcher, /<h2>快捷入口<\/h2>/);
+  // V1.6 P1B removed the "我的工作区 / 快捷入口" panel; launcher now uses
+  // direct flowchart grids followed by utility disclosures.
   assert.doesNotMatch(launcher, /<h2>我的工作区<\/h2>/);
-  // Single "业务目录" eyebrow may appear (or no eyebrow at all).
+  assert.doesNotMatch(launcher, /<h2>快捷入口<\/h2>/);
 });
 
-test('D2.2 application page keeps the seven-domain aligned selector', () => {
-  assert.match(launcher, /application-domain-nav__index/);
-  assert.match(launcher, /application-domain-nav__label/);
-  assert.match(launcher, /application-domain-nav__indicator/);
-  // Active state still uses weight/color/surface only.
-  assert.match(css, /\.application-domain-nav button\.is-selected\s*\{[^}]*font-size:14px/);
-  assert.match(css, /\.application-domain-nav button\s*\{[^}]*height:48px/);
-  // Seven-row grid preserved (top-level `application-domain-nav > div`).
-  assert.match(css, /\.application-domain-nav > div\s*\{[^}]*display:grid/);
+test('D2.2 application page is rebuilt as direct flowchart grids (no numbered selector)', () => {
+  // V1.6 P1B replaces the numbered seven-domain selector with six
+  // flowchart-aligned groups rendered as direct 3-column grids.
+  const v16Css = read('src/styles/v16-mobile-enterprise.css');
+  assert.match(launcher, /v16-launcher/);
+  assert.match(launcher, /v16-launcher-group/);
+  assert.match(launcher, /v16-launcher-tile/);
+  assert.match(v16Css, /\.v16-launcher-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3/);
+  // Numbered domain selector is intentionally gone.
+  assert.doesNotMatch(launcher, /application-domain-nav__index/);
+  assert.doesNotMatch(launcher, /application-domain-nav__label/);
+  assert.doesNotMatch(launcher, /application-domain-nav__indicator/);
 });
 
 test('D2.2 business overview turns tile groups into vertical step flow', () => {

@@ -1,0 +1,600 @@
+/* ============================================================
+   V1.6 — Mobile enterprise component layer
+   Scope: P0 foundation + P1 launcher / nav / workspace.
+
+   Loaded after styles.css via src/main.jsx. Selectors are scoped
+   under .v16-mobile-enterprise OR use the v16-* prefix so V1.6
+   rules cannot leak to legacy surfaces.
+
+   No decorative gradients, no glass, no large marketing shadows.
+   Strong shadow allowed only for elevated sheets/dialogs/floats.
+   ============================================================ */
+
+/* ---------- Shell (only the v16 root gets re-typed; the
+   existing legacy .mobile-shell continues to drive everything
+   else and remains the single source of safe-area padding). */
+.v16-mobile-enterprise {
+  width: 100%;
+  max-width: var(--v16-app-max-width);
+  margin-inline: auto;
+  background: var(--v16-bg);
+  color: var(--v16-text);
+  font-family: var(--v16-font-sans);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+.v16-mobile-enterprise.mobile-shell {
+  --app-max-width: var(--v16-app-max-width);
+  background: var(--v16-bg);
+  box-shadow: none;
+}
+
+.v16-mobile-enterprise > .mobile-header,
+.v16-mobile-enterprise > .mobile-bottom-nav {
+  background: var(--v16-surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.v16-mobile-enterprise > .mobile-header {
+  border-bottom-color: var(--v16-separator);
+}
+
+.v16-mobile-enterprise > .mobile-header .mobile-header__title {
+  color: var(--v16-text);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.v16-mobile-enterprise > .mobile-main {
+  min-width: 0;
+}
+
+.v16-mobile-enterprise > .mobile-bottom-nav {
+  width: min(100%, var(--v16-app-max-width));
+  border-top-color: var(--v16-separator);
+}
+
+.v16-mobile-enterprise > .mobile-bottom-nav .mobile-bottom-nav__item {
+  min-height: 56px;
+}
+
+.v16-mobile-enterprise > .mobile-bottom-nav .mobile-bottom-nav__item--active {
+  color: var(--v16-accent);
+}
+
+.v16-mobile-enterprise .v16-page {
+  padding: var(--v16-space-4) var(--v16-space-4)
+    var(--v16-mobile-main-padding-bottom);
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-5);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--v16-text);
+  line-height: 1.35;
+  padding-inline: var(--v16-space-1);
+}
+
+.v16-mobile-enterprise .v16-section-hint {
+  font-size: 12px;
+  color: var(--v16-text-tertiary);
+  padding-inline: var(--v16-space-1);
+}
+
+.v16-mobile-enterprise .v16-surface {
+  background: var(--v16-surface);
+  border: 1px solid var(--v16-border);
+  border-radius: var(--v16-radius-surface);
+  padding: var(--v16-space-3) var(--v16-space-4);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-divider {
+  height: 1px;
+  background: var(--v16-separator);
+  width: 100%;
+  border: 0;
+  margin: 0;
+}
+
+/* ---------- Application launcher (P1B) ---------- */
+.v16-mobile-enterprise .v16-launcher {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-5);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-launcher-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v16-space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-launcher-tile {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  padding: var(--v16-space-3) var(--v16-space-2);
+  min-height: 82px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--v16-space-2);
+  border-radius: var(--v16-radius-surface);
+  cursor: pointer;
+  color: var(--v16-text);
+  font: inherit;
+  text-align: center;
+  transition: background-color 120ms ease;
+}
+
+.v16-mobile-enterprise .v16-launcher-tile:hover {
+  background: var(--v16-accent-soft);
+}
+
+.v16-mobile-enterprise .v16-launcher-tile:focus-visible {
+  outline: 2px solid var(--v16-accent);
+  outline-offset: 2px;
+}
+
+.v16-mobile-enterprise .v16-launcher-tile__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--v16-radius-icon);
+  background: var(--v16-accent-soft);
+  color: var(--v16-accent);
+  display: grid;
+  place-items: center;
+}
+
+.v16-mobile-enterprise .v16-launcher-tile__label {
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--v16-text);
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* Common / 常用 section */
+.v16-mobile-enterprise .v16-launcher-common {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+/* Utility disclosure (details/summary) */
+.v16-mobile-enterprise .v16-utility {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-2);
+  border-top: 1px solid var(--v16-separator);
+  padding-top: var(--v16-space-3);
+}
+
+.v16-mobile-enterprise .v16-utility details {
+  border-bottom: 1px solid var(--v16-separator);
+}
+
+.v16-mobile-enterprise .v16-utility details:last-of-type {
+  border-bottom: 0;
+}
+
+.v16-mobile-enterprise .v16-utility summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--v16-space-3) var(--v16-space-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--v16-space-3);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--v16-text);
+  min-height: 44px;
+}
+
+.v16-mobile-enterprise .v16-utility summary::-webkit-details-marker {
+  display: none;
+}
+
+.v16-mobile-enterprise .v16-utility summary::after {
+  content: '›';
+  font-size: 18px;
+  color: var(--v16-text-tertiary);
+  transition: transform 120ms ease;
+  display: inline-block;
+}
+
+.v16-mobile-enterprise .v16-utility details[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.v16-mobile-enterprise .v16-utility__count {
+  font-size: 12px;
+  color: var(--v16-text-tertiary);
+  font-weight: 400;
+}
+
+.v16-mobile-enterprise .v16-utility__list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 var(--v16-space-2) 0;
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-utility__item {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  padding: var(--v16-space-3) var(--v16-space-1);
+  min-height: 44px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--v16-space-3);
+  cursor: pointer;
+  color: var(--v16-text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  width: 100%;
+  border-radius: var(--v16-radius-input);
+}
+
+.v16-mobile-enterprise .v16-utility__item:hover {
+  background: var(--v16-accent-soft);
+}
+
+.v16-mobile-enterprise .v16-utility__item:focus-visible {
+  outline: 2px solid var(--v16-accent);
+  outline-offset: 2px;
+}
+
+.v16-mobile-enterprise .v16-utility__item-label {
+  display: flex;
+  align-items: center;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-utility__item-label > span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-utility__item-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--v16-radius-icon);
+  background: var(--v16-accent-soft);
+  color: var(--v16-accent);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+/* ---------- Workspace (P1C) ---------- */
+.v16-mobile-enterprise .v16-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-5);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-workspace__title {
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--v16-text);
+  line-height: 1.3;
+  padding-inline: var(--v16-space-1);
+}
+
+.v16-mobile-enterprise .v16-workspace__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--v16-space-2);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-workspace__section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--v16-text-secondary);
+  line-height: 1.35;
+  padding-inline: var(--v16-space-1);
+  text-transform: none;
+}
+
+.v16-mobile-enterprise .v16-task-row {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--v16-surface);
+  border: 1px solid var(--v16-border);
+  border-radius: var(--v16-radius-surface);
+  padding: var(--v16-space-3) var(--v16-space-4);
+  min-height: 56px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--v16-space-3);
+  cursor: pointer;
+  color: var(--v16-text);
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.v16-mobile-enterprise .v16-task-row:hover {
+  background: var(--v16-accent-soft);
+}
+
+.v16-mobile-enterprise .v16-task-row:focus-visible {
+  outline: 2px solid var(--v16-accent);
+  outline-offset: 2px;
+}
+
+.v16-mobile-enterprise .v16-task-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-task-row__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--v16-text);
+  line-height: 1.3;
+}
+
+.v16-mobile-enterprise .v16-task-row__meta {
+  font-size: 12px;
+  color: var(--v16-text-tertiary);
+}
+
+.v16-mobile-enterprise .v16-task-row__chevron {
+  font-size: 18px;
+  color: var(--v16-text-tertiary);
+}
+
+.v16-mobile-enterprise .v16-record-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--v16-border);
+  border-radius: var(--v16-radius-surface);
+  background: var(--v16-surface);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.v16-mobile-enterprise .v16-record {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--v16-separator);
+  padding: var(--v16-space-3) var(--v16-space-4);
+  min-height: 56px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--v16-text);
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.v16-mobile-enterprise .v16-record:last-child {
+  border-bottom: 0;
+}
+
+.v16-mobile-enterprise .v16-record:hover {
+  background: var(--v16-accent-soft);
+}
+
+.v16-mobile-enterprise .v16-record:focus-visible {
+  outline: 2px solid var(--v16-accent);
+  outline-offset: -2px;
+}
+
+.v16-mobile-enterprise .v16-record__primary {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--v16-text);
+  line-height: 1.3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-record__primary > span:first-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v16-mobile-enterprise .v16-record__secondary {
+  font-size: 13px;
+  color: var(--v16-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-record__secondary > span:first-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v16-mobile-enterprise .v16-record__amount {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--v16-text);
+  flex-shrink: 0;
+}
+
+.v16-mobile-enterprise .v16-record__status {
+  font-size: 12px;
+  color: var(--v16-text-tertiary);
+  flex-shrink: 0;
+}
+
+.v16-mobile-enterprise .v16-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  background: var(--v16-surface-secondary);
+  color: var(--v16-text-secondary);
+  border: 1px solid var(--v16-border);
+  flex-shrink: 0;
+}
+
+.v16-mobile-enterprise .v16-status-pill--info {
+  color: var(--v16-accent);
+  background: var(--v16-accent-soft);
+  border-color: transparent;
+}
+
+.v16-mobile-enterprise .v16-status-pill--success {
+  color: var(--v16-success);
+  background: rgba(47, 168, 79, 0.08);
+  border-color: transparent;
+}
+
+.v16-mobile-enterprise .v16-status-pill--warning {
+  color: var(--v16-warning);
+  background: rgba(229, 138, 0, 0.10);
+  border-color: transparent;
+}
+
+.v16-mobile-enterprise .v16-status-pill--danger {
+  color: var(--v16-danger);
+  background: rgba(217, 54, 62, 0.08);
+  border-color: transparent;
+}
+
+.v16-mobile-enterprise .v16-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--v16-space-3);
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-quick-action {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--v16-surface);
+  border: 1px solid var(--v16-border);
+  border-radius: var(--v16-radius-surface);
+  padding: var(--v16-space-3) var(--v16-space-2);
+  min-height: 82px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--v16-space-2);
+  cursor: pointer;
+  color: var(--v16-text);
+  font: inherit;
+  text-align: center;
+}
+
+.v16-mobile-enterprise .v16-quick-action:hover {
+  background: var(--v16-accent-soft);
+}
+
+.v16-mobile-enterprise .v16-quick-action:focus-visible {
+  outline: 2px solid var(--v16-accent);
+  outline-offset: 2px;
+}
+
+.v16-mobile-enterprise .v16-quick-action__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--v16-radius-icon);
+  background: var(--v16-accent-soft);
+  color: var(--v16-accent);
+  display: grid;
+  place-items: center;
+}
+
+.v16-mobile-enterprise .v16-quick-action__label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--v16-text);
+  line-height: 1.35;
+  max-width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.v16-mobile-enterprise .v16-empty {
+  font-size: 13px;
+  color: var(--v16-text-tertiary);
+  padding: var(--v16-space-4) var(--v16-space-1);
+  text-align: center;
+}
+
+.v16-mobile-enterprise .v16-loading {
+  font-size: 13px;
+  color: var(--v16-text-tertiary);
+  padding: var(--v16-space-4) var(--v16-space-1);
+  text-align: center;
+}

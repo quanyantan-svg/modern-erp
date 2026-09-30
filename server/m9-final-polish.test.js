@@ -67,24 +67,28 @@ describe('M9 business overview', () => {
 });
 
 describe('M9 permission and terminology contracts', () => {
-  test('accounting dashboard cannot request inventory alerts without INVENTORY_VIEW', () => {
-    assert.match(dashboardSource, /can\(user, 'INVENTORY_VIEW'\) \? api\('\/api\/inventory\/alerts'\) : Promise\.resolve/);
-    assert.doesNotMatch(dashboardSource, /Promise\.all\(\[\s*api\('\/api\/dashboard'\),\s*api\('\/api\/inventory\/alerts'\)/);
+  // V1.6 P1C: workspace rebuild removed the inventory-alerts Promise.all
+  // (no longer needed once the dashboard is task-oriented) and replaced
+  // decorative AppLink shortcuts with capability-driven native buttons.
+  test('V1.6 dashboard no longer requests inventory alerts from inside the workspace', () => {
+    assert.doesNotMatch(dashboardSource, /\/api\/inventory\/alerts/);
+    assert.doesNotMatch(dashboardSource, /Promise\.all\(\[\s*api\('\/api\/dashboard'\)/);
   });
 
-  test('dashboard shortcuts use canonical permission-aware AppLink navigation', () => {
-    assert.match(dashboardSource, /navigation\.canNavigate\(page\)/);
-    assert.match(dashboardSource, /<AppLink key=\{page\} page=\{page\}>/);
+  test('V1.6 dashboard quick actions use navigation.canNavigate and native buttons', () => {
+    assert.match(dashboardSource, /navigation\.canNavigate\(action\.page\)/);
+    assert.match(dashboardSource, /v16-quick-action/);
+    assert.match(dashboardSource, /navigation\.navigateToPage\(action\.page\)/);
   });
 
-  test('only the four true approval families remain in approval aggregation', () => {
-    for (const family of ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']) assert.match(approvalsSource, new RegExp(family));
+  test('only the five true approval families remain in approval aggregation', () => {
+    for (const family of ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']) assert.match(approvalsSource, new RegExp(family));
     for (const operational of ['SALES_DELIVERY', 'PURCHASE_RECEIPT', 'MATERIAL_ISSUE', 'PRODUCTION_RECEIPT', 'PAYMENT_COLLECTION']) assert.doesNotMatch(approvalsSource, new RegExp(operational));
   });
 
   test('finance is contextual rather than an eighth primary domain', () => {
-    const masterStart = metadataSource.indexOf("{ key: 'master-data'");
-    const salesStart = metadataSource.indexOf("{ key: 'sales'");
+    const masterStart = metadataSource.search(/key:\s*'master-data'/);
+    const salesStart = metadataSource.search(/key:\s*'sales'/);
     assert.ok(masterStart >= 0 && salesStart > masterStart);
     const master = metadataSource.slice(masterStart, salesStart);
     assert.doesNotMatch(master, /accounts-receivable|payment-collections|accounts-payable|payment-disbursements/);

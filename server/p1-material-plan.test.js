@@ -188,13 +188,20 @@ test('P1 material plan: page source uses centralized status labels (no raw enum 
 // ---------------------------------------------------------------------------
 // 5. Mobile launcher — three distinct planning entries, no duplicate
 // ---------------------------------------------------------------------------
+//
+// V1.6 P1B collapses the V1.5 计划/MRP domain into the 生产管理
+// core group; material-requirements-plan is no longer a primary tile
+// (the route remains reachable). Forecast, MRP and material-requirements
+// continue to appear under 生产管理.
 
-test('P1 launcher: 计划 / MRP domain exposes forecast, MRP and material suggestions', () => {
+test('P1 launcher: 生产管理 domain exposes forecast, MRP and material suggestions', () => {
   const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationMetadata.js'), 'utf8');
-  assertContains(launcherSource, "label: '计划 / MRP'");
+  assertContains(launcherSource, "label: '生产管理'");
   assertContains(launcherSource, "['forecasts', '计划预测'");
   assertContains(launcherSource, "['mrp-runs', 'MRP'");
-  assertContains(launcherSource, "['material-requirements-plan', '物料建议'");
+  // material-requirements-plan is intentionally NOT a primary tile.
+  assert.ok(!launcherSource.includes("['material-requirements-plan'"),
+    'V1.6 P1B must not list material-requirements-plan as a primary launcher tile');
 });
 
 test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础资料', () => {

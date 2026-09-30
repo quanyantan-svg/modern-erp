@@ -15,23 +15,34 @@ const pageSources = readdirSync(join(root, 'src', 'pages'))
   .join('\n');
 
 describe('V1.2 core page migration', () => {
-  test('launcher retains the canonical business groups', () => {
-    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析', '工作区', '高级设置', '更多业务', '系统设置']) {
+  test('launcher retains the canonical V1.6 business groups', () => {
+    // V1.6 P1B: six flowchart-aligned core groups + utility disclosures.
+    for (const label of [
+      '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
+      '业务流程', '财务工具', '更多业务', '高级设置', '系统设置',
+    ]) {
       assert.match(metadata, new RegExp(`label: '${label}'`));
     }
   });
 
   test('all required core ERP surfaces remain registered', () => {
     const surface = app + metadata + pageSources;
+    // V1.6 P1B: IQC/OQC remain in App.jsx routes but are NOT primary launcher
+    // tiles; material-requirements-plan stays as a route but is not a tile.
     for (const label of [
       '货品资料', 'BOM', '客户资料', '供应商资料', '仓库资料', '制品工序标准',
-      '计划预测', 'MRP', '物料建议', '生产指令', '采购指令', '请购单',
+      '计划预测', 'MRP', '生产指令', '采购指令', '请购单',
       '制令单', '用料出库', '生产入库', '销售订单', '销售出货', '销售退货',
       '采购订单', '采购入库', '采购退货', '库存作业', '库存调整', '库存调拨',
-      '存货报废', '库存盘点', '存货月结', 'IQC 来料检验', 'OQC 出货检验',
+      '存货报废', '库存盘点', '存货月结',
       '应收结算', '应付结算', '销售折让', '采购折让', '收款 / 核销', '付款 / 核销', '会计凭证',
-      '采购统计分析', '采购未交货', '销售统计分析', '销售未出货', '库存异动明细',
+      '采购统计分析表', '采购未交货反应表', '销售统计分析表', '销售未出货反应表', '存货异动明细表',
     ]) assert.ok(surface.includes(label), `missing core surface: ${label}`);
+    // IQC/OQC are reachable as routes but must not be primary launcher tiles.
+    const iqcInLauncher = /\['iqc'/.test(metadata);
+    const oqcInLauncher = /\['oqc'/.test(metadata);
+    assert.ok(!iqcInLauncher, 'IQC must not be a primary launcher tile');
+    assert.ok(!oqcInLauncher, 'OQC must not be a primary launcher tile');
   });
 
   test('card lists and one-column forms are canonical at every viewport width', () => {
@@ -62,8 +73,10 @@ describe('V1.2 core page migration', () => {
   });
 
   test('sales and purchase returns have distinct launcher targets', () => {
-    assert.match(metadata, /\['returns', '销售退货'[\s\S]*documentType: 'SALES_RETURN'[\s\S]*'returns:sales'/);
-    assert.match(metadata, /\['returns', '采购退货'[\s\S]*documentType: 'PURCHASE_RETURN'[\s\S]*'returns:purchase'/);
+    // V1.6 P1B puts returns entries into the sales / purchasing core groups
+    // while preserving the SALES_RETURN / PURCHASE_RETURN distinction.
+    assert.match(metadata, /\['returns', '销售退货'[\s\S]*'returns:sales'[\s\S]*documentType: 'SALES_RETURN'/);
+    assert.match(metadata, /\['returns', '采购退货'[\s\S]*'returns:purchase'[\s\S]*documentType: 'PURCHASE_RETURN'/);
     assert.match(app, /navigateToPage\(item\.page, item\.target\)/);
   });
 

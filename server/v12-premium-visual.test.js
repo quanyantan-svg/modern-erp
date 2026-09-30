@@ -21,7 +21,8 @@ describe('V1.2 premium visual system', () => {
   });
 
   test('keeps the exact five-tab contract with 24px canonical icons', () => {
-    for (const label of ['消息', '签核', '应用', '云翼', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
+    // V1.6 P1A: cloud/云翼/签核 replaced by workspace/工作台/审批.
+    for (const label of ['消息', '审批', '应用', '工作台', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
     assert.match(shell, /<Icon name="message" size=\{24\}/);
     assert.match(css, /\.mobile-bottom-nav__item\s*\{[^}]*min-height:58px/s);
   });

@@ -43,12 +43,13 @@ describe('P3 global design system', () => {
 
   test('mobile shell exposes exactly the canonical labels in order', () => {
     const labels = [...shell.matchAll(/key: '[^']+', label: '([^']+)'/g)].map((match) => match[1]);
-    assert.deepEqual(labels, ['消息', '签核', '应用', '云翼', '我的']);
-    assert.doesNotMatch(shell, /通讯录|敬请期待/);
+    // V1.6 P1A: cloud/云翼/签核 replaced by workspace/工作台/审批.
+    assert.deepEqual(labels, ['消息', '审批', '应用', '工作台', '我的']);
+    assert.doesNotMatch(shell, /通讯录|敬请期待|云翼/);
   });
 
-  test('launcher has calm business group names and permission filtering remains external', () => {
-    for (const label of ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析', '系统设置']) assert.match(metadata, new RegExp(`label: '${label}'`));
+  test('launcher has V1.6 flowchart-aligned business group names and permission filtering remains external', () => {
+    for (const label of ['基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表', '系统设置']) assert.match(metadata, new RegExp(`label: '${label}'`));
     assert.doesNotMatch(metadata, /permission\s*:/);
   });
 

@@ -765,8 +765,10 @@ describe('M7 — frontend wiring', () => {
 
   test('buildMobileApplicationGroups forwards reportKey so each card has a unique key', () => {
     const src = readSrc('navigation/applicationMetadata.js');
-    assert.match(src, /reportKey:\s*metadata\.reportKey/);
-    assert.match(src, /metadata\.reportKey\s*\?\s*`\$\{navigationItem\.key\}:\$\{metadata\.reportKey\}`/);
+    // V1.6 P1B: composite key construction moved into the static
+    // metadata definition (so the runtime only carries it forward).
+    assert.match(src, /reportKey:\s*metadata\.reportKey\s*\|\|\s*null/);
+    assert.match(src, /`\$\{page\}:\$\{reportKey\}`/);
   });
 
   test('App.jsx forwards reportKey via navigation target', () => {

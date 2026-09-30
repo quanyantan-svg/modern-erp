@@ -1,67 +1,163 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Icon } from './icons.jsx';
+import {
+  buildMobileApplicationGroups,
+  buildMobileCommonItems,
+} from '../navigation/applicationMetadata.js';
 
-const OPTICALLY_COMPACT_ICONS = new Set([
-  'customers', 'suppliers', 'products', 'warehouses', 'mrpRuns',
-  'planningDocuments', 'inventory', 'accounting', 'cleanup', 'notifications',
-]);
+// V1.6 P1B application launcher.
+//
+// Replaces V1.5's "select a numbered domain to see its applications"
+// interaction with a direct grid that lists every authorized core
+// application under its flowchart-aligned business group.
+//
+// Public props:
+//   - groups: optional pre-built groups (from buildMobileApplicationGroups)
+//   - common: optional pre-built "常用" items
+//   - icons:  icon name -> React element map
+//   - onItemSelect: (item) => void
+//   - emptyText: rendered when nothing is authorized
+//
+// The launcher itself owns no selection state. It is a presentational
+// shell over the items passed in.
 
-function ApplicationItem({ item, icons, onItemSelect, compact = false }) {
-  const icon = icons[item.iconKey] || <Icon name="apps" />;
-  const itemKey = item.page || item.key;
-  return <button type="button" data-page={itemKey} data-testid={`mobile-launcher-item-${itemKey}`}
-    className={`application-item${compact ? ' application-item--compact' : ''}`}
-    onClick={() => onItemSelect?.(item)} aria-label={`打开${item.label}`}>
-    <span className={`application-item__icon${OPTICALLY_COMPACT_ICONS.has(item.iconKey) ? ' application-item__icon--compact' : ''}`} aria-hidden="true">{icon}</span>
-    <span className="application-item__copy"><strong>{item.label}</strong>{item.presentation?.description && !compact && <small>{item.presentation.description}</small>}</span>
-    {compact && <Icon name="chevronRight" size={16}/>}
-  </button>;
+function ApplicationTile({ item, icons, onItemSelect }) {
+  const icon = icons[item.iconKey] || <Icon name="apps" size={22}/>;
+  const key = item.key || item.page;
+  return (
+    <button
+      type="button"
+      data-page={item.page}
+      data-testid={`v16-launcher-tile-${key}`}
+      className="v16-launcher-tile"
+      aria-label={`打开${item.label}`}
+      onClick={() => onItemSelect?.(item)}
+    >
+      <span className="v16-launcher-tile__icon" aria-hidden="true">{icon}</span>
+      <span className="v16-launcher-tile__label">{item.label}</span>
+    </button>
+  );
 }
 
-function UtilityGroups({ groups, icons, onItemSelect }) {
-  if (!groups.length) return null;
-  return <div className="application-utilities" aria-label="更多入口">
-    {groups.map((group) => <details key={group.key} className="application-utilities__group">
-      <summary>{group.label}<span>{group.items.length}</span></summary>
-      <div>{group.items.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div>
-    </details>)}
-  </div>;
+function ApplicationGrid({ items, icons, onItemSelect }) {
+  if (!items.length) return null;
+  return (
+    <div className="v16-launcher-grid" role="list">
+      {items.map((item) => (
+        <div role="listitem" key={item.key || item.page}>
+          <ApplicationTile item={item} icons={icons} onItemSelect={onItemSelect} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
-export default function MobileLauncher({ groups = [], icons = {}, onItemSelect, emptyText = '暂无可用应用' }) {
-  const domains = useMemo(() => groups.filter((group) => group.kind === 'domain' && group.items?.length), [groups]);
-  const utilities = useMemo(() => groups.filter((group) => group.kind === 'utility' && group.items?.length), [groups]);
-  const [selectedKey, setSelectedKey] = useState(domains[0]?.key || '');
-  const selected = domains.find((group) => group.key === selectedKey) || domains[0];
+function UtilityDisclosure({ group, icons, onItemSelect }) {
+  if (!group.items.length) return null;
+  return (
+    <details
+      className="v16-utility__disclosure"
+      data-testid={`v16-launcher-utility-${group.key}`}
+    >
+      <summary>
+        <span>{group.label}</span>
+        <span className="v16-utility__count">{group.items.length}</span>
+      </summary>
+      <div className="v16-utility__list">
+        {group.items.map((item) => {
+          const icon = icons[item.iconKey] || <Icon name="apps" size={16}/>;
+          const key = item.key || item.page;
+          return (
+            <button
+              type="button"
+              key={key}
+              data-page={item.page}
+              data-testid={`v16-launcher-utility-item-${key}`}
+              className="v16-utility__item"
+              aria-label={`打开${item.label}`}
+              onClick={() => onItemSelect?.(item)}
+            >
+              <span className="v16-utility__item-label">
+                <span className="v16-utility__item-icon" aria-hidden="true">{icon}</span>
+                <span>{item.label}</span>
+              </span>
+              <span aria-hidden="true">›</span>
+            </button>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
 
-  if (!domains.length && !utilities.length) {
-    return <div className="mobile-launcher" data-testid="mobile-launcher"><div className="mobile-launcher__empty" data-testid="mobile-launcher-empty">{emptyText}</div></div>;
+export default function MobileLauncher({
+  groups: providedGroups,
+  common: providedCommon,
+  visibleNav,
+  icons = {},
+  onItemSelect,
+  emptyText = '暂无可用应用',
+}) {
+  // Allow tests / external callers to provide pre-built groups, or to
+  // pass a raw visibleNav and let the launcher build groups itself.
+  const groups = useMemo(() => {
+    if (providedGroups) return providedGroups.filter((group) => group.items?.length);
+    if (visibleNav) return buildMobileApplicationGroups(visibleNav).filter((group) => group.items?.length);
+    return [];
+  }, [providedGroups, visibleNav]);
+
+  const common = useMemo(() => {
+    if (providedCommon) return providedCommon;
+    if (visibleNav) return buildMobileCommonItems(visibleNav);
+    return [];
+  }, [providedCommon, visibleNav]);
+
+  const coreGroups = useMemo(() => groups.filter((group) => group.kind === 'domain'), [groups]);
+  const utilityGroups = useMemo(() => groups.filter((group) => group.kind === 'utility'), [groups]);
+
+  if (!coreGroups.length && !utilityGroups.length && !common.length) {
+    return (
+      <div className="v16-mobile-enterprise" data-testid="v16-launcher-empty">
+        <div className="v16-empty">{emptyText}</div>
+      </div>
+    );
   }
 
-  const shortcuts = utilities.find((group) => group.key === 'workspace');
-  const remainingUtilities = utilities.filter((group) => group.key !== 'workspace');
-  const shortcutItems = shortcuts?.items.filter((item) => item.tier === 'shortcut') || [];
-  const workspaceUtilities = shortcuts?.items.filter((item) => item.tier !== 'shortcut') || [];
-  const disclosedUtilities = workspaceUtilities.length
-    ? [{ key: 'finance-tools', label: '财务工具', kind: 'utility', items: workspaceUtilities }, ...remainingUtilities]
-    : remainingUtilities;
-  const primary = selected?.items.filter((item) => item.tier === 'primary') || [];
-  const more = selected?.items.filter((item) => item.tier !== 'primary') || [];
+  return (
+    <div className="v16-mobile-enterprise v16-launcher mobile-launcher application-workspace" data-testid="v16-launcher" aria-label="应用">
+      <div className="v16-page">
+        {common.length > 0 && (
+          <section className="v16-section v16-launcher-common" aria-label="常用">
+            <div className="v16-section-title">常用</div>
+            <ApplicationGrid items={common} icons={icons} onItemSelect={onItemSelect} />
+          </section>
+        )}
 
-  return <section className="mobile-launcher application-workspace" data-testid="mobile-launcher" aria-label="应用">
-    <nav className="application-domain-nav" aria-label="业务领域">
-      <p>业务领域</p>
-      <div>{domains.map((group, index) => <button type="button" key={group.key} data-testid={`mobile-launcher-group-${group.label}`} className={selected?.key === group.key ? 'is-selected' : ''} aria-current={selected?.key === group.key ? 'page' : undefined} onClick={() => setSelectedKey(group.key)}><span className="application-domain-nav__index">{String(index + 1).padStart(2, '0')}</span><span className="application-domain-nav__label">{group.label}</span><span className="application-domain-nav__indicator" aria-hidden="true">→</span></button>)}</div>
-    </nav>
-    <section className="application-domain-content" aria-live="polite">
-      <header><h2>{selected?.label}</h2><small>{primary.length} 个主要入口</small></header>
-      <div className="application-domain-content__primary">{primary.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect}/>)}</div>
-      {more.length > 0 && <details className="application-domain-content__more"><summary>更多{selected?.label}能力 <span>{more.length}</span></summary><div>{more.map((item) => <ApplicationItem key={item.key || `${item.page}:${item.reportKey || ''}`} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div></details>}
-    </section>
-    <aside className="application-shortcuts">
-      <header><h2>快捷入口</h2></header>
-      <div className="application-shortcuts__primary">{shortcutItems.map((item) => <ApplicationItem key={item.key || item.page} item={item} icons={icons} onItemSelect={onItemSelect} compact/>)}</div>
-      <UtilityGroups groups={disclosedUtilities} icons={icons} onItemSelect={onItemSelect}/>
-    </aside>
-  </section>;
+        {coreGroups.map((group) => (
+          <section
+            key={group.key}
+            className="v16-section v16-launcher-group"
+            aria-label={group.label}
+            data-testid={`v16-launcher-group-${group.key}`}
+          >
+            <div className="v16-section-title">{group.label}</div>
+            <ApplicationGrid items={group.items} icons={icons} onItemSelect={onItemSelect} />
+          </section>
+        ))}
+
+        {utilityGroups.length > 0 && (
+          <section className="v16-section v16-utility" aria-label="更多入口">
+            {utilityGroups.map((group) => (
+              <UtilityDisclosure
+                key={group.key}
+                group={group}
+                icons={icons}
+                onItemSelect={onItemSelect}
+              />
+            ))}
+          </section>
+        )}
+      </div>
+    </div>
+  );
 }

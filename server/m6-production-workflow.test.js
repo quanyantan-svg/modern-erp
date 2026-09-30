@@ -638,10 +638,15 @@ describe('M6 mobile UI surface', () => {
   test('41. fake / deferred production cards (work center / output) are absent from mobile group; production-instruction is present after M12', () => {
     const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
     const activeGroups = meta.slice(0, meta.indexOf('DEFERRED_MOBILE_APPLICATIONS'));
+    // V1.6 P1B: material-requirements-plan is intentionally NOT a primary
+    // launcher tile (it remains reachable via the mrp-runs route). The
+    // route is preserved in App.jsx pages map but excluded from the
+    // launcher core groups.
     assert.match(activeGroups, /\['forecasts', '计划预测'/);
     assert.match(activeGroups, /\['mrp-runs', 'MRP'/);
-    assert.match(activeGroups, /\['material-requirements-plan', '物料建议'/);
     assert.match(activeGroups, /\['production-instructions', '生产指令'/);
+    assert.ok(!activeGroups.includes("['material-requirements-plan', '物料建议'"),
+      'V1.6 P1B must not list material-requirements-plan as a primary launcher tile');
     assert.doesNotMatch(activeGroups, /工作中心|work-center/);
     assert.doesNotMatch(activeGroups, /生产产出|production-output/);
   });

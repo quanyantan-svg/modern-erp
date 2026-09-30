@@ -13,11 +13,17 @@
 // It does not know how sales orders, inventory or vouchers work.
 //
 // M1 contract:
-//   - 5 active tabs: messages / approvals / apps / cloud / profile
+//   - 5 active tabs: messages / approvals / apps / workspace / profile
 //   - bottom nav stays fixed, respects safe-area-inset-bottom
 //   - active state clearly visible
 //   - touch targets >= 44x44 CSS px
 //   - usable at 320px width
+//
+// V1.6 P1A contract (replaces the legacy collaboration tab with workspace/工作台):
+//   - exactly 5 enabled tabs
+//   - exact labels: 消息 / 审批 / 应用 / 工作台 / 我的
+//   - internal keys: messages / approvals / apps / workspace / profile
+//   - no active legacy collaboration tab.
 
 import { useCallback } from 'react';
 import { Icon } from './icons.jsx';
@@ -26,17 +32,15 @@ const TAB_ICONS = {
   messages: <Icon name="message" size={24}/>,
   approvals: <Icon name="approval" size={24}/>,
   apps: <Icon name="apps" size={24}/>,
-  cloud: (
-    <Icon name="cloud" size={24}/>
-  ),
+  workspace: <Icon name="dashboard" size={24}/>,
   profile: <Icon name="user" size={24}/>,
 };
 
 const TABS = [
   { key: 'messages', label: '消息', icon: 'messages', enabled: true },
-  { key: 'approvals', label: '签核', icon: 'approvals', enabled: true },
+  { key: 'approvals', label: '审批', icon: 'approvals', enabled: true },
   { key: 'apps', label: '应用', icon: 'apps', enabled: true },
-  { key: 'cloud', label: '云翼', icon: 'cloud', enabled: true },
+  { key: 'workspace', label: '工作台', icon: 'workspace', enabled: true },
   { key: 'profile', label: '我的', icon: 'profile', enabled: true },
 ];
 
@@ -172,7 +176,7 @@ export default function MobileShell({
   );
 
   return (
-    <div className="mobile-shell" data-testid="mobile-shell">
+    <div className="mobile-shell v16-mobile-enterprise" data-testid="mobile-shell">
       <MobileHeader
         brand={brand}
         pageTitle={pageTitle}

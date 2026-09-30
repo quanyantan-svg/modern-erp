@@ -125,7 +125,8 @@ describe('MobileShell — bottom navigation', () => {
     const disabled = MobileShellTabs.filter((t) => !t.enabled);
     assert.equal(enabled.length, 5, 'MobileShell must have 5 enabled tabs');
     assert.equal(disabled.length, 0, 'No canonical product tab is disabled');
-    assert.deepEqual(MobileShellTabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
+    assert.deepEqual(MobileShellTabs.map((tab) => tab.label), ['消息', '审批', '应用', '工作台', '我的']);
+    assert.deepEqual(MobileShellTabs.map((tab) => tab.key), ['messages', 'approvals', 'apps', 'workspace', 'profile']);
   });
 
   test('renders the shell wrapper, header, main, and bottom nav', () => {
@@ -141,25 +142,29 @@ describe('MobileShell — bottom navigation', () => {
   test('renders all 5 bottom nav buttons with correct labels', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
     assert.match(html, /data-testid="bottom-tab-messages"[\s\S]*?>[\s\S]*?消息/);
-    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?签核/);
+    assert.match(html, /data-testid="bottom-tab-approvals"[\s\S]*?>[\s\S]*?审批/);
     assert.match(html, /data-testid="bottom-tab-apps"[\s\S]*?>[\s\S]*?应用/);
-    assert.match(html, /data-testid="bottom-tab-cloud"[\s\S]*?>[\s\S]*?云翼/);
+    assert.match(html, /data-testid="bottom-tab-workspace"[\s\S]*?>[\s\S]*?工作台/);
     assert.match(html, /data-testid="bottom-tab-profile"[\s\S]*?>[\s\S]*?我的/);
   });
 
-  test('cloud tab is enabled and does not expose legacy placeholder copy', () => {
+  test('cloud/云翼 tab is no longer rendered as an enabled tab', () => {
     const html = renderToStaticMarkup(createElement(MobileShell, { activeTab: 'apps' }));
-    assert.match(
-      html,
-      /data-testid="bottom-tab-cloud"/,
-      'cloud tab must be rendered'
-    );
+    assert.doesNotMatch(html, /data-testid="bottom-tab-cloud"/);
+    assert.doesNotMatch(html, /云翼/);
+    assert.doesNotMatch(html, /签核/);
     assert.doesNotMatch(html, /通讯录|敬请期待/);
+  });
+
+  test('V1.6 P1A: TABS source no longer exposes cloud/云翼/签核', () => {
+    const source = readSrc('components/MobileShell.jsx');
+    assert.doesNotMatch(source, /key:\s*'cloud'/);
+    assert.doesNotMatch(source, /label:\s*'云翼'/);
+    assert.doesNotMatch(source, /label:\s*'签核'/);
   });
 
   test('legacy disabled branch cannot affect canonical tab contract', () => {
     const source = readSrc('components/MobileShell.jsx');
-    // Find the disabled-button code path
     assert.doesNotMatch(source, /key:\s*'directory'|label:\s*'通讯录'/);
   });
 
@@ -404,7 +409,7 @@ describe('MobilePage — reusable container', () => {
 describe('MobileLauncher — visual primitive', () => {
   test('renders empty state when no groups provided', () => {
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups: [] }));
-    assert.match(html, /data-testid="mobile-launcher-empty"/);
+    assert.match(html, /data-testid="v16-launcher-empty"/);
   });
 
   test('renders items inside a group', () => {
@@ -414,19 +419,19 @@ describe('MobileLauncher — visual primitive', () => {
         label: '基础资料',
         kind: 'domain',
         items: [
-          { key: 'products', label: '货品', iconKey: 'products', tier: 'primary' },
-          { key: 'customers', label: '客户', iconKey: 'customers', tier: 'primary' },
-          { key: 'warehouses', label: '仓库', iconKey: 'warehouses', tier: 'primary' },
-          { key: 'suppliers', label: '供应商', iconKey: 'suppliers', tier: 'primary' },
+          { key: 'products', page: 'products', label: '货品', iconKey: 'products' },
+          { key: 'customers', page: 'customers', label: '客户', iconKey: 'customers' },
+          { key: 'warehouses', page: 'warehouses', label: '仓库', iconKey: 'warehouses' },
+          { key: 'suppliers', page: 'suppliers', label: '供应商', iconKey: 'suppliers' },
         ],
       },
     ];
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups }));
-    assert.match(html, /data-testid="mobile-launcher-group-基础资料"/);
-    assert.match(html, /data-testid="mobile-launcher-item-products"/);
-    assert.match(html, /data-testid="mobile-launcher-item-customers"/);
-    assert.match(html, /data-testid="mobile-launcher-item-warehouses"/);
-    assert.match(html, /data-testid="mobile-launcher-item-suppliers"/);
+    assert.match(html, /data-testid="v16-launcher-group-master-data"/);
+    assert.match(html, /data-testid="v16-launcher-tile-products"/);
+    assert.match(html, /data-testid="v16-launcher-tile-customers"/);
+    assert.match(html, /data-testid="v16-launcher-tile-warehouses"/);
+    assert.match(html, /data-testid="v16-launcher-tile-suppliers"/);
   });
 
   test('invokes onItemSelect when an item is clicked (source contract)', () => {

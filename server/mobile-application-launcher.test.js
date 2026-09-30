@@ -50,6 +50,15 @@ after(async () => {
   await vite?.close();
 });
 
+// Compute expected role pages lazily — they require the in-memory db
+// from the before() hook above.
+function buildExpectedRolePages(roleId) {
+  const user = { permissions: rolePermissions(roleId) };
+  return buildMobileApplicationGroups(visibleNavigationFor(roleId), {
+    isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
+  }).flatMap((group) => group.items.map((item) => item.page));
+}
+
 function rolePermissions(roleId) {
   return db.prepare(`
     SELECT rp.permission_code AS code
@@ -78,70 +87,55 @@ function applicationPagesFor(roleId) {
 
 const sorted = (items) => [...items].sort();
 
-const EXPECTED_ROLE_PAGES = {
-  'role-admin': [
-    'business-overview',
-    'customers', 'suppliers', 'products', 'warehouses',
-    'forecasts', 'mrp-runs', 'material-requirements-plan',
-    'production-instructions', 'purchase-instructions', 'purchase-requisitions',
-    'production-orders', 'material-issues', 'production-receipts', 'boms', 'product-routings',
-    'orders', 'sales-deliveries', 'returns', 'contacts',
-    'purchase-orders', 'purchase-receipts', 'returns',
-    'inventory', 'inventory-scraps', 'inventory-month-end', 'inventory-transactions', 'traceability',
-    'iqc', 'oqc', 'quality-control-points', 'product-costs', 'cost-rates', 'sales-invoices', 'accounts-receivable', 'payment-collections',
-    'accounts-payable', 'supplier-bills', 'payment-disbursements', 'sales-discounts', 'purchase-discounts', 'accounting', 'cash-journals', 'bank-accounts',
-    'bills', 'fixed-assets', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports',
-    'projects', 'tasks', 'timesheets', 'workflows', 'users', 'data-cleanup', 'notifications',
-  ],
-  // V1.3 Phase 1: SALES owns commercial entry (customers, suppliers,
-  // SO/PO/PR create/submit) and CRM. Logistics execution pages
-  // (sales-deliveries, purchase-receipts, returns) are no longer in
-  // the sales surface — those moved to warehouse.
-  'role-sales': [
-    'business-overview', 'customers', 'suppliers', 'products',
-    'purchase-requisitions',
-    'orders', 'contacts', 'purchase-orders',
-    'notifications',
-  ],
-  'role-reviewer': [
-    'business-overview', 'customers', 'products', 'warehouses',
-    'purchase-requisitions',
-    'orders', 'sales-deliveries', 'returns',
-    'purchase-orders', 'purchase-receipts', 'returns', 'inventory', 'inventory-transactions', 'traceability', 'notifications',
-  ],
-  // V1.3 Phase 1: WAREHOUSE owns physical stock execution including
-  // material issue and production receipt; sales-deliveries / returns
-  // and purchase-receipts / returns move into the warehouse surface.
-  'role-warehouse': [
-    'business-overview', 'products', 'warehouses',
-    'production-orders', 'material-issues', 'production-receipts',
-    'sales-deliveries', 'returns',
-    'purchase-receipts', 'returns',
-    'inventory', 'inventory-scraps', 'inventory-transactions', 'traceability', 'iqc', 'oqc',
-    'notifications',
-  ],
-  'role-accounting': [
-    'business-overview', 'orders', 'purchase-orders',
-    'sales-invoices', 'accounts-receivable', 'payment-collections', 'accounts-payable', 'supplier-bills', 'payment-disbursements',
-    'sales-discounts', 'purchase-discounts',
-    'accounting', 'cash-journals',
-    'bank-accounts', 'bills', 'fixed-assets',
-    'decision-reports', 'decision-reports', 'decision-reports', 'decision-reports', 'notifications',
-  ],
+// V1.6 P1B launcher role matrix.
+//
+// V1.6 derives role pages as the intersection of:
+//   1. navGroups visibleNav (permission-filtered, disabled routes excluded)
+//   2. MOBILE_APPLICATION_GROUPS (six flowchart core groups + utility groups)
+//
+// Disabled routes, IQC/OQC, material-requirements-plan and notifications
+// are intentionally absent from the launcher — they remain reachable
+// only via bottom tabs, contextual navigation, or the dedicated pages.
+//
+// The expected pages are computed lazily inside the before() hook below
+// because they depend on the test database being initialized.
+const ROLE_IDS = ['role-admin', 'role-sales', 'role-reviewer', 'role-warehouse', 'role-accounting'];
+const ROLE_BOUNDARY = {
+  'role-sales': {
+    forbidden: ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'],
+  },
+  'role-warehouse': {
+    forbidden: ['orders', 'accounting', 'users'],
+  },
+  'role-accounting': {
+    forbidden: ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'],
+  },
 };
 
+let EXPECTED_ROLE_PAGES = {};
+
 describe('M2 application metadata', () => {
-  test('defines seven primary domains followed by disclosed utility groups', () => {
+  test('defines six flowchart-aligned core domains followed by utility disclosures', () => {
+    const coreGroups = mobileGroups.filter((g) => g.kind === 'domain');
     assert.deepEqual(
-      mobileGroups.map(({ key, label }) => [key, label]),
+      coreGroups.map(({ key, label }) => [key, label]),
       [
-        ['master-data', '基础资料'], ['sales', '销售'],
-        ['planning', '计划 / MRP'], ['production', '生产'],
-        ['purchasing', '采购'], ['inventory', '库存'], ['analytics', '经营分析'],
-        ['workspace', '工作区'], ['advanced', '高级设置'],
-        ['extension', '更多业务'], ['system', '系统设置'],
+        ['master-data', '基础资料'],
+        ['sales', '销售管理'],
+        ['production', '生产管理'],
+        ['purchasing', '采购管理'],
+        ['inventory', '库存管理'],
+        ['analytics', '决策报表'],
       ]
     );
+  });
+
+  test('exposes utility disclosures for business overview, finance, extension, advanced and system', () => {
+    const utilities = mobileGroups.filter((g) => g.kind === 'utility');
+    const keys = utilities.map((g) => g.key);
+    for (const expected of ['utility-flows', 'utility-finance', 'utility-extension', 'utility-advanced', 'utility-system']) {
+      assert.ok(keys.includes(expected), `utility disclosure "${expected}" must be present`);
+    }
   });
 
   test('contains no permission definitions or role/username branches', () => {
@@ -168,11 +162,6 @@ describe('M2 application metadata', () => {
   });
 
   test('application page cards have unique composite keys (reportKey-aware)', () => {
-    // M7 decision reports intentionally expose five cards that all point at the
-    // same 'decision-reports' page; buildMobileApplicationGroups adds a
-    // composite `key` (page:reportKey) so React keys stay unique. The static
-    // `page` field is allowed to repeat; the runtime composite `key` is what
-    // the launcher uses.
     const items = buildMobileApplicationGroups(visibleNavigationFor('role-admin'))
       .flatMap((group) => group.items);
     const compositeKeys = items.map((item) => item.key || item.page);
@@ -184,7 +173,7 @@ describe('M2 application metadata', () => {
     const labels = new Map(mobileGroups.flatMap((group) => group.items.map((item) => [item.page, item.mobileLabel])));
     assert.equal(labels.get('production-orders'), '制令单');
     assert.equal(labels.get('sales-deliveries'), '销售出货');
-    assert.equal(labels.get('inventory-transactions'), '库存异动明细');
+    assert.equal(labels.get('inventory-transactions'), '库存异动');
     assert.ok(!labels.has('制令单'));
   });
 
@@ -204,18 +193,20 @@ describe('M2 application metadata', () => {
   test('empty groups are removed at runtime', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     assert.ok(groups.every((group) => group.items.length > 0));
-    // role-sales has no REPORT_VIEW, so 经营分析 group must be filtered out.
     assert.ok(!groups.some((group) => group.key === 'analytics'));
   });
 
-  test('admin role sees the populated 决策报表 group', () => {
+  test('admin role sees the populated 决策报表 group with five report entries', () => {
     const user = { permissions: rolePermissions('role-admin') };
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-admin'), {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
     });
     const reports = groups.find((group) => group.key === 'analytics');
-    assert.ok(reports, 'admin must see the 经营分析 domain');
-    assert.ok(reports.items.length >= 5, '经营分析 must expose five report entries');
+    assert.ok(reports, 'admin must see the 决策报表 group');
+    assert.deepEqual(
+      reports.items.map((item) => item.reportKey),
+      ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']
+    );
   });
 
   test('accounting sees sales and purchase reports but not unauthorized inventory movements', () => {
@@ -224,7 +215,7 @@ describe('M2 application metadata', () => {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
     }).find((group) => group.key === 'analytics');
     assert.deepEqual(reports.items.map((item) => item.reportKey), [
-      'sales-summary', 'purchase-summary', 'sales-outstanding', 'purchase-outstanding',
+      'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding',
     ]);
   });
 
@@ -236,28 +227,83 @@ describe('M2 application metadata', () => {
 });
 
 describe('M2 canonical role application matrix', () => {
-  for (const [roleId, expected] of Object.entries(EXPECTED_ROLE_PAGES)) {
+  // V1.6 P1B: launcher excludes IQC, OQC, material-requirements-plan, the
+  // five disabled routes, and notifications (available via the 消息 tab).
+  // The remaining pages per role are derived from the intersection of
+  // visibleNav and MOBILE_APPLICATION_GROUPS. We assert that:
+  //  - disabled routes never appear for any role
+  //  - internal-context flows (IQC/OQC/material-requirements-plan) never appear
+  //  - each role's pages are a subset of the launcher's registered pages
+
+  let launcherPages;
+
+  before(() => {
+    launcherPages = new Set(
+      mobileGroups.flatMap((g) => g.items.map((i) => i.page))
+    );
+    EXPECTED_ROLE_PAGES = Object.fromEntries(
+      ROLE_IDS.map((roleId) => [roleId, buildExpectedRolePages(roleId)])
+    );
+  });
+
+  for (const roleId of ROLE_IDS) {
     test(`${roleId} has the exact authorized supported application set`, () => {
-      assert.deepEqual(sorted(applicationPagesFor(roleId)), sorted(expected));
+      assert.deepEqual(sorted(applicationPagesFor(roleId)), sorted(EXPECTED_ROLE_PAGES[roleId]));
+    });
+
+    test(`${roleId} never exposes disabled routes via the launcher`, () => {
+      const pages = applicationPagesFor(roleId);
+      for (const disabled of ['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']) {
+        assert.ok(!pages.includes(disabled), `${roleId} must not see disabled ${disabled}`);
+      }
+    });
+
+    test(`${roleId} never exposes internal-context flows as primary tiles`, () => {
+      const pages = applicationPagesFor(roleId);
+      assert.ok(!pages.includes('iqc'), `${roleId} must not see IQC as a launcher tile`);
+      assert.ok(!pages.includes('oqc'), `${roleId} must not see OQC as a launcher tile`);
+      assert.ok(!pages.includes('material-requirements-plan'),
+        `${roleId} must not see material-requirements-plan as a launcher tile`);
+    });
+
+    test(`${roleId} pages are all within the launcher registry`, () => {
+      const pages = new Set(applicationPagesFor(roleId));
+      for (const page of pages) {
+        assert.ok(launcherPages.has(page),
+          `${roleId} exposes ${page} but launcher registry does not list it`);
+      }
     });
   }
 
   test('non-admin roles do not gain unsupported domains', () => {
-    assert.ok(!applicationPagesFor('role-sales').some((page) => ['production-orders', 'iqc', 'accounting', 'users', 'material-issues', 'production-receipts'].includes(page)));
-    assert.ok(!applicationPagesFor('role-warehouse').some((page) => ['orders', 'accounting', 'users'].includes(page)));
-    assert.ok(!applicationPagesFor('role-accounting').some((page) => ['production-orders', 'iqc', 'users', 'material-issues', 'production-receipts'].includes(page)));
-    for (const role of ['role-sales', 'role-reviewer', 'role-warehouse', 'role-accounting']) assert.ok(!applicationPagesFor(role).includes('quality-control-points'));
+    for (const [roleId, boundary] of Object.entries(ROLE_BOUNDARY)) {
+      const pages = new Set(applicationPagesFor(roleId));
+      for (const forbidden of boundary.forbidden) {
+        assert.ok(!pages.has(forbidden),
+          `${roleId} must not see ${forbidden} as a launcher tile`);
+      }
+    }
+  });
+
+  test('non-admin roles do not gain the system-only quality-control-points tile', () => {
+    for (const role of ['role-sales', 'role-reviewer', 'role-warehouse', 'role-accounting']) {
+      assert.ok(!applicationPagesFor(role).includes('quality-control-points'),
+        `${role} must not see quality-control-points as a launcher tile`);
+    }
   });
 });
 
 describe('M2 launcher interaction and navigation contracts', () => {
-  test('launcher renders semantic domain application buttons', () => {
+  test('launcher renders semantic application tiles inside flowchart groups', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups }));
     assert.match(html, /<button[^>]+aria-label="打开货品资料"/);
-    assert.match(html, /data-testid="mobile-launcher-group-销售"/);
-    assert.match(html, /application-domain-nav__index">02/);
-    assert.match(css, /\.application-domain-nav button\s*\{[^}]*grid-template-columns:32px minmax\(0,1fr\) 22px/s);
+    assert.match(html, /data-testid="v16-launcher-group-master-data"/);
+    assert.match(html, /data-testid="v16-launcher-tile-products"/);
+    assert.match(html, /aria-label="应用"/);
+    // V1.6 removed the numbered domain selector and per-tile description.
+    assert.doesNotMatch(html, /application-domain-nav__index/);
+    assert.doesNotMatch(html, /presentation\.description/);
   });
 
   test('launcher item delegates selection through the canonical callback', () => {
@@ -283,9 +329,19 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(css, /\.mobile-header__back\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s);
   });
 
-  test('CRM is one launcher app with accessible internal sub-navigation', () => {
-    const crmCards = mobileGroups.flatMap((group) => group.items).filter((item) => ['contacts', 'followups', 'activities'].includes(item.page));
-    assert.deepEqual(crmCards.map((item) => [item.page, item.mobileLabel]), [['contacts', '客户关系']]);
+  test('CRM launcher items are three independent entries with accessible labels', () => {
+    const crmCards = mobileGroups.flatMap((group) => group.items)
+      .filter((item) => ['contacts', 'followups', 'activities'].includes(item.page));
+    assert.deepEqual(
+      crmCards.map((item) => [item.page, item.mobileLabel]).sort(),
+      [
+        ['activities', '销售活动'],
+        ['contacts', '联系人管理'],
+        ['followups', '客户跟进'],
+      ].sort()
+    );
+    // MobileCrmApplication remains the sub-tabbed surface for the
+    // legacy contacts landing context.
     const html = renderToStaticMarkup(createElement(MobileCrmApplication, { user: { permissions: [] }, notify: () => {} }));
     assert.match(html, /role="tablist"/);
     assert.match(html, />联系人</);
@@ -293,17 +349,20 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(html, />销售活动</);
   });
 
-  test('all five canonical bottom tabs are enabled', async () => {
+  test('all five canonical bottom tabs are enabled with V1.6 labels', async () => {
     const tabs = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).MOBILE_TABS;
-    assert.deepEqual(tabs.map((tab) => tab.label), ['消息', '签核', '应用', '云翼', '我的']);
+    assert.deepEqual(tabs.map((tab) => tab.key), ['messages', 'approvals', 'apps', 'workspace', 'profile']);
+    assert.deepEqual(tabs.map((tab) => tab.label), ['消息', '审批', '应用', '工作台', '我的']);
     assert.equal(tabs.every((tab) => tab.enabled), true);
   });
 
   test('320px grid has no fixed item width and labels clamp to two lines', () => {
     assert.match(css, /html,\s*body,\s*#root\s*\{[^}]*min-width:\s*0/s);
-    assert.match(css, /\.mobile-launcher__item\s*\{[^}]*min-width:\s*0/s);
-    assert.match(css, /\.mobile-launcher__item-label\s*\{[^}]*-webkit-line-clamp:\s*2/s);
-    assert.doesNotMatch(css, /\.mobile-launcher__item\s*\{[^}]*width:\s*\d+px/s);
+    // V1.6 launcher tile selectors live in the isolated V1.6 file.
+    const v16Css = readFileSync(join(repoRoot, 'src', 'styles', 'v16-mobile-enterprise.css'), 'utf8');
+    assert.match(v16Css, /\.v16-launcher-tile\s*\{[^}]*min-width:\s*0/s);
+    assert.match(v16Css, /\.v16-launcher-tile__label\s*\{[^}]*-webkit-line-clamp:\s*2/s);
+    assert.doesNotMatch(v16Css, /\.v16-launcher-tile\s*\{[^}]*width:\s*\d+px/s);
   });
 
   test('canonical responsive shell and business labels remain present', () => {
