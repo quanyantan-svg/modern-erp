@@ -3479,3 +3479,360 @@ function choosePurchaseOrder(purchaseOrderId) {
 - P0/P1/P1.1/P2/P3/P3.1 任何文件；
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
+
+## 30. V1.6 P7 — Mobile Enterprise Decision Reports 设计
+
+本节是 `document.md §29` 已批准需求的 STAGE 2 — DESIGN，起点为 master `0c3c5db`。P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6 视觉 DNA 与合同保持不变。本节只设计 P7 在 V1.6 移动企业 UX 下重塑五张决策报表的实现策略，**不动后端 / API / 数据库 / 业务合同 / 报表口径 / CSV schema**。P8 不在本节范围。
+
+P7 与既有 P5/P6 一样属于「既有页面移动企业级重塑」：单一职责是展示层，不重写计算。
+
+### 30.1 范围与不变量
+
+实现范围：
+
+- `src/pages/decision-reports.jsx`：替换为 V1.6 移动企业级版本 `DecisionReportsV16`；保留 `REPORT_TABS / REPORT_DATE_BASIS / canViewDecisionReport` 等导出，作为下游测试与旧依赖的稳定接口；
+- `src/main.jsx`：追加一行 CSS import；
+- `src/styles/v16-decision-reports.css`（新增）：仅作用于 `.v16-mobile-enterprise .v16-decision-reports` 与子前缀；
+- `server/v16-p7-decision-reports.test.js`（新增）：源码合同测试 ≥ 18 项；
+- `scripts/acceptance/v16-p7-decision-reports.mjs`（新增）：Edge 浏览器验收，输出 `.tmp/v16-p7-visual/`。
+
+不修改：
+
+- `server/app.js`、`server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- `server/modules/decision-reports.js`：所有 handler 与 `DECISION_REPORT_SOURCE_LABELS` 不变；
+- 五条 `GET /api/reports/decision/...` 与对应 `*/export` 端点的请求 / 响应；
+- `GET /api/reports/:reportKey/lines/:orderItemId/contributions`；
+- 报表 SQL、过滤参数、`legacyMissing` / `accuracyNotice` / `informationalItems` / `reconciliation` 的字段语义；
+- 五 canonical 角色、五 canonical 审批族、`REPORT_VIEW` 权限映射；
+- P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6 任何文件；
+- `package.json` 版本；不动 v1.5.0 tag；不 push / tag / deploy。
+
+### 30.2 模块与状态模型
+
+`DecisionReportsV16` 顶层维护三类互斥状态：
+
+- `currentReportKey`：当前展示的报表 `sales-summary | sales-outstanding | purchase-summary | purchase-outstanding | inventory-movements`；
+- 报表切换器状态：`switcherOpen`（boolean）；
+- 每张报表独立维护：`draftFilters` / `appliedFilters` / `useReport` 状态。
+
+`currentReportKey` 解析路径：
+
+1. 初次进入：若 `useAppNavigation().target.reportKey` 命中 `REPORT_TABS` 且当前用户被授权可见，则使用该 `reportKey`；
+2. 否则：从当前用户被授权的 `REPORT_TABS` 中取第一张；
+3. 报表切换器仅展示当前用户被授权的报表（`canViewDecisionReport(user, reportKey) === true`）；
+4. 用户在切换器切换时，仅修改 `currentReportKey`，不重新进入路由、不修改 URL、不破坏既有 `AppLink` 行为。
+
+`useReport(endpoint, appliedFilters)` 现有逻辑继续保留（`decision-reports.jsx:141-157`），其 `JSON.stringify(appliedFilters)` 依赖保证参数变化时重新拉取；不重写该 hook，仅在新组件中复用。
+
+### 30.3 组件边界
+
+P7 在 `decision-reports.jsx` 内定义以下组件（命名仅作实现约定，本节不创建文件）：
+
+| 组件 | 职责 |
+|---|---|
+| `DecisionReportsV16` | 顶层壳；维护 `currentReportKey`、切换器、每张报表的过滤器；按当前 `currentReportKey` 分发到对应子面板 |
+| `DecisionReportSwitcher` | 紧凑选择器（select / sheet）；只列当前用户被授权可见的报表；切换时更新 `currentReportKey`；可键盘操作 |
+| `DecisionReportControls` | 「筛选」+ 「导出 CSV」按钮区，与报表标题同一行；导出按钮调用 `ExportButton`，使用 `applied` |
+| `DecisionMetricGrid` | 2 列扁平指标网格；金额不换行；含数据质量提示位 |
+| `DecisionBreakdownRow` | 客户 / 供应商分组企业行；不渲染 `RecordCard` |
+| `FulfillmentReportRowV16` | 履行行；按密度整合订单号 + 行号 + 履行状态、货品、客户 / 供应商、剩余 / 订货 / 已履行、要求交期 / 预计到货、逾期 / 未设置交期、履约明细入口 |
+| `FulfillmentContributionSheet` | 履行贡献明细 Sheet；按 `contributions + informationalItems` 渲染；空状态显示 `没有可证明的履约贡献` |
+| `InventoryMovementReportRowV16` | 库存异动企业行；业务日期、产品、仓库、来源、方向、数量、变动后结存 |
+| `ReportAuditNotice` | 统一渲染 `legacyMissing / accuracyNotice / legacyAccuracyLimited / informationalItems / reconciliation` 的克制 inline 提示 |
+
+子面板组件继续存在（`SalesSummaryPanel / SalesOutstandingPanel / PurchaseSummaryPanel / PurchaseOutstandingPanel / InventoryMovementsPanel`），但其内部 JSX 由 V1.6 风格替换；不删除这些子组件，便于逐步对齐 P0–P6 的命名约定与回归测试。
+
+### 30.4 报表身份与控件区（统一）
+
+每个面板顶部由以下结构组成（不再重复 `<h1>` / 不再使用 `BusinessPageHeader`）：
+
+1. 报表切换器入口（`DecisionReportSwitcher`）：按钮显示「报表：销售统计分析」+ caret；
+2. 「筛选」按钮（沿用 `FilterButton`，仅显示当前已应用筛选数量）；
+3. 「导出 CSV」按钮（沿用 `ExportButton`，使用 `applied`）；
+4. 报表正文按当前 `reportKey` 渲染；不再渲染「经营分析 + 当前报表」重复副标题。
+
+### 30.5 筛选与导出生命周期
+
+#### 30.5.1 双值状态
+
+每张报表维护两套筛选值：
+
+- `draftFilters`：当前在 `FilterSheet` 内编辑的值；
+- `appliedFilters`：实际驱动 `useReport` 与 CSV 导出的值。
+
+转换路径：
+
+```text
+[打开筛选] -> 编辑 draftFilters -> [应用筛选] -> appliedFilters = draftFilters -> reload + 关闭 Sheet
+                                    -> [重置]     -> draftFilters = initial; appliedFilters = initial
+                                    -> [关闭 / 点外部] -> 丢弃草稿；appliedFilters 不变
+```
+
+#### 30.5.2 与报表切换的交互
+
+- 切换报表时，新报表展示自己的 `appliedFilters`（旧报表的已应用值不直接迁移到新报表，避免误导）；
+- 已应用值与「实际驱动查询」之间的对应关系由 UI 显式标识（每个面板头部展示已应用的筛选摘要）。
+
+#### 30.5.3 CSV 导出
+
+`ExportButton` 继续使用 `applied` 导出：
+
+- 端点：`{exportEndpoint}/export?...&appliedFilters`；
+- 文件名继续由服务端 `Content-Disposition` 提供；
+- 加载状态：`正在导出...`；失败：`导出失败` + 错误消息；不得静默；
+- 不在前端生成 CSV；不改 CSV schema。
+
+### 30.6 销售统计分析面板
+
+```jsx
+<DecisionMetricGrid
+  rows={[
+    { label: '订单数', value: data.summary.orderCount },
+    { label: '订单金额', value: money(data.summary.orderCents) },
+    { label: '已审批订单数', value: data.summary.approvedOrderCount },
+    { label: '出货单数', value: data.summary.deliveryCount },
+    { label: '实际出货金额', value: money(data.summary.deliveryCents) },
+    { label: '销售退货金额', value: money(data.summary.returnCents) },
+    { label: '净出货金额', value: money(data.summary.netShipmentCents) },
+  ]}
+/>
+<ReportAuditNotice
+  legacyMissing={data.legacyMissing}
+  accuracyNotice={null}
+/>
+<ul className="v16-decision-reports__breakdown">
+  {(data.byCustomer || []).map((row) => (
+    <DecisionBreakdownRow
+      key={row.customerId}
+      title={`${row.customerCode} · ${row.customerName}`}
+      facts={[
+        { label: '订单数', value: row.orderCount },
+        { label: '订单金额', value: money(row.orderCents) },
+        { label: '出货金额', value: money(row.deliveryCents) },
+      ]}
+    />
+  ))}
+</ul>
+<ReportAuditNotice notice={data.notes} kind="neutral" />
+```
+
+要点：
+
+- 不展示装饰性图表；不把 `订单金额` 描述为收入；
+- 货币 `money()` 仅做展示格式，不重新计算；
+- 客户分组以企业行渲染，不使用 `RecordCard` / `RecordList`；
+- `legacyMissing` 与 `notes` 通过 `ReportAuditNotice` 渲染，保留原始文本语义而不解析为 raw JSON；
+- 空数据走 `BusinessState kind="EMPTY"`；筛选无结果走 `BusinessState kind="NO_RESULTS"`，不合并。
+
+### 30.7 销售未出货 / 采购未交货面板
+
+#### 30.7.1 履行行布局
+
+```jsx
+<FulfillmentReportRowV16
+  row={row}
+  reportKey={reportKey}
+  onOpenContributions={() => openContribution(row.orderItemId, row.contributionCount)}
+/>
+```
+
+每行（按密度堆叠）：
+
+- 主识别：`{orderNumber} / 行 {lineNumber}` + 履行状态 chip；
+- 货品：`product.code · product.name`（最多两行）；
+- 客户 / 供应商：`code · name`；
+- 剩余数量（强调）；
+- 已履行 / 订货数量；
+- 要求交期 / 预计到货日：`commitmentDate || 未设置交期`；
+- 逾期：未逾期 / 逾期 N 天，文字 + 颜色双重表达；
+- 履约明细按钮：`查看履约明细（N）` / `收起履约明细`；
+- 当 `legacyAccuracyLimited` 为真，附克制 inline 警告；
+- 当 `fulfillmentStatus === 'OVER_FULFILLED'`，附 inline danger，提示超量与数量。
+
+#### 30.7.2 履约明细 Sheet
+
+`FulfillmentContributionSheet` 接收 `reportKey / orderItemId`：
+
+1. 调用 `GET /api/reports/${reportKey}/lines/${encodeURIComponent(orderItemId)}/contributions`；
+2. 章节：
+   - 订单行概要（订单号 / 行号 / 订货数量 / 已执行数量）；
+   - 贡献明细：每条 `sourceDocumentNumber + businessDate || 业务日期缺失 + quantity + warehouse.code`；
+   - `informationalItems`：每项一条克制 warning；
+   - 空证据：`没有可证明的履约贡献`；
+3. 错误态：`履约明细加载失败` + 服务端 message；
+4. 不得伪造履约贡献；
+5. 不得绕过服务端独立计算；
+6. 销售单 / 采购单跳转继续使用既有安全 `AppLink`。
+
+#### 30.7.3 状态矩阵
+
+| 服务端数据 | 状态 | 文案 |
+|---|---|---|
+| `rows.length > 0` | READY | 正常渲染 |
+| `rows.length === 0 && population.hiddenFulfilledLines > 0` | 匹配行均已履行 | `匹配行均已履行` + 提示开启 `显示已履行` |
+| `rows.length === 0 && 任何其他已应用筛选` | NO_RESULTS | `当前条件无匹配` |
+| `rows.length === 0 && 无已应用筛选` | EMPTY | `没有待出货订单行` / `没有待收货订单行` |
+
+不得用「暂无数据」覆盖上述四类。
+
+### 30.8 采购统计分析面板
+
+与 §30.6 同构；指标替换为采购域语义；供应商行使用 `supplierCode · supplierName`。不修改 `purchase_orders.total_cents` 语义，不描述为「已实现成本」。
+
+### 30.9 库存异动明细面板
+
+```jsx
+{reconciliation && (
+  <ReportAuditNotice
+    kind="audit"
+    title="库存对账"
+    summary={[
+      { label: '当前库存', value: reconciliation.currentQuantity },
+      { label: '最新流水余额', value: reconciliation.latestMovementBalance ?? '—' },
+      {
+        label: '核对结果',
+        value:
+          reconciliation.reconcilesToCurrent == null
+            ? '历史不足，无法核对'
+            : reconciliation.reconcilesToCurrent
+              ? '流水与当前库存一致'
+              : '流水与当前库存不一致，请核查',
+      },
+    ]}
+    note={reconciliation.note}
+  />
+)}
+
+<ul className="v16-decision-reports__movements">
+  {data.rows.map((row) => <InventoryMovementReportRowV16 row={row} key={row.id} />)}
+</ul>
+```
+
+要点：
+
+- `reconciliation` 仅当 `productId + warehouseId` 同时存在时由服务端返回；P7 不在此条件下伪造；
+- 对账使用紧凑审计块，不使用 `SummaryCard` 卡片墙；
+- 历史不足（`reconcilesToCurrent == null`）必须显示「历史不足，无法核对」，不得改写为一致 / 不一致；
+- 业务日期缺失：行内显示 `业务日期缺失`，与 `legacyMissing.withoutBusinessDate` 顶部提示同时存在；
+- 跟踪身份不在 P7 决策报表中展示（属于 P6 `inventory-transactions`）；P7 维持空缺；
+- 状态来源枚举沿用服务端 `source_type_label`；
+- 不得使用 `createdAt` 充当业务日期。
+
+### 30.10 状态文案与错误反馈
+
+每张报表统一使用 `BusinessState`：
+
+| 状态 | kind | 标题 | 描述 |
+|---|---|---|---|
+| 加载中 | LOADING | `正在加载决策报表` | `正在按业务日期口径汇总，请稍候。` |
+| 错误 | ERROR | `决策报表加载失败` | `[message + resolution]` + 请求编号（可展开技术详情） |
+| 空 | EMPTY | `暂无报表数据` | `当前业务范围内还没有可汇总的数据。` |
+| 无结果 | NO_RESULTS | `没有客户分组数据` / `没有供应商分组数据` / `当前条件无匹配` / `没有库存异动记录` | 引导清除 / 调整筛选 |
+| 履行报表特殊 | EMPTY | `匹配行均已履行` | 提示开启 `显示已履行` |
+
+`ERROR` 必须保留 `requestId` 与可读错误信息；不暴露堆栈；`details` 仍可由用户主动展开查看。
+
+### 30.11 数据流与调用关系
+
+- 列表查询：`GET /api/reports/decision/{reportKey}?...&appliedFilters`；
+- CSV 导出：`GET /api/reports/decision/{reportKey}/export?...&appliedFilters`，前端只触发；
+- 履约贡献：`GET /api/reports/{reportKey}/lines/{orderItemId}/contributions`；
+- 错误反馈：失败统一走 `notify(error.message, 'error')`；不破坏既有错误捕获；
+- 状态：`useReport` hook 的 lifecycle（loading / success / error）保持不变；
+- 切换报表：仅修改 `currentReportKey`；不重新拉取导航；不修改 `useReport` endpoint 缓存。
+
+### 30.12 样式与适配
+
+1. 新增 `src/styles/v16-decision-reports.css`；
+2. `src/main.jsx` 在既有 V1.6 页面样式（`v16-inventory-control.css`）之后追加 `import './styles/v16-decision-reports.css'`；
+3. 选择器作用域限定于 `.v16-mobile-enterprise .v16-decision-reports` 与 `v16-decision-reports-*`、`v16-decision-metric-*`、`v16-decision-breakdown-*`、`v16-decision-fulfillment-*`、`v16-decision-contribution-*`、`v16-decision-movement-*` 前缀；
+4. 不写入 `src/styles.css`、`v16-mobile-enterprise.css`、`v16-tokens.css`、`v16-inventory-control.css`、`v16-mrp-planning.css` 等既有文件；
+5. 模块识别色使用既有 `--v16-module-analytics: #7656D6`（V1.6 决策报表身份色 token），仅作为识别色 / 主操作 / 焦点 / 链接 / 进度强调；不得用于业务状态 / 履约状态 / 危险 / 警告；
+6. 业务状态 / 逾期 / 警告 / 危险继续使用 V1.6 已冻结的语义色（success / warning / danger / neutral）；
+7. 320 / 390 / 430 / 680px 共用同一布局；680px 居中单轨，不切换为桌面布局；
+8. 长文本（超长客户名 / 供应商名 / 产品名 / 单据号 / 大金额 / 六位小数量 / 缺失要求交期 / 逾期 / 超量 / 缺失业务日期 / 长来源单号）必须在 320px 视口下不造成页面级横向溢出；
+9. 不得用 `overflow-x: hidden` 强行掩盖布局问题；
+10. 不为决策报表新增 `Panel / RecordCard / RecordList / BusinessPageHeader / CompactRecord / MobileWorkflowProgress` 类主表面。
+
+### 30.13 权限、错误与事务边界
+
+- 报表可见性继续由 `canViewDecisionReport()` 控制；
+- 履约贡献 / 导出 / 列表查询的 401 / 403 / 404 由服务端返回；前端通过 `notify(message, 'error')` 显示；
+- 切换报表时若用户对该报表不可见（例如外部动态变更权限），由 `BusinessState kind="PERMISSION_DENIED"` 处理；
+- 不在前端做任何权限映射、角色映射、权限推断；
+- 后端事务不变化；前端不发起任何写操作。
+
+### 30.14 Focused 源码合同测试（计划 ≥ 18 项）
+
+`server/v16-p7-decision-reports.test.js` 使用 `node:test` + `node:fs`：
+
+1. `decision-reports.jsx` 不再使用 `BusinessPageHeader` 作为页面级标题；
+2. `decision-reports.jsx` 不再包含永久 `<HelpDisclosure summary="报表口径">`；
+3. 不再渲染 `decision-reports-v15` 类；
+4. 不再渲染 5 长标签水平 Tab 切换条（`role="tablist"` 仅允许出现在切换器内）；
+5. `DecisionReportSwitcher` 仅展示 `canViewDecisionReport(user, reportKey) === true` 的报表；
+6. 切换器在 320px 视口下触点 ≥ 44px；可键盘操作；ESC 关闭；
+7. `ReportFilters` 仍维护 `draftFilters` 与 `appliedFilters`；
+8. 关闭 FilterSheet 时不提交 `draftFilters`；
+9. CSV 导出调用 `applied` 而非 `draftFilters`；
+10. 五条 `*/export` 端点路径不变；
+11. `useReport` 仍调用既有 `GET /api/reports/decision/{reportKey}`；
+12. 销售统计指标 key 仍为 `orderCount / orderCents / approvedOrderCount / deliveryCount / deliveryCents / returnCount / returnCents / netShipmentCents`；
+13. 销售未出货 / 采购未交货 `granularity` 仍为 `ORDER_LINE`；前端不重算 `remainingQuantity` 或 `fulfillmentStatus`；
+14. 履约贡献仍调 `GET /api/reports/:reportKey/lines/:orderItemId/contributions`；空贡献显示 `没有可证明的履约贡献`；
+15. 库存异动明细 `businessDate` 缺失显示 `业务日期缺失`；不替换为 `created_at`；
+16. 对账块仅在 `reconciliation` 非空时渲染，且 `reconcilesToCurrent == null` 时显示 `历史不足，无法核对`；
+17. 状态文案区分 `LOADING / ERROR / EMPTY / NO_RESULTS / READY`；履行报表额外包含 `匹配行均已履行`；
+18. 不得修改 `server/app.js`、`server/modules/decision-reports.js`、`server/db.js`、`server/database/*`、`server/migrations/*`（通过 `git status --porcelain` 与源码字面共同校验）。
+
+### 30.15 浏览器验收设计
+
+`scripts/acceptance/v16-p7-decision-reports.mjs` 使用现有 acceptance harness：
+
+1. 输出目录：`.tmp/v16-p7-visual/`，遵循既有 `.tmp/` 隔离；
+2. 视口：390px 覆盖五张报表关键状态；320 / 430 / 680 各取代表性证据；
+3. 关键状态覆盖：销售统计 READY / EMPTY / legacy 缺失；销售未出货 READY / 含超量 / 含逾期 / 含未设置交期 / 匹配行均已履行 / 履约贡献 sheet READY / 履约贡献空 / 库存异动含对账 / 库存异动缺业务日期 / 报表切换器；
+4. 验收断言：视口宽度 `document.documentElement.scrollWidth <= clientWidth`；无控制台 / React 错误；触点 ≥ 44px；底部导航不遮挡；切换器 / 筛选 Sheet / 履约 Sheet / 对账块在 320px 下完全可见且不溢出；
+5. 截图清单：
+   - 销售统计：`{320,390,430,680}-{ready,empty,legacy}-{png}`；
+   - 销售未出货：`{320,390,430,680}-{ready,overdue,noCommitment,hiddenFulfilled}-{png}`；
+   - 履约贡献 sheet：`contribution-{ready,empty}-{320,390}.png`；
+   - 采购统计、采购未交货、库存异动（含对账、缺业务日期）同上；
+   - 报表切换器 `switcher-{320,390}.png`；
+6. 截图脚本必须使用确定性 fixtures（已知账期、已知客户 / 供应商、已知过期货、已知超量单）；
+7. 截图脚本不得修改任何业务数据。
+
+### 30.16 预计实现文件范围
+
+实现阶段预计只修改：
+
+- `src/main.jsx`（追加一行 CSS import）；
+- `src/pages/decision-reports.jsx`（新增 `DecisionReportsV16 / DecisionReportSwitcher / DecisionReportControls / DecisionMetricGrid / DecisionBreakdownRow / FulfillmentReportRowV16 / FulfillmentContributionSheet / InventoryMovementReportRowV16 / ReportAuditNotice`；替换 5 张面板的 JSX；保留 `REPORT_TABS / REPORT_DATE_BASIS / canViewDecisionReport` 等导出）。
+
+预计新增：
+
+- `src/styles/v16-decision-reports.css`；
+- `server/v16-p7-decision-reports.test.js`；
+- `scripts/acceptance/v16-p7-decision-reports.mjs`。
+
+可能需要小幅修改（仅当 `applicationMetadata` 引入的 `reportKey` 文字需要与新切换器对齐、且不影响 `reportKey` / 路由 / 权限时）：
+
+- `src/navigation/applicationMetadata.js` 启动器 `mobileLabel` / `formalLabel` 字段；
+- 但 `reportKey` 与 `page` 不得修改。
+
+不修改：
+
+- 后端任何文件 / `server/app.js` / `server/modules/decision-reports.js` / 数据库 / 迁移 / 权限 / 角色 / 审批族 / 状态机 / 履约语义 / 库存语义 / 报表口径 / CSV schema；
+- `Modal / BusinessPageHeader / CompactRecord / CompactRecordList / RecordCard / RecordList / ResponsiveBusinessList / MobileWorkflowProgress / HelpDisclosure` 等组件本身；
+- P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6 任何文件；
+- `package.json` 版本；不动 v1.5.0 tag；不 push / tag / deploy。
+
+### 30.17 测试与完成门禁
+
+1. `server/v16-p7-decision-reports.test.js` ≥ 18 项通过；
+2. 既有 P0–P6 focused 测试、`mobile-application-launcher.test.js`、`decision-reports.test.js`、`v14-e8-product-consistency.test.js`、`v15-d8-reporting-ux.test.js`、`v16-p1-mobile-enterprise-foundation.test.js` 等保持通过；
+3. 全量 `pnpm test` 不超过基线既有 4 个 reset-data 路径保护失败；不引入新失败；
+4. `pnpm build` 与 `git diff --check` 通过；
+5. Edge 浏览器验收脚本输出至 `.tmp/v16-p7-visual/`，无控制台 / React 错误，无水平溢出，无触点不足，无底部导航 / 动作栏碰撞；
+6. 提交后 STOP；不进入 P8；不 push / tag / deploy；不动 package.json 版本；不动 v1.5.0 tag；
+7. 截图通过运营方视觉评审后才进入 P8。

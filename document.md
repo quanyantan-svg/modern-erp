@@ -2100,3 +2100,289 @@ P6 不改造追溯、采购入库、销售出库、生产领料/入库、会计�
 新增 `server/v16-p6-inventory-control.test.js`，以不少于 41 项源码合同覆盖路由、状态、日期、权限、TrackingAllocationEditor、月结预检及禁用旧主表面等约束。新增 `scripts/acceptance/v16-p6-inventory-control.mjs`，使用隔离确定性 fixtures，在 `.tmp/v16-p6-visual/` 输出 390px 的库存、调拨、盘点、调整、报废、月结和异动关键状态截图，并为库存、调拨编辑器、盘点编辑器、月结、异动补充 320/430/680px 代表性证据。
 
 完成门禁：focused 测试无新增失败；全量 `pnpm test` 不超过基线既有 4 个 reset-data 路径保护失败；`pnpm build` 与 `git diff --check` 通过；浏览器验收无控制台/React 错误、水平溢出、重复返回、底栏碰撞或旧主表面。P6 不修改后端、数据库、迁移、状态机、审批族、角色权限、版本、tag，不 push、tag、deploy，也不进入 P7/P8。
+
+## 29. V1.6 P7 — Mobile Enterprise Decision Reports
+
+本节是 V1.6 P7 的 STAGE 1 — REQUIREMENT 冻结，起点为当前 master `0c3c5db`（P5.1 polish commit）。P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6 的工程与视觉合同保持不变。P7 是 V1.6 决策报表的移动企业级展示层产品化，**仅重做前端表现，不修改报表计算、报表口径、API、数据库、迁移、角色、权限、审批族、路由身份、版本或发布状态**。
+
+本节需求由运营方与产品架构师在 V1.6 流程图中确定，不在本节重新设计产品范围。审计信息以 `server/modules/decision-reports.js` 与 `server/decision-reports.test.js` 为权威依据；前端展示层需求不得与既有后端合同冲突。
+
+### 29.1 范围与产品模型
+
+1. P7 严格只覆盖既有五张 canonical 决策报表在 V1.6 移动企业 UX 下的展示层改造：
+   - `sales-summary` 销售统计分析；
+   - `sales-outstanding` 销售未出货；
+   - `purchase-summary` 采购统计分析；
+   - `purchase-outstanding` 采购未交货；
+   - `inventory-movements` 库存异动明细。
+2. 用户可见报表名称继续为：`销售统计分析 / 销售未出货 / 采购统计分析 / 采购未交货 / 库存异动明细`。
+3. 不新增第六张报表；不合并报表；不删除既有报表。
+4. 不重建业务总览（`business-overview`）；不重建制造执行分析（`manufacturing-analytics`）；不重建任何会计或财务报表。
+5. 不进入 P8；不进行 release prep、版本号变更、tag、push、deploy。
+6. 五张报表共用同一个路由 `decision-reports` 与同一个 `MobileShell` 页面标题；通过 `reportKey` 切换当前报表；不创建五条独立路由。
+
+### 29.2 路由与导航
+
+1. 唯一路由保持 `decision-reports`；不新增子路由。
+2. P1 启动器继续以 5 张报表卡片（短标签：`销售统计 / 销售未出货 / 采购统计 / 采购未交货 / 库存异动`）以 `decision-reports:{reportKey}` 形式进入路由。卡片名沿用 P1.1 的 `analytics` 模块识别色 token，与本节兼容。
+3. `appMetadata.MOBILE_APPLICATION_GROUPS.analytics` 中 5 个 `reportKey` 严格保持 `sales-summary / sales-outstanding / purchase-summary / purchase-outstanding / inventory-movements`；P7 不修改此 metadata。
+4. 不为决策报表新增顶层导航、底部导航、消息中心、审批中心、设置入口。
+5. `AppLink` 跳转与 `useAppNavigation().target.reportKey` 解析路径保持；进入路由时仍可由 `nav.target.reportKey` 直接打开某张报表，但同一路由下切换报表不再制造新路由。
+
+### 29.3 移动报表切换（关键 P7 行为）
+
+1. P7 移动端不保留 P1.1 的五长标签水平滚动 Tab 切换条。
+2. 同一时刻仅展示一张报表；当前报表身份明确（如：顶部标题旁附 `销售统计分析` 等）；
+3. 提供一个紧凑、可达、可关闭、可键盘操作的「报表切换器」控件（select / sheet / 列表），其列表只包含当前用户被授权可见的报表（基于既有 `canViewDecisionReport()`）；
+4. 切换器在 320px 视口下不溢出、不与底部导航冲突、不被动作栏遮挡；
+5. 切换器关闭后焦点返回触发控件；键盘可达；触点 ≥ 44px；
+6. `MobileShell` 顶部已展示「经营分析」标题，页面正文不得再渲染 `经营分析 + 当前报表` 这种重复内容型 `<h1>` 副标题。
+
+### 29.4 权限合同
+
+1. 报表可见性继续由 `canViewDecisionReport(user, reportKey)` 决定：必须同时具备 `REPORT_VIEW` 与对应领域的至少一项权限（销售域、采购域、库存域）；
+2. 不授予任何角色 `REPORT_VIEW`；不调整任何 canonical 角色或既有 `REPORT_VIEW` 权限映射；
+3. UI 仅按当前用户权限裁剪报表切换器选项；后端授权仍然权威，未授权请求返回 401 / 403；
+4. 五张报表必须独立判断可见性；不因启动器中能进入某张报表就视为对该用户可见；
+5. 不在 P7 内新增权限、审批族、角色或权限映射；不修改现有 `REPORT_VIEW` / `REPORT_SALES` / `REPORT_PURCHASE` / `REPORT_INVENTORY` 语义；
+6. 履约贡献（`/api/reports/:reportKey/lines/:orderItemId/contributions`）的访问权限与所属报表保持同一权限判定：销售未出货使用销售域权限，采购未交货使用采购域权限。
+
+### 29.5 报表 API 合同（不变化）
+
+P7 不新增、不重命名、不修改任何字段、不引入前端再计算。所有计算、口径、汇总、履行语义、贡献证据、对账、CSV schema 与 CSV header 仍由以下既有端点提供：
+
+| 报表 | 查询 | 导出 |
+|---|---|---|
+| 销售统计分析 | `GET /api/reports/decision/sales-summary` | `GET /api/reports/decision/sales-summary/export` |
+| 销售未出货 | `GET /api/reports/decision/sales-outstanding` | `GET /api/reports/decision/sales-outstanding/export` |
+| 采购统计分析 | `GET /api/reports/decision/purchase-summary` | `GET /api/reports/decision/purchase-summary/export` |
+| 采购未交货 | `GET /api/reports/decision/purchase-outstanding` | `GET /api/reports/decision/purchase-outstanding/export` |
+| 库存异动明细 | `GET /api/reports/decision/inventory-movements` | `GET /api/reports/decision/inventory-movements/export` |
+| 履约贡献证据 | `GET /api/reports/:reportKey/lines/:orderItemId/contributions` | — |
+
+不允许：增加新端点、重命名端点、改造 schema、调整字段名、改 CSV header、加缓存字段、合并 CSV 报告、引入聚合查询端点。
+
+### 29.6 权威业务日期口径（不变）
+
+每张报表继续使用既有权威业务日期字段；P7 不得让前端用 `created_at / updated_at / confirmed_at / audit timestamp` 替代业务日期。
+
+#### 29.6.1 销售统计分析
+
+- 订单指标：`sales_orders.order_date`
+- 出货指标：`sales_deliveries.delivery_date`（仅 `CONFIRMED` 状态）
+- 退货指标：`return_orders.return_date`（仅 `CONFIRMED` 且 `source_type = 'SALES'`）
+
+#### 29.6.2 销售未出货
+
+- 期间筛选与到期判断：`sales_orders.requested_delivery_date`
+- 缺失要求交期：`未设置交期` 文本；不得回退到订单日期；
+- 履行状态、超量、剩余数量、逾期天数全部由服务端返回；前端不重新计算；
+- `includeFulfilled` 行为保持服务端权威；前端仅按返回的 `population.hiddenFulfilledLines` 与已履行行做空状态区分。
+
+#### 29.6.3 采购统计分析
+
+- 订单指标：`purchase_orders.order_date`
+- 入库指标：`purchase_receipts.receipt_date`（仅 `CONFIRMED` 状态）
+- 退货指标：`purchase_returns.return_date`（仅 `CONFIRMED`）
+
+#### 29.6.4 采购未交货
+
+- 期间筛选与到期判断：`purchase_orders.expected_delivery_date`
+- 缺失预计到货日：`未设置交期` 文本；不得回退到订单日期；
+- 履行状态、超量、剩余数量、逾期天数全部由服务端返回；前端不重新计算；
+- `includeFulfilled` 行为保持服务端权威。
+
+#### 29.6.5 库存异动明细
+
+- 流水日期：`inventory_transactions.business_date`；缺失时显示 `业务日期缺失`；
+- 不得以 `created_at` / `updated_at` / 任何审计字段替代 `business_date`；
+- 缺失业务日期的记录必须保留为「业务日期缺失」并在数据质量提示中保留提示，不得静默赋一个回退日期。
+
+#### 29.6.6 缺失日期的审计可见性
+
+- 销售统计：服务端返回 `legacyMissing.orderWithoutDate / deliveryWithoutDate / returnWithoutDate / total`；前端必须保留但不得暴露 raw JSON；
+- 采购统计：相同 `legacyMissing` 合同；
+- 库存异动：`legacyMissing.withoutBusinessDate`；
+- 履行行：`legacyAccuracyLimited` / `accuracyStatus` / `accuracyNotice` / `informationalItems`；
+- 这些审计字段在 §29.12 中必须以克制 inline 形式展示，不得为了视觉简洁而隐藏。
+
+### 29.7 筛选与导出合同
+
+#### 29.7.1 筛选器可见形态
+
+P7 在移动端以紧凑的「筛选」触发器打开 `Filter Sheet`，不再保留桌面大表单在主页面长期占用。
+
+#### 29.7.2 筛选字段（按报表）
+
+- 销售统计分析：`dateFrom / dateTo / customerId / status`
+- 销售未出货：`dateFrom / dateTo / customerId / includeFulfilled`
+- 采购统计分析：`dateFrom / dateTo / supplierId / status`
+- 采购未交货：`dateFrom / dateTo / supplierId / includeFulfilled`
+- 库存异动明细：`dateFrom / dateTo / productId / warehouseId / direction / sourceType`
+
+`customerId / supplierId / productId / warehouseId` 必须继续通过 `BusinessEntitySelector` 或其安全行为提交内部 ID；不得改回文本输入。
+
+#### 29.7.3 草稿值 / 已应用值
+
+1. 筛选控件维护「草稿值」与「已应用值」两套；前者仅供用户在筛选 Sheet 内编辑，后者才是实际驱动查询与导出的参数；
+2. 用户点击「应用筛选」才把草稿值提交为已应用值；点「重置」则同时清空草稿与已应用；
+3. 「关闭筛选 Sheet」不得默默把草稿写为已应用；
+4. 查询请求必须使用「已应用值」；不能误用草稿值；
+5. 报表切换器切换报表时，已应用值可保持原报表的当前筛选，但前端必须明确指出当前筛选仍归属前一报表，避免误导；
+6. CSV 导出必须使用当前报表的「已应用值」，不得使用未提交的草稿值。
+
+#### 29.7.4 CSV 导出
+
+- 五张报表的 `*/export` 端点全部保留；
+- 浏览器必须继续使用服务端返回的文件名，不自行生成；
+- 加载与失败状态必须显式（按钮态 + 错误提示），不得静默；
+- 不得在前端重新生成 CSV；
+- 不得在 P7 改动 CSV schema / header / 顺序；
+- `apply` 之后下一次导出即可使用最新已应用筛选。
+
+### 29.8 销售统计分析（P7 移动模型）
+
+P7 在不引入装饰性图表、不堆叠 7 张孤立 KPI 卡的前提下，提供以下层级：
+
+1. 报表身份与控件区：当前报表标识 + 「筛选」+ 「导出 CSV」；
+2. 关键指标区：扁平 2 列 / 高密度网格，至少包含 `订单数 / 订单金额 / 已审批订单数 / 出货单数 / 实际出货金额 / 销售退货金额 / 净出货金额`；金额保持元格式且不换行；
+3. 客户分组：紧凑企业行（不再使用宽桌面表格 / 卡片墙）；
+4. 数据质量提示：当服务端返回的 `legacyMissing.total > 0` 或 `accuracyNotice` 非空时显示克制 inline 提示；
+5. 不得把 `订单金额` 描述为「收入」或「已实现收入」；订单金额来自 `sales_orders.total_cents`；
+6. 不得从 `deliveryCount > 0` 推断「已完成 / 已全部出货 / 部分出货」；
+7. 不为销售统计伪造趋势图 / 折线 / 柱状；服务端未提供趋势序列，前端禁止构造。
+
+### 29.9 销售未出货（P7 移动模型）
+
+1. 履行行级别（`granularity: 'ORDER_LINE'`）保持服务端权威；前端不重算 `remainingQuantity` 或 `fulfillmentStatus`；
+2. 中文状态标签继续使用 `未履行 / 部分履行 / 已履行 / 超量履行异常`；
+3. 每行展示：订单号 / 行号 + 履行状态、货品、客户、剩余数量、已履行 / 订货数量、要求交期、逾期 / 剩余天数、履约明细入口；
+4. 履约明细入口以紧凑、可关闭的展示（按钮 / 折叠 / sheet）形式暴露，由 `GET /api/reports/:reportKey/lines/:orderItemId/contributions` 取数；
+5. 贡献明细必须保留：`sourceDocumentNumber / businessDate / quantity / warehouse`（当可用）；`informationalItems` 作为 inline 警告；无证据时显示 `没有可证明的履约贡献`；
+6. 当 `population.hiddenFulfilledLines > 0` 时，空状态显示「匹配行均已履行」并提示用户可勾选「显示已履行」；
+7. 不得把 `已履行` 状态用作主行的 `font-weight` 唯一区分；状态与逾期都需文字 + 颜色双重表达；
+8. 不得把「未设置交期」与「逾期」合并为单一指示；缺失要求交期与已逾期是两个不同业务事实；
+9. 销售订单 / 采购订单跳转链接必须继续使用既有安全 `AppLink`；不允许在没有安全导航合同的情况下强行打开详情。
+
+### 29.10 采购统计分析（P7 移动模型）
+
+与 §29.8 同构，但使用采购域术语：
+
+1. 指标至少包含 `采购订单数 / 采购订单金额 / 已审批订单数 / 入库单数 / 实际入库金额 / 采购退货金额 / 净入库金额`；
+2. 供应商分组以紧凑企业行展示，不使用卡片墙或宽桌面表；
+3. 不得把「采购订单金额」描述为「已实现成本」；服务端以 `purchase_orders.total_cents` 提供；
+4. 不为采购统计伪造趋势图；
+5. 缺失日期审计字段沿用 §29.6.6。
+
+### 29.11 采购未交货（P7 移动模型）
+
+与 §29.9 同构，但使用采购域术语与 `expected_delivery_date`：
+
+1. 履行行级别保持服务端权威；
+2. 中文状态标签继续使用 `未履行 / 部分履行 / 已履行 / 超量履行异常`；
+3. 每行展示：订单号 / 行号 + 履行状态、货品、供应商、剩余数量、已收货 / 订货数量、预计到货日、逾期 / 剩余天数、履约明细入口；
+4. 履约明细由 `GET /api/reports/purchase-outstanding/lines/:orderItemId/contributions` 取数；
+5. 不得重算 `receivedQuantity` 或剩余；
+6. 不得将「未设置预计到货日」与「逾期」合并表达。
+
+### 29.12 库存异动明细（P7 移动模型）
+
+1. P7 必须保留决策报表中的库存异动明细作为一条独立报表；不与 P6 的 `inventory-transactions` 移动操作流水合并；
+2. 筛选保留：业务日期范围、产品、仓库、方向、来源类型；
+3. 每行展示：业务日期、产品、仓库、来源、方向、数量变动、变动后结存；
+4. 业务日期缺失时显示 `业务日期缺失`，不替换为 `created_at`；
+5. 历史应跟踪但未采集身份的产品行（P6 既有事实），本节维持现状：决策报表不展示身份字段（身份属于 P6 库存异动明细页面）；
+6. 跟 P6 的关系：P7 的库存异动明细 = 决策报表（汇总 + 对账），P6 的 `inventory-transactions` = 移动操作流水；两者各自独立存在，不互相替代。
+
+#### 29.12.1 对账（reconciliation）信息
+
+- 服务端在 `productId + warehouseId` 同时存在时返回 `reconciliation.{currentQuantity, latestMovementBalance, reconcilesToCurrent, note}`；
+- 当前端用户只指定 `productId` 或只指定 `warehouseId` 时，服务端不返回对账信息，前端不得伪造；
+- 对账信息以紧凑审计块展示：当前库存、最近流水余额、是否一致、备注；
+- 三态语义：`true` 一致 / `false` 不一致 / `null` 历史不足无法核对；
+- 不得把对账信息做成大型 dashboard 卡片；
+- 不得在历史不足时伪造「一致」或「不一致」。
+
+### 29.13 数据质量 / legacy / 准确度提示
+
+1. 服务端返回的 `legacyMissing / accuracyNotice / legacyAccuracyLimited / informationalItems / reconciliation` 必须保留；
+2. 展示方式：克制 inline 警告（`InlineAlert` 风格），位于受影响区块附近；
+3. 不得永久展示在页面 header 的 tutorial / HelpDisclosure 段落；
+4. 不得用装饰色替代语义色；`legacyMissing` / `accuracyNotice` 使用 warning 语义色，`OVER_FULFILLED` 等错误状态使用 danger；
+5. 状态 / 警告 / 危险均不可仅靠颜色；必须同时有文字；
+6. 不得在 P7 内引入把这些审计字段隐藏的「清空」操作；用户必须能看到原始数据质量信息；
+7. 不得把 `informationalItems` 永久静默丢弃。
+
+### 29.14 状态机
+
+每张报表必须区分以下五类状态：
+
+- `LOADING`：查询进行中；
+- `ERROR`：查询失败（含网络、4xx/5xx、服务端业务错误）；
+- `EMPTY`：当前用户在该报表下没有任何数据；
+- `NO_RESULTS`：当前已应用筛选无匹配；
+- `READY`：查询成功且数据可呈现。
+
+`销售未出货` / `采购未交货` 必须额外区分：
+
+- `匹配行均已履行（includeFulfilled = false 且 hiddenFulfilledLines > 0）`：与 EMPTY / NO_RESULTS 不得合并；
+
+错误状态必须保留可读的错误 / 解决方案信息（来自服务端 `message + resolution`），不暴露堆栈；请求编号可显示；不暴露 raw JSON。
+
+### 29.15 移动视觉与可访问性
+
+1. 主视口 390 × 844；必须支持 320 / 390 / 430 / 680px；
+2. 应用最大宽度 680px；视口 > 680px 时保持居中单轨；
+3. 任何 P7 页面 / 切换器 / 筛选 Sheet / 履约明细 Sheet 都不允许页面级水平滚动；
+4. 触点 ≥ 44 × 44 px（报表切换器、筛选 Sheet 控件、导出按钮、履约明细展开、行内交互）；
+5. 关键文字与状态必须同时通过文字 + 颜色 / 图标 / 文案表达，不仅靠颜色；
+6. 报表切换器与筛选 Sheet 必须可键盘操作（含 ESC 关闭）；
+7. 表格行 / 履约行 / 库存异动行使用 `<button>` 或可访问交互元素，不允许 `<div>` 假装可点击；
+8. 报表切换器、筛选控件必须与表单 label 关联；
+9. `:focus-visible` 必须可见；
+10. 模块身份色使用既有 `--v16-module-analytics: #7656D6`（V1.6 决策报表模块识别色 token），只作为识别色 / 进度条 / 焦点边框 / 链接 / 主操作等克制场景；不得用于状态徽标、不得用于 `OVER_FULFILLED` 等业务状态色；
+11. 状态色继续使用 V1.6 已冻结的语义色（success / warning / danger / neutral）；
+12. 长文本（超长客户名、超长供应商名、超长产品名、超长单据号、大金额、六位小数量、超多履约行、缺失要求交期、逾期、超量履行、缺失业务日期、long source number）必须在 320 / 390 / 430 / 680 视口下都不造成页面级横向溢出；
+13. 不得用 `overflow-x: hidden` 强行掩盖布局问题。
+
+### 29.16 显式淘汰的旧主表面（P7 路由内）
+
+P7 实现阶段必须停止在 `decision-reports` 路由内使用以下旧主表面，**只停止在 P7 路径使用，不删除组件本身**：
+
+- `BusinessPageHeader` 作为 P7 页面级标题；
+- `decision-reports-v15` 旧桌面外壳类；
+- 顶部「报表口径」永久 `HelpDisclosure`；
+- 五标签水平 Tab 切换条；
+- 宽桌面表格；
+- `ResponsiveBusinessList` 桌面行 + 移动卡片的双形态展示；
+- `RecordCard` / `RecordList` 卡片墙；
+- 移动卡 `mobile-card decision-report-card fulfillment-card` 卡片形态；
+- 7 张独立 KPI 卡墙。
+
+允许保留：通用的 `InlineAlert / StatusChip / BusinessState / FilterSheet / Sheet / IconButton` 等基础组件；只在本路径停止其作为主表面。
+
+### 29.17 验收门禁
+
+1. 视口 320 / 390 / 430 / 680px 必须通过；每档 `document.documentElement.scrollWidth <= clientWidth`；
+2. 报表切换器、筛选 Sheet、履约明细 Sheet、CSV 导出按钮、关键指标网格、履行行、库存异动行、对账块在 320px 视口下均不得溢出；
+3. 列表状态文案：`LOADING / ERROR / EMPTY / NO_RESULTS / READY`（履行行报表额外 `匹配行均已履行`）必须各自独立、不混用；
+4. 后端 / API / 数据库 / 迁移 / 角色 / 权限 / 五类审批族 / 路由身份 / 状态机 / 报表口径 / 履约语义 / 库存语义 / CSV schema 全部保持不变；
+5. focused 源码合同测试 `server/v16-p7-decision-reports.test.js`（计划新增）≥ 18 项；
+6. 全量 `pnpm test` 不超过基线既有 4 个 reset-data 路径保护失败；不引入新失败；
+7. `pnpm build` 与 `git diff --check` 通过；
+8. 浏览器验收脚本 `scripts/acceptance/v16-p7-decision-reports.mjs`（计划新增）输出至 `.tmp/v16-p7-visual/`，390px 覆盖五张报表关键状态，320 / 430 / 680 各取代表性证据；
+9. P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6 既有合同保持不变。
+
+### 29.18 非目标
+
+1. 不修改五个 canonical 角色；
+2. 不修改五个 canonical 审批族；
+3. 不修改 `REPORT_VIEW` 或任何报告相关权限；
+4. 不修改五张报表的 API、计算、口径、字段、CSV；
+5. 不修改履约贡献 API；
+6. 不修改库存异动明细的 `business_date` 业务日期合同；
+7. 不新增 / 不合并 / 不删除报表；
+8. 不重新设计 `business-overview` / `manufacturing-analytics`；
+9. 不实施 53 路由全站推广；
+10. 不进行 release prep、版本号变更、tag、push、deploy；
+11. 不进入 P8。
