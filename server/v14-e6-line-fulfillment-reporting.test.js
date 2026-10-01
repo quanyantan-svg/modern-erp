@@ -219,12 +219,19 @@ describe('V1.4-E6 contribution API, auth and export', () => {
   test('initial UI query is summary-only and contribution loading is explicitly lazy/mobile-safe', () => {
     const page = readFileSync(resolve(root, 'src/pages/decision-reports.jsx'), 'utf8');
     const css = readFileSync(resolve(root, 'src/styles.css'), 'utf8');
-    assert.match(page, /ContributionDisclosure/);
-    assert.match(page, /onClick=\{toggle\}/);
+    const p7Css = readFileSync(resolve(root, 'src/styles/v16-decision-reports.css'), 'utf8');
+    // V1.6 P7 replaces ContributionDisclosure / ResponsiveBusinessList with the
+    // dedicated FulfillmentContributionSheet + FulfillmentReportRowV16 grammar;
+    // the contribution endpoint and '剩余数量' semantics are preserved.
+    assert.match(page, /FulfillmentContributionSheet/);
     assert.match(page, /\/contributions`\)/);
-    assert.match(page, /ResponsiveBusinessList/);
     assert.match(page, /剩余数量/);
+    assert.doesNotMatch(page, /ResponsiveBusinessList/);
+    // The legacy desktop CSS hooks are preserved in src/styles.css for any
+    // other consumer that still references ResponsiveBusinessList.
     assert.match(css, /@media \(max-width: 767\.98px\)[\s\S]*\.fulfillment-row--header \{ display: none; \}/);
     assert.match(css, /\.fulfillment-list \.responsive-business-list__desktop \{ display: none; \}/);
+    // P7 introduces its own scoped CSS without relying on legacy desktop hooks.
+    assert.match(p7Css, /\.v16-decision-reports__fulfillment-row/);
   });
 });

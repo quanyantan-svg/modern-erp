@@ -9,15 +9,17 @@ test('D8 exposes the five canonical decision-report labels', () => {
   for (const label of ['采购统计分析', '采购未交货', '销售统计分析', '销售未出货', '库存异动明细']) {
     assert.match(source, new RegExp(`label: '${label}'`));
   }
-  assert.match(source, /className="decision-reports decision-reports-v15" width="rail"/);
-  assert.match(source, /title="经营分析"/);
+  // V1.6 P7 retired the legacy decision-reports-v15 desktop shell; the V16
+  // mobile-enterprise surface remains on the single decision-reports route.
+  assert.match(source, /className="v16-mobile-enterprise v16-decision-reports"/);
+  assert.match(source, /'决策报表'/);
 });
 
 test('D8 keeps report date basis and export filters explicit', () => {
   const source = read('src/pages/decision-reports.jsx');
   assert.match(source, /权威业务日期/);
-  assert.match(source, /exportEndpoint/);
-  assert.match(source, /导出沿用当前筛选/);
+  assert.match(source, /ExportButton/);
+  assert.match(source, /applied=\{appliedFilters\}/);
 });
 
 test('D8 presents production and financial analysis within the canonical rail', () => {

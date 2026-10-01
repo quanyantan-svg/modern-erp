@@ -64,12 +64,13 @@ describe('V1.2 core page migration', () => {
     }
   });
 
-  test('decision reports use cards and an on-demand filter sheet, not tables', () => {
+  test('decision reports use compact enterprise rows and an on-demand filter sheet, not tables', () => {
     const reports = read('src', 'pages', 'decision-reports.jsx');
     assert.doesNotMatch(reports, /<table\b/);
     assert.match(reports, /<FilterSheet/);
     assert.match(reports, /<FilterButton/);
-    assert.match(reports, /<RecordCard/);
+    // V1.6 P7 retired the RecordCard primary surface in favour of compact enterprise rows.
+    assert.doesNotMatch(reports, /<RecordCard/);
   });
 
   test('sales and purchase returns have distinct launcher targets', () => {

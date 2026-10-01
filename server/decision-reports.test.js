@@ -786,20 +786,18 @@ describe('M7 — frontend wiring', () => {
 
   test('outstanding order numbers use canonical permission-aware SPA links', () => {
     const src = readSrc('pages/decision-reports.jsx');
-    assert.match(src, /page=\{isSales \? 'orders' : 'purchase-orders'\}/);
+    assert.match(src, /partyPage\s*=\s*isSales\s*\?\s*'orders'\s*:\s*'purchase-orders'/);
     assert.match(src, /documentId=\{row\.orderId\}/);
     assert.match(src, /\{row\.orderNumber\}/);
   });
 
-  test('DecisionReports page exposes KPI cards and accurate-gate disclaimer', () => {
+  test('DecisionReports page exposes panel functions and authoritative accuracy gate', () => {
     const src = readSrc('pages/decision-reports.jsx');
     assert.match(src, /function SalesSummaryPanel/);
     assert.match(src, /function SalesOutstandingPanel/);
     assert.match(src, /function PurchaseSummaryPanel/);
     assert.match(src, /function PurchaseOutstandingPanel/);
     assert.match(src, /function InventoryMovementsPanel/);
-    assert.match(src, /KpiCard/);
-    // Money must be formatted via money() (frontend never receives raw cents as text).
     assert.match(src, /money\(data\.summary\.orderCents\)/);
     assert.match(src, /data\.accuracyNotice/);
   });
