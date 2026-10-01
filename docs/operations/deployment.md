@@ -127,8 +127,11 @@ SQLite 可用于本地、测试或经明确评估的兼容部署。数据库不�
 
 ## 9. 备份、恢复与发布检查
 
-- SQLite：使用 `scripts/admin/backup-db.mjs` / `scripts/admin/restore-db.mjs`（或稳定的 `pnpm backup-db` / `pnpm restore-db` 命令），并在维护窗口验证完整性与 safety backup。
+- SQLite 备份：确认 `ERP_DB_PATH` 与 `ERP_BACKUP_DIR` 指向持久化目录后运行 `pnpm backup-db`。脚本使用 `VACUUM INTO` 创建一致快照、执行 `integrity_check`，并按 `ERP_BACKUP_RETENTION` 清理旧备份。
+- SQLite 恢复：这是破坏性生产数据操作，须先取得批准并进入维护窗口。停止 `modern-erp.service`，再次核对目标 `ERP_DB_PATH`，再运行 `NODE_ENV=production pnpm restore-db -- <backup-file> --confirm-restore`；脚本会先校验来源、创建 safety backup、替换数据库并再次执行完整性检查。成功后重启服务并检查 live/ready。不要在服务仍写入数据库时恢复。
 - MySQL：使用组织批准的 MySQL 工具和 runbook；当前 SQLite 脚本不适用。
+- Schema 初始化与兼容迁移由 `server/index.js` 创建数据库连接时自动执行：SQLite 运行基础 schema 与幂等迁移链；MySQL 运行 schema bootstrap，并对已初始化数据库执行当前受支持的幂等升级步骤。发布前必须先备份；迁移失败应阻止启动，不应通过手工改表或 reset-data 绕过。
+- 持久化数据不得放在 release 目录中：SQLite 使用 `/var/lib/modern-erp/erp.db`，备份使用 `/var/backups/modern-erp`；前端构建产物是 `/opt/modern-erp/dist`，由 Node 服务提供并经 Nginx 反向代理。
 - 发布前：确认目标 commit/tag、环境变量权限、数据库备份、迁移策略、回滚方案、`pnpm test`、`pnpm build`、systemd 和 Nginx 配置。
 - 发布后：检查 live/ready、登录、关键只读查询、结构化日志和反向代理。
 
