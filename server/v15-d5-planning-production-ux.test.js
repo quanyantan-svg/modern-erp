@@ -4,15 +4,16 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D5 separates forecast, MRP runs and material suggestions in presentation', () => {
+test('D5 keeps forecast separate while P5 joins MRP runs and material results as one workflow', () => {
   const forecasts = read('src/pages/forecasts.jsx');
   const runs = read('src/pages/mrp-runs.jsx');
   const plan = read('src/pages/material-requirements-plan.jsx');
   assert.match(forecasts, /className="forecasts-v15" width="rail"/);
   assert.match(forecasts, /title="计划预测"/);
-  assert.match(runs, /title="MRP"/);
-  assert.match(runs, /context="运算历史"/);
-  assert.match(plan, /title="MRP · 物料建议"/);
+  assert.match(runs, /className="v16-mrp-planning v16-mrp-list"/);
+  assert.match(runs, /查看物料需求计划/);
+  assert.match(plan, /className="v16-mrp-planning v16-material-plan"/);
+  assert.match(plan, /originPage === 'mrp-runs'/);
 });
 
 test('D5 keeps the three planning document branches distinct', () => {

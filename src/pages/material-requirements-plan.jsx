@@ -1,418 +1,192 @@
-// 物料需求计划 / Material Requirements Plan page.
-//
-// P1 — read-only derived view over an MRP run. NO new database tables.
-// Reads existing mrp_runs / mrp_run_results / mrp_run_components /
-// mrp_run_pegging via /api/planning/mrp/runs/:id.
-//
-// One canonical card architecture at every width. Four segments
-// (全部 / 生产 / 采购 / 缺料). Sort by
-// 需求日期 (default) or 物料. Trace view explains the numbers in
-// user-friendly product language, never engineering terms.
-
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { Empty, Loading, Panel } from '../components/ui.jsx';
-import { BottomActionBar, BusinessPageShell, EmptyState, SecondaryButton, SegmentedControl, Sheet } from '../components/design-system.jsx';
-import {
-  demandModeLabel,
-  suggestionTypeLabel,
-  warningLabel,
-} from '../lib/status.js';
+import { Loading } from '../components/ui.jsx';
+import { BottomActionBar, BusinessPageShell, EmptyState, SegmentedControl, Sheet } from '../components/design-system.jsx';
+import { demandModeLabel, warningLabel } from '../lib/status.js';
+import { MrpSummaryV16 } from './mrp-runs.jsx';
 
 const FILTERS = [
-  { key: 'all', label: '全部' },
-  { key: 'make', label: '生产' },
-  { key: 'buy', label: '采购' },
-  { key: 'shortage', label: '缺料' },
+  { value: 'all', label: '全部' }, { value: 'make', label: '生产' },
+  { value: 'buy', label: '采购' }, { value: 'shortage', label: '缺料' },
 ];
-
-const SORTS = [
-  { key: 'need_date', label: '按需求日期' },
-  { key: 'product', label: '按物料' },
-];
+const SORTS = [{ value: 'need_date', label: '按需求日期' }, { value: 'product', label: '按物料' }];
 
 function fmtQty(value) {
   if (value === null || value === undefined || value === '') return '—';
-  const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
-  if (n === 0) return '0';
-  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 4 }).format(n);
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 }).format(number);
 }
-
-function fmtDateShort(value) {
-  if (!value) return '';
-  const text = String(value).slice(0, 10);
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return text;
-  return `${parseInt(match[2], 10)}月${parseInt(match[3], 10)}日`;
+function withUnit(value, unit) { const text = fmtQty(value); return unit && text !== '—' ? `${text} ${unit}` : text; }
+function fmtDate(value) {
+  const match = String(value || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${Number(match[2])}月${Number(match[3])}日` : '需求日期未指定';
 }
-
-// Apply the active filter chip to a result row.
-function rowMatchesFilter(row, filterKey) {
-  const net = Number(row.net_requirement || 0);
-  const sug = Number(row.suggested_quantity || 0);
-  const type = row.suggestion_type;
-  if (filterKey === 'shortage') return net > 0;
-  if (filterKey === 'make') return type === 'MAKE' && sug > 0;
-  if (filterKey === 'buy') return type === 'BUY' && sug > 0;
+function matchesFilter(row, filter) {
+  if (filter === 'shortage') return Number(row.net_requirement || 0) > 0;
+  if (filter === 'make') return row.suggestion_type === 'MAKE' && Number(row.suggested_quantity || 0) > 0;
+  if (filter === 'buy') return row.suggestion_type === 'BUY' && Number(row.suggested_quantity || 0) > 0;
   return true;
 }
-
-// Sort comparator
-function sortRows(rows, sortKey) {
-  const copy = [...rows];
-  if (sortKey === 'product') {
-    copy.sort((a, b) => (a.product_code || '').localeCompare(b.product_code || ''));
-  } else {
-    // default: by need_by_date asc, then product_code
-    copy.sort((a, b) => {
-      const ad = a.need_by_date || '9999-12-31';
-      const bd = b.need_by_date || '9999-12-31';
-      if (ad !== bd) return ad.localeCompare(bd);
-      return (a.product_code || '').localeCompare(b.product_code || '');
-    });
-  }
-  return copy;
+function sortRows(rows, sort) {
+  return [...rows].sort((a, b) => {
+    if (sort === 'product') return String(a.product_code || '').localeCompare(String(b.product_code || ''), 'zh-CN');
+    const dateResult = String(a.need_by_date || '9999-12-31').localeCompare(String(b.need_by_date || '9999-12-31'));
+    return dateResult || String(a.product_code || '').localeCompare(String(b.product_code || ''), 'zh-CN');
+  });
 }
-
-// Group rows by ISO week (yyyy-Www) for optional "按周" presentation
-function isoWeekKey(dateStr) {
-  if (!dateStr) return '未指定日期';
-  const text = String(dateStr).slice(0, 10);
-  const d = new Date(text + 'T00:00:00Z');
-  if (Number.isNaN(d.getTime())) return '未指定日期';
-  // Compute ISO week
-  const target = new Date(d.valueOf());
-  const dayNr = (d.getUTCDay() + 6) % 7;
-  target.setUTCDate(target.getUTCDate() - dayNr + 3);
-  const firstThursday = target.valueOf();
-  target.setUTCMonth(0, 1);
-  if (target.getUTCDay() !== 4) {
-    target.setUTCMonth(0, 1 + ((4 - target.getUTCDay()) + 7) % 7);
-  }
-  const week = 1 + Math.ceil((firstThursday - target.valueOf()) / 604800000);
-  return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+function weekStart(dateText) {
+  if (!dateText) return null;
+  const date = new Date(`${String(dateText).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - day + 1);
+  return date.toISOString().slice(0, 10);
 }
-
-function formatWeekRange(weekKey) {
-  const match = /^(\d{4})-W(\d{2})$/.exec(weekKey);
-  if (!match) return weekKey;
-  // Approximate Monday-Sunday for visual grouping only
-  const year = parseInt(match[1], 10);
-  const week = parseInt(match[2], 10);
-  const simple = new Date(Date.UTC(year, 0, 1 + (week - 1) * 7));
-  const day = simple.getUTCDay();
-  const ISOweekStart = new Date(simple);
-  if (day <= 4) ISOweekStart.setUTCDate(simple.getUTCDate() - simple.getUTCDay() + 1);
-  else ISOweekStart.setUTCDate(simple.getUTCDate() + 8 - simple.getUTCDay());
-  const start = ISOweekStart;
-  const end = new Date(start);
-  end.setUTCDate(start.getUTCDate() + 6);
-  const fmt = (d) => `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`;
-  return `${fmt(start)}–${fmt(end)}`;
+function weekLabel(key) {
+  if (!key) return '需求日期未指定';
+  const start = new Date(`${key}T00:00:00Z`); const end = new Date(start); end.setUTCDate(end.getUTCDate() + 6);
+  const display = (date) => `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
+  return `${display(start)}–${display(end)}`;
+}
+function conversionText(row) {
+  const converted = Number(row.converted_quantity || 0); const remaining = Number(row.remaining_quantity || 0);
+  if (remaining <= 0) return '已全部转为指令';
+  if (converted > 0) return `已转指令 ${fmtQty(converted)} · 待处理 ${fmtQty(remaining)}`;
+  return `待转指令 ${fmtQty(remaining)}`;
+}
+function resultType(row) {
+  if (row.suggestion_type === 'MAKE') return '生产';
+  if (row.suggestion_type === 'BUY') return '采购';
+  return '无需补充';
 }
 
 export default function MaterialRequirementsPlan({ notify }) {
   const navigation = useAppNavigation();
-  const [runs, setRuns] = useState(null);
+  const [runs, setRuns] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [run, setRun] = useState(null);
+  const [listState, setListState] = useState('LOADING');
+  const [detailState, setDetailState] = useState('IDLE');
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('need_date');
   const [traceRow, setTraceRow] = useState(null);
 
-  // Load list of runs (to find latest COMPLETED and allow switching)
+  async function loadRuns() {
+    setListState('LOADING');
+    try {
+      const result = await api('/api/planning/mrp/runs?status=COMPLETED');
+      const completed = (result.runs || []).filter((item) => item.status === 'COMPLETED');
+      setRuns(completed);
+      const targetId = navigation.target?.documentId;
+      const nextId = completed.some((item) => item.id === targetId) ? targetId : completed[0]?.id || null;
+      setSelectedRunId(nextId);
+      setListState(completed.length ? 'READY' : 'EMPTY');
+    } catch (error) { setListState('ERROR'); notify(error.message, 'error'); }
+  }
+  useEffect(() => { void loadRuns(); }, []);
   useEffect(() => {
-    api('/api/planning/mrp/runs')
-      .then((result) => {
-        const all = result.runs || [];
-        setRuns(all);
-        if (navigation.target?.documentId) {
-          setSelectedRunId(navigation.target.documentId);
-        } else {
-          const completed = all.filter((r) => r.status === 'COMPLETED');
-          const latest = completed.sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''))[0];
-          if (latest) setSelectedRunId(latest.id);
-        }
-      })
-      .catch((error) => notify(error.message, 'error'));
-  }, []);
-
-  // Load selected run detail (results / pegging / components / demands)
+    const backTarget = selectedRunId && navigation.target?.originPage === 'mrp-runs'
+      ? () => navigation.navigateToPage('mrp-runs', { documentId: selectedRunId })
+      : () => navigation.navigateToPage('mrp-runs');
+    navigation.setHeaderBackAction?.(backTarget);
+    return () => navigation.setHeaderBackAction?.(null);
+  }, [selectedRunId, navigation.target?.originPage]);
   useEffect(() => {
-    if (!selectedRunId) { setRun(null); return; }
-    let current = true;
-    api('/api/planning/mrp/runs/' + selectedRunId)
-      .then((result) => { if (current) setRun(result.run); })
-      .catch((error) => { if (current) notify(error.message, 'error'); });
-    return () => { current = false; };
+    if (!selectedRunId) { setRun(null); setDetailState('IDLE'); return; }
+    let active = true;
+    setDetailState('LOADING'); setTraceRow(null);
+    api(`/api/planning/mrp/runs/${selectedRunId}`)
+      .then((result) => { if (active) { setRun(result.run); setDetailState('READY'); } })
+      .catch((error) => { if (active) { setDetailState('ERROR'); notify(error.message, 'error'); } });
+    return () => { active = false; };
   }, [selectedRunId]);
 
-  const summary = run?.summary || null;
-
-  // Apply filter + sort to results
-  const visibleRows = useMemo(() => {
-    if (!run?.results) return [];
-    return sortRows(
-      run.results.filter((row) => rowMatchesFilter(row, filter)),
-      sort,
-    );
-  }, [run, filter, sort]);
-
-  // Group by week when sort is need_date (visual grouping only)
-  const grouped = useMemo(() => {
-    if (sort !== 'need_date') return null;
+  const visibleRows = useMemo(() => sortRows((run?.results || []).filter((row) => matchesFilter(row, filter)), sort), [run, filter, sort]);
+  const groups = useMemo(() => {
+    if (sort !== 'need_date') return [{ key: 'product', label: '', items: visibleRows }];
     const map = new Map();
-    for (const row of visibleRows) {
-      const key = isoWeekKey(row.need_by_date);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(row);
-    }
-    return [...map.entries()].map(([weekKey, items]) => ({ weekKey, items }));
+    visibleRows.forEach((row) => { const key = weekStart(row.need_by_date); if (!map.has(key)) map.set(key, []); map.get(key).push(row); });
+    return [...map.entries()].map(([key, items]) => ({ key: key || 'undated', label: weekLabel(key), items }));
   }, [visibleRows, sort]);
 
-  if (runs === null) return <Loading/>;
+  if (listState === 'LOADING') return <BusinessPageShell className="v16-mrp-planning v16-material-plan" width="rail"><Loading/></BusinessPageShell>;
+  if (listState === 'ERROR') return <BusinessPageShell className="v16-mrp-planning v16-material-plan" width="rail"><EmptyState title="加载失败" description="暂时无法获取已计算的 MRP 运算。" action={<button type="button" className="secondary" onClick={() => void loadRuns()}>重新加载</button>}/></BusinessPageShell>;
+  if (listState === 'EMPTY') return <BusinessPageShell className="v16-mrp-planning v16-material-plan" width="rail"><EmptyState title="本次没有物料需求" description="请先完成一次 MRP 运算。" action={<AppLink page="mrp-runs" className="primary">前往 MRP</AppLink>}/></BusinessPageShell>;
 
-  if (runs.length === 0) {
-    return <BusinessPageShell className="material-plan-v15" width="rail"><Panel title="MRP · 物料建议">
-      <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
-      <div className="form-actions full">
-        <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
+  return <BusinessPageShell className="v16-mrp-planning v16-material-plan" width="rail">
+    <section className="v16-material-plan__run">
+      <label><span>MRP 运算</span><select aria-label="切换 MRP 运算" value={selectedRunId || ''} onChange={(event) => setSelectedRunId(event.target.value)}>{runs.map((item) => <option key={item.id} value={item.id}>{item.run_name} · {item.run_code}</option>)}</select></label>
+      {run && <p>{demandModeLabel(run.demand_source_mode)} · {run.horizon_start} – {run.horizon_end}</p>}
+    </section>
+    {detailState === 'LOADING' && <Loading/>}
+    {detailState === 'ERROR' && <EmptyState title="加载失败" description="暂时无法获取这次运算结果。" action={<button type="button" className="secondary" onClick={() => { const current = selectedRunId; setSelectedRunId(null); queueMicrotask(() => setSelectedRunId(current)); }}>重新加载</button>}/>}
+    {detailState === 'READY' && run && <>
+      <MrpSummaryV16 summary={run.summary}/>
+      <div className="v16-material-plan__controls">
+        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} label="物料计划筛选"/>
+        <label>排序<select value={sort} onChange={(event) => setSort(event.target.value)}>{SORTS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
       </div>
-    </Panel></BusinessPageShell>;
-  }
-
-  const completedRuns = runs.filter((r) => r.status === 'COMPLETED');
-  if (completedRuns.length === 0) {
-    return <BusinessPageShell className="material-plan-v15" width="rail"><Panel title="MRP · 物料建议">
-      <Empty text="还没有可查看的物料需求计划。请先完成一次 MRP 运算。"/>
-      <div className="form-actions full">
-        <AppLink page="mrp-runs" className="primary">前往 MRP 运算</AppLink>
-      </div>
-    </Panel></BusinessPageShell>;
-  }
-
-  if (!run) return <Loading/>;
-
-  return <BusinessPageShell className="material-plan-v15" width="rail">
-    <Panel title="MRP · 物料建议">
-      <label className="material-run-selector">
-        <span>MRP 运算</span>
-        <select aria-label="切换 MRP 运算" value={selectedRunId || ''} onChange={(e) => setSelectedRunId(e.target.value)}>
-        {runs.filter((r) => r.status === 'COMPLETED').map((r) => <option key={r.id} value={r.id}>{r.run_name}（{r.run_code}）</option>)}
-        </select>
-      </label>
-      <p className="material-run-meta">{demandModeLabel(run.demand_source_mode)} · {run.horizon_start} ~ {run.horizon_end}</p>
-      <MaterialSummary summary={summary} run={run}/>
-      <div className="material-plan-controls">
-        <SegmentedControl
-          label="物料建议筛选"
-          options={FILTERS.map(({ key, label }) => ({ value: key, label }))}
-          value={filter}
-          onChange={setFilter}
-        />
-        <label className="filter-sort">
-          排序
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
-            {SORTS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-        </label>
-      </div>
-      {visibleRows.length === 0
-        ? filter === 'all' ? <MaterialPlanZeroState/> : <Empty text="当前筛选条件下没有匹配的物料。"/>
-        : <MaterialPlanList grouped={grouped} rows={visibleRows} onTrace={setTraceRow}/>
-      }
-    </Panel>
-    {traceRow && <MaterialTraceSheet
-      run={run}
-      row={traceRow}
-      onClose={() => setTraceRow(null)}
-    />}
+      {(run.results || []).length === 0 && <EmptyState title="本次没有物料需求" description="当前期间没有可纳入计算的需求。" action={<AppLink page="mrp-runs" className="secondary">前往 MRP</AppLink>}/>}
+      {(run.results || []).length > 0 && visibleRows.length === 0 && <EmptyState title="当前筛选没有结果" action={<button type="button" className="secondary" onClick={() => setFilter('all')}>查看全部</button>}/>}
+      {visibleRows.length > 0 && <div className="v16-material-result-list">{groups.map((group) => <section className="v16-material-week" key={group.key}>{group.label && <h3>{group.label}</h3>}{group.items.map((row) => <MaterialResultRowV16 key={row.id} row={row} onOpen={() => setTraceRow(row)}/>)}</section>)}</div>}
+    </>}
+    {traceRow && <MaterialTraceSheetV16 run={run} row={traceRow} onClose={() => setTraceRow(null)}/>}
   </BusinessPageShell>;
 }
 
-function MaterialSummary({ summary, run }) {
-  if (!summary) return null;
-  return <div className="material-summary-grid">
-    <div className="material-summary-item">
-      <span>物料</span>
-      <strong>{summary.totalProducts}</strong>
-    </div>
-    <div className="material-summary-item">
-      <span>生产建议</span>
-      <strong>{summary.makeSuggestions}</strong>
-    </div>
-    <div className="material-summary-item">
-      <span>采购建议</span>
-      <strong>{summary.buySuggestions}</strong>
-    </div>
-    <div className="material-summary-item">
-      <span>缺料</span>
-      <strong>{summary.shortageProducts}</strong>
-    </div>
-  </div>;
+function MaterialResultRowV16({ row, onOpen }) {
+  const warning = warningLabel(row.warning);
+  return <button type="button" className="v16-material-result-row" onClick={onOpen}>
+    <span className="v16-material-result-row__head"><strong className="mono">{row.product_code}</strong><span className={`v16-material-type is-${String(row.suggestion_type || 'none').toLowerCase()}`}>{resultType(row)}</span></span>
+    <span className="v16-material-result-row__name">{row.product_name}</span>
+    <span className="v16-material-result-row__date">{row.need_by_date ? `${fmtDate(row.need_by_date)}前需要` : '需求日期未指定'}</span>
+    <span className="v16-material-result-row__metrics"><span>建议 <b>{withUnit(row.suggested_quantity, row.product_unit)}</b></span><span>净需求 <b>{withUnit(row.net_requirement, row.product_unit)}</b></span><span>库存 <b>{withUnit(row.on_hand, row.product_unit)}</b></span></span>
+    <span className="v16-material-result-row__foot"><span>{conversionText(row)}</span>{warning && <span className="v16-material-warning">{warning}</span>}<span aria-hidden="true">›</span></span>
+  </button>;
 }
 
-function MaterialPlanZeroState() {
-  return <EmptyState
-    title="本次计算期间内没有可纳入的需求"
-    description="请检查销售订单是否已审批且提交、审批或创建日期位于计算期间内，并检查需求预测需求日期和计算期间。"
-    action={<AppLink page="mrp-runs" className="primary">重新运行 MRP</AppLink>}
-  />;
+function traceSources(run, row) {
+  const components = (run.components || []).filter((item) => item.product_id === row.product_id);
+  const pegging = (run.pegging || []).filter((item) => item.result_product_id === row.product_id);
+  const labels = [];
+  components.forEach((item) => { const text = [item.parent_code, item.parent_name].filter(Boolean).join(' · '); if (text && !labels.includes(text)) labels.push(text); });
+  pegging.forEach((item) => { if (item.source_label && !labels.includes(item.source_label)) labels.push(item.source_label); });
+  return labels;
 }
 
-function MaterialPlanList({ grouped, rows, onTrace }) {
-  return <div className="material-plan-list">
-    {grouped && grouped.map((group) => <div className="material-plan-week" key={group.weekKey}>
-      <div className="material-plan-week__label">{formatWeekRange(group.weekKey)}</div>
-      {group.items.map((row) => <MaterialCard key={row.id} row={row} onTrace={onTrace}/>)}
-    </div>)}
-    {!grouped && rows.map((row) => <MaterialCard key={row.id} row={row} onTrace={onTrace}/>)}
-  </div>;
-}
-
-function MaterialCard({ row, onTrace }) {
-  const net = Number(row.net_requirement || 0);
-  const sug = Number(row.suggested_quantity || 0);
-  const suggestion = row.suggestion_type;
-  const dateText = row.need_by_date ? `${fmtDateShort(row.need_by_date)}前需要` : '—';
-  const warning = row.warning ? warningLabel(row.warning) : '';
-  const hasSuggestion = sug > 0 && Boolean(suggestion);
-  const kindLabel = hasSuggestion ? suggestionTypeLabel(suggestion) : '无需补充';
-  const kindClass = hasSuggestion ? suggestion.toLowerCase() : 'ok';
-
-  return <article className={`material-card material-card--${kindClass}`}>
-    <header className="material-card__head">
-      <div>
-        <strong className="mono">{row.product_code}</strong>
-        <span>{row.product_name}</span>
-      </div>
-      <span className={`material-card__chip is-${kindClass}`}>{kindLabel}</span>
-    </header>
-    <dl className="material-card__rows">
-      <div><dt>建议数量</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
-      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
-      <div><dt>现有库存</dt><dd>{fmtQty(row.on_hand)}</dd></div>
-    </dl>
-    <div className="material-card__meta">
-      <span>{dateText}</span>
-      {warning && <span className="material-card__warning">{warning}</span>}
+function MaterialTraceSheetV16({ run, row, onClose }) {
+  const unit = row.product_unit;
+  const sources = traceSources(run, row);
+  const remaining = Number(row.remaining_quantity || 0);
+  const targetPage = row.suggestion_type === 'MAKE' ? 'production-instructions' : row.suggestion_type === 'BUY' ? 'purchase-instructions' : null;
+  const targetLabel = row.suggestion_type === 'MAKE' ? '前往生产指令' : '前往采购指令';
+  return <Sheet title={`${row.product_name} · 计算依据`} onClose={onClose} className="v16-material-trace-sheet">
+    <div className="v16-material-trace">
+      <TraceSection title="需求" rows={[
+        ['销售订单需求', withUnit(row.gross_sales_demand, unit)], ['需求预测', withUnit(row.gross_forecast_demand, unit)],
+        ['组件需求', withUnit(row.gross_component_demand, unit)], ['毛需求', withUnit(row.gross_requirement, unit)],
+      ]}/>
+      <TraceSection title="可用供应" rows={[
+        ['现有库存', withUnit(row.on_hand, unit)], ['在途采购', withUnit(row.open_purchase_supply, unit)], ['在途生产', withUnit(row.open_production_supply, unit)],
+      ]}/>
+      <TraceSection title="净需求" rows={[
+        ['计算式', `${fmtQty(row.gross_requirement)} − ${fmtQty(row.on_hand)} − ${fmtQty(row.open_purchase_supply)} − ${fmtQty(row.open_production_supply)}`],
+        ['净需求', withUnit(row.net_requirement, unit)],
+      ]}/>
+      <TraceSection title="建议" rows={[
+        ['建议类型', resultType(row)], ['建议数量', withUnit(row.suggested_quantity, unit)], ['已转指令', withUnit(row.converted_quantity, unit)], ['待处理', withUnit(row.remaining_quantity, unit)],
+      ]}/>
+      {sources.length > 0 && <section className="v16-material-trace__section"><h3>BOM 来源</h3><ul>{sources.map((source) => <li key={source}>{source}</li>)}</ul></section>}
+      {remaining <= 0 && <p className="v16-material-trace__complete">已全部转为指令</p>}
     </div>
-    <div className="material-card__footer">
-      <button type="button" className="material-card__trace" onClick={() => onTrace(row)}>查看计算依据</button>
-      {suggestion === 'MAKE' && <AppLink page="production-instructions" className="primary">创建生产指令</AppLink>}
-      {suggestion === 'BUY' && <AppLink page="purchase-instructions" className="primary">创建采购指令</AppLink>}
-    </div>
-  </article>;
-}
-
-// User-friendly trace view explaining the math behind a result row.
-// Uses existing mrp_run_demands / mrp_run_components / mrp_run_pegging.
-function MaterialTraceSheet({ run, row, onClose }) {
-  const demands = (run.demands || []).filter((d) => d.product_id === row.product_id);
-  const pegging = (run.pegging || []).filter((p) => p.result_product_id === row.product_id);
-  const components = (run.components || []).filter((c) => c.product_id === row.product_id);
-  const gross = Number(row.gross_requirement || 0);
-  const component = Number(row.gross_component_demand || 0);
-  const onHand = Number(row.on_hand || 0);
-  const openPo = Number(row.open_purchase_supply || 0);
-  const openProd = Number(row.open_production_supply || 0);
-  const net = Number(row.net_requirement || 0);
-  const sug = Number(row.suggested_quantity || 0);
-
-  const suggestion = row.suggestion_type;
-  const suggestionLabel = suggestionTypeLabel(suggestion);
-  const isTopLevel = demands.length > 0;
-  const parentsText = components
-    .map((c) => `${c.parent_name || ''}${c.bom_path ? `（${c.bom_path.replace(/^[^>]+>\s*/, '')}）` : ''}`)
-    .filter(Boolean);
-
-  return <Sheet title={`${row.product_name} · 计算依据`} onClose={onClose}>
-    <div className="material-calculation-trace">
-      {isTopLevel ? <TopLevelTrace
-      row={row}
-      demands={demands}
-      component={component}
-      gross={gross}
-      onHand={onHand}
-      openPo={openPo}
-      openProd={openProd}
-      net={net}
-      sug={sug}
-      suggestionLabel={suggestionLabel}
-      /> : <BuyItemTrace
-      row={row}
-      components={components}
-      pegging={pegging}
-      gross={gross}
-      onHand={onHand}
-      openPo={openPo}
-      openProd={openProd}
-      net={net}
-      sug={sug}
-      parentsText={parentsText}
-      />}
-    </div>
-    <BottomActionBar><SecondaryButton type="button" onClick={onClose}>关闭</SecondaryButton></BottomActionBar>
+    <BottomActionBar><button type="button" className="secondary" onClick={onClose}>关闭</button>{remaining > 0 && targetPage && <AppLink page={targetPage} className="primary">{targetLabel}</AppLink>}</BottomActionBar>
   </Sheet>;
 }
 
-function TopLevelTrace({ demands, component, gross, onHand, openPo, openProd, net, sug, suggestionLabel }) {
-  const sales = demands.filter((d) => d.source_type === 'SALES_ORDER').reduce((s, d) => s + Number(d.quantity || 0), 0);
-  const forecast = demands.filter((d) => d.source_type === 'FORECAST').reduce((s, d) => s + Number(d.quantity || 0), 0);
-  return <>
-    <h3>需求来源</h3>
-    <dl className="trace-list">
-      <div><dt>销售订单需求</dt><dd>{fmtQty(sales)}</dd></div>
-      <div><dt>需求预测</dt><dd>{fmtQty(forecast)}</dd></div>
-      <div><dt>组件需求</dt><dd>{fmtQty(component)}</dd></div>
-      <div><dt>毛需求</dt><dd><strong>{fmtQty(gross)}</strong></dd></div>
-    </dl>
-    <h3>供应情况</h3>
-    <dl className="trace-list">
-      <div><dt>现有库存</dt><dd>{fmtQty(onHand)}</dd></div>
-      <div><dt>在途采购</dt><dd>{fmtQty(openPo)}</dd></div>
-      <div><dt>在途生产</dt><dd>{fmtQty(openProd)}</dd></div>
-    </dl>
-    <h3>最终结果</h3>
-    <dl className="trace-list">
-      <div><dt>计算式</dt><dd>{fmtQty(gross)} − {fmtQty(onHand)} − {fmtQty(openPo)} − {fmtQty(openProd)} = <strong>{fmtQty(net)}</strong></dd></div>
-      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
-      <div><dt>建议类型</dt><dd>{suggestionLabel}</dd></div>
-      <div><dt>{suggestionLabel}</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
-    </dl>
-  </>;
+function TraceSection({ title, rows }) {
+  return <section className="v16-material-trace__section"><h3>{title}</h3><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>;
 }
 
-function BuyItemTrace({ row, components, pegging, gross, onHand, openPo, openProd, net, sug, parentsText }) {
-  return <>
-    <h3>需求来源</h3>
-    <dl className="trace-list">
-      <div><dt>销售订单需求</dt><dd>{fmtQty(row.gross_sales_demand)}</dd></div>
-      <div><dt>需求预测</dt><dd>{fmtQty(row.gross_forecast_demand)}</dd></div>
-      <div><dt>组件需求</dt><dd>{fmtQty(row.gross_component_demand)}</dd></div>
-    </dl>
-    <h3>BOM 追溯</h3>
-    {parentsText.length > 0 ? (
-      <ul className="trace-parent-list">
-        {parentsText.map((text, idx) => <li key={idx}>来自 {text}</li>)}
-      </ul>
-    ) : <p className="dim">本次运算中此项没有 BOM 组件需求来源。</p>}
-    <dl className="trace-list">
-      <div><dt>组件毛需求</dt><dd>{fmtQty(gross)}</dd></div>
-    </dl>
-    <h3>供应情况</h3>
-    <dl className="trace-list">
-      <div><dt>现有库存</dt><dd>{fmtQty(onHand)}</dd></div>
-      <div><dt>在途采购</dt><dd>{fmtQty(openPo)}</dd></div>
-      <div><dt>在途生产</dt><dd>{fmtQty(openProd)}</dd></div>
-    </dl>
-    <h3>最终结果</h3>
-    <dl className="trace-list">
-      <div><dt>计算式</dt><dd>{fmtQty(gross)} − {fmtQty(onHand)} − {fmtQty(openPo)} − {fmtQty(openProd)} = <strong>{fmtQty(net)}</strong></dd></div>
-      <div><dt>净需求</dt><dd><strong>{fmtQty(net)}</strong></dd></div>
-      <div><dt>采购建议</dt><dd><strong>{fmtQty(sug)}</strong></dd></div>
-    </dl>
-  </>;
-}
+export { conversionText, matchesFilter, sortRows };

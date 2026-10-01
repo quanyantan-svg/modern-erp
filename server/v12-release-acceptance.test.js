@@ -62,12 +62,12 @@ describe('V1.2 unified product acceptance contract', () => {
     }
   });
 
-  test('material plan keeps one card architecture and all explicit controls', () => {
-    assert.match(materialPlanSource, /One canonical card architecture at every width/);
-    for (const filter of ['all', 'make', 'buy', 'shortage']) assert.match(materialPlanSource, new RegExp(`key: '${filter}'`));
-    assert.match(materialPlanSource, /本次计算期间内没有可纳入的需求/);
-    assert.match(materialPlanSource, /查看计算依据/);
-    assert.doesNotMatch(materialPlanSource, /<table|desktop/i);
+  test('material plan keeps one enterprise-row architecture and all explicit controls', () => {
+    assert.match(materialPlanSource, /function MaterialResultRowV16/);
+    for (const filter of ['all', 'make', 'buy', 'shortage']) assert.match(materialPlanSource, new RegExp(`value: '${filter}'`));
+    assert.match(materialPlanSource, /本次没有物料需求/);
+    assert.match(materialPlanSource, /MaterialTraceSheetV16/);
+    assert.doesNotMatch(materialPlanSource, /MaterialCard|<table|desktop/i);
   });
 });
 

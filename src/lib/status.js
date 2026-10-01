@@ -29,7 +29,7 @@ export const FORECAST_STATUS_LABEL = Object.freeze({
 
 export const MRP_RUN_STATUS_LABEL = Object.freeze({
   DRAFT: '草稿',
-  COMPLETED: '已完成',
+  COMPLETED: '已计算',
   CANCELLED: '已取消',
 });
 
@@ -42,7 +42,7 @@ export const MRP_DEMAND_MODE_LABEL = Object.freeze({
 export const MRP_DEMAND_MODE_HINT = Object.freeze({
   SALES_ORDERS: '按已审批销售订单的未交付数量计算',
   FORECAST: '按已生效的需求预测数量计算',
-  SALES_PLUS_FORECAST: '销售订单需求与预测需求将叠加计算',
+  SALES_PLUS_FORECAST: '销售订单会消费同期预测，重叠需求不会重复计算',
 });
 
 export const SUGGESTION_TYPE_LABEL = Object.freeze({

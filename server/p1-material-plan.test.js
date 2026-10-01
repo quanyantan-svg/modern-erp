@@ -96,7 +96,7 @@ test('P1 status: forecast status mapping is centralized', () => {
 
 test('P1 status: MRP run status mapping is centralized', () => {
   assert.equal(mrpRunStatusLabel('DRAFT'), '草稿');
-  assert.equal(mrpRunStatusLabel('COMPLETED'), '已完成'); // NOT '已计算'
+  assert.equal(mrpRunStatusLabel('COMPLETED'), '已计算');
   assert.equal(mrpRunStatusLabel('CANCELLED'), '已取消');
 });
 
@@ -170,7 +170,7 @@ test('P1 material plan: sort by 物料 is alphabetical', () => {
 // ---------------------------------------------------------------------------
 
 test('P1 material plan: page source contains the four canonical filter segments', () => {
-  assert.match(FILTER_LOGIC_SOURCE, /key: 'all', label: '全部'[\s\S]*key: 'make', label: '生产'[\s\S]*key: 'buy', label: '采购'[\s\S]*key: 'shortage', label: '缺料'/);
+  assert.match(FILTER_LOGIC_SOURCE, /value: 'all', label: '全部'[\s\S]*value: 'make', label: '生产'[\s\S]*value: 'buy', label: '采购'[\s\S]*value: 'shortage', label: '缺料'/);
 });
 
 test('P1 material plan: page source contains sort options', () => {
@@ -181,7 +181,6 @@ test('P1 material plan: page source contains sort options', () => {
 test('P1 material plan: page source uses centralized status labels (no raw enum leakage)', () => {
   assertContains(FILTER_LOGIC_SOURCE, "from '../lib/status.js'");
   assertContains(FILTER_LOGIC_SOURCE, 'demandModeLabel');
-  assertContains(FILTER_LOGIC_SOURCE, 'suggestionTypeLabel');
   assertContains(FILTER_LOGIC_SOURCE, 'warningLabel');
 });
 
@@ -315,16 +314,17 @@ test('P1 mrp-runs: detail page offers 查看物料需求计划 primary action', 
   assertContains(source, '查看物料需求计划');
 });
 
-test('P1 mrp-runs: create form uses 开始计算 / 取消运算 lifecycle', () => {
+test('P1 mrp-runs: detail uses 开始计算 / 取消这次运算 lifecycle', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/mrp-runs.jsx'), 'utf8');
   assertContains(source, '开始计算');
-  assertContains(source, '取消运算');
+  assertContains(source, '取消这次运算');
 });
 
-test('P1 mrp-runs: combined mode hint says 叠加 not 抵扣', () => {
+test('P1 mrp-runs: combined mode hint accurately describes overlap consumption', () => {
   // The hint string lives in the centralized status lib; the page uses it via demandModeHint().
   const statusSource = readFileSync(resolve(repoRoot, 'src/lib/status.js'), 'utf8');
-  assertContains(statusSource, '销售订单需求与预测需求将叠加计算');
+  assertContains(statusSource, '销售订单会消费同期预测，重叠需求不会重复计算');
+  assert.ok(!statusSource.includes('销售订单需求与预测需求将叠加计算'));
   // Page wires demandModeHint for the SALES_PLUS_FORECAST branch
   const pageSource = readFileSync(resolve(repoRoot, 'src/pages/mrp-runs.jsx'), 'utf8');
   assertContains(pageSource, 'demandModeHint');
@@ -337,8 +337,8 @@ test('P1 mrp-runs: combined mode hint says 叠加 not 抵扣', () => {
 
 test('P1 material plan: page reads from existing M11 endpoints only', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
-  assertContains(source, "/api/planning/mrp/runs'");
-  assertContains(source, "/api/planning/mrp/runs/' + selectedRunId");
+  assertContains(source, '/api/planning/mrp/runs?status=COMPLETED');
+  assertContains(source, 'api(`/api/planning/mrp/runs/${selectedRunId}`)');
   assert.ok(!source.includes('/api/material-requirement-plans'), 'material plan calls non-existent endpoint');
 });
 
@@ -364,22 +364,22 @@ test('P1 material plan: trace sheet shows user-friendly explanation', () => {
   assertContains(source, '在途采购');
   assertContains(source, '在途生产');
   assertContains(source, '毛需求');
-  assertContains(source, '最终结果');
+  assertContains(source, '净需求');
+  assertContains(source, '建议');
 });
 
-test('P1 material plan: routing titles use exact product names', () => {
+test('P1 material plan: uses the dedicated P5 surface and exact trace title', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
-  // Page title appears as Panel title prop
-  assertContains(source, 'title="MRP · 物料建议"');
-  // Trace modal title pattern (per-product trace)
+  assertContains(source, 'v16-material-plan');
+  assert.ok(!source.includes('<Panel'));
   assertContains(source, 'title={`${row.product_name} · 计算依据`}');
 });
 
 test('P1 material plan: conversion actions link to M12 production / purchase instructions', () => {
   const source = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
   // Canonical cards wire the link at every width.
-  const makeCount = (source.match(/page="production-instructions"/g) || []).length;
-  const buyCount = (source.match(/page="purchase-instructions"/g) || []).length;
+  const makeCount = (source.match(/'production-instructions'/g) || []).length;
+  const buyCount = (source.match(/'purchase-instructions'/g) || []).length;
   assert.ok(makeCount >= 1, 'production-instructions AppLink missing');
   assert.ok(buyCount >= 1, 'purchase-instructions AppLink missing');
 });
@@ -446,17 +446,18 @@ test('P1 trace: top-level trace renders 销售订单需求 + 需求预测 + 供�
   assertContains(traceSource, '现有库存');
   assertContains(traceSource, '在途采购');
   assertContains(traceSource, '在途生产');
-  assertContains(traceSource, '最终结果');
+  assertContains(traceSource, '净需求');
+  assertContains(traceSource, '建议');
 });
 
 test('P1 trace: buy-item trace renders component sources + supply + 采购建议 for PCB BUY 70', () => {
   // PCB: component demand 100, on hand 30, open po 0, open prod 0 -> net 70 -> BUY 70
   const traceSource = readFileSync(resolve(repoRoot, 'src/pages/material-requirements-plan.jsx'), 'utf8');
-  // BuyItemTrace references component parents via bom_path
+  // The trace maps component parents to readable BOM sources.
   assertContains(traceSource, 'parent_name');
-  assertContains(traceSource, '组件毛需求');
+  assertContains(traceSource, 'BOM 来源');
   assertContains(traceSource, '组件需求'); // top-level label
-  assertContains(traceSource, '采购建议');
+  assertContains(traceSource, "row.suggestion_type === 'BUY'");
 });
 
 // ---------------------------------------------------------------------------
