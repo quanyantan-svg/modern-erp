@@ -2396,6 +2396,84 @@ P2 正常列表行内不得出现以下任意字段：
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
 
+## 28. V1.6 P5 — Mobile Enterprise MRP 规划设计
+
+本节是第 27 节需求对应的 STAGE 2 — DESIGN。实现沿用既有 Planning API 与权限合同，只替换 MRP 运算和物料需求计划的移动端呈现，不触碰规划引擎、数据库或下游指令逻辑。
+
+### 28.1 页面状态与导航职责
+
+`MrpRuns` 保持为 `/planning/mrp-runs` 路由入口，并在同一页面内互斥渲染列表、`MrpRunDetailV16` 与 `MrpRunEditorV16`。列表负责运算集合、客户端搜索、状态筛选和列表级错误；详情独立读取单次运算并负责动作；编辑器独立维护草稿表单与 ACTIVE 预测选项。详情和编辑器通过 `setHeaderBackAction` 注册 MobileShell 唯一返回动作，并在卸载时清理；编辑器记录来源，使取消和返回分别回到列表或原详情。
+
+`MaterialRequirementsPlan` 保持 `/planning/material-requirements-plan` 路由入口，只加载 COMPLETED 运算。若由运算详情进入，则 navigation target 携带 `documentId` 与来源标记，页面返回到对应运算详情；独立打开时返回 MRP 列表。正文不再渲染第二个返回按钮。
+
+### 28.2 样式隔离与视觉结构
+
+新增 `src/styles/v16-mrp-planning.css`，由 `src/main.jsx` 在既有 V1.6 页面样式之后导入。选择器使用 `v16-mrp-*` 和 `v16-material-plan-*` 前缀，复用现有 spacing、radius、字体与 `--v16-module-production` token，不修改全局设计系统组件。页面采用单一白色内容轨、细分隔线、克制状态面和固定任务动作栏；320–680px 共用同一结构，680px 只扩大留白，不变成桌面布局。
+
+### 28.3 运算列表数据流
+
+列表调用 `GET /api/planning/mrp/runs?limit=100&offset=0` 一次取得集合；搜索仅在内存中匹配规范化后的 `run_code` 与 `run_name`，状态段也在客户端过滤，不制造虚假服务端查询。渲染顺序保持 API 返回顺序。行组件只读取列表 DTO 的状态和汇总字段：COMPLETED 显示四项摘要，DRAFT/CANCELLED 显示对应静态进度；整行进入详情，草稿 overflow 仅进入编辑器。
+
+列表显式建模 `loading / error / empty / no-match / ready`。重试只重发列表请求，清除筛选只重置本地状态。`MRP_MANAGE` 决定新建和草稿编辑入口是否出现，查看权限仍由路由与后端控制。
+
+### 28.4 运算详情与状态动作
+
+详情调用 `GET /api/planning/mrp/runs/:id`，以状态分支产生固定章节和动作。DRAFT 只提供编辑、执行和取消；COMPLETED 只提供结果计划和新建；CANCELLED 只提供新建。执行使用 `DangerSheet` 之外的明确确认面，调用 `POST .../execute` 后重新读取详情与列表；取消使用危险确认 Sheet，调用 `POST .../cancel` 后同步刷新。请求进行中禁用重复提交，失败以内联错误明确反馈。
+
+COMPLETED 摘要只消费 API 的 `summary`，零结果不推导额外业务原因。元数据仅展示真实且对用户有意义的创建/完成信息，不展示内部 ID。任何状态都不提供物理删除、完成态编辑或原地重算。
+
+### 28.5 全页编辑器
+
+编辑器新建时构造默认日期窗口，草稿编辑时并行读取运算详情与 ACTIVE 预测；任一必要请求失败均显示可重试错误，不静默降级。保存前做名称、日期顺序、需求来源和条件预测校验；新建调用 POST，编辑调用 PATCH。保存成功后使用返回或既有运算 ID 进入详情并刷新列表。
+
+FORECAST 与 SALES_PLUS_FORECAST 才呈现预测选择；SALES_PLUS_FORECAST 下只显示一条重叠需求消费提示。编辑器不提供执行组合动作，避免把草稿持久化与不可逆历史快照混成一次操作。
+
+### 28.6 物料计划筛选、排序与分组
+
+页面先读取运算列表并筛出 COMPLETED，再读取选中运算详情；切换运算时重置已打开的依据 Sheet。筛选严格使用结果行的 API 字段，排序仅比较 `need_by_date` 或展示产品键。日期排序用本地 ISO 周键组织视觉分组，但分组标题转换为自然日期范围；未指定日期独立成组。
+
+摘要、类型、数量、库存、日期、转换进度和警告全部直接来自详情 DTO。前端不得从 BOM、库存或供应字段重新推算 `suggestion_type`、`suggested_quantity` 或 `net_requirement`。结果行本身是可聚焦 button，避免在整行内部嵌套交互控件。
+
+### 28.7 计算依据与下游导航
+
+点击结果行将该结果存入本地 Sheet 状态。Sheet 以五个固定章节映射权威字段，并通过 `warningLabel()`、需求来源标签和可读产品名称做展示转换。BOM 来源用 `run.components` 关联组件产品，再用 `run.pegging` 汇总父项来源；无法安全映射的内部值不直接显示。
+
+当 `remaining_quantity > 0` 时，根据 API `suggestion_type` 渲染到生产指令或采购指令页面的 `AppLink`，动作命名为“前往…指令”。导航不传递无法被目标页面可靠消费的伪预填参数，也不调用创建 API。余量为零时仅显示完成转换文案。
+
+### 28.8 权限、错误与合同边界
+
+所有管理动作继续由 `can(user, 'MRP_MANAGE')` 控制可见性；API 的 403/409/验证错误经现有错误提取方式显示。列表、详情、预测、执行、取消和保存各自保留独立忙碌/失败状态，失败不会留下假成功 UI。实现不修改 `server/modules/planning.js`、路由、迁移、数据库适配、权限或测试 fixture 的业务含义。
+
+### 28.9 标签与兼容测试迁移
+
+`src/lib/status.js` 将 MRP COMPLETED 展示统一为“已计算”，并把组合模式提示改为重叠消费语义；枚举值和 API 合同不变。既有静态 UI 测试中依赖旧 Panel、MaterialCard、Modal 或“叠加计算”文案的断言，迁移为 P5 的结构与语义断言；规划引擎数量和事务测试保持原样。
+
+### 28.10 浏览器验收设计
+
+新增 `scripts/acceptance/v16-p5-mrp-planning.mjs`，使用隔离的确定性数据和独立服务端口，驱动真实浏览器覆盖列表、详情、编辑器、物料计划与依据 Sheet。脚本在 320/390/430/680px 截图到 `.tmp/v16-p5-visual/`，采集 pageerror/console error，并断言页面无水平溢出、固定动作栏不遮挡底部导航、主要触点不少于 44px、仅有一个 shell header back、旧卡片/Modal 主表面不存在。长文本、六位小数量、大汇总、长警告与零结果单独覆盖。
+
+### 28.11 测试与完成门禁
+
+新增 `server/v16-p5-mrp-planning.test.js` 锁定文件作用域、状态标签、列表/详情/编辑器结构、物料计划筛选、转换文案、依据章节与诚实导航。先运行 P5 focused 测试及既有 planning/MRP 引擎测试，再运行浏览器验收、`pnpm test`、`pnpm build` 和 `git diff --check`。全量测试只接受基线已确认的 4 个 reset-data 环境保护失败，不接受新增失败。
+
+### 28.12 预计文件范围
+
+实现阶段预计只修改：
+
+- `src/main.jsx`；
+- `src/lib/status.js`；
+- `src/pages/mrp-runs.jsx`；
+- `src/pages/material-requirements-plan.jsx`；
+- 与旧 P1/P3.1 MRP 表面断言直接冲突的 focused UI 测试。
+
+预计新增：
+
+- `src/styles/v16-mrp-planning.css`；
+- `server/v16-p5-mrp-planning.test.js`；
+- `scripts/acceptance/v16-p5-mrp-planning.mjs`。
+
+不修改后端模块、API、数据库 schema/迁移、规划引擎、指令页面、版本号、发布标签或部署配置。
+
 ## 26. V1.6 P3 — Mobile Enterprise 销售订单详情 + 编辑器原型设计
 
 本节是 `document.md §25` 已批准需求的 STAGE 2 — DESIGN，起点为 `6e72dbb`。P0/P1/P1.1/P2 视觉 DNA 与列表合同已冻结，本节只设计 P3 销售订单详情与编辑器的展示层实现策略，不重写既有组件、不变更后端 / API / 数据库 / 业务合同。P4–P8 不在本节范围。

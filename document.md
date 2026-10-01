@@ -1945,3 +1945,89 @@ P-编码
 3. 不实施 53 路由全站推广；
 4. 不进行 release prep、版本号变更、tag、push、deploy；
 5. 不进入 P5–P8。
+
+## 27. V1.6 P5 — Mobile Enterprise MRP 规划原型
+
+本节冻结 V1.6 P5 的 STAGE 1 — REQUIREMENT，起点为 P4 实现提交 `67b7f554ee813663ac46ecb59816ab55a824772e`。P0 / P1 / P1.1 / P2 / P3 / P3.1 / P4 的工程与视觉合同保持不变。P5 只重建设计用户可见的 MRP 规划体验，不修改规划引擎、API、数据库、生产/采购指令页面或其他业务表面。
+
+### 27.1 产品模型与范围
+
+用户面对的是一项连续的 MRP 规划能力：需求输入 → MRP 运算 → 物料需求计划 → 生产/采购建议 → 生产/采购指令。`mrp-runs` 与 `material-requirements-plan` 路由继续存在，后者继续作为前者的内部结果页，不形成两个无关的顶层产品概念，不删除路由或改变导航父子关系。
+
+P5 仅覆盖：MRP 运算列表、新建/编辑草稿、运算详情、物料需求计划、计算依据 Sheet，以及前往生产/采购指令的诚实导航。计划预测、生产指令、采购指令、请购单、制令单、采购订单、生产执行、库存、业务总览、报表及结算/会计页面均不重设计。
+
+### 27.2 业务不变量
+
+1. MRP 只产生规划建议，不改变库存，不记账，不直接创建制令单、采购订单、生产指令或采购指令。
+2. MRP Run 状态严格为 `DRAFT / COMPLETED / CANCELLED`，展示为 `草稿 / 已计算 / 已取消`；不得新增 RUNNING、FAILED、APPROVED 或 EXECUTED。
+3. `COMPLETED` 是不可变历史快照：不得编辑输入、原地重算、刷新当前库存后覆盖结果或静默改写历史。新计算必须新建 MRP Run。
+4. 需求来源模式保持 `SALES_ORDERS / FORECAST / SALES_PLUS_FORECAST`；组合模式继续沿用规划引擎的重叠消费语义，不得描述为简单相加，不得改变计算。
+5. MAKE / BUY 完全来自 API 的 `suggestion_type`，前端不得推断。
+6. 结果、需求、供应、净需求、建议与日期只读取 API 权威字段；前端只做格式化、筛选、排序和按周分组，不独立重算业务结果。
+7. 转换进度只读取 `converted_quantity / remaining_quantity`。`remaining_quantity <= 0` 仅表示“已全部转为指令”，不得声称已完成生产、采购或履约。
+8. 警告通过既有 `warningLabel()` 本地化，不显示原始枚举。
+
+### 27.3 API 与权限边界
+
+继续使用既有 `GET/POST /api/planning/mrp/runs`、`GET/PATCH /api/planning/mrp/runs/:id`、`POST /api/planning/mrp/runs/:id/execute`、`POST /api/planning/mrp/runs/:id/cancel` 与 `GET /api/planning/forecasts?status=ACTIVE`。`MRP_VIEW` 控制查看，`MRP_MANAGE` 控制新建、编辑、执行和取消。前端隐藏动作不替代后端授权。P5 不修改接口、权限、角色或审批族。
+
+### 27.4 视口、外壳与视觉
+
+1. 主视口 390 × 844；支持 320 / 390 / 430 / 680px；最大 680px 居中单轨，不构建桌面布局。
+2. 所有档位必须满足 `document.documentElement.scrollWidth <= clientWidth`，底部导航与固定任务动作栏不得遮挡内容。
+3. P5 使用既有 `--v16-module-production: #0F9F95` 作为克制的小型规划身份色，不新增第七种模块色，不给状态统一染青绿色。
+4. MRP 列表/详情/编辑器/物料计划不得以 `Panel`、`RecordCard`、大型 `MaterialCard`、阴影卡片墙或四个营销 KPI 卡作为主表面；结果摘要允许紧凑 2×2 数据格。
+5. 永久解释段预算：运算列表 0、运算详情 0、物料计划 0、计算依据仅标签与数据；编辑器最多一条组合模式提示。
+6. 所有触点不小于 44px；状态和警告不能只靠颜色；筛选可键盘操作；结果行是真实 button/link；Sheet 键盘可达；表单标签关联；保留可见 focus。
+
+### 27.5 MRP 运算列表
+
+正文不得重复 MobileShell 的 MRP 页面标题。顶部为客户端搜索（只匹配 `run_code / run_name`）和具备 `MRP_MANAGE` 时的紧凑 `新建` 按钮（`aria-label="新建 MRP 运算"`）；搜索不得伪装成服务端查询。状态段严格为 `全部 / 草稿 / 已计算 / 已取消`，对应 `"" / DRAFT / COMPLETED / CANCELLED`，320px 必须容纳。
+
+专用企业行展示：单号 + 状态、运算名称、期间 + 需求来源；COMPLETED 第四行展示 `N项物料 · N生产 · N采购 · N缺料`，DRAFT 展示 `待计算`，CANCELLED 展示 `已取消`。首屏不展示 creator、created_at 或 forecast 内部 ID。整行进入详情；DRAFT 的 overflow 可提供编辑设置。
+
+列表状态必须区分：`加载中`、`暂无 MRP 运算`（可新建）、`没有匹配结果`（清除筛选）、`加载失败`（重试）。不得保留“系统会计算”等教程段落。
+
+### 27.6 MRP 运算详情
+
+详情为 MobileShell 内容轨中的全页 `MrpRunDetailV16`，不使用 Modal，不重复内容级返回。身份区展示运算号、状态、名称和期间。章节严格为：运算设置 → 结果摘要（仅 COMPLETED）→ 下一步 → 可用真实元数据 → 管理（仅存在动作）。
+
+运算设置展示需求期间、需求来源和条件预测来源；不显示技术 ID。COMPLETED 摘要使用 `物料 / 生产建议 / 采购建议 / 缺料` 2×2 数据格。零结果展示 `本次没有物料需求`，可选一行 `当前计算期间内没有可纳入的需求。`。
+
+动作：DRAFT 固定栏为 `编辑设置 / 开始计算`，管理章节为 `取消这次运算`；COMPLETED 且有结果主操作为 `查看物料需求计划`，管理用户可 `新建一次 MRP`；COMPLETED 零结果或 CANCELLED 可新建。COMPLETED 不得编辑或原地重算。
+
+执行前确认标题 `开始 MRP 计算？`，正文说明按当前期间、来源、库存和在途供应生成历史快照，不暗示创建下游单据。取消仅 DRAFT，确认文案明确取消草稿不影响已完成历史，不物理删除。
+
+### 27.7 MRP 编辑器
+
+新建和 DRAFT 编辑共用全页 `MrpRunEditorV16`，不使用 Modal。章节顺序为：运算名称 → 需求期间 → 需求来源 → 条件预测来源。字段标签为 `运算名称 / 开始日期 / 结束日期 / 需求来源 / 关联预测`，预测仅加载 ACTIVE，并仅在 FORECAST 或 SALES_PLUS_FORECAST 时出现。
+
+底部固定栏只有 `取消 / 保存草稿`，不得出现保存并计算。编辑 DRAFT 使用既有 PATCH，创建使用既有 POST；COMPLETED/CANCELLED 不可进入编辑器。组合模式最多显示一条准确且简洁的“不重复计算重叠需求”提示。
+
+### 27.8 物料需求计划
+
+页面是 COMPLETED MRP Run 的只读结果。顶部为紧凑运行选择器，仅列 COMPLETED；随后展示需求模式与期间、同详情的 2×2 摘要、严格筛选 `全部 / 生产 / 采购 / 缺料` 和排序 `按需求日期 / 按物料`。
+
+筛选语义保持：生产 = MAKE 且建议数量 > 0；采购 = BUY 且建议数量 > 0；缺料 = `net_requirement > 0`。需求日期排序可继续按 ISO 周分组，但普通用户只看到 `M月D日–M月D日`，不显示 `YYYY-Wnn`。
+
+大型 MaterialCard 改为带分隔线的企业结果行：产品编码 + API 权威建议类型、产品名、需求日期、建议数量、净需求、库存、转换进度、警告与进入计算依据的 affordance。长名称最多两行；无需求日期显示 `需求日期未指定`；单位只在 API 提供时使用。
+
+转换文案严格为：未转换 `待转指令 X`；部分转换 `已转指令 X · 待处理 Y`；全部转换 `已全部转为指令`。不得出现“已完成采购/生产”。整行打开计算依据 Sheet，不保留永久“查看计算依据”文字按钮，不在每行放大型下游创建动作。
+
+零结果为 `本次没有物料需求` + 可选一行 `当前期间没有可纳入计算的需求。` + `前往 MRP`。筛选无结果为 `当前筛选没有结果` + `查看全部`。
+
+### 27.9 计算依据 Sheet 与下游导航
+
+Sheet 标题为产品名 + `计算依据`，章节严格为：需求、可用供应、净需求、建议、BOM 来源（适用时）。需求使用 `gross_sales_demand / gross_forecast_demand / gross_component_demand / gross_requirement`；供应使用 `on_hand / open_purchase_supply / open_production_supply`；净需求使用 API 的 `net_requirement` 并展示权威公式；建议使用 `suggestion_type / suggested_quantity / converted_quantity / remaining_quantity`；BOM 来源只使用 `run.components / run.pegging` 并转换为可读来源，不暴露 raw source type、内部 ID 或字段名。
+
+若 remaining > 0，MAKE/BUY 在 Sheet 中提供诚实的 `前往生产指令 / 前往采购指令` 导航；当前下游页面不能安全接收特定结果预填，因此不得称“一键创建”或自动创建。remaining <= 0 时不显示下游动作，仅展示 `已全部转为指令`。
+
+### 27.10 长内容、验收与非目标
+
+必须覆盖长运算号/名称/预测名、长产品编码/名称、六位小数量、大汇总、众多结果/BOM 父项和长警告；不得产生页面级水平溢出。
+
+浏览器验收使用隔离确定性 fixtures，输出 `.tmp/v16-p5-visual/`，覆盖 320/390/430/680 的列表、详情、编辑器、物料计划、计算依据、长文本与零结果；断言无浏览器/React 错误、无底部导航/动作栏碰撞、触点合格、单一 header back，以及无旧卡片/Modal 主表面。
+
+focused 测试新增 `server/v16-p5-mrp-planning.test.js`，并运行既有 planning/MRP 引擎测试，不得修改引擎测试迎合前端。完成门禁：focused 测试无新增失败；全量测试不超过既有 4 个 reset-data 路径保护失败；构建通过；`git diff --check` 通过。
+
+P5 不修改后端、API、数据库、迁移、规划计算、库存/会计、角色权限、五类审批族、版本、tag；不重设计指令页面；不进入 P6–P8，不做全站推广、release prep、push、tag 或 deploy。
