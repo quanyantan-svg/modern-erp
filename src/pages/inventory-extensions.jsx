@@ -1,325 +1,65 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import {
-  Empty, FormActions, Loading, Modal, Panel, Status, Toolbar, can, dateTime, quantity,
-} from '../components/ui.jsx';
-import {
-  BusinessActionBar, BusinessPageHeader, BusinessPageShell, BusinessState, DestructiveButton, HelpDisclosure, InlineAlert,
-  PrimaryButton, RecordCard, RecordList, SecondaryButton, StatusChip, SummaryCard,
-} from '../components/design-system.jsx';
+import { Loading, can, dateTime, quantity } from '../components/ui.jsx';
+import { BottomActionBar, ConfirmSheet, DangerSheet, EmptyState, InlineAlert, SearchField, SegmentedControl, StatusChip } from '../components/design-system.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
-import { presentStatus } from '../lib/presentation.js';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { withProductTracking } from '../lib/tracking.js';
 
-function useInventoryScraps(notify) {
-  const [rows, setRows] = useState([]);
-  const reload = () => api('/api/inventory-scraps').then((r) => setRows(r.inventoryScraps || [])).catch((e) => notify(e.message, 'error'));
-  useEffect(() => { void reload(); }, []);
-  return { rows, reload };
-}
-
-function useInventoryPeriodClosures(notify) {
-  const [rows, setRows] = useState([]);
-  const reload = () => api('/api/inventory-period-closures').then((r) => setRows(r.inventoryPeriodClosures || [])).catch((e) => notify(e.message, 'error'));
-  useEffect(() => { void reload(); }, []);
-  return { rows, reload };
-}
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function currentPeriodKey() {
-  return new Date().toISOString().slice(0, 7);
-}
-
-// =====================================================================
-// Inventory Scrap page
-// =====================================================================
+const today = () => new Date().toISOString().slice(0, 10);
+const businessDate = (value) => value || '业务日期缺失';
+const STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消', CLOSED: '已结账', REOPENED: '已反结账' };
+function Shell({ className = '', children }) { return <main className={`business-page-shell business-page-shell--rail v16-inventory-shell ${className}`.trim()}>{children}</main>; }
+function Row({ code, title, status, lines, metric, onClick }) { return <button type="button" className="v16-inventory-row" onClick={onClick}><span className="v16-inventory-row__body"><span className="v16-inventory-row__top"><b className="mono">{code}</b>{status}</span><strong>{title}</strong>{lines.map((line, index) => <small key={index}>{line}</small>)}{metric && <b className="v16-inventory-row__metric">{metric}</b>}</span></button>; }
+function Identity({ code, title, status, subtitle }) { return <header className="v16-inventory-identity"><div><span className="mono">{code}</span><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{status}</header>; }
+function Facts({ facts }) { return <dl className="v16-inventory-facts">{facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value ?? '—'}</dd></div>)}</dl>; }
+function Lines({ items = [] }) { return <section className="v16-inventory-section"><h3>明细</h3><div className="v16-inventory-list">{items.map((item, index) => <div className="v16-inventory-line" key={item.id || index}><div><b>{item.productName}</b><small className="mono">{item.productCode}</small><small>{item.warehouseName || item.reason || ''}</small></div><strong>{quantity(item.quantity)} {item.productUnit || item.unit || ''}</strong></div>)}</div></section>; }
+function useBack(active, back) { const navigation = useAppNavigation(); useEffect(() => { navigation.setHeaderBackAction?.(active ? back : null); return () => navigation.setHeaderBackAction?.(null); }, [active, back, navigation.setHeaderBackAction]); }
 
 export function InventoryScraps({ user, notify }) {
-  const { rows, reload } = useInventoryScraps(notify);
-  const [warehouses, setWarehouses] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [editing, setEditing] = useState(null);
-  const [viewing, setViewing] = useState(null);
-
-  useEffect(() => {
-    api('/api/warehouses').then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, 'error'));
-    api('/api/products').then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, 'error'));
-  }, []);
-
-  async function openDetail(row) {
-    try { const result = await api(`/api/inventory-scraps/${row.id}`); setViewing(result.inventoryScrap); }
-    catch (error) { notify(error.message, 'error'); }
-  }
-
-  async function changeState(row, action) {
-    try {
-      await api(`/api/inventory-scraps/${row.id}/${action}`, { method: 'POST' });
-      notify(action === 'confirm' ? '报废单已确认' : '报废单已取消');
-      setViewing(null);
-      await reload();
-    } catch (error) { notify(error.message, 'error'); }
-  }
-
-  return <BusinessPageShell className="inventory-scraps-v15" width="rail">
-    <BusinessPageHeader title="存货报废" primaryAction={can(user, 'INVENTORY_SCRAP_MANAGE') && <button className="primary" onClick={() => setEditing({})}>新建报废单</button>} help={<HelpDisclosure summary="业务说明"><p>草稿可编辑；确认后扣减库存并写入库存异动。确认是库存生效动作，不是审批动作。</p></HelpDisclosure>}/>
-    <Toolbar search={() => {}} placeholder=""/>
-    <p className="section-hint">报废单确认时按仓库 + 货品校验库存，任一行不足则整张单据回滚。</p>
-    <div className="table-wrap"><table><thead><tr><th>报废单号</th><th>状态</th><th>报废日期</th><th className="number">明细数</th><th className="number">报废数量</th><th>原因</th><th>创建人</th><th>确认时间</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} className="clickable" onClick={() => void openDetail(row)}><td className="mono">{row.scrapNo}</td><td><Status status={row.status} label={presentStatus(row.status).label}/></td><td>{row.scrapDate}</td><td className="number">{row.itemCount}</td><td className="number">{quantity(row.totalQuantity)}</td><td>{row.reason || '—'}</td><td>{row.creatorName}</td><td className="dim">{dateTime(row.confirmedAt)}</td></tr>)}</tbody></table>{!rows.length && <BusinessState kind="EMPTY" title="没有库存报废记录" description="确认报废后会扣减库存并写入库存异动表。"/>}</div>
-    {editing && <InventoryScrapModal value={editing} warehouses={warehouses} products={products} notify={notify} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); notify('报废单已保存'); }}/>}
-    {viewing && <InventoryScrapDetail value={viewing} onClose={() => setViewing(null)} onEdit={() => { setViewing(null); setEditing(viewing); }} onAction={changeState}/>}
-  </BusinessPageShell>;
+  const [rows, setRows] = useState([]); const [status, setStatus] = useState(''); const [search, setSearch] = useState(''); const [screen, setScreen] = useState(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [warehouses, setWarehouses] = useState([]); const [products, setProducts] = useState([]);
+  const load = () => { setLoading(true); setError(''); api(`/api/inventory-scraps${status ? `?status=${status}` : ''}`).then((r) => setRows(r.inventoryScraps || [])).catch((e) => { setError(e.message); notify(e.message, 'error'); }).finally(() => setLoading(false)); };
+  useEffect(() => { void load(); }, [status]);
+  useEffect(() => { Promise.all([api('/api/warehouses'), api('/api/products')]).then(([w, p]) => { setWarehouses((w.warehouses || []).filter((x) => x.active)); setProducts((p.products || []).filter((x) => x.active)); }).catch((e) => notify(e.message, 'error')); }, []);
+  useBack(Boolean(screen), () => setScreen(null));
+  const open = async (row) => { try { const result = await api(`/api/inventory-scraps/${row.id}`); setScreen({ mode: 'detail', value: result.inventoryScrap }); } catch (e) { notify(e.message, 'error'); } };
+  if (screen?.mode === 'editor') return <InventoryScrapEditor value={screen.value || {}} warehouses={warehouses} products={products} notify={notify} onSaved={() => { setScreen(null); void load(); }}/>;
+  if (screen?.mode === 'detail') return <InventoryScrapDetail value={screen.value} user={user} notify={notify} onEdit={() => setScreen({ mode: 'editor', value: screen.value })} onChanged={() => { setScreen(null); void load(); }}/>;
+  const visible = rows.filter((row) => `${row.scrapNo} ${row.reason}`.toLowerCase().includes(search.trim().toLowerCase()));
+  return <Shell className="v16-inventory-scraps"><div className="v16-inventory-tools"><SearchField value={search} onChange={setSearch} placeholder="搜索报废单号或原因"/>{can(user, 'INVENTORY_SCRAP_MANAGE') && <button className="primary" onClick={() => setScreen({ mode: 'editor', value: {} })}>新建</button>}</div><SegmentedControl value={status} onChange={setStatus} options={[['','全部'],['DRAFT','草稿'],['CONFIRMED','已确认'],['CANCELLED','已取消']].map(([value,label]) => ({ value, label }))}/>{loading ? <Loading/> : error ? <EmptyState title="加载失败" description={error} action={<button className="secondary" onClick={load}>重试</button>}/> : visible.length ? <div className="v16-inventory-list">{visible.map((row) => <Row key={row.id} code={row.scrapNo} title={row.reason || '未填写原因'} status={<StatusChip status={row.status}>{STATUS[row.status]}</StatusChip>} lines={[businessDate(row.scrapDate), `${row.itemCount} 项 · ${row.creatorName}`]} metric={quantity(row.totalQuantity)} onClick={() => void open(row)}/>)}</div> : <EmptyState title={search || status ? '没有匹配结果' : '暂无报废记录'}/>}</Shell>;
 }
 
-function InventoryScrapModal({ value, warehouses, products, notify, onClose, onSaved }) {
-  const initialItems = value.items?.length
-    ? value.items.map((item) => ({ warehouseId: item.warehouseId, productId: item.productId, quantity: item.quantity, reason: item.reason || '', trackingAllocations: item.trackingAllocations || [] }))
-    : [{ warehouseId: '', productId: '', quantity: '', reason: '' }];
-  const [form, setForm] = useState({
-    scrapDate: value.scrap_date || today(),
-    reason: value.reason || '',
-    notes: value.notes || '',
-    items: initialItems,
-  });
-
-  function updateLine(index, patch) {
-    setForm({ ...form, items: form.items.map((item, i) => i === index ? { ...item, ...patch } : item) });
-  }
-
-  async function save(event) {
-    event.preventDefault();
-    try {
-      const payload = {
-        scrapDate: form.scrapDate,
-        reason: form.reason,
-        notes: form.notes,
-        items: form.items.map((item) => ({
-          warehouseId: item.warehouseId,
-          productId: item.productId,
-          quantity: Number(item.quantity),
-          reason: item.reason || '',
-          trackingAllocations: item.trackingAllocations || [],
-        })),
-      };
-      const url = value.id ? `/api/inventory-scraps/${value.id}` : '/api/inventory-scraps';
-      const method = value.id ? 'PATCH' : 'POST';
-      await api(url, { method, body: payload });
-      onSaved();
-    } catch (error) { notify(error.message, 'error'); }
-  }
-
-  return <Modal title={value.id ? '编辑库存报废单' : '新建库存报废单'} onClose={onClose} wide>
-    <form onSubmit={save}>
-      <div className="form-grid order-head">
-        <label>报废日期<input type="date" value={form.scrapDate} onChange={(e) => setForm({ ...form, scrapDate: e.target.value })} required/></label>
-        <label className="full">报废原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="如：过期、损坏、滞销、检测不合格" maxLength={200}/></label>
-        <label className="full">备注（可选）<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} maxLength={200}/></label>
-      </div>
-      <div className="line-title"><div><strong>报废明细</strong><small className="block">每个仓库 + 货品仅允许一行；数量必须为正数，确认时校验库存。</small></div><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { warehouseId: '', productId: '', quantity: '', reason: '' }] })}>＋ 添加一行</button></div>
-      <div className="line-table scrap-lines">
-        <div className="line-row line-header"><span>#</span><span>仓库</span><span>货品</span><span className="number">数量</span><span>原因</span><span/></div>
-        {form.items.map((line, index) => <div className="tracking-line" key={index}><div className="line-row">
-          <span>{index + 1}</span>
-          <select value={line.warehouseId} onChange={(e) => updateLine(index, { warehouseId: e.target.value })} required>
-            <option value="">请选择仓库</option>
-            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
-          </select>
-          <select value={line.productId} onChange={(e) => updateLine(index, withProductTracking(line, e.target.value))} required>
-            <option value="">请选择货品</option>
-            {products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
-          </select>
-          <input type="number" min="0.01" step="0.01" value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value, trackingAllocations: [] })} placeholder="如 5" required/>
-          <input value={line.reason} onChange={(e) => updateLine(index, { reason: e.target.value })} maxLength={200} placeholder="可选"/>
-          <button type="button" className="remove" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>×</button>
-        </div><TrackingAllocationEditor product={products.find((product) => product.id === line.productId)} warehouseId={line.warehouseId} quantity={line.quantity} businessDate={form.scrapDate} direction="OUT" value={line.trackingAllocations || []} onChange={(trackingAllocations) => updateLine(index, { trackingAllocations })} notify={notify}/></div>)}
-      </div>
-      <FormActions onClose={onClose} saveText="保存草稿"/>
-    </form>
-  </Modal>;
+function InventoryScrapEditor({ value, warehouses, products, notify, onSaved }) {
+  const initial = value.items?.map((item) => ({ warehouseId: item.warehouseId, productId: item.productId, quantity: item.quantity, reason: item.reason || '', trackingAllocations: item.trackingAllocations || [] })) || [{ warehouseId: '', productId: '', quantity: '', reason: '', trackingAllocations: [] }];
+  const [form, setForm] = useState({ scrapDate: value.scrap_date || today(), reason: value.reason || '', notes: value.notes || '', items: initial }); const update = (i, patch) => setForm({ ...form, items: form.items.map((row, index) => index === i ? { ...row, ...patch } : row) });
+  const save = async (event) => { event.preventDefault(); try { await api(value.id ? `/api/inventory-scraps/${value.id}` : '/api/inventory-scraps', { method: value.id ? 'PATCH' : 'POST', body: form }); notify('报废草稿已保存'); onSaved(); } catch (e) { notify(e.message, 'error'); } };
+  return <Shell className="v16-inventory-editor"><form onSubmit={save}><h2>{value.id ? '编辑存货报废' : '新建存货报废'}</h2><div className="v16-inventory-form-grid"><label>报废日期<input type="date" required value={form.scrapDate} onChange={(e) => setForm({ ...form, scrapDate: e.target.value })}/></label><label>报废原因<input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })}/></label><label>备注<textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></label></div><section className="v16-inventory-section"><header><h3>报废明细</h3><button type="button" className="secondary" onClick={() => setForm({ ...form, items: [...form.items, { warehouseId: '', productId: '', quantity: '', reason: '', trackingAllocations: [] }] })}>添加一行</button></header><div className="v16-inventory-lines">{form.items.map((line, index) => <article key={index}><div className="v16-inventory-line-head"><b>第 {index + 1} 行</b><button type="button" className="ghost" disabled={form.items.length === 1} onClick={() => setForm({ ...form, items: form.items.filter((_, i) => i !== index) })}>移除</button></div><select aria-label="仓库" required value={line.warehouseId} onChange={(e) => update(index, { warehouseId: e.target.value })}><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}</select><select aria-label="货品" required value={line.productId} onChange={(e) => update(index, withProductTracking(line, e.target.value))}><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select><input aria-label="报废数量" type="number" min="0.01" step="0.01" required value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value, trackingAllocations: [] })}/><input aria-label="行原因" value={line.reason} onChange={(e) => update(index, { reason: e.target.value })}/><TrackingAllocationEditor product={products.find((p) => p.id === line.productId)} warehouseId={line.warehouseId} quantity={line.quantity} businessDate={form.scrapDate} direction="OUT" value={line.trackingAllocations || []} onChange={(trackingAllocations) => update(index, { trackingAllocations })} notify={notify}/></article>)}</div></section><BottomActionBar><button className="primary">保存草稿</button></BottomActionBar></form></Shell>;
 }
-
-function InventoryScrapDetail({ value, onClose, onEdit, onAction }) {
-  const navigation = useAppNavigation();
-  const canViewMovements = navigation.canNavigate('inventory-transactions');
-  return <Modal title="库存报废单详情" onClose={onClose} wide>
-    <div className="detail-head"><div><span className="mono">{value.scrap_no}</span><h3>{value.reason || '无原因'}</h3><p>{value.notes || '—'}</p></div><Status status={value.status} label={value.statusLabel}/></div>
-    <div className="detail-grid">
-      <div><span>报废日期</span><strong>{value.scrap_date}</strong></div>
-      <div><span>创建人</span><strong>{value.creatorName}</strong></div>
-      <div><span>确认人</span><strong>{value.confirmedByName || '尚未确认'}</strong></div>
-      <div><span>确认时间</span><strong>{dateTime(value.confirmed_at)}</strong></div>
-      {value.status === 'CANCELLED' && <div><span>取消人</span><strong>{value.cancelledByName || '—'}</strong></div>}
-    </div>
-    <div className="table-wrap inset">
-      <table>
-        <thead><tr><th>#</th><th>仓库</th><th>货品</th><th className="number">报废数量</th><th>原因</th></tr></thead>
-        <tbody>{value.items.map((item) => <tr key={item.id}><td>{item.line_no}</td><td>{item.warehouseName}</td><td><strong>{item.productName}</strong><small className="block mono">{item.productCode}</small></td><td className="number">{quantity(item.quantity)}</td><td>{item.reason || '—'}</td></tr>)}</tbody>
-      </table>
-    </div>
-    {value.status === 'DRAFT' && <div className="form-actions">
-      <button type="button" className="secondary" onClick={onClose}>关闭</button>
-      <button type="button" className="row-action" onClick={onEdit}>编辑</button>
-      <button type="button" className="danger-button" onClick={() => onAction(value, 'cancel')}>取消报废</button>
-      <button type="button" className="approve-button" onClick={() => onAction(value, 'confirm')}>确认报废</button>
-    </div>}
-    {value.status === 'CONFIRMED' && canViewMovements && <p className="section-hint">报废已生成库存异动，可在<strong> 库存异动 </strong>按来源单号 <span className="mono">{value.scrap_no}</span> 查询。</p>}
-    {value.status === 'CANCELLED' && <p className="section-hint">已取消的报废单未对库存或异动表产生任何影响。</p>}
-  </Modal>;
+function InventoryScrapDetail({ value, user, notify, onEdit, onChanged }) {
+  const [action, setAction] = useState(null); const change = async (name) => { try { await api(`/api/inventory-scraps/${value.id}/${name}`, { method: 'POST' }); notify(name === 'confirm' ? '报废单已确认' : '报废单已取消'); onChanged(); } catch (e) { notify(e.message, 'error'); } };
+  return <Shell className="v16-inventory-detail"><Identity code={value.scrap_no} title={value.reason || '存货报废'} status={<StatusChip status={value.status}>{STATUS[value.status]}</StatusChip>} subtitle={value.notes}/><Facts facts={[{ label: '报废日期', value: businessDate(value.scrap_date) }, { label: '创建人', value: value.creatorName }, { label: '确认人', value: value.confirmedByName || '—' }, { label: '确认时间', value: dateTime(value.confirmed_at) }]}/><Lines items={value.items}/>{value.status === 'CONFIRMED' && <div className="v16-inventory-inline-link"><AppLink page="inventory-transactions">查看库存异动</AppLink></div>}{value.status === 'DRAFT' && can(user, 'INVENTORY_SCRAP_MANAGE') && <BottomActionBar><button className="secondary" onClick={onEdit}>编辑草稿</button><button className="danger-button" onClick={() => setAction('cancel')}>取消报废</button><button className="primary" onClick={() => setAction('confirm')}>确认报废</button></BottomActionBar>}{action === 'confirm' && <ConfirmSheet title="确认整单报废？" message="系统会先校验全部明细；任一行库存不足时整单不会生效。" confirmLabel="确认报废" onClose={() => setAction(null)} onConfirm={() => void change('confirm')}/>} {action === 'cancel' && <DangerSheet title="取消报废？" message="取消后不会扣减库存。" confirmLabel="取消报废" onClose={() => setAction(null)} onConfirm={() => void change('cancel')}/>}</Shell>;
 }
-
-// =====================================================================
-// Inventory Month-End page
-// =====================================================================
 
 export function InventoryMonthEnd({ user, notify }) {
-  const { rows, reload } = useInventoryPeriodClosures(notify);
-  const [status, setStatus] = useState(null);
-  const [viewing, setViewing] = useState(null);
-  const [showCloseForm, setShowCloseForm] = useState(false);
-  const [reopening, setReopening] = useState(null);
-  const canManage = can(user, 'INVENTORY_PERIOD_CLOSE_MANAGE');
-
-  const reloadStatus = () => api('/api/inventory-period-closures/status').then((result) => setStatus(result.status)).catch((error) => notify(error.message, 'error'));
-  useEffect(() => { void reloadStatus(); }, []);
-
-  async function openDetail(row) {
-    try { const result = await api(`/api/inventory-period-closures/${row.id}`); setViewing(result.inventoryPeriodClosure); }
-    catch (error) { notify(error.message, 'error'); }
-  }
-
-  async function reopen(row, reason) {
-    try {
-      await api(`/api/inventory-period-closures/${row.id}/reopen`, { method: 'POST', body: { reason } });
-      notify(`期间 ${row.period_key} 已反结账`);
-      setReopening(null);
-      await Promise.all([reload(), reloadStatus()]);
-    } catch (error) { notify(error.message, 'error'); }
-  }
-
-  return <BusinessPageShell className="inventory-period-page inventory-month-end-v15" width="rail">
-    <BusinessPageHeader
-      title="存货期间结账"
-      context="存货期间控制"
-      help={<HelpDisclosure summary="月结边界"><p>先运行预检查，再冻结已结束自然月的存货数量快照。结账不会修改库存流水或会计凭证。</p></HelpDisclosure>}
-      status={status?.latestStatus}
-      meta={status?.closedThrough ? `已结至 ${status.closedThrough}` : '尚无结账基线'}
-      primaryAction={canManage && <PrimaryButton type="button" disabled={!status?.canClose} onClick={() => setShowCloseForm(true)}>执行月结</PrimaryButton>}
-    />
-    <div className="inventory-period-summary">
-      <SummaryCard label="最近期间" value={status?.latestPeriod || '—'} detail={status?.latestStatus === 'REOPENED' ? '等待重新结账' : '最近操作记录'}/>
-      <SummaryCard label="下一可结期间" value={status?.nextClosablePeriod || '—'} detail="仅允许连续的已结束自然月"/>
-      <SummaryCard label="历史记录" value={rows.length} detail="含结账与反结账轨迹"/>
-    </div>
-    <InlineAlert>快照只读取权威 <code>business_date</code>。遗留日期无法验证、负库存、未完成单据或一致性差异都会阻止结账。</InlineAlert>
-    {rows.length ? <RecordList className="inventory-period-list">{rows.map((row) => {
-      const canReopenThis = canManage && row.status === 'CLOSED' && status?.latestPeriod === row.period_key;
-      return <RecordCard key={row.id} title={row.period_key} subtitle={`结账人 ${row.closedByName} · ${dateTime(row.closed_at)}`}
-        status={<StatusChip status={row.status} domain="period.status"/>}
-        facts={[
-          { label: '快照条目', value: row.snapshotCount },
-          { label: '预检查', value: row.closeChecks?.overallStatus || '—' },
-          { label: '反结时间', value: dateTime(row.reopened_at) },
-          { label: '反结人', value: row.reopenedByName || '—' },
-        ]}
-        onClick={() => void openDetail(row)}
-        actions={<BusinessActionBar secondary={<SecondaryButton type="button" onClick={() => void openDetail(row)}>查看详情</SecondaryButton>}
-          destructive={canReopenThis && <DestructiveButton type="button" onClick={() => setReopening(row)}>反结账</DestructiveButton>}/>}/>; })}</RecordList>
-      : <BusinessState kind="EMPTY" title="尚未执行存货月结" description="运行预检查并结账后，这里会显示只读快照与完整审计历史。" action={canManage && status?.canClose ? <PrimaryButton type="button" onClick={() => setShowCloseForm(true)}>执行首次月结</PrimaryButton> : null}/>}
-    {showCloseForm && <CloseInventoryPeriodModal initialPeriod={status?.nextClosablePeriod} notify={notify} onClose={() => setShowCloseForm(false)} onSaved={async () => { setShowCloseForm(false); await Promise.all([reload(), reloadStatus()]); notify('存货月结已完成'); }}/>}
-    {reopening && <ReopenInventoryPeriodModal row={reopening} onClose={() => setReopening(null)} onConfirm={(reason) => reopen(reopening, reason)}/>}
-    {viewing && <InventoryPeriodClosureDetail value={viewing} onClose={() => setViewing(null)}/>}
-  </BusinessPageShell>;
+  const [rows, setRows] = useState([]); const [periodStatus, setPeriodStatus] = useState(null); const [screen, setScreen] = useState(null); const [loading, setLoading] = useState(true);
+  const load = () => { setLoading(true); Promise.all([api('/api/inventory-period-closures'), api('/api/inventory-period-closures/status')]).then(([list, state]) => { setRows(list.inventoryPeriodClosures || []); setPeriodStatus(state.status); }).catch((e) => notify(e.message, 'error')).finally(() => setLoading(false)); };
+  useEffect(() => { void load(); }, []); useBack(Boolean(screen), () => setScreen(null));
+  const open = async (row) => { try { const result = await api(`/api/inventory-period-closures/${row.id}`); setScreen({ mode: 'detail', value: result.inventoryPeriodClosure }); } catch (e) { notify(e.message, 'error'); } };
+  if (screen?.mode === 'close') return <InventoryCloseTask initialPeriod={periodStatus?.nextClosablePeriod} notify={notify} onSaved={() => { setScreen(null); void load(); }}/>;
+  if (screen?.mode === 'detail') return <InventoryPeriodDetail value={screen.value} user={user} periodStatus={periodStatus} notify={notify} onChanged={() => { setScreen(null); void load(); }}/>;
+  return <Shell className="v16-inventory-month-end"><div className="v16-inventory-month-head"><div><small>已结至</small><strong>{periodStatus?.closedThrough || '尚无结账基线'}</strong></div>{can(user, 'INVENTORY_PERIOD_CLOSE_MANAGE') && <button className="primary" disabled={!periodStatus?.canClose} onClick={() => setScreen({ mode: 'close' })}>执行月结</button>}</div>{loading ? <Loading/> : rows.length ? <div className="v16-inventory-list">{rows.map((row) => <Row key={row.id} code={row.period_key} title={row.status === 'REOPENED' ? '等待重新结账' : '存货期间已关闭'} status={<StatusChip status={row.status}>{STATUS[row.status]}</StatusChip>} lines={[`${row.snapshotCount} 条快照`, `结账人 ${row.closedByName} · ${dateTime(row.closed_at)}`]} onClick={() => void open(row)}/>)}</div> : <EmptyState title="尚未执行存货月结"/>}</Shell>;
 }
-
-function CloseInventoryPeriodModal({ initialPeriod, notify, onClose, onSaved }) {
-  const [period, setPeriod] = useState(initialPeriod || currentPeriodKey());
-  const [notes, setNotes] = useState('');
-  const [precheck, setPrecheck] = useState(null);
-  const [confirmWarnings, setConfirmWarnings] = useState(false);
-  const [checking, setChecking] = useState(false);
-  async function check() {
-    setChecking(true);
-    try {
-      const result = await api('/api/inventory-period-closures/check', { method: 'POST', body: { period } });
-      setPrecheck(result.precheck); setConfirmWarnings(false);
-    } catch (error) { notify(error.message, 'error'); }
-    finally { setChecking(false); }
-  }
-  async function save(event) { event.preventDefault(); try {
-    await api('/api/inventory-period-closures', { method: 'POST', body: { period, notes, confirmWarnings } }); onSaved();
-  } catch (error) { notify(error.message, 'error'); } }
-  const warning = precheck?.overallStatus === 'WARNING';
-  const ready = precheck && precheck.overallStatus !== 'BLOCKED' && (!warning || confirmWarnings);
-  return <Modal title="执行存货月结" onClose={onClose}>
-    <form onSubmit={save}>
-      <div className="form-grid order-head">
-        <label>期间 (YYYY-MM)<input value={period} onChange={(event) => { setPeriod(event.target.value); setPrecheck(null); }} placeholder="2026-08" pattern="\d{4}-(0[1-9]|1[0-2])" required/></label>
-        <label className="full">结账备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={200}/></label>
-      </div>
-      {!precheck && <BusinessState kind="EMPTY" title="尚未运行预检查" description="结账前必须检查期间顺序、库存、单据、追踪身份与财务一致性。"/>}
-      {precheck && <PrecheckResults value={precheck}/>}
-      {warning && <label className="inventory-period-warning-confirm"><input type="checkbox" checked={confirmWarnings} onChange={(event) => setConfirmWarnings(event.target.checked)}/>我已审阅并接受上述非阻断警告</label>}
-      <BusinessActionBar secondary={[<SecondaryButton key="cancel" type="button" onClick={onClose}>取消</SecondaryButton>, <SecondaryButton key="check" type="button" disabled={checking} onClick={() => void check()}>{checking ? '检查中…' : '运行预检查'}</SecondaryButton>]}
-        primary={<PrimaryButton type="submit" disabled={!ready}>确认结账</PrimaryButton>}/>
-    </form>
-  </Modal>;
+function InventoryCloseTask({ initialPeriod, notify, onSaved }) {
+  const [period, setPeriod] = useState(initialPeriod || today().slice(0, 7)); const [notes, setNotes] = useState(''); const [precheck, setPrecheck] = useState(null); const [precheckedPeriod, setPrecheckedPeriod] = useState(''); const [confirmWarnings, setConfirmWarnings] = useState(false); const [checking, setChecking] = useState(false);
+  const check = async () => { setChecking(true); try { const result = await api('/api/inventory-period-closures/check', { method: 'POST', body: { period } }); setPrecheck(result.precheck); setPrecheckedPeriod(period); setConfirmWarnings(false); } catch (e) { notify(e.message, 'error'); } finally { setChecking(false); } };
+  const current = precheckedPeriod === period ? precheck : null; const warning = current?.overallStatus === 'WARNING'; const ready = current && current.overallStatus !== 'BLOCKED' && (!warning || confirmWarnings);
+  const close = async (event) => { event.preventDefault(); if (!ready) return; try { await api('/api/inventory-period-closures', { method: 'POST', body: { period, notes, confirmWarnings: warning && confirmWarnings } }); notify(`期间 ${period} 已结账`); onSaved(); } catch (e) { notify(e.message, 'error'); } };
+  return <Shell className="v16-inventory-editor"><form onSubmit={close}><h2>执行存货月结</h2><div className="v16-inventory-form-grid"><label>结账期间<input aria-label="结账期间" value={period} pattern="\d{4}-(0[1-9]|1[0-2])" onChange={(e) => { setPeriod(e.target.value); setPrecheck(null); setPrecheckedPeriod(''); setConfirmWarnings(false); }} required/></label><label>结账备注<textarea value={notes} onChange={(e) => setNotes(e.target.value)}/></label></div>{current ? <PrecheckResults value={current}/> : <EmptyState title="尚未运行预检查" description="选择期间后先运行预检查。"/>}{warning && <label className="v16-inventory-warning-confirm"><input type="checkbox" checked={confirmWarnings} onChange={(e) => setConfirmWarnings(e.target.checked)}/>我已审阅并接受上述非阻断警告</label>}<BottomActionBar><button type="button" className="secondary" disabled={checking} onClick={() => void check()}>{checking ? '检查中…' : '运行预检查'}</button><button className="primary" disabled={!ready}>确认结账</button></BottomActionBar></form></Shell>;
 }
-
-function PrecheckResults({ value }) {
-  const tone = value.overallStatus === 'PASS' ? 'success' : value.overallStatus === 'WARNING' ? 'warning' : 'danger';
-  return <div className="inventory-precheck"><InlineAlert tone={tone} title={`预检查：${value.overallStatus}`}>阻断 {value.summary.blockingCount} · 警告 {value.summary.warningCount} · 通过 {value.summary.passCount}</InlineAlert>
-    <div className="inventory-precheck__list">{value.checks.map((check) => <article key={check.code} className={`inventory-precheck__item is-${check.status.toLowerCase()}`}>
-      <div><strong>{check.title}</strong><small>{check.code}</small></div><span>{check.status}{check.count ? ` · ${check.count}` : ''}</span>
-      {check.status === 'FAIL' && <p>{check.resolution}</p>}
-    </article>)}</div></div>;
+function PrecheckResults({ value }) { const tone = value.overallStatus === 'PASS' ? 'success' : value.overallStatus === 'WARNING' ? 'warning' : 'danger'; const label = { PASS: '可以结账', WARNING: '存在警告', BLOCKED: '暂不能结账' }[value.overallStatus]; return <section className="v16-inventory-precheck"><InlineAlert tone={tone} title={label}>阻断 {value.summary.blockingCount} · 警告 {value.summary.warningCount} · 通过 {value.summary.passCount}</InlineAlert>{value.checks.map((check) => <article key={check.code} className={`is-${check.status.toLowerCase()}`}><div><b>{check.title}</b><span>{check.status === 'PASS' ? '通过' : check.severity === 'WARNING' ? '警告' : '阻断'}{check.count ? ` · ${check.count}` : ''}</span></div>{check.status === 'FAIL' && check.resolution && <p>{check.resolution}</p>}</article>)}</section>; }
+function InventoryPeriodDetail({ value, user, periodStatus, notify, onChanged }) {
+  const [reopen, setReopen] = useState(false); const [reason, setReason] = useState(''); const canReopen = can(user, 'INVENTORY_PERIOD_CLOSE_MANAGE') && value.status === 'CLOSED' && periodStatus?.latestPeriod === value.period_key;
+  const submitReopen = async () => { if (!reason.trim()) return; try { await api(`/api/inventory-period-closures/${value.id}/reopen`, { method: 'POST', body: { reason } }); notify(`期间 ${value.period_key} 已反结账`); onChanged(); } catch (e) { notify(e.message, 'error'); } };
+  return <Shell className="v16-inventory-detail"><Identity code={value.period_key} title="存货月结快照" status={<StatusChip status={value.status}>{STATUS[value.status]}</StatusChip>} subtitle={`${value.periodRange?.startDate} 至 ${value.periodRange?.endDate}`}/><Facts facts={[{ label: '仓库数', value: value.summary?.warehouseCount || 0 }, { label: '货品数', value: value.summary?.productCount || 0 }, { label: '期内入库', value: quantity(value.summary?.totalInQuantity || 0) }, { label: '期内出库', value: quantity(value.summary?.totalOutQuantity || 0) }]}/>{value.closeChecks && <PrecheckResults value={value.closeChecks}/>}<section className="v16-inventory-section"><h3>期末快照</h3>{value.snapshots?.length ? <div className="v16-inventory-list">{value.snapshots.map((snap) => <div className="v16-inventory-snapshot" key={snap.id}><div><b>{snap.productName}</b><small className="mono">{snap.productCode}</small><small>{snap.warehouseName}</small></div><dl><div><dt>入</dt><dd>{quantity(snap.periodInQuantity)}</dd></div><div><dt>出</dt><dd>{quantity(snap.periodOutQuantity)}</dd></div><div><dt>期末</dt><dd>{quantity(snap.closingQuantity)}</dd></div></dl></div>)}</div> : <EmptyState title="该期间无快照"/>}</section><div className="v16-inventory-inline-link"><AppLink page="inventory-transactions">按记录日期查看库存异动</AppLink></div>{canReopen && <BottomActionBar><button className="danger-button" onClick={() => setReopen(true)}>反结账</button></BottomActionBar>}{reopen && <DangerSheet title={`反结账 ${value.period_key}？`} confirmLabel="确认反结账" onClose={() => setReopen(false)} onConfirm={() => void submitReopen()}><label>反结账原因<textarea value={reason} onChange={(e) => setReason(e.target.value)} required/></label></DangerSheet>}</Shell>;
 }
-
-function ReopenInventoryPeriodModal({ row, onClose, onConfirm }) {
-  const [reason, setReason] = useState('');
-  return <Modal title={`反结账 ${row.period_key}`} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onConfirm(reason); }}>
-    <InlineAlert tone="warning">只能反结最近已结期间；同月会计期间必须为打开状态。快照保留并将在重结时重建。</InlineAlert>
-    <label>反结账原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={200} required/></label>
-    <BusinessActionBar secondary={<SecondaryButton type="button" onClick={onClose}>取消</SecondaryButton>} destructive={<DestructiveButton type="submit" disabled={!reason.trim()}>确认反结账</DestructiveButton>}/>
-  </form></Modal>;
-}
-
-function InventoryPeriodClosureDetail({ value, onClose }) {
-  const navigation = useAppNavigation();
-  const canViewMovements = navigation.canNavigate('inventory-transactions');
-  return <Modal title={`存货月结 ${value.period_key}`} onClose={onClose} wide>
-    <div className="detail-head"><div><span className="mono">{value.period_key}</span><h3>{value.notes || '—'}</h3><p>期间范围 {value.periodRange?.startDate} 至 {value.periodRange?.endDate}</p></div><Status status={value.status} label={value.statusLabel}/></div>
-    <div className="detail-grid">
-      <div><span>结账时间</span><strong>{dateTime(value.closed_at)}</strong></div>
-      <div><span>结账人</span><strong>{value.closedByName}</strong></div>
-      <div><span>反结时间</span><strong>{dateTime(value.reopened_at)}</strong></div>
-      <div><span>反结人</span><strong>{value.reopenedByName || '—'}</strong></div>
-      <div><span>反结原因</span><strong>{value.reopen_reason || '—'}</strong></div>
-    </div>
-    {value.closeChecks && <PrecheckResults value={value.closeChecks}/>}
-    <h4>期间汇总</h4>
-    <div className="detail-grid">
-      <div><span>仓库数</span><strong>{value.summary?.warehouseCount || 0}</strong></div>
-      <div><span>货品数</span><strong>{value.summary?.productCount || 0}</strong></div>
-      <div><span>期内入库数量</span><strong>{quantity(value.summary?.totalInQuantity || 0)}</strong></div>
-      <div><span>期内出库数量</span><strong>{quantity(value.summary?.totalOutQuantity || 0)}</strong></div>
-    </div>
-    <h4>审计历史</h4>
-    <div className="inventory-period-audit">{value.audits?.map((entry) => <div key={entry.id}><strong>{entry.action}</strong><span>{entry.actorName || '系统'} · {dateTime(entry.created_at)}</span><p>{entry.detail}</p></div>)}</div>
-    <div className="table-wrap inset">
-      <table>
-        <thead><tr><th>仓库</th><th>货品</th><th className="number">本期入库</th><th className="number">本期出库</th><th className="number">期末数量</th></tr></thead>
-        <tbody>{value.snapshots?.length ? value.snapshots.map((snap) => <tr key={snap.id}><td>{snap.warehouseName}</td><td><strong>{snap.productName}</strong><small className="block mono">{snap.productCode}</small></td><td className="number">{quantity(snap.periodInQuantity)}</td><td className="number">{quantity(snap.periodOutQuantity)}</td><td className="number">{quantity(snap.closingQuantity)}</td></tr>) : <tr><td colSpan={5}><Empty text="该期间内未发生库存异动"/></td></tr>}</tbody>
-      </table>
-    </div>
-    {canViewMovements && <p className="section-hint">如需追溯本期内的明细，可前往<strong> 库存异动 </strong>按期间 {value.period_key} 筛选。</p>}
-  </Modal>;
-}
-
-// Default export: combined panel for the single-page launcher if needed.
-export default function InventoryExtensions({ user, notify, page }) {
-  if (page === 'inventory-month-end') return <InventoryMonthEnd user={user} notify={notify}/>;
-  return <InventoryScraps user={user} notify={notify}/>;
-}
+export default function InventoryExtensions({ user, notify, page }) { return page === 'inventory-month-end' ? <InventoryMonthEnd user={user} notify={notify}/> : <InventoryScraps user={user} notify={notify}/>; }

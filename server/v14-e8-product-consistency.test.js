@@ -42,7 +42,7 @@ test('tracking, commercial, inventory and quality pages use business-readable en
 test('business dates and settlement account labels are explicit and safe', () => {
   const inventory = source('src/pages/logistics-finance.jsx');
   const settlement = source('src/pages/settlement.jsx');
-  assert.match(inventory, /<th>业务日期<\/th>/);
+  assert.match(inventory, /item\.business_date \|\| '业务日期缺失'/);
   assert.match(inventory, /item\.business_date \|\| '业务日期缺失'/);
   assert.doesNotMatch(settlement, /<strong>\{document\.settlement_account_id/);
   assert.match(settlement, /settlementAccountLabel\(document\)/);

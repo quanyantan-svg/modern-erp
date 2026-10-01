@@ -36,11 +36,11 @@ describe('V1.2 premium visual polish round 2', () => {
   });
 
   test('inventory uses compact modes and product-first semantic records', () => {
-    assert.match(masterData, /className="inventory-record"/);
-    assert.match(masterData, /inventory-record__main[\s\S]*?productName/);
-    assert.match(masterData, /inventory-record__quantity/);
+    assert.match(masterData, /className="v16-inventory-row"/);
+    assert.match(masterData, /v16-inventory-row__body[\s\S]*?productName/);
+    assert.match(masterData, /v16-inventory-row__metric/);
     assert.doesNotMatch(masterData, /<strong>库存查询<\/strong><small>/);
-    assert.match(css, /\.inventory-workbench\s*\{[^}]*display:flex/s);
+    assert.match(masterData, /className="v16-inventory-tabs"/);
   });
 
   test('root panel and launcher groups use whitespace instead of container chrome', () => {

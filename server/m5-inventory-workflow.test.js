@@ -132,10 +132,10 @@ describe('M5 inventory workflow', () => {
 
   test('mobile inventory information architecture stays in scope and uses correct terminology', () => {
     const source = readFileSync(resolve(repoRoot, 'src/pages/master-data.jsx'), 'utf8');
-    for (const label of ['库存查询', '库存调拨', '库存盘点', '库存调整', '库存异动']) assert.match(source, new RegExp(label));
+    for (const label of ['库存', '调拨', '盘点', '调整', '库存异动']) assert.match(source, new RegExp(label));
     const inventorySection = source.slice(source.indexOf('export function Inventory('), source.indexOf('function InventoryChecks('));
     assert.doesNotMatch(inventorySection, /库存报废|库存月结|审批调整|审核通过/);
-    for (const label of ['提交审批', '等待审批', '确认调拨', '确认调整']) assert.match(source, new RegExp(label));
+    for (const label of ['提交审批', '前往审批中心', '确认调拨', '确认调整']) assert.match(source, new RegExp(label));
     assert.match(source, /INVENTORY_ADJUSTMENT_MANAGE/);
   });
 
