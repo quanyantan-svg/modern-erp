@@ -295,6 +295,17 @@ button:disabled, .button:disabled { opacity: 0.45; cursor: not-allowed; }
   border: 1px solid transparent;
 }
 .approve-button:hover { background: #2DA84A; }
+/* V1.6 P8 — neutral confirmation class for non-approval confirmation actions
+ * (inventory transfer / adjustment). Visually identical to
+ * .approve-button so existing layouts remain stable, but the class name
+ * keeps semantic ownership aligned with document.md §3 and §29/30.
+ */
+.confirm-button {
+  height: 28px; padding: 0 12px; border-radius: var(--r-xs);
+  background: var(--success); color: #fff; font-size: 12.5px; font-weight: 500;
+  border: 1px solid transparent;
+}
+.confirm-button:hover { background: #2DA84A; }
 .remove {
   width: 26px; height: 26px; border-radius: var(--r-xs);
   background: transparent; color: var(--text-tertiary); font-size: 16px;
@@ -2293,7 +2304,7 @@ tfoot td {
   .toolbar-spacer { display:none; }
   button, .button { min-height:44px; height:auto; padding:10px 14px; }
   button.primary, .button.primary, button.danger-button, .button.danger-button { min-height:48px; }
-  .row-action, .approve-button { min-height:44px; height:auto; }
+  .row-action, .approve-button, .confirm-button { min-height:44px; height:auto; }
   input, select { min-height:48px; height:48px; padding:0 14px; font-size:16px; }
   textarea { min-height:112px; padding:12px 14px; font-size:16px; }
   input[type="checkbox"] { min-height:22px; height:22px; width:22px; }
