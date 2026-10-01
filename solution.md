@@ -2396,6 +2396,71 @@ P2 正常列表行内不得出现以下任意字段：
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
 
+## 29. V1.6 P6 — Mobile Enterprise Inventory Control 设计
+
+### 29.1 组件边界与页面状态
+
+`Inventory` 保持 `#inventory` 唯一入口，顶层维护 `tab / selected / editor` 三类互斥状态：默认呈现四页签列表；选择记录进入对应全页详情；新建或编辑进入对应全页编辑器。顶层通过 `useAppNavigation().setHeaderBackAction` 注册唯一返回行为，详情返回列表，编辑器从详情进入时返回详情，否则返回列表。
+
+库存域拆分为专用展示组件：当前库存行与详情、调拨列表/详情/编辑器、盘点列表/详情/编辑器、调整列表/详情/编辑器。组件共用小型状态映射、权威日期格式化、移动筛选 Sheet、固定动作栏和明确的加载/空/错误状态，不复用旧 Modal 表格主表面。
+
+`InventoryScraps` 和 `InventoryMonthEnd` 各自维护 `list / detail / editor-or-task` 状态并注册 Shell 返回；`InventoryTransactions` 保持单层只读列表，只更换为移动企业行和筛选 Sheet。
+
+### 29.2 数据流与调用关系
+
+- 当前库存：`GET /api/inventory?warehouse=&product=`；详情 `GET /api/inventory/:warehouseId/:productId`；辅助数据 `/api/warehouses`、`/api/products`。
+- 调拨：列表 `GET /api/inventory-transfers?status=`，详情 `GET /api/inventory-transfers/:id`，创建 `POST /api/inventory-transfers`，确认/取消分别为 `POST .../:id/transfer`、`POST .../:id/cancel`。
+- 盘点：列表 `GET /api/inventory-checks?status=`，创建 `POST /api/inventory-checks`，草稿更新/提交 `PATCH /api/inventory-checks/:id`；提交体严格为 `{ action: 'SUBMIT' }`。
+- 调整：列表/详情使用 `/api/inventory-adjustments` 与 `/:id`；创建/编辑使用 POST/PATCH；确认、取消、删除沿用既有端点。
+- 报废：列表/详情使用 `/api/inventory-scraps` 与 `/:id`；创建/编辑使用 POST/PATCH；确认、取消使用现有动作端点。
+- 月结：列表与状态使用 `/api/inventory-period-closures` 和 `/status`；预检 POST `/check`；结账 POST 列表端点；反结账 POST `/:id/reopen`；详情 GET `/:id`。
+- 异动：`GET /api/inventory-transactions`，完整传递既有 `search / type / warehouse / product / direction / startDate / endDate` 查询合同。
+
+所有请求失败统一通过 `notify(message, 'error')` 显式反馈；列表加载失败保留重试入口。动作成功后重新获取列表/详情，不乐观伪造库存或状态。
+
+### 29.3 状态、权限与职责分离
+
+调拨详情仅 DRAFT 显示动作：确认由 `INVENTORY_TRANSFER_CONFIRM || INVENTORY_TRANSFER_APPROVE` 控制，取消由 `INVENTORY_TRANSFER_CREATE` 控制；历史 SUBMITTED/APPROVED 使用兼容标签并强制只读。盘点 DRAFT 的编辑/提交由既有管理权限控制，SUBMITTED 只导航审批中心。调整、报废动作继续由各自 MANAGE 权限控制。月结查看与管理权限分别控制读取、结账和反结账。
+
+界面权限只用于减少无效动作，不替代后端授权。P6 不引入前端审批决定、不改变状态枚举、不添加角色映射。危险动作使用确认 Sheet；调整草稿删除继续使用既有 `ConfirmDelete` 合同。
+
+### 29.4 编辑器与跟踪分配
+
+四类编辑器均使用全页 `<form>`，正文按身份/日期、仓库关系、明细、备注分节，底部固定栏只提供取消与保存。调拨和盘点只创建或更新草稿；确认、提交等状态动作位于详情，避免保存与业务执行合并。
+
+每行数量变化时沿用既有清理或重建 tracking allocations 的行为。传入 `TrackingAllocationEditor` 的参数保持：调拨 `warehouseId=fromWarehouseId, direction="OUT", quantity=item.quantity`；盘点以 `difference=actualQuantity-systemQuantity` 决定 IN/OUT 并传 `Math.abs(difference)`；调整以 `quantityDelta` 决定方向并传绝对值；报废从行仓库 OUT。日期分别传权威业务日期字段。
+
+### 29.5 月结任务状态机
+
+月结新任务维护 `period / notes / precheck / precheckedPeriod / warningConfirmed / loading`。period 变化立即清空 precheck 与确认勾选。运行预检后：
+
+- `BLOCKED`：只呈现阻断检查和重试，不渲染可用结账提交；
+- `WARNING`：呈现警告确认复选框，只有勾选后才允许提交并发送 `confirmWarnings: true`；
+- `PASS`：允许提交且不发送虚假警告确认；
+- 请求失败：显示错误并保持未预检状态。
+
+详情使用服务端 `summary` 和 `snapshots`。2×2 摘要只展示仓库数、货品数、期内入库、期内出库；期末数量仅逐快照展示。反结账采用独立危险 Sheet，reason 非空后调用接口。前端不写库存、不生成流水，也不触发盘点。
+
+### 29.6 日期与展示适配
+
+建立小型 `businessDate(value)` 展示函数，仅接受权威字段；空值固定返回 `业务日期缺失`。库存详情流水单独使用 `dateTime(createdAt)` 并将标题写为 `记录时间`。库存异动筛选字段继续发送 startDate/endDate，但标签固定为 `记录日期从 / 记录日期至`，从而准确表达后端基于 `created_at` 的合同。
+
+来源类型、方向和状态由本地显式映射转换为业务语言；未知值使用中性的“库存异动/未知状态”，不直接把内部枚举作为主要界面文案。
+
+### 29.7 样式与适配
+
+新增隔离的 `src/styles/v16-inventory-control.css`，挂在 P6 页面根类下；`src/main.jsx` 只追加样式 import。核心结构为 `v16-inventory-shell / v16-inventory-tabs / v16-inventory-row / v16-inventory-section / v16-inventory-actions`，最大宽度 680px。
+
+320px 下页签、筛选与动作允许紧凑换行但触点不缩小；390px 为主设计；430px 保持单轨；680px 增加留白而不切桌面双栏。长标识使用 `overflow-wrap:anywhere`，数据网格最小列宽为零，固定栏预留导航高度和安全区。
+
+### 29.8 测试策略与文件范围
+
+`server/v16-p6-inventory-control.test.js` 使用 `node:test` 与源码读取，至少 41 项合同断言覆盖：四页签、无旧主表面、全页编辑器/详情、日期不回退、调拨状态与权限别名、历史只读、盘点 SUBMIT/审批中心、调整有符号数量、四种 TrackingAllocationEditor 方向、报废无归档、月结预检三态/失效/确认、快照无异质汇总、异动记录日期与跟踪占位、Shell 单一返回和样式 import。
+
+`scripts/acceptance/v16-p6-inventory-control.mjs` 复用现有 acceptance harness 模式，写入隔离 fixtures，完成 390px 全流程截图以及规定页面的 320/430/680px 代表性截图，并断言无横向溢出、旧 Panel/Modal/Card 主表面、重复返回、动作栏/底部导航碰撞、低于 44px 触点及浏览器错误。
+
+实现文件限定为 `src/main.jsx`、`src/pages/master-data.jsx`、`src/pages/inventory-extensions.jsx`、`src/pages/logistics-finance.jsx`、新增 P6 CSS、focused 测试、acceptance 脚本，以及确有直接依赖的 UI 合同测试。后端、数据库、迁移、权限、审批、P5 MRP 文件与 README 不修改。
+
 ## 28. V1.6 P5 — Mobile Enterprise MRP 规划设计
 
 本节是第 27 节需求对应的 STAGE 2 — DESIGN。实现沿用既有 Planning API 与权限合同，只替换 MRP 运算和物料需求计划的移动端呈现，不触碰规划引擎、数据库或下游指令逻辑。
