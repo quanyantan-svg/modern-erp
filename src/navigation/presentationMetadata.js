@@ -56,7 +56,7 @@ export const ROUTE_PRESENTATIONS = Object.freeze([
   route('manufacturing-analytics','生产执行分析','analytics','REPORT','REPORT','secondary','生产制造','reports',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']},{mobileExposure:'contextual'}),
   route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划与生产','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划与生产','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
-  route('material-requirements-plan','MRP · 物料建议','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划与生产','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
+  route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划与生产','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
   route('production-instructions','生产指令','planning-production','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
   route('purchase-instructions','采购指令','planning-purchasing','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
   route('purchase-requisitions','请购单','purchasing','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
