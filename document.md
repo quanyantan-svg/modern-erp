@@ -2386,3 +2386,322 @@ P7 实现阶段必须停止在 `decision-reports` 路由内使用以下旧主表
 9. 不实施 53 路由全站推广；
 10. 不进行 release prep、版本号变更、tag、push、deploy；
 11. 不进入 P8。
+
+## 30. V1.6 P8 — 流程图与原型一致性验收
+
+本节是 V1.6 P8 的 STAGE 1 — REQUIREMENT 冻结，起点为 master `0595edb`（P7 实现提交）。P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7 的工程、合同与视觉冻结保持不变。P8 是 **文档 / 审计 / 一致性验收**阶段：**仅记录审计、冻结一致性要求与设计**，不修改应用源码、API、数据库、迁移、角色、权限、审批族、版本或发布状态。
+
+P8 不重新设计任何业务页面，不实施 53 路由全站推广。P8 验收产物为 `docs/v1.6-p8-consistency-matrix.md`，用于评估已批准的 P0–P7 原型与 canonical 流程语义是否构成连贯的产品基础，作为后续 53 路由全站推广的前置门禁。
+
+### 30.1 P8 目的与门禁
+
+1. P8 不修缺陷，只记录缺陷。
+2. P8 不引入新 API / 新路由 / 新权限 / 新角色 / 新审批族。
+3. P8 一致性矩阵的实际可执行版本仅冻结要求、设计与发现；任何代码 / 测试 / 验收脚本落地都留待 P8 fix / 自动化验收阶段。
+4. P8 PASS 的定义（详见 §30.15）：
+   - 0 未解决 BLOCKER；
+   - 0 未解决 MAJOR；
+   - MINOR 可保留，但仅当显式归类为「非阻塞推广 backlog」且不与已冻结的 P0–P7 原型语义冲突；
+   - OBSERVATION 不阻断 P8。
+5. P8 不重新设计任何 canonical 流程；如果审计发现需要后端 / API / 数据库 / 业务状态变更，P8 必须停止并要求产品复审。
+6. P8 不调用 MySQL gate、不配置 MySQL 测试数据库、不重置数据；P8 一致性验收不是数据库迁移或性能阶段。
+
+### 30.2 权威语义基线
+
+P8 使用的语义基线按以下顺序确定，**禁止**重新设计：
+
+1. `document.md §3`：五个 canonical 角色与五类审批族；§3.1 库存调拨为 WAREHOUSE 实物执行而非第六类审批族。
+2. `document.md §4 / §4.1 / §4.2`：业务日期口径、业务状态术语（草稿 / 待审批 / 已审批 / 已驳回 / 已确认 / 已调拨 / 已取消 / 已作废 / 已结账）、来源 / 事务 / 幂等 / 审计基线。
+3. `document.md §6 / §7`：O2C / P2P canonical 链路；销售未交 / 采购未收以「订单行」为最小粒度。
+4. `document.md §9`：MRP / 生产指令 / 制令单 / 用料出库 / 生产入库的制造语义；MRP 仅产生建议，不直接创建下游单据。
+5. `document.md §10 / §11 / §12 / §13 / §14`：库存 / 质量 / 结算 / 估值 / 税 / UOM 的语义边界。
+6. `document.md §16`：业务总览两层视图与 O2C / P2P canonical 链路；Level 1 简化不得暗示 `出货 = AR / 入库 = AP / 审批 = 履约`。
+7. `document.md §21`：V1.5 流程对齐产品术语（`货品 / 销售订单 / 销售出货 / 计划预测 / MRP / 生产指令 / 制令单 / 用料出库 / 生产入库 / 采购指令 / 请购单 / 采购订单 / 采购入库 / 应收结算 / 应付结算 / 存货报废 / 存货月结 / 库存异动明细 / 经营分析`）。
+8. `document.md §22–§29`：P0–P7 已冻结原型合同（mobile enterprise UX 基础、五项底部导航、销售列表 / 详情 / 编辑器、采购入库、MRP、库存控制、决策报表）。
+9. 仓库内不存在独立 standalone 流程图资产（`assets/` / `public/` / `docs/` 下未发现 PNG / SVG / Mermaid 等独立文件）；P8 的流程图来源完全以 `document.md` 中的 canonical 链路描述为准。
+
+### 30.3 路由分类模型
+
+P8 必须将每条已启用 canonical 路由分类为下列唯一类别：
+
+```text
+A. CORE         — launcher 6 大核心业务组直接呈现，或审批中心等 canonical 顶层能力。
+B. UTILITY      — 启动器底部折叠区域（业务流程 / 财务工具 / 更多业务 / 高级设置 / 系统设置）。
+C. CONTEXTUAL   — 不在 launcher 顶层出现，仅通过 parentRoute / 详情页 / 上下文链接进入。
+D. INTERNAL     — 仅 mobileExposure='contextual' / role-workspace / advanced-config 等入口，不在 launcher。
+E. REMOVED      — presentationMetadata 中 enabled=false；不允许以任何形式重新出现在 launcher、底部导航或常规路由。
+```
+
+P8 决策与依据冻结于 `docs/v1.6-p8-consistency-matrix.md §A`。
+
+### 30.4 六大核心业务组
+
+启动器六大核心业务组必须与流程图节点一致：
+
+```text
+master-data  基础资料
+sales        销售管理
+production   生产管理
+purchasing   采购管理
+inventory    库存管理
+analytics    决策报表
+```
+
+每组的启动器条目必须满足：
+
+```text
+launcher label     — 启动器短标签
+formalLabel        — 正式展示标签（含于 meta 与 CSV）
+page key           — App.jsx pages 字典键
+target / documentType — 退货按目标拆分（SALES_RETURN / PURCHASE_RETURN）
+reportKey          — 仅 analytics 组的 5 张报表使用
+permission         — 与 navigationMetadata 严格一致
+reachable page     — 必须有可访问页面
+```
+
+不在六大核心业务组内的页面归入 utility / contextual / internal / removed。utility 折叠区域不能成为第七 / 第八个核心业务组。
+
+### 30.5 五类 canonical 审批族
+
+五类审批族严格冻结：
+
+```text
+1. SALES_ORDER
+2. PURCHASE_ORDER
+3. PURCHASE_REQUISITION
+4. INVENTORY_CHECK
+5. ACCOUNTING_VOUCHER
+```
+
+硬规则：
+
+```text
+INVENTORY_TRANSFER 永远不属于审批族。
+库存调拨是 WAREHOUSE 实物执行事件，状态机严格为 DRAFT → TRANSFERRED / CANCELLED。
+动作名固定为 确认调拨 / 取消调拨，禁止 批准调拨 / 审批调拨 / 审核调拨。
+INVENTORY_TRANSFER_APPROVE 仅为兼容 alias；UI 不得将其呈现为审批语义。
+```
+
+P8 必须检查以下违规：
+
+```text
+审批调拨
+待审核调拨
+APPROVE-as-product-language for transfer
+approval-center transfer entry
+```
+
+### 30.6 O2C 一致性合同
+
+O2C canonical 链路：
+
+```text
+客户 → 销售订单 → 审批 → 销售出货 → OQC 门禁 → 库存/COGS → 销售发票 → AR/收入/销项税 → 收款/贷项/退款/核销
+```
+
+P8 验收必须证明：
+
+1. 5 段核心节点在路由表中存在并可由授权用户访问。
+2. 销售出货与销售发票是不同事件；OQC 是物流确认前的门禁，不是独立库存 / 会计事件。
+3. Level 1 简化（业务总览 / 启动器）不得暗示 `出货 = AR / 审批 = 履约`；Level 2 在详情视图必须暴露独立节点与独立权限。
+4. 销售未出货 / 销售未交报表为决策报表（`sales-outstanding`），其行级履行状态由服务端权威决定，前端不重算。
+
+### 30.7 P2P 一致性合同
+
+P2P canonical 链路：
+
+```text
+MRP/采购指令 → 请购 → 审批 → 采购订单 → 审批 → 采购入库 → IQC 门禁 → 库存/GRNI → 供应商账单 → AP/进项税/价差 → 付款/贷项/退款/核销
+```
+
+P8 验收必须证明：
+
+1. MRP 仅产生建议；不得在 P8 一致性矩阵中允许 `MRP = 自动创建 PO / 自动创建制令单 / 自动写入库存 / 自动过账` 的隐含语义。
+2. IQC 是采购入库的内部门禁，不是独立库存 / 会计事件。
+3. 采购未交货报表为决策报表（`purchase-outstanding`），履行行级别与销售未出货一致。
+4. 应付结算 / 供应商账单 / 付款单 / 采购折让 通过 `parentRoute=accounts-payable` 形成上下文链接。
+
+### 30.8 生产一致性合同
+
+生产链路（document.md §9）：
+
+```text
+MRP → 生产指令 → 制令单 → 用料出库 / 退料 → 工序报工 → 生产入库 / 冲销 → 完工
+```
+
+P8 验收必须证明：
+
+1. 制令单状态机 PENDING → IN_PROGRESS → COMPLETED / CANCELLED，标准成本、路由、工艺在开工时冻结。
+2. 用料出库 / 生产入库 / 生产执行分析 的权限与文档语义一致。
+3. 生产执行分析（`manufacturing-analytics`）仅作为上下文入口（`mobileExposure='contextual'`），不在启动器顶层。
+4. `boms` 与 `product-routings` 的 `domain` 与 launcher 分类保持一致（详见 §30.4 与 matrix §A）。
+
+### 30.9 库存一致性合同
+
+库存链路：
+
+```text
+inventory
+├─ 库存
+├─ 调拨（实物执行）
+├─ 盘点（INVENTORY_CHECK 审批族）
+└─ 调整（确认流）
+
+inventory-scraps（确认流）
+inventory-month-end（预检 / 结账 / 反结账）
+inventory-transactions（只读操作流水）
+```
+
+P8 验收必须证明：
+
+1. 调拨 = 实物执行；不允许晋升为审批族。
+2. 盘点 = 审批族（INVENTORY_CHECK），SUBMITTED 后只能前往审批中心。
+3. 调整 = 确认流；报废 = 确认流；月结 = 预检 / 结账 / 反结账三态。
+4. 库存异动明细（`inventory-transactions` 操作流水）与 P7 决策报表 `inventory-movements` 是两个不同的用户可见上下文，不能合并也不能互相替代。
+5. 跟踪策略 NONE / LOT / SERIAL 在 P7 决策报表中不展示身份字段（身份属于 P6 `inventory-transactions`）。
+6. 业务日期以权威字段为准；缺失显示 `业务日期缺失`，不得回退到 `created_at`。
+
+### 30.10 决策报表一致性合同
+
+决策报表合同：
+
+```text
+launcher 5 条 analytics 入口 → 单一 decision-reports 路由 → 5 个 reportKey
+sales-summary
+sales-outstanding
+purchase-summary
+purchase-outstanding
+inventory-movements
+```
+
+P8 验收必须证明：
+
+1. 5 条 launcher 入口对应 5 个 `reportKey`，且仅对应这 5 个；不允许第六条 launcher 报表入口。
+2. 决策报表可见性由 `REPORT_VIEW` + 至少一个对应领域权限共同决定；后端 `allowAny` 仍为权威。
+3. 五条 `GET /api/reports/decision/{key}`、五条 `*/export` 端点、`GET /api/reports/:reportKey/lines/:orderItemId/contributions` 维持不变。
+4. CSV schema 与文件名沿用服务端权威；前端不重新生成 CSV。
+5. 不重算履行剩余 / 逾期 / 履行状态 / 库存余额。
+6. `order_amount ≠ recognized_revenue` 与 `order_amount ≠ realized_cost` 在销售 / 采购统计说明中持续保留。
+
+### 30.11 上下文 / 内部路由规则
+
+1. `material-requirements-plan` 是 `mrp-runs` 的内部 child route（`parentRoute='mrp-runs'`），仅通过 MRP 运算详情进入；不在启动器顶层。
+2. `manufacturing-analytics` 仅作为 `mobileExposure='contextual'` 入口；不在启动器顶层。
+3. `iqc` / `oqc` 是质量门禁，分别通过 `parentRoute='purchase-receipts' / 'sales-deliveries'` 暴露。
+4. `sales-discounts` / `purchase-discounts` / `sales-invoices` / `payment-collections` / `payment-disbursements` / `supplier-bills` 通过 `parentRoute=accounts-receivable / accounts-payable` 形成上下文链接。
+5. `bank-accounts` / `product-costs` / `cost-rates` 是 `role-workspace` / `advanced-config` 入口；仅在工作台 / 高级设置上下文暴露。
+6. `quality-control-points` 仅由 `USERS_MANAGE` 可见，是系统级能力。
+7. `system-health` 与 `commercial-go-live` 不作为最终用户可见前端路由；后端 reconciliation / import 能力保留为后端 / 内部诊断。
+8. 任何已 `enabled: false` 的路由（`cash-journals / bills / fixed-assets / workflows / data-cleanup`）不得以任何形式重新出现在 launcher、底部导航或常规路由。
+
+### 30.12 术语 / 状态一致性
+
+冻结术语 / 状态映射（仅举关键，禁止漂移）：
+
+```text
+草稿           DRAFT
+待审批         SUBMITTED     ≠ 已审批
+已审批         APPROVED      ≠ 已确认
+已驳回         REJECTED
+已确认         CONFIRMED     ≠ 已审批
+已调拨         TRANSFERRED   ≠ 已审核 / ≠ 已审批
+已取消         CANCELLED     ≠ 已归档
+已归档         ARCHIVED      ≠ 已取消
+已结账         CLOSED
+已反结账       REOPENED      ≠ 草稿
+已作废         REVERSED
+业务日期缺失   缺权威业务日期时显示
+记录时间       inventory 详情中 createdAt 字段
+记录日期       库存异动起止日期筛选
+未设置交期     销售未出货 / 采购未交货承诺日期缺失
+```
+
+P8 必须审计以下不当用法：
+
+```text
+将 SUBMITTED 显示为「已审批」
+将 TRANSFERRED 显示为「已审核」
+将 APPROVED 与 CONFIRMED 互相替代
+将 CANCELLED 与 ARCHIVED 互相替代
+将 REOPENED 与 DRAFT 互相替代
+将 业务日期 替换为 创建时间 / 提交时间 / 审核时间
+将订单金额 描述为 已实现收入 / 已实现成本
+```
+
+### 30.13 权限 / 可达性
+
+每条重要路由 / 流程都必须满足：
+
+```text
+launcher 权限 ≡ presentationMetadata 权限 ≡ 页面级权限 ≡ 后端 allowAny 权限
+```
+
+P8 必须审计以下缺陷：
+
+```text
+launcher 可见但页面不可访问
+launcher 隐藏但合法授权工作流不可达
+深层链接绕过权限
+内部页面被晋升为顶层
+权限被拒后死胡同（无可用上一级）
+```
+
+P8 不修改角色 / 权限。
+
+### 30.14 P0–P7 原型一致性
+
+已批准的 P0–P7 原型必须保持以下硬属性：
+
+```text
+MobileShell 拥有页面标题
+单一 shell header back（不重复内容级返回）
+不重复渲染页面级 <h1>
+320 / 390 / 430 / 680 px 全部支持
+680 px 居中单轨
+触点 ≥ 44 px
+无页面级水平溢出
+底部导航与固定动作栏不冲突
+FilterSheet 替代桌面常驻筛选表单
+全屏移动编辑器（已冻结页面）
+无宽 Modal 主工作流
+无表格墙
+无卡片墙
+无永久 HelpDisclosure 教程
+诚实 LOADING / EMPTY / NO_RESULTS / ERROR / READY 状态
+```
+
+P8 仅审计已批准原型；V1.5 旧路由不要求 V1.6 重塑，53 路由全站推广仍待后续阶段。
+
+### 30.15 缺陷严重度与通过条件
+
+严重度定义：
+
+```text
+BLOCKER      破坏业务语义、权限、路由可达性或 canonical 工作流，使 P8 不能通过。
+MAJOR        重大原型不一致或导航缺陷，但核心数据语义未破坏。
+MINOR        限定范围的术语 / 展示 / 元数据不匹配，适合后续 P8 fix 提交。
+OBSERVATION  故意保留的旧 V1.5 表面或未来推广项，不违反已批准的 P0–P7 范围。
+```
+
+通过条件：
+
+```text
+P8 PASS = 0 未解决 BLOCKER + 0 未解决 MAJOR
+```
+
+MINOR 可保留，但必须显式归类为「非阻塞推广 backlog」；如该 MINOR 与已冻结的 P0–P7 原型语义冲突，则必须先修复再 PASS。
+
+OBSERVATION 不阻断 P8。
+
+### 30.16 非目标
+
+1. 不把 53 路由全部 V1.6 化。
+2. 不重新设计任何已冻结页面。
+3. 不改写任何业务导航。
+4. 不修改后端工作流、API、数据库、角色、权限、审批族、报告语义。
+5. 不打 tag / 不发布 / 不写 release prep。
+6. P8 不实施 MySQL gate / 不写 MySQL 性能或并发 gate。
+7. P8 不调用任何 destructive 重置（`reset-data` / `ERP_MYSQL_TEST_ALLOW_RESET=true`）。
+8. P8 不修改 `package.json` 版本。
+9. P8 不修改 `README.md` 当前已发布基线段落。
+10. 53 路由全站推广须待 P0–P8 全部通过且 P8 fix / 自动化验收完成后，由运营方单独批准。

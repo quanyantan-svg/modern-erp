@@ -3836,3 +3836,255 @@ P7 在 `decision-reports.jsx` 内定义以下组件（命名仅作实现约定�
 5. Edge 浏览器验收脚本输出至 `.tmp/v16-p7-visual/`，无控制台 / React 错误，无水平溢出，无触点不足，无底部导航 / 动作栏碰撞；
 6. 提交后 STOP；不进入 P8；不 push / tag / deploy；不动 package.json 版本；不动 v1.5.0 tag；
 7. 截图通过运营方视觉评审后才进入 P8。
+
+## 31. V1.6 P8 — 流程图与原型一致性验收 设计
+
+本节是 `document.md §30` 已批准需求的 STAGE 2 — DESIGN，起点为 master `0595edb`。P0–P7 视觉 DNA 与合同保持不变。P8 是 **文档 / 审计 / 一致性验收**阶段：**仅设计验收实现策略**，不修改应用源码 / 后端 / API / 数据库 / 业务合同。本节为后续 P8 fix / 自动化验收阶段提供实现架构，但本任务本身不创建任何源代码、测试或验收脚本。
+
+### 31.1 设计目标
+
+1. 把 P8 一致性矩阵 `docs/v1.6-p8-consistency-matrix.md` 的发现作为后续 source-contract 与浏览器 smoke 测试的设计输入。
+2. 设计 metadata-driven 的一致性断言策略，优先 metadata / 语义断言而非脆弱的字符串匹配。
+3. 五大 canonical 工作流（O2C / P2P / Production / Inventory / Approvals / Decision Reports）必须有 source-contract 覆盖。
+4. P0–P7 关键属性（title ownership / shell back / 680 px 居中 / 触点 / 模块识别色 / 状态术语）必须有 source-contract 覆盖。
+5. 浏览器 smoke-flow 仅覆盖代表性 journeys，不替代 53 路由视觉认证。
+
+### 31.2 元数据审计策略
+
+唯一权威元数据源：
+
+```text
+src/navigation/applicationMetadata.js  — MOBILE_APPLICATION_GROUPS / MOBILE_COMMON_PRIORITY
+src/navigation/presentationMetadata.js  — ROUTE_PRESENTATIONS / DISABLED_ROUTE_PRESENTATIONS / APPROVAL_FAMILIES / TECHNICAL_ROUTE_ALIASES
+src/App.jsx                          — pages 字典 + navGroups
+src/components/MobileShell.jsx        — MOBILE_TABS（5 项底部导航）
+src/components/MobileLauncher.jsx     — 启动器呈现逻辑
+```
+
+一致性断言（每条作为一条 source-contract 断言）：
+
+```text
+A1. presentationMetadata 的 ROUTE_PRESENTATIONS 总条目数 = 53；DISABLED_ROUTE_PRESENTATIONS = 5（cash-journals / bills / fixed-assets / workflows / data-cleanup）。
+A2. presentationMetadata 的 APPROVAL_FAMILIES 严格等于 SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER；不包含 INVENTORY_TRANSFER。
+A3. presentationMetadata 的每条 enabled 路由在 App.jsx pages 字典中存在对应组件。
+A4. App.jsx pages 字典中的每个 page key 在 presentationMetadata 中存在对应 route。
+A5. MobileShell MOBILE_TABS 严格为 messages / approvals / apps / workspace / profile 5 项；无 cloud / 概览 / 仪表盘等旧标签。
+A6. presentationMetadata 中 enabled:false 的路由不进入 MOBILE_APPLICATION_GROUPS、不进入 navGroups 任何 items。
+A7. presentationMetadata 中 enabled 路由的 mobileExposure 为 contextual / role-workspace / advanced-config / extension / approval-tab / launcher / messages-tab / global 之一；不出现自定义值。
+A8. presentationMetadata 中声明的 parentRoute 必须引用另一个 enabled 路由的 route key。
+A9. analytics 组的 5 个 launcher 入口的 reportKey 严格等于 sales-summary / sales-outstanding / purchase-summary / purchase-outstanding / inventory-movements；不允许第六个。
+A10. App.jsx 中 navigateToPage 接受 target.reportKey 时将其写入 navigationTarget，决策报表路由据此解析 reportKey；不允许为每张报表单独创建 page 字典键。
+A11. AppNavigationContext 暴露的 canNavigate 必须仅基于 visibleNav（融合 permission / any + enabled !== false）。
+A12. App.jsx 中 hashchange 与 erp:unauthorized 监听必须调用 setUser(null) 或 navigateToPage(visibleNav[0].key, null, { notifyDenied: false })。
+A13. system-health 与 commercial-go-live 不出现在 App.jsx pages 字典，不出现在 presentationMetadata，不出现在 MOBILE_APPLICATION_GROUPS。
+A14. INVENTORY_TRANSFER_APPROVE 仅作为兼容 alias 出现；其用户可见文案固定为「确认库存调拨（兼容）」或类似回退文案，不得作为审批动作产品语言。
+```
+
+### 31.3 路由图推导策略
+
+基于元数据推导路由图：
+
+```text
+1. 收集 ROUTE_PRESENTATIONS 中 enabled 路由集合 R = { r1, ..., r53 }。
+2. 收集 ROUTE_PRESENTATIONS 中所有 parentRoute 关系 P = { (child, parent) | child.parentRoute === parent }。
+3. 收集 MOBILE_APPLICATION_GROUPS 中所有 launcher 项 L = { (groupKey, pageKey, mobileLabel, formalLabel, reportKey?) }。
+4. 收集 utility 折叠区域项 U ⊆ L（kind='utility'）。
+5. 推导 CORE 集合 = R ∖ Contextual ∖ Removed；
+   其中 Contextual = { r | r.mobileExposure !== 'launcher' ∧ r.parentRoute ≠ undefined }；
+   Removed = DISABLED_ROUTE_PRESENTATIONS。
+6. 推导 launcher 覆盖率：每个 enabled 路由必须至少有一条 launch 路径（launcher / utility / contextual / internal / shell-tab / direct hash）。
+```
+
+source-contract 断言（每条一条）：
+
+```text
+G1. 对每条 enabled 路由，至少有一条 launcher / utility / contextual / shell-tab 入口；不存在无入口的「孤儿路由」。
+G2. 对每条 CORE 路由，launcher 至少在一个核心业务组中以 launcher 项或 contextual shell 入口暴露。
+G3. UTILITY 路由不进入六大核心业务组；仅在 utility 折叠区域出现。
+G4. 任何带 parentRoute 的子路由必须能由对应父路由的详情 / 上下文链接到达。
+G5. `decision-reports` route 仅 1 条；5 个 `reportKey` 共用同一 page 字典键与同一组件 `DecisionReports`。
+```
+
+### 31.4 流程图断言策略
+
+按 `document.md §16` 冻结的 O2C / P2P 链路生成链路矩阵：
+
+```text
+Flow   Steps   Surface   EventType    Permission          Assertion
+O2C    9       orders/sales-deliveries/etc.   见 matrix §B.1    document.md §16.1
+P2P    10      purchase-orders/purchase-receipts/etc.             §16.2
+Production 6  production-orders/material-issues                   §9
+Inventory  7  inventory/inventory-month-end                      §10
+Approvals  5  approvals                                         §3
+Reports    5  decision-reports                                  §29
+```
+
+每条链路步骤都对应一条 source-contract 断言：
+
+```text
+F1. O2C 链路每步对应路由或隐含后端事件；不存在缺失节点或被错误合并的事件（如「出货 = AR」）。
+F2. P2P 链路中 MRP 仅产生建议，不隐含「MRP 自动创建 PO / 制令单 / 库存 / 凭证」。
+F3. Production 链路中制令单状态机不含 APPROVED；只用 PENDING/IN_PROGRESS/COMPLETED/CANCELLED。
+F4. Inventory 链路中调拨不在审批族；状态机不含 APPROVED/REJECTED。
+F5. Approvals 5 族在 approvals 页面均被识别，且不包含 INVENTORY_TRANSFER。
+F6. Reports 链路中 5 reportKey 共用同一路由；P7 切换器只列 canViewDecisionReport 为真的报表。
+```
+
+### 31.5 审批族断言策略
+
+```text
+AP1. presentationMetadata.APPROVAL_FAMILIES 长度 = 5。
+AP2. 5 族按 canonical 顺序排列（与 APPROVAL_FAMILIES 数组一致）。
+AP3. MobileApprovalCenter 仅处理这 5 族；switch 不接受 INVENTORY_TRANSFER。
+AP4. presentationMetadata 的 route('approvals', ...) 包含 approvalFamilies: APPROVAL_FAMILIES。
+AP5. App.jsx 中 approval 入口走 mobileExposure='approval-tab'，不进入 launcher 6 大核心业务组。
+AP6. inventory-transfer 的详情与列表 UI 文本中不出现「批准 / 审批 / 待审核」作为当前动作标签；如出现历史 `SUBMITTED / APPROVED`，其展示标签固定为「历史待审核 / 历史已审核」且不可执行新动作。
+```
+
+### 31.6 启动器到路由断言策略
+
+```text
+LM1. MOBILE_APPLICATION_GROUPS.analytics.items[*].reportKey 5 项严格等于 5 个 canonical reportKey。
+LM2. analytics 组的 launcher page 全部为 'decision-reports'，不允许出现第二种 page。
+LM3. sales / purchasing / inventory / production / master-data 6 组的 launcher 项 page 在 presentationMetadata 中均存在且 enabled。
+LM4. MOBILE_COMMON_PRIORITY 仅由 6 个 page key 组成；不存在孤儿优先级。
+LM5. utility-* 折叠区域合计包含所有 enabled 但未在 launcher 核心业务组的路由（除 contextual / internal / removed）。
+LM6. 每条 utility launcher 项的 page 在 presentationMetadata 中存在。
+LM7. analytics launcher 项的 mobileLabel 与 formalLabel 至少有一项在文档中显式存在（启动器短标签 / 正式标题 / CSV 文件名 三者权威来源之一）。
+```
+
+### 31.7 上下文路由可达性策略
+
+```text
+CX1. 每条带 parentRoute 的子路由都能由父路由详情 / 上下文链接到达；最常用：iqc → purchase-receipts / oqc → sales-deliveries / sales-discounts → accounts-receivable / purchase-discounts → accounts-payable / sales-invoices → accounts-receivable / supplier-bills → accounts-payable / payment-collections → accounts-receivable / payment-disbursements → accounts-payable / material-requirements-plan → mrp-runs。
+CX2. 每条 mobileExposure='contextual' / 'role-workspace' / 'advanced-config' / 'extension' 的路由必须在代码中存在显式入口或上下文链接（不能仅以 hash 形式静默可达）。
+CX3. App.jsx pages 字典中仅以 hash 静默可达的 enabled 路由，必须在 source-contract 矩阵中显式登记为「仅 deep-link」并由产品评审确认。
+```
+
+### 31.8 权限一致性策略
+
+```text
+PM1. launcher permission ≡ presentationMetadata permission/any ≡ 后端 allow / allowAny（按已冻结服务端模块）。
+PM2. App.jsx 的 canNavigate 仅在 visibleNav 中查找；visibleNav 由 navGroups.flatMap().filter() 派生。
+PM3. navigation target 的 reportKey 不影响权限判定；权限基于 page key。
+PM4. P7 DecisionReportsV16 的 visibleTabs 使用 canViewDecisionReport(user, reportKey)，与 server allowAny 一致。
+PM5. 任何 launchPath 在权限被拒后必须回退至 visibleNav[0] 或工作台，不留死胡同。
+```
+
+### 31.9 术语源检查策略
+
+```text
+TM1. `草稿 / 待审批 / 已审批 / 已驳回 / 已确认 / 已调拨 / 已取消 / 已作废 / 已结账 / 已重开` 10 个 canonical 状态名在 P0–P7 源码中保持一致；不允许出现「未审批 / 待审核 / 已审核 / 已批准 / 已通过 / 已拒绝 / 已驳回」等近义替换。
+TM2. 销售订单「业务日期」字段名严格使用 §4.1 / §16 冻结名称；不允许出现「订单日期 / 出货日期 / 预计到货日 / 退货日期」以外的近义替换。
+TM3. 库存异动明细「业务日期缺失」字符串严格保持；不允许出现「日期缺失 / 业务日期为空 / 创建时间」等同义替换。
+TM4. 销售统计 / 采购统计说明文本中保留「订单金额不等于已实现收入」/「订单金额不等于已实现成本」字样。
+TM5. 调拨详情动作按钮文案严格使用「确认调拨 / 取消调拨」；不允许出现「批准调拨 / 审批调拨 / 审核调拨」。
+TM6. P7 决策报表状态文案严格按 §29.14 区分 LOADING / ERROR / EMPTY / NO_RESULTS / READY；履行报表额外区分「匹配行均已履行」。
+```
+
+### 31.10 原型 surface 源检查策略
+
+```text
+PS1. P0 / P1 / P1.1：v16-tokens.css / v16-mobile-enterprise.css / MobileShell.jsx / MobileLauncher.jsx 仍按既有模块识别色与底部 5 项导航。
+PS2. P2 / P3 / P3.1：master-data.jsx 中销售订单 LIST / DETAIL / EDITOR 不再使用 BusinessPageHeader / CompactRecord / Modal。
+PS3. P4：logistics-finance.jsx 中 purchase-receipts 不再使用 BusinessPageHeader / CompactRecord / Modal；IQC 上下文正确。
+PS4. P5 / P5.1：mrp-runs.jsx / material-requirements-plan.jsx 不再使用 Panel / MaterialCard / Modal；COMPLETED 不可编辑；标题为「物料需求计划」。
+PS5. P6：master-data.jsx（inventory）+ inventory-extensions.jsx 不再使用 record-card / panel / modal；移动四页签 + 月结 + 异动分立。
+PS6. P7：decision-reports.jsx 不再使用 BusinessPageHeader / CompactRecord / RecordCard / ResponsiveBusinessList / decision-reports-v15；5-tab rail 已退；引入 DecisionReportSwitcher / FulfillmentContributionSheet。
+```
+
+每条作为一条 source-contract 断言。
+
+### 31.11 浏览器 smoke-flow 策略
+
+不进行完整 53 路由视觉认证。代表性 smoke journeys（390 px 为主，320 / 430 / 680 取代表性证据）：
+
+```text
+Journey 1：launcher → 销售订单 → 业务审批 → 销售订单详情（验证 O2C 上下文）
+Journey 2：launcher → MRP → 物料需求计划（验证 P5 父 / 子上下文）
+Journey 3：launcher → 采购入库 → IQC 上下文（验证 P4 门禁）
+Journey 4：launcher → 库存作业 → 盘点 → 审批中心（验证盘点 = 审批族）
+Journey 5：launcher → 库存作业 → 调拨 → 确认调拨（验证调拨非审批）
+Journey 6：launcher → 决策报表（销售统计）→ 报表切换器 → 销售未出货 → 履约贡献（验证 P7）
+Journey 7：launcher → 决策报表（库存异动）→ 对账三态（验证 P7 reconciliation）
+Journey 8：决策报表行内 AppLink → 销售订单 / 采购订单详情（验证 source-document 反向可达）
+```
+
+每条 journey 至少断言：
+
+```text
+G1. 启动器进入路径可见且授权通过。
+G2. 各核心路由未出现水平溢出；触点 ≥ 44 px。
+G3. 旧主表面（panel / record-card / compact-record / modal / responsive-business-list / decision-reports-v15 / 5-tab rail）数量 = 0。
+G4. AppLink 跳转最终成功，无权限死胡同。
+G5. P7 5 个 reportKey 可由切换器逐项打开，不出现非法 reportKey。
+G6. 库存调拨详情仅暴露「确认调拨 / 取消调拨」，无「批准 / 审批」字样。
+```
+
+输出至 `.tmp/v16-p8-visual/`；不替代 P0–P7 既有 acceptance 截图。
+
+### 31.12 viewport 策略
+
+```text
+primary  : 390 × 844
+mandatory: 320 / 430 / 680
+```
+
+每条 smoke journey 至少在 390 px 跑通；选择代表性 journey 补 320 / 430 / 680 三档。
+
+每档断言：
+
+```text
+document.documentElement.scrollWidth <= clientWidth
+无控制台 / React error
+触点 ≥ 44 px
+底部导航 / 动作栏不碰撞
+旧主表面数量 = 0
+```
+
+### 31.13 finding-gate 策略
+
+P8 PASS 门槛（必须满足）：
+
+```text
+0 未解决 BLOCKER
+0 未解决 MAJOR
+MINOR 仅当显式归类为「非阻塞推广 backlog」可保留
+OBSERVATION 不阻断 PASS
+```
+
+finding ID 规范：`P8-CONS-NNN`。每条 finding 必须在 `docs/v1.6-p8-consistency-matrix.md §D` 登记，并指明：
+
+```text
+severity / domain / route-or-file / current-behavior / expected-frozen-behavior /
+recommended-bounded-fix / requires-backend / P8-fix-eligible
+```
+
+### 31.14 预计实现文件范围
+
+P8 fix / 自动化验收阶段（如未来批准）预计涉及：
+
+```text
+docs/v1.6-p8-consistency-matrix.md  (本任务已落地)
+document.md                          (本任务已落地 §30)
+solution.md                          (本任务已落地 §31)
+log/2026-10-01.md                    (本任务将落地 P8 audit + freeze)
+
+未来 P8 fix / 自动化验收阶段（不在本任务范围）预计涉及：
+server/v16-p8-flow-consistency.test.js
+scripts/acceptance/v16-p8-flow-consistency.mjs
+src/styles/v16-p8-consistency.css (仅在 source-contract 需要视觉回归时)
+```
+
+本任务不创建后述文件；不修改任何应用源码；不修改任何现有 P0–P7 测试。
+
+### 31.15 设计完成门禁
+
+1. `docs/v1.6-p8-consistency-matrix.md` 与 §30 / §31 互相引用一致；
+2. matrix §A / §B / §C / §D 的所有 finding 都有 source 证据；
+3. matrix §A 涵盖全部 58 entries（53 enabled + 5 disabled）；
+4. matrix §B 涵盖六大流程（O2C / P2P / Production / Inventory / Approvals / Decision Reports）；
+5. matrix §C 涵盖 P0–P11 + P5.1（与 frozen 范围一致）；
+6. matrix §D 的 finding ID 唯一；BLOCKER / MAJOR 数量为 0；
+7. `git diff --check` exit 0；工作树最终干净；
+8. 仅 `document.md / solution.md / docs/v1.6-p8-consistency-matrix.md / log/2026-10-01.md` 四个文件变更；提交信息推荐 `docs: freeze V1.6 flow and prototype consistency acceptance`。
