@@ -2705,3 +2705,34 @@ OBSERVATION 不阻断 P8。
 8. P8 不修改 `package.json` 版本。
 9. P8 不修改 `README.md` 当前已发布基线段落。
 10. 53 路由全站推广须待 P0–P8 全部通过且 P8 fix / 自动化验收完成后，由运营方单独批准。
+
+## 31. V1.6 全站 Mobile Enterprise 推广
+
+本节是 P0–P8 通过后的全站推广 REQUIREMENT。起点为 `205ac1d`。本阶段一次性审计当前源码中的全部 enabled canonical route，将仍使用 V1.5 主表面的最终用户页面迁移到已冻结的 V1.6 Mobile Enterprise 语言；不得重新设计 P0–P8 原型。
+
+### 31.1 范围与完成状态
+
+1. enabled / disabled 数量必须从 `presentationMetadata.js` 动态推导；禁用路由不得恢复。
+2. 每条 enabled route 必须在 `docs/v1.6-sitewide-rollout-matrix.md` 中记录分类、应用组、正式标签、权限、父路由、页面原型、实现和浏览器结果。
+3. 最终状态只允许 `V1.6 FROZEN`、`V1.6 MIGRATED`、`FRONTEND-LIMITED`；不得遗留 UNKNOWN、TODO 或 NOT TESTED。
+4. CORE、UTILITY、CONTEXTUAL、INTERNAL、REMOVED 分类、六个核心应用组、五个 utility 组、五类审批族、五张决策报表和 parentRoute 关系保持 P8 冻结结果。
+
+### 31.2 全站呈现合同
+
+1. 主视口为 390×844，并支持 320 / 430 / 680px；大于 680px 仍是居中单轨应用，不恢复桌面 ERP 布局。
+2. MobileShell 拥有主标题；内容不重复页面级 `<h1>`。详情、编辑器和 contextual 页面使用唯一 shell 返回动作。
+3. 列表使用紧凑企业行；详情使用扁平分节和事实网格；编辑器使用移动全页表单。筛选在适用时进入 Sheet；不得以桌面工具栏、卡片墙、Panel 墙、宽 Modal 或永久说明块作为主表面。
+4. 触点至少 44px，`:focus-visible` 可见；长编码、名称、金额和数量可用；页面不得水平溢出，也不得用 `overflow-x:hidden` 掩盖布局问题。
+5. 固定动作区必须位于底部导航之上，内容保留足够底部安全距离。
+
+### 31.3 业务与安全不变量
+
+本阶段只允许前端呈现迁移。后端业务逻辑、API、数据库、迁移、角色、权限身份、审批族、路由身份、状态机、报表口径、MRP、库存和会计语义全部保持不变。销售出货不等于 AR、采购入库不等于 AP、订单金额不等于已实现收入或成本；IQC/OQC 仍是质量门禁；调拨仍是执行；盘点仍属于审批族。
+
+### 31.4 验收
+
+1. `server/v16-sitewide-rollout.test.js` 必须从 metadata 检查全部 enabled route、矩阵覆盖、禁用路由、导航分组、父子关系、审批族、决策报表、冻结路由、迁移状态、样式导入和主标题合同。
+2. `scripts/acceptance/v16-sitewide-rollout.mjs` 必须在 390px 对全部 enabled route 进行 smoke，并输出机器可读汇总；contextual/internal 路由通过合法父路径或等效授权上下文进入。
+3. 320 / 430 / 680px 覆盖主数据列表与编辑器、销售/采购交易、生产、库存、财务、会计、utility、contextual 和决策报表代表场景。
+4. P0–P8 focused tests、完整 `pnpm test`、`pnpm build` 与 `git diff --check` 必须执行；完整回归只允许保留既有四项 reset-data 安全前置失败。
+5. 不配置或运行 MySQL gate；不执行 reset；不版本升级、tag、push、release prep 或部署。

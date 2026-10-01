@@ -10,6 +10,7 @@ import './styles/v16-purchase-receipts.css';
 import './styles/v16-mrp-planning.css';
 import './styles/v16-inventory-control.css';
 import './styles/v16-decision-reports.css';
+import './styles/v16-sitewide-rollout.css';
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode><App /></React.StrictMode>

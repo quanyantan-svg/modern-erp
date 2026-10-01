@@ -2,7 +2,7 @@ import { Icon } from './icons.jsx';
 import { statusLabel } from '../lib/status.js';
 import { presentStatus } from '../lib/presentation.js';
 
-export function PageHeader({ title, subtitle, action, large = false }) { return <header className={`page-header${large ? ' page-header--large' : ''}`}><div><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{action && <div className="page-header__action">{action}</div>}</header>; }
+export function PageHeader({ title, subtitle, action, large = false }) { return <header className={`page-header${large ? ' page-header--large' : ''}`}><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action && <div className="page-header__action">{action}</div>}</header>; }
 export function SectionHeader({ title, subtitle, action }) { return <header className="section-header"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</header>; }
 
 // V1.4-E1: canonical page header. Page bodies pass `context` (e.g. business
@@ -44,7 +44,7 @@ export function BusinessPageHeader({
         {back && <span className="page-header__back">{back}</span>}
         <div>
           {breadcrumb && <div className="page-header__breadcrumb" aria-label="面包屑">{breadcrumb}</div>}
-          <h1>{title}</h1>
+          <span className="page-header__route-context">{title}</span>
           {context && <p className="page-header__context">{context}</p>}
         </div>
       </div>

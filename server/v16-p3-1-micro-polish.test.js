@@ -85,7 +85,7 @@ describe('V1.6 P3.1 — sales-order micro polish contract', () => {
     // and App.jsx wires it as the MobileShell backAction fallback.
     assert.match(navContext, /setHeaderBackAction/);
     assert.match(appJsx, /setHeaderBackAction/);
-    assert.match(appJsx, /backAction=\{documentBackAction \|\|/);
+    assert.match(appJsx, /backAction=\{registeredBackAction \|\| documentBackAction \|\|/);
   });
 
   test('3. Editor-from-list back returns to the list', () => {

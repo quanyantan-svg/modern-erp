@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, setToken } from './api.js';
 import { Login, Dashboard, Suppliers, Customers, Products, Orders, UsersRoles, PurchaseOrders, Warehouses, Inventory } from './pages/master-data.jsx';
 import { Accounting } from './pages/accounting.jsx';
@@ -26,6 +26,7 @@ import MobilePage from './components/MobilePage.jsx';
 import MobileLauncher from './components/MobileLauncher.jsx';
 import MobileCrmApplication from './components/MobileCrmApplication.jsx';
 import MobileApprovalCenter from './components/MobileApprovalCenter.jsx';
+import V16RouteSurface from './components/V16RouteSurface.jsx';
 import { buildMobileApplicationGroups } from './navigation/applicationMetadata.js';
 import { AppNavigationProvider } from './navigation/AppNavigationContext.jsx';
 import { Icon as ProductIcon } from './components/icons.jsx';
@@ -145,7 +146,18 @@ export default function App() {
   const [navigationTarget, setNavigationTarget] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [documentBackAction, setDocumentBackAction] = useState(null);
+  const modalBackActions = useRef(new Map());
+  const [, setModalBackVersion] = useState(0);
   const setHeaderBackAction = (action) => setDocumentBackAction(() => action);
+  const registerHeaderBackAction = useCallback((action) => {
+    const key = Symbol('v16-full-page-surface');
+    modalBackActions.current.set(key, action);
+    setModalBackVersion((version) => version + 1);
+    return () => {
+      modalBackActions.current.delete(key);
+      setModalBackVersion((version) => version + 1);
+    };
+  }, []);
   const visibleNav = user ? navGroups.flatMap((g) => g?.items || []).filter((item) => item.enabled !== false && (item.permission ? can(user, item.permission) : item.any.some((p) => can(user, p)))) : [];
 
   function canNavigate(pageKey) {
@@ -207,7 +219,7 @@ export default function App() {
     'business-overview': <BusinessOverview/>,
     dashboard: <Dashboard user={user} notify={notify}/>,
     orders: <Orders user={user} notify={notify}/>,
-    approvals: <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount} standaloneTitle/>,
+    approvals: <MobileApprovalCenter notify={notify} onPendingCountChange={setPendingApprovalCount}/>,
     customers: <Customers user={user} notify={notify}/>,
     suppliers: <Suppliers user={user} notify={notify}/>,
     'purchase-orders': <PurchaseOrders user={user} notify={notify}/>,
@@ -352,7 +364,7 @@ export default function App() {
           data-testid={`mobile-application-view-${mobileApplication.page}`}
           aria-label={mobileApplication.label}
         >
-          {applicationPage}
+          <V16RouteSurface route={mobileApplication.page}>{applicationPage}</V16RouteSurface>
         </section>
       );
     }
@@ -370,14 +382,16 @@ export default function App() {
 
   const tabLabel = MOBILE_TABS.find((tab) => tab.key === mobileTab)?.label || 'Modern ERP';
   const workspaceTitle = mobileApplication?.label || (mobileTab === 'apps' ? '应用' : tabLabel);
+  const registeredBackActions = [...modalBackActions.current.values()];
+  const registeredBackAction = registeredBackActions.at(-1) || null;
   return (
-    <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage, setHeaderBackAction }}>
+    <AppNavigationProvider value={{ currentPage: page, target: navigationTarget, canNavigate, navigateToPage, setHeaderBackAction, registerHeaderBackAction }}>
       <MobileShell
         brand="Modern ERP"
         pageTitle={workspaceTitle}
         activeTab={mobileTab}
         onTabChange={handleMobileTabChange}
-        backAction={documentBackAction || (mobileApplication ? returnToMobileApplications : null)}
+        backAction={registeredBackAction || documentBackAction || (mobileApplication ? returnToMobileApplications : null)}
         tabBadges={{ approvals: pendingApprovalCount }}
       >
         {renderMobileContent()}

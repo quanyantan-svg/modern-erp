@@ -6,6 +6,7 @@ const AppNavigationContext = createContext({
   canNavigate: () => false,
   navigateToPage: () => false,
   setHeaderBackAction: () => {},
+  registerHeaderBackAction: () => () => {},
 });
 
 export function AppNavigationProvider({ value, children }) {

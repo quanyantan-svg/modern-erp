@@ -220,6 +220,7 @@ describe('V1.6 P2 — stylesheet isolation', () => {
       "import './styles/v16-mrp-planning.css'",
       "import './styles/v16-inventory-control.css'",
       "import './styles/v16-decision-reports.css'",
+      "import './styles/v16-sitewide-rollout.css'",
     ]);
   });
 

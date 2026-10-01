@@ -24,7 +24,8 @@ test('D9 uses the real notification center for the mobile messages tab', () => {
 test('D9 unifies desktop approvals across exactly five approved families', () => {
   assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']);
   const app = read('src/App.jsx');
-  assert.match(app, /approvals: <MobileApprovalCenter[^>]*standaloneTitle/);
+  assert.match(app, /approvals: <MobileApprovalCenter/);
+  assert.doesNotMatch(app, /approvals: <MobileApprovalCenter[^>]*standaloneTitle/);
   const center = read('src/components/MobileApprovalCenter.jsx');
   assert.match(center, /<h1>业务审批<\/h1>/);
   assert.match(center, /销售订单、采购订单、请购单、库存盘点与会计凭证/);

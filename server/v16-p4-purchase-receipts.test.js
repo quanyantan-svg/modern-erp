@@ -225,6 +225,6 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
 
   test('36. MobileShell header back registration stores handlers as values', () => {
     assert.match(app, /setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
-    assert.match(app, /setHeaderBackAction \}\}>/);
+    assert.match(app, /setHeaderBackAction, registerHeaderBackAction \}\}>/);
   });
 });

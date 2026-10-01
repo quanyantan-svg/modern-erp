@@ -1,0 +1,322 @@
+/* V1.6 site-wide rollout. Frozen P0-P8 routes are deliberately excluded
+   from presentation overrides and receive only the route inventory marker. */
+.v16-mobile-enterprise .v16-route-surface {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
+/* Sheets belong to the application viewport, not beneath the fixed nav.
+   This keeps the final option/action reachable on every frozen/migrated
+   route while retaining the existing sheet component and focus contract. */
+.v16-mobile-enterprise .sheet-backdrop {
+  bottom: calc(var(--v16-bottom-nav-height) + var(--v16-bottom-nav-safe));
+}
+
+.v16-mobile-enterprise .sheet {
+  max-height: calc(100dvh - var(--v16-bottom-nav-height) - var(--v16-bottom-nav-safe));
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] {
+  --v16-route-accent: var(--v16-module-foreground, var(--v16-accent));
+  display: block;
+  padding: var(--v16-space-4) var(--v16-space-4) var(--v16-mobile-main-padding-bottom);
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] > :is(main, section, div) {
+  min-width: 0;
+}
+
+/* MobileShell owns the route title. Legacy page headers become compact
+   command bars and retain only actionable/contextual content. */
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.page-header, .page-header--business) {
+  display: flex;
+  align-items: center;
+  gap: var(--v16-space-3);
+  margin: 0 0 var(--v16-space-4);
+  min-height: 44px;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.page-header__route-context, .page-header > div:first-child > h2) {
+  display: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .page-header__leading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .page-header__trailing {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--v16-space-2);
+  flex-wrap: wrap;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.page-header__breadcrumb, .page-header__context, .page-header__help, .page-header__back) {
+  display: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .page-header--business:not(:has(.page-header__action, .page-header__meta, .status-chip, .page-header__secondary, .page-header__overflow)) {
+  display: none;
+}
+
+/* Single-rail page grammar. */
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.business-page-shell, .page, .content, .workspace) {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.panel, .card) {
+  width: 100%;
+  min-width: 0;
+  padding: var(--v16-space-3) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .panel + .panel {
+  border-top: 1px solid var(--v16-separator);
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .panel-head {
+  align-items: center;
+  gap: var(--v16-space-3);
+  margin-bottom: var(--v16-space-3);
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .panel-head h2,
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .business-content-section h2 {
+  color: var(--v16-text);
+  font-size: 15px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .panel-head p {
+  margin-top: 2px;
+  color: var(--v16-text-tertiary);
+  font-size: 12px;
+}
+
+/* Dense enterprise rows replace card walls without changing record data or
+   action handlers. */
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.record-list, .compact-record-list) {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.record-card, .compact-record) {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 2px;
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--v16-separator);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.record-card, .compact-record):last-child {
+  border-bottom: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.record-card, .compact-record) :is(strong, dd, span) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.record-card, .compact-record) button {
+  min-height: 44px;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .business-content-section {
+  padding: var(--v16-space-4) 0;
+  border: 0;
+  border-bottom: 1px solid var(--v16-separator);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .business-content-section__body {
+  padding: var(--v16-space-3) 0 0;
+}
+
+/* Toolbar and filters. */
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.toolbar, .filters, .filter-row) {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--v16-space-2);
+  flex-wrap: wrap;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.toolbar, .filters, .filter-row) :is(input, select) {
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(button, a[role='button'], input, select, textarea, summary) {
+  min-height: 44px;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--v16-route-accent);
+  outline-offset: 2px;
+}
+
+/* Existing editor/detail overlays are upgraded into application-rail pages.
+   Confirmation dialogs opt into data-presentation=dialog and remain dialogs. */
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] {
+  position: fixed;
+  inset: var(--v16-header-height, 56px) 0 calc(var(--v16-bottom-nav-height) + var(--v16-bottom-nav-safe)) 0;
+  width: min(100%, var(--v16-app-max-width));
+  max-width: var(--v16-app-max-width);
+  margin-inline: auto;
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  background: var(--v16-bg);
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] > .modal,
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] > .modal.wide {
+  width: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  height: 100%;
+  margin: 0 !important;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--v16-bg);
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] .modal-head {
+  min-height: auto;
+  padding: var(--v16-space-4) var(--v16-space-4) var(--v16-space-2);
+  border-bottom: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] .modal-head h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] .modal-close {
+  display: none;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .modal-backdrop[data-presentation='page'] .modal-body {
+  min-width: 0;
+  padding: var(--v16-space-3) var(--v16-space-4) calc(var(--v16-space-8) + env(safe-area-inset-bottom, 0px));
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .form-grid {
+  min-width: 0;
+}
+
+.v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-inline: calc(var(--v16-space-4) * -1);
+  padding: var(--v16-space-3) var(--v16-space-4) calc(var(--v16-space-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--v16-separator);
+  background: var(--v16-surface);
+}
+
+/* Tables remain reserved for real matrices. At mobile widths their rows
+   become readable stacked groups, preventing a page-level table wall. */
+@media (max-width: 680px) {
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--v16-space-3);
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .form-grid > * {
+    grid-column: 1 !important;
+    min-width: 0;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap {
+    width: 100%;
+    min-width: 0;
+    border-radius: 0;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap table,
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px var(--v16-space-3);
+    width: 100%;
+    min-width: 0;
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--v16-separator);
+    border-radius: 0;
+    margin: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap td[data-v16-label]::before {
+    content: attr(data-v16-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--v16-text-tertiary);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.25;
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] .table-wrap td.number {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 360px) {
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] {
+    padding-inline: var(--v16-space-3);
+  }
+
+  .v16-mobile-enterprise .v16-route-surface[data-rollout-state='migrated'] :is(.toolbar, .filters, .filter-row) > * {
+    max-width: 100%;
+  }
+}

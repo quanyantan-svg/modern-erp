@@ -4088,3 +4088,35 @@ src/styles/v16-p8-consistency.css (仅在 source-contract 需要视觉回归时)
 6. matrix §D 的 finding ID 唯一；BLOCKER / MAJOR 数量为 0；
 7. `git diff --check` exit 0；工作树最终干净；
 8. 仅 `document.md / solution.md / docs/v1.6-p8-consistency-matrix.md / log/2026-10-01.md` 四个文件变更；提交信息推荐 `docs: freeze V1.6 flow and prototype consistency acceptance`。
+
+## 32. V1.6 全站 Mobile Enterprise 推广设计
+
+### 32.1 路由库存与呈现边界
+
+`ROUTE_PRESENTATIONS` 继续是 enabled canonical route 的唯一来源，`DISABLED_ROUTE_PRESENTATIONS` 是 removed 集合。新增 rollout matrix 逐路由记录 P8 分类、launcher/utility group、权限与 parentRoute；应用代码不复制路由或权限事实。`App.jsx` 在页面组件外增加纯呈现路由表面，提供 route、classification、module、archetype 和 rollout state 数据属性，不改变页面实例、目标参数或权限判断。
+
+### 32.2 共享呈现组件
+
+新增小型 `V16RouteSurface`，职责仅为：
+
+- 为全部 application route 提供一致的单轨、底部安全间距和模块身份上下文；
+- 标记 frozen / migrated 状态与 LIST / DETAIL / WORKFLOW / REPORT / CONFIG 原型；
+- 不负责导航、权限、数据请求或业务计算。
+
+现有共享呈现原语按 V1.6 语义收敛：`BusinessPageHeader` 退为命令/上下文工具条，不再输出页面级 `<h1>`；`Panel`、`RecordCard`、`CompactRecord` 在 migrated route 内呈现为扁平分节和企业行；`Modal` 在 MobileShell 内成为全页 editor/detail surface，并把关闭行为注册为唯一 shell back action。确认类小对话框和 Sheet 保持真正的浮层语义。
+
+### 32.3 样式隔离
+
+新增 `src/styles/v16-sitewide-rollout.css`，仅在 `.v16-mobile-enterprise .v16-route-surface` 下生效。样式按 list toolbar、enterprise row、detail section、fact grid、full-page editor、responsive table 和 action area 组织；不修改 P2–P7 专用样式。320–680px 使用同一单轨结构，表格仅在语义必要处通过行重排或内部可读布局适配，不对 document 设置 overflow hiding。
+
+### 32.4 页面与数据流
+
+各业务页面保留原 API、state、save/submit/confirm handler 和 permission gate。迁移只替换或重解释 JSX 主表面；详情/编辑器打开时注册 shell back，关闭时清理。contextual route 继续使用 P8 parentRoute；没有合法动作权限时仍只读展示，不在客户端授予权限。
+
+### 32.5 错误、事务与合同
+
+所有既有 API 错误继续进入现有 notify / BusinessState；迁移不吞掉失败。事务边界仍完全位于既有后端 handler/module/database 层，本阶段无后端写入路径变化。金额、日期、状态、质量门禁、库存执行和会计含义均直接复用既有权威字段与格式化函数。
+
+### 32.6 测试与浏览器验收
+
+`server/v16-sitewide-rollout.test.js` 解析 metadata、matrix、App wrapper、共享组件和样式导入，检查 53-route 覆盖而非依赖任意 class 数量。`scripts/acceptance/v16-sitewide-rollout.mjs` 复用 P8 的隔离 SQLite、角色登录和 Edge/Playwright 启动方法，逐路由记录 resolve/render/pageerror/React error/overflow/shell/nav/title/fallback；失败、frontend-limited 和代表场景截图写入 `.tmp/v16-sitewide-rollout/`，summary 写 JSON。最后依次运行 focused、全回归、build、diff check。
