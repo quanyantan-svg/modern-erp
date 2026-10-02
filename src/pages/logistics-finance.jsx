@@ -485,7 +485,13 @@ function PurchaseReceiptDetailV16({ id, user, notify, navigation, onBack, onEdit
   }
 
   function goIqc() {
-    if (navigation?.navigateToPage) navigation.navigateToPage('iqc');
+    const inspectionId = detail?.qualityState?.inspectionId;
+    if (navigation?.navigateToPage) navigation.navigateToPage('iqc', inspectionId ? {
+      documentId: inspectionId,
+      documentType: 'IQC_INSPECTION',
+      sourcePage: 'purchase-receipts',
+      sourceDocumentId: id,
+    } : undefined);
   }
 
   if (loadState === 'ERROR') {
@@ -1288,7 +1294,29 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ salesOrderItemId: item.salesOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, deliveredQuantity: item.deliveredQuantity, unitPriceCents: item.unitPriceCents })) }));
   };
   const changeState = async (action) => { try { await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
-  const createQuality = async () => { try { await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: value.id } }); notify('OQC 检验草稿已创建，请前往出货检验完成检验'); const response = await api('/api/sales-deliveries/' + value.id); setDetail(response.salesDelivery); } catch (e) { notify(e.message, 'error'); } };
+  const navigation = useAppNavigation();
+  const createQuality = async () => {
+    try {
+      const created = await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: value.id } });
+      notify('OQC 检验草稿已创建');
+      const response = await api('/api/sales-deliveries/' + value.id);
+      setDetail(response.salesDelivery);
+      const inspectionId = created?.id || response?.salesDelivery?.qualityState?.inspectionId;
+      if (inspectionId && navigation?.navigateToPage) {
+        navigation.navigateToPage('oqc', { documentId: inspectionId, documentType: 'OQC_INSPECTION', sourcePage: 'sales-deliveries', sourceDocumentId: value.id });
+      }
+    } catch (e) { notify(e.message, 'error'); }
+  };
+  const goOqc = () => {
+    const inspectionId = detail?.qualityState?.inspectionId;
+    if (inspectionId && navigation?.navigateToPage) navigation.navigateToPage('oqc', { documentId: inspectionId, documentType: 'OQC_INSPECTION', sourcePage: 'sales-deliveries', sourceDocumentId: value.id });
+    else if (navigation?.navigateToPage) navigation.navigateToPage('oqc');
+  };
+  const qualityStateCode = detail?.qualityState?.code;
+  const oqcAction = qualityStateCode === 'INSPECTION_DRAFT'
+    ? (can(user, 'OQC_VIEW') || can(user, 'OQC_MANAGE') ? goOqc : null)
+    : (can(user, 'OQC_MANAGE') ? createQuality : null);
+  const oqcLabel = qualityStateCode === 'FAIL' || qualityStateCode === 'STALE' ? '创建 OQC 复检' : qualityStateCode === 'INSPECTION_DRAFT' ? '前往 OQC' : '创建 OQC';
   if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出货单" : "新增销售出货单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
@@ -1311,7 +1339,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
       {form.items.map((item, i) => <TrackingAllocationEditor key={`delivery-tracking-${item.salesOrderItemId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.deliveryDate} direction="OUT" value={item.trackingAllocations || []} onChange={(trackingAllocations) => updateItem(i, 'trackingAllocations', trackingAllocations)} notify={notify}/>)}
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id && detail?.qualityState?.code !== 'INSPECTION_DRAFT' ? createQuality : null} qualityLabel={detail?.qualityState?.code === 'FAIL' || detail?.qualityState?.code === 'STALE' ? '创建 OQC 复检' : '创建 OQC'} qualityState={detail?.qualityState}/>
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState} qualityAction={value.id ? oqcAction : null} qualityLabel={oqcLabel} qualityState={detail?.qualityState}/>
   </form></Modal>;
 }
 // Returns

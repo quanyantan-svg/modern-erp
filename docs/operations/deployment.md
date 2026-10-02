@@ -36,6 +36,8 @@
     pnpm test
     pnpm build
 
+仓库的 `pnpm-workspace.yaml` 明确支持 Windows x64 开发机和 Linux x64 生产机；锁文件必须保留对应的 Rollup 可选原生包。Linux 主机必须使用受版本控制的配置和 `--frozen-lockfile`，不得在部署目录临时改写架构列表或降级为非冻结安装。
+
 生产启动命令为：
 
     node server/index.js

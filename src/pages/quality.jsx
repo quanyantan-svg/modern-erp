@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Badge, Empty, Loading, Modal, Panel, Toolbar, can } from '../components/ui.jsx';
 import { BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
+import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { presentBusinessValue } from '../lib/presentation.js';
 
 const STATUS_LABEL = { DRAFT: '草稿', PENDING: '旧版待检验', COMPLETED: '已完成', CANCELLED: '已取消' };
@@ -12,10 +13,17 @@ const badge = (status, result) => result === 'FAIL' || status === 'CANCELLED' ? 
 function QualityPage({ user, notify, kind }) {
   const upper = kind.toUpperCase();
   const partyField = kind === 'iqc' ? 'supplier_name' : 'customer_name';
+  const navigation = useAppNavigation();
+  const { target } = navigation;
   const [items, setItems] = useState([]); const [status, setStatus] = useState(''); const [selected, setSelected] = useState(null); const [loading, setLoading] = useState(true);
   const load = () => { setLoading(true); api(`/api/${kind}${status ? `?status=${status}` : ''}`).then((data) => setItems(data.inspections || [])).catch((error) => notify(error.message, 'error')).finally(() => setLoading(false)); };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [status]);
   const open = (id) => api(`/api/${kind}/${id}`).then((data) => setSelected(data.inspection)).catch((error) => notify(error.message, 'error'));
+  useEffect(() => {
+    const targetId = target?.documentType === `${upper}_INSPECTION` ? target.documentId : null;
+    if (!targetId || selected?.id === targetId) return;
+    api(`/api/${kind}/${targetId}`).then((data) => setSelected(data.inspection)).catch((error) => notify(error.message, 'error'));
+  }, [target?.documentId, kind]);
   return <BusinessPageShell className={`${kind}-queue-v15`} width="rail">
     <BusinessPageHeader title={`${upper} ${kind === 'iqc' ? '来料检验' : '出货检验'}`} context={kind === 'iqc' ? '采购入库内部质量任务' : '销售出货内部质量任务'} help={<HelpDisclosure summary="检验说明"><p>{kind === 'iqc' ? 'IQC 是采购入库确认前的质量门禁。' : 'OQC 是销售出库确认前的质量门禁。'}检验本身不移动库存，也不属于业务审批。</p></HelpDisclosure>}/>
     <Toolbar action={<span className="muted">请从{kind === 'iqc' ? '采购入库草稿' : '销售出库草稿'}创建检验单</span>}/>
@@ -29,16 +37,20 @@ function QualityPage({ user, notify, kind }) {
       canManage={can(user, `${upper}_MANAGE`)}
       notify={notify}
       onClose={() => { setSelected(null); load(); }}
+      onReturnToSource={() => navigation.navigateToPage(kind === 'iqc' ? 'purchase-receipts' : 'sales-deliveries', {
+        documentId: selected[kind === 'iqc' ? 'purchase_receipt_id' : 'sales_delivery_id'],
+        documentType: kind === 'iqc' ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY',
+      })}
     />}
   </BusinessPageShell>;
 }
 
-function QualityModal({ kind, inspection, canManage, notify, onClose }) {
+function QualityModal({ kind, inspection, canManage, notify, onClose, onReturnToSource }) {
   const isDraft = ['DRAFT', 'PENDING'].includes(inspection.status) && inspection.authoritative;
   const [form, setForm] = useState({ inspection_date: inspection.inspection_date || new Date().toISOString().slice(0, 10), inspection_type: inspection.inspection_type || 'NORMAL', sample_quantity: inspection.sample_quantity || inspection.total_quantity, passed_quantity: inspection.qualified_quantity || 0, failed_quantity: inspection.reject_quantity || 0, result: inspection.result || 'PASS', defect_reason: inspection.defect_reason || '', disposition: inspection.disposition || '', remark: inspection.remark || '' });
   const set = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const save = async () => { try { await api(`/api/${kind}/${inspection.id}`, { method: 'PATCH', body: form }); notify('检验信息已保存'); onClose(); } catch (error) { notify(error.message, 'error'); } };
-  const complete = async () => { try { await api(`/api/${kind}/${inspection.id}/complete`, { method: 'POST', body: { ...form, inspection_quantity: inspection.total_quantity } }); notify(form.result === 'PASS' ? '检验已完成：合格' : '检验已完成：不合格'); onClose(); } catch (error) { notify(error.message, 'error'); } };
+  const complete = async () => { try { await api(`/api/${kind}/${inspection.id}/complete`, { method: 'POST', body: { ...form, inspection_quantity: inspection.total_quantity } }); notify(form.result === 'PASS' ? '检验已完成：合格' : '检验已完成：不合格'); onReturnToSource(); } catch (error) { notify(error.message, 'error'); } };
   const cancel = async () => { try { await api(`/api/${kind}/${inspection.id}/cancel`, { method: 'POST', body: {} }); notify('检验草稿已取消'); onClose(); } catch (error) { notify(error.message, 'error'); } };
   return <Modal title={`${kind.toUpperCase()} 检验单 ${inspection[`${kind}_no`]}`} onClose={onClose} wide>
     {!inspection.authoritative && <div className="notice danger">历史未关联检验（仅供读取，不能满足质量门禁）</div>}
@@ -48,7 +60,7 @@ function QualityModal({ kind, inspection, canManage, notify, onClose }) {
       <label>检验日期<input type="date" disabled={!isDraft} value={form.inspection_date} onChange={(e) => set('inspection_date', e.target.value)}/></label><label>检验类型<select disabled={!isDraft} value={form.inspection_type} onChange={(e) => set('inspection_type', e.target.value)}><option value="NORMAL">常规</option><option value="SAMPLING">抽样</option><option value="FULL">全检</option></select></label><label>抽样数量<input type="number" min="0" disabled={!isDraft} value={form.sample_quantity} onChange={(e) => set('sample_quantity', Number(e.target.value))}/></label><label>检验结果<select disabled={!isDraft} value={form.result} onChange={(e) => set('result', e.target.value)}><option value="PASS">合格</option><option value="FAIL">不合格</option></select></label><label>合格数量<input type="number" min="0" disabled={!isDraft} value={form.passed_quantity} onChange={(e) => set('passed_quantity', Number(e.target.value))}/></label><label>不合格数量<input type="number" min="0" disabled={!isDraft} value={form.failed_quantity} onChange={(e) => set('failed_quantity', Number(e.target.value))}/></label>
       {form.result === 'FAIL' && <><label className="full">缺陷原因<input disabled={!isDraft} value={form.defect_reason} onChange={(e) => set('defect_reason', e.target.value)}/></label><label>处置方式<select disabled={!isDraft} value={form.disposition} onChange={(e) => set('disposition', e.target.value)}><option value="">请选择</option>{DISPOSITIONS[kind].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></>}
       <label className="full">备注<input disabled={!isDraft} value={form.remark} onChange={(e) => set('remark', e.target.value)}/></label>
-    </div><div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button>{isDraft && canManage && <><button type="button" className="danger-button" onClick={cancel}>取消检验</button><button type="button" className="secondary" onClick={save}>保存</button><button type="button" className="approve-button" onClick={complete}>完成检验</button></>}</div>
+    </div><div className="form-actions"><button type="button" className="secondary" onClick={onClose}>关闭</button><button type="button" className="secondary" onClick={onReturnToSource}>返回{kind === 'iqc' ? '采购入库' : '销售出库'}</button>{isDraft && canManage && <><button type="button" className="danger-button" onClick={cancel}>取消检验</button><button type="button" className="secondary" onClick={save}>保存</button><button type="button" className="approve-button" onClick={complete}>完成检验</button></>}</div>
   </Modal>;
 }
 

@@ -609,13 +609,20 @@ export async function listPurchaseRequisitions(db, res, actor, url) {
      ORDER BY pr.created_at DESC
      LIMIT 100
   `).all(...params);
-  const items = rows.map((row) => ({
-    ...row,
-    sourceType: row.sourceInstructionId ? 'PURCHASE_INSTRUCTION' : 'MANUAL',
-    statusLabel: PR_STATUS[row.status] || row.status,
-    totalQuantity: Number(row.totalQuantity),
-    totalAmountCents: Number(row.totalAmountCents),
-  }));
+  const items = rows.map((row) => {
+    const purchaseOrders = purchaseOrdersForRequisition(db, row.id);
+    return {
+      ...row,
+      purchaseOrderId: purchaseOrders.length === 1 ? purchaseOrders[0].id : null,
+      purchaseOrderNo: purchaseOrders.length === 1 ? purchaseOrders[0].orderNo : null,
+      purchaseOrders,
+      purchaseOrderCount: purchaseOrders.length,
+      sourceType: row.sourceInstructionId ? 'PURCHASE_INSTRUCTION' : 'MANUAL',
+      statusLabel: PR_STATUS[row.status] || row.status,
+      totalQuantity: Number(row.totalQuantity),
+      totalAmountCents: Number(row.totalAmountCents),
+    };
+  });
   return send(res, 200, { requisitions: items });
 }
 
@@ -645,17 +652,52 @@ export async function getPurchaseRequisition(db, res, actor, id) {
      WHERE i.requisition_id = ?
      ORDER BY i.created_at, i.id
   `).all(id);
-  header.items = header.items.map((row) => ({
-    ...row,
-    quantity: Number(row.quantity),
-    unitPriceCents: Number(row.unit_price_cents),
-    amountCents: Number(row.amount_cents),
-  }));
+  header.items = header.items.map((row) => {
+    const orderedQuantity = activeOrderedQuantity(db, row.id);
+    return {
+      ...row,
+      quantity: Number(row.quantity),
+      orderedQuantity,
+      remainingQuantity: Math.max(0, Number(row.quantity) - orderedQuantity),
+      unitPriceCents: Number(row.unit_price_cents),
+      amountCents: Number(row.amount_cents),
+    };
+  });
   header.totalAmountCents = header.items.reduce((sum, item) => sum + item.amountCents, 0);
   header.totalQuantity = header.items.reduce((sum, item) => sum + item.quantity, 0);
   header.sourceType = header.source_instruction_id ? 'PURCHASE_INSTRUCTION' : 'MANUAL';
   header.statusLabel = PR_STATUS[header.status] || header.status;
+  header.purchaseOrders = purchaseOrdersForRequisition(db, id);
+  header.purchaseOrderCount = header.purchaseOrders.length;
+  header.purchase_order_id = header.purchaseOrders.length === 1 ? header.purchaseOrders[0].id : null;
+  header.purchaseOrderNo = header.purchaseOrders.length === 1 ? header.purchaseOrders[0].orderNo : null;
   return send(res, 200, { requisition: header });
+}
+
+function activeOrderedQuantity(db, requisitionItemId) {
+  return Number(db.prepare(`
+    SELECT COALESCE(SUM(poi.quantity), 0) quantity
+      FROM purchase_order_items poi
+      JOIN purchase_orders po ON po.id=poi.order_id
+     WHERE poi.purchase_requisition_item_id=?
+       AND po.status<>'CANCELLED'
+  `).get(requisitionItemId).quantity);
+}
+
+function purchaseOrdersForRequisition(db, requisitionId) {
+  return db.prepare(`
+    SELECT po.id, po.order_no orderNo, po.status, po.supplier_id supplierId,
+           s.code supplierCode, s.name supplierName, po.created_at createdAt
+      FROM purchase_orders po
+      JOIN suppliers s ON s.id=po.supplier_id
+     WHERE EXISTS (
+       SELECT 1
+         FROM purchase_order_items poi
+         JOIN purchase_requisition_items pri ON pri.id=poi.purchase_requisition_item_id
+        WHERE poi.order_id=po.id AND pri.requisition_id=?
+     )
+     ORDER BY po.created_at, po.id
+  `).all(requisitionId);
 }
 
 export async function createPurchaseRequisition(db, req, res, actor) {
@@ -825,7 +867,7 @@ export async function cancelPurchaseRequisition(db, res, actor, id) {
   const header = db.prepare("SELECT * FROM purchase_requisitions WHERE id=?").get(id);
   if (!header) throw new HttpError(404, '请购单不存在');
   if (header.status === 'CANCELLED') return send(res, 200, { ok: true, status: 'CANCELLED' });
-  if (header.status === 'APPROVED' && header.purchase_order_id) {
+  if (header.status === 'APPROVED' && purchaseOrdersForRequisition(db, id).length) {
     throw new HttpError(409, '已生成采购订单的请购单不可取消');
   }
   if (!['DRAFT', 'REJECTED'].includes(header.status)) {
@@ -839,63 +881,137 @@ export async function cancelPurchaseRequisition(db, res, actor, id) {
   return send(res, 200, { ok: true, status: 'CANCELLED' });
 }
 
+function validateBatchAssignment(db, entry, index) {
+  const requisitionItemId = requiredText(
+    entry.purchaseRequisitionItemId ?? entry.purchase_requisition_item_id,
+    `第${index + 1}行请购明细`,
+    100,
+  );
+  const supplierId = requiredText(entry.supplierId ?? entry.supplier_id, `第${index + 1}行供应商`, 100);
+  const quantity = readPositiveQuantity(entry.quantity, `第${index + 1}行转换数量`);
+  const source = db.prepare(`
+    SELECT i.*, r.id requisitionId, r.requisition_no requisitionNo, r.status requisitionStatus,
+           r.required_date requiredDate, p.code productCode, p.name productName
+      FROM purchase_requisition_items i
+      JOIN purchase_requisitions r ON r.id=i.requisition_id
+      JOIN products p ON p.id=i.product_id
+     WHERE i.id=?
+  `).get(requisitionItemId);
+  if (!source) throw new HttpError(404, `第${index + 1}行请购明细不存在`);
+  if (source.requisitionStatus !== 'APPROVED') throw new HttpError(409, `${source.requisitionNo} 不是已审批请购单`);
+  const supplier = db.prepare('SELECT id,active,contact,phone,address FROM suppliers WHERE id=?').get(supplierId);
+  if (!supplier) throw new HttpError(400, `第${index + 1}行供应商不存在`);
+  if (!supplier.active) throw new HttpError(400, `第${index + 1}行供应商已停用`);
+  if (source.preferred_supplier_id && source.preferred_supplier_id !== supplierId) {
+    throw new HttpError(409, `${source.productCode} 的参考供应商与本次分组供应商不一致`);
+  }
+  const orderedQuantity = activeOrderedQuantity(db, requisitionItemId);
+  const remainingQuantity = Math.max(0, Number(source.quantity) - orderedQuantity);
+  if (quantity > remainingQuantity + 1e-9) {
+    throw new HttpError(409, `${source.productCode} 剩余可转换 ${remainingQuantity}，本次 ${quantity} 超出`);
+  }
+  const unitPriceCents = entry.unitPriceCents === undefined && entry.unit_price_cents === undefined
+    ? Number(source.unit_price_cents || 0)
+    : Number(entry.unitPriceCents ?? entry.unit_price_cents);
+  if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(400, `${source.productCode} 单价必须为非负整数分`);
+  const amountCents = quantity * unitPriceCents;
+  if (!Number.isSafeInteger(amountCents)) throw new HttpError(400, `${source.productCode} 金额无法精确到分`);
+  return { requisitionItemId, supplierId, supplier, source, quantity, unitPriceCents, amountCents };
+}
+
+function createPurchaseOrderGroups(db, actor, rawItems, defaults = {}) {
+  if (!Array.isArray(rawItems) || !rawItems.length) throw new HttpError(400, '请选择至少一条请购明细');
+  const duplicateIds = rawItems.map((entry, index) => requiredText(
+    entry.purchaseRequisitionItemId ?? entry.purchase_requisition_item_id,
+    `第${index + 1}行请购明细`,
+    100,
+  ));
+  if (new Set(duplicateIds).size !== duplicateIds.length) throw new HttpError(400, '同一请购明细不能在一次批量转换中重复选择');
+  // A portable no-op update acquires the source-row write lock before any
+  // remaining-quantity reads. This serializes concurrent conversions in both
+  // MySQL and SQLite without introducing dialect-specific SELECT ... FOR UPDATE.
+  for (const requisitionItemId of [...duplicateIds].sort()) {
+    db.prepare('UPDATE purchase_requisition_items SET quantity=quantity WHERE id=?').run(requisitionItemId);
+  }
+  const assignments = rawItems.map((entry, index) => validateBatchAssignment(db, entry, index));
+  const groups = new Map();
+  for (const assignment of assignments) {
+    const group = groups.get(assignment.supplierId) || [];
+    group.push(assignment);
+    groups.set(assignment.supplierId, group);
+  }
+  const now = nowIso();
+  const orderDate = readDate(defaults.orderDate ?? defaults.order_date, '订单日期') || now.slice(0, 10);
+  const requestedExpectedDate = readDate(defaults.expectedDeliveryDate ?? defaults.expected_delivery_date, '预计交期');
+  const paymentTerms = readString(defaults.paymentTerms ?? defaults.payment_terms, 200);
+  const created = [];
+  for (const [supplierId, group] of groups) {
+    const expectedCandidates = group.map((entry) => entry.source.requiredDate).filter((date) => date && date >= orderDate).sort();
+    const expectedDeliveryDate = requestedExpectedDate || expectedCandidates[0] || null;
+    if (expectedDeliveryDate && expectedDeliveryDate < orderDate) throw new HttpError(400, '预计交期不能早于订单日期');
+    const supplier = group[0].supplier;
+    const poId = genId();
+    const orderNo = makeCode(db, 'purchase_orders', 'PO');
+    const totalCents = group.reduce((sum, entry) => sum + entry.amountCents, 0);
+    const requisitionNos = [...new Set(group.map((entry) => entry.source.requisitionNo))];
+    const requisitionIds = [...new Set(group.map((entry) => entry.source.requisitionId))];
+    const headerRequisitionId = requisitionIds.length === 1 ? requisitionIds[0] : null;
+    db.prepare(`
+      INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
+        order_date,expected_delivery_date,payment_terms,supplier_contact_name,supplier_contact_phone,supplier_address,purchase_requisition_id)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(poId, orderNo, supplierId, totalCents, `批量转换请购单 ${requisitionNos.join('、')}`, actor.id, now, now,
+      orderDate, expectedDeliveryDate, paymentTerms, supplier.contact || '', supplier.phone || '', supplier.address || '', headerRequisitionId);
+    const insertItem = db.prepare(`
+      INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id)
+      VALUES(?,?,?,?,?,?,?,?)
+    `);
+    group.forEach((entry, lineIndex) => insertItem.run(
+      genId(), poId, entry.source.product_id, entry.quantity, entry.unitPriceCents, entry.amountCents, lineIndex + 1, entry.requisitionItemId,
+    ));
+    audit(db, actor.id, 'GENERATE', 'PURCHASE_ORDER', poId, `按供应商批量生成 ${orderNo}; 来源 ${requisitionNos.join(',')}`);
+    created.push({ id: poId, orderNo, supplierId, itemCount: group.length, totalCents });
+  }
+  const affectedRequisitions = [...new Set(assignments.map((entry) => entry.source.requisitionId))];
+  for (const requisitionId of affectedRequisitions) {
+    const sourceItems = db.prepare('SELECT id,quantity FROM purchase_requisition_items WHERE requisition_id=?').all(requisitionId);
+    const complete = sourceItems.every((item) => activeOrderedQuantity(db, item.id) + 1e-9 >= Number(item.quantity));
+    const orders = purchaseOrdersForRequisition(db, requisitionId).filter((order) => order.status !== 'CANCELLED');
+    db.prepare('UPDATE purchase_requisitions SET purchase_order_id=?,updated_at=? WHERE id=?')
+      .run(complete && orders.length === 1 ? orders[0].id : null, now, requisitionId);
+  }
+  return created;
+}
+
+export async function batchGeneratePurchaseOrders(db, req, res, actor) {
+  allow(actor, 'PURCHASE_REQUISITION_MANAGE');
+  allow(actor, 'PURCHASE_ORDERS_CREATE');
+  const body = await readJson(req);
+  let purchaseOrders;
+  transaction(db, () => { purchaseOrders = createPurchaseOrderGroups(db, actor, body.items, body); });
+  return send(res, 201, { purchaseOrders });
+}
+
 export async function generatePurchaseOrderFromRequisition(db, req, res, actor, id) {
   allow(actor, 'PURCHASE_REQUISITION_MANAGE');
   allow(actor, 'PURCHASE_ORDERS_CREATE');
   const header = db.prepare("SELECT * FROM purchase_requisitions WHERE id=?").get(id);
   if (!header) throw new HttpError(404, '请购单不存在');
   if (header.status !== 'APPROVED') throw new HttpError(409, '只有已审批的请购单可以生成采购订单');
-  if (header.purchase_order_id) throw new HttpError(409, '该请购单已经生成过采购订单');
   const body = await readJson(req);
   const supplierId = requiredText(body.supplierId ?? body.supplier_id, '供应商', 100);
-  const supplier = db.prepare("SELECT id, active, contact, phone, address FROM suppliers WHERE id=?").get(supplierId);
-  if (!supplier) throw new HttpError(400, '供应商不存在');
-  if (!supplier.active) throw new HttpError(400, '供应商已停用');
-
   const items = db.prepare("SELECT * FROM purchase_requisition_items WHERE requisition_id=? ORDER BY created_at, id").all(id);
   if (!items.length) throw new HttpError(409, '请购单至少需要一条明细');
-
-  const now = nowIso();
-  const poId = genId();
-  const ts = Date.now();
-  const orderNo = `PO-${now.slice(0, 10).replaceAll('-', '')}-${String(ts).slice(-6)}${Math.floor(Math.random() * 90 + 10)}`;
-  const orderDate = readDate(body.orderDate ?? body.order_date, '订单日期') || now.slice(0, 10);
-  const requestedExpectedDate = readDate(body.expectedDeliveryDate ?? body.expected_delivery_date, '预计交期');
-  const expectedDeliveryDate = requestedExpectedDate || (header.required_date >= orderDate ? header.required_date : null);
-  const paymentTerms = readString(body.paymentTerms ?? body.payment_terms, 200);
-  const supplierContactName = readString(body.supplierContactName ?? body.supplier_contact_name, 50, supplier.contact || '');
-  const supplierContactPhone = readString(body.supplierContactPhone ?? body.supplier_contact_phone, 30, supplier.phone || '');
-  const supplierAddress = readString(body.supplierAddress ?? body.supplier_address, 200, supplier.address || '');
-  if (expectedDeliveryDate && expectedDeliveryDate < orderDate) throw new HttpError(400, '预计交期不能早于订单日期');
-
-  transaction(db, () => {
-    let totalCents = 0;
-    for (const item of items) {
-      const qty = Number(item.quantity);
-      const unit = Number(item.unit_price_cents) || 0;
-      totalCents += qty * unit;
-    }
-    db.prepare(`
-      INSERT INTO purchase_orders(id, order_no, supplier_id, status, total_cents, remark, creator_id, created_at, updated_at,
-        order_date, expected_delivery_date, payment_terms, supplier_contact_name, supplier_contact_phone, supplier_address, purchase_requisition_id)
-      VALUES (?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(poId, orderNo, supplierId, totalCents, `来自请购单 ${header.requisition_no}`, actor.id, now, now,
-      orderDate, expectedDeliveryDate, paymentTerms, supplierContactName, supplierContactPhone, supplierAddress, id);
-    const insertItem = db.prepare(`
-      INSERT INTO purchase_order_items(id, order_id, product_id, quantity, unit_price_cents, amount_cents, line_no, purchase_requisition_item_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    items.forEach((item, index) => {
-      const qty = Number(item.quantity);
-      const unit = Number(item.unit_price_cents) || 0;
-      const amount = qty * unit;
-      insertItem.run(genId(), poId, item.product_id, qty, unit, amount, index + 1, item.id);
-    });
-    db.prepare("UPDATE purchase_requisitions SET purchase_order_id=?, updated_at=? WHERE id=?").run(poId, now, id);
-    audit(db, actor.id, 'GENERATE', 'PURCHASE_ORDER', poId, `由请购单 ${header.requisition_no} 生成 ${orderNo}`);
-  });
-
-  return send(res, 201, { id: poId, orderNo });
+  const assignments = items.map((item) => ({
+    purchaseRequisitionItemId: item.id,
+    supplierId,
+    quantity: Math.max(0, Number(item.quantity) - activeOrderedQuantity(db, item.id)),
+  })).filter((item) => item.quantity > 1e-9);
+  if (!assignments.length) throw new HttpError(409, '该请购单已全部生成采购订单');
+  let purchaseOrders;
+  transaction(db, () => { purchaseOrders = createPurchaseOrderGroups(db, actor, assignments, body); });
+  if (purchaseOrders.length !== 1) throw new HttpError(409, '单请购转换只能生成一张采购订单');
+  return send(res, 201, purchaseOrders[0]);
 }
 
 // ============================================================

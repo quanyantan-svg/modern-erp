@@ -458,11 +458,13 @@ function PurchaseInstructionDetail({ instructionId, notify, onChanged }) {
 export function PurchaseRequisitionsPage({ user, notify }) {
   const canManage = can(user, 'PURCHASE_REQUISITION_MANAGE');
   const canApprove = can(user, 'PURCHASE_REQUISITION_APPROVE');
+  const canBatchConvert = canManage && can(user, 'PURCHASE_ORDERS_CREATE');
   const [rows, setRows] = useState(null);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
   const [selection, setSelection] = useState(null);
   const [creating, setCreating] = useState(null);
+  const [batching, setBatching] = useState(false);
   const load = () => api(`/api/purchase-requisitions?status=${encodeURIComponent(status)}`)
     .then((result) => setRows(result.requisitions || []))
     .catch((error) => notify(error.message, 'error'));
@@ -481,7 +483,7 @@ export function PurchaseRequisitionsPage({ user, notify }) {
     </Panel>;
   }
   return <Panel title="请购单"
-    action={canManage && <button className="primary" onClick={() => setCreating({ create: true })}>＋ 新建请购单</button>}>
+    action={<div className="form-actions">{canBatchConvert && <button className="secondary" onClick={() => setBatching(true)}>批量生成采购订单</button>}{canManage && <button className="primary" onClick={() => setCreating({ create: true })}>＋ 新建请购单</button>}</div>}>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或来源指令"
       extra={<select aria-label="状态" value={status} onChange={(event) => setStatus(event.target.value)}>
         <option value="">全部状态</option>
@@ -506,14 +508,87 @@ export function PurchaseRequisitionsPage({ user, notify }) {
         <td>{fmtDate(row.requiredDate)}</td>
         <td>{row.creatorName || '—'}</td>
         <td><Status status={PR_STATUS_VARIANT[row.status] || 'draft'} label={PR_STATUS_LABELS[row.status] || row.status}/></td>
-        <td>{row.purchaseOrderNo
+        <td>{row.purchaseOrderCount > 1
+          ? <span>已生成 {row.purchaseOrderCount} 张</span>
+          : row.purchaseOrderNo
           ? <AppLink page="purchase-orders" documentId={row.purchaseOrderId}>{row.purchaseOrderNo}</AppLink>
           : <span className="dim">未生成</span>}</td>
       </tr>)}
     </tbody></table>{!filtered.length && <Empty text="没有符合条件的请购单"/>}</div>
     {creating && <PurchaseRequisitionCreate value={creating} onClose={() => setCreating(null)}
       onSaved={() => { setCreating(null); void load(); }} notify={notify}/>}
+    {batching && (
+      <PurchaseOrderBatchModal requisitions={rows.filter((row) => row.status === 'APPROVED')} notify={notify}
+        onClose={() => setBatching(false)} onSaved={() => { setBatching(false); void load(); }}/>
+    )}
   </Panel>;
+}
+
+function PurchaseOrderBatchModal({ requisitions, notify, onClose, onSaved }) {
+  const [suppliers, setSuppliers] = useState([]);
+  const [items, setItems] = useState(null);
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [busy, setBusy] = useState(false);
+  const requisitionKey = requisitions.map((row) => row.id).sort().join('|');
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api('/api/suppliers'),
+      Promise.all(requisitions.map((row) => api(`/api/purchase-requisitions/${row.id}`))),
+    ]).then(([supplierResult, details]) => {
+      if (cancelled) return;
+      setSuppliers((supplierResult.suppliers || []).filter((supplier) => supplier.active));
+      setItems(details.flatMap((result) => (result.requisition.items || [])
+        .filter((item) => Number(item.remainingQuantity) > 0)
+        .map((item) => ({
+          selected: true,
+          requisitionNo: result.requisition.requisition_no,
+          purchaseRequisitionItemId: item.id,
+          productCode: item.productCode,
+          productName: item.productName,
+          supplierId: item.preferred_supplier_id || '',
+          remainingQuantity: Number(item.remainingQuantity),
+          quantity: Number(item.remainingQuantity),
+          unitPriceCents: Number(item.unitPriceCents),
+        }))));
+    }).catch((error) => { if (!cancelled) notify(error.message, 'error'); });
+    return () => { cancelled = true; };
+    // The parent derives `requisitions` with Array.filter during render. Using
+    // that array identity here would refetch forever whenever session activity
+    // causes the application shell to render again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requisitionKey]);
+  const update = (index, patch) => setItems((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  const submit = async () => {
+    const selected = (items || []).filter((item) => item.selected);
+    if (!selected.length) { notify('请至少选择一条请购明细', 'error'); return; }
+    if (selected.some((item) => !item.supplierId)) { notify('请为每条已选明细确认供应商', 'error'); return; }
+    if (!paymentTerms.trim()) { notify('请填写付款条件，以便采购订单后续提交审批', 'error'); return; }
+    setBusy(true);
+    try {
+      const result = await api('/api/purchase-requisitions/batch-generate-purchase-orders', {
+        method: 'POST',
+        body: { paymentTerms: paymentTerms.trim(), items: selected.map(({ purchaseRequisitionItemId, supplierId, quantity, unitPriceCents }) => ({ purchaseRequisitionItemId, supplierId, quantity: Number(quantity), unitPriceCents })) },
+      });
+      notify(`已按供应商生成 ${result.purchaseOrders.length} 张采购订单草稿`);
+      onSaved();
+    } catch (error) { notify(error.message, 'error'); } finally { setBusy(false); }
+  };
+  return <Modal title="批量生成采购订单" onClose={onClose} wide>
+    {items === null ? <Loading/> : items.length === 0 ? <Empty text="没有可转换的已审批请购明细"/> : <>
+      <p className="dim">勾选请购明细并确认供应商；系统将按供应商合并为多行采购订单草稿。</p>
+      <div className="form-grid"><label className="full">付款条件<input value={paymentTerms} onChange={(event) => setPaymentTerms(event.target.value)} placeholder="例如：月结 30 天" required/></label></div>
+      <div className="table-wrap"><table><thead><tr><th>选择</th><th>请购单 / 产品</th><th>本次数量</th><th>供应商</th></tr></thead><tbody>
+        {items.map((item, index) => <tr key={item.purchaseRequisitionItemId}>
+          <td><input type="checkbox" aria-label={`选择 ${item.productCode}`} checked={item.selected} onChange={(event) => update(index, { selected: event.target.checked })}/></td>
+          <td><strong>{item.productCode} · {item.productName}</strong><small className="block dim">{item.requisitionNo} · 剩余 {fmtQty(item.remainingQuantity)}</small></td>
+          <td><input type="number" min="0.000001" max={item.remainingQuantity} step="0.000001" value={item.quantity} disabled={!item.selected} onChange={(event) => update(index, { quantity: event.target.value })}/></td>
+          <td><select value={item.supplierId} disabled={!item.selected} onChange={(event) => update(index, { supplierId: event.target.value })}><option value="">选择供应商</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.code} - {supplier.name}</option>)}</select></td>
+        </tr>)}
+      </tbody></table></div>
+      <div className="form-actions"><button type="button" className="secondary" onClick={onClose}>取消</button><button type="button" className="primary" disabled={busy} onClick={submit}>{busy ? '生成中…' : '按供应商生成'}</button></div>
+    </>}
+  </Modal>;
 }
 
 function PurchaseRequisitionCreate({ value, onClose, onSaved, notify }) {
@@ -761,22 +836,26 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
     </div>
     <h3>请购明细</h3>
     <div className="table-wrap"><table><thead><tr>
-      <th>产品</th><th className="number">数量</th><th className="number">参考单价（元）</th><th className="number">参考金额（元）</th><th>参考供应商</th>
+      <th>产品</th><th className="number">请购</th><th className="number">已订 / 剩余</th><th className="number">参考单价（元）</th><th className="number">参考金额（元）</th><th>参考供应商</th>
     </tr></thead><tbody>
       {(data.items || []).map((item) => <tr key={item.id}>
         <td><strong>{item.productName}</strong><small className="block mono dim">{item.productCode}</small></td>
         <td className="number">{fmtQty(item.quantity)}</td>
+        <td className="number">{fmtQty(item.orderedQuantity)} / {fmtQty(item.remainingQuantity)}</td>
         <td className="number">{money(item.unitPriceCents)}</td>
         <td className="number">{money(item.amountCents)}</td>
         <td>{item.supplierName ? `${item.supplierCode} - ${item.supplierName}` : '—'}</td>
       </tr>)}
       <tr>
-        <td colSpan={2}><strong>合计</strong></td>
+        <td><strong>合计</strong></td>
         <td className="number"><strong>{fmtQty(data.totalQuantity)}</strong></td>
+        <td/>
+        <td/>
         <td className="number"><strong>{money(data.totalAmountCents)}</strong></td>
         <td/>
       </tr>
     </tbody></table></div>
+    {!!data.purchaseOrders?.length && <div className="form-grid"><label className="full">下游采购订单<span>{data.purchaseOrders.map((order, index) => <span key={order.id}>{index > 0 ? ' · ' : ''}<AppLink page="purchase-orders" documentId={order.id}>{order.orderNo}</AppLink>（{order.supplierName}）</span>)}</span></label></div>}
     <div className="form-actions">
       {data.status === 'DRAFT' && canManage && <>
         <button type="button" className="secondary" onClick={() => setEditDraft({
@@ -794,8 +873,8 @@ function PurchaseRequisitionDetail({ requisitionId, notify, onChanged, onDeleted
         <button type="button" className="danger-button" onClick={() => setShowReject(true)}>驳回</button>
       </>}
       {data.status === 'SUBMITTED' && !canApprove && <span className="dim">等待审核人审批</span>}
-      {data.status === 'APPROVED' && canManage && !data.purchase_order_id && <button type="button" className="primary" onClick={() => setShowGenerate(true)}>生成采购订单</button>}
-      {data.status === 'APPROVED' && data.purchase_order_id && <span className="dim">已生成采购订单 {data.purchaseOrderNo}</span>}
+      {data.status === 'APPROVED' && canManage && (data.items || []).some((item) => Number(item.remainingQuantity) > 0) && <button type="button" className="primary" onClick={() => setShowGenerate(true)}>生成剩余采购订单</button>}
+      {data.status === 'APPROVED' && !(data.items || []).some((item) => Number(item.remainingQuantity) > 0) && <span className="dim">请购数量已全部转换</span>}
       {data.status === 'REJECTED' && canManage && <>
         <button type="button" className="primary" onClick={() => act('submit')}>重新提交</button>
         <button type="button" className="danger-button" onClick={() => act('cancel')}>取消</button>

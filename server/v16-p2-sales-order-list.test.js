@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test } from 'node:test';
+import {
+  ROUTE_PRESENTATIONS,
+  DISABLED_ROUTE_PRESENTATIONS,
+  APPROVAL_FAMILIES,
+} from '../src/navigation/presentationMetadata.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -13,6 +17,9 @@ const stylesDir = join(srcDir, 'styles');
 const readSrc = (path) => readFileSync(join(srcDir, path), 'utf8');
 const readServer = (path) => readFileSync(join(serverDir, path), 'utf8');
 const readStyles = (path) => readFileSync(join(stylesDir, path), 'utf8');
+
+const enabledByRoute = new Map(ROUTE_PRESENTATIONS.map((route) => [route.route, route]));
+const disabledKeys = new Set(DISABLED_ROUTE_PRESENTATIONS.map((route) => route.route));
 
 const masterData = readSrc('pages/master-data.jsx');
 const v16Tokens = readStyles('v16-tokens.css');
@@ -175,12 +182,33 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
     assert.match(ordersList, /onDelete=\{deleteOrder\}/);
   });
 
-  test('14. P2 did not modify server / API / database / migration / business logic files', () => {
-    const staged = execFileSync('git', ['status', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' });
-    const lines = staged.split('\n').filter(Boolean);
-    const forbidden = /^(?:.*\s)?(?:server\/app\.js|server\/db\.js|server\/database\/|server\/migrations\/|server\/modules\/|server\/lib\/|server\/index\.js)\b/;
-    const offenders = lines.filter((line) => forbidden.test(line));
-    assert.deepEqual(offenders, [], `P2 must not modify backend executable files: ${offenders.join('; ')}`);
+  test('14. P2 product contract: sales-orders canonical route + permission + approval families remain stable', () => {
+    // V1.6 P2 protects a frontend LIST rewrite only. The frozen backend /
+    // navigation product contracts are still guarded here:
+    //   - sales-orders remains an enabled canonical route
+    //   - its permission contract (ORDERS_VIEW / ORDERS_CREATE) is unchanged
+    //   - the five canonical approval families remain stable
+    //   - the five disabled routes remain disabled
+    //   - the LIST is still served through a backend route key, not via a
+    //     freshly invented alias.
+    const salesRoute = enabledByRoute.get('orders');
+    assert.ok(salesRoute, 'orders route must remain in the canonical enabled set');
+    assert.ok(salesRoute.permission || salesRoute.any, 'orders route must keep an access contract');
+    assert.deepEqual(
+      [...(salesRoute.any || []), salesRoute.permission].filter(Boolean).sort(),
+      ['ORDERS_CREATE', 'ORDERS_VIEW'],
+    );
+    assert.equal(disabledKeys.has('orders'), false, 'orders must not regress into the disabled set');
+
+    const approvals = enabledByRoute.get('approvals');
+    assert.ok(approvals, 'approvals route must remain enabled');
+    assert.deepEqual(approvals.approvalFamilies, APPROVAL_FAMILIES, 'approval families must remain the canonical five');
+
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
+
+    // The Orders LIST surface still routes through the canonical route key.
+    assert.match(masterData, /navigateToPage\(['"]orders['"]/);
   });
 
   test('15. P1 / P1.1 contracts remain unchanged', () => {

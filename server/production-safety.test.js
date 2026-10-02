@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -340,16 +340,20 @@ describe('Production Safety — reset-data sentinel regression (no repo default 
     // Confirm the guard invariants before invoking the script:
     //   1) repo default DB path resolves to <repo>/data/erp.db
     //   2) reset-data refuses when aimed at that path
-    //   3) the file does not exist (we are not running on a real workspace DB)
+    //   3) whether or not the repo default DB happens to exist as a developer
+    //      workspace artifact, the script must never mutate it.
     assert.equal(REPO_DEFAULT_DB, join(REPO, 'data', 'erp.db'));
 
-    // We do NOT create the repo default DB. If a future test accidentally
-    // does, this assertion will fail and force a maintainer review.
-    assert.equal(
-      existsSync(REPO_DEFAULT_DB),
-      false,
-      'this test requires the repo default DB to be absent; if a real DB exists, do NOT run the destructive suite against it',
-    );
+    // Snapshot the repo default DB state so the assertions are robust to
+    // the developer's workspace artifact being present or absent.
+    const snapshot = (path) => {
+      if (!existsSync(path)) return { exists: false, size: null, mtimeMs: null };
+      const s = statSync(path);
+      return { exists: true, size: s.size, mtimeMs: s.mtimeMs };
+    };
+    const beforeDb = snapshot(REPO_DEFAULT_DB);
+    const beforeWal = snapshot(`${REPO_DEFAULT_DB}-wal`);
+    const beforeShm = snapshot(`${REPO_DEFAULT_DB}-shm`);
 
     // Confirm script REFUSES even with explicit ERP_DB_PATH = repo default.
     const res = runReset({
@@ -360,9 +364,11 @@ describe('Production Safety — reset-data sentinel regression (no repo default 
     });
     assert.notEqual(res.status, 0, 'reset-data must refuse when aimed at the repo default DB');
 
-    // The repo default DB is still absent (nothing was created, nothing was destroyed).
-    assert.equal(existsSync(REPO_DEFAULT_DB), false, 'repo default DB must remain absent after a refused run');
-    assert.equal(existsSync(`${REPO_DEFAULT_DB}-wal`), false, 'repo default -wal must remain absent');
-    assert.equal(existsSync(`${REPO_DEFAULT_DB}-shm`), false, 'repo default -shm must remain absent');
+    // The repo default DB is unchanged after a refused run. We accept either
+    // "still absent" or "still present with identical size and mtime" — what
+    // matters is that the script did not touch it.
+    assert.deepEqual(snapshot(REPO_DEFAULT_DB), beforeDb, 'repo default DB must not be mutated by a refused reset run');
+    assert.deepEqual(snapshot(`${REPO_DEFAULT_DB}-wal`), beforeWal, 'repo default -wal must not be mutated by a refused reset run');
+    assert.deepEqual(snapshot(`${REPO_DEFAULT_DB}-shm`), beforeShm, 'repo default -shm must not be mutated by a refused reset run');
   });
 });

@@ -350,7 +350,7 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       await api('/api/production-orders/' + value.id, { method: 'POST', body: { action: 'complete' } });
       notify('已完工');
       refreshDetail();
-    } catch (e) { notify(e.message, 'error'); }
+    } catch (e) { notify(`无法完工：${e.message}`, 'error'); }
   };
   const cancelOrder = async () => {
     try {
@@ -366,6 +366,19 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       notify('报工已确认'); setReport({ operationId: '', goodQuantity: 0, scrapQuantity: 0, laborSeconds: '', machineSeconds: '', scrapReason: '', remark: '' }); refreshDetail();
     } catch (e) { notify(e.message, 'error'); }
   };
+  const completeOperationAction = async (operationId, operationName) => {
+    try {
+      await api(`/api/manufacturing/operations/${operationId}/complete`, { method: 'POST' });
+      notify(`工序 ${operationName} 已完成`);
+      refreshDetail();
+    } catch (e) { notify(e.message, 'error'); }
+  };
+  const canCompleteOrder = (() => {
+    if (!execution?.operations?.length) return { ready: true };
+    const incomplete = execution.operations.find((op) => !['COMPLETED', 'CANCELLED'].includes(op.status));
+    if (incomplete) return { ready: false, reason: `工序 ${incomplete.sequence_no} · ${incomplete.operation_name} 尚未完成` };
+    return { ready: true };
+  })();
   return <Modal title={value.id ? '制令单详情' : '新建制令单'} onClose={onClose} wide>
     {value.id && detail ? <>
       <div className="form-grid">
@@ -393,13 +406,17 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       </table>
       {!!execution?.operations?.length && <>
         <div className="form-section-head" style={{marginTop:'1rem'}}>工艺进度</div>
-        <div className="mobile-card-list">{execution.operations.map((op) => <article className="mobile-card" key={op.id}><h3>{op.sequence_no} · {op.operation_name}</h3><div className="mobile-card__row"><span>状态</span><strong>{op.status}</strong></div><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(op.good)} / {quantity(op.scrap)}</strong></div><div className="mobile-card__row"><span>可报工 / 剩余</span><strong>{quantity(op.inputAvailable)} / {quantity(op.remainingUnprocessed)}</strong></div><div className="mobile-card__row"><span>计划 / 实际负荷</span><strong>{op.plannedLoadMinutes} / {op.actualLoadMinutes ?? '证据缺失'} 分钟</strong></div><div className="mobile-card__row"><span>实际良率</span><strong>{op.actualYieldBps == null ? '—' : `${(op.actualYieldBps / 100).toFixed(2)}%`}</strong></div></article>)}</div>
-        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_START') && <div className="form-grid"><label>报工工序<select value={report.operationId} onChange={(e) => setReport({...report, operationId:e.target.value})}><option value="">选择当前可报工工序</option>{execution.operations.filter((op) => !['COMPLETED','CANCELLED'].includes(op.status)).map((op) => <option key={op.id} value={op.id}>{op.sequence_no} · {op.operation_name}（剩余 {quantity(op.remainingUnprocessed)}）</option>)}</select></label><label>本次良品<input type="number" min="0" value={report.goodQuantity} onChange={(e) => setReport({...report, goodQuantity:e.target.value})}/></label><label>本次报废<input type="number" min="0" value={report.scrapQuantity} onChange={(e) => setReport({...report, scrapQuantity:e.target.value})}/></label><label>报废原因<select value={report.scrapReason} onChange={(e) => setReport({...report, scrapReason:e.target.value})}><option value="">无报废</option><option value="PROCESS_DEFECT">制程缺陷</option><option value="MATERIAL_DEFECT">材料缺陷</option><option value="SETUP_LOSS">调机损耗</option><option value="QUALITY_FAILURE">质量不合格</option><option value="OTHER">其他</option></select></label><label>人工工时（秒）<input type="number" min="0" value={report.laborSeconds} onChange={(e) => setReport({...report, laborSeconds:e.target.value})}/></label><label>设备工时（秒）<input type="number" min="0" value={report.machineSeconds} onChange={(e) => setReport({...report, machineSeconds:e.target.value})}/></label><label className="full">备注<input value={report.remark} onChange={(e) => setReport({...report, remark:e.target.value})}/></label><div className="full"><button className="primary" type="button" disabled={!report.operationId} onClick={submitReport}>确认报工</button></div></div>}
+        <div className="mobile-card-list">{execution.operations.map((op) => {
+          const operationCanComplete = ['NOT_STARTED', 'IN_PROGRESS'].includes(op.status) && detail.status === 'IN_PROGRESS' && op.inputAvailable > 0 && op.remainingUnprocessed === 0 && can(user, 'PRODUCTION_ORDERS_COMPLETE');
+          return <article className="mobile-card" key={op.id}><h3>{op.sequence_no} · {op.operation_name}</h3><div className="mobile-card__row"><span>状态</span><strong>{op.status}</strong></div><div className="mobile-card__row"><span>良品 / 报废</span><strong>{quantity(op.good)} / {quantity(op.scrap)}</strong></div><div className="mobile-card__row"><span>可报工 / 剩余</span><strong>{quantity(op.inputAvailable)} / {quantity(op.remainingUnprocessed)}</strong></div><div className="mobile-card__row"><span>计划 / 实际负荷</span><strong>{op.plannedLoadMinutes} / {op.actualLoadMinutes ?? '证据缺失'} 分钟</strong></div><div className="mobile-card__row"><span>实际良率</span><strong>{op.actualYieldBps == null ? '—' : `${(op.actualYieldBps / 100).toFixed(2)}%`}</strong></div>{operationCanComplete && <div className="mobile-card__row"><button type="button" className="primary" onClick={() => completeOperationAction(op.id, op.operation_name)}>完成工序 {op.sequence_no}</button></div>}</article>;
+        })}</div>
+        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_START') && <div className="form-grid"><label>报工工序<select value={report.operationId} onChange={(e) => setReport({...report, operationId:e.target.value})}><option value="">选择当前可报工工序</option>{execution.operations.filter((op) => !['COMPLETED','CANCELLED'].includes(op.status) && op.remainingUnprocessed > 0).map((op) => <option key={op.id} value={op.id}>{op.sequence_no} · {op.operation_name}（剩余 {quantity(op.remainingUnprocessed)}）</option>)}</select></label><label>本次良品<input type="number" min="0" value={report.goodQuantity} onChange={(e) => setReport({...report, goodQuantity:e.target.value})}/></label><label>本次报废<input type="number" min="0" value={report.scrapQuantity} onChange={(e) => setReport({...report, scrapQuantity:e.target.value})}/></label><label>报废原因<select value={report.scrapReason} onChange={(e) => setReport({...report, scrapReason:e.target.value})}><option value="">无报废</option><option value="PROCESS_DEFECT">制程缺陷</option><option value="MATERIAL_DEFECT">材料缺陷</option><option value="SETUP_LOSS">调机损耗</option><option value="QUALITY_FAILURE">质量不合格</option><option value="OTHER">其他</option></select></label><label>人工工时（秒）<input type="number" min="0" value={report.laborSeconds} onChange={(e) => setReport({...report, laborSeconds:e.target.value})}/></label><label>设备工时（秒）<input type="number" min="0" value={report.machineSeconds} onChange={(e) => setReport({...report, machineSeconds:e.target.value})}/></label><label className="full">备注<input value={report.remark} onChange={(e) => setReport({...report, remark:e.target.value})}/></label><div className="full"><button className="primary" type="button" disabled={!report.operationId} onClick={submitReport}>确认报工</button></div></div>}
       </>}
       <div className="form-grid" style={{marginTop:'1rem'}}><label>计划生产<span>{quantity(detail.quantity)}</span></label><label>已净入库<span>{quantity(detail.netReceived || 0)}</span></label><label>剩余入库<span>{quantity(detail.remainingReceivable ?? detail.quantity)}</span></label><label>当前物料最多支持新增入库<span>{quantity(detail.maximumAdditionalReceipt || 0)}</span></label></div>
       <div className="form-actions" style={{marginTop:'1rem'}}>
         {detail.status === 'PENDING' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>开工</button>}
-        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_COMPLETE') && <button className="primary" onClick={completeOrder}>完工</button>}
+        {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_COMPLETE') && <button className="primary" disabled={!canCompleteOrder.ready} title={canCompleteOrder.ready ? '' : canCompleteOrder.reason} onClick={completeOrder}>完工{!canCompleteOrder.ready ? '（尚未满足）' : ''}</button>}
+        {!canCompleteOrder.ready && canCompleteOrder.reason && <div className="form-section-note">完工前置：{canCompleteOrder.reason}</div>}
         {detail.status !== 'COMPLETED' && (can(user, 'PRODUCTION_ORDERS_CREATE') || can(user, 'PRODUCTION_ORDERS_START')) && <button className="danger-button" onClick={cancelOrder}>取消</button>}
         <button className="secondary" onClick={onClose}>关闭</button>
       </div>

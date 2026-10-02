@@ -4120,3 +4120,61 @@ src/styles/v16-p8-consistency.css (仅在 source-contract 需要视觉回归时)
 ### 32.6 测试与浏览器验收
 
 `server/v16-sitewide-rollout.test.js` 解析 metadata、matrix、App wrapper、共享组件和样式导入，检查 53-route 覆盖而非依赖任意 class 数量。`scripts/acceptance/v16-sitewide-rollout.mjs` 复用 P8 的隔离 SQLite、角色登录和 Edge/Playwright 启动方法，逐路由记录 resolve/render/pageerror/React error/overflow/shell/nav/title/fallback；失败、frontend-limited 和代表场景截图写入 `.tmp/v16-sitewide-rollout/`，summary 写 JSON。最后依次运行 focused、全回归、build、diff check。
+
+## 33. V1.6.1 UAT Fix Pack 设计
+
+本节实现 `document.md §32`。不新增 route、角色、权限、审批族或数据库列；新增写路径全部复用现有事务、来源行和审计能力。
+
+### 33.1 采购入库关系查询
+
+`server/app.js:getPurchaseReceipt` 将供应商账单关联改为 correlated `EXISTS`：外层仅选择账单表的 `id / bill_no / status`，内层按 `supplier_bill_items.bill_id + receipt_id` 判定存在性，外层按 `created_at, id` 排序。这样天然去重，且 MySQL/SQLite 都不触发 DISTINCT 排序限制。focused 测试同时验证返回字段、重复行、稳定顺序和源码中不存在冲突 SQL。
+
+### 33.2 OQC 导航
+
+`SalesDeliveryModal` 读取详情中的 `qualityState.code / inspectionId`：创建成功后使用返回 id（回退到刷新后的 inspectionId）调用 `navigateToPage('oqc', { documentId, documentType:'OQC_INSPECTION', sourcePage:'sales-deliveries', sourceDocumentId })`；已有草稿直接使用相同目标。`QualityPage` 只在目标 kind 匹配时加载 documentId，避免跨 IQC/OQC 误开；`QualityModal` 从检验单权威 `sales_delivery_id / purchase_receipt_id` 生成回源动作，完成后直接回源，普通查看时也显示“返回销售出库/采购入库”。权限仍由路由和 API 分别校验，检验完成不调用物流确认 API。
+
+### 33.3 生产工序完成
+
+后端既有模型保持方案 B：确认报工只把工序置为 `IN_PROGRESS`；`POST /api/manufacturing/operations/:id/complete` 在无报工草稿、前工序完成、累计良品+报废严格等于本工序合法投入时置为 `COMPLETED` 并审计。前端 `ProductionOrderModal` 根据 execution 响应显示当前工序的剩余投入和“完成工序”；报工选择器只列出 `remainingUnprocessed > 0` 的可用工序，完成按钮同时要求 `inputAvailable > 0` 且剩余待加工为零，避免尚无上游投入的后续工序误显为可完成。制令单完工按钮在存在未完成工序时禁用并指明第一个阻塞工序；其余物料、入库、草稿、期间与 WIP 阻塞继续由后端权威检查并原样转换为 `无法完工：<业务原因>`。
+
+测试沿完整链路创建路由快照、工序、确认报工、逐工序完成、生产入库和制令单完工；另用非路由订单验证净领料不足，用路由订单验证领料/入库草稿阻塞，并覆盖确认报工冲销后不能取消/完工的原合同。
+
+### 33.4 pnpm 架构配置
+
+`pnpm-workspace.yaml` 的 `supportedArchitectures.os` 固定为 `win32 + linux`、`cpu` 固定为 `x64`，`allowBuilds.esbuild` 保持。执行 pnpm lockfile-only/install 校验，确认 lockfile 含 Rollup win32/linux x64 可选包；源码合同解析 YAML 文本和 lockfile，防止 Linux 被移除。应用依赖不直接增加 Rollup平台包。
+
+### 33.5 采购批量转换服务
+
+在 `server/modules/planning-documents.js` 增加 `batchGeneratePurchaseOrders`，由 `server/app.js` 暴露 `POST /api/purchase-requisitions/batch-generate-purchase-orders`。请求为：
+
+```text
+items[] = {
+  purchaseRequisitionItemId,
+  supplierId,
+  quantity,
+  unitPriceCents?          // 默认沿用请购参考单价
+}
+orderDate / expectedDeliveryDate / paymentTerms（可选批次默认）
+```
+
+服务在一个 `transaction` 中：
+
+1. 拒绝空数组、重复来源行、无权限、非 APPROVED 请购、停用供应商、无效数量/金额。
+2. 按来源行 id 稳定排序并执行 portable no-op update 取得行级写锁，再对每个来源行重算已占用量：关联 PO 状态不是 `CANCELLED` 的 `purchase_order_items.quantity` 之和；本次数量不得超过剩余量。该锁序列化 SQLite/MySQL 的并发转换，避免两个事务同时读取同一剩余量。
+3. 若请购行已有 `preferred_supplier_id`，请求 supplier 必须一致；未指定时允许操作员选择并将选择仅作为本次转换事实，不改写来源行。
+4. 按 supplierId 分组；每组创建一个 DRAFT PO 和多条 PO item，行级保存 `purchase_requisition_item_id`，预计交期采用组内来源请购 `required_date` 的最早非空值，联系人/地址取供应商主数据。
+5. 每张 PO 写独立 `GENERATE` 审计；全部成功才提交。返回 `purchaseOrders[]` 和逐来源剩余量。
+
+既有单请购生成端点改为复用同一校验/创建 helper，继续一次转换该请购全部剩余行。请购 list/detail 用 PO item 关系聚合 `purchaseOrders / purchaseOrderCount / orderedQuantity / remainingQuantity`，不以 header 单值判断完成。PO 更新逻辑只要任一行具有来源，就冻结来源行身份、产品和数量，避免批次生成 PO 因 header 为空而丢失不可变保护。
+
+### 33.6 采购前端
+
+`PurchaseRequisitionsPage` 增加“批量生成采购订单”任务：加载 APPROVED 且存在剩余量的请购行，支持多选，为每行选择/确认供应商与转换数量，并要求填写后续提交审批所需的付款条件；有参考供应商时预填。加载 effect 以排序后的请购单 ID 键为稳定依赖，避免应用 shell 重渲染造成重复请求。提交到批量端点后显示按供应商生成的 PO 数量并刷新。详情继续保留单请购快捷生成，但展示多个下游 PO 和每行已订/剩余量。生成结果仍进入 canonical `purchase-orders` 页面编辑商业字段、提交与审批；不在计划页面复制 PO 审批或采购入库表单。
+
+### 33.7 错误、事务和兼容
+
+批量转换、状态重读、累计量和写入处于同一事务；任一失败整体回滚。错误只返回业务原因，不泄露 SQL。SQLite 通过现有同步 adapter 执行；MySQL worker adapter 使用同一 portable SQL。旧 `purchase_requisitions.purchase_order_id` 与 `purchase_orders.purchase_requisition_id` 保留兼容，但新批量事实以 `purchase_order_items.purchase_requisition_item_id` 为权威。手工 PO、单来源 PO、审批、部分收货和多行收货 API shape 保持兼容。
+
+### 33.8 测试与发布门禁
+
+新增/扩展五组 focused tests：关系查询、OQC 导航、生产完工、pnpm Linux gate、采购批量转换。浏览器 runner 在隔离 SQLite 中执行 IQC/OQC/生产/采购旅程并验证 320/390/430/680px 无溢出和关键动作可达。依次运行 focused、受影响后端/前端/生产/采购测试、可用时的受保护 MySQL gate、完整 `pnpm test`、`pnpm build`、`git diff --check`。最后更新 README、版本、lockfile、v1.6.1 release notes/checklist 和当天 append-only log；仅全部 gate 通过时创建一次授权提交，不 push、不 tag、不部署。

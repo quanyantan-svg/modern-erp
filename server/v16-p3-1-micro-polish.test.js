@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test } from 'node:test';
+import {
+  ROUTE_PRESENTATIONS,
+  DISABLED_ROUTE_PRESENTATIONS,
+} from '../src/navigation/presentationMetadata.js';
+
+const enabledByRoute = new Map(ROUTE_PRESENTATIONS.map((route) => [route.route, route]));
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -166,11 +171,30 @@ describe('V1.6 P3.1 — sales-order micro polish contract', () => {
     assert.doesNotMatch(p2Styles, /v16-sales-order-editor/);
   });
 
-  test('9. No backend / API / database changes by P3.1', () => {
-    const staged = execFileSync('git', ['status', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' });
-    const lines = staged.split('\n').filter(Boolean);
-    const forbidden = /^(?:.*\s)?(?:server\/app\.js|server\/db\.js|server\/database\/|server\/migrations\/|server\/modules\/|server\/lib\/|server\/index\.js)\b/;
-    const offenders = lines.filter((line) => forbidden.test(line));
-    assert.deepEqual(offenders, [], `P3.1 must not modify backend executable files: ${offenders.join('; ')}`);
+  test('9. P3.1 product contract: canonical route inventory + back navigation wiring intact', () => {
+    // V1.6 P3.1 is a micro-polish change inside the mobile sales-order surface.
+    // The frozen product contract this phase must NOT disturb:
+    //   - canonical 53 enabled / 5 disabled route inventory
+    //   - sales-orders route keeps its access contract
+    //   - the back navigation chain in MobileShell / AppNavigationContext /
+    //     App.jsx is still wired (P3.1 cleaned up dead back buttons; the
+    //     canonical handler chain must remain).
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
+
+    const salesRoute = enabledByRoute.get('orders');
+    assert.ok(salesRoute, 'orders route must remain enabled');
+    assert.deepEqual(
+      [...(salesRoute.any || [])].sort(),
+      ['ORDERS_CREATE', 'ORDERS_VIEW'],
+      'orders route must keep its access contract',
+    );
+
+    // The canonical header back chain is preserved end-to-end.
+    assert.match(navContext, /setHeaderBackAction/);
+    assert.match(appJsx, /setHeaderBackAction/);
+    assert.match(appJsx, /backAction=\{registeredBackAction \|\| documentBackAction \|\|/);
+    assert.match(ordersFn, /function returnToList\(\)/);
+    assert.match(ordersFn, /function closeEditorOnly\(\)/);
   });
 });

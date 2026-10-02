@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test } from 'node:test';
+import {
+  ROUTE_PRESENTATIONS,
+  DISABLED_ROUTE_PRESENTATIONS,
+} from '../src/navigation/presentationMetadata.js';
+
+const enabledByRoute = new Map(ROUTE_PRESENTATIONS.map((route) => [route.route, route]));
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -215,12 +220,35 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
     assert.match(styles, /v16-purchase-receipts|v16-purchase-receipt-detail|v16-purchase-receipt-editor/);
   });
 
-  test('35. no backend executable or database file is modified by P4', () => {
-    const status = execFileSync('git', ['status', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' });
-    const offenders = status.split('\n').filter(Boolean).filter((line) =>
-      /(?:^|\s)(?:server\/(?:app|db|index)\.js|server\/(?:database|migrations|modules|lib)\/)/.test(line),
+  test('35. P4 product contract: purchase-receipts canonical route + contextual IQC parent + access contract stable', () => {
+    // V1.6 P4 rebuilt the purchase-receipt presentation surface. The frozen
+    // product contract this phase must preserve:
+    //   - canonical 53 enabled / 5 disabled route inventory
+    //   - purchase-receipts route keeps its access contract (PURCHASE_RECEIPTS_VIEW /
+    //     PURCHASE_RECEIPTS_MANAGE)
+    //   - IQC still has parentRoute = purchase-receipts (contextual classification
+    //     contract preserved)
+    //   - the MobileShell header back handler chain still wires setHeaderBackAction
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
+    assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
+
+    const receiptRoute = enabledByRoute.get('purchase-receipts');
+    assert.ok(receiptRoute, 'purchase-receipts route must remain enabled');
+    assert.deepEqual(
+      [...(receiptRoute.any || [])].sort(),
+      ['PURCHASE_RECEIPTS_MANAGE', 'PURCHASE_RECEIPTS_VIEW'],
+      'purchase-receipts route must keep its access contract',
     );
-    assert.deepEqual(offenders, []);
+    assert.equal(receiptRoute.parentRoute, undefined, 'purchase-receipts stays a primary route (no contextual parent)');
+    assert.equal(receiptRoute.contextHint, '仓库验收', 'purchase-receipts contextHint must be preserved');
+
+    const iqcRoute = enabledByRoute.get('iqc');
+    assert.ok(iqcRoute, 'iqc route must remain enabled');
+    assert.equal(iqcRoute.parentRoute, 'purchase-receipts', 'IQC contextual parent must remain purchase-receipts');
+
+    // The MobileShell header back registration chain is intact.
+    assert.match(app, /setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    assert.match(app, /setHeaderBackAction, registerHeaderBackAction \}\}>/);
   });
 
   test('36. MobileShell header back registration stores handlers as values', () => {

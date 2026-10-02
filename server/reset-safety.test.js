@@ -15,7 +15,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,6 +74,17 @@ function seed(dbPath) {
   db.prepare("INSERT OR IGNORE INTO permissions(code,name) VALUES ('X_RESET_SAFETY','reset-safety-marker')").run();
   try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch { /* ignore */ }
   db.close();
+}
+
+// Snapshot the state of a path so the safety tests are robust to whether the
+// developer's repo default DB / -wal / -shm happens to be present or absent.
+// The destructive reset contract only requires that the script does not
+// mutate the repo default DB; the test must not fail when a developer
+// workspace artifact already exists.
+function snapshotPath(path) {
+  if (!existsSync(path)) return { exists: false, size: null, mtimeMs: null };
+  const s = statSync(path);
+  return { exists: true, size: s.size, mtimeMs: s.mtimeMs };
 }
 
 describe('A. reset-data without ERP_DB_PATH → REFUSE', () => {
@@ -216,18 +227,19 @@ describe('E. temporary target reset does not touch repository default data DB', 
   });
 
   test('reset-data never resolves to the repo default DB on its own', () => {
-    assert.equal(existsSync(REPO_DEFAULT_DB), false, 'precondition: repo default DB absent');
+    const before = snapshotPath(REPO_DEFAULT_DB);
     const res = runReset({ NODE_ENV: 'development' });
     assert.notEqual(res.status, 0, 'reset must refuse without explicit target');
-    assert.equal(existsSync(REPO_DEFAULT_DB), false);
+    assert.deepEqual(snapshotPath(REPO_DEFAULT_DB), before, 'repo default DB must be unchanged after a refused run');
   });
 
   test('reset-data refuses if a caller points ERP_DB_PATH at the repo default DB', () => {
+    const before = snapshotPath(REPO_DEFAULT_DB);
     const res = runReset({ NODE_ENV: 'development', ERP_DB_PATH: REPO_DEFAULT_DB });
     assert.notEqual(res.status, 0);
     const combined = `${res.stdout}\n${res.stderr}`;
     assert.ok(combined.includes('仓库默认数据库') || combined.includes('默认数据库'));
-    assert.equal(existsSync(REPO_DEFAULT_DB), false);
+    assert.deepEqual(snapshotPath(REPO_DEFAULT_DB), before, 'repo default DB must be unchanged after a refused run');
   });
 
   test('reset-data refuses if ERP_DB_PATH points anywhere inside the repository', () => {
@@ -262,9 +274,10 @@ describe('F. malformed / non-absolute path behaviour is safe', () => {
     // though the caller's input was not literally "the repo default DB".
     const collapse = resolve(REPO, 'foo', '..', 'data', 'erp.db');
     assert.equal(collapse, REPO_DEFAULT_DB, 'precondition: collapsed path must equal repo default DB');
+    const before = snapshotPath(collapse);
     const res = runReset({ NODE_ENV: 'development', ERP_DB_PATH: collapse });
     assert.notEqual(res.status, 0, `must refuse repo-default via traversal, got stderr="${res.stderr}"`);
-    assert.equal(existsSync(collapse), false);
+    assert.deepEqual(snapshotPath(collapse), before, 'repo default DB must be unchanged after a refused traversal run');
   });
 
   test('absolute path that lives inside the repo (not at the default) is rejected', () => {

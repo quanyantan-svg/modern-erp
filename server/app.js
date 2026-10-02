@@ -45,7 +45,7 @@ import {
   updateMrpRun, updatePlanningForecast,
 } from './modules/planning.js';
 import {
-  approvePurchaseRequisition, cancelProductionInstruction, cancelPurchaseInstruction,
+  approvePurchaseRequisition, batchGeneratePurchaseOrders, cancelProductionInstruction, cancelPurchaseInstruction,
   cancelPurchaseRequisition, createProductionInstruction, createPurchaseInstruction,
   createPurchaseRequisition, generateProductionOrderFromInstruction,
   generatePurchaseOrderFromRequisition, getProductionInstruction,
@@ -437,6 +437,7 @@ async function handleApi(db, req, res, url) {
   // M12 — Purchase Requisition
   if (pathname === '/api/purchase-requisitions' && req.method === 'GET') return listPurchaseRequisitions(db, res, actor, url);
   if (pathname === '/api/purchase-requisitions' && req.method === 'POST') return createPurchaseRequisition(db, req, res, actor);
+  if (pathname === '/api/purchase-requisitions/batch-generate-purchase-orders' && req.method === 'POST') return batchGeneratePurchaseOrders(db, req, res, actor);
   const purchReqMatch = pathname.match(/^\/api\/purchase-requisitions\/([^/]+)$/);
   if (purchReqMatch && req.method === 'GET') return getPurchaseRequisition(db, res, actor, purchReqMatch[1]);
   if (purchReqMatch && req.method === 'PATCH') return updatePurchaseRequisition(db, req, res, actor, purchReqMatch[1]);
@@ -1548,8 +1549,10 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
   if (!['DRAFT', 'REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以修改');
   if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能修改自己创建的订单');
   const body = await readJson(req); const input = purchaseOrderInput(db, body); const now = new Date().toISOString();
-  if (current.purchase_requisition_id) {
+  const hasSourcedLines = Boolean(db.prepare('SELECT 1 FROM purchase_order_items WHERE order_id=? AND purchase_requisition_item_id IS NOT NULL LIMIT 1').get(orderId));
+  if (hasSourcedLines) {
     if (body.purchaseRequisitionId !== undefined && body.purchaseRequisitionId !== current.purchase_requisition_id) throw new HttpError(409, '请购单来源不可修改');
+    if (input.supplierId !== current.supplier_id) throw new HttpError(409, '来源型采购订单的供应商不可修改');
     const stored = db.prepare('SELECT purchase_requisition_item_id,product_id,quantity FROM purchase_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
     if (stored.length !== input.items.length) throw new HttpError(409, '来源请购明细不可增删');
     input.items.forEach((item, index) => {
@@ -1570,7 +1573,7 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress, orderId,
     );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
-    if (current.purchase_requisition_id) {
+    if (hasSourcedLines) {
       const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,
         document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -3717,7 +3720,7 @@ function getPurchaseReceipt(db, res, actor, receiptId) {
   receipt.billingSummary={status:receiptBilled<=0?'UNBILLED':receiptBilled<receiptQuantity?'PARTIALLY_BILLED':'BILLED',billedQuantity:receiptBilled,remainingQuantity:Math.max(0,receiptQuantity-receiptBilled),grniCents:receipt.billing_mode==='LEGACY_DIRECT'?0:receipt.total_cents};
   receipt.relationships = {
     upstream: receipt.purchase_order_id && receipt.poNo ? [{ type: 'PURCHASE_ORDER', id: receipt.purchase_order_id, documentNo: receipt.poNo }] : [],
-    downstream: [...db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),...db.prepare('SELECT DISTINCT b.id,b.bill_no documentNo,b.status FROM supplier_bills b JOIN supplier_bill_items i ON i.bill_id=b.id WHERE i.receipt_id=? ORDER BY b.created_at').all(receiptId).map(row=>({...row,type:'SUPPLIER_BILL'}))],
+    downstream: [...db.prepare('SELECT id,return_no documentNo,status FROM purchase_returns WHERE receipt_id=? ORDER BY created_at,id').all(receiptId).map((row) => ({ ...row, type: 'PURCHASE_RETURN' })),...db.prepare('SELECT b.id,b.bill_no documentNo,b.status FROM supplier_bills b WHERE EXISTS (SELECT 1 FROM supplier_bill_items i WHERE i.bill_id=b.id AND i.receipt_id=?) ORDER BY b.created_at,b.id').all(receiptId).map(row=>({...row,type:'SUPPLIER_BILL'}))],
     finance: workflowVoucher(db, 'PURCHASE_RECEIPT', receiptId, actor),
     subledger: actor.permissions.some((p) => ['AP_VIEW', 'PAYMENT_MANAGE'].includes(p)) ? db.prepare("SELECT id,voucher_no documentNo,status FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId) : null,
     direct: !receipt.poNo,
