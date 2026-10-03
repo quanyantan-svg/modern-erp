@@ -1,6 +1,6 @@
 # Modern ERP
 
-Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前应用版本为 **1.6.1**，产品方向为 **V1.6 Mobile Enterprise**；最终发布身份仍由 Git release tag 确认。
+Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前应用版本为 **1.6.2**，产品方向为 **V1.6 Mobile Enterprise**；最终发布身份仍由 Git release tag 确认。
 
 V1.6 的 P0–P8 原型与产品一致性验收、以及全站 Mobile Enterprise 推广已经完成。当前最终用户产品包含 **53 个启用的 canonical 路由**：其中 10 个 V1.6 原型路由保持冻结，43 个路由已完成全站迁移；5 个明确禁用路由继续保留为非产品入口。发布后的操作员验证结果将单独记录，本 README 不预先声明本次 release-prep 后的测试结论。
 
@@ -146,7 +146,7 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- 当前应用/package 版本为 1.6.1；本检出状态是 V1.6.1 UAT 修复候选，最终验证和发布动作仍由操作员控制。
+- 当前应用/package 版本为 1.6.2；本检出状态是 V1.6.1 UAT 修复候选，最终验证和发布动作仍由操作员控制。
 - Git release tag 是已发布版本的权威来源；最新既有发布 tag 为 `v1.6.0`，本次工作不会移动、删除或重建该 tag。
 - master 可以包含尚未打 tag 的发布准备变更；使用 Git SHA 或 `git describe` 标识精确检出状态，不应把未打 tag 的 HEAD 描述为已经发布。
 - document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
