@@ -146,8 +146,8 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- 当前应用/package 版本为 1.6.2；本检出状态是 V1.6.1 UAT 修复候选，最终验证和发布动作仍由操作员控制。
-- Git release tag 是已发布版本的权威来源；最新既有发布 tag 为 `v1.6.0`，本次工作不会移动、删除或重建该 tag。
+- 当前应用/package 版本为 1.6.2，Git tag 标识为 `v1.6.2`，HEAD 与 tag 一致；最终发布身份由 Git release tag 确认。
+- Git release tag 是已发布版本的权威来源；最新既有发布 tag 为 `v1.6.2`，不得移动、删除或重建既有 release tag。
 - master 可以包含尚未打 tag 的发布准备变更；使用 Git SHA 或 `git describe` 标识精确检出状态，不应把未打 tag 的 HEAD 描述为已经发布。
 - document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
 

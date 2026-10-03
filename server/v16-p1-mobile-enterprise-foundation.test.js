@@ -351,9 +351,9 @@ describe('P0 — V1.6 style isolation', () => {
 // Version / scope guard
 // ---------------------------------------------------------------------------
 describe('Scope — package version and route guards', () => {
-  test('package.json version identifies the V1.6.1 UAT fix candidate', () => {
+  test('package.json version identifies the v1.6.2 release', () => {
     const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(pkg.version, '1.6.1');
+    assert.equal(pkg.version, '1.6.2');
   });
 
   test('Dashboard route (#dashboard) is still preserved for compatibility', () => {
