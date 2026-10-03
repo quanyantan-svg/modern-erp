@@ -4178,3 +4178,444 @@ orderDate / expectedDeliveryDate / paymentTerms（可选批次默认）
 ### 33.8 测试与发布门禁
 
 新增/扩展五组 focused tests：关系查询、OQC 导航、生产完工、pnpm Linux gate、采购批量转换。浏览器 runner 在隔离 SQLite 中执行 IQC/OQC/生产/采购旅程并验证 320/390/430/680px 无溢出和关键动作可达。依次运行 focused、受影响后端/前端/生产/采购测试、可用时的受保护 MySQL gate、完整 `pnpm test`、`pnpm build`、`git diff --check`。最后更新 README、版本、lockfile、v1.6.1 release notes/checklist 和当天 append-only log；仅全部 gate 通过时创建一次授权提交，不 push、不 tag、不部署。
+
+## 34. V1.6.2 Phase 1 — OQC / 销售出库 UX 与 Purchase Receipt / IQC 对齐 设计
+
+本节是 `document.md §33` 已批准需求的 STAGE 2 — DESIGN，起点为 master `026b2966b6ce16784fe7acff41715172a0a8566d`（v1.6.1）。P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7 与 V1.6 全站推广已冻结，本节只设计销售出库 V1.6 Mobile Enterprise 详情与列表的镜像改造，并修复 `getSalesDelivery` 的 MySQL 8 关系查询。P8 不在本节范围；不动后端 API 形状、schema、迁移、角色、权限、审批族、状态机、IQC API 或 OQC API。
+
+### 34.1 范围与不变量
+
+实现范围（均位于 `src/pages/logistics-finance.jsx`）：
+
+- `SalesDeliveries` 顶层三分支：`editor` → `SalesDeliveryModal`；`selectedId` → `SalesDeliveryDetailV16`；否则列表；
+- `SalesDeliveryListRowV16` 替换 `CompactRecord` 列表行；
+- `SalesDeliveryDetailV16` 替换 `SalesDeliveryModal` 既有详情 / 列表行点击路径，成为单据权威详情表面；
+- `SalesDeliveryModal` 保留为草稿编辑表面（仍为 `<Modal>` 形态），不重写；
+- 新建隔离样式文件 `src/styles/v16-sales-deliveries.css`；
+- `src/main.jsx` 在 `v16-purchase-receipts.css` 之后追加 import；
+- 新增 `server/v16-p2-sales-deliveries.test.js`（focused 源码合同 ≥ 16 项）；
+- 新增 `server/mysql-v162-sales-delivery-detail.integration.js`（受保护 disposable MySQL 集成）。
+
+不修改：
+
+- `server/app.js` 中除 `getSalesDelivery` 的销售发票 / 销售退货关系子查询以外的任何代码；
+- `server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为、数据库 schema、迁移、权限、角色、审批族、OQC API、销售出库 API；
+- `Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`BusinessPageShell`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection`、`BusinessDangerZone`、`HelpDisclosure`、`SegmentedControl`、`SearchField`、`StatusChip`、`InlineAlert`、`ActionMenu`、`FilterSheet`、`ConfirmAction`、`ConfirmDelete`、`ConfirmSheet`、`DangerSheet`、`RecordCard`、`RecordList`、`ListRow`、`KeyValueRow`、`SummaryCard`、`Panel`、`Toolbar`、`FilterButton`、`Tabs`、`EmptyState`、`Empty`、`Loading` 等设计系统组件本身；
+- P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7/sitewide-rollout 任何文件；
+- `OrderDocumentDetail` 工作流阶段函数；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落；
+- 销售退货 / 采购订单 / 采购入库 / MRP / 库存 / 决策报表 / 业务总览等其它业务表面。
+
+### 34.2 样式隔离策略
+
+1. 新增 `src/styles/v16-sales-deliveries.css`；
+2. `src/main.jsx` 在 `v16-purchase-receipts.css` 之后追加 `import './styles/v16-sales-deliveries.css'`；
+3. 选择器作用域限定于 `.v16-mobile-enterprise .v16-sales-deliveries` / `.v16-mobile-enterprise .v16-sales-delivery-detail` / `.v16-mobile-enterprise .v16-sales-delivery-editor` 或 `v16-sales-delivery-*` 前缀；
+4. 不写入 `src/styles.css`、`v16-mobile-enterprise.css`、`v16-purchase-receipts.css` 等既有 V1.6 CSS；
+5. 模块色 `--v16-module-sales #1769E0` 沿用既有 token，仅用于主操作 / 来源关系链接 / 焦点 / 小型身份强调；状态 / 质量 chip 保留语义色。
+
+### 34.3 顶层分支
+
+```jsx
+function SalesDeliveries({ user, notify }) {
+  const navigation = useAppNavigation();
+  const setHeaderBackAction = navigation?.setHeaderBackAction;
+  const { target } = navigation || {};
+  const [items, setItems] = useState([]);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [selectedId, setSelectedId] = useState(
+    target?.page === 'sales-deliveries' && target.documentId ? target.documentId : null,
+  );
+  const [editor, setEditor] = useState(null);
+  const [listState, setListState] = useState('LOADING');
+
+  async function load(nextSearch = search, nextStatus = status, nextArchived = includeArchived) {
+    setListState('LOADING');
+    try {
+      const params = new URLSearchParams({ search: nextSearch, status: nextStatus, includeArchived: String(nextArchived) });
+      const response = await api('/api/sales-deliveries?' + params.toString());
+      const list = response.salesDeliveries || [];
+      setItems(list);
+      if (list.length) setListState('READY');
+      else if (nextSearch || nextStatus || nextArchived) setListState('NO_RESULTS');
+      else setListState('EMPTY');
+    } catch (error) {
+      setListState('ERROR');
+      notify(error.message, 'error');
+    }
+  }
+
+  function clearFilters() {
+    setSearch('');
+    setStatus('');
+    setIncludeArchived(false);
+    void load('', '', false);
+  }
+
+  function returnToList() {
+    setEditor(null);
+    setSelectedId(null);
+    void load();
+  }
+
+  function closeEditorOnly() {
+    setEditor(null);
+  }
+
+  // Surface exactly one MobileShell header back affordance.
+  useEffect(() => {
+    const handler = editor
+      ? (selectedId ? closeEditorOnly : returnToList)
+      : (selectedId ? returnToList : null);
+    if (setHeaderBackAction) setHeaderBackAction(handler);
+    return () => { if (setHeaderBackAction) setHeaderBackAction(null); };
+  }, [editor, selectedId]);
+
+  useEffect(() => { void load(search, status, includeArchived); }, [status, includeArchived]);
+
+  if (editor) {
+    return <BusinessPageShell className="sales-delivery-editor-v16 v16-sales-deliveries" width="rail">
+      <SalesDeliveryModal user={user} value={editor} notify={notify} api={api} onClose={() => { setEditor(null); }} />
+    </BusinessPageShell>;
+  }
+
+  if (selectedId) {
+    return <SalesDeliveryDetailV16 id={selectedId} user={user} notify={notify} navigation={navigation}
+      onBack={() => { setSelectedId(null); void load(); }}
+      onEdit={(value) => setEditor(value)}
+      onChanged={() => { setSelectedId(null); void load(); }} />;
+  }
+
+  // LIST MODE — see §34.5
+}
+```
+
+### 34.4 OQC 状态机（在详情中）
+
+```js
+const quality = detail.qualityState || { code: null, label: null, inspectionId: null };
+const code = quality.code;
+const editable = can(user, 'SALES_DELIVERIES_MANAGE') && detail.status === 'DRAFT';
+const canManageOqc = can(user, 'OQC_MANAGE');
+const canViewOqc = can(user, 'OQC_VIEW') || canManageOqc;
+const submittable = code === 'PASS' || code === 'WAIVED';
+const notInspected = code === 'NOT_INSPECTED';
+const inspectionDraft = code === 'INSPECTION_DRAFT';
+const needsRetest = code === 'FAIL' || code === 'STALE';
+
+let primary = null;
+let secondary = null;
+if (detail.status === 'DRAFT') {
+  if (submittable) {
+    primary = { kind: 'confirm', label: '确认出库' };
+    secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+  } else if (notInspected) {
+    primary = canManageOqc ? { kind: 'oqc-create', label: '创建 OQC' } : null;
+    secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+  } else if (inspectionDraft) {
+    primary = canViewOqc ? { kind: 'oqc-go', label: '前往 OQC' } : null;
+    secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+  } else if (needsRetest) {
+    primary = canManageOqc ? { kind: 'oqc-create', label: '创建 OQC 复检' } : null;
+    secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+  }
+}
+```
+
+`submittable` 仅在前端给出 primary 候选；服务端 `assertQualityGate(OQC)` 在 `confirmSalesDelivery` 内仍是权威；前端不可绕过。
+
+### 34.5 列表 — 行与状态文案
+
+`SalesDeliveryListRowV16`（新增）：
+
+```jsx
+<li className="v16-sales-delivery-row" data-testid={"sales-delivery-row-" + item.id}>
+  <button type="button" className="v16-sales-delivery-row__open" onClick={() => onOpen(item)} aria-label={"查看销售出库 " + item.deliveryNo}>
+    <span className="v16-sales-delivery-row__primary">
+      <span className="v16-sales-delivery-row__number">{item.deliveryNo}</span>
+      <span className={`v16-sales-delivery-status v16-sales-delivery-status--${tone}`}>{label}</span>
+    </span>
+    <span className="v16-sales-delivery-row__secondary">{item.customerName}</span>
+    <span className="v16-sales-delivery-row__meta">{item.warehouseName} · {item.deliveryDate} · {money(item.totalCents)}</span>
+    <span className="v16-sales-delivery-row__context">
+      {quantityContext(item)}{quality ? ` · ${quality}` : ''}
+    </span>
+    {archived && <span className="v16-sales-delivery-row__archive">已归档</span>}
+  </button>
+  <div className="v16-sales-delivery-row__overflow">
+    <CanonicalActionMenu label={"销售出库 " + item.deliveryNo + " 的更多操作"}>
+      <button type="button" onClick={() => onOpen(item)}>查看详情</button>
+      {canManage && item.status === 'DRAFT' && <button type="button" onClick={() => onEdit(item)}>编辑草稿</button>}
+    </CanonicalActionMenu>
+  </div>
+</li>
+```
+
+- 主识别：单号 + 文档状态 chip；
+- 第二行：客户（单行省略）；
+- 第三行：`仓库 · 发货日期 · 金额`；
+- 第四行：数量上下文 + OQC 上下文；
+- 归档 marker：`已归档` 仅次级标记，不得覆盖 `已取消` 主状态；
+- 行背景透明；`border-bottom: 1px` 分隔线；
+- 触点：行 open 区 ≥ 44 px；overflow 触点 ≥ 44 px；
+- 数量上下文：按服务端 `itemCount` 与已交付总数推导（沿用 `listSalesDeliveries` 既有 `billedQuantity / remainingBillQuantity` 行为）；
+- 不得展示 `creatorName` / 原始 enum `qualityState.label`。
+
+### 34.6 详情 — 章节顺序与字段
+
+| # | 标题 | 内容 |
+|---|---|---|
+| 1 | 概要 | 出库仓库 / 发货日期 / 计费方式（本地化） |
+| 2 | 来源销售订单 | SO 行；缺失时 `来源信息不完整` |
+| 3 | 出库明细 | 高密度行；跟踪分配紧凑披露；金额合计 |
+| 4 | 质量 | OQC 状态标签 |
+| 5 | 结算与关联 | 计费状态 / 销售发票数 / 应收记录 / 销售退货数 |
+| 6 | 操作记录 | 制单人 / 确认人 / 归档原因 / 归档时间 |
+| 7 | 管理 | 仅在存在可执行动作时渲染 |
+
+`SalesDeliveryDetailV16` 不渲染 `<BusinessPageHeader>` / `<BusinessPageShell>` 顶部标题 / 永久 `<HelpDisclosure>`；返回按钮由 MobileShell 头部承担（通过 `setHeaderBackAction`）；详情正文使用 `<div className="v16-mobile-enterprise v16-sales-delivery-detail">` 包裹。
+
+### 34.7 详情 — 质量章节
+
+```jsx
+<details className="v16-sales-delivery-detail__disclosure">
+  <summary>质量</summary>
+  <div className="v16-sales-delivery-detail__disclosure-body">
+    <div className="v16-sales-delivery-detail__quality">
+      <strong>OQC</strong>
+      <span className={`v16-sales-delivery-quality v16-sales-delivery-quality--${(code || '').toLowerCase()}`} data-quality={code || ''}>
+        {qualityLabel(quality)}
+      </span>
+    </div>
+  </div>
+</details>
+```
+
+quality label 本地化：复用 IQC 的同形态 (`免检 / 未检验 / 检验中 / 检验合格 / 检验不合格 / 需复检`)；色阶沿用 V1.6 已冻结语义色。
+
+### 34.8 OQC 创建与跳转
+
+```js
+async function createQuality() {
+  try {
+    const created = await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: id } });
+    notify('OQC 检验草稿已创建');
+    setReloadKey((v) => v + 1);
+    const inspectionId = created?.id;
+    if (inspectionId) {
+      navigation?.navigateToPage?.('oqc', {
+        documentId: inspectionId,
+        documentType: 'OQC_INSPECTION',
+        sourcePage: 'sales-deliveries',
+        sourceDocumentId: id,
+      });
+    }
+  } catch (error) { notify(error.message, 'error'); }
+}
+
+function goOqc() {
+  const inspectionId = detail?.qualityState?.inspectionId;
+  if (inspectionId && navigation?.navigateToPage) {
+    navigation.navigateToPage('oqc', {
+      documentId: inspectionId,
+      documentType: 'OQC_INSPECTION',
+      sourcePage: 'sales-deliveries',
+      sourceDocumentId: id,
+    });
+  } else if (navigation?.navigateToPage) {
+    navigation.navigateToPage('oqc');
+  }
+}
+```
+
+`POST /api/oqc { sales_delivery_id }` 是既有后端；不在前端臆造。
+
+### 34.9 详情 — Confirm / Cancel / Archive
+
+```jsx
+{confirm === 'confirm' && (
+  <DangerSheet title="确认销售出库？" confirmLabel="确认出库" onClose={() => setConfirm(null)} onConfirm={() => act('confirm')}>
+    <p>确认后将按本单数量减少库存，发货日期和来源销售订单将作为业务依据。
+       {billingMode === 'AUTO_BILL' && <span><br />当前设置会自动生成销售发票。</span>}
+    </p>
+  </DangerSheet>
+)}
+```
+
+Confirm / Cancel / Archive / Restore 沿用既有 lifecycle 端点；文案与采购入库对齐，但用 `出库` / `销售出库` 术语。
+
+### 34.10 编辑器保留
+
+`SalesDeliveryModal` 保留为 Modal 形态；不重写编辑器。`SalesDeliveries` 顶层通过 `editor` 分支调用它，与现有 `onClose` / `notify` / `api` 接口保持不变。
+
+### 34.11 返回源重载
+
+`SalesDeliveryDetailV16` 通过 `id` + `reloadKey` 重新拉取详情，保证 OQC 完成后再次打开看到最新 `qualityState`。`useEffect(() => { void reload(); }, [id, reloadKey])`。
+
+### 34.12 MySQL 关系查询修复
+
+`server/app.js:getSalesDelivery` 的 `relationships.downstream` 子查询替换为：
+
+```sql
+SELECT v.id, v.invoice_no documentNo, v.status
+FROM sales_invoices v
+WHERE EXISTS (
+  SELECT 1
+  FROM sales_invoice_items i
+  WHERE i.invoice_id = v.id
+    AND i.delivery_id = ?
+)
+ORDER BY v.created_at, v.id
+```
+
+`getSalesDelivery` 的销售退货子查询排序从 `ORDER BY created_at` 改为 `ORDER BY created_at, id`：
+
+```js
+db.prepare("SELECT id,return_no documentNo,status FROM return_orders WHERE source_type='SALES' AND (delivery_id=? OR (delivery_id IS NULL AND source_id=?)) ORDER BY created_at, id")
+```
+
+修复：
+
+- 同一发票 / 退货只出现一次（来自相关 `EXISTS` / 内嵌连接去重）；
+- 排序稳定（`created_at, id` 在 SQLite / MySQL 都可移植）；
+- MySQL 8 不再触发 `ER_FIELD_IN_ORDER_NOT_SELECT`（外层 SELECT 全部参与排序）；
+- API 响应 shape 不变（`{ type: 'SALES_INVOICE' | 'SALES_RETURN', id, documentNo, status }`）；
+- SQLite 兼容（`EXISTS` 子查询既有的 SQLite 行为不变）；
+- 无 schema 变更；
+- `db.prepare` 仍然只缓存一次，handler 不重写其他逻辑。
+
+### 34.13 数据流与调用关系
+
+- 列表：`GET /api/sales-deliveries?search=&status=&includeArchived=`；
+- 详情：`GET /api/sales-deliveries/:id`；
+- 提交 / 取消：`POST /api/sales-deliveries/:id { action: 'confirm' | 'cancel' }`；
+- OQC 创建：`POST /api/oqc { sales_delivery_id }`；
+- 归档资格：`GET /api/lifecycle/analyze?entityType=SALES_DELIVERY&entityId=`；
+- 归档：`POST /api/lifecycle/archive { entityType: 'SALES_DELIVERY' }`；
+- 恢复：`POST /api/lifecycle/restore { entityType: 'SALES_DELIVERY' }`；
+- 编辑器：`POST /api/sales-deliveries`、`PATCH /api/sales-deliveries/:id`（既有）。
+
+### 34.14 事务、权限与错误行为
+
+- 不引入任何后端事务 / API / 数据库变更（除 §34.12 的关系子查询替换）；
+- `SALES_DELIVERIES_VIEW` / `SALES_DELIVERIES_MANAGE` 控制列表 / 详情可见与基本操作；
+- `OQC_MANAGE` 控制 OQC 创建 / 复检；
+- `OQC_VIEW` 或 `OQC_MANAGE` 控制 OQC 详情进入；
+- `USERS_MANAGE` 控制归档恢复；
+- 服务端 quality gate（`assertQualityGate('OQC')`）在 `confirmSalesDelivery` 内仍是权威；前端 `submittable` 仅控制 primary 按钮展示。
+
+### 34.15 Focused 源码合同测试
+
+新增 `server/v16-p2-sales-deliveries.test.js`，使用 `node:test` + `node:fs` + `node:path`，源码字面 + 正则断言覆盖 ≥ 16 项：
+
+1. `SalesDeliveries` 不再 import / 渲染 `CompactRecord` / `CompactRecordList`；
+2. `SalesDeliveries` 不再渲染 `BusinessPageHeader`；
+3. `SalesDeliveries` 不含永久 `<HelpDisclosure summary="业务说明">`；
+4. 状态过滤严格为 `全部 / 草稿 / 已确认 / 已取消`；
+5. 归档 marker 与文档状态分别渲染；
+6. 列表行读取 `deliveryNo / customerName / warehouseName / deliveryDate / totalCents / itemCount / qualityState`；
+7. 列表不展示 `creatorName`；
+8. OQC 列表文本本地化（`OQC 免检 / 未检验 / 检验中 / 合格 / 不合格 / 需复检`）；
+9. 详情不渲染 `business-status-group` / `BusinessPageHeader`；
+10. 详情章节顺序固定；
+11. 详情不展示原始 enum `qualityState.label`；
+12. OQC 状态机按 `code` 派生 primary：
+    - `NOT_INSPECTED` → `创建 OQC`；
+    - `INSPECTION_DRAFT` → `前往 OQC`；
+    - `PASS` / `WAIVED` → `确认出库`；
+    - `FAIL` / `STALE` → `创建 OQC 复检`；
+13. OQC 创建调用 `POST /api/oqc { sales_delivery_id }`；
+14. OQC 跳转调用 `navigateToPage('oqc', { documentId, documentType: 'OQC_INSPECTION', sourcePage: 'sales-deliveries', sourceDocumentId })`；
+15. 确认出库仍调用 `POST /api/sales-deliveries/:id { action: 'confirm' }`；
+16. 归档 / 恢复沿用 `/api/lifecycle/archive` / `/api/lifecycle/restore`，无 `DELETE`；
+17. `OQC_MANAGE` 才允许 primary `创建 OQC` / `创建 OQC 复检`；无 `OQC_VIEW` 也不允许 `前往 OQC`；
+18. 编辑器由 `SalesDeliveryModal` 承担，且仍走 `POST /api/sales-deliveries` / `PATCH /api/sales-deliveries/:id`；
+19. 服务端 `getSalesDelivery` 不再包含 `DISTINCT ... ORDER BY v.created_at` 的旧查询形态；改为 `WHERE EXISTS (...) ORDER BY v.created_at, v.id`；
+20. 服务端销售退货关系查询包含 `ORDER BY created_at, id`；
+21. `app.js` 中除 `getSalesDelivery` 子查询以外未被改动。
+
+### 34.16 MySQL 集成测试
+
+新增 `server/mysql-v162-sales-delivery-detail.integration.js`，受保护 disposable 模式（与 `server/mysql-v15-d1-purchase-receipt-archive.integration.js` 一致）：
+
+```js
+describe('V1.6.2 Phase 1 real MySQL sales-delivery detail', () => {
+  let mysql; let db;
+  const at = '2026-10-03T08:00:00.000Z';
+  const actor = { id: 'v162-mysql-admin', roleCode: 'ADMIN', permissions: ['SALES_DELIVERIES_MANAGE', 'SALES_DELIVERIES_VIEW', 'OQC_MANAGE', 'OQC_VIEW'] };
+
+  before(() => {
+    mysql = createTempDb({ label: 'mysql-v162-sales-delivery', production: true });
+    db = mysql.db;
+    // seed customer / warehouse / product / sales_order / sales_delivery
+    // seed sales_invoice(s) + sales_invoice_items pointing at delivery_id
+    // seed sales_invoice_items duplicates for same delivery to verify no duplicates
+  });
+
+  after(() => mysql.cleanup());
+
+  test('GET /api/sales-deliveries/:id returns 200 with deterministic, duplicate-free relationships.downstream SALES_INVOICE', async () => {
+    const res = await runHandler(getSalesDelivery, db, ...);
+    assert.equal(res.status, 200);
+    const downstream = res.body.salesDelivery.relationships.downstream;
+    const invoices = downstream.filter((r) => r.type === 'SALES_INVOICE');
+    assert.ok(invoices.length >= 1);
+    const ids = invoices.map((i) => i.id);
+    assert.equal(new Set(ids).size, ids.length);
+    const replays = [runHandler(getSalesDelivery, db, ...), runHandler(getSalesDelivery, db, ...)];
+    assert.deepEqual(replays[0].body.salesDelivery.relationships.downstream, replays[1].body.salesDelivery.relationships.downstream);
+  });
+});
+```
+
+测试必须在 `ERP_MYSQL_TEST_ALLOW_RESET=true` 与 disposable 数据库名（`/(?:test|phase7[abc]|disposable)/i`）的环境下执行；否则抛出 `MySQL integration tests require ERP_MYSQL_TEST_ALLOW_RESET=true` 或拒绝运行。不得指向生产或开发数据库。
+
+### 34.17 浏览器验收
+
+新增 `scripts/acceptance/v16-p2-sales-deliveries.mjs`，使用 `purchase-receipts` P4 runner 同款确定性 fixtures 思路，输出 `.tmp/v16-p2-sales-deliveries-visual/`：
+
+- 列表：4 个视口截图；
+- 详情（`draft / confirmed / cancelled / archived`）× 4 视口 = 16 张；
+- 编辑器（Modal 形态：`new / edit`）× 4 视口 = 8 张；
+- OQC 旅程（创建 → 跳转 → 完成 PASS → 返回源 → 确认出库）× 4 视口 = 4 张；
+- 共 32 张截图；
+- 运营方视觉评审证据为 `sales-delivery-detail-draft-390.png` + `sales-delivery-editor-new-390.png` + `oqc-flow-390.png`。
+
+视口高度 844px；不通过缩字号作弊满足 ≥ 44 px；不强行 `overflow-x: hidden`。
+
+### 34.18 阶段状态与门禁
+
+1. focused ≥ 16 项通过 + V1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7/sitewide-rollout focused 套件保持通过 + 全量 `pnpm test` 不超过基线 4 个 reset-data 路径保护失败 + `pnpm build` 通过 + `git diff --check` 通过 → 进入 implementation / 提交阶段；
+2. 受保护 disposable MySQL gate 通过 → MySQL 销售出库详情查询问题得到回归；
+3. 真实 Edge 在 320 / 390 / 430 / 680px 四个视口下截图无横向溢出、无未捕获错误 → 可停止；
+4. 不 push、不 tag、不部署；不动 package.json 版本；不动 README 当前已发布基线段落；不动 v1.6.1 tag；
+5. 实施完成后写入 log/2026-10-03.md；commit 由用户后续单独授权。
+
+### 34.19 实施范围与文件清单
+
+可能涉及的实现文件（最终以 exact-file stage 为准）：
+
+- `document.md`（§33 V1.6.2 Phase 1 REQUIREMENT 追加，已提交）
+- `solution.md`（§34 V1.6.2 Phase 1 DESIGN 追加，已提交）
+- `log/2026-10-03.md`（V1.6.2 Phase 1 阶段追加）
+- `server/app.js`（`getSalesDelivery` 内销售发票 / 销售退货关系子查询替换）
+- `src/main.jsx`（追加一行 import）
+- `src/pages/logistics-finance.jsx`（新增 `SalesDeliveryListRowV16` / `SalesDeliveryDetailV16`；改写 `SalesDeliveries` 顶层三分支；不修改 `SalesDeliveryModal` 内部实现；不修改 `Returns` / `ReturnModal` / `ReadOnlyDocument` / `LogisticsActions` / `RelationshipSections` 等其它功能）
+- `src/styles/v16-sales-deliveries.css`（新增）
+- `server/v16-p2-sales-deliveries.test.js`（新增）
+- `server/mysql-v162-sales-delivery-detail.integration.js`（新增）
+- `scripts/acceptance/v16-p2-sales-deliveries.mjs`（新增，可选）
+
+不修改：
+
+- `server/db.js`、`server/database/*`、`server/migrations/*`、`server/modules/*`、`server/lib/*`；
+- 后端 endpoint 行为（除 §34.12 子查询）、数据库 schema、迁移、权限、角色、审批族、OQC API、销售出库 API 形状；
+- `Modal`、`CompactRecord`、`CompactRecordList`、`BusinessPageHeader`、`BusinessPageShell`、`BusinessContentSection`、`BusinessRelationSection`、`BusinessAuditSection`、`BusinessDangerZone`、`HelpDisclosure`、`SegmentedControl`、`SearchField`、`StatusChip`、`InlineAlert`、`ActionMenu`、`FilterSheet`、`ConfirmAction`、`ConfirmDelete`、`ConfirmSheet`、`DangerSheet`、`RecordCard`、`RecordList`、`ListRow`、`KeyValueRow`、`SummaryCard`、`Panel`、`Toolbar`、`FilterButton`、`Tabs`、`EmptyState`、`Empty`、`Loading` 等设计系统组件；
+- `SalesDeliveryModal` / `ReturnModal` / `OrderDocumentDetail` 工作流阶段函数 `orderWorkflowStages`；
+- P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7/sitewide-rollout 任何文件；
+- `package.json` 版本；
+- `README.md` 当前已发布基线段落。

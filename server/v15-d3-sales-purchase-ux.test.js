@@ -23,7 +23,16 @@ test('D3 keeps order approval separate from fulfillment', () => {
 test('D3 presents delivery, return and quality queues on the canonical rail', () => {
   const logistics = read('src/pages/logistics-finance.jsx');
   const quality = read('src/pages/quality.jsx');
-  assert.match(logistics, /className="sales-deliveries-v15" width="rail"/);
+  // V1.6.2 Phase 1 migrated the sales-delivery surface from V1.5 to V1.6
+  // (OQC parity with IQC). The frozen D3 product contract this phase must
+  // preserve:
+  //   - sales-deliveries canonical route remains on the rail with new V1.6
+  //     class (sales-deliveries-v16) so it is reachable through the existing
+  //     navigation map
+  //   - Returns list still renders 退货管理 title with the same kind split
+  //   - OQC / IQC remain质量内部门禁 wording in the quality page
+  //   - No "LEGACY / UNLINKED INSPECTION" placeholder in the quality page
+  assert.match(logistics, /className="sales-deliveries-v16 v16-sales-deliveries" width="rail"/);
   assert.match(logistics, /title="退货管理"/);
   assert.match(logistics, /销售退货引用已确认销售出货/);
   assert.match(quality, /采购入库内部质量任务/);

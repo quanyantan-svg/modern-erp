@@ -2771,3 +2771,201 @@ canonical pnpm 配置必须同时声明 Windows x64 开发与 Linux x64 生产�
 ### 32.6 验收与发布准备
 
 每项修复必须有 focused regression。生产覆盖工序顺序、完工、物料、草稿、非路由和冲销/取消；采购覆盖同/异供应商、来源、部分与重复转换、审批及多行收货；OQC 覆盖创建、直达、PASS/FAIL、复检和回源；Linux 配置有源码合同。浏览器至少在 390×844 跑通 IQC、OQC、生产和采购四条旅程，并在 320 / 430 / 680px 检查代表页面。完成后运行完整测试、构建与 diff check；MySQL gate 仅在受保护 disposable 环境可用时执行。发布资料必须明确尚未 tag、push 或部署。
+
+## 33. V1.6.2 Phase 1 — OQC / 销售出库 UX 与 Purchase Receipt / IQC 对齐
+
+本节是 v1.6.1 之后的第一阶段需求冻结，起点为当前 master `026b2966b6ce16784fe7acff41715172a0a8566d`（tag `v1.6.1`）。v1.6.1 UAT 已暴露：销售出库草稿的 OQC 创建 / 前往 / 复检动作仍埋在旧的 `SalesDeliveryModal` 编辑弹窗中，且 `GET /api/sales-deliveries/:id` 的销售发票关联查询在 MySQL 8 上触发 `ER_FIELD_IN_ORDER_NOT_SELECT` 错误。
+
+本阶段只做销售出库 UX 镜像采购入库 + MySQL 关系查询修复；不重写 IQC；不重写其他业务表面；不动后端 API 形状、schema、迁移、角色、权限、审批族或合同。
+
+### 33.1 范围
+
+仅覆盖销售出库（route `sales-deliveries`）：
+
+- LIST MODE（按 P4 列表合同改造，与采购入库列表同形态）；
+- DETAIL：`SalesDeliveryDetailV16` 成为单据的权威文档详情表面；
+- EDITOR：保留 `SalesDeliveryModal` 作为草稿编辑表面，由详情 `编辑` 次级动作进入；
+- OQC 上下文展示（quality state + quality primary action）；
+- 已取消单据的安全归档 / 恢复 UX（沿用既有 `lifecycle` 合同，不重写归档行为）；
+- 销售出库详情读取下游销售发票的 MySQL 8 关系查询修复；
+- 销售退货（`sales-returns`）下游关系排序去随机化（不扩大范围）。
+
+不重设计：
+
+- 销售订单、采购订单、采购入库、销售退货、MRP、库存作业、决策报表、业务总览；
+- 独立 OQC 列表页（`oqc`）；
+- `Modal` / `CompactRecord` / `CompactRecordList` / `BusinessPageHeader` / `HelpDisclosure` / `SalesDeliveryModal` 的内部实现；
+- `OrderDocumentDetail` 工作流阶段函数；
+- V1.5 / V1.6 / V1.6.1 已冻结原型合同（除 `SalesDeliveryModal` 改为从详情 `编辑` 进入）；
+- 后端 API 形状、schema、迁移、角色、权限、审批族、状态机、IQC/OQC API、`POST /api/oqc` / `GET /api/sales-deliveries/:id` / `GET /api/sales-deliveries` 既有合同。
+
+### 33.2 OQC 状态机（与 IQC 同构）
+
+OQC 必须使用既有权威 `qualityState.code`；不引入新的 code 或前端重新计算。
+
+| 服务端 code | 列表 / 详情文本 | DRAFT 下的 primary 动作 |
+|---|---|---|
+| `WAIVED` | `OQC 免检` / `免检` | `确认出库` |
+| `NOT_INSPECTED` | `OQC 未检验` / `未检验` | `创建 OQC` |
+| `INSPECTION_DRAFT` | `OQC 检验中` / `检验中` | `前往 OQC` |
+| `PASS` | `OQC 合格` / `检验合格` | `确认出库` |
+| `FAIL` | `OQC 不合格` / `检验不合格` | `创建 OQC 复检` |
+| `STALE` | `OQC 需复检` / `需复检` | `创建 OQC 复检` |
+
+`submittable = code === 'PASS' || code === 'WAIVED'`、`notInspected = code === 'NOT_INSPECTED'`、`inspectionDraft = code === 'INSPECTION_DRAFT'`、`needsRetest = code === 'FAIL' || code === 'STALE'` 必须从 `detail.qualityState.code` 派生；不得重复后端 quality state 逻辑；不得从 `salesOrderId`、`customerId`、行数量等业务字段反推。
+
+### 33.3 SalesDeliveryDetailV16 章节顺序
+
+DETAIL 章节固定顺序：
+
+1. 概要（仓库 / 发货日期 / 计费方式本地化）
+2. 来源销售订单
+3. 出库明细（高密度行 + 跟踪分配紧凑披露）
+4. 质量（OQC）
+5. 结算与关联（计费状态 / 销售发票 / 应收记录 / 销售退货）
+6. 操作记录（制单人 / 确认人 / 归档原因 / 归档时间）
+7. 管理（仅在存在可执行动作时渲染）
+
+不新增 Finance / AR / Invoice 章节；不展示虚假的「已完成 / 已全部出货 / 部分出货 / 已开账」状态。
+
+### 33.4 SalesDeliveryDetailV16 动作矩阵
+
+固定动作栏：
+
+| 状态 | quality | secondary | primary |
+|---|---|---|---|
+| DRAFT | `PASS` 或 `WAIVED` | 编辑 | `确认出库` |
+| DRAFT | `NOT_INSPECTED` | 编辑 | `创建 OQC` |
+| DRAFT | `INSPECTION_DRAFT` | 编辑 | `前往 OQC` |
+| DRAFT | `FAIL` 或 `STALE` | 编辑 | `创建 OQC 复检` |
+| CONFIRMED | — | — | 不渲染固定 primary |
+| CANCELLED + 未归档 + `SALES_DELIVERIES_MANAGE` | — | — | 管理章节渲染 `从业务列表移除 >` |
+| ARCHIVED + `USERS_MANAGE` | — | — | 管理章节渲染 `恢复到业务列表 >` |
+
+仅当 `SALES_DELIVERIES_MANAGE` 时渲染 secondary `编辑`。`创建 OQC` / `创建 OQC 复检` / `前往 OQC` 必须遵循 §33.5 的权限与导航合同。
+
+### 33.5 OQC 导航合同
+
+`POST /api/oqc { sales_delivery_id }` 创建成功后，必须立即跳转到该检验单；不得留在编辑弹窗。
+
+导航必须使用既有 `navigation.navigateToPage('oqc', { documentId, documentType: 'OQC_INSPECTION', sourcePage: 'sales-deliveries', sourceDocumentId })`。
+
+`前往 OQC` 必须从 `detail.qualityState.inspectionId` 读取 `documentId`，跳转同一上下文。
+
+返回源：
+
+- `QualityPage / QualityModal` 已存在的「返回销售出库」动作保持；
+- 完成后必须直接调用 `navigation.navigateToPage('sales-deliveries', { documentId, documentType: 'SALES_DELIVERY' })`，重载当前销售出库详情；
+- 当 `SalesDeliveryDetailV16` 重新打开时，必须重新拉取详情以反映最新 `qualityState.code` 和 `inspectionId`；不得从缓存读取旧 `code`。
+
+### 33.6 权限
+
+| 能力 | 权限 code |
+|---|---|
+| 查看销售出库 | `SALES_DELIVERIES_VIEW` 或 `SALES_DELIVERIES_MANAGE` |
+| 创建 OQC / 创建 OQC 复检 | `OQC_MANAGE` |
+| 前往 OQC（打开既有检验） | `OQC_VIEW` 或 `OQC_MANAGE` |
+| 编辑草稿 / 取消草稿 / 归档（未归档） | `SALES_DELIVERIES_MANAGE` |
+| 确认出库 | `SALES_DELIVERIES_MANAGE` 且当前 OQC `PASS` 或 `WAIVED`（后端 quality gate 权威） |
+| 恢复归档 | `USERS_MANAGE` |
+
+不在前端重复权限映射；不得显示用户无法执行的动作；后端授权不可被前端绕过。
+
+### 33.7 销售出库列表
+
+打开销售出库行 → `SalesDeliveryDetailV16`，不再直接打开编辑弹窗。
+
+列表使用与采购入库列表同形态的命令行（搜索 + 新建）、四段式状态筛选（`全部 / 草稿 / 已确认 / 已取消`）与次级归档切换 `归档记录`；列表不展示 `creatorName`；不展示原始 `qualityState.label` enum 文案。
+
+### 33.8 编辑器保留
+
+`SalesDeliveryModal` 继续承担草稿编辑表面；编辑器由详情次级动作 `编辑` 进入；编辑器使用既有 API 与 payload，不修改后端。
+
+不得删除 `SalesDeliveryModal`；不得绕过后端 immutability 校验；不得在 V1.6.2 Phase 1 内重写编辑器的视觉与表单语义。
+
+### 33.9 MySQL 销售出库关系查询修复
+
+`GET /api/sales-deliveries/:id` 的 `relationships.downstream` 中销售发票子查询当前使用 `DISTINCT ... ORDER BY v.created_at`，MySQL 8 在 `DISTINCT` 与未在选择列表中的排序列组合上触发 `ER_FIELD_IN_ORDER_NOT_SELECT`。
+
+修复为相关 `EXISTS` 子查询，外层 SELECT 严格只选择 `id / invoice_no / status`，按 `v.created_at, v.id` 稳定排序；同一发票只出现一次；API 响应形状不变；SQLite 兼容；无 schema 变更。
+
+`relationships.downstream` 中销售退货子查询保留，但排序从 `ORDER BY created_at` 改为 `ORDER BY created_at, id`，避免相同时间戳时排序不稳定。
+
+### 33.10 Focused 回归覆盖（至少 16 项）
+
+1. `GET /api/sales-deliveries/:id` HTTP 200；
+2. 返回的 `salesDelivery.relationships.downstream` 含 `SALES_INVOICE` 且至少一条；
+3. 同一发票只出现一次（无重复行）；
+4. 在 MySQL 8 上不触发 `ER_FIELD_IN_ORDER_NOT_SELECT`；
+5. 排序稳定（按 `created_at, id`）；
+6. SQLite 行为一致；
+7. API 响应 shape 不变（`salesDelivery.delivery_no / status / customerName / total_cents / items / relationships`）；
+8. `SalesDeliveryDetailV16` 暴露 OQC 状态；
+9. `NOT_INSPECTED` → primary `创建 OQC`；
+10. `INSPECTION_DRAFT` → primary `前往 OQC`；
+11. `PASS` 与 `WAIVED` → primary `确认出库`；
+12. `FAIL` 与 `STALE` → primary `创建 OQC 复检`；
+13. `OQC_MANAGE` 才允许 `创建 OQC` / `创建 OQC 复检`；`OQC_VIEW` 或 `OQC_MANAGE` 允许 `前往 OQC`；
+14. 销售出库列表不再 import `CompactRecord` / `BusinessPageHeader`；
+15. 状态过滤严格为 `全部 / 草稿 / 已确认 / 已取消`；IQC / OQC 不进入过滤；
+16. 编辑器路径仍由 `SalesDeliveryModal` 承载，API / payload 不变。
+
+### 33.11 MySQL 集成回归（强制）
+
+新增受保护 disposable MySQL 集成测试，必须在 `ERP_MYSQL_TEST_ALLOW_RESET=true` 与 disposable 测试库（`/(?:test|phase7[abc]|disposable)/i` 命中）的环境内执行；不得在任何生产或开发数据库上运行。测试至少：
+
+1. 创建最少一个 `sales_deliveries` 与至少一个 `sales_invoices` + `sales_invoice_items` 关系（多项发票关系允许）；
+2. 直接调用 `getSalesDelivery` handler；
+3. 断言 HTTP 200、`relationships.downstream` 含 `SALES_INVOICE` 且无重复发票；
+4. 断言响应稳定（同输入两次调用顺序一致）；
+5. 断言不存在 `ER_FIELD_IN_ORDER_NOT_SELECT`。
+
+### 33.12 IQC 回归（必须保留 PASS）
+
+不修改 IQC。再次跑通：
+
+```
+Purchase Receipt detail
+→ 创建 IQC（NOT_INSPECTED）
+→ 前往 IQC（INSPECTION_DRAFT）
+→ 完成 PASS
+→ 返回源
+→ 检验合格（PASS）
+→ 确认入库
+```
+
+IQC 任何已有 focused / 受影响合同必须保持通过。
+
+### 33.13 浏览器验收
+
+新增 `scripts/acceptance/v16-p2-sales-deliveries.mjs` 输出 `.tmp/v16-p2-sales-deliveries-visual/`，在 320 / 390 / 430 / 680px 下覆盖：
+
+- `sales-deliveries-{320,390,430,680}.png`（列表）
+- `sales-delivery-detail-{draft,confirmed,cancelled,archived}-{320,390,430,680}.png`（详情）
+- `sales-delivery-editor-{new,edit}-{320,390,430,680}.png`（编辑器，仍为 Modal 形态）
+- OQC 旅程：`oqc-flow-{320,390,430,680}.png`（创建 → 跳转 → 完成 PASS → 返回源 → 确认出库）
+
+主视口 390×844；断言每档 `document.documentElement.scrollWidth <= clientWidth`；触点 ≥ 44px；不产生页面级水平溢出。
+
+### 33.14 验收与发布准备
+
+1. focused 测试新增 `server/v16-p2-sales-deliveries.test.js`，覆盖 §33.10 的全部 16 项；
+2. MySQL 集成测试新增 `server/mysql-v162-sales-delivery-detail.integration.js`，覆盖 §33.11；
+3. 现有 V1.6 P4 / P3 / P5 / P6 / P7 / sitewide-rollout focused 与全量 `pnpm test` 不出现新失败（仅允许既有 4 个 reset-data 路径保护失败）；
+4. `pnpm install --frozen-lockfile` 通过；
+5. `pnpm build` 通过；
+6. `git diff --check` 通过；
+7. MySQL gate（受保护 disposable）通过；
+8. 浏览器验收在 320 / 390 / 430 / 680px 全部通过；
+9. 不 push、不 tag、不部署、不重写 Git 历史；
+10. log/2026-10-03.md 追加本次 STAGE 1 / 2 / 3 阶段记录。
+
+### 33.15 非目标
+
+- 不修改五个 canonical 角色；
+- 不修改五个 canonical 审批族；
+- 不修改任何后端业务模块、API、数据库、迁移、`POST /api/oqc`、`GET /api/sales-deliveries` 既有合同（仅在 `getSalesDelivery` 内部修正销售发票关系查询）；
+- 不动 `package.json` 版本；不动 v1.6.1 tag；
+- 不重设计 IQC、采购入库、销售订单、采购订单、独立 OQC、MRP、库存、决策报表、业务总览；
+- 不新增全局 OQC 启动器图块（OQC 仍为 contextual，仅通过销售出库详情进入）；
+- 不进入 V1.6.2 Phase 2 / MySQL 连接可靠性 / connection pool 迁移 / systemd / Nginx / 部署脚本 / 新质量数据模型 / schema / MRP / 采购批次 / 生产完工 / 会计 / 库存重设计。

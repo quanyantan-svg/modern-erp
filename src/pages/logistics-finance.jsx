@@ -34,6 +34,32 @@ function purchaseReceiptListQualityLabel(quality) {
   return label === '无需检验' ? '' : `IQC ${label.replace(/^IQC\s*/i, '')}`;
 }
 
+const SALES_DELIVERY_STATUS_PRESENTATION = {
+  DRAFT: { label: '草稿', tone: 'draft' },
+  CONFIRMED: { label: '已确认', tone: 'confirmed' },
+  CANCELLED: { label: '已取消', tone: 'cancelled' },
+};
+function salesDeliveryStatusPresentation(status) {
+  return SALES_DELIVERY_STATUS_PRESENTATION[status] || { label: '—', tone: 'draft' };
+}
+
+const SALES_DELIVERY_QUALITY_LABEL = {
+  WAIVED: '免检',
+  NOT_INSPECTED: '未检验',
+  INSPECTION_DRAFT: '检验中',
+  PASS: '检验合格',
+  FAIL: '检验不合格',
+  STALE: '需复检',
+};
+function salesDeliveryQualityLabel(quality) {
+  if (!quality || !quality.code) return '无需检验';
+  return SALES_DELIVERY_QUALITY_LABEL[quality.code] || quality.label || '无需检验';
+}
+function salesDeliveryListQualityLabel(quality) {
+  const label = salesDeliveryQualityLabel(quality);
+  return label === '无需检验' ? '' : `OQC ${label.replace(/^OQC\s*/i, '')}`;
+}
+
 function compactBusinessDate(value) {
   if (!value) return '—';
   const match = String(value).match(/^\d{4}-(\d{2})-(\d{2})$/);
@@ -1218,21 +1244,785 @@ function PurchaseReceiptEditorV16({ order, user, notify, onClose, onSaved }) {
 }
 
 export function SalesDeliveries({ user, notify }) {
-  const { target } = useAppNavigation();
+  const navigation = useAppNavigation();
+  const setHeaderBackAction = navigation?.setHeaderBackAction;
+  const { target } = navigation || {};
   const [items, setItems] = useState([]);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [view, setView] = useState(target?.page === 'sales-deliveries' && target.documentId ? { id: target.documentId } : null);
-  const load = () => api("/api/sales-deliveries?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(r.salesDeliveries || [])).catch((e) => notify(e.message, "error"));
-  useEffect(() => { void load(); }, [status]);
-  return <BusinessPageShell className="sales-deliveries-v15" width="rail">
-    <BusinessPageHeader title="销售出货" primaryAction={can(user, "SALES_DELIVERIES_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建销售出货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售出货承接已审批销售订单；需要检验时先完成 OQC，确认出库后才影响库存。订单审批不等于实际出货。</p></HelpDisclosure>}/>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号或客户" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
-    <div className="table-wrap"><table><thead><tr><th>单号</th><th>客户</th><th>仓库</th><th>发货日期</th><th className="number">金额</th><th>质量</th><th>状态</th><th>制单人</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:"pointer"}}><td className="mono">{item.delivery_no}</td><td>{item.customerName}</td><td>{item.warehouseName}</td><td>{item.delivery_date}</td><td className="number">{money(item.total_cents)}</td><td>{item.qualityState?.label}</td><td><Status status={item.status} label={item.statusLabel}/></td><td>{item.creatorName}</td><td onClick={(e) => e.stopPropagation()}>{can(user, "SALES_DELIVERIES_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id })}>编辑</button>}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有销售出货记录"/>}</div>
-    {view && <SalesDeliveryModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
-  </BusinessPageShell>;
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [selectedId, setSelectedId] = useState(
+    target?.page === 'sales-deliveries' && target.documentId ? target.documentId : null,
+  );
+  const [editor, setEditor] = useState(null);
+  const [listState, setListState] = useState('LOADING');
+
+  async function load(nextSearch = search, nextStatus = status, nextArchived = includeArchived) {
+    setListState('LOADING');
+    try {
+      const params = new URLSearchParams({ search: nextSearch, status: nextStatus, includeArchived: String(nextArchived) });
+      const response = await api('/api/sales-deliveries?' + params.toString());
+      const list = response.salesDeliveries || [];
+      setItems(list);
+      if (list.length) setListState('READY');
+      else if (nextSearch || nextStatus || nextArchived) setListState('NO_RESULTS');
+      else setListState('EMPTY');
+    } catch (error) {
+      setListState('ERROR');
+      notify(error.message, 'error');
+    }
+  }
+
+  function clearFilters() {
+    setSearch('');
+    setStatus('');
+    setIncludeArchived(false);
+    void load('', '', false);
+  }
+
+  function returnToList() {
+    setEditor(null);
+    setSelectedId(null);
+    void load();
+  }
+
+  function closeEditorOnly() {
+    setEditor(null);
+  }
+
+  useEffect(() => {
+    const handler = editor
+      ? (selectedId ? closeEditorOnly : returnToList)
+      : (selectedId ? returnToList : null);
+    if (setHeaderBackAction) setHeaderBackAction(handler);
+    return () => { if (setHeaderBackAction) setHeaderBackAction(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, selectedId]);
+
+  useEffect(() => {
+    void load(search, status, includeArchived);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, includeArchived]);
+
+  if (editor) {
+    return (
+      <BusinessPageShell className="sales-delivery-editor-v16 v16-sales-deliveries" width="rail">
+        <SalesDeliveryModal
+          user={user}
+          value={editor}
+          notify={notify}
+          api={api}
+          onClose={() => { setEditor(null); }}
+        />
+      </BusinessPageShell>
+    );
+  }
+
+  if (selectedId) {
+    return (
+      <SalesDeliveryDetailV16
+        id={selectedId}
+        user={user}
+        notify={notify}
+        navigation={navigation}
+        onBack={() => {
+          setSelectedId(null);
+          void load();
+        }}
+        onEdit={(value) => setEditor(value)}
+        onChanged={() => { setSelectedId(null); void load(); }}
+      />
+    );
+  }
+
+  const canCreate = can(user, 'SALES_DELIVERIES_MANAGE');
+
+  return (
+    <BusinessPageShell className="sales-deliveries-v16 v16-sales-deliveries" width="rail">
+      <section className="v16-sales-deliveries__command" aria-label="销售出库操作">
+        <SearchField value={search} onChange={setSearch} onSubmit={() => load(search, status, includeArchived)} placeholder="搜索单号或客户" />
+        {canCreate && (
+          <button
+            type="button"
+            className="v16-sales-delivery-new"
+            onClick={() => setEditor({})}
+            aria-label="新增销售出库"
+            data-testid="sales-delivery-new"
+          >
+            新建
+          </button>
+        )}
+      </section>
+
+      <section className="v16-sales-deliveries__segments" aria-label="状态筛选">
+        <SegmentedControl
+          label="单据状态"
+          value={status}
+          onChange={setStatus}
+          options={[
+            { value: '', label: '全部' },
+            { value: 'DRAFT', label: '草稿' },
+            { value: 'CONFIRMED', label: '已确认' },
+            { value: 'CANCELLED', label: '已取消' },
+          ]}
+        />
+      </section>
+
+      <section className="v16-sales-deliveries__archive-toggle" aria-label="归档切换">
+        <button
+          type="button"
+          aria-pressed={includeArchived ? 'true' : 'false'}
+          onClick={() => setIncludeArchived((value) => !value)}
+          data-testid="sales-delivery-archive-toggle"
+        >
+          归档记录
+        </button>
+      </section>
+
+      {listState === 'LOADING' && (
+        <div className="v16-sales-deliveries__list-state" role="status" aria-live="polite">
+          <span className="v16-sales-deliveries__list-state-title">加载中</span>
+        </div>
+      )}
+
+      {listState === 'ERROR' && (
+        <div className="v16-sales-deliveries__list-state" role="alert">
+          <span className="v16-sales-deliveries__list-state-title">加载失败</span>
+          <button
+            type="button"
+            className="v16-sales-deliveries__list-state-action"
+            onClick={() => load(search, status, includeArchived)}
+          >
+            重试
+          </button>
+        </div>
+      )}
+
+      {listState === 'EMPTY' && (
+        <div className="v16-sales-deliveries__list-state">
+          <span className="v16-sales-deliveries__list-state-title">暂无销售出库</span>
+          {canCreate && (
+            <button
+              type="button"
+              className="v16-sales-deliveries__list-state-action v16-sales-deliveries__list-state-action--primary"
+              onClick={() => setEditor({})}
+            >
+              新建销售出库
+            </button>
+          )}
+        </div>
+      )}
+
+      {listState === 'NO_RESULTS' && (
+        <div className="v16-sales-deliveries__list-state">
+          <span className="v16-sales-deliveries__list-state-title">没有匹配结果</span>
+          <button
+            type="button"
+            className="v16-sales-deliveries__list-state-action"
+            onClick={clearFilters}
+          >
+            清除筛选
+          </button>
+        </div>
+      )}
+
+      {listState === 'READY' && (
+        <ul className="v16-sales-delivery-list" role="list">
+          {items.map((item) => (
+            <SalesDeliveryListRowV16
+              key={item.id}
+              item={item}
+              user={user}
+              onOpen={() => setSelectedId(item.id)}
+              onEdit={(value) => setEditor(value)}
+            />
+          ))}
+        </ul>
+      )}
+    </BusinessPageShell>
+  );
+}
+
+function SalesDeliveryListRowV16({ item, user, onOpen, onEdit }) {
+  const presentation = salesDeliveryStatusPresentation(item.status);
+  const archived = Boolean(item.archiveState?.archived);
+  const quality = salesDeliveryListQualityLabel(item.qualityState);
+  const canManage = can(user, 'SALES_DELIVERIES_MANAGE');
+  return (
+    <li className="v16-sales-delivery-row" data-testid={"sales-delivery-row-" + item.id}>
+      <button
+        type="button"
+        className="v16-sales-delivery-row__open"
+        onClick={() => onOpen(item)}
+        aria-label={"查看销售出库 " + item.delivery_no}
+      >
+        <span className="v16-sales-delivery-row__primary">
+          <span className="v16-sales-delivery-row__number">{item.delivery_no}</span>
+          <span
+            className={"v16-sales-delivery-status v16-sales-delivery-status--" + presentation.tone}
+            data-status={item.status}
+          >
+            {presentation.label}
+          </span>
+        </span>
+        <span className="v16-sales-delivery-row__secondary">{item.customerName}</span>
+        <span className="v16-sales-delivery-row__meta">
+          {item.warehouseName} · {item.delivery_date} · {money(item.total_cents)}
+        </span>
+        <span className="v16-sales-delivery-row__context">
+          {quality ? quality + ' · ' : ''}
+          {item.itemCount ? `${item.itemCount} 项` : ''}
+        </span>
+        {archived && (
+          <span className="v16-sales-delivery-row__archive">已归档</span>
+        )}
+      </button>
+      <div className="v16-sales-delivery-row__overflow">
+        <ActionMenu label={"销售出库 " + item.delivery_no + " 的更多操作"}>
+          <button type="button" onClick={() => onOpen(item)}>查看详情</button>
+          {canManage && item.status === 'DRAFT' && (
+            <button type="button" onClick={() => onEdit(item)}>编辑草稿</button>
+          )}
+        </ActionMenu>
+      </div>
+    </li>
+  );
+}
+
+function SalesDeliveryDetailV16({ id, user, notify, navigation, onBack, onEdit, onChanged }) {
+  const [detail, setDetail] = useState(null);
+  const [loadState, setLoadState] = useState('LOADING');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [archiveReason, setArchiveReason] = useState('已取消单据不再参与日常业务处理');
+
+  async function reload() {
+    setLoadState('LOADING');
+    try {
+      const response = await api('/api/sales-deliveries/' + id);
+      setDetail(response.salesDelivery);
+      setLoadState('READY');
+    } catch (error) {
+      setLoadState('ERROR');
+      notify(error.message, 'error');
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, reloadKey]);
+
+  async function act(action) {
+    setBusy(true);
+    try {
+      await api('/api/sales-deliveries/' + id, { method: 'POST', body: { action } });
+      notify(action === 'confirm' ? '出库单已确认' : '出库单已取消');
+      setConfirm(null);
+      setReloadKey((v) => v + 1);
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function prepareArchive() {
+    try {
+      const response = await api('/api/lifecycle/analyze?entityType=SALES_DELIVERY&entityId=' + encodeURIComponent(id));
+      const eligibility = response.archiveEligibility;
+      setDetail((current) => ({ ...current, archiveEligibility: eligibility }));
+      if (!eligibility.allowed) {
+        return notify(eligibility.blockers?.[0]?.message || '当前单据不能移除', 'error');
+      }
+      setConfirm('archive');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function archive() {
+    try {
+      await api('/api/lifecycle/archive', {
+        method: 'POST',
+        body: { entityType: 'SALES_DELIVERY', entityId: id, reason: archiveReason },
+      });
+      notify('已归档');
+      setConfirm(null);
+      await reload();
+      await onChanged?.();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function restore() {
+    try {
+      await api('/api/lifecycle/restore', {
+        method: 'POST',
+        body: { entityType: 'SALES_DELIVERY', entityId: id, reason: '恢复正常列表可见性' },
+      });
+      notify('已恢复到业务列表，单据仍为已取消');
+      setConfirm(null);
+      await reload();
+      await onChanged?.();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  async function createQuality() {
+    try {
+      const created = await api('/api/oqc', { method: 'POST', body: { sales_delivery_id: id } });
+      notify('OQC 检验草稿已创建');
+      const inspectionId = created?.id;
+      if (inspectionId && navigation?.navigateToPage) {
+        navigation.navigateToPage('oqc', {
+          documentId: inspectionId,
+          documentType: 'OQC_INSPECTION',
+          sourcePage: 'sales-deliveries',
+          sourceDocumentId: id,
+        });
+      } else {
+        setReloadKey((v) => v + 1);
+      }
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  function goOqc() {
+    const inspectionId = detail?.qualityState?.inspectionId;
+    if (inspectionId && navigation?.navigateToPage) {
+      navigation.navigateToPage('oqc', {
+        documentId: inspectionId,
+        documentType: 'OQC_INSPECTION',
+        sourcePage: 'sales-deliveries',
+        sourceDocumentId: id,
+      });
+    } else if (navigation?.navigateToPage) {
+      navigation.navigateToPage('oqc');
+    }
+  }
+
+  if (loadState === 'ERROR') {
+    return (
+      <div className="v16-mobile-enterprise v16-sales-delivery-detail">
+        <div className="v16-sales-delivery-detail__error" role="alert">
+          <span className="v16-sales-delivery-detail__error-title">加载失败</span>
+          <div className="v16-sales-delivery-detail__error-actions">
+            <button type="button" onClick={() => setReloadKey((v) => v + 1)}>重试</button>
+            <button type="button" onClick={onBack}>返回列表</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadState !== 'READY' || !detail) {
+    return (
+      <div className="v16-mobile-enterprise v16-sales-delivery-detail">
+        <div className="v16-sales-delivery-detail__loading" role="status" aria-live="polite">
+          <span className="v16-sales-delivery-detail__loading-title">加载中</span>
+        </div>
+      </div>
+    );
+  }
+
+  const presentation = salesDeliveryStatusPresentation(detail.status);
+  const archived = Boolean(detail.archiveState?.archived);
+  const canManage = can(user, 'SALES_DELIVERIES_MANAGE');
+  const canRestore = can(user, 'USERS_MANAGE');
+  const canManageOqc = can(user, 'OQC_MANAGE');
+  const canViewOqc = can(user, 'OQC_VIEW') || canManageOqc;
+  const upstream = detail.relationships?.upstream || [];
+  const downstream = detail.relationships?.downstream || [];
+  const salesInvoices = downstream.filter((item) => item.type === 'SALES_INVOICE');
+  const salesReturns = downstream.filter((item) => item.type === 'SALES_RETURN');
+  const quality = detail.qualityState || { code: null, label: null };
+  const code = quality.code;
+  const editable = canManage && detail.status === 'DRAFT';
+  const submittable = code === 'PASS' || code === 'WAIVED';
+  const notInspected = code === 'NOT_INSPECTED';
+  const inspectionDraft = code === 'INSPECTION_DRAFT';
+  const needsRetest = code === 'FAIL' || code === 'STALE';
+
+  let primary = null;
+  let secondary = null;
+  if (detail.status === 'DRAFT') {
+    if (submittable) {
+      primary = { kind: 'confirm', label: '确认出库' };
+      secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+    } else if (notInspected) {
+      primary = canManageOqc ? { kind: 'oqc-create', label: '创建 OQC' } : null;
+      secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+    } else if (inspectionDraft) {
+      primary = canViewOqc ? { kind: 'oqc-go', label: '前往 OQC' } : null;
+      secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+    } else if (needsRetest) {
+      primary = canManageOqc ? { kind: 'oqc-create', label: '创建 OQC 复检' } : null;
+      secondary = editable ? { kind: 'edit', label: '编辑' } : null;
+    }
+  }
+
+  function handlePrimary() {
+    if (!primary) return;
+    if (primary.kind === 'edit') return onEdit(detail);
+    if (primary.kind === 'confirm') return setConfirm('confirm');
+    if (primary.kind === 'oqc-create') return void createQuality();
+    if (primary.kind === 'oqc-go') return goOqc();
+  }
+
+  function handleSecondary() {
+    if (secondary?.kind === 'edit') onEdit(detail);
+  }
+
+  const billingStatus = detail.billingSummary?.status || null;
+  const billingMode = detail.billing_mode || null;
+  const billingModeText = billingModeLabel(billingMode);
+  const billingFilled = Boolean(billingModeText && billingModeText !== '—');
+
+  return (
+    <div className="v16-mobile-enterprise v16-sales-delivery-detail">
+      <section className="v16-sales-delivery-detail__identity" aria-label="销售出库身份">
+        <div className="v16-sales-delivery-detail__identity-row">
+          <span className="v16-sales-delivery-detail__number">{detail.delivery_no}</span>
+          <span
+            className={"v16-sales-delivery-status v16-sales-delivery-status--" + presentation.tone}
+            data-status={detail.status}
+          >
+            {presentation.label}
+          </span>
+          {archived && (
+            <span className="v16-sales-delivery-detail__archive">已归档</span>
+          )}
+        </div>
+        <span className="v16-sales-delivery-detail__customer">{detail.customerName}</span>
+        <span className="v16-sales-delivery-detail__amount">{money(detail.total_cents)}</span>
+      </section>
+
+      <section className="v16-sales-delivery-detail__sections" aria-label="销售出库章节">
+        <details className="v16-sales-delivery-detail__disclosure" open>
+          <summary>概要</summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            <dl className="v16-sales-delivery-detail__kv">
+              <div>
+                <dt>出库仓库</dt>
+                <dd>{detail.warehouseName || '—'}</dd>
+              </div>
+              <div>
+                <dt>发货日期</dt>
+                <dd>{detail.delivery_date || '—'}</dd>
+              </div>
+              <div>
+                <dt>计费方式</dt>
+                <dd>
+                  {billingModeText}
+                  {billingFilled && billingMode === 'DIRECT_BILL' && (
+                    <small>当前设置会自动生成销售发票</small>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </details>
+
+        <details className="v16-sales-delivery-detail__disclosure">
+          <summary>来源销售订单</summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            {upstream.length > 0 ? (
+              upstream.map((item) => (
+                <div key={item.id} className="v16-sales-delivery-detail__source-row">
+                  <span className="v16-sales-delivery-detail__source-row-key">销售订单</span>
+                  {navigation?.canNavigate?.('orders') ? (
+                    <AppLink
+                      page="orders"
+                      documentId={item.id}
+                      documentType={item.type}
+                      className="v16-sales-delivery-detail__source-row-value"
+                    >
+                      {item.documentNo}
+                    </AppLink>
+                  ) : (
+                    <span className="v16-sales-delivery-detail__source-row-value">{item.documentNo}</span>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="v16-sales-delivery-detail__source-row">
+                <span className="v16-sales-delivery-detail__source-row-key">销售订单</span>
+                <span className="v16-sales-delivery-detail__source-row-value v16-sales-delivery-detail__source-row-value--neutral">
+                  来源信息不完整
+                </span>
+              </div>
+            )}
+          </div>
+        </details>
+
+        <details className="v16-sales-delivery-detail__disclosure" open>
+          <summary>
+            <span>出库明细</span>
+            <span className="v16-sales-delivery-detail__summary-hint">
+              {(detail.items || []).length} 行
+            </span>
+          </summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            <ul className="v16-sales-delivery-detail__lines">
+              {(detail.items || []).map((item) => {
+                const ordered = Number(item.orderedQuantity || 0);
+                const delivered = Number(item.deliveredQuantity || 0);
+                const showSourceLine = ordered > 0;
+                const remaining = Math.max(0, ordered - delivered);
+                return (
+                  <li className="v16-sales-delivery-detail__line" key={item.id || item.productId}>
+                    <div className="v16-sales-delivery-detail__line-head">
+                      <span className="v16-sales-delivery-detail__line-name">{item.productName || '—'}</span>
+                      <span className="v16-sales-delivery-detail__line-code">{item.productCode || ''}</span>
+                    </div>
+                    {showSourceLine && (
+                      <small className="v16-sales-delivery-detail__line-source">
+                        订购 {quantity(ordered)} · 已发 {quantity(delivered)} · 剩余 {quantity(remaining)}
+                      </small>
+                    )}
+                    <div className="v16-sales-delivery-detail__line-meta">
+                      <span>{quantity(item.quantity)} {item.unit || ''} × {money(item.unitPriceCents)}</span>
+                      <span className="v16-sales-delivery-detail__line-meta-amount">
+                        {money(item.amountCents)}
+                      </span>
+                    </div>
+                    {(item.trackingAllocations || []).length > 0 && (
+                      <details className="v16-sales-delivery-detail__tracking">
+                        <summary>批次 / 序列号 {(item.trackingAllocations || []).length} 条</summary>
+                        <ul>
+                          {item.trackingAllocations.map((allocation, allocationIndex) => (
+                            <li key={allocation.id || allocation.lotId || allocation.serialId || allocationIndex}>
+                              <span>{allocation.lotCode || allocation.serialNumber || '跟踪信息'}</span>
+                              <strong>{quantity(allocation.quantity || 1)}</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="v16-sales-delivery-detail__total">
+              <span>单据合计</span>
+              <strong>{money(detail.total_cents)}</strong>
+            </div>
+          </div>
+        </details>
+
+        <details className="v16-sales-delivery-detail__disclosure">
+          <summary>质量</summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            <div className="v16-sales-delivery-detail__quality">
+              <strong>OQC</strong>
+              <span
+                className={"v16-sales-delivery-quality v16-sales-delivery-quality--" + (code || '').toLowerCase()}
+                data-quality={code || ''}
+              >
+                {salesDeliveryQualityLabel(quality)}
+              </span>
+            </div>
+          </div>
+        </details>
+
+        <details className="v16-sales-delivery-detail__disclosure">
+          <summary>结算与关联</summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            <div className="v16-sales-delivery-detail__relations">
+              <div className="v16-sales-delivery-detail__relation">
+                <span>计费状态</span>
+                <strong>{billingStatusLabel(billingStatus) || '—'}</strong>
+              </div>
+              {salesInvoices.length > 0 && (
+                <div className="v16-sales-delivery-detail__relation">
+                  <span>销售发票</span>
+                  <strong>{salesInvoices.length} 张</strong>
+                </div>
+              )}
+              {salesReturns.length > 0 && (
+                <div className="v16-sales-delivery-detail__relation">
+                  <span>销售退货</span>
+                  <strong>{salesReturns.length} 张</strong>
+                </div>
+              )}
+              {detail.relationships?.subledger && (
+                <div className="v16-sales-delivery-detail__relation">
+                  <span>应收记录</span>
+                  <strong className="mono">{detail.relationships.subledger.documentNo}</strong>
+                </div>
+              )}
+            </div>
+          </div>
+        </details>
+
+        <details className="v16-sales-delivery-detail__disclosure">
+          <summary>
+            <span>操作记录</span>
+            <span className="v16-sales-delivery-detail__summary-hint">
+              {(detail.creatorName ? 1 : 0) + (detail.confirmedByName ? 1 : 0) + (archived ? 1 : 0)} 条
+            </span>
+          </summary>
+          <div className="v16-sales-delivery-detail__disclosure-body">
+            <div className="v16-sales-delivery-detail__history">
+              {detail.creatorName && (
+                <div className="v16-sales-delivery-detail__relation">
+                  <span>制单人</span>
+                  <strong>{detail.creatorName}</strong>
+                </div>
+              )}
+              {detail.confirmedByName && (
+                <div className="v16-sales-delivery-detail__relation">
+                  <span>确认人</span>
+                  <strong>{detail.confirmedByName}</strong>
+                </div>
+              )}
+              {archived && (
+                <>
+                  <div className="v16-sales-delivery-detail__relation">
+                    <span>归档时间</span>
+                    <strong>{dateTime(detail.archiveState?.archivedAt) || '—'}</strong>
+                  </div>
+                  {detail.archiveState?.reason && (
+                    <div className="v16-sales-delivery-detail__relation">
+                      <span>归档原因</span>
+                      <strong>{detail.archiveState.reason}</strong>
+                    </div>
+                  )}
+                </>
+              )}
+              {!detail.creatorName && !detail.confirmedByName && !archived && (
+                <p className="v16-sales-delivery-detail__history-empty">暂无操作记录</p>
+              )}
+            </div>
+          </div>
+        </details>
+
+        {((detail.status === 'DRAFT' && canManage) ||
+          (detail.status === 'CANCELLED' && !archived && canManage) ||
+          (archived && canRestore)) && (
+          <details className="v16-sales-delivery-detail__disclosure">
+            <summary>管理</summary>
+            <div className="v16-sales-delivery-detail__disclosure-body">
+              <div className="v16-sales-delivery-detail__management">
+                {detail.status === 'DRAFT' && canManage && (
+                  <div className="v16-sales-delivery-detail__management-row">
+                    <span>取消这张单据</span>
+                    <button
+                      type="button"
+                      className="v16-sales-delivery-detail__management-button v16-sales-delivery-detail__management-button--danger"
+                      onClick={() => setConfirm('cancel')}
+                    >
+                      取消
+                    </button>
+                  </div>
+                )}
+                {detail.status === 'CANCELLED' && !archived && canManage && (
+                  <div className="v16-sales-delivery-detail__management-row">
+                    <span>从业务列表移除</span>
+                    <button
+                      type="button"
+                      className="v16-sales-delivery-detail__management-button v16-sales-delivery-detail__management-button--danger"
+                      onClick={prepareArchive}
+                    >
+                      从列表移除
+                    </button>
+                  </div>
+                )}
+                {archived && canRestore && (
+                  <div className="v16-sales-delivery-detail__management-row">
+                    <span>恢复到业务列表</span>
+                    <button
+                      type="button"
+                      className="v16-sales-delivery-detail__management-button"
+                      onClick={() => setConfirm('restore')}
+                    >
+                      恢复
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </details>
+        )}
+      </section>
+
+      {(primary || secondary) && (
+        <div className="v16-sales-delivery-detail__action-bar" role="group" aria-label="销售出库操作">
+          {secondary && (
+            <button type="button" className="secondary" onClick={handleSecondary} data-testid="sales-delivery-action-secondary">
+              {secondary.label}
+            </button>
+          )}
+          {primary && (
+            <button
+              type="button"
+              className="primary"
+              onClick={handlePrimary}
+              disabled={busy}
+              data-testid="sales-delivery-action-primary"
+            >
+              {primary.label}
+            </button>
+          )}
+        </div>
+      )}
+
+      {confirm === 'confirm' && (
+        <DangerSheet
+          title="确认销售出库？"
+          confirmLabel="确认出库"
+          onClose={() => setConfirm(null)}
+          onConfirm={() => act('confirm')}
+        >
+          <p>
+            确认后将按本单数量减少库存，发货日期和来源销售订单将作为业务依据。
+            {billingMode === 'DIRECT_BILL' && (
+              <span><br />当前设置会自动生成销售发票。</span>
+            )}
+          </p>
+        </DangerSheet>
+      )}
+
+      {confirm === 'cancel' && (
+        <DangerSheet
+          title="取消这张销售出库单？"
+          confirmLabel="确认取消"
+          onClose={() => setConfirm(null)}
+          onConfirm={() => act('cancel')}
+        >
+          <p>取消后该单据将不能继续编辑或确认，也不会减少库存。</p>
+        </DangerSheet>
+      )}
+
+      {confirm === 'archive' && (
+        <DangerSheet
+          title="从业务列表移除？"
+          confirmLabel="从列表移除"
+          onClose={() => setConfirm(null)}
+          onConfirm={archive}
+        >
+          <p>该销售出库单将从正常业务列表中移除，并保留在归档记录中。<br />原单据、明细和审计记录不会被删除，有权限的管理员可以恢复。</p>
+          <label>归档原因<textarea value={archiveReason} onChange={(event) => setArchiveReason(event.target.value)} maxLength="500" required /></label>
+        </DangerSheet>
+      )}
+
+      {confirm === 'restore' && (
+        <DangerSheet
+          title="恢复到业务列表？"
+          confirmLabel="确认恢复"
+          onClose={() => setConfirm(null)}
+          onConfirm={restore}
+        >
+          <p>恢复后该单据会重新出现在业务列表中，但仍保持“已取消”，不会恢复库存或财务效果。</p>
+        </DangerSheet>
+      )}
+    </div>
+  );
 }
 
 function SalesDeliveryModal({ user, value, onClose, notify, api }) {

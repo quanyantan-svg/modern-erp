@@ -7,6 +7,7 @@ import './styles/v16-mobile-enterprise.css';
 import './styles/v16-sales-orders.css';
 import './styles/v16-sales-order-document.css';
 import './styles/v16-purchase-receipts.css';
+import './styles/v16-sales-deliveries.css';
 import './styles/v16-mrp-planning.css';
 import './styles/v16-inventory-control.css';
 import './styles/v16-decision-reports.css';
