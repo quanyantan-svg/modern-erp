@@ -156,8 +156,17 @@ export class MySqlSyncAdapter {
     const translated = translateSqliteSql(sql);
     const normalized = translated.replace(/;\s*$/, '').trim().toUpperCase();
     const result = this._request('exec', { sql: translated });
-    if (normalized === 'START TRANSACTION' || normalized === 'BEGIN') this.isTransaction = true;
-    if (normalized === 'COMMIT' || normalized === 'ROLLBACK') this.isTransaction = false;
+    // The worker is the authoritative source for transaction state because
+    // it can detect a transaction lost to a recoverable connection error and
+    // must reset inTransaction to false even when the COMMIT/ROLLBACK did not
+    // successfully run.
+    if (typeof result?.inTransaction === 'boolean') {
+      this.isTransaction = result.inTransaction;
+    } else if (normalized === 'START TRANSACTION' || normalized === 'BEGIN') {
+      this.isTransaction = true;
+    } else if (normalized === 'COMMIT' || normalized === 'ROLLBACK') {
+      this.isTransaction = false;
+    }
     return result;
   }
 

@@ -4619,3 +4619,155 @@ describe('V1.6.2 Phase 1 real MySQL sales-delivery detail', () => {
 - P0/P1/P1.1/P2/P3/P3.1/P4/P5/P5.1/P6/P7/sitewide-rollout 任何文件；
 - `package.json` 版本；
 - `README.md` 当前已发布基线段落。
+
+## 35. V1.6.2 Phase 2 — MySQL 连接自动恢复
+
+本节对应 `document.md §34` 的设计实现。起点 `026b2966b6ce16784fe7acff41715172a0a8566d`（tag `v1.6.1`）。本节只描述连接生命周期与恢复语义，不重写数据库层，不迁移 pool，不改 schema / 迁移 / API / 角色 / 审批族 / 业务合同。
+
+### 35.1 改动范围
+
+仅修改下列文件：
+
+- `server/database/mysql-worker.js`：引入 `openConnection()` 中央函数、`isRecoverableConnectionError()`、`isReadOnlySql()`、`classifyExecStatement()`、worker 内事务状态、错误事件清理、`close()` 后禁用重建；
+- `server/database/mysql-adapter.js`：`exec()` 改为以 worker 返回的 `inTransaction` 为权威；
+- `server/database/test-fixtures/recovery-mysql-worker.js`：新增可控 fixture，复用上述中央分类函数；
+- `server/v16-p2-connection-recovery.test.js`：聚焦回归；
+- `server/mysql-v162-connection-recovery.integration.js`：受保护 disposable MySQL 集成测试。
+
+不动 `server/db.js`、`server/app.js`、`server/modules/`、`server/migrations/`、前端、Nginx、systemd、部署脚本、`package.json` 版本、`v1.6.1` tag。
+
+### 35.2 内部状态机
+
+worker 内维护以下模块级状态：
+
+```
+connection           : mysql2/promise connection 或 undefined
+connectionConfig     : 最近一次 connect 的 payload（保留用于重连）
+inTransaction        : BEGIN 之后到 COMMIT / ROLLBACK / 连接丢失前为 true
+closed               : 显式 close() 之后为 true
+```
+
+每次进入操作前调用 `ensureConnection()`：
+
+1. 若 `closed` → 抛 `MySQL adapter is closed`；
+2. 若 `connection` 存活（socket 未被 destroy） → 直接复用；
+3. 否则使用 `connectionConfig` 重新 `mysql.createConnection(...)` 并应用 §35.3 会话设置；
+4. 重连日志 `mysql_reconnect_attempt` / `mysql_reconnect_success` / `mysql_reconnect_failed`。
+
+### 35.3 单一连接配置 + 会话初始化
+
+`openConnection(config)` 完成三件事：
+
+1. `mysql.createConnection({ ...config, multipleStatements, decimalNumbers, supportBigNumbers, bigNumberStrings, jsonStrings, charset: 'utf8mb4' })`；
+2. `conn.on('error', ...)`：当底层 socket 错误且该对象仍是当前 connection 时，置 `connection = undefined`，发出 `mysql_connection_lost`；
+3. 按序执行：
+
+```sql
+SET time_zone = '+00:00';
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SET SESSION innodb_lock_wait_timeout = 2;
+```
+
+任何一步失败 → 不发布该连接，把错误返回给调用方。
+
+### 35.4 可恢复错误分类（中央函数）
+
+```js
+RECOVERABLE_CONNECTION_CODES = new Set([
+  'PROTOCOL_CONNECTION_LOST', 'PROTOCOL_PACKETS_OUT_OF_ORDER',
+  'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR', 'PROTOCOL_ENQUEUE_AFTER_QUIT',
+  'PROTOCOL_SEQUENCE_TIMEOUT',
+  'ECONNRESET','ECONNREFUSED','ETIMEDOUT','EPIPE','ENOTFOUND','EAI_AGAIN',
+]);
+isRecoverableConnectionError(error) = error.code ∈ RECOVERABLE_CONNECTION_CODES
+                                     || /Connection lost|Connection terminated|Server has gone away|Packets out of order/i.test(error.message)
+```
+
+业务 / SQL 错误不进入该集合；SQL 错误（`ER_DUP_ENTRY`、`ER_PARSE_ERROR`、`ER_LOCK_DEADLOCK` 等）继续走现有应用层处理路径，不触发重连。
+
+### 35.5 只读分类（中央函数）
+
+```js
+isReadOnlySql(sql) = /^(SELECT|WITH|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i.test(trim(sql))
+```
+
+`allocateSequence` 是显式写，永不参与只读重试。
+
+### 35.6 恢复路径（按 action 区分）
+
+| action | 失败驱动行为 |
+|---|---|
+| `query` (read-only) | 失败若是可恢复连接错误且不在事务中 → 丢弃当前连接 → 重连 → 重试 SELECT 一次 |
+| `query` (非 read-only) | 失败若是可恢复连接错误 → 丢弃连接、不重试 |
+| `allocateSequence` | 任何连接错误 → 丢弃连接、不重试；序号递增可能已发生 |
+| `exec` (BEGIN/COMMIT/ROLLBACK) | 连接错误 → 丢弃连接、清 `inTransaction`、不重试 |
+| `exec` (其它 DDL/DML) | 连接错误 → 丢弃连接、不重试 |
+| `close` | 优雅 `connection.end()`；不重建 |
+
+任何单次请求最多做一次恢复 / 重试决策；不会进入 `while (true) reconnect`。
+
+### 35.7 事务状态
+
+worker 内部按 `classifyExecStatement(sql)` 跟踪：
+
+- `BEGIN` / `START TRANSACTION` → `inTransaction = true`
+- `COMMIT` / `ROLLBACK` → `inTransaction = false`
+- 连接丢失时 → `inTransaction = false`，发出 `mysql_transaction_lost`
+
+adapter 的 `exec()` 改为以 worker 返回的 `inTransaction` 为权威；旧版仅以本地 `BEGIN/COMMIT/ROLLBACK` 字符串判定的回退路径仍保留作为兼容。
+
+### 35.8 关闭语义
+
+`MySqlSyncAdapter.close()` 触发 worker 的 `close` action：
+
+1. `closed = true`；
+2. 对健康连接尝试 `connection.end()`，失败 / 已损坏时直接放弃；
+3. 置 `connection = undefined`、`inTransaction = false`；
+4. 之后任何 `_request`（除 `close` 外）以 `MySQL database is closed` 抛出。
+
+### 35.9 可观测性
+
+仅在 §35.6 列举的恢复路径上调用 `createStructuredLogger()` 发出：
+
+- `mysql_connection_lost { code, reason }`
+- `mysql_reconnect_attempt`
+- `mysql_reconnect_success`
+- `mysql_reconnect_failed { code, message }`
+- `mysql_transaction_lost { reason }`
+
+logger 内置 `redact()` 已覆盖 password / secret / token / 完整 `key=value` 形式；不输出 SQL 参数值。正常成功查询不产生日志。
+
+### 35.10 性能边界
+
+禁止添加无条件 `connection.ping()`。每次业务请求可能触发数十次同步 SQL，前置 ping 会显著放大往返。本阶段仅采用失败驱动恢复；不引入主动探活。
+
+### 35.11 测试策略
+
+聚焦回归测试 `server/v16-p2-connection-recovery.test.js`：
+
+1. `isRecoverableConnectionError` 仅识别传输级错误；
+2. `isReadOnlySql` 保守分类；
+3. `classifyExecStatement` 识别 BEGIN / COMMIT / ROLLBACK；
+4. fixture worker 行为：
+   - 重连后会话设置被重新应用；
+   - 写 / 序号分配 / exec 错误绝不重试；
+   - SELECT 在可恢复错误后仅重试一次；
+   - 事务中的 SELECT 不会被重试；
+   - 业务 SQL 错误不触发重连；
+   - close 之后任何请求以 `MySQL database is closed` 失败；
+   - killed session 后下一条读自动重连并继续工作。
+
+集成测试 `server/mysql-v162-connection-recovery.integration.js`：
+
+- 通过独立控制连接对 adapter 持有的 session 执行 `KILL CONNECTION`；
+- 验证 `SELECT 1 ready` 通过重连成功；
+- 验证 `SELECT CONNECTION_ID()` 的返回值改变；
+- 验证重连后 `time_zone`、`transaction_isolation`、`innodb_lock_wait_timeout` 被重新应用；
+- 验证事务被 KILL 后 `COMMIT` 抛可恢复错误且 adapter.isTransaction 同步置为 `false`；
+- 验证随后独立请求仍能正常重连。
+
+测试不削弱既有 V1.6 / V1.6.1 / V1.6.2 Phase 1 任何 focused / 受影响合同。
+
+### 35.12 阶段状态
+
+STAGE 1 / 2 / 3 一体化冻结于本节；不重新进入设计阶段、不重做需求评审。完成后写入 log/2026-10-03.md，由用户授权后续提交动作。

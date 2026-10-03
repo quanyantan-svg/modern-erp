@@ -2969,3 +2969,168 @@ IQC 任何已有 focused / 受影响合同必须保持通过。
 - 不重设计 IQC、采购入库、销售订单、采购订单、独立 OQC、MRP、库存、决策报表、业务总览；
 - 不新增全局 OQC 启动器图块（OQC 仍为 contextual，仅通过销售出库详情进入）；
 - 不进入 V1.6.2 Phase 2 / MySQL 连接可靠性 / connection pool 迁移 / systemd / Nginx / 部署脚本 / 新质量数据模型 / schema / MRP / 采购批次 / 生产完工 / 会计 / 库存重设计。
+
+## 34. V1.6.2 Phase 2 — MySQL 连接自动恢复
+
+本节是 V1.6.2 Phase 2 的 STAGE 1 / 2 / 3 一体化冻结。起点为 Phase 1 已落地 commit `026b2966b6ce16784fe7acff41715172a0a8566d`（tag `v1.6.1`）。本节不重写 §1–§33 任何需求，不引入 schema / 迁移 / API / 角色 / 审批族 / 业务合同变化；只新增 MySQL worker 内连接生命周期与恢复策略，并明确禁止用配置或运维手段绕过该策略。
+
+### 34.1 问题陈述（生产事故复现）
+
+生产路径为 `ERP_DB_BACKEND=mysql`，MySQL 8 `127.0.0.1:3306`。MySQL `wait_timeout=28800`、`interactive_timeout=28800`。应用在 `server/database/mysql-worker.js` 启动时建立一个长连接，并一直复用。MySQL 关闭空闲连接或发生瞬时中断后：
+
+- Node 进程仍存活；
+- worker 持有的 connection 对象已陈旧；
+- 后续 SQL 全部失败；
+- `/api/health/live = 200`，`/api/health/ready = 503`；
+- 应用保持 not-ready，必须 `systemctl restart modern-erp` 才能恢复。
+
+直接用同应用凭据的 MySQL CLI 在该期间可正常访问；重启 `modern-erp.service` 立刻恢复 readiness。该事故已在生产复现。
+
+### 34.2 恢复目标
+
+应用必须在不动 Node 进程的前提下，从陈旧 / 丢失的 MySQL 连接中自动恢复，使 readiness 不再依赖 `systemctl restart modern-erp`。
+
+### 34.3 范围与非范围
+
+仅修改应用内 MySQL 连接生命周期与 worker 协议；不重写数据库层、不迁移 connection pool、不修改 schema、迁移、API、角色、审批族、SQLite 路径、business SQL 或业务合同。
+
+显式禁止的“伪修复”：
+
+- 调整 MySQL 全局 `wait_timeout` / `interactive_timeout`；
+- cron / systemd 周期重启；
+- 任何外部 watchdog 拉起脚本；
+- Nginx 兜底；
+- 周期性 HTTP 探活仅用于维持 MySQL 连接。
+
+同服务器还有其他项目共存；不得为单个应用修改 MySQL 全局行为。
+
+### 34.4 连接配置与会话设置保留
+
+worker 必须保留初次连接时的原始 MySQL 配置。每次新建连接（含初次连接与重连）必须按以下顺序应用会话设置，且只有会话设置全部成功后才将该连接视为可用：
+
+```sql
+SET time_zone = '+00:00';
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+SET SESSION innodb_lock_wait_timeout = 2;
+```
+
+禁止让重连“静默丢失”上述会话设置。
+
+### 34.5 可恢复连接错误（中央分类）
+
+worker 集中识别以下 mysql2 / Node 错误为可恢复传输级错误：
+
+```
+PROTOCOL_CONNECTION_LOST
+PROTOCOL_PACKETS_OUT_OF_ORDER
+PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR
+PROTOCOL_ENQUEUE_AFTER_QUIT
+PROTOCOL_SEQUENCE_TIMEOUT
+ECONNRESET
+ECONNREFUSED
+ETIMEDOUT
+EPIPE
+ENOTFOUND
+EAI_AGAIN
+```
+
+以及文本特征 `Connection lost` / `Connection terminated` / `Server has gone away` / `Packets out of order`。
+
+业务 / SQL 错误（`ER_DUP_ENTRY` / `ER_NO_REFERENCED_ROW_2` / `ER_BAD_FIELD_ERROR` / `ER_PARSE_ERROR` / `ER_LOCK_DEADLOCK` / `ER_LOCK_WAIT_TIMEOUT` 等）不得触发重连。错误分类必须有且仅有一个中央实现，禁止散落复制。
+
+### 34.6 写安全（关键）
+
+`INSERT` / `UPDATE` / `DELETE` / `REPLACE` / `COMMIT` / 文档序号分配 / 业务过账 / 库存过账 / 会计过账 在被分发到 MySQL 后即便客户端后续收到连接错误，**也可能已经写入**。自动重试写可能造成：
+
+- 重复过账；
+- 重复库存移动；
+- 重复文档序号递增；
+- 重复财务分录。
+
+**因此绝不自动重试已经被分发到 MySQL 的写操作**。`allocateSequence` 是显式写动作，与业务写入同等对待。
+
+### 34.7 只读自动重试
+
+明确只读的语句（`SELECT` / `WITH` / `SHOW` / `DESCRIBE` / `DESC` / `EXPLAIN`）在收到可恢复连接错误时可以自动重试一次，路径为：
+
+```
+陈旧连接 → SELECT 失败（可恢复错误）→ 丢弃陈旧连接 → 重连 → 重新应用会话设置 → 重试 SELECT 一次 → 成功
+```
+
+`/api/health/ready` 中的 `SELECT 1 ready` 由此 self-heal。
+
+非读操作（`exec`、事务控制、序号分配、写查询）不享受此重试。
+
+### 34.8 写失败后的清理
+
+写遇到可恢复连接错误时：
+
+- 不重放该写；
+- 丢弃陈旧连接；
+- 不在下一个请求前静默重建；
+- 下一条独立请求来时自动建立新连接。
+
+### 34.9 事务丢失
+
+应用通过 adapter 使用事务语义。重连必须**不能**在另一条 MySQL 连接上继续同一事务。连接丢失后：
+
+- 不得重放事务语句；
+- 不得在新连接上假装 `COMMIT` 成功；
+- 必须把错误返回给调用方，并在 worker 内部把事务状态重置为关闭；
+- adapter 的 `isTransaction` 必须与之保持一致。
+
+### 34.10 关闭与禁用
+
+`MySqlSyncAdapter.close()` 必须继续以优雅方式关闭健康连接，并使之后任何请求以 `MySQL database is closed` 失败；不得在 close 后继续重建连接。已损坏连接不必先尝试 `.end()` 再销毁；mysql2 的 `destroy()` 是更安全的兜底。
+
+### 34.11 性能边界
+
+禁止对每次 SQL 调用前置 `connection.ping()`。ERP 单次业务请求中可能包含数十次同步 SQL；每次前置 ping 会显著放大 MySQL 网络往返。允许的恢复路径为失败驱动（failure-driven recovery），必要时可加空闲阈值后做的有界主动校验，但本阶段不引入主动 ping。
+
+### 34.12 可观测性
+
+使用现有 structured logger 发出以下事件，仅在实际恢复发生时才记录：
+
+```
+mysql_connection_lost
+mysql_reconnect_attempt
+mysql_reconnect_success
+mysql_reconnect_failed
+mysql_transaction_lost
+```
+
+不得记录密码、完整连接配置、SQL 参数值或业务数据。正常成功查询不得产生日志。
+
+### 34.13 Readiness 合同
+
+健康行为必须保持：
+
+- MySQL 健康 → `/api/health/ready = 200`；
+- MySQL 宕机 → `/api/health/ready = 503`，`/api/health/live = 200`；
+- MySQL 恢复后 → 下一个 readiness 请求自动重建连接，`/api/health/ready = 200`，无应用重启。
+
+本阶段不改 readiness API、不改 `db.prepare('SELECT 1 ready').get()` 作为权威探针。
+
+### 34.14 验收与发布准备
+
+1. 新增 `server/v16-p2-connection-recovery.test.js`：聚焦回归覆盖 §34.4–§34.10 的全部行为；
+2. 新增 `server/database/test-fixtures/recovery-mysql-worker.js`：可控的 worker fixture，复用 §34.5 中央分类函数；
+3. 新增 `server/mysql-v162-connection-recovery.integration.js`：受保护 disposable MySQL 集成测试，缺 MySQL 环境时 fail-fast；
+4. focused 测试与全量 `pnpm test` 不引入新失败（仅允许既有 4 个 reset-data 路径保护失败）；
+5. `CI=true pnpm install --frozen-lockfile` 通过；
+6. `CI=true pnpm build` 通过；
+7. `git diff --check` 通过；
+8. 若受保护 disposable MySQL 已配置：执行 `mysql-v162-connection-recovery.integration.js`，真实 KILL session 并验证重连 / 会话设置 / 事务丢失；
+9. 不 push、不 tag、不部署、不重写 Git 历史；
+10. log/2026-10-03.md 追加本次 STAGE 1 / 2 / 3 阶段记录。
+
+### 34.15 非目标
+
+- 不重写数据库层；
+- 不迁移到 mysql2 connection pool；
+- 不修改任何业务 SQL、schema、迁移；
+- 不修改 SQLite 兼容路径；
+- 不修改 backend API、role、审批族、document sequence 分配语义；
+- 不动 `package.json` 版本；不动 v1.6.1 tag；
+- 不修改 Nginx / systemd / 部署脚本；
+- 不引入 cron / 周期重启 / watchdog / 探活 HTTP。
