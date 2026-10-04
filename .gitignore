@@ -22,4 +22,11 @@ Thumbs.db
 *.swo
 *~
 
+# Claude Code 项目级配置：仅跟踪共享 settings 与项目级 Skill；
+# 本机私有 settings、缓存、临时状态、凭据、Token 等必须忽略。
 .claude/settings.local.json
+.claude/settings.local.*.json
+.claude/cache/
+.claude/state/
+.claude/tmp/
+.claude/*.local.*

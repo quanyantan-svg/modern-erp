@@ -97,25 +97,35 @@ MySQL 8 需要：
 
 ## 仓库地图
 
-    src/                 React 前端、页面、共享组件及 canonical application registry / hash navigation
-    server/app.js        原生 HTTP 路由与部分核心 handler
-    server/modules/      领域服务与业务工作流
-    server/database/     MySQL adapter、worker、protocol 与 schema
-    server/migrations/   增量 schema 迁移
-    server/*.test.js     回归、合同与集成测试
-    scripts/runtime/     开发运行入口
-    scripts/admin/       备份、恢复、首个管理员与受保护的数据转换工具
-    scripts/gates/       MySQL 功能/并发 gate 及其子进程 worker
-    scripts/diagnostics/ 诊断、性能检查和历史调试工具
-    scripts/acceptance/  手工/浏览器验收工具
-    scripts/             不提供当前 V1.6 可直接执行的生产全量重置工具
-    deploy/              Nginx 与 systemd 配置
-    docs/operations/     当前专项运维与演示指南
-    docs/archive/        历史审计、阶段与发布证据
-    docs/archive/v1.2/   V1.2 审计与视觉验收历史证据
-    log/                 append-only 开发日志
+    src/main.jsx              React 启动入口
+    src/App.jsx               应用壳、权限化导航和 Registry 驱动的 Screen orchestration
+    src/navigation/           canonical applicationRegistry、RouteLocation、Launcher 与 navigation context
+    src/lib/                  金额、状态、产品文案与共享 presentation 工具
+    src/api.js                Bearer Token、请求封装和安全错误映射
+    src/pages/                业务页面
+    src/components/           通用与移动端组件
+    src/styles/               共享与 V1.6 / V1.7 各 domain 样式
+    server/index.js           配置数据库、创建 HTTP server、优雅关闭
+    server/app.js             原生 HTTP 路由、认证分发及仍未拆出的核心 handler
+    server/db.js              SQLite schema/seed、权限、共享 transaction 和数据库创建
+    server/modules/           领域服务、工作流和 reconciliation
+    server/database/          MySQL adapter、worker、protocol 与 schema bootstrap
+    server/migrations/        按业务阶段组织的增量迁移
+    server/lib/               HTTP 校验/响应、审计和结构化日志
+    server/*.test.js          单元、合同、回归和集成测试
+    scripts/runtime/          开发运行入口；package.json 保持稳定命令别名
+    scripts/admin/            备份、恢复、首个管理员与受保护的数据转换工具
+    scripts/gates/            MySQL 功能/并发 gate 与 JSON-lines 并发 worker
+    scripts/diagnostics/      诊断、性能检查和历史调试工具
+    scripts/acceptance/       隔离数据库、浏览器和发布验收工具
+    scripts/testing/          跨平台 test runner、suite manifest 与 governance validate
+    deploy/                   Nginx 与 systemd 配置
+    docs/operations/          当前专项运维与演示指南（含 testing.md）
+    docs/archive/             历史审计、阶段与发布证据
+    docs/archive/v1.6/        V1.6 各阶段设计证据与验收记录
+    log/                      append-only 开发日志（log/YYYY-MM-DD.md）
 
-scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令名保持稳定；日常仍使用 `pnpm dev`、`pnpm test:mysql:performance` 等命令，不应依赖内部脚本路径。
+scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令名保持稳定；日常仍使用 `pnpm dev`、`pnpm test:mysql:performance` 等命令，不应依赖内部脚本路径。当前仓库不提供适用于 V1.6 的可直接执行生产全量数据重置工具。
 
 当前仓库不提供适用于 V1.6 的可直接执行生产全量数据重置工具。此类破坏性操作必须使用单独评审、与目标环境匹配并获得明确批准的流程；`pnpm reset-data` 只面向仓库外的一次性开发/测试 SQLite 数据库。
 
