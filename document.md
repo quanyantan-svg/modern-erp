@@ -397,3 +397,226 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - 用户可见的 System Health / 核对前端（应用启动卡、常规导航入口、可达前端路由）；
 - 用户可见的受控 Go-Live 前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）；
 - 在真实大规模 MySQL 数据和目标硬件上的生产容量认证。
+
+## 20. V2 系统化重构与产品结构现代化
+
+V2 是建立在 v1.6.2 已发布基线之上的系统化重构与产品结构现代化计划。V2 不得被描述为 greenfield 改写，也不得暗示既有已验证 ERP 业务逻辑会被整体替换。V2 是结构重构与所有权迁移计划，不是新 ERP 业务能力发布；§3–§19 既有的业务合同在 V2 全部实施阶段必须继续成立，任何偏离必须先形成独立、明确批准的需求 delta。V2 第一波的版本与 tag 语义见 §20.9。
+
+### 20.1 V2 目的
+
+V2 的目标是：
+
+1. 减少架构集中度与重复所有权；
+2. 建立清晰的前后端领域边界；
+3. 使未来 ERP 开发更安全、更易推理；
+4. 在不改变既有 ERP 业务含义的前提下改进 mobile-first 应用结构；
+5. 在保留已验证的 v1.6.2 业务合同的同时，按需替换遗留 / 内部实现结构；
+6. 通过显式的迁移阶段，使 V2 增量推进、持续回归安全，避免一次性重写。
+
+### 20.2 V2 基线冻结
+
+下列状态在 V2 全部实施阶段视为冻结基线（版本与 tag 规则以 §20.9 为权威）：
+
+- 已发布基线：`v1.6.2`。
+- 已认证的开发 / 重构基线：`master` @ `98d20232674baf8b1ccb69850fd46ecd709f42b3`。
+- V2 继承的 V1.7 P0 前端架构基础：
+  - `src/navigation/applicationRegistry.js` 仍为 canonical 路由与应用元数据事实源；
+  - `src/navigation/routeLocation.js` 仍为 canonical 导航位置合同；
+  - `AppNavigationContext` 导航合同继续继承；
+  - Route-level lazy screen 架构继续继承；
+  - 53 个启用 Route、5 个禁用 Route；
+  - 现有 `MobileShell`（messages / approvals / apps / workspace / profile）五入口合同。
+- V1.7 P0 属于 V2 继承的前端架构基础，不是独立的 ERP 业务能力发布。
+
+### 20.3 V2 业务合同冻结（必须保留）
+
+§3–§17 仍是权威、详尽的业务合同来源；§20.3 只识别 V2 重构不得违反的跨领域不变量。任何偏离必须先形成新的、明确批准的需求 delta。
+
+A. 授权与治理（见 §3）
+
+- 五 canonical 角色：ADMIN / SALES / REVIEWER / WAREHOUSE / ACCOUNTING；
+- 五 canonical 审批族：SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER；
+- 职责分离（SOD）与创建人不得审批自己单据；
+- 后端授权始终权威；
+- 关键操作保留审计合同。
+
+B. 金额与会计（见 §4.1、§13、§14、§16）
+
+- API / 数据库使用安全整数分，借贷严格相等；
+- POSTED-only 是财务报表权威口径；
+- 系统凭证来源唯一；
+- AR / AP 未结金额由历史派生、不得由人工编辑；
+- 退款、贷项、冲销、write-off 保留原单、反向凭证与审计。
+
+C. 库存、LOT / SERIAL 与估值（见 §10、§13）
+
+- canonical inventory、不可变流水、LOT / SERIAL 身份语义、HOLD / AVAILABLE 区分；
+- 数量与价值移动在同一业务事务内同步发生；
+- valuation movement 为价值权威历史，缓存由事务维护；
+- 退货 / 冲销恢复原账面价值；
+- LEGACY_UNVALUED 不得静默估价，并阻断权威关账。
+
+D. O2C / P2P（见 §6、§7、§11）
+
+- 来源单据数量边界、审批、收货 / 出货质量门禁、IQC / OQC 语义保留；
+- 开票 / 结算与收货 / 出货分离；
+- 退货不得自动重开原始订单履约义务。
+
+E. 制造、WIP 与成本（见 §9、§12）
+
+- BOM / routing / cost snapshot 在开工时建立；
+- 领退料、生产入库与冲销由 WAREHOUSE 执行；
+- 工序报工、报废与时间记录、显式冲销；
+- WIP 必须正确；完工差异显式；完工时 WIP 归零；
+- 缺失成本证据不得伪装为零。
+
+F. 期间控制（见 §13、§16）
+
+- 存货期间先于会计期间关闭；
+- 业务日期为期间归属口径；
+- 关闭期间内的库存 / 财务影响交易必须被拒绝；
+- reconciliation 默认为 CHECK-only；
+- 反结账按相反顺序并保留原因与历史。
+
+G. 数据库与并发（见 §6、§9、§17）
+
+- SQLite 仍为受支持的本地 / 测试兼容后端；
+- MySQL 8 仍为一等运行后端；
+- 既有 transaction recheck、幂等与唯一性保证继续生效；
+- 既有 MySQL 并发正确性边界不得在另行批准的证据 / 设计前被削弱；
+- stale-connection recovery 语义保留；
+- 写入不得盲重放；已允许的 reads 重试范围按既有合同执行。
+
+H. 安全（见 §17）
+
+- 现有 session / 密码 / 安全合同不变；
+- 生产密钥、密码、token 不得进入仓库、日志或文档示例；
+- 破坏性 / 生产操作仍按既有 governance 单独授权。
+
+### 20.4 V2 架构要求
+
+V2 必须在结构上达成下列目标；具体文件级实现由后续 STAGE 2 DESIGN 阶段决定，本节不得越界规定实现细节。
+
+后端：
+
+- `server/app.js` 不得继续长期作为无关领域业务的 handler 所有者；HTTP dispatch 所有权必须逐步清晰、可审计。
+- 业务规则必须只有一个 canonical 实现；不得长期存在重复或"半死"的并行实现。
+- 领域所有权必须显式、可在目录树中可定位。
+- 跨领域依赖必须是有意为之、可审查。
+- 事务边界必须可见；权限必须在 API / 领域边界可见。
+- 既有"extended.js kitchen sink"形态的所有权必须随重构减少。
+- 重构必须按领域逐步推进，不得一次性整仓改写。
+
+前端：
+
+- `applicationRegistry` 仍为 canonical 路由与 Route 元数据事实源，除非另行批准的需求单独改变该合同。
+- `RouteLocation` 语义必须保持 canonical。
+- direct URL / 刷新 / Back / Forward 必须继续正确工作。
+- 授权 gate 必须保持 fail-closed。
+- 大型遗留页面文件应逐步分解为 list / detail / editor / domain surface；本需求不要求一次性分解。
+- V2 必须保持 mobile-first。
+- 320 / 390 / 430 / 680 CSS px 响应式行为不得回归。
+- 既有工作流语义不得因视觉一致性而改变。
+- UI 现代化必须把"展示变更"与"业务行为变更"分离。
+
+数据库：
+
+- V2 不得创建第二套并行的 inventory / accounting 真实来源。
+- V2 不得创建第二套 MySQL adapter 或数据库抽象路径。
+- schema / migration 变更必须有自己的、明确批准的 V2 需求阶段。
+- 纯结构重构应优先零 schema 变更。
+
+测试（与 AGENTS.md §6 / §6.1 / §6.2 一致）：
+
+- 每个迁移 / 重构阶段必须为变更的所有权 / 边界提供 focused 测试。
+- 架构 / 跨域阶段必须运行 `pnpm test` + `pnpm build` + `git diff --check`。
+- MySQL / 数据库敏感阶段在具备受保护 disposable MySQL 环境时运行相应 MySQL gate。
+- FAST / FULL / HEAVY manifest 不变量仍为强制约束。
+- 不得通过弱化测试、插入 `skip` / `todo`、删除 assertion 或 reclassification 制造绿色结果。
+
+### 20.5 V2 第一波范围
+
+V2 第一波必须足够窄、足够可证、可在保留既有合同的前提下完成。每一项都是一个独立的、可单独批准与回归的逻辑单元：
+
+P1. 后端应用边界清理
+
+- 降低 `server/app.js` 的集中度；
+- 建立显式的 route / handler 所有权；
+- 保留每一项既有外部 API 合同。
+
+P2. 后端领域所有权清理
+
+- 在已有不可达证据后清除真正不可达的重复实现；
+- 在合理情况下拆分混合领域所有权；
+- 在移动所有权时不得改变 ERP 行为。
+
+P3. 前端领域 surface 分解
+
+- 降低 `master-data.jsx`、`logistics-finance.jsx`、`manufacturing.jsx` 的集中度；
+- 保留当前 `applicationRegistry` / navigation 合同；
+- 为后续 mobile 展示现代化准备 domain 组件。
+
+P4. 移动展示现代化基础（仅作为需求目标）
+
+- 建立一致的现代 mobile ERP 布局语言；
+- 改善层级、密度、间距、交互 ergonomics 与 list / detail / editor 一致性；
+- 保留业务工作流、状态、权限与 action 语义。
+
+P4 在本阶段仅定义目标；具体设计与实现须在后续 DESIGN / IMPLEMENTATION 阶段另行批准。
+
+### 20.6 第一波明确非目标
+
+§19 的延后或明确不支持范围在 V2 第一波继续全部适用。除此外，V2 第一波还明确不以以下结构变化为目标：
+
+- 任何新的 ERP 业务模块；
+- 重大会计模型重设；
+- 存货估值重设；
+- 替换 MySQL；
+- 替换 / 移除 SQLite 支持；
+- 为框架偏好替换 Node 原生 HTTP；
+- 为技术偏好迁移到 React Router；
+- 引入 Docker / Kubernetes；
+- 引入 Redis；
+- 生产数据迁移；
+- 生产部署变更；
+- 任意数据库 schema 清理；
+- 修改既有角色族；
+- 修改既有审批族；
+- 为架构整洁而改变既有 Route 数量。
+
+未在未来需求中被显式引入的能力不得描述为"默认计划"。
+
+### 20.7 V2 交付原则
+
+V2 必须按增量推进，不得作为整仓一次性重写：
+
+- 每个 wave 必须遵循 AGENTS.md 定义的 REQUIREMENT → DESIGN → IMPLEMENTATION 流程与验证 / Git 治理。
+- 不相关的后端、前端、数据库、视觉重设不得混入同一个无控 wave。
+- 若重构发现实际业务行为缺陷，该缺陷不再视为"纯重构"，必须先创建并批准独立的需求 / 设计 delta，再修改行为。
+
+### 20.8 V2 验收要求
+
+§18 的通用验收标准继续全部适用。V2 重构额外必须证明：
+
+- 既有外部 API 形态保持兼容，除非另行明确批准；
+- 既有业务工作流保持等价；
+- RBAC / SOD / 审批语义保持等价；
+- 会计 / 库存业务结果保持等价；
+- canonical 所有权无歧义；
+- 同一业务原语不得有重复活动实现；
+- 领域所有权可理解、可审计；
+- route 所有权可审计；
+- mobile-first 行为保留；
+- 既有响应式断点行为保留；
+- 既有 route / 深链导航行为保留；
+- 用户可见业务术语仍为 canonical ERP 术语；
+- 不得只是把 desktop 表格压缩到 mobile。
+
+### 20.9 版本语义
+
+- V2 当前是重构计划的名称，不是发布版本。
+- `package.json` 维持 `1.6.2`，直至另行批准的 release / version 决策变更。
+- 既有 `v1.6.2` Git tag 不可移动、不可删除、不可重建。
+- 不得在架构开发过程中创建 `v2.0.0` 或其他 v2.x tag / release。
+- 精确开发状态以 Git SHA 标识。
+- V2 首个 release 的最终语义版本号必须留待未来的 release-planning 阶段决定。
