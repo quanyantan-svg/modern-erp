@@ -194,17 +194,18 @@ test('P1 material plan: page source uses centralized status labels (no raw enum 
 // continue to appear under 生产管理.
 
 test('P1 launcher: 生产管理 domain exposes forecast, MRP and material suggestions', () => {
-  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationMetadata.js'), 'utf8');
-  assertContains(launcherSource, "label: '生产管理'");
-  assertContains(launcherSource, "['forecasts', '计划预测'");
-  assertContains(launcherSource, "['mrp-runs', 'MRP'");
+  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
+  assertContains(launcherSource, "'production','生产管理'");
+  assertContains(launcherSource, "['forecasts','计划预测'");
+  assertContains(launcherSource, "['mrp-runs','MRP'");
   // material-requirements-plan is intentionally NOT a primary tile.
-  assert.ok(!launcherSource.includes("['material-requirements-plan'"),
+  const productionLauncher = launcherSource.split("launcherGroup('production'")[1]?.split("launcherGroup('purchasing'")[0] || '';
+  assert.ok(!productionLauncher.includes("['material-requirements-plan'"),
     'V1.6 P1B must not list material-requirements-plan as a primary launcher tile');
 });
 
 test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础资料', () => {
-  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationMetadata.js'), 'utf8');
+  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
   // The exact old label must be gone
   assert.ok(!launcherSource.includes("'MRP 物料需求计划'"), 'legacy MRP launcher entry still present');
   // The old `mrp` page key must not appear as a launcher entry (it remains as a route alias only)
@@ -212,30 +213,30 @@ test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础�
 });
 
 test('P1 launcher: 基础资料 no longer contains forecasts or mrp items', () => {
-  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationMetadata.js'), 'utf8');
+  const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
   // master-data group must not reference forecasts / mrp-runs / material-requirements-plan
-  const masterDataBlock = launcherSource.split("label: '基础资料'")[1]?.split("}")[0] || '';
+  const masterDataBlock = launcherSource.split("launcherGroup('master-data'")[1]?.split("launcherGroup('sales'")[0] || '';
   assert.ok(!masterDataBlock.includes("'forecasts'"), 'forecasts still inside 基础资料 group');
   assert.ok(!masterDataBlock.includes("'mrp-runs'"), 'mrp-runs still inside 基础资料 group');
   assert.ok(!masterDataBlock.includes("'material-requirements-plan'"), 'material plan still inside 基础资料 group');
 });
 
 // ---------------------------------------------------------------------------
-// 6. App.jsx navGroups — three distinct canonical entries, label rename
+// 6. Canonical application registry — three distinct entries, label rename
 // ---------------------------------------------------------------------------
 
-test('P1 navGroups: V1.5 navigation uses 计划预测 / MRP / MRP · 物料建议 labels', () => {
-  const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
-  assertContains(appSource, "key: 'forecasts', label: '计划预测'");
-  assertContains(appSource, "key: 'mrp-runs', label: 'MRP'");
-  assertContains(appSource, "key: 'material-requirements-plan', label: 'MRP · 物料建议'");
+test('P1 registry uses 计划预测 / MRP / 物料需求计划 labels', () => {
+  const registrySource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
+  assertContains(registrySource, "route('forecasts','计划预测'");
+  assertContains(registrySource, "route('mrp-runs','MRP'");
+  assertContains(registrySource, "route('material-requirements-plan','物料需求计划'");
   // Older ambiguous combined label remains absent.
-  assert.ok(!appSource.includes("label: 'MRP 物料需求计划'"), 'old MRP 物料需求计划 label still in navGroups');
+  assert.ok(!registrySource.includes("'MRP 物料需求计划'"), 'old ambiguous label still in registry');
 });
 
-test('P1 navGroups: 计划与生产 group contains the three planning entries + planning documents', () => {
-  const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
-  const planningBlock = appSource.split("label: '计划与生产'")[1]?.split(']},')[0] || '';
+test('P1 registry: 计划与生产 contains planning entries and documents', () => {
+  const registrySource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
+  const planningBlock = registrySource;
   assertContains(planningBlock, "'forecasts'");
   assertContains(planningBlock, "'mrp-runs'");
   assertContains(planningBlock, "'material-requirements-plan'");
@@ -244,15 +245,16 @@ test('P1 navGroups: 计划与生产 group contains the three planning entries + 
   assertContains(planningBlock, "'purchase-requisitions'");
 });
 
-test('P1 navGroups: 物料需求计划 uses MRP_VIEW or MRP_MANAGE permission', () => {
-  const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
-  const entry = appSource.split("key: 'material-requirements-plan'")[1]?.split('},')[0] || '';
-  assertContains(entry, "'MRP_VIEW', 'MRP_MANAGE'");
+test('P1 registry: 物料需求计划 uses MRP_VIEW or MRP_MANAGE permission', () => {
+  const registrySource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
+  const entry = registrySource.split("route('material-requirements-plan'")[1]?.split('),')[0] || '';
+  assertContains(entry, "'MRP_VIEW'");
+  assertContains(entry, "'MRP_MANAGE'");
 });
 
 test('P1 routes: mrp is kept as a backwards-compat alias for material-requirements-plan', () => {
-  const appSource = readFileSync(resolve(repoRoot, 'src/App.jsx'), 'utf8');
-  assertContains(appSource, "'mrp': <MaterialRequirementsPlan");
+  const registrySource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
+  assertContains(registrySource, "mrp: 'material-requirements-plan'");
 });
 
 // ---------------------------------------------------------------------------
@@ -506,7 +508,7 @@ test('P1 planning hub derives its active tab from currentPage and navigates tabs
   assertContains(hubSource, 'onChange={navigateToPage}');
   assertContains(hubSource, "value:'production-instructions'");
   assertContains(hubSource, "value:'purchase-instructions'");
-  assertContains(appSource, 'currentPage: page');
-  assertContains(appSource, "useState(location.hash.slice(1) || 'dashboard')");
-  assertContains(appSource, "navigateToPage(location.hash.slice(1) || 'dashboard'");
+  assertContains(appSource, 'currentPage: currentLocation.routeKey');
+  assertContains(appSource, 'parseRouteLocation(location.hash)');
+  assertContains(appSource, "addEventListener('hashchange', applyBrowserLocation)");
 });

@@ -9,6 +9,7 @@ import {
   TECHNICAL_ROUTE_ALIASES,
   presentationForRoute,
 } from '../src/navigation/presentationMetadata.js';
+import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/navigation/applicationRegistry.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
@@ -31,15 +32,12 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
   assert.equal(ROUTE_PRESENTATIONS.some((item) => item.route === 'mrp'), false, 'mrp alias must not be a canonical active route');
 });
 
-test('D10 active routes reconcile exactly with src/App.jsx navGroups', () => {
-  const app = read('src/App.jsx');
-  const block = app.match(/export const navGroups = \[([\s\S]*?)\n\];/)?.[1] || '';
-  const entries = [...block.matchAll(/\{ key: '([^']+)'[^\n]+/g)].map((match) => ({ route: match[1], disabled: /enabled: false/.test(match[0]) }));
-  const active = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.route));
-  const disabled = new Set(entries.filter((entry) => entry.disabled).map((entry) => entry.route));
-  assert.equal(active.size, 53, 'App.jsx navGroups must contain 53 active routes');
-  assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'App active routes must match ROUTE_PRESENTATIONS');
-  assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'App disabled routes must match DISABLED_ROUTE_PRESENTATIONS');
+test('D10 active routes reconcile exactly with canonical application registry', () => {
+  const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
+  const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
+  assert.equal(active.size, 53, 'application registry must contain 53 active routes');
+  assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
+  assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
 
 test('D10 every active route has complete presentation metadata', () => {

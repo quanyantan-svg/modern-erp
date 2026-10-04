@@ -176,8 +176,11 @@ export function PurchaseReceipts({ user, notify }) {
   function returnToList() {
     setEditor(null);
     setSelectedId(null);
+    navigation.navigateToPage('purchase-receipts', null, { replace: true });
     void load();
   }
+
+  function openDetail(id) { setSelectedId(id); navigation.navigateToPage('purchase-receipts', { documentId: id }); }
 
   function closeEditorOnly() {
     setEditor(null);
@@ -197,6 +200,9 @@ export function PurchaseReceipts({ user, notify }) {
     void load(search, status, includeArchived);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, includeArchived]);
+  useEffect(() => {
+    setSelectedId(target?.page === 'purchase-receipts' && target.documentId ? target.documentId : null);
+  }, [target?.page, target?.documentId]);
 
   if (editor) {
     const fromDetail = Boolean(selectedId);
@@ -236,12 +242,9 @@ export function PurchaseReceipts({ user, notify }) {
         user={user}
         notify={notify}
         navigation={navigation}
-        onBack={() => {
-          setSelectedId(null);
-          void load();
-        }}
+        onBack={returnToList}
         onEdit={(value) => setEditor(value)}
-        onChanged={() => { setSelectedId(null); void load(); }}
+        onChanged={returnToList}
       />
     );
   }
@@ -344,7 +347,7 @@ export function PurchaseReceipts({ user, notify }) {
               key={item.id}
               item={item}
               user={user}
-              onOpen={() => setSelectedId(item.id)}
+              onOpen={() => openDetail(item.id)}
               onEdit={(value) => setEditor(value)}
             />
           ))}
@@ -1283,8 +1286,11 @@ export function SalesDeliveries({ user, notify }) {
   function returnToList() {
     setEditor(null);
     setSelectedId(null);
+    navigation.navigateToPage('sales-deliveries', null, { replace: true });
     void load();
   }
+
+  function openDetail(id) { setSelectedId(id); navigation.navigateToPage('sales-deliveries', { documentId: id }); }
 
   function closeEditorOnly() {
     setEditor(null);
@@ -1303,6 +1309,9 @@ export function SalesDeliveries({ user, notify }) {
     void load(search, status, includeArchived);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, includeArchived]);
+  useEffect(() => {
+    setSelectedId(target?.page === 'sales-deliveries' && target.documentId ? target.documentId : null);
+  }, [target?.page, target?.documentId]);
 
   if (editor) {
     return (
@@ -1325,12 +1334,9 @@ export function SalesDeliveries({ user, notify }) {
         user={user}
         notify={notify}
         navigation={navigation}
-        onBack={() => {
-          setSelectedId(null);
-          void load();
-        }}
+        onBack={returnToList}
         onEdit={(value) => setEditor(value)}
-        onChanged={() => { setSelectedId(null); void load(); }}
+        onChanged={returnToList}
       />
     );
   }
@@ -1433,7 +1439,7 @@ export function SalesDeliveries({ user, notify }) {
               key={item.id}
               item={item}
               user={user}
-              onOpen={() => setSelectedId(item.id)}
+              onOpen={() => openDetail(item.id)}
               onEdit={(value) => setEditor(value)}
             />
           ))}
@@ -2134,7 +2140,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
 }
 // Returns
 export function Returns({ user, notify }) {
-  const { target } = useAppNavigation();
+  const { target, navigateToPage } = useAppNavigation();
   const targetTab = target?.documentType === 'PURCHASE_RETURN' ? 'purchase' : 'sales';
   const [tab, setTab] = useState(target?.page === 'returns' ? targetTab : "sales");
   const [items, setItems] = useState([]);
@@ -2146,23 +2152,33 @@ export function Returns({ user, notify }) {
     api(apiPath + "?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(tab === "sales" ? r.salesReturns : r.purchaseReturns)).catch((e) => notify(e.message, "error"));
   };
   useEffect(() => { void load(); }, [tab, status]);
+  useEffect(() => {
+    const nextTab = target?.documentType === 'PURCHASE_RETURN' ? 'purchase' : 'sales';
+    setTab(nextTab);
+    setView(target?.page === 'returns' && target.documentId ? { id: target.documentId, tab: nextTab } : null);
+  }, [target?.page, target?.documentId, target?.documentType]);
+  function switchTab(nextTab) {
+    setTab(nextTab);
+    setView(null);
+    navigateToPage('returns', { documentType: nextTab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }, { replace: true });
+  }
   const cols = ["单号", tab === "sales" ? "客户" : "供应商", "仓库", "金额", "状态", "制单人", ""];
   return <BusinessPageShell className="returns-v15" width="rail">
     <BusinessPageHeader title="退货管理" context={tab === 'sales' ? '销售退货' : '采购退货'} primaryAction={can(user, "RETURNS_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({ tab })}>新建{tab === 'sales' ? '销售' : '采购'}退货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售退货引用已确认销售出货；采购退货引用已确认采购入库。两类退货保持各自来源和库存方向。</p></HelpDisclosure>}/>
-    <div className="segment-wrap"><div className="segment"><button className={tab === "sales" ? "active" : ""} onClick={() => setTab("sales")}>销售退货</button><button className={tab === "purchase" ? "active" : ""} onClick={() => setTab("purchase")}>采购退货</button></div></div>
+    <div className="segment-wrap"><div className="segment"><button className={tab === "sales" ? "active" : ""} onClick={() => switchTab("sales")}>销售退货</button><button className={tab === "purchase" ? "active" : ""} onClick={() => switchTab("purchase")}>采购退货</button></div></div>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr>{cols.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id, tab })} style={{cursor:"pointer"}}>
+      {items.map((item) => <tr key={item.id} onClick={() => { setView({ id: item.id, tab }); navigateToPage('returns', { documentId: item.id, documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }); }} style={{cursor:"pointer"}}>
         <td className="mono">{item.return_no}</td>
         <td>{tab === "sales" ? item.customerName : item.supplierName}</td>
         <td>{item.warehouseName}</td>
         <td className="number">{money(item.total_cents)}</td>
         <td><Status status={item.status} label={item.statusLabel}/></td>
         <td>{item.creatorName}</td>
-        <td onClick={(e) => e.stopPropagation()}>{can(user, "RETURNS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => setView({ id: item.id, tab })}>编辑</button>}</td>
+        <td onClick={(e) => e.stopPropagation()}>{can(user, "RETURNS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => { setView({ id: item.id, tab }); navigateToPage('returns', { documentId: item.id, documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }); }}>编辑</button>}</td>
       </tr>)}
     </tbody></table>{!items.length && <Empty text="没有退货记录"/>}</div>
-    {view && <ReturnModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
+    {view && <ReturnModal user={user} value={view} onClose={() => { setView(null); navigateToPage('returns', { documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }, { replace: true }); void load(); }} notify={notify} api={api}/>}
   </BusinessPageShell>;
 }
 

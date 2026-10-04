@@ -210,14 +210,14 @@ describe('M10 routing lifecycle and validation', () => {
 describe('M10 frontend and navigation contracts', () => {
   const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
   const page = readFileSync(new URL('../src/pages/product-routing.jsx', import.meta.url), 'utf8');
-  const metadata = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
+  const metadata = readFileSync(new URL('../src/navigation/applicationRegistry.js', import.meta.url), 'utf8');
   const overview = readFileSync(new URL('../src/pages/business-overview.jsx', import.meta.url), 'utf8');
   const manufacturing = readFileSync(new URL('../src/pages/manufacturing.jsx', import.meta.url), 'utf8');
 
   test('canonical SPA navigation and mobile application metadata expose the admin-only application', () => {
-    assert.match(app, /key: 'product-routings'.*ROUTING_VIEW.*ROUTING_MANAGE/);
-    assert.match(app, /'product-routings': <ProductRoutings/);
-    assert.match(metadata, /\['product-routings', '制品工序标准'/);
+    assert.match(metadata, /route\('product-routings','制品工序标准'.*ROUTING_VIEW.*ROUTING_MANAGE/);
+    assert.match(metadata, /'product-routings': defaultScreen\('\.\.\/pages\/product-routing\.jsx'\)/);
+    assert.match(metadata, /\['product-routings','制品工序标准'/);
     assert.doesNotMatch(page, /location\.hash|window\.location/);
   });
 
@@ -228,8 +228,11 @@ describe('M10 frontend and navigation contracts', () => {
   });
 
   test('product, production-order and business overview integrations use product routing as sibling master data', () => {
-    assert.match(metadata, /\['product-routings', '制品工序标准'/);
+    // V1.7 P0: launcher groups live in applicationRegistry.js with route
+    // bindings (not the legacy applicationMetadata.js free-form arrays).
+    const registry = readFileSync(new URL('../src/navigation/applicationRegistry.js', import.meta.url), 'utf8');
+    assert.match(registry, /\['product-routings','制品工序标准','routings'/);
     assert.match(manufacturing, /activeRoutingId/);
-    assert.match(manufacturing, /page="product-routings"/);
+    assert.match(manufacturing, /product-routings/);
   });
 });

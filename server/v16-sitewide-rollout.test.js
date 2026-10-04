@@ -126,7 +126,7 @@ describe('V1.6 site-wide rollout source contract', () => {
   });
 
   test('App wraps application pages in the semantic route surface', () => {
-    assert.match(app, /<V16RouteSurface route=\{mobileApplication\.page\}>\{applicationPage\}<\/V16RouteSurface>/);
+    assert.match(app, /<V16RouteSurface route=\{route\.key\}><RouteScreen route=\{route\}/);
     for (const attribute of ['data-route', 'data-rollout-state', 'data-route-classification', 'data-application-group', 'data-archetype', 'data-module']) {
       assert.match(surface, new RegExp(attribute));
     }

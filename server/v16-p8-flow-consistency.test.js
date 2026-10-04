@@ -23,6 +23,7 @@ import {
   TECHNICAL_ROUTE_ALIASES,
 } from '../src/navigation/presentationMetadata.js';
 import { MOBILE_APPLICATION_GROUPS, MOBILE_COMMON_PRIORITY } from '../src/navigation/applicationMetadata.js';
+import { applicationRouteFor } from '../src/navigation/applicationRegistry.js';
 
 const readSrc = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 const app = readSrc('src/App.jsx');
@@ -31,12 +32,18 @@ const decisionReports = readSrc('src/pages/decision-reports.jsx');
 const inventoryExtensions = readSrc('src/pages/inventory-extensions.jsx');
 const mobileApprovalCenter = readSrc('src/components/MobileApprovalCenter.jsx');
 const styles = readSrc('src/styles.css');
-const presentation = readSrc('src/navigation/presentationMetadata.js');
 
 const enabledByRoute = new Map(ROUTE_PRESENTATIONS.map((route) => [route.route, route]));
 const launcherItems = MOBILE_APPLICATION_GROUPS.flatMap((group) =>
   group.items.map((item) => ({ ...item, groupKey: group.key, groupKind: group.kind })),
 );
+
+function assertRouteScreen(routeKey, modulePath, exportName) {
+  const screen = applicationRouteFor(routeKey)?.screen;
+  assert.equal(screen?.identity, routeKey, `${routeKey} screen identity`);
+  assert.equal(screen?.modulePath, modulePath, `${routeKey} screen module`);
+  assert.equal(screen?.exportName, exportName, `${routeKey} screen export`);
+}
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
@@ -55,12 +62,13 @@ test('P8 route inventory: enabled route keys are unique and no collision with di
   assert.deepEqual(overlap, [], 'no enabled route may also appear as disabled');
 });
 
-test('P8 route inventory: every enabled route has a concrete App page registration', () => {
+test('P8 route inventory: every enabled route has a concrete Registry screen registration', () => {
   for (const { route } of ROUTE_PRESENTATIONS) {
-    const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const quoted = new RegExp(`['"]${escaped}['"]\\s*:`);
-    const bare = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:`, 'm');
-    assert.ok(quoted.test(app) || bare.test(app), `${route} must be registered in App.jsx pages`);
+    const registeredRoute = applicationRouteFor(route);
+    assert.ok(registeredRoute, `${route} must exist in the Application Registry`);
+    assert.ok(registeredRoute.screen, `${route} must have a screen registration`);
+    assert.equal(typeof registeredRoute.screen.loader, 'function', `${route} screen loader`);
+    assert.ok(registeredRoute.screen.identity, `${route} screen identity must be non-empty`);
   }
 });
 
@@ -205,9 +213,9 @@ test('P8 MRP alias: TECHNICAL_ROUTE_ALIASES.mrp resolves to material-requirement
 
 test('P8 MRP: planning remains a production child and uses the canonical permission', () => {
   const mrp = enabledByRoute.get('material-requirements-plan');
+  assert.ok(mrp, 'material-requirements-plan must remain enabled');
   assert.equal(mrp.parentRoute, 'mrp-runs');
   assert.deepEqual(mrp.any, ['MRP_VIEW', 'MRP_MANAGE']);
-  assert.match(presentation, /mrp:\s*'material-requirements-plan'/);
 });
 
 // ----- 4. Removed/internal capability safety -----
@@ -315,36 +323,35 @@ test('P8 prototype: MobileShell still exposes exactly 5 enabled tabs in frozen o
 });
 
 test('P8 prototype: P7 decision-reports route identity is preserved', () => {
-  assert.match(app, /'decision-reports':\s*<DecisionReports\b/);
+  assertRouteScreen('decision-reports', '../pages/decision-reports.jsx', 'default');
 });
 
 test('P8 prototype: P2/P3 sales list and document remain one canonical orders route', () => {
-  assert.match(app, /\borders:\s*<Orders\b/);
+  assertRouteScreen('orders', '../pages/master-data.jsx', 'Orders');
   assert.doesNotMatch(app, /['"]sales-order-(?:list|detail)['"]\s*:/);
 });
 
 test('P8 prototype: purchasing receipt and production execution routes remain distinct canonical pages', () => {
-  for (const [route, component] of [
-    ['purchase-receipts', 'PurchaseReceipts'],
-    ['production-orders', 'ProductionOrders'],
-    ['material-issues', 'MaterialIssues'],
-    ['production-receipts', 'ProductionReceipts'],
+  for (const [route, modulePath, component] of [
+    ['purchase-receipts', '../pages/logistics-finance.jsx', 'PurchaseReceipts'],
+    ['production-orders', '../pages/manufacturing.jsx', 'ProductionOrders'],
+    ['material-issues', '../pages/manufacturing.jsx', 'MaterialIssues'],
+    ['production-receipts', '../pages/manufacturing.jsx', 'ProductionReceipts'],
   ]) {
-    assert.match(app, new RegExp(`['"]?${route}['"]?\\s*:\\s*<${component}\\b`));
+    assertRouteScreen(route, modulePath, component);
   }
 });
 
 test('P8 prototype: inventory four-tab model in master-data inventory section is preserved', () => {
-  // P6 inventory module entry still resolves to Inventory component.
-  assert.match(app, /\binventory:\s*<Inventory\b/);
-  assert.match(app, /'inventory-scraps':\s*<InventoryScraps\b/);
-  assert.match(app, /'inventory-month-end':\s*<InventoryMonthEnd\b/);
-  assert.match(app, /'inventory-transactions':\s*<InventoryTransactions\b/);
+  // P6 inventory routes retain their distinct source modules and exports.
+  assertRouteScreen('inventory', '../pages/master-data.jsx', 'Inventory');
+  assertRouteScreen('inventory-scraps', '../pages/inventory-extensions.jsx', 'InventoryScraps');
+  assertRouteScreen('inventory-month-end', '../pages/inventory-extensions.jsx', 'InventoryMonthEnd');
+  assertRouteScreen('inventory-transactions', '../pages/logistics-finance.jsx', 'InventoryTransactions');
   assert.ok(inventoryExtensions.length > 0, 'inventory-extensions.jsx must exist for scraps / month-end');
   // Inventory-transactions must NOT be the same as the P7 decision-reports
   // inventory-movements route. They are two distinct user-visible contexts.
-  assert.match(app, /'inventory-transactions':\s*<InventoryTransactions\b/);
-  assert.match(app, /'decision-reports':\s*<DecisionReports\b/);
+  assert.notEqual(applicationRouteFor('inventory-transactions'), applicationRouteFor('decision-reports'));
 });
 
 // ----- 8. P8-CONS-001 bounded fix verification -----

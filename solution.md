@@ -42,6 +42,8 @@ MySQL 配置不完整时在连接前 fail closed。
 |---|---|
 | src/main.jsx | React 启动入口 |
 | src/App.jsx | 应用壳、权限化导航和页面选择 |
+| src/navigation/applicationRegistry.js | 最终用户 Route、权限、导航、Launcher、Presentation 与 Screen 的 canonical registry |
+| src/navigation/routeLocation.js | hash RouteLocation 的解析、规范化、校验与序列化纯函数 |
 | src/api.js | Bearer Token、请求封装和安全错误映射 |
 | src/pages/ | 业务页面 |
 | src/components/ | 通用与移动端组件 |
@@ -63,6 +65,26 @@ MySQL 配置不完整时在连接前 fail closed。
 | docs/archive/v1.2/ | V1.2 审计、视觉验收和发布上下文历史证据，不是当前产品事实 |
 
 server/app.js 仍是较大的集中路由文件。新增复杂领域逻辑应优先进入 server/modules/，但本阶段不为目录美观迁移既有 handler。
+
+### 3.1 V1.7 P0 — 前端应用架构基础
+
+`src/navigation/applicationRegistry.js` 是最终用户 Route 的唯一前端事实源。每条 Route 描述唯一 key、title、domain、archetype、access、enabled、parentRoute、desktop navigation、mobile exposure、零至多个 Launcher Entry、target contract、screen identity/loader、aliases 和 responsive mode。启动期静态校验拒绝重复 key、冲突 alias、无效 parentRoute、指向不存在 Route 的 Launcher Entry，以及缺少 Screen 的启用 Route。`presentationMetadata.js` 和 `applicationMetadata.js` 只保留向后兼容 projection，不维护第二份业务 Route inventory。
+
+Launcher Entry 与 Route 分离，一个 Route 可以没有、具有一个或具有多个 Launcher Entry。`returns` 通过不同 target 暴露销售退货和采购退货；`decision-reports` 通过 reportKey 暴露多个报表入口。P0 保持六个 core Launcher group（master-data、sales、production、purchasing、inventory、analytics）和 V1.6 的业务范围，不注册尚未实现的业务模块。
+
+`src/navigation/routeLocation.js` 提供 `parseRouteLocation(hash)`、`serializeRouteLocation(location)`、`normalizeRouteLocation(location)`、`resolveRouteAlias(routeKey)` 和 `validateRouteTarget(route, target)`。概念对象为 `{ routeKey, params, query, target }`；函数不调用 API、不产生业务 mutation、不写数据库。SPA 继续使用 hash，不引入 Router dependency。列表地址保持 `#orders` 等旧格式，详情使用 `#orders/<documentId>`，context/report target 使用稳定 query。旧 `#mrp` 解析为 `#material-requirements-plan` 并以 replace 规范化；ID/query 使用安全编码，malformed 输入 fail safely。
+
+浏览器 hash 经 RouteLocation parser 进入 Registry，依次检查 Route 存在、enabled、前端 access，再解析 Screen 并通过 RouteSurface 挂载业务页面。`App.jsx` 只承担认证、壳状态、history 协调、错误态和 Screen orchestration；不再维护独立 `navGroups` 或 `pages` inventory。Route Screen 使用 route-level lazy loading，加载或渲染失败由 Route-level Error Boundary 捕获，MobileShell 不整体崩溃。
+
+`AppNavigationContext` 暴露 `currentLocation`、`currentRoute`、`canNavigate`、`navigate`、`hrefFor`、`setHeaderBackAction` 和 `registerHeaderBackAction`；`navigateToPage` 作为兼容 wrapper，把旧 target 转换为 RouteLocation。`AppLink` 通过 `hrefFor()` 生成包含 exact target 的真实 href。普通业务跳转 push history；alias/normalization replace history；Sheet、FilterSheet、ConfirmSheet、ActionSheet 等 ephemeral UI 保持 React local state。Back / Forward 始终重新解析 hash，不依赖陈旧 memory target。
+
+Registry access 只控制 Launcher、desktop navigation、Route mount 和 contextual link。direct URL 的顺序为 parse → registry resolve → enabled → frontend access → component mount → API request → backend authorization。unknown、disabled 和 unauthorized Route 使用安全 canonical 状态；未授权 Route 不挂载受保护 Screen，因此不触发页面 API。后端授权语义不因本重构改变。
+
+`cash-journals`、`bills`、`fixed-assets`、`workflows`、`data-cleanup` 保持 `enabled: false` 且不进入 Launcher；System Health 和 controlled Go-Live UI 不注册为最终用户 Route。`V16RouteSurface` 的 classification、application group、archetype、module 和 responsive mode 从 Registry 派生。旧页面保留 `LEGACY_ADAPTER` MutationObserver 适配；V1.7 新页面默认 `NATIVE_RESPONSIVE`，P0 不批量迁移旧页面。
+
+现有 BusinessPageShell、BusinessPageHeader、BusinessDetailLayout、ResponsiveBusinessList、RecordCard、CompactRecord、BusinessState、BusinessActionBar、DetailSection、KeyValueRow、Sheet、FilterSheet、ActionSheet 与 BottomActionBar 继续作为唯一 design system。MobileShell 固定且仅包含 messages、approvals、apps、workspace、profile 五个全部启用入口，不按 viewport 分叉第二棵组件树。
+
+P0 按 Registry Foundation、Route Location、App Shell Integration、Legacy Compatibility & Acceptance 四个逻辑单元实施。测试覆盖 53/5 Route 数量与完整性、projection、RouteLocation round-trip/编码/非法输入、Launcher/List/Detail/Related/Refresh/Back/Forward、alias、unknown/disabled/unauthorized、Screen Error Boundary 和五入口移动合同。旧 source-contract 测试若绑定 `App.jsx navGroups/pages` 旧结构，应改为验证 Registry projection 的等价产品合同，不删除真实业务回归。正式完成 gate 仍为 focused tests、`pnpm test`、`pnpm build` 和 `git diff --check`。
 
 脚本从 package.json 或其他脚本启动子进程时，必须从 `import.meta.url` 推导仓库根目录并显式设置 `cwd` 或使用绝对目标路径，不得依赖调用者碰巧位于仓库根目录。ES module 的相对 import 仍以脚本文件自身为基准。浏览器验收脚本的临时数据库与截图位置必须继续保持隔离；默认生成截图写入被忽略的 `.tmp/`，不能混入 `docs/archive/` 的版本化历史证据；结构移动不得改变验收业务流程。
 
@@ -376,14 +398,56 @@ Go-Live 激活与普通首笔业务共享事务 gate，避免期初状态和正�
 
 ### 15.1 默认回归
 
-server/*.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js 或系统临时目录创建隔离 SQLite 数据库。测试必须证明仓库默认 data/erp.db 不被访问或删除。
+server/*.test.js 与 src/lib/v14-e1-presentation.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js 或系统临时目录创建隔离 SQLite 数据库。测试必须证明仓库默认 data/erp.db 不被访问或删除。
 
 测试层次：
 
 - 领域 focused tests：状态、金额、来源、权限和回滚。
-- 合同测试：五角色、五审批族、schema/migration、前端源结构。
+- 合同测试：五角色、五审批族、schema/migration、canonical 前端 registry（V1.7 P0 之后）。
 - 集成/UAT：跨模块业务链、期间关闭和 reconciliation。
 - UI/浏览器工具：在隔离数据库和临时输出目录运行。
+
+### 15.2 测试分层（V1.7 P0 + 整合后）
+
+V1.7 Test Suite Consolidation 整理后的分层，由 `scripts/testing/test-suites.js`
+集中声明，`scripts/testing/run-tests.js` 跨平台调用。Manifest 在每次运行前由
+`validate()` 做 invariant 校验：FAST ⊆ FULL、FULL ∩ HEAVY = ∅、所有列出的文件存在、
+磁盘上每一个 `*.test.js` 都被分类到某一个 suite；任何一项不满足即 fail-closed（exit 2）。
+
+集合语义：
+
+    FAST  ⊆ FULL
+    FULL ∩ HEAVY = ∅
+    ALL   = FULL ∪ HEAVY
+
+`test:all` 因此执行每个 Node `--test` 文件恰好一次 —— FAST 不会因为落在两个
+suite 里而被重复跑。
+
+当前 suite 实测（2026-10-04 review）：
+
+- `pnpm test:fast` —— 日常开发快速 feedback。覆盖 V1.7 P0 frontend authoritative suite、helpers、copy/status、轻量权限、suite governance self-test 与小型确定性回归，不跑 temp SQLite / Vite SSR。当前 12 文件 / 344 测试，约 13.9 秒。
+- `pnpm test` —— canonical full regression。包含 fast 全部内容 + 当前领域 workflow + integration + security + supported migration safety。当前 116 文件 / 1914 测试，约 56.3 秒。
+- `pnpm test:heavy` —— slow / environment-coupled：backup restore、长迁移矩阵、生产 bootstrap、MySQL adapter、concurrency、performance、browser acceptance。不进入日常 gate。当前 7 文件 / 67 测试，约 19.6 秒（在 disposable 环境一次跑完）；MySQL gate 保持独立脚本，不被拉入 `test:heavy` 以保留其 disposable-only 防护。
+- `pnpm test:all` —— FULL ∪ HEAVY，仅用于 release candidate / 数据库 migration release / 生产认证。当前 123 文件。
+
+Runner 提供 `--list` / `--dry-run` 低成本验证 suite selection，也提供 `--filter <substring>`
+对单个 suite 做 targeted smoke；`pnpm test:list` 是 `full --list` 的别名。
+
+不允许通过 `skip()` / `todo()` / 删除 assertion 来制造"全绿"，heavy 分类依据必须是执行成本 / 环境依赖，而不是当前 failing。
+
+frontend authoritative suite 固定为 `server/v17-p0-frontend-application-architecture.test.js`：
+它拥有 route inventory 53/5、RouteLocation round-trip / 编码 / 非法输入 / stable query、launcher
+group projection、route aliases、disabled routes、App.jsx shell + lazy screen + RouteSurface
++ AppNavigationContext + MobileShell 五入口合同。后续 frontend navigation contract
+的新增与改动必须落在此处；旧 source-structure assertion（如 `App.jsx must still reference
+Dashboard`）已迁移至 registry / projection API，禁止回归。
+
+`server/test-suite-governance.test.js` 是 suite governance self-test，落在 FAST。
+它重新调用 `validate()` 并断言每个 suite 不变量，保证后续任何人新增 `*.test.js`
+但忘记把它分到某个 suite 时，`pnpm test:fast` 会立即失败。
+
+完整测试矩阵、删除/迁移记录、1975→1868 的准确账目、各 domain canonical owner 与
+runtime 实测见 [docs/operations/testing.md](./docs/operations/testing.md)。
 
 默认完成 gate：
 
@@ -392,7 +456,11 @@ server/*.test.js 使用 node:test，主要通过 server/test-utils/temp-db.js �
     pnpm build
     git diff --check
 
-### 15.2 MySQL gate
+跨域 / 架构 / release-candidate 阶段使用 `pnpm test`；数据库 / 备份 / 生产 / 迁移 /
+release 相关变更追加 `pnpm test:heavy` 与既有 MySQL gate。日常有界任务使用
+`pnpm test:fast`。具体 AI gate 阶梯以 `AGENTS.md` §6 为权威。
+
+### 15.3 MySQL gate
 
 - pnpm test:mysql：schema/SQL 兼容与业务集成。
 - pnpm test:mysql:concurrency：多进程、多连接真实锁等待与竞态。

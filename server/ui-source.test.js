@@ -85,9 +85,11 @@ describe('UI source — production cleanup', () => {
 });
 
 describe('UI source — route surface preserved', () => {
-  test('All supported page modules remain importable from App.jsx', () => {
-    const app = readFile('App.jsx');
-    // every page component referenced in App.jsx must be present in the corresponding module
+  test('All supported page modules remain importable through the canonical registry', () => {
+    // V1.7 P0: route-to-component bindings live in applicationRegistry.js
+    // (SCREEN_DEFINITIONS), not as literal imports in App.jsx. Each
+    // canonical screen must remain a real export from its module file.
+    const registry = readFile('navigation/applicationRegistry.js');
     const expectedExports = [
       ['Login', 'pages/master-data.jsx'],
       ['Dashboard', 'pages/master-data.jsx'],
@@ -104,9 +106,6 @@ describe('UI source — route surface preserved', () => {
       ['ProductionOrders', 'pages/manufacturing.jsx'],
       ['IQCInspections', 'pages/quality.jsx'],
       ['OQCInspections', 'pages/quality.jsx'],
-      ['Contacts', 'pages/crm.jsx'],
-      ['Followups', 'pages/crm.jsx'],
-      ['SalesActivities', 'pages/crm.jsx'],
       ['Projects', 'pages/projects-workflow.jsx'],
       ['ProjectTasks', 'pages/projects-workflow.jsx'],
       ['Timesheets', 'pages/projects-workflow.jsx'],
@@ -124,29 +123,31 @@ describe('UI source — route surface preserved', () => {
       ['InventoryTransactions', 'pages/logistics-finance.jsx'],
     ];
     for (const [name, module] of expectedExports) {
-      assert.ok(app.includes(name), `App.jsx must still reference ${name}`);
       const src = readFile(module);
       const exportMatch = new RegExp(`export\\s+function\\s+${name}\\b`).test(src)
         || new RegExp(`export\\s*\\{[^}]*\\b${name}\\b[^}]*\\}`).test(src);
       assert.ok(exportMatch, `${module} must still export ${name}`);
     }
-    assert.ok(app.includes('MobileApprovalCenter'), 'App.jsx must use the canonical aggregated approval center');
+    assert.match(registry, /approvals:\s*defaultScreen\('\.\.\/components\/MobileApprovalCenter\.jsx'\)/);
+    assert.match(registry, /contacts:\s*defaultScreen\('\.\.\/components\/MobileCrmApplication\.jsx'\)/);
   });
 
-  test('M8 AR/AP and settlement pages are mounted and advertised in App.jsx', () => {
-    const app = readFile('App.jsx');
-    for (const name of ['Receivables', 'Payables', 'Collections', 'Payments']) assert.equal(app.includes(name), true);
-    for (const key of ['accounts-receivable', 'accounts-payable', 'payment-collections', 'payment-disbursements']) assert.equal(app.includes(key), true);
+  test('M8 AR/AP and settlement routes are bound through the canonical registry', () => {
+    const registry = readFile('navigation/applicationRegistry.js');
+    for (const key of ['accounts-receivable', 'accounts-payable', 'payment-collections', 'payment-disbursements']) {
+      assert.match(registry, new RegExp(`'${key}':\\s*named\\('../pages/settlement\\.jsx'`));
+    }
   });
 
-  test('Permission-based navigation logic (navGroups + can) preserved', () => {
+  test('Permission-based navigation is sourced from the canonical registry', () => {
     const app = readFile('App.jsx');
-    assert.ok(/navGroups\.flatMap/.test(app), 'navGroups flatMap filter for visible items must remain');
-    assert.ok(/visibleNav\.some/.test(app), 'visibleNav.some must remain the active-page guard');
-    assert.ok(/permission:\s*['"]DASHBOARD_VIEW['"]/.test(app), 'dashboard permission gate must remain');
-    assert.ok(/permission:\s*['"]ORDERS_APPROVE['"]/.test(app), 'order approval permission gate must remain');
-    assert.ok(/any:\s*\[\s*['"]SUPPLIERS_VIEW['"]/.test(app), 'suppliers view gate must remain');
-    assert.ok(/any:\s*\[\s*['"]ACCOUNTING_VIEW['"]/.test(app), 'accounting view gate must remain');
+    const registry = readFile('navigation/applicationRegistry.js');
+    assert.ok(/ACTIVE_APPLICATION_ROUTES/.test(app), 'App must consume canonical active routes');
+    assert.ok(/userCanAccessRoute/.test(app), 'App must guard route exposure and mount');
+    assert.ok(/permission:\s*['"]DASHBOARD_VIEW['"]/.test(registry), 'dashboard permission gate must remain');
+    assert.ok(/permission:\s*['"]ORDERS_APPROVE['"]/.test(registry), 'approval permission gate must remain');
+    assert.ok(/any:\s*\[\s*['"]SUPPLIERS_VIEW['"]/.test(registry), 'suppliers view gate must remain');
+    assert.ok(/any:\s*\[\s*['"]ACCOUNTING_VIEW['"]/.test(registry), 'accounting view gate must remain');
   });
 
   test('Auth flow surface preserved (login + logout + auth:unauthorized)', () => {

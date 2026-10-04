@@ -151,15 +151,9 @@ describe('M2 application metadata', () => {
     }
   });
 
-  test('every application page is mounted by the existing App page map', () => {
-    for (const item of mobileGroups.flatMap((group) => group.items)) {
-      assert.match(
-        appSource,
-        new RegExp(`(?:['"]${item.page}['"]|${item.page}):\\s*<[A-Z]`),
-        `unmounted mobile page: ${item.page}`
-      );
-    }
-  });
+  // V1.7 P0: App.jsx no longer owns an explicit page map; routes and screens
+  // are sourced from applicationRegistry.js. Mount coverage is asserted by
+  // server/v17-p0-frontend-application-architecture.test.js.
 
   test('application page cards have unique composite keys (reportKey-aware)', () => {
     const items = buildMobileApplicationGroups(visibleNavigationFor('role-admin'))
@@ -312,14 +306,14 @@ describe('M2 launcher interaction and navigation contracts', () => {
   });
 
   test('App selection uses the existing hash/page state and back clears the application', () => {
-    assert.match(appSource, /location\.hash\s*=\s*authorizedPage\.key/);
-    assert.match(appSource, /setPage\(authorizedPage\.key\)/);
+    assert.match(appSource, /location\.hash = hash/);
+    assert.match(appSource, /setCurrentLocation\(normalized\)/);
     assert.match(appSource, /function returnToMobileApplications\(\)[\s\S]*?setMobileApplication\(null\)[\s\S]*?setMobileTab\('apps'\)/);
   });
 
   test('the canonical shell defaults to Applications while preserving the page fallback', () => {
     assert.match(appSource, /useState\('apps'\)/);
-    assert.match(appSource, /location\.hash\.slice\(1\) \|\| 'dashboard'/);
+    assert.match(appSource, /parseRouteLocation\(location\.hash\)/);
   });
 
   test('mobile shell exposes a 44px accessible back action', () => {
@@ -369,9 +363,10 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(appSource, /<MobileShell\b/);
     assert.doesNotMatch(appSource, /className="app-shell"/);
     assert.doesNotMatch(appSource, /className="sidebar"/);
-    assert.match(appSource, /key: 'business-overview', label: '业务总览'/);
-    assert.match(appSource, /key: 'production-orders', label: '制令单'/);
-    assert.match(appSource, /key: 'sales-deliveries', label: '销售出货'/);
-    assert.match(appSource, /key: 'inventory-transactions', label: '库存异动明细'/);
+    const registry = readFileSync(join(repoRoot, 'src', 'navigation', 'applicationRegistry.js'), 'utf8');
+    assert.match(registry, /route\('business-overview','业务总览'/);
+    assert.match(registry, /route\('production-orders','制令单'/);
+    assert.match(registry, /route\('sales-deliveries','销售出货'/);
+    assert.match(registry, /route\('inventory-transactions','库存异动明细'/);
   });
 });

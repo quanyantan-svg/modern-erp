@@ -82,7 +82,11 @@ MySQL 8 需要：
 | pnpm dev | 同时启动前端与 API 开发环境 |
 | pnpm build | 构建前端至 dist/ |
 | pnpm start | 启动生产式 Node 服务 |
-| pnpm test | 运行完整 Node 测试套件 |
+| pnpm test:fast | 运行日常快速回归（前端 registry、helpers、suite governance self-test、小型确定性测试） |
+| pnpm test | 运行 canonical 完整回归（default completion gate） |
+| pnpm test:heavy | 运行 heavy / backup / systemd / nginx / production bootstrap；MySQL gate 保持独立 |
+| pnpm test:all | 运行 full + heavy，用于 release candidate / 数据库 migration release（FAST 不会重复执行） |
+| pnpm test:list | 仅列出 FULL suite 文件清单，不执行测试 |
 | pnpm test:mysql | 运行受保护的 MySQL 兼容 gate |
 | pnpm test:mysql:concurrency | 运行真实 MySQL 并发 gate |
 | pnpm test:mysql:performance | 运行受保护的 MySQL 性能测试 |
@@ -93,7 +97,7 @@ MySQL 8 需要：
 
 ## 仓库地图
 
-    src/                 React 前端、页面、导航和共享组件
+    src/                 React 前端、页面、共享组件及 canonical application registry / hash navigation
     server/app.js        原生 HTTP 路由与部分核心 handler
     server/modules/      领域服务与业务工作流
     server/database/     MySQL adapter、worker、protocol 与 schema
@@ -117,12 +121,39 @@ scripts/ 的物理路径按职责整理，但 package.json 提供的公共命令
 
 ## 测试与质量门
 
-通常按以下顺序验证：
+日常开发（单域 / 单页面 / 小型 bugfix / 低风险重构）：
 
-    # 先运行与变更相关的 focused tests
+    pnpm test:fast
+    pnpm build
+    git diff --check
+
+跨域 / 架构 / canonical metadata / release-candidate：
+
     pnpm test
     pnpm build
     git diff --check
+
+数据库 / 备份 / 生产 / 迁移 / release 相关变更追加：
+
+    pnpm test:heavy
+
+完整 release candidate / 数据库 migration release / 生产认证：
+
+    pnpm test:all
+
+新增低成本 runner 选项：
+
+    pnpm test:list                          # 列 FULL suite 文件清单，不执行测试
+    node scripts/testing/run-tests.js <suite> --list
+    node scripts/testing/run-tests.js <suite> --filter <substring>   # targeted smoke
+
+测试分层的 contract、set 关系不变量（FAST ⊆ FULL、FULL ∩ HEAVY = ∅、ALL = FULL ∪ HEAVY）
+与每条命令实际执行的清单见 [docs/operations/testing.md](./docs/operations/testing.md)。
+当前 V1.7 P0 之后的具体测试矩阵也在该文件中。
+
+`pnpm test` 当前覆盖 1914 个 Node `--test`，约 56 秒；`pnpm test:fast`
+约 14 秒、344 个 Node `--test`，覆盖 frontend registry、helpers、
+copy/status、轻量权限、suite governance self-test 与小型确定性回归。
 
 MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置时会安全拒绝运行。
 

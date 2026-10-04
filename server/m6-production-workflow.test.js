@@ -621,31 +621,31 @@ describe('M6 security contract', () => {
 
 describe('M6 mobile UI surface', () => {
   test('39. mobile manufacturing group exposes 制令单 / 用料出库 / 生产入库', () => {
-    const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
-    assert.match(meta, /\['material-issues', '用料出库'/);
-    assert.match(meta, /\['production-receipts', '生产入库'/);
-    assert.match(meta, /\['production-orders', '制令单'/);
+    const meta = readFileSync(new URL('../src/navigation/applicationRegistry.js', import.meta.url), 'utf8');
+    assert.match(meta, /\['material-issues','用料出库'/);
+    assert.match(meta, /\['production-receipts','生产入库'/);
+    assert.match(meta, /\['production-orders','制令单'/);
   });
 
-  test('40. mobile production cards are real — Production Order / Material Issue / Production Receipt route registration in App.jsx', () => {
-    const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
-    assert.match(app, /'material-issues': <MaterialIssues/);
-    assert.match(app, /'production-receipts': <ProductionReceipts/);
-    assert.match(app, /'material-issues', label: '用料出库'/);
-    assert.match(app, /'production-receipts', label: '生产入库'/);
+  test('40. mobile production cards resolve to canonical lazy route screens', () => {
+    const registry = readFileSync(new URL('../src/navigation/applicationRegistry.js', import.meta.url), 'utf8');
+    assert.match(registry, /'material-issues': named\('\.\.\/pages\/manufacturing\.jsx','MaterialIssues'\)/);
+    assert.match(registry, /'production-receipts': named\('\.\.\/pages\/manufacturing\.jsx','ProductionReceipts'\)/);
+    assert.match(registry, /route\('material-issues','用料出库'/);
+    assert.match(registry, /route\('production-receipts','生产入库'/);
   });
 
   test('41. fake / deferred production cards (work center / output) are absent from mobile group; production-instruction is present after M12', () => {
-    const meta = readFileSync(new URL('../src/navigation/applicationMetadata.js', import.meta.url), 'utf8');
-    const activeGroups = meta.slice(0, meta.indexOf('DEFERRED_MOBILE_APPLICATIONS'));
+    const activeGroups = readFileSync(new URL('../src/navigation/applicationRegistry.js', import.meta.url), 'utf8');
     // V1.6 P1B: material-requirements-plan is intentionally NOT a primary
     // launcher tile (it remains reachable via the mrp-runs route). The
-    // route is preserved in App.jsx pages map but excluded from the
+    // route is preserved in the canonical registry but excluded from the
     // launcher core groups.
-    assert.match(activeGroups, /\['forecasts', '计划预测'/);
-    assert.match(activeGroups, /\['mrp-runs', 'MRP'/);
-    assert.match(activeGroups, /\['production-instructions', '生产指令'/);
-    assert.ok(!activeGroups.includes("['material-requirements-plan', '物料建议'"),
+    assert.match(activeGroups, /\['forecasts','计划预测'/);
+    assert.match(activeGroups, /\['mrp-runs','MRP'/);
+    assert.match(activeGroups, /\['production-instructions','生产指令'/);
+    const productionLauncher = activeGroups.split("launcherGroup('production'")[1]?.split("launcherGroup('purchasing'")[0] || '';
+    assert.ok(!productionLauncher.includes("['material-requirements-plan','物料建议'"),
       'V1.6 P1B must not list material-requirements-plan as a primary launcher tile');
     assert.doesNotMatch(activeGroups, /工作中心|work-center/);
     assert.doesNotMatch(activeGroups, /生产产出|production-output/);

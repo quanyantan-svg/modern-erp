@@ -110,12 +110,43 @@ README 必须在以下内容变化时更新：项目结构、运行时要求、�
 - 不得削弱、删除或绕过测试来制造通过结果。
 - 金额在 API/数据库边界使用安全整数分；所有外部输入由后端验证。
 - 关键状态转换、库存、结算和会计操作必须保留事务、权限和审计合同。
+- 测试套件分层由 `scripts/testing/test-suites.js` 集中声明并由 `validate()` 做不变量校验。集合语义固定为 `FAST ⊆ FULL`、`FULL ∩ HEAVY = ∅`、`ALL = FULL ∪ HEAVY`。新增或调整 `*.test.js` 必须落到 FAST / FULL / HEAVY 中的一个，不能静默未分类。
 
-标准完成检查：
+### 6.1 测试 gate 阶梯（按任务类型）
+
+不同任务必须使用不同的最小完成 gate。任何 release candidate、跨域或 release-related
+变更不得降级为 `pnpm test:fast`；`test:fast` 是日常快速 feedback，不是 release certification。
+
+| 任务类型 | 必跑 gate | 备注 |
+|---|---|---|
+| 日常有界任务（单域 / 单页面 / 小型 bugfix / 低风险重构 / 非跨域） | `pnpm test:fast` + `pnpm build` + `git diff --check` | focused node `--test` 仍按需运行 |
+| 跨域 / 架构 / canonical metadata（application registry、permissions、shared accounting/inventory contracts、cross-domain workflow、大型重构、release candidate） | `pnpm test` + `pnpm build` + `git diff --check` | FULL 包含 FAST 的全部内容 |
+| Heavy 相关变更（backup / restore、production bootstrap、deployment、systemd、nginx、legacy migration、MySQL adapter、concurrency、performance、filesystem destructive safety） | `pnpm test` + `pnpm test:heavy` + 受影响 MySQL gate + `pnpm build` + `git diff --check` | MySQL gate 仅在具备受保护 disposable MySQL 环境时运行 |
+
+新增低成本的 runner 选项：
+
+- `pnpm test:list` —— `pnpm test` 的 `--list`，不执行测试，输出 suite 文件清单。
+- `node scripts/testing/run-tests.js <suite> --list` —— 同上对任意 suite。
+- `node scripts/testing/run-tests.js <suite> --filter <substring>` —— targeted smoke，仅匹配 basename 的文件。
+
+`pnpm test:all` 用于 release candidate / 数据库 migration release / 生产认证，
+集合语义为 `FULL ∪ HEAVY`；`test:fast` 不会被重复执行。
+
+### 6.2 标准完成检查
+
+有界任务（默认）：
+
+    pnpm test:fast
+    pnpm build
+    git diff --check
+
+跨域 / 架构 / release-candidate：
 
     pnpm test
     pnpm build
     git diff --check
+
+heavy 相关：在 6.1 表格的对应行追加 `pnpm test:heavy` 与受影响 MySQL gate。
 
 仅在具有受保护 disposable MySQL 环境时运行 MySQL reset/gate；不得把未知或生产数据库用于测试。
 

@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { MOBILE_APPLICATION_GROUPS } from '../navigation/applicationMetadata.js';
-import { presentationForRoute } from '../navigation/presentationMetadata.js';
+import { applicationRouteFor, RESPONSIVE_MODES } from '../navigation/applicationRegistry.js';
 
 export const V16_FROZEN_ROUTES = Object.freeze(new Set([
   'dashboard',
@@ -15,37 +14,21 @@ export const V16_FROZEN_ROUTES = Object.freeze(new Set([
   'decision-reports',
 ]));
 
-const INTERNAL_ROUTES = new Set(['material-requirements-plan', 'manufacturing-analytics']);
-const CONTEXTUAL_ROUTES = new Set([
-  'dashboard', 'sales-discounts', 'purchase-discounts', 'sales-invoices', 'payment-collections',
-  'supplier-bills', 'payment-disbursements', 'bank-accounts', 'product-costs', 'cost-rates',
-  'iqc', 'oqc', 'quality-control-points', 'tasks', 'timesheets', 'notifications',
-]);
-
-function applicationGroupFor(routeKey) {
-  return MOBILE_APPLICATION_GROUPS.find((group) => group.items.some((item) => item.page === routeKey))?.key || 'contextual';
-}
-
-function classificationFor(metadata, applicationGroup) {
-  if (INTERNAL_ROUTES.has(metadata?.route)) return 'INTERNAL';
-  if (CONTEXTUAL_ROUTES.has(metadata?.route)) return 'CONTEXTUAL';
-  return 'CORE';
-}
-
 export function routeRolloutDescriptor(routeKey) {
-  const metadata = presentationForRoute(routeKey);
-  const applicationGroup = applicationGroupFor(routeKey);
+  const route = applicationRouteFor(routeKey);
+  const metadata = route?.presentation || null;
   return {
     metadata,
-    applicationGroup,
-    classification: classificationFor(metadata, applicationGroup),
+    applicationGroup: route?.applicationGroup || 'contextual',
+    classification: route?.classification || 'CORE',
     state: V16_FROZEN_ROUTES.has(routeKey) ? 'frozen' : 'migrated',
-    archetype: String(metadata?.template || 'WORKFLOW').toLowerCase(),
+    archetype: String(route?.archetype || 'WORKFLOW').toLowerCase(),
     module: ({
       'master-data': 'master', sales: 'sales', production: 'production', purchasing: 'purchasing',
       inventory: 'inventory', analytics: 'analytics', planning: 'production',
       'planning-production': 'production', 'planning-purchasing': 'purchasing',
-    })[metadata?.domain] || 'master',
+    })[route?.domain] || 'master',
+    responsiveMode: route?.responsiveMode || RESPONSIVE_MODES.LEGACY_ADAPTER,
   };
 }
 
@@ -53,7 +36,7 @@ export default function V16RouteSurface({ route, children }) {
   const descriptor = routeRolloutDescriptor(route);
   const surfaceRef = useRef(null);
   useEffect(() => {
-    if (descriptor.state !== 'migrated' || !surfaceRef.current) return undefined;
+    if (descriptor.state !== 'migrated' || descriptor.responsiveMode !== RESPONSIVE_MODES.LEGACY_ADAPTER || !surfaceRef.current) return undefined;
     const surface = surfaceRef.current;
     const labelMobileTableCells = () => {
       for (const table of surface.querySelectorAll('.table-wrap table')) {
@@ -81,6 +64,7 @@ export default function V16RouteSurface({ route, children }) {
       data-application-group={descriptor.applicationGroup}
       data-archetype={descriptor.archetype}
       data-module={descriptor.module}
+      data-responsive-mode={descriptor.responsiveMode}
     >
       {children}
     </div>

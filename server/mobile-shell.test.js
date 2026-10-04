@@ -33,6 +33,7 @@ let MobileShell;
 let MobileShellTabs;
 let MobilePage;
 let MobileLauncher;
+let applicationRegistry;
 
 before(async () => {
   vite = await createViteServer({
@@ -45,6 +46,7 @@ before(async () => {
   MobileShellTabs = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).MOBILE_TABS;
   MobilePage = (await vite.ssrLoadModule('/src/components/MobilePage.jsx')).default;
   MobileLauncher = (await vite.ssrLoadModule('/src/components/MobileLauncher.jsx')).default;
+  applicationRegistry = await vite.ssrLoadModule('/src/navigation/applicationRegistry.js');
 });
 
 after(async () => {
@@ -209,7 +211,7 @@ describe('App.jsx — unified responsive composition', () => {
   });
 
   test('canonical shell mounts the selected business page exactly once', () => {
-    assert.equal((appSource.match(/pages\[mobileApplication\.page\]/g) || []).length, 1);
+    assert.equal((appSource.match(/<RouteScreen route=\{route\}/g) || []).length, 1);
     assert.equal((appSource.match(/\{renderMobileContent\(\)\}/g) || []).length, 1);
   });
 
@@ -323,22 +325,17 @@ describe('Canonical shell — preserved', () => {
     assert.match(appSource, /<MobileShell[\s\S]*\{renderMobileContent\(\)\}[\s\S]*<\/MobileShell>/);
   });
 
-  test('navGroups array still has all 10 group labels', () => {
-    const appSource = readSrc('App.jsx');
+  test('registry desktop projection still has all canonical group labels', () => {
     const groupLabels = [
       '概览', '销售与采购', '基础资料', '仓储物流', '财务资金',
       '生产制造', '成本与质量', '项目管理', 'CRM客户关系', '系统设置',
     ];
     for (const label of groupLabels) {
-      assert.ok(
-        appSource.includes(`label: '${label}'`),
-        `navGroups must still include "${label}"`
-      );
+      assert.ok(applicationRegistry.DESKTOP_GROUP_ORDER.includes(label), `desktop groups must still include "${label}"`);
     }
   });
 
-  test('business page map still contains all canonical pages', () => {
-    const appSource = readSrc('App.jsx');
+  test('application registry still contains all canonical pages', () => {
     const pages = [
       'dashboard', 'orders', 'approvals', 'customers', 'suppliers',
       'purchase-orders', 'products', 'warehouses', 'inventory',
@@ -350,13 +347,7 @@ describe('Canonical shell — preserved', () => {
       'users',
     ];
     for (const key of pages) {
-      // Keys may be quoted ('key':) or unquoted (key:) depending on
-      // whether they are valid JS identifiers. Both forms must be
-      // accepted.
-      assert.ok(
-        new RegExp(`(?:['"]${key}['"]|${key}):\\s*<[A-Z]`).test(appSource),
-        `pages map must include "${key}"`
-      );
+      assert.ok(applicationRegistry.applicationRouteFor(key), `application registry must include "${key}"`);
     }
   });
 });

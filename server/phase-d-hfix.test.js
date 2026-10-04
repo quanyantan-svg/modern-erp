@@ -165,9 +165,11 @@ describe('Blocker 2 — frontend uses canonical PRODUCTION_ORDERS_* permission c
     assert.ok(cancel.includes("'PRODUCTION_ORDERS_CREATE'") && cancel.includes("'PRODUCTION_ORDERS_START'"), 'cancel must accept either canonical CREATE or START, matching backend allowAny');
   });
 
-  test('App.jsx production nav already uses the canonical codes', () => {
-    const src = readSrc('App.jsx');
-    assert.ok(/PRODUCTION_ORDERS_VIEW/.test(src) && /PRODUCTION_ORDERS_CREATE/.test(src), 'navigation must already use PRODUCTION_ORDERS_*');
+  test('Application registry production routes already use the canonical codes', () => {
+    // V1.7 P0: navigation and route bindings live in applicationRegistry.js;
+    // App.jsx no longer hard-codes route access codes.
+    const src = readSrc('navigation/applicationRegistry.js');
+    assert.ok(/PRODUCTION_ORDERS_VIEW/.test(src) && /PRODUCTION_ORDERS_CREATE/.test(src), 'registry routes must already use PRODUCTION_ORDERS_*');
   });
 
   test('Permission table defines only the canonical production codes', () => {

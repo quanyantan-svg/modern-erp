@@ -31,6 +31,24 @@ V1.4 不引入新的核心业务对象或角色，优先聚焦业务一致性、
 
 最终用户可见产品范围有意与原始 ERP 业务流程图对齐，主线覆盖主数据、销售、采购、生产、库存、财务/会计和决策报表；受控 Go-Live 用户前端从最终用户可见产品范围移除，但其后端实现、相关数据库结构与历史文档/证据仍保留为后端/内部能力（见第 15、16、19 节）。
 
+### 2.1 V1.7 P0 — 前端应用架构基础
+
+V1.7 P0 只建立前端应用架构基础，不新增 ERP 业务对象、API、数据库业务 schema、角色、审批族或业务能力。移动端继续固定“消息、审批、应用、工作台、我的”五个全局入口；新增 ERP domain 不得增加底部入口。“应用”表达用户可执行的业务能力，不是数据库表目录，内部步骤、辅助查询、配置能力和 contextual capability 不默认提升为一级应用。
+
+同一最终用户 Route 的名称、domain、access、Launcher exposure、desktop navigation 与 direct route behavior 必须来自统一事实源。不得出现 direct URL 可访问却没有合理导航路径、Launcher 暴露无权应用、同一业务在不同入口名称或领域冲突等情况；前端隐藏只负责 exposure，后端 API 权限始终是最终授权权威。
+
+页面层级支持 `APPLICATION / HUB → LIST → DETAIL → EDITOR / WORKFLOW`、`APPLICATION → REPORT → DRILLDOWN` 和 `WORKSPACE / QUEUE → TASK → EXECUTE → RESULT`。canonical archetype 为 HUB、LIST、DETAIL、EDITOR、WORKFLOW、REPORT、TASK、CONFIG。复杂业务对象不得长期依赖大型 Modal 作为主操作界面。
+
+核心业务位置必须可地址化和恢复：刷新后保留目标位置，浏览器 Back / Forward 正常工作，消息、审批、报表和关联单据可以进入 exact target，详情页具有稳定 hash 地址，direct URL 仍执行正常权限校验。Sheet、FilterSheet、ConfirmSheet、ActionSheet 等临时 UI 保持本地状态，不写入 URL。
+
+系统坚持 Mobile-first 而非 Mobile-only：320 CSS px 下必须能完成核心操作；主要触控目标原则上至少 44×44 CSS px；核心任务不得依赖永久横向滚动；状态、业务身份和 primary action 优先；新页面不得以“desktop table + MutationObserver”作为主要移动方案。
+
+DETAIL 在权限允许时应支持 upstream source、downstream document、execution status、quality gate、settlement/commercial result、inventory/manufacturing/finance impact 以及 audit/change evidence 的关系导航。关系导航不得绕过 Route exposure 或后端权限。
+
+P0 保持五角色、五审批族、现有 API、数据库业务 schema、业务行为、53 个启用 Route、5 个禁用 Route 和五个移动底部入口不变。P0 不实现 Engineering Data、ECO、substitute material、subcontracting、barcode、credit、treasury、fixed assets、management accounting 或 generic workflow，也不得开放现有 disabled capability。
+
+P0 验收至少证明：重构前后授权能力等价；移动底部入口仍且仅有五个；Route metadata 不存在多份冲突；详情刷新和 Back / Forward 正常；未授权 direct URL 不挂载业务页面且不获得数据；archetype 使用统一合同；不新增业务 API/schema；320px 移动合同保持；不引入虚假 ERP capability；focused tests、完整回归、构建和 `git diff --check` 在正式验收时全部通过。
+
 ## 3. 角色、权限与职责分离
 
 系统正常角色固定为五个：

@@ -249,9 +249,9 @@ describe('M14 — Sales Discount', () => {
     assert.match(source, /api\('\/api\/settlement\/suppliers'\)/);
     assert.doesNotMatch(source, /api\('\/api\/(?:customers|suppliers)'\)/);
 
-    const appSource = readFileSync(resolve('src/App.jsx'), 'utf8');
-    assert.match(appSource, /key: 'sales-discounts'[\s\S]*?SALES_DISCOUNT_MANAGE/);
-    assert.match(appSource, /key: 'purchase-discounts'[\s\S]*?PURCHASE_DISCOUNT_MANAGE/);
+    const registrySource = readFileSync(resolve('src/navigation/applicationRegistry.js'), 'utf8');
+    assert.match(registrySource, /route\('sales-discounts','销售折让'[^\n]*SALES_DISCOUNT_MANAGE/);
+    assert.match(registrySource, /route\('purchase-discounts','采购折让'[^\n]*PURCHASE_DISCOUNT_MANAGE/);
     const launcher = buildMobileApplicationGroups([
       { key: 'sales-discounts', label: '销售折让' },
       { key: 'purchase-discounts', label: '采购折让' },

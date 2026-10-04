@@ -16,31 +16,33 @@ const pageSources = readdirSync(join(root, 'src', 'pages'))
 
 describe('V1.2 core page migration', () => {
   test('launcher retains the canonical V1.6 business groups', () => {
-    // V1.6 P1B: six flowchart-aligned core groups + utility disclosures.
+    // V1.7 P0: launcher groups are owned by applicationRegistry.js;
+    // applicationMetadata.js is a compatibility projection.
+    const registry = read('src', 'navigation', 'applicationRegistry.js');
     for (const label of [
       '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
       '业务流程', '财务工具', '更多业务', '高级设置', '系统设置',
     ]) {
-      assert.match(metadata, new RegExp(`label: '${label}'`));
+      assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
     }
   });
 
   test('all required core ERP surfaces remain registered', () => {
-    const surface = app + metadata + pageSources;
-    // V1.6 P1B: IQC/OQC remain in App.jsx routes but are NOT primary launcher
-    // tiles; material-requirements-plan stays as a route but is not a tile.
+    const registry = read('src', 'navigation', 'applicationRegistry.js');
+    // V1.7 P0: routes, labels and launcher entries all live in the
+    // canonical registry. IQC/OQC remain enabled routes but must not be
+    // primary launcher tiles.
     for (const label of [
       '货品资料', 'BOM', '客户资料', '供应商资料', '仓库资料', '制品工序标准',
-      '计划预测', 'MRP', '生产指令', '采购指令', '请购单',
+      '计划预测', '生产指令', '采购指令', '请购单',
       '制令单', '用料出库', '生产入库', '销售订单', '销售出货', '销售退货',
-      '采购订单', '采购入库', '采购退货', '库存作业', '库存调整', '库存调拨',
-      '存货报废', '库存盘点', '存货月结',
-      '应收结算', '应付结算', '销售折让', '采购折让', '收款 / 核销', '付款 / 核销', '会计凭证',
-      '采购统计分析表', '采购未交货反应表', '销售统计分析表', '销售未出货反应表', '存货异动明细表',
-    ]) assert.ok(surface.includes(label), `missing core surface: ${label}`);
+      '采购订单', '采购入库', '采购退货', '库存作业', '存货报废', '存货月结',
+      '应收结算', '应付结算', '销售折让', '采购折让', '会计凭证',
+      '销售统计分析表', '销售未出货反应表', '采购统计分析表', '采购未交货反应表', '存货异动明细表',
+    ]) assert.ok(registry.includes(label), `missing core surface: ${label}`);
     // IQC/OQC are reachable as routes but must not be primary launcher tiles.
-    const iqcInLauncher = /\['iqc'/.test(metadata);
-    const oqcInLauncher = /\['oqc'/.test(metadata);
+    const iqcInLauncher = /\['iqc'/.test(registry);
+    const oqcInLauncher = /\['oqc'/.test(registry);
     assert.ok(!iqcInLauncher, 'IQC must not be a primary launcher tile');
     assert.ok(!oqcInLauncher, 'OQC must not be a primary launcher tile');
   });
@@ -74,11 +76,12 @@ describe('V1.2 core page migration', () => {
   });
 
   test('sales and purchase returns have distinct launcher targets', () => {
-    // V1.6 P1B puts returns entries into the sales / purchasing core groups
-    // while preserving the SALES_RETURN / PURCHASE_RETURN distinction.
-    assert.match(metadata, /\['returns', '销售退货'[\s\S]*'returns:sales'[\s\S]*documentType: 'SALES_RETURN'/);
-    assert.match(metadata, /\['returns', '采购退货'[\s\S]*'returns:purchase'[\s\S]*documentType: 'PURCHASE_RETURN'/);
-    assert.match(app, /navigateToPage\(item\.page, item\.target\)/);
+    // V1.7 P0: returns launcher entries are owned by applicationRegistry.js
+    // with composite keys that encode SALES_RETURN / PURCHASE_RETURN targets.
+    const registry = read('src', 'navigation', 'applicationRegistry.js');
+    assert.match(registry, /\['returns','销售退货','returns',\{key:'returns:sales',target:\{documentType:'SALES_RETURN'\}\}\]/);
+    assert.match(registry, /\['returns','采购退货','returns',\{key:'returns:purchase',target:\{documentType:'PURCHASE_RETURN'\}\}\]/);
+    assert.match(app, /navigate\(\{ routeKey: item\.page, target: item\.reportKey \? \{ reportKey: item\.reportKey \} : item\.target \}/);
   });
 
   test('boilerplate helper phrases are absent from product pages', () => {

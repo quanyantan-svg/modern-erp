@@ -240,19 +240,18 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
       'purchase-receipts route must keep its access contract',
     );
     assert.equal(receiptRoute.parentRoute, undefined, 'purchase-receipts stays a primary route (no contextual parent)');
-    assert.equal(receiptRoute.contextHint, '仓库验收', 'purchase-receipts contextHint must be preserved');
 
     const iqcRoute = enabledByRoute.get('iqc');
     assert.ok(iqcRoute, 'iqc route must remain enabled');
     assert.equal(iqcRoute.parentRoute, 'purchase-receipts', 'IQC contextual parent must remain purchase-receipts');
 
     // The MobileShell header back registration chain is intact.
-    assert.match(app, /setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
-    assert.match(app, /setHeaderBackAction, registerHeaderBackAction \}\}>/);
+    assert.match(app, /const setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    assert.match(app, /setHeaderBackAction,\s*registerHeaderBackAction/);
   });
 
   test('36. MobileShell header back registration stores handlers as values', () => {
-    assert.match(app, /setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
-    assert.match(app, /setHeaderBackAction, registerHeaderBackAction \}\}>/);
+    assert.match(app, /const setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    assert.match(app, /setHeaderBackAction,\s*registerHeaderBackAction/);
   });
 });

@@ -4,8 +4,8 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const editor = read('src/pages/mrp-runs.jsx');
-const metadata = read('src/navigation/presentationMetadata.js');
-const planRoute = metadata.match(/route\('material-requirements-plan'[^\n]+/)?.[0] || '';
+const registry = read('src/navigation/applicationRegistry.js');
+const planRoute = registry.match(/route\('material-requirements-plan'[^\n]+/)?.[0] || '';
 
 test('MRP editor keeps one visible 运算名称 heading', () => {
   assert.match(editor, /<h3>运算名称<\/h3><input/);
@@ -31,6 +31,9 @@ test('demand source values and combined-demand hint remain unchanged', () => {
 });
 
 test('material plan presentation title is 物料需求计划', () => {
+  // V1.7 P0: route entries live in applicationRegistry.js (presentationMetadata.js
+  // is now a compatibility projection and no longer contains literal route()
+  // definitions).
   assert.match(planRoute, /route\('material-requirements-plan','物料需求计划'/);
   assert.doesNotMatch(planRoute, /MRP · 物料建议/);
 });

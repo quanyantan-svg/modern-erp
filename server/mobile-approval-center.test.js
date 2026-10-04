@@ -216,7 +216,7 @@ describe('M3R mobile approval UI', () => {
   test('bottom navigation renders pending badge', () => { const html=renderToStaticMarkup(createElement(MobileShell,{activeTab:'apps',tabBadges:{approvals:12}})); assert.match(html,/mobile-bottom-nav__badge/); assert.match(html,/>12<\/span>/); });
   test('bottom navigation caps large badges', () => { const html=renderToStaticMarkup(createElement(MobileShell,{activeTab:'apps',tabBadges:{approvals:120}})); assert.match(html,/>99\+<\/span>/); });
   test('App fetches pending count after mobile session load', () => { assert.match(appSource,/api\('\/api\/approvals\?tab=pending&limit=1'\)/); });
-  test('App mounts approval center only in approvals mobile tab', () => { assert.match(appSource,/mobileTab === 'approvals'[\s\S]{0,160}<MobileApprovalCenter/); });
+  test('App mounts approval center only in approvals mobile tab', () => { assert.match(appSource,/mobileTab === 'approvals'[\s\S]{0,200}<RouteScreen route=\{applicationRouteFor\('approvals'\)\}/); });
   test('successful mutations refresh the active list', () => { assert.match(approvalSource,/await api\(request\.path, request\.options\)[\s\S]*?await load\(activeTab\)/); });
   test('busy guard and disabled controls protect against double action', () => { assert.match(approvalSource,/if \(!dialog \|\| busy\) return/); assert.match(approvalSource,/disabled=\{busy/); });
   test('reject reason is trimmed before dispatch', () => { assert.match(approvalSource,/approvalActionRequest\(dialog\.item, dialog\.action, reason\.trim\(\)\)/); });
@@ -225,5 +225,5 @@ describe('M3R mobile approval UI', () => {
   test('sticky detail actions clear the bottom nav safe area', () => { assert.match(css,/\.mobile-approval-detail__actions\s*\{[^}]*bottom:\s*calc\(72px \+ env\(safe-area-inset-bottom/s); });
   test('touch targets stay at least 44px high', () => { assert.match(css,/\.mobile-approval-tabs__item\s*\{[^}]*min-height:\s*44px/s); assert.match(css,/\.mobile-approval-card__actions button,[^}]*min-height:\s*44px/s); });
   test('approval badge is wired through shell props', () => { assert.match(shellSource,/tabBadges\[tab\.key\] > 0/); });
-  test('route and tab use the canonical aggregated approval center without a duplicate route title', () => { assert.match(appSource,/approvals:\s*<MobileApprovalCenter/); assert.doesNotMatch(appSource,/approvals:\s*<MobileApprovalCenter[^>]*standaloneTitle/); });
+  test('route and tab use the canonical aggregated approval center without a duplicate route title', () => { assert.match(appSource,/applicationRouteFor\('approvals'\)/); assert.doesNotMatch(appSource,/standaloneTitle/); });
 });

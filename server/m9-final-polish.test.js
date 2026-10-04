@@ -13,7 +13,7 @@ const read = (...parts) => readFileSync(join(root, ...parts), 'utf8');
 const appSource = read('src', 'App.jsx');
 const dashboardSource = read('src', 'pages', 'master-data.jsx');
 const overviewSource = read('src', 'pages', 'business-overview.jsx');
-const metadataSource = read('src', 'navigation', 'applicationMetadata.js');
+const metadataSource = read('src', 'navigation', 'applicationRegistry.js');
 const approvalsSource = read('server', 'modules', 'approvals.js');
 
 let vite;
@@ -36,9 +36,9 @@ function renderOverview(allowed = []) {
 
 describe('M9 business overview', () => {
   test('is mounted in canonical navigation without a new permission', () => {
-    assert.match(appSource, /key: 'business-overview',[^\n]+permission: 'DASHBOARD_VIEW'/);
-    assert.match(appSource, /'business-overview': <BusinessOverview\/>/);
-    assert.match(metadataSource, /\['business-overview', '业务总览'/);
+    assert.match(metadataSource, /route\('business-overview','业务总览'[^\n]+permission:'DASHBOARD_VIEW'/);
+    assert.match(metadataSource, /'business-overview': defaultScreen\('\.\.\/pages\/business-overview\.jsx'\)/);
+    assert.match(metadataSource, /\['business-overview','业务总览'/);
   });
 
   test('renders the teacher-facing principal business areas and stages', () => {
@@ -62,7 +62,7 @@ describe('M9 business overview', () => {
 
   test('all overview destinations are registered canonical page keys', () => {
     const destinations = [...overviewSource.matchAll(/\['[^']+', '([^']+)'\]/g)].map((match) => match[1]);
-    for (const page of destinations) assert.match(appSource, new RegExp(`(?:key: '${page}'|'${page}':)`, 'm'), page);
+    for (const page of destinations) assert.match(metadataSource, new RegExp(`route\\('${page}'`), page);
   });
 });
 
@@ -87,19 +87,19 @@ describe('M9 permission and terminology contracts', () => {
   });
 
   test('finance is contextual rather than an eighth primary domain', () => {
-    const masterStart = metadataSource.search(/key:\s*'master-data'/);
-    const salesStart = metadataSource.search(/key:\s*'sales'/);
+    const masterStart = metadataSource.search(/launcherGroup\('master-data'/);
+    const salesStart = metadataSource.search(/launcherGroup\('sales'/);
     assert.ok(masterStart >= 0 && salesStart > masterStart);
     const master = metadataSource.slice(masterStart, salesStart);
     assert.doesNotMatch(master, /accounts-receivable|payment-collections|accounts-payable|payment-disbursements/);
-    assert.doesNotMatch(metadataSource, /key: 'finance', label:/);
+    assert.doesNotMatch(metadataSource, /launcherGroup\('finance'/);
     for (const page of ['accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements']) assert.match(metadataSource, new RegExp(page));
   });
 
   test('visible labels use the frozen course vocabulary', () => {
-    assert.match(appSource, /label: '销售出货'/);
-    assert.match(appSource, /label: '库存异动明细'/);
-    assert.match(appSource, /label: '制令单'/);
-    assert.doesNotMatch(appSource, /label: '销售出库'|label: '库存流水'|label: '生产工单'/);
+    assert.match(metadataSource, /route\('sales-deliveries','销售出货'/);
+    assert.match(metadataSource, /route\('inventory-transactions','库存异动明细'/);
+    assert.match(metadataSource, /route\('production-orders','制令单'/);
+    assert.doesNotMatch(metadataSource, /'销售出库'|'库存流水'|'生产工单'/);
   });
 });

@@ -18,7 +18,7 @@
 //     existing INSERT OR IGNORE role_permissions reconciliation path.
 //   - Audit-only on UsersRoles / projects-workflow `/api/users` callers
 //     (warehouse cannot reach those components through existing sidebar
-//     gating — verified by reading App.jsx navGroups + USERS_MANAGE /
+//     gating — verified through the canonical application registry + USERS_MANAGE /
 //     ROLES_MANAGE gates).
 //
 // What is intentionally not changed:

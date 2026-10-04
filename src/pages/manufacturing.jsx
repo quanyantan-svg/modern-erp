@@ -284,21 +284,21 @@ export function ProductionOrders({ user, notify }) {
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('');
   const [view, setView] = useState(null);
-  const { target } = useAppNavigation();
+  const { target, navigateToPage } = useAppNavigation();
   const load = () => api('/api/production-orders?search=' + encodeURIComponent(search) + '&status=' + status).then((r) => setItems(r.orders)).catch((e) => notify(e.message, 'error'));
   useEffect(() => { void load(); }, [status]);
   useEffect(() => {
     if (target?.page === 'production-orders' && target.documentId) {
       setView({ id: target.documentId });
-    }
-  }, [target]);
+    } else setView(null);
+  }, [target?.page, target?.documentId]);
   return <BusinessPageShell className="production-orders-v15" width="rail">
     <BusinessPageHeader title="制令单" primaryAction={can(user, 'PRODUCTION_ORDERS_CREATE') && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建制令单</BusinessAction>} help={<HelpDisclosure summary="生产说明"><p>制令单承接已下达生产指令，开工后冻结 BOM、工序与成本快照。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索工单号或产品" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="PENDING">待生产</option><option value="IN_PROGRESS">生产中</option><option value="COMPLETED">已完成</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr><th>工单号</th><th>产品</th><th className="number">数量</th><th>计划开始</th><th>状态</th><th>完工</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={PO_STATUS_LABELS[item.status] || item.statusLabel}/></td><td className="number">{quantity(item.totalOutput)}</td></tr>)}
+      {items.map((item) => <tr key={item.id} onClick={() => { setView({ id: item.id }); navigateToPage('production-orders', { documentId: item.id }); }} style={{cursor:'pointer'}}><td className="mono">{item.order_no}</td><td>{item.productName}</td><td className="number">{quantity(item.quantity)}</td><td>{item.planned_start || '-'}</td><td><Status status={item.status?.toLowerCase()} label={PO_STATUS_LABELS[item.status] || item.statusLabel}/></td><td className="number">{quantity(item.totalOutput)}</td></tr>)}
     </tbody></table>{!items.length && <Empty text="没有制令单"/>}</div>
-    {view && <ProductionOrderModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api}/>}
+    {view && <ProductionOrderModal user={user} value={view} onClose={() => { setView(null); navigateToPage('production-orders', null, { replace: true }); void load(); }} notify={notify} api={api}/>}
   </BusinessPageShell>;
 }
 

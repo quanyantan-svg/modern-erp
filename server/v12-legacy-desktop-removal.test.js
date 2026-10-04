@@ -31,9 +31,8 @@ describe('V1.2 canonical interface cleanup', () => {
 
   test('navigation metadata describes one application information architecture', () => {
     assert.doesNotMatch(metadataSource, /desktop navigation/i);
-    // V1.6 P1B: authorization is still owned by App.jsx visibleNav; the
-    // metadata file's role is grouping and display terminology only.
-    assert.match(metadataSource, /intersected with the authorized visibleNav|Authorization still comes only/);
+    // V1.7 P0: this file is a compatibility projection over the registry.
+    assert.match(metadataSource, /Compatibility projection/);
     assert.match(metadataSource, /authorizedByPage/);
   });
 });

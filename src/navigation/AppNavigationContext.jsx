@@ -1,9 +1,14 @@
 import { createContext, useContext } from 'react';
+import { serializeRouteLocation } from './routeLocation.js';
 
 const AppNavigationContext = createContext({
+  currentLocation: null,
+  currentRoute: null,
   currentPage: null,
   target: null,
   canNavigate: () => false,
+  navigate: () => false,
+  hrefFor: (routeKey, target) => serializeRouteLocation({ routeKey, target }),
   navigateToPage: () => false,
   setHeaderBackAction: () => {},
   registerHeaderBackAction: () => () => {},
@@ -18,15 +23,17 @@ export function useAppNavigation() {
 }
 
 export function AppLink({ page, documentId, documentType, target, children, onClick, ...props }) {
-  const { canNavigate, navigateToPage } = useAppNavigation();
+  const { canNavigate, navigate, navigateToPage, hrefFor = (routeKey, nextTarget) => serializeRouteLocation({ routeKey, target: nextTarget }) } = useAppNavigation();
+  const exactTarget = documentId ? { documentId, ...(documentType ? { documentType } : {}) } : (target || null);
   if (!canNavigate(page)) return <span {...props}>{children}</span>;
   return <a
     {...props}
-    href={`#${page}`}
+    href={hrefFor(page, exactTarget)}
     onClick={(event) => {
       event.preventDefault();
       onClick?.(event);
-      navigateToPage(page, documentId ? { documentId, documentType } : (target || null));
+      if (navigate) navigate({ routeKey: page, target: exactTarget });
+      else navigateToPage(page, exactTarget);
     }}
   >{children}</a>;
 }

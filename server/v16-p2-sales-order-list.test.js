@@ -219,7 +219,7 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
     }
     assert.doesNotMatch(mobileShell, /key:\s*'cloud'/);
     // Six launcher groups.
-    const applicationMetadata = readSrc('navigation/applicationMetadata.js');
+    const applicationMetadata = readSrc('navigation/applicationRegistry.js');
     for (const group of ['基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表']) {
       assert.match(applicationMetadata, new RegExp(group));
     }

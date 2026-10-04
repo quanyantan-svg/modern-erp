@@ -782,10 +782,10 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
       'listCustomerLookup must gate by delivery/return workflow permissions plus CRM permissions');
   });
 
-  test('stale inaccessible hash renders the first visible page, not admin UsersRoles', () => {
+  test('stale inaccessible hash renders a safe denial without mounting admin UsersRoles', () => {
     const app = readFileSync(join(srcDir, 'App.jsx'), 'utf8');
-    assert.match(app, /if \(user && visibleNav\.length && !canNavigate\(page\)\) navigateToPage\(visibleNav\[0\]\.key/);
-    assert.match(app, /function navigateToPage[\s\S]*?const authorizedPage = visibleNav\.find/);
+    assert.match(app, /!userCanAccessRoute\(user, route\)[\s\S]*?<SafeRouteState kind="PERMISSION_DENIED"/);
+    assert.match(app, /normalized\.invalid \|\| !route \|\| !userCanAccessRoute\(user, route\)/);
     assert.doesNotMatch(app, /className="page-content">\{pages\[page\]/);
   });
 });

@@ -404,7 +404,7 @@ function orderStageText(order, kind) {
 }
 
 export function Orders({ user, notify }) {
-  const { target, setHeaderBackAction } = useAppNavigation();
+  const { target, setHeaderBackAction, navigateToPage } = useAppNavigation();
 
   const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState('');
@@ -450,7 +450,13 @@ export function Orders({ user, notify }) {
   function returnToList() {
     setEditing(null);
     setViewing(null);
+    navigateToPage('orders', null, { replace: true });
     void load();
+  }
+
+  function openDetail(id) {
+    setViewing({ id });
+    navigateToPage('orders', { documentId: id });
   }
 
   function closeEditorOnly() {
@@ -473,6 +479,9 @@ export function Orders({ user, notify }) {
     // status change intentionally reloads the current search scope.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+  useEffect(() => {
+    setViewing(target?.page === 'orders' && target.documentId ? { id: target.documentId } : null);
+  }, [target?.page, target?.documentId]);
 
   async function deleteOrder(order) {
     try {
@@ -521,10 +530,7 @@ export function Orders({ user, notify }) {
         id={viewing.id}
         user={user}
         notify={notify}
-        onBack={() => {
-          setViewing(null);
-          void load();
-        }}
+        onBack={returnToList}
         onEdit={(order) => setEditing(order)}
       />
     );
@@ -615,7 +621,7 @@ export function Orders({ user, notify }) {
               key={order.id}
               order={order}
               user={user}
-              onOpen={() => setViewing({ id: order.id })}
+              onOpen={() => openDetail(order.id)}
               onEdit={(row) => setEditing(row)}
               onDelete={deleteOrder}
             />
@@ -1830,7 +1836,7 @@ function RoleModal({ value, permissions, onClose, onSaved, notify }) {
 
 
 export function PurchaseOrders({ user, notify }) {
-  const { target } = useAppNavigation();
+  const { target, navigateToPage } = useAppNavigation();
 
   const [orders, setOrders] = useState([]);
   const [search, setSearch] = useState('');
@@ -1871,6 +1877,14 @@ export function PurchaseOrders({ user, notify }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
+  useEffect(() => {
+    setViewing(target?.page === 'purchase-orders' && target.documentId ? { id: target.documentId } : null);
+  }, [target?.page, target?.documentId]);
+
+  function openDetail(id) {
+    setViewing({ id });
+    navigateToPage('purchase-orders', { documentId: id });
+  }
 
   async function deleteOrder(order) {
     try {
@@ -1895,6 +1909,7 @@ export function PurchaseOrders({ user, notify }) {
           notify={notify}
           onBack={() => {
             setViewing(null);
+            navigateToPage('purchase-orders', null, { replace: true });
             void load();
           }}
           onEdit={(order) => setEditing(order)}
@@ -2048,12 +2063,12 @@ export function PurchaseOrders({ user, notify }) {
                     : '尚未入库',
                 },
               ]}
-              onOpen={() => setViewing({ id: order.id })}
+              onOpen={() => openDetail(order.id)}
               action={
                 <CanonicalActionMenu label={`采购订单 ${order.orderNo} 的更多操作`}>
                   <button
                     type="button"
-                    onClick={() => setViewing({ id: order.id })}
+                    onClick={() => openDetail(order.id)}
                   >
                     查看详情
                   </button>

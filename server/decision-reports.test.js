@@ -738,18 +738,17 @@ describe('M7 — inventory source label map', () => {
 // ============================================================
 
 describe('M7 — frontend wiring', () => {
-  test('App.jsx declares an 经营分析 navigation group gated by REPORT_VIEW', () => {
-    const src = readSrc('App.jsx');
-    assert.match(src, /label:\s*'经营分析'[\s\S]{0,200}any:\s*\['REPORT_VIEW'\]/);
-  });
+  // V1.7 P0: navigation groups are owned by applicationRegistry.js; the
+  // decision reports contract is asserted below through registry APIs
+  // rather than App.jsx source regex.
 
-  test('App.jsx routes decision-reports to DecisionReports component', () => {
-    const src = readSrc('App.jsx');
-    assert.match(src, /'decision-reports':\s*<DecisionReports\s+user=\{user\}\s+notify=\{notify\}\s*\/>/);
+  test('registry lazy-routes decision-reports to its screen module', () => {
+    const src = readSrc('navigation/applicationRegistry.js');
+    assert.match(src, /'decision-reports':\s*defaultScreen\('\.\.\/pages\/decision-reports\.jsx'\)/);
   });
 
   test('applicationMetadata exposes all 5 decision report cards', () => {
-    const src = readSrc('navigation/applicationMetadata.js');
+    const src = readSrc('navigation/applicationRegistry.js');
     for (const key of ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']) assert.match(src, new RegExp(`'${key}'`));
   });
 
@@ -765,23 +764,27 @@ describe('M7 — frontend wiring', () => {
 
   test('buildMobileApplicationGroups forwards reportKey so each card has a unique key', () => {
     const src = readSrc('navigation/applicationMetadata.js');
+    const registry = readSrc('navigation/applicationRegistry.js');
     // V1.6 P1B: composite key construction moved into the static
     // metadata definition (so the runtime only carries it forward).
-    assert.match(src, /reportKey:\s*metadata\.reportKey\s*\|\|\s*null/);
-    assert.match(src, /`\$\{page\}:\$\{reportKey\}`/);
+    assert.match(src, /reportKey:\s*metadata\.reportKey/);
+    assert.match(registry, /`\$\{routeKey\}:\$\{extra\.reportKey\}`/);
   });
 
   test('App.jsx forwards reportKey via navigation target', () => {
     const src = readSrc('App.jsx');
-    assert.match(src, /navigateToPage\(item\.page,\s*\{\s*reportKey:\s*item\.reportKey\s*\}\)/);
+    assert.match(src, /navigate\(\{ routeKey: item\.page, target: item\.reportKey \? \{ reportKey: item\.reportKey \}/);
   });
 
   test('report tabs and launcher cards require REPORT_VIEW plus domain visibility', () => {
     const page = readSrc('pages/decision-reports.jsx');
-    const app = readSrc('App.jsx');
+    const registry = readSrc('navigation/applicationRegistry.js');
     assert.match(page, /can\(user, 'REPORT_VIEW'\)/);
     assert.match(page, /report\.domainPermissions\.some/);
-    assert.match(app, /canViewDecisionReport\(user, item\.reportKey\)/);
+    // V1.7 P0: launcher entry domain visibility is enforced through the
+    // canonical userCanAccessLauncherEntry helper in applicationRegistry.js.
+    assert.match(registry, /export function userCanAccessLauncherEntry/);
+    assert.match(registry, /REPORT_VIEW/);
   });
 
   test('outstanding order numbers use canonical permission-aware SPA links', () => {

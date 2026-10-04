@@ -60,10 +60,16 @@ describe('V1.5 D2 flow-aligned business overview', () => {
   });
 
   test('every lane destination remains a current enabled route', () => {
+    // V1.7 P0: route inventory lives in applicationRegistry.js, not in
+    // App.jsx navGroups. Each lane step page must remain an enabled
+    // canonical route.
+    const registry = read('src/navigation/applicationRegistry.js');
+    const enabledRoutes = new Set();
+    for (const match of registry.matchAll(/route\('([a-z0-9-]+)'/g)) enabledRoutes.add(match[1]);
     for (const page of new Set(flows.flatMap((flow) => flow.steps.map((item) => item.page)))) {
-      const navEntry = appSource.match(new RegExp(`\\{ key: '${page}'[^\\n]+`))?.[0] || '';
-      assert.ok(navEntry, page);
-      assert.doesNotMatch(navEntry, /enabled:\s*false/, page);
+      assert.ok(enabledRoutes.has(page), `${page} must remain a registered route`);
+      const entry = registry.match(new RegExp(`route\\('${page}'[^)]+\\),?`))?.[0] || '';
+      assert.doesNotMatch(entry, /enabled:\s*false/, `${page} must remain enabled`);
     }
   });
 

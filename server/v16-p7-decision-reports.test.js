@@ -31,9 +31,10 @@ test('P7 keeps exactly five canonical decision report keys', () => {
 
 // 2. Decision-reports remains a single route; no per-report routes introduced.
 test('P7 keeps decision-reports as a single route with no per-report routes', () => {
-  // The route mapping is in App.jsx (page navigation); verify it points at DecisionReports.
+  // The canonical registry owns the route and lazy screen identity.
   const appJsx = read('src/App.jsx');
-  assert.match(appJsx, /'decision-reports':\s*<DecisionReports\b/);
+  const registry = read('src/navigation/applicationRegistry.js');
+  assert.match(registry, /'decision-reports':\s*defaultScreen\('\.\.\/pages\/decision-reports\.jsx'\)/);
   for (const sub of ['decision-reports/sales-summary', 'decision-reports/sales-outstanding', 'decision-reports/purchase-summary', 'decision-reports/purchase-outstanding', 'decision-reports/inventory-movements']) {
     assert.equal(serverApp.includes(`'${sub}'`), false, `${sub} must not be a route`);
     assert.equal(appJsx.includes(`'${sub}'`), false, `${sub} must not be a route`);

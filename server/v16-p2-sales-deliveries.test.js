@@ -242,8 +242,8 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     assert.equal(oqcRoute.parentRoute, 'sales-deliveries', 'OQC contextual parent must remain sales-deliveries');
 
     // The MobileShell header back registration chain is intact.
-    assert.match(app, /setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
-    assert.match(app, /setHeaderBackAction, registerHeaderBackAction \}\}>/);
+    assert.match(app, /const setHeaderBackAction = \(action\) => setDocumentBackAction\(\(\) => action\)/);
+    assert.match(app, /setHeaderBackAction,\s*registerHeaderBackAction/);
   });
 
   test('35. MobileShell header back handler chain still wired for sales-deliveries detail', () => {

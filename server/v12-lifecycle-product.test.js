@@ -13,6 +13,7 @@ const root = resolve(here, '..');
 const appSource = readFileSync(join(root, 'src', 'App.jsx'), 'utf8');
 const pageSource = readFileSync(join(root, 'src', 'pages', 'data-cleanup.jsx'), 'utf8');
 const metadataSource = readFileSync(join(root, 'src', 'navigation', 'applicationMetadata.js'), 'utf8');
+const registrySource = readFileSync(join(root, 'src', 'navigation', 'applicationRegistry.js'), 'utf8');
 let db; let server; let baseUrl; let tempDir; let adminToken; let salesToken;
 const stamp = '2026-09-21T08:00:00.000Z';
 
@@ -95,8 +96,8 @@ describe('Data cleanup product wiring', () => {
   test('data-cleanup route is wired with USERS_MANAGE gate but excluded from launcher tiles', () => {
     // V1.6 P1B: data-cleanup continues to be a reachable disabled route
     // via the navigation registry but is NOT a primary launcher tile.
-    assert.match(appSource, /key:\s*['"]data-cleanup['"][\s\S]*?permission:\s*['"]USERS_MANAGE['"]/);
-    assert.match(appSource, /['"]data-cleanup['"]:\s*<DataCleanup/);
+    assert.match(registrySource, /route\('data-cleanup','数据整理'[\s\S]*?permission:'USERS_MANAGE'/);
+    assert.match(registrySource, /'data-cleanup': defaultScreen\('\.\.\/pages\/data-cleanup\.jsx'\)/);
     assert.doesNotMatch(metadataSource, /\['data-cleanup', '数据整理'/);
   });
 

@@ -8,6 +8,7 @@ import { after, before, describe, test } from 'node:test';
 import { createServer as createViteServer } from 'vite';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
+import { ACTIVE_APPLICATION_ROUTES } from '../src/navigation/applicationRegistry.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -51,21 +52,13 @@ async function fetchJson(baseUrl, token, path) {
   return { status: response.status, body: response.status === 200 ? await response.json() : null };
 }
 
-// Build the role × page matrix from real source so we test what's actually wired.
-const appSource = readFileSync(resolve(repoRoot, 'src', 'App.jsx'), 'utf8');
-const navGroupsMatch = appSource.match(/const navGroups = \[([\s\S]*?)\n\];/);
-const navBlock = navGroupsMatch ? navGroupsMatch[1] : '';
-const navEntryRegex = /\{ key: '([^']+)', label: '([^']+)', icon: [^,]+, (?:permission: '([^']+)'|any: \[([^\]]+)\]) \}/g;
-const NAV_MATRIX = [];
-for (const match of navBlock.matchAll(navEntryRegex)) {
-  const [, key, label, permission, any] = match;
-  NAV_MATRIX.push({
-    key,
-    label,
-    permission: permission || null,
-    any: any ? any.split(',').map((s) => s.trim().replace(/^'|'$/g, '')) : null,
-  });
-}
+// Build the role × page matrix from the canonical registry.
+const NAV_MATRIX = ACTIVE_APPLICATION_ROUTES.map((route) => ({
+  key: route.key, label: route.title,
+  permission: route.access.permission || null,
+  any: route.access.any || null,
+  enabled: route.enabled,
+}));
 
 const dbSource = readFileSync(resolve(repoRoot, 'server', 'db.js'), 'utf8');
 const rolePermissionsMatch = dbSource.match(/const rolePermissions = \{([\s\S]*?)\n\s*\};/);

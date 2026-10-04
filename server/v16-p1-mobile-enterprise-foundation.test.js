@@ -36,6 +36,7 @@ let MOBILE_TABS;
 let MobileLauncher;
 let applicationMetadata;
 let presentationMetadata;
+let applicationRegistry;
 
 before(async () => {
   vite = await createViteServer({
@@ -50,6 +51,7 @@ before(async () => {
   MobileLauncher = (await vite.ssrLoadModule('/src/components/MobileLauncher.jsx')).default;
   applicationMetadata = await vite.ssrLoadModule('/src/navigation/applicationMetadata.js');
   presentationMetadata = await vite.ssrLoadModule('/src/navigation/presentationMetadata.js');
+  applicationRegistry = await vite.ssrLoadModule('/src/navigation/applicationRegistry.js');
 });
 
 after(async () => {
@@ -114,7 +116,7 @@ describe('P1A — bottom navigation contract', () => {
   test('App.jsx routes mobileTab === "workspace" to the Dashboard', () => {
     const appSource = readSrc('App.jsx');
     assert.match(appSource, /mobileTab === 'workspace'/);
-    assert.match(appSource, /<Dashboard[\s\S]*?mobileWorkspace\s*\/>/);
+    assert.match(appSource, /<RouteScreen route=\{applicationRouteFor\('dashboard'\)\}[\s\S]*?mobileWorkspace\s*\/>/);
   });
 });
 
@@ -357,31 +359,23 @@ describe('Scope — package version and route guards', () => {
   });
 
   test('Dashboard route (#dashboard) is still preserved for compatibility', () => {
-    const appSource = readSrc('App.jsx');
-    assert.match(
-      appSource,
-      new RegExp(`(?:['"]dashboard['"]|dashboard):\\s*<Dashboard`)
-    );
+    assert.equal(applicationRegistry.applicationRouteFor('dashboard')?.enabled, true);
   });
 
   test('53 active routes are still reachable through launcher / utility / nav', () => {
     const presentations = presentationMetadata.ROUTE_PRESENTATIONS;
-    const enabledRoutes = presentations.filter((p) => p.enabled).map((p) => p.route);
+    const enabledRoutes = presentations.map((p) => p.route);
     const allLauncherPages = new Set(
       applicationMetadata.MOBILE_APPLICATION_GROUPS
         .flatMap((g) => g.items.map((i) => i.page))
     );
     // We do NOT require every active route to be a launcher tile — many
     // remain reachable through contextual navigation and bottom tabs.
-    // We do require the route map in App.jsx to be untouched.
-    const appSource = readSrc('App.jsx');
+    // Every enabled route must instead resolve from the canonical registry.
     for (const route of enabledRoutes) {
-      assert.ok(
-        new RegExp(`(?:['"]${route}['"]|${route}):\\s*<[A-Z]`).test(appSource),
-        `App.jsx page map must still include "${route}"`
-      );
+      assert.ok(applicationRegistry.applicationRouteFor(route), `application registry must include "${route}"`);
     }
-    // Ensure no broken navGroups map entry.
+    // Ensure the launcher projection remains populated.
     assert.ok(allLauncherPages.size > 0, 'launcher must expose some pages');
   });
 });

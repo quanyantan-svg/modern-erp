@@ -11,11 +11,15 @@ test('P4 — canonical mobile and planning terminology', () => {
   const shell = source('src/components/MobileShell.jsx');
   // V1.6 P1A: bottom nav strict five tabs, no cloud/签核/云翼.
   for (const label of ['消息', '审批', '应用', '工作台', '我的']) assert.match(shell, new RegExp(`label: '${label}'`));
-  const app = source('src/App.jsx');
-  for (const term of ['计划预测', "label: 'MRP'", 'MRP · 物料建议']) assert.match(app, new RegExp(term));
-  const metadata = source('src/navigation/applicationMetadata.js');
-  // V1.6 P1B renames the launcher reports to flowchart-oriented labels.
-  for (const term of ['采购统计分析表', '采购未交货反应表', '销售统计分析表', '销售未出货反应表', '存货异动明细表']) assert.match(metadata, new RegExp(term));
+  // V1.7 P0: route labels live in applicationRegistry.js; App.jsx no
+  // longer carries a hard-coded label table. Decision reports are
+  // exposed via per-entry formalLabel/formalLabel-aware projections.
+  const registry = source('src/navigation/applicationRegistry.js');
+  assert.match(registry, /route\('forecasts','计划预测'/);
+  assert.match(registry, /route\('mrp-runs','MRP'/);
+  for (const term of ['销售统计分析表', '销售未出货反应表', '采购统计分析表', '采购未交货反应表', '存货异动明细表']) {
+    assert.match(registry, new RegExp(term));
+  }
 });
 
 test('P4 — five canonical visible role labels', () => {

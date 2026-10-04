@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { APPROVAL_FAMILIES, DISABLED_ROUTE_PRESENTATIONS, PRIMARY_DOMAINS, ROUTE_PRESENTATIONS, TECHNICAL_ROUTE_ALIASES } from '../src/navigation/presentationMetadata.js';
+import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/navigation/applicationRegistry.js';
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
@@ -17,14 +18,11 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
   }
 });
 
-test('D0 registry reconciles exactly with active App navigation', () => {
-  const app = read('src/App.jsx');
-  const block = app.match(/export const navGroups = \[([\s\S]*?)\n\];/)?.[1] || '';
-  const entries = [...block.matchAll(/\{ key: '([^']+)'[^\n]+/g)].map((match) => ({ route: match[1], disabled: /enabled: false/.test(match[0]) }));
-  const active = new Set(entries.filter((entry) => !entry.disabled).map((entry) => entry.route));
+test('D0 presentation projection reconciles exactly with canonical application registry', () => {
+  const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   assert.equal(active.size, 53);
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)));
-  assert.deepEqual(new Set(entries.filter((entry) => entry.disabled).map((entry) => entry.route)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
+  assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });
 
 test('D0 product semantics freeze seven domains and five approval families', () => {
