@@ -81,4 +81,3 @@ export function serializeRouteLocation(location) {
   if (queryEntries.length) hash += `?${queryEntries.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&')}`;
   return hash;
 }
-
