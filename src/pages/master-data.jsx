@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import { api, setToken } from '../api.js';
-import { ActionMenu, Active, ConfirmAction, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { Active, ConfirmAction, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import MobileWorkflowProgress from '../components/MobileWorkflowProgress.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { roleDisplayName } from '../lib/copy.js';
@@ -9,7 +9,7 @@ import { Icon } from '../components/icons.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { trackingPresentation, withProductTracking } from '../lib/tracking.js';
 import {
-  ActionMenu as CanonicalActionMenu,
+  ActionMenu,
   BusinessAction,
   BusinessAuditSection,
   BusinessContentSection,
@@ -222,7 +222,7 @@ function MasterActions({ item, label, endpoint, onEdit, onChanged, notify }) {
       notify(`${label}已${active ? '启用' : '停用'}`); await onChanged();
     } catch (error) { notify(error.message, 'error'); }
   }
-  return <ActionMenu>
+  return <ActionMenu label={`${label} ${item.code} 的更多操作`}>
     <button type="button" className="row-action" onClick={() => onEdit(item)}>编辑</button>
     <button type="button" className="row-action" onClick={() => void setActive(!item.active)}>{item.active ? '停用' : '启用'}</button>
     <ConfirmDelete label={label} message={`确定删除“${item.code} · ${item.name}”吗？删除后无法恢复。如已有业务引用，系统将阻止删除并建议停用。`} onConfirm={async () => {
@@ -674,7 +674,7 @@ function SalesOrderListRow({ order, user, onOpen, onEdit, onDelete }) {
         )}
       </button>
       <div className="v16-sales-order-row__overflow">
-        <CanonicalActionMenu label={`销售订单 ${order.orderNo} 的更多操作`}>
+        <ActionMenu label={`销售订单 ${order.orderNo} 的更多操作`}>
           <button type="button" onClick={onOpen}>查看详情</button>
           {canEditDraft && (
             <button type="button" onClick={() => onEdit(order)}>编辑草稿</button>
@@ -687,7 +687,7 @@ function SalesOrderListRow({ order, user, onOpen, onEdit, onDelete }) {
               onConfirm={() => onDelete(order)}
             />
           )}
-        </CanonicalActionMenu>
+        </ActionMenu>
       </div>
     </li>
   );
@@ -2065,7 +2065,7 @@ export function PurchaseOrders({ user, notify }) {
               ]}
               onOpen={() => openDetail(order.id)}
               action={
-                <CanonicalActionMenu label={`采购订单 ${order.orderNo} 的更多操作`}>
+                <ActionMenu label={`采购订单 ${order.orderNo} 的更多操作`}>
                   <button
                     type="button"
                     onClick={() => openDetail(order.id)}
@@ -2092,7 +2092,7 @@ export function PurchaseOrders({ user, notify }) {
                         onConfirm={() => deleteOrder(order)}
                       />
                     )}
-                </CanonicalActionMenu>
+                </ActionMenu>
               }
             />
           ))}

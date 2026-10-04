@@ -2,6 +2,7 @@
 import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
+import { adjustInventory } from './lib/stock.js';
 import {
   createContact, createFollowup, createProject, createProjectTask, createSalesActivity,
   createTimesheet, createWorkflow, deleteContact, deleteSalesActivity, deleteTimesheet,
@@ -2437,15 +2438,6 @@ function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
     if (!Number.isSafeInteger(totalCents)) throw new HttpError(409, '单据金额超出安全范围');
   }
   return { items, totalCents };
-}
-
-function adjustInventory(db, warehouseId, productId, quantityChange, now) {
-  db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at)
-    VALUES(?,?,?,?,?)
-    ON CONFLICT(warehouse_id,product_id) DO UPDATE SET
-      quantity=inventory.quantity+excluded.quantity,
-      updated_at=excluded.updated_at`).run(id(), warehouseId, productId, quantityChange, now);
-  return db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity;
 }
 
 const INVENTORY_CONTROL_REVERSAL = Object.freeze({

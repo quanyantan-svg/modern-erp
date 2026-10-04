@@ -568,7 +568,7 @@ export async function restoreLifecycleRecord(db, req, res, actor) {
   return send(res, 200, { ok: true, archived: false });
 }
 
-export function isLifecycleArchived(db, entityType, entityId) {
+function isLifecycleArchived(db, entityType, entityId) {
   const type = normalizeEntityType(entityType);
   return Boolean(db.prepare('SELECT 1 FROM lifecycle_archives WHERE entity_type=? AND entity_id=? AND active=1').get(type, entityId));
 }
@@ -604,7 +604,7 @@ function lifecycleRecordSummary(row, entityType) {
   };
 }
 
-export function listLifecycleRecords(db, actor, query = {}) {
+function listLifecycleRecords(db, actor, query = {}) {
   allow(actor, 'USERS_MANAGE');
   const requestedType = query.entityType ? normalizeEntityType(query.entityType) : null;
   const search = String(query.search || '').trim();
@@ -659,7 +659,7 @@ function parseAuditJson(value, fallback) {
   try { return JSON.parse(value || ''); } catch { return fallback; }
 }
 
-export function listCleanupEvents(db, actor, query = {}) {
+function listCleanupEvents(db, actor, query = {}) {
   allow(actor, 'USERS_MANAGE');
   const limit = Math.max(1, Math.min(100, Number(query.limit) || 30));
   const search = String(query.search || '').trim();
@@ -715,7 +715,7 @@ export function listCleanupEventsHandler(db, res, actor, url) {
   }));
 }
 
-export function createCleanupAudit(db, actor, graph, reason) {
+function createCleanupAudit(db, actor, graph, reason) {
   const cleanupId = id();
   const selected = graph.nodes.filter((node) => node.selectedForCleanup);
   const now = new Date().toISOString();

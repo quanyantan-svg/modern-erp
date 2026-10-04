@@ -15,7 +15,7 @@ const num = (value, label, positive = false) => {
 const today = (value = nowIso()) => String(value).slice(0, 10);
 const isExpired = (row, onDate = today()) => Boolean(row?.expiry_date && onDate > row.expiry_date);
 
-export function productTracking(db, productId) {
+function productTracking(db, productId) {
   const product = db.prepare('SELECT id,code,name,tracking_policy,shelf_life_days,tracking_effective_at FROM products WHERE id=?').get(productId);
   if (!product) throw new HttpError(404, '货品不存在');
   return { ...product, tracking_policy: product.tracking_policy || 'NONE' };
@@ -69,7 +69,7 @@ export function changeTrackingPolicy(db, actor, productId, { policy, shelfLifeDa
   return { productId, trackingPolicy: next, shelfLifeDays: shelf, effectiveAt: at };
 }
 
-export function deriveExpiry(manufactureDate, shelfLifeDays) {
+function deriveExpiry(manufactureDate, shelfLifeDays) {
   if (!manufactureDate || !shelfLifeDays) return null;
   const date = new Date(`${manufactureDate}T00:00:00.000Z`);
   if (Number.isNaN(date.valueOf())) throw new HttpError(400, '生产日期不正确');
@@ -483,7 +483,7 @@ export function listTrackingIdentities(db, identityType, search = '') {
     ORDER BY latestMovementDate DESC,s.serial_number LIMIT 100`).all(term, term, term);
 }
 
-export function trackedAvailability(db, productId, warehouseId, businessDate = today()) {
+function trackedAvailability(db, productId, warehouseId, businessDate = today()) {
   const product = productTracking(db, productId);
   if (product.tracking_policy === 'LOT') {
     const lots = db.prepare(`SELECT l.*,b.quantity on_hand_quantity,CASE WHEN l.status='AVAILABLE' AND (l.expiry_date IS NULL OR l.expiry_date>=?) THEN b.quantity ELSE 0 END available_quantity
@@ -511,4 +511,3 @@ export function listTrackingIdentitiesHandler(db, res, actor, url) { allow(actor
 export async function genealogyHandler(db, req, res, actor) { return send(res, 201, allocateGenealogy(db, actor, await readJson(req))); }
 
 export const TRACKING_POLICIES = POLICIES;
-export const TRACKED_ON_HAND_SERIAL_STATES = ON_HAND_SERIAL_STATES;

@@ -34,7 +34,6 @@ export function ConfirmAction({ title, message, confirmLabel = '确认', buttonL
   async function run() { setBusy(true); try { await onConfirm(); setOpen(false); } catch { /* caller presents the safe error */ } finally { setBusy(false); } }
   return <><button type="button" className={className || (destructive ? 'danger-button' : 'primary')} onClick={() => setOpen(true)}>{buttonLabel}</button>{open && <Modal presentation="dialog" title={title} onClose={() => !busy && setOpen(false)}><div className="confirm-delete"><p>{message}</p><div className="form-actions"><button type="button" className="secondary" disabled={busy} onClick={() => setOpen(false)}>取消</button><button type="button" className={destructive ? 'danger-button' : 'primary'} disabled={busy} onClick={() => void run()}>{busy ? '正在处理…' : confirmLabel}</button></div></div></Modal>}</>;
 }
-export function ActionMenu({ children }) { return <details className="action-menu"><summary aria-label="更多操作"><MoreIcon size={18}/></summary><div className="action-menu__items">{children}</div></details>; }
 export function FormActions({ onClose, saveText = '保存', danger }) { return <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button className={danger ? 'danger-button' : 'primary'}>{saveText}</button></div>; }
 export function Status({ status, label }) { return <span className={`status ${status?.toLowerCase() || 'draft'}`}>{label}</span>; }
 export function Badge({ type, children }) {
@@ -52,7 +51,7 @@ export function Empty({ text, title = '暂无相关数据', action }) { return <
 export function Loading() { return <div className="loading" role="status"><div className="spinner"/><span>正在载入…</span></div>; }
 export function ErrorState({ message = '暂时无法获取数据，请稍后重试。', onRetry }) { return <div className="error-state" role="alert"><ErrorIcon size={28}/><strong>加载失败</strong><p>{message}</p>{onRetry && <button type="button" className="secondary" onClick={onRetry}>重新加载</button>}</div>; }
 import { useEffect, useState } from 'react';
-import { CloseIcon, EmptyIcon, ErrorIcon, MoreIcon, SearchIcon } from './icons.jsx';
+import { CloseIcon, EmptyIcon, ErrorIcon, SearchIcon } from './icons.jsx';
 import { useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import { centsToYuanInput, yuanToCents, yuanToNonNegativeCents } from '../lib/money.js';
 

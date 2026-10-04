@@ -794,7 +794,7 @@ export async function executeMrpRun(db, req, res, actor, runId) {
   return send(res, 200, { ok: true, summary });
 }
 
-export async function runMrpCalculation(db, run, actor, nowIso) {
+async function runMrpCalculation(db, run, actor, nowIso) {
   // Pre-flight: validate forecast when needed.
   if (run.demand_source_mode !== 'SALES_ORDERS') {
     const forecast = db.prepare("SELECT * FROM planning_forecasts WHERE id=?").get(run.forecast_id);

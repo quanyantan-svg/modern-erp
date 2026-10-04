@@ -1,13 +1,9 @@
-// M13 — Inventory Scrap + Inventory Month-End.
+// M13 — Inventory Scrap.
 //
-// Two related but independent feature families:
-//
-//   1. Inventory Scrap (operational stock destruction)
-//   2. Inventory Month-End (period control + read-only snapshot)
-//
-// Both integrate with the canonical `inventory` and
-// `inventory_transactions` tables without introducing a parallel
-// stock ledger.
+// Operational stock destruction feature; inventory month-end period control
+// lives in `./inventory-period-close.js` and shares the canonical `inventory`
+// and `inventory_transactions` tables without introducing a parallel stock
+// ledger.
 //
 // Inventory Scrap contract:
 //
@@ -31,63 +27,20 @@
 //   Accounting effect: SCRAP ACCOUNTING VALUATION = DEFERRED. We do
 //   not invent arbitrary loss accounts and do not generate any
 //   accounting voucher for a scrap confirm.
-//
-// Inventory Month-End contract:
-//
-//   CLOSED   (default)        -> REOPENED (admin only, only on the
-//                                latest CLOSED period; rejected if a
-//                                later CLOSED period exists).
-//   REOPENED                  -> CLOSED   (admin only, rebuilds the
-//                                snapshot for that exact period in
-//                                one transaction).
-//
-//   - First close on a legacy database is allowed for any completed
-//     calendar month after validation. After a closure exists, new
-//     closes must be strictly chronological: 2026-08 is rejected if
-//     2026-09 already CLOSED, etc.
-//   - Closing a CLOSED period is rejected (409). Reopening an
-//     already REOPENED period is rejected (409).
-//   - Close is atomic: validate period, validate order, compute
-//     snapshot, write snapshot, mark CLOSED — all in one
-//     transaction. Any failure rolls back the entire closure.
-//   - Reclose rebuilds the snapshot for the same period inside one
-//     transaction. No duplicate snapshot rows are produced because of
-//     the unique index on (closure_id, warehouse_id, product_id).
-//   - Closing and reopening write 0 rows into `inventory` and 0 rows
-//     into `inventory_transactions`. The snapshot is read-only.
-//
-// Snapshot reconstruction (canonical-only):
-//
-//   For each (warehouse_id, product_id) with activity in the period:
-//
-//     closing_quantity =
-//         inventory.quantity
-//         − SUM(CASE WHEN direction='IN'  THEN quantity_change ELSE 0 END)
-//         − SUM(CASE WHEN direction='OUT' THEN -quantity_change ELSE 0 END)
-//         for transactions strictly AFTER period_end (last day of period)
-//
-//     period_in_quantity  = SUM(quantity_change) for direction='IN'
-//                           AND created_at within period range
-//     period_out_quantity = SUM(quantity_change) for direction='OUT'
-//                           AND created_at within period range
-//
-//   Current canonical inventory is the only stock source of truth;
-//   `products.stock_quantity` is NEVER used.
 
 import { id as genId, transaction } from '../db.js';
+import { adjustInventory } from '../lib/stock.js';
 import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, readJson, requiredText, optionalText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { postTrackedMovement, saveTrackedAllocations, sourceTrackingAllocations } from './traceability-quality.js';
-import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, issueSourceValue, systemHealth } from './financial-inventory.js';
+import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, issueSourceValue } from './financial-inventory.js';
 
 const SCRAP_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
-const PERIOD_STATUS = { CLOSED: '已结账', REOPENED: '已反结账' };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_NOTE = 200;
 const MAX_REASON = 200;
 
@@ -104,24 +57,6 @@ function readScrapDate(value, fallback) {
   if (!DATE_RE.test(text)) throw new HttpError(400, '报废日期格式应为 YYYY-MM-DD');
   if (Number.isNaN(Date.parse(text + 'T00:00:00Z'))) throw new HttpError(400, '报废日期不正确');
   return text;
-}
-
-function readPeriodKey(value) {
-  if (typeof value !== 'string' || !PERIOD_RE.test(value)) {
-    throw new HttpError(400, '期间格式应为 YYYY-MM');
-  }
-  return value;
-}
-
-function periodRange(periodKey) {
-  const [yearStr, monthStr] = periodKey.split('-');
-  const year = Number(yearStr);
-  const month = Number(monthStr);
-  // lastDay: month is 1-12, day 0 of next month is the last day of month
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const startDate = `${periodKey}-01`;
-  const endDate = `${periodKey}-${String(lastDay).padStart(2, '0')}`;
-  return { startDate, endDate, endTimestamp: `${endDate} 23:59:59` };
 }
 
 function normalizeScrapItems(db, rawItems) {
@@ -337,245 +272,4 @@ export function cancelInventoryScrap(db, res, actor, scrapId) {
     audit(db, actor.id, 'CANCEL', 'INVENTORY_SCRAP', scrapId, `取消库存报废 ${header.scrap_no}`);
   });
   return send(res, 200, { ok: true, status: 'CANCELLED' });
-}
-
-// =====================================================================
-// Inventory Month-End — list / close / reopen / detail / snapshot
-// =====================================================================
-
-function fetchClosureHeader(db, closureId) {
-  return db.prepare(`
-    SELECT c.*, closer.display_name closedByName, reopener.display_name reopenedByName
-      FROM inventory_period_closures c
-      JOIN users closer ON closer.id = c.closed_by
-      LEFT JOIN users reopener ON reopener.id = c.reopened_by
-     WHERE c.id = ?
-  `).get(closureId);
-}
-
-function fetchSnapshots(db, closureId) {
-  return db.prepare(`
-    SELECT s.*, s.warehouse_id warehouseId, s.product_id productId,
-           w.code warehouseCode, w.name warehouseName,
-           p.code productCode, p.name productName, p.unit productUnit
-      FROM inventory_period_snapshots s
-      JOIN warehouses w ON w.id = s.warehouse_id
-      JOIN products p ON p.id = s.product_id
-     WHERE s.closure_id = ?
-     ORDER BY w.code, p.code
-  `).all(closureId).map((row) => ({
-    ...row,
-    closingQuantity: Number(row.closing_quantity),
-    periodInQuantity: Number(row.period_in_quantity),
-    periodOutQuantity: Number(row.period_out_quantity),
-  }));
-}
-
-function buildSnapshotsForPeriod(db, periodKey) {
-  const { startDate, endDate, endTimestamp } = periodRange(periodKey);
-  // Active (warehouse_id, product_id) combinations from canonical
-  // inventory OR from transactions inside / before the period end.
-  // We treat inventory as the authoritative current state; net
-  // movements strictly AFTER period_end are subtracted.
-  const inventoryRows = db.prepare(`
-    SELECT warehouse_id, product_id, quantity FROM inventory
-  `).all();
-  const movementKeys = db.prepare(`
-    SELECT DISTINCT warehouse_id, product_id
-      FROM inventory_transactions
-     WHERE DATE(created_at) <= ?
-  `).all(endDate);
-  const keySet = new Map();
-  for (const row of inventoryRows) keySet.set(`${row.warehouse_id}|${row.product_id}`, { warehouseId: row.warehouse_id, productId: row.product_id });
-  for (const row of movementKeys) if (!keySet.has(`${row.warehouse_id}|${row.product_id}`)) keySet.set(`${row.warehouse_id}|${row.product_id}`, { warehouseId: row.warehouse_id, productId: row.product_id });
-
-  const snapshots = [];
-  for (const { warehouseId, productId } of keySet.values()) {
-    const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?')
-      .get(warehouseId, productId);
-    const currentQuantity = current ? Number(current.quantity) : 0;
-    // Net movements strictly AFTER period_end (i.e. created_at > endTimestamp).
-    const afterMovements = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN direction='IN'  THEN quantity_change ELSE 0  END), 0) AS in_sum,
-        COALESCE(SUM(CASE WHEN direction='OUT' THEN quantity_change ELSE 0  END), 0) AS out_sum
-        FROM inventory_transactions
-       WHERE warehouse_id=? AND product_id=?
-         AND created_at > ?
-    `).get(warehouseId, productId, endTimestamp);
-    const closingQuantity = currentQuantity - Number(afterMovements.in_sum) + Number(afterMovements.out_sum);
-    // Period in/out: within period range inclusive.
-    const periodMovements = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN direction='IN'  THEN quantity_change ELSE 0  END), 0) AS in_sum,
-        COALESCE(SUM(CASE WHEN direction='OUT' THEN quantity_change ELSE 0  END), 0) AS out_sum
-        FROM inventory_transactions
-       WHERE warehouse_id=? AND product_id=?
-         AND DATE(created_at) >= ?
-         AND DATE(created_at) <= ?
-    `).get(warehouseId, productId, startDate, endDate);
-    const periodInQuantity = Number(periodMovements.in_sum);
-    const periodOutQuantity = Number(periodMovements.out_sum);
-    snapshots.push({
-      id: genId(),
-      warehouseId,
-      productId,
-      closingQuantity,
-      periodInQuantity,
-      periodOutQuantity,
-    });
-  }
-  return snapshots;
-}
-
-function writeSnapshots(db, closureId, snapshots) {
-  db.prepare('DELETE FROM inventory_period_snapshots WHERE closure_id=?').run(closureId);
-  const insert = db.prepare(`
-    INSERT INTO inventory_period_snapshots(id, closure_id, warehouse_id, product_id,
-      closing_quantity, period_in_quantity, period_out_quantity)
-    VALUES(?, ?, ?, ?, ?, ?, ?)
-  `);
-  for (const s of snapshots) {
-    insert.run(s.id, closureId, s.warehouseId, s.productId, s.closingQuantity, s.periodInQuantity, s.periodOutQuantity);
-  }
-}
-
-export function listInventoryPeriodClosures(db, res, actor) {
-  allowAny(actor, ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE']);
-  const rows = db.prepare(`
-    SELECT c.*, closer.display_name closedByName, reopener.display_name reopenedByName,
-           (SELECT COUNT(*) FROM inventory_period_snapshots WHERE closure_id=c.id) snapshotCount
-      FROM inventory_period_closures c
-      JOIN users closer ON closer.id = c.closed_by
-      LEFT JOIN users reopener ON reopener.id = c.reopened_by
-      ORDER BY c.period_key DESC
-      LIMIT 100
-  `).all().map((row) => ({
-    ...row,
-    statusLabel: PERIOD_STATUS[row.status] || row.status,
-    snapshotCount: Number(row.snapshotCount),
-  }));
-  return send(res, 200, { inventoryPeriodClosures: rows });
-}
-
-export function getInventoryPeriodClosure(db, res, actor, closureId) {
-  allowAny(actor, ['INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE']);
-  const header = fetchClosureHeader(db, closureId);
-  if (!header) throw new HttpError(404, '存货月结记录不存在');
-  header.statusLabel = PERIOD_STATUS[header.status] || header.status;
-  const snapshots = fetchSnapshots(db, closureId);
-  header.snapshots = snapshots;
-  const periodRangeInfo = periodRange(header.period_key);
-  header.periodRange = periodRangeInfo;
-  // Summary aggregation.
-  const productSet = new Set();
-  const warehouseSet = new Set();
-  let totalIn = 0;
-  let totalOut = 0;
-  for (const snap of snapshots) {
-    productSet.add(snap.productId);
-    warehouseSet.add(snap.warehouseId);
-    totalIn += snap.periodInQuantity;
-    totalOut += snap.periodOutQuantity;
-  }
-  header.summary = {
-    productCount: productSet.size,
-    warehouseCount: warehouseSet.size,
-    totalInQuantity: totalIn,
-    totalOutQuantity: totalOut,
-  };
-  return send(res, 200, { inventoryPeriodClosure: header });
-}
-
-export async function closeInventoryPeriod(db, req, res, actor) {
-  allow(actor, 'INVENTORY_PERIOD_CLOSE_MANAGE');
-  const body = await readJson(req);
-  const periodKey = readPeriodKey(body.period ?? body.periodKey);
-  const notes = optionalText(body.notes ?? '', MAX_NOTE);
-  const health=systemHealth(db,{asOfDate:periodRange(periodKey).endDate}); const blocking=health.checks.filter(x=>x.severity==='BLOCKING'&&x.status==='FAIL'); if(blocking.length) throw new HttpError(409,`存货结账健康检查失败: ${blocking.map(x=>x.code).join(', ')}`);
-  const now = nowIso();
-  transaction(db, () => {
-    // If a closure already exists for this period_key, decide based on
-    // its current status.
-    const existing = db.prepare('SELECT * FROM inventory_period_closures WHERE period_key=?').get(periodKey);
-    if (existing) {
-      if (existing.status === 'CLOSED') {
-        throw new HttpError(409, `期间 ${periodKey} 已结账`);
-      }
-      // REOPENED -> rebuild snapshot, mark CLOSED again.
-      const snapshots = buildSnapshotsForPeriod(db, periodKey);
-      writeSnapshots(db, existing.id, snapshots);
-      db.prepare(`
-        UPDATE inventory_period_closures
-           SET status='CLOSED', closed_by=?, closed_at=?, reopened_by=NULL, reopened_at=NULL, reopen_reason=NULL, notes=?, close_checks_json=?
-         WHERE id=?
-      `).run(actor.id, now, notes, JSON.stringify(health), existing.id);
-      audit(db, actor.id, 'CLOSE_PERIOD', 'INVENTORY_PERIOD_CLOSURE', existing.id, `重新结账 ${periodKey}`);
-      return;
-    }
-    // No prior closure for this period_key — chronological check:
-    // After the first closure exists, new closes must be strictly
-    // later than the latest CLOSED period's period_key. We compare as
-    // YYYY-MM lexicographically because the format is fixed width.
-    const latest = db.prepare(`
-      SELECT period_key, status FROM inventory_period_closures
-       ORDER BY period_key DESC LIMIT 1
-    `).get();
-    if (latest && latest.status === 'CLOSED' && latest.period_key >= periodKey) {
-      throw new HttpError(409, `期间 ${periodKey} 早于最近已结期间 ${latest.period_key}，请按顺序结账`);
-    }
-    const snapshots = buildSnapshotsForPeriod(db, periodKey);
-    const closureId = genId();
-    db.prepare(`
-      INSERT INTO inventory_period_closures(id, period_key, status, closed_by, closed_at, notes, close_checks_json)
-      VALUES(?, ?, 'CLOSED', ?, ?, ?, ?)
-    `).run(closureId, periodKey, actor.id, now, notes, JSON.stringify(health));
-    writeSnapshots(db, closureId, snapshots);
-    audit(db, actor.id, 'CLOSE_PERIOD', 'INVENTORY_PERIOD_CLOSURE', closureId, `结账 ${periodKey}`);
-  });
-  return send(res, 200, { ok: true, period: periodKey });
-}
-
-export async function reopenInventoryPeriod(db, req, res, actor, closureId) {
-  allow(actor, 'INVENTORY_PERIOD_CLOSE_MANAGE');
-  const body=await readJson(req); const reason=requiredText(body.reason,'反结账原因',200);
-  const now = nowIso();
-  transaction(db, () => {
-    const closure = db.prepare('SELECT * FROM inventory_period_closures WHERE id=?').get(closureId);
-    if (!closure) throw new HttpError(404, '存货月结记录不存在');
-    if (closure.status !== 'CLOSED') throw new HttpError(409, '当前期间已为反结账状态');
-    if(db.prepare("SELECT 1 FROM period_closures WHERE period=? AND status='CLOSED'").get(closure.period_key)) throw new HttpError(409,'必须先重新打开会计期间，再重新打开存货期间');
-    // Only the latest CLOSED period may be reopened; opening an older
-    // period underneath a newer one would violate forward chronology.
-    const latest = db.prepare(`
-      SELECT period_key, status FROM inventory_period_closures
-       ORDER BY period_key DESC LIMIT 1
-    `).get();
-    if (!latest || latest.period_key !== closure.period_key || latest.status !== 'CLOSED') {
-      throw new HttpError(409, `期间 ${closure.period_key} 不是最近已结期间，不能反结账`);
-    }
-    db.prepare(`
-      UPDATE inventory_period_closures
-         SET status='REOPENED', reopened_by=?, reopened_at=?,reopen_reason=?
-       WHERE id=?
-    `).run(actor.id, now,reason, closureId);
-    audit(db, actor.id, 'REOPEN_PERIOD', 'INVENTORY_PERIOD_CLOSURE', closureId, `反结账 ${closure.period_key}：${reason}`);
-  });
-  return send(res, 200, { ok: true, status: 'REOPENED' });
-}
-
-// =====================================================================
-// Canonical stock helper (mirrors server/app.js adjustInventory; kept
-// inline to avoid a circular import).
-// =====================================================================
-
-function adjustInventory(db, warehouseId, productId, quantityChange, now) {
-  db.prepare(`
-    INSERT INTO inventory(id, warehouse_id, product_id, quantity, updated_at)
-    VALUES(?, ?, ?, ?, ?)
-    ON CONFLICT(warehouse_id, product_id) DO UPDATE SET
-      quantity = inventory.quantity + excluded.quantity,
-      updated_at = excluded.updated_at
-  `).run(genId(), warehouseId, productId, quantityChange, now);
-  return Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId).quantity);
 }

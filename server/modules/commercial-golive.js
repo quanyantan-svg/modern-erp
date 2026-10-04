@@ -17,12 +17,7 @@ export function rational(num, den = 1) {
   const n = int(num, '分子'); const d = positiveInt(den, '分母'); const factor = gcd(n, d);
   return { num: n / factor, den: d / factor };
 }
-export function multiplyRational(left, right) { return rational(left.num * right.num, left.den * right.den); }
-export function compareRational(left, right) {
-  const value = BigInt(left.num) * BigInt(right.den) - BigInt(right.num) * BigInt(left.den);
-  return value < 0n ? -1 : value > 0n ? 1 : 0;
-}
-export function addRational(left, right) { return rational(left.num * right.den + right.num * left.den, left.den * right.den); }
+function multiplyRational(left, right) { return rational(left.num * right.num, left.den * right.den); }
 export function roundRational(num, den) {
   const n = BigInt(num); const d = BigInt(den); const sign = n < 0n ? -1n : 1n; const abs = n < 0n ? -n : n;
   return Number(sign * ((abs * 2n + d) / (2n * d)));

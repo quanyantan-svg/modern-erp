@@ -2,7 +2,7 @@ import { id } from '../db.js';
 import { HttpError, allowAny, send } from '../lib/http.js';
 
 const EPS = 1e-9;
-export const VALUATION_BY_TRACKING = Object.freeze({ NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' });
+const VALUATION_BY_TRACKING = Object.freeze({ NONE: 'MOVING_AVERAGE', LOT: 'LOT_SPECIFIC_POOL', SERIAL: 'SPECIFIC_SERIAL' });
 
 function nextPeriodKey(period) {
   const [year, month] = period.split('-').map(Number);
@@ -154,7 +154,7 @@ export function restoreSourceValue(db,input){
   if(remaining>EPS) throw new HttpError(409,'退回数量超过原出库成本分配'); return result;
 }
 
-export function accountForRole(db, role) {
+function accountForRole(db, role) {
   const row = db.prepare('SELECT s.id,s.code,s.name FROM account_role_mappings m JOIN accounting_subjects s ON s.id=m.subject_id AND s.active=1 WHERE m.role_code=?').get(role);
   if (!row) throw new HttpError(409, `缺少会计科目角色映射: ${role}`);
   return row;

@@ -1018,35 +1018,6 @@ export async function generatePurchaseOrderFromRequisition(db, req, res, actor, 
 // Conversion metadata for MRP result rows
 // ============================================================
 
-export function conversionMetadataForMrpResult(db, resultId) {
-  const result = db.prepare("SELECT id, suggested_quantity, suggestion_type FROM mrp_run_results WHERE id=?").get(resultId);
-  if (!result) return null;
-  const suggested = Number(result.suggested_quantity);
-  if (result.suggestion_type === 'MAKE') {
-    const converted = convertedQtyForMrpResult(
-      db, 'production_instruction_items', 'production_instructions', 'mrp_result_id', ACTIVE_PI_STATUSES, resultId,
-    );
-    return {
-      suggestedQuantity: suggested,
-      convertedQuantity: converted,
-      remainingQuantity: Math.max(0, suggested - converted),
-      canConvert: suggested - converted > 0,
-    };
-  }
-  if (result.suggestion_type === 'BUY') {
-    const converted = convertedQtyForMrpResult(
-      db, 'purchase_instruction_items', 'purchase_instructions', 'mrp_result_id', ACTIVE_PUI_STATUSES, resultId,
-    );
-    return {
-      suggestedQuantity: suggested,
-      convertedQuantity: converted,
-      remainingQuantity: Math.max(0, suggested - converted),
-      canConvert: suggested - converted > 0,
-    };
-  }
-  return { suggestedQuantity: suggested, convertedQuantity: 0, remainingQuantity: suggested, canConvert: false };
-}
-
 // Expose the helper for testing.
 export const __test__ = {
   convertedQtyForMrpResult,

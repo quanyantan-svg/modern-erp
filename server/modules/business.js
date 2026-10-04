@@ -403,12 +403,6 @@ export async function markNotificationRead(db, req, res, actor) {
   return send(res, 200, { ok: true });
 }
 
-export function createNotification(db, userId, title, content, type = 'INFO', sourceType = null, sourceId = null) {
-  const now = new Date().toISOString();
-  const nid = id();
-  db.prepare('INSERT INTO notifications(id,user_id,title,content,type,source_type,source_id,created_at) VALUES(?,?,?,?,?,?,?,?)').run(nid, userId, title, content, type, sourceType, sourceId, now);
-}
-
 // ============ Approval Workflows ============
 
 export async function listWorkflows(db, res, actor) {
@@ -428,19 +422,4 @@ export async function createWorkflow(db, req, res, actor) {
   
   audit(db, actor.id, 'CREATE', 'WORKFLOW', wfId, `创建审批流程 ${name}`);
   return send(res, 200, { id: wfId });
-}
-
-export async function listApprovalRecords(db, res, actor, url) {
-  allowAny(actor, ['WORKFLOW_VIEW', 'WORKFLOW_MANAGE']);
-  const entityType = url.searchParams.get('entityType') || '';
-  const entityId = url.searchParams.get('entityId') || '';
-  
-  let sql = `SELECT ar.*, u.name approverName FROM approval_records ar LEFT JOIN users u ON u.id=ar.approver_id WHERE 1=1`;
-  const params = [];
-  if (entityType) { sql += ` AND ar.entity_type=?`; params.push(entityType); }
-  if (entityId) { sql += ` AND ar.entity_id=?`; params.push(entityId); }
-  sql += ` ORDER BY ar.created_at DESC`;
-  
-  const records = db.prepare(sql).all(...params);
-  return send(res, 200, { records });
 }
