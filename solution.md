@@ -530,3 +530,536 @@ scripts/admin/setup-admin.mjs 只用于显式创建首个 ADMIN，要求强密�
 - 旧 archive 当前工作树已脱敏，但 Git 历史仍包含历史秘密；历史清理与凭据轮换不属于普通代码重构。
 - MySQL 生产备份/恢复、真实容量、分页收口和部署升级/回滚仍需环境化验收。
 - 多公司、多币种、年结、政府电子发票、APS、完整 MES/OEE/QMS 和期初 WIP 属于明确未支持范围，不得通过 UI 或文档暗示已实现。
+
+## 19. V2 系统化重构与产品结构现代化设计
+
+§19 是 V2 的当前架构设计，对应 document.md §20。它不是对既有章节的重写，而是新增一份当前技术设计：把 §20.3 的业务合同冻结、§20.4 的架构要求，转化为可逐 wave 推进的所有权、迁移和验证方案。任何对既有实现细节的引用仍以 §1–§18 为权威；本节只补充 V2 阶段特有的目标、边界、顺序和退出门槛。
+
+### 19.1 设计目标与原则
+
+V2 是 §20 描述的"结构重构与所有权迁移计划"，不是 greenfield 改写，也不得被解读为对既有 ERP 业务能力的替代发布。本节的设计目标是把"减少架构集中度 / 清晰前后端领域边界"翻译成可逐步落地的所有权与迁移规则。设计遵循下列原则：
+
+1. **行为冻结**。§3–§17 与 §20.3 的业务合同在 V2 任何 wave 内不得偏离；任何被视为"行为修复"的发现必须先作为独立 REQUIREMENT / DESIGN delta 处理，不能混进纯重构 wave。
+2. **增量优先**。每个 wave 必须留下一个可运行、可回归、外部行为等价的仓库状态；不得借重构改动 API、schema、路由身份或权限语义。
+3. **单一规范实现**。同一业务原语不得同时存在两套活动实现；先有 caller proof / 替代实现，再用小逻辑单元删除旧的。
+4. **零 schema 默认**。结构性 wave 默认零 schema 变更；若发现 schema 需求，STOP 该 wave 并独立 REQUIREMENT / DESIGN 处理。
+5. **不引入框架**。不在 V2 第一波为路由分发或领域编排引入 Express/Koa/Router/DI 框架；既有 Node 原生 HTTP + 自包含 dispatch 是原文职责。
+6. **重叠 wave 不混合**。跨模块 / 跨 API / 跨 schema / 跨视觉的不相关变更不得合入同一个 wave。
+7. **AGENTS.md 优先**。每个 wave 的完成 gate 由 AGENTS.md §6.1 推导，而非由"业务风险"标签推导；"高风险业务领域"不等于"HEAVY test suite"。
+
+本节对"front-end / back-end"作如下区分：后端指 Node 原生 HTTP 入口（`server/index.js`、`server/app.js`、`server/lib/`、`server/modules/`、`server/database/`、`server/migrations/`、`server/db.js` 基础部分）；前端指 React 19 + Vite 7 入口（`src/main.jsx`、`src/App.jsx`、`src/navigation/`、`src/api.js`、`src/pages/`、`src/components/`、`src/styles/`、`src/lib/`）。任何越界修改都视为跨域变更，必须按 §15 测试 gate 阶梯与 AGENTS.md §6.1 升档。
+
+### 19.2 后端目标架构
+
+§20.4 对后端的要求是"减少 `server/app.js` 集中度 / 显式领域所有权 / 可见的事务边界与权限 / 减少 kitchen-sink 形态"。本节给出该目标的所有权结构。
+
+#### A. `server/app.js` 收敛后的责任
+
+收敛后，`server/app.js` 仅承担下列职责：
+
+1. `createApp(db, options)` 工厂函数，导出形式与现有合同保持兼容；
+2. 全局 request lifecycle：`X-Request-Id` 生成与响应头、`setSecurityHeaders`、OPTIONS 204、慢请求日志钩子、未处理异常安全化；
+3. `/api/health`, `/api/health/live`, `/api/health/ready` 三个 readiness 端点（已在 solution.md §4 表达，沿用）；
+4. 静态资源 / `dist/` 提供与 SPA fallback（仍由 `createApp` 持有，但不在 `handleApi` 内）；
+5. **薄 dispatch 入口**：把 `(method, pathname)` 解析为 `(route handler)` 并调用；不再包含业务不变量解析、来源校验、状态机或凭证生成；
+6. 业务 handler 不再声明于 `server/app.js`，统一迁入 `server/modules/`；`server/app.js` 只保留与 dispatch 相关的私有函数（regex matcher、path param 抽取）。
+
+不再属于 `server/app.js`（按各 wave 实际迁出）：
+
+- 低 / 中风险主数据 / 字典 CRUD handler（如 `listCustomers`, `createCustomer`, `updateSupplier`, `listProducts`, `createProduct`, `listUsers`, `createUser`, `updateUser`, `listWarehouses`, `createWarehouse`, `updateWarehouse`, `listRoles`, `createRole`, `updateRole`, `listDepartments`, `createDepartment`, `listAuxProjects`, `createAuxProject`, `listCurrencies`, `listVoucherWords`, `createVoucherWord`, `listVoucherTemplates` 等）；
+- 按 §19.7 各 bounded wave 选定的低 / 中风险单据 / state-change / 物流 handler 子集；
+- 持久化的 `legacy*` 影子实现（在 §19.3 中按 caller-proof 规则删除）；
+- 单据号码生成器（`makeVoucherNo`, `makeInventoryTransferNo`, `makeInventoryCheckNo`, `makeInventoryAdjustmentNo`, `makePurchaseOrderNo`, `makeOrderNo`），随其所属 wave 迁入领域内部。
+
+不属于本 wave（已在 §19.4 / §19.7 标记为高风险，不在 first-wave 迁出）：
+
+- 期间控制（`listPeriodClosures`, `createPeriodClosure`, `closePeriod`, `unclosePeriod`, `getClosureChecklist`）；
+- 全部 settlement / accounting voucher / inventory mutation / valuation / LOT-SERIAL / IQC-OQC / manufacturing WIP-cost / MySQL adapter / migrations 相关 handler。
+
+迁出后，`handleApi` 由领域模块的 route 表装载，仅记录 `matcher (method, pathRegex) → domainModule.handler`，并按 §19.2.B 的所有权规则代理。
+
+#### B. Route 所有权模型（单一事实源）
+
+route 表只承载 dispatch 与 ownership 必需的最小信息；不复制任何已有的运行时权威。
+
+每个 route 描述项必须且只能包含：
+
+- `method` — 大写 HTTP method；
+- `path` — 既有 `pathname.match(/^\/api\/...\/([^/]+)$/)` 等正则风格；本阶段不引入 path-to-regexp 依赖；
+- `handler` — 领域模块导出的函数；签名沿用各领域既有 signature，route 装载层以薄适配形态调用；
+- `owner` — 领域模块路径（`server/modules/<domain>/...` 的目录或文件），禁止使用 `app.js` 作为 owner。
+
+route 表不承载：
+
+- 权限策略字段。Authorization 仍由 handler 入口第一行的 `allow` / `allowAny` 校验承担；权限名取自 `PERMISSIONS` 常量。任何把权限合并到 route 表的元数据都会与 runtime 校验漂移，禁止引入。
+- `transactionPolicy` / `auditPolicy` 元数据。事务边界仍是 `transaction(db, work)`，由领域 module 在触发写入时调用；审计仍是 `server/lib/audit.js` 的 `audit(db, ...)`，由领域 mutation 同事务内调用。任何把这些策略抽到 route 表的设计都会产生第二个可漂移的事实源，禁止引入。
+
+route 表静态校验：
+
+- 重复的 `(method, path)` → fail closed；
+- 同一 `(method, path)` 关联到两个 owner → fail closed；
+- 任何 handler 的 owner 字段指向 `app.js` → fail closed；
+- 注册表在 `pnpm test` 内由 server test 启动时静态加载并断言。
+
+#### C. Handler 适配层（不强求统一签名）
+
+迁出后 handler 与 dispatch 之间以"适配"为默认形态，不强求既有 handler 立即统一签名。handler 既有的 sign 约定按各领域 module 现状保留；route 表装载层以薄适配形态调用。
+
+适配层按下列四层组织（不修改领域实现）：
+
+1. **HTTP adapter** — 把 `Request` / `URL` / `URLSearchParams` / body / path 解析为 plain input；不进入领域。`server/lib/http.js` 暴露 `readJson`, `assertAllowedFields`, `send`, `HttpError`, `serializeError`, `bearer`, `setSecurityHeaders`。
+2. **Authorization** — handler 入口第一行调用 `allow(actor, perm)` / `allowAny(actor, [...])`；权限名取自 `PERMISSIONS` 常量；迁移时不得改权限名或放松检查。
+3. **Domain command / query** — 接受 plain business input，返回 business result；领域不接收 `URLSearchParams` / `Request` / `Response` 等 HTTP 协议对象；既有实现仍暂时依赖 HTTP 形态的部分允许保留 compat adapter。
+4. **Response adapter** — 把 business result 序列化为 HTTP response；不进入领域。
+
+handler 内部禁止：
+
+- 自行写 voucher / settlement / inventory mutation 的 SQL；
+- 自行调用 `audit(...)` 与业务写入分离（必须同事务）；
+- 把 `app.js` 私有函数 / 单据号码生成器 / 凭证生成器作为依赖；这些迁入领域内部。
+
+#### D. Domain 模块责任边界
+
+domain 目录与文件布局不在本节预先冻结。下列为设计规则，不是恒等替代方案：
+
+- 领域目录在某个迁移 wave 证明该业务确有 coherent owner 后才创建；不得为了架构美观预创建。
+- ownership 跟随当前业务责任与 call chain，不跟随 `extended.js` / `business.js` 等历史文件名。
+- 不创建 catch-all 替代领域；不创建新的 kitchen-sink（例如把 OA + CRM + 项目 + workflow 合入一个目录）。
+- 具体目录命名由该 wave 的 REQUIREMENT / DESIGN 决定。
+
+举例（仅作示例，非最终仓库 taxonomy）：
+
+- 若 sales order 迁出，target owner 通常是当前实现已承担该职责的领域文件（`server/modules/` 下现存的 export 或新增模块）；
+- 若 decision-reports 迁出，target owner 通常是当前 `server/modules/decision-reports.js`（已承载）；
+- 具体的目录与文件名由各 wave 决定；本节不强求统一模板。
+
+跨领域依赖：
+
+- 不经由 `app.js` 中转；
+- 跨领域调用由模块导出函数表达；
+- 静态 caller / import 关系是迁移证据，不是 runtime / domain source；本节不强制 `callers.js` 等 committed 文件。
+
+#### E. 兼容性 / 外部 API 合同
+
+V2 任何 wave 都不得改变：
+
+- HTTP methods、`paths`、`request shapes`、`response shapes`、错误结构（`HttpError` + `X-Request-Id`）；
+- 权限名 `PERMISSIONS.*` 与 `allow` / `allowAny` 校验语义；
+- `transaction(db, work)`、审计、idempotency 行为；
+- 既有 MySQL stale-connection recovery / 并发合同（solution.md §6 / §9 / §9.1）。
+
+V2 第一波不引入任何 API deprecation 行为（无强制 deprecation 周期、无 `Deprecated:` HTTP 头）。任何 API 增加 / 字段变更 / 端点删除由后续独立 REQUIREMENT / DESIGN wave 处理。
+
+### 19.3 后端领域所有权清理
+
+#### A. 混合 ownership 模块的拆分策略
+
+`server/modules/extended.js`（主数据扩展 + OA + HR + IQC / OQC + 评估 + Alert + MRP classic + financial reports）、`server/modules/business.js`（CRM + 项目 + 工时 + 通知 + workflow）、`server/modules/lifecycle-engine.js`（草稿删除 + 引用检查 + 清理事件）、`server/modules/decision-reports.js`、`server/modules/planning-documents.js`、`server/modules/planning.js` 当前承担混合 ownership。
+
+拆分策略：
+
+- 只迁移已证 coherent 的低 / 中风险责任（按各 wave 的 focused test / 调用链证据）；
+- 高风险责任（IQC / OQC、MRP classic、financial reports、CRM / 项目 / 工时 / 通知 / workflow 等）保留在当前 canonical 模块直至其独立 wave；
+- 跨域迁移按业务 owner 划分，不按文件大小或历史名划分；
+- 兼容 re-export 只在迁移证据成立后暂时保留，且仅指向唯一实现。
+
+#### B. 死代码删除规则
+
+仅当满足下列全部时，才允许删除一个函数或文件：
+
+1. 删除前一刻在实现 wave HEAD 上重新跑 zero-caller proof（`git grep` / `import` / export 检查 / route ownership / 单元测试引用），不得仅依据 Stage 0 静态快照；
+2. canonical 替代实现已在注册表中可见（route 表 `owner` 字段指向唯一模块）；
+3. 替代实现的 return / error / permission / transaction / audit 语义与被删函数已比较；
+4. 删除作为独立小逻辑单元提交（不得与跨模块变更混在同一个 commit）。
+
+按 Stage 0 静态分析，下列函数为"当前删除候选"，但其 zero-caller proof 必须在实际删除所在 wave 的 HEAD 上重新执行：
+
+- `legacyListCashJournals`, `legacyCreateCashJournal`, `legacyListBankAccounts`, `legacyCreateBankAccount`, `legacyUpdateBankAccount`, `legacyListBills`, `legacyCreateBill`, `legacyUpdateBill`, `legacyListFixedAssets`, `legacyCreateFixedAsset`, `legacyUpdateFixedAsset`, `legacyCalculateDepreciation`, `legacyCalculateProductionCost`；
+- `getCashJournal`, `deleteCashJournal`, `getBankAccount`, `getBill`, `getFixedAsset`, `listAssetDepreciations`, `getProductionCost` 等私有 helper。
+
+不允许删除：
+
+- 任何仍由 `handleApi` 直接调用的私有函数；
+- 任何被跨文件 `import` 引用的导出；
+- 任何受既有测试依赖的 helper。
+
+#### C. dead-code 删除前的 regression 证据
+
+死代码删除前必须确认：
+
+1. 替代 route 的 list / get / get-detail / mutation / state-change 由既有 focused `node --test` 覆盖；既有 live focused test 已覆盖替代实现时不得为删除而新建"行为等价"测试；
+2. 若既有覆盖不足，先为 live 行为补 focused test，再删除；
+3. 删除前 `pnpm test` 全绿（验证 `validate()` 集合不变）。
+
+#### D. caller-proof 证据来源
+
+caller-proof 是迁移证据，不属于 runtime / domain source。证据来源：
+
+- `git grep` 跨模块 `import` / `from '...'`；
+- route 表 `owner` 字段 handler 调用；
+- 单元测试 `import { fn }` / `fn(` 引用；
+- focused test 断言。
+
+本节不强制 `scripts/testing/caller-proof.js` 等 committed helper 脚本。仅在实际删除 / 迁移 wave 证明 helper 必要后再由独立 wave 引入；不得仅因架构纯净而在 Wave 1 引入。
+
+### 19.4 受保护的高风险领域
+
+下列领域属于 V2 第一波高风险，必须延后或仅在更强 gate 下迁移：
+
+- **inventory mutation**（inventory transactions、adjustments、transfers、scrap）：数量 + LOT/SERIAL 身份 + 估值同步发生，事务边界与审计不可破坏；
+- **inventory valuation**（NONE / LOT / SERIAL 池，valuation movements、cache）：LEGACY_UNVALUED 与权威关账合同保留；
+- **LOT / SERIAL**（tracking, hold/release, allocation）：身份唯一性、可用性排除规则、谱系证据；
+- **IQC / OQC**（quality gates, authoritative quality, FAIL safe-default）：PASS/FAIL/STALE 与抽样规则；
+- **period close**（inventory month-end, accounting period closures）：阻断级 System Health 与"存货期间先于会计期间"关闭顺序；
+- **AR / AP settlement**（settlement-core, settlement, financial-controls）：不可变再贷项、缓存刷新、写后回流；
+- **accounting voucher posting**（`createSystemVoucher`, period gating, debit/credit 严格相等）：POSTED-only 报表；
+- **manufacturing WIP / cost**（manufacturing-execution, `snapshotManufacturingExecution`, `deriveProductionCost`）：AUTHORITATIVE / PARTIAL / ESTIMATED 证据，缺失不得伪装为零；
+- **MySQL adapter / recovery**（`server/database/*`）：timeout-generation protocol、failure-driven recovery、写禁止重放；
+- **migrations**（`server/migrations/`, `server/db.js` 基础 schema）：schema 变更必须单独 REQUIREMENT / DESIGN wave。
+
+对这些领域的迁移要求：
+
+1. 不得借 V2 重构改变业务不变量；
+2. 迁移必须携带 focused tests 覆盖：交易回滚、来源 recheck、审计写入、权限位、写后 idempotency；
+3. MySQL 受影响 wave 必须运行 `pnpm test:mysql` + `pnpm test:mysql:concurrency`（在具备受保护 disposable MySQL 环境时）；
+4. 任何 schema 变更必须独立 REQUIREMENT / DESIGN wave（§19.10）。
+
+### 19.5 前端目标架构
+
+§20.4 对前端的要求是"`applicationRegistry` 仍为 canonical 路由 / Route 元数据事实源；`RouteLocation` 语义保持；direct URL / 刷新 / Back / Forward 正常工作；授权 gate fail-closed；大型遗留页面逐步分解为 list / detail / editor / domain surface；mobile-first 不回归"。本节给出具体的层、组件归属与迁移模型。
+
+#### A. `applicationRegistry` 不变
+
+- `src/navigation/applicationRegistry.js` 仍是 Route、access、Launcher Entry、target contract、screen loader、responsive mode 的 canonical 事实源；
+- §3.1 中既有的 `presentationMetadata.js` / `applicationMetadata.js` 仍是兼容 projection，不得成为第二份事实源；
+- 不创建第二份 route registry；
+- 不创建重复 launcher metadata；
+- `applicationRegistry` 的静态校验（重复 key、冲突 alias、无效 parentRoute、指向不存在 Route 的 Launcher Entry、缺少 Screen 的启用 Route）维持现状（详见 solution.md §3.1）；
+- `RESPONSIVE_MODES` 枚举的现有值（`LEGACY_ADAPTER` / `NATIVE_RESPONSIVE`）保持；不新增运行时 production 状态。
+
+#### B. 屏幕 / 组件所有权层
+
+下列层是前端 V2 必须遵守的依赖方向（上层依赖下层，下层不依赖上层）：
+
+1. **`applicationRegistry` + `routeLocation` + `AppNavigationContext`**（事实与导航层）— 不变；
+2. **`App` + `MobileShell` + `RouteScreen` + `V16RouteSurface`**（壳 / 编排层）— 不变；
+3. **domain list surface**（list / filter / row）：由实际迁移 wave 的目标 owner 文件承载；
+4. **domain detail surface**（detail / workflow / status / related sections）：由实际迁移 wave 的目标 owner 文件承载；
+5. **domain editor / workflow surface**（form / editor / modal / action bar）：由实际迁移 wave 的目标 owner 文件承载；
+6. **reusable domain components**：由实际迁移 wave 的目标 owner 文件承载；
+7. **shared UI / design-system primitives**：`src/components/ui.jsx`, `src/components/design-system.jsx`, `src/components/icons.jsx`, `src/components/MobileShell.jsx`, `src/components/MobilePage.jsx`, `src/lib/copy.js`, `src/lib/status.js`, `src/lib/money.js`, `src/lib/presentation.js`, `src/lib/tracking.js`（保持与现状一致）。
+
+明确禁止：
+
+- 把 ERP 业务含义（如 APPROVE / CONFIRM / TRANSFER / REVERSE / HOLD / RELEASE / POST 等动作语义）写进 `src/components/ui.jsx`、`design-system.jsx`、`icons.jsx` 等通用层；
+- 在通用组件中调用 `api()`、判断 role / permission、解析 route target / location；
+- 让 domain surface 直接依赖另一个 domain surface（必须通过 route 跳转或 AppNavigationContext）。
+
+#### C. Route 迁移模型（无双活屏幕）
+
+`responsiveMode` 保持现有两个 production 值（`LEGACY_ADAPTER` / `NATIVE_RESPONSIVE`）；不新增运行时 production 状态。同一 route key 必须只对应唯一 live executable screen。
+
+迁移按三阶段模型：
+
+A. **Before cutover**：
+- 既有 route loader 仍为权威；
+- route 保持当前 `responsiveMode`（通常 `LEGACY_ADAPTER`）；
+- 新 surface 可独立开发 / 测试，但不挂载为该 route key 的 live screen；不进入 registry 的 `loader`。
+
+B. **Cutover**：
+- 在 focused / full evidence 证明等价后，一次 bounded change 替换该 route 的 loader ownership；
+- 必须仅有一个 active screen implementation 对应同一 route key；
+- 不允许"新 primary + 旧 fallback"双活屏幕；
+- 不允许同一 route key 暂时并行持有两套 live executable business screen。
+
+C. **Responsive completion**：
+- 若新 screen 仍依赖 legacy adapter（典型 desktop-table 形态），`responsiveMode` 可暂时保持 `LEGACY_ADAPTER`；
+- 只有当新 screen 满足 §19.5.D 退出门槛（无 desktop-table / 无 `MutationObserver`、320 / 390 / 430 / 680 px 已覆盖）后，`responsiveMode` 才设为 `NATIVE_RESPONSIVE`。
+
+#### D. Route 退出门槛
+
+仅当下列全部成立时，一条 Route 视为完成 native responsive 迁移：
+
+1. `route.key`, `pathParam`, `queryKeys`, `alias` 行为保持不变；
+2. 权限 / access 与 `applicationRegistry.access` 一致；
+3. list / detail / editor / workflow 路径在新 screen 内仍然一致；direct URL 仍按既有 target 解析；
+4. 320 / 390 / 430 / 680 CSS px 响应式行为已记录并测试覆盖；
+5. 页面不再依赖 `MutationObserver`（`data-responsive-mode` 不再为 `LEGACY_ADAPTER`）；
+6. focused test 已覆盖 list / detail / editor / deep-link / Back / Forward；
+7. `applicationRegistry.responsiveMode === 'NATIVE_RESPONSIVE'` 已静态设置。
+
+### 19.6 移动展示现代化基线（设计目标）
+
+`P4` 在 document.md §20.5 是"需求目标"层级。本节只列出现有 canonical 已经背书的展示架构原则，不进入具体组件 / CSS / 默认值：
+
+1. **信息层级** — 主标题 / 副标题 / 主操作 / 次要操作 / 返回的标准外壳；
+2. **mobile-first 密度** — 320 px 下必须能完成核心操作；主要触控目标 ≥ 44 × 44 CSS px；
+3. **list / detail / editor 一致性** — 同一业务对象在 list / detail / editor 三种 surface 行为一致；
+4. **primary / secondary / destructive action 层级** — 主操作优先、次要操作次级、破坏性操作需要二次确认；
+5. **filter / sort / search / status / loading / error patterns** — 维持现状；
+6. **safe-area 感知** — 顶栏 / 底栏适配；
+7. **响应式断点** — 320 / 390 / 430 / 680 CSS px 行为保持；
+8. **业务动作语义保留** — APPROVE / CONFIRM / TRANSFER / POST / REVERSE / HOLD / RELEASE 必须各自具备显式标识与文案；不得合并为一个通用 visual action。
+
+不冻结具体组件选择 / 默认值；具体细节由后续独立 DESIGN wave 决定。
+
+### 19.7 实现 waves
+
+下列 wave 顺序由当前 call chain 与 ownership 推导；按"先低风险、后高风险；先规则、后内容；先静态、后行为"组织。每 wave 必须留下一个 runnable、regression-safe、externally-compatible 的仓库状态。具体 wave 数量与划分由实际当前 ownership 决定。
+
+#### Wave 1 — 后端 dispatch 所有权基础设施
+
+- 目标：建立 route 表装载层；建立静态校验；建立 dispatch 与领域 handler 之间的薄适配。
+- scope：仅引入 route 表与 dispatch 装载；不迁任何 handler；不动业务；不改 schema；不改前端。
+- files：`server/app.js`（薄化）、`server/lib/route-table.js`（新增）、`server/route-table.test.js`（新增）。
+- non-goals：不迁移 handler；不引入 permissions / transactionPolicy / auditPolicy 元数据；不创建 `callers.js` 强制文件；不强制 caller-proof 脚本。
+- frozen contracts：所有现有 API / 路径 / 权限 / 错误形态。
+- focused tests：route 表静态校验（重复 owner / 无 owner / 指向 app.js / 唯一性）。
+- canonical gate（由 AGENTS.md §6.1 推导；架构 / canonical metadata tier）：`pnpm test` + `pnpm build` + `git diff --check`。
+- rollback：删除 `server/lib/route-table.js` 与新 test 文件，回退 `server/app.js` 单一 commit。
+- exit criteria：
+  - `server/app.js` 中除 dispatch 入口外不引入新业务逻辑；
+  - route 表静态校验可独立运行并对当前 `handleApi` 行为等价；
+  - `pnpm test` 全绿。
+- risk：低。
+
+#### Wave 2 — 已识别 dead-code 清理
+
+- 目标：删除 Stage 0 静态分析得到的 dead code 候选（`legacy*` 与若干私有 helper）。
+- scope：`server/app.js` 内的 `legacy*` 函数；私有 helper（`getCashJournal` / `deleteCashJournal` / `getBankAccount` / `getBill` / `getFixedAsset` / `listAssetDepreciations` / `getProductionCost` 等）。
+- non-goals：不迁任何其他函数；不动 dispatch；不动业务。
+- frozen contracts：所有现有 API / 路径 / 权限 / 错误形态。
+- focused tests：既有 live endpoint focused test 已覆盖替代实现时不再新建"等价"测试；若覆盖不足先补 focused test 再删除。
+- 删除前必须重跑 zero-caller proof（不得仅依据 Stage 0 快照）。
+- canonical gate（按 AGENTS.md §6.1 推导；本 wave 是低风险结构性重构）：`pnpm test:fast` + `pnpm build` + `git diff --check`。
+- rollback：保留 dead-code 删除为单独小 commit；恢复该 commit 即回滚。
+- exit criteria：
+  - 全仓 grep / route 表 / 测试引用已无 `legacyListCashJournals` 等；
+  - `pnpm test:fast` 全绿；
+  - 既有 live focused test 全绿。
+- risk：低。
+
+#### Wave 3 — 第一波低风险 backend domain 所有权迁移（master / dictionary 子集）
+
+- 目标：将 §19.2.A 列出的"低风险主数据 / 字典 CRUD handler"从 `server/app.js` 迁入对应领域文件。
+- scope：仅低 / 中风险主数据 / 字典，例如 `customers / suppliers / products / warehouses / users / roles / departments / auxProjects / currencies / voucherWords / voucherTemplates` 等。
+- 排除：`periodClosures / closePeriod / unclosePeriod / getClosureChecklist` —— 期间控制为高风险，留待 §19.4 / §19.7 独立 wave。
+- files：相关领域模块（按当前 call chain 与现有实现承载决定 owner；不预先创建 kitchen-sink domain）；`server/app.js`（仅 dispatch 表）；如需，原模块保留 compat re-export。
+- non-goals：不动高风险期间控制；不动 settlement / accounting voucher / inventory mutation / valuation / LOT-SERIAL / IQC-OQC / manufacturing WIP-cost / MySQL adapter / migrations。
+- frozen contracts：所有现有 API / 路径 / 权限 / 错误形态。
+- focused tests：每个端点至少有 focused test 覆盖 list / get / create / update / delete；既有 live focused test 已覆盖的不新建。
+- canonical gate（跨域 / 架构 tier）：`pnpm test` + `pnpm build` + `git diff --check`。
+- rollback：本 wave 内逐端点提交；任何端点失败仅回滚该端点。
+- exit criteria：
+  - `server/app.js` 内不再声明上述函数；
+  - route 表 `owner` 字段指向实际领域文件；
+  - `pnpm test` 全绿。
+- risk：低 — 中。
+
+#### Wave 4 — 后续 bounded backend domain 迁移（按业务责任分组）
+
+Wave 4 不再是"单据 / 物流 / 凭证一次性"子集；它把后续 backend domain 迁移拆为多个 bounded wave。每个具体 wave 必须：
+
+- 仅迁一个 coherent business owner 的 handler；
+- 不混入 §19.4 高风险领域；
+- 按当前 call chain 与 §19.3.A 拆分策略选 owner；
+- 携带 focused tests（既有 live focused test 已覆盖的不新建）；
+- canonical gate 由 AGENTS.md §6.1 按变更类型推导（多数为架构 / 跨域 tier：`pnpm test` + `pnpm build` + `git diff --check`；少数低风险子集可降级为 `pnpm test:fast` + `pnpm build` + `git diff --check`）。
+
+下列高风险领域**不**进入普通 first-wave：inventory mutation / period close / settlement / accounting voucher / valuation / LOT-SERIAL / IQC-OQC / manufacturing WIP-cost / MySQL adapter / migrations。
+
+示例（仅作示例，非最终 wave 数量）：
+
+- 一个仅迁"采购入库草稿 / 销售出货草稿"等 logistics 单一源子集的 wave；
+- 一个仅迁"折让 / 退款 / write-off"中单一低风险责任子集的 wave；
+- 一个仅迁"决策报表"中 read-only 子集的 wave。
+
+实际 wave 数量与边界由当前 call chain 决定。
+
+#### Wave 5 — extended.js / business.js / lifecycle-engine.js / decision-reports.js / planning-documents.js / planning.js 拆分（仅低 / 中风险）
+
+- 目标：按 §19.3.A 策略，从上述混合 ownership 文件中迁出已证 coherent 的低 / 中风险责任。
+- 排除：IQC / OQC、MRP classic、financial reports、CRM / 项目 / 工时 / 通知 / workflow 等高风险责任留待其独立 wave；`extended.js` / `business.js` 不要求在本 wave 变空。
+- files：按各 wave 目标 owner 决定。
+- frozen contracts：所有现有 API / 路径 / 权限 / 错误形态。
+- focused tests：每个被迁出函数 / 端点沿用既有 live focused test。
+- canonical gate（架构 / 跨域 tier）：`pnpm test` + `pnpm build` + `git diff --check`；少数纯函数 / helper 抽取可降级为 `pnpm test:fast` + `pnpm build` + `git diff --check`。
+- rollback：每文件独立提交；任何文件失败仅回滚该文件。
+- exit criteria：
+  - 已迁出的低 / 中风险责任在原文件中不再承担；
+  - route 表 `owner` 指向新 owner；
+  - `pnpm test` 全绿。
+- risk：低 — 中。
+
+#### Wave 6 — 第一波 bounded frontend route-family 提取
+
+- 目标：从历史大文件中按 route-family / business surface 提取第一组 frontend 责任。
+- scope：实际由当前 call chain 决定；不预先创建空 `src/pages/<domain>/` 骨架；不预先绑定到 `master-data` 等历史文件名；按 route key 实际的业务责任（如订单、采购、库存）迁出。
+- 排除：当前 §19.4 高风险责任。
+- files：按 route-family 决定；`src/navigation/applicationRegistry.js`（loader 替换为唯一实现）；`server/v17-p0-frontend-application-architecture.test.js`（按需更新注册验证）。
+- non-goals：不创建第二份 route registry；不创建重复 launcher metadata；不引入 `MIGRATING` 等新运行时 production 状态。
+- frozen contracts：53 个 route + 5 个 disabled route；既有 access / aliases / target contract / launcher metadata / 五入口 MobileShell 不变。
+- focused tests：每个 route-family 单独测试 list / detail / deep-link / Back / Forward；权限位显式断言；`applicationRegistry` 静态校验全绿。
+- canonical gate（前端架构 / canonical metadata tier）：`pnpm test` + `pnpm build` + `git diff --check`。
+- rollback：保持唯一 loader；任何 route-family 失败仅回滚该 route-family。
+- exit criteria：
+  - 该 route-family 在原文件中不再承担（剩余路由函数兼容 re-export 指向唯一实现）；
+  - `applicationRegistry.responsiveMode` 保持既有值（未达到 native-responsive 退出门槛前保持 `LEGACY_ADAPTER`）；
+  - `pnpm test` 全绿。
+- risk：中。
+
+#### Wave 7 — 后续 frontend route-family 提取
+
+- 目标：继续按 route-family / business surface 提取剩余责任。
+- scope / files / non-goals / frozen contracts / focused tests / gate / rollback / exit criteria / risk：与 Wave 6 同模式，由当前 call chain 决定边界。
+- canonical gate（前端架构 / canonical metadata tier）：`pnpm test` + `pnpm build` + `git diff --check`。
+
+#### Wave 8 — NATIVE_RESPONSIVE 切换
+
+- 目标：按 route / surface 移除 `MutationObserver` 依赖；满足 §19.5.D 退出门槛后切换 `responsiveMode` 为 `NATIVE_RESPONSIVE`。
+- scope：每个 route / surface 独立 wave。
+- files：对应 surface 文件；`src/components/V16RouteSurface.jsx`（仅在该 route 完全切换后调整逻辑分支）；`src/navigation/applicationRegistry.js`。
+- frozen contracts：路由身份、权限、行为、target contract。
+- focused tests：list / detail / editor / deep-link / Back / Forward / 320 / 390 / 430 / 680 px 响应式断言。
+- canonical gate（前端架构 tier）：`pnpm test` + `pnpm build` + `git diff --check`。
+- rollback：`responsiveMode` 字段回退；`MutationObserver` 重新启用。
+- exit criteria：
+  - 对应 route 不再使用 `MutationObserver`；
+  - `data-responsive-mode` 不再为 `LEGACY_ADAPTER`；
+  - `pnpm test` 全绿。
+- risk：低 — 中。
+
+#### Wave 9 — 移动展示现代化（独立 REQUIREMENT / DESIGN）
+
+- 目标：按 §19.6 的展示架构原则进入 P4 实现。
+- scope：由独立 REQUIREMENT / DESIGN wave 决定。
+- non-goals：不与 schema / API / 后端重构混合。
+- frozen contracts：业务工作流、权限、状态机术语；§19.6 业务动作语义保留。
+- canonical gate：按实际变更类型由 AGENTS.md §6.1 推导。UI 重构多为 daily-bounded tier `pnpm test:fast` + `pnpm build` + `git diff --check`；跨域 wave 升档。
+- 具体细节在独立 wave 内决定。
+
+#### Wave 10 — 高风险领域重构（独立 REQUIREMENT / DESIGN）
+
+- 目标：inventory mutation / valuation / LOT-SERIAL / IQC-OQC / period close / settlement / accounting voucher / manufacturing WIP-cost / MySQL adapter / migrations。
+- scope：每个领域单独 wave；不在其他 wave 混合。
+- frozen contracts：§19.4 高风险领域合同。
+- focused tests：交易回滚、来源 recheck、审计写入、写后 idempotency 显式断言。
+- canonical gate：基础 gate 由 AGENTS.md §6.1 按变更类型推导；变更属于 backup / restore / production bootstrap / deployment / systemd / nginx / legacy migration / MySQL adapter / concurrency / performance / filesystem destructive safety 时，按 HEAVY 类别附加 `pnpm test:heavy`；同时涉 MySQL 且具备受保护 disposable MySQL 环境时，附加 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。`pnpm test:heavy` 与 MySQL gate 互相独立：HEAVY 类别 gate 不依赖 MySQL 环境存在。
+- risk：高。
+
+### 19.8 兼容性与 deprecation
+
+V2 任何 wave 在迁移期间允许：
+
+- 兼容 re-export，但仅指向唯一实现（不得形成"新 + 旧"两套 live executable 业务实现）；
+- 薄 dispatch 入口（与原 dispatch 共存）作为迁移期间的 fallback，但不得形成两个并行 dispatcher；
+- route 表 `owner` 字段静态指向新模块，但旧入口必须可逐步被替换。
+
+禁止：
+
+- 把兼容层变成第二个 writable source of truth；
+- 把兼容层变成第二个 live executable business screen。
+
+兼容层移除条件（全部 evidence-based，不得使用 elapsed-time 条件）：
+
+- canonical loader / owner 已切换；
+- 兼容 import / 引用已零（caller-proof 通过）；
+- 静态 import / grep 清洁；
+- focused tests 全绿；
+- 该 wave 的 canonical gate 通过。
+
+不允许任意替换：
+
+- 任何现有 API path / request shape / 错误头 / `X-Request-Id`；
+- 既有 `applicationMetadata.js` / `presentationMetadata.js` 作为兼容 projection（不得变成第二份事实源）；
+- 既有 `applicationRegistry.js` 静态校验。
+
+V2 第一波不引入任何 API deprecation 行为（无强制 deprecation 周期、无 `Deprecated:` HTTP 头）。
+
+### 19.9 可观测性与错误合同
+
+V2 任何 wave 必须保持：
+
+- `X-Request-Id` 在每个响应携带；调用方提供的 ID 须符合现有格式；
+- 慢请求 / 慢查询（`SLOW_REQUEST_MS`, `SLOW_QUERY_MS`）日志事件、字段不变；
+- `mysql_connection_lost`, `mysql_reconnect_attempt`, `mysql_reconnect_success`, `mysql_reconnect_failed`, `mysql_transaction_lost` 事件保持；
+- `HttpError` 序列化合同、`serializeError` 返回安全消息 + request ID 形态不变；
+- 不在错误响应中泄露 SQL、stack、连接串、密码；
+- `/api/health/live`, `/api/health/ready`, `/api/health` readiness 合同不变（详见 solution.md §9.1）。
+
+迁移中新增的可观测事件必须保持单一来源（`server/lib/logger.js` 的 `createStructuredLogger`），不得在领域模块内建立新 logger。
+
+### 19.10 数据库与 schema 策略
+
+结构性 wave 默认零 schema 变更。schema 变更与结构性迁移不得混在同一个 wave。
+
+若某结构性 wave 发现需要 schema 变更：
+
+1. STOP 当前 wave；
+2. 创建独立 REQUIREMENT / DESIGN delta（受 AGENTS.md §3 流程约束）；
+3. 由独立 schema wave 实施，按 AGENTS.md §6.1 推导对应 gate，双路径验证（SQLite + MySQL 8）。
+
+独立批准的 schema wave 可对相关领域 schema 做必要修改；该 schema wave 与结构性 extraction wave 在不同 commit / 不同 wave 实施。
+
+不允许：
+
+- 在结构性 V2 重构 wave 中夹带"顺手"清理 schema；
+- 修改 `server/db.js` 基础 schema、`server/migrations/`、`server/database/mysql-schema.js`，除非由独立 schema wave 批准；
+- 修改业务字段名 / 类型 / 索引，以消除 §19.3.A 拆分的模棱两可。
+
+### 19.11 测试 / gate 映射
+
+每个 wave 的完成 gate 由 AGENTS.md §6.1 按变更类型落入三档之一：
+
+- 日常有界任务（单域 / 单页面 / 小型 bugfix / 低风险重构 / 非跨域）：`pnpm test:fast` + `pnpm build` + `git diff --check`；
+- 跨域 / 架构 / canonical metadata（application registry、permissions、shared accounting / inventory contracts、cross-domain workflow、大型重构、release candidate）：`pnpm test` + `pnpm build` + `git diff --check`；
+- HEAVY 相关（backup / restore、production bootstrap、deployment、systemd、nginx、legacy migration、MySQL adapter、concurrency、performance、filesystem destructive safety）：上一档基础 gate + `pnpm test:heavy`；当变更同时涉及 MySQL 且具备受保护 disposable MySQL 环境时，再附加 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。`pnpm test:heavy` 与 MySQL gate 互相独立：HEAVY 类别 gate 不依赖 MySQL 环境存在。
+
+按当前 call chain 与 §19.7 推导，各 wave 落入 tier 如下（具体 gate 由该 wave 在执行时按实际变更再确认一次）：
+
+| Wave | 变更类型 | canonical gate |
+|---|---|---|
+| Wave 1（后端 dispatch 所有权基础设施） | 架构 / canonical metadata | `pnpm test` + `pnpm build` + `git diff --check` |
+| Wave 2（已识别 dead-code 清理） | 日常低风险重构 | `pnpm test:fast` + `pnpm build` + `git diff --check` |
+| Wave 3（低风险 backend domain 迁移 master / dictionary 子集） | 跨域 / 架构 | `pnpm test` + `pnpm build` + `git diff --check` |
+| Wave 4+（后续 bounded backend domain 迁移） | 按该 wave 实际变更类型（多为跨域 / 架构） | `pnpm test` + `pnpm build` + `git diff --check`；少数低风险子集可降级为 `pnpm test:fast` + `pnpm build` + `git diff --check` |
+| Wave 5（extended.js 等混合 ownership 拆分低 / 中风险部分） | 跨域 / 架构 | `pnpm test` + `pnpm build` + `git diff --check`；少数纯函数 / helper 抽取可降级为 `pnpm test:fast` + `pnpm build` + `git diff --check` |
+| Wave 6+（frontend route-family 提取） | 前端架构 / canonical metadata | `pnpm test` + `pnpm build` + `git diff --check` |
+| Wave 8（NATIVE_RESPONSIVE 切换） | 前端架构 / canonical metadata | `pnpm test` + `pnpm build` + `git diff --check` |
+| Wave 9（P4 移动展示现代化） | 按实际变更类型（多为 UI 重构） | 大多数 daily-bounded tier：`pnpm test:fast` + `pnpm build` + `git diff --check`；跨域 wave 升档 `pnpm test` + `pnpm build` + `git diff --check` |
+| Wave 10+（高风险领域重构） | 按变更实际类型；HEAVY 类别按 AGENTS.md §6.1 追加 `pnpm test:heavy`；MySQL 受影响且具备受保护环境时附加 MySQL gate | 由该 wave 按 AGENTS.md §6.1 推导 |
+
+不得冗余同时要求 `pnpm test:fast` 与 `pnpm test`；`pnpm test` 已包含 FAST 集合。
+
+测试集合不变式必须保持（见 §15.2）：
+
+- `FAST ⊆ FULL`、`FULL ∩ HEAVY = ∅`、`ALL = FULL ∪ HEAVY`；
+- 不得通过 `skip` / `todo` / 删除 assertion / 重分类制造绿色；
+- `server/test-suite-governance.test.js` 必须继续在 FAST suite；
+- `server/v17-p0-frontend-application-architecture.test.js` 继续作为 frontend authoritative suite。
+
+### 19.12 设计决策记录
+
+下列决策在 §19 中作为本设计阶段的最终答复（与 document.md §20.4 要求对应）：
+
+1. **`server/app.js` 收敛后的责任** — request lifecycle / X-Request-Id / 安全头 / readiness / 静态资源 / 薄 dispatch / 私有 matcher 函数。详见 §19.2.A。
+2. **route 表最小信息集** — 只含 `method / path / handler / owner`；不复制 `permissions / transactionPolicy / auditPolicy`；Authorization 仍由 `allow` / `allowAny` 承担；事务仍由 `transaction(db, work)` 承担；审计仍由领域内 `audit(db, ...)` 承担。详见 §19.2.B。
+3. **handler 适配层（不强求统一签名）** — HTTP adapter / Authorization / Domain command/query / Response adapter 四层；既有 handler 签名按各领域 module 现状保留；route 装载层以薄适配调用。详见 §19.2.C。
+4. **domain 目录创建规则** — 仅在某个迁移 wave 证明该业务确有 coherent owner 后才创建；不预创建；不创建 kitchen-sink；具体命名由该 wave 决定。详见 §19.2.D。
+5. **兼容性 / 外部 API 合同** — 第一波不改变 API path / request shape / 错误形态 / 权限名 / 事务 / 审计；不引入任何 API deprecation 行为。详见 §19.2.E / §19.8。
+6. **dead-code 删除规则** — zero-caller proof 必须在实现 wave HEAD 重跑（不得仅依据 Stage 0 快照）；既有 live focused test 已覆盖替代实现时不新建"等价"测试。详见 §19.3.B / §19.3.C / §19.3.D。
+7. **caller-proof 证据来源** — git grep / route ownership / import 静态分析 / focused test；不强制 `callers.js` 或 committed helper script；helper 仅在删除 / 迁移 wave 证明必要时独立 wave 引入。详见 §19.3.D。
+8. **高风险领域延后** — inventory mutation / valuation / LOT-SERIAL / IQC-OQC / period close / settlement / accounting voucher / manufacturing WIP-cost / MySQL adapter / migrations。详见 §19.4。
+9. **frontend 迁移模型（无双活屏幕）** — A. before（既有 loader 权威，新 surface 独立开发不挂载）/ B. cutover（一次 bounded change 替换 loader，唯一 active screen）/ C. responsive completion（满足 §19.5.D 后设 `NATIVE_RESPONSIVE`）。不引入 `MIGRATING` 状态。详见 §19.5.C / §19.5.D。
+10. **frontend 兼容 shim** — 仅指向唯一实现；不得形成第二个 live executable screen；移除条件 evidence-based。详见 §19.8。
+11. **frontend decomposition 规则** — 按 route-family / business surface 推进；不按 `master-data` 等历史文件名预绑定；目录命名由该 wave 决定。详见 §19.5.B / §19.7 Wave 6。
+12. **generic UI 与 ERP 语义分离** — generic 组件只拥有展示 / 交互；不得调用 `api()`、判断 role / permission、解析 route target / location；APPROVE / CONFIRM / TRANSFER / POST / REVERSE / HOLD / RELEASE 等动作语义不得下沉到 generic 层。详见 §19.5.B。
+13. **mobile 展示现代化基线** — 信息层级 / mobile-first 密度 / list-detail-editor 一致性 / action 层级 / filter-sort-status-error-loading / safe-area / 响应式断点 / 业务动作语义保留；不冻结具体组件选择 / 默认值。详见 §19.6。
+14. **schema 策略** — 结构性 wave 零 schema 默认；发现 schema 需求时 STOP 并独立 REQUIREMENT / DESIGN wave；schema wave 与 extraction wave 不混合；独立批准的 schema wave 可对相关领域 schema 做必要修改。详见 §19.10。
+15. **每个 wave 的 gate** — 由 AGENTS.md §6.1 按变更类型推导；见 §19.11 表；`pnpm test:heavy` 与 MySQL gate 互相独立。
+
+### 19.13 实施前暂停
+
+本节是 Stage 2 DESIGN 阶段的当前技术设计。任何对 `document.md`、`README.md`、`AGENTS.md`、`CLAUDE.md`、`package.json`、`server/*`、`src/*`、`tests/*`、`deploy/*`、`server/migrations/*`、`server/database/*`、CSS、schema 的修改都不属于本节授权范围；进入 Stage 3 IMPLEMENTATION 前必须由用户独立批准，且按 AGENTS.md §3 / §6 / §7 的顺序单独 wave 推进。
+
+文档引用：本节复用并交叉引用 solution.md §1–§18 与 §3.1（V1.7 P0 前端架构）；§19 不重复 document.md §3–§19 的业务合同与既有实现细节。
