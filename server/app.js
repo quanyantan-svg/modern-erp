@@ -1,5 +1,5 @@
 ﻿import { createHash, randomBytes } from 'node:crypto';
-import { id, hashPassword, transaction, verifyPassword } from './db.js';
+import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory } from './lib/stock.js';
@@ -164,19 +164,27 @@ import {
   listRoles,
   updateRole,
 } from './modules/roles.js';
+import {
+  createUser,
+  listUsers,
+  updateUser,
+} from './modules/users.js';
 
-// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — Warehouse +
-// Customer + Supplier + Role route-table registration. All four
-// live production route families are migrated using the Wave 1
-// route-table dispatch infrastructure. Each descriptor carries
-// exactly method / path / handler / owner — no permissions,
-// transaction policy, audit policy, or other runtime authority is
-// duplicated. Thin per-route adapters below translate the
-// route-table dispatch context (db, req, res, actor, url, params)
+// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
+// Warehouse + Customer + Supplier + Role + User-management
+// route-table registration. All five live production route families
+// are migrated using the Wave 1 route-table dispatch infrastructure.
+// Each descriptor carries exactly method / path / handler / owner —
+// no permissions, transaction policy, audit policy, or other runtime
+// authority is duplicated. Thin per-route adapters below translate
+// the route-table dispatch context (db, req, res, actor, url, params)
 // into each business handler's existing signature. The neutral name
 // `ownedRouteTable` reflects that the table holds multiple domain
 // families. Roles have exactly GET / POST / PATCH — there is no
-// canonical DELETE /api/roles route in production.
+// canonical DELETE /api/roles route in production. User-management
+// has exactly GET / POST / PATCH — there is no canonical DELETE
+// /api/users route in production. /api/users/lookup is intentionally
+// NOT migrated and remains on the legacy handleApi branch below.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -267,6 +275,24 @@ ownedRouteTable.register({
   path: /^\/api\/roles\/([^/]+)$/,
   handler: ({ db, req, res, actor, params }) => updateRole(db, req, res, actor, params[0]),
   owner: 'server/modules/roles.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/users',
+  handler: ({ db, res, actor }) => listUsers(db, res, actor),
+  owner: 'server/modules/users.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/users',
+  handler: ({ db, req, res, actor }) => createUser(db, req, res, actor),
+  owner: 'server/modules/users.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/users\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateUser(db, req, res, actor, params[0]),
+  owner: 'server/modules/users.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -361,10 +387,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/lifecycle/cleanup-events' && req.method === 'GET') return listCleanupEventsHandler(db, res, actor, url);
 
   if (pathname === '/api/users/lookup' && req.method === 'GET') return listProjectManagerCandidates(db, res, actor);
-  if (pathname === '/api/users' && req.method === 'GET') return listUsers(db, res, actor);
-  if (pathname === '/api/users' && req.method === 'POST') return createUser(db, req, res, actor);
-  const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
-  if (userMatch && req.method === 'PATCH') return updateUser(db, req, res, actor, userMatch[1]);
 
   if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
   if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
@@ -432,13 +454,17 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — Owned-route lookup.
-  // Runs AFTER authentication is resolved and BEFORE the legacy
-  // handleApi chain continues. Unmatched routes fall through to
-  // the existing legacy chain unchanged. Currently owns the four
-  // warehouse routes, the four customer routes, the four supplier
-  // routes, and the three role routes (GET / POST / PATCH; there
-  // is no canonical DELETE /api/roles route).
+  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
+  // Owned-route lookup. Runs AFTER authentication is resolved and
+  // BEFORE the legacy handleApi chain continues. Unmatched routes
+  // fall through to the existing legacy chain unchanged. Currently
+  // owns the four warehouse routes, the four customer routes, the
+  // four supplier routes, the three role routes (GET / POST / PATCH;
+  // there is no canonical DELETE /api/roles route), and the three
+  // user-management routes (GET / POST / PATCH; there is no
+  // canonical DELETE /api/users route). /api/users/lookup remains
+  // on the legacy handleApi branch above and is NOT in the
+  // route-table.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -1105,16 +1131,6 @@ function dashboard(db, res, actor) {
   return send(res, 200, data);
 }
 
-function listUsers(db, res, actor) {
-  allow(actor, 'USERS_MANAGE');
-  const users = db.prepare(`
-    SELECT u.id,u.username,u.display_name displayName,u.active,u.created_at createdAt,
-           r.id roleId,r.name roleName,r.code roleCode
-    FROM users u JOIN roles r ON r.id=u.role_id ORDER BY u.created_at
-  `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
-  return send(res, 200, { users });
-}
-
 function listProjectManagerCandidates(db, res, actor) {
   allow(actor, 'PROJECT_MANAGE');
   const users = db.prepare(`
@@ -1124,50 +1140,6 @@ function listProjectManagerCandidates(db, res, actor) {
     ORDER BY u.display_name, u.username
   `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
   return send(res, 200, { users });
-}
-
-async function createUser(db, req, res, actor) {
-  allow(actor, 'USERS_MANAGE');
-  const body = await readJson(req);
-  assertAllowedFields(body, ['username', 'displayName', 'password', 'roleId']);
-  const username = requiredCode(body.username, '登录账号').toLowerCase();
-  const displayName = requiredText(body.displayName, '用户姓名', 40);
-  const passwordText = requiredText(body.password, '初始密码', 100);
-  if (passwordText.length < 6) throw new HttpError(400, '密码至少需要 6 位');
-  ensureRole(db, body.roleId);
-  const password = hashPassword(passwordText);
-  const userId = id();
-  db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)`)
-    .run(userId, username, displayName, password.hash, password.salt, body.roleId, new Date().toISOString());
-  audit(db, actor.id, 'CREATE', 'USER', userId, username);
-  return send(res, 201, { id: userId });
-}
-
-async function updateUser(db, req, res, actor, userId) {
-  allow(actor, 'USERS_MANAGE');
-  const current = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
-  if (!current) throw new HttpError(404, '用户不存在');
-  const body = await readJson(req);
-  assertAllowedFields(body, ['displayName', 'password', 'roleId', 'active']);
-  const displayName = requiredText(body.displayName ?? current.display_name, '用户姓名', 40);
-  const roleId = body.roleId ?? current.role_id;
-  if (body.active !== undefined && typeof body.active !== 'boolean') throw new HttpError(400, '启用状态必须为布尔值');
-  const active = body.active === undefined ? current.active : body.active ? 1 : 0;
-  ensureRole(db, roleId);
-  if (userId === actor.id && !active) throw new HttpError(400, '不能停用当前登录账号');
-  transaction(db, () => {
-    db.prepare('UPDATE users SET display_name=?,role_id=?,active=? WHERE id=?').run(displayName, roleId, active, userId);
-    if (body.password) {
-      if (String(body.password).length < 6) throw new HttpError(400, '密码至少需要 6 位');
-      const password = hashPassword(String(body.password));
-      db.prepare('UPDATE users SET password_hash=?,password_salt=? WHERE id=?').run(password.hash, password.salt, userId);
-    }
-    if (userId !== actor.id && (body.password || roleId !== current.role_id || active !== current.active)) {
-      db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
-    }
-    audit(db, actor.id, 'UPDATE', 'USER', userId, displayName);
-  });
-  return send(res, 200, { ok: true });
 }
 
 function listProducts(db, res, actor, url) {
@@ -1447,10 +1419,6 @@ function productInput(body) {
   if (!Number.isFinite(stockQuantity) || stockQuantity < 0) throw new HttpError(400, '库存数量不能小于 0');
   return { code: requiredCode(body.code, '货品编码'), name: requiredText(body.name, '货品名称', 100),
     unit: requiredText(body.unit, '单位', 10), priceCents, stockQuantity };
-}
-
-function ensureRole(db, roleId) {
-  if (!db.prepare('SELECT id FROM roles WHERE id=?').get(roleId)) throw new HttpError(400, '角色不存在');
 }
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }

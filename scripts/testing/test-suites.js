@@ -77,17 +77,18 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
-  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — backend dispatch ownership architecture -----
+  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
-  // Wave 3A + Wave 3B + Wave 3C + Wave 3D invariants for the
-  // migrated warehouse, customer, supplier, and role route families
-  // (app.js imports route-table, fifteen descriptors registered
-  // across the four domains with canonical owners, no legacy
-  // warehouse / customer / supplier / role dispatch branches remain,
-  // products / users / orders / purchase-orders / etc. still fall
-  // through to the legacy handleApi chain, single `ownedRouteTable`
-  // constructed once with a single `.match()` lookup). Pure-function
-  // route-table safety tests live in the same file.
+  // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E invariants for
+  // the migrated warehouse, customer, supplier, role, and
+  // user-management route families (app.js imports route-table,
+  // eighteen descriptors registered across the five domains with
+  // canonical owners, no legacy warehouse / customer / supplier /
+  // role / user-management dispatch branches remain, products /
+  // orders / purchase-orders / etc. still fall through to the
+  // legacy handleApi chain, single `ownedRouteTable` constructed
+  // once with a single `.match()` lookup). Pure-function route-table
+  // safety tests live in the same file.
   'server/route-table.test.js',
 
   // ----- V2 Stage 3 / Wave 3A — first live warehouse ownership -----
@@ -137,6 +138,21 @@ const FULL = [
   // canonical PERMISSIONS entry is dropped). No DELETE /api/roles
   // route exists, and none is exercised.
   'server/v2-wave3d-roles-ownership.test.js',
+
+  // ----- V2 Stage 3 / Wave 3E — fifth live user-management ownership -----
+  // Focused behavior coverage for the migrated /api/users route
+  // family: GET (canonical users + role join + active Boolean /
+  // 403 sales / 401 unauth), POST (lowercase username / roleId +
+  // active=1 + password hash persisted / CREATE USER audit /
+  // password < 6 / unknown roleId / sales 403), PATCH
+  // (displayName / roleId / active Boolean round-trip / password
+  // re-hash + session invalidation / 404 / non-boolean active 400 /
+  // self-deactivation 400 / unknown roleId 400 / UPDATE USER audit
+  // / non-security-sensitive displayName-only update preserves
+  // sessions), plus /api/users/lookup legacy continuity proof
+  // (PROJECT_MANAGE-gated minimal active-user candidate shape).
+  // No DELETE /api/users route exists, and none is exercised.
+  'server/v2-wave3e-users-ownership.test.js',
 
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',

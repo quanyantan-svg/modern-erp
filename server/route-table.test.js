@@ -10,14 +10,16 @@
 //      they require no DB and no HTTP and never assert anything about
 //      live dispatch.
 //
-//   2. V2 Stage 3 / Wave 3A — backend dispatch ownership architecture
-//      invariants. These tests read server/app.js and
-//      server/modules/warehouses.js from disk and assert that the
-//      live route-table infrastructure is wired in: app.js imports
-//      route-table.js, the four warehouse descriptors are registered
-//      with owner='server/modules/warehouses.js', no legacy
-//      /api/warehouses dispatch branches remain, and unrelated routes
-//      still fall through to the legacy handleApi chain.
+//   2. V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
+//      backend dispatch ownership architecture invariants. These tests
+//      read server/app.js and the migrated server/modules/*.js files
+//      from disk and assert that the live route-table infrastructure
+//      is wired in: app.js imports route-table.js, the warehouse /
+//      customer / supplier / role / user-management descriptors are
+//      registered with their canonical owners, no legacy /api/warehouses
+//      / /api/customers / /api/suppliers / /api/roles / /api/users
+//      dispatch branches remain, and unrelated routes still fall
+//      through to the legacy handleApi chain.
 //
 // Authorization, transaction, and audit continue to live at the
 // handler boundary (allow / allowAny / transaction / audit); the
@@ -1482,36 +1484,38 @@ describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)',
     assert.equal(table.match('DELETE', '/api/roles/role-admin'), null, 'DELETE /api/roles must NOT be dispatched by the route-table');
   });
 
-  test('users routes remain legacy after Roles migrate (explicit non-migration proof)', () => {
-    // Wave 3D scope explicitly excludes Users. The legacy handleApi
-    // chain MUST continue to dispatch /api/users (GET, POST, PATCH)
-    // and /api/users/lookup (GET) until Users migration is approved
-    // in a later wave. Authentication / login / logout / session /
-    // self-deactivation guards are not part of Wave 3D scope.
+  test('users routes migrate in Wave 3E: /api/users (GET / POST / PATCH) move to the route-table while /api/users/lookup stays legacy', () => {
+    // After Wave 3D, /api/users was still legacy. Wave 3E moves
+    // only the three User-management routes (GET / POST / PATCH)
+    // into the route-table. The /api/users/lookup project-manager
+    // candidate lookup must continue to be served by the legacy
+    // handleApi branch because it is a PROJECT_MANAGE-gated lookup,
+    // not a Users-management responsibility. Authentication /
+    // login / logout / session / self-deactivation guards remain
+    // app-local and are not part of Wave 3E scope.
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
     table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
     table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
 
-    assert.equal(table.match('GET', '/api/users'), null);
-    assert.equal(table.match('POST', '/api/users'), null);
-    assert.equal(table.match('PATCH', '/api/users/user-001'), null);
-    assert.equal(table.match('GET', '/api/users/lookup'), null);
+    // After Wave 3E: /api/users (3 routes) are owned, /api/users/lookup
+    // is NOT (remains legacy because it is a project-manager lookup
+    // gated by PROJECT_MANAGE, not a Users-management responsibility).
+    assert.equal(table.match('GET', '/api/users').owner, 'server/modules/users.js');
+    assert.equal(table.match('POST', '/api/users').owner, 'server/modules/users.js');
+    assert.equal(table.match('PATCH', '/api/users/user-001').owner, 'server/modules/users.js');
+    assert.equal(table.match('GET', '/api/users/lookup'), null, '/api/users/lookup must NOT migrate to the route-table');
 
+    // Lookup dispatch + handler must remain app-local.
     assert.match(
       appSource,
-      /pathname\s*===\s*['"]\/api\/users['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
-      'User routes remain on legacy handleApi and MUST NOT be migrated in Wave 3D',
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
+      '/api/users/lookup must continue to dispatch via the legacy handleApi branch',
     );
-    assert.match(
-      appSource,
-      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
-      '/api/users/lookup remains on legacy handleApi after Roles migrate',
-    );
-    // App-local user handlers must still exist after Wave 3D.
-    assert.match(appSource, /^\s*function\s+listUsers\b/m);
-    assert.match(appSource, /^\s*async\s+function\s+createUser\b/m);
-    assert.match(appSource, /^\s*async\s+function\s+updateUser\b/m);
+    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'listProjectManagerCandidates must remain defined in app.js');
   });
 
   test('warehouse + customer + supplier + role descriptors coexist (15 total) under one ownedRouteTable dispatch lookup', () => {
@@ -1532,7 +1536,7 @@ describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)',
     table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
     table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
 
-    assert.equal(table.size(), 15, 'Wave 3D: 4+4+4+3 = 15 owned descriptors across the four migrated families');
+    assert.equal(table.size(), 15, 'Wave 3D: 4+4+4+3 = 15 owned descriptors across the four pre-User families');
     assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
     assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
     assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
@@ -1556,5 +1560,206 @@ describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)',
     assert.doesNotMatch(rolesModuleSource, /export\s+function\s+validPermissions\b/);
     // Roles module owns PERMISSIONS import.
     assert.match(rolesModuleSource, /PERMISSIONS/);
+  });
+});
+
+describe('V2 Stage 3 / Wave 3E — backend dispatch ownership (user-management migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const usersModuleSource = readFileSync(resolve('server/modules/users.js'), 'utf8');
+
+  test('app.js imports user-management handlers from server/modules/users.js, exports listUsers/createUser/updateUser from users.js, has no app-local listUsers/createUser/updateUser/ensureRole declarations, and does not import hashPassword', () => {
+    // Imports: from ./modules/users.js with all three handler symbols.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/users\.js['"]/,
+      'Wave 3E: server/app.js MUST import user-management handlers from server/modules/users.js',
+    );
+    assert.match(appSource, /\blistUsers\b/);
+    assert.match(appSource, /\bcreateUser\b/);
+    assert.match(appSource, /\bupdateUser\b/);
+
+    // users.js exports the four canonical handlers / helpers in the
+    // contract (listUsers, createUser, updateUser) and ensureRole stays
+    // an internal non-exported helper.
+    assert.match(usersModuleSource, /export function listUsers\b/);
+    assert.match(usersModuleSource, /export (?:async )?function createUser\b/);
+    assert.match(usersModuleSource, /export (?:async )?function updateUser\b/);
+    assert.match(usersModuleSource, /function ensureRole\b/);
+    assert.doesNotMatch(usersModuleSource, /export\s+function\s+ensureRole\b/);
+
+    // No app-local function declarations remain.
+    assert.doesNotMatch(appSource, /^\s*function\s+listUsers\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createUser\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateUser\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+ensureRole\b/m);
+
+    // hashPassword has no remaining app-local caller after Wave 3E.
+    // users.js still imports it from db.js (canonical implementation),
+    // but app.js must drop it from its own ./db.js import.
+    assert.doesNotMatch(
+      appSource,
+      /from\s+['"]\.\/db\.js['"]\s*\)[^;]*;?[\s\S]{0,200}\bhashPassword\b/m,
+      'Wave 3E: app.js db.js import must no longer reference hashPassword (no remaining app-local caller)',
+    );
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching GET /api/users, POST /api/users, or PATCH /api/users/:id, and no DELETE /api/users/:id dispatch branch was ever introduced', () => {
+    // Legacy exact-match branches must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3E: legacy exact-match GET branch for /api/users must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3E: legacy exact-match POST branch for /api/users must be removed',
+    );
+    // Legacy PATCH regex branch (was a `userMatch` block before
+    // migration) must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/users\\\/[^/]+\$\/\)/,
+      'Wave 3E: legacy userMatch-style dispatch for /api/users/:id must be removed',
+    );
+    // The brief §0 forbids inventing a DELETE /api/users route.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users['"]\s*&&\s*req\.method\s*===\s*['"]DELETE['"]/,
+      'Wave 3E: no exact-match DELETE /api/users branch must exist',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/users\\\/[^/]+\$\/\)[^)]*req\.method\s*===\s*['"]DELETE['"]/,
+      'Wave 3E: no regex DELETE /api/users/:id branch must exist',
+    );
+  });
+
+  test('three user-management routes register with canonical owner (GET, POST, PATCH); no DELETE /api/users/:id descriptor exists; no /api/users/lookup descriptor exists; /api/users/lookup continues to dispatch via listProjectManagerCandidates in app.js', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    const userEntries = table.list().filter((item) => item.owner === 'server/modules/users.js');
+    assert.equal(userEntries.length, 3, 'three User-management descriptors must exist with the canonical owner');
+    assert.deepEqual(userEntries.map((item) => item.method).sort(), ['GET', 'PATCH', 'POST']);
+    assert.equal(userEntries.some((item) => item.method === 'DELETE'), false, 'no DELETE /api/users descriptor must exist');
+
+    // /api/users/lookup is intentionally NOT registered in the
+    // route-table. It must continue to hit its earlier legacy
+    // handleApi branch (listProjectManagerCandidates).
+    assert.equal(table.match('GET', '/api/users/lookup'), null, 'lookup must NOT be dispatched by the route-table');
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
+      '/api/users/lookup must continue to dispatch via the legacy handleApi branch to listProjectManagerCandidates',
+    );
+    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'listProjectManagerCandidates must remain defined in app.js');
+
+    // Live dispatch parity for the three User-management routes.
+    assert.equal(table.match('GET', '/api/users').owner, 'server/modules/users.js');
+    assert.equal(table.match('POST', '/api/users').owner, 'server/modules/users.js');
+    assert.equal(table.match('PATCH', '/api/users/user-001').owner, 'server/modules/users.js');
+    assert.deepEqual(table.match('PATCH', '/api/users/user-001').params, ['user-001']);
+  });
+
+  test('after Wave 3E exactly 18 owned descriptors exist (4 warehouses + 4 customers + 4 suppliers + 3 roles + 3 users); single ownedRouteTable constructor and single .match() lookup remain', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+
+    assert.equal(table.size(), 18, 'Wave 3E: 4+4+4+3+3 = 18 owned descriptors across the five migrated families');
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'app.js must construct the owned route table exactly once after Wave 3E');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'app.js must keep exactly one ownedRouteTable.match() dispatch call after Wave 3E');
+    assert.match(appSource, /\bownedRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bwarehouseRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bcustomerRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bsupplierRouteTable\b/);
+    assert.doesNotMatch(appSource, /\broleRouteTable\b/);
+    assert.doesNotMatch(appSource, /\buserRouteTable\b/);
+  });
+
+  test('user-management duplicate (method, path) registration is still rejected', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/users', handler: () => 'first', owner: 'server/modules/users.js' });
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/users',
+        handler: () => 'second',
+        owner: 'server/modules/users.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+      'duplicate (method, path) registrations must still fail closed for user-management routes too',
+    );
+  });
+
+  test('user-management regex path must be anchored with no flags; unknown descriptor fields stay rejected', () => {
+    const table = createRouteTable();
+    // Accept the exact regex shape used in app.js.
+    assert.doesNotThrow(() => table.register({
+      method: 'PATCH',
+      path: /^\/api\/users\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/users.js',
+    }));
+    // Same source with the `i` flag must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: new RegExp('^\\/api\\/users\\/([^/]+)$', 'i'),
+        handler: () => {},
+        owner: 'server/modules/users.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    // Unanchored variant must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: /\/api\/users\/([^/]+)/,
+        handler: () => {},
+        owner: 'server/modules/users.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+    // Unknown descriptor field must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'POST',
+        path: '/api/users',
+        handler: () => {},
+        owner: 'server/modules/users.js',
+        permissions: ['USERS_MANAGE'],
+      }),
+      (error) => error instanceof RouteTableError
+        && error.reason === 'unknown_descriptor_field'
+        && error.field === 'permissions',
+    );
   });
 });

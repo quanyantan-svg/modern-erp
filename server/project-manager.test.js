@@ -230,11 +230,27 @@ describe('Backend — /api/users/lookup route + handler', () => {
     assert.ok(/WHERE\s+u\.active\s*=\s*1/.test(handler[0]), 'lookup must filter active=1');
   });
 
-  test('existing /api/users endpoint is unchanged — still admin-only via USERS_MANAGE', () => {
-    const src = readServerSrc('app.js');
-    const listUsers = src.match(/function\s+listUsers\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
-    assert.ok(listUsers, 'listUsers must remain defined');
+  test('existing /api/users endpoint is unchanged — still admin-only via USERS_MANAGE (now owned by server/modules/users.js after Wave 3E)', () => {
+    // After Wave 3E migration the User-management route family lives
+    // in server/modules/users.js. listUsers must still gate on
+    // USERS_MANAGE and the GET /api/users route must remain admin-only.
+    // The legacy /api/users/lookup branch and listProjectManagerCandidates
+    // remain app-local because the lookup is a PROJECT_MANAGE-gated
+    // helper, not part of the User-management responsibility.
+    const usersSrc = readFileSync(resolve(serverSrc, 'modules', 'users.js'), 'utf8');
+    const listUsers = usersSrc.match(/function\s+listUsers\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/);
+    assert.ok(listUsers, 'listUsers must be defined in server/modules/users.js');
     assert.ok(/allow\(actor,\s*'USERS_MANAGE'\)/.test(listUsers[0]), 'listUsers must still gate on USERS_MANAGE');
+
+    const appSrc = readServerSrc('app.js');
+    // /api/users lookup must STILL be served by the legacy
+    // listProjectManagerCandidates handler (NOT the route-table).
+    assert.match(
+      appSrc,
+      /pathname\s*===\s*'\/api\/users\/lookup'\s*&&\s*req\.method\s*===\s*'GET'\s*\)\s*return\s+listProjectManagerCandidates/,
+      'GET /api/users/lookup must still dispatch to listProjectManagerCandidates in app.js',
+    );
+    assert.match(appSrc, /function\s+listProjectManagerCandidates\b/, 'listProjectManagerCandidates must remain defined in app.js');
   });
 });
 
