@@ -153,17 +153,23 @@ import {
   listCustomers,
   updateCustomer,
 } from './modules/customers.js';
+import {
+  createSupplier,
+  deleteSupplier,
+  listSuppliers,
+  updateSupplier,
+} from './modules/suppliers.js';
 
-// V2 Stage 3 / Wave 3A + Wave 3B — Warehouse + Customer route-table
-// registration. Both live production route families are migrated using
-// the Wave 1 route-table dispatch infrastructure. Each descriptor
-// carries exactly method / path / handler / owner — no permissions,
-// transaction policy, audit policy, or other runtime authority is
-// duplicated. Thin per-route adapters below translate the route-table
-// dispatch context (db, req, res, actor, url, params) into each
-// business handler's existing signature. The neutral name
-// `ownedRouteTable` reflects that the table now holds more than one
-// domain family.
+// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C — Warehouse + Customer +
+// Supplier route-table registration. All three live production route
+// families are migrated using the Wave 1 route-table dispatch
+// infrastructure. Each descriptor carries exactly method / path /
+// handler / owner — no permissions, transaction policy, audit policy,
+// or other runtime authority is duplicated. Thin per-route adapters
+// below translate the route-table dispatch context (db, req, res,
+// actor, url, params) into each business handler's existing
+// signature. The neutral name `ownedRouteTable` reflects that the
+// table holds multiple domain families.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -212,6 +218,30 @@ ownedRouteTable.register({
   path: /^\/api\/customers\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => deleteCustomer(db, res, actor, params[0]),
   owner: 'server/modules/customers.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/suppliers',
+  handler: ({ db, res, actor, url }) => listSuppliers(db, res, actor, url),
+  owner: 'server/modules/suppliers.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/suppliers',
+  handler: ({ db, req, res, actor }) => createSupplier(db, req, res, actor),
+  owner: 'server/modules/suppliers.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/suppliers\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateSupplier(db, req, res, actor, params[0]),
+  owner: 'server/modules/suppliers.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/suppliers\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteSupplier(db, res, actor, params[0]),
+  owner: 'server/modules/suppliers.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -316,12 +346,6 @@ async function handleApi(db, req, res, url) {
   const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
   if (userMatch && req.method === 'PATCH') return updateUser(db, req, res, actor, userMatch[1]);
 
-  if (pathname === '/api/suppliers' && req.method === 'GET') return listSuppliers(db, res, actor, url);
-  if (pathname === '/api/suppliers' && req.method === 'POST') return createSupplier(db, req, res, actor);
-  const supplierMatch = pathname.match(/^\/api\/suppliers\/([^/]+)$/);
-  if (supplierMatch && req.method === 'PATCH') return updateSupplier(db, req, res, actor, supplierMatch[1]);
-  if (supplierMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'supplier', supplierMatch[1]);
-
   if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
   if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
   const productTrackingMatch = pathname.match(/^\/api\/products\/([^/]+)\/tracking-policy$/);
@@ -388,11 +412,12 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // V2 Stage 3 / Wave 3A + Wave 3B — Owned-route lookup.
+  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C — Owned-route lookup.
   // Runs AFTER authentication is resolved and BEFORE the legacy
   // handleApi chain continues. Unmatched routes fall through to
   // the existing legacy chain unchanged. Currently owns the four
-  // warehouse routes and the four customer routes.
+  // warehouse routes, the four customer routes, and the four
+  // supplier routes.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -1164,50 +1189,6 @@ async function updateUser(db, req, res, actor, userId) {
     audit(db, actor.id, 'UPDATE', 'USER', userId, displayName);
   });
   return send(res, 200, { ok: true });
-}
-
-function listSuppliers(db, res, actor, url) {
-  allowAny(actor, ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE']);
-  const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
-    FROM suppliers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
-    .map((row) => ({ ...row, active: Boolean(row.active) }));
-  return send(res, 200, { suppliers });
-}
-
-async function createSupplier(db, req, res, actor) {
-  allow(actor, 'SUPPLIERS_MANAGE');
-  const body = await readJson(req);
-  const supplier = supplierInput(body);
-  const supplierId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO suppliers(id,code,name,contact,phone,address,email,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)`)
-    .run(supplierId, supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, now, now);
-  audit(db, actor.id, 'CREATE', 'SUPPLIER', supplierId, supplier.code);
-  return send(res, 201, { id: supplierId });
-}
-
-async function updateSupplier(db, req, res, actor, supplierId) {
-  allow(actor, 'SUPPLIERS_MANAGE');
-  const current = db.prepare('SELECT * FROM suppliers WHERE id=?').get(supplierId);
-  if (!current) throw new HttpError(404, '供应商不存在');
-  const body = await readJson(req); const supplier = supplierInput({ ...current, ...body });
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE suppliers SET code=?,name=?,contact=?,phone=?,address=?,email=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
-    .run(supplier.code, supplier.name, supplier.contact, supplier.phone, supplier.address, supplier.email, supplier.paymentTermsDays, active, new Date().toISOString(), supplierId);
-  audit(db, actor.id, 'UPDATE', 'SUPPLIER', supplierId, supplier.code);
-  return send(res, 200, { ok: true });
-}
-
-function supplierInput(body) {
-  return {
-    code: requiredCode(body.code, '供应商编码'),
-    name: requiredText(body.name, '供应商名称', 100),
-    contact: optionalText(body.contact, 50),
-    phone: optionalText(body.phone, 30),
-    address: optionalText(body.address, 200),
-    email: optionalText(body.email, 100),
-    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days)
-  };
 }
 
 function listProducts(db, res, actor, url) {

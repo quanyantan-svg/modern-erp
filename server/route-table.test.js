@@ -1138,27 +1138,25 @@ describe('V2 Stage 3 / Wave 3B — backend dispatch ownership (customer migratio
     assert.equal(customerEntries.length, 4);
   });
 
-  test('supplier routes have NOT migrated to the route-table (still on legacy handleApi)', () => {
+  test('product routes have NOT migrated to the route-table (still on legacy handleApi after Wave 3B)', () => {
+    // Wave 3B scope explicitly excluded Products. The legacy
+    // handleApi chain MUST continue to dispatch /api/products
+    // until Products migration is approved in a later wave.
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
 
-    assert.equal(table.match('GET', '/api/suppliers'), null);
-    assert.equal(table.match('POST', '/api/suppliers'), null);
-    assert.equal(table.match('PATCH', '/api/suppliers/supplier-001'), null);
-    assert.equal(table.match('DELETE', '/api/suppliers/supplier-001'), null);
+    assert.equal(table.match('GET', '/api/products'), null);
+    assert.equal(table.match('POST', '/api/products'), null);
+    assert.equal(table.match('PATCH', '/api/products/product-001'), null);
+    assert.equal(table.match('DELETE', '/api/products/product-001'), null);
 
     assert.match(
       appSource,
-      /pathname\s*===\s*['"]\/api\/suppliers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
-      'Supplier routes remain on legacy handleApi and MUST NOT be migrated in Wave 3B',
-    );
-    assert.match(
-      appSource,
-      /const\s+supplierMatch\s*=\s*pathname\.match\(/,
-      'Supplier /:id legacy dispatch branch must remain in app.js for Wave 3B',
+      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Product routes remain on legacy handleApi and MUST NOT be migrated in Wave 3B',
     );
   });
 
@@ -1252,6 +1250,167 @@ describe('V2 Stage 3 / Wave 3B — backend dispatch ownership (customer migratio
       'Wave 3B: app.js must construct the owned route table exactly once',
     );
     assert.doesNotMatch(appSource, /\bwarehouseRouteTable\b/);
+    assert.match(appSource, /\bownedRouteTable\b/);
+  });
+});
+
+describe('V2 Stage 3 / Wave 3C — backend dispatch ownership (supplier migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+
+  test('app.js imports the supplier handlers from server/modules/suppliers.js', () => {
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/suppliers\.js['"]/,
+      'Wave 3C: server/app.js MUST import the supplier handlers from server/modules/suppliers.js',
+    );
+    assert.match(appSource, /\blistSuppliers\b/);
+    assert.match(appSource, /\bcreateSupplier\b/);
+    assert.match(appSource, /\bupdateSupplier\b/);
+    assert.match(appSource, /\bdeleteSupplier\b/);
+  });
+
+  test('app.js no longer declares listSuppliers / createSupplier / updateSupplier / supplierInput as app-local functions', () => {
+    assert.doesNotMatch(appSource, /^\s*function\s+listSuppliers\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createSupplier\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateSupplier\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+supplierInput\b/m);
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching /api/suppliers', () => {
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/suppliers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3C: legacy exact-match GET branch for /api/suppliers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/suppliers['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3C: legacy exact-match POST branch for /api/suppliers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/suppliers\\\/[^/]+\$\/\)/,
+      'Wave 3C: legacy supplierMatch-style dispatch for /api/suppliers/:id must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]supplier['"]/,
+      'Wave 3C: deleteMasterRecord must not be called directly from app.js for kind="supplier"; it must delegate via server/modules/suppliers.js',
+    );
+  });
+
+  test('all four supplier routes are registered with the canonical owner', () => {
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/suppliers',
+      handler: () => {},
+      owner: 'server/modules/suppliers.js',
+    });
+    table.register({
+      method: 'POST',
+      path: '/api/suppliers',
+      handler: () => {},
+      owner: 'server/modules/suppliers.js',
+    });
+    table.register({
+      method: 'PATCH',
+      path: /^\/api\/suppliers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/suppliers.js',
+    });
+    table.register({
+      method: 'DELETE',
+      path: /^\/api\/suppliers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/suppliers.js',
+    });
+
+    const supplierItems = table.list().filter((item) => item.owner === 'server/modules/suppliers.js');
+    assert.equal(supplierItems.length, 4, 'four Supplier descriptors must exist with the canonical owner');
+    for (const item of supplierItems) {
+      assert.equal(item.owner, 'server/modules/suppliers.js');
+    }
+  });
+
+  test('exactly four supplier descriptors exist (no Products descriptor registered)', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    const supplierEntries = table.list().filter((item) => item.owner === 'server/modules/suppliers.js');
+    assert.equal(supplierEntries.length, 4);
+  });
+
+  test('product routes have NOT migrated to the route-table (still on legacy handleApi)', () => {
+    // Wave 3C scope explicitly excludes Products. The legacy
+    // handleApi chain MUST continue to dispatch /api/products
+    // until Products migration is approved in a later wave.
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+
+    assert.equal(table.match('GET', '/api/products'), null);
+    assert.equal(table.match('POST', '/api/products'), null);
+    assert.equal(table.match('PATCH', '/api/products/product-001'), null);
+    assert.equal(table.match('DELETE', '/api/products/product-001'), null);
+
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Product routes remain on legacy handleApi and MUST NOT be migrated in Wave 3C',
+    );
+    assert.match(
+      appSource,
+      /productTrackingMatch\s*=\s*pathname\.match\(/,
+      'Product /:id/tracking-policy legacy dispatch branch must remain in app.js for Wave 3C',
+    );
+  });
+
+  test('warehouse + customer descriptors remain intact alongside the new supplier family', () => {
+    // After Wave 3C the owned table still owns all three
+    // previously-migrated families. This guards against an
+    // accidental drop of the Wave 3A / 3B descriptors while
+    // registering the new supplier family.
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+  });
+
+  test('exactly one ownedRouteTable constructor and one .match() call remain in app.js', () => {
+    // Constructor count must remain exactly 1 after Wave 3C.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(
+      constructorOccurrences.length,
+      1,
+      'Wave 3C: app.js must still construct the owned route table exactly once',
+    );
+    // Dispatch lookup count must remain exactly 1 after Wave 3C.
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(
+      matchOccurrences.length,
+      1,
+      'Wave 3C: app.js must keep exactly one ownedRouteTable.match() dispatch call',
+    );
+    assert.doesNotMatch(appSource, /\bwarehouseRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bsupplierRouteTable\b/);
     assert.match(appSource, /\bownedRouteTable\b/);
   });
 });
