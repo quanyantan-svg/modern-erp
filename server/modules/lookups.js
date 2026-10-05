@@ -1,24 +1,148 @@
-// V1.4-E5 — C02 bounded business-object lookup.
+// V1.4-E5 / V2 Wave 4C — read-only lookup transports.
 //
-// Read-only minimal projections of customer / supplier / product /
-// warehouse records. Intentionally scoped to the four entity types
-// listed in solution.md §21.5, used as report filter selectors only.
+// After V2 Wave 4C this module owns the canonical implementations for
+// every read-only lookup endpoint under /api/lookup/* and
+// /api/lookups/*. It exposes two intentionally distinct lookup
+// categories that share no permission model and no inactiveness contract:
 //
-// Why a separate module instead of the legacy /api/lookup/customers /
-// /api/lookup/suppliers endpoints:
-//   * Those legacy endpoints filter `active=1` and return full master
-//     records. V1.4 reports require INACTIVE historical records so
-//     inactive customers/suppliers/products/warehouses can still be
-//     selected for historical period filters.
-//   * Their permission scopes are tied to transaction-module visibility
-//     (PURCHASE_RECEIPTS_MANAGE, CRM_VIEW, ...). Report filters must
-//     follow REPORT_VIEW + the same domain intersection the report
-//     itself uses, not the transaction-module scope.
-//   * This module binds the registry to a fixed `usage` value and
-//     rejects `TRANSACTION_*` usages, so it cannot accidentally be
-//     repurposed as a master-data enumeration endpoint.
+//   A. transaction / logistics-scoped lookups (4 handlers):
+//     `listSupplierLookup`, `listCustomerLookup`,
+//     `listSalesOrderSourceLookup`, `listPurchaseOrderSourceLookup`.
+//     They were migrated verbatim from server/app.js so the route-table
+//     becomes the single dispatch entry. They retain their existing
+//     transaction / CRM / return-workflow permission gates and they
+//     continue to filter on `active=1`; downstream warehouse, sales
+//     delivery, returns and purchase-receipt workflows rely on this
+//     strict active-only contract.
+//
+//   B. report-filter business-entity lookup (1 handler):
+//     `searchBusinessEntities` (V1.4-E5 C02). It is bounded by
+//     REPORT_VIEW intersected with the per-usage domain permissions
+//     (REPORT_SALES / REPORT_PURCHASE / REPORT_INVENTORY) and is
+//     allowed to surface inactive historical records so that report
+//     filters can still reference periods where the party is no longer
+//     active.
+//
+// The two categories must NOT be merged into a single endpoint or a
+// single permission model: their permission gates, inactiveness /
+// archive semantics, and SQL projections are intentionally different.
 
 import { allowAny, HttpError, send } from '../lib/http.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+
+// =================================================================
+// V2 Wave 4C — transaction / logistics-scoped lookups (migrated from
+// server/app.js verbatim). These four handlers were the canonical
+// implementations behind /api/lookup/suppliers, /api/lookup/customers,
+// /api/lookup/sales-orders-source and /api/lookup/purchase-orders-source
+// prior to Wave 4C. The bodies below are byte-identical to the
+// pre-migration handlers; only the registration site changed.
+// =================================================================
+
+// ============ Narrow Lookups (warehouse / logistics-flavored) ============
+// Return minimal id+code+name projections so warehouse workflows (purchase
+// receipts, sales deliveries, returns) can populate party pickers without
+// granting full master-data *_MANAGE permissions. Gated by INVENTORY_VIEW
+// which warehouse already holds. Safe for production: the response body
+// contains no PII, no contact info, no balances.
+//
+// Pattern matches /api/users/lookup (project-manager candidates).
+export function listSupplierLookup(db, res, actor, url) {
+  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const suppliers = db.prepare("SELECT id, code, name FROM suppliers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
+  return send(res, 200, { suppliers });
+}
+
+export function listCustomerLookup(db, res, actor, url) {
+  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
+  return send(res, 200, { customers });
+}
+
+// Minimal read-only projection of APPROVED sales orders eligible as the
+// optional source for Sales Delivery forms. Gated by the logistics
+// permission that authorizes creating/managing Sales Delivery (no
+// ORDERS_VIEW required) so the warehouse role can populate the optional
+// source selector without gaining broad Sales Order module access. Items
+// are included so the form can prefill quantities / unit prices from the
+// dropdown selection without a follow-up /api/orders/:id call (which
+// would require ORDERS_VIEW).
+export function listSalesOrderSourceLookup(db, res, actor, url) {
+  // V1.3 Phase 1: sales uses ORDERS_CREATE (rather than the logistics
+  // execute rights it no longer holds) to source approved sales orders
+  // for downstream PR / PO prefill; warehouse / return managers still
+  // have their dedicated logistics permissions for the legacy path.
+  allowAny(actor, ['ORDERS_CREATE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
+  const headerStmt = db.prepare(`
+    SELECT so.id, so.order_no orderNo, so.status, so.total_cents totalCents, so.created_at createdAt,
+           c.id customerId, c.code customerCode, c.name customerName
+    FROM sales_orders so
+    JOIN customers c ON c.id = so.customer_id
+    WHERE so.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
+      AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
+    ORDER BY so.created_at DESC
+    LIMIT 100
+  `);
+  const itemStmt = db.prepare(`
+    SELECT soi.id salesOrderItemId, soi.product_id productId, soi.quantity orderedQuantity,
+           soi.quantity-COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) deliveredQuantity,
+           soi.unit_price_cents unitPriceCents,
+           p.code productCode, p.name productName, p.unit
+    FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
+    WHERE soi.order_id = ?
+    ORDER BY soi.line_no
+  `);
+  const orders = headerStmt.all(search, search, search).map((row) => ({
+    ...row,
+    items: itemStmt.all(row.id),
+  }));
+  return send(res, 200, { orders });
+}
+
+// Symmetric to listSalesOrderSourceLookup but for the Purchase Order
+// prefill (used by purchase-receipt, sales-delivery/PR/PO generation).
+// V1.3 Phase 1: sales uses PURCHASE_ORDERS_CREATE (rather than the
+// logistics execute rights it no longer holds) to source approved
+// purchase orders for downstream PR / PO prefill; warehouse / return
+// managers still have their dedicated logistics permissions for the
+// legacy path.
+export function listPurchaseOrderSourceLookup(db, res, actor, url) {
+  allowAny(actor, ['PURCHASE_ORDERS_CREATE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
+  const search = '%' + (url.searchParams.get('search') || '') + '%';
+  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
+  const headerStmt = db.prepare(`
+    SELECT po.id, po.order_no orderNo, po.status, po.total_cents totalCents, po.created_at createdAt,
+           s.id supplierId, s.code supplierCode, s.name supplierName
+    FROM purchase_orders po
+    JOIN suppliers s ON s.id = po.supplier_id
+    WHERE po.status = 'APPROVED'
+      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
+      AND (po.order_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)
+    ORDER BY po.created_at DESC
+    LIMIT 100
+  `);
+  const itemStmt = db.prepare(`
+    SELECT poi.id purchaseOrderItemId, poi.product_id productId, poi.quantity orderedQuantity,
+           poi.quantity-COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) quantity,
+           COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) receivedQuantity,
+           poi.unit_price_cents unitPriceCents,
+           p.code productCode, p.name productName, p.unit
+    FROM purchase_order_items poi JOIN products p ON p.id = poi.product_id
+    WHERE poi.order_id = ?
+    ORDER BY poi.line_no
+  `);
+  const purchaseOrders = headerStmt.all(search, search, search).map((row) => ({
+    ...row,
+    items: itemStmt.all(row.id),
+  }));
+  return send(res, 200, { purchaseOrders });
+}
 
 // Each entry binds a public `type` to its master table, the projected
 // columns, the join-free boolean expression that marks whether a row

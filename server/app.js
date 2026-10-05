@@ -37,7 +37,13 @@ import {
   exportPurchaseSummaryReport, exportPurchaseOutstandingReport,
   exportInventoryMovementsReport,
 } from './modules/decision-reports.js';
-import { searchBusinessEntities } from './modules/lookups.js';
+import {
+  listCustomerLookup,
+  listPurchaseOrderSourceLookup,
+  listSalesOrderSourceLookup,
+  listSupplierLookup,
+  searchBusinessEntities,
+} from './modules/lookups.js';
 import { listApprovals } from './modules/approvals.js';
 import {
   activatePlanningForecast, cancelPlanningForecast, cancelMrpRun,
@@ -175,33 +181,64 @@ import {
   updateProduct,
 } from './modules/products.js';
 
-// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
-// Wave 3F — Warehouse + Customer + Supplier + Role +
-// User-management + Product master-data + Decision Reports +
-// Product Routings route-table registration. All eight live production
-// route families are migrated using the Wave 1 route-table dispatch
-// infrastructure. Each descriptor carries exactly method / path /
-// handler / owner — no permissions, transaction policy, audit policy,
-// or other runtime authority is duplicated. Thin per-route adapters
-// below translate the route-table dispatch context (db, req, res,
-// actor, url, params) into each business handler's existing signature.
-// The neutral name `ownedRouteTable` reflects that the table holds
-// multiple domain families. Roles have exactly GET / POST / PATCH —
-// there is no canonical DELETE /api/roles route in production.
-// User-management has exactly GET / POST / PATCH — there is no
-// canonical DELETE /api/users route in production. Product master-data
-// has GET / POST / PATCH / DELETE — DELETE delegates to
-// deleteMasterRecord. Decision Reports own eleven read-only GET
-// routes (five core summaries / outstanding, one regex
-// fulfillment-contributions, and five CSV exports) — canonical owner is
-// server/modules/decision-reports.js. Product Routings owns nine
-// routes (collection GET / POST, regex activate|deactivate POST,
-// regex operations POST / PATCH / DELETE, detail GET / PATCH / DELETE)
-// — canonical owner is server/modules/product-routing.js; detail
-// DELETE delegates to deleteMasterRecord via the thin
-// deleteProductRouting wrapper. /api/users/lookup and PATCH
-// /api/products/:id/tracking-policy are intentionally NOT migrated
-// and remain on the legacy handleApi branches below.
+// V2 owned-route registrations — Waves 3A–3F / 4A–4C
+//
+// Master-data families:
+//   Warehouses (4 routes, server/modules/warehouses.js)
+//   Customers (4 routes, server/modules/customers.js)
+//   Suppliers (4 routes, server/modules/suppliers.js)
+//   Roles (3 routes, server/modules/roles.js)
+//   User-management (3 routes, server/modules/users.js)
+//   Product master-data (4 routes, server/modules/products.js)
+// Decision Reports:
+//   Eleven read-only GET routes (five core summaries / outstanding,
+//   one regex fulfillment-contributions, and five CSV exports) —
+//   canonical owner is server/modules/decision-reports.js.
+// Product Routings:
+//   Nine routes (collection GET / POST, regex activate|deactivate
+//   POST, regex operations POST / PATCH / DELETE, detail GET / PATCH /
+//   DELETE) — canonical owner is server/modules/product-routing.js;
+//   detail DELETE delegates to deleteMasterRecord via the thin
+//   deleteProductRouting wrapper.
+// Lookups (V2 Wave 4C):
+//   Five GET routes owned by server/modules/lookups.js:
+//     - /api/lookup/suppliers, /api/lookup/customers,
+//       /api/lookup/sales-orders-source,
+//       /api/lookup/purchase-orders-source (transaction / logistics
+//       lookups with active=1-only semantics and CRM / returns /
+//       receipt / delivery permission gates); and
+//     - /api/lookups/business-entities (V1.4-E5 C02 report-filter
+//       business-entity lookup; REPORT_VIEW + per-usage domain
+//       intersection; intentionally allowed to surface inactive
+//       historical records).
+//   The two lookup categories share no permission model and no
+//   inactiveness contract; they are deliberately not merged.
+//
+// Intentionally non-migrated special routes (remain on legacy
+// handleApi branches below):
+//   - /api/users/lookup         → listProjectManagerCandidates in app.js
+//                                  (project-manager candidate lookup
+//                                  gated by PROJECT_MANAGE, not
+//                                  USERS_MANAGE)
+//   - PATCH /api/products/:id/tracking-policy
+//                                → updateProductTrackingHandler in app.js
+//   - All /api/orders/*,
+//     /api/purchase-orders/*,
+//     /api/sales-deliveries/*,
+//     /api/purchase-receipts/*,
+//     /api/returns/*,
+//     /api/settlement/*,
+//     /api/lifecycle/*
+//                                remain on legacy handleApi and are
+//                                explicitly out of scope for V2 Wave 4C.
+//
+// Each descriptor carries exactly method / path / handler / owner —
+// no permissions, transaction policy, audit policy, or other runtime
+// authority is duplicated. Thin per-route adapters below translate
+// the route-table dispatch context (db, req, res, actor, url, params)
+// into each business handler's existing signature. The neutral name
+// `ownedRouteTable` reflects that the table holds multiple domain
+// families.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -455,6 +492,36 @@ ownedRouteTable.register({
   handler: ({ db, res, actor, params }) => deleteProductRouting(db, res, actor, params[0]),
   owner: 'server/modules/product-routing.js',
 });
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/lookup/suppliers',
+  handler: ({ db, res, actor, url }) => listSupplierLookup(db, res, actor, url),
+  owner: 'server/modules/lookups.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/lookup/customers',
+  handler: ({ db, res, actor, url }) => listCustomerLookup(db, res, actor, url),
+  owner: 'server/modules/lookups.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/lookups/business-entities',
+  handler: ({ db, res, actor, url }) => searchBusinessEntities(db, res, actor, url),
+  owner: 'server/modules/lookups.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/lookup/sales-orders-source',
+  handler: ({ db, res, actor, url }) => listSalesOrderSourceLookup(db, res, actor, url),
+  owner: 'server/modules/lookups.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/lookup/purchase-orders-source',
+  handler: ({ db, res, actor, url }) => listPurchaseOrderSourceLookup(db, res, actor, url),
+  owner: 'server/modules/lookups.js',
+});
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
@@ -610,11 +677,11 @@ async function handleApi(db, req, res, url) {
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
-  // Wave 3F + Wave 4A — Owned-route lookup. Runs AFTER authentication
-  // is resolved and BEFORE the legacy handleApi chain continues.
-  // Unmatched routes fall through to the existing legacy chain
-  // unchanged. Currently owns the four warehouse routes, the four
-  // customer routes, the four supplier routes, the three role
+  // Wave 3F + Wave 4A + Wave 4B + Wave 4C — Owned-route lookup. Runs
+  // AFTER authentication is resolved and BEFORE the legacy handleApi
+  // chain continues. Unmatched routes fall through to the existing
+  // legacy chain unchanged. Currently owns the four warehouse routes,
+  // the four customer routes, the four supplier routes, the three role
   // routes (GET / POST / PATCH; there is no canonical DELETE
   // /api/roles route), the three user-management routes (GET / POST
   // / PATCH; there is no canonical DELETE /api/users route), the
@@ -622,15 +689,22 @@ async function handleApi(db, req, res, url) {
   // DELETE delegates to deleteMasterRecord), the eleven Decision
   // Reports routes (five core summaries / outstanding, one regex
   // fulfillment-contributions, and five CSV exports; canonical owner
-  // server/modules/decision-reports.js), and the nine Product
-  // Routings routes (collection GET / POST, regex
-  // activate|deactivate POST, regex operations POST / PATCH / DELETE,
-  // detail GET / PATCH / DELETE; canonical owner
-  // server/modules/product-routing.js; detail DELETE delegates to
-  // deleteMasterRecord via the thin deleteProductRouting wrapper).
-  // /api/users/lookup and PATCH /api/products/:id/tracking-policy
-  // remain on their respective legacy handleApi branches above and
-  // are NOT in the route-table.
+  // server/modules/decision-reports.js), the nine Product Routings
+  // routes (collection GET / POST, regex activate|deactivate POST,
+  // regex operations POST / PATCH / DELETE, detail GET / PATCH / DELETE;
+  // canonical owner server/modules/product-routing.js; detail DELETE
+  // delegates to deleteMasterRecord via the thin deleteProductRouting
+  // wrapper), and the five Lookups routes (GET /api/lookup/suppliers,
+  // GET /api/lookup/customers, GET /api/lookups/business-entities,
+  // GET /api/lookup/sales-orders-source,
+  // GET /api/lookup/purchase-orders-source; canonical owner
+  // server/modules/lookups.js — the four transaction/logistics
+  // lookups share their existing logistics/CRM permission gates and
+  // active=1-only semantics, while the report-filter
+  // business-entities lookup is bounded by REPORT_VIEW + per-usage
+  // domain intersection). /api/users/lookup and PATCH
+  // /api/products/:id/tracking-policy remain on their respective
+  // legacy handleApi branches above and are NOT in the route-table.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -901,16 +975,9 @@ async function handleApi(db, req, res, url) {
   if (periodMatch && req.method === 'GET') return getInventoryPeriodClosure(db, res, actor, periodMatch[1]);
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
-  if (pathname === "/api/lookup/suppliers" && req.method === "GET") return listSupplierLookup(db, res, actor, url);
-  if (pathname === "/api/lookup/customers" && req.method === "GET") return listCustomerLookup(db, res, actor, url);
-  // V1.4-E5 C02 — bounded business-object lookup used by report filter selectors.
-  if (pathname === "/api/lookups/business-entities" && req.method === "GET") return searchBusinessEntities(db, res, actor, url);
+  // V2 Wave 4C: migrated to ownedRouteTable (server/modules/lookups.js).
   // Scoped source-document lookups for Sales Delivery / Purchase Receipt forms.
-  // Read-only minimal projections of APPROVED source orders so the warehouse
-  // role can populate the optional source selector without gaining broad
-  // Sales Order / Purchase Order module access (no ORDERS_VIEW / PURCHASE_ORDERS_VIEW).
-  if (pathname === "/api/lookup/sales-orders-source" && req.method === "GET") return listSalesOrderSourceLookup(db, res, actor, url);
-  if (pathname === "/api/lookup/purchase-orders-source" && req.method === "GET") return listPurchaseOrderSourceLookup(db, res, actor, url);
+  // V2 Wave 4C: migrated to ownedRouteTable (server/modules/lookups.js).
 
   // ============ Accounts Receivable ============
   if (pathname === '/api/settlement/customers' && req.method === 'GET') return listSettlementParties(db, res, actor, url, 'CUSTOMER');
@@ -4202,109 +4269,14 @@ function getAccountReceivable(db, res, actor, arId) {
 // ============ Accounts Payable ============
 
 // ============ Narrow Lookups (warehouse / logistics-flavored) ============
-// Return minimal id+code+name projections so warehouse workflows (purchase
-// receipts, sales deliveries, returns) can populate party pickers without
-// granting full master-data *_MANAGE permissions. Gated by INVENTORY_VIEW
-// which warehouse already holds. Safe for production: the response body
-// contains no PII, no contact info, no balances.
-//
-// Pattern matches /api/users/lookup (project-manager candidates).
-function listSupplierLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
-  const search = '%' + (url.searchParams.get('search') || '') + '%';
-  const suppliers = db.prepare("SELECT id, code, name FROM suppliers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
-  return send(res, 200, { suppliers });
-}
-
-function listCustomerLookup(db, res, actor, url) {
-  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
-  const search = '%' + (url.searchParams.get('search') || '') + '%';
-  const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
-  return send(res, 200, { customers });
-}
-
-// Minimal read-only projection of APPROVED sales orders eligible as the
-// optional source for Sales Delivery forms. Gated by the logistics
-// permission that authorizes creating/managing Sales Delivery (no
-// ORDERS_VIEW required) so the warehouse role can populate the optional
-// source selector without gaining broad Sales Order module access. Items
-// are included so the form can prefill quantities / unit prices from the
-// dropdown selection without a follow-up /api/orders/:id call (which
-// would require ORDERS_VIEW).
-function listSalesOrderSourceLookup(db, res, actor, url) {
-  // V1.3 Phase 1: sales uses ORDERS_CREATE (rather than the logistics
-  // execute rights it no longer holds) to source approved sales orders
-  // for downstream PR / PO prefill; warehouse / return managers still
-  // have their dedicated logistics permissions for the legacy path.
-  allowAny(actor, ['ORDERS_CREATE', 'SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
-  const search = '%' + (url.searchParams.get('search') || '') + '%';
-  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
-  const headerStmt = db.prepare(`
-    SELECT so.id, so.order_no orderNo, so.status, so.total_cents totalCents, so.created_at createdAt,
-           c.id customerId, c.code customerCode, c.name customerName
-    FROM sales_orders so
-    JOIN customers c ON c.id = so.customer_id
-    WHERE so.status = 'APPROVED'
-      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
-      AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
-    ORDER BY so.created_at DESC
-    LIMIT 100
-  `);
-  const itemStmt = db.prepare(`
-    SELECT soi.id salesOrderItemId, soi.product_id productId, soi.quantity orderedQuantity,
-           soi.quantity-COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) quantity,
-           COALESCE((SELECT SUM(sdi.quantity) FROM sales_delivery_items sdi JOIN sales_deliveries sd ON sd.id=sdi.delivery_id WHERE sdi.sales_order_item_id=soi.id AND sd.status='CONFIRMED'),0) deliveredQuantity,
-           soi.unit_price_cents unitPriceCents,
-           p.code productCode, p.name productName, p.unit
-    FROM sales_order_items soi JOIN products p ON p.id = soi.product_id
-    WHERE soi.order_id = ?
-    ORDER BY soi.line_no
-  `);
-  const orders = headerStmt.all(search, search, search).map((row) => ({
-    ...row,
-    items: itemStmt.all(row.id),
-  }));
-  return send(res, 200, { orders });
-}
-
-// Symmetric to listSalesOrderSourceLookup but for the Purchase Order
-// prefill (used by purchase-receipt, sales-delivery/PR/PO generation).
-// V1.3 Phase 1: sales uses PURCHASE_ORDERS_CREATE (rather than the
-// logistics execute rights it no longer holds) to source approved
-// purchase orders for downstream PR / PO prefill; warehouse / return
-// managers still have their dedicated logistics permissions for the
-// legacy path.
-function listPurchaseOrderSourceLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_ORDERS_CREATE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
-  const search = '%' + (url.searchParams.get('search') || '') + '%';
-  const archiveFilter = lifecycleArchiveFilter('PURCHASE_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
-  const headerStmt = db.prepare(`
-    SELECT po.id, po.order_no orderNo, po.status, po.total_cents totalCents, po.created_at createdAt,
-           s.id supplierId, s.code supplierCode, s.name supplierName
-    FROM purchase_orders po
-    JOIN suppliers s ON s.id = po.supplier_id
-    WHERE po.status = 'APPROVED'
-      ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
-      AND (po.order_no LIKE ? OR s.code LIKE ? OR s.name LIKE ?)
-    ORDER BY po.created_at DESC
-    LIMIT 100
-  `);
-  const itemStmt = db.prepare(`
-    SELECT poi.id purchaseOrderItemId, poi.product_id productId, poi.quantity orderedQuantity,
-           poi.quantity-COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) quantity,
-           COALESCE((SELECT SUM(pri.quantity) FROM purchase_receipt_items pri JOIN purchase_receipts pr ON pr.id=pri.receipt_id WHERE pri.purchase_order_item_id=poi.id AND pr.status='CONFIRMED'),0) receivedQuantity,
-           poi.unit_price_cents unitPriceCents,
-           p.code productCode, p.name productName, p.unit
-    FROM purchase_order_items poi JOIN products p ON p.id = poi.product_id
-    WHERE poi.order_id = ?
-    ORDER BY poi.line_no
-  `);
-  const purchaseOrders = headerStmt.all(search, search, search).map((row) => ({
-    ...row,
-    items: itemStmt.all(row.id),
-  }));
-  return send(res, 200, { purchaseOrders });
-}
+// V2 Wave 4C: the four handlers previously defined here
+// (listSupplierLookup / listCustomerLookup / listSalesOrderSourceLookup
+// / listPurchaseOrderSourceLookup) moved verbatim to
+// server/modules/lookups.js. The five /api/lookup/* and
+// /api/lookups/business-entities routes are now dispatched through
+// the route-table. /api/users/lookup remains on the legacy handleApi
+// branch above (project-manager candidate lookup, gated by
+// PROJECT_MANAGE).
 
 function listAccountsPayable(db, res, actor, url) {
   allowAny(actor, ['ACCOUNTING_VIEW', 'AP_VIEW', 'AP_MANAGE']);

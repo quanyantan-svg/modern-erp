@@ -2588,3 +2588,249 @@ describe('V2 Wave 4B — Product Routings Route Ownership Migration', () => {
     );
   });
 });
+
+describe('V2 Wave 4C — Read-only Lookups Route Ownership Migration', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const lookupsModuleSource = readFileSync(resolve('server/modules/lookups.js'), 'utf8');
+
+  function buildOwnedTable() {
+    const table = createRouteTable();
+    // 42 Wave 4B baseline descriptors (warehouse + customer + supplier
+    // + role + user + product master-data + decision-reports +
+    // product-routings). See buildOwnedTable in Wave 4B for the full
+    // list; replicate the relevant subset here so the Wave 4C tests
+    // are self-contained and can be exercised in isolation.
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/, handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/operations$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    // 5 Wave 4C lookups descriptors.
+    table.register({ method: 'GET', path: '/api/lookup/suppliers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/customers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookups/business-entities', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/sales-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/purchase-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    return table;
+  }
+
+  test('exactly five lookups descriptors exist with the canonical owner; previous 42 baseline descriptors remain intact; ownedRouteTable is now 47; single createRouteTable() and single .match() remain in app.js', () => {
+    const table = buildOwnedTable();
+    const lookupsEntries = table.list().filter((item) => item.owner === 'server/modules/lookups.js');
+    assert.equal(lookupsEntries.length, 5, 'Wave 4C: exactly five lookups descriptors must exist with the canonical owner');
+    assert.equal(table.size(), 47, 'Wave 4C: 42 baseline + 5 lookups = 47 owned descriptors');
+    // list() exposes only { method, path, pathKind, owner } — no other keys.
+    for (const entry of lookupsEntries) {
+      assert.deepEqual(
+        Object.keys(entry).sort(),
+        ['method', 'owner', 'path', 'pathKind'].sort(),
+        `Wave 4C: descriptor ${entry.method} ${entry.path} must expose exactly { method, path, pathKind, owner }`,
+      );
+      assert.equal(entry.owner, 'server/modules/lookups.js');
+      assert.ok(typeof entry.path === 'string' && entry.path.length > 0, 'descriptor path must be non-empty');
+    }
+    // All five lookups paths must be present (exact-string, pathKind === 'exact').
+    const lookupPaths = lookupsEntries.map((item) => item.path).sort();
+    assert.deepEqual(lookupPaths, [
+      '/api/lookups/business-entities',
+      '/api/lookup/customers',
+      '/api/lookup/purchase-orders-source',
+      '/api/lookup/sales-orders-source',
+      '/api/lookup/suppliers',
+    ].sort(), 'Wave 4C: the five lookups paths must match the canonical brief exactly');
+    for (const entry of lookupsEntries) assert.equal(entry.pathKind, 'exact', 'Wave 4C: all five lookups paths must be exact-string');
+    // Previous 42 baseline descriptors remain intact.
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/decision-reports.js').length, 11);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/product-routing.js').length, 9);
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'Wave 4C: app.js must construct the owned route table exactly once');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'Wave 4C: app.js must keep exactly one ownedRouteTable.match() dispatch call');
+    assert.match(appSource, /\bownedRouteTable\b/);
+  });
+
+  test('all five GET paths match correctly through the route-table and dispatch to server/modules/lookups.js with no params', () => {
+    const table = buildOwnedTable();
+    const cases = [
+      ['/api/lookup/suppliers', 'listSupplierLookup'],
+      ['/api/lookup/customers', 'listCustomerLookup'],
+      ['/api/lookups/business-entities', 'searchBusinessEntities'],
+      ['/api/lookup/sales-orders-source', 'listSalesOrderSourceLookup'],
+      ['/api/lookup/purchase-orders-source', 'listPurchaseOrderSourceLookup'],
+    ];
+    for (const [path] of cases) {
+      const hit = table.match('GET', path);
+      assert.ok(hit, `GET ${path} must match the route-table`);
+      assert.equal(hit.owner, 'server/modules/lookups.js', `GET ${path} owner must be server/modules/lookups.js`);
+      assert.deepEqual(hit.params, [], `GET ${path} must have empty params (no path captures)`);
+      assert.equal(typeof hit.handler, 'function', `GET ${path} must have a function handler`);
+    }
+    // Non-matching methods on the same paths must NOT match (the
+    // brief requires exactly five GET routes, no POST / PATCH / DELETE).
+    for (const [path] of cases) {
+      assert.equal(table.match('POST', path), null, `POST ${path} must NOT match the route-table`);
+      assert.equal(table.match('PATCH', path), null, `PATCH ${path} must NOT match the route-table`);
+      assert.equal(table.match('DELETE', path), null, `DELETE ${path} must NOT match the route-table`);
+    }
+  });
+
+  test('lookups.js exports all five production handlers; the four moved handler declarations are absent from app.js; /api/users/lookup remains legacy and route-table match returns null; transaction lookup permission strings remain in lookups.js; business-entity REPORT usage registry remains present', () => {
+    // Source-shape: lookups.js exports all five canonical handlers.
+    assert.match(lookupsModuleSource, /export function listSupplierLookup\b/);
+    assert.match(lookupsModuleSource, /export function listCustomerLookup\b/);
+    assert.match(lookupsModuleSource, /export function listSalesOrderSourceLookup\b/);
+    assert.match(lookupsModuleSource, /export function listPurchaseOrderSourceLookup\b/);
+    assert.match(lookupsModuleSource, /export function searchBusinessEntities\b/);
+    // lookups.js imports lifecycleArchiveFilter directly from lifecycle-engine.
+    assert.match(lookupsModuleSource, /from\s+['"]\.\/lifecycle-engine\.js['"]/);
+    assert.match(lookupsModuleSource, /\blifecycleArchiveFilter\b/);
+    // app.js imports the four moved handlers and searchBusinessEntities from lookups.js.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/lookups\.js['"]/,
+      'Wave 4C: server/app.js MUST import lookups handlers from server/modules/lookups.js',
+    );
+    assert.match(appSource, /\blistSupplierLookup\b/);
+    assert.match(appSource, /\blistCustomerLookup\b/);
+    assert.match(appSource, /\blistSalesOrderSourceLookup\b/);
+    assert.match(appSource, /\blistPurchaseOrderSourceLookup\b/);
+    assert.match(appSource, /\bsearchBusinessEntities\b/);
+    // app.js no longer declares any of the four moved handlers as app-local functions.
+    assert.doesNotMatch(appSource, /^\s*function\s+listSupplierLookup\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+listCustomerLookup\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+listSalesOrderSourceLookup\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+listPurchaseOrderSourceLookup\b/m);
+    // Legacy handleApi branches dispatching /api/lookup/* must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/lookup\/suppliers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4C: legacy exact-match branch for GET /api/lookup/suppliers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/lookup\/customers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4C: legacy exact-match branch for GET /api/lookup/customers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/lookups\/business-entities['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4C: legacy exact-match branch for GET /api/lookups/business-entities must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/lookup\/sales-orders-source['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4C: legacy exact-match branch for GET /api/lookup/sales-orders-source must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/lookup\/purchase-orders-source['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4C: legacy exact-match branch for GET /api/lookup/purchase-orders-source must be removed',
+    );
+    // /api/users/lookup must remain on the legacy handleApi branch and NOT in the route-table.
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
+      'Wave 4C: /api/users/lookup must continue to dispatch via the legacy handleApi branch to listProjectManagerCandidates',
+    );
+    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'Wave 4C: listProjectManagerCandidates must remain defined in app.js');
+    assert.equal(
+      buildOwnedTable().match('GET', '/api/users/lookup'),
+      null,
+      'Wave 4C: /api/users/lookup must NOT be dispatched by the route-table',
+    );
+    // Transaction lookup permission strings must live in lookups.js (verbatim, byte-identical).
+    assert.match(
+      lookupsModuleSource,
+      /allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+      'Wave 4C: listSupplierLookup must keep its existing receipt/return/CRM permission gate',
+    );
+    assert.match(
+      lookupsModuleSource,
+      /allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+      'Wave 4C: listCustomerLookup must keep its existing delivery/return/CRM permission gate',
+    );
+    assert.match(
+      lookupsModuleSource,
+      /allowAny\(actor,\s*\[['"]ORDERS_CREATE['"],\s*['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'Wave 4C: listSalesOrderSourceLookup must keep its existing ORDERS_CREATE / SALES_DELIVERIES_MANAGE / RETURNS_MANAGE permission gate',
+    );
+    assert.match(
+      lookupsModuleSource,
+      /allowAny\(actor,\s*\[['"]PURCHASE_ORDERS_CREATE['"],\s*['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'Wave 4C: listPurchaseOrderSourceLookup must keep its existing PURCHASE_ORDERS_CREATE / PURCHASE_RECEIPTS_MANAGE / RETURNS_MANAGE permission gate',
+    );
+    // Business-entity REPORT usage registry must remain in lookups.js (V1.4-E5 C02 contract).
+    assert.match(lookupsModuleSource, /USAGE_PERMISSIONS/);
+    assert.match(lookupsModuleSource, /REPORT_SALES/);
+    assert.match(lookupsModuleSource, /REPORT_PURCHASE/);
+    assert.match(lookupsModuleSource, /REPORT_INVENTORY/);
+    assert.match(lookupsModuleSource, /allowAny\(actor,\s*\[['"]REPORT_VIEW['"]\]\)/);
+    // Existing test helper constants stay exported.
+    assert.match(lookupsModuleSource, /export const __ENTITY_REGISTRY\b/);
+    assert.match(lookupsModuleSource, /export const __USAGE_PERMISSIONS\b/);
+    assert.match(lookupsModuleSource, /export const __USAGE_ENTITY_TYPES\b/);
+    // Source-order archive filter preserved verbatim for both source lookups.
+    assert.match(
+      lookupsModuleSource,
+      /lifecycleArchiveFilter\(\s*['"]SALES_ORDER['"]\s*,\s*\{\s*includeArchived:\s*url\.searchParams\.get\(\s*['"]includeArchived['"]\s*\)\s*===\s*['"]true['"]\s*,\s*idExpression:\s*['"]so\.id['"]\s*\}\s*\)/,
+      'Wave 4C: listSalesOrderSourceLookup must preserve its lifecycleArchiveFilter invocation verbatim',
+    );
+    assert.match(
+      lookupsModuleSource,
+      /lifecycleArchiveFilter\(\s*['"]PURCHASE_ORDER['"]\s*,\s*\{\s*includeArchived:\s*url\.searchParams\.get\(\s*['"]includeArchived['"]\s*\)\s*===\s*['"]true['"]\s*,\s*idExpression:\s*['"]po\.id['"]\s*\}\s*\)/,
+      'Wave 4C: listPurchaseOrderSourceLookup must preserve its lifecycleArchiveFilter invocation verbatim',
+    );
+    // do NOT duplicate lifecycleArchiveFilter implementation in lookups.js.
+    const lifecycleEngineSource = readFileSync(resolve('server/modules/lifecycle-engine.js'), 'utf8');
+    assert.match(lifecycleEngineSource, /export function lifecycleArchiveFilter\b/);
+    assert.equal(
+      (lookupsModuleSource.match(/export\s+function\s+lifecycleArchiveFilter\b/g) || []).length,
+      0,
+      'Wave 4C: lifecycleArchiveFilter must be imported, not re-defined in lookups.js',
+    );
+  });
+});

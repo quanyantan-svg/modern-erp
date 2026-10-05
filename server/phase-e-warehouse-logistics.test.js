@@ -773,13 +773,25 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
     // a future custom role can keep warehouse scoped. CRM_VIEW / CRM_MANAGE
     // are also allowed so CRM selectors can reuse the same minimal id/code/name
     // contract without weakening full master-data APIs.
-    const dbjs = readFileSync(join(repoRoot, 'server', 'app.js'), 'utf8');
-    assert.match(dbjs,
-      /function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+    //
+    // V2 Wave 4C: the canonical implementations moved to
+    // server/modules/lookups.js and the route-table became the single
+    // dispatch entry. The behavioral gating contract is unchanged;
+    // only the source file changed.
+    const lookups = readFileSync(join(repoRoot, 'server', 'modules', 'lookups.js'), 'utf8');
+    const appSource = readFileSync(join(repoRoot, 'server', 'app.js'), 'utf8');
+    assert.match(lookups,
+      /export function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
       'listSupplierLookup must gate by receipt/return workflow permissions plus CRM permissions');
-    assert.match(dbjs,
-      /function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
+    assert.match(lookups,
+      /export function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
       'listCustomerLookup must gate by delivery/return workflow permissions plus CRM permissions');
+    assert.doesNotMatch(appSource,
+      /function listSupplierLookup\b/,
+      'V2 Wave 4C: app.js must NOT declare listSupplierLookup (now owned by server/modules/lookups.js)');
+    assert.doesNotMatch(appSource,
+      /function listCustomerLookup\b/,
+      'V2 Wave 4C: app.js must NOT declare listCustomerLookup (now owned by server/modules/lookups.js)');
   });
 
   test('stale inaccessible hash renders a safe denial without mounting admin UsersRoles', () => {
