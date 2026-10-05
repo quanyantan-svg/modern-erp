@@ -77,15 +77,15 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
-  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C — backend dispatch ownership architecture -----
+  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
-  // Wave 3A + Wave 3B + Wave 3C invariants for the migrated
-  // warehouse, customer, and supplier route families (app.js
-  // imports route-table, twelve descriptors registered across the
-  // three domains with canonical owners, no legacy warehouse /
-  // customer / supplier dispatch branches remain, products / users /
-  // roles / orders / purchase-orders / etc. still fall through to
-  // the legacy handleApi chain, single `ownedRouteTable`
+  // Wave 3A + Wave 3B + Wave 3C + Wave 3D invariants for the
+  // migrated warehouse, customer, supplier, and role route families
+  // (app.js imports route-table, fifteen descriptors registered
+  // across the four domains with canonical owners, no legacy
+  // warehouse / customer / supplier / role dispatch branches remain,
+  // products / users / orders / purchase-orders / etc. still fall
+  // through to the legacy handleApi chain, single `ownedRouteTable`
   // constructed once with a single `.match()` lookup). Pure-function
   // route-table safety tests live in the same file.
   'server/route-table.test.js',
@@ -125,6 +125,18 @@ const FULL = [
   // existing p2-data-lifecycle coverage of referenced-supplier
   // deactivation and the supplier-schema test of column contract.
   'server/v2-wave3c-suppliers-ownership.test.js',
+
+  // ----- V2 Stage 3 / Wave 3D — fourth live role ownership -----
+  // Focused behavior coverage for the migrated /api/roles route
+  // family: GET (canonical roles + PERMISSIONS catalogue /
+  // allowAny USERS_MANAGE or ROLES_MANAGE), POST (201 + audit +
+  // permissions persisted + canonical 400 messages for invalid
+  // permission shapes / 403), PATCH (200 + audit + permissions
+  // persisted / 404 missing role / preserve current permissions
+  // when body.permissions is omitted / ADMIN protection when
+  // canonical PERMISSIONS entry is dropped). No DELETE /api/roles
+  // route exists, and none is exercised.
+  'server/v2-wave3d-roles-ownership.test.js',
 
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',

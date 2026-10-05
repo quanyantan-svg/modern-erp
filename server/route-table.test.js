@@ -969,7 +969,6 @@ describe('V2 Stage 3 / Wave 3A — backend dispatch ownership (warehouse migrati
       ['DELETE', '/api/products/product-001'],
       ['GET', '/api/inventory'],
       ['GET', '/api/inventory-checks'],
-      ['GET', '/api/roles'],
       ['POST', '/api/auth/login'],
       ['GET', '/api/health'],
       ['GET', '/api/dashboard'],
@@ -1412,5 +1411,150 @@ describe('V2 Stage 3 / Wave 3C — backend dispatch ownership (supplier migratio
     assert.doesNotMatch(appSource, /\bwarehouseRouteTable\b/);
     assert.doesNotMatch(appSource, /\bsupplierRouteTable\b/);
     assert.match(appSource, /\bownedRouteTable\b/);
+  });
+});
+
+describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const rolesModuleSource = readFileSync(resolve('server/modules/roles.js'), 'utf8');
+
+  test('app.js imports roles from server/modules/roles.js and has no app-local role handlers/helpers', () => {
+    // Combined: imports, no duplicate function declarations,
+    // no app-local helper declarations, no PERMISSIONS import
+    // from db.js. The PERMISSIONS catalogue is now exclusively
+    // owned by server/modules/roles.js.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/roles\.js['"]/,
+      'Wave 3D: server/app.js MUST import the role handlers from server/modules/roles.js',
+    );
+    assert.match(appSource, /\blistRoles\b/);
+    assert.match(appSource, /\bcreateRole\b/);
+    assert.match(appSource, /\bupdateRole\b/);
+    assert.doesNotMatch(appSource, /^\s*function\s+listRoles\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createRole\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateRole\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+rolePermissions\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+saveRolePermissions\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+validPermissions\b/m);
+    assert.doesNotMatch(
+      appSource,
+      /from\s+['"]\.\/db\.js['"]\s*\)\s*;?[\s\S]{0,200}\bPERMISSIONS\b/m,
+      'Wave 3D: app.js db.js import must no longer reference PERMISSIONS',
+    );
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching /api/roles', () => {
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/roles['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3D: legacy exact-match GET branch for /api/roles must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/roles['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3D: legacy exact-match POST branch for /api/roles must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/roles\\\/[^/]+\$\/\)/,
+      'Wave 3D: legacy roleMatch-style dispatch for /api/roles/:id must be removed',
+    );
+  });
+
+  test('three role routes register with the canonical owner (GET, POST, PATCH) and no DELETE descriptor exists', () => {
+    // The canonical Roles route family has GET / POST / PATCH only.
+    // The brief §0 explicitly states: there is no DELETE /api/roles
+    // route and the migration MUST NOT invent one.
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    const roleEntries = table.list().filter((item) => item.owner === 'server/modules/roles.js');
+    assert.equal(roleEntries.length, 3, 'three Role descriptors must exist with the canonical owner');
+    assert.deepEqual(roleEntries.map((item) => item.method).sort(), ['GET', 'PATCH', 'POST']);
+    assert.equal(roleEntries.some((item) => item.method === 'DELETE'), false, 'no DELETE /api/roles descriptor must exist');
+    // Live dispatch parity.
+    assert.equal(table.match('GET', '/api/roles').owner, 'server/modules/roles.js');
+    assert.equal(table.match('POST', '/api/roles').owner, 'server/modules/roles.js');
+    assert.equal(table.match('PATCH', '/api/roles/role-admin').owner, 'server/modules/roles.js');
+    assert.deepEqual(table.match('PATCH', '/api/roles/role-admin').params, ['role-admin']);
+    assert.equal(table.match('DELETE', '/api/roles/role-admin'), null, 'DELETE /api/roles must NOT be dispatched by the route-table');
+  });
+
+  test('users routes remain legacy after Roles migrate (explicit non-migration proof)', () => {
+    // Wave 3D scope explicitly excludes Users. The legacy handleApi
+    // chain MUST continue to dispatch /api/users (GET, POST, PATCH)
+    // and /api/users/lookup (GET) until Users migration is approved
+    // in a later wave. Authentication / login / logout / session /
+    // self-deactivation guards are not part of Wave 3D scope.
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+
+    assert.equal(table.match('GET', '/api/users'), null);
+    assert.equal(table.match('POST', '/api/users'), null);
+    assert.equal(table.match('PATCH', '/api/users/user-001'), null);
+    assert.equal(table.match('GET', '/api/users/lookup'), null);
+
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'User routes remain on legacy handleApi and MUST NOT be migrated in Wave 3D',
+    );
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      '/api/users/lookup remains on legacy handleApi after Roles migrate',
+    );
+    // App-local user handlers must still exist after Wave 3D.
+    assert.match(appSource, /^\s*function\s+listUsers\b/m);
+    assert.match(appSource, /^\s*async\s+function\s+createUser\b/m);
+    assert.match(appSource, /^\s*async\s+function\s+updateUser\b/m);
+  });
+
+  test('warehouse + customer + supplier + role descriptors coexist (15 total) under one ownedRouteTable dispatch lookup', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+
+    assert.equal(table.size(), 15, 'Wave 3D: 4+4+4+3 = 15 owned descriptors across the four migrated families');
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'app.js must still construct the owned route table exactly once after Wave 3D');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'app.js must keep exactly one ownedRouteTable.match() dispatch call after Wave 3D');
+    assert.match(appSource, /\bownedRouteTable\b/);
+  });
+
+  test('roles.js is the only owner of the role responsibility (canonical exports and internal helpers)', () => {
+    assert.match(rolesModuleSource, /export function listRoles\b/);
+    assert.match(rolesModuleSource, /export (?:async )?function createRole\b/);
+    assert.match(rolesModuleSource, /export (?:async )?function updateRole\b/);
+    // The role-local helpers must NOT be exported (they are
+    // internal to the canonical Roles owner).
+    assert.doesNotMatch(rolesModuleSource, /export\s+function\s+rolePermissions\b/);
+    assert.doesNotMatch(rolesModuleSource, /export\s+function\s+saveRolePermissions\b/);
+    assert.doesNotMatch(rolesModuleSource, /export\s+function\s+validPermissions\b/);
+    // Roles module owns PERMISSIONS import.
+    assert.match(rolesModuleSource, /PERMISSIONS/);
   });
 });

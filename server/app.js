@@ -1,5 +1,5 @@
 ﻿import { createHash, randomBytes } from 'node:crypto';
-import { id, hashPassword, PERMISSIONS, transaction, verifyPassword } from './db.js';
+import { id, hashPassword, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory } from './lib/stock.js';
@@ -159,17 +159,24 @@ import {
   listSuppliers,
   updateSupplier,
 } from './modules/suppliers.js';
+import {
+  createRole,
+  listRoles,
+  updateRole,
+} from './modules/roles.js';
 
-// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C — Warehouse + Customer +
-// Supplier route-table registration. All three live production route
-// families are migrated using the Wave 1 route-table dispatch
-// infrastructure. Each descriptor carries exactly method / path /
-// handler / owner — no permissions, transaction policy, audit policy,
-// or other runtime authority is duplicated. Thin per-route adapters
-// below translate the route-table dispatch context (db, req, res,
-// actor, url, params) into each business handler's existing
-// signature. The neutral name `ownedRouteTable` reflects that the
-// table holds multiple domain families.
+// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — Warehouse +
+// Customer + Supplier + Role route-table registration. All four
+// live production route families are migrated using the Wave 1
+// route-table dispatch infrastructure. Each descriptor carries
+// exactly method / path / handler / owner — no permissions,
+// transaction policy, audit policy, or other runtime authority is
+// duplicated. Thin per-route adapters below translate the
+// route-table dispatch context (db, req, res, actor, url, params)
+// into each business handler's existing signature. The neutral name
+// `ownedRouteTable` reflects that the table holds multiple domain
+// families. Roles have exactly GET / POST / PATCH — there is no
+// canonical DELETE /api/roles route in production.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -242,6 +249,24 @@ ownedRouteTable.register({
   path: /^\/api\/suppliers\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => deleteSupplier(db, res, actor, params[0]),
   owner: 'server/modules/suppliers.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/roles',
+  handler: ({ db, res, actor }) => listRoles(db, res, actor),
+  owner: 'server/modules/roles.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/roles',
+  handler: ({ db, req, res, actor }) => createRole(db, req, res, actor),
+  owner: 'server/modules/roles.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/roles\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateRole(db, req, res, actor, params[0]),
+  owner: 'server/modules/roles.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -335,11 +360,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/lifecycle/records' && req.method === 'GET') return listLifecycleRecordsHandler(db, res, actor, url);
   if (pathname === '/api/lifecycle/cleanup-events' && req.method === 'GET') return listCleanupEventsHandler(db, res, actor, url);
 
-  if (pathname === '/api/roles' && req.method === 'GET') return listRoles(db, res, actor);
-  if (pathname === '/api/roles' && req.method === 'POST') return createRole(db, req, res, actor);
-  const roleMatch = pathname.match(/^\/api\/roles\/([^/]+)$/);
-  if (roleMatch && req.method === 'PATCH') return updateRole(db, req, res, actor, roleMatch[1]);
-
   if (pathname === '/api/users/lookup' && req.method === 'GET') return listProjectManagerCandidates(db, res, actor);
   if (pathname === '/api/users' && req.method === 'GET') return listUsers(db, res, actor);
   if (pathname === '/api/users' && req.method === 'POST') return createUser(db, req, res, actor);
@@ -412,12 +432,13 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C — Owned-route lookup.
+  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D — Owned-route lookup.
   // Runs AFTER authentication is resolved and BEFORE the legacy
   // handleApi chain continues. Unmatched routes fall through to
   // the existing legacy chain unchanged. Currently owns the four
-  // warehouse routes, the four customer routes, and the four
-  // supplier routes.
+  // warehouse routes, the four customer routes, the four supplier
+  // routes, and the three role routes (GET / POST / PATCH; there
+  // is no canonical DELETE /api/roles route).
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -1084,48 +1105,6 @@ function dashboard(db, res, actor) {
   return send(res, 200, data);
 }
 
-function listRoles(db, res, actor) {
-  allowAny(actor, ['USERS_MANAGE', 'ROLES_MANAGE']);
-  const roles = db.prepare(`
-    SELECT r.*, count(DISTINCT u.id) user_count FROM roles r LEFT JOIN users u ON u.role_id=r.id
-    GROUP BY r.id ORDER BY r.system_role DESC, r.name
-  `).all().map((role) => ({ ...role, permissions: rolePermissions(db, role.id) }));
-  return send(res, 200, { roles, permissions: PERMISSIONS.map(([code, name]) => ({ code, name })) });
-}
-
-async function createRole(db, req, res, actor) {
-  allow(actor, 'ROLES_MANAGE');
-  const body = await readJson(req);
-  const role = {
-    id: id(), code: requiredCode(body.code, '角色编码'), name: requiredText(body.name, '角色名称', 40),
-    description: optionalText(body.description, 200), permissions: validPermissions(body.permissions)
-  };
-  transaction(db, () => {
-    db.prepare('INSERT INTO roles(id,code,name,description,system_role,created_at) VALUES(?,?,?,?,0,?)')
-      .run(role.id, role.code, role.name, role.description, new Date().toISOString());
-    saveRolePermissions(db, role.id, role.permissions);
-    audit(db, actor.id, 'CREATE', 'ROLE', role.id, role.name);
-  });
-  return send(res, 201, { id: role.id });
-}
-
-async function updateRole(db, req, res, actor, roleId) {
-  allow(actor, 'ROLES_MANAGE');
-  const current = db.prepare('SELECT * FROM roles WHERE id=?').get(roleId);
-  if (!current) throw new HttpError(404, '角色不存在');
-  const body = await readJson(req);
-  const name = requiredText(body.name ?? current.name, '角色名称', 40);
-  const description = optionalText(body.description ?? current.description, 200);
-  const permissions = body.permissions ? validPermissions(body.permissions) : rolePermissions(db, roleId);
-  if (current.code === 'ADMIN' && !PERMISSIONS.every(([code]) => permissions.includes(code))) throw new HttpError(400, '系统管理员必须保留全部权限');
-  transaction(db, () => {
-    db.prepare('UPDATE roles SET name=?,description=? WHERE id=?').run(name, description, roleId);
-    saveRolePermissions(db, roleId, permissions);
-    audit(db, actor.id, 'UPDATE', 'ROLE', roleId, name);
-  });
-  return send(res, 200, { ok: true });
-}
-
 function listUsers(db, res, actor) {
   allow(actor, 'USERS_MANAGE');
   const users = db.prepare(`
@@ -1468,24 +1447,6 @@ function productInput(body) {
   if (!Number.isFinite(stockQuantity) || stockQuantity < 0) throw new HttpError(400, '库存数量不能小于 0');
   return { code: requiredCode(body.code, '货品编码'), name: requiredText(body.name, '货品名称', 100),
     unit: requiredText(body.unit, '单位', 10), priceCents, stockQuantity };
-}
-
-function rolePermissions(db, roleId) {
-  return db.prepare('SELECT permission_code code FROM role_permissions WHERE role_id=? ORDER BY permission_code').all(roleId).map((row) => row.code);
-}
-
-function saveRolePermissions(db, roleId, permissions) {
-  db.prepare('DELETE FROM role_permissions WHERE role_id=?').run(roleId);
-  const insert = db.prepare('INSERT INTO role_permissions(role_id, permission_code) VALUES(?,?)');
-  for (const permission of permissions) insert.run(roleId, permission);
-}
-
-function validPermissions(value) {
-  if (!Array.isArray(value)) throw new HttpError(400, '权限列表格式不正确');
-  const valid = new Set(PERMISSIONS.map(([code]) => code));
-  const result = [...new Set(value.map(String))];
-  if (result.some((permission) => !valid.has(permission))) throw new HttpError(400, '包含未知权限');
-  return result;
 }
 
 function ensureRole(db, roleId) {
