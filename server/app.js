@@ -11,17 +11,20 @@ import {
   updateContact, updateFollowup, updateProject, updateProjectTask, updateSalesActivity,
 } from './modules/business.js';
 import {
+  listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
+} from './modules/accounting-config.js';
+import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
   createDepartment, createExpenseClaim, createLaborRecord,
   createLeaveRequest, createMrpPlan, createPeriodClosure,
-  createRoutingOperation, createSupplierEvaluation, createVoucherWord, createWorkCenter,
+  createRoutingOperation, createSupplierEvaluation, createWorkCenter,
   generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement,
   getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
-  listBankStatements, listCurrencies, listDepartments, listExpenseClaims,
+  listBankStatements, listDepartments, listExpenseClaims,
   listLaborRecords, listLeaveRequests, listMrpPlans,
   listPeriodClosures, listRoutingOperations,
-  closePeriod, getClosureChecklist, listSupplierEvaluations, listVoucherTemplates, listVoucherWords, listWorkCenters, unclosePeriod,
+  closePeriod, getClosureChecklist, listSupplierEvaluations, listWorkCenters, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
 import {
@@ -214,6 +217,8 @@ import {
 //   The two lookup categories share no permission model and no
 //   inactiveness contract; they are deliberately not merged.
 //
+// V2 owned-route registrations — Waves 3A–3F / 4A–4D / 5A
+//
 // Intentionally non-migrated special routes (remain on legacy
 // handleApi branches below):
 //   - /api/users/lookup         → listProjectManagerCandidates in app.js
@@ -229,8 +234,8 @@ import {
 //     /api/returns/*,
 //     /api/settlement/*,
 //     /api/lifecycle/*
-//                                remain on legacy handleApi and are
-//                                explicitly out of scope for V2 Wave 4C.
+//                                remain on legacy handleApi at the
+//                                current V2 boundary.
 //
 // Each descriptor carries exactly method / path / handler / owner —
 // no permissions, transaction policy, audit policy, or other runtime
@@ -240,11 +245,23 @@ import {
 // `ownedRouteTable` reflects that the table holds multiple domain
 // families.
 //
+// Wave 5A — `server/modules/accounting-config.js` owns the four
+// accounting-configuration dictionaries routes (GET /api/currencies,
+// GET /api/voucher-words, POST /api/voucher-words, GET
+// /api/voucher-templates). The four handler implementations were
+// extracted verbatim from `server/modules/extended.js`. Departments
+// (listDepartments / createDepartment), aux projects
+// (listAuxProjects / createAuxProject), and period-close
+// (listPeriodClosures / createPeriodClosure / closePeriod /
+// unclosePeriod / getClosureChecklist) remain on legacy handleApi
+// at the current V2 boundary.
+//
 // Wave 3A warehouses + Wave 3B customers + Wave 3C suppliers +
 // Wave 3D roles + Wave 3E user-management + Wave 3F product
 // master-data + Wave 4A decision-reports + Wave 4B product-routings
 // + Wave 4C read-only lookups + Wave 4D sales+purchase discount
-// draft lifecycle route-table registration.
+// draft lifecycle + Wave 5A accounting-configuration dictionaries
+// route-table registration.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -597,6 +614,37 @@ ownedRouteTable.register({
   owner: 'server/modules/discounts.js',
 });
 
+// Wave 5A — Accounting Configuration Dictionaries (currencies /
+// voucher words / voucher templates). Coherent low-risk responsibility
+// extracted from server/modules/extended.js. Period closures,
+// financial reports, accounting vouchers, and the remaining
+// mixed-owner extended.js responsibilities remain on the legacy
+// handleApi chain.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/currencies',
+  handler: ({ db, res, actor }) => listCurrencies(db, res, actor),
+  owner: 'server/modules/accounting-config.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/voucher-words',
+  handler: ({ db, res, actor }) => listVoucherWords(db, res, actor),
+  owner: 'server/modules/accounting-config.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/voucher-words',
+  handler: ({ db, req, res, actor }) => createVoucherWord(db, req, res, actor),
+  owner: 'server/modules/accounting-config.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/voucher-templates',
+  handler: ({ db, res, actor, url }) => listVoucherTemplates(db, res, actor, url),
+  owner: 'server/modules/accounting-config.js',
+});
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
@@ -751,24 +799,25 @@ async function handleApi(db, req, res, url) {
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
-  // Wave 3F + Wave 4A + Wave 4B + Wave 4C — Owned-route lookup. Runs
-  // AFTER authentication is resolved and BEFORE the legacy handleApi
-  // chain continues. Unmatched routes fall through to the existing
-  // legacy chain unchanged. Currently owns the four warehouse routes,
-  // the four customer routes, the four supplier routes, the three role
+  // Wave 3F + Wave 4A + Wave 4B + Wave 4C + Wave 5A — Owned-route
+  // lookup. Runs AFTER authentication is resolved and BEFORE the
+  // legacy handleApi chain continues. Unmatched routes fall through
+  // to the existing legacy chain unchanged. Currently owns the four
+  // warehouse routes, the four customer routes, the four supplier
+  // routes, the three role routes (GET / POST / PATCH; there is no
+  // canonical DELETE /api/roles route), the three user-management
   // routes (GET / POST / PATCH; there is no canonical DELETE
-  // /api/roles route), the three user-management routes (GET / POST
-  // / PATCH; there is no canonical DELETE /api/users route), the
-  // four Product master-data routes (GET / POST / PATCH / DELETE;
-  // DELETE delegates to deleteMasterRecord), the eleven Decision
-  // Reports routes (five core summaries / outstanding, one regex
-  // fulfillment-contributions, and five CSV exports; canonical owner
-  // server/modules/decision-reports.js), the nine Product Routings
-  // routes (collection GET / POST, regex activate|deactivate POST,
-  // regex operations POST / PATCH / DELETE, detail GET / PATCH / DELETE;
-  // canonical owner server/modules/product-routing.js; detail DELETE
-  // delegates to deleteMasterRecord via the thin deleteProductRouting
-  // wrapper), and the five Lookups routes (GET /api/lookup/suppliers,
+  // /api/users route), the four Product master-data routes (GET /
+  // POST / PATCH / DELETE; DELETE delegates to deleteMasterRecord),
+  // the eleven Decision Reports routes (five core summaries /
+  // outstanding, one regex fulfillment-contributions, and five CSV
+  // exports; canonical owner server/modules/decision-reports.js),
+  // the nine Product Routings routes (collection GET / POST, regex
+  // activate|deactivate POST, regex operations POST / PATCH /
+  // DELETE, detail GET / PATCH / DELETE; canonical owner
+  // server/modules/product-routing.js; detail DELETE delegates to
+  // deleteMasterRecord via the thin deleteProductRouting wrapper),
+  // the five Lookups routes (GET /api/lookup/suppliers,
   // GET /api/lookup/customers, GET /api/lookups/business-entities,
   // GET /api/lookup/sales-orders-source,
   // GET /api/lookup/purchase-orders-source; canonical owner
@@ -776,18 +825,25 @@ async function handleApi(db, req, res, url) {
   // lookups share their existing logistics/CRM permission gates and
   // active=1-only semantics, while the report-filter
   // business-entities lookup is bounded by REPORT_VIEW + per-usage
-  // domain intersection). /api/users/lookup and PATCH
-  // /api/products/:id/tracking-policy remain on their respective
-  // legacy handleApi branches above and are NOT in the route-table.
+  // domain intersection), the ten discount draft lifecycle routes
+  // (canonical owner server/modules/discounts.js), and the four
+  // Accounting Configuration routes (GET /api/currencies, GET
+  // /api/voucher-words, POST /api/voucher-words, GET
+  // /api/voucher-templates; canonical owner
+  // server/modules/accounting-config.js). /api/users/lookup and
+  // PATCH /api/products/:id/tracking-policy remain on their
+  // respective legacy handleApi branches above and are NOT in the
+  // route-table.
   //
   // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F +
-  // Wave 4A + Wave 4B + Wave 4C + Wave 4D — Owned-route lookup:
-  // 47 baseline (4 warehouses + 4 customers + 4 suppliers +
+  // Wave 4A + Wave 4B + Wave 4C + Wave 4D + Wave 5A — Owned-route
+  // lookup: 57 baseline (4 warehouses + 4 customers + 4 suppliers +
   // 3 roles + 3 users + 4 products + 11 decision-reports +
-  // 9 product-routings + 5 read-only lookups) + 10 discount draft
-  // lifecycle routes (5 sales: list / create / detail GET / detail
-  // PATCH / detail cancel POST; 5 purchase: same). Confirm and
-  // reverse remain on legacy handleApi branches below because they
+  // 9 product-routings + 5 read-only lookups + 10 discount draft
+  // lifecycle) + 4 accounting-configuration routes (1 currency GET +
+  // 1 voucher-words GET + 1 voucher-words POST + 1 voucher-templates
+  // GET) = 61 owned descriptors. Confirm and reverse remain on
+  // legacy handleApi branches below because they
   // touch financial_credit_adjustments, accounting voucher
   // generation, and period-close gating.
   {
@@ -839,10 +895,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/departments' && req.method === 'POST') return createDepartment(db, req, res, actor);
   if (pathname === '/api/aux-projects' && req.method === 'GET') return listAuxProjects(db, res, actor, url);
   if (pathname === '/api/aux-projects' && req.method === 'POST') return createAuxProject(db, req, res, actor);
-  if (pathname === '/api/currencies' && req.method === 'GET') return listCurrencies(db, res, actor);
-  if (pathname === '/api/voucher-words' && req.method === 'GET') return listVoucherWords(db, res, actor);
-  if (pathname === '/api/voucher-words' && req.method === 'POST') return createVoucherWord(db, req, res, actor);
-  if (pathname === '/api/voucher-templates' && req.method === 'GET') return listVoucherTemplates(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'GET') return listPeriodClosures(db, res, actor, url);
   if (pathname === '/api/period-closures' && req.method === 'POST') return createPeriodClosure(db, req, res, actor);
   // Period Closure Operations

@@ -288,6 +288,21 @@ const FULL = [
   'server/uat-r6-production-order-completion.test.js',
   'server/uat-r6-oqc-contextual-navigation.test.js',
 
+  // ----- V2 Stage 3 / Wave 5A — accounting configuration dictionaries ownership -----
+  // Focused behavior coverage for the migrated accounting
+  // configuration dictionaries route family (currencies / voucher
+  // words / voucher templates): GET /api/currencies (admin gate +
+  // is_base DESC ordering + baseline shape), GET /api/voucher-words
+  // (admin gate + voucherWords array + prefix ordering), POST
+  // /api/voucher-words (admin gate + 201 + id returned + current_no
+  // persisted as 0 + subsequent GET exposes new word), GET
+  // /api/voucher-templates (admin gate + category query filter +
+  // entries_json parsed as entries + creator projection preserved),
+  // and permission preservation (warehouse role 403 on representative
+  // routes). Complements — does not duplicate — the minimal GET-only
+  // coverage already present in teacher-acceptance-matrix.test.js.
+  'server/v2-wave5a-accounting-config.test.js',
+
   // ----- V1.6 mobile / sales / purchase / MRP / inventory contracts -----
   'server/v16-p1-mobile-enterprise-foundation.test.js',
   'server/v16-p2-connection-recovery.test.js',
