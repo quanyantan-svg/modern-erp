@@ -3164,35 +3164,6 @@ async function createCashJournal(db, req, res, actor) {
   return send(res, 201, { id: journalId, journalNo });
 }
 
-function getCashJournal(db, res, actor, journalId) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const journal = db.prepare(`SELECT c.*, u.display_name operatorName, ba.bank_name, ba.account_no bankAccountNo
-    FROM cash_journals c JOIN users u ON u.id = c.operator_id
-    LEFT JOIN bank_accounts ba ON ba.id = c.bank_id WHERE c.id = ?`).get(journalId);
-  
-  if (!journal) throw new HttpError(404, '记录不存在');
-  return send(res, 200, { journal });
-}
-
-function deleteCashJournal(db, req, res, actor, journalId) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const journal = db.prepare('SELECT * FROM cash_journals WHERE id = ?').get(journalId);
-  if (!journal) throw new HttpError(404, '记录不存在');
-  
-  const now = new Date().toISOString();
-  transaction(db, () => {
-    // 还原银行账户余额
-    if (journal.bank_id) {
-      const change = journal.direction === 'IN' ? -journal.amount_cents : journal.amount_cents;
-      db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, journal.bank_id);
-    }
-    db.prepare('DELETE FROM cash_journals WHERE id = ?').run(journalId);
-    audit(db, actor.id, 'DELETE', 'CASH_JOURNAL', journalId, '删除出纳记录 ' + journal.journal_no);
-  });
-  
-  return send(res, 200, { success: true });
-}
-
 // ============ 银行账户 ============
 
 function listBankAccounts(db, res, actor) {
@@ -3217,17 +3188,6 @@ async function createBankAccount(db, req, res, actor) {
     .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', initial_balance_cents, now, now);
   
   return send(res, 201, { id: accountId });
-}
-
-function getBankAccount(db, res, actor, accountId) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const account = db.prepare('SELECT * FROM bank_accounts WHERE id = ?').get(accountId);
-  if (!account) throw new HttpError(404, '账户不存在');
-  
-  // 获取最近10笔交易
-  const transactions = db.prepare(`SELECT * FROM cash_journals WHERE bank_id = ? ORDER BY journal_date DESC, created_at DESC LIMIT 10`).all(accountId);
-  
-  return send(res, 200, { bankAccount: account, transactions });
 }
 
 async function updateBankAccount(db, req, res, actor, accountId) {
@@ -3287,16 +3247,6 @@ async function createBill(db, req, res, actor) {
     .run(billId, effectiveBillNo, bill_type || 'DRAFT', direction || 'RECEIVABLE', face_amount_cents, bank_id || null, drawer_name || '', drawer_bank || '', payee_name || '', payee_name || '', holder_id || actor.id, issue_date, due_date, remark || '', now, now);
   
   return send(res, 201, { id: billId });
-}
-
-function getBill(db, res, actor, billId) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const bill = db.prepare(`SELECT b.*, ba.bank_name, u.display_name holderName
-    FROM bills b LEFT JOIN bank_accounts ba ON ba.id = b.bank_id
-    LEFT JOIN users u ON u.id = b.holder_id WHERE b.id = ?`).get(billId);
-  
-  if (!bill) throw new HttpError(404, '票据不存在');
-  return send(res, 200, { bill });
 }
 
 async function updateBill(db, req, res, actor, billId) {
@@ -3373,22 +3323,6 @@ async function createFixedAsset(db, req, res, actor) {
   return send(res, 201, { id: assetId });
 }
 
-function getFixedAsset(db, res, actor, assetId) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const asset = db.prepare(`SELECT fa.asset_code, fa.asset_name, fa.asset_type AS category, fa.purchase_date,
-    fa.purchase_amount_cents, fa.status, fa.net_value_cents, fa.accumulated_depreciation_cents,
-    fa.depreciation_method, fa.service_years, fa.residual_value_cents,
-    u.display_name creatorName,
-    COALESCE((SELECT SUM(depreciation_amount_cents) FROM asset_depreciations WHERE asset_id = fa.id), 0) AS totalDepreciatedCents
-    FROM fixed_assets fa JOIN users u ON u.id = fa.creator_id WHERE fa.id = ?`).get(assetId);
-  if (!asset) throw new HttpError(404, '资产不存在');
-  
-  // 获取折旧记录
-  const depreciations = db.prepare('SELECT * FROM asset_depreciations WHERE asset_id = ? ORDER BY depreciation_date DESC').all(assetId);
-  
-  return send(res, 200, { asset, depreciations });
-}
-
 async function updateFixedAsset(db, req, res, actor, assetId) {
   allow(actor, 'FIXED_ASSETS_MANAGE');
   const asset = db.prepare('SELECT * FROM fixed_assets WHERE id = ?').get(assetId);
@@ -3435,34 +3369,6 @@ async function calculateDepreciation(db, req, res, actor) {
   
   return send(res, 200, { id: depId });
 }
-
-function listAssetDepreciations(db, res, actor, url) {
-  allow(actor, 'ACCOUNTING_VIEW');
-  const assetId = url.searchParams.get('asset_id');
-  const startDate = url.searchParams.get('start_date');
-  const endDate = url.searchParams.get('end_date');
-  
-  let where = [];
-  let params = [];
-  
-  if (assetId) { where.push('ad.asset_id = ?'); params.push(assetId); }
-  if (startDate) { where.push('ad.depreciation_date >= ?'); params.push(startDate); }
-  if (endDate) { where.push('ad.depreciation_date <= ?'); params.push(endDate); }
-  
-  const sql = `SELECT ad.*, fa.asset_code, fa.asset_name, u.display_name creatorName
-    FROM asset_depreciations ad
-    JOIN fixed_assets fa ON fa.id = ad.asset_id
-    JOIN users u ON u.id = ad.creator_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY ad.depreciation_date DESC LIMIT 100`;
-  
-  const depreciations = db.prepare(sql).all(...params);
-  
-  return send(res, 200, { depreciations });
-}
-
-
-
 
 // ============ 成本管理 ============
 
@@ -4872,224 +4778,6 @@ const RECEIPT_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '�
 const DELIVERY_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RETURN_STATUS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 
-// ============ Cash Journals ============
-
-async function legacyListCashJournals(db, res, actor, url) {
-  allowAny(actor, ['CASH_JOURNALS_VIEW', 'CASH_JOURNALS_MANAGE']);
-  const search = url.searchParams.get('search') || '';
-  const startDate = url.searchParams.get('startDate') || '';
-  const endDate = url.searchParams.get('endDate') || '';
-  const accountType = url.searchParams.get('accountType') || '';
-  
-  let sql = `SELECT cj.*, u.name operatorName, ba.account_name bankName
-    FROM cash_journals cj
-    LEFT JOIN users u ON u.id=cj.operator_id
-    LEFT JOIN bank_accounts ba ON ba.id=cj.bank_id
-    WHERE 1=1`;
-  const params = [];
-  
-  if (search) {
-    sql += ` AND (cj.journal_no LIKE ? OR cj.summary LIKE ? OR cj.counterparty_name LIKE ?)`;
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
-  }
-  if (startDate) { sql += ` AND cj.journal_date >= ?`; params.push(startDate); }
-  if (endDate) { sql += ` AND cj.journal_date <= ?`; params.push(endDate); }
-  if (accountType) { sql += ` AND cj.account_type = ?`; params.push(accountType); }
-  
-  sql += ` ORDER BY cj.journal_date DESC, cj.created_at DESC`;
-  
-  const journals = db.prepare(sql).all(...params);
-  return send(res, 200, { journals });
-}
-
-async function legacyCreateCashJournal(db, req, res, actor) {
-  allow(actor, 'CASH_JOURNALS_MANAGE');
-  const body = await readJson(req);
-  const { journal_type, account_type, bank_account, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, journal_date, remark } = body;
-  
-  const now = new Date().toISOString();
-  const journalId = id();
-  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM cash_journals WHERE journal_date LIKE ?').get(journal_date.slice(0,7) + '%').cnt + 1).padStart(4, '0');
-  const journalNo = `CJ-${journal_date.replace(/-/g,'')}-${seq}`;
-  
-  db.prepare(`INSERT INTO cash_journals(id,journal_no,journal_type,account_type,bank_id,amount_cents,direction,counterparty_type,counterparty_id,counterparty_name,subject_id,summary,voucher_id,operator_id,journal_date,remark,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    journalId, journalNo, journal_type, account_type, bank_account || null, amount_cents, direction,
-    counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null,
-    summary, null, actor.id, journal_date, remark || '', now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${money(amount_cents)} ${summary}`);
-  return send(res, 200, { id: journalId, journal_no: journalNo });
-}
-
-// ============ Bank Accounts ============
-
-async function legacyListBankAccounts(db, res, actor) {
-  allowAny(actor, ['BANK_ACCOUNTS_VIEW', 'BANK_ACCOUNTS_MANAGE']);
-  const accounts = db.prepare('SELECT * FROM bank_accounts ORDER BY created_at DESC').all();
-  return send(res, 200, { accounts });
-}
-
-async function legacyCreateBankAccount(db, req, res, actor) {
-  allow(actor, 'BANK_ACCOUNTS_MANAGE');
-  const body = await readJson(req);
-  const { bank_name, account_no, account_name, initial_balance_cents, remark } = body;
-  const now = new Date().toISOString();
-  const accountId = id();
-  
-  db.prepare('INSERT INTO bank_accounts(id,bank_name,account_no,account_name,balance_cents,initial_balance_cents,active,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?)').run(
-    accountId, bank_name, account_no, account_name, initial_balance_cents || 0, initial_balance_cents || 0, remark || '', actor.id, now, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'BANK_ACCOUNT', accountId, `新建银行账户 ${account_name}`);
-  return send(res, 200, { id: accountId });
-}
-
-async function legacyUpdateBankAccount(db, req, res, actor, accountId) {
-  allow(actor, 'BANK_ACCOUNTS_MANAGE');
-  const body = await readJson(req);
-  const { bank_name, account_no, account_name, active, remark } = body;
-  const now = new Date().toISOString();
-  
-  db.prepare('UPDATE bank_accounts SET bank_name=?,account_no=?,account_name=?,active=?,remark=?,updated_at=? WHERE id=?').run(
-    bank_name, account_no, account_name, active ? 1 : 0, remark || '', now, accountId
-  );
-  
-  audit(db, actor.id, 'UPDATE', 'BANK_ACCOUNT', accountId, `更新银行账户 ${account_name}`);
-  return send(res, 200, { ok: true });
-}
-
-// ============ Bills (Notes Payable/Receivable) ============
-
-async function legacyListBills(db, res, actor, url) {
-  allowAny(actor, ['BILLS_VIEW', 'BILLS_MANAGE']);
-  const billType = url.searchParams.get('billType') || '';
-  const status = url.searchParams.get('status') || '';
-  
-  let sql = `SELECT b.*, 
-    CASE WHEN b.counterparty_type = 'CUSTOMER' THEN c.name ELSE s.name END counterpartyName,
-    u.name creatorName
-    FROM bills b
-    LEFT JOIN customers c ON c.id=b.counterparty_id AND b.counterparty_type='CUSTOMER'
-    LEFT JOIN suppliers s ON s.id=b.counterparty_id AND b.counterparty_type='SUPPLIER'
-    LEFT JOIN users u ON u.id=b.creator_id
-    WHERE 1=1`;
-  const params = [];
-  
-  if (billType) { sql += ` AND b.bill_type = ?`; params.push(billType); }
-  if (status) { sql += ` AND b.status = ?`; params.push(status); }
-  
-  sql += ` ORDER BY b.issue_date DESC, b.created_at DESC`;
-  
-  const bills = db.prepare(sql).all(...params);
-  return send(res, 200, { bills });
-}
-
-async function legacyCreateBill(db, req, res, actor) {
-  allow(actor, 'BILLS_MANAGE');
-  const body = await readJson(req);
-  const { bill_type, bill_no, counterparty_type, counterparty_id, face_amount_cents, issue_date, due_date, status, remark } = body;
-  
-  const now = new Date().toISOString();
-  const billId = id();
-  const seq = String(db.prepare('SELECT COUNT(*) cnt FROM bills WHERE bill_type=? AND issue_date LIKE ?').get(bill_type, issue_date.slice(0,7) + '%').cnt + 1).padStart(4, '0');
-  const billNo = bill_no || `${bill_type === 'RECEivable' ? 'AR' : 'AP'}-${issue_date.replace(/-/g,'')}-${seq}`;
-  
-  db.prepare('INSERT INTO bills(id,bill_type,bill_no,counterparty_type,counterparty_id,face_amount_cents,issue_date,due_date,status,remark,creator_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
-    billId, bill_type, billNo, counterparty_type, counterparty_id, face_amount_cents, issue_date, due_date, status || 'PENDING', remark || '', actor.id, now, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'BILL', billId, `新建${bill_type === 'RECEivable' ? '应收' : '应付'}票据 ${billNo}`);
-  return send(res, 200, { id: billId, bill_no: billNo });
-}
-
-async function legacyUpdateBill(db, req, res, actor, billId) {
-  allow(actor, 'BILLS_MANAGE');
-  const body = await readJson(req);
-  const { bill_no, counterparty_id, face_amount_cents, issue_date, due_date, status, remark } = body;
-  const now = new Date().toISOString();
-  
-  db.prepare('UPDATE bills SET bill_no=?,counterparty_id=?,face_amount_cents=?,issue_date=?,due_date=?,status=?,remark=?,updated_at=? WHERE id=?').run(
-    bill_no, counterparty_id, face_amount_cents, issue_date, due_date, status, remark || '', now, billId
-  );
-  
-  audit(db, actor.id, 'UPDATE', 'BILL', billId, `更新票据 ${bill_no}`);
-  return send(res, 200, { ok: true });
-}
-
-// ============ Fixed Assets ============
-
-async function legacyListFixedAssets(db, res, actor) {
-  allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
-  const assets = db.prepare(`SELECT fa.*, u.name creatorName,
-    (SELECT SUM(depreciation_cents) FROM asset_depreciations WHERE asset_id=fa.id) totalDepreciatedCents
-    FROM fixed_assets fa
-    LEFT JOIN users u ON u.id=fa.creator_id
-    ORDER BY fa.purchase_date DESC`).all();
-  return send(res, 200, { assets });
-}
-
-async function legacyCreateFixedAsset(db, req, res, actor) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const body = await readJson(req);
-  const { asset_code, asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents, depreciation_method, remark } = body;
-  
-  const now = new Date().toISOString();
-  const assetId = id();
-  const monthlyDepreciation = depreciation_method === 'NONE' ? 0 : 
-    Math.floor((purchase_amount_cents - (salvage_value_cents || 0)) / useful_life_months);
-  
-  db.prepare(`INSERT INTO fixed_assets(id,asset_code,asset_name,category,purchase_date,purchase_amount_cents,useful_life_months,salvage_value_cents,depreciation_method,monthly_depreciation_cents,net_value_cents,status,remark,creator_id,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-    assetId, asset_code, asset_name, category, purchase_date, purchase_amount_cents,
-    useful_life_months, salvage_value_cents || 0, depreciation_method, monthlyDepreciation,
-    purchase_amount_cents, 'IN_USE', remark || '', actor.id, now, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'FIXED_ASSET', assetId, `新增固定资产 ${asset_name}`);
-  return send(res, 200, { id: assetId });
-}
-
-async function legacyUpdateFixedAsset(db, req, res, actor, assetId) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const body = await readJson(req);
-  const { asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents, depreciation_method, status, remark } = body;
-  const now = new Date().toISOString();
-  
-  const monthlyDepreciation = depreciation_method === 'NONE' ? 0 : 
-    Math.floor((purchase_amount_cents - (salvage_value_cents || 0)) / useful_life_months);
-  
-  db.prepare(`UPDATE fixed_assets SET asset_name=?,category=?,purchase_date=?,purchase_amount_cents=?,useful_life_months=?,salvage_value_cents=?,depreciation_method=?,monthly_depreciation_cents=?,status=?,remark=?,updated_at=? WHERE id=?`).run(
-    asset_name, category, purchase_date, purchase_amount_cents, useful_life_months, salvage_value_cents || 0, depreciation_method, monthlyDepreciation, status, remark || '', now, assetId
-  );
-  
-  audit(db, actor.id, 'UPDATE', 'FIXED_ASSET', assetId, `更新固定资产 ${asset_name}`);
-  return send(res, 200, { ok: true });
-}
-
-async function legacyCalculateDepreciation(db, req, res, actor) {
-  allow(actor, 'FIXED_ASSETS_MANAGE');
-  const body = await readJson(req);
-  const { assetId, depreciationDate } = body;
-  
-  const asset = db.prepare('SELECT * FROM fixed_assets WHERE id=?').get(assetId);
-  if (!asset) throw new HttpError(404, '固定资产不存在');
-  
-  const now = new Date().toISOString();
-  const depId = id();
-  
-  db.prepare('INSERT INTO asset_depreciations(id,asset_id,depreciation_date,depreciation_cents,creator_id,created_at) VALUES(?,?,?,?,?,?)').run(
-    depId, assetId, depreciationDate, asset.monthly_depreciation_cents, actor.id, now
-  );
-  
-  db.prepare('UPDATE fixed_assets SET net_value_cents=net_value_cents-?,updated_at=? WHERE id=?').run(
-    asset.monthly_depreciation_cents, now, assetId
-  );
-  
-  audit(db, actor.id, 'CREATE', 'ASSET_DEPRECIATION', depId, `计提折旧 ${money(asset.monthly_depreciation_cents)}`);
-  return send(res, 200, { id: depId });
-}
 
 async function getFixedAssetDepreciations(db, res, actor, assetId) {
   allowAny(actor, ['FIXED_ASSETS_VIEW', 'FIXED_ASSETS_MANAGE']);
@@ -5117,49 +4805,5 @@ async function updateCostRate(db, req, res, actor, rateId) {
   return send(res, 200, { rate: costRateDto(updated) });
 }
 
-async function legacyCalculateProductionCost(db, req, res, actor) {
-  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
-  const body = await readJson(req);
-  const { orderId } = body;
-  
-  const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(orderId);
-  if (!order) throw new HttpError(404, '生产工单不存在');
-  
-  // Get product standard cost
-  const stdCost = db.prepare('SELECT * FROM product_costs WHERE product_id=? AND status=? ORDER BY effective_date DESC LIMIT 1').get(order.product_id, 'ACTIVE');
-  
-  // Get consumed materials from production order items
-  const items = db.prepare('SELECT * FROM production_order_items WHERE order_id=?').all(orderId);
-  let materialCost = 0;
-  for (const item of items) {
-    const itemCost = db.prepare('SELECT standard_cost_cents FROM product_costs WHERE product_id=? AND status=? ORDER BY effective_date DESC LIMIT 1').get(item.product_id, 'ACTIVE');
-    materialCost += (itemCost?.standard_cost_cents || 0) * item.consumed_quantity;
-  }
-  
-  // Get labor and overhead from cost rates
-  const laborRate = db.prepare('SELECT rate_cents_per_hour FROM cost_rates WHERE category=? AND active=1 ORDER BY created_at LIMIT 1').get('LABOR');
-  const overheadRate = db.prepare('SELECT rate_cents_per_hour FROM cost_rates WHERE category=? AND active=1 ORDER BY created_at LIMIT 1').get('OVERHEAD');
-  
-  const now = new Date().toISOString();
-  const costId = id();
-  
-  // Calculate based on production quantity
-  const laborCost = (laborRate?.rate_cents_per_hour || 0) * order.quantity;
-  const overheadCost = (overheadRate?.rate_cents_per_hour || 0) * order.quantity;
-  const totalCost = materialCost + laborCost + overheadCost;
-  const unitCost = order.quantity > 0 ? Math.floor(totalCost / order.quantity) : 0;
-  
-  db.prepare('INSERT INTO production_costs(id,order_id,material_cost_cents,labor_cost_cents,overhead_cost_cents,total_cost_cents,unit_cost_cents,calculated_at,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(
-    costId, orderId, materialCost, laborCost, overheadCost, totalCost, unitCost, now, actor.id, now
-  );
-  
-  audit(db, actor.id, 'CREATE', 'PRODUCTION_COST', costId, `计算工单成本 ${money(totalCost)}`);
-  return send(res, 200, { id: costId, materialCost, laborCost, overheadCost, totalCost, unitCost });
-}
 
-async function getProductionCost(db, res, actor, orderId) {
-  allowAny(actor, ['COST_VIEW', 'COST_MANAGE']);
-  const cost = db.prepare('SELECT * FROM production_costs WHERE order_id=? ORDER BY created_at DESC LIMIT 1').get(orderId);
-  return send(res, 200, { cost });
-}
 // ============ IQC Inspections (canonical handlers live in server/modules/extended.js) ============
