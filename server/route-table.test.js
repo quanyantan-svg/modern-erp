@@ -901,9 +901,13 @@ describe('V2 Stage 3 / Wave 3A — backend dispatch ownership (warehouse migrati
   });
 
   test('unrelated routes still fall through to legacy handleApi (match returns null)', () => {
-    // The route-table only owns the four warehouse routes in Wave
-    // 3A. Every other production route must continue to fall
-    // through to the existing legacy handleApi chain unchanged.
+    // After Wave 3A + Wave 3B, the route-table owns the four
+    // warehouse routes and the four customer routes. Every other
+    // production route must continue to fall through to the
+    // existing legacy handleApi chain unchanged. Supplier / Order
+    // / Product / Purchase Order / Inventory / accounting routes
+    // MUST remain on the legacy chain because their migration is
+    // explicitly out-of-scope for this wave.
     const table = createRouteTable();
     table.register({
       method: 'GET',
@@ -929,17 +933,40 @@ describe('V2 Stage 3 / Wave 3A — backend dispatch ownership (warehouse migrati
       handler: () => {},
       owner: 'server/modules/warehouses.js',
     });
+    table.register({
+      method: 'GET',
+      path: '/api/customers',
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'POST',
+      path: '/api/customers',
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'PATCH',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'DELETE',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
 
     // All of these must return null so legacy handleApi continues
     // to handle them exactly as before.
     const unrelatedPaths = [
-      ['GET', '/api/customers'],
       ['GET', '/api/suppliers'],
       ['GET', '/api/products'],
       ['GET', '/api/orders'],
-      ['POST', '/api/customers'],
-      ['PATCH', '/api/customers/customer-001'],
-      ['DELETE', '/api/customers/customer-001'],
+      ['GET', '/api/purchase-orders'],
+      ['PATCH', '/api/suppliers/supplier-001'],
+      ['DELETE', '/api/products/product-001'],
       ['GET', '/api/inventory'],
       ['GET', '/api/inventory-checks'],
       ['GET', '/api/roles'],
@@ -948,7 +975,283 @@ describe('V2 Stage 3 / Wave 3A — backend dispatch ownership (warehouse migrati
       ['GET', '/api/dashboard'],
     ];
     for (const [method, path] of unrelatedPaths) {
-      assert.equal(table.match(method, path), null, `unrelated ${method} ${path} must NOT match the warehouse route-table`);
+      assert.equal(table.match(method, path), null, `unrelated ${method} ${path} must NOT match the route-table`);
     }
+  });
+});
+
+describe('V2 Stage 3 / Wave 3B — backend dispatch ownership (customer migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const customersModuleSource = readFileSync(resolve('server/modules/customers.js'), 'utf8');
+
+  test('app.js imports the shared paymentTermsDays helper from server/lib/payment-terms.js', () => {
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/lib\/payment-terms\.js['"]/,
+      'Wave 3B: server/app.js MUST import paymentTermsDays from the shared helper module',
+    );
+    assert.match(appSource, /\bpaymentTermsDays\b/);
+  });
+
+  test('server/lib/payment-terms.js exists and exports a single paymentTermsDays implementation', () => {
+    const helperSource = readFileSync(resolve('server/lib/payment-terms.js'), 'utf8');
+    assert.match(
+      helperSource,
+      /export\s+function\s+paymentTermsDays\b/,
+      'Wave 3B: server/lib/payment-terms.js MUST export a single paymentTermsDays function',
+    );
+    assert.match(helperSource, /付款条款天数必须是 0–3650 的整数/);
+  });
+
+  test('app.js no longer declares an app-local paymentTermsDays function (no duplicate)', () => {
+    assert.doesNotMatch(
+      appSource,
+      /^\s*function\s+paymentTermsDays\b/m,
+      'Wave 3B: app-local paymentTermsDays declaration MUST be removed; only the shared helper is canonical',
+    );
+  });
+
+  test('server/modules/customers.js exists and exports the four canonical customer handlers', () => {
+    assert.match(customersModuleSource, /export function listCustomers\b/);
+    assert.match(customersModuleSource, /export (?:async )?function createCustomer\b/);
+    assert.match(customersModuleSource, /export (?:async )?function updateCustomer\b/);
+    assert.match(customersModuleSource, /export function deleteCustomer\b/);
+    assert.match(customersModuleSource, /export function customerInput\b/);
+  });
+
+  test('customers.js imports paymentTermsDays from the shared helper (no app-local duplicate)', () => {
+    assert.match(
+      customersModuleSource,
+      /from\s+['"]\.\.\/lib\/payment-terms\.js['"]/,
+      'Wave 3B: server/modules/customers.js MUST import paymentTermsDays from the shared helper module',
+    );
+    assert.doesNotMatch(
+      customersModuleSource,
+      /^\s*function\s+paymentTermsDays\b/m,
+      'Wave 3B: customer module MUST NOT redeclare paymentTermsDays; the shared helper is the single source of truth',
+    );
+  });
+
+  test('app.js imports the customer handlers from server/modules/customers.js', () => {
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/customers\.js['"]/,
+      'Wave 3B: server/app.js MUST import the customer handlers from server/modules/customers.js',
+    );
+    assert.match(appSource, /\blistCustomers\b/);
+    assert.match(appSource, /\bcreateCustomer\b/);
+    assert.match(appSource, /\bupdateCustomer\b/);
+    assert.match(appSource, /\bdeleteCustomer\b/);
+  });
+
+  test('app.js no longer declares listCustomers / createCustomer / updateCustomer / customerInput as app-local functions', () => {
+    assert.doesNotMatch(appSource, /^\s*function\s+listCustomers\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createCustomer\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateCustomer\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+customerInput\b/m);
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching /api/customers', () => {
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/customers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3B: legacy exact-match GET branch for /api/customers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/customers['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3B: legacy exact-match POST branch for /api/customers must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/customers\\\/[^/]+\$\/\)/,
+      'Wave 3B: legacy customerMatch-style dispatch for /api/customers/:id must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]customer['"]/,
+      'Wave 3B: deleteMasterRecord must not be called directly from app.js for kind="customer"; it must delegate via server/modules/customers.js',
+    );
+  });
+
+  test('all four customer routes are registered with the canonical owner', () => {
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/customers',
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'POST',
+      path: '/api/customers',
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'PATCH',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+    table.register({
+      method: 'DELETE',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    });
+
+    assert.equal(table.size(), 4);
+    const items = table.list();
+    const customerItems = items.filter((item) => item.owner === 'server/modules/customers.js');
+    assert.equal(customerItems.length, 4);
+    for (const item of customerItems) {
+      assert.equal(item.owner, 'server/modules/customers.js');
+    }
+
+    const getHit = table.match('GET', '/api/customers');
+    assert.ok(getHit, 'GET /api/customers must match');
+    assert.equal(getHit.owner, 'server/modules/customers.js');
+
+    const postHit = table.match('POST', '/api/customers');
+    assert.ok(postHit, 'POST /api/customers must match');
+    assert.equal(postHit.owner, 'server/modules/customers.js');
+
+    const patchHit = table.match('PATCH', '/api/customers/customer-001');
+    assert.ok(patchHit, 'PATCH /api/customers/:id must match');
+    assert.deepEqual(patchHit.params, ['customer-001']);
+    assert.equal(patchHit.owner, 'server/modules/customers.js');
+
+    const deleteHit = table.match('DELETE', '/api/customers/customer-001');
+    assert.ok(deleteHit, 'DELETE /api/customers/:id must match');
+    assert.deepEqual(deleteHit.params, ['customer-001']);
+    assert.equal(deleteHit.owner, 'server/modules/customers.js');
+  });
+
+  test('exactly four customer descriptors exist (no Supplier descriptor registered)', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    const customerEntries = table.list().filter((item) => item.owner === 'server/modules/customers.js');
+    assert.equal(customerEntries.length, 4);
+  });
+
+  test('supplier routes have NOT migrated to the route-table (still on legacy handleApi)', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+
+    assert.equal(table.match('GET', '/api/suppliers'), null);
+    assert.equal(table.match('POST', '/api/suppliers'), null);
+    assert.equal(table.match('PATCH', '/api/suppliers/supplier-001'), null);
+    assert.equal(table.match('DELETE', '/api/suppliers/supplier-001'), null);
+
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/suppliers['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Supplier routes remain on legacy handleApi and MUST NOT be migrated in Wave 3B',
+    );
+    assert.match(
+      appSource,
+      /const\s+supplierMatch\s*=\s*pathname\.match\(/,
+      'Supplier /:id legacy dispatch branch must remain in app.js for Wave 3B',
+    );
+  });
+
+  test('duplicate customer route registration is still rejected', () => {
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/customers',
+      handler: () => 'first',
+      owner: 'server/modules/customers.js',
+    });
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/customers',
+        handler: () => 'second',
+        owner: 'server/modules/customers.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+      'duplicate (method, path) registrations must still fail closed for customer routes too',
+    );
+  });
+
+  test('unknown descriptor field protection still rejects declarative metadata on customer routes', () => {
+    const table = createRouteTable();
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/customers',
+        handler: () => {},
+        owner: 'server/modules/customers.js',
+        permissions: ['CUSTOMERS_VIEW'],
+      }),
+      (error) => error instanceof RouteTableError
+        && error.reason === 'unknown_descriptor_field'
+        && error.field === 'permissions',
+    );
+    assert.throws(
+      () => table.register({
+        method: 'POST',
+        path: '/api/customers',
+        handler: () => {},
+        owner: 'server/modules/customers.js',
+        transactionPolicy: 'serializable',
+      }),
+      (error) => error instanceof RouteTableError
+        && error.reason === 'unknown_descriptor_field'
+        && error.field === 'transactionPolicy',
+    );
+  });
+
+  test('customer regex path must be anchored with no flags', () => {
+    const table = createRouteTable();
+    assert.doesNotThrow(() => table.register({
+      method: 'PATCH',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    }));
+    assert.doesNotThrow(() => table.register({
+      method: 'DELETE',
+      path: /^\/api\/customers\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/customers.js',
+    }));
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: new RegExp('^\\/api\\/customers\\/([^/]+)$', 'i'),
+        handler: () => {},
+        owner: 'server/modules/customers.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: /\/api\/customers\/([^/]+)/,
+        handler: () => {},
+        owner: 'server/modules/customers.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+  });
+
+  test('one live owned route table is used by app.js (single dispatch block, neutral name)', () => {
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(
+      constructorOccurrences.length,
+      1,
+      'Wave 3B: app.js must construct the owned route table exactly once',
+    );
+    assert.doesNotMatch(appSource, /\bwarehouseRouteTable\b/);
+    assert.match(appSource, /\bownedRouteTable\b/);
   });
 });

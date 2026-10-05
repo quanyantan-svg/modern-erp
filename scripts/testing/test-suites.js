@@ -77,14 +77,16 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
-  // ----- V2 Stage 3 / Wave 3A — backend dispatch ownership architecture -----
+  // ----- V2 Stage 3 / Wave 3A + Wave 3B — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
-  // Wave 3A invariants for the migrated warehouse route family
-  // (app.js imports route-table, four warehouse descriptors
-  // registered with canonical owner, no legacy warehouse dispatch
-  // branch remains, unrelated routes still fall through to the
-  // legacy handleApi chain). Pure-function route-table safety
-  // tests live in the same file.
+  // Wave 3A + Wave 3B invariants for the migrated warehouse and
+  // customer route families (app.js imports route-table, eight
+  // descriptors registered across the two domains with canonical
+  // owners, no legacy warehouse or customer dispatch branches
+  // remain, supplier / order / purchase-order / etc. still fall
+  // through to the legacy handleApi chain, single
+  // `ownedRouteTable` constructed once). Pure-function
+  // route-table safety tests live in the same file.
   'server/route-table.test.js',
 
   // ----- V2 Stage 3 / Wave 3A — first live warehouse ownership -----
@@ -96,6 +98,18 @@ const FULL = [
   // — does not duplicate — the existing p2-data-lifecycle coverage
   // of the deactivation stock guard and 409 on referenced warehouse.
   'server/v2-wave3a-warehouses-ownership.test.js',
+
+  // ----- V2 Stage 3 / Wave 3B — second live customer ownership -----
+  // Focused behavior coverage for the migrated /api/customers route
+  // family: GET (search / shape / role), POST (validation / audit
+  // / 201 / paymentTermsDays 400 message preservation / paymentTermsDays
+  // default-to-0 / 403), PATCH (200 / 404 / active Boolean round-trip
+  // / paymentTermsDays persistence), DELETE (RECORD_REFERENCED on a
+  // referenced customer / 200 + DELETE audit on an unreferenced one),
+  // and the canonical deleteMasterRecord lifecycle delegation.
+  // Complements — does not duplicate — the existing
+  // p2-data-lifecycle coverage of customer DELETE behavior.
+  'server/v2-wave3b-customers-ownership.test.js',
 
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',

@@ -140,45 +140,78 @@ import {
   listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
 import { createRouteTable } from './lib/route-table.js';
+import { paymentTermsDays } from './lib/payment-terms.js';
 import {
   createWarehouse,
   deleteWarehouse,
   listWarehouses,
   updateWarehouse,
 } from './modules/warehouses.js';
+import {
+  createCustomer,
+  deleteCustomer,
+  listCustomers,
+  updateCustomer,
+} from './modules/customers.js';
 
-// V2 Stage 3 / Wave 3A — Warehouse route-table registration.
-// First live production route family migrated using the Wave 1
-// route-table dispatch infrastructure. Each descriptor carries
-// exactly method / path / handler / owner — no permissions,
-// transaction policy, audit policy, or other runtime authority
-// is duplicated. Thin per-route adapters below translate the
-// route-table dispatch context (db, req, res, actor, url, params)
-// into each business handler's existing signature.
-const warehouseRouteTable = createRouteTable();
-warehouseRouteTable.register({
+// V2 Stage 3 / Wave 3A + Wave 3B — Warehouse + Customer route-table
+// registration. Both live production route families are migrated using
+// the Wave 1 route-table dispatch infrastructure. Each descriptor
+// carries exactly method / path / handler / owner — no permissions,
+// transaction policy, audit policy, or other runtime authority is
+// duplicated. Thin per-route adapters below translate the route-table
+// dispatch context (db, req, res, actor, url, params) into each
+// business handler's existing signature. The neutral name
+// `ownedRouteTable` reflects that the table now holds more than one
+// domain family.
+const ownedRouteTable = createRouteTable();
+ownedRouteTable.register({
   method: 'GET',
   path: '/api/warehouses',
   handler: ({ db, res, actor, url }) => listWarehouses(db, res, actor, url),
   owner: 'server/modules/warehouses.js',
 });
-warehouseRouteTable.register({
+ownedRouteTable.register({
   method: 'POST',
   path: '/api/warehouses',
   handler: ({ db, req, res, actor }) => createWarehouse(db, req, res, actor),
   owner: 'server/modules/warehouses.js',
 });
-warehouseRouteTable.register({
+ownedRouteTable.register({
   method: 'PATCH',
   path: /^\/api\/warehouses\/([^/]+)$/,
   handler: ({ db, req, res, actor, params }) => updateWarehouse(db, req, res, actor, params[0]),
   owner: 'server/modules/warehouses.js',
 });
-warehouseRouteTable.register({
+ownedRouteTable.register({
   method: 'DELETE',
   path: /^\/api\/warehouses\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => deleteWarehouse(db, res, actor, params[0]),
   owner: 'server/modules/warehouses.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/customers',
+  handler: ({ db, res, actor, url }) => listCustomers(db, res, actor, url),
+  owner: 'server/modules/customers.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/customers',
+  handler: ({ db, req, res, actor }) => createCustomer(db, req, res, actor),
+  owner: 'server/modules/customers.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/customers\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateCustomer(db, req, res, actor, params[0]),
+  owner: 'server/modules/customers.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/customers\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteCustomer(db, res, actor, params[0]),
+  owner: 'server/modules/customers.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -283,12 +316,6 @@ async function handleApi(db, req, res, url) {
   const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
   if (userMatch && req.method === 'PATCH') return updateUser(db, req, res, actor, userMatch[1]);
 
-  if (pathname === '/api/customers' && req.method === 'GET') return listCustomers(db, res, actor, url);
-  if (pathname === '/api/customers' && req.method === 'POST') return createCustomer(db, req, res, actor);
-  const customerMatch = pathname.match(/^\/api\/customers\/([^/]+)$/);
-  if (customerMatch && req.method === 'PATCH') return updateCustomer(db, req, res, actor, customerMatch[1]);
-  if (customerMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'customer', customerMatch[1]);
-
   if (pathname === '/api/suppliers' && req.method === 'GET') return listSuppliers(db, res, actor, url);
   if (pathname === '/api/suppliers' && req.method === 'POST') return createSupplier(db, req, res, actor);
   const supplierMatch = pathname.match(/^\/api\/suppliers\/([^/]+)$/);
@@ -361,13 +388,13 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // V2 Stage 3 / Wave 3A — Warehouse owned-route lookup.
+  // V2 Stage 3 / Wave 3A + Wave 3B — Owned-route lookup.
   // Runs AFTER authentication is resolved and BEFORE the legacy
   // handleApi chain continues. Unmatched routes fall through to
-  // the existing legacy chain unchanged. The four warehouse
-  // routes are the only production routes in this wave.
+  // the existing legacy chain unchanged. Currently owns the four
+  // warehouse routes and the four customer routes.
   {
-    const match = warehouseRouteTable.match(req.method, pathname);
+    const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
       return match.handler({ db, req, res, actor, url, params: match.params });
     }
@@ -1183,38 +1210,6 @@ function supplierInput(body) {
   };
 }
 
-function listCustomers(db, res, actor, url) {
-  allowAny(actor, ['CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE']);
-  const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const customers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
-    FROM customers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
-    .map((row) => ({ ...row, active: Boolean(row.active) }));
-  return send(res, 200, { customers });
-}
-
-async function createCustomer(db, req, res, actor) {
-  allow(actor, 'CUSTOMERS_MANAGE');
-  const body = await readJson(req);
-  const customer = customerInput(body);
-  const customerId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
-    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, now, now);
-  audit(db, actor.id, 'CREATE', 'CUSTOMER', customerId, customer.code);
-  return send(res, 201, { id: customerId });
-}
-
-async function updateCustomer(db, req, res, actor, customerId) {
-  allow(actor, 'CUSTOMERS_MANAGE');
-  const current = db.prepare('SELECT * FROM customers WHERE id=?').get(customerId);
-  if (!current) throw new HttpError(404, '客户不存在');
-  const body = await readJson(req); const customer = customerInput({ ...current, ...body });
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
-    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, active, new Date().toISOString(), customerId);
-  audit(db, actor.id, 'UPDATE', 'CUSTOMER', customerId, customer.code);
-  return send(res, 200, { ok: true });
-}
-
 function listProducts(db, res, actor, url) {
   allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
@@ -1484,18 +1479,6 @@ function saveOrderItems(db, orderId, items) {
   for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
     item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
     item.baseQuantityNumerator, item.baseQuantityDenominator);
-}
-
-function customerInput(body) {
-  return { code: requiredCode(body.code, '客户编码'), name: requiredText(body.name, '客户名称', 100),
-    contact: optionalText(body.contact, 50), phone: optionalText(body.phone, 30), address: optionalText(body.address, 200),
-    paymentTermsDays: paymentTermsDays(body.paymentTermsDays ?? body.payment_terms_days) };
-}
-
-function paymentTermsDays(value) {
-  const n = value === undefined || value === null || value === '' ? 0 : Number(value);
-  if (!Number.isSafeInteger(n) || n < 0 || n > 3650) throw new HttpError(400, '付款条款天数必须是 0–3650 的整数');
-  return n;
 }
 
 function productInput(body) {
