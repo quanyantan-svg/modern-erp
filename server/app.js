@@ -75,8 +75,8 @@ import {
 } from './modules/production-workflow.js';
 import {
   changeProductRoutingStatus, createProductRouting, createProductRoutingOperation,
-  deleteProductRoutingOperation, getProductRouting, listProductRoutings,
-  updateProductRouting, updateProductRoutingOperation,
+  deleteProductRouting, deleteProductRoutingOperation, getProductRouting,
+  listProductRoutings, updateProductRouting, updateProductRoutingOperation,
 } from './modules/product-routing.js';
 import {
   assertRoutedCompletion, cancelOperation, cancelOperationReport, completeOperation, confirmOperationReport,
@@ -177,26 +177,31 @@ import {
 
 // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
 // Wave 3F — Warehouse + Customer + Supplier + Role +
-// User-management + Product master-data + Decision Reports route-table
-// registration. All seven live production route families are migrated
-// using the Wave 1 route-table dispatch infrastructure. Each
-// descriptor carries exactly method / path / handler / owner — no
-// permissions, transaction policy, audit policy, or other runtime
-// authority is duplicated. Thin per-route adapters below translate
-// the route-table dispatch context (db, req, res, actor, url, params)
-// into each business handler's existing signature. The neutral name
-// `ownedRouteTable` reflects that the table holds multiple domain
-// families. Roles have exactly GET / POST / PATCH — there is no
-// canonical DELETE /api/roles route in production. User-management
-// has exactly GET / POST / PATCH — there is no canonical DELETE
-// /api/users route in production. Product master-data has GET /
-// POST / PATCH / DELETE — DELETE delegates to deleteMasterRecord.
-// Decision Reports own eleven read-only GET routes (five core
-// summaries / outstanding, one regex fulfillment-contributions, and
-// five CSV exports) — canonical owner is server/modules/decision-reports.js.
-// /api/users/lookup and PATCH /api/products/:id/tracking-policy
-// are intentionally NOT migrated and remain on the legacy handleApi
-// branches below.
+// User-management + Product master-data + Decision Reports +
+// Product Routings route-table registration. All eight live production
+// route families are migrated using the Wave 1 route-table dispatch
+// infrastructure. Each descriptor carries exactly method / path /
+// handler / owner — no permissions, transaction policy, audit policy,
+// or other runtime authority is duplicated. Thin per-route adapters
+// below translate the route-table dispatch context (db, req, res,
+// actor, url, params) into each business handler's existing signature.
+// The neutral name `ownedRouteTable` reflects that the table holds
+// multiple domain families. Roles have exactly GET / POST / PATCH —
+// there is no canonical DELETE /api/roles route in production.
+// User-management has exactly GET / POST / PATCH — there is no
+// canonical DELETE /api/users route in production. Product master-data
+// has GET / POST / PATCH / DELETE — DELETE delegates to
+// deleteMasterRecord. Decision Reports own eleven read-only GET
+// routes (five core summaries / outstanding, one regex
+// fulfillment-contributions, and five CSV exports) — canonical owner is
+// server/modules/decision-reports.js. Product Routings owns nine
+// routes (collection GET / POST, regex activate|deactivate POST,
+// regex operations POST / PATCH / DELETE, detail GET / PATCH / DELETE)
+// — canonical owner is server/modules/product-routing.js; detail
+// DELETE delegates to deleteMasterRecord via the thin
+// deleteProductRouting wrapper. /api/users/lookup and PATCH
+// /api/products/:id/tracking-policy are intentionally NOT migrated
+// and remain on the legacy handleApi branches below.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -396,6 +401,60 @@ ownedRouteTable.register({
   handler: ({ db, res, actor, url }) => exportInventoryMovementsReport(db, res, actor, url),
   owner: 'server/modules/decision-reports.js',
 });
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/product-routings',
+  handler: ({ db, res, actor, url }) => listProductRoutings(db, res, actor, url),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/product-routings',
+  handler: ({ db, req, res, actor }) => createProductRouting(db, req, res, actor),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/,
+  handler: ({ db, req, res, actor, params }) => changeProductRoutingStatus(db, req, res, actor, params[0], params[1]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateProductRoutingOperation(db, req, res, actor, params[0], params[1]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteProductRoutingOperation(db, res, actor, params[0], params[1]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/product-routings\/([^/]+)\/operations$/,
+  handler: ({ db, req, res, actor, params }) => createProductRoutingOperation(db, req, res, actor, params[0]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/product-routings\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProductRouting(db, res, actor, params[0]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/product-routings\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateProductRouting(db, req, res, actor, params[0]),
+  owner: 'server/modules/product-routing.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/product-routings\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteProductRouting(db, res, actor, params[0]),
+  owner: 'server/modules/product-routing.js',
+});
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
@@ -560,10 +619,15 @@ async function handleApi(db, req, res, url) {
   // /api/roles route), the three user-management routes (GET / POST
   // / PATCH; there is no canonical DELETE /api/users route), the
   // four Product master-data routes (GET / POST / PATCH / DELETE;
-  // DELETE delegates to deleteMasterRecord), and the eleven
-  // Decision Reports routes (five core summaries / outstanding, one
-  // regex fulfillment-contributions, and five CSV exports; canonical
-  // owner server/modules/decision-reports.js).
+  // DELETE delegates to deleteMasterRecord), the eleven Decision
+  // Reports routes (five core summaries / outstanding, one regex
+  // fulfillment-contributions, and five CSV exports; canonical owner
+  // server/modules/decision-reports.js), and the nine Product
+  // Routings routes (collection GET / POST, regex
+  // activate|deactivate POST, regex operations POST / PATCH / DELETE,
+  // detail GET / PATCH / DELETE; canonical owner
+  // server/modules/product-routing.js; detail DELETE delegates to
+  // deleteMasterRecord via the thin deleteProductRouting wrapper).
   // /api/users/lookup and PATCH /api/products/:id/tracking-policy
   // remain on their respective legacy handleApi branches above and
   // are NOT in the route-table.
@@ -932,21 +996,6 @@ async function handleApi(db, req, res, url) {
   if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
 
-
-  // ============ Product Routings ============
-  if (pathname === '/api/product-routings' && req.method === 'GET') return listProductRoutings(db, res, actor, url);
-  if (pathname === '/api/product-routings' && req.method === 'POST') return createProductRouting(db, req, res, actor);
-  const productRoutingAction = pathname.match(/^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/);
-  if (productRoutingAction && req.method === 'POST') return changeProductRoutingStatus(db, req, res, actor, productRoutingAction[1], productRoutingAction[2]);
-  const productRoutingOperation = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/);
-  if (productRoutingOperation && req.method === 'PATCH') return updateProductRoutingOperation(db, req, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
-  if (productRoutingOperation && req.method === 'DELETE') return deleteProductRoutingOperation(db, res, actor, productRoutingOperation[1], productRoutingOperation[2]);
-  const productRoutingOperations = pathname.match(/^\/api\/product-routings\/([^/]+)\/operations$/);
-  if (productRoutingOperations && req.method === 'POST') return createProductRoutingOperation(db, req, res, actor, productRoutingOperations[1]);
-  const productRoutingMatch = pathname.match(/^\/api\/product-routings\/([^/]+)$/);
-  if (productRoutingMatch && req.method === 'GET') return getProductRouting(db, res, actor, productRoutingMatch[1]);
-  if (productRoutingMatch && req.method === 'PATCH') return updateProductRouting(db, req, res, actor, productRoutingMatch[1]);
-  if (productRoutingMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'routing', productRoutingMatch[1]);
 
   // ============ BOM ============
   if (pathname === "/api/boms" && req.method === "GET") return listBoms(db, res, actor, url);

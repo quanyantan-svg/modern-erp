@@ -11,6 +11,20 @@
 //      live dispatch.
 //
 //   2. V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
+//      Wave 3F + Wave 4A + Wave 4B — backend dispatch ownership
+//      architecture invariants. These tests read server/app.js and the
+//      migrated server/modules/*.js files from disk and assert that
+//      the live route-table infrastructure is wired in: app.js imports
+//      route-table.js, the warehouse / customer / supplier / role /
+//      user-management / product-master-data / decision-reports /
+//      product-routings descriptors are registered with their
+//      canonical owners, no legacy /api/warehouses / /api/customers /
+//      /api/suppliers / /api/roles / /api/users / /api/reports/decision/*
+//      / /api/product-routings dispatch branches remain, and unrelated
+//      routes still fall through to the legacy handleApi chain.
+//      live dispatch.
+//
+//   2. V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
 //      Wave 3F + Wave 4A — backend dispatch ownership architecture
 //      invariants. These tests read server/app.js and the migrated
 //      server/modules/*.js files from disk and assert that the live
@@ -2263,6 +2277,314 @@ describe('V2 Wave 4A — Decision Reports Route Ownership Migration', () => {
         owner: 'server/modules/decision-reports.js',
       }),
       (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+    );
+  });
+});
+
+describe('V2 Wave 4B — Product Routings Route Ownership Migration', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const productRoutingModuleSource = readFileSync(resolve('server/modules/product-routing.js'), 'utf8');
+
+  function buildOwnedTable() {
+    const table = createRouteTable();
+    // 22 Wave 3F baseline descriptors (warehouse + customer + supplier + role + user + product master-data).
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    // 11 Wave 4A decision-reports descriptors.
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/, handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    // 9 Wave 4B product-routings descriptors.
+    table.register({ method: 'GET', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/operations$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    return table;
+  }
+
+  test('exactly 9 Product Routing descriptors exist with the canonical owner; previous 33 baseline descriptors remain intact; ownedRouteTable is now 42; single createRouteTable() and single .match() remain in app.js', () => {
+    const table = buildOwnedTable();
+    const routingEntries = table.list().filter((item) => item.owner === 'server/modules/product-routing.js');
+    assert.equal(routingEntries.length, 9, 'Wave 4B: exactly nine Product Routing descriptors must exist with the canonical owner');
+    assert.equal(table.size(), 42, 'Wave 4B: 33 baseline + 9 product-routings = 42 owned descriptors');
+    // list() exposes only { method, path, pathKind, owner } — no other keys.
+    for (const entry of routingEntries) {
+      assert.deepEqual(
+        Object.keys(entry).sort(),
+        ['method', 'owner', 'path', 'pathKind'].sort(),
+        `Wave 4B: descriptor ${entry.method} ${entry.path} must expose exactly { method, path, pathKind, owner }`,
+      );
+      assert.equal(entry.owner, 'server/modules/product-routing.js');
+      assert.ok(typeof entry.path === 'string' && entry.path.length > 0, 'descriptor path must be non-empty');
+    }
+    // Previous 33 baseline descriptors remain intact.
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/decision-reports.js').length, 11);
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'Wave 4B: app.js must construct the owned route table exactly once');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'Wave 4B: app.js must keep exactly one ownedRouteTable.match() dispatch call');
+    assert.match(appSource, /\bownedRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bproductRoutingRouteTable\b/);
+    assert.doesNotMatch(appSource, /\broutingRouteTable\b/);
+  });
+
+  test('collection GET / POST register with canonical owner; both resolve with empty params; product-routing.js is the live module, no app-local handlers remain', () => {
+    // Source-shape: product-routing.js exports the canonical handlers; app.js imports them; no app-local handlers.
+    assert.match(productRoutingModuleSource, /export function listProductRoutings\b/);
+    assert.match(productRoutingModuleSource, /export (?:async )?function createProductRouting\b/);
+    assert.match(productRoutingModuleSource, /export function deleteProductRouting\b/, 'Wave 4B: product-routing.js must export deleteProductRouting thin wrapper');
+    assert.match(productRoutingModuleSource, /from\s+['"]\.\/data-lifecycle\.js['"]/);
+    assert.match(productRoutingModuleSource, /deleteMasterRecord\b/);
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/product-routing\.js['"]/,
+      'Wave 4B: server/app.js MUST import Product Routing handlers from server/modules/product-routing.js',
+    );
+    assert.match(appSource, /\blistProductRoutings\b/);
+    assert.match(appSource, /\bcreateProductRouting\b/);
+    assert.match(appSource, /\bdeleteProductRouting\b/);
+    assert.match(appSource, /\bchangeProductRoutingStatus\b/);
+    assert.match(appSource, /\bcreateProductRoutingOperation\b/);
+    assert.match(appSource, /\bupdateProductRoutingOperation\b/);
+    assert.match(appSource, /\bdeleteProductRoutingOperation\b/);
+    assert.match(appSource, /\bgetProductRouting\b/);
+    assert.match(appSource, /\bupdateProductRouting\b/);
+    assert.doesNotMatch(appSource, /^\s*function\s+listProductRoutings\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createProductRouting\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+productRoutingMatch\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+productRoutingAction\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+productRoutingOperation\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+productRoutingOperations\b/m);
+    // Live dispatch parity for the two collection routes.
+    const table = buildOwnedTable();
+    const listHit = table.match('GET', '/api/product-routings');
+    assert.ok(listHit, 'GET /api/product-routings must match the route-table');
+    assert.equal(listHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(listHit.params, []);
+    const createHit = table.match('POST', '/api/product-routings');
+    assert.ok(createHit, 'POST /api/product-routings must match the route-table');
+    assert.equal(createHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(createHit.params, []);
+    // Both collection routes are exact-string (not regex) per the
+    // canonical descriptor contract.
+    const collectionEntries = table.list()
+      .filter((item) => item.owner === 'server/modules/product-routing.js')
+      .filter((item) => item.path === '/api/product-routings');
+    assert.equal(collectionEntries.length, 2);
+    for (const entry of collectionEntries) assert.equal(entry.pathKind, 'exact');
+  });
+
+  test('activate|deactivate regex returns both params correctly; operations POST + PATCH + DELETE register with the canonical owner', () => {
+    const table = buildOwnedTable();
+    // activate|deactivate regex: two capture groups (routingId, action).
+    const activateHit = table.match('POST', '/api/product-routings/route-abc-001/activate');
+    assert.ok(activateHit, 'POST .../activate must match the route-table');
+    assert.equal(activateHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(activateHit.params, ['route-abc-001', 'activate']);
+    const deactivateHit = table.match('POST', '/api/product-routings/route-abc-001/deactivate');
+    assert.ok(deactivateHit, 'POST .../deactivate must match the route-table');
+    assert.equal(deactivateHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(deactivateHit.params, ['route-abc-001', 'deactivate']);
+    // activate|deactivate descriptor must be a regex (pathKind === 'regex').
+    const actionDescriptors = table.list()
+      .filter((item) => item.owner === 'server/modules/product-routing.js')
+      .filter((item) => item.path.includes('activate|deactivate'));
+    assert.equal(actionDescriptors.length, 1, 'exactly one activate|deactivate regex descriptor must exist');
+    assert.equal(actionDescriptors[0].pathKind, 'regex');
+    // operations POST: single capture group (routingId).
+    const opCreateHit = table.match('POST', '/api/product-routings/route-abc-001/operations');
+    assert.ok(opCreateHit, 'POST /api/product-routings/:id/operations must match the route-table');
+    assert.equal(opCreateHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(opCreateHit.params, ['route-abc-001']);
+    const opCreateDescriptors = table.list()
+      .filter((item) => item.owner === 'server/modules/product-routing.js')
+      .filter((item) => item.path === '^\\/api\\/product-routings\\/([^/]+)\\/operations$');
+    assert.equal(opCreateDescriptors.length, 1, 'exactly one operations POST descriptor');
+    assert.equal(opCreateDescriptors[0].pathKind, 'regex');
+    // operations PATCH / DELETE: two capture groups (routingId, operationId);
+    // same regex source shape used for both methods.
+    const patchHit = table.match('PATCH', '/api/product-routings/route-abc-001/operations/op-42');
+    assert.ok(patchHit, 'PATCH .../operations/:operationId must match the route-table');
+    assert.equal(patchHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(patchHit.params, ['route-abc-001', 'op-42']);
+    const deleteHit = table.match('DELETE', '/api/product-routings/route-abc-001/operations/op-42');
+    assert.ok(deleteHit, 'DELETE .../operations/:operationId must match the route-table');
+    assert.equal(deleteHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(deleteHit.params, ['route-abc-001', 'op-42']);
+    const operationDescriptors = table.list()
+      .filter((item) => item.owner === 'server/modules/product-routing.js')
+      .filter((item) => item.path.includes('\\/operations\\/([^/]+)$'));
+    assert.equal(operationDescriptors.length, 2, 'exactly two operations PATCH/DELETE descriptors must exist');
+    assert.deepEqual(operationDescriptors.map((entry) => entry.method).sort(), ['DELETE', 'PATCH']);
+    for (const entry of operationDescriptors) assert.equal(entry.pathKind, 'regex');
+  });
+
+  test('detail GET / PATCH / DELETE register with single routingId param; detail DELETE delegates to the thin deleteProductRouting wrapper in product-routing.js', () => {
+    const table = buildOwnedTable();
+    const getHit = table.match('GET', '/api/product-routings/route-abc-001');
+    assert.ok(getHit, 'GET /api/product-routings/:id must match the route-table');
+    assert.equal(getHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(getHit.params, ['route-abc-001']);
+    const patchHit = table.match('PATCH', '/api/product-routings/route-abc-001');
+    assert.ok(patchHit, 'PATCH /api/product-routings/:id must match the route-table');
+    assert.equal(patchHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(patchHit.params, ['route-abc-001']);
+    const deleteHit = table.match('DELETE', '/api/product-routings/route-abc-001');
+    assert.ok(deleteHit, 'DELETE /api/product-routings/:id must match the route-table');
+    assert.equal(deleteHit.owner, 'server/modules/product-routing.js');
+    assert.deepEqual(deleteHit.params, ['route-abc-001']);
+    const detailDescriptors = table.list()
+      .filter((item) => item.owner === 'server/modules/product-routing.js')
+      .filter((item) => item.path === '^\\/api\\/product-routings\\/([^/]+)$');
+    assert.equal(detailDescriptors.length, 3, 'exactly three detail GET/PATCH/DELETE descriptors must exist');
+    assert.deepEqual(detailDescriptors.map((entry) => entry.method).sort(), ['DELETE', 'GET', 'PATCH']);
+    for (const entry of detailDescriptors) assert.equal(entry.pathKind, 'regex');
+    // Detail DELETE is the only Product Routing entry whose handler
+    // is the thin wrapper (deleteProductRouting). The wrapper itself
+    // delegates to deleteMasterRecord(...,'routing',...) inside
+    // product-routing.js, not in app.js.
+    assert.doesNotMatch(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]routing['"]/,
+      'Wave 4B: deleteMasterRecord must not be called directly from app.js for kind="routing"; it must delegate via server/modules/product-routing.js deleteProductRouting',
+    );
+    // The wrapper body itself.
+    assert.match(
+      productRoutingModuleSource,
+      /export\s+function\s+deleteProductRouting\s*\(\s*db\s*,\s*res\s*,\s*actor\s*,\s*routingId\s*\)\s*\{[^}]*deleteMasterRecord\s*\(\s*db\s*,\s*res\s*,\s*actor\s*,\s*['"]routing['"]\s*,\s*routingId\s*\)/,
+      'Wave 4B: deleteProductRouting wrapper must delegate verbatim to deleteMasterRecord(db, res, actor, \'routing\', routingId)',
+    );
+    // data-lifecycle.js routing rule remains the canonical DELETE
+    // master-data contract (table = product_routings, permission =
+    // ROUTING_MANAGE, requiredStatus = INACTIVE).
+    const dataLifecycleSource = readFileSync(resolve('server/modules/data-lifecycle.js'), 'utf8');
+    assert.match(dataLifecycleSource, /routing:\s*\{/);
+    assert.match(dataLifecycleSource, /table:\s*['"]product_routings['"]/);
+    assert.match(dataLifecycleSource, /permission:\s*['"]ROUTING_MANAGE['"]/);
+    assert.match(dataLifecycleSource, /requiredStatus:\s*['"]INACTIVE['"]/);
+  });
+
+  test('legacy Product Routing handleApi branches and match variables are absent in app.js; BOM remains legacy and is NOT registered', () => {
+    // Legacy exact-match branches must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/product-routings['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4B: legacy exact-match GET branch for /api/product-routings must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/product-routings['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 4B: legacy exact-match POST branch for /api/product-routings must be removed',
+    );
+    // Legacy productRoutingMatch / productRoutingAction /
+    // productRoutingOperation / productRoutingOperations declarations
+    // and any reference to productRoutingAction[2] /
+    // productRoutingOperation[1] / productRoutingOperation[2] /
+    // productRoutingOperations[1] / productRoutingMatch[1] must be
+    // removed (the new regex params surface as match.params[0] /
+    // match.params[1] through the route-table).
+    assert.doesNotMatch(appSource, /\bproductRoutingAction\b/);
+    assert.doesNotMatch(appSource, /\bproductRoutingOperation\b/);
+    assert.doesNotMatch(appSource, /\bproductRoutingOperations\b/);
+    assert.doesNotMatch(appSource, /\bproductRoutingMatch\b/);
+    // The legacy section header must be removed (canonical route-table
+    // is the single source of dispatch now).
+    assert.doesNotMatch(
+      appSource,
+      /\/\/\s*============\s*Product Routings\s*============/,
+      'Wave 4B: legacy "// ============ Product Routings ============" section header must be removed',
+    );
+    // BOM legacy boundary must remain intact (do not migrate BOM).
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/boms['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4B: BOM legacy exact-match GET branch MUST remain',
+    );
+    assert.match(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/boms['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 4B: BOM legacy exact-match POST branch MUST remain',
+    );
+    assert.match(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]bom['"]/,
+      'Wave 4B: BOM DELETE legacy direct deleteMasterRecord call MUST remain',
+    );
+    // BOM detail/mutation routes must remain legacy and not in the
+    // route-table. ownedRouteTable.match(...) must return null for
+    // every representative BOM URL.
+    assert.equal(buildOwnedTable().match('GET', '/api/boms'), null, 'BOM GET must NOT be dispatched by the route-table');
+    assert.equal(buildOwnedTable().match('POST', '/api/boms'), null, 'BOM POST must NOT be dispatched by the route-table');
+    assert.equal(buildOwnedTable().match('DELETE', '/api/boms/bom-001'), null, 'BOM DELETE must NOT be dispatched by the route-table');
+  });
+
+  test('product-routings duplicate (method, path) registration is still rejected; regex shapes used in app.js must be anchored with no flags; unknown descriptor fields stay rejected', () => {
+    const table = createRouteTable();
+    // Register one exact-string collection route + one regex family to
+    // exercise both shapes used in app.js.
+    table.register({ method: 'GET', path: '/api/product-routings', handler: () => 'first', owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    assert.equal(table.size(), 3);
+    // Duplicate exact-string (method, path) must fail closed.
+    assert.throws(
+      () => table.register({ method: 'GET', path: '/api/product-routings', handler: () => 'second', owner: 'server/modules/product-routing.js' }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+    );
+    // Same regex source with a flag must fail closed.
+    assert.throws(
+      () => table.register({ method: 'PATCH', path: new RegExp('^\\/api\\/product-routings\\/([^/]+)$', 'i'), handler: () => {}, owner: 'server/modules/product-routing.js' }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    // Unanchored variant of the detail regex must fail closed.
+    assert.throws(
+      () => table.register({ method: 'PATCH', path: /\/api\/product-routings\/([^/]+)/, handler: () => {}, owner: 'server/modules/product-routing.js' }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+    // Unknown descriptor field (e.g. permissions) must fail closed.
+    assert.throws(
+      () => table.register({ method: 'POST', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js', permissions: ['ROUTING_MANAGE'] }),
+      (error) => error instanceof RouteTableError && error.reason === 'unknown_descriptor_field' && error.field === 'permissions',
     );
   });
 });

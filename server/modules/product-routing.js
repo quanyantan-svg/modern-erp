@@ -1,6 +1,7 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, optionalText, readJson, requiredCode, requiredText, send } from '../lib/http.js';
+import { deleteMasterRecord } from './data-lifecycle.js';
 
 const ROUTING_STATUSES = new Set(['ACTIVE', 'INACTIVE']);
 
@@ -233,4 +234,8 @@ export function deleteProductRoutingOperation(db, res, actor, routingId, operati
     audit(db, actor.id, 'DELETE_OPERATION', 'PRODUCT_ROUTING', routingId, `${operation.sequence_no} ${operation.operation_name}`);
   });
   return send(res, 200, { ok: true });
+}
+
+export function deleteProductRouting(db, res, actor, routingId) {
+  return deleteMasterRecord(db, res, actor, 'routing', routingId);
 }

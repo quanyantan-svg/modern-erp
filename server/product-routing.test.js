@@ -191,6 +191,63 @@ describe('M10 routing lifecycle and validation', () => {
     assert.equal((await request(`/api/product-routings/${routingId}/operations/${created.data.id}`, { method: 'DELETE' })).status, 200);
   });
 
+  test('PATCH detail route updates header fields and preserves operations, with UPDATE PRODUCT_ROUTING audit', async () => {
+    // Capture header + operations snapshot before PATCH.
+    const before = await request(`/api/product-routings/${routingId}`);
+    assert.equal(before.status, 200);
+    const headerBefore = {
+      routingName: before.data.routing.routing_name,
+      version: before.data.routing.version,
+      notes: before.data.routing.notes,
+    };
+    const opsBefore = before.data.routing.operations.map((operation) => ({
+      id: operation.id,
+      sequence_no: operation.sequence_no,
+      operation_code: operation.operation_code,
+      operation_name: operation.operation_name,
+    }));
+
+    // PATCH only header fields — no operations, no status, no productId.
+    const patchBody = {
+      routingName: '演示成品标准工序-更新版',
+      version: 'V1.1',
+      notes: 'header-only PATCH via ownedRouteTable dispatch',
+    };
+    const patched = await request(`/api/product-routings/${routingId}`, { method: 'PATCH', body: patchBody });
+    assert.equal(patched.status, 200, patched.data.error);
+    assert.deepEqual(patched.data, { ok: true });
+
+    // GET detail after PATCH; header fields changed, operations preserved.
+    const after = await request(`/api/product-routings/${routingId}`);
+    assert.equal(after.status, 200);
+    assert.equal(after.data.routing.routing_name, patchBody.routingName);
+    assert.equal(after.data.routing.version, patchBody.version);
+    assert.equal(after.data.routing.notes, patchBody.notes);
+    assert.notEqual(after.data.routing.routing_name, headerBefore.routingName);
+    assert.notEqual(after.data.routing.version, headerBefore.version);
+    assert.notEqual(after.data.routing.notes, headerBefore.notes);
+    // productId and status are preserved by this PATCH.
+    assert.equal(after.data.routing.product_id, before.data.routing.product_id);
+    assert.equal(after.data.routing.status, before.data.routing.status);
+    // Operations remain unchanged — same IDs, sequence numbers, codes, names.
+    const opsAfter = after.data.routing.operations.map((operation) => ({
+      id: operation.id,
+      sequence_no: operation.sequence_no,
+      operation_code: operation.operation_code,
+      operation_name: operation.operation_name,
+    }));
+    assert.deepEqual(opsAfter, opsBefore);
+
+    // UPDATE PRODUCT_ROUTING audit must be present; entity_id, action, detail preserved.
+    const updateAudit = db.prepare(
+      "SELECT action, entity_type, entity_id, detail FROM audit_logs WHERE entity_type='PRODUCT_ROUTING' AND entity_id=? AND action='UPDATE' ORDER BY created_at DESC LIMIT 1",
+    ).get(routingId);
+    assert.ok(updateAudit, 'UPDATE PRODUCT_ROUTING audit must exist after PATCH');
+    assert.equal(updateAudit.entity_type, 'PRODUCT_ROUTING');
+    assert.equal(updateAudit.entity_id, routingId);
+    assert.match(updateAudit.detail, /ROUTE-DEMO-V1/);
+  });
+
   test('inactive routing remains readable but no longer appears as production order active relation', async () => {
     const bomId = id();
     db.prepare("INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES(?,'product-004','ROUTING-TEST','ACTIVE','','user-admin',datetime('now'),datetime('now'))").run(bomId);
