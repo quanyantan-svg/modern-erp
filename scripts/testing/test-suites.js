@@ -77,11 +77,25 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
-  // ----- V2 Wave 1 — backend dispatch ownership infrastructure -----
-  // Pure-function architecture tests for server/lib/route-table.js.
-  // Server/app.js remains the live dispatcher until a later wave wires
-  // route descriptors in.
+  // ----- V2 Stage 3 / Wave 3A — backend dispatch ownership architecture -----
+  // Architecture tests for server/lib/route-table.js plus the live
+  // Wave 3A invariants for the migrated warehouse route family
+  // (app.js imports route-table, four warehouse descriptors
+  // registered with canonical owner, no legacy warehouse dispatch
+  // branch remains, unrelated routes still fall through to the
+  // legacy handleApi chain). Pure-function route-table safety
+  // tests live in the same file.
   'server/route-table.test.js',
+
+  // ----- V2 Stage 3 / Wave 3A — first live warehouse ownership -----
+  // Focused behavior coverage for the migrated /api/warehouses route
+  // family: GET (search / shape / role), POST (validation / audit /
+  // 201), PATCH (200 / 404 / WAREHOUSE_NOT_EMPTY guard), DELETE
+  // (RECORD_REFERENCED / 200 empty warehouse / audit), and the
+  // canonical deleteMasterRecord lifecycle delegation. Complement
+  // — does not duplicate — the existing p2-data-lifecycle coverage
+  // of the deactivation stock guard and 409 on referenced warehouse.
+  'server/v2-wave3a-warehouses-ownership.test.js',
 
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',

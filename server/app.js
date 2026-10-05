@@ -139,6 +139,47 @@ import {
   analyzeArchiveEligibility, archiveLifecycleRecord, executeLifecycleCleanup, lifecycleAnalysis, lifecycleArchiveFilter,
   listCleanupEventsHandler, listLifecycleRecordsHandler, restoreLifecycleRecord,
 } from './modules/lifecycle-engine.js';
+import { createRouteTable } from './lib/route-table.js';
+import {
+  createWarehouse,
+  deleteWarehouse,
+  listWarehouses,
+  updateWarehouse,
+} from './modules/warehouses.js';
+
+// V2 Stage 3 / Wave 3A — Warehouse route-table registration.
+// First live production route family migrated using the Wave 1
+// route-table dispatch infrastructure. Each descriptor carries
+// exactly method / path / handler / owner — no permissions,
+// transaction policy, audit policy, or other runtime authority
+// is duplicated. Thin per-route adapters below translate the
+// route-table dispatch context (db, req, res, actor, url, params)
+// into each business handler's existing signature.
+const warehouseRouteTable = createRouteTable();
+warehouseRouteTable.register({
+  method: 'GET',
+  path: '/api/warehouses',
+  handler: ({ db, res, actor, url }) => listWarehouses(db, res, actor, url),
+  owner: 'server/modules/warehouses.js',
+});
+warehouseRouteTable.register({
+  method: 'POST',
+  path: '/api/warehouses',
+  handler: ({ db, req, res, actor }) => createWarehouse(db, req, res, actor),
+  owner: 'server/modules/warehouses.js',
+});
+warehouseRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/warehouses\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateWarehouse(db, req, res, actor, params[0]),
+  owner: 'server/modules/warehouses.js',
+});
+warehouseRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/warehouses\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteWarehouse(db, res, actor, params[0]),
+  owner: 'server/modules/warehouses.js',
+});
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
@@ -320,12 +361,17 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // Warehouses
-  if (pathname === '/api/warehouses' && req.method === 'GET') return listWarehouses(db, res, actor, url);
-  if (pathname === '/api/warehouses' && req.method === 'POST') return createWarehouse(db, req, res, actor);
-  const whMatch = pathname.match(/^\/api\/warehouses\/([^/]+)$/);
-  if (whMatch && req.method === 'PATCH') return updateWarehouse(db, req, res, actor, whMatch[1]);
-  if (whMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'warehouse', whMatch[1]);
+  // V2 Stage 3 / Wave 3A — Warehouse owned-route lookup.
+  // Runs AFTER authentication is resolved and BEFORE the legacy
+  // handleApi chain continues. Unmatched routes fall through to
+  // the existing legacy chain unchanged. The four warehouse
+  // routes are the only production routes in this wave.
+  {
+    const match = warehouseRouteTable.match(req.method, pathname);
+    if (match) {
+      return match.handler({ db, req, res, actor, url, params: match.params });
+    }
+  }
 
   // Inventory
   if (pathname === '/api/inventory' && req.method === 'GET') return listInventory(db, res, actor, url);
@@ -1756,43 +1802,6 @@ function savePurchaseOrderItems(db, orderId, items) {
   for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
     item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
     item.baseQuantityNumerator, item.baseQuantityDenominator);
-}
-
-// ============ Warehouses ============
-
-function listWarehouses(db, res, actor, url) {
-  allowAny(actor, ['WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE']);
-  const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const warehouses = db.prepare(`SELECT id,code,name,address,manager,active,created_at createdAt,updated_at updatedAt FROM warehouses WHERE code LIKE ? OR name LIKE ? ORDER BY code`).all(search, search).map((row) => ({ ...row, active: Boolean(row.active) }));
-  return send(res, 200, { warehouses });
-}
-
-async function createWarehouse(db, req, res, actor) {
-  allow(actor, 'WAREHOUSES_MANAGE');
-  const body = await readJson(req);
-  const warehouse = { id: id(), code: requiredCode(body.code, '仓库编码'), name: requiredText(body.name, '仓库名称', 100), address: optionalText(body.address, 200), manager: optionalText(body.manager, 50) };
-  const now = new Date().toISOString();
-  db.prepare(`INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)`).run(warehouse.id, warehouse.code, warehouse.name, warehouse.address, warehouse.manager, now, now);
-  audit(db, actor.id, 'CREATE', 'WAREHOUSE', warehouse.id, warehouse.code);
-  return send(res, 201, { id: warehouse.id });
-}
-
-async function updateWarehouse(db, req, res, actor, warehouseId) {
-  allow(actor, 'WAREHOUSES_MANAGE');
-  const current = db.prepare('SELECT * FROM warehouses WHERE id=?').get(warehouseId);
-  if (!current) throw new HttpError(404, '仓库不存在');
-  const body = await readJson(req);
-  const name = requiredText(body.name ?? current.name, '仓库名称', 100);
-  const address = optionalText(body.address ?? current.address, 200);
-  const manager = optionalText(body.manager ?? current.manager, 50);
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  if (current.active && !active) {
-    const stock = db.prepare('SELECT 1 FROM inventory WHERE warehouse_id=? AND quantity<>0 LIMIT 1').get(warehouseId);
-    if (stock) throw new HttpError(409, '仓库仍有库存，清零或转移库存后才能停用', { code: 'WAREHOUSE_NOT_EMPTY' });
-  }
-  db.prepare('UPDATE warehouses SET name=?,address=?,manager=?,active=?,updated_at=? WHERE id=?').run(name, address, manager, active, new Date().toISOString(), warehouseId);
-  audit(db, actor.id, 'UPDATE', 'WAREHOUSE', warehouseId, name);
-  return send(res, 200, { ok: true });
 }
 
 // ============ Inventory ============

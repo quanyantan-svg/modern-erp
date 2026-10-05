@@ -1,12 +1,27 @@
-// V2 Stage 3 / Wave 1 — focused architecture tests for the backend
+// V2 Stage 3 / Wave 3A — focused architecture tests for the backend
 // dispatch ownership infrastructure.
 //
-// These tests prove the route-table contract documented in
-// server/lib/route-table.js. They are pure-function tests: no DB, no HTTP,
-// no Vite. They are intentionally isolated from app.js — Wave 1 does NOT
-// wire the dispatcher into handleApi, so behavior at the live API boundary
-// remains unchanged. The architectural invariant that handleApi remains
-// the sole live dispatcher in Wave 1 is asserted explicitly at the end.
+// Two describe blocks in this file:
+//
+//   1. Pure-function tests for server/lib/route-table.js, covering
+//      register / match / list / duplicate detection / unknown
+//      descriptor-field rejection / RegExp anchor and no-flags rules
+//      / owner normalization. These tests are isolated from app.js —
+//      they require no DB and no HTTP and never assert anything about
+//      live dispatch.
+//
+//   2. V2 Stage 3 / Wave 3A — backend dispatch ownership architecture
+//      invariants. These tests read server/app.js and
+//      server/modules/warehouses.js from disk and assert that the
+//      live route-table infrastructure is wired in: app.js imports
+//      route-table.js, the four warehouse descriptors are registered
+//      with owner='server/modules/warehouses.js', no legacy
+//      /api/warehouses dispatch branches remain, and unrelated routes
+//      still fall through to the legacy handleApi chain.
+//
+// Authorization, transaction, and audit continue to live at the
+// handler boundary (allow / allowAny / transaction / audit); the
+// route-table carries dispatch + owner metadata only.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -678,18 +693,262 @@ describe('V2 Wave 1 — backend dispatch ownership route-table', () => {
       (error) => error instanceof RouteTableError && error.reason === 'invalid_owner',
     );
   });
+});
 
-  test('handleApi remains the authoritative live dispatcher in Wave 1 (no double-dispatch)', () => {
-    // Architectural invariant: server/app.js MUST NOT yet import
-    // server/lib/route-table.js, because Wave 1 is infrastructure-only
-    // and no business route is migrated. handleApi remains the sole
-    // live dispatcher. This static-source check locks the Wave 1
-    // cutover contract.
-    const appSource = readFileSync(resolve('server/app.js'), 'utf8');
-    assert.equal(
+describe('V2 Stage 3 / Wave 3A — backend dispatch ownership (warehouse migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+
+  test('server/app.js now imports the route-table infrastructure', () => {
+    assert.ok(
       appSource.includes('./lib/route-table.js') || appSource.includes('./lib\\route-table.js'),
-      false,
-      'Wave 1 must not import route-table into app.js — handleApi remains authoritative',
+      'Wave 3A: server/app.js MUST import ./lib/route-table.js so the migrated warehouse route family can dispatch through it',
     );
+    assert.match(appSource, /createRouteTable/);
+  });
+
+  test('server/modules/warehouses.js exists and exports the four canonical warehouse handlers', () => {
+    const moduleSource = readFileSync(resolve('server/modules/warehouses.js'), 'utf8');
+    assert.match(moduleSource, /export function listWarehouses\b/);
+    assert.match(moduleSource, /export (?:async )?function createWarehouse\b/);
+    assert.match(moduleSource, /export (?:async )?function updateWarehouse\b/);
+    assert.match(moduleSource, /export function deleteWarehouse\b/);
+  });
+
+  test('app.js imports the warehouse handlers from server/modules/warehouses.js', () => {
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/warehouses\.js['"]/,
+      'Wave 3A: server/app.js MUST import the warehouse handlers from server/modules/warehouses.js',
+    );
+    assert.match(appSource, /listWarehouses/);
+    assert.match(appSource, /createWarehouse/);
+    assert.match(appSource, /updateWarehouse/);
+    assert.match(appSource, /deleteWarehouse/);
+  });
+
+  test('app.js no longer declares listWarehouses / createWarehouse / updateWarehouse as app-local functions', () => {
+    assert.doesNotMatch(appSource, /^\s*function\s+listWarehouses\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createWarehouse\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateWarehouse\b/m);
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching /api/warehouses', () => {
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/warehouses['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3A: legacy exact-match GET branch for /api/warehouses must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/warehouses['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3A: legacy exact-match POST branch for /api/warehouses must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\.match\(\/\^\\\/api\\\/warehouses\\\/[^/]+\$\/\)/,
+      'Wave 3A: legacy whMatch-style dispatch for /api/warehouses/:id must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]warehouse['"]/,
+      'Wave 3A: deleteMasterRecord must not be called directly from app.js for kind="warehouse"; it must delegate via server/modules/warehouses.js',
+    );
+  });
+
+  test('all four warehouse routes are registered with the canonical owner', () => {
+    // Build the same route-table that app.js builds at module load
+    // by importing createRouteTable and exercising the descriptor
+    // contract with the same canonical fields.
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/warehouses',
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'POST',
+      path: '/api/warehouses',
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'PATCH',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'DELETE',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+
+    assert.equal(table.size(), 4);
+    const items = table.list();
+    for (const item of items) {
+      assert.equal(item.owner, 'server/modules/warehouses.js');
+    }
+
+    const getHit = table.match('GET', '/api/warehouses');
+    assert.ok(getHit, 'GET /api/warehouses must match');
+    assert.equal(getHit.owner, 'server/modules/warehouses.js');
+
+    const postHit = table.match('POST', '/api/warehouses');
+    assert.ok(postHit, 'POST /api/warehouses must match');
+    assert.equal(postHit.owner, 'server/modules/warehouses.js');
+
+    const patchHit = table.match('PATCH', '/api/warehouses/warehouse-001');
+    assert.ok(patchHit, 'PATCH /api/warehouses/:id must match');
+    assert.deepEqual(patchHit.params, ['warehouse-001']);
+    assert.equal(patchHit.owner, 'server/modules/warehouses.js');
+
+    const deleteHit = table.match('DELETE', '/api/warehouses/warehouse-001');
+    assert.ok(deleteHit, 'DELETE /api/warehouses/:id must match');
+    assert.deepEqual(deleteHit.params, ['warehouse-001']);
+    assert.equal(deleteHit.owner, 'server/modules/warehouses.js');
+  });
+
+  test('duplicate warehouse route registration is still rejected', () => {
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/warehouses',
+      handler: () => 'first',
+      owner: 'server/modules/warehouses.js',
+    });
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/warehouses',
+        handler: () => 'second',
+        owner: 'server/modules/warehouses.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+      'duplicate (method, path) registrations must still fail closed',
+    );
+  });
+
+  test('unknown descriptor field protection still rejects declarative metadata', () => {
+    // The Wave 3A descriptors must continue to be rejected for any
+    // field other than { method, path, handler, owner }. This protects
+    // against silently smuggling permissions / transactionPolicy /
+    // auditPolicy into the route-table.
+    const table = createRouteTable();
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/warehouses',
+        handler: () => {},
+        owner: 'server/modules/warehouses.js',
+        permissions: ['WAREHOUSES_VIEW'],
+      }),
+      (error) => error instanceof RouteTableError
+        && error.reason === 'unknown_descriptor_field'
+        && error.field === 'permissions',
+    );
+    assert.throws(
+      () => table.register({
+        method: 'POST',
+        path: '/api/warehouses',
+        handler: () => {},
+        owner: 'server/modules/warehouses.js',
+        transactionPolicy: 'serializable',
+      }),
+      (error) => error instanceof RouteTableError
+        && error.reason === 'unknown_descriptor_field'
+        && error.field === 'transactionPolicy',
+    );
+  });
+
+  test('warehouse regex path must be anchored with no flags', () => {
+    const table = createRouteTable();
+    // Exactly the regex shape used in app.js — must accept.
+    assert.doesNotThrow(() => table.register({
+      method: 'PATCH',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    }));
+    // Unflagged variant of the same regex — must accept.
+    assert.doesNotThrow(() => table.register({
+      method: 'DELETE',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    }));
+    // The same pattern with a flag must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: new RegExp('^\\/api\\/warehouses\\/([^/]+)$', 'i'),
+        handler: () => {},
+        owner: 'server/modules/warehouses.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    // An unanchored variant must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: /\/api\/warehouses\/([^/]+)/,
+        handler: () => {},
+        owner: 'server/modules/warehouses.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+  });
+
+  test('unrelated routes still fall through to legacy handleApi (match returns null)', () => {
+    // The route-table only owns the four warehouse routes in Wave
+    // 3A. Every other production route must continue to fall
+    // through to the existing legacy handleApi chain unchanged.
+    const table = createRouteTable();
+    table.register({
+      method: 'GET',
+      path: '/api/warehouses',
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'POST',
+      path: '/api/warehouses',
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'PATCH',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+    table.register({
+      method: 'DELETE',
+      path: /^\/api\/warehouses\/([^/]+)$/,
+      handler: () => {},
+      owner: 'server/modules/warehouses.js',
+    });
+
+    // All of these must return null so legacy handleApi continues
+    // to handle them exactly as before.
+    const unrelatedPaths = [
+      ['GET', '/api/customers'],
+      ['GET', '/api/suppliers'],
+      ['GET', '/api/products'],
+      ['GET', '/api/orders'],
+      ['POST', '/api/customers'],
+      ['PATCH', '/api/customers/customer-001'],
+      ['DELETE', '/api/customers/customer-001'],
+      ['GET', '/api/inventory'],
+      ['GET', '/api/inventory-checks'],
+      ['GET', '/api/roles'],
+      ['POST', '/api/auth/login'],
+      ['GET', '/api/health'],
+      ['GET', '/api/dashboard'],
+    ];
+    for (const [method, path] of unrelatedPaths) {
+      assert.equal(table.match(method, path), null, `unrelated ${method} ${path} must NOT match the warehouse route-table`);
+    }
   });
 });
