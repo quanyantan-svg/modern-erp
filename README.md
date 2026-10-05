@@ -1,8 +1,16 @@
 # Modern ERP
 
-Modern ERP 是基于方天云端 ERP B9V27 可识别业务模型重建的教学与业务原型系统。当前应用版本为 **1.6.2**，产品方向为 **V1.6 Mobile Enterprise**；最终发布身份仍由 Git release tag 确认。
+Modern ERP 是一套基于 React + Node + SQLite/MySQL 技术体系、采用 mobile-first 产品形态构建的现代 ERP 系统。当前已发布产品基线为 **v1.6.2**，其内部代号为 **V1.6 Mobile Enterprise**，包含 53 个启用的 canonical 路由与 5 个明确禁用路由；最终发布身份由 Git release tag 确认。
 
-V1.6 的 P0–P8 原型与产品一致性验收、以及全站 Mobile Enterprise 推广已经完成。当前最终用户产品包含 **53 个启用的 canonical 路由**：其中 10 个 V1.6 原型路由保持冻结，43 个路由已完成全站迁移；5 个明确禁用路由继续保留为非产品入口。发布后的操作员验证结果将单独记录，本 README 不预先声明本次 release-prep 后的测试结论。
+当前应用版本仍为 `1.6.2`；最新既有 release tag 仍为 `v1.6.2`，不得移动、删除或重建。`master` 是持续开发分支，可以包含尚未打 tag 的发布准备变更；精确检出状态由 Git SHA 或 `git describe` 标识，HEAD 不应被描述为已经发布的版本。
+
+后续开发的产品主线是：
+
+> 以《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册作为**模块级功能对标来源**，吸收成熟 ERP 的业务功能、术语、流程、控制机制与模块边界。
+
+Modern ERP 不是金蝶产品的复刻、UI 像素复制或代码复制，也不宣称与金蝶产品等同；它继续在自己的技术栈与 mobile-first 形态下实现由上述对标产生的具体模块能力。Wave / Stage / V2 / V1.6 等历史工程路线不再决定产品开发顺序，仅作为模块内部工程约束或历史迁移记录存在。
+
+当前 V1.6 P0–P8、53 启用 routes、5 disabled routes 等已经形成的产品事实，是历史完成状态 / 已有产品基线，不构成未来模块对标的替代路线。
 
 ## 当前支持
 
@@ -187,10 +195,21 @@ MySQL gate 需要单独的 disposable MySQL 8 环境；缺少明确测试配置�
 
 ## 版本语义
 
-- 当前应用/package 版本为 1.6.2，Git tag 标识为 `v1.6.2`，HEAD 与 tag 一致；最终发布身份由 Git release tag 确认。
-- Git release tag 是已发布版本的权威来源；最新既有发布 tag 为 `v1.6.2`，不得移动、删除或重建既有 release tag。
-- master 可以包含尚未打 tag 的发布准备变更；使用 Git SHA 或 `git describe` 标识精确检出状态，不应把未打 tag 的 HEAD 描述为已经发布。
+- 当前应用/package 版本为 `1.6.2`，最新既有 release tag 为 `v1.6.2`，HEAD 可以领先 tag 包含尚未发布的开发变更；最终发布身份由 Git release tag 确认。
+- Git release tag 是已发布版本的权威来源；不得移动、删除或重建既有 release tag；不要把当前未打 tag 的 HEAD 描述为已经发布的版本。
+- 精确开发状态由 Git SHA 或 `git describe` 标识；不要把 SHA 硬编码进 README 作为永久版本号。
 - document.md 和 solution.md 描述当前检出仓库状态，不维护独立语义版本。
+- 22 模块对标主线不是 `v2.0.0` release 声明；不因开始金蝶模块对标而自动创建或修改 release tag。
+
+## 当前开发主线
+
+产品开发主线以**金蝶业务模块**为顶层单位，遵循下列顺序：
+
+`金蝶模块 → 当前实现审计 → Coverage Matrix → Gap → Requirement → Design → Implementation → Acceptance → Module Freeze`
+
+默认按编号推进：B3101 → B3102 → …… → B3122。每个模块必须独立完成审计、设计、实现、验收，通过后方可进入下一个模块；不得以"重构完成"、"已有同名页面"等工程理由跳过 Acceptance。
+
+详细规则与术语见 [document.md](./document.md)（§20 金蝶模块级功能对标开发主线）与 [solution.md](./solution.md)（§19 金蝶模块级功能对标实施设计与工程约束）。
 
 ## 安全说明
 

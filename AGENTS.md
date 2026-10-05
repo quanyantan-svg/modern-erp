@@ -10,6 +10,16 @@
 - 部署：Nginx 反向代理 + systemd 服务，不使用 PM2。
 - 当前发布上下文以 Git release tag 为准；当前基线为 v1.6.2。
 
+## 1.1 当前产品开发主线
+
+- 产品开发主线是 **金蝶 B3101–B3122 模块级功能对标**：以《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册作为模块级功能对标来源。
+- **模块**是顶层进度单位（不是 route 数量 / handler 抽取数量 / Wave 编号 / 页面数量）。
+- 默认模块推进顺序为 `B3101 → B3102 → ... → B3122`；只有用户明确调整时才允许改变模块顺序。
+- 不得因为某个 Wave 尚未完成或某个工程目标尚未达成而自动推迟、跳过或改变当前模块。
+- 不得因为某个 Wave 已完成而自动开始下一个 Wave；Wave 不再是产品 roadmap。
+- 历史 Wave（Wave 1 ～ Wave 5B）只作为模块内部工程模式 / 历史迁移记录保留，不构成未来执行顺序。
+- 详细规则见 `document.md §20`（金蝶模块级功能对标开发主线）与 `solution.md §19`（金蝶模块级功能对标实施设计与工程约束）。
+
 ## 2. 修改应用代码前的必读与检查
 
 仓库内有数千行 canonical 文档和源代码。完整阅读整个仓库对每个小任务都不现实；下面把阅读义务分为"会话基线建立"、"会话内变更感知读取"、"代码阅读范围"和"全局级强制通读"四档。**任务级不要机械重复全文读取，但首次会话基线不得跳过。**
@@ -71,42 +81,82 @@
 
 **任务级文档阅读不等于可以跳过完整调用链阅读。** 文档告诉你"做什么"和"为什么"，调用链告诉你"在哪里做"和"必须不能动什么"；两者都是任务级阅读义务的硬性部分。
 
-## 3. 需求、设计、实现的顺序
+## 3. 模块开发与实现授权顺序
 
-新增功能或行为变化必须按以下顺序进行。每个阶段完成后必须停止，等待用户对当前阶段成果的明确确认，再进入下一阶段；不要把"暂停等确认"当成可选。
+新增功能、行为变化或金蝶模块对标任务必须按以下顺序进行。每个阶段完成后必须停止，等待用户对当前阶段成果的明确确认，再进入下一阶段；不要把"暂停等确认"当成可选。
 
-### STAGE 1 — REQUIREMENT
+固定顺序：
 
-- 只更新 document.md 中与本次变化相关的章节。
-- 不重写无关需求。
-- 完成后停止，等待用户对需求文档的明确确认，再进入 STAGE 2。
+`MODULE AUDIT → COVERAGE/GAP → REQUIREMENT → DESIGN → IMPLEMENTATION → ACCEPTANCE/FREEZE`
 
-### STAGE 2 — DESIGN
+### MODULE AUDIT / COVERAGE
 
-需求获批后，只更新 solution.md 中相关设计，说明：
+- 对照对应金蝶操作手册（参见 §1.1 与 `document.md §20.2` 的 22 模块清单）提取该模块的业务功能；
+- 检查真实仓库实现（前端、后端、数据库、测试、audit、RBAC、SOD、transaction、mobile surface、cross-module impact）；
+- 形成 Coverage Matrix（参见 `document.md §20.4`），逐项给出 `COVERED` / `PARTIAL` / `MISSING` / `SEMANTIC_MISMATCH` / `OUT_OF_SCOPE`；
+- Implementation Agent 不得把"看见类似页面 / 同名 API"自行判断为 `COVERED`；必须就业务语义、控制机制与状态机逐项核对。
+- 完成后停止，等待用户对审计结果的明确确认。
+
+### GAP
+
+- 明确 `COVERED` / `PARTIAL` / `MISSING` / `SEMANTIC_MISMATCH` / `OUT_OF_SCOPE` 五种状态；
+- 只有 `PARTIAL` / `MISSING` / `SEMANTIC_MISMATCH` 三类项目经过用户确认后才进入 REQUIREMENT；
+- `COVERED` 默认保持不动；`OUT_OF_SCOPE` 不实现，不通过 UI / 文档 / 日志暗示已经支持。
+
+### REQUIREMENT
+
+- 只更新 `document.md` 中与本次变化相关的章节；
+- 不重写无关需求；
+- 不粘贴详细实现源码；
+- 完成后停止，等待用户对需求文档的明确确认，再进入 DESIGN。
+
+### DESIGN
+
+需求获批后，只更新 `solution.md` 中相关设计，说明：
 
 - 模块和函数职责；
 - 数据流与调用关系；
 - 事务边界；
 - 权限与职责分离；
 - 错误行为；
-- 测试策略。
+- 测试策略；
+- 与金蝶 Coverage Matrix 的对应关系；
+- 受 §6 测试 gate 阶梯约束的 gate 推导。
 
-- 不粘贴详细实现源码。
-- 完成后停止，等待用户对设计文档的明确确认，再进入 STAGE 3。
+- 不粘贴详细实现源码；
+- 完成后停止，等待用户对设计文档的明确确认，再进入 IMPLEMENTATION。
 
-### STAGE 3 — IMPLEMENTATION
+### IMPLEMENTATION
 
 需求和设计获批后才可以：
 
 - 修改实现；
 - 修改或增加测试；
 - 仅在运行要求、设置、结构或入口变化时更新 README；
-- 将开发结果追加到当天 log/YYYY-MM-DD.md。
+- 将开发结果追加到当天 `log/YYYY-MM-DD.md`。
+
+Implementation Agent 的职责范围（关键边界）：
+
+- 当用户已经提供或批准完整 Requirement / Design / Implementation Brief 时，Implementation Agent 的职责只是按照该批准内容实施；**不需要重新发明需求或设计**。
+- 如果批准的 implementation brief 同时要求把已经确认的 Requirement / Design 机械写入 `document.md` / `solution.md`，可以在同一 implementation task 中按提供内容更新这些文档，不需要重新发明需求或设计。
+- 但是：不得扩大需求；不得改变设计；不得新增未经批准的功能。
+- 实现过程中发现新 Gap / 新 schema 需求 / 跨模块冲突 / 新业务规则 / 手册解释冲突时，停止该新增部分，先报告给用户；不得直接修改。
+- 不得以"顺手优化"为理由扩大实现范围。
+- 不得为了完成架构目标（拆 `app.js`、拆 `extended.js`、完成 Wave 编号等）夹带业务变更。
 
 旧规则"新增功能时只修改 document.md"和"新增功能时只修改 solution.md"表示连续阶段，而不是互斥的全局规则。
 
-如果实现先于必需的需求或设计步骤开始，立即停止实现，先修复文档与工作流状态。
+### ACCEPTANCE / FREEZE
+
+- Module Acceptance 必须基于真实远端代码、Coverage Matrix、Requirement、Design、测试证据；
+- Implementation Agent 的自我报告（包括 "PASS"、"迁移完成"、"重构结束" 等说法）不能作为最终 Module Acceptance 的依据；
+- 只有用户明确确认 `Module Acceptance = PASS` 后，`MODULE FREEZE` 才成立；
+- `MODULE FREEZE` 之后才能进入下一个金蝶模块；
+- `MODULE FREEZE` 之后的模块内部若发现新 Gap、新设计变更或新业务需求，按本节重新走 `MODULE AUDIT → COVERAGE → REQUIREMENT → DESIGN → ACCEPTANCE/FREEZE`。
+
+### 流程违规处理
+
+如果实现先于必需的需求或设计步骤开始，立即停止实现，先修复文档与工作流状态；如果 Implementation Agent 自行决定扩大需求 / 改变设计 / 新增未经批准的功能，立即停止该新增部分，恢复到上一阶段并报告。
 
 ## 4. Canonical 文档职责
 

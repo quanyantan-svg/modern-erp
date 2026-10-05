@@ -31,6 +31,8 @@ V1.4 不引入新的核心业务对象或角色，优先聚焦业务一致性、
 
 最终用户可见产品范围有意与原始 ERP 业务流程图对齐，主线覆盖主数据、销售、采购、生产、库存、财务/会计和决策报表；受控 Go-Live 用户前端从最终用户可见产品范围移除，但其后端实现、相关数据库结构与历史文档/证据仍保留为后端/内部能力（见第 15、16、19 节）。
 
+当前新增、补齐和修正 ERP 能力的产品主线，以 §20 定义的金蝶 B3101–B3122 模块级功能对标为准；上述"原始 ERP 业务流程图"承担的是历史结构的事实描述，不再作为当前 roadmap 的权威来源。Wave / Stage / V2 / V1.6 等历史工程路线仅作为模块内部工程约束或历史迁移记录存在，不再驱动产品开发顺序。
+
 ### 2.1 V1.7 P0 — 前端应用架构基础
 
 V1.7 P0 只建立前端应用架构基础，不新增 ERP 业务对象、API、数据库业务 schema、角色、审批族或业务能力。移动端继续固定“消息、审批、应用、工作台、我的”五个全局入口；新增 ERP domain 不得增加底部入口。“应用”表达用户可执行的业务能力，不是数据库表目录，内部步骤、辅助查询、配置能力和 contextual capability 不默认提升为一级应用。
@@ -398,225 +400,175 @@ IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOL
 - 用户可见的受控 Go-Live 前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）；
 - 在真实大规模 MySQL 数据和目标硬件上的生产容量认证。
 
-## 20. V2 系统化重构与产品结构现代化
+## 20. 金蝶模块级功能对标开发主线
 
-V2 是建立在 v1.6.2 已发布基线之上的系统化重构与产品结构现代化计划。V2 不得被描述为 greenfield 改写，也不得暗示既有已验证 ERP 业务逻辑会被整体替换。V2 是结构重构与所有权迁移计划，不是新 ERP 业务能力发布；§3–§19 既有的业务合同在 V2 全部实施阶段必须继续成立，任何偏离必须先形成独立、明确批准的需求 delta。V2 第一波的版本与 tag 语义见 §20.9。
+### 20.1 对标目标与权威来源
 
-### 20.1 V2 目的
+Modern ERP 当前的产品开发主线是以《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册作为**模块级功能对标来源**，吸收成熟 ERP 的业务功能、术语、流程、控制机制与模块边界。该对标的目标是：
 
-V2 的目标是：
+- 让 Modern ERP 的功能范围、术语口径、业务流程与控制机制能够与成熟 ERP 对齐；
+- 让 Modern ERP 的模块边界与金蝶模块边界在语义层面对齐；
+- 在 Modern ERP 自己的 React + Node + SQLite/MySQL 技术体系和 mobile-first 形态下实现上述对标。
 
-1. 减少架构集中度与重复所有权；
-2. 建立清晰的前后端领域边界；
-3. 使未来 ERP 开发更安全、更易推理；
-4. 在不改变既有 ERP 业务含义的前提下改进 mobile-first 应用结构；
-5. 在保留已验证的 v1.6.2 业务合同的同时，按需替换遗留 / 内部实现结构；
-6. 通过显式的迁移阶段，使 V2 增量推进、持续回归安全，避免一次性重写。
+下列边界必须明确：
 
-### 20.2 V2 基线冻结
+- **不是 UI 像素复制**：不复制金蝶的桌面 ERP 视觉布局、控件样式或栅格密度；Modern ERP 继续采用 mobile-first 产品形态。
+- **不是源码复制**：不复制金蝶产品的实现代码或内部抽象；Modern ERP 在现有 `src/`、`server/`、`server/modules/`、`server/database/` 上落地。
+- **不是等同声明**：Modern ERP 不宣称自己是金蝶产品或与金蝶产品完全等价；它只是按模块级范围主动对标。
+- **§3–§19 仍然有效**：当前文档已经成立的 Modern ERP 业务合同继续全部有效；只有经过模块 Gap 分析确认需要改变的内容，才形成新的需求 delta。
+- **Wave 不再决定模块顺序**：Wave 1 / Wave 2 / ... / Wave 10 等历史路线仅作为模块内部工程约束或历史迁移记录存在，不再决定产品开发顺序。
 
-下列状态在 V2 全部实施阶段视为冻结基线（版本与 tag 规则以 §20.9 为权威）：
+### 20.2 22 个模块清单与默认推进顺序
 
-- 已发布基线：`v1.6.2`。
-- 已认证的开发 / 重构基线：`master` @ `98d20232674baf8b1ccb69850fd46ecd709f42b3`。
-- V2 继承的 V1.7 P0 前端架构基础：
-  - `src/navigation/applicationRegistry.js` 仍为 canonical 路由与应用元数据事实源；
-  - `src/navigation/routeLocation.js` 仍为 canonical 导航位置合同；
-  - `AppNavigationContext` 导航合同继续继承；
-  - Route-level lazy screen 架构继续继承；
-  - 53 个启用 Route、5 个禁用 Route；
-  - 现有 `MobileShell`（messages / approvals / apps / workspace / profile）五入口合同。
-- V1.7 P0 属于 V2 继承的前端架构基础，不是独立的 ERP 业务能力发布。
+按《金蝶云星空标准版操作手册》，当前纳入产品对标范围的模块共 22 个，按编号顺序推进：
 
-### 20.3 V2 业务合同冻结（必须保留）
+| 编号 | 模块名称 |
+|---|---|
+| B3101 | 采购管理 |
+| B3102 | 销售管理 |
+| B3103 | 信用管理 |
+| B3104 | 库存管理 |
+| B3105 | 条码管理 |
+| B3106 | 存货核算 |
+| B3107 | 固定资产 |
+| B3108 | 应付款－业务应付模式 |
+| B3109 | 应付款－暂估应付模式 |
+| B3110 | 应收款－业务应收模式 |
+| B3111 | 应收款－暂估应收模式 |
+| B3112 | 发票管理 |
+| B3113 | 出纳管理 |
+| B3114 | 智能会计平台 |
+| B3115 | 总账 |
+| B3116 | 报表 |
+| B3117 | 经营会计 |
+| B3118 | 工程数据 |
+| B3119 | 生产管理 |
+| B3120 | 计划管理 |
+| B3121 | 委外管理 |
+| B3122 | 工作流设计与配置 |
 
-§3–§17 仍是权威、详尽的业务合同来源；§20.3 只识别 V2 重构不得违反的跨领域不变量。任何偏离必须先形成新的、明确批准的需求 delta。
+默认顺序为 `B3101 → B3102 → ... → B3122`。只有用户明确调整时才允许改变模块顺序；不得因为某个 Wave 尚未完成或某个工程目标尚未达成而自动改变模块顺序，也不得因为某个模块工作量大就自动跳过或推迟到下一轮。每个模块独立审计、独立设计、独立实现、独立验收。
 
-A. 授权与治理（见 §3）
+### 20.3 模块是顶层开发与完成单位
 
-- 五 canonical 角色：ADMIN / SALES / REVIEWER / WAREHOUSE / ACCOUNTING；
-- 五 canonical 审批族：SALES_ORDER / PURCHASE_ORDER / PURCHASE_REQUISITION / INVENTORY_CHECK / ACCOUNTING_VOUCHER；
-- 职责分离（SOD）与创建人不得审批自己单据；
-- 后端授权始终权威；
-- 关键操作保留审计合同。
+- **模块**是产品 roadmap 的顶层单位；
+- route 数量、handler 抽取数量、Wave 编号、页面数量、迁移 cell 数量都不是模块完成标准；
+- 每个模块必须独立审计、独立设计、独立实现、独立验收；
+- 一个模块没有通过最终 Module Acceptance，不得因工程重构或部分迁移已经完成而标记模块完成；
+- 一个模块通过后进入 `MODULE FREEZE` 状态；MODULE FREEZE 之后才能进入下一个模块；
+- MODULE FREEZE 之后的模块内部若发现新 Gap、新设计变更或新业务需求，按 §3 流程重新走 MODULE AUDIT → COVERAGE → REQUIREMENT → DESIGN → ACCEPTANCE/FREEZE。
 
-B. 金额与会计（见 §4.1、§13、§14、§16）
+### 20.4 每模块固定 Audit / Coverage Matrix
 
-- API / 数据库使用安全整数分，借贷严格相等；
-- POSTED-only 是财务报表权威口径；
-- 系统凭证来源唯一；
-- AR / AP 未结金额由历史派生、不得由人工编辑；
-- 退款、贷项、冲销、write-off 保留原单、反向凭证与审计。
+任何新增功能实现之前，都必须先基于对应金蝶操作手册提取该模块的业务功能，并对照当前 Modern ERP 真实仓库状态进行审计。Coverage Matrix 至少逐项核对：
 
-C. 库存、LOT / SERIAL 与估值（见 §10、§13）
+- 金蝶业务能力 / 场景；
+- 当前 UI / Route（`src/navigation/applicationRegistry.js` 中的启用 / 禁用 Route、对应 surface）；
+- API（`server/app.js` 与 `server/modules/` 中已注册的 method / path）；
+- handler / domain owner（依据 route 表 `owner` 字段与现有模块文件结构）；
+- schema / persistence（`server/db.js` 基础 schema + `server/migrations/` + `server/database/` MySQL adapter）；
+- workflow / state machine（业务状态机、DRAFT / SUBMITTED / APPROVED / CONFIRMED / REVERSED 等状态）；
+- RBAC / SOD（PERMISSIONS catalogue、SOD、ADMIN 校验）；
+- transaction（事务边界、回滚与幂等合同）；
+- audit（审计事件、created/updated 字段、audit log）；
+- tests（focused tests、regression、focused / full / heavy tier）；
+- mobile / responsive surface（涉及 UI 时，320 / 390 / 430 / 680 CSS px 行为）；
+- cross-module impact（与其它模块的耦合点，包括状态机、AR/AP、库存、WIP、会计、估值）。
 
-- canonical inventory、不可变流水、LOT / SERIAL 身份语义、HOLD / AVAILABLE 区分；
-- 数量与价值移动在同一业务事务内同步发生；
-- valuation movement 为价值权威历史，缓存由事务维护；
-- 退货 / 冲销恢复原账面价值；
-- LEGACY_UNVALUED 不得静默估价，并阻断权威关账。
+Coverage 状态统一使用下列取值，不允许自定义：
 
-D. O2C / P2P（见 §6、§7、§11）
+- `COVERED` — 当前能力和业务语义已经满足，不应为了"对标"重复实现；保留既有的实现与合同。
+- `PARTIAL` — 已有能力，但功能范围、控制机制或业务边界不足；按差额补齐。
+- `MISSING` — 当前 Modern ERP 没有对应能力；按批准需求新增。
+- `SEMANTIC_MISMATCH` — 表面存在类似能力，但业务含义、状态机、来源、来源快照、控制机制或语义口径不一致；优先校正业务语义，不能仅改 UI 名称。
+- `OUT_OF_SCOPE` — 经过明确决策后不纳入当前 Modern ERP 支持范围；不实现，不得通过 UI 或文档暗示已经支持。
 
-- 来源单据数量边界、审批、收货 / 出货质量门禁、IQC / OQC 语义保留；
-- 开票 / 结算与收货 / 出货分离；
-- 退货不得自动重开原始订单履约义务。
+不得把"有一个同名页面 / 同名 API"直接判定为 `COVERED`；必须就业务语义、控制机制与状态机逐项核对。
 
-E. 制造、WIP 与成本（见 §9、§12）
+### 20.5 Gap → Requirement → Design
 
-- BOM / routing / cost snapshot 在开工时建立；
-- 领退料、生产入库与冲销由 WAREHOUSE 执行；
-- 工序报工、报废与时间记录、显式冲销；
-- WIP 必须正确；完工差异显式；完工时 WIP 归零；
-- 缺失成本证据不得伪装为零。
+只有 `PARTIAL` / `MISSING` / `SEMANTIC_MISMATCH` 三类项目经过用户确认后，才形成新的需求 delta 并进入实现路径：
 
-F. 期间控制（见 §13、§16）
+- `COVERED` 默认保持不动；只有发现独立 bug 或独立 Gap 时才再次审计。
+- `OUT_OF_SCOPE` 不实现；不得通过 UI、文档或日志暗示已经支持。
 
-- 存货期间先于会计期间关闭；
-- 业务日期为期间归属口径；
-- 关闭期间内的库存 / 财务影响交易必须被拒绝；
-- reconciliation 默认为 CHECK-only；
-- 反结账按相反顺序并保留原因与历史。
+需求 delta 形成后按下列路径推进：
 
-G. 数据库与并发（见 §6、§9、§17）
+- `REQUIREMENT` 进入 `document.md`：只更新与本次变化相关的章节；不重写无关需求。
+- `DESIGN` 进入 `solution.md`：说明模块与函数职责、数据流与调用关系、事务边界、权限与职责分离、错误行为、测试策略；不粘贴详细实现源码。
+- 不得由实现阶段自行补造新的业务需求；实现阶段不得绕过 REQUIREMENT / DESIGN 流程。
+- 不得以"顺手优化"为理由扩大实现范围。
 
-- SQLite 仍为受支持的本地 / 测试兼容后端；
-- MySQL 8 仍为一等运行后端；
-- 既有 transaction recheck、幂等与唯一性保证继续生效；
-- 既有 MySQL 并发正确性边界不得在另行批准的证据 / 设计前被削弱；
-- stale-connection recovery 语义保留；
-- 写入不得盲重放；已允许的 reads 重试范围按既有合同执行。
+### 20.6 Implementation
 
-H. 安全（见 §17）
+Implementation 只能执行已经批准的 Requirement + Design。下列边界必须遵守：
 
-- 现有 session / 密码 / 安全合同不变；
-- 生产密钥、密码、token 不得进入仓库、日志或文档示例；
-- 破坏性 / 生产操作仍按既有 governance 单独授权。
+- 不得自行扩大需求；
+- 不得自行改变设计；
+- 不得新增未经批准的功能；
+- 不得为了"把架构清理掉"或"完成 Wave"为理由夹带业务变更。
 
-### 20.4 V2 架构要求
+实现过程中若发现下列情况，必须停止该新增部分，先返回 GAP / REQUIREMENT / DESIGN 层处理，不得直接修改：
 
-V2 必须在结构上达成下列目标；具体文件级实现由后续 STAGE 2 DESIGN 阶段决定，本节不得越界规定实现细节。
+- 新业务规则；
+- 手册解释冲突；
+- 需要新增 schema 或 migration；
+- 跨模块行为变化；
+- 会计、库存、结算、估值、WIP 等重大语义变化；
+- 既有五角色 / 五审批族 / 既有状态机的边界调整。
 
-后端：
+### 20.7 Module Acceptance / Module Freeze
 
-- `server/app.js` 不得继续长期作为无关领域业务的 handler 所有者；HTTP dispatch 所有权必须逐步清晰、可审计。
-- 业务规则必须只有一个 canonical 实现；不得长期存在重复或"半死"的并行实现。
-- 领域所有权必须显式、可在目录树中可定位。
-- 跨领域依赖必须是有意为之、可审查。
-- 事务边界必须可见；权限必须在 API / 领域边界可见。
-- 既有"extended.js kitchen sink"形态的所有权必须随重构减少。
-- 重构必须按领域逐步推进，不得一次性整仓改写。
+模块实现后必须重新基于下列材料进行模块级验收：
 
-前端：
+- 金蝶功能清单（来自对应操作手册）；
+- Coverage Matrix（按 §20.4 重新核对）；
+- Requirement（`document.md` 中对应的需求 delta）；
+- Design（`solution.md` 中对应的设计 delta）；
+- 远端真实代码（不是 Implementation Agent 的自我描述）；
+- 测试证据（focused tests、regression、构建、`git diff --check`、受保护 disposable MySQL gate 当适用时）。
 
-- `applicationRegistry` 仍为 canonical 路由与 Route 元数据事实源，除非另行批准的需求单独改变该合同。
-- `RouteLocation` 语义必须保持 canonical。
-- direct URL / 刷新 / Back / Forward 必须继续正确工作。
-- 授权 gate 必须保持 fail-closed。
-- 大型遗留页面文件应逐步分解为 list / detail / editor / domain surface；本需求不要求一次性分解。
-- V2 必须保持 mobile-first。
-- 320 / 390 / 430 / 680 CSS px 响应式行为不得回归。
-- 既有工作流语义不得因视觉一致性而改变。
-- UI 现代化必须把"展示变更"与"业务行为变更"分离。
+下列边界必须遵守：
 
-数据库：
+- Implementation Agent 的自我报告（包括 "PASS"、"完成"、"迁移已结束" 等说法）不能作为最终 Module Acceptance 的依据；
+- 只有用户明确确认 `Module Acceptance = PASS` 后，才能进入 `MODULE FREEZE` 状态；
+- `MODULE FREEZE` 之后，才能进入下一个模块；
+- 在 `MODULE FREEZE` 之前的 Implementation Agent 不得擅自开始下一个模块的工作。
 
-- V2 不得创建第二套并行的 inventory / accounting 真实来源。
-- V2 不得创建第二套 MySQL adapter 或数据库抽象路径。
-- schema / migration 变更必须有自己的、明确批准的 V2 需求阶段。
-- 纯结构重构应优先零 schema 变更。
+### 20.8 原 V2 / Wave 工程规则的定位
 
-测试（与 AGENTS.md §6 / §6.1 / §6.2 一致）：
+原 V2 / Wave 工作产生的下列工程原则继续作为当前代码与文档基线的一部分，在模块实施时使用：
 
-- 每个迁移 / 重构阶段必须为变更的所有权 / 边界提供 focused 测试。
-- 架构 / 跨域阶段必须运行 `pnpm test` + `pnpm build` + `git diff --check`。
-- MySQL / 数据库敏感阶段在具备受保护 disposable MySQL 环境时运行相应 MySQL gate。
-- FAST / FULL / HEAVY manifest 不变量仍为强制约束。
-- 不得通过弱化测试、插入 `skip` / `todo`、删除 assertion 或 reclassification 制造绿色结果。
+- single canonical implementation：同一业务原语不得存在两套活动实现；
+- clear domain ownership：每个领域模块有显式的 owner；
+- route ownership：route 表 `owner` 字段指向唯一模块；
+- caller proof：迁移 / 删除前的 zero-caller proof；
+- 禁止双活实现：route 表 `responsiveMode` 保持既有 `LEGACY_ADAPTER` / `NATIVE_RESPONSIVE` 两值；不引入运行时 production 状态；同一 route key 不允许两套 live executable business screen；
+- incremental refactor：按领域逐步推进，不一次性整仓重写；
+- authorization fail-closed：`allow` / `allowAny` 仍在 handler 入口第一行；
+- transaction / audit contract：事务与审计不漂移；
+- mobile-first：320 / 390 / 430 / 680 CSS px 行为不退化；
+- `applicationRegistry.js` / `RouteLocation` 作为 canonical；
+- focused / full / heavy test gate；
+- schema 变更必须显式设计；
+- inventory mutation / valuation / LOT-SERIAL / IQC-OQC / period close / settlement / accounting voucher / manufacturing WIP-cost / MySQL adapter / migrations 等高风险领域需要更严格验证。
 
-### 20.5 V2 第一波范围
+但是：
 
-V2 第一波必须足够窄、足够可证、可在保留既有合同的前提下完成。每一项都是一个独立的、可单独批准与回归的逻辑单元：
+> 这些规则是模块实施时的工程约束，不再构成独立的产品 roadmap。
 
-P1. 后端应用边界清理
+下列行为被禁止：
 
-- 降低 `server/app.js` 的集中度；
-- 建立显式的 route / handler 所有权；
-- 保留每一项既有外部 API 合同。
+- 不得从"Wave 5B 已完成"推导"下一步必须 Wave 5C"；
+- 不得因某个 Wave 目标尚未完成而自动推迟当前正在进行的金蝶模块；
+- 不得用"完成 V2 重构"作为不开始新模块的挡箭牌；
+- 历史日志、历史 commit、`docs/archive/v1.6/` 与历史 Wave 名称保持原样，不重写历史。
 
-P2. 后端领域所有权清理
+### 20.9 版本与开发基线
 
-- 在已有不可达证据后清除真正不可达的重复实现；
-- 在合理情况下拆分混合领域所有权；
-- 在移动所有权时不得改变 ERP 行为。
-
-P3. 前端领域 surface 分解
-
-- 降低 `master-data.jsx`、`logistics-finance.jsx`、`manufacturing.jsx` 的集中度；
-- 保留当前 `applicationRegistry` / navigation 合同；
-- 为后续 mobile 展示现代化准备 domain 组件。
-
-P4. 移动展示现代化基础（仅作为需求目标）
-
-- 建立一致的现代 mobile ERP 布局语言；
-- 改善层级、密度、间距、交互 ergonomics 与 list / detail / editor 一致性；
-- 保留业务工作流、状态、权限与 action 语义。
-
-P4 在本阶段仅定义目标；具体设计与实现须在后续 DESIGN / IMPLEMENTATION 阶段另行批准。
-
-### 20.6 第一波明确非目标
-
-§19 的延后或明确不支持范围在 V2 第一波继续全部适用。除此外，V2 第一波还明确不以以下结构变化为目标：
-
-- 任何新的 ERP 业务模块；
-- 重大会计模型重设；
-- 存货估值重设；
-- 替换 MySQL；
-- 替换 / 移除 SQLite 支持；
-- 为框架偏好替换 Node 原生 HTTP；
-- 为技术偏好迁移到 React Router；
-- 引入 Docker / Kubernetes；
-- 引入 Redis；
-- 生产数据迁移；
-- 生产部署变更；
-- 任意数据库 schema 清理；
-- 修改既有角色族；
-- 修改既有审批族；
-- 为架构整洁而改变既有 Route 数量。
-
-未在未来需求中被显式引入的能力不得描述为"默认计划"。
-
-### 20.7 V2 交付原则
-
-V2 必须按增量推进，不得作为整仓一次性重写：
-
-- 每个 wave 必须遵循 AGENTS.md 定义的 REQUIREMENT → DESIGN → IMPLEMENTATION 流程与验证 / Git 治理。
-- 不相关的后端、前端、数据库、视觉重设不得混入同一个无控 wave。
-- 若重构发现实际业务行为缺陷，该缺陷不再视为"纯重构"，必须先创建并批准独立的需求 / 设计 delta，再修改行为。
-
-### 20.8 V2 验收要求
-
-§18 的通用验收标准继续全部适用。V2 重构额外必须证明：
-
-- 既有外部 API 形态保持兼容，除非另行明确批准；
-- 既有业务工作流保持等价；
-- RBAC / SOD / 审批语义保持等价；
-- 会计 / 库存业务结果保持等价；
-- canonical 所有权无歧义；
-- 同一业务原语不得有重复活动实现；
-- 领域所有权可理解、可审计；
-- route 所有权可审计；
-- mobile-first 行为保留；
-- 既有响应式断点行为保留；
-- 既有 route / 深链导航行为保留；
-- 用户可见业务术语仍为 canonical ERP 术语；
-- 不得只是把 desktop 表格压缩到 mobile。
-
-### 20.9 版本语义
-
-- V2 当前是重构计划的名称，不是发布版本。
-- `package.json` 维持 `1.6.2`，直至另行批准的 release / version 决策变更。
-- 既有 `v1.6.2` Git tag 不可移动、不可删除、不可重建。
-- 不得在架构开发过程中创建 `v2.0.0` 或其他 v2.x tag / release。
-- 精确开发状态以 Git SHA 标识。
-- V2 首个 release 的最终语义版本号必须留待未来的 release-planning 阶段决定。
+- 最新既有 release tag 仍为 `v1.6.2`；不得移动、删除或重建。
+- `package.json` 当前版本仍为 `1.6.2`；不因开始金蝶模块对标而自动 bump。
+- `master` 是持续开发分支，可以领先 release tag。
+- 当前精确开发状态由 Git SHA 标识；不得把 SHA 永久硬编码进 README / document.md / solution.md 作为"基线 SHA"。
+- 22 模块对标主线不是 `v2.0.0` release 声明；不因开始金蝶模块对标而自动创建或修改 release tag。
+- 模块验收与 Module Freeze 的版本语义留待未来的 release-planning 阶段决定；本节只规定日常推进规则。
