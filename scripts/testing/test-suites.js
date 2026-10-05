@@ -77,6 +77,12 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
+  // ----- V2 Wave 1 — backend dispatch ownership infrastructure -----
+  // Pure-function architecture tests for server/lib/route-table.js.
+  // Server/app.js remains the live dispatcher until a later wave wires
+  // route descriptors in.
+  'server/route-table.test.js',
+
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',
   'server/setup-admin.test.js',
