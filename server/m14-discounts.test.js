@@ -747,3 +747,117 @@ describe('V1.3 Phase 5 — source open-item integrity', () => {
     database.prepare("UPDATE account_receivables SET paid_cents=0,open_amount_cents=123456,status='PENDING' WHERE id=?").run(receivableId);
   });
 });
+
+// =====================================================================
+// V2 Wave 4D — Discount Draft Lifecycle route-table runtime coverage.
+// Two executable tests, one per migrated subset (sales read routes,
+// purchase draft lifecycle). Confirm/reverse are intentionally out of
+// scope and continue to be exercised by the existing legacy suite.
+// =====================================================================
+
+describe('V2 Wave 4D — Discount Draft Lifecycle (route-table runtime coverage)', () => {
+  test('16. sales discount list + detail through createApp proves the migrated read routes (listSalesDiscounts / getSalesDiscount)', async () => {
+    const cust = ensureCustomer('W4D-SALES');
+    const { receivableId } = await createConfirmedDelivery(cust, 10000);
+
+    // Create a fresh DRAFT sales discount.
+    const create = await request('/api/sales-discounts', { token: accountingToken, method: 'POST', body: {
+      customerId: cust, sourceReceivableId: receivableId, businessDate: '2026-08-15',
+      amountCents: 400, reason: 'wave-4d sales list-detail',
+    } });
+    assert.equal(create.status, 201, JSON.stringify(create.data));
+    const id = create.data.id;
+
+    // GET /api/sales-discounts — list path through ownedRouteTable.
+    const list = await request('/api/sales-discounts', { token: accountingToken });
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.data.salesDiscounts), 'salesDiscounts must be an array');
+    const row = list.data.salesDiscounts.find((r) => r.id === id);
+    assert.ok(row, 'the freshly-created discount must appear in the list');
+    assert.equal(row.id, id);
+    assert.ok(row.discountNo, 'row must expose discountNo');
+    assert.equal(row.status, 'DRAFT');
+    assert.equal(row.amountCents, 400);
+    assert.ok(row.customerCode, 'row must expose customerCode');
+    assert.ok(row.customerName, 'row must expose customerName');
+    assert.ok(row.sourceNo, 'row must expose sourceNo (joins account_receivables)');
+
+    // GET /api/sales-discounts/:id — detail path through ownedRouteTable.
+    const detail = await request(`/api/sales-discounts/${id}`, { token: accountingToken });
+    assert.equal(detail.status, 200);
+    assert.equal(detail.data.salesDiscount.id, id);
+    assert.equal(detail.data.salesDiscount.status, 'DRAFT');
+    assert.ok(detail.data.salesDiscount.source, 'detail must resolve the canonical receivable');
+    assert.equal(detail.data.salesDiscount.source.id, receivableId);
+    assert.ok(detail.data.salesDiscount.sourceCapacity, 'sourceCapacity envelope must be present');
+    assert.equal(typeof detail.data.salesDiscount.sourceCapacity.originalCents, 'number');
+    assert.equal(typeof detail.data.salesDiscount.sourceCapacity.remainingCents, 'number');
+    assert.equal(typeof detail.data.salesDiscount.sourceCapacity.consumedCents, 'number');
+  });
+
+  test('17. purchase discount draft lifecycle (create / list / detail / patch / re-detail / cancel / double-cancel) creates no economic posting side effect', async () => {
+    const supplierId = ensureSupplier('W4D-PURCH');
+    const { payableId } = await createConfirmedReceipt(supplierId, 10000);
+
+    const voucherBefore = database.prepare('SELECT COUNT(*) n FROM accounting_vouchers').get().n;
+    const creditBefore = database.prepare("SELECT COUNT(*) n FROM financial_credit_adjustments WHERE side='AP'").get().n;
+
+    // POST /api/purchase-discounts — create path through ownedRouteTable.
+    const create = await request('/api/purchase-discounts', { token: accountingToken, method: 'POST', body: {
+      supplierId, sourcePayableId: payableId, businessDate: '2026-08-15',
+      amountCents: 500, reason: 'wave-4d purchase draft', notes: 'initial',
+    } });
+    assert.equal(create.status, 201, JSON.stringify(create.data));
+    const id = create.data.id;
+    assert.ok(id, 'create must return an id');
+    assert.ok(create.data.discountNo, 'create must return a discountNo');
+
+    // GET /api/purchase-discounts — list path through ownedRouteTable.
+    const list = await request('/api/purchase-discounts', { token: accountingToken });
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.data.purchaseDiscounts), 'purchaseDiscounts must be an array');
+    const row = list.data.purchaseDiscounts.find((r) => r.id === id);
+    assert.ok(row, 'created discount must appear in the list');
+    assert.equal(row.status, 'DRAFT');
+    assert.equal(row.amountCents, 500);
+
+    // GET /api/purchase-discounts/:id — detail path through ownedRouteTable.
+    const detail1 = await request(`/api/purchase-discounts/${id}`, { token: accountingToken });
+    assert.equal(detail1.status, 200);
+    assert.equal(detail1.data.purchaseDiscount.id, id);
+    assert.equal(detail1.data.purchaseDiscount.status, 'DRAFT');
+    assert.ok(detail1.data.purchaseDiscount.source, 'detail must resolve the canonical payable');
+    assert.equal(detail1.data.purchaseDiscount.source.id, payableId);
+    assert.ok(detail1.data.purchaseDiscount.sourceCapacity, 'sourceCapacity envelope must be present');
+
+    // PATCH /api/purchase-discounts/:id — update path through ownedRouteTable.
+    const patch = await request(`/api/purchase-discounts/${id}`, { token: accountingToken, method: 'PATCH', body: {
+      supplierId, sourcePayableId: payableId, businessDate: '2026-08-15',
+      amountCents: 800, reason: 'wave-4d purchase updated', notes: 'updated',
+    } });
+    assert.equal(patch.status, 200);
+
+    // GET detail again — prove the PATCH persisted.
+    const detail2 = await request(`/api/purchase-discounts/${id}`, { token: accountingToken });
+    assert.equal(detail2.status, 200);
+    assert.equal(detail2.data.purchaseDiscount.amountCents, 800, 'PATCH amountCents must be persisted');
+    assert.equal(detail2.data.purchaseDiscount.reason, 'wave-4d purchase updated', 'PATCH reason must be persisted');
+    assert.equal(detail2.data.purchaseDiscount.notes, 'updated', 'PATCH notes must be persisted');
+
+    // POST /api/purchase-discounts/:id/cancel — cancel path through ownedRouteTable.
+    const cancel1 = await request(`/api/purchase-discounts/${id}/cancel`, { token: accountingToken, method: 'POST' });
+    assert.equal(cancel1.status, 200);
+    assert.deepEqual(cancel1.data, { ok: true, status: 'CANCELLED' });
+
+    // Second cancel — must 409 (status is no longer DRAFT).
+    const cancel2 = await request(`/api/purchase-discounts/${id}/cancel`, { token: accountingToken, method: 'POST' });
+    assert.equal(cancel2.status, 409, 'second cancel of an already-CANCELLED discount must be 409');
+
+    // Side-effect proof: draft-edit-cancel MUST NOT create any economic
+    // posting (no accounting voucher, no AP financial_credit_adjustment).
+    const voucherAfter = database.prepare('SELECT COUNT(*) n FROM accounting_vouchers').get().n;
+    const creditAfter = database.prepare("SELECT COUNT(*) n FROM financial_credit_adjustments WHERE side='AP'").get().n;
+    assert.equal(voucherAfter, voucherBefore, 'draft-edit-cancel must not create accounting_vouchers rows');
+    assert.equal(creditAfter, creditBefore, 'draft-edit-cancel must not create financial_credit_adjustments rows');
+  });
+});

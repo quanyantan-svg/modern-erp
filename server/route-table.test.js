@@ -2834,3 +2834,378 @@ describe('V2 Wave 4C — Read-only Lookups Route Ownership Migration', () => {
     );
   });
 });
+
+describe('V2 Wave 4D — Discount Draft Lifecycle Route Ownership Migration', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const discountsModuleSource = readFileSync(resolve('server/modules/discounts.js'), 'utf8');
+
+  function buildOwnedTable() {
+    const table = createRouteTable();
+    // 47 Wave 4C baseline descriptors (warehouse + customer + supplier
+    // + role + user + product master-data + decision-reports +
+    // product-routings + read-only lookups). See buildOwnedTable in
+    // Wave 4C for the full list; replicate the relevant subset here
+    // so the Wave 4D tests are self-contained and can be exercised in
+    // isolation.
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/, handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/operations$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: '/api/lookup/suppliers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/customers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookups/business-entities', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/sales-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/purchase-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    // 10 Wave 4D sales+purchase discount draft-lifecycle descriptors.
+    table.register({ method: 'GET', path: '/api/sales-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: '/api/sales-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: /^\/api\/sales-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/sales-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: /^\/api\/sales-discounts\/([^/]+)\/cancel$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: '/api/purchase-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: '/api/purchase-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: /^\/api\/purchase-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/purchase-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: /^\/api\/purchase-discounts\/([^/]+)\/cancel$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    return table;
+  }
+
+  test('1. exactly 10 discount descriptors exist with the canonical owner; previous 47 baseline descriptors remain intact; ownedRouteTable is now 57; single createRouteTable() and single .match() remain in app.js', () => {
+    const table = buildOwnedTable();
+    const discountEntries = table.list().filter((item) => item.owner === 'server/modules/discounts.js');
+    assert.equal(discountEntries.length, 10, 'Wave 4D: exactly ten discount descriptors must exist with the canonical owner');
+    assert.equal(table.size(), 57, 'Wave 4D: 47 baseline + 10 discount = 57 owned descriptors');
+    // list() exposes only { method, path, pathKind, owner } — no other keys.
+    for (const entry of discountEntries) {
+      assert.deepEqual(
+        Object.keys(entry).sort(),
+        ['method', 'owner', 'path', 'pathKind'].sort(),
+        `Wave 4D: descriptor ${entry.method} ${entry.path} must expose exactly { method, path, pathKind, owner }`,
+      );
+      assert.equal(entry.owner, 'server/modules/discounts.js');
+      assert.ok(typeof entry.path === 'string' || entry.path instanceof RegExp, 'descriptor path must be non-empty string or RegExp');
+    }
+    // Five sales + five purchase routes must all be present.
+    const salesPaths = discountEntries
+      .filter((item) => item.path.toString().includes('sales-discounts'))
+      .map((item) => item.path.toString())
+      .sort();
+    assert.deepEqual(salesPaths, [
+      '/api/sales-discounts',
+      '/api/sales-discounts',
+      '^\\/api\\/sales-discounts\\/([^/]+)$',
+      '^\\/api\\/sales-discounts\\/([^/]+)$',
+      '^\\/api\\/sales-discounts\\/([^/]+)\\/cancel$',
+    ].sort(), 'Wave 4D: the five sales-discounts paths must match the canonical brief exactly');
+    const purchasePaths = discountEntries
+      .filter((item) => item.path.toString().includes('purchase-discounts'))
+      .map((item) => item.path.toString())
+      .sort();
+    assert.deepEqual(purchasePaths, [
+      '/api/purchase-discounts',
+      '/api/purchase-discounts',
+      '^\\/api\\/purchase-discounts\\/([^/]+)$',
+      '^\\/api\\/purchase-discounts\\/([^/]+)$',
+      '^\\/api\\/purchase-discounts\\/([^/]+)\\/cancel$',
+    ].sort(), 'Wave 4D: the five purchase-discounts paths must match the canonical brief exactly');
+    // Previous 47 baseline descriptors remain intact.
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/decision-reports.js').length, 11);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/product-routing.js').length, 9);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/lookups.js').length, 5);
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'Wave 4D: app.js must construct the owned route table exactly once');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'Wave 4D: app.js must keep exactly one ownedRouteTable.match() dispatch call');
+    assert.match(appSource, /\bownedRouteTable\b/);
+  });
+
+  test('2. sales discount collection / detail / cancel routes match correctly through the route-table and dispatch to server/modules/discounts.js; confirm and reverse routes return null from ownedRouteTable', () => {
+    const table = buildOwnedTable();
+    // Collection GET + POST.
+    const listMatch = table.match('GET', '/api/sales-discounts');
+    assert.ok(listMatch, 'GET /api/sales-discounts must match the route-table');
+    assert.equal(listMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(listMatch.params, []);
+    assert.equal(typeof listMatch.handler, 'function');
+    const createMatch = table.match('POST', '/api/sales-discounts');
+    assert.ok(createMatch, 'POST /api/sales-discounts must match the route-table');
+    assert.equal(createMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(createMatch.params, []);
+    // Detail GET + PATCH with capture group param.
+    const detailGet = table.match('GET', '/api/sales-discounts/sd-001');
+    assert.ok(detailGet, 'GET /api/sales-discounts/:id must match the route-table');
+    assert.equal(detailGet.owner, 'server/modules/discounts.js');
+    assert.deepEqual(detailGet.params, ['sd-001']);
+    const detailPatch = table.match('PATCH', '/api/sales-discounts/sd-001');
+    assert.ok(detailPatch, 'PATCH /api/sales-discounts/:id must match the route-table');
+    assert.equal(detailPatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(detailPatch.params, ['sd-001']);
+    // Cancel POST on detail.
+    const cancelMatch = table.match('POST', '/api/sales-discounts/sd-001/cancel');
+    assert.ok(cancelMatch, 'POST /api/sales-discounts/:id/cancel must match the route-table');
+    assert.equal(cancelMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(cancelMatch.params, ['sd-001']);
+    // Confirm + reverse MUST NOT match (legacy handleApi keeps them).
+    assert.equal(table.match('POST', '/api/sales-discounts/sd-001/confirm'), null,
+      'POST /api/sales-discounts/:id/confirm must NOT match the route-table (legacy handleApi)');
+    assert.equal(table.match('POST', '/api/sales-discounts/sd-001/reverse'), null,
+      'POST /api/sales-discounts/:id/reverse must NOT match the route-table (legacy handleApi)');
+    // DELETE on detail must NOT match (no DELETE descriptor registered).
+    assert.equal(table.match('DELETE', '/api/sales-discounts/sd-001'), null,
+      'DELETE /api/sales-discounts/:id must NOT match the route-table');
+  });
+
+  test('3. purchase discount collection / detail / cancel routes match correctly through the route-table and dispatch to server/modules/discounts.js; confirm and reverse routes return null from ownedRouteTable', () => {
+    const table = buildOwnedTable();
+    // Collection GET + POST.
+    const listMatch = table.match('GET', '/api/purchase-discounts');
+    assert.ok(listMatch, 'GET /api/purchase-discounts must match the route-table');
+    assert.equal(listMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(listMatch.params, []);
+    const createMatch = table.match('POST', '/api/purchase-discounts');
+    assert.ok(createMatch, 'POST /api/purchase-discounts must match the route-table');
+    assert.equal(createMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(createMatch.params, []);
+    // Detail GET + PATCH with capture group param.
+    const detailGet = table.match('GET', '/api/purchase-discounts/pd-001');
+    assert.ok(detailGet, 'GET /api/purchase-discounts/:id must match the route-table');
+    assert.equal(detailGet.owner, 'server/modules/discounts.js');
+    assert.deepEqual(detailGet.params, ['pd-001']);
+    const detailPatch = table.match('PATCH', '/api/purchase-discounts/pd-001');
+    assert.ok(detailPatch, 'PATCH /api/purchase-discounts/:id must match the route-table');
+    assert.equal(detailPatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(detailPatch.params, ['pd-001']);
+    // Cancel POST on detail.
+    const cancelMatch = table.match('POST', '/api/purchase-discounts/pd-001/cancel');
+    assert.ok(cancelMatch, 'POST /api/purchase-discounts/:id/cancel must match the route-table');
+    assert.equal(cancelMatch.owner, 'server/modules/discounts.js');
+    assert.deepEqual(cancelMatch.params, ['pd-001']);
+    // Confirm + reverse MUST NOT match (legacy handleApi keeps them).
+    assert.equal(table.match('POST', '/api/purchase-discounts/pd-001/confirm'), null,
+      'POST /api/purchase-discounts/:id/confirm must NOT match the route-table (legacy handleApi)');
+    assert.equal(table.match('POST', '/api/purchase-discounts/pd-001/reverse'), null,
+      'POST /api/purchase-discounts/:id/reverse must NOT match the route-table (legacy handleApi)');
+    // DELETE on detail must NOT match.
+    assert.equal(table.match('DELETE', '/api/purchase-discounts/pd-001'), null,
+      'DELETE /api/purchase-discounts/:id must NOT match the route-table');
+  });
+
+  test('4. app.js has no legacy list / create / get / update / cancel discount dispatch branches; salesDiscountAction / purchaseDiscountAction combined (confirm|cancel) matchers are gone', () => {
+    // No legacy exact-match branches for sales-discounts collection GET / POST.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/sales-discounts['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4D: legacy exact-match branch for GET /api/sales-discounts must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/sales-discounts['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 4D: legacy exact-match branch for POST /api/sales-discounts must be removed',
+    );
+    // No legacy exact-match branches for purchase-discounts collection GET / POST.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/purchase-discounts['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4D: legacy exact-match branch for GET /api/purchase-discounts must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/purchase-discounts['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 4D: legacy exact-match branch for POST /api/purchase-discounts must be removed',
+    );
+    // No legacy `salesDiscountMatch` or `purchaseDiscountMatch` detail GET/PATCH dispatch branches.
+    assert.doesNotMatch(
+      appSource,
+      /salesDiscountMatch\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4D: legacy sales-discounts detail GET dispatch branch must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /salesDiscountMatch\s*&&\s*req\.method\s*===\s*['"]PATCH['"]/,
+      'Wave 4D: legacy sales-discounts detail PATCH dispatch branch must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /purchaseDiscountMatch\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4D: legacy purchase-discounts detail GET dispatch branch must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /purchaseDiscountMatch\s*&&\s*req\.method\s*===\s*['"]PATCH['"]/,
+      'Wave 4D: legacy purchase-discounts detail PATCH dispatch branch must be removed',
+    );
+    // Combined `(confirm|cancel)` matcher for sales-discounts and
+    // purchase-discounts must be gone (cancel now dispatched by
+    // route-table; confirm split into its own legacy branch below).
+    assert.doesNotMatch(
+      appSource,
+      /\/api\/sales-discounts\/([^/]+)\/\(confirm\|cancel\)/,
+      'Wave 4D: combined (confirm|cancel) regex for sales-discounts must be replaced with a confirm-only legacy branch',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /\/api\/purchase-discounts\/([^/]+)\/\(confirm\|cancel\)/,
+      'Wave 4D: combined (confirm|cancel) regex for purchase-discounts must be replaced with a confirm-only legacy branch',
+    );
+    // `salesDiscountAction` / `purchaseDiscountAction` combined-action
+    // variables must be gone from app.js.
+    assert.doesNotMatch(
+      appSource,
+      /\bsalesDiscountAction\b/,
+      'Wave 4D: salesDiscountAction combined-action variable must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /\bpurchaseDiscountAction\b/,
+      'Wave 4D: purchaseDiscountAction combined-action variable must be removed',
+    );
+  });
+
+  test('5. app.js keeps confirm-only legacy dispatch for sales + purchase discount confirm; reverse legacy dispatch remains for both sides', () => {
+    // Confirm-only legacy regex literal for sales-discounts must remain
+    // (file source uses regex literal with `^`, `\/`, `$`).
+    const salesConfirmLiteral = '/^\\/api\\/sales-discounts\\/([^/]+)\\/confirm$/';
+    assert.ok(appSource.includes(salesConfirmLiteral),
+      'Wave 4D: confirm-only legacy regex literal for sales-discounts must remain');
+    assert.ok(appSource.includes('confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
+      'Wave 4D: confirmSalesDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    // Confirm-only legacy regex literal for purchase-discounts.
+    const purchaseConfirmLiteral = '/^\\/api\\/purchase-discounts\\/([^/]+)\\/confirm$/';
+    assert.ok(appSource.includes(purchaseConfirmLiteral),
+      'Wave 4D: confirm-only legacy regex literal for purchase-discounts must remain');
+    assert.ok(appSource.includes('confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
+      'Wave 4D: confirmPurchaseDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    // Reverse legacy regex literals must remain for both sides.
+    const salesReverseLiteral = '/^\\/api\\/sales-discounts\\/([^/]+)\\/reverse$/';
+    assert.ok(appSource.includes(salesReverseLiteral),
+      'Wave 4D: sales-discounts reverse legacy regex literal must remain');
+    assert.ok(appSource.includes('reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
+      'Wave 4D: reverseSalesDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    const purchaseReverseLiteral = '/^\\/api\\/purchase-discounts\\/([^/]+)\\/reverse$/';
+    assert.ok(appSource.includes(purchaseReverseLiteral),
+      'Wave 4D: purchase-discounts reverse legacy regex literal must remain');
+    assert.ok(appSource.includes('reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher)'),
+      'Wave 4D: reversePurchaseDiscount legacy dispatch must pass generateVoucher + checkPeriodNotClosedForVoucher dependencies exactly');
+    // Discounts module remains the canonical implementation source.
+    // Note: createSalesDiscount / createPurchaseDiscount / updateSalesDiscount
+    // / updatePurchaseDiscount are declared `async`; allow that keyword.
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+listSalesDiscounts\b/,
+      'Wave 4D: discounts.js must continue to export listSalesDiscounts',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+createSalesDiscount\b/,
+      'Wave 4D: discounts.js must continue to export createSalesDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+getSalesDiscount\b/,
+      'Wave 4D: discounts.js must continue to export getSalesDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+updateSalesDiscount\b/,
+      'Wave 4D: discounts.js must continue to export updateSalesDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+cancelSalesDiscount\b/,
+      'Wave 4D: discounts.js must continue to export cancelSalesDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+listPurchaseDiscounts\b/,
+      'Wave 4D: discounts.js must continue to export listPurchaseDiscounts',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+createPurchaseDiscount\b/,
+      'Wave 4D: discounts.js must continue to export createPurchaseDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+getPurchaseDiscount\b/,
+      'Wave 4D: discounts.js must continue to export getPurchaseDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+updatePurchaseDiscount\b/,
+      'Wave 4D: discounts.js must continue to export updatePurchaseDiscount',
+    );
+    assert.match(
+      discountsModuleSource,
+      /export\s+(?:async\s+)?function\s+cancelPurchaseDiscount\b/,
+      'Wave 4D: discounts.js must continue to export cancelPurchaseDiscount',
+    );
+    // app.js continues to import the ten low-risk handlers from discounts.js.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/discounts\.js['"]/,
+      'Wave 4D: app.js must continue to import handlers from ./modules/discounts.js',
+    );
+    assert.match(appSource, /\blistSalesDiscounts\b/);
+    assert.match(appSource, /\bcreateSalesDiscount\b/);
+    assert.match(appSource, /\bgetSalesDiscount\b/);
+    assert.match(appSource, /\bupdateSalesDiscount\b/);
+    assert.match(appSource, /\bcancelSalesDiscount\b/);
+    assert.match(appSource, /\blistPurchaseDiscounts\b/);
+    assert.match(appSource, /\bcreatePurchaseDiscount\b/);
+    assert.match(appSource, /\bgetPurchaseDiscount\b/);
+    assert.match(appSource, /\bupdatePurchaseDiscount\b/);
+    assert.match(appSource, /\bcancelPurchaseDiscount\b/);
+    // High-risk handlers (confirm + reverse) remain imported in app.js
+    // because their legacy dispatch still calls them with explicit
+    // voucher dependencies.
+    assert.match(appSource, /\bconfirmSalesDiscount\b/);
+    assert.match(appSource, /\bconfirmPurchaseDiscount\b/);
+    assert.match(appSource, /\breverseSalesDiscount\b/);
+    assert.match(appSource, /\breversePurchaseDiscount\b/);
+  });
+});

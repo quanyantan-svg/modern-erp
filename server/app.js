@@ -239,6 +239,12 @@ import {
 // into each business handler's existing signature. The neutral name
 // `ownedRouteTable` reflects that the table holds multiple domain
 // families.
+//
+// Wave 3A warehouses + Wave 3B customers + Wave 3C suppliers +
+// Wave 3D roles + Wave 3E user-management + Wave 3F product
+// master-data + Wave 4A decision-reports + Wave 4B product-routings
+// + Wave 4C read-only lookups + Wave 4D sales+purchase discount
+// draft lifecycle route-table registration.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -523,6 +529,74 @@ ownedRouteTable.register({
   owner: 'server/modules/lookups.js',
 });
 
+// Wave 4D — Sales / Purchase discount DRAFT lifecycle (list /
+// detail / create / update / cancel). Confirm and reverse remain
+// on the legacy handleApi branches below because they touch
+// financial_credit_adjustments, accounting voucher generation,
+// period-close gating, and (for reverse) full reversal voucher
+// generation — all explicitly out-of-scope for this bounded wave.
+// Canonical owner: server/modules/discounts.js.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/sales-discounts',
+  handler: ({ db, res, actor, url }) => listSalesDiscounts(db, res, actor, url),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/sales-discounts',
+  handler: ({ db, req, res, actor }) => createSalesDiscount(db, req, res, actor),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/sales-discounts\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getSalesDiscount(db, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/sales-discounts\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateSalesDiscount(db, req, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/sales-discounts\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelSalesDiscount(db, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/purchase-discounts',
+  handler: ({ db, res, actor, url }) => listPurchaseDiscounts(db, res, actor, url),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/purchase-discounts',
+  handler: ({ db, req, res, actor }) => createPurchaseDiscount(db, req, res, actor),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-discounts\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getPurchaseDiscount(db, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/purchase-discounts\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updatePurchaseDiscount(db, req, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/purchase-discounts\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelPurchaseDiscount(db, res, actor, params[0]),
+  owner: 'server/modules/discounts.js',
+});
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
@@ -705,6 +779,17 @@ async function handleApi(db, req, res, url) {
   // domain intersection). /api/users/lookup and PATCH
   // /api/products/:id/tracking-policy remain on their respective
   // legacy handleApi branches above and are NOT in the route-table.
+  //
+  // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F +
+  // Wave 4A + Wave 4B + Wave 4C + Wave 4D — Owned-route lookup:
+  // 47 baseline (4 warehouses + 4 customers + 4 suppliers +
+  // 3 roles + 3 users + 4 products + 11 decision-reports +
+  // 9 product-routings + 5 read-only lookups) + 10 discount draft
+  // lifecycle routes (5 sales: list / create / detail GET / detail
+  // PATCH / detail cancel POST; 5 purchase: same). Confirm and
+  // reverse remain on legacy handleApi branches below because they
+  // touch financial_credit_adjustments, accounting voucher
+  // generation, and period-close gating.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -1031,33 +1116,27 @@ async function handleApi(db, req, res, url) {
   const pdReverse = pathname.match(/^\/api\/payment-disbursements\/([^/]+)\/reverse$/);
   if (pdReverse && req.method === 'POST') return reverseSettlementDocument(db, req, res, actor, 'PAYMENT', pdReverse[1], generateVoucher);
 
-  // M14 — Sales / Purchase Discount (operational finance adjustment)
-  if (pathname === '/api/sales-discounts' && req.method === 'GET') return listSalesDiscounts(db, res, actor, url);
-  if (pathname === '/api/sales-discounts' && req.method === 'POST') return createSalesDiscount(db, req, res, actor);
-  const salesDiscountMatch = pathname.match(/^\/api\/sales-discounts\/([^/]+)$/);
-  if (salesDiscountMatch && req.method === 'GET') return getSalesDiscount(db, res, actor, salesDiscountMatch[1]);
-  if (salesDiscountMatch && req.method === 'PATCH') return updateSalesDiscount(db, req, res, actor, salesDiscountMatch[1]);
-  const salesDiscountAction = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/(confirm|cancel)$/);
-  if (salesDiscountAction && req.method === 'POST') {
-    const id = salesDiscountAction[1];
-    if (salesDiscountAction[2] === 'confirm') return confirmSalesDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
-    return cancelSalesDiscount(db, res, actor, id);
+  // M14 — Sales / Purchase Discount (operational finance adjustment).
+  // Wave 4D: list / create / detail GET / detail PATCH / detail
+  // cancel POST for both sales and purchase discounts are migrated
+  // to ownedRouteTable above (canonical owner
+  // server/modules/discounts.js). Confirm and reverse remain on
+  // legacy handleApi branches here because they touch
+  // financial_credit_adjustments, accounting voucher generation,
+  // and period-close gating, which are explicitly out-of-scope for
+  // the bounded draft-lifecycle wave.
+  const salesDiscountConfirm = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/confirm$/);
+  if (salesDiscountConfirm && req.method === 'POST') {
+    return confirmSalesDiscount(db, res, actor, salesDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher);
   }
   const voucherReverseMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/reverse$/);
   if (voucherReverseMatch && req.method === 'POST') return reverseManualVoucher(db, req, res, actor, voucherReverseMatch[1]);
   const salesDiscountReverse = pathname.match(/^\/api\/sales-discounts\/([^/]+)\/reverse$/);
   if (salesDiscountReverse && req.method === 'POST') return reverseSalesDiscount(db, req, res, actor, salesDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
 
-  if (pathname === '/api/purchase-discounts' && req.method === 'GET') return listPurchaseDiscounts(db, res, actor, url);
-  if (pathname === '/api/purchase-discounts' && req.method === 'POST') return createPurchaseDiscount(db, req, res, actor);
-  const purchaseDiscountMatch = pathname.match(/^\/api\/purchase-discounts\/([^/]+)$/);
-  if (purchaseDiscountMatch && req.method === 'GET') return getPurchaseDiscount(db, res, actor, purchaseDiscountMatch[1]);
-  if (purchaseDiscountMatch && req.method === 'PATCH') return updatePurchaseDiscount(db, req, res, actor, purchaseDiscountMatch[1]);
-  const purchaseDiscountAction = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/(confirm|cancel)$/);
-  if (purchaseDiscountAction && req.method === 'POST') {
-    const id = purchaseDiscountAction[1];
-    if (purchaseDiscountAction[2] === 'confirm') return confirmPurchaseDiscount(db, res, actor, id, generateVoucher, checkPeriodNotClosedForVoucher);
-    return cancelPurchaseDiscount(db, res, actor, id);
+  const purchaseDiscountConfirm = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/confirm$/);
+  if (purchaseDiscountConfirm && req.method === 'POST') {
+    return confirmPurchaseDiscount(db, res, actor, purchaseDiscountConfirm[1], generateVoucher, checkPeriodNotClosedForVoucher);
   }
   const purchaseDiscountReverse = pathname.match(/^\/api\/purchase-discounts\/([^/]+)\/reverse$/);
   if (purchaseDiscountReverse && req.method === 'POST') return reversePurchaseDiscount(db, req, res, actor, purchaseDiscountReverse[1], generateVoucher, checkPeriodNotClosedForVoucher);
