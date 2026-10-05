@@ -77,18 +77,20 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
-  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E — backend dispatch ownership architecture -----
+  // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
-  // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E invariants for
-  // the migrated warehouse, customer, supplier, role, and
-  // user-management route families (app.js imports route-table,
-  // eighteen descriptors registered across the five domains with
-  // canonical owners, no legacy warehouse / customer / supplier /
-  // role / user-management dispatch branches remain, products /
-  // orders / purchase-orders / etc. still fall through to the
-  // legacy handleApi chain, single `ownedRouteTable` constructed
-  // once with a single `.match()` lookup). Pure-function route-table
-  // safety tests live in the same file.
+  // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F
+  // invariants for the migrated warehouse, customer, supplier,
+  // role, user-management, and product master-data route families
+  // (app.js imports route-table, twenty-two descriptors registered
+  // across the six domains with canonical owners, no legacy
+  // warehouse / customer / supplier / role / user-management /
+  // generic product dispatch branches remain, the tracking-policy
+  // route and all tracking / traceability / IQC-OQC routes still
+  // fall through to the legacy handleApi chain, single
+  // `ownedRouteTable` constructed once with a single `.match()`
+  // lookup). Pure-function route-table safety tests live in the
+  // same file.
   'server/route-table.test.js',
 
   // ----- V2 Stage 3 / Wave 3A — first live warehouse ownership -----
@@ -153,6 +155,31 @@ const FULL = [
   // (PROJECT_MANAGE-gated minimal active-user candidate shape).
   // No DELETE /api/users route exists, and none is exercised.
   'server/v2-wave3e-users-ownership.test.js',
+
+  // ----- V2 Stage 3 / Wave 3F — sixth live product master-data ownership -----
+  // Focused behavior coverage for the migrated /api/products route
+  // family: GET (canonical shape + 18-field contract + active
+  // Boolean + search filter + PRODUCTS_VIEW reachability +
+  // unauthenticated 401), POST (lowercased code NOT — codes are
+  // case-sensitive; standardManufacturingCostCents persistence +
+  // UOM auto-create + active=1 hard-code + stock_quantity=0 hard-
+  // code + CREATE PRODUCT audit / invalid trackingPolicy exact
+  // 400 "库存跟踪方式无效" + TRACKING_POLICY_MISMATCH code / invalid
+  // standard cost / invalid shelfLifeDays / sales 403), PATCH
+  // (display fields + classification + standard cost + baseUom
+  // when no inventory_transactions exist + UPDATE PRODUCT audit /
+  // 404 missing / stockQuantity + stock_quantity writes rejected
+  // with exact 409 "货品库存数量只读…" / baseUom change rejected
+  // with exact 409 "已有历史交易的产品不可变更基础单位" once
+  // inventory_transactions exist), DELETE (delegation to
+  // deleteMasterRecord: 200 + DELETE PRODUCT audit on unreferenced
+  // / 409 RECORD_REFERENCED on referenced product), and
+  // PATCH /api/products/:id/tracking-policy continuity proof that
+  // the route remains on the legacy handleApi branch. The full
+  // tracking-policy semantics are owned by
+  // server/modules/traceability-quality.js and are preserved by
+  // brief §11.
+  'server/v2-wave3f-products-ownership.test.js',
 
   // ----- Core business contracts (legacy filenames — kept, see matrix) -----
   'server/app.test.js',

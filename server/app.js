@@ -109,7 +109,6 @@ import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
   reverseTrackedSource, saveTrackedAllocations, sourceTrackingAllocations, traceHandler, transferTrackedInventory, updateProductTrackingHandler,
-  TRACKING_POLICIES,
 } from './modules/traceability-quality.js';
 import {
   assertFinancialPeriodsOpen, createSystemVoucher, generalLedgerHandler, inventoryAccountRole, inventoryRollForwardHandler, inventoryValuationReport,
@@ -169,22 +168,32 @@ import {
   listUsers,
   updateUser,
 } from './modules/users.js';
+import {
+  createProduct,
+  deleteProduct,
+  listProducts,
+  updateProduct,
+} from './modules/products.js';
 
-// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
-// Warehouse + Customer + Supplier + Role + User-management
-// route-table registration. All five live production route families
-// are migrated using the Wave 1 route-table dispatch infrastructure.
-// Each descriptor carries exactly method / path / handler / owner —
-// no permissions, transaction policy, audit policy, or other runtime
-// authority is duplicated. Thin per-route adapters below translate
-// the route-table dispatch context (db, req, res, actor, url, params)
+// V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
+// Wave 3F — Warehouse + Customer + Supplier + Role +
+// User-management + Product master-data route-table registration.
+// All six live production route families are migrated using the
+// Wave 1 route-table dispatch infrastructure. Each descriptor
+// carries exactly method / path / handler / owner — no permissions,
+// transaction policy, audit policy, or other runtime authority is
+// duplicated. Thin per-route adapters below translate the
+// route-table dispatch context (db, req, res, actor, url, params)
 // into each business handler's existing signature. The neutral name
 // `ownedRouteTable` reflects that the table holds multiple domain
 // families. Roles have exactly GET / POST / PATCH — there is no
 // canonical DELETE /api/roles route in production. User-management
 // has exactly GET / POST / PATCH — there is no canonical DELETE
-// /api/users route in production. /api/users/lookup is intentionally
-// NOT migrated and remains on the legacy handleApi branch below.
+// /api/users route in production. Product master-data has GET /
+// POST / PATCH / DELETE — DELETE delegates to deleteMasterRecord.
+// /api/users/lookup and PATCH /api/products/:id/tracking-policy
+// are intentionally NOT migrated and remain on the legacy handleApi
+// branches below.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -294,6 +303,30 @@ ownedRouteTable.register({
   handler: ({ db, req, res, actor, params }) => updateUser(db, req, res, actor, params[0]),
   owner: 'server/modules/users.js',
 });
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/products',
+  handler: ({ db, res, actor, url }) => listProducts(db, res, actor, url),
+  owner: 'server/modules/products.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/products',
+  handler: ({ db, req, res, actor }) => createProduct(db, req, res, actor),
+  owner: 'server/modules/products.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/products\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateProduct(db, req, res, actor, params[0]),
+  owner: 'server/modules/products.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/products\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteProduct(db, res, actor, params[0]),
+  owner: 'server/modules/products.js',
+});
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
@@ -388,8 +421,6 @@ async function handleApi(db, req, res, url) {
 
   if (pathname === '/api/users/lookup' && req.method === 'GET') return listProjectManagerCandidates(db, res, actor);
 
-  if (pathname === '/api/products' && req.method === 'GET') return listProducts(db, res, actor, url);
-  if (pathname === '/api/products' && req.method === 'POST') return createProduct(db, req, res, actor);
   const productTrackingMatch = pathname.match(/^\/api\/products\/([^/]+)\/tracking-policy$/);
   if (productTrackingMatch && req.method === 'PATCH') return updateProductTrackingHandler(db, req, res, actor, productTrackingMatch[1]);
   if (pathname === '/api/tracking/allocations' && req.method === 'PUT') return saveAllocationsHandler(db, req, res, actor);
@@ -402,10 +433,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/production-genealogy' && req.method === 'POST') return genealogyHandler(db, req, res, actor);
   if (pathname === '/api/quality-control-points' && req.method === 'GET') return listQcpHandler(db, res, actor);
   if (pathname === '/api/quality-control-points' && req.method === 'POST') return createQcpHandler(db, req, res, actor);
-  const productMatch = pathname.match(/^\/api\/products\/([^/]+)$/);
-  if (productMatch && req.method === 'PATCH') return updateProduct(db, req, res, actor, productMatch[1]);
-  if (productMatch && req.method === 'DELETE') return deleteMasterRecord(db, res, actor, 'product', productMatch[1]);
-
   if (pathname === '/api/orders' && req.method === 'GET') return listOrders(db, res, actor, url);
   if (pathname === '/api/orders' && req.method === 'POST') return createOrder(db, req, res, actor);
   const orderActionMatch = pathname.match(/^\/api\/orders\/([^/]+)\/(submit|approve|reject)$/);
@@ -454,17 +481,20 @@ async function handleApi(db, req, res, url) {
   if (assetDepMatch && req.method === 'GET') return getFixedAssetDepreciations(db, res, actor, assetDepMatch[1]);
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
-  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
-  // Owned-route lookup. Runs AFTER authentication is resolved and
-  // BEFORE the legacy handleApi chain continues. Unmatched routes
-  // fall through to the existing legacy chain unchanged. Currently
-  // owns the four warehouse routes, the four customer routes, the
-  // four supplier routes, the three role routes (GET / POST / PATCH;
-  // there is no canonical DELETE /api/roles route), and the three
-  // user-management routes (GET / POST / PATCH; there is no
-  // canonical DELETE /api/users route). /api/users/lookup remains
-  // on the legacy handleApi branch above and is NOT in the
-  // route-table.
+  // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
+  // Wave 3F — Owned-route lookup. Runs AFTER authentication is
+  // resolved and BEFORE the legacy handleApi chain continues.
+  // Unmatched routes fall through to the existing legacy chain
+  // unchanged. Currently owns the four warehouse routes, the four
+  // customer routes, the four supplier routes, the three role
+  // routes (GET / POST / PATCH; there is no canonical DELETE
+  // /api/roles route), the three user-management routes (GET / POST
+  // / PATCH; there is no canonical DELETE /api/users route), and
+  // the four Product master-data routes (GET / POST / PATCH /
+  // DELETE; DELETE delegates to deleteMasterRecord).
+  // /api/users/lookup and PATCH /api/products/:id/tracking-policy
+  // remain on their respective legacy handleApi branches above and
+  // are NOT in the route-table.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -1142,51 +1172,6 @@ function listProjectManagerCandidates(db, res, actor) {
   return send(res, 200, { users });
 }
 
-function listProducts(db, res, actor, url) {
-  allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTS_MANAGE']);
-  const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const products = db.prepare(`SELECT p.id,p.code,p.name,p.unit,p.base_uom_code baseUomCode,p.purchase_uom_code purchaseUomCode,p.sales_uom_code salesUomCode,p.price_cents priceCents,p.standard_manufacturing_cost_cents standardManufacturingCostCents,COALESCE((SELECT SUM(i.quantity) FROM inventory i WHERE i.product_id=p.id),0) stockQuantity,p.active,p.tracking_policy trackingPolicy,p.shelf_life_days shelfLifeDays,p.tracking_effective_at trackingEffectiveAt,p.valuation_method valuationMethod,p.inventory_classification inventoryClassification,
-    p.created_at createdAt,p.updated_at updatedAt FROM products p WHERE p.code LIKE ? OR p.name LIKE ? ORDER BY p.code`).all(search, search)
-    .map((row) => ({ ...row, active: Boolean(row.active) }));
-  return send(res, 200, { products });
-}
-
-async function createProduct(db, req, res, actor) {
-  allow(actor, 'PRODUCTS_MANAGE');
-  const body = await readJson(req); const product = productInput(body);
-  const productId = id(); const now = new Date().toISOString();
-  const standardCost = Number(body.standardManufacturingCostCents ?? 0); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
-  const classification = ['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(body.inventoryClassification) ? body.inventoryClassification : 'OTHER_INVENTORY';
-  const trackingPolicy = String(body.trackingPolicy || body.tracking_policy || 'NONE').toUpperCase();
-  if (!TRACKING_POLICIES.includes(trackingPolicy)) throw new HttpError(400, '库存跟踪方式无效', { code: 'TRACKING_POLICY_MISMATCH', resolution: '请选择不跟踪、批次管理或序列号管理' });
-  const shelfLifeDays = body.shelfLifeDays === '' || body.shelfLifeDays == null ? null : Number(body.shelfLifeDays);
-  if (shelfLifeDays !== null && (!Number.isSafeInteger(shelfLifeDays) || shelfLifeDays <= 0)) throw new HttpError(400, '保质期必须为正整数天');
-  const baseUom=String(body.baseUomCode||product.unit).trim().toUpperCase(); db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,now,now);
-  db.prepare(`INSERT INTO products(id,code,name,unit,base_uom_code,purchase_uom_code,sales_uom_code,price_cents,standard_manufacturing_cost_cents,stock_quantity,inventory_classification,tracking_policy,shelf_life_days,tracking_effective_at,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,1,?,?)`)
-    .run(productId, product.code, product.name, baseUom, baseUom, body.purchaseUomCode||null, body.salesUomCode||null, product.priceCents, standardCost, classification, trackingPolicy, shelfLifeDays, now, now, now);
-  audit(db, actor.id, 'CREATE', 'PRODUCT', productId, `${product.code}; tracking=${trackingPolicy}`);
-  return send(res, 201, { id: productId });
-}
-
-async function updateProduct(db, req, res, actor, productId) {
-  allow(actor, 'PRODUCTS_MANAGE');
-  const current = db.prepare('SELECT * FROM products WHERE id=?').get(productId);
-  if (!current) throw new HttpError(404, '货品不存在');
-  const body = await readJson(req);
-  if (body.stockQuantity !== undefined || body.stock_quantity !== undefined) throw new HttpError(409, '货品库存数量只读，请通过库存业务单据变更');
-  const product = productInput({ code: body.code ?? current.code, name: body.name ?? current.name, unit: body.unit ?? current.unit,
-    priceCents: body.priceCents ?? current.price_cents, stockQuantity: current.stock_quantity });
-  const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  const standardCost = Number(body.standardManufacturingCostCents ?? current.standard_manufacturing_cost_cents); if (!Number.isSafeInteger(standardCost) || standardCost < 0) throw new HttpError(400, '标准制造成本必须是非负整数分');
-  const classification = body.inventoryClassification ?? current.inventory_classification;
-  if (!['RAW_MATERIAL','FINISHED_GOOD','OTHER_INVENTORY'].includes(classification)) throw new HttpError(400, '库存分类不正确');
-  const baseUom=String(body.baseUomCode??current.base_uom_code??product.unit).trim().toUpperCase(); if(baseUom!==current.base_uom_code&&db.prepare('SELECT 1 FROM inventory_transactions WHERE product_id=? LIMIT 1').get(productId))throw new HttpError(409,'已有历史交易的产品不可变更基础单位'); const updatedAt=new Date().toISOString();db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(baseUom,baseUom,updatedAt,updatedAt);
-  db.prepare('UPDATE products SET code=?,name=?,unit=?,base_uom_code=?,purchase_uom_code=?,sales_uom_code=?,price_cents=?,standard_manufacturing_cost_cents=?,inventory_classification=?,active=?,updated_at=? WHERE id=?')
-    .run(product.code, product.name, baseUom,baseUom,body.purchaseUomCode??current.purchase_uom_code,body.salesUomCode??current.sales_uom_code, product.priceCents, standardCost, classification, active, updatedAt, productId);
-  audit(db, actor.id, 'UPDATE', 'PRODUCT', productId, product.code);
-  return send(res, 200, { ok: true });
-}
-
 function listOrders(db, res, actor, url) {
   allow(actor, 'ORDERS_VIEW');
   const where = []; const params = [];
@@ -1411,14 +1396,6 @@ function saveOrderItems(db, orderId, items) {
   for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
     item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
     item.baseQuantityNumerator, item.baseQuantityDenominator);
-}
-
-function productInput(body) {
-  const priceCents = Number(body.priceCents); const stockQuantity = Number(body.stockQuantity ?? 0);
-  if (!Number.isSafeInteger(priceCents) || priceCents < 0) throw new HttpError(400, '销售单价必须是非负金额');
-  if (!Number.isFinite(stockQuantity) || stockQuantity < 0) throw new HttpError(400, '库存数量不能小于 0');
-  return { code: requiredCode(body.code, '货品编码'), name: requiredText(body.name, '货品名称', 100),
-    unit: requiredText(body.unit, '单位', 10), priceCents, stockQuantity };
 }
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }

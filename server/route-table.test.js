@@ -1139,25 +1139,42 @@ describe('V2 Stage 3 / Wave 3B — backend dispatch ownership (customer migratio
     assert.equal(customerEntries.length, 4);
   });
 
-  test('product routes have NOT migrated to the route-table (still on legacy handleApi after Wave 3B)', () => {
-    // Wave 3B scope explicitly excluded Products. The legacy
-    // handleApi chain MUST continue to dispatch /api/products
-    // until Products migration is approved in a later wave.
+  test('product master-data routes migrate in Wave 3F: /api/products (GET / POST / PATCH / DELETE) move to the route-table while tracking-policy + tracking + traceability + IQC/OQC remain legacy', () => {
+    // Wave 3F scope explicitly covers Product master-data routes
+    // only. The four Product master-data routes (GET, POST, PATCH,
+    // DELETE) move to the route-table. All non-master-data Product
+    // routes — including the tracking-policy route, every tracking
+    // route, the genealogy route, and the quality-control-points
+    // routes — remain on the legacy handleApi chain and MUST NOT be
+    // migrated in Wave 3F.
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
     table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
 
-    assert.equal(table.match('GET', '/api/products'), null);
+    // Product master-data routes ARE owned (after Wave 3F).
+    assert.equal(table.match('GET', '/api/products'), null, 'Wave 3F: customer-only table does not own /api/products yet — proves the customer wave never registered products');
     assert.equal(table.match('POST', '/api/products'), null);
-    assert.equal(table.match('PATCH', '/api/products/product-001'), null);
-    assert.equal(table.match('DELETE', '/api/products/product-001'), null);
 
-    assert.match(
+    // Product tracking-policy + tracking + traceability routes are
+    // intentionally NOT in the route-table after Wave 3F.
+    assert.equal(table.match('PATCH', '/api/products/p-001/tracking-policy'), null, 'tracking-policy route must NOT be dispatched by the route-table after Wave 3F');
+    assert.equal(table.match('GET', '/api/traceability'), null);
+    assert.equal(table.match('POST', '/api/production-genealogy'), null);
+
+    // /api/products (master-data) generic exact-match dispatch
+    // branches were removed from app.js; the legacy handleApi chain
+    // MUST NOT contain them anymore.
+    assert.doesNotMatch(
       appSource,
       /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
-      'Product routes remain on legacy handleApi and MUST NOT be migrated in Wave 3B',
+      'Wave 3F: legacy exact-match GET branch for /api/products must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3F: legacy exact-match POST branch for /api/products must be removed',
     );
   });
 
@@ -1344,26 +1361,21 @@ describe('V2 Stage 3 / Wave 3C — backend dispatch ownership (supplier migratio
     assert.equal(supplierEntries.length, 4);
   });
 
-  test('product routes have NOT migrated to the route-table (still on legacy handleApi)', () => {
-    // Wave 3C scope explicitly excludes Products. The legacy
-    // handleApi chain MUST continue to dispatch /api/products
-    // until Products migration is approved in a later wave.
+  test('product tracking-policy route remains on legacy handleApi after Wave 3C and after Wave 3F', () => {
+    // Wave 3C kept tracking-policy legacy; Wave 3F migrates Product
+    // master-data only and explicitly excludes the tracking-policy
+    // route. The legacy productTrackingMatch branch must continue to
+    // dispatch to updateProductTrackingHandler and remain in app.js
+    // before the generic Product master-data dispatch reaches the
+    // route-table.
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
     table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
     table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
     table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
 
-    assert.equal(table.match('GET', '/api/products'), null);
-    assert.equal(table.match('POST', '/api/products'), null);
-    assert.equal(table.match('PATCH', '/api/products/product-001'), null);
-    assert.equal(table.match('DELETE', '/api/products/product-001'), null);
+    assert.equal(table.match('PATCH', '/api/products/p-001/tracking-policy'), null, 'tracking-policy must NOT migrate to the route-table');
 
-    assert.match(
-      appSource,
-      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
-      'Product routes remain on legacy handleApi and MUST NOT be migrated in Wave 3C',
-    );
     assert.match(
       appSource,
       /productTrackingMatch\s*=\s*pathname\.match\(/,
@@ -1760,6 +1772,194 @@ describe('V2 Stage 3 / Wave 3E — backend dispatch ownership (user-management m
       (error) => error instanceof RouteTableError
         && error.reason === 'unknown_descriptor_field'
         && error.field === 'permissions',
+    );
+  });
+});
+
+describe('V2 Stage 3 / Wave 3F — backend dispatch ownership (product master-data migration)', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const productsModuleSource = readFileSync(resolve('server/modules/products.js'), 'utf8');
+
+  test('app.js imports product master-data handlers from server/modules/products.js; products.js exports the four canonical handlers plus productInput and deleteProduct; app.js no longer declares listProducts/createProduct/updateProduct/productInput; app.js no longer imports TRACKING_POLICIES', () => {
+    // Imports.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/products\.js['"]/,
+      'Wave 3F: server/app.js MUST import product master-data handlers from server/modules/products.js',
+    );
+    assert.match(appSource, /\blistProducts\b/);
+    assert.match(appSource, /\bcreateProduct\b/);
+    assert.match(appSource, /\bupdateProduct\b/);
+    assert.match(appSource, /\bdeleteProduct\b/);
+
+    // products.js exports.
+    assert.match(productsModuleSource, /export function listProducts\b/);
+    assert.match(productsModuleSource, /export (?:async )?function createProduct\b/);
+    assert.match(productsModuleSource, /export (?:async )?function updateProduct\b/);
+    assert.match(productsModuleSource, /export function deleteProduct\b/);
+    assert.match(productsModuleSource, /function productInput\b/);
+    assert.doesNotMatch(productsModuleSource, /export\s+function\s+productInput\b/);
+
+    // No app-local function declarations remain.
+    assert.doesNotMatch(appSource, /^\s*function\s+listProducts\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+createProduct\b/m);
+    assert.doesNotMatch(appSource, /^\s*async\s+function\s+updateProduct\b/m);
+    assert.doesNotMatch(appSource, /^\s*function\s+productInput\b/m);
+
+    // TRACKING_POLICIES is no longer imported into app.js (createProduct
+    // was its only caller and moved to products.js).
+    assert.doesNotMatch(
+      appSource,
+      /from\s+['"]\.\/modules\/traceability-quality\.js['"]\s*\)[^;]*;?[\s\S]{0,800}\bTRACKING_POLICIES\b/m,
+      'Wave 3F: app.js must no longer import TRACKING_POLICIES (createProduct was its only app-local caller)',
+    );
+    // updateProductTrackingHandler import must still be present (the
+    // tracking-policy branch remains in app.js).
+    assert.match(appSource, /\bupdateProductTrackingHandler\b/);
+  });
+
+  test('app.js no longer has legacy handleApi branches dispatching GET /api/products, POST /api/products, or the generic productMatch PATCH/DELETE; productTrackingMatch remains legacy', () => {
+    // Legacy exact-match branches must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 3F: legacy exact-match GET branch for /api/products must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/products['"]\s*&&\s*req\.method\s*===\s*['"]POST['"]/,
+      'Wave 3F: legacy exact-match POST branch for /api/products must be removed',
+    );
+    // Legacy `productMatch` block was the PATCH/DELETE branch before
+    // migration. After migration, generic Product master-data PATCH /
+    // DELETE dispatch lives in the route-table, not in handleApi.
+    assert.doesNotMatch(
+      appSource,
+      /productMatch\s*=\s*pathname\.match\(\/\^\\\/api\\\/products\\\/[^/]+\$\/\)/,
+      'Wave 3F: legacy productMatch-style dispatch for /api/products/:id must be removed',
+    );
+
+    // productTrackingMatch MUST still be present and continue to call
+    // updateProductTrackingHandler. The tracking-policy route is
+    // intentionally NOT migrated in Wave 3F. Use substring assertions
+    // (rather than a complex regex) to avoid regex-literal ambiguity.
+    assert.ok(appSource.includes('productTrackingMatch = pathname.match(/^\\/api\\/products\\/([^/]+)\\/tracking-policy$/)'),
+      'Wave 3F: productTrackingMatch legacy branch must remain in app.js');
+    assert.ok(appSource.includes('productTrackingMatch && req.method === \'PATCH\') return updateProductTrackingHandler'),
+      'Wave 3F: productTrackingMatch branch must continue to dispatch to updateProductTrackingHandler');
+    assert.doesNotMatch(
+      appSource,
+      /deleteMasterRecord\([^)]*['"]product['"]/,
+      'Wave 3F: app.js must not call deleteMasterRecord directly with kind="product"; it must delegate via server/modules/products.js',
+    );
+  });
+
+  test('four product master-data routes register with canonical owner (GET, POST, PATCH, DELETE); no PATCH /api/products/:id/tracking-policy descriptor exists; no /api/traceability or /api/production-genealogy descriptor exists', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    const productEntries = table.list().filter((item) => item.owner === 'server/modules/products.js');
+    assert.equal(productEntries.length, 4, 'four Product master-data descriptors must exist with the canonical owner');
+    assert.deepEqual(productEntries.map((item) => item.method).sort(), ['DELETE', 'GET', 'PATCH', 'POST']);
+
+    // Tracking-policy is intentionally NOT in the route-table.
+    assert.equal(table.match('PATCH', '/api/products/p-001/tracking-policy'), null, 'tracking-policy must NOT be dispatched by the route-table');
+    assert.equal(table.match('GET', '/api/traceability'), null);
+    assert.equal(table.match('POST', '/api/production-genealogy'), null);
+    assert.equal(table.match('GET', '/api/quality-control-points'), null);
+
+    // Live dispatch parity.
+    assert.equal(table.match('GET', '/api/products').owner, 'server/modules/products.js');
+    assert.equal(table.match('POST', '/api/products').owner, 'server/modules/products.js');
+    assert.equal(table.match('PATCH', '/api/products/p-001').owner, 'server/modules/products.js');
+    assert.equal(table.match('DELETE', '/api/products/p-001').owner, 'server/modules/products.js');
+    assert.deepEqual(table.match('PATCH', '/api/products/p-001').params, ['p-001']);
+    assert.deepEqual(table.match('DELETE', '/api/products/p-001').params, ['p-001']);
+  });
+
+  test('after Wave 3F exactly 22 owned descriptors exist (4 warehouses + 4 customers + 4 suppliers + 3 roles + 3 users + 4 products); single ownedRouteTable constructor and single .match() lookup remain', () => {
+    const table = createRouteTable();
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+
+    assert.equal(table.size(), 22, 'Wave 3F: 4+4+4+3+3+4 = 22 owned descriptors across the six migrated families');
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'app.js must construct the owned route table exactly once after Wave 3F');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'app.js must keep exactly one ownedRouteTable.match() dispatch call after Wave 3F');
+    assert.match(appSource, /\bownedRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bproductRouteTable\b/);
+    assert.doesNotMatch(appSource, /\buserRouteTable\b/);
+  });
+
+  test('product-master-data duplicate (method, path) registration is still rejected; product PATCH/DELETE regex path must be anchored with no flags', () => {
+    const table = createRouteTable();
+    // Register all four canonical product master-data routes.
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    assert.equal(table.size(), 4);
+
+    // Duplicate (method, path) for /api/products (GET) must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/products',
+        handler: () => 'second',
+        owner: 'server/modules/products.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+    );
+    // Same source with the `i` flag must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: new RegExp('^\\/api\\/products\\/([^/]+)$', 'i'),
+        handler: () => {},
+        owner: 'server/modules/products.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    // Unanchored variant must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'PATCH',
+        path: /\/api\/products\/([^/]+)/,
+        handler: () => {},
+        owner: 'server/modules/products.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
     );
   });
 });
