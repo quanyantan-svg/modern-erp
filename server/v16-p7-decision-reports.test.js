@@ -244,7 +244,13 @@ test('P7 outstanding rows preserve safe AppLink to source orders', () => {
 });
 
 // 27. P7 does not modify the backend module, app.js, db.js, or migrations.
-test('P7 does not modify backend modules, app.js, db.js or migrations', () => {
+// V2 Wave 4A migrated the eleven Decision Report routes from the legacy
+// handleApi chain into the single ownedRouteTable dispatch infrastructure.
+// This test now asserts that:
+//   - decision-reports.js continues to own the eleven canonical handlers;
+//   - app.js dispatches each route through an ownedRouteTable.register
+//     descriptor (Wave 4A) rather than through a handleApi branch (P7).
+test('P7 keeps decision-reports.js ownership of all eleven handlers; V2 Wave 4A routes dispatch via ownedRouteTable', () => {
   for (const handler of [
     'getSalesSummary',
     'getSalesOutstanding',
@@ -260,6 +266,9 @@ test('P7 does not modify backend modules, app.js, db.js or migrations', () => {
   ]) {
     assert.match(serverModule, new RegExp(`export function ${handler}\\b`));
   }
+  // V2 Wave 4A: all eleven Decision Report paths register as
+  // ownedRouteTable descriptors pointing at server/modules/decision-reports.js.
+  // No legacy handleApi branch remains for these paths.
   for (const path of [
     '/api/reports/decision/sales-summary',
     '/api/reports/decision/sales-outstanding',
@@ -267,13 +276,40 @@ test('P7 does not modify backend modules, app.js, db.js or migrations', () => {
     '/api/reports/decision/purchase-outstanding',
     '/api/reports/decision/inventory-movements',
   ]) {
-    assert.match(serverApp, new RegExp(path.replace(/\//g, '\\/')));
+    const escaped = path.replace(/\//g, '\\/');
+    // Either as exact-string descriptor or inside a regex descriptor.
+    const asExactString = new RegExp(`path: ['"]${escaped}['"]`);
+    const asExactDescriptor = new RegExp(`method: 'GET',[\\s\\S]{0,40}path: ['"]${escaped}['"]`);
+    assert.ok(
+      asExactDescriptor.test(serverApp) || asExactString.test(serverApp),
+      `Wave 4A: app.js must register ${path} as an ownedRouteTable descriptor`,
+    );
   }
-  // Source is a regex literal; just check the route registration mentions both segments.
-  assert.match(serverApp, /fulfillmentContributionsMatch/);
-  assert.match(serverApp, /api\\\/reports\\\//);
-  assert.match(serverApp, /lines\\\//);
-  assert.match(serverApp, /contributions/);
+  // Fulfillment contributions regex literal lives in the descriptor registration.
+  // The regex literal in app.js source is anchored: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/
+  // Use a RegExp constructor (not a regex literal) so / does not need escaping.
+  const contributionsRegex = new RegExp(
+    "path:\\s*/\\^\\\\/api\\\\/reports\\\\/\\(\\[\\^/\\]\\+\\)\\\\/lines\\\\/\\(\\[\\^/\\]\\+\\)\\\\/contributions\\$/",
+  );
+  assert.match(serverApp, contributionsRegex);
+  assert.match(serverApp, /getFulfillmentContributions\(/);
+  assert.match(serverApp, /owner:\s*['"]server\/modules\/decision-reports\.js['"]/);
+  // Legacy dispatch must be gone.
+  assert.doesNotMatch(serverApp, /fulfillmentContributionsMatch\s*=\s*pathname\.match/);
+  for (const path of [
+    '/api/reports/decision/sales-summary',
+    '/api/reports/decision/sales-outstanding',
+    '/api/reports/decision/purchase-summary',
+    '/api/reports/decision/purchase-outstanding',
+    '/api/reports/decision/inventory-movements',
+  ]) {
+    const escaped = path.replace(/\//g, '\\/');
+    assert.doesNotMatch(
+      serverApp,
+      new RegExp(`pathname\\s*===\\s*['"]${escaped}['"]\\s*&&\\s*req\\.method\\s*===\\s*['"]GET['"]`),
+      `Wave 4A: legacy exact-match GET branch for ${path} must be removed`,
+    );
+  }
 });
 
 // 28. Outstanding "all-fulfilled-but-hidden" branch stays distinct.

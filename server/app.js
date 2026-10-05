@@ -177,13 +177,13 @@ import {
 
 // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
 // Wave 3F — Warehouse + Customer + Supplier + Role +
-// User-management + Product master-data route-table registration.
-// All six live production route families are migrated using the
-// Wave 1 route-table dispatch infrastructure. Each descriptor
-// carries exactly method / path / handler / owner — no permissions,
-// transaction policy, audit policy, or other runtime authority is
-// duplicated. Thin per-route adapters below translate the
-// route-table dispatch context (db, req, res, actor, url, params)
+// User-management + Product master-data + Decision Reports route-table
+// registration. All seven live production route families are migrated
+// using the Wave 1 route-table dispatch infrastructure. Each
+// descriptor carries exactly method / path / handler / owner — no
+// permissions, transaction policy, audit policy, or other runtime
+// authority is duplicated. Thin per-route adapters below translate
+// the route-table dispatch context (db, req, res, actor, url, params)
 // into each business handler's existing signature. The neutral name
 // `ownedRouteTable` reflects that the table holds multiple domain
 // families. Roles have exactly GET / POST / PATCH — there is no
@@ -191,6 +191,9 @@ import {
 // has exactly GET / POST / PATCH — there is no canonical DELETE
 // /api/users route in production. Product master-data has GET /
 // POST / PATCH / DELETE — DELETE delegates to deleteMasterRecord.
+// Decision Reports own eleven read-only GET routes (five core
+// summaries / outstanding, one regex fulfillment-contributions, and
+// five CSV exports) — canonical owner is server/modules/decision-reports.js.
 // /api/users/lookup and PATCH /api/products/:id/tracking-policy
 // are intentionally NOT migrated and remain on the legacy handleApi
 // branches below.
@@ -326,6 +329,72 @@ ownedRouteTable.register({
   path: /^\/api\/products\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => deleteProduct(db, res, actor, params[0]),
   owner: 'server/modules/products.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/sales-summary',
+  handler: ({ db, res, actor, url }) => getSalesSummary(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/sales-outstanding',
+  handler: ({ db, res, actor, url }) => getSalesOutstanding(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/purchase-summary',
+  handler: ({ db, res, actor, url }) => getPurchaseSummary(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/purchase-outstanding',
+  handler: ({ db, res, actor, url }) => getPurchaseOutstanding(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/inventory-movements',
+  handler: ({ db, res, actor, url }) => getInventoryMovements(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/,
+  handler: ({ db, res, actor, params }) => getFulfillmentContributions(db, res, actor, params[0], params[1]),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/sales-summary/export',
+  handler: ({ db, res, actor, url }) => exportSalesSummaryReport(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/sales-outstanding/export',
+  handler: ({ db, res, actor, url }) => exportSalesOutstandingReport(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/purchase-summary/export',
+  handler: ({ db, res, actor, url }) => exportPurchaseSummaryReport(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/purchase-outstanding/export',
+  handler: ({ db, res, actor, url }) => exportPurchaseOutstandingReport(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/decision/inventory-movements/export',
+  handler: ({ db, res, actor, url }) => exportInventoryMovementsReport(db, res, actor, url),
+  owner: 'server/modules/decision-reports.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -482,16 +551,19 @@ async function handleApi(db, req, res, url) {
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
-  // Wave 3F — Owned-route lookup. Runs AFTER authentication is
-  // resolved and BEFORE the legacy handleApi chain continues.
+  // Wave 3F + Wave 4A — Owned-route lookup. Runs AFTER authentication
+  // is resolved and BEFORE the legacy handleApi chain continues.
   // Unmatched routes fall through to the existing legacy chain
   // unchanged. Currently owns the four warehouse routes, the four
   // customer routes, the four supplier routes, the three role
   // routes (GET / POST / PATCH; there is no canonical DELETE
   // /api/roles route), the three user-management routes (GET / POST
-  // / PATCH; there is no canonical DELETE /api/users route), and
-  // the four Product master-data routes (GET / POST / PATCH /
-  // DELETE; DELETE delegates to deleteMasterRecord).
+  // / PATCH; there is no canonical DELETE /api/users route), the
+  // four Product master-data routes (GET / POST / PATCH / DELETE;
+  // DELETE delegates to deleteMasterRecord), and the eleven
+  // Decision Reports routes (five core summaries / outstanding, one
+  // regex fulfillment-contributions, and five CSV exports; canonical
+  // owner server/modules/decision-reports.js).
   // /api/users/lookup and PATCH /api/products/:id/tracking-policy
   // remain on their respective legacy handleApi branches above and
   // are NOT in the route-table.
@@ -683,23 +755,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/bank-reconciliations' && req.method === 'GET') return listBankReconciliations(db, res, actor, url);
   if (pathname === '/api/bank-reconciliations' && req.method === 'POST') return createBankReconciliation(db, req, res, actor);
   if (pathname === '/api/reports/trial-balance' && req.method === 'GET') return getTrialBalance(db, res, actor, url);
-  // M7 Decision Reports — read-only analytics over canonical documents.
-  if (pathname === '/api/reports/decision/sales-summary' && req.method === 'GET') return getSalesSummary(db, res, actor, url);
-  if (pathname === '/api/reports/decision/sales-outstanding' && req.method === 'GET') return getSalesOutstanding(db, res, actor, url);
-  if (pathname === '/api/reports/decision/purchase-summary' && req.method === 'GET') return getPurchaseSummary(db, res, actor, url);
-  if (pathname === '/api/reports/decision/purchase-outstanding' && req.method === 'GET') return getPurchaseOutstanding(db, res, actor, url);
-  if (pathname === '/api/reports/decision/inventory-movements' && req.method === 'GET') return getInventoryMovements(db, res, actor, url);
-  const fulfillmentContributionsMatch = pathname.match(/^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/);
-  if (fulfillmentContributionsMatch && req.method === 'GET') {
-    return getFulfillmentContributions(db, res, actor, fulfillmentContributionsMatch[1], fulfillmentContributionsMatch[2]);
-  }
-  // V1.4-E5: CSV exports re-use the same authoritative business-date
-  // query semantics and the resolved entity filter labels.
-  if (pathname === '/api/reports/decision/sales-summary/export' && req.method === 'GET') return exportSalesSummaryReport(db, res, actor, url);
-  if (pathname === '/api/reports/decision/sales-outstanding/export' && req.method === 'GET') return exportSalesOutstandingReport(db, res, actor, url);
-  if (pathname === '/api/reports/decision/purchase-summary/export' && req.method === 'GET') return exportPurchaseSummaryReport(db, res, actor, url);
-  if (pathname === '/api/reports/decision/purchase-outstanding/export' && req.method === 'GET') return exportPurchaseOutstandingReport(db, res, actor, url);
-  if (pathname === '/api/reports/decision/inventory-movements/export' && req.method === 'GET') return exportInventoryMovementsReport(db, res, actor, url);
   if (pathname === '/api/accounting-vouchers' && req.method === 'POST') return createAccountingVoucher(db, req, res, actor);
   // Accounting Voucher Workflow
   const voucherActionMatch = pathname.match(/^\/api\/accounting-vouchers\/([^/]+)\/(submit|approve|reject)$/);

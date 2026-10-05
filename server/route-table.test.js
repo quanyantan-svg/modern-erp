@@ -10,16 +10,18 @@
 //      they require no DB and no HTTP and never assert anything about
 //      live dispatch.
 //
-//   2. V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E —
-//      backend dispatch ownership architecture invariants. These tests
-//      read server/app.js and the migrated server/modules/*.js files
-//      from disk and assert that the live route-table infrastructure
-//      is wired in: app.js imports route-table.js, the warehouse /
-//      customer / supplier / role / user-management descriptors are
-//      registered with their canonical owners, no legacy /api/warehouses
-//      / /api/customers / /api/suppliers / /api/roles / /api/users
-//      dispatch branches remain, and unrelated routes still fall
-//      through to the legacy handleApi chain.
+//   2. V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
+//      Wave 3F + Wave 4A — backend dispatch ownership architecture
+//      invariants. These tests read server/app.js and the migrated
+//      server/modules/*.js files from disk and assert that the live
+//      route-table infrastructure is wired in: app.js imports
+//      route-table.js, the warehouse / customer / supplier / role /
+//      user-management / product-master-data / decision-reports
+//      descriptors are registered with their canonical owners, no
+//      legacy /api/warehouses / /api/customers / /api/suppliers /
+//      /api/roles / /api/users / /api/reports/decision/* dispatch
+//      branches remain, and unrelated routes still fall through to
+//      the legacy handleApi chain.
 //
 // Authorization, transaction, and audit continue to live at the
 // handler boundary (allow / allowAny / transaction / audit); the
@@ -1960,6 +1962,307 @@ describe('V2 Stage 3 / Wave 3F — backend dispatch ownership (product master-da
         owner: 'server/modules/products.js',
       }),
       (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+  });
+});
+
+describe('V2 Wave 4A — Decision Reports Route Ownership Migration', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+
+  function buildOwnedTable() {
+    const table = createRouteTable();
+    // 22 Wave 3F baseline descriptors.
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    // 11 Wave 4A decision-reports descriptors.
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/, handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    return table;
+  }
+
+  test('exactly 33 owned descriptors exist after Wave 4A (22 baseline + 11 decision-reports) and each carries exactly four canonical fields; the single createRouteTable() constructor and the single ownedRouteTable.match() lookup remain', () => {
+    const table = buildOwnedTable();
+    const decisionEntries = table.list().filter((item) => item.owner === 'server/modules/decision-reports.js');
+    assert.equal(decisionEntries.length, 11, 'Wave 4A: exactly eleven decision-reports descriptors must exist with the canonical owner');
+    assert.equal(table.size(), 33, 'Wave 4A: 22 baseline + 11 decision-reports = 33 owned descriptors');
+    // list() returns exactly { method, path, pathKind, owner } — no other keys.
+    for (const entry of decisionEntries) {
+      assert.deepEqual(
+        Object.keys(entry).sort(),
+        ['method', 'owner', 'path', 'pathKind'].sort(),
+        `Wave 4A: descriptor ${entry.method} ${entry.path} must expose exactly { method, path, pathKind, owner }`,
+      );
+      assert.equal(entry.owner, 'server/modules/decision-reports.js');
+      assert.equal(entry.method, 'GET');
+      assert.ok(typeof entry.path === 'string' && entry.path.length > 0, 'descriptor path must be non-empty');
+    }
+    // Previous 22 baseline descriptors remain intact.
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'Wave 4A: app.js must construct the owned route table exactly once');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'Wave 4A: app.js must keep exactly one ownedRouteTable.match() dispatch call');
+    assert.match(appSource, /\bownedRouteTable\b/);
+    assert.doesNotMatch(appSource, /\bdecisionReportRouteTable\b/);
+    assert.doesNotMatch(appSource, /\banalyticsRouteTable\b/);
+  });
+
+  test('five core Decision Report GET routes register with the canonical owner and live dispatch resolves to decision-reports.js', () => {
+    const table = buildOwnedTable();
+    const core = [
+      ['/api/reports/decision/sales-summary', 'sales-summary'],
+      ['/api/reports/decision/sales-outstanding', 'sales-outstanding'],
+      ['/api/reports/decision/purchase-summary', 'purchase-summary'],
+      ['/api/reports/decision/purchase-outstanding', 'purchase-outstanding'],
+      ['/api/reports/decision/inventory-movements', 'inventory-movements'],
+    ];
+    for (const [path, label] of core) {
+      const hit = table.match('GET', path);
+      assert.ok(hit, `Wave 4A: GET ${path} (${label}) must match the route-table`);
+      assert.equal(hit.owner, 'server/modules/decision-reports.js');
+      assert.deepEqual(hit.params, []);
+    }
+    // Exact-string paths (not RegExp regex) for the five core GETs.
+    const pathKinds = table.list()
+      .filter((item) => item.owner === 'server/modules/decision-reports.js')
+      .filter((item) => ['/api/reports/decision/sales-summary',
+                         '/api/reports/decision/sales-outstanding',
+                         '/api/reports/decision/purchase-summary',
+                         '/api/reports/decision/purchase-outstanding',
+                         '/api/reports/decision/inventory-movements'].includes(item.path))
+      .map((item) => item.pathKind);
+    assert.equal(pathKinds.length, 5);
+    for (const kind of pathKinds) assert.equal(kind, 'exact');
+  });
+
+  test('fulfillment-contributions regex registers with two capture-group params and resolves correctly', () => {
+    const table = buildOwnedTable();
+    const hit = table.match('GET', '/api/reports/sales-outstanding/lines/order-item-uuid-123/contributions');
+    assert.ok(hit, 'fulfillment-contributions route must match the route-table');
+    assert.equal(hit.owner, 'server/modules/decision-reports.js');
+    assert.deepEqual(hit.params, ['sales-outstanding', 'order-item-uuid-123']);
+
+    // purchase-outstanding variant must also match (same regex shape).
+    const purchaseHit = table.match('GET', '/api/reports/purchase-outstanding/lines/order-item-456/contributions');
+    assert.ok(purchaseHit);
+    assert.equal(purchaseHit.owner, 'server/modules/decision-reports.js');
+    assert.deepEqual(purchaseHit.params, ['purchase-outstanding', 'order-item-456']);
+
+    // The descriptor must be a regex (pathKind === 'regex').
+    const regexDescriptors = table.list()
+      .filter((item) => item.owner === 'server/modules/decision-reports.js')
+      .filter((item) => item.pathKind === 'regex');
+    assert.equal(regexDescriptors.length, 1, 'exactly one regex descriptor (fulfillment contributions) must exist for decision-reports');
+  });
+
+  test('five CSV export routes register with the canonical owner and dispatch correctly', () => {
+    const table = buildOwnedTable();
+    const exports = [
+      '/api/reports/decision/sales-summary/export',
+      '/api/reports/decision/sales-outstanding/export',
+      '/api/reports/decision/purchase-summary/export',
+      '/api/reports/decision/purchase-outstanding/export',
+      '/api/reports/decision/inventory-movements/export',
+    ];
+    for (const path of exports) {
+      const hit = table.match('GET', path);
+      assert.ok(hit, `Wave 4A: GET ${path} (CSV export) must match the route-table`);
+      assert.equal(hit.owner, 'server/modules/decision-reports.js');
+      assert.deepEqual(hit.params, []);
+    }
+    // Exact-string (not regex) for the five CSV exports.
+    const exportKinds = table.list()
+      .filter((item) => item.owner === 'server/modules/decision-reports.js')
+      .filter((item) => item.path.endsWith('/export'))
+      .map((item) => item.pathKind);
+    assert.equal(exportKinds.length, 5);
+    for (const kind of exportKinds) assert.equal(kind, 'exact');
+  });
+
+  test('legacy Decision Report handleApi branches are absent and the six financial/dashboard report endpoints remain legacy (match returns null)', () => {
+    // Five core GET exact branches must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/sales-summary['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/sales-summary must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/sales-outstanding['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/sales-outstanding must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/purchase-summary['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/purchase-summary must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/purchase-outstanding['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/purchase-outstanding must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/inventory-movements['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/inventory-movements must be removed',
+    );
+    // fulfillmentContributionsMatch declaration + branch must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /fulfillmentContributionsMatch\s*=\s*pathname\.match/,
+      'Wave 4A: legacy fulfillmentContributionsMatch declaration must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /fulfillmentContributionsMatch\s*\[\s*1\s*\]/,
+      'Wave 4A: legacy fulfillmentContributionsMatch branch (params[1] indexing) must be removed',
+    );
+    // Five CSV export exact branches must be removed.
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/sales-summary\/export['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/sales-summary/export must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/sales-outstanding\/export['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/sales-outstanding/export must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/purchase-summary\/export['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/purchase-summary/export must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/purchase-outstanding\/export['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/purchase-outstanding/export must be removed',
+    );
+    assert.doesNotMatch(
+      appSource,
+      /pathname\s*===\s*['"]\/api\/reports\/decision\/inventory-movements\/export['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
+      'Wave 4A: legacy exact-match GET branch for /api/reports/decision/inventory-movements/export must be removed',
+    );
+
+    // Six financial / dashboard reports MUST still be served by legacy handleApi
+    // branches and therefore return null from ownedRouteTable.match(...). This
+    // proves Wave 4A did not accidentally migrate extended.js financial-report
+    // ownership.
+    const table = buildOwnedTable();
+    const legacyFinancial = [
+      ['GET', '/api/reports/financial-summary'],
+      ['GET', '/api/reports/income-statement'],
+      ['GET', '/api/reports/balance-sheet'],
+      ['GET', '/api/reports/inventory-status'],
+      ['GET', '/api/reports/sales-analysis'],
+      ['GET', '/api/reports/trial-balance'],
+    ];
+    for (const [method, path] of legacyFinancial) {
+      assert.equal(
+        table.match(method, path),
+        null,
+        `Wave 4A: financial/dashboard report ${method} ${path} must remain legacy and return null from ownedRouteTable.match(...)`,
+      );
+    }
+    // Their legacy handleApi branches must remain in app.js.
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/financial-summary['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getFinancialSummary/);
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/income-statement['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getIncomeStatement/);
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/balance-sheet['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getBalanceSheet/);
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/inventory-status['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getInventoryStatus/);
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/sales-analysis['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getSalesAnalysis/);
+    assert.match(appSource, /pathname\s*===\s*['"]\/api\/reports\/trial-balance['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+getTrialBalance/);
+  });
+
+  test('decision-reports duplicate (method, path) registration is still rejected; regex shape with two capture groups must be anchored with no flags', () => {
+    const table = createRouteTable();
+    // Register a core Decision Report exact path first.
+    table.register({
+      method: 'GET',
+      path: '/api/reports/decision/sales-summary',
+      handler: () => 'first',
+      owner: 'server/modules/decision-reports.js',
+    });
+    // Register the fulfillment contributions regex shape used in app.js.
+    table.register({
+      method: 'GET',
+      path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/,
+      handler: () => {},
+      owner: 'server/modules/decision-reports.js',
+    });
+    // Same source with the `i` flag must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: new RegExp('^\\/api\\/reports\\/([^/]+)\\/lines\\/([^/]+)\\/contributions$', 'i'),
+        handler: () => {},
+        owner: 'server/modules/decision-reports.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unsupported_regex_flags',
+    );
+    // Unanchored variant must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: /\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions/,
+        handler: () => {},
+        owner: 'server/modules/decision-reports.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'unanchored_regex',
+    );
+    // Duplicate exact (method, path) registration must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: '/api/reports/decision/sales-summary',
+        handler: () => 'second',
+        owner: 'server/modules/decision-reports.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
+    );
+    // Duplicate regex (same source) registration must fail closed.
+    assert.throws(
+      () => table.register({
+        method: 'GET',
+        path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/,
+        handler: () => 'second',
+        owner: 'server/modules/decision-reports.js',
+      }),
+      (error) => error instanceof RouteTableError && error.reason === 'duplicate_route',
     );
   });
 });

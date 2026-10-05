@@ -285,7 +285,7 @@ test('P8 decision reports: P7 switcher only renders the 5 canonical reportKeys',
   assert.equal(tabCount, 5, 'REPORT_TABS must contain exactly 5 entries');
 });
 
-test('P8 decision reports: report endpoints are registered server-side (preserved by P7)', () => {
+test('P8 decision reports: report endpoints are registered server-side (V2 Wave 4A ownedRouteTable dispatch)', () => {
   const paths = [
     '/api/reports/decision/sales-summary',
     '/api/reports/decision/sales-outstanding',
@@ -294,20 +294,38 @@ test('P8 decision reports: report endpoints are registered server-side (preserve
     '/api/reports/decision/inventory-movements',
   ];
   const server = readSrc('server/app.js');
-  // server/app.js stores routes as plain pathname strings (no regex literal).
+  // V2 Wave 4A: routes are owned by server/modules/decision-reports.js through
+  // ownedRouteTable.register descriptors. The five core paths must still be
+  // present as exact-string descriptors; the five CSV exports as well.
   for (const path of paths) {
-    assert.match(server, new RegExp(path.replace(/\//g, '\\/')), `server/app.js must keep registering ${path}`);
+    const escaped = path.replace(/\//g, '\\/');
+    assert.match(
+      server,
+      new RegExp(`path:\\s*['"]${escaped}['"]`),
+      `server/app.js must keep registering ${path} as an ownedRouteTable descriptor`,
+    );
   }
   // Five CSV exports.
   for (const path of paths) {
-    assert.match(server, new RegExp((`${path}/export`).replace(/\//g, '\\/')), `server/app.js must keep ${path}/export`);
+    const escaped = (`${path}/export`).replace(/\//g, '\\/');
+    assert.match(
+      server,
+      new RegExp(`path:\\s*['"]${escaped}['"]`),
+      `server/app.js must keep registering ${path}/export as an ownedRouteTable descriptor`,
+    );
   }
-  // Contributions endpoint uses a runtime regex match(); assert its named
-  // dispatch point and handler are both preserved without re-parsing the
-  // regular-expression literal itself.
-  assert.match(server, /fulfillmentContributionsMatch\s*=\s*pathname\.match\(/);
-  assert.match(server, /\/contributions\$\/\)/);
+  // Contributions endpoint registers as a regex descriptor (no longer as a
+  // legacy runtime `fulfillmentContributionsMatch = pathname.match(...)`
+  // branch). The descriptor must include the regex literal plus the handler
+  // and the canonical owner.
+  const contributionsRegex = new RegExp(
+    "path:\\s*/\\^\\\\/api\\\\/reports\\\\/\\(\\[\\^/\\]\\+\\)\\\\/lines\\\\/\\(\\[\\^/\\]\\+\\)\\\\/contributions\\$/",
+  );
+  assert.match(server, contributionsRegex);
   assert.match(server, /getFulfillmentContributions\(/);
+  assert.match(server, /owner:\s*['"]server\/modules\/decision-reports\.js['"]/);
+  // Legacy dispatch must be gone.
+  assert.doesNotMatch(server, /fulfillmentContributionsMatch\s*=\s*pathname\.match\(/);
 });
 
 // ----- 7. P0..P7 prototype invariants (high-level) -----
