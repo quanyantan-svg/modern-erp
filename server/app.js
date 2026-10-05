@@ -17,14 +17,14 @@ import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
   createDepartment, createExpenseClaim, createLaborRecord,
   createLeaveRequest, createMrpPlan, createPeriodClosure,
-  createRoutingOperation, createSupplierEvaluation, createWorkCenter,
+  createSupplierEvaluation,
   generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement,
   getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listDepartments, listExpenseClaims,
   listLaborRecords, listLeaveRequests, listMrpPlans,
-  listPeriodClosures, listRoutingOperations,
-  closePeriod, getClosureChecklist, listSupplierEvaluations, listWorkCenters, unclosePeriod,
+  listPeriodClosures,
+  closePeriod, getClosureChecklist, listSupplierEvaluations, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
 } from './modules/extended.js';
 import {
@@ -183,6 +183,12 @@ import {
   listProducts,
   updateProduct,
 } from './modules/products.js';
+import {
+  createWorkCenter,
+  listWorkCenters,
+  createRoutingOperation,
+  listRoutingOperations,
+} from './modules/manufacturing-reference.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
 //
@@ -256,12 +262,27 @@ import {
 // unclosePeriod / getClosureChecklist) remain on legacy handleApi
 // at the current V2 boundary.
 //
+// Wave 5B — `server/modules/manufacturing-reference.js` owns the four
+// legacy BOM-bound manufacturing-reference-data routes (GET
+// /api/work-centers, POST /api/work-centers, GET
+// /api/routing-operations, POST /api/routing-operations). The four
+// handler implementations were extracted verbatim from
+// `server/modules/extended.js`. `/api/labor-records`, production
+// orders, manufacturing execution, WIP / production cost, BOM
+// handlers, IQC / OQC, inventory, planning / MRP, and supplier
+// evaluations remain on legacy handleApi at the current V2 boundary.
+// `/api/product-routings/*` and `product_routings` /
+// `product_routing_operations` continue to live under
+// `server/modules/product-routing.js` and are NOT touched by this
+// wave — the legacy `routing_operations` table behind these four
+// routes is a separate table from `product_routing_operations`.
+//
 // Wave 3A warehouses + Wave 3B customers + Wave 3C suppliers +
 // Wave 3D roles + Wave 3E user-management + Wave 3F product
 // master-data + Wave 4A decision-reports + Wave 4B product-routings
 // + Wave 4C read-only lookups + Wave 4D sales+purchase discount
-// draft lifecycle + Wave 5A accounting-configuration dictionaries
-// route-table registration.
+// draft lifecycle + Wave 5A accounting-configuration dictionaries +
+// Wave 5B manufacturing reference data route-table registration.
 const ownedRouteTable = createRouteTable();
 ownedRouteTable.register({
   method: 'GET',
@@ -645,6 +666,45 @@ ownedRouteTable.register({
   owner: 'server/modules/accounting-config.js',
 });
 
+// Wave 5B — Manufacturing Reference Data Decomposition. Canonical
+// owner of the legacy BOM-bound work-centre / routing-operation routes
+// (`/api/work-centers`, `/api/routing-operations`) extracted from
+// `server/modules/extended.js`. The four handler implementations were
+// moved verbatim into `server/modules/manufacturing-reference.js`.
+// `/api/product-routings/*`, `product_routings`, and
+// `product_routing_operations` continue to live under
+// `server/modules/product-routing.js` and remain unchanged. The
+// legacy `routing_operations` table behind these four routes is a
+// different table from `product_routing_operations`; this wave does not
+// merge or redesign the two. `/api/labor-records`, production orders,
+// manufacturing execution, WIP / production cost, BOM handlers,
+// IQC / OQC, inventory, planning / MRP, and supplier evaluations all
+// stay on the legacy `handleApi` chain below.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/work-centers',
+  handler: ({ db, res, actor }) => listWorkCenters(db, res, actor),
+  owner: 'server/modules/manufacturing-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/work-centers',
+  handler: ({ db, req, res, actor }) => createWorkCenter(db, req, res, actor),
+  owner: 'server/modules/manufacturing-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/routing-operations',
+  handler: ({ db, res, actor, url }) => listRoutingOperations(db, res, actor, url),
+  owner: 'server/modules/manufacturing-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/routing-operations',
+  handler: ({ db, req, res, actor }) => createRoutingOperation(db, req, res, actor),
+  owner: 'server/modules/manufacturing-reference.js',
+});
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
@@ -799,11 +859,11 @@ async function handleApi(db, req, res, url) {
   if (poMatch && req.method === 'PUT') return updatePurchaseOrder(db, req, res, actor, poMatch[1]);
 
   // V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E +
-  // Wave 3F + Wave 4A + Wave 4B + Wave 4C + Wave 5A — Owned-route
-  // lookup. Runs AFTER authentication is resolved and BEFORE the
-  // legacy handleApi chain continues. Unmatched routes fall through
-  // to the existing legacy chain unchanged. Currently owns the four
-  // warehouse routes, the four customer routes, the four supplier
+  // Wave 3F + Wave 4A + Wave 4B + Wave 4C + Wave 5A + Wave 5B —
+  // Owned-route lookup. Runs AFTER authentication is resolved and
+  // BEFORE the legacy handleApi chain continues. Unmatched routes fall
+  // through to the existing legacy chain unchanged. Currently owns the
+  // four warehouse routes, the four customer routes, the four supplier
   // routes, the three role routes (GET / POST / PATCH; there is no
   // canonical DELETE /api/roles route), the three user-management
   // routes (GET / POST / PATCH; there is no canonical DELETE
@@ -826,26 +886,35 @@ async function handleApi(db, req, res, url) {
   // active=1-only semantics, while the report-filter
   // business-entities lookup is bounded by REPORT_VIEW + per-usage
   // domain intersection), the ten discount draft lifecycle routes
-  // (canonical owner server/modules/discounts.js), and the four
+  // (canonical owner server/modules/discounts.js), the four
   // Accounting Configuration routes (GET /api/currencies, GET
   // /api/voucher-words, POST /api/voucher-words, GET
   // /api/voucher-templates; canonical owner
-  // server/modules/accounting-config.js). /api/users/lookup and
+  // server/modules/accounting-config.js), and the four Manufacturing
+  // Reference Data routes (GET /api/work-centers, POST
+  // /api/work-centers, GET /api/routing-operations, POST
+  // /api/routing-operations; canonical owner
+  // server/modules/manufacturing-reference.js — the legacy
+  // BOM-bound `routing_operations` table; distinct from the
+  // `product_routings` / `product_routing_operations` owned by
+  // server/modules/product-routing.js). /api/users/lookup and
   // PATCH /api/products/:id/tracking-policy remain on their
   // respective legacy handleApi branches above and are NOT in the
   // route-table.
   //
   // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F +
-  // Wave 4A + Wave 4B + Wave 4C + Wave 4D + Wave 5A — Owned-route
-  // lookup: 57 baseline (4 warehouses + 4 customers + 4 suppliers +
-  // 3 roles + 3 users + 4 products + 11 decision-reports +
-  // 9 product-routings + 5 read-only lookups + 10 discount draft
+  // Wave 4A + Wave 4B + Wave 4C + Wave 4D + Wave 5A + Wave 5B —
+  // Owned-route lookup: 57 baseline (4 warehouses + 4 customers +
+  // 4 suppliers + 3 roles + 3 users + 4 products + 11 decision-reports
+  // + 9 product-routings + 5 read-only lookups + 10 discount draft
   // lifecycle) + 4 accounting-configuration routes (1 currency GET +
   // 1 voucher-words GET + 1 voucher-words POST + 1 voucher-templates
-  // GET) = 61 owned descriptors. Confirm and reverse remain on
-  // legacy handleApi branches below because they
-  // touch financial_credit_adjustments, accounting voucher
-  // generation, and period-close gating.
+  // GET) + 4 manufacturing-reference routes (GET work-centers + POST
+  // work-centers + GET routing-operations + POST routing-operations)
+  // = 65 owned descriptors. Confirm and reverse remain on legacy
+  // handleApi branches below because they touch
+  // financial_credit_adjustments, accounting voucher generation,
+  // and period-close gating.
   {
     const match = ownedRouteTable.match(req.method, pathname);
     if (match) {
@@ -975,10 +1044,6 @@ async function handleApi(db, req, res, url) {
     if (action === 'cancel') return cancelPurchaseRequisition(db, res, actor, rid);
     return generatePurchaseOrderFromRequisition(db, req, res, actor, rid);
   }
-  if (pathname === '/api/work-centers' && req.method === 'GET') return listWorkCenters(db, res, actor);
-  if (pathname === '/api/work-centers' && req.method === 'POST') return createWorkCenter(db, req, res, actor);
-  if (pathname === '/api/routing-operations' && req.method === 'GET') return listRoutingOperations(db, res, actor, url);
-  if (pathname === '/api/routing-operations' && req.method === 'POST') return createRoutingOperation(db, req, res, actor);
   if (pathname === '/api/labor-records' && req.method === 'GET') return listLaborRecords(db, res, actor, url);
   if (pathname === '/api/labor-records' && req.method === 'POST') return createLaborRecord(db, req, res, actor);
   if (pathname === '/api/iqc' && req.method === 'GET') return listIqcInspections(db, res, actor, url);

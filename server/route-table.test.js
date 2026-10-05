@@ -3454,3 +3454,282 @@ describe('V2 Wave 5A — Accounting Configuration Decomposition', () => {
       'Wave 5A: POST /api/accounting-vouchers must NOT match the route-table (legacy handleApi)');
   });
 });
+
+describe('V2 Wave 5B — Manufacturing Reference Data Decomposition', () => {
+  const appSource = readFileSync(resolve('server/app.js'), 'utf8');
+  const extendedModuleSource = readFileSync(resolve('server/modules/extended.js'), 'utf8');
+  const manufacturingReferenceModuleSource = readFileSync(resolve('server/modules/manufacturing-reference.js'), 'utf8');
+
+  function buildOwnedTable() {
+    const table = createRouteTable();
+    // 61 Wave 5A baseline descriptors (warehouse + customer +
+    // supplier + role + user + product master-data + decision-reports
+    // + product-routings + read-only lookups + discount draft
+    // lifecycle + accounting-configuration). The Wave 5B tests
+    // extend the Wave 5A buildOwnedTable by adding the four
+    // manufacturing-reference descriptors.
+    table.register({ method: 'GET', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'POST', path: '/api/warehouses', handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/warehouses\/([^/]+)$/, handler: () => {}, owner: 'server/modules/warehouses.js' });
+    table.register({ method: 'GET', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'POST', path: '/api/customers', handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/customers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/customers.js' });
+    table.register({ method: 'GET', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'POST', path: '/api/suppliers', handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/suppliers\/([^/]+)$/, handler: () => {}, owner: 'server/modules/suppliers.js' });
+    table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/roles\/([^/]+)$/, handler: () => {}, owner: 'server/modules/roles.js' });
+    table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
+    table.register({ method: 'GET', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'POST', path: '/api/products', handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/products\/([^/]+)$/, handler: () => {}, owner: 'server/modules/products.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: /^\/api\/reports\/([^/]+)\/lines\/([^/]+)\/contributions$/, handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/sales-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-summary/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/purchase-outstanding/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/reports/decision/inventory-movements/export', handler: () => {}, owner: 'server/modules/decision-reports.js' });
+    table.register({ method: 'GET', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: '/api/product-routings', handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/(activate|deactivate)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)\/operations\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'POST', path: /^\/api\/product-routings\/([^/]+)\/operations$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'DELETE', path: /^\/api\/product-routings\/([^/]+)$/, handler: () => {}, owner: 'server/modules/product-routing.js' });
+    table.register({ method: 'GET', path: '/api/lookup/suppliers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/customers', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookups/business-entities', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/sales-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/lookup/purchase-orders-source', handler: () => {}, owner: 'server/modules/lookups.js' });
+    table.register({ method: 'GET', path: '/api/sales-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: '/api/sales-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: /^\/api\/sales-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/sales-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: /^\/api\/sales-discounts\/([^/]+)\/cancel$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: '/api/purchase-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: '/api/purchase-discounts', handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: /^\/api\/purchase-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'PATCH', path: /^\/api\/purchase-discounts\/([^/]+)$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'POST', path: /^\/api\/purchase-discounts\/([^/]+)\/cancel$/, handler: () => {}, owner: 'server/modules/discounts.js' });
+    table.register({ method: 'GET', path: '/api/currencies', handler: () => {}, owner: 'server/modules/accounting-config.js' });
+    table.register({ method: 'GET', path: '/api/voucher-words', handler: () => {}, owner: 'server/modules/accounting-config.js' });
+    table.register({ method: 'POST', path: '/api/voucher-words', handler: () => {}, owner: 'server/modules/accounting-config.js' });
+    table.register({ method: 'GET', path: '/api/voucher-templates', handler: () => {}, owner: 'server/modules/accounting-config.js' });
+    // 4 Wave 5B manufacturing-reference descriptors.
+    table.register({ method: 'GET', path: '/api/work-centers', handler: () => {}, owner: 'server/modules/manufacturing-reference.js' });
+    table.register({ method: 'POST', path: '/api/work-centers', handler: () => {}, owner: 'server/modules/manufacturing-reference.js' });
+    table.register({ method: 'GET', path: '/api/routing-operations', handler: () => {}, owner: 'server/modules/manufacturing-reference.js' });
+    table.register({ method: 'POST', path: '/api/routing-operations', handler: () => {}, owner: 'server/modules/manufacturing-reference.js' });
+    return table;
+  }
+
+  test('1. exactly 4 manufacturing-reference descriptors exist; previous 61 baseline descriptors remain intact; 65 total; single createRouteTable() and single .match() in app.js', () => {
+    const table = buildOwnedTable();
+    const manufacturingReferenceEntries = table.list().filter((item) => item.owner === 'server/modules/manufacturing-reference.js');
+    assert.equal(manufacturingReferenceEntries.length, 4, 'Wave 5B: exactly four manufacturing-reference descriptors must exist with the canonical owner');
+    assert.equal(table.size(), 65, 'Wave 5B: 61 baseline + 4 manufacturing-reference = 65 owned descriptors');
+    for (const entry of manufacturingReferenceEntries) {
+      assert.deepEqual(
+        Object.keys(entry).sort(),
+        ['method', 'owner', 'path', 'pathKind'].sort(),
+        `Wave 5B: descriptor ${entry.method} ${entry.path} must expose exactly { method, path, pathKind, owner }`,
+      );
+      assert.equal(entry.owner, 'server/modules/manufacturing-reference.js');
+    }
+    const paths = manufacturingReferenceEntries.map((entry) => entry.path).sort();
+    assert.deepEqual(paths, [
+      '/api/routing-operations',
+      '/api/routing-operations',
+      '/api/work-centers',
+      '/api/work-centers',
+    ].sort(), 'Wave 5B: the four manufacturing-reference paths must match the canonical brief exactly');
+    // Previous 61 baseline descriptors remain intact.
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/warehouses.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/customers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/suppliers.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/roles.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/users.js').length, 3);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/products.js').length, 4);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/decision-reports.js').length, 11);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/product-routing.js').length, 9);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/lookups.js').length, 5);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/discounts.js').length, 10);
+    assert.equal(table.list().filter((item) => item.owner === 'server/modules/accounting-config.js').length, 4);
+    // Single constructor + single .match() lookup remain in app.js.
+    const constructorOccurrences = appSource.match(/\bcreateRouteTable\s*\(\s*\)/g) || [];
+    assert.equal(constructorOccurrences.length, 1, 'Wave 5B: app.js must construct the owned route table exactly once');
+    const matchOccurrences = appSource.match(/\bownedRouteTable\s*\.\s*match\s*\(/g) || [];
+    assert.equal(matchOccurrences.length, 1, 'Wave 5B: app.js must keep exactly one ownedRouteTable.match() dispatch call');
+    assert.match(appSource, /\bownedRouteTable\b/);
+  });
+
+  test('2. all four manufacturing-reference route matches succeed via the route-table; legacy exact-match branches for /api/work-centers and /api/routing-operations are removed from app.js', () => {
+    const table = buildOwnedTable();
+    const wcGet = table.match('GET', '/api/work-centers');
+    assert.ok(wcGet, 'GET /api/work-centers must match the route-table');
+    assert.equal(wcGet.owner, 'server/modules/manufacturing-reference.js');
+    const wcPost = table.match('POST', '/api/work-centers');
+    assert.ok(wcPost, 'POST /api/work-centers must match the route-table');
+    assert.equal(wcPost.owner, 'server/modules/manufacturing-reference.js');
+    const roGet = table.match('GET', '/api/routing-operations');
+    assert.ok(roGet, 'GET /api/routing-operations must match the route-table');
+    assert.equal(roGet.owner, 'server/modules/manufacturing-reference.js');
+    const roPost = table.match('POST', '/api/routing-operations');
+    assert.ok(roPost, 'POST /api/routing-operations must match the route-table');
+    assert.equal(roPost.owner, 'server/modules/manufacturing-reference.js');
+    // Legacy dispatch branches must be removed from app.js.
+    assert.equal(
+      (appSource.match(/pathname\s*===\s*['"]\/api\/work-centers['"]/g) || []).length,
+      0,
+      'Wave 5B: legacy exact-match branches for /api/work-centers must be removed from app.js',
+    );
+    assert.equal(
+      (appSource.match(/pathname\s*===\s*['"]\/api\/routing-operations['"]/g) || []).length,
+      0,
+      'Wave 5B: legacy exact-match branches for /api/routing-operations must be removed from app.js',
+    );
+  });
+
+  test('3. extended.js no longer declares the four extracted handlers; manufacturing-reference.js exports them; app.js imports them; four legacy handler symbols are removed from the extended.js import block', () => {
+    // extended.js no longer declares the four extracted handlers.
+    assert.equal(
+      (extendedModuleSource.match(/export\s+(?:async\s+)?function\s+listWorkCenters\b/g) || []).length,
+      0,
+      'Wave 5B: extended.js must no longer export listWorkCenters',
+    );
+    assert.equal(
+      (extendedModuleSource.match(/export\s+(?:async\s+)?function\s+createWorkCenter\b/g) || []).length,
+      0,
+      'Wave 5B: extended.js must no longer export createWorkCenter',
+    );
+    assert.equal(
+      (extendedModuleSource.match(/export\s+(?:async\s+)?function\s+listRoutingOperations\b/g) || []).length,
+      0,
+      'Wave 5B: extended.js must no longer export listRoutingOperations',
+    );
+    assert.equal(
+      (extendedModuleSource.match(/export\s+(?:async\s+)?function\s+createRoutingOperation\b/g) || []).length,
+      0,
+      'Wave 5B: extended.js must no longer export createRoutingOperation',
+    );
+    // manufacturing-reference.js exports the four handlers.
+    assert.match(
+      manufacturingReferenceModuleSource,
+      /export\s+function\s+listWorkCenters\b/,
+      'Wave 5B: manufacturing-reference.js must export listWorkCenters',
+    );
+    assert.match(
+      manufacturingReferenceModuleSource,
+      /export\s+async\s+function\s+createWorkCenter\b/,
+      'Wave 5B: manufacturing-reference.js must export createWorkCenter',
+    );
+    assert.match(
+      manufacturingReferenceModuleSource,
+      /export\s+function\s+listRoutingOperations\b/,
+      'Wave 5B: manufacturing-reference.js must export listRoutingOperations',
+    );
+    assert.match(
+      manufacturingReferenceModuleSource,
+      /export\s+async\s+function\s+createRoutingOperation\b/,
+      'Wave 5B: manufacturing-reference.js must export createRoutingOperation',
+    );
+    // app.js imports the four handlers from the new canonical owner.
+    assert.match(
+      appSource,
+      /from\s+['"]\.\/modules\/manufacturing-reference\.js['"]/,
+      'Wave 5B: app.js must import handlers from ./modules/manufacturing-reference.js',
+    );
+    assert.match(appSource, /\blistWorkCenters\b/);
+    assert.match(appSource, /\bcreateWorkCenter\b/);
+    assert.match(appSource, /\blistRoutingOperations\b/);
+    assert.match(appSource, /\bcreateRoutingOperation\b/);
+    // The four symbols must NOT appear in the extended.js import
+    // block in app.js — they were removed from the canonical import
+    // line. We assert by looking inside the multi-line import braces
+    // by searching for the four identifiers in the import-section only
+    // (no extension or wildcards).
+    const extendedImportBlockMatch = appSource.match(/from\s+['"]\.\/modules\/extended\.js['"]/);
+    assert.ok(extendedImportBlockMatch, 'app.js must still import from ./modules/extended.js');
+    const startOfFile = appSource.slice(0, extendedImportBlockMatch.index);
+    // The previous multi-line import opens with `{` after the last
+    // import statement; walk back to find the `{` boundary.
+    const importOpen = startOfFile.lastIndexOf('{');
+    const importBody = appSource.slice(importOpen, extendedImportBlockMatch.index);
+    assert.equal(importBody.includes('listWorkCenters'), false, 'Wave 5B: listWorkCenters must be removed from the extended.js import block');
+    assert.equal(importBody.includes('createWorkCenter'), false, 'Wave 5B: createWorkCenter must be removed from the extended.js import block');
+    assert.equal(importBody.includes('listRoutingOperations'), false, 'Wave 5B: listRoutingOperations must be removed from the extended.js import block');
+    assert.equal(importBody.includes('createRoutingOperation'), false, 'Wave 5B: createRoutingOperation must be removed from the extended.js import block');
+  });
+
+  test('4. labor-records, IQC, supplier-evaluations and BOMs remain on legacy handleApi (route-table returns null); Product Routings remain intact with 9 descriptors', () => {
+    const table = buildOwnedTable();
+    // Representative legacy routes stay on legacy handleApi.
+    assert.equal(table.match('GET', '/api/labor-records'), null, 'Wave 5B: GET /api/labor-records must remain legacy');
+    assert.equal(table.match('POST', '/api/labor-records'), null, 'Wave 5B: POST /api/labor-records must remain legacy');
+    assert.equal(table.match('GET', '/api/iqc'), null, 'Wave 5B: GET /api/iqc must remain legacy');
+    assert.equal(table.match('POST', '/api/iqc'), null, 'Wave 5B: POST /api/iqc must remain legacy');
+    assert.equal(table.match('GET', '/api/supplier-evaluations'), null, 'Wave 5B: GET /api/supplier-evaluations must remain legacy');
+    assert.equal(table.match('POST', '/api/supplier-evaluations'), null, 'Wave 5B: POST /api/supplier-evaluations must remain legacy');
+    assert.equal(table.match('GET', '/api/boms'), null, 'Wave 5B: GET /api/boms must remain legacy (no manufacturing-reference migration of /api/boms)');
+    assert.equal(table.match('POST', '/api/boms'), null, 'Wave 5B: POST /api/boms must remain legacy');
+    // Product Routings remain intact with their nine descriptors
+    // owned by server/modules/product-routing.js — these are a
+    // separate table / route family from the manufacturing-reference
+    // legacy `routing_operations` routes.
+    assert.equal(
+      table.list().filter((item) => item.owner === 'server/modules/product-routing.js').length,
+      9,
+      'Wave 5B: Product Routings must remain intact with 9 descriptors owned by server/modules/product-routing.js',
+    );
+    // The two route families must not be merged: /api/product-routings
+    // is owned by product-routing.js while /api/routing-operations is
+    // owned by manufacturing-reference.js.
+    const productRoutingsMatch = table.match('GET', '/api/product-routings');
+    assert.equal(productRoutingsMatch.owner, 'server/modules/product-routing.js');
+    const routingOperationsMatch = table.match('GET', '/api/routing-operations');
+    assert.equal(routingOperationsMatch.owner, 'server/modules/manufacturing-reference.js');
+  });
+
+  test('5. legacy handleApi branches for /api/work-centers and /api/routing-operations are absent from app.js; the four Wave 5B handler symbols appear only in the manufacturing-reference.js import block + 4 ownedRouteTable.adapter callbacks', () => {
+    // Belt-and-braces: also assert by the canonical exact-match
+    // pattern that legacy handleApi dispatching for these endpoints
+    // has been removed in both directions (method-agnostic).
+    assert.equal(
+      (appSource.match(/pathname\s*===\s*['"]\/api\/work-centers['"]/g) || []).length,
+      0,
+      'Wave 5B: no legacy handleApi exact-match branch may remain for /api/work-centers',
+    );
+    assert.equal(
+      (appSource.match(/pathname\s*===\s*['"]\/api\/routing-operations['"]/g) || []).length,
+      0,
+      'Wave 5B: no legacy handleApi exact-match branch may remain for /api/routing-operations',
+    );
+    // The four handler symbols must appear in app.js exactly in the
+    // import block (one occurrence each) and in the four
+    // ownedRouteTable.register adapter callbacks (one occurrence
+    // each) — totaling two occurrences per symbol. Any other
+    // occurrence would indicate a leaked second implementation.
+    for (const symbol of ['listWorkCenters', 'createWorkCenter', 'listRoutingOperations', 'createRoutingOperation']) {
+      const occurrences = appSource.match(new RegExp(`\\b${symbol}\\b`, 'g')) || [];
+      assert.equal(
+        occurrences.length,
+        2,
+        `Wave 5B: ${symbol} must appear exactly twice in app.js (one import + one adapter); found ${occurrences.length}`,
+      );
+    }
+  });
+});

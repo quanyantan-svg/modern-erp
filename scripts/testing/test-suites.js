@@ -303,6 +303,28 @@ const FULL = [
   // coverage already present in teacher-acceptance-matrix.test.js.
   'server/v2-wave5a-accounting-config.test.js',
 
+  // ----- V2 Stage 3 / Wave 5B — manufacturing reference data ownership -----
+  // Focused behavior coverage for the migrated manufacturing
+  // reference-data route family (`/api/work-centers`,
+  // `/api/routing-operations` — the legacy BOM-bound
+  // `routing_operations` table; distinct from the
+  // `product_routings` / `product_routing_operations` owned by
+  // server/modules/product-routing.js). Six tests covering: GET
+  // /api/work-centers (200 + canonical list ordered by code + full
+  // row shape), POST /api/work-centers (201 + { id } + capacity /
+  // labor / overhead rate normalization with canonical defaults +
+  // CREATE WORK_CENTER audit with `能力 <minutes> 分钟` detail),
+  // sales 403 on /api/work-centers GET and POST (no
+  // WORK_CENTERS_VIEW / WORK_CENTERS_MANAGE), GET
+  // /api/routing-operations (joined work-centre / BOM / product
+  // projection + bom_id filter + ordering by bom_id, operation_no),
+  // POST /api/routing-operations (201 + { id } + exact INSERT
+  // contract + canonical defaults operation_no=1 / time fields=0 /
+  // description=""), sales 403 on /api/routing-operations GET and
+  // POST (no ROUTING_VIEW / ROUTING_MANAGE). Complements — does not
+  // duplicate — the generic teacher-acceptance-matrix reference.
+  'server/v2-wave5b-manufacturing-reference.test.js',
+
   // ----- V1.6 mobile / sales / purchase / MRP / inventory contracts -----
   'server/v16-p1-mobile-enterprise-foundation.test.js',
   'server/v16-p2-connection-recovery.test.js',
