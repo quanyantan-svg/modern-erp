@@ -1,574 +1,191 @@
-# Modern ERP 当前功能与业务需求
+# document.md 建议更新内容
 
-## 1. 范围、版本与术语
+## 对 §20 的语义修订
 
-本文档是 Modern ERP 唯一当前功能和业务需求来源，回答“系统必须做什么、允许什么、禁止什么”。运行入口见 README.md，技术实现见 solution.md。docs/ 下的阶段文档、审计和验收记录是支持性或历史证据，不得覆盖本文档。
+### 将 §20 标题建议调整为
 
-项目发布版本由 Git tag 标识，当前已发布基线为 v1.6.2；package.json 的版本 1.6.2 镜像该发布基线。本文档不维护独立语义版本，描述当前检出仓库的需求状态，其中可以包含 v1.6.2 发布后的维护变更；精确检出状态由 Git SHA 或 git describe 标识。
+`## 20. 金蝶手册需求对标与能力验收主线`
 
-术语：
+### §20.1 中将“模块边界与金蝶模块边界在语义层面对齐”修订为
 
-- 产品：通用主数据；在 BOM、MRP 和生产上下文中也称物料。
-- 业务日期：决定履行、计价和会计期间的日期，不得用创建时间代替。
-- 来源快照：单据创建或过账时冻结的往来单位、产品、价格、UOM、税、BOM、工艺或条款信息。
-- canonical：当前被系统承认为唯一权威的业务来源或账本。
-- CHECK-only：只报告差异，不自动修复或覆盖历史。
+- 让 Modern ERP 的每项核心业务能力都能够追溯到 B3101–B3122 对应手册；
+- 让业务术语、流程、状态、控制机制和上下游关系与成熟 ERP 语义对齐；
+- **最终产品边界由 §21 的 8 Business Domains + Platform 定义，而不是把 22 份手册直接变成 22 个一级产品模块。**
 
-## 2. 产品目标与支持边界
+### 将 §20.3 建议替换为
 
-Modern ERP 以单组织业务为边界，支持从主数据、销售、采购、计划、生产、质量和库存，到应收应付、结算、存货价值和总账的可追溯闭环。核心目标是：
+### 20.3 手册模块是需求审计与验收单位，不是最终产品业务域
 
-- 业务单据具有明确来源、状态和责任人；
-- 授权审批、实物移动与会计确认是不同事件；
-- 库存、账款和总账影响在事务内保持一致；
-- 关键经济事件不可通过普通编辑或硬删除改写；
-- SQLite 与 MySQL 8 路径保持相同业务合同；
-- 通过测试、审计日志与 System Health 内部/诊断能力提供可重复验证；System Health 仅作为后端/诊断能力保留，不在最终用户可见产品范围内。
+- B3101–B3122 是需求完整性、Coverage 和 Acceptance 的审计单位；
+- §21 定义的 8 Business Domains + Platform 是最终产品架构；
+- 一个手册模块可以跨多个业务域，一个业务域也可以吸收多本手册的能力；
+- route 数量、handler 数量、页面数量、Wave 编号均不是手册能力完成标准；
+- 每本手册必须建立 Capability Coverage Matrix；
+- 对应手册所有能力最终必须为 `COVERED` 或经过用户明确确认的 `OUT_OF_SCOPE`，才可视为该手册验收完成；
+- `MODULE FREEZE` 表示该手册对应能力基线冻结，不表示产品存在一个同名一级模块；
+- 默认按 B3101 → B3122 审计，不禁止用户批准的跨域架构基础任务先行，但任何先行任务必须可追溯到已确认的架构/Gap，不得成为独立“重构为了重构”的 roadmap。
 
-V1.4 不引入新的核心业务对象或角色，优先聚焦业务一致性、可理解性、可用性与移动作业打磨：业务日期语义、报表编码/名称筛选、逐行未交/未收报表、业务总览链路校正、库存期间结账前置检查、LOT/SERIAL 跟踪策略表达、产品级一致性术语与移动任务形态属于本阶段；其余扩展类需求（多组织、多币种、APS、完整 MES/QMS、期初 WIP 迁移、年结结转等）仍按 §19 明确延后。
+---
 
-当前支持 SQLite 本地/测试兼容运行和 MySQL 8 一等运行后端。项目不声称已经取得任意生产负载下的企业级容量认证。
+## 21. 新版 ERP 目标业务架构
 
-最终用户可见产品范围有意与原始 ERP 业务流程图对齐，主线覆盖主数据、销售、采购、生产、库存、财务/会计和决策报表；受控 Go-Live 用户前端从最终用户可见产品范围移除，但其后端实现、相关数据库结构与历史文档/证据仍保留为后端/内部能力（见第 15、16、19 节）。
+### 21.1 架构原则
 
-当前新增、补齐和修正 ERP 能力的产品主线，以 §20 定义的金蝶 B3101–B3122 模块级功能对标为准；上述"原始 ERP 业务流程图"承担的是历史结构的事实描述，不再作为当前 roadmap 的权威来源。Wave / Stage / V2 / V1.6 等历史工程路线仅作为模块内部工程约束或历史迁移记录存在，不再驱动产品开发顺序。
+Modern ERP 的长期产品架构固定为 **8 Business Domains + 1 Platform Layer**。  
+B3101–B3122 继续作为需求和验收来源，8 Domains + Platform 作为产品和领域架构。
 
-### 2.1 V1.7 P0 — 前端应用架构基础
+系统最终必须满足：
 
-V1.7 P0 只建立前端应用架构基础，不新增 ERP 业务对象、API、数据库业务 schema、角色、审批族或业务能力。移动端继续固定“消息、审批、应用、工作台、我的”五个全局入口；新增 ERP domain 不得增加底部入口。“应用”表达用户可执行的业务能力，不是数据库表目录，内部步骤、辅助查询、配置能力和 contextual capability 不默认提升为一级应用。
+1. 所有金蝶手册中的目标 Capability 都可追溯到明确 Domain/Platform；
+2. 同一业务原语只有一个 canonical owner；
+3. 前端菜单按用户任务和业务域组织，不复制传统桌面 ERP 的 22 模块菜单；
+4. 后端、数据和工作流继续保留成熟 ERP 的业务语义与审计链；
+5. 现有已验证的业务事实优先复用，禁止以“新版架构”为理由整仓重写。
 
-同一最终用户 Route 的名称、domain、access、Launcher exposure、desktop navigation 与 direct route behavior 必须来自统一事实源。不得出现 direct URL 可访问却没有合理导航路径、Launcher 暴露无权应用、同一业务在不同入口名称或领域冲突等情况；前端隐藏只负责 exposure，后端 API 权限始终是最终授权权威。
+### 21.2 八个业务域与 Platform
 
-页面层级支持 `APPLICATION / HUB → LIST → DETAIL → EDITOR / WORKFLOW`、`APPLICATION → REPORT → DRILLDOWN` 和 `WORKSPACE / QUEUE → TASK → EXECUTE → RESULT`。canonical archetype 为 HUB、LIST、DETAIL、EDITOR、WORKFLOW、REPORT、TASK、CONFIG。复杂业务对象不得长期依赖大型 Modal 作为主操作界面。
-
-核心业务位置必须可地址化和恢复：刷新后保留目标位置，浏览器 Back / Forward 正常工作，消息、审批、报表和关联单据可以进入 exact target，详情页具有稳定 hash 地址，direct URL 仍执行正常权限校验。Sheet、FilterSheet、ConfirmSheet、ActionSheet 等临时 UI 保持本地状态，不写入 URL。
-
-系统坚持 Mobile-first 而非 Mobile-only：320 CSS px 下必须能完成核心操作；主要触控目标原则上至少 44×44 CSS px；核心任务不得依赖永久横向滚动；状态、业务身份和 primary action 优先；新页面不得以“desktop table + MutationObserver”作为主要移动方案。
-
-DETAIL 在权限允许时应支持 upstream source、downstream document、execution status、quality gate、settlement/commercial result、inventory/manufacturing/finance impact 以及 audit/change evidence 的关系导航。关系导航不得绕过 Route exposure 或后端权限。
-
-P0 保持五角色、五审批族、现有 API、数据库业务 schema、业务行为、53 个启用 Route、5 个禁用 Route 和五个移动底部入口不变。P0 不实现 Engineering Data、ECO、substitute material、subcontracting、barcode、credit、treasury、fixed assets、management accounting 或 generic workflow，也不得开放现有 disabled capability。
-
-P0 验收至少证明：重构前后授权能力等价；移动底部入口仍且仅有五个；Route metadata 不存在多份冲突；详情刷新和 Back / Forward 正常；未授权 direct URL 不挂载业务页面且不获得数据；archetype 使用统一合同；不新增业务 API/schema；320px 移动合同保持；不引入虚假 ERP capability；focused tests、完整回归、构建和 `git diff --check` 在正式验收时全部通过。
-
-## 3. 角色、权限与职责分离
-
-系统正常角色固定为五个：
-
-| 角色 | 主要职责 | 明确限制 |
-|---|---|---|
-| ADMIN | 系统配置、主数据、计划与制造管理、异常管理；当前五角色模型中的手工凭证审批 | 仍受创建人不得审批自己单据约束 |
-| SALES | 客户/供应商、CRM、销售订单、采购订单和请购单的创建、编辑、提交 | 不执行库存、质量、制造库存或会计动作；不审批 |
-| REVIEWER | 独立审核销售订单、采购订单、请购单和库存盘点 | 不创建普通交易，不审批自己创建的单据 |
-| WAREHOUSE | 收货、出货、退货、IQC/OQC、盘点提交、调拨、调整、报废、生产领退料和生产入库/冲销 | 不执行 MRP、商业计价、结算或会计；不审批自己的盘点 |
-| ACCOUNTING | AR/AP、收付款、折让/贷项、退款、核销、手工凭证创建和提交、财务报表 | 不执行库存或制造；不能审批自己创建的凭证 |
-
-REVIEWER 角色的用户可见名称应表达"跨销售/采购/请购/盘点的独立审核"语义，不再以"销售主管"作为唯一显示名；后端角色代码 `role-reviewer` 不变，仅统一前端与文档中的对外术语。
-
-库存调拨是 WAREHOUSE 的实物执行事件，不是第六类授权审批。调拨生命周期为草稿 → 已调拨，草稿可取消；执行后立即移动两仓数量、身份与价值；不进入审批中心，不复用 APPROVE 术语。WAREHOUSE 创建并确认同一调拨不属于自审，因为调拨不属于授权审批族；若企业未来要求双人复核，应作为独立需求并显式触发条件，不得悄悄增加第六类审批族。
-
-前端菜单隐藏只改善体验；每个 API 必须在后端独立授权。VIEW 权限不得隐式授予 CREATE、MANAGE、APPROVE、POST 或 REVERSE。
-
-ADMIN 必须能够通过用户管理 UI 为上述五个 canonical 角色（ADMIN、SALES、REVIEWER、WAREHOUSE、ACCOUNTING）创建用户；用户创建与编辑请求必须严格遵循后端 create-user / update-user 合同中显式允许的字段，前端表单状态不得泄漏未支持字段进入 API 载荷；现有后端严格字段校验不得为了容纳意外前端字段而弱化。
-
-首个 ADMIN 初始化（operator 显式调用 `pnpm setup-admin`）必须支持当前配置的数据库后端：MySQL 生产环境必须在 MySQL 中创建 ADMIN，SQLite 环境保留既有受支持行为。任何情况下都必须保持显式 operator 调用，禁止应用启动时自动执行；必须保留最小密码策略、弱/演示密码拒绝、既有用户拒绝、ADMIN 角色校验、安全密码哈希以及明文密码不记录/不持久化。canonical 五角色模型不变。
-
-审批中心只包含五类授权事件：
-
-- SALES_ORDER
-- PURCHASE_ORDER
-- PURCHASE_REQUISITION
-- INVENTORY_CHECK
-- ACCOUNTING_VOUCHER
-
-IQC/OQC、出入库确认、退货、结算、折让、生产领料/入库、HOLD/RELEASE 和期间动作是各自领域事件，不得为了复用界面而变成新的通用审批族。
-
-## 4. 通用业务不变量
-
-### 4.1 金额、数量与日期
-
-- UI 以元录入和展示；API 和数据库使用安全整数分。
-- 不允许 NaN、无穷值、小数分或静默默认金额进入过账边界。
-- 借贷必须以整数分严格相等，不存在一分容差。
-- 数量必须满足业务允许的正数/非负数和 UOM 换算规则；SERIAL 基本单位数量必须为整数。
-- 合同日期、要求交期、预计到货日、物流日期和会计日期必须显式保存；创建/提交/审核时间不得代替业务日期。
-
-决策报表的日期口径必须按"期间活动"而非"订单 cohort"或创建时间：
-
-1. 销售统计：订单指标按销售订单日期；出货指标按出货日期；退货指标按退货日期；同一期间内不同事件类型按各自业务日期归属，不得用单据创建时间替代。
-2. 采购统计：订单指标按采购订单日期；入库指标按入库日期；采购退货指标按退货日期。
-3. 销售未交以要求交期判断到期/逾期；采购未收以预计到货日判断到期/逾期；订单日期可作为辅助筛选，但不得充当履约日期。
-4. 库存异动以库存流水业务日期归属期间；创建时间仅作为审计信息或辅助筛选列。
-5. 日期范围按自然日，起止日均包含；桌面、移动和导出必须使用相同口径。
-6. 缺失权威业务日期的 legacy 记录必须明确标为"业务日期缺失"，不得静默回退到创建时间并伪装为准确业务日期。
-
-报表筛选器不得要求用户输入或记忆内部 ID。客户、供应商、产品、仓库的筛选应面向业务编码与名称：空筛选表示不限制该维度；输入不存在或未选定的文本不得被静默忽略，必须明确提示无匹配或返回空结果并显示已应用条件；停用对象在历史报表中可被查找并明确标记"已停用"，但仍遵循"停用记录不进入新交易选择器"的既有规则。报表 UI 与导出应显示业务编码与名称，不得只显示内部身份。
-
-### 4.2 状态与不可变性
-
-- 状态转换必须同时校验当前状态、权限、来源和业务不变量。
-- DRAFT 且没有下游或经济效果的记录可按政策编辑、取消或删除。
-- 已确认、已过账和已完成记录不可普通编辑或硬删除；纠错必须使用显式反向单据或冲销。
-- 关闭期间的历史不得被回写；允许的纠错必须在当前开放期间保留原始来源和反向证据。
-
-业务状态术语在最终用户可见产品范围内按下表统一语义使用：
-
-| 中文术语 | 业务含义 | 典型场景 |
-|---|---|---|
-| 草稿 DRAFT | 创建但未对外发生效力 | 新建中的单据 |
-| 已提交 SUBMITTED | 已送审待授权人决策 | 销售/采购/请购/盘点/手工凭证 |
-| 已审批 APPROVED | 授权人已通过 | 审批中心五类文档 |
-| 已驳回 REJECTED | 授权人已否决，需填写原因 | 审批中心五类文档 |
-| 已确认 CONFIRMED | 已完成实物/业务执行，库存或子账影响已完成 | 收货、出货、领料、退料、入库、折让、收/付款 |
-| 已调拨 TRANSFERRED | 调拨实物移动完成 | 库存调拨（WAREHOUSE 执行，不是审批） |
-| 已取消 CANCELLED | 在产生经济或库存影响前作废 | 草稿/未确认单据 |
-| 已作废 REVERSED | 通过反向单据或冲销恢复 | 贷项冲销、退货等已确认后的反向 |
-| 已结账 / 已反结账 | 期间结账 / 反结账 | 存货月结、会计期间 |
-
-上述术语区分以下三种语义事件，不得相互替换：
-
-- 授权审批（APPROVE/REJECT）只发生在审批中心五类文档；
-- 实物执行（CONFIRM/TRANSFER）由对应领域（仓库/生产）按业务事件触发；
-- 商业/会计过账（POSTED）由系统按权威单据自动完成。
-
-### 4.3 来源、事务、幂等与审计
-
-- 新的正常商业单据必须引用权威上游头和行；旧版无来源记录只能以 LEGACY/不可重新确认方式读取。
-- 来源往来单位、产品、价格、UOM/税和关键快照创建后不得被普通草稿编辑替换。
-- 确认或过账必须在同一事务内重新读取状态、来源、累计量、库存/未结余额和期间状态。
-- 任一步失败必须回滚库存、价值、账款、凭证、审计和幂等结果。
-- 支持幂等键的操作：相同键和相同语义返回原结果；相同键和不同语义返回冲突。
-- 关键新增、变更、状态转换、确认、冲销、HOLD/RELEASE 和管理动作必须写审计日志。
-
-## 5. 主数据
-
-系统支持客户、供应商、产品、仓库、会计科目、部门、辅助项目、银行账户、税码、UOM、BOM、工艺路线和工作中心等主数据。
-
-- 编码及适用自然键必须唯一。
-- 有历史引用的主数据不得硬删除；应停用并保留历史显示。
-- 停用记录不进入新单选择器，但历史单据仍可读取其名称和快照。
-- 产品库存真相来自 inventory，不得从 products.stock_quantity 接受业务写入。
-- 一个产品可有多个 BOM/路线版本，但只有符合约束的当前有效版本参与新业务。
-- 跟踪策略为 NONE、LOT 或 SERIAL；产生跟踪流水后不得任意切换或关闭。
-
-## 6. Order-to-Cash
-
-权威链路：
-
-    Customer → Sales Order → Approval → Sales Delivery
-      → OQC gate → Inventory/COGS → Sales Invoice
-      → AR/Revenue/Output Tax → Collection/Credit/Refund/Write-off
-
-要求：
-
-- 销售订单冻结客户、订单日期、要求交期、收货联系人/电话/地址、付款条件和行级价格。
-- 要求交期不得早于订单日期；每行数量和价格必须为正。
-- DRAFT 可编辑，SALES 提交后由 REVIEWER 独立批准或驳回。
-- 批次出货只能来自 APPROVED 订单行，累计确认出货不得超过订单行数量。
-- WAREHOUSE 可修改执行数量、仓库、业务日期和备注，不能修改商业价格。
-- 需要质检的销售出货必须具有当前来源快照一致的 OQC PASS 或明确的有效免检快照。
-- SEPARATE 模式下，销售出货只处理库存与 COGS；Sales Invoice 过账才确认 AR、收入和销项税。
-- DIRECT_BILL/AUTO_BILL 也必须创建权威 Sales Invoice，不得恢复无发票来源的平行新流程。
-- 销售退货恢复原出货价值并冲减 COGS；商业金额通过销售贷项处理，保持物理与商业事件分离。
-
-销售未交报表必须以 APPROVED 销售订单行为最小报告粒度。每行至少显示订单号/行号、客户、产品编码/名称、订单数量、已确认执行数量（不含被有效冲销的出货）、当前剩余数量（= 订单数量 − 有效确认执行数量，不得小于零）、要求交期、逾期天数和履行状态。状态至少区分 未开始 / 部分履行 / 已履行 / 逾期未履行 或 部分逾期。已履行行默认不进入"销售未交"主列表，但可通过显式选项查看。订单行及其下游执行单据必须可双向追溯。
-
-普通销售退货不自动重开原始订单履约义务；只有未来显式记录的"补货/换货义务"才能再次进入待履行计算。报表剩余量定义与该原则一致；本阶段不假设所有销售退货都会自动恢复订单剩余。
-
-## 7. Procure-to-Pay
-
-权威链路：
-
-    MRP/Purchase Instruction → Purchase Requisition → Approval
-      → Purchase Order → Approval → Purchase Receipt
-      → IQC gate → Inventory/GRNI → Supplier Bill
-      → AP/Input Tax/PPV → Payment/Credit/Refund/Write-off
-
-要求：
-
-- 请购包含请购日期、要求到货日、产品、数量和可选参考估价。
-- 无估价请购可生成零价 PO 草稿，但 PO 提交前必须有正的最终价格。
-- PO 冻结供应商、订单/预计到货日期、联系人/地址、付款条款和成交价格。
-- 由已批准请购单生成的来源型 PO 必须保留不可变来源身份，同时允许运营方补全当前后端合同支持的商业/单据字段。不可变来源字段至少包括来源请购单/来源行身份、来源产品身份、以及当前合同定义为不可变的来源数量；这些字段不得在普通保存/编辑动作中被静默改写。
-- 来源型 PO 的后端 immutability 校验必须保持严格：前端不得通过放宽后端校验的方式实现“修改来源产品或来源数量”。前端保存草稿不得盲目回传整张已加载的 PO 对象；不可变来源字段要么从更新载荷中省略，要么按后端合同明确要求的精确形式回传，以避免“未变更的来源字段被当作修改而被拒绝”。
-- 来源型 PO 允许编辑的字段至少包括付款条款和付款条件天数，以及当前后端合同已经支持的其他商业/单据头字段（例如预计到货日、供应商联系人、备注、价格与商业补充字段中当前已开放的子集）；具体可编辑字段以设计阶段对后端 create/update 合同的检查结论为准，不得在此处盲目列举。
-- PO 草稿可保存并随后提交审批，前提是当前后端合同要求的商业/单据字段已被补全；上述可编辑性必须在源型 PO 与手工创建 PO 上同时成立，不得因为来源追溯而失去正常的草稿保存与提交能力。
-- 收货只能来自 APPROVED PO 行；供应商、产品和价格由来源决定，累计收货不得超订单量。
-- 需要质检的收货必须有有效 IQC PASS 或明确免检快照。
-- SEPARATE 模式下，收货确认 Dr 存货 / Cr GRNI；Supplier Bill 完成三单匹配并过账后确认 AP、进项税和价差。
-- 同一供应商的外部发票号必须唯一；未完成匹配的账单可以 WAITING_MATCH，但不能过账。
-- 采购退货移除原账面价值；商业金额和税通过供应商贷项处理。
-
-采购未收报表必须以 APPROVED 采购订单行为最小报告粒度。每行至少显示订单号/行号、供应商、产品编码/名称、订单数量、已确认入库数量（不含被有效冲销的入库）、当前剩余数量（= 订单数量 − 有效确认入库数量，不得小于零）、预计到货日、逾期天数和履行状态。状态至少区分 未开始 / 部分入库 / 已入库 / 逾期未入库 部分逾期。已入库行默认不进入"采购未收"主列表，但可通过显式选项查看。订单行及其下游入库单据必须可双向追溯。
-
-普通采购退货不自动重开原始采购订单履约义务；只有未来显式记录的"补货/换货义务"才能再次进入待入库计算。报表剩余量定义与该原则一致；本阶段不假设所有采购退货都会自动恢复订单剩余。
-
-## 8. Planning、MRP 与请购
-
-- 需求预测使用 DRAFT、ACTIVE、CANCELLED；MRP 只读取 ACTIVE 预测。
-- MRP Run 是不可变计算快照；重复执行先清理该 run 的派生结果，不影响库存、会计或业务单据。
-- 销售与预测消费采用 MAX(sales demand, forecast demand)，不得重复计算。
-- BOM 展开使用 net-before-explosion：父项先扣可用库存、有效在途采购和生产供应，再以净 MAKE 数量展开组件。
-- 可用库存排除 HOLD 和已过期的 LOT/SERIAL 身份。
-- MRP 结果给出 MAKE/BUY、建议数量、需求日期、来源追溯和警告，但不会自动创建单据。
-- 生产/采购指令可以分批占用建议量，累计不得超过建议。
-- RELEASED 生产指令生成制令单；RELEASED 采购指令生成请购，APPROVED 请购生成采购订单。
-- 由 RELEASED 采购指令（或 MRP 建议）生成的请购单必须自动携带上游来源行数据：来源参考（含来源指令/来源行身份）必须保留；来源产品必须自动填充；上游建议/请求数量必须自动填充；上游需求上下文在当前数据模型支持的范围内一并保留。请购阶段允许运营方调整请求数量的，源建议数量仍须可见或保留，且调整必须显式发生，不得静默覆盖原始来源数量。除非现有来源字段被证明不足以表达，不得为此需求引入新 schema。
-- 计划与指令本身不产生库存、AR/AP 或总账效果。
-
-## 9. 制造执行
-
-权威链路：
-
-    MRP → Production Instruction → Production Order
-      → BOM/Routing/Cost snapshots → Material Issue/Return
-      → Operation Report → Production Receipt/Reversal → Completion
-
-- 制令单状态为 PENDING → IN_PROGRESS → COMPLETED，允许无经济影响状态进入 CANCELLED。
-- 开工冻结 BOM 物料、路线、工作中心、标准时间和标准成本；主数据后续变化不改写在制单。
-- 领料、退料、生产入库和入库冲销由 WAREHOUSE 执行，并产生明确来源的数量、身份、价值和 WIP 记录。
-- 净领料不得超过需求；缺料时整单回滚。
-- 入库不得超过计划量或末工序净良品，并必须满足组件覆盖。
-- 工序报工保留良品、报废、人工/设备时间；已确认报工只能显式冲销。
-- 完工要求无活动执行草稿、所有工序满足状态、净成品与良品/报废及物料覆盖对账一致。
-- 制造成本区分标准基线、权威/部分/暂估材料证据、人工和制造费用；证据缺失不得伪装为零。
-
-## 10. 库存、LOT、SERIAL 与追溯
-
-- inventory 是仓库+产品数量真相；inventory_transactions 是不可变数量流水。
-- NONE 使用汇总数量；LOT 使用批次余额；SERIAL 每一基本单位具有唯一身份。
-- LOT/SERIAL 的身份移动必须与 canonical inventory 在同一事务中更新。
-- ON HAND 包含 HOLD；AVAILABLE 排除 HOLD、过期、已消耗、已交付和已报废身份。
-- 调拨移动相同身份和价值，公司总数量/价值不变。
-- 调整、盘点和报废必须明确产品、仓库和需要时的身份；库存盘点只有 REVIEWER 批准时影响库存。
-- 生产谱系以结构化来源连接组件身份、领料、工单、成品身份和客户交付，不得按 BOM 比例虚构精确谱系。
-- 正向/反向追溯只报告已有权威证据；无历史身份的数据必须显示未跟踪或证据不足。
-
-库存跟踪策略由产品级字段控制，取值为 NONE / LOT / SERIAL：
-
-1. NONE：汇总数量；该产品在新交易表单中不显示批次/序列号输入；在已确认履历中不维护 LOT/SERIAL 身份。
-2. LOT：按批次余额；适用于按批管理的原材料或组件；同一基本单位数量按批次区分。
-3. SERIAL：每一基本单位具有唯一身份；适用于单件可追溯的成品或高价值货物；基本单位数量必须为整数。
-4. 跟踪策略一旦产生任何跟踪流水即不得任意切换或关闭；变更策略需 ADMIN 显式声明原因，且库存必须为 0、不得存在进行中的生产/草稿业务单据。
-5. 最终用户可见追溯页只显示权威存在的身份及其来源、移动、生产谱系与下游交付，不得为未启用跟踪的历史业务伪造谱系；legacy/未跟踪数据必须明确标记"未跟踪或证据不足"。
-
-业务含义与业务目的遵循：LOT 适用于按批管理的原材料、组件与有效期受控货物；SERIAL 适用于需要逐件追溯的成品、关键件或高价值货物；NONE 适用于其他不需要身份区分的货物。最终用户可见表单/列表/追溯页不应在 NONE 产品上提示批次/序列号输入，也不得为 NONE 产品合成空身份记录。
-
-## 11. IQC、OQC 与质量控制
-
-- IQC/OQC 是物流确认前的质量门禁，不是库存或会计事件。
-- 新检验必须引用对应物流草稿和全部来源行，冻结产品、数量、仓库及 LOT/SERIAL 集合。
-- 状态为 DRAFT → COMPLETED(PASS/FAIL) 或 CANCELLED；完成后不可普通修改。
-- PASS 要求所有必检标准通过；FAIL 必须记录缺陷和处置。
-- 物流来源或身份集合变化使既有 PASS 变为 STALE，必须复检。
-- 质量控制点支持 PURCHASE_RECEIPT/SALES_DELIVERY、GLOBAL/PRODUCT、版本化标准、FULL/FIXED_QUANTITY/PERCENTAGE 抽样和显式免检。
-- 缺失或异常规则默认 fail-safe 为 REQUIRED + FULL。
-- 失败检验不得产生库存、AR/AP 或凭证，也不得自动伪造退货/报废。
-
-## 12. AR/AP、结算、贷项、退款与核销
-
-- 新商业流程中，Sales Invoice 创建正 AR，Supplier Bill 创建正 AP；来源组合必须唯一。
-- 退货、折让和其他商业贷项通过不可变 credit adjustment 连接原正向 open item。
-- 未结金额由原始金额、有效贷项、确认分配、冲销、余额应用和核销历史派生；缓存必须在同一事务刷新且不得人工编辑。
-- 收款/付款确认必须重新验证往来单位、选中来源、当前未结和分配合计。
-- 未分配差额只有在用户明确选择预收/预付时才允许；不得创建虚假 AR/AP。
-- 预收、预付和未核销贷项只能显式应用于同一往来单位的未来项目，不做隐式 FIFO。
-- 退款、结算冲销、贷项应用冲销和 write-off 必须保留原单、反向凭证、结算账户移动和审计。
-- write-off 使用 DRAFT → SUBMITTED → CONFIRMED/REJECTED；创建人与确认人必须不同。
-- 所有确认、退款和冲销受开放期间保护。
-
-## 13. 存货估值、WIP 与会计
-
-- NONE 使用仓库+产品移动加权平均；LOT 使用批次专属池；SERIAL 使用特定识别。
-- inventory_valuation_movements 是不可变价值历史，余额表是事务维护缓存。
-- 部分出库按池中数量/价值确定性分摊；全部耗尽必须同时耗尽剩余价值。
-- 采购入库、销售出库/退货、调拨、调整、报废、生产领料/退料、生产入库/冲销都必须同步数量和价值。
-- 生产领料 Dr WIP / Cr 存货；成品入库 Dr 存货 / Cr WIP；完工差异显式进入制造差异，COMPLETED 工单 WIP 必须为零。
-- 系统凭证来源唯一且不可普通编辑；手工凭证必须借贷严格平衡并经过独立审批。
-- 存货期间必须先于会计期间关闭；重新打开按相反顺序并保留原因和历史。
-- 存在未解决的 LEGACY_UNVALUED 运动、数量/价值差异或阻断级 System Health 失败时不得权威关账。
-
-存货期间结账（存货月结）的业务语义：
-
-1. 系统按月维护一个"当前/已结账"期间。结账对历史期间不产生数量或价值修改，仅生成只读快照；不得在结账后回写历史业务日期。
-2. 在结账前，授权操作员可运行前置检查；前置检查列出关键阻断项，至少包括：
-   - 负库存（不可临时掩盖）；
-   - 未完成的库存相关业务草稿（盘点、调整、报废、调拨、生产出入库等）；
-   - 未结的盘点或未经 REVIEWER 批准的盘点差异；
-   - 库存数量/价值一致性与 System Health 阻断项；
-   - 与当前期间开放规则冲突的项目。
-3. 授权操作员可对已结束自然月执行结账；结账必须按期间顺序推进，跨月跳结账被拒绝；同一期间二次结账重建同一快照，不累积重复行。
-4. 同一期间内业务日期 <= 已结账期间的库存影响交易（出/入/调/盘/调/报废/生产出入库等）在结账后被拒绝并返回明确错误；纠错必须使用反向单据或冲销，并在当前开放期间留下证据。
-5. 存货期间结账支持受控反结账（重开）；反结账必须记录操作员、时间戳与原因；会计期间的反结账须先于存货期间的反结账完成，顺序不得颠倒。
-6. 反结账后该期间内的库存数量与价值移动不自动撤销；纠错责任由反向单据/冲销承担。
-
-存货期间结账的范围边界（仍按 §19 不可扩展为）：
-
-- 企业级多账簿期间关闭；
-- 多组织期间管理；
-- 复杂成本结账（差异分摊、跨期差异、汇兑差异、year-end carry forward）；
-- 与金蝶等大型 ERP 等同的完整成本/会计关账架构。
-
-本阶段只保留单组织、月度、CHECK-only 风格期间控制。
-
-## 14. 商业开票、税与 UOM
-
-- Sales Delivery 与 Sales Invoice、Purchase Receipt 与 Supplier Bill 是不同事件。
-- 税模式为 NO_TAX、EXCLUSIVE、INCLUSIVE；税率以精确分子/分母保存。
-- 税额使用确定性的整数分 round-half-up，并以行税额之和形成单据税额。
-- 过账时冻结税快照；后续税码修改不改写历史。
-- 产品有基本 UOM，可维护生效日期和版本化的精确换算；业务行保存不可变换算快照。
-- 库存、追踪和估值以基本数量工作；文档数量可使用业务 UOM。
-- 本系统不宣称提供法定税务申报、政府电子发票或多币种会计。
-
-## 15. 期初、导入导出与 Go-Live
-
-- Opening Batch 状态为 DRAFT → VALIDATED → SUBMITTED → APPROVED → POSTED。
-- 支持期初库存数量/价值、LOT/SERIAL、AR、AP、现金、银行和试算平衡；不支持期初 WIP 迁移。
-- 审批和过账必须满足创建人与审批人分离、借贷平衡和 System Health 无阻断错误。
-- 激活 Go-Live 后不得创建新的期初批次。
-- CSV 导入使用 STAGE → VALIDATE → PREVIEW → COMMIT，保留行级错误并在一个事务中提交；幂等键防止重复。
-- canonical export 支持库存、AR、AP、GL、税和 System Health。
-- demo seed、reset-data 或产品 stock_quantity 不得替代受控期初流程。
-
-受控 Go-Live 用户前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）从最终用户可见 ERP 产品范围移除；后端 Go-Live / import 实现、相关数据库结构、历史文档与证据均保留为后端/内部能力，不得因前端移除而被破坏性清理。
-
-## 16. 报表与 System Health
-
-支持试算平衡表、利润表、资产负债表、经营/销售/采购分析、未履行、库存异动、AR/AP 对账、税、WIP、制造分析和追溯查询。
-
-- 正式财务报表只纳入 POSTED 凭证。
-- 利润表按期间；资产负债表按所选期间末累计，并以未结转损益虚拟行保持扩展会计恒等式。
-- 库存报表使用 inventory 和 valuation，而不是 legacy products.stock_quantity。
-- System Health 对数量、身份、价值、WIP、GRNI、AR、AP、税、COGS、现金银行、UOM、凭证唯一性、期间顺序和结算未结项执行 CHECK-only 对账。
-- System Health 不在启动时自动修复业务历史。
-
-销售统计、采购统计、库存异动与销售/采购未交报表必须按 §4.1 的"期间活动"业务日期口径实现：每张报表的 UI 筛选器与列标题必须显示具体业务日期名称（例如"订单日期""出货日期""预计到货日"），不得只显示模糊的"日期"；同一期间内不同事件类型按各自业务日期归属。报表不得以 `created_at` 或单据头"创建时间"替代业务日期。重复读取同一查询必须返回一致结果且不产生任何业务/库存/财务副作用。
-
-业务总览（business overview）必须按 canonical 链路准确表达，不压扁质量门禁、商业开票、AR/AP 与结算事件：
-
-1. O2C 链路：客户 → 销售订单 → 审批 → 销售出货 → OQC 门禁 → 库存/COGS → 销售发票 → AR/收入/销项税 → 收款/贷项/退款/核销。
-2. P2P 链路：MRP/采购指令 → 请购 → 审批 → 采购订单 → 审批 → 采购入库 → IQC 门禁 → 库存/GRNI → 供应商账单 → AP/进项税/价差 → 付款/贷项/退款/核销。
-3. 质量门禁只解释为物流确认前的关卡，不得呈现为独立库存或会计事件；商业开票与子账建立是不同事件。
-4. 业务总览采用两层视图：
-   - 第一级（Level 1）按原始项目 / 教师业务流程图组织，仅显示与移动端友好的主要业务阶段（如客户 → 销售订单 → 销售出货 → 应收账款；供应商 → 采购订单 → 采购入库 → 应付账款；MRP → 指令 / 请购 → 制令 / 采购订单 → 入库 / 出库等）。第一级不得堆叠完整工作台或全字段表单。
-   - 第二级（Level 2）在详情视图（订单详情 / 单据详情 / 跟踪视图）中展开 canonical 阶段，包括但不限于质量门禁（IQC / OQC）、物流确认、商业发票 / 供应商账单、AR / AP、收 / 付款与贷项 / 退款 / 核销等节点；阶段顺序与 §16 第 1、2 项一致。
-   - 第一级的简化不得暗示 出货 = AR、入库 = AP 或 审批 = 履约；任何看似合并的阶段必须在第二级暴露独立节点与独立权限。
-5. 节点可见性与节点数据访问分离：用户对某节点无权限时第一级可呈现只读流程说明，但不得读取或触发该节点的数据或动作；Level 2 默认只展开当前用户拥有数据权限的阶段节点。
-
-系统健康 / 核对（System Health / Reconciliation）用户前端从最终用户可见 ERP 产品范围移除：不得保留应用启动卡、常规导航入口或可达前端路由。后端 reconciliation 逻辑、相关数据库结构与 server API 仍保留为后端/内部诊断能力，仍按 CHECK-only 语义运行、不在启动时自动修复业务历史。
-
-## 17. 安全与非功能需求
-
-- 使用随机 opaque Bearer Token；数据库只保存 SHA-256 digest，Token 有绝对有效期。
-- 密码使用随机盐和 scrypt；不得记录明文密码或 Bearer Token。
-- 登录失败按标准化用户名限流和锁定。
-- 禁用用户、角色或密码变更必须使既有会话失效。
-- JSON 请求有大小、Content-Type、对象形状和敏感字段白名单限制。
-- API 返回 no-store、安全响应头和 X-Request-Id；生产错误只返回安全消息与请求 ID。
-- 日志必须结构化并递归脱敏；慢 SQL 只记录安全标签、时长和指纹。
-- 提供 liveness 和 database readiness；不得暴露环境变量、数据库名或连接串。
-- 目标环境为 Ubuntu 22.04、Node 22.23.2、MySQL 8、Nginx 和 systemd。
-- 当前全量 SQLite 回归和构建是基础 gate；真实 MySQL 性能仍需 disposable 环境完成，不得声称已认证无限并发或企业级容量。
-
-## 18. 验收标准
-
-完成一个行为变更至少必须证明：
-
-1. 正常路径、非法状态、越权、重复提交和事务回滚均有 focused tests。
-2. 五角色权限与五类审批边界没有非预期扩大。
-3. 金额使用整数分，数量/UOM/税舍入符合合同。
-4. 库存、身份、价值、AR/AP、GL、WIP 和审计副作用在失败时为零。
-5. 来源、累计量、期间关闭、创建人/审批人分离和幂等合同成立。
-6. 相关前端页面无未处理异常，后端不泄露 SQL 或秘密。
-7. focused tests 通过后，pnpm test、pnpm build 和 git diff --check 通过。
-8. MySQL 特定变更还必须在受保护 disposable MySQL 环境通过相应兼容/并发 gate。
-9. 文档、日志和 README 按 AGENTS.md 的阶段规则同步。
-
-## 19. 延后或明确不支持
-
-- 多组织、多公司、多账套和复杂数据范围；
-- 多币种及汇率重估；
-- 年结、自动损益结转和 Year-End Carry Forward；
-- 政府电子发票、法定税务申报；
-- APS、完整 MES/OEE、完整 QMS/CAPA；
-- 里程碑/进度开票；
-- 期初 WIP 迁移；
-- 面向外部客户/供应商的门户；
-- 已隐藏的旧 Production Output、旧 MRP Calculator，以及尚未形成受支持 UI 的辅助生产成本/工时界面；
-- 用户可见的 System Health / 核对前端（应用启动卡、常规导航入口、可达前端路由）；
-- 用户可见的受控 Go-Live 前端（应用启动卡、常规导航入口、可达前端路由、阶段化导入 UI）；
-- 在真实大规模 MySQL 数据和目标硬件上的生产容量认证。
-
-## 20. 金蝶模块级功能对标开发主线
-
-### 20.1 对标目标与权威来源
-
-Modern ERP 当前的产品开发主线是以《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册作为**模块级功能对标来源**，吸收成熟 ERP 的业务功能、术语、流程、控制机制与模块边界。该对标的目标是：
-
-- 让 Modern ERP 的功能范围、术语口径、业务流程与控制机制能够与成熟 ERP 对齐；
-- 让 Modern ERP 的模块边界与金蝶模块边界在语义层面对齐；
-- 在 Modern ERP 自己的 React + Node + SQLite/MySQL 技术体系和 mobile-first 形态下实现上述对标。
-
-下列边界必须明确：
-
-- **不是 UI 像素复制**：不复制金蝶的桌面 ERP 视觉布局、控件样式或栅格密度；Modern ERP 继续采用 mobile-first 产品形态。
-- **不是源码复制**：不复制金蝶产品的实现代码或内部抽象；Modern ERP 在现有 `src/`、`server/`、`server/modules/`、`server/database/` 上落地。
-- **不是等同声明**：Modern ERP 不宣称自己是金蝶产品或与金蝶产品完全等价；它只是按模块级范围主动对标。
-- **§3–§19 仍然有效**：当前文档已经成立的 Modern ERP 业务合同继续全部有效；只有经过模块 Gap 分析确认需要改变的内容，才形成新的需求 delta。
-- **Wave 不再决定模块顺序**：Wave 1 / Wave 2 / ... / Wave 10 等历史路线仅作为模块内部工程约束或历史迁移记录存在，不再决定产品开发顺序。
-
-### 20.2 22 个模块清单与默认推进顺序
-
-按《金蝶云星空标准版操作手册》，当前纳入产品对标范围的模块共 22 个，按编号顺序推进：
-
-| 编号 | 模块名称 |
+| 架构域 | 核心能力 |
 |---|---|
-| B3101 | 采购管理 |
-| B3102 | 销售管理 |
-| B3103 | 信用管理 |
-| B3104 | 库存管理 |
-| B3105 | 条码管理 |
-| B3106 | 存货核算 |
-| B3107 | 固定资产 |
-| B3108 | 应付款－业务应付模式 |
-| B3109 | 应付款－暂估应付模式 |
-| B3110 | 应收款－业务应收模式 |
-| B3111 | 应收款－暂估应收模式 |
-| B3112 | 发票管理 |
-| B3113 | 出纳管理 |
-| B3114 | 智能会计平台 |
-| B3115 | 总账 |
-| B3116 | 报表 |
-| B3117 | 经营会计 |
-| B3118 | 工程数据 |
-| B3119 | 生产管理 |
-| B3120 | 计划管理 |
-| B3121 | 委外管理 |
-| B3122 | 工作流设计与配置 |
+| Master & Engineering | Organization、Business Partner 基础、Material、Warehouse Foundation、BOM、Routing、Operation、Work Center、Resource、Calendar、Substitute、ECO |
+| Sales & Customer | Customer、Quotation、Sales Order、Order Change、Delivery、Return/Replacement、Pricing/Discount、Credit |
+| Planning | Forecast、Consumption、Demand/Supply、Reservation、MRP、Pegging、Planned Order、Release |
+| Procurement & Outsourcing | Requisition、Sourcing、Supplier Allocation、Purchase Order、Receipt、Return、VMI、Outsourcing |
+| Manufacturing & Quality | Production Order、Production BOM、Issue/Return/Supplement、Operation Execution、WIP、Inspection、Non-conformance |
+| Inventory & Warehouse | Inventory Ledger、Inbound/Outbound、Transfer、Adjustment、Stocktake、Status Conversion、LOT/SERIAL、Bin、Barcode/Mobile |
+| Finance Operations | AR、AP、Temporary AR/AP、Invoice、Collection/Payment、Treasury、Bank、Bills、Inventory Cost、Fixed Assets |
+| Accounting & Analytics | Accounting Platform、Voucher、GL、Period End、Financial Reports、Management Accounting |
+| Platform | Identity/RBAC、Organization Scope、Workflow、Approval、Document Lifecycle、Document Conversion、Numbering、Attachment、Audit、Notification、Period Control |
 
-默认顺序为 `B3101 → B3102 → ... → B3122`。只有用户明确调整时才允许改变模块顺序；不得因为某个 Wave 尚未完成或某个工程目标尚未达成而自动改变模块顺序，也不得因为某个模块工作量大就自动跳过或推迟到下一轮。每个模块独立审计、独立设计、独立实现、独立验收。
+### 21.3 B3101–B3122 到目标架构的主映射
 
-### 20.3 模块是顶层开发与完成单位
+| 金蝶手册 | 主要目标归属 |
+|---|---|
+| B3101 采购管理 | Procurement & Outsourcing |
+| B3102 销售管理 | Sales & Customer |
+| B3103 信用管理 | Sales & Customer |
+| B3104 库存管理 | Inventory & Warehouse |
+| B3105 条码管理 | Inventory & Warehouse；生产现场动作可跨 Manufacturing & Quality |
+| B3106 存货核算 | Finance Operations |
+| B3107 固定资产 | Finance Operations |
+| B3108–B3109 应付款 | Finance Operations |
+| B3110–B3111 应收款 | Finance Operations |
+| B3112 发票管理 | Finance Operations |
+| B3113 出纳管理 | Finance Operations |
+| B3114 智能会计平台 | Accounting & Analytics |
+| B3115 总账 | Accounting & Analytics |
+| B3116 报表 | Accounting & Analytics |
+| B3117 经营会计 | Accounting & Analytics |
+| B3118 工程数据 | Master & Engineering |
+| B3119 生产管理（含车间/质量） | Manufacturing & Quality |
+| B3120 计划管理 | Planning |
+| B3121 委外管理 | Procurement & Outsourcing，跨 Planning / Inventory / Finance |
+| B3122 工作流设计与配置 | Platform |
 
-- **模块**是产品 roadmap 的顶层单位；
-- route 数量、handler 抽取数量、Wave 编号、页面数量、迁移 cell 数量都不是模块完成标准；
-- 每个模块必须独立审计、独立设计、独立实现、独立验收；
-- 一个模块没有通过最终 Module Acceptance，不得因工程重构或部分迁移已经完成而标记模块完成；
-- 一个模块通过后进入 `MODULE FREEZE` 状态；MODULE FREEZE 之后才能进入下一个模块；
-- MODULE FREEZE 之后的模块内部若发现新 Gap、新设计变更或新业务需求，按 §3 流程重新走 MODULE AUDIT → COVERAGE → REQUIREMENT → DESIGN → ACCEPTANCE/FREEZE。
+此表只定义主归属。跨域业务关系必须保留，不能为了单一归属切断上下游。
 
-### 20.4 每模块固定 Audit / Coverage Matrix
+### 21.4 必须保持的端到端主链
 
-任何新增功能实现之前，都必须先基于对应金蝶操作手册提取该模块的业务功能，并对照当前 Modern ERP 真实仓库状态进行审计。Coverage Matrix 至少逐项核对：
+新版架构必须完整支持并保持可追溯：
 
-- 金蝶业务能力 / 场景；
-- 当前 UI / Route（`src/navigation/applicationRegistry.js` 中的启用 / 禁用 Route、对应 surface）；
-- API（`server/app.js` 与 `server/modules/` 中已注册的 method / path）；
-- handler / domain owner（依据 route 表 `owner` 字段与现有模块文件结构）；
-- schema / persistence（`server/db.js` 基础 schema + `server/migrations/` + `server/database/` MySQL adapter）；
-- workflow / state machine（业务状态机、DRAFT / SUBMITTED / APPROVED / CONFIRMED / REVERSED 等状态）；
-- RBAC / SOD（PERMISSIONS catalogue、SOD、ADMIN 校验）；
-- transaction（事务边界、回滚与幂等合同）；
-- audit（审计事件、created/updated 字段、audit log）；
-- tests（focused tests、regression、focused / full / heavy tier）；
-- mobile / responsive surface（涉及 UI 时，320 / 390 / 430 / 680 CSS px 行为）；
-- cross-module impact（与其它模块的耦合点，包括状态机、AR/AP、库存、WIP、会计、估值）。
+**O2C**
 
-Coverage 状态统一使用下列取值，不允许自定义：
+`客户/报价 → 销售订单 → 信用控制 → 计划/库存准备 → 发货/出库 → 应收 → 销售发票 → 收款 → 核销 → 会计`
 
-- `COVERED` — 当前能力和业务语义已经满足，不应为了"对标"重复实现；保留既有的实现与合同。
-- `PARTIAL` — 已有能力，但功能范围、控制机制或业务边界不足；按差额补齐。
-- `MISSING` — 当前 Modern ERP 没有对应能力；按批准需求新增。
-- `SEMANTIC_MISMATCH` — 表面存在类似能力，但业务含义、状态机、来源、来源快照、控制机制或语义口径不一致；优先校正业务语义，不能仅改 UI 名称。
-- `OUT_OF_SCOPE` — 经过明确决策后不纳入当前 Modern ERP 支持范围；不实现，不得通过 UI 或文档暗示已经支持。
+**P2P**
 
-不得把"有一个同名页面 / 同名 API"直接判定为 `COVERED`；必须就业务语义、控制机制与状态机逐项核对。
+`需求/MRP → 请购 → 寻源/采购订单 → 收料/检验/入库 → 应付/暂估 → 采购发票 → 付款 → 核销 → 存货成本/会计`
 
-### 20.5 Gap → Requirement → Design
+**Plan-to-Produce**
 
-只有 `PARTIAL` / `MISSING` / `SEMANTIC_MISMATCH` 三类项目经过用户确认后，才形成新的需求 delta 并进入实现路径：
+`销售订单/预测 → MRP → 计划订单 → 生产订单 → BOM/领退补料 → 工序执行/报工 → 检验 → 生产入库 → WIP/成本`
 
-- `COVERED` 默认保持不动；只有发现独立 bug 或独立 Gap 时才再次审计。
-- `OUT_OF_SCOPE` 不实现；不得通过 UI、文档或日志暗示已经支持。
+**Plan-to-Outsource**
 
-需求 delta 形成后按下列路径推进：
+`MRP → 委外计划/订单 → 委外用料 → 发料 → 供应商加工 → 收料/检验 → 委外入库 → 加工费应付 → 材料+加工成本`
 
-- `REQUIREMENT` 进入 `document.md`：只更新与本次变化相关的章节；不重写无关需求。
-- `DESIGN` 进入 `solution.md`：说明模块与函数职责、数据流与调用关系、事务边界、权限与职责分离、错误行为、测试策略；不粘贴详细实现源码。
-- 不得由实现阶段自行补造新的业务需求；实现阶段不得绕过 REQUIREMENT / DESIGN 流程。
-- 不得以"顺手优化"为理由扩大实现范围。
+**R2R**
 
-### 20.6 Implementation
+`业务事实 → 库存/AR/AP/资金/资产/成本 → 智能会计 → 凭证 → 总账 → 期末 → 财务报表/经营会计`
 
-Implementation 只能执行已经批准的 Requirement + Design。下列边界必须遵守：
+Platform 的 Workflow / Approval / Audit / Document Conversion 贯穿上述全部流程。
 
-- 不得自行扩大需求；
-- 不得自行改变设计；
-- 不得新增未经批准的功能；
-- 不得为了"把架构清理掉"或"完成 Wave"为理由夹带业务变更。
+### 21.5 核心产品范围收口：删除非核心扩展
 
-实现过程中若发现下列情况，必须停止该新增部分，先返回 GAP / REQUIREMENT / DESIGN 层处理，不得直接修改：
+最终产品不再支持下列当前扩展：
 
-- 新业务规则；
-- 手册解释冲突；
-- 需要新增 schema 或 migration；
-- 跨模块行为变化；
-- 会计、库存、结算、估值、WIP 等重大语义变化；
-- 既有五角色 / 五审批族 / 既有状态机的边界调整。
+- Project Management：`projects`、`tasks`、`timesheets`；
+- CRM Extension：`contacts`、`followups`、`activities`。
 
-### 20.7 Module Acceptance / Module Freeze
+要求：
 
-模块实现后必须重新基于下列材料进行模块级验收：
+1. 从 `applicationRegistry`、Launcher、桌面导航和 direct route 中删除上述最终用户能力；
+2. 删除对应前端 executable surface；
+3. 删除对应后端 API/handler 和仅服务上述能力的权限/seed；
+4. 删除或更新与上述能力绑定的测试；
+5. `projects-workflow.jsx` 与 `server/modules/business.js` 是 mixed-owner 文件，必须先保留/提取仍属于 Platform 的 `notifications`、`workflows` 等能力，再删除 Project/CRM 部分；
+6. Sales & Customer 仍需要客户联系人、收货地址、结算方/付款方等核心能力；不得把“删除 CRM contacts 扩展”误解成“ERP 不需要客户联系人”；
+7. 若现有 `contacts` 数据可映射为未来 Customer Contact 主数据，先做迁移设计，再删旧实现；
+8. 历史数据库表不得在普通代码删除任务中直接 DROP。最终 DROP/归档必须单独审计历史数据、备份、迁移/导出、SQLite/MySQL 双路径和 rollback；
+9. 清理后 Lifecycle dependency、权限 catalogue、测试 manifest、文档、演示 seed 与导航必须保持一致；
+10. 删除后不得保留“隐藏但仍受支持”的产品承诺；如只保留历史表，应明确为 legacy data retention，而非 active capability。
 
-- 金蝶功能清单（来自对应操作手册）；
-- Coverage Matrix（按 §20.4 重新核对）；
-- Requirement（`document.md` 中对应的需求 delta）；
-- Design（`solution.md` 中对应的设计 delta）；
-- 远端真实代码（不是 Implementation Agent 的自我描述）；
-- 测试证据（focused tests、regression、构建、`git diff --check`、受保护 disposable MySQL gate 当适用时）。
+### 21.6 当前仓库能力基线（2026-10-06 初步架构审计）
 
-下列边界必须遵守：
+下表是**领域级初步审计**，用于规划，不替代 B3101–B3122 的逐 Capability Module Acceptance。
 
-- Implementation Agent 的自我报告（包括 "PASS"、"完成"、"迁移已结束" 等说法）不能作为最终 Module Acceptance 的依据；
-- 只有用户明确确认 `Module Acceptance = PASS` 后，才能进入 `MODULE FREEZE` 状态；
-- `MODULE FREEZE` 之后，才能进入下一个模块；
-- 在 `MODULE FREEZE` 之前的 Implementation Agent 不得擅自开始下一个模块的工作。
+| Domain | 当前基础 | 主要 Gap | 状态 |
+|---|---|---|---|
+| Master & Engineering | 客户、供应商、产品、仓库、BOM、Product Routing、Work Center、Routing Operation | Organization、Bin、Resource/Equipment、Calendar、Substitute、ECO | PARTIAL |
+| Sales & Customer | Sales Order、Delivery、Return、Discount、Invoice/AR 链 | Quotation、完整 Pricing、Order Change、Credit | PARTIAL |
+| Planning | Forecast、MRP、Demand/Supply、Pegging、Production/Purchase Instruction、Requisition | Safety Stock 深化、替代供应、更多计划策略/参数 | PARTIAL |
+| Procurement & Outsourcing | Requisition、PO、Receipt、Return、Supplier | Sourcing、Quota、VMI、完整 Outsourcing | PARTIAL |
+| Manufacturing & Quality | Production Order、Issue/Return、Receipt、Routing Snapshot、Operation Report、WIP、IQC/OQC、Traceability | Scheduling、Dispatch、Operation Transfer、更多 Inspection、Sampling/NC 深化 | PARTIAL |
+| Inventory & Warehouse | Inventory、Transfer、Check、Adjustment、Scrap、Month End、LOT/SERIAL、Traceability | Barcode/PDA、Bin、Status Conversion、Assembly/Disassembly、完整 Reservation | PARTIAL |
+| Finance Operations | AR/AP、Collection/Payment、Settlement、Invoices/Bills、Bank Accounts、Valuation/WIP；Cash/Bills/Fixed Assets 有部分后端 | Temporary AR/AP 深化、完整 Treasury、Fixed Asset 生命周期、多币种 | PARTIAL |
+| Accounting & Analytics | Voucher、GL、Trial Balance、P&L、Balance Sheet、Decision Reports、Accounting Config 基础 | Smart Accounting Rule Engine、业务财务对账产品化、Cash Flow、Management Accounting | PARTIAL |
+| Platform | RBAC、5 Approval Families、Audit、Notification、Lifecycle、Registry/RouteLocation | Generic Workflow、Document Relationship/Conversion、Numbering、Organization Scope | PARTIAL |
 
-### 20.8 原 V2 / Wave 工程规则的定位
+### 21.7 当前限制与目标限制必须分开表达
 
-原 V2 / Wave 工作产生的下列工程原则继续作为当前代码与文档基线的一部分，在模块实施时使用：
+当前运行事实继续保持：
 
-- single canonical implementation：同一业务原语不得存在两套活动实现；
-- clear domain ownership：每个领域模块有显式的 owner；
-- route ownership：route 表 `owner` 字段指向唯一模块；
-- caller proof：迁移 / 删除前的 zero-caller proof；
-- 禁止双活实现：route 表 `responsiveMode` 保持既有 `LEGACY_ADAPTER` / `NATIVE_RESPONSIVE` 两值；不引入运行时 production 状态；同一 route key 不允许两套 live executable business screen；
-- incremental refactor：按领域逐步推进，不一次性整仓重写；
-- authorization fail-closed：`allow` / `allowAny` 仍在 handler 入口第一行；
-- transaction / audit contract：事务与审计不漂移；
-- mobile-first：320 / 390 / 430 / 680 CSS px 行为不退化；
-- `applicationRegistry.js` / `RouteLocation` 作为 canonical；
-- focused / full / heavy test gate；
-- schema 变更必须显式设计；
-- inventory mutation / valuation / LOT-SERIAL / IQC-OQC / period close / settlement / accounting voucher / manufacturing WIP-cost / MySQL adapter / migrations 等高风险领域需要更严格验证。
+- 当前单组织；
+- 当前单本位币；
+- `fixed-assets` / `cash-journals` / `bills` / `workflows` 等部分前端 Route 仍 disabled；
+- 当前 Generic Workflow、Outsourcing、Credit、Barcode 等未完成；
+- 当前代码存在较大的 `server/app.js` 与 mixed-owner 页面/模块。
 
-但是：
+但目标架构不把“单组织/单本位币”永久冻结为产品原则：
 
-> 这些规则是模块实施时的工程约束，不再构成独立的产品 roadmap。
+- Organization-ready 是 Master & Engineering / Platform 的目标 Gap；
+- 多币种是 Finance Operations / Accounting & Analytics 的目标 Gap；
+- 何时实施必须由对应手册 Capability Audit 和独立 Requirement/Design 决定；
+- 在正式实现前，系统仍必须诚实显示为不支持。
 
-下列行为被禁止：
+`APS / 完整 MES-OEE / 完整 QMS-CAPA / 政府法定税务申报` 等超出 B3101–B3122 核心能力的产品，不因本次架构调整自动进入范围；如以后新增，必须单独立项。
 
-- 不得从"Wave 5B 已完成"推导"下一步必须 Wave 5C"；
-- 不得因某个 Wave 目标尚未完成而自动推迟当前正在进行的金蝶模块；
-- 不得用"完成 V2 重构"作为不开始新模块的挡箭牌；
-- 历史日志、历史 commit、`docs/archive/v1.6/` 与历史 Wave 名称保持原样，不重写历史。
+### 21.8 后续开发推进顺序
 
-### 20.9 版本与开发基线
+本次文档基线确认后，不直接开始新增 ERP 功能。后续顺序为：
 
-- 最新既有 release tag 仍为 `v1.6.2`；不得移动、删除或重建。
-- `package.json` 当前版本仍为 `1.6.2`；不因开始金蝶模块对标而自动 bump。
-- `master` 是持续开发分支，可以领先 release tag。
-- 当前精确开发状态由 Git SHA 标识；不得把 SHA 永久硬编码进 README / document.md / solution.md 作为"基线 SHA"。
-- 22 模块对标主线不是 `v2.0.0` release 声明；不因开始金蝶模块对标而自动创建或修改 release tag。
-- 模块验收与 Module Freeze 的版本语义留待未来的 release-planning 阶段决定；本节只规定日常推进规则。
+1. `CORE SCOPE CLEANUP AUDIT`：审计并安全移除 Project/CRM 扩展；
+2. `DOMAIN ALIGNMENT`：将 Registry、导航和 logical ownership 对齐 8 Domains + Platform；初期保持既有 API/数据业务合同；
+3. 从 B3101 起逐手册执行：
+   `MANUAL EXTRACTION → CAPABILITY MATRIX → CURRENT AUDIT → GAP → REQUIREMENT → DESIGN → IMPLEMENTATION → ACCEPTANCE/FREEZE`；
+4. 每个 Capability 必须同时记录 `Manual → Capability → Domain → Current Owner → Coverage → Target Owner`；
+5. 跨域 foundation 只有在已确认 Gap 的前提下才允许先行，不得重新演变成无业务目标的 Wave roadmap。
+
+### 21.9 最终完成标准
+
+新版 ERP 不是以“页面都做完”判定完成。最终至少满足：
+
+- B3101–B3122 每项目标 Capability 均为 `COVERED` 或明确 `OUT_OF_SCOPE`；
+- 8 Domains + Platform 有清晰 canonical ownership；
+- 非核心 Project/CRM 扩展已不再是 active product capability；
+- O2C / P2P / Plan-to-Produce / Plan-to-Outsource / R2R 端到端可追溯；
+- Document source/downstream、行级累计执行、状态、权限、审计和反向业务证据可追溯；
+- Inventory / LOT-SERIAL / WIP / AR/AP / Valuation / GL 等账实一致；
+- Mobile-first 320/390/430/680 合同成立；
+- SQLite / MySQL 8 适用合同通过对应 gate；
+- focused、full、build、diff check 以及适用的 heavy/MySQL gate 全绿；
+- 用户完成最终 Acceptance 后方可声明新版 ERP 架构完成。
