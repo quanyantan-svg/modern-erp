@@ -123,7 +123,7 @@ async function issueAllRequirements(orderId, warehouseId) {
 // =====================================================================
 
 describe('M6 permission registry', () => {
-  test('1. PERMISSIONS registry has 113 entries including M14 sales/purchase discount permissions', () => {
+  test('1. PERMISSIONS registry has 110 entries after Core Scope Cleanup (CRM_*, PROJECT_* removed)', () => {
     assert.equal(PERMISSIONS.length, 110);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('PRODUCTION_MATERIAL_ISSUE_MANAGE'));

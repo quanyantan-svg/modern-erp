@@ -125,8 +125,10 @@ describe('navigation state and regression contracts', () => {
   test('27 M5 inventory behavior code is outside navigation changes', () => { assert.match(masterSource, /INVENTORY_ADJUSTMENT_MANAGE/); assert.match(logisticsSource, /INVENTORY_ADJUSTMENT/); });
   test('28 registered permissions reflect Core Scope Cleanup', async () => {
     const { PERMISSIONS } = await import('../server/db.js');
-    // After M14 the catalogue held 113 entries; Core Scope Cleanup
-    // removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW, PROJECT_MANAGE.
+    // M14 reached 113 entries; subsequent M5/V13 hardening added
+    // SUPPLIERS_VIEW and INVENTORY_TRANSFER_CONFIRM (114); Core Scope
+    // Cleanup removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW,
+    // PROJECT_MANAGE (110).
     assert.equal(PERMISSIONS.length, 110);
   });
   test('exact targets initialize Sales Delivery and Purchase Receipt detail state', () => {

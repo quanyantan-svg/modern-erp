@@ -127,7 +127,7 @@ function countVouchers() {
 // =====================================================================
 
 describe('M13 — Inventory Scrap', () => {
-  test('1. permission registry has 113 entries after M13 + M14 additions', () => {
+  test('1. permission registry has 110 entries after M13 + M14 + Core Scope Cleanup', () => {
     assert.equal(PERMISSIONS.length, 110);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('INVENTORY_SCRAP_VIEW'));

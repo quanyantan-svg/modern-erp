@@ -240,7 +240,7 @@ async function executeRun(runId, token = adminToken) {
 // 1. Permission registry / role contract
 // =====================================================================
 describe('M11 permission registry and five-role contract', () => {
-  test('1. registered permission count stays at 113 after M14; MRP_VIEW / MRP_MANAGE exist', () => {
+  test('1. registered permission count stays at 110 after M14 + Core Scope Cleanup; MRP_VIEW / MRP_MANAGE exist', () => {
     assert.equal(PERMISSIONS.length, 110);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('MRP_VIEW'));

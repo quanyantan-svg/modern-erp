@@ -4418,7 +4418,6 @@ function getAccountReceivable(db, res, actor, arId) {
 // server/modules/lookups.js. The five /api/lookup/* and
 // /api/lookups/business-entities routes are now dispatched through
 // the route-table.
-// PROJECT_MANAGE).
 
 function listAccountsPayable(db, res, actor, url) {
   allowAny(actor, ['ACCOUNTING_VIEW', 'AP_VIEW', 'AP_MANAGE']);

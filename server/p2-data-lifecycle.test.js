@@ -38,7 +38,7 @@ after(async () => {
 });
 
 describe('P2 lifecycle contract remains permission- and approval-neutral', () => {
-  test('permission registry stays exactly 113 and approval center stays exactly five canonical types', () => {
+  test('permission registry stays exactly 110 after Core Scope Cleanup and approval center stays exactly five canonical types', () => {
     assert.equal(PERMISSIONS.length, 110);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION']);
   });

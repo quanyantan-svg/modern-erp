@@ -473,7 +473,6 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
         'PRODUCTS_MANAGE', 'CUSTOMERS_VIEW', 'CUSTOMERS_MANAGE', 'SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE',
         'ACCOUNTING_VIEW', 'PERIOD_CLOSE_VIEW', 'PERIOD_CLOSE_MANAGE',
         'USERS_MANAGE', 'ROLES_MANAGE',
-        'CRM_VIEW', 'CRM_MANAGE',
       ]) assert.ok(!permissions.has(forbidden), `warehouse must NOT have ${forbidden}`);
     });
 
@@ -485,7 +484,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
         'SALES_DELIVERIES_MANAGE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE',
         'ORDERS_CREATE', 'ORDERS_SUBMIT',
         'PRODUCTS_MANAGE', 'CUSTOMERS_MANAGE', 'SUPPLIERS_MANAGE',
-        'ACCOUNTING_VIEW', 'PERIOD_CLOSE_MANAGE', 'CRM_MANAGE', 'USERS_MANAGE',
+        'ACCOUNTING_VIEW', 'PERIOD_CLOSE_MANAGE', 'USERS_MANAGE',
       ]) assert.ok(!permissions.has(forbidden), `reviewer must NOT have ${forbidden}`);
       // reviewer should keep ORDERS_APPROVE + PURCHASE_ORDERS_APPROVE
       assert.ok(permissions.has('ORDERS_APPROVE'));
@@ -500,7 +499,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
         'SALES_DELIVERIES_MANAGE', 'PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE',
         'ORDERS_CREATE', 'ORDERS_APPROVE',
         'PURCHASE_ORDERS_CREATE', 'PURCHASE_ORDERS_APPROVE',
-        'PERIOD_CLOSE_VIEW', 'PERIOD_CLOSE_MANAGE', 'CRM_MANAGE', 'USERS_MANAGE',
+        'PERIOD_CLOSE_VIEW', 'PERIOD_CLOSE_MANAGE', 'USERS_MANAGE',
       ]) assert.ok(!permissions.has(forbidden), `accounting must NOT have ${forbidden}`);
     });
   });
