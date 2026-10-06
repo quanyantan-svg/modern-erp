@@ -1,84 +1,446 @@
-# README.md 建议更新内容
+# Modern ERP
 
-> 用途：将当前项目定位从“22 个金蝶模块作为产品架构”修正为“22 份手册保证需求完整性，8 个业务域 + Platform 定义最终产品架构”。
+Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 8** 构建的现代制造业 ERP。产品采用 **mobile-first** 形态，但不牺牲成熟 ERP 的业务语义、控制机制、来源关系、状态机、审计和财务一致性。
 
-## 建议新增：目标业务架构
+当前已发布基线仍为 **v1.6.2**，`package.json` 当前版本为 `1.6.2`。`master` 是持续开发分支，可以领先最新 release tag；精确开发状态以 Git SHA 或 `git describe` 为准。既有 release tag 不得移动、删除或重建。
 
-Modern ERP 的长期产品架构正式采用 **8 Business Domains + 1 Platform Layer**。  
-《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册继续作为完整业务需求、术语、流程和控制机制的权威对标来源，但**不再直接决定最终用户菜单、一级模块或代码物理目录**。
+## 产品架构
 
-| # | Business Domain | 中文名称 | 主要范围 |
-|---|---|---|---|
-| 01 | Master & Engineering | 主数据与工程数据 | 组织、客户/供应商/物料基础、仓储基础、BOM、工艺路线、工序、工作中心、资源、日历、工程变更 |
-| 02 | Sales & Customer | 销售与客户 | 客户、报价、订单、变更、发货、退货、价格/折扣、信用 |
-| 03 | Planning | 需求与计划 | 预测、预测冲销、MRP、供需、Pegging、计划订单、计划释放 |
-| 04 | Procurement & Outsourcing | 采购与委外 | 请购、寻源、配额、采购订单、收料/入库/退货、VMI、委外 |
-| 05 | Manufacturing & Quality | 制造与质量 | 生产订单、用料、报工、车间工序、WIP、质量方案、检验与不合格处理 |
-| 06 | Inventory & Warehouse | 库存与仓储 | 库存账、出入库、调拨、盘点、状态转换、LOT/SERIAL、仓位、条码与移动仓储 |
-| 07 | Finance Operations | 财务运营 | AR/AP、暂估、发票、收付款、出纳、银行、票据、存货核算、固定资产 |
-| 08 | Accounting & Analytics | 会计与分析 | 智能会计、总账、期末、财务报表、经营会计、管理分析 |
-| — | Platform | 平台层 | Identity/RBAC、Workflow、Approval、Document Lifecycle、Document Conversion、Audit、Notification、Period Control、Numbering |
+新版 Modern ERP 的长期产品架构采用：
 
-22 份金蝶手册与 8 个业务域采用“双轴”关系：
+1. **Master & Engineering — 主数据与工程数据**
+2. **Sales & Customer — 销售与客户**
+3. **Planning — 需求与计划**
+4. **Procurement & Outsourcing — 采购与委外**
+5. **Manufacturing & Quality — 制造与质量**
+6. **Inventory & Warehouse — 库存与仓储**
+7. **Finance Operations — 财务运营**
+8. **Accounting & Analytics — 会计与分析**
+9. **Platform — 横向平台层**
 
-- **22 份手册 = Requirements / Coverage / Acceptance 轴**：保证原系统业务能力不遗漏；
-- **8 Business Domains + Platform = Product Architecture 轴**：决定新版 ERP 的产品边界、信息架构和长期领域所有权；
-- 一个金蝶模块可以映射到一个或多个业务域；一个业务域也可以吸收多本金蝶手册的能力；
-- 不再把 B3101–B3122 直接做成 22 个一级菜单。
+《金蝶云星空标准版操作手册》B3101–B3122 共 22 份手册继续作为 **Requirements / Coverage / Acceptance** 的权威业务对标来源，但不再直接决定最终用户菜单、一级模块或代码物理目录。
 
-## 建议新增：核心产品范围收口
+双轴关系固定为：
 
-下列现有扩展不属于 B3101–B3122 核心 ERP 业务，确定从最终产品范围删除：
+- **22 份金蝶手册 = Requirements / Coverage / Acceptance**
+- **8 Business Domains + Platform = Product Architecture / Ownership**
 
-- `projects` — 项目立项；
-- `tasks` — 项目任务；
-- `timesheets` — 项目工时；
-- `contacts` — 现有 CRM 扩展联系人入口；
-- `followups` — 客户跟进；
-- `activities` — 销售活动。
+一个手册可以跨多个 Domain，一个 Domain 也可以吸收多本手册。Modern ERP 不复制传统桌面 ERP 的 22 模块菜单，不复制金蝶 UI，也不复制其源码；系统只吸收成熟 ERP 的业务功能、术语、流程与控制机制，并在当前技术栈上重新实现 mobile-first 产品体验。
 
-删除上述扩展**不等于删除销售域需要的客户联系人/地址能力**。Sales & Customer 仍需要正规的客户联系人、收货方、结算方、付款方、地址与联系方式模型；现有 CRM `contacts` 是否有可复用历史数据，必须在删除实现前先审计和迁移，不能直接丢失业务数据。
+完整业务需求与 22 手册 Capability 基线见 [document.md](./document.md)。  
+当前技术设计与实现见 [solution.md](./solution.md)。  
+开发与 AI/Vibe Coding 治理见 [AGENTS.md](./AGENTS.md)。
 
-当前 `projects-workflow.jsx` / `server/modules/business.js` 同时混有通知、工作流与项目/CRM 能力。实施删除时必须先把仍属于 Platform 的通知/工作流能力保留下来，再删除项目/CRM 部分，禁止按文件整块删除造成误伤。
+## 当前已具备的核心基础
 
-数据库中的历史扩展表不在普通代码清理中直接 DROP。最终 schema 清理必须经过数据保留/导出/迁移审计和单独批准。
+当前仓库已经形成可继续复用的核心能力，包括：
 
-## 建议替换：当前开发主线
+- 五角色 RBAC、职责分离、审批中心和操作审计；
+- 客户、供应商、产品、仓库、BOM、工艺路线、工作中心等主数据；
+- 销售订单、发货、退货、销售发票、AR 与收款/核销；
+- 请购、采购订单、收货、退货、供应商账单、AP 与付款/核销；
+- Forecast、MRP、Demand/Supply、Pegging、生产/采购指令与请购；
+- 生产订单、BOM/Routing snapshot、领料、退料、工序报工、生产入库；
+- IQC/OQC、质量门禁；
+- Inventory、调拨、盘点、调整、报废、期间关闭；
+- LOT/SERIAL、HOLD/RELEASE、Traceability 与 Production Genealogy；
+- Inventory Valuation、WIP、COGS、GRNI 等财务库存基础；
+- Voucher、GL、Trial Balance、Income Statement、Balance Sheet；
+- Decision Reports；
+- SQLite 本地/测试兼容路径；
+- MySQL 8 一等运行路径；
+- applicationRegistry / RouteLocation / MobileShell；
+- route ownership、domain module extraction、测试分层和部署基础。
 
-开发采用以下双轴流程：
+这些能力属于已有产品资产。后续新版 ERP 采用**渐进式演进**，不进行整仓重写。
 
-`金蝶手册能力提取 → Capability → 映射到 8 Domain/Platform → 当前实现审计 → Coverage Matrix → Gap → Requirement → Design → Implementation → Acceptance → Freeze`
+## 当前主要 Gap
 
-默认仍可按 `B3101 → B3102 → ... → B3122` 作为**需求审计顺序**，但该编号不决定最终产品一级模块、Launcher 分组或代码目录。
+### Master & Engineering
 
-当前架构基线之后的优先顺序：
+- Organization / Organization Scope
+- Bin / 仓位
+- Resource / Equipment
+- Work Calendar / Shift
+- Substitute Material
+- ECO / Engineering Change
+- 更完整的 BOM/Routing 生命周期
 
-1. **Core Scope Cleanup**：安全移除 Project Management / CRM 扩展；
-2. **Domain Alignment**：将前端 Registry 与长期领域所有权对齐到 8 Domains + Platform，不改变既有业务事实；
-3. **B3101–B3122 Coverage**：逐手册建立 Capability Coverage Matrix；
-4. 仅对 `PARTIAL / MISSING / SEMANTIC_MISMATCH` 形成 Requirement / Design；
-5. 每项实现继续复用已经验证的库存、MRP、制造、结算、估值、会计、权限、审计和 MySQL 基础，不进行整仓重写。
+### Sales & Customer
 
-## 建议新增：当前架构差距概览
+- Quotation
+- Price List / Pricing Engine
+- Sales Order Change
+- Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval
+- 更完整的 replacement / replenishment obligation
 
-当前 v1.6.2/master 已有较强基础：销售/采购主链、Forecast/MRP/Pegging、生产订单与领退料/入库、工序报工、IQC/OQC、LOT/SERIAL 与谱系、库存调拨/盘点/报废/月结、AR/AP 与核销、存货估值/WIP、凭证/总账/报表、RBAC/审计及 MySQL 运行路径均可继续复用。
+### Planning
 
-主要目标 Gap：
+- Planning Scheme
+- Safety Stock 深化
+- Forecast Consumption 深化
+- Reservation
+- Planned Order 生命周期
+- Planner Workbench
+- Outsourcing release
 
-- Master & Engineering：组织模型、仓位、资源/设备、工作日历、替代料、ECO/工程变更；
-- Sales & Customer：报价、价格体系、销售变更、信用档案/额度/占用/特批；
-- Planning：更完整计划参数、安全库存、替代供应与供需优先级；
-- Procurement & Outsourcing：寻源、配额、VMI、完整委外子域；
-- Manufacturing & Quality：排程/派工/工序转移、更多质量类型、抽样与不合格处理；
-- Inventory & Warehouse：Barcode/PDA、仓位、库存状态转换、组装/拆卸、完整预留；
-- Finance Operations：暂估深度、完整出纳、固定资产生命周期、多币种；
-- Accounting & Analytics：智能会计规则引擎、业务财务对账、现金流量、经营会计；
-- Platform：Generic Workflow、Document Relationship/Conversion、统一编号与组织级数据权限。
+### Procurement & Outsourcing
 
-当前“单组织、单本位币”仍是**现状限制**，不得在 UI/文档中宣称已经支持多组织/多币种；但它们不再被视为永久产品架构限制，后续在相关 Capability 审计确认后进入独立基础能力设计。
+- Sourcing
+- Supplier Allocation / Quota
+- VMI
+- 独立 Receipt Notice/收料语义
+- 完整 Outsourcing 子域
+
+### Manufacturing & Quality
+
+- Operation Plan
+- Scheduling
+- Dispatch
+- Operation Transfer
+- 更完整的 Quality Plan / Sampling
+- 更多检验类型
+- Non-conformance disposition
+
+### Inventory & Warehouse
+
+- Barcode / PDA / Mobile Scan
+- Bin
+- Stock Status
+- Assembly / Disassembly
+- Form Conversion
+- 完整 Reservation / Lock
+- Inventory Age / Obsolete / ABC 等深化
+
+### Finance Operations
+
+- Provisional AP / AR
+- 完整 Treasury / Cashier
+- Payment Request
+- Bills 生命周期
+- 完整 Fixed Asset 生命周期
+- Purchase Expense Allocation
+- 多币种
+
+### Accounting & Analytics
+
+- Smart Accounting Rule Engine
+- Accounting Event / Voucher Template 深化
+- Business ↔ GL Reconciliation 产品化
+- Cash Flow
+- Report Designer / Formula Engine
+- Management Accounting / Operating Ledger / Amoeba
+
+### Platform
+
+- Generic Workflow
+- Workflow Definition / Instance / Node / Action
+- Document Relationship
+- Document Conversion
+- Numbering
+- Organization Scope
+
+## 核心产品范围收口
+
+以下现有扩展不属于 B3101–B3122 核心 ERP 产品范围，已确定从最终产品移除：
+
+- `projects`
+- `tasks`
+- `timesheets`
+- `contacts`（现有 CRM Extension）
+- `followups`
+- `activities`
+
+重要边界：
+
+- 删除 CRM `contacts` 不等于删除 ERP Customer/Supplier Contact；
+- 客户联系人、收货地址、结算方、付款方等仍属于核心 Sales & Customer；
+- 若旧 contacts 数据可迁移为核心联系人，必须先迁移再删除；
+- `projects-workflow.jsx`、`server/modules/business.js` 当前包含 mixed responsibilities，不能整文件直接删除；
+- notifications / workflows 等 Platform 能力必须保留或先提取；
+- 历史数据库表不得在普通代码清理中直接 DROP；
+- schema cleanup 必须单独完成数据保留、备份、SQLite/MySQL migration 与 rollback 设计。
+
+## 必须保持的端到端主链
+
+### Order-to-Cash
+
+`Customer / Quotation → Sales Order → Credit → Planning/Reservation → Delivery/OQC → Inventory/COGS → Sales Invoice → AR → Collection/Credit/Refund/Write-off → Accounting`
+
+### Procure-to-Pay
+
+`Demand/MRP → Purchase Requisition → Sourcing → Purchase Order → Receipt/IQC → Inventory/GRNI → Supplier Bill / AP → Payment/Credit/Refund/Write-off → Cost/Accounting`
+
+### Plan-to-Produce
+
+`Sales Order/Forecast → MRP → Planned Order/Instruction → Production Order → BOM/Material List → Issue/Return/Supplement → Operation Execution → Inspection → Production Receipt → WIP/Cost`
+
+### Plan-to-Outsource
+
+`MRP → Outsourcing Plan/Order → Outsourcing Material List → Issue → Supplier Processing → Receipt/Inspection → Outsourcing Receipt → Processing AP → Material + Processing Cost`
+
+### Record-to-Report
+
+`Business Facts → Inventory/AR/AP/Treasury/Asset/Cost → Accounting Event → Voucher → GL → Period End → Financial Reports / Management Accounting`
+
+## 当前运行限制
+
+当前事实仍然是：
+
+- 单组织；
+- 单本位币；
+- Generic Workflow 尚未完成；
+- Credit、Barcode、完整 Outsourcing 尚未完成；
+- 部分 `cash-journals` / `bills` / `fixed-assets` / `workflows` 用户 Route 仍 disabled；
+- `server/app.js` 与部分页面仍较大；
+- 部分领域仍存在 mixed-owner 文件。
+
+这些是**当前限制**，不是永久产品原则。Organization-ready、多币种等后续通过对应 Capability 的 Requirement/Design 独立实现；在真正完成前不得通过 UI 或文档宣称已经支持。
+
+## 实际技术栈
+
+| 层级 | 技术 |
+|---|---|
+| 前端 | React 19、Vite 7 |
+| 后端 | Node.js 22.23.2 原生 HTTP |
+| 数据库 | SQLite（本地/测试兼容）与 MySQL 8（一等运行后端） |
+| 数据库驱动 | Node `node:sqlite`、`mysql2` worker adapter |
+| 反向代理 | Nginx |
+| 进程管理 | systemd |
+| 包管理 | pnpm |
+
+项目不使用 Express、Koa 或 PM2。
+
+## 快速开始
+
+要求 Node.js 22.23.2 和 pnpm。
+
+```bash
+pnpm install
+pnpm dev
+```
+
+默认开发入口：
+
+- 前端：http://127.0.0.1:5173
+- API：http://127.0.0.1:3001
+
+生产式本地启动：
+
+```bash
+pnpm build
+pnpm start
+```
+
+Windows 可在构建后使用仓库现有 `start-local.ps1`。
+
+## 环境与数据库后端
+
+项目不依赖 `dotenv` 自动读取；变量必须由 shell、进程管理器或 systemd `EnvironmentFile` 注入。
+
+SQLite 示例：
+
+```bash
+ERP_DB_BACKEND=sqlite
+ERP_DB_PATH=./data/erp.db
+```
+
+MySQL 8 示例：
+
+```bash
+ERP_DB_BACKEND=mysql
+ERP_DB_HOST=127.0.0.1
+ERP_DB_PORT=3306
+ERP_DB_NAME=modern_erp
+ERP_DB_USER=modern_erp
+ERP_DB_PASSWORD=<provided-securely>
+```
+
+禁止把真实密码、Token、连接串写入仓库、日志、fixture、截图或命令示例。
+
+MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且显式启用 reset guard 的数据库。
+
+## 常用命令
+
+| 命令 | 用途 |
+|---|---|
+| `pnpm dev` | 同时启动前端与 API 开发环境 |
+| `pnpm build` | 构建前端到 `dist/` |
+| `pnpm start` | 启动生产式 Node 服务 |
+| `pnpm test:fast` | 日常快速回归 |
+| `pnpm test` | canonical 完整回归 |
+| `pnpm test:heavy` | backup / deployment / production bootstrap 等 heavy gate |
+| `pnpm test:all` | FULL + HEAVY |
+| `pnpm test:list` | 列出 FULL suite 文件 |
+| `pnpm test:mysql` | MySQL 兼容 gate |
+| `pnpm test:mysql:concurrency` | MySQL 并发 gate |
+| `pnpm test:mysql:performance` | MySQL 性能测试 |
+| `pnpm backup-db` | SQLite 备份 |
+| `pnpm restore-db -- <file>` | SQLite 恢复 |
+| `pnpm setup-admin -- --username <name> --password <secret>` | 显式创建首个管理员 |
+| `pnpm reset-data` | 仅开发/测试 SQLite 数据重置 |
+
+## 仓库地图
+
+```text
+src/main.jsx
+src/App.jsx
+src/api.js
+src/navigation/
+src/pages/
+src/components/
+src/styles/
+src/lib/
+
+server/index.js
+server/app.js
+server/db.js
+server/modules/
+server/database/
+server/migrations/
+server/lib/
+server/*.test.js
+
+scripts/runtime/
+scripts/admin/
+scripts/gates/
+scripts/diagnostics/
+scripts/acceptance/
+scripts/testing/
+
+deploy/
+docs/operations/
+docs/archive/
+log/
+.claude/skills/erp-mobile-taste/
+```
+
+关键责任：
+
+- `src/navigation/applicationRegistry.js`：最终用户 Route、权限、导航、Launcher、Presentation 和 Screen 的 canonical registry；
+- `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
+- `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；
+- `server/modules/`：逐步形成 domain canonical owner；
+- `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
+- `server/database/`：MySQL adapter / worker / protocol / schema bootstrap；
+- `server/migrations/`：增量 schema migration；
+- `scripts/testing/`：suite manifest、runner 和 governance；
+- `docs/archive/`：历史证据，不是当前规格；
+- `log/`：append-only 开发记录。
+
+## 测试与质量门
+
+### 日常有界任务
+
+```bash
+pnpm test:fast
+pnpm build
+git diff --check
+```
+
+### 跨域 / 架构 / canonical metadata / release-candidate
+
+```bash
+pnpm test
+pnpm build
+git diff --check
+```
+
+### 数据库 / 备份 / 部署 / migration / MySQL adapter 等 high-risk 任务
+
+在完整回归基础上追加：
+
+```bash
+pnpm test:heavy
+```
+
+以及实际受影响且具备受保护 disposable MySQL 环境时的：
+
+```bash
+pnpm test:mysql
+pnpm test:mysql:concurrency
+```
+
+release candidate / migration release / 生产认证可运行：
+
+```bash
+pnpm test:all
+```
+
+测试分层与具体 suite 以 `scripts/testing/test-suites.js` 和 `docs/operations/testing.md` 为准，不在 README 硬编码会快速过期的测试数量。
+
+## 部署入口
+
+- `.env.example`
+- `deploy/nginx/modern-erp.conf`
+- `deploy/systemd/modern-erp.service`
+- `deploy/systemd/modern-erp-backup.*`
+- `docs/operations/deployment.md`
+
+生产目标路径为 Ubuntu 22.04 + Node.js 22.23.2 + MySQL 8 + Nginx + systemd。
+
+## Canonical 文档
+
+- `README.md`：项目入口、技术栈、运行/测试/部署、目录和发布状态；
+- `document.md`：唯一当前功能与业务需求来源；
+- `solution.md`：唯一当前技术设计与实现参考；
+- `AGENTS.md`：唯一当前开发与 AI/Vibe Coding 治理政策；
+- `CLAUDE.md`：Claude Code 入口，只引用 `AGENTS.md`；
+- `log/YYYY-MM-DD.md`：append-only 开发历史；
+- `docs/`：运维资料和历史证据，不得形成第二套当前规格。
+
+`APPLY_GUIDE.md` 不是 canonical 文档，仅可用于一次性恢复/应用说明；恢复完成后可以删除。
+
+## 当前开发主线
+
+当前执行顺序：
+
+```text
+DOCUMENT BASELINE
+→ CORE SCOPE CLEANUP
+→ DOMAIN ALIGNMENT
+→ B3101 ... B3122 CAPABILITY CLOSURE
+```
+
+单个业务能力遵循：
+
+```text
+AUDIT
+→ COVERAGE / GAP
+→ REQUIREMENT
+→ DESIGN
+→ IMPLEMENTATION
+→ ACCEPTANCE / FREEZE
+```
+
+22 手册负责“不漏业务”；8 Domains + Platform 负责“系统最终怎么组织”。
 
 ## Vibe Coding 与 UI Skill
 
-开发治理以 `AGENTS.md` 为唯一权威。`README.md` 只引用，不复制第二套流程。
+所有 AI/Claude Code/Codex 开发必须遵守 `AGENTS.md`。
 
-`.claude/skills/erp-mobile-taste/SKILL.md` 只负责明确的 UI 设计、Mobile UX、布局和响应式现代化任务。它不得改变业务术语、API、数据库、权限、状态机、审批/确认语义或上下游关系；业务正确性始终优先于视觉简化。
+`.claude/skills/erp-mobile-taste/SKILL.md` 只用于用户明确要求的 UI Design、Mobile UX、Layout、Responsive Design 任务。它不得改变：
+
+- ERP 业务术语；
+- API；
+- schema；
+- 权限；
+- 状态机；
+- Approval / Confirm / Post / Reverse 语义；
+- 上下游来源关系；
+- 财务、库存和审计事实。
+
+业务正确性优先于视觉简化。
+
+## Git 与安全
+
+- 使用本地 Git；
+- 中文 commit；
+- 每次逻辑单元及时提交；
+- 未经用户明确批准不 push / tag / merge / deploy；
+- 不重写 Git 历史；
+- 不移动或重建既有 release tag；
+- 不提交 `.env`、数据库、备份、真实日志、Token 或密码；
+- 破坏性数据库操作必须单独批准。
+
+私有项目，禁止外传。
