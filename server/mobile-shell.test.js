@@ -295,13 +295,26 @@ describe('App.jsx — unified responsive composition', () => {
 // 6. Role permissions are not changed
 // ---------------------------------------------------------------------------
 describe('Permissions — canonical registry count', () => {
-  test('PERMISSIONS array in server/db.js has 100 entries after M8 settlement additions', async () => {
+  test('PERMISSIONS array in server/db.js after Core Scope Cleanup', async () => {
     const db = await import('../server/db.js');
     const perms = db.PERMISSIONS.filter((p) => Array.isArray(p) && p[0]);
-    assert.equal(perms.length, 114, `PERMISSIONS array must have 113 entries after M14 (got ${perms.length})`);
+    // The Project Management / CRM extensions removed four
+    // active permission codes (CRM_VIEW, CRM_MANAGE,
+    // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
+    // remain.
+    assert.equal(perms.length, 110, `PERMISSIONS array must have 110 entries after Core Scope Cleanup (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'PROJECTS_VIEW').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'PROJECTS_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'WORKFLOW_VIEW').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'WORKFLOW_MANAGE').length, 1);
+    // Removed permission codes must not be present.
+    assert.equal(perms.filter(([code]) => code === 'CRM_VIEW').length, 0);
+    assert.equal(perms.filter(([code]) => code === 'CRM_MANAGE').length, 0);
+    assert.equal(perms.filter(([code]) => code === 'PROJECT_VIEW').length, 0);
+    assert.equal(perms.filter(([code]) => code === 'PROJECT_MANAGE').length, 0);
   });
 
   test('role-accounting has 20 permissions after M8 + M14 narrow grants', () => {
@@ -328,11 +341,16 @@ describe('Canonical shell — preserved', () => {
   test('registry desktop projection still has all canonical group labels', () => {
     const groupLabels = [
       '概览', '销售与采购', '基础资料', '仓储物流', '财务资金',
-      '生产制造', '成本与质量', '项目管理', 'CRM客户关系', '系统设置',
+      '生产制造', '计划与生产', '成本与质量', '系统设置',
     ];
     for (const label of groupLabels) {
       assert.ok(applicationRegistry.DESKTOP_GROUP_ORDER.includes(label), `desktop groups must still include "${label}"`);
     }
+    // Project / CRM desktop groups were removed in Core Scope
+    // Cleanup because their only launcher tiles were extension
+    // routes that no longer exist.
+    assert.equal(applicationRegistry.DESKTOP_GROUP_ORDER.includes('项目管理'), false, '项目管理 must be removed');
+    assert.equal(applicationRegistry.DESKTOP_GROUP_ORDER.includes('CRM客户关系'), false, 'CRM客户关系 must be removed');
   });
 
   test('application registry still contains all canonical pages', () => {
@@ -340,11 +358,10 @@ describe('Canonical shell — preserved', () => {
       'dashboard', 'orders', 'approvals', 'customers', 'suppliers',
       'purchase-orders', 'products', 'warehouses', 'inventory',
       'cash-journals', 'bank-accounts', 'bills', 'fixed-assets',
-      'product-costs', 'cost-rates', 'iqc', 'oqc', 'contacts', 'followups',
-      'activities', 'projects', 'tasks', 'timesheets', 'notifications',
-      'workflows', 'accounting', 'purchase-receipts', 'sales-deliveries',
-      'returns', 'inventory-transactions', 'boms', 'production-orders',
-      'users',
+      'product-costs', 'cost-rates', 'iqc', 'oqc',
+      'notifications', 'workflows', 'accounting', 'purchase-receipts',
+      'sales-deliveries', 'returns', 'inventory-transactions', 'boms',
+      'production-orders', 'users',
     ];
     for (const key of pages) {
       assert.ok(applicationRegistry.applicationRouteFor(key), `application registry must include "${key}"`);

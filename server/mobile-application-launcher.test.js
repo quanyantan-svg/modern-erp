@@ -22,7 +22,6 @@ let buildMobileApplicationGroups;
 let canViewDecisionReport;
 let MobileLauncher;
 let MobileShell;
-let MobileCrmApplication;
 let db;
 
 before(async () => {
@@ -41,7 +40,6 @@ before(async () => {
   ({ canViewDecisionReport } = await vite.ssrLoadModule('/src/pages/decision-reports.jsx'));
   MobileLauncher = (await vite.ssrLoadModule('/src/components/MobileLauncher.jsx')).default;
   MobileShell = (await vite.ssrLoadModule('/src/components/MobileShell.jsx')).default;
-  MobileCrmApplication = (await vite.ssrLoadModule('/src/components/MobileCrmApplication.jsx')).default;
   db = createDatabase(':memory:');
 });
 
@@ -130,12 +128,16 @@ describe('M2 application metadata', () => {
     );
   });
 
-  test('exposes utility disclosures for business overview, finance, extension, advanced and system', () => {
+  test('exposes utility disclosures for business overview, finance, advanced and system', () => {
     const utilities = mobileGroups.filter((g) => g.kind === 'utility');
     const keys = utilities.map((g) => g.key);
-    for (const expected of ['utility-flows', 'utility-finance', 'utility-extension', 'utility-advanced', 'utility-system']) {
+    for (const expected of ['utility-flows', 'utility-finance', 'utility-advanced', 'utility-system']) {
       assert.ok(keys.includes(expected), `utility disclosure "${expected}" must be present`);
     }
+    // The legacy utility-extension group held the project / CRM
+    // launcher tiles; the cleanup removed the group entirely when
+    // its last tile was deleted.
+    assert.equal(keys.includes('utility-extension'), false, 'utility-extension must be removed after Project/CRM cleanup');
   });
 
   test('contains no permission definitions or role/username branches', () => {
@@ -323,24 +325,12 @@ describe('M2 launcher interaction and navigation contracts', () => {
     assert.match(css, /\.mobile-header__back\s*\{[^}]*width:\s*44px[^}]*height:\s*44px/s);
   });
 
-  test('CRM launcher items are three independent entries with accessible labels', () => {
-    const crmCards = mobileGroups.flatMap((group) => group.items)
-      .filter((item) => ['contacts', 'followups', 'activities'].includes(item.page));
-    assert.deepEqual(
-      crmCards.map((item) => [item.page, item.mobileLabel]).sort(),
-      [
-        ['activities', '销售活动'],
-        ['contacts', '联系人管理'],
-        ['followups', '客户跟进'],
-      ].sort()
-    );
-    // MobileCrmApplication remains the sub-tabbed surface for the
-    // legacy contacts landing context.
-    const html = renderToStaticMarkup(createElement(MobileCrmApplication, { user: { permissions: [] }, notify: () => {} }));
-    assert.match(html, /role="tablist"/);
-    assert.match(html, />联系人</);
-    assert.match(html, />客户跟进</);
-    assert.match(html, />销售活动</);
+  test('CRM extension launcher items no longer expose the project / CRM tiles', () => {
+    const removedKeys = ['projects', 'tasks', 'timesheets', 'contacts', 'followups', 'activities'];
+    for (const key of removedKeys) {
+      const present = mobileGroups.flatMap((group) => group.items).some((item) => item.page === key);
+      assert.equal(present, false, `launcher must not contain removed extension tile "${key}"`);
+    }
   });
 
   test('all five canonical bottom tabs are enabled with V1.6 labels', async () => {

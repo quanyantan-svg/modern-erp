@@ -12,8 +12,12 @@ import { normalizeRouteLocation, parseRouteLocation, serializeRouteLocation, val
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('P0-A registry owns 53 active and 5 disabled unique routes with valid screens, access and parents', () => {
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 53);
+test('P0-A registry owns 47 active and 5 disabled unique routes with valid screens, access and parents', () => {
+  // After Core Scope Cleanup, the registry has 47 active routes
+  // (53 minus the 6 removed extension routes: projects, tasks,
+  // timesheets, contacts, followups, activities). 5 disabled
+  // routes remain.
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 47);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','fixed-assets','workflows','data-cleanup']);
@@ -21,6 +25,10 @@ test('P0-A registry owns 53 active and 5 disabled unique routes with valid scree
     assert.ok(route.access.permission || route.access.any?.length, `${route.key} access`);
     if (route.enabled) assert.equal(typeof route.screen.loader, 'function', `${route.key} screen loader`);
     if (route.parentRoute) assert.ok(applicationRouteFor(route.parentRoute), `${route.key} parent`);
+  }
+  // Removed extension routes must not be in the registry.
+  for (const removed of ['projects','tasks','timesheets','contacts','followups','activities']) {
+    assert.equal(applicationRouteFor(removed), null, `${removed} must be removed from registry`);
   }
 });
 
@@ -33,7 +41,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 53);
+  assert.equal(ROUTE_PRESENTATIONS.length, 47);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));
@@ -44,7 +52,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
 
 test('P0-A registry preserves V1.6 rollout classification and application groups', () => {
   const internal = ['manufacturing-analytics','material-requirements-plan'];
-  const contextual = ['bank-accounts','cost-rates','dashboard','iqc','notifications','oqc','payment-collections','payment-disbursements','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-invoices','supplier-bills','tasks','timesheets'];
+  const contextual = ['bank-accounts','cost-rates','dashboard','iqc','notifications','oqc','payment-collections','payment-disbursements','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-invoices','supplier-bills'];
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'INTERNAL').map((route) => route.key).sort(), internal);
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'CONTEXTUAL').map((route) => route.key).sort(), contextual);
   assert.deepEqual(

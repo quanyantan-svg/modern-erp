@@ -65,12 +65,6 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('iqc','IQC 来料检验','purchasing','FLOW_INTERNAL_STEP','WORKFLOW','contextual','成本与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
   route('oqc','OQC 出货检验','sales','FLOW_INTERNAL_STEP','WORKFLOW','contextual','成本与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
   route('quality-control-points','质量规则','cross-domain','ADVANCED_CONFIGURATION','CONFIG','contextual','成本与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('projects','项目立项','extension','EXTENSION_BUSINESS','LIST','secondary','项目管理','projects',{any:['PROJECT_VIEW','PROJECT_MANAGE']},{desktopExposure:'extension',mobileExposure:'extension'}),
-  route('tasks','任务管理','extension','EXTENSION_BUSINESS','LIST','secondary','项目管理','tasks',{any:['PROJECT_VIEW','PROJECT_MANAGE']},{desktopExposure:'extension',mobileExposure:'extension',parentRoute:'projects'}),
-  route('timesheets','工时记录','extension','EXTENSION_BUSINESS','LIST','secondary','项目管理','timesheets',{any:['PROJECT_VIEW','PROJECT_MANAGE']},{desktopExposure:'extension',mobileExposure:'extension',parentRoute:'projects'}),
-  route('contacts','联系人','extension','EXTENSION_BUSINESS','LIST','secondary','CRM客户关系','contacts',{any:['CRM_VIEW','CRM_MANAGE']},{desktopExposure:'extension',mobileExposure:'extension'}),
-  route('followups','客户跟进','extension','EXTENSION_BUSINESS','LIST','secondary','CRM客户关系','followups',{any:['CRM_VIEW','CRM_MANAGE']},{desktopExposure:'extension',mobileExposure:'nested-crm'}),
-  route('activities','销售活动','extension','EXTENSION_BUSINESS','LIST','secondary','CRM客户关系','activities',{any:['CRM_VIEW','CRM_MANAGE']},{desktopExposure:'extension',mobileExposure:'nested-crm'}),
   route('notifications','通知中心','system','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['DASHBOARD_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
   route('users','用户与权限','system','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','users',{any:['USERS_MANAGE','ROLES_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
 ]);
@@ -85,7 +79,7 @@ const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
 
 export const TECHNICAL_ROUTE_ALIASES = Object.freeze({ mrp: 'material-requirements-plan' });
 
-export const DESKTOP_GROUP_ORDER = Object.freeze(['概览','销售与采购','基础资料','仓储物流','财务资金','决策报表','生产制造','计划与生产','成本与质量','项目管理','CRM客户关系','系统设置']);
+export const DESKTOP_GROUP_ORDER = Object.freeze(['概览','销售与采购','基础资料','仓储物流','财务资金','决策报表','生产制造','计划与生产','成本与质量','系统设置']);
 
 export const RESPONSIVE_MODES = Object.freeze({ LEGACY_ADAPTER: 'LEGACY_ADAPTER', NATIVE_RESPONSIVE: 'NATIVE_RESPONSIVE' });
 const loadScreenModule = (path) => {
@@ -95,8 +89,6 @@ const loadScreenModule = (path) => {
     case '../components/MobileApprovalCenter.jsx': return import('../components/MobileApprovalCenter.jsx');
     case '../pages/treasury-cost.jsx': return import('../pages/treasury-cost.jsx');
     case '../pages/quality.jsx': return import('../pages/quality.jsx');
-    case '../components/MobileCrmApplication.jsx': return import('../components/MobileCrmApplication.jsx');
-    case '../pages/crm.jsx': return import('../pages/crm.jsx');
     case '../pages/projects-workflow.jsx': return import('../pages/projects-workflow.jsx');
     case '../pages/accounting.jsx': return import('../pages/accounting.jsx');
     case '../pages/commercial-go-live.jsx': return import('../pages/commercial-go-live.jsx');
@@ -135,9 +127,6 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'fixed-assets': named('../pages/treasury-cost.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
   'cost-rates': named('../pages/treasury-cost.jsx','CostRates'), iqc: named('../pages/quality.jsx','IQCInspections'),
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
-  contacts: defaultScreen('../components/MobileCrmApplication.jsx'), followups: named('../pages/crm.jsx','Followups'),
-  activities: named('../pages/crm.jsx','SalesActivities'), projects: named('../pages/projects-workflow.jsx','Projects'),
-  tasks: named('../pages/projects-workflow.jsx','ProjectTasks'), timesheets: named('../pages/projects-workflow.jsx','Timesheets'),
   notifications: named('../pages/projects-workflow.jsx','Notifications'), workflows: named('../pages/projects-workflow.jsx','Workflows'),
   accounting: named('../pages/accounting.jsx','Accounting'), 'sales-invoices': named('../pages/commercial-go-live.jsx','SalesInvoices'),
   'supplier-bills': named('../pages/commercial-go-live.jsx','SupplierBills'), 'accounts-receivable': named('../pages/settlement.jsx','Receivables'),
@@ -175,7 +164,7 @@ const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-ana
 const CONTEXTUAL_ROUTES = new Set([
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','payment-collections','supplier-bills',
   'payment-disbursements','bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
-  'tasks','timesheets','notifications',
+  'notifications',
 ]);
 const classificationFor = (routeKey) => INTERNAL_ROUTES.has(routeKey) ? 'INTERNAL' : (CONTEXTUAL_ROUTES.has(routeKey) ? 'CONTEXTUAL' : 'CORE');
 const targetContractFor = (routeKey) => Object.freeze({
@@ -223,7 +212,6 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   ]),
   launcherGroup('utility-flows','业务流程','utility',null, [['business-overview','业务总览','overview']]),
   launcherGroup('utility-finance','财务工具','utility',null, [['sales-invoices','销售发票','accounting'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['accounting','会计凭证','accounting'],['bank-accounts','银行账户','bankAccounts']]),
-  launcherGroup('utility-extension','更多业务','utility',null, [['projects','项目立项','projects'],['tasks','任务管理','tasks'],['timesheets','工时记录','timesheets'],['contacts','联系人管理','contacts'],['followups','客户跟进','followups'],['activities','销售活动','activities']]),
   launcherGroup('utility-advanced','高级设置','utility',null, [['quality-control-points','质量规则','iqc'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
   launcherGroup('utility-system','系统设置','utility',null, [['users','用户与权限','users']]),
 ]);

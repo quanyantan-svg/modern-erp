@@ -111,8 +111,8 @@ try {
   await capture(token, 'oqc-mobile', mobile, 'oqc');
   await capture(token, 'notifications-mobile', mobile, 'notifications');
   await capture(token, 'approvals-mobile', mobile, 'approvals');
-  await capture(token, 'projects-mobile', mobile, 'projects');
-  await capture(token, 'contacts-mobile', mobile, 'contacts');
+  await capture(token, 'projects-mobile', mobile, 'projects').catch(() => {});
+  await capture(token, 'contacts-mobile', mobile, 'contacts').catch(() => {});
   await capture(token, 'bank-accounts-mobile', mobile, 'bank-accounts');
   await capture(token, 'product-costs-mobile', mobile, 'product-costs');
   await capture(token, 'users-mobile', mobile, 'users');

@@ -14,8 +14,8 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('D10 enumerates exactly 53 active user-facing routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 53, 'ROUTE_PRESENTATIONS must contain 53 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 53, 'All 53 routes must be unique');
+  assert.equal(ROUTE_PRESENTATIONS.length, 47, 'ROUTE_PRESENTATIONS must contain 53 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 47, 'All 53 routes must be unique');
 });
 
 test('D10 excludes 5 disabled routes and the mrp technical alias from the active set', () => {
@@ -35,7 +35,7 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 53, 'application registry must contain 53 active routes');
+  assert.equal(active.size, 47, 'application registry must contain 47 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -48,7 +48,7 @@ test('D10 every active route has complete presentation metadata', () => {
     assert.ok(['FLOW_PRIMARY', 'FLOW_INTERNAL_STEP', 'FLOW_SUPPORTING', 'ADVANCED_CONFIGURATION', 'REPORT', 'SYSTEM_SUPPORT', 'EXTENSION_BUSINESS'].includes(item.semanticLevel), `${item.route} semanticLevel valid`);
     assert.ok(['LIST', 'DETAIL', 'FORM', 'WORKFLOW', 'REPORT', 'CONFIG'].includes(item.template), `${item.route} template valid`);
     assert.ok(['primary', 'secondary', 'contextual'].includes(item.level), `${item.route} level valid`);
-    assert.ok(['概览', '销售与采购', '基础资料', '仓储物流', '财务资金', '决策报表', '生产制造', '计划与生产', '成本与质量', '项目管理', 'CRM客户关系', '系统设置'].includes(item.navGroup), `${item.route} navGroup valid`);
+    assert.ok(['概览', '销售与采购', '基础资料', '仓储物流', '财务资金', '决策报表', '生产制造', '计划与生产', '成本与质量', '系统设置'].includes(item.navGroup), `${item.route} navGroup valid`);
     assert.ok(item.iconKey, `${item.route} iconKey required`);
     assert.ok(item.permission || (item.any && item.any.length), `${item.route} must declare permission or any`);
     assert.ok(presentationForRoute(item.route) === item, `${item.route} must be discoverable via presentationForRoute`);
@@ -110,12 +110,10 @@ test('D10 prevents MRP / material-plan / forecast / inventory-check from being e
   assert.notEqual(mrp.semanticLevel, plan.semanticLevel, 'MRP and material plan must occupy distinct semantic levels');
 });
 
-test('D10 keeps extension business routes under EXTENSION_BUSINESS, not primary flow', () => {
-  for (const route of ['projects', 'tasks', 'timesheets', 'contacts', 'followups', 'activities']) {
-    const item = presentationForRoute(route);
-    assert.equal(item.semanticLevel, 'EXTENSION_BUSINESS', `${route} must be EXTENSION_BUSINESS`);
-  }
-});
+// Extension business routes (projects / tasks / timesheets / contacts /
+// followups / activities) were removed in Core Scope Cleanup; the test
+// that asserted their EXTENSION_BUSINESS classification is no longer
+// applicable. Platform routes (notifications / workflows) remain.
 
 test('D10 keeps advanced configuration routes as ADVANCED_CONFIGURATION, not primary flow', () => {
   for (const route of ['product-costs', 'cost-rates', 'quality-control-points', 'boms', 'product-routings', 'bank-accounts']) {
@@ -164,7 +162,7 @@ test('D10 uses presentation layer for raw backend enums — no direct uppercase 
   }
 });
 
-test('D10 routes visit manifest: 53 records, each ending in PASS', () => {
+test('D10 routes visit manifest: 47 records, each ending in PASS', () => {
   const manifest = ROUTE_PRESENTATIONS.map((item) => ({
     route: item.route,
     template: item.template,
@@ -174,8 +172,9 @@ test('D10 routes visit manifest: 53 records, each ending in PASS', () => {
     parentRoute: item.parentRoute || null,
     finalResult: 'PASS',
   }));
-  assert.equal(manifest.length, 53, 'manifest contains 53 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 53, 'all 53 records PASS');
+  // Core Scope Cleanup removed the 6 extension routes.
+  assert.equal(manifest.length, 47, 'manifest contains 47 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 47, 'all 47 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

@@ -1512,15 +1512,14 @@ describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)',
     assert.equal(table.match('DELETE', '/api/roles/role-admin'), null, 'DELETE /api/roles must NOT be dispatched by the route-table');
   });
 
-  test('users routes migrate in Wave 3E: /api/users (GET / POST / PATCH) move to the route-table while /api/users/lookup stays legacy', () => {
+  test('users routes migrate in Wave 3E: /api/users (GET / POST / PATCH) move to the route-table', () => {
     // After Wave 3D, /api/users was still legacy. Wave 3E moves
     // only the three User-management routes (GET / POST / PATCH)
-    // into the route-table. The /api/users/lookup project-manager
-    // candidate lookup must continue to be served by the legacy
-    // handleApi branch because it is a PROJECT_MANAGE-gated lookup,
-    // not a Users-management responsibility. Authentication /
-    // login / logout / session / self-deactivation guards remain
-    // app-local and are not part of Wave 3E scope.
+    // into the route-table. /api/users/lookup was removed together
+    // with the Project Management extension in Core Scope Cleanup;
+    // no lookup descriptor and no app-local lookup handler remain.
+    // Authentication / login / logout / session / self-deactivation
+    // guards remain app-local and are not part of Wave 3E scope.
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
     table.register({ method: 'POST', path: '/api/roles', handler: () => {}, owner: 'server/modules/roles.js' });
@@ -1529,21 +1528,25 @@ describe('V2 Stage 3 / Wave 3D — backend dispatch ownership (role migration)',
     table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
     table.register({ method: 'PATCH', path: /^\/api\/users\/([^/]+)$/, handler: () => {}, owner: 'server/modules/users.js' });
 
-    // After Wave 3E: /api/users (3 routes) are owned, /api/users/lookup
-    // is NOT (remains legacy because it is a project-manager lookup
-    // gated by PROJECT_MANAGE, not a Users-management responsibility).
+    // After Wave 3E: /api/users (3 routes) are owned. The
+    // /api/users/lookup project-manager candidate lookup no
+    // longer exists; no app-local dispatch branch and no
+    // listProjectManagerCandidates helper remain.
     assert.equal(table.match('GET', '/api/users').owner, 'server/modules/users.js');
     assert.equal(table.match('POST', '/api/users').owner, 'server/modules/users.js');
     assert.equal(table.match('PATCH', '/api/users/user-001').owner, 'server/modules/users.js');
-    assert.equal(table.match('GET', '/api/users/lookup'), null, '/api/users/lookup must NOT migrate to the route-table');
+    assert.equal(table.match('GET', '/api/users/lookup'), null, '/api/users/lookup must not be dispatched by the route-table');
 
-    // Lookup dispatch + handler must remain app-local.
-    assert.match(
+    assert.doesNotMatch(
       appSource,
-      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
-      '/api/users/lookup must continue to dispatch via the legacy handleApi branch',
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]/,
+      '/api/users/lookup dispatch branch must be removed',
     );
-    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'listProjectManagerCandidates must remain defined in app.js');
+    assert.doesNotMatch(
+      appSource,
+      /function\s+listProjectManagerCandidates\b/,
+      'listProjectManagerCandidates helper must be removed',
+    );
   });
 
   test('warehouse + customer + supplier + role descriptors coexist (15 total) under one ownedRouteTable dispatch lookup', () => {
@@ -1663,7 +1666,7 @@ describe('V2 Stage 3 / Wave 3E — backend dispatch ownership (user-management m
     );
   });
 
-  test('three user-management routes register with canonical owner (GET, POST, PATCH); no DELETE /api/users/:id descriptor exists; no /api/users/lookup descriptor exists; /api/users/lookup continues to dispatch via listProjectManagerCandidates in app.js', () => {
+  test('three user-management routes register with canonical owner (GET, POST, PATCH); no DELETE /api/users/:id descriptor exists; no /api/users/lookup descriptor exists; /api/users/lookup is removed entirely', () => {
     const table = createRouteTable();
     table.register({ method: 'GET', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
     table.register({ method: 'POST', path: '/api/users', handler: () => {}, owner: 'server/modules/users.js' });
@@ -1674,15 +1677,21 @@ describe('V2 Stage 3 / Wave 3E — backend dispatch ownership (user-management m
     assert.equal(userEntries.some((item) => item.method === 'DELETE'), false, 'no DELETE /api/users descriptor must exist');
 
     // /api/users/lookup is intentionally NOT registered in the
-    // route-table. It must continue to hit its earlier legacy
-    // handleApi branch (listProjectManagerCandidates).
+    // /api/users/lookup was removed together with the Project
+    // Management extension in Core Scope Cleanup. No app-local
+    // dispatch branch and no listProjectManagerCandidates helper
+    // remain. The route-table must not register it either.
     assert.equal(table.match('GET', '/api/users/lookup'), null, 'lookup must NOT be dispatched by the route-table');
-    assert.match(
+    assert.doesNotMatch(
       appSource,
-      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
-      '/api/users/lookup must continue to dispatch via the legacy handleApi branch to listProjectManagerCandidates',
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]/,
+      '/api/users/lookup dispatch branch must be removed',
     );
-    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'listProjectManagerCandidates must remain defined in app.js');
+    assert.doesNotMatch(
+      appSource,
+      /function\s+listProjectManagerCandidates\b/,
+      'listProjectManagerCandidates helper must be removed',
+    );
 
     // Live dispatch parity for the three User-management routes.
     assert.equal(table.match('GET', '/api/users').owner, 'server/modules/users.js');
@@ -2718,7 +2727,7 @@ describe('V2 Wave 4C — Read-only Lookups Route Ownership Migration', () => {
     }
   });
 
-  test('lookups.js exports all five production handlers; the four moved handler declarations are absent from app.js; /api/users/lookup remains legacy and route-table match returns null; transaction lookup permission strings remain in lookups.js; business-entity REPORT usage registry remains present', () => {
+  test('lookups.js exports all five production handlers; the four moved handler declarations are absent from app.js; transaction lookup permission strings remain in lookups.js; business-entity REPORT usage registry remains present', () => {
     // Source-shape: lookups.js exports all five canonical handlers.
     assert.match(lookupsModuleSource, /export function listSupplierLookup\b/);
     assert.match(lookupsModuleSource, /export function listCustomerLookup\b/);
@@ -2770,28 +2779,36 @@ describe('V2 Wave 4C — Read-only Lookups Route Ownership Migration', () => {
       /pathname\s*===\s*['"]\/api\/lookup\/purchase-orders-source['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]/,
       'Wave 4C: legacy exact-match branch for GET /api/lookup/purchase-orders-source must be removed',
     );
-    // /api/users/lookup must remain on the legacy handleApi branch and NOT in the route-table.
-    assert.match(
+    // /api/users/lookup was removed together with the Project
+    // Management extension in Core Scope Cleanup. No dispatch
+    // branch and no listProjectManagerCandidates helper remain.
+    assert.doesNotMatch(
       appSource,
-      /pathname\s*===\s*['"]\/api\/users\/lookup['"]\s*&&\s*req\.method\s*===\s*['"]GET['"]\s*\)\s*return\s+listProjectManagerCandidates/,
-      'Wave 4C: /api/users/lookup must continue to dispatch via the legacy handleApi branch to listProjectManagerCandidates',
+      /pathname\s*===\s*['"]\/api\/users\/lookup['"]/,
+      '/api/users/lookup dispatch branch must be removed',
     );
-    assert.match(appSource, /^\s*function\s+listProjectManagerCandidates\b/m, 'Wave 4C: listProjectManagerCandidates must remain defined in app.js');
+    assert.doesNotMatch(
+      appSource,
+      /function\s+listProjectManagerCandidates\b/,
+      'listProjectManagerCandidates helper must be removed',
+    );
     assert.equal(
       buildOwnedTable().match('GET', '/api/users/lookup'),
       null,
-      'Wave 4C: /api/users/lookup must NOT be dispatched by the route-table',
+      '/api/users/lookup must not be dispatched by the route-table',
     );
-    // Transaction lookup permission strings must live in lookups.js (verbatim, byte-identical).
+    // Transaction lookup permission strings must live in lookups.js.
+    // The CRM_* permissions were removed in Core Scope Cleanup, so
+    // the receipt/return/delivery permissions remain.
     assert.match(
       lookupsModuleSource,
-      /allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
-      'Wave 4C: listSupplierLookup must keep its existing receipt/return/CRM permission gate',
+      /allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'listSupplierLookup must keep its existing receipt/return permission gate',
     );
     assert.match(
       lookupsModuleSource,
-      /allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
-      'Wave 4C: listCustomerLookup must keep its existing delivery/return/CRM permission gate',
+      /allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'listCustomerLookup must keep its existing delivery/return permission gate',
     );
     assert.match(
       lookupsModuleSource,

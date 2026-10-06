@@ -9,12 +9,9 @@
 //   - PATCH preserves existing password hash when password is
 //     omitted;
 //   - unknown request field → 400 "不支持的字段: <field>".
-// The pre-existing project-manager.test.js suite already covers:
-//   - GET /api/users/lookup PROJECT_MANAGE gating and minimal-shape
-//     response;
-//   - /api/users/lookup active=1 filter;
-//   - sales / accounting 403 on lookup;
-//   - unauthenticated 401 on lookup.
+// /api/users/lookup was removed together with the Project Management
+// extension in Core Scope Cleanup; the legacy lookup continuity proof
+// no longer applies and project-manager.test.js was removed.
 // The pre-existing v13-phase7c-security-observability.test.js suite
 // already covers:
 //   - PATCH /api/users/:id rejects mass-assignment of
@@ -435,23 +432,5 @@ describe('V2 Wave 3E — user-management route family behavior preservation', ()
 
     const afterSessions = database.prepare('SELECT count(*) AS n FROM sessions WHERE user_id=?').get(userId).n;
     assert.equal(afterSessions, 1, 'target user\'s existing session must NOT be invalidated by a non-security-sensitive update');
-  });
-
-  test('GET /api/users/lookup still succeeds for PROJECT_MANAGE-authorized actor with the minimal active-user candidate shape (legacy /api/users/lookup continuity proof)', async () => {
-    // Brief §14: the lookup endpoint must continue to be served by
-    // the legacy handleApi branch (listProjectManagerCandidates).
-    const result = await request('/api/users/lookup');
-    assert.equal(result.status, 200);
-    assert.ok(Array.isArray(result.data.users));
-    assert.ok(result.data.users.length >= 1, 'candidate list must include at least the seeded admin');
-
-    const sample = result.data.users[0];
-    const keys = Object.keys(sample).sort();
-    assert.deepEqual(
-      keys,
-      ['active', 'displayName', 'id', 'username'],
-      `lookup response must expose only id / username / displayName / active; got ${JSON.stringify(keys)}`,
-    );
-    assert.equal(typeof sample.active, 'boolean');
   });
 });

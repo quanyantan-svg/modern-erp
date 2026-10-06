@@ -12,7 +12,6 @@ const approvals = read('src', 'components', 'MobileApprovalCenter.jsx');
 const masterData = read('src', 'pages', 'master-data.jsx');
 const settlement = read('src', 'pages', 'settlement.jsx');
 const ordinaryFilterPages = [
-  read('src', 'pages', 'crm.jsx'),
   read('src', 'pages', 'projects-workflow.jsx'),
   read('src', 'pages', 'quality.jsx'),
   read('src', 'pages', 'treasury-cost.jsx'),

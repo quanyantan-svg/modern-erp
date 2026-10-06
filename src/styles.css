@@ -1671,36 +1671,6 @@ tfoot td {
   }
 }
 
-.mobile-crm-application__tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px;
-  margin-bottom: 12px;
-  padding: 4px;
-  border-radius: 12px;
-  background: var(--bg-active);
-}
-
-.mobile-crm-application__tabs button {
-  min-width: 0;
-  min-height: 44px;
-  padding: 6px 4px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.mobile-crm-application__tabs button.active {
-  background: var(--bg-surface);
-  color: var(--accent);
-  font-weight: 600;
-  box-shadow: var(--shadow-xs);
-}
-
 .mobile-workflow,
 .document-relations,
 .finance-trace {
@@ -3796,8 +3766,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .mobile-shell:has(.product-routings-v15),
 .mobile-shell:has(.product-costs-v15),
 .mobile-shell:has(.cost-rates-v15),
-.mobile-shell:has(.quality-rules-v15),
-.mobile-shell:has(.contacts-v15) {
+.mobile-shell:has(.quality-rules-v15) {
   --app-max-width: 680px;
   background: #fbfcfd;
 }
@@ -3810,8 +3779,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .product-routings-v15,
 .product-costs-v15,
 .cost-rates-v15,
-.quality-rules-v15,
-.contacts-v15 {
+.quality-rules-v15 {
   min-width: 0;
 }
 
@@ -3822,8 +3790,7 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .boms-v15 .table-wrap,
 .product-costs-v15 .table-wrap,
 .cost-rates-v15 .table-wrap,
-.quality-rules-v15 .table-wrap,
-.contacts-v15 .table-wrap {
+.quality-rules-v15 .table-wrap {
   border-radius: 0;
 }
 
@@ -3870,12 +3837,6 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .mobile-application-view > *,
 .dashboard-v15,
 .approval-workspace-v15,
-.projects-v15,
-.project-tasks-v15,
-.timesheets-v15,
-.contacts-v15,
-.followups-v15,
-.sales-activities-v15,
 .notifications-v15,
 .users-roles-v15 {
   min-width: 0;
@@ -3913,11 +3874,6 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   font-size: 22px;
 }
 
-.projects-v15 .table-wrap,
-.project-tasks-v15 .table-wrap,
-.timesheets-v15 .table-wrap,
-.followups-v15 .table-wrap,
-.sales-activities-v15 .table-wrap,
 .notifications-v15 .table-wrap {
   max-width: 100%;
   overflow-x: auto;

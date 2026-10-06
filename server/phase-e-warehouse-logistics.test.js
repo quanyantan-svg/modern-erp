@@ -767,12 +767,12 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
       'purchase receipt editor must initialize form state inside its loading effect');
   });
 
-  test('WHITE-SCREEN SAFETY: lookup endpoints use workflow permissions and CRM lookup permissions', () => {
+  test('WHITE-SCREEN SAFETY: lookup endpoints use workflow permissions only after Core Scope Cleanup', () => {
     // Source-level guarantee: the narrow lookup endpoints exist; their
     // backend gating does not require SUPPLIERS_VIEW / CUSTOMERS_VIEW so
-    // a future custom role can keep warehouse scoped. CRM_VIEW / CRM_MANAGE
-    // are also allowed so CRM selectors can reuse the same minimal id/code/name
-    // contract without weakening full master-data APIs.
+    // a future custom role can keep warehouse scoped. Core Scope Cleanup
+    // removed the CRM_VIEW / CRM_MANAGE permissions; the lookup
+    // endpoints no longer reference them.
     //
     // V2 Wave 4C: the canonical implementations moved to
     // server/modules/lookups.js and the route-table became the single
@@ -781,11 +781,11 @@ describe('v1.0.1 — frontend warehouse modal source-level contract', () => {
     const lookups = readFileSync(join(repoRoot, 'server', 'modules', 'lookups.js'), 'utf8');
     const appSource = readFileSync(join(repoRoot, 'server', 'app.js'), 'utf8');
     assert.match(lookups,
-      /export function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
-      'listSupplierLookup must gate by receipt/return workflow permissions plus CRM permissions');
+      /export function listSupplierLookup[\s\S]*?allowAny\(actor,\s*\[['"]PURCHASE_RECEIPTS_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'listSupplierLookup must gate by receipt/return workflow permissions');
     assert.match(lookups,
-      /export function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"],\s*['"]CRM_VIEW['"],\s*['"]CRM_MANAGE['"]\]\)/,
-      'listCustomerLookup must gate by delivery/return workflow permissions plus CRM permissions');
+      /export function listCustomerLookup[\s\S]*?allowAny\(actor,\s*\[['"]SALES_DELIVERIES_MANAGE['"],\s*['"]RETURNS_MANAGE['"]\]\)/,
+      'listCustomerLookup must gate by delivery/return workflow permissions');
     assert.doesNotMatch(appSource,
       /function listSupplierLookup\b/,
       'V2 Wave 4C: app.js must NOT declare listSupplierLookup (now owned by server/modules/lookups.js)');

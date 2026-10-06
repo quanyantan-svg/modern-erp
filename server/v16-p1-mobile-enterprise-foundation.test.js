@@ -225,7 +225,6 @@ describe('P1B — application launcher contract', () => {
     for (const page of [
       'business-overview', 'sales-invoices', 'payment-collections',
       'supplier-bills', 'payment-disbursements', 'accounting', 'bank-accounts',
-      'projects', 'tasks', 'timesheets', 'contacts', 'followups', 'activities',
       'quality-control-points', 'product-costs', 'cost-rates', 'users',
     ]) {
       assert.ok(utilityPages.has(page), `utility group must include ${page}`);

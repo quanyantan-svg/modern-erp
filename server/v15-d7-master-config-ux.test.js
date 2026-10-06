@@ -24,9 +24,11 @@ test('D7 makes BOM routing cost and quality version hierarchies explicit', () =>
   assert.match(quality, /title="质量规则"/);
 });
 
-test('D7 keeps contacts subordinate to customer and supplier master data', () => {
-  const source = read('src/pages/crm.jsx');
-  assert.match(source, /className="contacts-v15" width="rail"/);
-  assert.match(source, /客户与供应商辅助资料/);
-  assert.match(source, /联系人不替代客户或供应商主数据/);
+// Contacts subordinate coverage was removed together with the CRM extension
+// in Core Scope Cleanup; customer / supplier master-data contact fields
+// remain on customers / suppliers tables and are owned by their respective
+// domain modules.
+test('D7 master-config UX shells preserved', () => {
+  assert.match(read('src/pages/master-data.jsx'), /className="customers-v15" width="rail"/);
+  assert.match(read('src/pages/master-data.jsx'), /className="suppliers-v15" width="rail"/);
 });

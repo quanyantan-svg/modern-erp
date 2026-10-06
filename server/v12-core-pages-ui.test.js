@@ -17,14 +17,18 @@ const pageSources = readdirSync(join(root, 'src', 'pages'))
 describe('V1.2 core page migration', () => {
   test('launcher retains the canonical V1.6 business groups', () => {
     // V1.7 P0: launcher groups are owned by applicationRegistry.js;
-    // applicationMetadata.js is a compatibility projection.
+    // applicationMetadata.js is a compatibility projection. The
+    // Core Scope Cleanup removed the 更多业务 utility-extension
+    // launcher group because its only tiles were the Project /
+    // CRM extension routes.
     const registry = read('src', 'navigation', 'applicationRegistry.js');
     for (const label of [
       '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
-      '业务流程', '财务工具', '更多业务', '高级设置', '系统设置',
+      '业务流程', '财务工具', '高级设置', '系统设置',
     ]) {
       assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
     }
+    assert.doesNotMatch(registry, /launcherGroup\('utility-extension',/);
   });
 
   test('all required core ERP surfaces remain registered', () => {

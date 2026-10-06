@@ -250,7 +250,7 @@ async function runJourneys(token) {
   });
   await runJourney(token, 'finance-accounting', ['accounts-receivable', 'payment-collections', 'accounting']);
   await runJourney(token, 'production-execution', ['production-instructions', 'production-orders', 'material-issues', 'production-receipts']);
-  await runJourney(token, 'utility-admin', ['business-overview', 'projects', 'users']);
+  await runJourney(token, 'utility-admin', ['business-overview', 'notifications', 'users']);
 }
 
 try {

@@ -173,7 +173,6 @@ Classification key:
 | `server/balance-sheet.test.js` | Accounting | balance sheet | FULL | KEEP | — |
 | `server/business-integrity-stabilization.test.js` | Cross-domain | integrity stabilization | FULL | KEEP | — |
 | `server/cost-stabilization.test.js` | Cost / WIP | cost stabilization | FULL | KEEP | — |
-| `server/crm-stabilization.test.js` | CRM | stabilization | FULL | KEEP | — |
 | `server/decision-reports.test.js` | Reporting / Decision reports | 5 reports HTTP + money + date + source labels + inventory movements | FULL | KEEP | — |
 | `server/financial-summary.test.js` | Accounting | summary | FULL | KEEP | — |
 | `server/income-statement.test.js` | Accounting | income statement | FULL | KEEP | — |
@@ -207,7 +206,6 @@ Classification key:
 | `server/phase-e-warehouse-logistics.test.js` | Warehouse / Logistics | Phase E warehouse logistics | FULL | KEEP | — |
 | `server/product-routing.test.js` | Manufacturing | routing tables, role contract, registry binding | FULL | KEEP | — |
 | `server/production-safety.test.js` | Operations | production safety | HEAVY | HEAVY | — |
-| `server/project-manager.test.js` | Project | project manager | FULL | KEEP | — |
 | `server/purchase-order-status-fix.test.js` | Purchase | PO status fix | FULL | KEEP | — |
 | `server/quality-stabilization.test.js` | Quality | stabilization | FULL | KEEP | — |
 | `server/reset-safety.test.js` | Operations | reset-data safety | HEAVY | HEAVY | — |

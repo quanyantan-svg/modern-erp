@@ -4,11 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory } from './lib/stock.js';
 import {
-  createContact, createFollowup, createProject, createProjectTask, createSalesActivity,
-  createTimesheet, createWorkflow, deleteContact, deleteSalesActivity, deleteTimesheet,
-  getProjectDetail, listContacts, listFollowups, listNotifications, listProjectTasks,
-  listProjects, listSalesActivities, listTimesheets, listWorkflows, markNotificationRead,
-  updateContact, updateFollowup, updateProject, updateProjectTask, updateSalesActivity,
+  createWorkflow, listNotifications, listWorkflows, markNotificationRead,
 } from './modules/business.js';
 import {
   listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
@@ -227,10 +223,6 @@ import {
 //
 // Intentionally non-migrated special routes (remain on legacy
 // handleApi branches below):
-//   - /api/users/lookup         → listProjectManagerCandidates in app.js
-//                                  (project-manager candidate lookup
-//                                  gated by PROJECT_MANAGE, not
-//                                  USERS_MANAGE)
 //   - PATCH /api/products/:id/tracking-policy
 //                                → updateProductTrackingHandler in app.js
 //   - All /api/orders/*,
@@ -796,8 +788,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/lifecycle/records' && req.method === 'GET') return listLifecycleRecordsHandler(db, res, actor, url);
   if (pathname === '/api/lifecycle/cleanup-events' && req.method === 'GET') return listCleanupEventsHandler(db, res, actor, url);
 
-  if (pathname === '/api/users/lookup' && req.method === 'GET') return listProjectManagerCandidates(db, res, actor);
-
   const productTrackingMatch = pathname.match(/^\/api\/products\/([^/]+)\/tracking-policy$/);
   if (productTrackingMatch && req.method === 'PATCH') return updateProductTrackingHandler(db, req, res, actor, productTrackingMatch[1]);
   if (pathname === '/api/tracking/allocations' && req.method === 'PUT') return saveAllocationsHandler(db, req, res, actor);
@@ -897,10 +887,9 @@ async function handleApi(db, req, res, url) {
   // server/modules/manufacturing-reference.js — the legacy
   // BOM-bound `routing_operations` table; distinct from the
   // `product_routings` / `product_routing_operations` owned by
-  // server/modules/product-routing.js). /api/users/lookup and
-  // PATCH /api/products/:id/tracking-policy remain on their
-  // respective legacy handleApi branches above and are NOT in the
-  // route-table.
+  // server/modules/product-routing.js). PATCH
+  // /api/products/:id/tracking-policy remains on its legacy
+  // handleApi branch above and is NOT in the route-table.
   //
   // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F +
   // Wave 4A + Wave 4B + Wave 4C + Wave 4D + Wave 5A + Wave 5B —
@@ -1334,42 +1323,11 @@ async function handleApi(db, req, res, url) {
   const costRateMatch = pathname.match(/^\/api\/cost-rates\/([^/]+)$/);
   if (costRateMatch && req.method === 'PATCH') return updateCostRate(db, req, res, actor, costRateMatch[1]);
 
-  // ============ Project Management ============
-  if (pathname === '/api/projects' && req.method === 'GET') return listProjects(db, res, actor, url);
-  if (pathname === '/api/projects' && req.method === 'POST') return createProject(db, req, res, actor);
-  const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
-  if (projectMatch && req.method === 'GET') return getProjectDetail(db, res, actor, projectMatch[1]);
-  if (projectMatch && req.method === 'PATCH') return updateProject(db, req, res, actor, projectMatch[1]);
-  if (pathname === '/api/project-tasks' && req.method === 'GET') return listProjectTasks(db, res, actor, url);
-  if (pathname === '/api/project-tasks' && req.method === 'POST') return createProjectTask(db, req, res, actor);
-  const projectTaskMatch = pathname.match(/^\/api\/project-tasks\/([^/]+)$/);
-  if (projectTaskMatch && req.method === 'PATCH') return updateProjectTask(db, req, res, actor, projectTaskMatch[1]);
-  if (pathname === '/api/timesheets' && req.method === 'GET') return listTimesheets(db, res, actor, url);
-  if (pathname === '/api/timesheets' && req.method === 'POST') return createTimesheet(db, req, res, actor);
-  const timesheetMatch = pathname.match(/^\/api\/timesheets\/([^/]+)$/);
-  if (timesheetMatch && req.method === 'DELETE') return deleteTimesheet(db, req, res, actor, timesheetMatch[1]);
-
   // ============ Notifications and Workflows ============
   if (pathname === '/api/notifications' && req.method === 'GET') return listNotifications(db, res, actor);
   if (pathname === '/api/notifications/read' && req.method === 'POST') return markNotificationRead(db, req, res, actor);
   if (pathname === '/api/workflows' && req.method === 'GET') return listWorkflows(db, res, actor);
   if (pathname === '/api/workflows' && req.method === 'POST') return createWorkflow(db, req, res, actor);
-
-  // ============ CRM ============
-  if (pathname === '/api/contacts' && req.method === 'GET') return listContacts(db, res, actor, url);
-  if (pathname === '/api/contacts' && req.method === 'POST') return createContact(db, req, res, actor);
-  const contactMatch = pathname.match(/^\/api\/contacts\/([^/]+)$/);
-  if (contactMatch && req.method === 'PATCH') return updateContact(db, req, res, actor, contactMatch[1]);
-  if (contactMatch && req.method === 'DELETE') return deleteContact(db, req, res, actor, contactMatch[1]);
-  if (pathname === '/api/customer-followups' && req.method === 'GET') return listFollowups(db, res, actor, url);
-  if (pathname === '/api/customer-followups' && req.method === 'POST') return createFollowup(db, req, res, actor);
-  const followupMatch = pathname.match(/^\/api\/customer-followups\/([^/]+)$/);
-  if (followupMatch && req.method === 'PATCH') return updateFollowup(db, req, res, actor, followupMatch[1]);
-  if (pathname === '/api/sales-activities' && req.method === 'GET') return listSalesActivities(db, res, actor, url);
-  if (pathname === '/api/sales-activities' && req.method === 'POST') return createSalesActivity(db, req, res, actor);
-  const salesActivityMatch = pathname.match(/^\/api\/sales-activities\/([^/]+)$/);
-  if (salesActivityMatch && req.method === 'PATCH') return updateSalesActivity(db, req, res, actor, salesActivityMatch[1]);
-  if (salesActivityMatch && req.method === 'DELETE') return deleteSalesActivity(db, req, res, actor, salesActivityMatch[1]);
 
 
 
@@ -1526,17 +1484,6 @@ function dashboard(db, res, actor) {
     recentPurchaseOrders: purchaseOrderRows(db, '', [], 'ORDER BY po.created_at DESC LIMIT 5')
   };
   return send(res, 200, data);
-}
-
-function listProjectManagerCandidates(db, res, actor) {
-  allow(actor, 'PROJECT_MANAGE');
-  const users = db.prepare(`
-    SELECT u.id, u.username, u.display_name displayName, u.active
-    FROM users u
-    WHERE u.active = 1
-    ORDER BY u.display_name, u.username
-  `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
-  return send(res, 200, { users });
 }
 
 function listOrders(db, res, actor, url) {
@@ -4470,8 +4417,7 @@ function getAccountReceivable(db, res, actor, arId) {
 // / listPurchaseOrderSourceLookup) moved verbatim to
 // server/modules/lookups.js. The five /api/lookup/* and
 // /api/lookups/business-entities routes are now dispatched through
-// the route-table. /api/users/lookup remains on the legacy handleApi
-// branch above (project-manager candidate lookup, gated by
+// the route-table.
 // PROJECT_MANAGE).
 
 function listAccountsPayable(db, res, actor, url) {

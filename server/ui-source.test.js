@@ -106,9 +106,6 @@ describe('UI source — route surface preserved', () => {
       ['ProductionOrders', 'pages/manufacturing.jsx'],
       ['IQCInspections', 'pages/quality.jsx'],
       ['OQCInspections', 'pages/quality.jsx'],
-      ['Projects', 'pages/projects-workflow.jsx'],
-      ['ProjectTasks', 'pages/projects-workflow.jsx'],
-      ['Timesheets', 'pages/projects-workflow.jsx'],
       ['Notifications', 'pages/projects-workflow.jsx'],
       ['Workflows', 'pages/projects-workflow.jsx'],
       ['CashJournals', 'pages/treasury-cost.jsx'],
@@ -129,7 +126,6 @@ describe('UI source — route surface preserved', () => {
       assert.ok(exportMatch, `${module} must still export ${name}`);
     }
     assert.match(registry, /approvals:\s*defaultScreen\('\.\.\/components\/MobileApprovalCenter\.jsx'\)/);
-    assert.match(registry, /contacts:\s*defaultScreen\('\.\.\/components\/MobileCrmApplication\.jsx'\)/);
   });
 
   test('M8 AR/AP and settlement routes are bound through the canonical registry', () => {
@@ -175,7 +171,6 @@ describe('UI source — file inventory sanity', () => {
       'pages/logistics-finance.jsx',
       'pages/manufacturing.jsx',
       'pages/quality.jsx',
-      'pages/crm.jsx',
       'pages/projects-workflow.jsx',
       'pages/treasury-cost.jsx',
       'components/ui.jsx',

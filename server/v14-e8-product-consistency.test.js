@@ -12,10 +12,15 @@ const source = (path) => readFileSync(resolve(root, path), 'utf8');
 test('E8 audits the complete current user-facing application catalogue', () => {
   const disabled = new Set(['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']);
   const pages = new Set(ROUTE_PRESENTATIONS.map((item) => item.route));
-  assert.equal(pages.size, 53);
+  // Core Scope Cleanup removed the 6 extension routes
+  // (projects, tasks, timesheets, contacts, followups, activities).
+  assert.equal(pages.size, 47);
   assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);
+  }
+  for (const removed of ['projects','tasks','timesheets','contacts','followups','activities']) {
+    assert.equal(pages.has(removed), false, `${removed} must be removed from catalogue`);
   }
   assert.equal(pages.has('system-health'), false);
   assert.equal(pages.has('commercial-go-live'), false);

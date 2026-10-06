@@ -123,7 +123,12 @@ describe('navigation state and regression contracts', () => {
   test('25 M3 approval mutation dispatch is unchanged', () => { assert.match(approvalSource, /await api\(request\.path, request\.options\)/); });
   test('26 M4 relationship data rendering is unchanged', () => { assert.match(logisticsSource, /relation\.upstream/); assert.match(logisticsSource, /relation\.downstream/); });
   test('27 M5 inventory behavior code is outside navigation changes', () => { assert.match(masterSource, /INVENTORY_ADJUSTMENT_MANAGE/); assert.match(logisticsSource, /INVENTORY_ADJUSTMENT/); });
-  test('28 registered permissions are 113 after M14 discount additions', async () => { const { PERMISSIONS }=await import('../server/db.js'); assert.equal(PERMISSIONS.length,114); });
+  test('28 registered permissions reflect Core Scope Cleanup', async () => {
+    const { PERMISSIONS } = await import('../server/db.js');
+    // After M14 the catalogue held 113 entries; Core Scope Cleanup
+    // removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW, PROJECT_MANAGE.
+    assert.equal(PERMISSIONS.length, 110);
+  });
   test('exact targets initialize Sales Delivery and Purchase Receipt detail state', () => {
     assert.match(logisticsSource, /target\?\.page === 'sales-deliveries'[\s\S]{0,100}documentId/);
     assert.match(logisticsSource, /target\?\.page === 'purchase-receipts'[\s\S]{0,100}documentId/);

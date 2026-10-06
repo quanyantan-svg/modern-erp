@@ -46,16 +46,16 @@ import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 // which warehouse already holds. Safe for production: the response body
 // contains no PII, no contact info, no balances.
 //
-// Pattern matches /api/users/lookup (project-manager candidates).
+// Pattern matches warehouse / logistics-flavored pickers.
 export function listSupplierLookup(db, res, actor, url) {
-  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
+  allowAny(actor, ['PURCHASE_RECEIPTS_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const suppliers = db.prepare("SELECT id, code, name FROM suppliers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
   return send(res, 200, { suppliers });
 }
 
 export function listCustomerLookup(db, res, actor, url) {
-  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE', 'CRM_VIEW', 'CRM_MANAGE']);
+  allowAny(actor, ['SALES_DELIVERIES_MANAGE', 'RETURNS_MANAGE']);
   const search = '%' + (url.searchParams.get('search') || '') + '%';
   const customers = db.prepare("SELECT id, code, name FROM customers WHERE active=1 AND (code LIKE ? OR name LIKE ?) ORDER BY code").all(search, search);
   return send(res, 200, { customers });

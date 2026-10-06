@@ -151,8 +151,10 @@ const FULL = [
   // re-hash + session invalidation / 404 / non-boolean active 400 /
   // self-deactivation 400 / unknown roleId 400 / UPDATE USER audit
   // / non-security-sensitive displayName-only update preserves
-  // sessions), plus /api/users/lookup legacy continuity proof
-  // (PROJECT_MANAGE-gated minimal active-user candidate shape).
+  // sessions).
+  // /api/users/lookup was removed with the Project Management
+  // extension in Core Scope Cleanup; the continuity proof no
+  // longer applies.
   // No DELETE /api/users route exists, and none is exercised.
   'server/v2-wave3e-users-ownership.test.js',
 
@@ -193,7 +195,6 @@ const FULL = [
   'server/inventory-transactions-query.test.js',
   'server/period.test.js',
   'server/period-ui.test.js',
-  'server/project-manager.test.js',
   'server/purchase-order-status-fix.test.js',
   'server/supplier-schema.test.js',
 
@@ -275,7 +276,6 @@ const FULL = [
   // ----- Business integrity stabilization -----
   'server/business-integrity-stabilization.test.js',
   'server/cost-stabilization.test.js',
-  'server/crm-stabilization.test.js',
   'server/manufacturing-stabilization.test.js',
   'server/quality-stabilization.test.js',
   'server/badge-defect.test.js',

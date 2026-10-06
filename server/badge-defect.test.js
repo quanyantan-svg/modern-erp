@@ -55,7 +55,6 @@ describe('Badge component — every JSX call site is supplied', () => {
   const pages = [
     'pages/projects-workflow.jsx',
     'pages/treasury-cost.jsx',
-    'pages/crm.jsx',
     'pages/quality.jsx',
   ];
 

@@ -1,11 +1,12 @@
-// Phase D hotfix regression coverage for two production blockers:
+// Phase D hotfix regression coverage for the remaining production blocker:
 //
-//   1. Project create blank screen — Uncaught ReferenceError: user is not defined
-//      inside ProjectModal when projects-workflow.jsx invoked setEditing({}).
-//   2. Production Order create button missing — frontend used non-canonical
-//      permission codes (PRODUCTION_CREATE / PRODUCTION_START / PRODUCTION_COMPLETE
-//      / PRODUCTION_CANCEL) that are NOT defined anywhere, so can() returned false
-//      for every user including admin.
+//   - Production Order create button missing — frontend used non-canonical
+//     permission codes (PRODUCTION_CREATE / PRODUCTION_START / PRODUCTION_COMPLETE
+//     / PRODUCTION_CANCEL) that are NOT defined anywhere, so can() returned false
+//     for every user including admin.
+//
+// The original Blocker 1 (Project create blank screen) coverage was removed
+// together with the Project Management extension in Core Scope Cleanup.
 //
 // This file mixes:
 //   • source-level regression assertions (importing the actual .jsx modules is not
@@ -65,73 +66,8 @@ after(async () => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-// ============================================================
-// Blocker 1 — Project create blank screen (source-level)
-// ============================================================
-
-describe('Blocker 1 — project create uses real authenticated user', () => {
-  test('ProjectModal function signature accepts { user, notify, value, onClose, onSaved }', () => {
-    const src = readSrc('pages/projects-workflow.jsx');
-    const match = src.match(/function\s+ProjectModal\s*\(\s*\{([^}]+)\}/);
-    assert.ok(match, 'ProjectModal signature must be present');
-    const params = match[1].split(',').map((s) => s.trim());
-    for (const required of ['user', 'notify', 'value', 'onClose', 'onSaved']) {
-      assert.ok(params.includes(required), `ProjectModal must accept "${required}"; got [${params.join(',')}]`);
-    }
-  });
-
-  test('Projects parent passes { user, notify } into ProjectModal', () => {
-    const src = readSrc('pages/projects-workflow.jsx');
-    const callSite = src.match(/<ProjectModal\b([^/>]*)\/?\s*>/);
-    assert.ok(callSite, 'ProjectModal must be invoked from Projects');
-    const props = callSite[1];
-    assert.ok(/\buser=\{user\}/.test(props), 'ProjectModal invocation must include user={user}');
-    assert.ok(/\bnotify=\{notify\}/.test(props), 'ProjectModal invocation must include notify={notify}');
-  });
-
-  test('ProjectModal references the real authenticated user (not a global / hardcoded admin)', () => {
-    const src = readSrc('pages/projects-workflow.jsx');
-    assert.ok(/function\s+ProjectModal[\s\S]*?manager_id:\s*user\?\.id/.test(src), 'ProjectModal must derive manager_id from user?.id');
-    // Defense in depth: no global / window / hardcoded user object
-    assert.equal(/window\.user|globalThis\.user/.test(src), false, 'must not reference a global user');
-  });
-
-  test('TimesheetModal also receives user and notify (same defect class — verified to prevent recurrence)', () => {
-    const src = readSrc('pages/projects-workflow.jsx');
-    const sig = src.match(/function\s+TimesheetModal\s*\(\s*\{([^}]+)\}/);
-    assert.ok(sig, 'TimesheetModal signature must be present');
-    const params = sig[1].split(',').map((s) => s.trim());
-    assert.ok(params.includes('user') && params.includes('notify'), 'TimesheetModal must accept user and notify');
-    const callSite = src.match(/<TimesheetModal\b([^/>]*)\/?\s*>/);
-    assert.ok(/\buser=\{user\}/.test(callSite[1]) && /\bnotify=\{notify\}/.test(callSite[1]), 'TimesheetModal invocation must pass user and notify');
-  });
-
-  test('TaskModal and WorkflowModal also receive notify (same defect class)', () => {
-    const src = readSrc('pages/projects-workflow.jsx');
-    for (const name of ['TaskModal', 'WorkflowModal']) {
-      const sigRe = new RegExp('function\\s+' + name + '\\s*\\(\\s*\\{([^}]+)\\}');
-      const sig = src.match(sigRe);
-      assert.ok(sig, `${name} signature must be present`);
-      const params = sig[1].split(',').map((s) => s.trim());
-      assert.ok(params.includes('notify'), `${name} must accept notify (otherwise .save() throws)`);
-      const callRe = new RegExp('<' + name + '\\b([^/>]*)\\/?\\s*>');
-      const callSite = src.match(callRe);
-      assert.ok(callSite, `${name} must be invoked`);
-      assert.ok(/notify=\{notify\}/.test(callSite[1]), `${name} invocation must pass notify={notify}`);
-    }
-  });
-
-  test('No remaining "user is not defined" pattern: project-modal scope does not reference bare user without destructuring', () => {
-    // Heuristic: every modal function signature must list user (or have it via closure).
-    // ProjectModal and TimesheetModal reference `user?.id`; the only way `user?.id` is
-    // safe is when `user` is destructured in the function signature.
-    const src = readSrc('pages/projects-workflow.jsx');
-    const usesUser = [...src.matchAll(/\buser\?\.id\b/g)].length;
-    assert.ok(usesUser >= 1, 'user?.id must still be referenced (manager / submitter default)');
-    const destructuredUsers = [...src.matchAll(/function\s+\w+\s*\(\s*\{[^}]*\buser\b[^}]*\}\s*\)/g)].length;
-    assert.ok(destructuredUsers >= 2, 'user must be destructured in at least 2 component signatures (ProjectModal + TimesheetModal)');
-  });
-});
+// Blocker 1 (Project create blank screen) was removed together with
+// the Project Management extension in Core Scope Cleanup.
 
 // ============================================================
 // Blocker 2 — Production permissions canonical alignment (source + backend)

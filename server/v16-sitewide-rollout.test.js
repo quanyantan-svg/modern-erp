@@ -35,7 +35,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 53);
+    assert.equal(keys.length, 47);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -59,9 +59,9 @@ describe('V1.6 site-wide rollout source contract', () => {
     ]);
   });
 
-  test('five utility groups remain separate', () => {
+  test('four utility groups remain separate after Core Scope Cleanup', () => {
     assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'utility').map((group) => group.key), [
-      'utility-flows', 'utility-finance', 'utility-extension', 'utility-advanced', 'utility-system',
+      'utility-flows', 'utility-finance', 'utility-advanced', 'utility-system',
     ]);
   });
 

@@ -20,8 +20,9 @@
 // (not the actor) whose password, role, or active flag actually
 // changed. The actor's own session is never invalidated.
 //
-// The /api/users/lookup endpoint (project-manager candidate lookup)
-// is intentionally NOT migrated in this wave and remains app-local.
+// No /api/users/lookup project-manager candidate lookup exists in
+// the active API surface; the helper was removed together with the
+// Project Management extension in Core Scope Cleanup.
 
 import { hashPassword, id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';

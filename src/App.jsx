@@ -21,7 +21,7 @@ const launcherIconNames = [
   'overview','dashboard','orders','approvals','purchaseOrders','suppliers','customers','products','warehouses','inventory',
   'purchaseReceipts','salesDeliveries','returns','inventoryTransactions','reports','accountsReceivable','accountsPayable',
   'paymentCollections','paymentDisbursements','accounting','cashJournals','bankAccounts','bills','fixedAssets','costAccounting',
-  'iqc','oqc','contacts','followups','activities','projects','tasks','timesheets','notifications','boms','routings','forecasts',
+  'iqc','oqc','notifications','boms','routings','forecasts',
   'mrpRuns','materialPlan','mrp','planningDocuments','productionOrders','inventoryScrap','inventoryPeriod','salesDiscount',
   'purchaseDiscount','users','cleanup','traceability',
 ];

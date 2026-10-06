@@ -188,25 +188,24 @@ describe('Teacher Acceptance Matrix — Live auth/me', () => {
     for (const forbidden of ['IQC_MANAGE', 'OQC_MANAGE', 'VOUCHER_APPROVE', 'PERIOD_CLOSE_MANAGE', 'ORDERS_APPROVE', 'PURCHASE_ORDERS_APPROVE', 'USERS_MANAGE', 'ROLES_MANAGE', 'COST_MANAGE']) {
       assert.ok(!me.body.user.permissions.includes(forbidden), `sales must not hold ${forbidden}`);
     }
-    assert.ok(me.body.user.permissions.includes('CRM_MANAGE'));
     assert.ok(me.body.user.permissions.includes('ORDERS_CREATE'));
   });
 
-  test('reviewer /me holds approvals but no Quality / Manufacturing / CRM / Cost / Accounting write', async () => {
+  test('reviewer /me holds approvals but no Quality / Manufacturing / Cost / Accounting write', async () => {
     const me = await fetchJson(baseUrl, tokens.reviewer, '/api/auth/me');
     assert.ok(me.body.user.permissions.includes('ORDERS_APPROVE'));
     assert.ok(me.body.user.permissions.includes('PURCHASE_ORDERS_APPROVE'));
-    for (const forbidden of ['IQC_MANAGE', 'OQC_MANAGE', 'CRM_MANAGE', 'VOUCHER_APPROVE', 'ORDERS_CREATE', 'USERS_MANAGE', 'COST_MANAGE']) {
+    for (const forbidden of ['IQC_MANAGE', 'OQC_MANAGE', 'VOUCHER_APPROVE', 'ORDERS_CREATE', 'USERS_MANAGE', 'COST_MANAGE']) {
       assert.ok(!me.body.user.permissions.includes(forbidden), `reviewer must not hold ${forbidden}`);
     }
   });
 
-  test('warehouse /me holds IQC/OQC write but no Cost / CRM / Accounting / Users / Production', async () => {
+  test('warehouse /me holds IQC/OQC write but no Cost / Accounting / Users / Production', async () => {
     const me = await fetchJson(baseUrl, tokens.warehouse, '/api/auth/me');
     assert.ok(me.body.user.permissions.includes('IQC_MANAGE'));
     assert.ok(me.body.user.permissions.includes('OQC_MANAGE'));
     assert.ok(me.body.user.permissions.includes('INVENTORY_TRANSFER_APPROVE'));
-    for (const forbidden of ['VOUCHER_APPROVE', 'COST_MANAGE', 'CRM_MANAGE', 'USERS_MANAGE', 'ROLES_MANAGE', 'PERIOD_CLOSE_MANAGE', 'ORDERS_CREATE', 'ORDERS_APPROVE']) {
+    for (const forbidden of ['VOUCHER_APPROVE', 'COST_MANAGE', 'USERS_MANAGE', 'ROLES_MANAGE', 'PERIOD_CLOSE_MANAGE', 'ORDERS_CREATE', 'ORDERS_APPROVE']) {
       assert.ok(!me.body.user.permissions.includes(forbidden), `warehouse must not hold ${forbidden}`);
     }
   });
@@ -216,7 +215,7 @@ describe('Teacher Acceptance Matrix — Live auth/me', () => {
     assert.ok(me.body.user.permissions.includes('VOUCHER_SUBMIT'));
     assert.ok(me.body.user.permissions.includes('REPORT_VIEW'));
     assert.ok(me.body.user.permissions.includes('ACCOUNTING_VIEW'));
-    for (const forbidden of ['VOUCHER_APPROVE', 'PERIOD_CLOSE_MANAGE', 'PERIOD_CLOSE_VIEW', 'USERS_MANAGE', 'ROLES_MANAGE', 'IQC_MANAGE', 'OQC_MANAGE', 'COST_MANAGE', 'COST_VIEW', 'CRM_MANAGE', 'ORDERS_CREATE']) {
+    for (const forbidden of ['VOUCHER_APPROVE', 'PERIOD_CLOSE_MANAGE', 'PERIOD_CLOSE_VIEW', 'USERS_MANAGE', 'ROLES_MANAGE', 'IQC_MANAGE', 'OQC_MANAGE', 'COST_MANAGE', 'COST_VIEW', 'ORDERS_CREATE']) {
       assert.ok(!me.body.user.permissions.includes(forbidden), `accounting must not hold ${forbidden}`);
     }
   });
@@ -252,8 +251,7 @@ describe('Teacher Acceptance Matrix — test_admin surface (smoke)', () => {
       '/api/bank-accounts', '/api/bills', '/api/fixed-assets', '/api/boms',
       '/api/production-orders', '/api/work-centers', '/api/routing-operations',
       '/api/labor-records', '/api/mrp-plans', '/api/product-costs', '/api/cost-rates',
-      '/api/iqc', '/api/oqc', '/api/supplier-evaluations', '/api/projects',
-      '/api/contacts', '/api/customer-followups', '/api/sales-activities',
+      '/api/iqc', '/api/oqc', '/api/supplier-evaluations',
       '/api/notifications', '/api/workflows', '/api/users', '/api/roles',
       '/api/departments', '/api/aux-projects', '/api/currencies',
       '/api/voucher-words', '/api/voucher-templates',
@@ -358,111 +356,8 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
     assert.equal(reject.status, 403, `sales reject must be 403, got ${reject.status}`);
   });
 
-  test('Sales CRM workflow: contacts list + create + edit relationship persists', async () => {
-    const list = await fetchJson(baseUrl, salesToken, '/api/contacts');
-    assert.equal(list.status, 200);
-    const created = await api(baseUrl, salesToken, '/api/contacts', {
-      method: 'POST',
-      body: {
-        customer_id: 'customer-001',
-        supplier_id: '',
-        name: '测试联系人',
-        gender: 'MALE',
-        position: '采购',
-        phone: '0755-1',
-        mobile: '13800000001',
-        email: 'c@test',
-        wechat: '',
-        birthday: '',
-        remark: '',
-        is_primary: false,
-      },
-    });
-    assert.equal(created.status, 200, created.body.error);
-    const contactId = created.body.id;
-    const patched = await api(baseUrl, salesToken, `/api/contacts/${contactId}`, {
-      method: 'PATCH',
-      body: { customer_id: 'customer-002', supplier_id: '', name: '切换到C002', gender: 'MALE', position: '', phone: '', mobile: '', email: '', wechat: '', birthday: '', remark: '', is_primary: false },
-    });
-    assert.equal(patched.status, 200, patched.body.error);
-    const row = db.prepare('SELECT customer_id FROM contacts WHERE id=?').get(contactId);
-    assert.equal(row.customer_id, 'customer-002');
-  });
-
-  test('Sales CRM workflow: follow-up create + PATCH updates same row', async () => {
-    const created = await api(baseUrl, salesToken, '/api/customer-followups', {
-      method: 'POST',
-      body: {
-        customer_id: 'customer-001',
-        followup_type: 'VISIT',
-        followup_date: '2026-09-02',
-        content: '初次拜访',
-        next_plan: '下周复访',
-        next_date: '2026-09-09',
-      },
-    });
-    assert.equal(created.status, 200, created.body.error);
-    const id = created.body.id;
-    const originalCount = db.prepare('SELECT count(*) c FROM customer_followups').get().c;
-    const patched = await api(baseUrl, salesToken, `/api/customer-followups/${id}`, {
-      method: 'PATCH',
-      body: {
-        customer_id: 'customer-002',
-        followup_type: 'PHONE',
-        followup_date: '2026-09-03',
-        content: '复访记录',
-        next_plan: '确认订单',
-        next_date: '2026-09-15',
-      },
-    });
-    assert.equal(patched.status, 200, patched.body.error);
-    assert.equal(db.prepare('SELECT count(*) c FROM customer_followups').get().c, originalCount);
-    const row = db.prepare('SELECT customer_id,content,handler_id FROM customer_followups WHERE id=?').get(id);
-    assert.equal(row.customer_id, 'customer-002');
-    assert.equal(row.content, '复访记录');
-    assert.equal(row.handler_id, 'user-sales');
-  });
-
-  test('Sales CRM workflow: sales activity create + edit persists exact cents', async () => {
-    const created = await api(baseUrl, salesToken, '/api/sales-activities', {
-      method: 'POST',
-      body: {
-        activity_type: 'VISIT',
-        title: '客户拜访',
-        content: '重点客户',
-        start_date: '2026-09-02',
-        end_date: '2026-09-02',
-        location: '深圳',
-        budget_cents: 50000,
-        actual_cost_cents: 42500,
-        participants: 'sales',
-        status: 'PLANNING',
-        result: '',
-      },
-    });
-    assert.equal(created.status, 200, created.body.error);
-    const id = created.body.id;
-    const patched = await api(baseUrl, salesToken, `/api/sales-activities/${id}`, {
-      method: 'PATCH',
-      body: {
-        activity_type: 'VISIT',
-        title: '客户拜访 - 已完成',
-        content: '',
-        start_date: '2026-09-02',
-        end_date: '2026-09-02',
-        location: '深圳',
-        budget_cents: 50000,
-        actual_cost_cents: 47200,
-        participants: 'sales',
-        status: 'COMPLETED',
-        result: '客户签约意向',
-      },
-    });
-    assert.equal(patched.status, 200, patched.body.error);
-    const row = db.prepare('SELECT actual_cost_cents,status,result FROM sales_activities WHERE id=?').get(id);
-    assert.equal(row.actual_cost_cents, 47200);
-    assert.equal(row.status, 'COMPLETED');
-  });
+  // Sales CRM workflow tests for contacts / customer-followups / sales-activities
+  // were removed together with the CRM extension in Core Scope Cleanup.
 
   test('Sales CANNOT mutate Quality (IQC/OQC), voucher approval, period, system', async () => {
     assert.equal((await api(baseUrl, salesToken, '/api/iqc', { method: 'POST', body: {} })).status, 403);
@@ -531,7 +426,7 @@ describe('Teacher Acceptance Matrix — test_reviewer', () => {
     assert.equal(approve.status, 200, approve.body.error);
   });
 
-  test('Reviewer CANNOT mutate Quality, Cost, Manufacturing, Accounting, System, CRM, Warehouse writes', async () => {
+  test('Reviewer CANNOT mutate Quality, Cost, Manufacturing, Accounting, System, Warehouse writes', async () => {
     const checks = [
       ['/api/iqc', 'POST', {}],
       ['/api/oqc', 'POST', {}],
@@ -542,9 +437,6 @@ describe('Teacher Acceptance Matrix — test_reviewer', () => {
       ['/api/accounting-vouchers', 'POST', {}],
       ['/api/users', 'POST', {}],
       ['/api/roles', 'POST', {}],
-      ['/api/contacts', 'POST', {}],
-      ['/api/customer-followups', 'POST', {}],
-      ['/api/sales-activities', 'POST', {}],
       ['/api/purchase-receipts', 'POST', {}],
       ['/api/sales-deliveries', 'POST', {}],
       ['/api/inventory-transfers', 'POST', {}],
@@ -669,8 +561,8 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
     assert.equal(patch.status, 409);
   });
 
-  test('Warehouse CANNOT access Cost / Accounting / CRM / Manufacturing writes', async () => {
-    for (const path of ['/api/product-costs', '/api/cost-rates', '/api/accounting-vouchers', '/api/contacts', '/api/customer-followups', '/api/sales-activities', '/api/users', '/api/roles', '/api/boms', '/api/production-orders']) {
+  test('Warehouse CANNOT access Cost / Accounting / Manufacturing writes', async () => {
+    for (const path of ['/api/product-costs', '/api/cost-rates', '/api/accounting-vouchers', '/api/users', '/api/roles', '/api/boms', '/api/production-orders']) {
       const res = await api(baseUrl, warehouseToken, path, { method: 'POST', body: {} });
       assert.equal(res.status, 403, `warehouse POST ${path} must be 403, got ${res.status}`);
     }
@@ -797,8 +689,8 @@ describe('Teacher Acceptance Matrix — test_accounting', () => {
     assert.equal(unclose.status, 403);
   });
 
-  test('Accounting CANNOT access Cost / CRM / Quality / Manufacturing / System / Warehouse writes', async () => {
-    for (const path of ['/api/product-costs', '/api/cost-rates', '/api/contacts', '/api/customer-followups', '/api/sales-activities', '/api/iqc', '/api/oqc', '/api/boms', '/api/production-orders', '/api/users', '/api/roles', '/api/purchase-receipts', '/api/sales-deliveries', '/api/inventory-transfers']) {
+  test('Accounting CANNOT access Cost / Quality / Manufacturing / System / Warehouse writes', async () => {
+    for (const path of ['/api/product-costs', '/api/cost-rates', '/api/iqc', '/api/oqc', '/api/boms', '/api/production-orders', '/api/users', '/api/roles', '/api/purchase-receipts', '/api/sales-deliveries', '/api/inventory-transfers']) {
       const res = await api(baseUrl, accountingToken, path, { method: 'POST', body: {} });
       assert.equal(res.status, 403, `accounting POST ${path} must be 403, got ${res.status}`);
     }
@@ -831,7 +723,6 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   const qualitySource = readFileSync(resolve(repoRoot, 'src', 'pages', 'quality.jsx'), 'utf8');
   const manufacturingSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'manufacturing.jsx'), 'utf8');
   const accountingSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'accounting.jsx'), 'utf8');
-  const crmSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'crm.jsx'), 'utf8');
   const logisticsFinanceSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'logistics-finance.jsx'), 'utf8');
   const treasuryCostSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'treasury-cost.jsx'), 'utf8');
   const masterDataSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'master-data.jsx'), 'utf8');
@@ -846,7 +737,7 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   });
 
   test('No current page module references the dead QC_MANAGE / BOM_MANAGE / PRODUCTION_CREATE codes', () => {
-    const sources = [qualitySource, manufacturingSource, accountingSource, crmSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, projectsWorkflowSource];
+    const sources = [qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, projectsWorkflowSource];
     for (const src of sources) {
       assert.doesNotMatch(src, /['"]QC_MANAGE['"]/);
       assert.doesNotMatch(src, /['"]QC_VIEW['"]/);
@@ -860,14 +751,10 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
     }
   });
 
-  test('IQC / OQC / Contacts / Followups / SalesActivities / Production modals receive user and notify props', () => {
+  test('IQC / OQC / Production modals receive user and notify props', () => {
     // The unified V1.3 quality page receives user + notify and passes execution rights into its source-driven modal.
     assert.match(qualitySource, /function\s+QualityPage\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
     assert.match(qualitySource, /function\s+QualityModal\s*\(\s*\{[^}]*\bnotify\b/);
-    // CRM modals — ContactModal / FollowupModal / ActivityModal receive notify
-    assert.match(crmSource, /function\s+ContactModal\s*\(\s*\{[^}]*\bnotify\b/);
-    assert.match(crmSource, /function\s+FollowupModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
-    assert.match(crmSource, /function\s+ActivityModal\s*\(\s*\{[^}]*\bnotify\b/);
     // BOM + ProductionOrder modals — receive user + notify
     assert.match(manufacturingSource, /function\s+BomModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
     assert.match(manufacturingSource, /function\s+ProductionOrderModal\s*\(\s*\{[^}]*\buser\b[^}]*\bnotify\b/);
@@ -885,12 +772,11 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
     }
   });
 
-  test('No /api/users usage in non-admin-visible pages (projects page is admin-only)', () => {
-    // After Quality + CRM stabilization, IQC / OQC / Contacts / Followups / SalesActivities / Production / Accounting
-    // pages must derive actors / inspectors from authenticated user / narrow lookups, not the admin-only /api/users.
-    // projects-workflow is admin-only (requires PROJECT_MANAGE), so its /api/users/lookup + /api/users usages are fine.
+  test('No /api/users usage in non-admin-visible pages (projects page was removed in Core Scope Cleanup)', () => {
+    // IQC / OQC / Production / Accounting pages must derive actors / inspectors
+    // from authenticated user / narrow lookups, not the admin-only /api/users.
     const nonAdminSources = [
-      qualitySource, manufacturingSource, accountingSource, crmSource, logisticsFinanceSource,
+      qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource,
       treasuryCostSource,
     ];
     for (const src of nonAdminSources) {
@@ -898,13 +784,12 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
     }
   });
 
-  test('IQCInspections / OQCInspections / Contacts / Followups / SalesActivities SSR-render without exceptions', async () => {
+  test('IQCInspections / OQCInspections SSR-render without exceptions', async () => {
     const { createElement } = await import('react');
     const { renderToStaticMarkup } = await import('react-dom/server');
     const quality = await vite.ssrLoadModule('/src/pages/quality.jsx');
-    const crm = await vite.ssrLoadModule('/src/pages/crm.jsx');
-    const user = { id: 'u', username: 'u', displayName: 'Test', permissions: ['IQC_MANAGE', 'OQC_MANAGE', 'CRM_MANAGE', 'CUSTOMERS_MANAGE'] };
-    for (const mod of [quality.IQCInspections, quality.OQCInspections, crm.Contacts, crm.Followups, crm.SalesActivities]) {
+    const user = { id: 'u', username: 'u', displayName: 'Test', permissions: ['IQC_MANAGE', 'OQC_MANAGE', 'CUSTOMERS_MANAGE'] };
+    for (const mod of [quality.IQCInspections, quality.OQCInspections]) {
       const element = createElement(mod, { user, notify: () => {} });
       const markup = renderToStaticMarkup(element);
       assert.ok(markup.length > 0);
@@ -941,8 +826,8 @@ describe('Teacher Acceptance Matrix — API 500 sweep on visible workflows', () 
       '/api/accounting-vouchers', '/api/accounting-subjects', '/api/cash-journals', '/api/bank-accounts',
       '/api/bills', '/api/fixed-assets', '/api/boms', '/api/production-orders', '/api/work-centers',
       '/api/routing-operations', '/api/labor-records', '/api/mrp-plans', '/api/product-costs',
-      '/api/cost-rates', '/api/iqc', '/api/oqc', '/api/supplier-evaluations', '/api/projects',
-      '/api/contacts', '/api/customer-followups', '/api/sales-activities', '/api/workflows',
+      '/api/cost-rates', '/api/iqc', '/api/oqc', '/api/supplier-evaluations',
+      '/api/workflows',
       '/api/users', '/api/roles', '/api/departments', '/api/aux-projects', '/api/currencies',
       '/api/period-closures',
     ];

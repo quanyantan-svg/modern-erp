@@ -220,12 +220,12 @@ describe('V1.6 P3 — sales-order document contract', () => {
     // OrderDetail for the sales surface while keeping OrderDocumentDetail as
     // the purchase renderer. The frozen product contract this phase must
     // preserve:
-    //   - canonical 53 enabled / 5 disabled route inventory
+    //   - canonical 47 enabled / 5 disabled route inventory
     //   - sales-orders and purchase-orders routes keep their access contract
     //   - OrderDocumentDetail still branches by kind so purchase detail is
     //     rendered through the legacy pipeline
     //   - PurchaseOrderDetail still wires kind="purchase"
-    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 47, 'canonical 47 enabled routes must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesRoute = enabledByRoute.get('orders');

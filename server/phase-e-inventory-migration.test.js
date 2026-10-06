@@ -22,8 +22,9 @@
 //     ROLES_MANAGE gates).
 //
 // What is intentionally not changed:
-//   - Frontend trees for projects / CRM / users-roles (warehouse users
-//     do not reach those routes; expanding audit may be done separately).
+//   - Frontend trees for users-roles (warehouse users do not reach that
+//     route; expanding audit may be done separately). Project / CRM
+//     extensions were removed in Core Scope Cleanup.
 //   - INVENTORY_TRANSFER_APPROVE / INVENTORY_TRANSFER_CREATE permission
 //     contract (warehouse already had INVENTORY_TRANSFER_CREATE; the
 //     missing or unregistered code paths are out of this task scope).
