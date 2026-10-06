@@ -89,7 +89,7 @@ const sorted = (items) => [...items].sort();
 //
 // V1.6 derives role pages as the intersection of:
 //   1. navGroups visibleNav (permission-filtered, disabled routes excluded)
-//   2. MOBILE_APPLICATION_GROUPS (six flowchart core groups + utility groups)
+//   2. MOBILE_APPLICATION_GROUPS (eight canonical business domains)
 //
 // Disabled routes, IQC/OQC, material-requirements-plan and notifications
 // are intentionally absent from the launcher — they remain reachable
@@ -113,31 +113,27 @@ const ROLE_BOUNDARY = {
 let EXPECTED_ROLE_PAGES = {};
 
 describe('M2 application metadata', () => {
-  test('defines six flowchart-aligned core domains followed by utility disclosures', () => {
+  test('defines the eight canonical business domains', () => {
     const coreGroups = mobileGroups.filter((g) => g.kind === 'domain');
     assert.deepEqual(
       coreGroups.map(({ key, label }) => [key, label]),
       [
-        ['master-data', '基础资料'],
-        ['sales', '销售管理'],
-        ['production', '生产管理'],
-        ['purchasing', '采购管理'],
-        ['inventory', '库存管理'],
-        ['analytics', '决策报表'],
+        ['master-engineering', 'Master & Engineering'],
+        ['sales-customer', 'Sales & Customer'],
+        ['planning', 'Planning'],
+        ['procurement-outsourcing', 'Procurement & Outsourcing'],
+        ['manufacturing-quality', 'Manufacturing & Quality'],
+        ['inventory-warehouse', 'Inventory & Warehouse'],
+        ['finance-operations', 'Finance Operations'],
+        ['accounting-analytics', 'Accounting & Analytics'],
       ]
     );
   });
 
-  test('exposes utility disclosures for business overview, finance, advanced and system', () => {
+  test('does not expose Platform or legacy utility groups as business domains', () => {
     const utilities = mobileGroups.filter((g) => g.kind === 'utility');
-    const keys = utilities.map((g) => g.key);
-    for (const expected of ['utility-flows', 'utility-finance', 'utility-advanced', 'utility-system']) {
-      assert.ok(keys.includes(expected), `utility disclosure "${expected}" must be present`);
-    }
-    // The legacy utility-extension group held the project / CRM
-    // launcher tiles; the cleanup removed the group entirely when
-    // its last tile was deleted.
-    assert.equal(keys.includes('utility-extension'), false, 'utility-extension must be removed after Project/CRM cleanup');
+    assert.deepEqual(utilities, []);
+    assert.equal(mobileGroups.some((group) => group.key === 'platform'), false);
   });
 
   test('contains no permission definitions or role/username branches', () => {
@@ -189,7 +185,6 @@ describe('M2 application metadata', () => {
   test('empty groups are removed at runtime', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     assert.ok(groups.every((group) => group.items.length > 0));
-    assert.ok(!groups.some((group) => group.key === 'analytics'));
   });
 
   test('admin role sees the populated 决策报表 group with five report entries', () => {
@@ -197,10 +192,10 @@ describe('M2 application metadata', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-admin'), {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
     });
-    const reports = groups.find((group) => group.key === 'analytics');
+    const reports = groups.find((group) => group.key === 'accounting-analytics');
     assert.ok(reports, 'admin must see the 决策报表 group');
     assert.deepEqual(
-      reports.items.map((item) => item.reportKey),
+      reports.items.filter((item) => item.reportKey).map((item) => item.reportKey),
       ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']
     );
   });
@@ -209,8 +204,8 @@ describe('M2 application metadata', () => {
     const user = { permissions: rolePermissions('role-accounting') };
     const reports = buildMobileApplicationGroups(visibleNavigationFor('role-accounting'), {
       isItemVisible: (item) => !item.reportKey || canViewDecisionReport(user, item.reportKey),
-    }).find((group) => group.key === 'analytics');
-    assert.deepEqual(reports.items.map((item) => item.reportKey), [
+    }).find((group) => group.key === 'accounting-analytics');
+    assert.deepEqual(reports.items.filter((item) => item.reportKey).map((item) => item.reportKey), [
       'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding',
     ]);
   });
@@ -294,7 +289,7 @@ describe('M2 launcher interaction and navigation contracts', () => {
     const groups = buildMobileApplicationGroups(visibleNavigationFor('role-sales'));
     const html = renderToStaticMarkup(createElement(MobileLauncher, { groups }));
     assert.match(html, /<button[^>]+aria-label="打开货品资料"/);
-    assert.match(html, /data-testid="v16-launcher-group-master-data"/);
+    assert.match(html, /data-testid="v16-launcher-group-master-engineering"/);
     assert.match(html, /data-testid="v16-launcher-tile-products"/);
     assert.match(html, /aria-label="应用"/);
     // V1.6 removed the numbered domain selector and per-tile description.

@@ -156,12 +156,13 @@ describe('P1B — application launcher contract', () => {
     assert.match(html, /data-testid="v16-launcher-group-master-data"/);
   });
 
-  test('mobile metadata exposes exactly six flowchart-aligned core groups', () => {
+  test('mobile metadata exposes exactly eight canonical business groups', () => {
     const groups = applicationMetadata.MOBILE_APPLICATION_GROUPS;
     const coreGroups = groups.filter((g) => g.kind === 'domain');
     const labels = coreGroups.map((g) => g.label);
     assert.deepEqual(labels, [
-      '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
+      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
+      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
     ]);
   });
 
@@ -170,7 +171,8 @@ describe('P1B — application launcher contract', () => {
       .filter((g) => g.kind === 'domain')
       .map((g) => g.key);
     assert.deepEqual(coreKeys, [
-      'master-data', 'sales', 'production', 'purchasing', 'inventory', 'analytics',
+      'master-engineering', 'sales-customer', 'planning', 'procurement-outsourcing',
+      'manufacturing-quality', 'inventory-warehouse', 'finance-operations', 'accounting-analytics',
     ]);
   });
 
@@ -185,50 +187,41 @@ describe('P1B — application launcher contract', () => {
       'material-requirements-plan must not be a primary launcher tile');
   });
 
-  test('master-data core group contains the expected items in order', () => {
-    const masterData = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'master-data');
+  test('Master & Engineering group contains engineering master items in order', () => {
+    const masterData = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'master-engineering');
     assert.deepEqual(
       masterData.items.map((item) => item.page),
-      ['products', 'boms', 'customers', 'suppliers', 'warehouses', 'product-routings']
+      ['products', 'boms', 'product-routings']
     );
   });
 
   test('sales core group excludes OQC as a tile', () => {
-    const sales = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'sales');
+    const sales = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'sales-customer');
     assert.deepEqual(
       sales.items.map((item) => item.page),
-      ['orders', 'sales-deliveries', 'returns', 'accounts-receivable', 'sales-discounts']
+      ['customers', 'orders', 'sales-deliveries', 'returns', 'sales-discounts']
     );
   });
 
   test('purchasing core group excludes IQC as a tile', () => {
-    const purchasing = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'purchasing');
+    const purchasing = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'procurement-outsourcing');
     assert.deepEqual(
       purchasing.items.map((item) => item.page),
-      ['purchase-instructions', 'purchase-requisitions', 'purchase-orders', 'purchase-receipts', 'returns', 'accounts-payable', 'purchase-discounts']
+      ['suppliers', 'purchase-requisitions', 'purchase-orders', 'purchase-receipts', 'returns', 'purchase-discounts']
     );
   });
 
   test('analytics core group exposes exactly five decision report keys', () => {
-    const analytics = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'analytics');
+    const analytics = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'accounting-analytics');
     assert.deepEqual(
-      analytics.items.map((item) => item.reportKey),
+      analytics.items.filter((item) => item.reportKey).map((item) => item.reportKey),
       ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']
     );
   });
 
-  test('utility disclosures include all currently active routes that are not core tiles', () => {
-    const utilityItems = applicationMetadata.MOBILE_APPLICATION_GROUPS
-      .filter((g) => g.kind === 'utility')
-      .flatMap((g) => g.items);
-    const utilityPages = new Set(utilityItems.map((i) => i.page));
-    for (const page of [
-      'business-overview', 'sales-invoices', 'payment-collections',
-      'supplier-bills', 'payment-disbursements', 'accounting', 'bank-accounts',
-      'quality-control-points', 'product-costs', 'cost-rates', 'users',
-    ]) {
-      assert.ok(utilityPages.has(page), `utility group must include ${page}`);
-    }
+  test('Platform routes stay outside business launcher groups', () => {
+    const launcherPages = new Set(applicationMetadata.MOBILE_APPLICATION_GROUPS.flatMap((group) => group.items.map((item) => item.page)));
+    for (const page of ['notifications','approvals','users','workflows','data-cleanup']) assert.equal(launcherPages.has(page), false, page);
   });
 
   test('disabled routes (cash-journals/bills/fixed-assets/workflows/data-cleanup) are not launcher tiles', () => {

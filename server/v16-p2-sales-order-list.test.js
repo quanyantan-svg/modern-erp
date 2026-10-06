@@ -218,9 +218,9 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
       assert.match(mobileShell, new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
     assert.doesNotMatch(mobileShell, /key:\s*'cloud'/);
-    // Six launcher groups.
+    // Eight canonical business launcher groups.
     const applicationMetadata = readSrc('navigation/applicationRegistry.js');
-    for (const group of ['基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表']) {
+    for (const group of ['Master & Engineering','Sales & Customer','Planning','Procurement & Outsourcing','Manufacturing & Quality','Inventory & Warehouse','Finance Operations','Accounting & Analytics']) {
       assert.match(applicationMetadata, new RegExp(group));
     }
     // Workspace sections.

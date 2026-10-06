@@ -24,9 +24,10 @@ export function routeRolloutDescriptor(routeKey) {
     state: V16_FROZEN_ROUTES.has(routeKey) ? 'frozen' : 'migrated',
     archetype: String(route?.archetype || 'WORKFLOW').toLowerCase(),
     module: ({
-      'master-data': 'master', sales: 'sales', production: 'production', purchasing: 'purchasing',
-      inventory: 'inventory', analytics: 'analytics', planning: 'production',
-      'planning-production': 'production', 'planning-purchasing': 'purchasing',
+      'master-engineering': 'master', 'sales-customer': 'sales', planning: 'planning',
+      'procurement-outsourcing': 'purchasing', 'manufacturing-quality': 'production',
+      'inventory-warehouse': 'inventory', 'finance-operations': 'finance',
+      'accounting-analytics': 'analytics', platform: 'platform',
     })[route?.domain] || 'master',
     responsiveMode: route?.responsiveMode || RESPONSIVE_MODES.LEGACY_ADAPTER,
   };

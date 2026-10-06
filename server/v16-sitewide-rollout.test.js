@@ -53,16 +53,14 @@ describe('V1.6 site-wide rollout source contract', () => {
     assert.doesNotMatch(app, /['"](?:system-health|commercial-go-live)['"]\s*:/);
   });
 
-  test('six core application groups remain in frozen order', () => {
+  test('eight canonical business groups remain in order', () => {
     assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').map((group) => group.key), [
-      'master-data', 'sales', 'production', 'purchasing', 'inventory', 'analytics',
+      'master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics',
     ]);
   });
 
-  test('four utility groups remain separate after Core Scope Cleanup', () => {
-    assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'utility').map((group) => group.key), [
-      'utility-flows', 'utility-finance', 'utility-advanced', 'utility-system',
-    ]);
+  test('Platform stays outside the business launcher', () => {
+    assert.deepEqual(MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'utility').map((group) => group.key), []);
   });
 
   test('contextual parent relationships all resolve to enabled routes', () => {
@@ -85,8 +83,8 @@ describe('V1.6 site-wide rollout source contract', () => {
   });
 
   test('five canonical decision-report keys remain valid launcher targets', () => {
-    const analytics = MOBILE_APPLICATION_GROUPS.find((group) => group.key === 'analytics');
-    assert.deepEqual(analytics.items.map((item) => item.reportKey), [
+    const analytics = MOBILE_APPLICATION_GROUPS.find((group) => group.key === 'accounting-analytics');
+    assert.deepEqual(analytics.items.filter((item) => item.reportKey).map((item) => item.reportKey), [
       'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements',
     ]);
   });

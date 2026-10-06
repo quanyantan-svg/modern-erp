@@ -62,8 +62,8 @@ test('P0-A registry preserves V1.6 rollout classification and application groups
   for (const route of ACTIVE_APPLICATION_ROUTES) {
     assert.equal(route.applicationGroup, route.launcherEntries[0]?.group || 'contextual', `${route.key} application group`);
   }
-  assert.equal(applicationRouteFor('orders').applicationGroup, 'sales');
-  assert.equal(applicationRouteFor('users').applicationGroup, 'utility-system');
+  assert.equal(applicationRouteFor('orders').applicationGroup, 'sales-customer');
+  assert.equal(applicationRouteFor('users').applicationGroup, 'contextual');
   assert.equal(applicationRouteFor('iqc').applicationGroup, 'contextual');
 });
 

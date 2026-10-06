@@ -25,8 +25,8 @@ test('D0 presentation projection reconciles exactly with canonical application r
   assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });
 
-test('D0 product semantics freeze seven domains and five approval families', () => {
-  assert.deepEqual(PRIMARY_DOMAINS.map((item) => item.label), ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析']);
+test('D0 product semantics freeze eight domains and five approval families', () => {
+  assert.deepEqual(PRIMARY_DOMAINS.map((item) => item.key), ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics']);
   assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']);
   assert.equal(APPROVAL_FAMILIES.includes('INVENTORY_TRANSFER'), false);
   const byRoute = Object.fromEntries(ROUTE_PRESENTATIONS.map((item) => [item.route, item]));

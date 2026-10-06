@@ -23,8 +23,8 @@ describe('V1.2 core page migration', () => {
     // CRM extension routes.
     const registry = read('src', 'navigation', 'applicationRegistry.js');
     for (const label of [
-      '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
-      '业务流程', '财务工具', '高级设置', '系统设置',
+      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
+      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
     ]) {
       assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
     }

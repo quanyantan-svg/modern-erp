@@ -7,26 +7,22 @@ import { PRIMARY_DOMAINS } from '../src/navigation/presentationMetadata.js';
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('D2 application workspace exposes V1.6 flowchart-aligned primary domains', () => {
-  // V1.6 P1B intentionally moves the launcher to six flowchart-aligned
-  // core groups. PRIMARY_DOMAINS (internal V1.5 metadata) is preserved at
-  // seven entries; the launcher's user-facing groups are a deliberate
-  // subset alignment that must not collapse internal semantics.
+test('D2 application workspace exposes the eight canonical business domains', () => {
   const domains = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain');
   assert.deepEqual(
     domains.map(({ key, label }) => [key, label]),
     [
-      ['master-data', '基础资料'],
-      ['sales', '销售管理'],
-      ['production', '生产管理'],
-      ['purchasing', '采购管理'],
-      ['inventory', '库存管理'],
-      ['analytics', '决策报表'],
+      ['master-engineering', 'Master & Engineering'],
+      ['sales-customer', 'Sales & Customer'],
+      ['planning', 'Planning'],
+      ['procurement-outsourcing', 'Procurement & Outsourcing'],
+      ['manufacturing-quality', 'Manufacturing & Quality'],
+      ['inventory-warehouse', 'Inventory & Warehouse'],
+      ['finance-operations', 'Finance Operations'],
+      ['accounting-analytics', 'Accounting & Analytics'],
     ]
   );
-  assert.equal(domains.some((group) => group.key === 'finance'), false);
-  // Internal V1.5 metadata still has seven entries for backend semantics.
-  assert.equal(PRIMARY_DOMAINS.length, 7);
+  assert.equal(PRIMARY_DOMAINS.length, 8);
 });
 
 test('D2 mobile application hierarchy discloses utility entries via details/summary', () => {

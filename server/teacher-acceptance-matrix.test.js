@@ -726,7 +726,8 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   const logisticsFinanceSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'logistics-finance.jsx'), 'utf8');
   const treasuryCostSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'treasury-cost.jsx'), 'utf8');
   const masterDataSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'master-data.jsx'), 'utf8');
-  const projectsWorkflowSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'projects-workflow.jsx'), 'utf8');
+  const platformNotificationsSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'platform-notifications.jsx'), 'utf8');
+  const platformWorkflowsSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'platform-workflows.jsx'), 'utf8');
 
   before(async () => {
     vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true }, appType: 'custom' });
@@ -737,7 +738,7 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   });
 
   test('No current page module references the dead QC_MANAGE / BOM_MANAGE / PRODUCTION_CREATE codes', () => {
-    const sources = [qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, projectsWorkflowSource];
+    const sources = [qualitySource, manufacturingSource, accountingSource, logisticsFinanceSource, treasuryCostSource, masterDataSource, platformNotificationsSource, platformWorkflowsSource];
     for (const src of sources) {
       assert.doesNotMatch(src, /['"]QC_MANAGE['"]/);
       assert.doesNotMatch(src, /['"]QC_VIEW['"]/);

@@ -188,20 +188,18 @@ test('P1 material plan: page source uses centralized status labels (no raw enum 
 // 5. Mobile launcher — three distinct planning entries, no duplicate
 // ---------------------------------------------------------------------------
 //
-// V1.6 P1B collapses the V1.5 计划/MRP domain into the 生产管理
-// core group; material-requirements-plan is no longer a primary tile
-// (the route remains reachable). Forecast, MRP and material-requirements
-// continue to appear under 生产管理.
+// Domain Alignment restores Planning as its canonical business domain;
+// material-requirements-plan remains a contextual route rather than a tile.
 
-test('P1 launcher: 生产管理 domain exposes forecast, MRP and material suggestions', () => {
+test('P1 launcher: Planning domain exposes forecast and MRP while material suggestions remain contextual', () => {
   const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
-  assertContains(launcherSource, "'production','生产管理'");
+  assertContains(launcherSource, "'planning','Planning'");
   assertContains(launcherSource, "['forecasts','计划预测'");
   assertContains(launcherSource, "['mrp-runs','MRP'");
   // material-requirements-plan is intentionally NOT a primary tile.
-  const productionLauncher = launcherSource.split("launcherGroup('production'")[1]?.split("launcherGroup('purchasing'")[0] || '';
-  assert.ok(!productionLauncher.includes("['material-requirements-plan'"),
-    'V1.6 P1B must not list material-requirements-plan as a primary launcher tile');
+  const planningLauncher = launcherSource.split("launcherGroup('planning'")[1]?.split("launcherGroup('procurement-outsourcing'")[0] || '';
+  assert.ok(!planningLauncher.includes("['material-requirements-plan'"),
+    'material-requirements-plan must remain a contextual Planning route');
 });
 
 test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础资料', () => {
@@ -212,10 +210,9 @@ test('P1 launcher: no duplicate legacy "MRP 物料需求计划" card in 基础�
   assert.ok(!launcherSource.includes("page: 'mrp'"), "'mrp' is reserved as a route alias only");
 });
 
-test('P1 launcher: 基础资料 no longer contains forecasts or mrp items', () => {
+test('P1 launcher: Master & Engineering does not contain planning items', () => {
   const launcherSource = readFileSync(resolve(repoRoot, 'src/navigation/applicationRegistry.js'), 'utf8');
-  // master-data group must not reference forecasts / mrp-runs / material-requirements-plan
-  const masterDataBlock = launcherSource.split("launcherGroup('master-data'")[1]?.split("launcherGroup('sales'")[0] || '';
+  const masterDataBlock = launcherSource.split("launcherGroup('master-engineering'")[1]?.split("launcherGroup('sales-customer'")[0] || '';
   assert.ok(!masterDataBlock.includes("'forecasts'"), 'forecasts still inside 基础资料 group');
   assert.ok(!masterDataBlock.includes("'mrp-runs'"), 'mrp-runs still inside 基础资料 group');
   assert.ok(!masterDataBlock.includes("'material-requirements-plan'"), 'material plan still inside 基础资料 group');

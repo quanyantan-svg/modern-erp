@@ -32,25 +32,27 @@ before(async () => {
 after(async () => vite?.close());
 
 describe('V1.6 P1.1 application visual contract', () => {
-  test('preserves the six ordered flowchart groups and explicit module identities', () => {
+  test('preserves the eight canonical domain groups and explicit module identities', () => {
     const groups = applicationMetadata.MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain');
     assert.deepEqual(groups.map(({ label }) => label), [
-      '基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表',
+      'Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing',
+      'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics',
     ]);
     assert.deepEqual(groups.map(({ module }) => module), [
-      'master', 'sales', 'production', 'purchasing', 'inventory', 'analytics',
+      'master', 'sales', 'planning', 'purchasing', 'production', 'inventory', 'finance', 'analytics',
     ]);
   });
 
   test('uses short launcher report labels without changing report keys', () => {
-    const analytics = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((group) => group.key === 'analytics');
-    assert.deepEqual(analytics.items.map(({ mobileLabel }) => mobileLabel), [
+    const analytics = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((group) => group.key === 'accounting-analytics');
+    const reports = analytics.items.filter(({ reportKey }) => reportKey);
+    assert.deepEqual(reports.map(({ mobileLabel }) => mobileLabel), [
       '销售统计', '销售未出货', '采购统计', '采购未交货', '库存异动',
     ]);
-    assert.deepEqual(analytics.items.map(({ reportKey }) => reportKey), [
+    assert.deepEqual(reports.map(({ reportKey }) => reportKey), [
       'sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements',
     ]);
-    assert.deepEqual(analytics.items.map(({ formalLabel }) => formalLabel), [
+    assert.deepEqual(reports.map(({ formalLabel }) => formalLabel), [
       '销售统计分析表', '销售未出货反应表', '采购统计分析表', '采购未交货反应表', '存货异动明细表',
     ]);
   });

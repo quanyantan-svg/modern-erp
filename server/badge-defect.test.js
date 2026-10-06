@@ -53,7 +53,7 @@ describe('Badge component — definition exists', () => {
 
 describe('Badge component — every JSX call site is supplied', () => {
   const pages = [
-    'pages/projects-workflow.jsx',
+    'pages/platform-notifications.jsx',
     'pages/treasury-cost.jsx',
     'pages/quality.jsx',
   ];

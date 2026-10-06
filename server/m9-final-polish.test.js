@@ -86,14 +86,12 @@ describe('M9 permission and terminology contracts', () => {
     for (const operational of ['SALES_DELIVERY', 'PURCHASE_RECEIPT', 'MATERIAL_ISSUE', 'PRODUCTION_RECEIPT', 'PAYMENT_COLLECTION']) assert.doesNotMatch(approvalsSource, new RegExp(operational));
   });
 
-  test('finance is contextual rather than an eighth primary domain', () => {
-    const masterStart = metadataSource.search(/launcherGroup\('master-data'/);
-    const salesStart = metadataSource.search(/launcherGroup\('sales'/);
-    assert.ok(masterStart >= 0 && salesStart > masterStart);
-    const master = metadataSource.slice(masterStart, salesStart);
-    assert.doesNotMatch(master, /accounts-receivable|payment-collections|accounts-payable|payment-disbursements/);
-    assert.doesNotMatch(metadataSource, /launcherGroup\('finance'/);
-    for (const page of ['accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements']) assert.match(metadataSource, new RegExp(page));
+  test('finance operations is a canonical domain separated from sales and procurement', () => {
+    const financeStart = metadataSource.search(/launcherGroup\('finance-operations'/);
+    const accountingStart = metadataSource.search(/launcherGroup\('accounting-analytics'/);
+    assert.ok(financeStart >= 0 && accountingStart > financeStart);
+    const finance = metadataSource.slice(financeStart, accountingStart);
+    for (const page of ['accounts-receivable', 'payment-collections', 'accounts-payable', 'payment-disbursements']) assert.match(finance, new RegExp(page));
   });
 
   test('visible labels use the frozen course vocabulary', () => {

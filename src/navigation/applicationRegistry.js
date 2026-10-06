@@ -1,15 +1,8 @@
-// V1.7 P0 — canonical frontend application registry.
+// Canonical frontend application registry.
 // Route, access, presentation, launcher and screen definitions live here only.
+import { BUSINESS_DOMAINS, DESKTOP_GROUP_ORDER } from './domainMetadata.js';
 
-export const PRIMARY_DOMAINS = Object.freeze([
-  { key: 'master-data', label: '基础资料' },
-  { key: 'sales', label: '销售' },
-  { key: 'planning', label: '计划 / MRP' },
-  { key: 'production', label: '生产' },
-  { key: 'purchasing', label: '采购' },
-  { key: 'inventory', label: '库存' },
-  { key: 'analytics', label: '经营分析' },
-]);
+export const PRIMARY_DOMAINS = BUSINESS_DOMAINS;
 
 export const APPROVAL_FAMILIES = Object.freeze([
   'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER',
@@ -20,66 +13,66 @@ const route = (route, title, domain, semanticLevel, template, level, navGroup, i
 });
 
 const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
-  route('business-overview','业务总览','cross-domain','FLOW_SUPPORTING','WORKFLOW','primary','概览','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
-  route('dashboard','工作台','cross-domain','FLOW_SUPPORTING','WORKFLOW','secondary','概览','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
-  route('orders','销售订单','sales','FLOW_PRIMARY','LIST','primary','销售与采购','orders',{any:['ORDERS_VIEW','ORDERS_CREATE']}),
-  route('approvals','业务审批','cross-domain','FLOW_SUPPORTING','WORKFLOW','primary','销售与采购','approvals',{permission:'ORDERS_APPROVE'},{mobileExposure:'approval-tab',desktopExposure:'global',approvalFamilies:APPROVAL_FAMILIES}),
-  route('purchase-orders','采购订单','purchasing','FLOW_PRIMARY','LIST','primary','销售与采购','purchaseOrders',{any:['PURCHASE_ORDERS_VIEW','PURCHASE_ORDERS_CREATE']}),
-  route('suppliers','供应商资料','master-data','FLOW_PRIMARY','LIST','primary','基础资料','suppliers',{any:['SUPPLIERS_VIEW','SUPPLIERS_MANAGE']}),
-  route('customers','客户资料','master-data','FLOW_PRIMARY','LIST','primary','基础资料','customers',{any:['CUSTOMERS_VIEW','CUSTOMERS_MANAGE']}),
-  route('products','货品资料','master-data','FLOW_PRIMARY','LIST','primary','基础资料','products',{any:['PRODUCTS_VIEW','PRODUCTS_MANAGE']}),
-  route('warehouses','仓库资料','master-data','FLOW_PRIMARY','LIST','primary','基础资料','warehouses',{any:['WAREHOUSES_VIEW','WAREHOUSES_MANAGE']}),
-  route('inventory','库存作业','inventory','FLOW_PRIMARY','WORKFLOW','primary','仓储物流','inventory',{any:['INVENTORY_VIEW']}),
-  route('purchase-receipts','采购入库','purchasing','FLOW_PRIMARY','LIST','primary','仓储物流','purchaseReceipts',{any:['PURCHASE_RECEIPTS_VIEW','PURCHASE_RECEIPTS_MANAGE']},{contextHint:'仓库验收'}),
-  route('sales-deliveries','销售出货','sales','FLOW_PRIMARY','LIST','primary','仓储物流','salesDeliveries',{any:['SALES_DELIVERIES_VIEW','SALES_DELIVERIES_MANAGE']}),
-  route('returns','退货管理','sales-purchasing','FLOW_SUPPORTING','LIST','secondary','仓储物流','returns',{any:['RETURNS_VIEW','RETURNS_MANAGE']}),
-  route('inventory-transactions','库存异动明细','analytics','REPORT','REPORT','contextual','仓储物流','inventoryTransactions',{any:['INVENTORY_VIEW']}),
-  route('traceability','批次 / 序列号追溯','inventory','FLOW_SUPPORTING','REPORT','secondary','仓储物流','traceability',{any:['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW']}),
-  route('inventory-scraps','存货报废','inventory','FLOW_PRIMARY','LIST','primary','仓储物流','inventoryScrap',{any:['INVENTORY_SCRAP_VIEW','INVENTORY_SCRAP_MANAGE']}),
-  route('inventory-month-end','存货月结','inventory','FLOW_PRIMARY','WORKFLOW','primary','仓储物流','inventoryPeriod',{any:['INVENTORY_PERIOD_CLOSE_VIEW','INVENTORY_PERIOD_CLOSE_MANAGE']}),
-  route('sales-discounts','销售折让','sales','FLOW_INTERNAL_STEP','LIST','contextual','仓储物流','salesDiscount',{any:['SALES_DISCOUNT_MANAGE']},{parentRoute:'accounts-receivable'}),
-  route('purchase-discounts','采购折让','purchasing','FLOW_INTERNAL_STEP','LIST','contextual','仓储物流','purchaseDiscount',{any:['PURCHASE_DISCOUNT_MANAGE']},{parentRoute:'accounts-payable'}),
-  route('sales-invoices','销售发票','sales','FLOW_INTERNAL_STEP','LIST','secondary','财务资金','accounting',{any:['AR_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-receivable'}),
-  route('accounts-receivable','应收结算','sales','FLOW_PRIMARY','WORKFLOW','primary','财务资金','accounting',{any:['AR_VIEW','COLLECTION_MANAGE']}),
-  route('payment-collections','收款 / 核销','sales','FLOW_INTERNAL_STEP','LIST','contextual','财务资金','cashJournals',{any:['AR_VIEW','COLLECTION_MANAGE']},{parentRoute:'accounts-receivable'}),
-  route('accounts-payable','应付结算','purchasing','FLOW_PRIMARY','WORKFLOW','secondary','财务资金','accounting',{any:['AP_VIEW','PAYMENT_MANAGE']}),
-  route('supplier-bills','供应商账单','purchasing','FLOW_INTERNAL_STEP','LIST','secondary','财务资金','accounting',{any:['AP_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-payable'}),
-  route('payment-disbursements','付款 / 核销','purchasing','FLOW_INTERNAL_STEP','LIST','contextual','财务资金','bankAccounts',{any:['AP_VIEW','PAYMENT_MANAGE']},{parentRoute:'accounts-payable'}),
-  route('accounting','会计凭证','analytics','FLOW_SUPPORTING','LIST','secondary','财务资金','accounting',{any:['ACCOUNTING_VIEW']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
-  route('bank-accounts','银行账户','master-data','ADVANCED_CONFIGURATION','CONFIG','contextual','财务资金','bankAccounts',{any:['BANK_ACCOUNTS_VIEW','BANK_ACCOUNTS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
-  route('decision-reports','经营分析','analytics','REPORT','REPORT','primary','决策报表','reports',{any:['REPORT_VIEW']}),
-  route('boms','BOM','production','ADVANCED_CONFIGURATION','CONFIG','secondary','生产制造','boms',{any:['PRODUCTION_ORDERS_CREATE']}),
-  route('product-routings','制品工序标准','production','ADVANCED_CONFIGURATION','CONFIG','secondary','生产制造','routings',{any:['ROUTING_VIEW','ROUTING_MANAGE']}),
-  route('production-orders','制令单','production','FLOW_PRIMARY','LIST','primary','生产制造','productionOrders',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_ORDERS_CREATE']}),
-  route('material-issues','用料出库','production','FLOW_PRIMARY','LIST','primary','生产制造','salesDeliveries',{any:['PRODUCTION_MATERIAL_ISSUE_MANAGE']}),
-  route('production-receipts','生产入库','production','FLOW_PRIMARY','LIST','primary','生产制造','purchaseReceipts',{any:['PRODUCTION_RECEIPT_MANAGE']}),
-  route('manufacturing-analytics','生产执行分析','analytics','REPORT','REPORT','secondary','生产制造','reports',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']},{mobileExposure:'contextual'}),
-  route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划与生产','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
-  route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划与生产','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
-  route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划与生产','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
-  route('production-instructions','生产指令','planning-production','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
-  route('purchase-instructions','采购指令','planning-purchasing','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
-  route('purchase-requisitions','请购单','purchasing','FLOW_PRIMARY','LIST','primary','计划与生产','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
-  route('product-costs','标准成本','production','ADVANCED_CONFIGURATION','CONFIG','contextual','成本与质量','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('cost-rates','成本费率','production','ADVANCED_CONFIGURATION','CONFIG','contextual','成本与质量','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('iqc','IQC 来料检验','purchasing','FLOW_INTERNAL_STEP','WORKFLOW','contextual','成本与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
-  route('oqc','OQC 出货检验','sales','FLOW_INTERNAL_STEP','WORKFLOW','contextual','成本与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
-  route('quality-control-points','质量规则','cross-domain','ADVANCED_CONFIGURATION','CONFIG','contextual','成本与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('notifications','通知中心','system','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['DASHBOARD_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
-  route('users','用户与权限','system','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','users',{any:['USERS_MANAGE','ROLES_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
+  route('business-overview','业务总览','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','primary','会计与分析','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
+  route('dashboard','工作台','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','secondary','会计与分析','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
+  route('orders','销售订单','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','ORDERS_CREATE']}),
+  route('approvals','业务审批','platform','FLOW_SUPPORTING','WORKFLOW','primary','系统设置','approvals',{permission:'ORDERS_APPROVE'},{mobileExposure:'approval-tab',desktopExposure:'global',approvalFamilies:APPROVAL_FAMILIES}),
+  route('purchase-orders','采购订单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseOrders',{any:['PURCHASE_ORDERS_VIEW','PURCHASE_ORDERS_CREATE']}),
+  route('suppliers','供应商资料','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','suppliers',{any:['SUPPLIERS_VIEW','SUPPLIERS_MANAGE']}),
+  route('customers','客户资料','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','customers',{any:['CUSTOMERS_VIEW','CUSTOMERS_MANAGE']}),
+  route('products','货品资料','master-engineering','FLOW_PRIMARY','LIST','primary','主数据与工程','products',{any:['PRODUCTS_VIEW','PRODUCTS_MANAGE']}),
+  route('warehouses','仓库资料','inventory-warehouse','FLOW_PRIMARY','LIST','primary','库存与仓储','warehouses',{any:['WAREHOUSES_VIEW','WAREHOUSES_MANAGE']}),
+  route('inventory','库存作业','inventory-warehouse','FLOW_PRIMARY','WORKFLOW','primary','库存与仓储','inventory',{any:['INVENTORY_VIEW']}),
+  route('purchase-receipts','采购入库','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseReceipts',{any:['PURCHASE_RECEIPTS_VIEW','PURCHASE_RECEIPTS_MANAGE']},{contextHint:'仓库验收'}),
+  route('sales-deliveries','销售出货','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','salesDeliveries',{any:['SALES_DELIVERIES_VIEW','SALES_DELIVERIES_MANAGE']}),
+  route('returns','退货管理','sales-customer','FLOW_SUPPORTING','LIST','secondary','销售与客户','returns',{any:['RETURNS_VIEW','RETURNS_MANAGE']}),
+  route('inventory-transactions','库存异动明细','inventory-warehouse','REPORT','REPORT','contextual','库存与仓储','inventoryTransactions',{any:['INVENTORY_VIEW']}),
+  route('traceability','批次 / 序列号追溯','inventory-warehouse','FLOW_SUPPORTING','REPORT','secondary','库存与仓储','traceability',{any:['INVENTORY_VIEW','PURCHASE_RECEIPTS_VIEW','SALES_DELIVERIES_VIEW']}),
+  route('inventory-scraps','存货报废','inventory-warehouse','FLOW_PRIMARY','LIST','primary','库存与仓储','inventoryScrap',{any:['INVENTORY_SCRAP_VIEW','INVENTORY_SCRAP_MANAGE']}),
+  route('inventory-month-end','存货月结','inventory-warehouse','FLOW_PRIMARY','WORKFLOW','primary','库存与仓储','inventoryPeriod',{any:['INVENTORY_PERIOD_CLOSE_VIEW','INVENTORY_PERIOD_CLOSE_MANAGE']}),
+  route('sales-discounts','销售折让','sales-customer','FLOW_INTERNAL_STEP','LIST','contextual','销售与客户','salesDiscount',{any:['SALES_DISCOUNT_MANAGE']},{parentRoute:'accounts-receivable'}),
+  route('purchase-discounts','采购折让','procurement-outsourcing','FLOW_INTERNAL_STEP','LIST','contextual','采购与委外','purchaseDiscount',{any:['PURCHASE_DISCOUNT_MANAGE']},{parentRoute:'accounts-payable'}),
+  route('sales-invoices','销售发票','finance-operations','FLOW_INTERNAL_STEP','LIST','secondary','财务运营','accounting',{any:['AR_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-receivable'}),
+  route('accounts-receivable','应收结算','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','accounting',{any:['AR_VIEW','COLLECTION_MANAGE']}),
+  route('payment-collections','收款 / 核销','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','cashJournals',{any:['AR_VIEW','COLLECTION_MANAGE']},{parentRoute:'accounts-receivable'}),
+  route('accounts-payable','应付结算','finance-operations','FLOW_PRIMARY','WORKFLOW','secondary','财务运营','accounting',{any:['AP_VIEW','PAYMENT_MANAGE']}),
+  route('supplier-bills','供应商账单','finance-operations','FLOW_INTERNAL_STEP','LIST','secondary','财务运营','accounting',{any:['AP_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-payable'}),
+  route('payment-disbursements','付款 / 核销','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','bankAccounts',{any:['AP_VIEW','PAYMENT_MANAGE']},{parentRoute:'accounts-payable'}),
+  route('accounting','会计凭证','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accounting',{any:['ACCOUNTING_VIEW']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
+  route('bank-accounts','银行账户','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','bankAccounts',{any:['BANK_ACCOUNTS_VIEW','BANK_ACCOUNTS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
+  route('decision-reports','经营分析','accounting-analytics','REPORT','REPORT','primary','会计与分析','reports',{any:['REPORT_VIEW']}),
+  route('boms','BOM','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','boms',{any:['PRODUCTION_ORDERS_CREATE']}),
+  route('product-routings','制品工序标准','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','routings',{any:['ROUTING_VIEW','ROUTING_MANAGE']}),
+  route('production-orders','制令单','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','productionOrders',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_ORDERS_CREATE']}),
+  route('material-issues','用料出库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','salesDeliveries',{any:['PRODUCTION_MATERIAL_ISSUE_MANAGE']}),
+  route('production-receipts','生产入库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','purchaseReceipts',{any:['PRODUCTION_RECEIPT_MANAGE']}),
+  route('manufacturing-analytics','生产执行分析','manufacturing-quality','REPORT','REPORT','secondary','制造与质量','reports',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']},{mobileExposure:'contextual'}),
+  route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
+  route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
+  route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
+  route('production-instructions','生产指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
+  route('purchase-instructions','采购指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
+  route('purchase-requisitions','请购单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
+  route('product-costs','标准成本','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('cost-rates','成本费率','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
+  route('oqc','OQC 出货检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
+  route('quality-control-points','质量规则','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('notifications','通知中心','platform','SYSTEM_SUPPORT','LIST','contextual','系统设置','notifications',{any:['DASHBOARD_VIEW']},{desktopExposure:'global',mobileExposure:'messages-tab'}),
+  route('users','用户与权限','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','users',{any:['USERS_MANAGE','ROLES_MANAGE']},{desktopExposure:'system-settings',mobileExposure:'system-settings'}),
 ]);
 
 const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
-  route('cash-journals','现金日记账','role-workspace','SYSTEM_SUPPORT','LIST','contextual','财务资金','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
-  route('bills','票据管理','role-workspace','SYSTEM_SUPPORT','LIST','contextual','财务资金','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
-  route('fixed-assets','固定资产','role-workspace','SYSTEM_SUPPORT','LIST','contextual','财务资金','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{enabled:false}),
-  route('workflows','审批流','system','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','approvals',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{enabled:false}),
-  route('data-cleanup','数据整理','system','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
+  route('cash-journals','现金日记账','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
+  route('bills','票据管理','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
+  route('fixed-assets','固定资产','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{enabled:false}),
+  route('workflows','审批流','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','approvals',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{enabled:false}),
+  route('data-cleanup','数据整理','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
 ]);
 
 export const TECHNICAL_ROUTE_ALIASES = Object.freeze({ mrp: 'material-requirements-plan' });
 
-export const DESKTOP_GROUP_ORDER = Object.freeze(['概览','销售与采购','基础资料','仓储物流','财务资金','决策报表','生产制造','计划与生产','成本与质量','系统设置']);
+export { DESKTOP_GROUP_ORDER };
 
 export const RESPONSIVE_MODES = Object.freeze({ LEGACY_ADAPTER: 'LEGACY_ADAPTER', NATIVE_RESPONSIVE: 'NATIVE_RESPONSIVE' });
 const loadScreenModule = (path) => {
@@ -89,7 +82,8 @@ const loadScreenModule = (path) => {
     case '../components/MobileApprovalCenter.jsx': return import('../components/MobileApprovalCenter.jsx');
     case '../pages/treasury-cost.jsx': return import('../pages/treasury-cost.jsx');
     case '../pages/quality.jsx': return import('../pages/quality.jsx');
-    case '../pages/projects-workflow.jsx': return import('../pages/projects-workflow.jsx');
+    case '../pages/platform-notifications.jsx': return import('../pages/platform-notifications.jsx');
+    case '../pages/platform-workflows.jsx': return import('../pages/platform-workflows.jsx');
     case '../pages/accounting.jsx': return import('../pages/accounting.jsx');
     case '../pages/commercial-go-live.jsx': return import('../pages/commercial-go-live.jsx');
     case '../pages/settlement.jsx': return import('../pages/settlement.jsx');
@@ -127,7 +121,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'fixed-assets': named('../pages/treasury-cost.jsx','FixedAssets'), 'product-costs': named('../pages/treasury-cost.jsx','ProductCosts'),
   'cost-rates': named('../pages/treasury-cost.jsx','CostRates'), iqc: named('../pages/quality.jsx','IQCInspections'),
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
-  notifications: named('../pages/projects-workflow.jsx','Notifications'), workflows: named('../pages/projects-workflow.jsx','Workflows'),
+  notifications: named('../pages/platform-notifications.jsx','Notifications'), workflows: named('../pages/platform-workflows.jsx','Workflows'),
   accounting: named('../pages/accounting.jsx','Accounting'), 'sales-invoices': named('../pages/commercial-go-live.jsx','SalesInvoices'),
   'supplier-bills': named('../pages/commercial-go-live.jsx','SupplierBills'), 'accounts-receivable': named('../pages/settlement.jsx','Receivables'),
   'payment-collections': named('../pages/settlement.jsx','Collections'), 'accounts-payable': named('../pages/settlement.jsx','Payables'),
@@ -198,22 +192,22 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 });
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
-  launcherGroup('master-data','基础资料','domain','master', [['products','货品资料','products'],['boms','BOM','boms'],['customers','客户资料','customers'],['suppliers','供应商资料','suppliers'],['warehouses','仓库资料','warehouses'],['product-routings','制品工序标准','routings']]),
-  launcherGroup('sales','销售管理','domain','sales', [['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['accounts-receivable','应收结算','accountsReceivable'],['sales-discounts','销售折让','salesDiscount']]),
-  launcherGroup('production','生产管理','domain','production', [['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-receipts','生产入库','purchaseReceipts']]),
-  launcherGroup('purchasing','采购管理','domain','purchasing', [['purchase-instructions','采购指令','planningDocuments'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['accounts-payable','应付结算','accountsPayable'],['purchase-discounts','采购折让','purchaseDiscount']]),
-  launcherGroup('inventory','库存管理','domain','inventory', [['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
-  launcherGroup('analytics','决策报表','domain','analytics', [
+  launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['boms','BOM','boms'],['product-routings','制品工序标准','routings']]),
+  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['sales-discounts','销售折让','salesDiscount']]),
+  launcherGroup('planning','Planning','domain','planning', [['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
+  launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['purchase-discounts','采购折让','purchaseDiscount']]),
+  launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-receipts','生产入库','purchaseReceipts'],['quality-control-points','质量规则','iqc']]),
+  launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
+  launcherGroup('finance-operations','Finance Operations','domain','finance', [['sales-invoices','销售发票','accounting'],['accounts-receivable','应收结算','accountsReceivable'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['accounts-payable','应付结算','accountsPayable'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['bank-accounts','银行账户','bankAccounts'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
+  launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
+    ['business-overview','业务总览','overview'],
+    ['accounting','会计凭证','accounting'],
     ['decision-reports','销售统计','reports',{reportKey:'sales-summary',formalLabel:'销售统计分析表'}],
     ['decision-reports','销售未出货','reports',{reportKey:'sales-outstanding',formalLabel:'销售未出货反应表'}],
     ['decision-reports','采购统计','reports',{reportKey:'purchase-summary',formalLabel:'采购统计分析表'}],
     ['decision-reports','采购未交货','reports',{reportKey:'purchase-outstanding',formalLabel:'采购未交货反应表'}],
     ['decision-reports','库存异动','reports',{reportKey:'inventory-movements',formalLabel:'存货异动明细表'}],
   ]),
-  launcherGroup('utility-flows','业务流程','utility',null, [['business-overview','业务总览','overview']]),
-  launcherGroup('utility-finance','财务工具','utility',null, [['sales-invoices','销售发票','accounting'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['accounting','会计凭证','accounting'],['bank-accounts','银行账户','bankAccounts']]),
-  launcherGroup('utility-advanced','高级设置','utility',null, [['quality-control-points','质量规则','iqc'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
-  launcherGroup('utility-system','系统设置','utility',null, [['users','用户与权限','users']]),
 ]);
 
 const launcherEntriesByRoute = new Map();

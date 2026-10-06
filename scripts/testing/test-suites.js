@@ -74,6 +74,9 @@ const HEAVY = [
 // KEEP / MERGE / DELETE / HEAVY classification for every file in this
 // manifest is recorded in docs/operations/testing.md §3.
 const FULL = [
+  // ----- Domain Alignment — canonical 8 Domains + Platform ownership -----
+  'server/v17-domain-alignment.test.js',
+
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
@@ -384,6 +387,9 @@ const FULL = [
 //
 // Invariant: every file in FAST must also be present in FULL.
 const FAST = [
+  // Canonical 8 Domains + Platform source-contract; no DB or Vite SSR.
+  'server/v17-domain-alignment.test.js',
+
   // V1.7 P0 frontend authoritative registry + RouteLocation + screen
   // identity. Pure function + source-contract, no DB, no Vite SSR.
   'server/v17-p0-frontend-application-architecture.test.js',

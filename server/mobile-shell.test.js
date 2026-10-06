@@ -339,8 +339,8 @@ describe('Canonical shell — preserved', () => {
 
   test('registry desktop projection still has all canonical group labels', () => {
     const groupLabels = [
-      '概览', '销售与采购', '基础资料', '仓储物流', '财务资金',
-      '生产制造', '计划与生产', '成本与质量', '系统设置',
+      '主数据与工程', '销售与客户', '计划', '采购与委外', '制造与质量',
+      '库存与仓储', '财务运营', '会计与分析', '系统设置',
     ];
     for (const label of groupLabels) {
       assert.ok(applicationRegistry.DESKTOP_GROUP_ORDER.includes(label), `desktop groups must still include "${label}"`);

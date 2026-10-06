@@ -80,11 +80,11 @@ test('P8 route inventory: every disabled route is one of the frozen five', () =>
   assert.deepEqual(actual, expected);
 });
 
-// ----- 2. Six canonical launcher groups -----
+// ----- 2. Eight canonical launcher groups -----
 
-test('P8 launcher: six canonical core application groups present in order', () => {
+test('P8 launcher: eight canonical business groups present in order', () => {
   const keys = MOBILE_APPLICATION_GROUPS.filter((g) => g.kind === 'domain').map((g) => g.key);
-  assert.deepEqual(keys, ['master-data', 'sales', 'production', 'purchasing', 'inventory', 'analytics']);
+  assert.deepEqual(keys, ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics']);
 });
 
 test('P8 launcher: every launcher tile references a legitimate enabled route', () => {
@@ -120,22 +120,23 @@ test('P8 launcher: target and documentType affordances are limited to canonical 
   );
 });
 
-test('P8 launcher: analytics group has exactly 5 decision-reports tiles with the 5 canonical reportKeys', () => {
-  const analytics = MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'analytics');
+test('P8 launcher: Accounting & Analytics has the 5 canonical decision-report targets', () => {
+  const analytics = MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'accounting-analytics');
   assert.ok(analytics, 'analytics group must exist');
-  assert.equal(analytics.items.length, 5, 'analytics launcher must have exactly 5 decision-report tiles');
-  const keys = analytics.items.map((item) => item.reportKey);
+  const reportItems = analytics.items.filter((item) => item.reportKey);
+  assert.equal(reportItems.length, 5, 'analytics launcher must have exactly 5 decision-report tiles');
+  const keys = reportItems.map((item) => item.reportKey);
   assert.deepEqual(keys, ['sales-summary', 'sales-outstanding', 'purchase-summary', 'purchase-outstanding', 'inventory-movements']);
-  const pages = new Set(analytics.items.map((item) => item.page));
+  const pages = new Set(reportItems.map((item) => item.page));
   assert.deepEqual([...pages], ['decision-reports'], 'analytics tiles must share a single decision-reports page');
 });
 
-test('P8 launcher: four utility disclosure groups remain distinct from the six core groups', () => {
+test('P8 launcher: Platform is not represented as a utility business group', () => {
   const utilityKeys = MOBILE_APPLICATION_GROUPS.filter((g) => g.kind === 'utility').map((g) => g.key);
   // utility-extension held the project / CRM launcher tiles; the
   // Core Scope Cleanup removed the group entirely when its last
   // tile was deleted.
-  assert.deepEqual(utilityKeys, ['utility-flows', 'utility-finance', 'utility-advanced', 'utility-system']);
+  assert.deepEqual(utilityKeys, []);
 });
 
 test('P8 launcher: disabled routes do not appear in any launcher group', () => {

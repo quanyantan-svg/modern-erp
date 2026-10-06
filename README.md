@@ -156,8 +156,8 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - 删除 CRM `contacts` 不等于删除 ERP Customer/Supplier Contact；
 - 客户联系人、收货地址、结算方、付款方等仍属于核心 Sales & Customer；
 - 若旧 contacts 数据可迁移为核心联系人，必须先迁移再删除；
-- `projects-workflow.jsx`、`server/modules/business.js` 当前包含 mixed responsibilities，不能整文件直接删除；
-- notifications / workflows 等 Platform 能力必须保留或先提取；
+- 原 `projects-workflow.jsx` 与 `server/modules/business.js` 已完成 Platform ownership 提取；
+- notifications / workflows 分别由明确的 Platform page/module 承载，workflows 用户 Route 仍保持 disabled；
 - 历史数据库表不得在普通代码清理中直接 DROP；
 - schema cleanup 必须单独完成数据保留、备份、SQLite/MySQL migration 与 rollback 设计。
 
@@ -318,9 +318,12 @@ log/
 关键责任：
 
 - `src/navigation/applicationRegistry.js`：最终用户 Route、权限、导航、Launcher、Presentation 和 Screen 的 canonical registry；
+- `src/navigation/domainMetadata.js`：8 Business Domains + Platform 的唯一 canonical taxonomy；
+- `src/pages/platform-notifications.jsx` / `platform-workflows.jsx`：Platform 通知与工作流用户界面 owner；
 - `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
 - `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；
 - `server/modules/`：逐步形成 domain canonical owner；
+- `server/modules/platform-notifications.js` / `platform-workflows.js`：Platform 通知与工作流 API owner；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap；
 - `server/migrations/`：增量 schema migration；

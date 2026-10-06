@@ -48,12 +48,12 @@ describe('P3 global design system', () => {
     assert.doesNotMatch(shell, /通讯录|敬请期待|云翼/);
   });
 
-  test('launcher has V1.6 flowchart-aligned business group names and permission filtering remains external', () => {
+  test('launcher has canonical eight-domain names and permission filtering remains external', () => {
     // V1.7 P0: launcher groups are now owned by applicationRegistry.js;
     // applicationMetadata.js is a compatibility projection. Permission
     // filtering continues to live in the registry, not in the projection.
     const registry = read('src', 'navigation', 'applicationRegistry.js');
-    for (const label of ['基础资料', '销售管理', '生产管理', '采购管理', '库存管理', '决策报表']) {
+    for (const label of ['Master & Engineering', 'Sales & Customer', 'Planning', 'Procurement & Outsourcing', 'Manufacturing & Quality', 'Inventory & Warehouse', 'Finance Operations', 'Accounting & Analytics']) {
       assert.match(registry, new RegExp(`launcherGroup\\('[^']+','${label}'`));
     }
     assert.doesNotMatch(metadata, /permission\s*:/);

@@ -48,28 +48,23 @@ test('D10 every active route has complete presentation metadata', () => {
     assert.ok(['FLOW_PRIMARY', 'FLOW_INTERNAL_STEP', 'FLOW_SUPPORTING', 'ADVANCED_CONFIGURATION', 'REPORT', 'SYSTEM_SUPPORT', 'EXTENSION_BUSINESS'].includes(item.semanticLevel), `${item.route} semanticLevel valid`);
     assert.ok(['LIST', 'DETAIL', 'FORM', 'WORKFLOW', 'REPORT', 'CONFIG'].includes(item.template), `${item.route} template valid`);
     assert.ok(['primary', 'secondary', 'contextual'].includes(item.level), `${item.route} level valid`);
-    assert.ok(['概览', '销售与采购', '基础资料', '仓储物流', '财务资金', '决策报表', '生产制造', '计划与生产', '成本与质量', '系统设置'].includes(item.navGroup), `${item.route} navGroup valid`);
+    assert.ok(['主数据与工程','销售与客户','计划','采购与委外','制造与质量','库存与仓储','财务运营','会计与分析','系统设置'].includes(item.navGroup), `${item.route} navGroup valid`);
     assert.ok(item.iconKey, `${item.route} iconKey required`);
     assert.ok(item.permission || (item.any && item.any.length), `${item.route} must declare permission or any`);
     assert.ok(presentationForRoute(item.route) === item, `${item.route} must be discoverable via presentationForRoute`);
   }
 });
 
-test('D10 freezes seven primary business domains and rejects finance as an eighth', () => {
+test('D10 freezes eight primary business domains with Finance separated from Accounting', () => {
   assert.deepEqual(
-    PRIMARY_DOMAINS.map((item) => item.label),
-    ['基础资料', '销售', '计划 / MRP', '生产', '采购', '库存', '经营分析'],
-    'Seven canonical primary domains',
+    PRIMARY_DOMAINS.map((item) => item.key),
+    ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics'],
+    'Eight canonical primary domains',
   );
-  assert.equal(PRIMARY_DOMAINS.length, 7, 'Domain count must be exactly 7');
-  assert.equal(PRIMARY_DOMAINS.some((item) => item.label === '财务'), false, 'Finance must not be promoted to an eighth primary domain');
+  assert.equal(PRIMARY_DOMAINS.length, 8, 'Domain count must be exactly 8');
   const primaryKeys = new Set(PRIMARY_DOMAINS.map((item) => item.key));
   for (const item of ROUTE_PRESENTATIONS) {
     if (item.semanticLevel !== 'FLOW_PRIMARY') continue;
-    if (item.domain === 'cross-domain') continue;
-    if (item.domain === 'sales-purchasing') continue;
-    if (item.domain === 'planning-production') continue;
-    if (item.domain === 'planning-purchasing') continue;
     assert.ok(primaryKeys.has(item.domain), `${item.route} FLOW_PRIMARY domain "${item.domain}" must be a canonical primary domain key`);
   }
 });

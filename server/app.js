@@ -3,9 +3,8 @@ import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
 import { adjustInventory } from './lib/stock.js';
-import {
-  createWorkflow, listNotifications, listWorkflows, markNotificationRead,
-} from './modules/business.js';
+import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
+import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
   listCurrencies, listVoucherWords, createVoucherWord, listVoucherTemplates,
 } from './modules/accounting-config.js';
@@ -697,6 +696,34 @@ ownedRouteTable.register({
   owner: 'server/modules/manufacturing-reference.js',
 });
 
+// Domain Alignment — Platform notifications and workflow foundation.
+// The HTTP contracts and handler-level authorization remain unchanged;
+// these descriptors only replace the legacy direct dispatch branches.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/notifications',
+  handler: ({ db, res, actor }) => listNotifications(db, res, actor),
+  owner: 'server/modules/platform-notifications.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/notifications/read',
+  handler: ({ db, req, res, actor }) => markNotificationRead(db, req, res, actor),
+  owner: 'server/modules/platform-notifications.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/workflows',
+  handler: ({ db, res, actor }) => listWorkflows(db, res, actor),
+  owner: 'server/modules/platform-workflows.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/workflows',
+  handler: ({ db, req, res, actor }) => createWorkflow(db, req, res, actor),
+  owner: 'server/modules/platform-workflows.js',
+});
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value ?? fallback);
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
@@ -900,7 +927,8 @@ async function handleApi(db, req, res, url) {
   // 1 voucher-words GET + 1 voucher-words POST + 1 voucher-templates
   // GET) + 4 manufacturing-reference routes (GET work-centers + POST
   // work-centers + GET routing-operations + POST routing-operations)
-  // = 65 owned descriptors. Confirm and reverse remain on legacy
+  // = 65 baseline descriptors + 4 Platform descriptors = 69 owned
+  // descriptors. Confirm and reverse remain on legacy
   // handleApi branches below because they touch
   // financial_credit_adjustments, accounting voucher generation,
   // and period-close gating.
@@ -1322,14 +1350,6 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/cost-rates' && req.method === 'POST') return createCostRate(db, req, res, actor);
   const costRateMatch = pathname.match(/^\/api\/cost-rates\/([^/]+)$/);
   if (costRateMatch && req.method === 'PATCH') return updateCostRate(db, req, res, actor, costRateMatch[1]);
-
-  // ============ Notifications and Workflows ============
-  if (pathname === '/api/notifications' && req.method === 'GET') return listNotifications(db, res, actor);
-  if (pathname === '/api/notifications/read' && req.method === 'POST') return markNotificationRead(db, req, res, actor);
-  if (pathname === '/api/workflows' && req.method === 'GET') return listWorkflows(db, res, actor);
-  if (pathname === '/api/workflows' && req.method === 'POST') return createWorkflow(db, req, res, actor);
-
-
 
   throw new HttpError(404, '接口不存在');
 }
