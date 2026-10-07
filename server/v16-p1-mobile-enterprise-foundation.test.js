@@ -191,7 +191,7 @@ describe('P1B — application launcher contract', () => {
     const masterData = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'master-engineering');
     assert.deepEqual(
       masterData.items.map((item) => item.page),
-      ['products', 'boms', 'product-routings']
+      ['products', 'engineering-reference', 'boms', 'product-routings', 'engineering-substitute', 'engineering-change']
     );
   });
 

@@ -1897,8 +1897,8 @@ API：
 
 - 所有新表 / 新字段 additive；
 - `addColumn` helper 复用既有 `v13-phase*.js` 模式；
-- `server/database/mysql-schema.js` 同步加入新表/新字段 DDL；
-- migration idempotent：`CREATE TABLE IF NOT EXISTS` / `addColumn` with check；
+- `server/database/mysql-schema.js` 从 canonical SQLite snapshot 生成 MySQL DDL，并对已存在 completion marker 的 MySQL schema 对比 `information_schema` 执行 additive table/column/ordinary-index reconciliation；
+- migration idempotent：缺表才 `CREATE TABLE IF NOT EXISTS`，缺列才 `ALTER TABLE ... ADD COLUMN`，缺普通索引才 `CREATE INDEX`；不 DROP/不重写业务数据；
 - 测试覆盖 SQLite + 具备 MySQL 受保护 disposable 测试库时 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。
 
 ### 23.13 Permission / RBAC
@@ -1922,6 +1922,8 @@ API：
 | D | `engineering-routing.test.js` | canonical convergence / operation refs / topology metadata / snapshot preservation |
 | E | `engineering-change.test.js` | transition / allowed operations by change type / impact preview / apply atomic / audit / rollback / use-up-old boundary |
 | F | `engineering-downstream.test.js` | production consumer stability / MRP consumer stability / outsource resolver contract
+| Frontend | `engineering-frontend-contract.test.js` + `scripts/acceptance/v17-engineering-frontend.mjs` | Registry/API contract；Edge 320/390/430/680 响应式与 runtime error |
+| MySQL schema | `engineering-mysql-schema.test.js` | 15 张工程表、28 个 additive 列、普通索引恢复与幂等性 |
 
 所有 focused tests 纳入 `scripts/testing/test-suites.js`。
 
@@ -1950,7 +1952,7 @@ API：
 - 8 Domain Launcher 保持当前 8 Domain；
 - `master-engineering` Launcher 改造：现有 3 项（products / boms / product-routings）保持 + 新增：
   - `engineering-reference` 工作面（9 类 master 入口 + Work Center 增强入口）以 single page + sheet 实现；
-- `engineering-change`、`engineering-substitute`、`engineering-configurable-boms` 通过 master-engineering Launcher 的 contextual 入口呈现；不再额外添加顶级 tile。
+- `engineering-substitute` 合并 Substitute + Configurable BOM 工作面，`engineering-change` 为 bounded ECO 工作面；两者均是 master-engineering Launcher 内的 canonical route，不创建第二套 executable screen。
 
 ---
 

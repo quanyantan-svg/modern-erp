@@ -98,11 +98,7 @@ function tableDefinition(table) {
   ]);
   const autoIncrement = /AUTOINCREMENT/i.test(table.sql);
   const primary = table.columns.filter((column) => column.pk).sort((a, b) => a.pk - b.pk);
-  const definitions = table.columns.map((column) => {
-    const type = mysqlType(column, indexed.has(column.name));
-    const inlinePrimary = primary.length === 1 && primary[0].name === column.name;
-    return `${quote(column.name)} ${type}${column.notnull || inlinePrimary ? ' NOT NULL' : ''}${mysqlDefault(column.dflt_value, type)}${autoIncrement && inlinePrimary ? ' AUTO_INCREMENT' : ''}`;
-  });
+  const definitions = table.columns.map((column) => columnDefinition(table, column, indexed, primary, autoIncrement));
   if (primary.length) definitions.push(`PRIMARY KEY (${primary.map((column) => quote(column.name)).join(',')})`);
   for (const index of table.indexes.filter((candidate) => candidate.origin === 'u' && candidate.columns.length && candidate.columns.length <= 4)) {
     definitions.push(`UNIQUE (${index.columns.map(quote).join(',')})`);
@@ -112,6 +108,45 @@ function tableDefinition(table) {
   }
   for (const check of extractChecks(table.sql)) definitions.push(`CHECK (${check})`);
   return `CREATE TABLE IF NOT EXISTS ${quote(table.name)} (\n  ${definitions.join(',\n  ')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`;
+}
+
+function columnDefinition(table, column, indexed = null, primary = null, autoIncrement = null) {
+  const indexedColumns = indexed || new Set([
+    ...table.indexes.flatMap((index) => index.columns),
+    ...table.foreignKeys.map((foreignKey) => foreignKey.from),
+  ]);
+  const primaryColumns = primary || table.columns.filter((item) => item.pk).sort((a, b) => a.pk - b.pk);
+  const hasAutoIncrement = autoIncrement ?? /AUTOINCREMENT/i.test(table.sql);
+  const type = mysqlType(column, indexedColumns.has(column.name));
+  const inlinePrimary = primaryColumns.length === 1 && primaryColumns[0].name === column.name;
+  return `${quote(column.name)} ${type}${column.notnull || inlinePrimary ? ' NOT NULL' : ''}${mysqlDefault(column.dflt_value, type)}${hasAutoIncrement && inlinePrimary ? ' AUTO_INCREMENT' : ''}`;
+}
+
+export function planMySqlAdditiveReconciliation(snapshot, current) {
+  const statements = [];
+  for (const table of snapshot.tables) {
+    if (!current.tables.has(table.name)) {
+      statements.push(tableDefinition(table));
+      continue;
+    }
+    const columns = current.columns.get(table.name) || new Set();
+    for (const column of table.columns) {
+      if (!columns.has(column.name)) statements.push(`ALTER TABLE ${quote(table.name)} ADD COLUMN ${columnDefinition(table, column)}`);
+    }
+  }
+  return statements;
+}
+
+export function planMySqlIndexReconciliation(snapshot, currentIndexes) {
+  const statements = [];
+  for (const table of snapshot.tables) {
+    const indexes = currentIndexes.get(table.name) || new Set();
+    for (const index of table.indexes) {
+      if (index.origin === 'u' || !index.columns.length || index.where || indexes.has(index.name)) continue;
+      statements.push(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${index.columns.map(quote).join(',')})`);
+    }
+  }
+  return statements;
 }
 
 export function captureSqliteSnapshot(createSqliteSnapshot, seedDemo) {
@@ -158,14 +193,29 @@ export function bootstrapMySql(adapter, snapshot) {
   if (existing.length && !complete) {
     throw new Error('Refusing partial MySQL schema without mysql_backend_metadata completion marker. Use an empty disposable database or a complete V1.3 schema.');
   }
-  const missingExisting = snapshot.tables.filter((table) => complete && !existingNames.has(table.name));
-  if (missingExisting.length) {
-    throw new Error(`MySQL schema completion marker exists but tables are missing: ${missingExisting.map((table) => table.name).join(', ')}`);
+  const currentColumns = new Map();
+  if (complete) {
+    for (const table of snapshot.tables) {
+      if (!existingNames.has(table.name)) continue;
+      const rows = adapter.prepare('SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?').all(table.name);
+      currentColumns.set(table.name, new Set(rows.map((row) => row.column_name)));
+    }
   }
 
   adapter.exec('SET FOREIGN_KEY_CHECKS=0');
   try {
-    for (const table of snapshot.tables) adapter.exec(tableDefinition(table));
+    const reconciliation = complete
+      ? planMySqlAdditiveReconciliation(snapshot, { tables: existingNames, columns: currentColumns })
+      : snapshot.tables.map(tableDefinition);
+    for (const statement of reconciliation) adapter.exec(statement);
+    if (complete) {
+      const currentIndexes = new Map();
+      for (const table of snapshot.tables) {
+        const rows = adapter.prepare('SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=?').all(table.name);
+        currentIndexes.set(table.name, new Set(rows.map((row) => row.index_name)));
+      }
+      for (const statement of planMySqlIndexReconciliation(snapshot, currentIndexes)) adapter.exec(statement);
+    }
     for (const table of snapshot.tables) {
       const primaryKeys = table.columns.filter((column) => column.pk).map((column) => column.name);
       for (const originalRow of table.rows) {
@@ -190,6 +240,8 @@ export function bootstrapMySql(adapter, snapshot) {
       }
       adapter.exec("CREATE TABLE mysql_backend_metadata (version VARCHAR(32) PRIMARY KEY, completed_at VARCHAR(64) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
       adapter.prepare('INSERT INTO mysql_backend_metadata(version,completed_at) VALUES(?,?)').run('v1.3-phase7a', new Date().toISOString());
+    } else {
+      adapter.prepare('UPDATE mysql_backend_metadata SET version=?, completed_at=?').run('v1.7-engineering', new Date().toISOString());
     }
     // Phase 7B correctness gate. All application write transactions lock this
     // singleton row before touching business rows, so independent Node

@@ -128,6 +128,10 @@ const FULL = [
   // engineering BOM resolver still resolves legacy ACTIVE rows.
   'server/engineering-downstream-integration.test.js',
 
+  // ----- V17 Master & Engineering Domain Closure — frontend contracts -----
+  'server/engineering-frontend-contract.test.js',
+  'server/engineering-mysql-schema.test.js',
+
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
@@ -444,6 +448,9 @@ const FAST = [
   // V17 Master & Engineering Domain Closure — Wave A: pure parser
   // tests for Workshop Formula evaluator (no DB, no Vite SSR).
   'server/engineering-reference.test.js',
+
+  // Master & Engineering route/API/responsive source contract.
+  'server/engineering-frontend-contract.test.js',
 
   // V1.7 P0 frontend authoritative registry + RouteLocation + screen
   // identity. Pure function + source-contract, no DB, no Vite SSR.

@@ -762,30 +762,30 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 ### 22.18 B3118 工程数据
 **主要目标 Domain：** Master & Engineering
 
-> 本节 Coverage 已由 2026-10-06 Master & Engineering Domain Closure Audit 复核。详细 evidence 见 `document.md §28`。
+> 本节 Coverage 已由 2026-10-07 Master & Engineering Domain Closure 实施与验收证据复核。详细 evidence 见 `document.md §28`。
 
 | Capability | 手册要求基线 | 当前 Modern ERP 基线 | Coverage | 主要 Gap / 后续方向 |
 |---|---|---|---|---|
-| 工作日历/班次 | 班次、工作日历、工作时间。 | 无 Shift/Shift Pattern/Work Calendar | `MISSING` | Wave A 新增 |
-| 车间公式 | 工期/活动汇报量/能力需求公式。 | 无 | `MISSING` | Wave A 新增（受限 grammar，禁 eval/Function） |
-| 资源/设备 | 资源、设备、工具等制造资源。 | Resource/Equipment 无；work_centers 基础 | `PARTIAL` | Wave A 新增 Resource/Equipment 并增强 Work Center |
-| 工序/作业 | 工序、基本活动、控制码等基础资料。 | `product_routing_operations` 已有；Operation/Activity/ControlCode master 缺失 | `PARTIAL` | Wave A 新增 Operation/Control Code/Basic Activity；Wave D 接入 |
-| 工作中心 | 工作中心及能力信息。 | `work_centers` 存在；缺 update/deactivate/calendar/activity 关联 | `PARTIAL` | Wave A 增强 |
-| BOM 生命周期 | 创建/版本/审核/生效/多层结构。 | `boms` / `bom_items` 存在；仅 ACTIVE/DISCONTINUED；无 purpose 维度；无 approval lifecycle | `SEMANTIC_MISMATCH` | Wave B additive：purpose/effective lifecycle + audit；不破坏 ACTIVE/DISCONTINUED |
-| BOM Purpose | 自制/通用/委外 BOM 区分。 | 单一 ACTIVE 维度，无 purpose | `SEMANTIC_MISMATCH` | Wave B 新增 purpose 维度 |
-| BOM 批量/树形维护 | 树形维护、批量维护和查询。 | flat list；无 multi-level tree；无 batch maintenance | `PARTIAL` | Wave B 新增 tree/where-used/batch preview-apply |
-| BOM 工程分析 | 多层 forward/reverse/where-used/consolidated/compare/cost | 仅 single-level list | `MISSING` | Wave B 新增全部工程分析 |
+| 工作日历/班次 | 班次、工作日历、工作时间。 | Shift/Pattern/Template/Calendar API + UI 已落地；班次支持 update，其余参考资料以 create/list 为主 | `PARTIAL` | 保留非 Shift 参考资料更新/停用闭环 Gap |
+| 车间公式 | 工期/活动汇报量/能力需求公式。 | 受限 grammar parser、安全创建/试算 UI/API，禁止 eval/Function | `COVERED` | 维持 parser 安全合同 |
+| 资源/设备 | 资源、设备、工具等制造资源。 | Resource/Equipment create/list/detail + Work Center 关联已落地 | `PARTIAL` | 保留资源/设备 update/deactivate 闭环 Gap |
+| 工序/作业 | 工序、基本活动、控制码等基础资料。 | Operation/Activity/ControlCode master 及 Routing enrichment 引用已落地 | `PARTIAL` | 保留 reference update/deactivate 闭环 Gap |
+| 工作中心 | 工作中心及能力信息。 | update/deactivate/calendar/capacity 关联、引用防护与独立权限已落地 | `COVERED` | 维持 lifecycle/reference guard |
+| BOM 生命周期 | 创建/版本/审核/生效/多层结构。 | purpose/effective/approval lifecycle、树形、审计与移动端工作面已落地 | `COVERED` | ACTIVE/DISCONTINUED 兼容保留 |
+| BOM Purpose | 自制/通用/委外 BOM 区分。 | `GENERAL / SELF_MAKE / OUTSOURCE` + effective resolver 已落地 | `COVERED` | 完整委外执行属跨域 Gap |
+| BOM 批量/树形维护 | 树形维护、批量维护和查询。 | multi-level tree + add/modify/remove/replace preview→confirm→apply 已落地 | `COVERED` | 保持 atomic apply |
+| BOM 工程分析 | 多层 forward/reverse/where-used/consolidated/compare/cost | tree/where-used/consolidated/compare/material-cost UI/API 已落地 | `COVERED` | 材料成本仅引用 canonical product cost |
 | 多组织分发 | 工程数据跨组织分发。 | 当前单组织 | `MISSING — OUT_OF_SCOPE_PRODUCT_BASELINE` | 随 Multi-Org Capability 实现；本 Domain Closure 不实施 |
-| 配置 BOM | 配置类产品/BOM（可选/可替换/可调）。 | 无 | `MISSING` | Wave C 新增 Engineering-side capability |
-| 替代料 | 主料/替代料、策略/方式/优先级/比例/生效期。 | 无 | `MISSING` | Wave C 新增 Substitute Scheme + resolver contract |
-| 工艺路线 | 工序顺序、工作中心、标准时间、资源、工具。 | `product_routings` canonical + `product_routing_operations` | `COVERED` | Wave D 加深：topology metadata + WorkCenter/Resource/ControlCode/Activity refs |
-| Routing Topology | linear/overlap/network/split/merge | 仅 sequence 顺序 | `PARTIAL` | Wave D 加 topology metadata；不实现完整 APS |
-| Engineering Change | 受控修改 BOM/路线并保留生效与历史。 | 无 ECO | `MISSING` | Wave E 新增 bounded ECO（IMMEDIATE/EFFECTIVE/USE_UP_OLD） |
-| Old Material Cleanup | 用完旧料；按当前库存/预计供应清理。 | 无 | `MISSING — CROSS_DOMAIN_DEPENDENCY` | Wave E bounded cleanup（仅库存当前事实）；预计供应标记 PARTIAL |
+| 配置 BOM | 配置类产品/BOM（可选/可替换/可调）。 | selectable/replaceable/modifiable/config group + 无副作用预览已落地 | `COVERED` | Sales 配置消费不在本 Domain |
+| 替代料 | 主料/替代料、策略/方式/优先级/比例/生效期。 | Substitute Scheme + deterministic resolver + UI 已落地 | `COVERED` | 完整 MRP 消费属 Planning 跨域 Gap |
+| 工艺路线 | 工序顺序、工作中心、标准时间、资源、工具。 | canonical routing + WorkCenter/Operation/ControlCode/Activity/Resource/Equipment enrichment 已落地 | `COVERED` | 保持 snapshot 不变 |
+| Routing Topology | linear/overlap/network/split/merge | LINEAR/NETWORK + PARALLEL/SPLIT/MERGE/ALTERNATE metadata 已落地 | `PARTIAL` | 完整 APS/overlap 计算不在本阶段 |
+| Engineering Change | 受控修改 BOM/路线并保留生效与历史。 | bounded ECO lifecycle/preview/approve/apply/audit/UI 已落地 | `COVERED` | 本结论限已批准 bounded scope |
+| Old Material Cleanup | 用完旧料；按当前库存/预计供应清理。 | 当前库存 cleanup candidate/log 已落地；预计入供尚未纳入 | `PARTIAL` | `CROSS_DOMAIN_DEPENDENCY`：Planning/Procurement 供应事实 |
 | Mold / Mold Combination | 模具/模具组合产品 | 无 | `MISSING — DEFER_SOURCE_DETAIL` | 用户手册 source 证据不足 |
 | Engineering Auxiliary Attributes | 复杂辅助属性 | 无 | `MISSING — DEFER_SOURCE_DETAIL` | 用户手册 source 证据不足 |
-| BOM 权限独立族 | BOM/ECO/Substitute 独立权限 | 当前复用 `PRODUCTION_ORDERS_VIEW/CREATE` | `SEMANTIC_MISMATCH` | Wave B 新增 `ENGINEERING_BOM_*` 等独立 permission；保留旧 permission 兼容 |
-| Routing Canonical Convergence | 单一 active mutable source | `product_routings`（canonical）+ legacy `routing_operations`（仍 active mutate） | `PARTIAL` | Wave D 收敛 legacy；保留 legacy 表与 FK；停止 active mutation path |
+| BOM 权限独立族 | BOM/ECO/Substitute 独立权限 | 12 个 ENGINEERING_* permission 与 backend fail-closed 已落地；旧权限仅保留兼容 | `COVERED` | 维持 SOD 与后端权威 |
+| Routing Canonical Convergence | 单一 active mutable source | `product_routings` 为 canonical；legacy table/FK 保留但 active mutation 已停止 | `COVERED` | 保留 legacy read compatibility |
 | Production Snapshot | BOM/Routing snapshot immutable | `bom_version_snapshot` / `routing_id_snapshot` / `production_order_routing_snapshots` 已存在 | `COVERED` | Wave F 保持 |
 
 详细 ME-01 ~ ME-31 矩阵与 Implementation Decision 见 `§28`。
@@ -1205,14 +1205,15 @@ Canonical product architecture 固定为：
 
 ### 28.5 Permission 约束
 
-新增最少、独立 `engineering_perms` 族：
+新增最少、独立 `engineering_perms` 族（共 12 个，与实现一致）：
 
+- `ENGINEERING_REFERENCE_VIEW` / `ENGINEERING_REFERENCE_MANAGE`（覆盖 Work Calendar / Shift / Shift Pattern / Calendar Template / Basic Activity / Workshop Formula / Resource / Equipment / Operation / Control Code）；
 - `ENGINEERING_BOM_VIEW` / `ENGINEERING_BOM_MANAGE` / `ENGINEERING_BOM_APPROVE`；
-- `ENGINEERING_ROUTING_VIEW` / `ENGINEERING_ROUTING_MANAGE`（已有 `ROUTING_VIEW`/`ROUTING_MANAGE` 保留兼容，新增 Engineering 独立 alias）；
-- `ENGINEERING_REFERENCE_VIEW` / `ENGINEERING_REFERENCE_MANAGE`（覆盖 Work Calendar / Shift / Resource / Equipment / Operation / Control Code / Activity / Work Center）；
-- `ENGINEERING_CHANGE_VIEW` / `ENGINEERING_CHANGE_MANAGE` / `ENGINEERING_CHANGE_APPROVE`；
 - `ENGINEERING_SUBSTITUTE_VIEW` / `ENGINEERING_SUBSTITUTE_MANAGE`；
-- `ENGINEERING_CONFIGURABLE_VIEW` / `ENGINEERING_CONFIGURABLE_MANAGE`。
+- `ENGINEERING_CONFIGURABLE_VIEW` / `ENGINEERING_CONFIGURABLE_MANAGE`；
+- `ENGINEERING_CHANGE_VIEW` / `ENGINEERING_CHANGE_MANAGE` / `ENGINEERING_CHANGE_APPROVE`。
+
+（注：原设计提到 `ENGINEERING_ROUTING_*` 独立 alias；实施时保留既有 `ROUTING_VIEW` / `ROUTING_MANAGE` 而不重复，遵循现有 RBAC 与 routing BOM Contract。）
 
 兼容策略：
 
@@ -1223,7 +1224,7 @@ Canonical product architecture 固定为：
 
 ### 28.6 Compatibility / 不变性约束
 
-- 不修改现有 47 enabled + 5 disabled route key；
+- 不删除或重命名现有 47 enabled + 5 disabled route key；本阶段依批准 Requirement 新增 3 条 Engineering canonical route，当前为 50 enabled + 5 disabled；
 - 不修改 BOM `/api/boms*` / Routing `/api/product-routings*` 既有 response/request 关键字段；新增字段以 **additive** 形式补齐；
 - 不修改 BOM ACTIVE/DISCONTINUED enum；purpose 作为 **additive 新字段**，默认 `GENERAL`；
 - 不修改 Work Center 既有字段（capacity_hours / efficiency / unit_cost_cents / active）；新字段以 additive migration 补齐；
@@ -1321,6 +1322,14 @@ Canonical product architecture 固定为：
 7. source semantics 不足；
 8. MySQL migration 无法保证 parity；
 9. 既有 Inventory/AR/AP/WIP/GL 原子合同必须破坏。
+
+### 28.10 Final Coverage / Evidence Reconciliation（2026-10-07）
+
+- 实施证据：Waves A–F backend/module/migration/focused integration 测试；Frontend 四个工作面及 Registry/Launcher 路由。
+- 响应式证据：真实 Edge 在 320 / 390 / 430 / 680 CSS px 访问 Engineering Reference / BOM / Substitute & Configurable / ECO，无页面水平溢出与 browser error。
+- Schema 证据：SQLite snapshot 含 15 张新工程表；MySQL bootstrap 对已完成 schema 执行 additive table/column/index reconciliation，覆盖 28 个既有表新增列并验证幂等。
+- 环境证据：当前主机未配置 `ERP_DB_HOST/PORT/NAME/USER/PASSWORD`；因此未执行会 reset/drop 的 live `test:mysql` / `test:mysql:concurrency`，不将结构合同测试伪报为 live MySQL PASS。
+- 最终保留 Gap：非 Shift 参考资料 update/deactivate；完整 APS；预计入供参与 Use-Up-Old；完整 MRP substitute 消费；Multi-Org/Mold/Auxiliary 的合法 deferred 范围。
 
 ---
 

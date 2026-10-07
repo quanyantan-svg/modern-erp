@@ -41,8 +41,11 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('accounting','会计凭证','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accounting',{any:['ACCOUNTING_VIEW']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
   route('bank-accounts','银行账户','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','bankAccounts',{any:['BANK_ACCOUNTS_VIEW','BANK_ACCOUNTS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
   route('decision-reports','经营分析','accounting-analytics','REPORT','REPORT','primary','会计与分析','reports',{any:['REPORT_VIEW']}),
-  route('boms','BOM','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','boms',{any:['PRODUCTION_ORDERS_CREATE']}),
+  route('boms','BOM','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','boms',{any:['ENGINEERING_BOM_VIEW','ENGINEERING_BOM_MANAGE','PRODUCTION_ORDERS_CREATE']}),
   route('product-routings','制品工序标准','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','routings',{any:['ROUTING_VIEW','ROUTING_MANAGE']}),
+  route('engineering-reference','工程基础资料','master-engineering','ADVANCED_CONFIGURATION','CONFIG','contextual','主数据与工程','engineeringReference',{any:['ENGINEERING_REFERENCE_VIEW','ENGINEERING_REFERENCE_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('engineering-substitute','替代料与可配置 BOM','master-engineering','ADVANCED_CONFIGURATION','CONFIG','contextual','主数据与工程','substitute',{any:['ENGINEERING_SUBSTITUTE_VIEW','ENGINEERING_SUBSTITUTE_MANAGE','ENGINEERING_CONFIGURABLE_VIEW','ENGINEERING_CONFIGURABLE_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('engineering-change','工程变更','master-engineering','ADVANCED_CONFIGURATION','CONFIG','contextual','主数据与工程','engineeringChange',{any:['ENGINEERING_CHANGE_VIEW','ENGINEERING_CHANGE_MANAGE','ENGINEERING_CHANGE_APPROVE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('production-orders','制令单','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','productionOrders',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_ORDERS_CREATE']}),
   route('material-issues','用料出库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','salesDeliveries',{any:['PRODUCTION_MATERIAL_ISSUE_MANAGE']}),
   route('production-receipts','生产入库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','purchaseReceipts',{any:['PRODUCTION_RECEIPT_MANAGE']}),
@@ -99,6 +102,9 @@ const loadScreenModule = (path) => {
     case '../pages/material-requirements-plan.jsx': return import('../pages/material-requirements-plan.jsx');
     case '../pages/planning-documents.jsx': return import('../pages/planning-documents.jsx');
     case '../pages/data-cleanup.jsx': return import('../pages/data-cleanup.jsx');
+    case '../pages/engineering-reference.jsx': return import('../pages/engineering-reference.jsx');
+    case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
+    case '../pages/engineering-change.jsx': return import('../pages/engineering-change.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -137,6 +143,9 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'mrp-runs': defaultScreen('../pages/mrp-runs.jsx'), 'material-requirements-plan': defaultScreen('../pages/material-requirements-plan.jsx'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
   'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'data-cleanup': defaultScreen('../pages/data-cleanup.jsx'),
+  'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
+  'engineering-substitute': defaultScreen('../pages/engineering-substitute.jsx'),
+  'engineering-change': defaultScreen('../pages/engineering-change.jsx'),
 });
 
 const DETAIL_TARGET_ROUTES = new Set([
@@ -144,6 +153,7 @@ const DETAIL_TARGET_ROUTES = new Set([
   'accounts-receivable','accounts-payable','payment-collections','payment-disbursements','forecasts','mrp-runs',
   'material-requirements-plan','production-orders','material-issues','production-receipts','product-routings','iqc','oqc',
   'production-instructions','purchase-instructions','purchase-requisitions',
+  'engineering-reference','engineering-substitute','engineering-change',
 ]);
 const ROUTE_QUERY_KEYS = Object.freeze({
   orders: ['documentType'], 'purchase-orders': ['documentType'], 'purchase-receipts': ['documentType'],
@@ -192,7 +202,7 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 });
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
-  launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['boms','BOM','boms'],['product-routings','制品工序标准','routings']]),
+  launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
   launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['sales-discounts','销售折让','salesDiscount']]),
   launcherGroup('planning','Planning','domain','planning', [['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['purchase-discounts','采购折让','purchaseDiscount']]),

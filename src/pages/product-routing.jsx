@@ -109,6 +109,7 @@ export default function ProductRoutings({ user, notify }) {
 function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }) {
   const canManage = can(user, 'ROUTING_MANAGE');
   const [detail, setDetail] = useState(value.create ? {} : null);
+  const [enrichment, setEnrichment] = useState(null);
   const [form, setForm] = useState({
     productId: value.productId || '', routingCode: '', routingName: '', version: 'V1',
     status: 'INACTIVE', notes: '', operations: [emptyOperation(10)],
@@ -121,6 +122,9 @@ function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }
     api('/api/product-routings/' + value.id)
       .then((result) => { setDetail(result.routing); setForm(toForm(result.routing)); })
       .catch((error) => notify(error.message, 'error'));
+    api(`/api/engineering/product-routings/${value.id}/enrichment`)
+      .then((result) => setEnrichment(result))
+      .catch(() => setEnrichment(null));
   };
   useEffect(() => { refresh(); }, []);
 
@@ -200,18 +204,39 @@ function ProductRoutingModal({ user, value, products, notify, onClose, onSaved }
         <label className="full">备注<span>{detail.notes || '—'}</span></label>
       </div>
       <div className="form-section-head routing-detail-heading">工序顺序</div>
+      {enrichment?.routing?.topology_type === 'NETWORK' && (
+        <p className="routing-topology-banner">拓扑：NETWORK（并行 / 分割 / 合并 / 替代关系）</p>
+      )}
       <div className="routing-operation-flow">
-        {sortedOperations.map((operation, index) => <div key={operation.id} className="routing-operation-step">
-          <article className="routing-operation-card">
-            <div className="routing-operation-card__sequence">{operation.sequence_no}</div>
-            <div><strong>{operation.operation_name}</strong><small className="mono">{operation.operation_code}</small></div>
-            <dl><div><dt>工作中心</dt><dd>{operation.work_center || '—'}</dd></div><div><dt>准备时间</dt><dd>{operation.setup_minutes} 分钟</dd></div><div><dt>单位工时</dt><dd>{operation.run_minutes_per_unit} 分钟</dd></div></dl>
-            {operation.notes && <p>{operation.notes}</p>}
-          </article>
-          {index < sortedOperations.length - 1 && <span className="routing-operation-arrow" aria-hidden="true">↓</span>}
-        </div>)}
+        {sortedOperations.map((operation, index) => {
+          const enr = (enrichment?.operations || []).find((o) => o.id === operation.id) || {};
+          return <div key={operation.id} className="routing-operation-step">
+            <article className="routing-operation-card">
+              <div className="routing-operation-card__sequence">{operation.sequence_no}</div>
+              <div><strong>{operation.operation_name}</strong><small className="mono">{operation.operation_code}</small></div>
+              <dl>
+                <div><dt>工作中心</dt><dd>{enr.work_center_name || operation.work_center || '—'}</dd></div>
+                <div><dt>作业</dt><dd>{enr.engineering_operation_code ? `${enr.engineering_operation_code} ${enr.engineering_operation_name || ''}` : '—'}</dd></div>
+                <div><dt>控制码</dt><dd>{enr.control_code_code ? `${enr.control_code_code} (${enr.control_code_name || ''})` : ''}</dd></div>
+                <div><dt>资源 / 设备</dt><dd>{enr.resource_code || '—'} / {enr.equipment_code || '—'}</dd></div>
+                <div><dt>准备 / 单位工时</dt><dd>{operation.setup_minutes} / {operation.run_minutes_per_unit} 分钟</dd></div>
+                <div><dt>委外 / 质量策略</dt><dd>{enr.is_outsource ? '是' : '否'} / {enr.quality_policy || '—'}</dd></div>
+              </dl>
+              {operation.notes && <p>{operation.notes}</p>}
+            </article>
+            {index < sortedOperations.length - 1 && <span className="routing-operation-arrow" aria-hidden="true">↓</span>}
+          </div>;
+        })}
         {!sortedOperations.length && <Empty text="该路线尚未维护工序"/>}
       </div>
+      {enrichment?.links?.length > 0 && (
+        <section className="routing-topology-links">
+          <h4>拓扑关联（NETWORK 关系）</h4>
+          <ul>{enrichment.links.map((link) => (
+            <li key={link.id}>{link.parent_name} <span className="mono">→ {link.link_type} →</span> {link.child_name}</li>
+          ))}</ul>
+        </section>
+      )}
       <div className="form-actions">
         {canManage && detail.status === 'INACTIVE' && <button type="button" className="primary" disabled={busy} onClick={() => void changeStatus('activate')}>启用</button>}
         {canManage && detail.status === 'INACTIVE' && (<ConfirmDelete label="制品工序标准" message="确定删除这条已停用且未被生产业务引用的工艺路线吗？" onConfirm={remove}/>) }

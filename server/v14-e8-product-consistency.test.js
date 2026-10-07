@@ -14,7 +14,7 @@ test('E8 audits the complete current user-facing application catalogue', () => {
   const pages = new Set(ROUTE_PRESENTATIONS.map((item) => item.route));
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
-  assert.equal(pages.size, 47);
+  assert.equal(pages.size, 50);
   assert.deepEqual(new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), disabled);
   for (const page of ['business-overview', 'orders', 'inventory-transactions', 'decision-reports', 'traceability']) {
     assert.ok(pages.has(page), `missing audited page ${page}`);

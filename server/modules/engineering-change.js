@@ -89,7 +89,7 @@ export function listEngineeringChanges(db, res, actor, url) {
   const params = [];
   if (ECO_STATUSES.has(status)) { where.push('eco.status=?'); params.push(status); }
   const rows = db.prepare(`SELECT eco.*, creator.display_name creator_name, approver.display_name approver_name,
-    target.product_code target_bom_product_code
+    target_p.code target_bom_product_code
     FROM engineering_change_orders eco
     LEFT JOIN users creator ON creator.id=eco.creator_id
     LEFT JOIN users approver ON approver.id=eco.approver_id

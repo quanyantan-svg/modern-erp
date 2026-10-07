@@ -47,12 +47,12 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 47 enabled + 5 disabled = 52 entries', () => {
+test('P8 route inventory: 50 enabled + 5 disabled = 55 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
-  assert.equal(ROUTE_PRESENTATIONS.length, 47, 'ROUTE_PRESENTATIONS must hold 47 enabled canonical routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 50, 'ROUTE_PRESENTATIONS must hold 50 enabled canonical routes');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 52);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 55);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {

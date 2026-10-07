@@ -77,6 +77,9 @@ describe('V17 Master & Engineering Change (Wave E)', () => {
       ],
     });
     assert.equal(create.status, 201, create.data.error);
+    const changeList = await api('GET', '/api/engineering/changes', adminAuth);
+    assert.equal(changeList.status, 200, changeList.data.error);
+    assert.equal(changeList.data.changes.find((item) => item.id === create.data.id)?.target_bom_product_code, 'ECO-P-1');
     const submit = await api('POST', `/api/engineering/changes/${create.data.id}/submit`, adminAuth);
     assert.equal(submit.status, 200);
     const approve = await api('POST', `/api/engineering/changes/${create.data.id}/approve`, adminAuth);

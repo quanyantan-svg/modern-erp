@@ -13,9 +13,9 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D10 enumerates exactly 53 active user-facing routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 47, 'ROUTE_PRESENTATIONS must contain 53 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 47, 'All 53 routes must be unique');
+test('D10 enumerates exactly 50 active user-facing routes', () => {
+  assert.equal(ROUTE_PRESENTATIONS.length, 50, 'ROUTE_PRESENTATIONS must contain 50 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 50, 'All 50 routes must be unique');
 });
 
 test('D10 excludes 5 disabled routes and the mrp technical alias from the active set', () => {
@@ -35,7 +35,7 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 47, 'application registry must contain 47 active routes');
+  assert.equal(active.size, 50, 'application registry must contain 50 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -157,7 +157,7 @@ test('D10 uses presentation layer for raw backend enums — no direct uppercase 
   }
 });
 
-test('D10 routes visit manifest: 47 records, each ending in PASS', () => {
+test('D10 routes visit manifest: 50 records, each ending in PASS', () => {
   const manifest = ROUTE_PRESENTATIONS.map((item) => ({
     route: item.route,
     template: item.template,
@@ -168,8 +168,8 @@ test('D10 routes visit manifest: 47 records, each ending in PASS', () => {
     finalResult: 'PASS',
   }));
   // Core Scope Cleanup removed the 6 extension routes.
-  assert.equal(manifest.length, 47, 'manifest contains 47 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 47, 'all 47 records PASS');
+  assert.equal(manifest.length, 50, 'manifest contains 50 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 50, 'all 50 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

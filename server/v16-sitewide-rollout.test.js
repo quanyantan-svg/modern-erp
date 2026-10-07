@@ -35,7 +35,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 47);
+    assert.equal(keys.length, 50);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -99,7 +99,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('every enabled route has a final frozen or migrated implementation classification', () => {
     for (const { route, line } of enabledMatrixRows()) {
-      assert.match(line, /\| V1\.6 (?:FROZEN|MIGRATED) \| PASS \|/, `${route} needs final implementation state`);
+      assert.match(line, /\| (?:V1\.6 (?:FROZEN|MIGRATED)|V1\.7 ADDED) \| PASS \|/, `${route} needs final implementation state`);
       assert.doesNotMatch(line, /UNKNOWN|TODO|NOT REVIEWED|FRONTEND-LIMITED/);
     }
   });

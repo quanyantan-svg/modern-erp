@@ -51,20 +51,19 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - MySQL 8 一等运行路径；
 - applicationRegistry / RouteLocation / MobileShell；
 - route ownership、domain module extraction、测试分层和部署基础。
+- Master & Engineering 工程基础资料、BOM 治理/分析、替代料与可配置 BOM、Routing enrichment/topology、bounded ECO 及移动端工作面。
 
 这些能力属于已有产品资产。后续新版 ERP 采用**渐进式演进**，不进行整仓重写。
 
 ## 当前主要 Gap
 
-### Master & Engineering
+### Master & Engineering 仍保留的跨域 / deferred Gap
 
-- Organization / Organization Scope
-- Bin / 仓位
-- Resource / Equipment
-- Work Calendar / Shift
-- Substitute Material
-- ECO / Engineering Change
-- 更完整的 BOM/Routing 生命周期
+- Organization / Organization Scope（Multi-Organization 基线外）
+- Bin / 仓位（Inventory & Warehouse 所有）
+- 完整 MRP substitute 消费与完整委外执行
+- 完整 APS / MES / HMI
+- Mold / Mold Combination 与复杂 Auxiliary Attributes（缺原手册细节证据）
 
 ### Sales & Customer
 
@@ -320,12 +319,14 @@ log/
 - `src/navigation/applicationRegistry.js`：最终用户 Route、权限、导航、Launcher、Presentation 和 Screen 的 canonical registry；
 - `src/navigation/domainMetadata.js`：8 Business Domains + Platform 的唯一 canonical taxonomy；
 - `src/pages/platform-notifications.jsx` / `platform-workflows.jsx`：Platform 通知与工作流用户界面 owner；
+- `src/pages/engineering-reference.jsx` / `engineering-substitute.jsx` / `engineering-change.jsx`：Master & Engineering 工程资料、替代/配置、ECO 工作面；
+- `src/components/BomGovernancePanel.jsx`：BOM lifecycle、tree/analysis 与 batch preview→apply 可复用工作面；
 - `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
 - `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；
 - `server/modules/`：逐步形成 domain canonical owner；
 - `server/modules/platform-notifications.js` / `platform-workflows.js`：Platform 通知与工作流 API owner；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
-- `server/database/`：MySQL adapter / worker / protocol / schema bootstrap；
+- `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；
 - `server/migrations/`：增量 schema migration；
 - `scripts/testing/`：suite manifest、runner 和 governance；
 - `docs/archive/`：历史证据，不是当前规格；

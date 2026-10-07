@@ -55,14 +55,15 @@ after(async () => {
 });
 
 describe('Manufacturing surface and permissions', () => {
-  test('live manufacturing permissions are registered and no BOM_MANAGE frontend gate remains', () => {
+  test('live manufacturing and engineering BOM permissions are registered', () => {
     const registered = new Set(PERMISSIONS.map(([code]) => code));
     for (const permission of ['PRODUCTION_ORDERS_VIEW', 'PRODUCTION_ORDERS_CREATE', 'PRODUCTION_ORDERS_START', 'PRODUCTION_ORDERS_COMPLETE', 'MRP_VIEW', 'MRP_MANAGE', 'WORK_CENTERS_VIEW', 'WORK_CENTERS_MANAGE', 'ROUTING_VIEW', 'ROUTING_MANAGE', 'PRODUCTION_COSTS_VIEW', 'PRODUCTION_COSTS_MANAGE']) {
       assert.ok(registered.has(permission), `${permission} must be registered`);
     }
     const manufacturing = readFileSync(new URL('../src/pages/manufacturing.jsx', import.meta.url), 'utf8');
     assert.match(manufacturing, /PRODUCTION_ORDERS_CREATE/);
-    assert.doesNotMatch(manufacturing, /BOM_MANAGE/);
+    assert.match(manufacturing, /ENGINEERING_BOM_MANAGE/);
+    assert.doesNotMatch(manufacturing, /can\(user, ['"]BOM_MANAGE['"]\)/);
     assert.doesNotMatch(manufacturing, /开发中/);
   });
 

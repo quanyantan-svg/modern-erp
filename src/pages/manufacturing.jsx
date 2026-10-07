@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
-import { Active, ConfirmDelete, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
+import { Active, Empty, FormActions, Loading, Modal, OrderTable, Panel, Status, Toolbar, can, dateTime, money, quantity } from '../components/ui.jsx';
 import { AppLink, useAppNavigation } from '../navigation/AppNavigationContext.jsx';
 import TrackingAllocationEditor from '../components/TrackingAllocationEditor.jsx';
 import { copySourceAllocations } from '../lib/tracking.js';
 import { presentBusinessValue } from '../lib/presentation.js';
-import { BusinessAction, BusinessPageHeader, BusinessPageShell, HelpDisclosure } from '../components/design-system.jsx';
+import { BusinessAction, BusinessPageHeader, BusinessPageShell, BusinessActionBar, CompactRecordList, RecordCard, HelpDisclosure } from '../components/design-system.jsx';
+import { BomApprovalBadge, BomAnalysisActions, BomBatchMaintenance, BomLifecycleActions, BomTree } from '../components/BomGovernancePanel.jsx';
 
 const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
@@ -15,65 +16,130 @@ export function Boms({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
   const [view, setView] = useState(null);
+  const [detail, setDetail] = useState(null);
   const [products, setProducts] = useState([]);
   const [filterProduct, setFilterProduct] = useState('');
-  const load = () => api('/api/boms?product=' + filterProduct).then((r) => setItems(r.boms)).catch((e) => notify(e.message, 'error'));
+  const [tab, setTab] = useState('list');
+  const canManageBom = can(user, 'ENGINEERING_BOM_MANAGE');
+  const canApproveBom = can(user, 'ENGINEERING_BOM_APPROVE');
+  const load = () => api('/api/engineering/boms?product=' + filterProduct)
+    .then((r) => setItems(r.boms || []))
+    .catch((e) => notify(e.message, 'error'));
   useEffect(() => {
     api('/api/products').then((r) => setProducts(r.products)).catch((e) => notify(e.message, 'error'));
     void load();
   }, [filterProduct]);
+  const filtered = items.filter((b) => !search || [b.product_code, b.version, b.purpose, b.approval_status, b.creator_name].join('|').toLowerCase().includes(search.toLowerCase()));
   return <BusinessPageShell className="boms-v15" width="rail">
-    <BusinessPageHeader title="BOM" primaryAction={can(user, 'PRODUCTION_ORDERS_CREATE') && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建 BOM</BusinessAction>} help={<HelpDisclosure summary="版本说明"><p>BOM 按产品与版本管理；只有启用版本进入计划与生产快照，历史版本保持可追溯。</p></HelpDisclosure>}/>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索BOM" extra={<select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}><option value="">全部产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>}/>
-    <div className="table-wrap"><table><thead><tr><th>BOM版本</th><th>产品</th><th>状态</th><th>物料项</th><th>备注</th><th>创建人</th></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id} onClick={() => setView({ id: item.id })} style={{cursor:'pointer'}}><td className="mono">{item.productCode}-v{item.version}</td><td>{item.productName}</td><td><Status status={item.status?.toLowerCase()} label={item.status === 'ACTIVE' ? '启用' : item.status === 'DISCONTINUED' ? '停用' : '草稿'}/></td><td className="number">{item.itemCount}</td><td>{item.remark || '-'}</td><td>{item.creatorName}</td></tr>)}
-    </tbody></table>{!items.length && <Empty text="没有BOM记录"/>}</div>
+    <BusinessPageHeader title="BOM"
+      primaryAction={canManageBom && <BusinessAction hierarchy="primary" onClick={() => setView({})}>新建 BOM</BusinessAction>}
+      help={<HelpDisclosure summary="生命周期与权限说明"><p>使用 ENGINEERING_BOM_MANAGE 维护；使用 ENGINEERING_BOM_APPROVE 审核。审核通过 + 启用 的 BOM 才会被生产 / 计划引用。</p></HelpDisclosure>} />
+    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索 BOM"
+      extra={<select aria-label="产品筛选" value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)}>
+        <option value="">全部产品</option>
+        {products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}
+      </select>} />
+    <nav className="boms-tabs" aria-label="BOM 子模块">
+      <button type="button" className={`boms-tab${tab === 'list' ? ' is-active' : ''}`} onClick={() => setTab('list')}>BOM 列表</button>
+      <button type="button" className={`boms-tab${tab === 'tree' ? ' is-active' : ''}`} onClick={() => setTab('tree')}>多层结构</button>
+      <button type="button" className={`boms-tab${tab === 'batch' ? ' is-active' : ''}`} onClick={() => setTab('batch')}>批量维护</button>
+    </nav>
+    {tab === 'list' && (
+      <CompactRecordList>
+        {filtered.map((b) => (
+          <RecordCard key={b.id}
+            title={`${b.product_code} · ${b.version}`}
+            subtitle={`用途 ${b.purpose || 'GENERAL'} · 物料 ${b.item_count}`}
+            status={<BomApprovalBadge bom={b} />}
+            facts={[
+              { label: '生效', value: b.effective_from || '永久' },
+              { label: '失效', value: b.effective_to || '永久' },
+              { label: '审核', value: b.approver_name || '—' },
+              { label: '创建', value: b.creator_name || '—' },
+            ]}
+            onClick={() => setDetail(b)} />
+        ))}
+        {!filtered.length && <Empty text="没有BOM记录" />}
+      </CompactRecordList>
+    )}
+    {tab === 'tree' && (
+      <BomTree bomId={detail?.id || filtered[0]?.id} notify={notify} />
+    )}
+    {tab === 'batch' && (
+      <BomBatchMaintenance boms={filtered} canManage={canManageBom}
+        notify={notify} onChanged={load} />
+    )}
+    {detail && <BomDetailModal detail={detail} boms={filtered} onClose={() => setDetail(null)} onEdit={() => { setView({ id: detail.id }); setDetail(null); }}
+      notify={notify} canManage={canManageBom} canApprove={canApproveBom} onChanged={load} />}
     {view && <BomModal user={user} value={view} onClose={() => { setView(null); void load(); }} notify={notify} api={api} products={products}/>}
   </BusinessPageShell>;
 }
 
+function BomDetailModal({ detail, boms, onClose, onEdit, notify, canManage, canApprove, onChanged }) {
+  const [analysisResult, setAnalysisResult] = useState(null);
+  return <Modal title={`${detail.product_code} · ${detail.version}`} onClose={onClose} wide>
+    <dl className="record-card-meta">
+      <div><dt>用途</dt><dd>{detail.purpose || 'GENERAL'}</dd></div>
+      <div><dt>状态</dt><dd>{detail.status === 'ACTIVE' ? '启用' : '停用'}</dd></div>
+      <div><dt>审核</dt><dd>{detail.approval_status || '—'}</dd></div>
+      <div><dt>生效</dt><dd>{detail.effective_from || '永久'}</dd></div>
+      <div><dt>失效</dt><dd>{detail.effective_to || '永久'}</dd></div>
+      <div><dt>备注</dt><dd>{detail.remark || '—'}</dd></div>
+    </dl>
+    <BomAnalysisActions bomId={detail.id} productId={detail.product_id} boms={boms} onResult={setAnalysisResult} notify={notify} />
+    <BomLifecycleActions bom={detail} onChanged={() => { onChanged?.(); onClose(); }} notify={notify} canManage={canManage} canApprove={canApprove} />
+    {analysisResult && (
+      <section className="bom-analysis-result">
+        <header><strong>分析结果</strong></header>
+        {analysisResult.lines && <ul>{analysisResult.lines.map((line) => <li key={line.product_id}>{line.product_code} · 用量 {line.quantity} · 损耗 {line.scrap_rate} · 材料成本 {line.line_material_cost_cents}</li>)}</ul>}
+        {analysisResult.total_material_cost_cents !== undefined && <p>材料成本合计：{analysisResult.total_material_cost_cents} 分</p>}
+        {analysisResult.usages && <ul>{analysisResult.usages.map((u) => <li key={u.parent_bom_id}>{u.parent_product_code} v{u.version} · {u.purpose} · {u.approval_status}</li>)}</ul>}
+        {analysisResult.items && <ul>{analysisResult.items.map((it) => <li key={it.product_id}>{it.product_code} · {it.quantity}</li>)}</ul>}
+        {analysisResult.diff && <ul>{analysisResult.diff.map((it) => <li key={it.product_id}>{it.product_id} · {it.status}</li>)}</ul>}
+      </section>
+    )}
+    <BusinessActionBar>
+      <button type="button" className="secondary" onClick={onClose}>关闭</button>
+      {canManage && detail.status === 'ACTIVE' && detail.approval_status === 'DRAFT' && <button type="button" className="primary" onClick={onEdit}>编辑草稿</button>}
+    </BusinessActionBar>
+  </Modal>;
+}
+
 function BomModal({ user, value, onClose, notify, api, products }) {
   const [detail, setDetail] = useState(value.id ? null : value);
-  const [form, setForm] = useState({ productId: '', version: '1.0', remark: '', items: [] });
+  const [form, setForm] = useState({ productId: '', version: '1.0', purpose: 'GENERAL', effectiveFrom: '', effectiveTo: '', approvalStatus: 'DRAFT', remark: '', items: [] });
   useEffect(() => {
-    if (value.id) api('/api/boms/' + value.id).then((r) => setDetail(r.bom)).catch((e) => notify(e.message, 'error'));
+    if (value.id) api('/api/engineering/boms/' + value.id).then((r) => setDetail(r.bom)).catch((e) => notify(e.message, 'error'));
   }, []);
   useEffect(() => {
     if (value.id && detail && !form.productId) {
-      setForm({ productId: detail.product_id || '', version: detail.version || '1.0', remark: detail.remark || '', items: detail.items || [] });
+      setForm({ productId: detail.product_id || '', version: detail.version || '1.0', purpose: detail.purpose || 'GENERAL', effectiveFrom: detail.effective_from || '', effectiveTo: detail.effective_to || '', approvalStatus: detail.approval_status || 'DRAFT', remark: detail.remark || '', items: (detail.items || []).map((item) => ({ ...item, productId: item.product_id, scrapRate: item.scrap_rate })) });
     }
   }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
     try {
       if (value.id) {
-        await api('/api/boms/' + value.id, { method: 'POST', body: { remark: form.remark, items: form.items } });
+        await api('/api/engineering/boms/' + value.id, { method: 'PATCH', body: form });
         notify('BOM 更改已保存');
       } else {
-        await api('/api/boms', { method: 'POST', body: form });
+        await api('/api/engineering/boms', { method: 'POST', body: form });
         notify('BOM 已创建');
       }
       onClose();
     } catch (e) { notify(e.message, 'error'); }
-  };
-  const deactivate = async () => {
-    try {
-      await api('/api/boms/' + value.id, { method: 'POST', body: { action: 'deactivate' } });
-      notify('已停用');
-      onClose();
-    } catch (e) { notify(e.message, 'error'); }
-  };
-  const remove = async () => {
-    try { await api('/api/boms/' + value.id, { method: 'DELETE' }); notify('BOM已删除'); onClose(); }
-    catch (e) { notify(e.message, 'error'); throw e; }
   };
   const addItem = () => setItems([...form.items, { productId: '', quantity: 1, scrapRate: 0 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const usedProducts = products.filter((p) => p.id !== form.productId);
   return <Modal title={value.id ? 'BOM详情' : '新建BOM'} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-    {!value.id && <><label>产品<select value={form.productId} onChange={(e) => setForm({...form, productId: e.target.value})} required><option value="">选择产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></label>
-    <label>版本号<input value={form.version} onChange={(e) => setForm({...form, version: e.target.value})} required/></label></>}
+    {!value.id && <label>产品<select value={form.productId} onChange={(e) => setForm({...form, productId: e.target.value})} required><option value="">选择产品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></label>}
+    <label>版本号<input value={form.version} onChange={(e) => setForm({...form, version: e.target.value})} required/></label>
+    <label>用途<select value={form.purpose} onChange={(e) => setForm({...form, purpose: e.target.value})}><option value="GENERAL">通用</option><option value="SELF_MAKE">自制</option><option value="OUTSOURCE">委外</option></select></label>
+    <label>审核状态<span>{form.approvalStatus === 'DRAFT' ? '草稿' : form.approvalStatus}</span></label>
+    <label>生效日期<input type="date" value={form.effectiveFrom} onChange={(e) => setForm({...form, effectiveFrom: e.target.value})}/></label>
+    <label>失效日期<input type="date" value={form.effectiveTo} onChange={(e) => setForm({...form, effectiveTo: e.target.value})}/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
     <div className="full"><div className="form-section-head"><span>物料组成</span><button type="button" className="secondary" onClick={addItem} disabled={detail?.status === 'DISCONTINUED'}>＋ 增行</button></div>
       <table className="line-table"><thead><tr><th>物料</th><th className="number">用量</th><th className="number">损耗率</th><th/></tr></thead><tbody>
@@ -85,11 +151,7 @@ function BomModal({ user, value, onClose, notify, api, products }) {
         </tr>)}
       </tbody></table>
     </div>
-    {value.id && detail?.status === 'DISCONTINUED'
-      ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>关闭</button>{can(user, 'PRODUCTION_ORDERS_CREATE') && <ConfirmDelete label="BOM" message="确定删除这个已停用且未被业务引用的 BOM 吗？此操作不可撤销。" onConfirm={remove}/>}</div>
-      : value.id && detail?.status === 'ACTIVE'
-        ? <div className="form-actions full"><button type="button" className="secondary" onClick={onClose}>取消</button><button type="button" className="danger-button" onClick={deactivate}>停用</button><button className="primary">保存</button></div>
-        : <FormActions onClose={onClose}/>}
+    <FormActions onClose={onClose}/>
   </form></Modal>;
 }
 

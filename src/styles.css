@@ -3883,3 +3883,325 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 .mobile-application-view :where(h1, h2, h3, p, strong, td, th, dd) {
   overflow-wrap: anywhere;
 }
+
+/* V17 Master & Engineering Domain Closure — frontend workbench styles.
+ * Mobile-first; no decorative patterns; semantic status colors only.
+ * Section tabs use the existing compact-token rhythm. */
+
+.engineering-reference-tabs,
+.engineering-substitute-tabs,
+.boms-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--border-default);
+  overflow-x: auto;
+}
+
+.engineering-reference-tab,
+.engineering-substitute-tab,
+.boms-tab {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.engineering-reference-tab.is-active,
+.engineering-substitute-tab.is-active,
+.boms-tab.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.engineering-reference-section,
+.engineering-substitute-section {
+  display: grid;
+  gap: 16px;
+  padding-top: 16px;
+}
+
+.engineering-reference-section-head,
+.engineering-substitute-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.engineering-reference-section-head h3,
+.engineering-substitute-section-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.engineering-reference-list-block {
+  display: grid;
+  gap: 8px;
+}
+
+.engineering-reference-list-block > header,
+.engineering-reference-block > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.engineering-reference-block {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.engineering-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px 16px;
+  width: 100%;
+}
+
+.engineering-form .full {
+  grid-column: 1 / -1;
+}
+
+.engineering-form .variable-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.engineering-form-result {
+  grid-column: 1 / -1;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin: 0;
+}
+
+.engineering-form-result--ok {
+  background: var(--success-soft);
+  color: var(--success-strong);
+}
+
+.engineering-form-result--fail {
+  background: var(--danger-soft);
+  color: var(--danger-strong);
+}
+
+.engineering-form-warnings {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--warning-soft);
+  border-radius: 8px;
+  list-style: disc inside;
+  color: var(--warning-strong);
+  font-size: 13px;
+}
+
+.engineering-form-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.engineering-substitute-subhead {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.bom-tree,
+.bom-batch,
+.bom-analysis-result {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.bom-tree > header,
+.bom-batch > header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.bom-tree-root {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.bom-tree-depths {
+  display: grid;
+  gap: 12px;
+}
+
+.bom-tree-depths > section > header {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.bom-batch-change {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.bom-batch-targets {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.bom-batch-targets label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bom-batch-targets span,
+.bom-reject-reason,
+.eco-reject-reason,
+.bom-compare-select {
+  overflow-wrap: anywhere;
+}
+
+.bom-reject-reason,
+.eco-reject-reason,
+.bom-compare-select {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.bom-batch-change > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.bom-batch-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+.bom-batch-preview {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface-soft);
+  border-radius: 8px;
+}
+
+.bom-batch-preview > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.routing-topology-banner {
+  margin: 8px 0;
+  padding: 6px 12px;
+  background: var(--info-soft);
+  color: var(--info-strong);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.routing-topology-links {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--surface-soft);
+  border-radius: 8px;
+}
+
+.routing-topology-links ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.engineering-eco-items {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.engineering-eco-items > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.engineering-eco-item {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.engineering-eco-item-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.engineering-eco-item-grid > label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.engineering-eco-preview {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--surface-soft);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.engineering-eco-preview ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.bom-analysis-result ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 430px) {
+  .engineering-form {
+    grid-template-columns: 1fr;
+  }
+  .bom-batch-row,
+  .engineering-eco-item-grid {
+    grid-template-columns: 1fr;
+  }
+}
