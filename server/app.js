@@ -1731,7 +1731,7 @@ async function handleApi(db, req, res, url) {
   if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
   if (pathname === '/api/mrp/calculate' && req.method === 'POST') return send(res, 410, { error: '旧版即时 MRP 已停用，请使用 /api/planning/mrp/runs' });
-  if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
+  if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return send(res, 410, { error: '旧版 BOM 展开已停用，请使用 /api/planning/reports/supply-demand-detail 或 Engineering BOM resolver' });
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
   if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
   const inventoryCheckReverseMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/(?:reverse|reversal-request|reversal-confirm)$/);
@@ -2873,52 +2873,8 @@ function getReorderList(db, res, actor) {
 }
 
 // ============ MRP (物料需求计划) ============
-
-async function explodeBOM(db, req, res, actor) {
-  allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTION_ORDERS_VIEW', 'ORDERS_VIEW']);
-  const body = await readJson(req);
-  const { productId, quantity } = body;
-  
-  if (!productId || !quantity) throw new HttpError(400, '请提供产品ID和数量');
-  
-  const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
-  if (!product) throw new HttpError(404, '产品不存在');
-  
-  const materials = [];
-  
-  function expand(productId, qty, level) {
-    const boms = db.prepare("SELECT b.*, p.code, p.name, p.unit FROM bom_items b JOIN products p ON p.id = b.product_id WHERE b.bom_id IN (SELECT id FROM boms WHERE product_id=? AND status='ACTIVE')").all(productId);
-    
-    if (boms.length === 0) {
-      const prod = db.prepare('SELECT code, name, unit FROM products WHERE id=?').get(productId);
-      materials.push({ productId, code: prod?.code || '', name: prod?.name || '', unit: prod?.unit || '', requiredQty: qty, level });
-      return;
-    }
-    
-    for (const bom of boms) {
-      const requiredQty = qty * bom.quantity * (1 + (bom.scrap_rate || 0));
-      expand(bom.product_id, requiredQty, level + 1);
-    }
-  }
-  
-  expand(productId, Number(quantity), 0);
-  
-  const materialSummary = {};
-  for (const mat of materials) {
-    if (!materialSummary[mat.productId]) {
-      materialSummary[mat.productId] = { ...mat, totalQty: 0 };
-    }
-    materialSummary[mat.productId].totalQty += mat.requiredQty;
-  }
-  
-  const result = Object.values(materialSummary).map(mat => {
-    const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(mat.productId)?.total || 0;
-    const netDemand = Math.max(0, mat.totalQty - stock);
-    return { ...mat, currentStock: stock, netDemand, shortage: stock < mat.totalQty };
-  });
-  
-  return send(res, 200, { product: { id: product.id, code: product.code, name: product.name }, quantity: Number(quantity), materials: result });
-}
+// /api/mrp/bom-explode POST 已 410 Gone；旧的独立 BOM 查找 / 递归展开 / 损耗计算 / 库存净需求已停用。
+// Canonical 路径：Engineering Resolver (`resolveEffectiveBomForCaller`) 与 Planning read models (`/api/planning/reports/*`).
 
 // ============ Inventory Checks ============
 

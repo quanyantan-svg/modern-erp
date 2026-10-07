@@ -100,4 +100,33 @@ describe('B3120 Planning Domain Closure', () => {
     assert.equal(reservation.status, 201, reservation.data.error);
     assert.equal((await request(`/api/planning/reservations/${reservation.data.id}/release`, { method: 'POST' })).status, 200);
   });
+
+  test('legacy /api/mrp/bom-explode is 410 Gone and canonical MRP engine count is 1', async () => {
+    const legacy = await request('/api/mrp/bom-explode', { method: 'POST', body: { productId: 'P', quantity: 1 } });
+    assert.equal(legacy.status, 410, JSON.stringify(legacy.data));
+    assert.match(String(legacy.data.error || ''), /停用|410|Gone/i);
+    const legacyGet = await request('/api/mrp/bom-explode', { method: 'GET' });
+    assert.notEqual(legacyGet.status, 500);
+    const legacyMrp = await request('/api/mrp/calculate', { method: 'POST', body: { schemeId: 'x' } });
+    assert.equal(legacyMrp.status, 410, JSON.stringify(legacyMrp.data));
+    const legacyPlans = await request('/api/mrp-plans?status=DRAFT');
+    assert.equal(legacyPlans.status, 410, JSON.stringify(legacyPlans.data));
+    const legacyPlansGenerate = await request('/api/mrp-plans/generate', { method: 'POST', body: { planId: 'x' } });
+    assert.equal(legacyPlansGenerate.status, 410, JSON.stringify(legacyPlansGenerate.data));
+  });
+
+  test('planned order release does not double-count planned supply in workbench read model', async () => {
+    const product = db.prepare('SELECT id FROM products WHERE active=1 LIMIT 1').get();
+    const created = await request('/api/planning/planned-orders', { method: 'POST', body: { productId: product.id, quantity: 9, supplyType: 'BUY', needDate: '2026-10-25' } });
+    assert.equal(created.status, 201, created.data.error);
+    const orderId = created.data.id;
+    const confirmed = await request(`/api/planning/planned-orders/${orderId}/confirm`, { method: 'POST' });
+    assert.equal(confirmed.status, 200);
+    const before = (await request(`/api/planning/workbench?productId=${product.id}`)).data.workbench.rows.find((row) => row.id === product.id);
+    const released = await request(`/api/planning/planned-orders/${orderId}/release`, { method: 'POST' });
+    assert.equal(released.status, 201, released.data.error);
+    const after = (await request(`/api/planning/workbench?productId=${product.id}`)).data.workbench.rows.find((row) => row.id === product.id);
+    assert.equal(Number(after.plannedSupply), 0, 'released planned order should leave plannedSupply=0 to avoid double counting');
+    assert.equal(Number(before.plannedSupply), 9, 'pre-release plannedSupply reflects confirmed not-yet-released supply');
+  });
 });
