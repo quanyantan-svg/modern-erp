@@ -5,7 +5,7 @@ import {
   DatabaseZap, Factory, FileInput, FileText,
   Grid3X3, Info, Inbox, Landmark, LayoutDashboard,
   MessageCircle, MoreHorizontal, Network, Package,
-  PackageCheck, PackageOpen, ReceiptText, RotateCcw, Search, ShieldCheck,
+  PackageCheck, PackageOpen, ReceiptText, RotateCcw, Search, Settings, ShieldCheck,
   ShoppingBag, ShoppingCart, SlidersHorizontal, Sparkles, Trash2, TrendingUp,
   TriangleAlert, UserRound, UsersRound, WalletCards, Warehouse, X,
 } from 'lucide-react';
@@ -62,6 +62,8 @@ const ICONS = {
   materialPlan: ClipboardList,
   mrp: CalendarClock,
   planningDocuments: ClipboardList,
+  configuration: Settings,
+  reservation: ShieldCheck,
   productionOrders: Factory,
   inventoryScrap: Trash2,
   inventoryPeriod: CalendarClock,

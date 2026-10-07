@@ -56,6 +56,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
   route('planned-orders','计划订单','planning','FLOW_PRIMARY','LIST','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']}),
+  route('planning-reservations','计划预留','planning','FLOW_INTERNAL_STEP','WORKFLOW','contextual','计划','reservation',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'planned-orders'}),
+  route('planning-configuration','计划配置','planning','ADVANCED_CONFIGURATION','CONFIG','contextual','计划','configuration',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'planned-orders'}),
   route('planner-workbench','计划员工作台','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','dashboard',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
   route('production-instructions','生产指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
@@ -108,6 +110,8 @@ const loadScreenModule = (path) => {
     case '../pages/material-requirements-plan.jsx': return import('../pages/material-requirements-plan.jsx');
     case '../pages/planning-documents.jsx': return import('../pages/planning-documents.jsx');
     case '../pages/planning-workbench.jsx': return import('../pages/planning-workbench.jsx');
+    case '../pages/planning-reservations.jsx': return import('../pages/planning-reservations.jsx');
+    case '../pages/planning-configuration.jsx': return import('../pages/planning-configuration.jsx');
     case '../pages/data-cleanup.jsx': return import('../pages/data-cleanup.jsx');
     case '../pages/engineering-reference.jsx': return import('../pages/engineering-reference.jsx');
     case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
@@ -151,6 +155,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'product-routings': defaultScreen('../pages/product-routing.jsx'), forecasts: defaultScreen('../pages/forecasts.jsx'),
   'mrp-runs': defaultScreen('../pages/mrp-runs.jsx'), 'material-requirements-plan': defaultScreen('../pages/material-requirements-plan.jsx'),
   'planned-orders': defaultScreen('../pages/planning-workbench.jsx'), 'planner-workbench': defaultScreen('../pages/planning-workbench.jsx'),
+  'planning-reservations': defaultScreen('../pages/planning-reservations.jsx'),
+  'planning-configuration': defaultScreen('../pages/planning-configuration.jsx'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
   'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'data-cleanup': defaultScreen('../pages/data-cleanup.jsx'),
   'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
@@ -163,6 +169,7 @@ const DETAIL_TARGET_ROUTES = new Set([
   'accounts-receivable','accounts-payable','payment-collections','payment-disbursements','forecasts','mrp-runs',
   'material-requirements-plan','production-orders','material-issues','production-receipts','product-routings','iqc','oqc',
   'production-instructions','purchase-instructions','purchase-requisitions',
+  'planned-orders','planning-reservations','planning-configuration',
   'engineering-reference','engineering-substitute','engineering-change',
 ]);
 const ROUTE_QUERY_KEYS = Object.freeze({
@@ -173,12 +180,13 @@ const ROUTE_QUERY_KEYS = Object.freeze({
   'production-receipts': ['documentType'], 'product-routings': ['documentType','productId'],
   iqc: ['documentType','sourcePage','sourceDocumentId'], oqc: ['documentType','sourcePage','sourceDocumentId'],
   'decision-reports': ['reportKey'],
+  'planned-orders': [], 'planning-reservations': [], 'planning-configuration': [],
 });
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','payment-collections','supplier-bills',
   'payment-disbursements','bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
-  'notifications',
+  'notifications','planning-reservations','planning-configuration',
 ]);
 const classificationFor = (routeKey) => INTERNAL_ROUTES.has(routeKey) ? 'INTERNAL' : (CONTEXTUAL_ROUTES.has(routeKey) ? 'CONTEXTUAL' : 'CORE');
 const targetContractFor = (routeKey) => Object.freeze({
