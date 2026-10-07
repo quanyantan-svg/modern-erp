@@ -3898,6 +3898,32 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   overflow-x: auto;
 }
 
+/* Manufacturing & Quality execution workspaces */
+.mq-workspace { min-width: 0; }
+.mq-workspace .segmented-control { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; margin: 12px 0 16px; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-grouped); }
+.mq-workspace .segmented-control button { min-height: 44px; border: 0; background: transparent; color: var(--text-secondary); }
+.mq-workspace .segmented-control button.active { background: var(--surface); color: var(--text-primary); font-weight: 700; box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+.mq-detail-head,
+.scan-order { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 12px 0 16px; border-bottom: 1px solid var(--border); }
+.mq-detail-head > span:last-child,
+.scan-order > span:last-child { grid-column: 1 / -1; color: var(--text-secondary); overflow-wrap: anywhere; }
+.mq-criteria { display: grid; gap: 0; }
+.mq-criteria > div { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.mq-criteria span,
+.mq-criteria small { color: var(--text-secondary); }
+.scan-lookup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-bottom: 16px; }
+.scan-lookup label { min-width: 0; }
+.scan-lookup input { width: 100%; }
+.scan-lookup button { min-height: 44px; }
+.scan-action { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+
+@media (max-width: 430px) {
+  .mq-workspace { padding-inline: 16px; }
+  .scan-lookup { grid-template-columns: 1fr; }
+  .scan-lookup button { width: 100%; }
+  .mq-workspace .form-actions { position: sticky; bottom: 0; z-index: 2; margin-inline: -16px; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border); }
+}
+
 .engineering-reference-tab,
 .engineering-substitute-tab,
 .boms-tab {

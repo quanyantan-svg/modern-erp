@@ -12,6 +12,14 @@ const ISSUE_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED
 const RECEIPT_STATUS_LABELS = { DRAFT: '草稿', CONFIRMED: '已确认', CANCELLED: '已取消' };
 const PO_STATUS_LABELS = { PENDING: '待生产', IN_PROGRESS: '生产中', COMPLETED: '已完成', CANCELLED: '已取消' };
 
+Object.assign(PO_STATUS_LABELS, {
+  DRAFT: '\u8349\u7a3f',
+  SUBMITTED: '\u5df2\u63d0\u4ea4',
+  APPROVED: '\u5df2\u5ba1\u6838',
+  REJECTED: '\u5df2\u9a73\u56de',
+  RELEASED: '\u5df2\u4e0b\u8fbe',
+});
+
 export function Boms({ user, notify }) {
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState('');
@@ -414,6 +422,13 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       refreshDetail();
     } catch (e) { notify(`无法完工：${e.message}`, 'error'); }
   };
+  const transitionOrder = async (target, successMessage) => {
+    try {
+      await api(`/api/production-orders/${value.id}/state`, { method: 'POST', body: { target } });
+      notify(successMessage);
+      refreshDetail();
+    } catch (e) { notify(e.message, 'error'); }
+  };
   const cancelOrder = async () => {
     try {
       await api('/api/production-orders/' + value.id, { method: 'POST', body: { action: 'cancel' } });
@@ -476,6 +491,10 @@ function ProductionOrderModal({ user, value, onClose, notify, api }) {
       </>}
       <div className="form-grid" style={{marginTop:'1rem'}}><label>计划生产<span>{quantity(detail.quantity)}</span></label><label>已净入库<span>{quantity(detail.netReceived || 0)}</span></label><label>剩余入库<span>{quantity(detail.remainingReceivable ?? detail.quantity)}</span></label><label>当前物料最多支持新增入库<span>{quantity(detail.maximumAdditionalReceipt || 0)}</span></label></div>
       <div className="form-actions" style={{marginTop:'1rem'}}>
+        {detail.status === 'DRAFT' && can(user, 'PRODUCTION_ORDERS_CREATE') && <button className="primary" onClick={() => transitionOrder('SUBMITTED', '\u5df2\u63d0\u4ea4\u5ba1\u6279')}>\u63d0\u4ea4</button>}
+        {detail.status === 'SUBMITTED' && can(user, 'PRODUCTION_ORDERS_APPROVE') && <button className="primary" onClick={() => transitionOrder('APPROVED', '\u5df2\u5ba1\u6838')}>\u5ba1\u6838</button>}
+        {detail.status === 'APPROVED' && can(user, 'PRODUCTION_ORDERS_RELEASE') && <button className="primary" onClick={() => transitionOrder('RELEASED', '\u5df2\u4e0b\u8fbe')}>\u4e0b\u8fbe</button>}
+        {detail.status === 'RELEASED' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>\u5f00\u5de5</button>}
         {detail.status === 'PENDING' && can(user, 'PRODUCTION_ORDERS_START') && <button className="primary" onClick={startOrder}>开工</button>}
         {detail.status === 'IN_PROGRESS' && can(user, 'PRODUCTION_ORDERS_COMPLETE') && <button className="primary" disabled={!canCompleteOrder.ready} title={canCompleteOrder.ready ? '' : canCompleteOrder.reason} onClick={completeOrder}>完工{!canCompleteOrder.ready ? '（尚未满足）' : ''}</button>}
         {!canCompleteOrder.ready && canCompleteOrder.reason && <div className="form-section-note">完工前置：{canCompleteOrder.reason}</div>}

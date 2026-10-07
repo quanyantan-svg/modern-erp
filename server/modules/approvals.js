@@ -111,6 +111,29 @@ const DOCUMENTS = [
       JOIN users creator ON creator.id=pr.creator_id
       LEFT JOIN users reviewer ON reviewer.id=pr.reviewer_id`,
   },
+  {
+    type: 'PRODUCTION_ORDER',
+    label: '生产工单',
+    view: 'PRODUCTION_ORDERS_VIEW',
+    approve: 'PRODUCTION_ORDERS_APPROVE',
+    supportsReject: true,
+    table: 'production_orders',
+    alias: 'mo',
+    reviewerColumn: 'approved_by',
+    rejectedReviewerColumn: 'rejected_by',
+    approvedStatus: 'APPROVED',
+    handledColumn: 'approved_at',
+    rejectedHandledColumn: 'rejected_at',
+    sql: `SELECT mo.id,mo.order_no documentNo,mo.status,NULL amountCents,
+      mo.remark,mo.rejection_reason rejectionReason,mo.creator_id initiatorId,
+      creator.display_name initiatorName,COALESCE(approver.display_name,rejected.display_name) handlerName,
+      mo.created_at createdAt,mo.submitted_at submittedAt,COALESCE(mo.approved_at,mo.rejected_at) handledAt,
+      p.name partyName,1 itemCount,mo.quantity systemQuantity
+      FROM production_orders mo JOIN products p ON p.id=mo.product_id
+      JOIN users creator ON creator.id=mo.creator_id
+      LEFT JOIN users approver ON approver.id=mo.approved_by
+      LEFT JOIN users rejected ON rejected.id=mo.rejected_by`,
+  },
 ];
 
 const STATUS_LABELS = {
@@ -126,7 +149,7 @@ function whereFor(document, tab, actorId) {
   const prefix = document.alias;
   if (tab === 'pending') return { sql: `${prefix}.status='SUBMITTED' AND ${prefix}.creator_id<>?`, params: [actorId] };
   if (tab === 'approved') return { sql: `${prefix}.status=? AND ${prefix}.${document.reviewerColumn}=?`, params: [document.approvedStatus, actorId] };
-  if (tab === 'rejected') return { sql: `${prefix}.status='REJECTED' AND ${prefix}.${document.reviewerColumn}=?`, params: [actorId] };
+  if (tab === 'rejected') return { sql: `${prefix}.status='REJECTED' AND ${prefix}.${document.rejectedReviewerColumn || document.reviewerColumn}=?`, params: [actorId] };
   return { sql: `${prefix}.creator_id=?`, params: [actorId] };
 }
 
@@ -221,7 +244,7 @@ export function listApprovals(db, res, actor, url) {
     if (!eligibleForSelected) continue;
     const filter = whereFor(document, tab, actor.id);
     const rows = db.prepare(`${document.sql} WHERE ${filter.sql}
-      ORDER BY ${tab === 'pending' ? `${document.alias}.${document.type === 'INVENTORY_CHECK' ? 'checked_at' : 'submitted_at'}` : tab === 'created' ? `${document.alias}.created_at` : `${document.alias}.${document.handledColumn}`} DESC,
+      ORDER BY ${tab === 'pending' ? `${document.alias}.${document.type === 'INVENTORY_CHECK' ? 'checked_at' : 'submitted_at'}` : tab === 'created' ? `${document.alias}.created_at` : `${document.alias}.${tab === 'rejected' && document.rejectedHandledColumn ? document.rejectedHandledColumn : document.handledColumn}`} DESC,
       ${document.alias}.id DESC LIMIT 100`).all(...filter.params);
     selected.push(...rows.map((row) => normalizeRow(document, row, tab)));
   }

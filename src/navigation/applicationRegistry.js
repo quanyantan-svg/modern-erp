@@ -5,7 +5,7 @@ import { BUSINESS_DOMAINS, DESKTOP_GROUP_ORDER } from './domainMetadata.js';
 export const PRIMARY_DOMAINS = BUSINESS_DOMAINS;
 
 export const APPROVAL_FAMILIES = Object.freeze([
-  'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER',
+  'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PRODUCTION_ORDER',
 ]);
 
 const route = (route, title, domain, semanticLevel, template, level, navGroup, iconKey, access, extra = {}) => Object.freeze({
@@ -50,6 +50,9 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('material-issues','用料出库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','salesDeliveries',{any:['PRODUCTION_MATERIAL_ISSUE_MANAGE']}),
   route('production-receipts','生产入库','manufacturing-quality','FLOW_PRIMARY','LIST','primary','制造与质量','purchaseReceipts',{any:['PRODUCTION_RECEIPT_MANAGE']}),
   route('manufacturing-analytics','生产执行分析','manufacturing-quality','REPORT','REPORT','secondary','制造与质量','reports',{any:['PRODUCTION_ORDERS_VIEW','PRODUCTION_COSTS_VIEW']},{mobileExposure:'contextual'}),
+  route('production-quality','生产质量','manufacturing-quality','FLOW_PRIMARY','WORKFLOW','primary','制造与质量','iqc',{any:['PRODUCTION_INSPECTION_VIEW','PRODUCTION_INSPECTION_MANAGE']}),
+  route('production-scan','生产扫码','manufacturing-quality','FLOW_PRIMARY','WORKFLOW','primary','制造与质量','traceability',{permission:'PRODUCTION_SCAN_EXECUTE'}),
+  route('quality-configuration','质量配置','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['PRODUCTION_QUALITY_CONFIG_VIEW','PRODUCTION_QUALITY_CONFIG_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
   route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
@@ -96,6 +99,7 @@ const loadScreenModule = (path) => {
     case '../pages/inventory-extensions.jsx': return import('../pages/inventory-extensions.jsx');
     case '../pages/discounts.jsx': return import('../pages/discounts.jsx');
     case '../pages/manufacturing.jsx': return import('../pages/manufacturing.jsx');
+    case '../pages/manufacturing-quality.jsx': return import('../pages/manufacturing-quality.jsx');
     case '../pages/product-routing.jsx': return import('../pages/product-routing.jsx');
     case '../pages/forecasts.jsx': return import('../pages/forecasts.jsx');
     case '../pages/mrp-runs.jsx': return import('../pages/mrp-runs.jsx');
@@ -139,6 +143,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'purchase-discounts': named('../pages/discounts.jsx','PurchaseDiscounts'), boms: named('../pages/manufacturing.jsx','Boms'),
   'production-orders': named('../pages/manufacturing.jsx','ProductionOrders'), 'material-issues': named('../pages/manufacturing.jsx','MaterialIssues'),
   'production-receipts': named('../pages/manufacturing.jsx','ProductionReceipts'), 'manufacturing-analytics': named('../pages/manufacturing.jsx','ManufacturingAnalytics'),
+  'production-quality': named('../pages/manufacturing-quality.jsx','ProductionQuality'), 'production-scan': named('../pages/manufacturing-quality.jsx','ProductionScan'),
+  'quality-configuration': named('../pages/manufacturing-quality.jsx','QualityConfiguration'),
   'product-routings': defaultScreen('../pages/product-routing.jsx'), forecasts: defaultScreen('../pages/forecasts.jsx'),
   'mrp-runs': defaultScreen('../pages/mrp-runs.jsx'), 'material-requirements-plan': defaultScreen('../pages/material-requirements-plan.jsx'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
@@ -206,7 +212,7 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['sales-discounts','销售折让','salesDiscount']]),
   launcherGroup('planning','Planning','domain','planning', [['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['purchase-discounts','采购折让','purchaseDiscount']]),
-  launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-receipts','生产入库','purchaseReceipts'],['quality-control-points','质量规则','iqc']]),
+  launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
   launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
   launcherGroup('finance-operations','Finance Operations','domain','finance', [['sales-invoices','销售发票','accounting'],['accounts-receivable','应收结算','accountsReceivable'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['accounts-payable','应付结算','accountsPayable'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['bank-accounts','银行账户','bankAccounts'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
   launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [

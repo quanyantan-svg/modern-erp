@@ -21,6 +21,9 @@ export function approvalActionRequest(item, action, reason = '') {
   if (item.documentType === 'PURCHASE_REQUISITION') {
     return { path: `/api/purchase-requisitions/${id}/${action}`, options: { method: 'POST', ...(action === 'reject' ? { body: { reason } } : {}) } };
   }
+  if (item.documentType === 'PRODUCTION_ORDER') {
+    return { path: `/api/production-orders/${id}/state`, options: { method: 'POST', body: { target: action === 'approve' ? 'APPROVED' : 'REJECTED', ...(action === 'reject' ? { reason } : {}) } } };
+  }
   if (item.documentType === 'INVENTORY_CHECK' && action === 'approve') {
     return { path: `/api/inventory-checks/${id}`, options: { method: 'PATCH', body: { action: 'APPROVE' } } };
   }

@@ -40,8 +40,8 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - 销售订单、发货、退货、销售发票、AR 与收款/核销；
 - 请购、采购订单、收货、退货、供应商账单、AP 与付款/核销；
 - Forecast、MRP、Demand/Supply、Pegging、生产/采购指令与请购；
-- 生产订单、BOM/Routing snapshot、领料、退料、工序报工、生产入库；
-- IQC/OQC、质量门禁；
+- 生产工单审批/下达、BOM/Routing snapshot、工序计划与正排/倒排、领料/退料/补料、工序报工、生产入库、WIP 与生产成本归集；
+- IQC/OQC、生产检验、检验项目/检测值/仪器/检验方案、质量门禁与生产扫码入口；
 - Inventory、调拨、盘点、调整、报废、期间关闭；
 - LOT/SERIAL、HOLD/RELEASE、Traceability 与 Production Genealogy；
 - Inventory Valuation、WIP、COGS、GRNI 等财务库存基础；
@@ -93,11 +93,8 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Manufacturing & Quality
 
-- Operation Plan
-- Scheduling
 - Dispatch
 - Operation Transfer
-- 更完整的 Quality Plan / Sampling
 - 更多检验类型
 - Non-conformance disposition
 
