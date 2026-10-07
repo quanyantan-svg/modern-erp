@@ -505,7 +505,7 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 | Sales & Customer | Sales Order、Delivery、Return、Discount、Invoice/AR 链 | Quotation、Price List、Order Change、Credit | PARTIAL |
 | Planning | Forecast、MRP、Demand/Supply、Pegging、Production/Purchase Instruction、Requisition | Safety Stock 深化、Reservation、更多策略/Workbench | PARTIAL |
 | Procurement & Outsourcing | Requisition、PO、Receipt、Return、Supplier | Sourcing、Quota、VMI、Outsourcing | PARTIAL |
-| Manufacturing & Quality | Production Order、Issue/Return、Receipt、Routing Snapshot、Operation Report、WIP、IQC/OQC、Traceability | Scheduling、Dispatch、Transfer、更多 Inspection/NC | PARTIAL |
+| Manufacturing & Quality | Production Order 审批/下达、Issue/Return/Supplement、Receipt、Operation Plan、Forward/Backward Scheduling、Routing Snapshot、Operation Report、Production Inspection、WIP/Cost、IQC/OQC、Traceability、生产扫码 | Dispatch、Transfer、更多 Inspection/NC | PARTIAL |
 | Inventory & Warehouse | Inventory、Transfer、Check、Adjustment、Scrap、Month End、LOT/SERIAL | Barcode/PDA、Bin、Stock Status、Assembly/Disassembly、完整 Reservation | PARTIAL |
 | Finance Operations | AR/AP、Collection/Payment、Settlement、Invoice/Bill、Bank、Valuation/WIP，部分 Cash/Bill/Fixed Asset backend | Provisional AR/AP、完整 Treasury、完整 Asset、多币种 | PARTIAL |
 | Accounting & Analytics | Voucher、GL、Trial Balance、P&L、BS、Decision Reports、Accounting Config | Smart Accounting Engine、Cash Flow、Report Designer、Management Accounting | PARTIAL |
@@ -595,7 +595,7 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 | PDA 单据生成 | 扫码选择来源单/物料并按转换规则生成目标单据。 | 无 PDA execution layer | `MISSING` | 新增 Mobile Scan Execution |
 | 收发货校验 | 扫码校验采购收货/销售出货物料、数量、批次等。 | 底层库存/LOT/SERIAL 可复用 | `MISSING` | 新增扫码校验入口 |
 | 盘点扫码 | 同步/异步盘点扫码并提交盘点结果。 | 盘点底层已有，无扫码入口 | `MISSING` | 新增 Barcode Stocktake |
-| 生产扫码 | 生产领料、报工等扫码作业。 | 生产执行底层已有，无扫码入口 | `MISSING` | 接入 Manufacturing execution |
+| 生产扫码 | 生产领料、报工等扫码作业。 | 已有 canonical `production-scan` 移动入口，复用权威工单、领料与报工 handler；完整 B3105 PDA 场景仍不在本轮范围 | `COVERED` | 完整 B3105 PDA = `OUT_OF_SCOPE` |
 | 包装/拆包 | 支持装箱、拆箱/包装关系。 | 无完整 packing model | `MISSING` | 新增 Packing/Unpacking |
 
 ### 22.6 B3106 存货核算
@@ -793,22 +793,52 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 ### 22.19 B3119 生产管理
 **主要目标 Domain：** Manufacturing & Quality
 
+> 本节 Coverage 已由 2026-10-07 Manufacturing & Quality Domain Closure 实施与验收证据复核。详细 evidence 见 `document.md §29`。
+
 | Capability | 手册要求基线 | 当前 Modern ERP 基线 | Coverage | 主要 Gap / 后续方向 |
 |---|---|---|---|---|
-| 生产订单 | 由计划等来源形成生产订单，审核/开工并创建生产用料清单。 | Production Order 已有 | `COVERED` | 保持 source/BOM snapshot |
-| 生产用料清单 | 子项、用量、损耗、版本快照。 | BOM snapshot/material list 已有 | `PARTIAL` | 补更完整损耗/替代 |
-| 领料/退料/补料 | 生产领料、退料、补料。 | Issue/Return 已有；Supplement 需复核 | `PARTIAL` | 补正式补料场景 |
-| 生产汇报 | 数量、良品/不良、工序/完工汇报。 | Operation Report 已有 | `PARTIAL` | 补更多 report types |
-| 产品检验 | 生产完工后检验再入库，不合格需处置。 | 当前 IQC/OQC 较强，生产检验不完整 | `PARTIAL` | 扩 Quality domain |
-| 生产入库 | 检验通过后生产入库并影响库存/WIP/价值。 | Production Receipt/WIP 已有 | `COVERED` | 保持 |
-| 工序计划 | 订单+工艺路线形成工序计划。 | Routing snapshot/operation reports 有 | `PARTIAL` | 建立正式 Operation Plan |
-| 生产排程 | 工序/资源排程。 | 无完整 scheduling | `MISSING` | 新增 Shop-floor Scheduling |
-| 派工/释放 | 操作计划派工、释放到执行。 | 无完整 dispatch | `MISSING` | 新增 |
-| 工序汇报/转移 | 工序报工与工序间转移，支持跨组织/委外工序等场景。 | 报工有，transfer 不完整 | `PARTIAL` | 补 Operation Transfer |
-| WIP | 在制品数量/价值与工序执行一致。 | WIP ledger 已有 | `COVERED` | 保持 |
-| 质量基础 | 检验项目、抽样、质量方案、仪器等。 | QCP/抽样基础有，范围不足 | `PARTIAL` | 扩 Quality Plan/Sampling |
-| 多类型检验 | 来料、产品、库存、发货、退货、工序、巡检、委外检验。 | 当前主要 IQC/OQC | `PARTIAL` | 补其余检验类型 |
-| 不合格处理 | 不合格结果、处置与复检。 | 部分 FAIL/RETEST 语义 | `PARTIAL` | 新增 Non-conformance disposition |
+| 生产订单生命周期 | 创建/提交/审核/下达/开工/完工/取消。 | 原 `DRAFT / PENDING / IN_PROGRESS / COMPLETED / CANCELLED`；本次补 Submit / Approve / Release 业务节点 | `COVERED` | Approval 接入 Platform Approval；2026-10 release sync |
+| 生产订单来源 | 计划/生产指令或人工建立，来源不可反向修改 MRP demand。 | `source_type IN ('MANUAL','INSTRUCTION')`；Planning Instruction 释放存在 | `COVERED` | 保持 source/BOM/routing snapshot |
+| BOM/Routing 冻结 | 产品 / 数量 / BOM / 工艺路线 / 版本 / 操作主数据冻结。 | `production_orders.bom_id / bom_version_snapshot / routing_id_snapshot` + `production_order_routing_snapshots` 已冻结 | `COVERED` | master edit 不得反向污染已下达 |
+| Engineering Resolver | 按 SELF_MAKE / GENERAL 解析 BOM。 | `engineering-bom.js::resolveEffectiveBomForCaller` 已存在；本次在生产订单创建/开工路径正式消费 | `COVERED` | 不再依赖散落 `status='ACTIVE'` |
+| 生产用料清单 | 子项、用量、损耗、版本快照。 | `production_order_items` 已为 frozen BOM snapshot | `COVERED` | lifecycle: generated / controlled edit / approved / released |
+| 领料 | 基于用料清单的真实库存出库；LOT/SERIAL、valuation、WIP、voucher、period、idempotency。 | `production_material_issues` 已完整 | `COVERED` | 不重写 |
+| 退料 | 与原出库/补料关联，按业务原因。 | `production_material_returns` 存在，扩展 reason | `COVERED` | 来料不良 / 良料退回 / 制程不良 |
+| 补料 | 临时增加非原 BOM material line。 | 本次新建 `production_material_supplements` + 表 + handler | `COVERED` | 走同一库存/voucher/WIP/audit 链路 |
+| 合并领料/批拣 | 多订单合并领料，per-order 分配保留。 | 本次新增 `production_batch_issues` + handler | `COVERED` | Atomic failure |
+| 生产汇报 | 数量、良品/不良、工序/完工汇报。 | `production_operation_reports` 已有 | `COVERED` | 与工序一对一 truth |
+| 副产品 | 副产品维护/调整。 | 本次新增 byproduct header + by-production-receipt；成本分配留 Finance | `PARTIAL — CROSS_DOMAIN_DEPENDENCY` | Byproduct Cost Allocation 归属 Finance |
+| 工序计划 | 订单 + 工艺路线形成 Operation Plan lifecycle。 | `production_order_operations` 升级为 lifecycle: GENERATED / SUBMITTED / APPROVED / RELEASED / EXECUTABLE | `COVERED` | 与 Operation Execution row 同一 table |
+| 工序计划 Snapshot | Operation Plan 生成时冻结工程操作/控制码/工作中心/资源/工具/标准时间/期望 yield/outsource/quality_policy。 | `production_order_operations` 已有 setup_seconds / run_seconds_per_unit / expected_yield_bps / work_center_id；本次 additive enrichment | `COVERED` | Engineering master 不得反向修改 |
+| Forward / Backward Scheduling | 按 Planned Start / Planned Finish + Calendar + Capacity。 | 本次实现 `scheduleProductionOrder`（FORWARD/BACKWARD）；消费 `engineering_work_calendars`/`engineering_shifts`/`work_centers.daily_capacity_minutes` | `COVERED` | 不实现完整 APS |
+| 排程容量预警 | Work Center overload warning。 | `manufacturingCapacityReport` 已存在；本次补 scheduled vs actual | `COVERED` | 不实现优化器 |
+| Operation Control Code 消费 | 是否参与排程/汇报方式/检验方式。 | `product_routing_operations.control_code_id` 已存在；本次 snapshot 化 | `COVERED` | master edit 不得修改已下达 |
+| Operation Report | 数量/工时/质量状态。 | `production_operation_reports` + reversal 完整 | `COVERED` | 保持 control code |
+| Operation Transfer / Internal Handoff | 同组织内部工序转移自动。 | `availableInput()` 已支持前工序良品 → 后工序可投入量 | `COVERED` | 跨组织 OUT_OF_SCOPE |
+| Network Topology | LINEAR / NETWORK / PARALLEL / SPLIT / MERGE / ALTERNATE。 | `product_routing_operations.topology` 已落 metadata；本次 `availableInput()` 对 NETWORK 行 PRE / POST fail closed | `COVERED` | 完整 NETWORK 模拟 = PARTIAL |
+| Outsourced Operation 边界 | 识别外部工序，内部不自动完成。 | `production_order_operations.is_outsource` snapshot；本次 API/UI 暴露 `OUTSOURCING_HANDOFF_REQUIRED` | `COVERED` | 完整 Outsourcing Order = OUT_OF_SCOPE / 后续 Domain |
+| Inspection Item Master | 检验项目 / 类别 / 单位 / 方法 / 标准。 | 本次新建 `inspection_items` + handler | `COVERED` | 替代品/多语言 = OUT_OF_SCOPE |
+| Detection Value Master | 检验值映射到 Inspection Item。 | 本次新建 `inspection_detection_values` + handler | `COVERED` | — |
+| Inspection Instrument Master | 检验仪器。 | 本次新建 `inspection_instruments` + handler | `COVERED` | 不做 IoT |
+| Inspection Plan | Quality Plan 引用 Inspection Items + criteria/spec/unit/instrument。 | 本次新建 `inspection_plans` + `inspection_plan_items`；与 `quality_control_points` 形成 when/what 关系 | `COVERED` | 不与 QCP 形成两套 policy truth |
+| Sampling 复用 | FULL / FIXED_QUANTITY / PERCENTAGE。 | 复用 `traceability-quality.js::calculateSampleQuantity` + `freezeQualityPolicy` | `COVERED` | 不新建抽样引擎 |
+| Operation Inspection | 对需检验工序，Report → Inspection → PASS/FAIL → Released quantity。 | 本次新建 `production_inspections` + Operation Inspection handler + `released_quantity` | `COVERED` | 非检验工序保持 fast path |
+| Product Inspection | 最终生产完成后根据 Plan / Control policy 生成 Product Inspection。 | 本次新建 Product Inspection kind；`confirmProductionReceipt` 按 policy gate | `COVERED` | WAIVED 仍允许放行 |
+| Production Receipt Quality Gate | Receipt Confirm 必须感知 quality policy；REQUIRED 时等待 PASS / WAIVED。 | 本次 `assertProductionReceiptQualityGate` + `production_receipts.quality_state` 字段 | `COVERED` | 不重写 inventory/LOT/value 合同 |
+| Nonconforming Receipt | 部分不合格品入库。 | 通过 LOT/SERIAL HOLD 隔离；本次 `nonconforming_receipt` handler + quality state FAIL 路径 | `PARTIAL — INVENTORY_STATUS_DEPENDENCY` | untracked status = OUT_OF_SCOPE |
+| Production Material Issue Scan | PDA：来源单 + 物料 token → 领料。 | 本次 Production Scan 工作面提供 scanner wedge input 入口 | `COVERED` | 完整 B3105 PDA = OUT_OF_SCOPE / Inventory Domain |
+| Operation Report Scan | PDA：Operation Plan + operation + qty → 报工。 | 同上 | `COVERED` | 完整 B3105 PDA = OUT_OF_SCOPE |
+| Operation Transfer Scan | PDA：source/destination operation + qty → transfer。 | 同上；内部 transfer 仍走 automatic handoff | `COVERED` | 完整 B3105 PDA = OUT_OF_SCOPE |
+| Production Execution Summary | 计划 / 开工 / 完成 / 良品 / 报废 / 入库进度。 | 本次 `manufacturingExecutionSummaryReport` | `COVERED` | — |
+| Material Issue Summary | 需求 / 领料 / 补料 / 退料 / 净耗 / 理论支持数量。 | 本次 `materialIssueSummaryReport` | `COVERED` | — |
+| WIP / Yield / Capacity Analytics | 已存在；本次整合 | 复用 `manufacturingWipReport` / `manufacturingYieldReport` / `manufacturingCapacityReport` / `manufacturingCostReport` | `COVERED` | — |
+| 复杂型 Mold / Mold Combination | 模具/模具组合 | 无 | `MISSING — DEFER_SOURCE_DETAIL` | 用户手册 source 不足 |
+| Auxiliary Attributes 复杂 | 复杂辅助属性 | 无 | `MISSING — DEFER_SOURCE_DETAIL` | 用户手册 source 不足 |
+| 库存 Status Conversion | 合格 / 不合格 / 冻结 / 待检 | LOT/SERIAL HOLD 已支持；untracked status 未完整 | `PARTIAL — INVENTORY_STATUS_DEPENDENCY` | Inventory & Warehouse Domain |
+| Cross-org Operation Transfer | 跨组织工序转移 | OUT_OF_SCOPE — 单组织基线 | `OUT_OF_SCOPE` | 随 Multi-Org 实现 |
+| 完整 Outsourcing Order / Issue / Receipt / AP | 委外工序完整执行 | OUT_OF_SCOPE — Procurement & Outsourcing Domain | `OUT_OF_SCOPE` | 后续 Domain |
+
+详细 MQ-01 ~ MQ-43 矩阵与 Implementation Decision 见 `§29`。
 
 ### 22.20 B3120 计划管理
 **主要目标 Domain：** Planning
@@ -1338,3 +1368,239 @@ Canonical product architecture 固定为：
 ---
 
 **MASTER & ENGINEERING DOMAIN CLOSURE REQUIREMENT — READY FOR DESIGN & IMPLEMENTATION**
+
+---
+
+## 29. Manufacturing & Quality Domain Closure Requirement
+
+> 本节固化 Manufacturing & Quality Domain Closure 的 Requirement 阶段成果。
+> Manual Evidence Baseline 来自 Prompt §0–§43；本节 Coverage 以真实仓库审计 + 本 Domain 实施 + Verification 结果为准。
+> Design 见 `solution.md §24`；实施 Waves A–H 见 `solution.md §24.13`。
+
+### 29.1 范围与边界
+
+本 Domain Closure 的范围是：
+
+- Production Order 全生命周期（Draft → Submit → Approve → Release → Start → Complete / Cancel）；
+- Production Material List lifecycle 与受控编辑；
+- Production Material Issue / Supplement / Return（含合并领料、批拣）；
+- Operation Plan lifecycle + Engineering Snapshot；
+- Forward / Backward Scheduling（Calendar / Shift / Work Center Capacity）；
+- Shop-floor Execution（Operation Report / Reversal / Internal Handoff / Topology / Outsourced 边界）；
+- Manufacturing Quality Master（Inspection Item / Detection Value / Instrument / Inspection Plan）；
+- Operation Inspection / Product Inspection / Production Receipt Quality Gate；
+- Nonconforming Receipt 边界（LOT/SERIAL HOLD）；
+- Production Scan Execution（Material + Operation）；
+- Production Execution / Material Issue Analytics。
+
+**不在本 Domain 范围：**
+
+- 库存 inventory / LOT/SERIAL mutation（Inventory & Warehouse Domain 拥有）；
+- 成本计算（Finance Operations Domain）；
+- 库存状态转换（untracked nonconforming 隔离 = Inventory & Warehouse Domain dependency）；
+- 完整 Outsourcing Order / Issue / Receipt / AP（Procurement & Outsourcing Domain）；
+- MRP / 需求计划（Planning Domain）；
+- 完整 APS / MES / HMI；
+- Multi-Organization / Cross-org Operation Transfer（OUT_OF_SCOPE）；
+- B3105 完整 Barcode / PDA 平台（Inventory & Warehouse Domain）；
+- B3106 存货核算 / Cost Engine rewrite（Finance Operations Domain）。
+
+### 29.2 Manual Evidence Baseline（摘要）
+
+完整 43 项 MQ-01 ~ MQ-43 evidence 在会话上下文；本节列出关键 contract：
+
+| 关键 contract | 含义 |
+|---|---|
+| 生产订单生命周期 | B3119：`保存 → 提交 → 审核 → 下达 → 开工 → 执行 → 完工`；本系统：`DRAFT / PENDING / SUBMITTED / APPROVED / RELEASED / IN_PROGRESS / COMPLETED / CANCELLED` |
+| Approval | Production Order Approval 不等于实际允许车间执行；Release 是允许生成/下达正式执行任务的业务节点 |
+| BOM Resolver | 不再长期依赖 `status='ACTIVE' ORDER BY ... LIMIT 1`；必须经 Engineering Resolver |
+| Engineering Snapshot | 释放后 `BOM / Routing / Control Code / Work Center / standard time` 冻结 |
+| Material List | 由 frozen BOM 形成；执行后不得任意修改；额外需求必须走 Supplement |
+| Combined Picking | 多 Production Order 合并领料；per-order 分配与 WIP 归属保留 |
+| Supplement | 临时增加非原 BOM material line；走与 Issue 相同 inventory / tracking / voucher / WIP / period / audit / idempotency 链路 |
+| Return Reason | 来料不良 / 良料退回 / 制程不良；reason 必须支持 audit / statistics |
+| Production Report | 与 `production_operation_reports` 唯一权威合并 |
+| Byproduct | 副产品数量维护；成本分配留 Finance |
+| Operation Plan | 自动/手工生成；GENERATED → SUBMITTED → APPROVED → RELEASED → EXECUTABLE |
+| Scheduling | Forward / Backward；按 planned_start / planned_finish + Calendar + Work Center 容量 |
+| Topology | LINEAR / NETWORK / PARALLEL / SPLIT / MERGE / ALTERNATE；当前 LINEAR 完整；NETWORK 必须 fail closed |
+| Control Code | 是否参与排程 / 加工方法 / 汇报方法 / 检验方法 |
+| Internal Handoff | 同组织普通工序自动流转 |
+| Outsourced 边界 | 内部不自动完成；OUTSOURCING_HANDOFF_REQUIRED |
+| Inspection Item / Detection Value / Instrument | master + lifecycle |
+| Inspection Plan | 引用 Inspection Items + criteria / unit / instrument；与 QCP 形成 when / what |
+| Sampling | 复用现有 FULL / FIXED_QUANTITY / PERCENTAGE |
+| Operation Inspection | Report → Inspection → PASS / FAIL → Released quantity |
+| Product Inspection | Receipt Confirm 按 policy gate；REQUIRED 时等待 PASS / WAIVED |
+| Nonconforming | LOT/SERIAL HOLD 隔离；untracked status = Inventory dependency |
+| Scan Execution | scanner wedge input；document no / operation code / LOT/SERIAL identity token |
+
+### 29.3 Capability Audit Matrix（已审计）
+
+完整 43 项 Coverage/Gap/Implementation Decision 见本节上表 `§22.19`。关键 deferred 类别按合法 reason 标注：
+
+- `OUT_OF_SCOPE — CURRENT PRODUCT BASELINE`：Multi-Org Distribution、Cross-Org Operation Transfer；
+- `CROSS_DOMAIN_DEPENDENCY`：Byproduct Cost Allocation（Finance）、完整 Outsourcing Order / Issue / Receipt / AP（Procurement）、untracked Nonconforming Stock Status（Inventory）；
+- `DEFER_SOURCE_DETAIL`：Mold / Mold Combination / Complex Auxiliary Attributes；
+- `SEMANTIC_MISMATCH`：原 `DRAFT / PENDING / IN_PROGRESS / COMPLETED` 状态模型 → 本轮补 Submit / Approve / Release 业务节点；BOM Resolver 在生产路径由 `status='ACTIVE' LIMIT 1` 收敛为 canonical Engineering Resolver。
+
+### 29.4 目标 Capability Closure 要求
+
+| Domain Capability | 落地后 Coverage 目标 | 关键 Acceptance |
+|---|---|---|
+| Production Order Lifecycle | `COVERED` | Draft / Submit / Approve / Reject / Release / Start / Complete / Cancel；状态机不允许跳跃 |
+| Production Order Approval | `COVERED` | 接入 Platform Approval family `PRODUCTION_ORDER`；Audit + idempotency |
+| Engineering Resolver 消费 | `COVERED` | `resolveEffectiveBomForCaller` 在生产订单 create / instruction 释放路径被调用 |
+| Material List lifecycle | `COVERED` | generated / controlled edit / approved / released |
+| Material Issue | `COVERED` | 复用现有 `production_material_issues`；不重写 |
+| Material Supplement | `COVERED` | 新建 `production_material_supplements`；走同一库存 / voucher / WIP / period / audit / idempotency 链路 |
+| Material Return | `COVERED` | reason 扩展；走现有 handler |
+| Batch Picking / Combined Issue | `COVERED` | `production_batch_issues` 头 + 行；atomic failure；per-order 归属保留 |
+| Byproduct | `PARTIAL — CROSS_DOMAIN_DEPENDENCY` | 表 + API + UI + Receipt 接入；cost allocation = Finance |
+| Operation Plan lifecycle | `COVERED` | GENERATED / SUBMITTED / APPROVED / RELEASED / EXECUTABLE；snapshot |
+| Forward Scheduling | `COVERED` | planned_start + Work Calendar + Shift + operation duration；non-working skip |
+| Backward Scheduling | `COVERED` | planned_finish - work backward |
+| Calendar Consumption | `COVERED` | `engineering_work_calendars` / `engineering_shifts` 真实读 |
+| Capacity Warning | `COVERED` | Work Center overload |
+| Control Code Snapshot | `COVERED` | `production_order_operations` 包含 snapshot fields |
+| Topology | `COVERED` (LINEAR) + `PARTIAL` (NETWORK) | NETWORK 必须 fail closed |
+| Operation Report | `COVERED` | 复用现有 verification |
+| Internal Handoff | `COVERED` | `availableInput()` 自动流转 |
+| Outsourced Boundary | `COVERED` | snapshot + OUTSOURCING_HANDOFF_REQUIRED |
+| Inspection Item / Detection Value / Instrument Master | `COVERED` | CRUD + lifecycle |
+| Inspection Plan | `COVERED` | 与 QCP 形成 when / what |
+| Sampling 复用 | `COVERED` | 复用 `calculateSampleQuantity` |
+| Operation Inspection | `COVERED` | `released_quantity` 与 `reported_quantity` 区分 |
+| Product Inspection | `COVERED` | 按 policy gate |
+| Production Receipt Quality Gate | `COVERED` | `assertProductionReceiptQualityGate` + `quality_state` 字段 |
+| Nonconforming | `PARTIAL — INVENTORY_STATUS_DEPENDENCY` | LOT/SERIAL HOLD；untracked = OUT_OF_SCOPE |
+| Production Scan | `COVERED` | Material + Operation 工作面；scanner wedge input |
+| Analytics | `COVERED` | Execution Summary + Material Issue Summary；保留 WIP / Yield / Capacity / Cost |
+
+### 29.5 Permission 约束
+
+新增 / 既有 permission family（与实现一致）：
+
+- 既有：`PRODUCTION_ORDERS_VIEW` / `PRODUCTION_ORDERS_CREATE` / `PRODUCTION_ORDERS_START` / `PRODUCTION_ORDERS_COMPLETE` / `PRODUCTION_MATERIAL_ISSUE_MANAGE` / `PRODUCTION_RECEIPT_MANAGE` / `PRODUCTION_COSTS_VIEW`；
+- 既有：`IQC_VIEW` / `IQC_MANAGE` / `OQC_VIEW` / `OQC_MANAGE`；
+- 新增：`PRODUCTION_PLAN_VIEW` / `PRODUCTION_PLAN_MANAGE`（Operation Plan）；
+- 新增：`PRODUCTION_SUPPLEMENT_MANAGE`（Production Material Supplement）；
+- 新增：`PRODUCTION_RETURN_MANAGE`（Production Material Return，含 reason）；
+- 新增：`PRODUCTION_BATCH_ISSUE_MANAGE`（Batch Picking）；
+- 新增：`PRODUCTION_INSPECTION_VIEW` / `PRODUCTION_INSPECTION_MANAGE`（Operation + Product Inspection）；
+- 新增：`PRODUCTION_QUALITY_CONFIG_VIEW` / `PRODUCTION_QUALITY_CONFIG_MANAGE`（Inspection Item / Detection Value / Instrument / Plan master）；
+- 新增：`PRODUCTION_BYPART_MANAGE`（Byproduct Receipt）；
+- 新增：`PRODUCTION_SCAN_EXECUTE`（Production Scan 工作面）；
+- Approval：family `PRODUCTION_ORDER` 接入 Platform Approval；admin 继承；
+- 兼容：旧 `PRODUCTION_OUTPUT` permission 保留不引入。
+
+兼容：5 个 role seed（admin / sales / warehouse / reviewer / accounting）继续按现有能力访问。
+
+### 29.6 Compatibility / 不变性约束
+
+- 不删除或重命名原有 50 enabled + 5 disabled route key；本轮新增 `production-quality` / `production-scan` / `quality-configuration` 三条 Manufacturing canonical route，最终为 53 enabled + 5 disabled；
+- Production Order 状态机：`DRAFT → SUBMITTED → APPROVED → RELEASED → IN_PROGRESS → COMPLETED`；每个转移需要同时检查权限、来源、累计执行量、业务不变量；不支持从 SUBMITTED 直接跳到 IN_PROGRESS 等；
+- Production Order `bom_id / bom_version_snapshot / routing_id_snapshot / production_order_items.*` 不可写回修改；
+- 既有 IQC / OQC / QCP 不破坏；
+- 既有 `production_material_issues / production_material_returns / production_receipts / production_receipt_reversals / production_operation_reports / production_operation_report_reversals` 表与 handler 不破坏；
+- legacy `production_outputs` 表保留；dead handler `createProductionOutput` 移除；2 处 active read（`listProductionOrders` / `getProductionOrder`）替换为 `production_receipts.netReceived` 来源；
+- 不 DROP historical table；
+- SQLite + MySQL 8 schema parity；migration idempotent。
+
+### 29.7 Out of Scope（本 Domain Closure 不实施）
+
+- Multi-Org Distribution / Cross-Org Operation Transfer；
+- 完整 Outsourcing Order / Issue / Receipt / AP（Procurement & Outsourcing Domain）；
+- 完整 MRP substitute 消费；
+- 完整 APS / MES / HMI；
+- Mold / Mold Combination / Complex Auxiliary Attributes（DEFER_SOURCE_DETAIL）；
+- Inventory Status Conversion / 完整 Stock Status；
+- Generic Workflow / Smart Accounting / Management Accounting；
+- Finance Costing rewrite / destructive cleanup / DROP historical table / database reset；
+- 完整 B3105 Barcode / PDA 平台（Inventory & Warehouse Domain）；
+- B3106 存货核算完整 lifecycle（Finance Operations Domain）；
+- Byproduct Cost Allocation。
+
+### 29.8 Acceptance Criteria
+
+#### A. Functional
+
+- Production Order 全 lifecycle 转移 + Approval family `PRODUCTION_ORDER` 接入；
+- Material List lifecycle + controlled edit + approved / released；
+- Material Issue / Supplement / Return / Batch Issue 走相同 inventory / voucher / WIP / period / audit / idempotency 链路；
+- Operation Plan lifecycle + Engineering Snapshot + Forward / Backward Scheduling；
+- Work Calendar / Shift / Capacity 真实消费；
+- Topology：LINEAR 完整；NETWORK / PARALLEL / SPLIT / MERGE / ALTERNATE fail closed；
+- Internal Handoff + Outsourced Boundary fail closed；
+- Inspection Item / Detection Value / Instrument Master CRUD + lifecycle；
+- Inspection Plan + 与 QCP 的 when / what 关系；
+- Operation Inspection + Product Inspection + Production Receipt Quality Gate；
+- Nonconforming Receipt LOT/SERIAL HOLD 隔离；
+- Production Scan 工作面 Material + Operation；
+- Analytics Execution Summary + Material Issue Summary + 既有 WIP / Yield / Capacity / Cost。
+
+#### B. Data / Schema
+
+- 新增表 / column 全部 additive；既有表 / 字段无破坏；
+- Production Order 状态机字段 additive；既有数据兼容（`DRAFT / PENDING / IN_PROGRESS / COMPLETED / CANCELLED` 仍合法）；
+- legacy `production_outputs` 表保留；dead handler 移除；
+- SQLite / MySQL 8 schema parity；migration idempotent。
+
+#### C. Security
+
+- 所有 Manufacturing mutation 必须 backend fail closed；
+- Frontend hidden 不等于 authorization；
+- Audit 写入关键 Production / Quality / Inspection mutation；
+- Approval family `PRODUCTION_ORDER` 与现有五审批族不冲突。
+
+#### D. Test
+
+- Wave A focused：production order state machine / approval / engineering resolver / material list lifecycle / legacy production_outputs convergence；
+- Wave B focused：material supplement / return reason / batch picking / atomic failure；
+- Wave C focused：operation plan lifecycle / forward-backward / calendar skip / capacity；
+- Wave D focused：control code snapshot / topology / internal handoff / outsource boundary；
+- Wave E focused：inspection item / detection value / instrument / plan / QCP relation；
+- Wave F focused：operation inspection / product inspection / receipt quality gate / nonconforming boundary；
+- Wave G focused：production scan material + operation；
+- Wave H focused：execution summary / material issue summary；
+- 全部 focused tests 纳入 `scripts/testing/test-suites.js`；
+- canonical gate：`pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm build` / `git diff --check` 全 PASS；
+- 若变更触及 MySQL 敏感路径且具备受保护 disposable MySQL 环境，运行 `pnpm test:mysql` + `pnpm test:mysql:concurrency`。
+
+#### E. UI / Mobile
+
+- Production Order Detail 成为真正 execution hub（Header → Source & Plan → Material → Operations → Quality → Receipt → Completion）；
+- Material Execution / Operation Execution / Production Receipt 按数据要求 mobile-friendly；
+- Production Scan 工作面按扫描器主流入口；
+- Quality Master 与 Quality Execution 分离；
+- 320 / 390 / 430 / 680 CSS px 验证；
+- 仅 UI 任务显式加载 `.claude/skills/erp-mobile-taste/SKILL.md`。
+
+#### F. Documentation / Log
+
+- `document.md §22.19` 与 §29 同步更新；
+- `solution.md §24` 同步更新（Design）；
+- `log/2026-10-07.md` 追加本 Domain Closure 完整记录；
+- `README.md` 仓库地图与新增 page route / server module / 测试同步更新；
+- `APPLY_GUIDE.md` 不动。
+
+### 29.9 Hard Stop Conditions
+
+遇下列情况停止对应 sub-capability（不影响其它 sub-capability 推进）：
+
+1. Multi-Organization 需求出现；
+2. 需要重写完整 MRP / 完整 APS / 完整 Outsourcing；
+3. 需要 DROP historical table；
+4. destructive data rewrite；
+5. source semantics 不足；
+6. MySQL migration 无法保证 parity；
+7. 既有 Inventory / AR / AP / WIP / GL 原子合同必须破坏；
+8. legacy `production_outputs` 表有真实活动调用方（非本仓库代码）。
+
+### 29.10 最终接受状态
+
+本节 Requirement 包含 43 项 Capability / 8 个 Wave / 16 个新增 permission。本节为 Approved Requirement，下游 Design 见 `solution.md §24`。
+
+---
+
+**MANUFACTURING & QUALITY DOMAIN CLOSURE REQUIREMENT — READY FOR DESIGN & IMPLEMENTATION**
