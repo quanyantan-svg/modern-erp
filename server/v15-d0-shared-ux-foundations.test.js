@@ -8,8 +8,8 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
 test('D0 route presentation registry is complete and excludes aliases and disabled routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 55);
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 55);
+  assert.equal(ROUTE_PRESENTATIONS.length, 57);
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 57);
   assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route), ['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']);
   assert.equal(ROUTE_PRESENTATIONS.some((item) => item.route === 'mrp'), false);
   assert.equal(TECHNICAL_ROUTE_ALIASES.mrp, 'material-requirements-plan');
@@ -20,7 +20,7 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
 
 test('D0 presentation projection reconciles exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 55);
+  assert.equal(active.size, 57);
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)));
   assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });

@@ -47,12 +47,14 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 55 enabled + 5 disabled = 60 entries', () => {
+test('P8 route inventory: 57 enabled + 5 disabled = 62 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
-  assert.equal(ROUTE_PRESENTATIONS.length, 55, 'ROUTE_PRESENTATIONS must hold 55 enabled canonical routes');
+  // Planning Closure added 2 contextual routes (planning-reservations,
+  // planning-configuration) under planned-orders.
+  assert.equal(ROUTE_PRESENTATIONS.length, 57, 'ROUTE_PRESENTATIONS must hold 57 enabled canonical routes');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 60);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 62);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -172,7 +174,7 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // (8 O2C/P2P quality and settlement children + material-requirements-plan).
   // The tasks/timesheets project children were removed with the Project
   // Management extension in Core Scope Cleanup.
-  assert.equal(contextualCount, 9, 'contextual routes with parentRoute must total 9');
+  assert.equal(contextualCount, 11, 'contextual routes with parentRoute must total 11 (9 historical + planning-reservations + planning-configuration)');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {
