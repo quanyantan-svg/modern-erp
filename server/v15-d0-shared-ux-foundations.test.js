@@ -8,8 +8,8 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
 test('D0 route presentation registry is complete and excludes aliases and disabled routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 50);
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 50);
+  assert.equal(ROUTE_PRESENTATIONS.length, 53);
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 53);
   assert.deepEqual(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route), ['cash-journals', 'bills', 'fixed-assets', 'workflows', 'data-cleanup']);
   assert.equal(ROUTE_PRESENTATIONS.some((item) => item.route === 'mrp'), false);
   assert.equal(TECHNICAL_ROUTE_ALIASES.mrp, 'material-requirements-plan');
@@ -20,14 +20,14 @@ test('D0 route presentation registry is complete and excludes aliases and disabl
 
 test('D0 presentation projection reconciles exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 50);
+  assert.equal(active.size, 53);
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)));
   assert.deepEqual(new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key)), new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)));
 });
 
-test('D0 product semantics freeze eight domains and five approval families', () => {
+test('D0 product semantics freeze eight domains and six approval families', () => {
   assert.deepEqual(PRIMARY_DOMAINS.map((item) => item.key), ['master-engineering','sales-customer','planning','procurement-outsourcing','manufacturing-quality','inventory-warehouse','finance-operations','accounting-analytics']);
-  assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']);
+  assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PRODUCTION_ORDER']);
   assert.equal(APPROVAL_FAMILIES.includes('INVENTORY_TRANSFER'), false);
   const byRoute = Object.fromEntries(ROUTE_PRESENTATIONS.map((item) => [item.route, item]));
   assert.equal(byRoute['material-requirements-plan'].parentRoute, 'mrp-runs');

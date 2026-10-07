@@ -174,12 +174,12 @@ describe('V1.6 P3.1 — sales-order micro polish contract', () => {
   test('9. P3.1 product contract: canonical route inventory + back navigation wiring intact', () => {
     // V1.6 P3.1 is a micro-polish change inside the mobile sales-order surface.
     // The frozen product contract this phase must NOT disturb:
-    //   - canonical 50 enabled / 5 disabled route inventory
+    //   - canonical 53 enabled / 5 disabled route inventory
     //   - sales-orders route keeps its access contract
     //   - the back navigation chain in MobileShell / AppNavigationContext /
     //     App.jsx is still wired (P3.1 cleaned up dead back buttons; the
     //     canonical handler chain must remain).
-    assert.equal(ROUTE_PRESENTATIONS.length, 50, 'canonical 50 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesRoute = enabledByRoute.get('orders');

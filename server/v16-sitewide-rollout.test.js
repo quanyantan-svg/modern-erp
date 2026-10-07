@@ -35,7 +35,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 50);
+    assert.equal(keys.length, 53);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -71,9 +71,9 @@ describe('V1.6 site-wide rollout source contract', () => {
     }
   });
 
-  test('five approval families remain exact', () => {
+  test('six approval families remain exact', () => {
     assert.deepEqual([...APPROVAL_FAMILIES], [
-      'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER',
+      'SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PRODUCTION_ORDER',
     ]);
   });
 

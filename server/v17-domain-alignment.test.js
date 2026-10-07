@@ -11,8 +11,8 @@ import { BUSINESS_DOMAIN_KEYS, CANONICAL_DOMAIN_KEYS, PLATFORM_DOMAIN } from '..
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
-test('Domain Alignment keeps 50 active and 5 disabled routes on canonical domains', () => {
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 50);
+test('Domain Alignment keeps 53 active and 5 disabled routes on canonical domains', () => {
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 53);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);

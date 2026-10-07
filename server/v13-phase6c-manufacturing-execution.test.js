@@ -32,14 +32,15 @@ after(async () => { await new Promise((done) => server.close(done)); handle.clea
 
 let orderId; let operations;
 describe('V1.3 Phase 6C manufacturing execution, yield, capacity and analytical cost', () => {
-  test('schema, five roles and no production approval family remain canonical', () => {
+  test('schema, five roles and production approval family remain canonical', () => {
     for (const table of ['production_order_operations','production_operation_reports','production_operation_report_reversals','production_cost_baselines','production_cost_summaries']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
-    assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION']);
+    assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION','PRODUCTION_ORDER']);
   });
 
   test('routing and work-center rates snapshot at start; baseline is integer cents and immutable', async () => {
     const created = await request('/api/production-orders', { method: 'POST', body: { productId: 'p6c-fg', bomId: 'p6c-bom', routingId: 'p6c-route', quantity: 100, plannedStart: '2026-09-24' } }); assert.equal(created.status, 200, created.data.error); orderId = created.data.id;
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target } }); assert.equal(transition.status, 200, transition.data.error); }
     assert.equal((await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } })).status, 200);
     operations = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? ORDER BY sequence_no').all(orderId); assert.equal(operations.length, 3); assert.equal(operations[0].labor_rate_cents_per_hour, 6000); assert.deepEqual(operations.map((x) => x.planned_date), ['2026-09-24','2026-09-25','2026-09-26']);
     const baseline = db.prepare('SELECT * FROM production_cost_baselines WHERE production_order_id=?').get(orderId); assert.equal(baseline.standard_material_cents, 4000000); assert.ok(Number.isInteger(baseline.standard_total_cents));

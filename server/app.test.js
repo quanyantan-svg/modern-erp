@@ -415,6 +415,18 @@ describe('Production Orders', () => {
 
   test('开工生产工单', async () => {
     if (!orderId) return;
+
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
+      const transitionRes = await fetch(`${baseUrl}/api/production-orders/${orderId}/state`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${adminToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ target }),
+      });
+      assert.equal(transitionRes.status, 200, `production order transition ${target}`);
+    }
     
     const startRes = await fetch(`${baseUrl}/api/production-orders/${orderId}`, {
       method: 'POST',

@@ -135,6 +135,12 @@ const FULL = [
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
+  // ----- V18 Manufacturing & Quality Domain Closure -----
+  // Production Order state machine + Material Supplement + Batch Picking +
+  // Operation Plan + Scheduling + Quality masters + Inspection + Scan +
+  // Analytics + legacy production_outputs convergence.
+  'server/manufacturing-quality-domain.test.js',
+
   // ----- V2 Stage 3 / Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F — backend dispatch ownership architecture -----
   // Architecture tests for server/lib/route-table.js plus the live
   // Wave 3A + Wave 3B + Wave 3C + Wave 3D + Wave 3E + Wave 3F

@@ -62,6 +62,7 @@ describe('V1.3 Phase 4 X100 execution, correction, completion and zero-side-effe
   test('J-BR full authoritative flow', async () => {
     seedX100();
     const created = await request('/api/production-orders', { method: 'POST', body: { productId: 'fg-x100', bomId: 'bom-x100', quantity: 100, plannedStart: '2026-09-23' } }); assert.equal(created.status, 200, created.data.error); const orderId = created.data.id;
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) { const transition = await request(`/api/production-orders/${orderId}/state`, { method: 'POST', body: { target } }); assert.equal(transition.status, 200, transition.data.error); }
     const txBeforeStart = db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n; const started = await request(`/api/production-orders/${orderId}`, { method: 'POST', body: { action: 'start' } }); assert.equal(started.status, 200); assert.equal(db.prepare('SELECT COUNT(*) n FROM inventory_transactions').get().n, txBeforeStart);
     const reqs = db.prepare('SELECT * FROM production_order_items WHERE order_id=? ORDER BY line_no').all(orderId); assert.equal(reqs.length, 3); assert.ok(reqs.every((r) => Number(r.quantity) === 100));
 

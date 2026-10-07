@@ -24,7 +24,7 @@ describe('V1.3 Phase 6B lot, serial, genealogy and configurable quality', () => 
     for (const table of ['inventory_lots','inventory_lot_balances','inventory_serials','tracked_source_allocations','tracked_inventory_movements','tracked_identity_hold_history','production_genealogy_allocations','quality_control_points','quality_control_criteria','logistics_quality_policy_snapshots','inspection_criteria_snapshots']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
     assert.equal(db.prepare("SELECT tracking_policy FROM products WHERE id='p-none'").get().tracking_policy, 'NONE');
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
-    assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION']);
+    assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER','PURCHASE_ORDER','INVENTORY_CHECK','ACCOUNTING_VOUCHER','PURCHASE_REQUISITION','PRODUCTION_ORDER']);
   });
 
   test('tracking policy changes require zero stock/open execution and create immutable audit history', () => {

@@ -547,9 +547,9 @@ describe('E. Approval Center', () => {
     assert.ok(!r.data.items.some((row) => row.documentType === 'PURCHASE_REQUISITION'));
   });
 
-  test('E3. PURCHASE_REQUISITION is the only new approval family; no other documents added', async () => {
+  test('E3. approval center exposes the approved document families', async () => {
     const { APPROVAL_DOCUMENT_TYPES } = await import('./modules/approvals.js');
-    const expected = new Set(['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION']);
+    const expected = new Set(['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION', 'PRODUCTION_ORDER']);
     assert.equal(APPROVAL_DOCUMENT_TYPES.length, expected.size);
     for (const t of APPROVAL_DOCUMENT_TYPES) assert.ok(expected.has(t), t);
   });

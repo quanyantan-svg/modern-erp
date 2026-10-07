@@ -124,7 +124,7 @@ async function issueAllRequirements(orderId, warehouseId) {
 
 describe('M6 permission registry', () => {
   test('1. PERMISSIONS registry has 112 entries after Core Scope Cleanup + V17 Wave A (CRM_*, PROJECT_* removed)', () => {
-    assert.equal(PERMISSIONS.length, 122);
+    assert.equal(PERMISSIONS.length, 135);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('PRODUCTION_MATERIAL_ISSUE_MANAGE'));
     assert.ok(codes.has('PRODUCTION_RECEIPT_MANAGE'));
@@ -654,7 +654,8 @@ describe('M6 mobile UI surface', () => {
   test('42. mobile Material Issue / Production Receipt / Production Order are not in approval center', () => {
     const approvals = readFileSync(new URL('../src/components/MobileApprovalCenter.jsx', import.meta.url), 'utf8');
     assert.doesNotMatch(approvals, /material-issues|production-receipts|Material Issue|Production Receipt|用料出库|生产入库/);
-    assert.doesNotMatch(approvals, /production-orders|productionOrderState|production-order-state/);
+    assert.match(approvals, /PRODUCTION_ORDER/);
+    assert.match(approvals, /production-orders/);
   });
 
   test('43. DEFERRED_MOBILE_APPLICATIONS no longer lists 用料出库 / 生产入库', () => {

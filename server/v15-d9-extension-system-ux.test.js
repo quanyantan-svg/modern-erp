@@ -6,7 +6,7 @@ import { APPROVAL_FAMILIES, ROUTE_PRESENTATIONS } from '../src/navigation/presen
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('D9 closes every active route on the shared 680px application rail', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 50);
+  assert.equal(ROUTE_PRESENTATIONS.length, 53);
   const styles = read('src/styles.css');
   assert.match(styles, /\.mobile-shell \{[\s\S]*--app-max-width: 680px;[\s\S]*--page-max-width: 680px;/);
   assert.match(styles, /\.mobile-application-view \{[\s\S]*max-width: 680px;/);
@@ -21,8 +21,8 @@ test('D9 uses the real notification center for the mobile messages tab', () => {
   assert.match(notifications, /移动端“消息”共享同一数据源和已读状态/);
 });
 
-test('D9 unifies desktop approvals across exactly five approved families', () => {
-  assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER']);
+test('D9 unifies desktop approvals across exactly six approved families', () => {
+  assert.deepEqual(APPROVAL_FAMILIES, ['SALES_ORDER', 'PURCHASE_ORDER', 'PURCHASE_REQUISITION', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PRODUCTION_ORDER']);
   const app = read('src/App.jsx');
   assert.match(app, /mobileTab === 'approvals'.*<RouteScreen route=\{applicationRouteFor\('approvals'\)\}/);
   assert.doesNotMatch(app, /standaloneTitle/);

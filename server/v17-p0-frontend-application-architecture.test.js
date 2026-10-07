@@ -12,12 +12,12 @@ import { normalizeRouteLocation, parseRouteLocation, serializeRouteLocation, val
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('P0-A registry owns 50 active and 5 disabled unique routes with valid screens, access and parents', () => {
+test('P0-A registry owns 53 active and 5 disabled unique routes with valid screens, access and parents', () => {
   // After Core Scope Cleanup, the registry had 47 active routes
   // (53 minus the 6 removed extension routes: projects, tasks,
   // timesheets, contacts, followups, activities). Master & Engineering
-  // Domain Closure adds 3 canonical engineering workbench routes.
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 50);
+  // Master & Engineering adds 3 workbenches; Manufacturing & Quality adds 3 execution surfaces.
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 53);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','fixed-assets','workflows','data-cleanup']);
@@ -41,7 +41,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 50);
+  assert.equal(ROUTE_PRESENTATIONS.length, 53);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));

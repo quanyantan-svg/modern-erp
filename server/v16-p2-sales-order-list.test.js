@@ -187,7 +187,7 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
     // navigation product contracts are still guarded here:
     //   - sales-orders remains an enabled canonical route
     //   - its permission contract (ORDERS_VIEW / ORDERS_CREATE) is unchanged
-    //   - the five canonical approval families remain stable
+    //   - the six canonical approval families remain stable
     //   - the five disabled routes remain disabled
     //   - the LIST is still served through a backend route key, not via a
     //     freshly invented alias.
@@ -202,10 +202,10 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
 
     const approvals = enabledByRoute.get('approvals');
     assert.ok(approvals, 'approvals route must remain enabled');
-    assert.deepEqual(approvals.approvalFamilies, APPROVAL_FAMILIES, 'approval families must remain the canonical five');
+    assert.deepEqual(approvals.approvalFamilies, APPROVAL_FAMILIES, 'approval families must remain the canonical six');
 
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
-    assert.equal(ROUTE_PRESENTATIONS.length, 50, 'canonical 50 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
 
     // The Orders LIST surface still routes through the canonical route key.
     assert.match(masterData, /navigateToPage\(['"]orders['"]/);

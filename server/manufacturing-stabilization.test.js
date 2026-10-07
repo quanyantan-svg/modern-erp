@@ -150,6 +150,10 @@ describe('Production order core hardening', () => {
     assert.equal(bom.status, 200, bom.data.error);
     const response = await request('/api/production-orders', { method: 'POST', body: { productId: 'product-001', bomId: bom.data.id, quantity: 5, plannedStart: '2026-09-02' } });
     assert.equal(response.status, 200, response.data.error);
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
+      const transition = await request(`/api/production-orders/${response.data.id}/state`, { method: 'POST', body: { target } });
+      assert.equal(transition.status, 200, transition.data.error);
+    }
     return response.data.id;
   }
 

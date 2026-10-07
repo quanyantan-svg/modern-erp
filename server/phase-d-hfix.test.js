@@ -192,13 +192,19 @@ describe('Production order — permission and state-machine regression', () => {
     const res = await api(`/api/production-orders/${orderId}`);
     assert.equal(res.status, 200);
     assert.equal(res.data.order.id, orderId);
-    assert.equal(res.data.order.status, 'PENDING');
+    assert.equal(res.data.order.status, 'DRAFT');
     assert.equal(res.data.order.quantity, 5);
   });
 
-  test('PENDING → start succeeds with action=start', async () => {
+  test('DRAFT → submit → approve → release → start succeeds', async () => {
     const orderId = orderRef.id;
     if (!orderId) return;
+    for (const target of ['SUBMITTED', 'APPROVED', 'RELEASED']) {
+      const transition = await api(`/api/production-orders/${orderId}/state`, {
+        method: 'POST', body: { target },
+      });
+      assert.equal(transition.status, 200, `transition ${target}`);
+    }
     const res = await api(`/api/production-orders/${orderId}`, {
       method: 'POST', body: { action: 'start' },
     });

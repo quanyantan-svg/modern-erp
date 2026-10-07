@@ -223,13 +223,13 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
   test('35. P4 product contract: purchase-receipts canonical route + contextual IQC parent + access contract stable', () => {
     // V1.6 P4 rebuilt the purchase-receipt presentation surface. The frozen
     // product contract this phase must preserve:
-    //   - canonical 50 enabled / 5 disabled route inventory
+    //   - canonical 53 enabled / 5 disabled route inventory
     //   - purchase-receipts route keeps its access contract (PURCHASE_RECEIPTS_VIEW /
     //     PURCHASE_RECEIPTS_MANAGE)
     //   - IQC still has parentRoute = purchase-receipts (contextual classification
     //     contract preserved)
     //   - the MobileShell header back handler chain still wires setHeaderBackAction
-    assert.equal(ROUTE_PRESENTATIONS.length, 50, 'canonical 50 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const receiptRoute = enabledByRoute.get('purchase-receipts');
