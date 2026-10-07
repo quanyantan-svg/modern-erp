@@ -38,8 +38,8 @@ after(async () => {
 });
 
 describe('P2 lifecycle contract remains permission- and approval-neutral', () => {
-  test('permission registry stays exactly 110 after Core Scope Cleanup and approval center stays exactly five canonical types', () => {
-    assert.equal(PERMISSIONS.length, 110);
+  test('permission registry stays exactly 112 after Core Scope Cleanup + V17 Wave A and approval center stays exactly five canonical types', () => {
+    assert.equal(PERMISSIONS.length, 122);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION']);
   });
   test('unauthorized destructive operation returns 403', async () => {

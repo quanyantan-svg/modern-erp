@@ -23,6 +23,11 @@ import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-comm
 import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateR4PurchaseSourceCardinality } from './migrations/r4-purchase-source-cardinality.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
+import { migrateEngineeringReferenceSchema } from './migrations/engineering-reference-schema.js';
+import { migrateEngineeringBomSchema } from './migrations/engineering-bom-schema.js';
+import { migrateEngineeringSubstituteSchema } from './migrations/engineering-substitute-schema.js';
+import { migrateEngineeringRoutingSchema } from './migrations/engineering-routing-schema.js';
+import { migrateEngineeringChangeSchema } from './migrations/engineering-change-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -148,6 +153,26 @@ export const PERMISSIONS = [
   ['SALES_DISCOUNT_MANAGE', '管理与确认销售附加折让'],
   ['PURCHASE_DISCOUNT_MANAGE', '管理与确认采购附加折让'],
 
+  // V17 — Master & Engineering Domain Closure (Wave A)
+  ['ENGINEERING_REFERENCE_VIEW', '查看工程基础资料'],
+  ['ENGINEERING_REFERENCE_MANAGE', '管理工程基础资料'],
+
+  // V17 — Master & Engineering Domain Closure (Wave B)
+  ['ENGINEERING_BOM_VIEW', '查看工程 BOM'],
+  ['ENGINEERING_BOM_MANAGE', '管理工程 BOM'],
+  ['ENGINEERING_BOM_APPROVE', '审核工程 BOM'],
+
+  // V17 — Master & Engineering Domain Closure (Wave C)
+  ['ENGINEERING_SUBSTITUTE_VIEW', '查看替代料'],
+  ['ENGINEERING_SUBSTITUTE_MANAGE', '管理替代料'],
+  ['ENGINEERING_CONFIGURABLE_VIEW', '查看可配置 BOM'],
+  ['ENGINEERING_CONFIGURABLE_MANAGE', '管理可配置 BOM'],
+
+  // V17 — Master & Engineering Domain Closure (Wave E)
+  ['ENGINEERING_CHANGE_VIEW', '查看工程变更'],
+  ['ENGINEERING_CHANGE_MANAGE', '管理工程变更'],
+  ['ENGINEERING_CHANGE_APPROVE', '审核工程变更'],
+
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -175,6 +200,11 @@ function createSqliteDatabase(filename) {
   migrateDiscountsSchema(db);
   migrateLifecycleSchema(db);
   migrateV13Phase1Contracts(db);
+  migrateEngineeringReferenceSchema(db);
+  migrateEngineeringBomSchema(db);
+  migrateEngineeringSubstituteSchema(db);
+  migrateEngineeringRoutingSchema(db);
+  migrateEngineeringChangeSchema(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables

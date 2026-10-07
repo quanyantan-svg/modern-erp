@@ -184,6 +184,43 @@ import {
   createRoutingOperation,
   listRoutingOperations,
 } from './modules/manufacturing-reference.js';
+import {
+  listShifts, createShift, updateShift,
+  listShiftPatterns, createShiftPattern,
+  listCalendarTemplates, createCalendarTemplate,
+  listWorkCalendars, createWorkCalendar,
+  listBasicActivities, createBasicActivity,
+  listWorkshopFormulas, createWorkshopFormula, evaluateWorkshopFormula,
+  listResources, createResource,
+  listEquipment, createEquipment,
+  listOperations, createOperation,
+  listControlCodes, createControlCode,
+  listWorkCenterEnhancement, updateWorkCenter, deactivateWorkCenter,
+} from './modules/engineering-reference.js';
+import {
+  listBomsGovernance, getBomGovernance,
+  createBomGovernance, updateBomGovernance, deactivateBomGovernance,
+  submitBomForApproval, approveBom, rejectBom,
+  expandBomTree, whereUsed, consolidateBom, compareBoms, bomCostReference,
+  previewBomBatch, applyBomBatch,
+} from './modules/engineering-bom.js';
+import {
+  listSubstituteSchemes, createSubstituteScheme,
+  listSubstitutes, createSubstitute, deleteSubstitute,
+  resolveSubstitutesForPrimary,
+} from './modules/engineering-substitute.js';
+import {
+  previewConfigurableBom, validateConfigurableBom,
+} from './modules/engineering-configurable-bom.js';
+import {
+  getEnrichedRouting, updateRoutingEnrichment,
+  createRoutingLink, deleteRoutingLink,
+} from './modules/engineering-routing-enrichment.js';
+import {
+  listEngineeringChanges, getEngineeringChange,
+  createEngineeringChange, submitEngineeringChange, approveEngineeringChange, rejectEngineeringChange,
+  previewImpactEngineeringChange, applyEngineeringChange, recordCleanup,
+} from './modules/engineering-change.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
 //
@@ -696,6 +733,165 @@ ownedRouteTable.register({
   owner: 'server/modules/manufacturing-reference.js',
 });
 
+// V17 Master & Engineering Domain Closure — Wave A: Engineering Reference
+// Foundation. The routes below own Shift / Shift Pattern / Calendar Template /
+// Work Calendar / Basic Activity / Workshop Formula (safe grammar only) /
+// Resource / Equipment / Operation / Control Code / Work Center enhancement.
+// They coexist with the legacy `/api/work-centers` GET/POST above without
+// removing the legacy handler. The legacy `/api/routing-operations` remains
+// for historical compatibility but the canonical owner of routing facts is
+// `server/modules/product-routing.js` (see Wave D for full convergence).
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/shifts',
+  handler: ({ db, res, actor }) => listShifts(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/shifts',
+  handler: ({ db, req, res, actor }) => createShift(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/shifts\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateShift(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/shift-patterns',
+  handler: ({ db, res, actor }) => listShiftPatterns(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/shift-patterns',
+  handler: ({ db, req, res, actor }) => createShiftPattern(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/calendar-templates',
+  handler: ({ db, res, actor }) => listCalendarTemplates(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/calendar-templates',
+  handler: ({ db, req, res, actor }) => createCalendarTemplate(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/work-calendars',
+  handler: ({ db, res, actor }) => listWorkCalendars(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/work-calendars',
+  handler: ({ db, req, res, actor }) => createWorkCalendar(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/basic-activities',
+  handler: ({ db, res, actor }) => listBasicActivities(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/basic-activities',
+  handler: ({ db, req, res, actor }) => createBasicActivity(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/workshop-formulas',
+  handler: ({ db, res, actor }) => listWorkshopFormulas(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/workshop-formulas',
+  handler: ({ db, req, res, actor }) => createWorkshopFormula(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/workshop-formulas\/([^/]+)\/evaluate$/,
+  handler: ({ db, req, res, actor, params }) => evaluateWorkshopFormula(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/resources',
+  handler: ({ db, res, actor }) => listResources(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/resources',
+  handler: ({ db, req, res, actor }) => createResource(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/equipment',
+  handler: ({ db, res, actor }) => listEquipment(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/equipment',
+  handler: ({ db, req, res, actor }) => createEquipment(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/operations',
+  handler: ({ db, res, actor }) => listOperations(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/operations',
+  handler: ({ db, req, res, actor }) => createOperation(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/control-codes',
+  handler: ({ db, res, actor }) => listControlCodes(db, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/control-codes',
+  handler: ({ db, req, res, actor }) => createControlCode(db, req, res, actor),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/work-centers/enhanced',
+  handler: ({ db, res, actor, url }) => listWorkCenterEnhancement(db, res, actor, url),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/work-centers\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateWorkCenter(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/work-centers\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateWorkCenter(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-reference.js',
+});
+
 // Domain Alignment — Platform notifications and workflow foundation.
 // The HTTP contracts and handler-level authorization remain unchanged;
 // these descriptors only replace the legacy direct dispatch branches.
@@ -722,6 +918,251 @@ ownedRouteTable.register({
   path: '/api/workflows',
   handler: ({ db, req, res, actor }) => createWorkflow(db, req, res, actor),
   owner: 'server/modules/platform-workflows.js',
+});
+
+// V17 Master & Engineering Domain Closure — Wave B: BOM Governance.
+// The legacy /api/boms* handlers in handleApi continue to provide
+// backwards-compatible behaviour (no breaking change). The routes below
+// provide the additive governance, lifecycle, tree / where-used /
+// consolidated / compare / cost analysis, and batch preview / apply
+// contracts documented in solution.md §23.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms',
+  handler: ({ db, res, actor, url }) => listBomsGovernance(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+// Static /tree /where-used /consolidated /compare /cost paths MUST be
+// registered before the dynamic /:id match so they don't get consumed by
+// the wildcard.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms/tree',
+  handler: ({ db, res, actor, url }) => expandBomTree(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms/where-used',
+  handler: ({ db, res, actor, url }) => whereUsed(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms/consolidated',
+  handler: ({ db, res, actor, url }) => consolidateBom(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms/compare',
+  handler: ({ db, res, actor, url }) => compareBoms(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/boms/cost',
+  handler: ({ db, res, actor, url }) => bomCostReference(db, res, actor, url),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/engineering\/boms\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getBomGovernance(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/boms',
+  handler: ({ db, req, res, actor }) => createBomGovernance(db, req, res, actor),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/boms\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateBomGovernance(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/boms\/([^/]+)\/deactivate$/,
+  handler: ({ db, res, actor, params }) => deactivateBomGovernance(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/boms\/([^/]+)\/submit$/,
+  handler: ({ db, res, actor, params }) => submitBomForApproval(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/boms\/([^/]+)\/approve$/,
+  handler: ({ db, res, actor, params }) => approveBom(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/boms\/([^/]+)\/reject$/,
+  handler: ({ db, req, res, actor, params }) => rejectBom(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/boms/batch-preview',
+  handler: ({ db, req, res, actor }) => previewBomBatch(db, req, res, actor),
+  owner: 'server/modules/engineering-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/boms/batch-apply',
+  handler: ({ db, req, res, actor }) => applyBomBatch(db, req, res, actor),
+  owner: 'server/modules/engineering-bom.js',
+});
+
+// V17 Master & Engineering Domain Closure — Wave C: Substitute Scheme.
+// These routes expose the deterministic substitute resolver contract for
+// Planning to call. They do NOT consume substitutes in MRP; that is owned
+// by the Planning Domain (per solution.md §23.8).
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/substitute-schemes',
+  handler: ({ db, res, actor }) => listSubstituteSchemes(db, res, actor),
+  owner: 'server/modules/engineering-substitute.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/substitute-schemes',
+  handler: ({ db, req, res, actor }) => createSubstituteScheme(db, req, res, actor),
+  owner: 'server/modules/engineering-substitute.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/substitutes',
+  handler: ({ db, res, actor, url }) => listSubstitutes(db, res, actor, url),
+  owner: 'server/modules/engineering-substitute.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/substitutes',
+  handler: ({ db, req, res, actor }) => createSubstitute(db, req, res, actor),
+  owner: 'server/modules/engineering-substitute.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/engineering\/substitutes\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteSubstitute(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-substitute.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/substitutes/resolve',
+  handler: ({ db, res, url }) => resolveSubstitutesForPrimary(db, res, url),
+  owner: 'server/modules/engineering-substitute.js',
+});
+
+// V17 Master & Engineering Domain Closure — Wave C: Configurable BOM
+// (Engineering side). Reads the canonical boms / bom_items rows and
+// produces a derived preview; does NOT persist derived rows.
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/configurable-boms/preview',
+  handler: ({ db, req, res, actor }) => previewConfigurableBom(db, req, res, actor),
+  owner: 'server/modules/engineering-configurable-bom.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/configurable-boms/validate',
+  handler: ({ db, req, res, actor }) => validateConfigurableBom(db, req, res, actor),
+  owner: 'server/modules/engineering-configurable-bom.js',
+});
+
+// V17 Master & Engineering Domain Closure — Wave D: Routing Enrichment.
+// The canonical product_routings / product_routing_operations tables
+// remain owned by server/modules/product-routing.js. These routes add
+// enrichment (Operation / Control Code / Activity / Resource / Equipment)
+// and topology links. Legacy /api/routing-operations GET/POST is not
+// active-mutated here; the legacy table is preserved.
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/engineering\/product-routings\/([^/]+)\/enrichment$/,
+  handler: ({ db, res, actor, params }) => getEnrichedRouting(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-routing-enrichment.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/engineering\/product-routings\/([^/]+)\/enrichment$/,
+  handler: ({ db, req, res, actor, params }) => updateRoutingEnrichment(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-routing-enrichment.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/product-routings\/([^/]+)\/links$/,
+  handler: ({ db, req, res, actor, params }) => createRoutingLink(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-routing-enrichment.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/engineering\/product-routing-links\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => deleteRoutingLink(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-routing-enrichment.js',
+});
+
+// V17 Master & Engineering Domain Closure — Wave E: Engineering Change.
+// Provides bounded ECO flow. Does NOT alter existing production snapshots.
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/engineering/changes',
+  handler: ({ db, res, actor, url }) => listEngineeringChanges(db, res, actor, url),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/engineering\/changes\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getEngineeringChange(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/engineering/changes',
+  handler: ({ db, req, res, actor }) => createEngineeringChange(db, req, res, actor),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/submit$/,
+  handler: ({ db, res, actor, params }) => submitEngineeringChange(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/approve$/,
+  handler: ({ db, res, actor, params }) => approveEngineeringChange(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/reject$/,
+  handler: ({ db, req, res, actor, params }) => rejectEngineeringChange(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/impact-preview$/,
+  handler: ({ db, res, actor, params }) => previewImpactEngineeringChange(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/apply$/,
+  handler: ({ db, res, actor, params }) => applyEngineeringChange(db, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/engineering\/changes\/([^/]+)\/cleanup$/,
+  handler: ({ db, req, res, actor, params }) => recordCleanup(db, req, res, actor, params[0]),
+  owner: 'server/modules/engineering-change.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {

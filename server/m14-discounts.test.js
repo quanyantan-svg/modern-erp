@@ -210,8 +210,8 @@ function voucherCount(sourceType, sourceId) {
 // =====================================================================
 
 describe('M14 — Sales Discount', () => {
-  test('1. permission registry has 110 entries after M14 + Core Scope Cleanup; SALES_DISCOUNT_MANAGE / PURCHASE_DISCOUNT_MANAGE exist', () => {
-    assert.equal(PERMISSIONS.length, 110);
+  test('1. permission registry has 112 entries after M14 + Core Scope Cleanup + V17 Wave A; SALES_DISCOUNT_MANAGE / PURCHASE_DISCOUNT_MANAGE exist', () => {
+    assert.equal(PERMISSIONS.length, 122);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('SALES_DISCOUNT_MANAGE'));
     assert.ok(codes.has('PURCHASE_DISCOUNT_MANAGE'));

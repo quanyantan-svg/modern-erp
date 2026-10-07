@@ -77,6 +77,57 @@ const FULL = [
   // ----- Domain Alignment — canonical 8 Domains + Platform ownership -----
   'server/v17-domain-alignment.test.js',
 
+  // ----- V17 Master & Engineering Domain Closure — Wave A Engineering Reference -----
+  // Pure parser tests for the safe Workshop Formula evaluator
+  // (no eval/Function/Function calls; rejects arithmetic-only,
+  // divide-by-zero, exceeded length/depth, unknown identifiers).
+  'server/engineering-reference.test.js',
+
+  // Live HTTP integration: all 10 master families (shift / shift
+  // pattern / calendar template / work calendar / basic activity /
+  // workshop formula / resource / equipment / operation / control
+  // code) + Work Center PATCH + deactivate + additive migration
+  // preservation (legacy tables/columns intact) + engineering
+  // permission family gate.
+  'server/engineering-reference-integration.test.js',
+
+  // ----- V17 Master & Engineering Domain Closure — Wave B BOM Governance -----
+  // Live HTTP integration: BOM lifecycle (create / submit / approve /
+  // reject / deactivate), cycle protection, tree expand, where-used,
+  // consolidated, compare, cost reference (using existing
+  // product_costs, NOT a second source of cost truth), batch preview
+  // / apply atomic, resolver contract (effective_from/to + approval),
+  // production-order reference guard on deactivate, additive
+  // migration preserves legacy BOM table + production_orders
+  // .bom_id snapshot column.
+  'server/engineering-bom-integration.test.js',
+
+  // ----- V17 Master & Engineering Domain Closure — Wave C Substitute Scheme -----
+  'server/engineering-substitute-integration.test.js',
+
+  // ----- V17 Master & Engineering Domain Closure — Wave D Routing Enrichment -----
+  // Migration preserves legacy routing_operations + production_labor_records;
+  // enrichment update attaches Engineering Operation / Control Code /
+  // Activity / Resource / Equipment references and rejects unknown ids;
+  // topology link CRUD (PARALLEL / SPLIT / MERGE / ALTERNATE) flips
+  // topology_type to NETWORK; legacy /api/routing-operations GET
+  // compatibility remains; production order routing snapshot source is
+  // canonical product_routings.
+  'server/engineering-routing-integration.test.js',
+
+  // ----- V17 Master & Engineering Domain Closure — Wave E Engineering Change -----
+  // ECO DRAFT → PENDING → APPROVED → APPLIED lifecycle; impact preview;
+  // allowed operations restricted by change type; USE_UP_OLD cleanup log;
+  // apply without APPROVED rejected; reject requires reason.
+  'server/engineering-change-integration.test.js',
+
+  // ----- V17 Master & Engineering Domain Closure — Wave F Downstream -----
+  // Production Order BOM/Routing snapshot preserved when master mutates;
+  // production order routing snapshot populated from canonical
+  // product_routings; legacy /api/routing-operations GET compatibility;
+  // engineering BOM resolver still resolves legacy ACTIVE rows.
+  'server/engineering-downstream-integration.test.js',
+
   // ----- V1.7 P0 — canonical frontend application architecture -----
   'server/v17-p0-frontend-application-architecture.test.js',
 
@@ -389,6 +440,10 @@ const FULL = [
 const FAST = [
   // Canonical 8 Domains + Platform source-contract; no DB or Vite SSR.
   'server/v17-domain-alignment.test.js',
+
+  // V17 Master & Engineering Domain Closure — Wave A: pure parser
+  // tests for Workshop Formula evaluator (no DB, no Vite SSR).
+  'server/engineering-reference.test.js',
 
   // V1.7 P0 frontend authoritative registry + RouteLocation + screen
   // identity. Pure function + source-contract, no DB, no Vite SSR.

@@ -112,7 +112,7 @@ describe('M10 schema and legacy safety', () => {
 describe('M10 permission and role contract', () => {
   test('keeps routing permissions and includes the single canonical transfer-confirm permission', () => {
     const codes = PERMISSIONS.map(([code]) => code);
-    assert.equal(codes.length, 110);
+    assert.equal(codes.length, 122);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
     assert.equal(codes.filter((code) => code === 'INVENTORY_TRANSFER_CONFIRM').length, 1);
