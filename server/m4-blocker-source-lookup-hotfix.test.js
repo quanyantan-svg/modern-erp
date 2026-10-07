@@ -451,7 +451,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
   describe('F. SECURITY — registry + role permission stability', () => {
     test('26. PERMISSIONS registry size after M14 + Core Scope Cleanup', () => {
-      assert.equal(PERMISSIONS.length, 135, 'PERMISSIONS count is 135 after M14 + Core Scope Cleanup + V17 Wave A+B+C+D+E + V18 Manufacturing & Quality (13 production_*)');
+      assert.equal(PERMISSIONS.length, 138, 'PERMISSIONS count is 138 after Planning Domain Closure adds three planning permissions');
     });
 
     test('27. role-warehouse permission set unchanged from M5 baseline', () => {

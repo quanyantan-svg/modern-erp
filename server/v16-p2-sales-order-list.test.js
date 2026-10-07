@@ -205,7 +205,7 @@ describe('V1.6 P2 — sales order LIST contracts', () => {
     assert.deepEqual(approvals.approvalFamilies, APPROVAL_FAMILIES, 'approval families must remain the canonical six');
 
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
-    assert.equal(ROUTE_PRESENTATIONS.length, 53, 'canonical 53 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 55, 'canonical 55 enabled routes must remain enabled');
 
     // The Orders LIST surface still routes through the canonical route key.
     assert.match(masterData, /navigateToPage\(['"]orders['"]/);

@@ -11,13 +11,13 @@ import {
 import {
   createAlertRule, createAuxProject, createBankReconciliation, createBankStatement,
   createDepartment, createExpenseClaim, createLaborRecord,
-  createLeaveRequest, createMrpPlan, createPeriodClosure,
+  createLeaveRequest, createPeriodClosure,
   createSupplierEvaluation,
-  generateMrp, getBalanceSheet, getFinancialSummary, getIncomeStatement,
+  getBalanceSheet, getFinancialSummary, getIncomeStatement,
   getInventoryStatus, getSalesAnalysis, getTrialBalance,
   listAlertRecords, listAlertRules, listAuxProjects, listBankReconciliations,
   listBankStatements, listDepartments, listExpenseClaims,
-  listLaborRecords, listLeaveRequests, listMrpPlans,
+  listLaborRecords, listLeaveRequests,
   listPeriodClosures,
   closePeriod, getClosureChecklist, listSupplierEvaluations, unclosePeriod,
   processExpenseClaim, processLeaveRequest, resolveAlert, updateAlertRule,
@@ -59,6 +59,16 @@ import {
   releaseProductionInstruction, releasePurchaseInstruction, submitPurchaseRequisition,
   updatePurchaseRequisition,
 } from './modules/planning-documents.js';
+import {
+  applyCascade, changePlannedOrderTarget, changePlanningSchemeStatus,
+  closeOrCancelPlannedOrder, confirmPlannedOrder, createPlannedOrder,
+  createPlanningScheme, createReservation, getPlannedOrder, getPlanningParameters,
+  getPlanningScheme, listForecastConsumption, listMaterialPolicies,
+  listPlannedOrders, listPlanningSchemes, listReservations, mergePlannedOrders,
+  planningReport, planningWorkbench, previewCascade, releasePlannedOrder,
+  releaseReservation, splitPlannedOrder, updateMaterialPolicy,
+  updatePlanningParameters, updatePlanningScheme, assertStrongReservationAvailability,
+} from './modules/planning-domain.js';
 import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './modules/settlement-core.js';
 import {
   cancelSettlementDocument, confirmSettlementDocument, createSettlementDocument, deleteSettlementDocument,
@@ -1194,6 +1204,39 @@ ownedRouteTable.register({
   owner: 'server/modules/engineering-change.js',
 });
 
+// ============ Planning Domain Closure — canonical decision routes ============
+const planningRoutes = [
+  ['GET', '/api/planning/parameters', ({ db, res, actor }) => getPlanningParameters(db, res, actor)],
+  ['PATCH', '/api/planning/parameters', ({ db, req, res, actor }) => updatePlanningParameters(db, req, res, actor)],
+  ['GET', '/api/planning/material-policies', ({ db, res, actor, url }) => listMaterialPolicies(db, res, actor, url)],
+  ['PATCH', /^\/api\/planning\/material-policies\/([^/]+)$/, ({ db, req, res, actor, params }) => updateMaterialPolicy(db, req, res, actor, params[0])],
+  ['GET', '/api/planning/schemes', ({ db, res, actor, url }) => listPlanningSchemes(db, res, actor, url)],
+  ['POST', '/api/planning/schemes', ({ db, req, res, actor }) => createPlanningScheme(db, req, res, actor)],
+  ['GET', /^\/api\/planning\/schemes\/([^/]+)$/, ({ db, res, actor, params }) => getPlanningScheme(db, res, actor, params[0])],
+  ['PATCH', /^\/api\/planning\/schemes\/([^/]+)$/, ({ db, req, res, actor, params }) => updatePlanningScheme(db, req, res, actor, params[0])],
+  ['POST', /^\/api\/planning\/schemes\/([^/]+)\/(activate|deactivate)$/, ({ db, res, actor, params }) => changePlanningSchemeStatus(db, res, actor, params[0], params[1] === 'activate' ? 'ACTIVE' : 'INACTIVE')],
+  ['GET', '/api/planning/forecast-consumptions', ({ db, res, actor, url }) => listForecastConsumption(db, res, actor, url)],
+  ['GET', '/api/planning/planned-orders', ({ db, res, actor, url }) => listPlannedOrders(db, res, actor, url)],
+  ['POST', '/api/planning/planned-orders', ({ db, req, res, actor }) => createPlannedOrder(db, req, res, actor)],
+  ['GET', /^\/api\/planning\/planned-orders\/([^/]+)$/, ({ db, res, actor, params }) => getPlannedOrder(db, res, actor, params[0])],
+  ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/confirm$/, ({ db, res, actor, params }) => confirmPlannedOrder(db, res, actor, params[0])],
+  ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/target$/, ({ db, req, res, actor, params }) => changePlannedOrderTarget(db, req, res, actor, params[0])],
+  ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/split$/, ({ db, req, res, actor, params }) => splitPlannedOrder(db, req, res, actor, params[0])],
+  ['POST', '/api/planning/planned-orders/merge', ({ db, req, res, actor }) => mergePlannedOrders(db, req, res, actor)],
+  ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/release$/, ({ db, res, actor, params }) => releasePlannedOrder(db, res, actor, params[0])],
+  ['POST', /^\/api\/planning\/planned-orders\/([^/]+)\/(close|cancel)$/, ({ db, res, actor, params }) => closeOrCancelPlannedOrder(db, res, actor, params[0], params[1] === 'close' ? 'CLOSED' : 'CANCELLED')],
+  ['GET', '/api/planning/reservations', ({ db, res, actor, url }) => listReservations(db, res, actor, url)],
+  ['POST', '/api/planning/reservations', ({ db, req, res, actor }) => createReservation(db, req, res, actor)],
+  ['POST', /^\/api\/planning\/reservations\/([^/]+)\/release$/, ({ db, res, actor, params }) => releaseReservation(db, res, actor, params[0])],
+  ['GET', '/api/planning/workbench', ({ db, res, actor, url }) => planningWorkbench(db, res, actor, url)],
+  ['POST', '/api/planning/cascade/preview', ({ db, req, res, actor }) => previewCascade(db, req, res, actor)],
+  ['POST', /^\/api\/planning\/cascade\/([^/]+)\/apply$/, ({ db, req, res, actor, params }) => applyCascade(db, req, res, actor, params[0])],
+];
+for (const [method, path, handler] of planningRoutes) ownedRouteTable.register({ method, path, handler, owner: 'server/modules/planning-domain.js' });
+for (const report of ['supply-demand-status', 'supply-demand-summary', 'supply-demand-detail', 'order-supply-demand', 'forecast-consumption', 'reservations', 'reservation-trace', 'substitute-suggestions', 'mrp-log']) {
+  ownedRouteTable.register({ method: 'GET', path: `/api/planning/reports/${report}`, handler: ({ db, res, actor, url }) => planningReport(db, res, actor, url, report), owner: 'server/modules/planning-domain.js' });
+}
+
 // ============ V18 Manufacturing & Quality Domain Closure — Routes ============
 
 // Production orders (lifecycle Draft / Submit / Approve / Reject / Release / Start / Complete / Cancel)
@@ -1687,7 +1730,7 @@ async function handleApi(db, req, res, url) {
   if (adjustmentMatch && req.method === 'GET') return getInventoryAdjustment(db, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'PATCH') return updateInventoryAdjustment(db, req, res, actor, adjustmentMatch[1]);
   if (adjustmentMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'inventoryAdjustment', adjustmentMatch[1]);
-  if (pathname === '/api/mrp/calculate' && req.method === 'POST') return calculateMRP(db, req, res, actor);
+  if (pathname === '/api/mrp/calculate' && req.method === 'POST') return send(res, 410, { error: '旧版即时 MRP 已停用，请使用 /api/planning/mrp/runs' });
   if (pathname === '/api/mrp/bom-explode' && req.method === 'POST') return explodeBOM(db, req, res, actor);
   if (pathname === '/api/inventory-checks' && req.method === 'GET') return listInventoryChecks(db, res, actor, url);
   if (pathname === '/api/inventory-checks' && req.method === 'POST') return createInventoryCheck(db, req, res, actor);
@@ -1725,9 +1768,9 @@ async function handleApi(db, req, res, url) {
   }
   // Closure Checklist
   if (pathname === '/api/period-closures/closure-checklist' && req.method === 'GET') return getClosureChecklist(db, res, actor, url);
-  if (pathname === '/api/mrp-plans' && req.method === 'GET') return listMrpPlans(db, res, actor, url);
-  if (pathname === '/api/mrp-plans' && req.method === 'POST') return createMrpPlan(db, req, res, actor);
-  if (pathname === '/api/mrp-plans/generate' && req.method === 'POST') return generateMrp(db, req, res, actor);
+  if ((pathname === '/api/mrp-plans' || pathname === '/api/mrp-plans/generate') && ['GET', 'POST'].includes(req.method)) {
+    return send(res, 410, { error: '旧版 MRP 计划已停用，请使用 /api/planning/mrp/runs' });
+  }
   // M11 — Forecast & MRP canonical planning
   if (pathname === '/api/planning/forecasts' && req.method === 'GET') return listPlanningForecasts(db, res, actor, url);
   if (pathname === '/api/planning/forecasts' && req.method === 'POST') return createPlanningForecast(db, req, res, actor);
@@ -2876,83 +2919,6 @@ async function explodeBOM(db, req, res, actor) {
   
   return send(res, 200, { product: { id: product.id, code: product.code, name: product.name }, quantity: Number(quantity), materials: result });
 }
-
-async function calculateMRP(db, req, res, actor) {
-  allowAny(actor, ['PRODUCTS_VIEW', 'PRODUCTION_ORDERS_VIEW', 'ORDERS_VIEW']);
-  const body = await readJson(req);
-  const { type, productId, quantity } = body;
-  
-  if (type === 'product' && productId && quantity) {
-    const product = db.prepare('SELECT * FROM products WHERE id=? AND active=1').get(productId);
-    if (!product) throw new HttpError(404, '产品不存在');
-    
-    const bom = db.prepare("SELECT * FROM boms WHERE product_id=? AND status='ACTIVE' LIMIT 1").get(productId);
-    if (!bom) {
-      const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(productId)?.total || 0;
-      const netDemand = Math.max(0, Number(quantity) - stock);
-      return send(res, 200, {
-        demand: { productId, code: product.code, name: product.name, quantity: Number(quantity) },
-        stock,
-        netDemand,
-        suggestions: [{ type: 'purchase', productId, code: product.code, name: product.name, quantity: netDemand, urgency: stock === 0 ? 'urgent' : 'normal' }]
-      });
-    }
-    
-    const materials = [];
-    
-    function expand(bomProductId, qty) {
-      const items = db.prepare('SELECT bi.*, p.code, p.name, p.unit, p.price_cents FROM bom_items bi JOIN products p ON p.id=bi.product_id WHERE bi.bom_id=?').all(bomProductId);
-      for (const item of items) {
-        const requiredQty = qty * item.quantity * (1 + (item.scrap_rate || 0));
-        const subBom = db.prepare("SELECT id FROM boms WHERE product_id=? AND status='ACTIVE' LIMIT 1").get(item.product_id);
-        if (!subBom) {
-          materials.push({ productId: item.product_id, code: item.code, name: item.name, unit: item.unit, requiredQty, priceCents: item.price_cents });
-        } else {
-          expand(item.product_id, requiredQty);
-        }
-      }
-    }
-    
-    expand(productId, Number(quantity));
-    
-    const materialMap = {};
-    for (const mat of materials) {
-      if (!materialMap[mat.productId]) materialMap[mat.productId] = { ...mat, totalQty: 0 };
-      materialMap[mat.productId].totalQty += mat.requiredQty;
-    }
-    
-    const suggestions = [];
-    for (const mat of Object.values(materialMap)) {
-      const stock = db.prepare('SELECT COALESCE(SUM(quantity), 0) as total FROM inventory WHERE product_id=?').get(mat.productId)?.total || 0;
-      const netDemand = Math.max(0, mat.totalQty - stock);
-      if (netDemand > 0) {
-        suggestions.push({
-          type: 'purchase', productId: mat.productId, code: mat.code, name: mat.name,
-          quantity: netDemand, unit: mat.unit, estimatedCost: Math.round(netDemand * (mat.priceCents || 0)),
-          currentStock: stock, requiredQty: mat.totalQty,
-          urgency: stock === 0 ? 'urgent' : stock < mat.totalQty * 0.3 ? 'high' : 'normal'
-        });
-      }
-    }
-    
-    suggestions.sort((a, b) => {
-      const priority = { urgent: 0, high: 1, normal: 2 };
-      return priority[a.urgency] - priority[b.urgency];
-    });
-    
-    const totalCost = suggestions.reduce((s, sg) => s + sg.estimatedCost, 0);
-    
-    return send(res, 200, {
-      demand: { productId, code: product.code, name: product.name, quantity: Number(quantity) },
-      materialsCount: suggestions.length, suggestions,
-      summary: { totalItems: suggestions.length, urgentCount: suggestions.filter(s => s.urgency === 'urgent').length, highCount: suggestions.filter(s => s.urgency === 'high').length, totalEstimatedCost: totalCost }
-    });
-  }
-  
-  throw new HttpError(400, '不支持的请求类型');
-}
-
-
 
 // ============ Inventory Checks ============
 
@@ -4785,6 +4751,8 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
           ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
           : Number(item.quantity);
+        assertStrongReservationAvailability(db, { productId: item.product_id, warehouseId: locked.warehouse_id,
+          quantity: baseQuantity, demandSourceType: 'SALES_ORDER', demandSourceId: so.id });
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
         if (!current || current.quantity < baseQuantity) throw new HttpError(400, '库存不足');
         postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });

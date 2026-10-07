@@ -39,7 +39,7 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - 客户、供应商、产品、仓库、BOM、工艺路线、工作中心等主数据；
 - 销售订单、发货、退货、销售发票、AR 与收款/核销；
 - 请购、采购订单、收货、退货、供应商账单、AP 与付款/核销；
-- Forecast、MRP、Demand/Supply、Pegging、生产/采购指令与请购；
+- Forecast、可追溯预测冲销、Planning Scheme、MRP、Demand/Supply、Pegging、Planned Order、Reservation、计划员工作台、生产/采购指令与请购；
 - 生产工单审批/下达、BOM/Routing snapshot、工序计划与正排/倒排、领料/退料/补料、工序报工、生产入库、WIP 与生产成本归集；
 - IQC/OQC、生产检验、检验项目/检测值/仪器/检验方案、质量门禁与生产扫码入口；
 - Inventory、调拨、盘点、调整、报废、期间关闭；
@@ -75,13 +75,10 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Planning
 
-- Planning Scheme
-- Safety Stock 深化
-- Forecast Consumption 深化
-- Reservation
-- Planned Order 生命周期
-- Planner Workbench
-- Outsourcing release
+- 更细粒度的时界/批量/合并策略与 APS 深化
+- 替代料自动消耗策略深化
+- 完整委外执行（当前只提供 OUTSOURCE 计划释放交接，不替代委外子域）
+- 跨组织计划（Multi-Organization 基线外）
 
 ### Procurement & Outsourcing
 
@@ -317,11 +314,13 @@ log/
 - `src/navigation/domainMetadata.js`：8 Business Domains + Platform 的唯一 canonical taxonomy；
 - `src/pages/platform-notifications.jsx` / `platform-workflows.jsx`：Platform 通知与工作流用户界面 owner；
 - `src/pages/engineering-reference.jsx` / `engineering-substitute.jsx` / `engineering-change.jsx`：Master & Engineering 工程资料、替代/配置、ECO 工作面；
+- `src/pages/planning-workbench.jsx`：Planning 计划订单与计划员例外工作台；
 - `src/components/BomGovernancePanel.jsx`：BOM lifecycle、tree/analysis 与 batch preview→apply 可复用工作面；
 - `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
 - `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；
 - `server/modules/`：逐步形成 domain canonical owner；
 - `server/modules/platform-notifications.js` / `platform-workflows.js`：Platform 通知与工作流 API owner；
+- `server/modules/planning.js` / `planning-domain.js`：MRP 运算与 Planning 方案、预测冲销、计划订单、预留、工作台 canonical owner；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；
 - `server/migrations/`：增量 schema migration；

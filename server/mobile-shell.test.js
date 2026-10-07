@@ -301,7 +301,7 @@ describe('Permissions — canonical registry count', () => {
     // active permission codes (CRM_VIEW, CRM_MANAGE,
     // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
     // remain.
-    assert.equal(perms.length, 135, `PERMISSIONS array must have 135 entries after Core Scope Cleanup + V17 Wave A+B+C+D+E + V18 Manufacturing & Quality (13 production_*) (got ${perms.length})`);
+    assert.equal(perms.length, 138, `PERMISSIONS array must have 138 entries after Planning Domain Closure adds three planning permissions (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);

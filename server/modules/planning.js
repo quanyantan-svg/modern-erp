@@ -26,6 +26,11 @@ import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, requiredText, send } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { resolveEffectiveBomForCaller } from './engineering-bom.js';
+import {
+  allocateForecastConsumption, loadSchemeSnapshot, materializePlannedOrders,
+  releaseWeakReservationsForScheme,
+} from './planning-domain.js';
 
 const FORECAST_STATUS = { DRAFT: '草稿', ACTIVE: '已生效', CANCELLED: '已取消' };
 const MRP_RUN_STATUS = { DRAFT: '草稿', COMPLETED: '已计算', CANCELLED: '已取消' };
@@ -289,13 +294,14 @@ function openPurchaseSupply(db, productId) {
 }
 
 function openProductionSupply(db, productId) {
-  // PENDING / IN_PROGRESS production orders minus CONFIRMED production
+  // Frozen Manufacturing contract: only RELEASED / IN_PROGRESS are firm
+  // execution supply. APPROVED is not yet released to execution.
   // receipts (header-level linkage via production_order_id). COMPLETED
   // and CANCELLED orders do not contribute to future supply.
   const ordered = db.prepare(`
     SELECT COALESCE(SUM(quantity), 0) total
       FROM production_orders
-     WHERE product_id = ? AND status IN ('PENDING','IN_PROGRESS')
+     WHERE product_id = ? AND status IN ('RELEASED','IN_PROGRESS')
   `).get(productId);
   const received = db.prepare(`
     SELECT COALESCE(SUM(pr.quantity), 0) total
@@ -303,7 +309,7 @@ function openProductionSupply(db, productId) {
       JOIN production_orders po ON po.id = pr.production_order_id
      WHERE po.product_id = ?
        AND pr.status = 'CONFIRMED'
-       AND po.status IN ('PENDING','IN_PROGRESS')
+       AND po.status IN ('RELEASED','IN_PROGRESS')
   `).get(productId);
   return Math.max(0, Number(ordered?.total || 0) - Number(received?.total || 0));
 }
@@ -377,14 +383,9 @@ export function consumeForecastDemand(salesDemand, forecastDemand) {
   return Math.max(Number(salesDemand || 0), Number(forecastDemand || 0));
 }
 
-function productBom(db, productId) {
-  return db.prepare(`
-    SELECT id, product_id, version, status
-      FROM boms
-     WHERE product_id = ? AND status = 'ACTIVE'
-     ORDER BY updated_at DESC
-     LIMIT 1
-  `).get(productId);
+function productBom(db, productId, businessDate) {
+  return resolveEffectiveBomForCaller(db, productId, 'SELF_MAKE', businessDate)
+    || resolveEffectiveBomForCaller(db, productId, 'GENERAL', businessDate);
 }
 
 function productBomItems(db, bomId) {
@@ -445,8 +446,8 @@ function explodeBomNet(db, pid, gross, path, depth, state, componentGross, compo
     if (!Number.isFinite(gross) || gross <= 0) return;
     const netting = computeNetting(db, pid, gross);
     if (netting.net <= 0) return;
-    if (decideMakeBuy(db, pid) !== 'MAKE') return;
-    const bom = productBom(db, pid);
+    if (decideSupplyType(db, pid, state.scheme, state.businessDate) !== 'MAKE') return;
+    const bom = productBom(db, pid, state.businessDate);
     if (!bom) return;
     const items = productBomItems(db, bom.id);
     if (items.length === 0) return;
@@ -512,6 +513,7 @@ export function getMrpRun(db, res, actor, runId) {
            r.gross_component_demand, r.gross_requirement, r.on_hand,
            r.open_purchase_supply, r.open_production_supply, r.net_requirement,
            r.suggestion_type, r.suggested_quantity, r.need_by_date, r.bom_level, r.warning,
+           r.supply_type, r.safety_stock,
            p.code product_code, p.name product_name, p.unit product_unit
       FROM mrp_run_results r
       LEFT JOIN products p ON p.id = r.product_id
@@ -571,13 +573,17 @@ function validateRunInputs(body) {
   if (horizonStart > horizonEnd) throw new HttpError(400, '计算开始日期不能晚于结束日期');
   const mode = body.demandSourceMode || body.demand_source_mode;
   if (!DEMAND_MODES.has(mode)) throw new HttpError(400, '需求来源模式无效');
-  return { name, horizonStart, horizonEnd, mode };
+  const calculationScopeMode = String(body.calculationScopeMode || body.calculation_scope_mode || 'GLOBAL').toUpperCase();
+  if (!['GLOBAL', 'SELECTED', 'PRECISE_SELECTED'].includes(calculationScopeMode)) throw new HttpError(400, '计算范围模式无效');
+  return { name, horizonStart, horizonEnd, mode, calculationScopeMode };
 }
 
 export async function createMrpRun(db, req, res, actor) {
   allow(actor, 'MRP_MANAGE');
   const body = await readJson(req);
-  const { name, horizonStart, horizonEnd, mode } = validateRunInputs(body);
+  const { name, horizonStart, horizonEnd, mode, calculationScopeMode } = validateRunInputs(body);
+  const schemeId = body.schemeId || body.scheme_id || null;
+  const scheme = schemeId ? loadSchemeSnapshot(db, schemeId) : null;
   let forecastId = body.forecastId || body.forecast_id || null;
   if (mode === 'FORECAST' || mode === 'SALES_PLUS_FORECAST') {
     if (!forecastId) throw new HttpError(400, '该需求来源模式必须选择计划预测');
@@ -593,9 +599,15 @@ export async function createMrpRun(db, req, res, actor) {
   const runCode = makeRunCode(db, today);
   transaction(db, () => {
     db.prepare(`
-      INSERT INTO mrp_runs(id, run_code, run_name, horizon_start, horizon_end, demand_source_mode, forecast_id, status, summary, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'DRAFT', '', ?, ?)
-    `).run(runId, runCode, name, horizonStart, horizonEnd, mode, forecastId, actor.id, now);
+      INSERT INTO mrp_runs(id, run_code, run_name, horizon_start, horizon_end, demand_source_mode, forecast_id, status, summary, created_by, created_at,
+        scheme_id,scheme_snapshot,calculation_scope_mode,config_snapshot)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'DRAFT', '', ?, ?, ?, ?, ?, ?)
+    `).run(runId, runCode, name, horizonStart, horizonEnd, mode, forecastId, actor.id, now, schemeId, scheme ? JSON.stringify(scheme) : '', calculationScopeMode,
+      JSON.stringify({ horizonStart, horizonEnd, demandSourceMode: mode, calculationScopeMode }));
+    const selections = Array.isArray(body.sourceSelections || body.source_selections) ? (body.sourceSelections || body.source_selections) : [];
+    if (calculationScopeMode !== 'GLOBAL' && selections.length === 0) throw new HttpError(400, '选择运算模式必须提供需求来源');
+    const insertSelection = db.prepare(`INSERT INTO mrp_run_source_selections(id,run_id,source_type,source_id,source_line_id,created_at) VALUES(?,?,?,?,?,?)`);
+    for (const selection of selections) insertSelection.run(id(), runId, String(selection.sourceType || selection.source_type || '').toUpperCase(), String(selection.sourceId || selection.source_id || ''), selection.sourceLineId || selection.source_line_id || null, now);
     audit(db, actor.id, 'CREATE', 'MRP_RUN', runId, `MRP ${runCode}`);
   });
   return send(res, 201, { id: runId, runCode });
@@ -607,7 +619,9 @@ export async function updateMrpRun(db, req, res, actor, runId) {
   if (!run) throw new HttpError(404, 'MRP 计算不存在');
   if (run.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的 MRP 可以修改');
   const body = await readJson(req);
-  const { name, horizonStart, horizonEnd, mode } = validateRunInputs({ ...body, runName: body.runName ?? body.run_name ?? run.run_name });
+  const { name, horizonStart, horizonEnd, mode, calculationScopeMode } = validateRunInputs({ ...body, runName: body.runName ?? body.run_name ?? run.run_name, calculationScopeMode: body.calculationScopeMode ?? run.calculation_scope_mode });
+  const schemeId = body.schemeId ?? body.scheme_id ?? run.scheme_id ?? null;
+  const scheme = schemeId ? loadSchemeSnapshot(db, schemeId) : null;
   let forecastId = body.forecastId || body.forecast_id || null;
   if (mode === 'FORECAST' || mode === 'SALES_PLUS_FORECAST') {
     if (!forecastId) throw new HttpError(400, '该需求来源模式必须选择计划预测');
@@ -621,9 +635,19 @@ export async function updateMrpRun(db, req, res, actor, runId) {
   transaction(db, () => {
     db.prepare(`
       UPDATE mrp_runs
-         SET run_name=?, horizon_start=?, horizon_end=?, demand_source_mode=?, forecast_id=?, updated_at=?
+         SET run_name=?, horizon_start=?, horizon_end=?, demand_source_mode=?, forecast_id=?, scheme_id=?,scheme_snapshot=?,calculation_scope_mode=?,config_snapshot=?, updated_at=?
        WHERE id=?
-    `).run(name, horizonStart, horizonEnd, mode, forecastId, now, runId);
+    `).run(name, horizonStart, horizonEnd, mode, forecastId, schemeId, scheme ? JSON.stringify(scheme) : '', calculationScopeMode,
+      JSON.stringify({ horizonStart, horizonEnd, demandSourceMode: mode, calculationScopeMode }), now, runId);
+    if (body.sourceSelections || body.source_selections) {
+      const selections = body.sourceSelections || body.source_selections;
+      if (!Array.isArray(selections)) throw new HttpError(400, '需求来源选择必须是数组');
+      if (calculationScopeMode !== 'GLOBAL' && selections.length === 0) throw new HttpError(400, '选择运算模式必须提供需求来源');
+      db.prepare('DELETE FROM mrp_run_source_selections WHERE run_id=?').run(runId);
+      const insertSelection = db.prepare(`INSERT INTO mrp_run_source_selections(id,run_id,source_type,source_id,source_line_id,created_at) VALUES(?,?,?,?,?,?)`);
+      for (const selection of selections) insertSelection.run(id(), runId, String(selection.sourceType || selection.source_type || '').toUpperCase(),
+        String(selection.sourceId || selection.source_id || ''), selection.sourceLineId || selection.source_line_id || null, now);
+    }
     audit(db, actor.id, 'UPDATE', 'MRP_RUN', runId, `MRP ${run.run_code}`);
   });
   return send(res, 200, { ok: true });
@@ -645,13 +669,14 @@ export function cancelMrpRun(db, res, actor, runId) {
 
 function buildForecastDemandRows(db, forecastId, horizonStart, horizonEnd) {
   const items = db.prepare(`
-    SELECT product_id, need_date, quantity
+    SELECT id, product_id, need_date, quantity
       FROM planning_forecast_items
      WHERE forecast_id = ?
        AND need_date >= ?
        AND need_date <= ?
   `).all(forecastId, horizonStart, horizonEnd);
   return items.map((row) => ({
+    itemId: row.id,
     productId: row.product_id,
     needDate: row.need_date,
     quantity: Number(row.quantity),
@@ -711,6 +736,8 @@ function insertOrUpdateResult(db, runId, partial) {
              need_by_date = COALESCE(?, need_by_date),
              bom_level = ?,
              warning = ?
+             ,supply_type = ?
+             ,safety_stock = ?
        WHERE id = ?
     `).run(
       partial.gross_sales_demand,
@@ -726,12 +753,14 @@ function insertOrUpdateResult(db, runId, partial) {
       partial.need_by_date || null,
       partial.bom_level || 0,
       partial.warning || '',
+      partial.supply_type || partial.suggestion_type || '',
+      partial.safety_stock || 0,
       existing.id,
     );
   } else {
     db.prepare(`
-      INSERT INTO mrp_run_results(id, run_id, product_id, gross_sales_demand, gross_forecast_demand, gross_component_demand, gross_requirement, on_hand, open_purchase_supply, open_production_supply, net_requirement, suggestion_type, suggested_quantity, need_by_date, bom_level, warning)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO mrp_run_results(id, run_id, product_id, gross_sales_demand, gross_forecast_demand, gross_component_demand, gross_requirement, on_hand, open_purchase_supply, open_production_supply, net_requirement, suggestion_type, suggested_quantity, need_by_date, bom_level, warning,supply_type,safety_stock)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id(), runId, partial.productId,
       partial.gross_sales_demand,
@@ -747,6 +776,8 @@ function insertOrUpdateResult(db, runId, partial) {
       partial.need_by_date || null,
       partial.bom_level || 0,
       partial.warning || '',
+      partial.supply_type || partial.suggestion_type || '',
+      partial.safety_stock || 0,
     );
   }
 }
@@ -771,10 +802,31 @@ function computeNetting(db, productId, gross) {
   return { onHand, openPo, openProd, net };
 }
 
-function decideMakeBuy(db, productId) {
-  const bom = productBom(db, productId);
-  if (!bom) return 'BUY';
-  return 'MAKE';
+function decideSupplyType(db, productId, scheme, businessDate) {
+  if (scheme?.force_supply_strategy) return scheme.force_supply_strategy;
+  const policy = db.prepare('SELECT supply_strategy FROM planning_material_policies WHERE product_id=?').get(productId);
+  const strategy = policy?.supply_strategy || 'AUTO';
+  if (strategy !== 'AUTO') return strategy;
+  return productBom(db, productId, businessDate) ? 'MAKE' : 'BUY';
+}
+
+function planningPolicy(db, productId) {
+  return db.prepare(`SELECT safety_stock,maximum_stock,economic_order_quantity,lead_time_days,supply_strategy
+    FROM planning_material_policies WHERE product_id=?`).get(productId) || {
+    safety_stock: 0, maximum_stock: 0, economic_order_quantity: 0, lead_time_days: 0, supply_strategy: 'AUTO',
+  };
+}
+
+function selectedDemandRows(db, run, salesRows, forecastRows) {
+  if ((run.calculation_scope_mode || 'GLOBAL') === 'GLOBAL') return { salesRows, forecastRows };
+  const selections = db.prepare('SELECT source_type,source_id,source_line_id FROM mrp_run_source_selections WHERE run_id=?').all(run.id);
+  const selected = (type, row) => selections.some((selection) => selection.source_type === type
+    && (selection.source_id === row.orderId || selection.source_id === row.productId)
+    && (!selection.source_line_id || selection.source_line_id === row.itemId));
+  return {
+    salesRows: salesRows.filter((row) => selected('SALES_ORDER', row)),
+    forecastRows: forecastRows.filter((row) => selected('FORECAST', row)),
+  };
 }
 
 function warningFor(db, productId, suggestionType) {
@@ -790,7 +842,26 @@ export async function executeMrpRun(db, req, res, actor, runId) {
   if (!run) throw new HttpError(404, 'MRP 计算不存在');
   if (run.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态的 MRP 可以执行');
   const now = nowIsoLocal();
-  const summary = await runMrpCalculation(db, run, actor, now);
+  const started = Date.now();
+  db.prepare("UPDATE mrp_runs SET started_at=?,failed_at=NULL,error_code='',error_message='' WHERE id=?").run(now, runId);
+  db.prepare("INSERT INTO mrp_run_logs(id,run_id,phase,status,message,detail,created_at) VALUES(?,?,'CALCULATION','STARTED','','',?)")
+    .run(id(), runId, now);
+  let summary;
+  try {
+    summary = await runMrpCalculation(db, run, actor, now);
+  } catch (error) {
+    const failedAt = nowIsoLocal();
+    db.prepare('UPDATE mrp_runs SET failed_at=?,error_code=?,error_message=?,duration_ms=? WHERE id=?')
+      .run(failedAt, String(error?.code || 'MRP_CALCULATION_FAILED'), String(error?.message || error).slice(0, 1000), Date.now() - started, runId);
+    db.prepare("INSERT INTO mrp_run_logs(id,run_id,phase,status,message,detail,created_at) VALUES(?,?,'CALCULATION','FAILED',?,?,?)")
+      .run(id(), runId, String(error?.message || error).slice(0, 500), '', failedAt);
+    throw error;
+  }
+  const completedAt = nowIsoLocal();
+  db.prepare('UPDATE mrp_runs SET duration_ms=? WHERE id=?').run(Date.now() - started, runId);
+  db.prepare("INSERT INTO mrp_run_logs(id,run_id,phase,status,message,detail,created_at) VALUES(?,?,'CALCULATION','COMPLETED',?,?,?)")
+    .run(id(), runId, 'MRP calculation completed', JSON.stringify(summary), completedAt);
+  summary.plannedOrdersCreated = materializePlannedOrders(db, runId, actor);
   return send(res, 200, { ok: true, summary });
 }
 
@@ -808,14 +879,22 @@ async function runMrpCalculation(db, run, actor, nowIso) {
   // atomically so that BOM cycle / validation errors do not leave a
   // half-written run.
   let summary = { totalProducts: 0, makeSuggestions: 0, buySuggestions: 0, shortageProducts: 0 };
-  const forecastDemand = run.demand_source_mode !== 'SALES_ORDERS'
+  let forecastDemand = run.demand_source_mode !== 'SALES_ORDERS'
     ? buildForecastDemandRows(db, run.forecast_id, run.horizon_start, run.horizon_end)
     : [];
-  const salesDemand = run.demand_source_mode !== 'FORECAST'
+  let salesDemand = run.demand_source_mode !== 'FORECAST'
     ? openSalesDemand(db, run.horizon_start, run.horizon_end)
     : [];
-  const consumedTopGross = (info) => run.demand_source_mode === 'SALES_PLUS_FORECAST'
-    ? consumeForecastDemand(info.sales, info.forecast)
+  ({ salesRows: salesDemand, forecastRows: forecastDemand } = selectedDemandRows(db, run, salesDemand, forecastDemand));
+  const consumption = run.demand_source_mode === 'SALES_PLUS_FORECAST'
+    ? allocateForecastConsumption(salesDemand, forecastDemand)
+    : { allocations: [], forecastRemainders: forecastDemand.map((row) => ({ ...row, remaining: row.quantity })) };
+  const remainingForecastByProduct = new Map();
+  for (const row of consumption.forecastRemainders) {
+    remainingForecastByProduct.set(row.productId, (remainingForecastByProduct.get(row.productId) || 0) + Number(row.remaining));
+  }
+  const consumedTopGross = (productId, info) => run.demand_source_mode === 'SALES_PLUS_FORECAST'
+    ? info.sales + (remainingForecastByProduct.get(productId) || 0)
     : info.sales + info.forecast;
   // Aggregate sales + forecast at product level. Need date is the
   // earliest of all contributor dates so MRP result rows show the
@@ -846,9 +925,11 @@ async function runMrpCalculation(db, run, actor, nowIso) {
   // next-level gross, and the same netting rule applies recursively.
   const componentGross = new Map(); // productId -> total gross from BOM explosions
   const componentParents = new Map(); // productId -> [{parentId, qty, path, level}]
-  const walkState = { active: new Set() };
+  const scheme = run.scheme_snapshot ? JSON.parse(run.scheme_snapshot) : null;
+  const includesSafetyStock = Boolean(scheme?.demandSources?.some((source) => source.source_type === 'SAFETY_STOCK' && source.enabled));
+  const walkState = { active: new Set(), scheme, businessDate: run.horizon_start };
   for (const [pid, info] of topGross.entries()) {
-    const totalGross = consumedTopGross(info);
+    const totalGross = consumedTopGross(pid, info) + (includesSafetyStock ? Number(planningPolicy(db, pid).safety_stock || 0) : 0);
     if (totalGross <= 0) continue;
     explodeBomNet(db, pid, totalGross, pid, 0, walkState, componentGross, componentParents);
   }
@@ -860,6 +941,17 @@ async function runMrpCalculation(db, run, actor, nowIso) {
     db.prepare("DELETE FROM mrp_run_components WHERE run_id=?").run(run.id);
     db.prepare("DELETE FROM mrp_run_demands WHERE run_id=?").run(run.id);
     db.prepare("DELETE FROM mrp_run_pegging WHERE run_id=?").run(run.id);
+    db.prepare("DELETE FROM forecast_consumptions WHERE run_id=?").run(run.id);
+    db.prepare("DELETE FROM mrp_run_events WHERE run_id=?").run(run.id);
+    if (run.scheme_id) releaseWeakReservationsForScheme(db, run.scheme_id, actor.id);
+    const insertConsumption = db.prepare(`INSERT INTO forecast_consumptions(id,run_id,forecast_item_id,sales_order_id,product_id,sales_need_date,quantity,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`);
+    for (const allocation of consumption.allocations) {
+      insertConsumption.run(id(), run.id, allocation.forecastItemId, allocation.salesOrderId,
+        allocation.productId, allocation.salesNeedDate, allocation.quantity, nowIso);
+    }
+    const insertEvent = db.prepare(`INSERT INTO mrp_run_events(id,run_id,product_id,event_date,direction,source_type,source_id,quantity,status,firm,metadata,created_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
     insertBomComponentEdges(db, run.id, componentParents);
     for (const row of salesDemand) {
       upsertDemandRow(db, run.id, {
@@ -871,6 +963,7 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         quantity: row.quantity,
       }, productMap);
       upsertPegg(db, run.id, row.productId, 'SALES_ORDER', row.orderId, `销售订单 ${row.orderNo}`, row.quantity, '');
+      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'SALES_ORDER', row.orderId, row.quantity, 'APPROVED', 1, '', nowIso);
     }
     for (const row of forecastDemand) {
       upsertDemandRow(db, run.id, {
@@ -882,6 +975,7 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         quantity: row.quantity,
       }, productMap);
       upsertPegg(db, run.id, row.productId, 'FORECAST', row.orderId, '计划预测', row.quantity, '');
+      insertEvent.run(id(), run.id, row.productId, row.needDate, 'DEMAND', 'FORECAST', row.itemId, row.quantity, 'ACTIVE', 0, '', nowIso);
     }
     // Walk end-item demands first so that any product that appears
     // both as a parent and as a component gets its MAKE/BUY decision
@@ -897,14 +991,14 @@ async function runMrpCalculation(db, run, actor, nowIso) {
       const topInfo = topGross.get(pid) || { sales: 0, forecast: 0, needDate: null };
       const parents = componentParents.get(pid);
       const grossFromComponents = parents ? parents.reduce((sum, p) => sum + p.qty, 0) : 0;
-      // Forecast is consumed by approved sales demand in the same product/run
-      // bucket.  The result retains both source columns for explainability,
-      // while gross requirement uses MAX rather than blindly double counting.
-      const gross = consumedTopGross(topInfo) + grossFromComponents;
+      const policy = planningPolicy(db, pid);
+      const safetyStock = includesSafetyStock ? Number(policy.safety_stock || 0) : 0;
+      const gross = consumedTopGross(pid, topInfo) + grossFromComponents + safetyStock;
       if (gross <= 0) continue;
       const netting = computeNetting(db, pid, gross);
-      const suggestionType = netting.net > 0 ? decideMakeBuy(db, pid) : '';
-      const warning = warningFor(db, pid, suggestionType);
+      const supplyType = netting.net > 0 ? decideSupplyType(db, pid, scheme, run.horizon_start) : '';
+      const suggestionType = supplyType === 'MAKE' ? 'MAKE' : (supplyType ? 'BUY' : '');
+      const warning = warningFor(db, pid, supplyType);
       const bomLevel = parents ? parents.reduce((m, p) => Math.max(m, p.level || 0), 0) : 0;
       insertOrUpdateResult(db, run.id, {
         productId: pid,
@@ -921,6 +1015,8 @@ async function runMrpCalculation(db, run, actor, nowIso) {
         need_by_date: topInfo.needDate || null,
         bom_level: bomLevel,
         warning,
+        supply_type: supplyType,
+        safety_stock: safetyStock,
       });
       // Pegging for component contributions (BOM_EXPLOSION quantities
       // come from parent_net × bom_qty × scrap, never parent_gross).
@@ -932,7 +1028,7 @@ async function runMrpCalculation(db, run, actor, nowIso) {
       totalProducts += 1;
       if (netting.net > 0) {
         if (suggestionType === 'MAKE') makeSuggestions += 1;
-        else if (suggestionType === 'BUY') buySuggestions += 1;
+        else if (supplyType === 'BUY' || supplyType === 'OUTSOURCE') buySuggestions += 1;
         shortageProducts += 1;
       }
     }

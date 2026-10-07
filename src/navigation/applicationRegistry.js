@@ -55,6 +55,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('quality-configuration','质量配置','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['PRODUCTION_QUALITY_CONFIG_VIEW','PRODUCTION_QUALITY_CONFIG_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('forecasts','计划预测','planning','FLOW_PRIMARY','LIST','primary','计划','forecasts',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('mrp-runs','MRP','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']},{presentationConcept:'MRP'}),
+  route('planned-orders','计划订单','planning','FLOW_PRIMARY','LIST','primary','计划','mrpRuns',{any:['MRP_VIEW','MRP_MANAGE']}),
+  route('planner-workbench','计划员工作台','planning','FLOW_PRIMARY','WORKFLOW','primary','计划','dashboard',{any:['MRP_VIEW','MRP_MANAGE']}),
   route('material-requirements-plan','物料需求计划','planning','FLOW_INTERNAL_STEP','REPORT','contextual','计划','materialPlan',{any:['MRP_VIEW','MRP_MANAGE']},{parentRoute:'mrp-runs',presentationConcept:'MRP'}),
   route('production-instructions','生产指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
   route('purchase-instructions','采购指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
@@ -105,6 +107,7 @@ const loadScreenModule = (path) => {
     case '../pages/mrp-runs.jsx': return import('../pages/mrp-runs.jsx');
     case '../pages/material-requirements-plan.jsx': return import('../pages/material-requirements-plan.jsx');
     case '../pages/planning-documents.jsx': return import('../pages/planning-documents.jsx');
+    case '../pages/planning-workbench.jsx': return import('../pages/planning-workbench.jsx');
     case '../pages/data-cleanup.jsx': return import('../pages/data-cleanup.jsx');
     case '../pages/engineering-reference.jsx': return import('../pages/engineering-reference.jsx');
     case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
@@ -147,6 +150,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'quality-configuration': named('../pages/manufacturing-quality.jsx','QualityConfiguration'),
   'product-routings': defaultScreen('../pages/product-routing.jsx'), forecasts: defaultScreen('../pages/forecasts.jsx'),
   'mrp-runs': defaultScreen('../pages/mrp-runs.jsx'), 'material-requirements-plan': defaultScreen('../pages/material-requirements-plan.jsx'),
+  'planned-orders': defaultScreen('../pages/planning-workbench.jsx'), 'planner-workbench': defaultScreen('../pages/planning-workbench.jsx'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
   'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'data-cleanup': defaultScreen('../pages/data-cleanup.jsx'),
   'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
@@ -210,7 +214,7 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
   launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['sales-discounts','销售折让','salesDiscount']]),
-  launcherGroup('planning','Planning','domain','planning', [['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
+  launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['purchase-discounts','采购折让','purchaseDiscount']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
   launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),

@@ -128,22 +128,28 @@ export function listProductionOrders(db, res, actor, url) {
 export async function createProductionOrder(db, req, res, actor) {
   allow(actor, 'PRODUCTION_ORDERS_CREATE');
   const body = await readJson(req);
-  const productId = String(body.productId || '').trim();
+  const result = transaction(db, () => createProductionOrderCommand(db, { actor, input: body }));
+  return send(res, 200, result);
+}
+
+export function createProductionOrderCommand(db, { actor, input }) {
+  const productId = String(input.productId || '').trim();
   if (!productId) throw new HttpError(400, '请选择产品');
   const product = db.prepare('SELECT id FROM products WHERE id=? AND active=1').get(productId);
   if (!product) throw new HttpError(400, '产品不存在或已停用');
-  const orderQuantity = positiveQuantity(body.quantity, '生产数量');
+  const orderQuantity = positiveQuantity(input.quantity, '生产数量');
   const now = new Date().toISOString();
   const poId = id();
   const poNo = 'MO-' + Date.now().toString(36).toUpperCase();
-  transaction(db, () => {
-    db.prepare(`INSERT INTO production_orders(id,order_no,product_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at,source_type,material_list_status)
-      VALUES(?,?,?,?, 'DRAFT', ?, ?, ?, ?, ?, ?, 'MANUAL', 'GENERATED')`).run(poId, poNo, productId, orderQuantity, body.plannedStart || null, body.plannedFinish || null, optionalText(body.remark, 500), actor.id, now, now);
-    const bomId = body.bomId ? String(body.bomId) : null;
-    snapshotProductionOrder(db, poId, productId, bomId, orderQuantity, body.routingId || null);
-    audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, `创建生产工单 ${poNo}`);
-  });
-  return send(res, 200, { id: poId, orderNo: poNo, status: 'DRAFT' });
+  db.prepare(`INSERT INTO production_orders(id,order_no,product_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at,source_type,material_list_status,
+    production_instruction_id,production_instruction_item_id)
+    VALUES(?,?,?,?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, 'GENERATED',?,?)`).run(poId, poNo, productId, orderQuantity,
+    input.plannedStart || null, input.plannedFinish || null, optionalText(input.remark, 500), actor.id, now, now,
+    input.sourceType || 'MANUAL', input.productionInstructionId || null, input.productionInstructionItemId || null);
+  const bomId = input.bomId ? String(input.bomId) : null;
+  snapshotProductionOrder(db, poId, productId, bomId, orderQuantity, input.routingId || null);
+  audit(db, actor.id, 'CREATE', 'PRODUCTION_ORDER', poId, `创建生产工单 ${poNo}`);
+  return { id: poId, orderNo: poNo, status: 'DRAFT' };
 }
 
 function transitionOrder(db, actor, order, target, body) {

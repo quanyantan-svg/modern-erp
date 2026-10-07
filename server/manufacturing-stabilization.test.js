@@ -182,7 +182,7 @@ describe('Production order core hardening', () => {
 });
 
 describe('MRP and routing stabilization', () => {
-  test('MRP generate uses ACTIVE BOM, inventory and purchase receipt items deterministically', async () => {
+  test('legacy MRP plan execution is retired in favor of canonical Planning runs', async () => {
     const activeBom = await request('/api/boms', { method: 'POST', body: { productId: 'product-001', version: 'mrp-active', items: [{ productId: 'product-002', quantity: 2, scrapRate: 0 }] } });
     assert.equal(activeBom.status, 200, activeBom.data.error);
     const discontinuedBomId = id();
@@ -203,23 +203,16 @@ describe('MRP and routing stabilization', () => {
     database.prepare('INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)')
       .run('so-item-mrp-001', 'so-mrp-001', 'product-001', 10, 0, 0);
 
-    const plan = await request('/api/mrp-plans', { method: 'POST', body: { plan_type: 'SALES_ORDER', planned_date: '2026-09-02' } });
-    assert.equal(plan.status, 201, plan.data.error);
-    const generated = await request('/api/mrp-plans/generate', { method: 'POST', body: { plan_id: plan.data.id, demand_type: 'SALES_ORDER', demand_source_id: 'so-mrp-001' } });
-    assert.equal(generated.status, 200, generated.data.error);
-
-    const rows = database.prepare('SELECT * FROM mrp_plan_items WHERE plan_id=? ORDER BY product_id').all(plan.data.id);
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].product_id, 'product-002');
-    assert.equal(rows[0].gross_requirement, 20);
-    assert.equal(rows[0].on_hand, 5);
-    assert.equal(rows[0].scheduled_receipt, 3);
-    assert.equal(rows[0].planned_order_quantity, 12);
+    const retired = await request('/api/mrp-plans', { method: 'POST', body: { plan_type: 'SALES_ORDER', planned_date: '2026-09-02' } });
+    assert.equal(retired.status, 410);
+    const canonical = await request('/api/planning/mrp/runs');
+    assert.equal(canonical.status, 200, canonical.data.error);
+    assert.deepEqual(canonical.data.runs, []);
   });
 
-  test('MRP rejects invalid input as 400 instead of silent success', async () => {
+  test('legacy MRP generate endpoint fails explicitly instead of silently succeeding', async () => {
     const response = await request('/api/mrp-plans/generate', { method: 'POST', body: { plan_id: 'missing', demand_type: 'BAD' } });
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 410);
   });
 
   test('routing operations GET returns 200 for empty and populated data without b.bom_code', async () => {

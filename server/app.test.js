@@ -319,7 +319,7 @@ test('扩展业务模块在全新数据库中完成迁移并可查询', async ()
   const headers = { authorization: `Bearer ${token}` };
   const paths = [
     '/api/notifications', '/api/departments',
-    '/api/aux-projects', '/api/mrp-plans', '/api/iqc', '/api/oqc',
+    '/api/aux-projects', '/api/planning/mrp/runs', '/api/iqc', '/api/oqc',
     '/api/leave-requests', '/api/expense-claims', '/api/alert-rules',
     '/api/reports/financial-summary', '/api/reports/inventory-status',
     '/api/reports/sales-analysis',

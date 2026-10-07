@@ -354,7 +354,7 @@ describe('Scope — package version and route guards', () => {
     assert.equal(applicationRegistry.applicationRouteFor('dashboard')?.enabled, true);
   });
 
-  test('53 active routes are still reachable through launcher / utility / nav', () => {
+  test('55 active routes are still reachable through launcher / utility / nav', () => {
     const presentations = presentationMetadata.ROUTE_PRESENTATIONS;
     const enabledRoutes = presentations.map((p) => p.route);
     const allLauncherPages = new Set(

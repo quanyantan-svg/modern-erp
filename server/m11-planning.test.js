@@ -11,7 +11,7 @@
 //   * Purchase open supply = APPROVED ordered − CONFIRMED receipts
 //     linked to the order, with direct receipts and purchase returns
 //     correctly excluded from open supply;
-//   * Production open supply = (PENDING/IN_PROGRESS ordered) −
+//   * Production open supply = (RELEASED/IN_PROGRESS ordered) −
 //     CONFIRMED production receipts linked to the order, with
 //     COMPLETED and CANCELLED orders excluded;
 //   * Basic netting, BOM explosion (single + multi-level),
@@ -184,7 +184,7 @@ function seedPurchaseReceipt({ orderId, productId, quantity, status = 'CONFIRMED
   return { receiptId, receiptNo };
 }
 
-function seedProductionOrder({ productId, quantity, status = 'PENDING' }) {
+function seedProductionOrder({ productId, quantity, status = 'RELEASED' }) {
   const orderId = 'po2-' + id().slice(0, 8);
   const orderNo = 'MO-M11-' + orderId.slice(4, 10);
   database.prepare(`
@@ -241,7 +241,7 @@ async function executeRun(runId, token = adminToken) {
 // =====================================================================
 describe('M11 permission registry and five-role contract', () => {
   test('1. registered permission count stays at 112 after M14 + Core Scope Cleanup + V17 Wave A; MRP_VIEW / MRP_MANAGE exist', () => {
-    assert.equal(PERMISSIONS.length, 135);
+    assert.equal(PERMISSIONS.length, 138);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('MRP_VIEW'));
     assert.ok(codes.has('MRP_MANAGE'));
@@ -598,9 +598,9 @@ describe('M11 purchase open supply derivation', () => {
 // 5. Production supply derivation
 // =====================================================================
 describe('M11 production open supply derivation', () => {
-  test('24. PENDING PO qty 10 − receipt 4 → open production supply = 6', async () => {
+  test('24. RELEASED PO qty 10 − receipt 4 → open production supply = 6', async () => {
     const productId = ensureProduct('PRP1', '生产订单P1');
-    const order = seedProductionOrder({ productId, quantity: 10, status: 'PENDING' });
+    const order = seedProductionOrder({ productId, quantity: 10, status: 'RELEASED' });
     seedProductionReceipt({ orderId: order.orderId, productId, quantity: 4 });
     seedSalesOrder({ productId, quantity: 10 });
     const run = await createMrpRun({ name: 'prod pending' });
@@ -657,7 +657,7 @@ describe('M11 simple MRP netting', () => {
     const productId = ensureProduct('NET1', '净需求1');
     const whId = seedWarehouse();
     seedInventory(whId, productId, 3);
-    seedProductionOrder({ productId, quantity: 2, status: 'PENDING' });
+    seedProductionOrder({ productId, quantity: 2, status: 'RELEASED' });
     seedSalesOrder({ productId, quantity: 10 });
     const run = await createMrpRun({ name: 'simple net' });
     await executeRun(run.id);
@@ -1005,7 +1005,7 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     seedSalesOrder({ productId: fgId, quantity: 10 });
     const whId = seedWarehouse();
     seedInventory(whId, fgId, 3);
-    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'RELEASED' });
     const run = await createMrpRun({ name: 'NB simple', mode: 'SALES_PLUS_FORECAST', forecastId: fc.id });
     await executeRun(run.id);
     const detail = await request(`/api/planning/mrp/runs/${run.id}`);
@@ -1095,11 +1095,11 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     seedSalesOrder({ productId: fgId, quantity: 10 });
     const whFg = seedWarehouse();
     seedInventory(whFg, fgId, 3);
-    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'RELEASED' });
     // SUB inventory: on-hand 4, open prod 6 → SUB net = 30 − 4 − 6 = 20.
     const whSub = seedWarehouse();
     seedInventory(whSub, subId, 4);
-    seedProductionOrder({ productId: subId, quantity: 6, status: 'PENDING' });
+    seedProductionOrder({ productId: subId, quantity: 6, status: 'RELEASED' });
     const run = await createMrpRun({ name: 'NB multilevel', mode: 'SALES_PLUS_FORECAST', forecastId: fc.id });
     await executeRun(run.id);
     const detail = await request(`/api/planning/mrp/runs/${run.id}`);
@@ -1166,7 +1166,7 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     seedSalesOrder({ productId: fgId, quantity: 20 });
     const whId = seedWarehouse();
     seedInventory(whId, fgId, 3);
-    seedProductionOrder({ productId: fgId, quantity: 2, status: 'PENDING' });
+    seedProductionOrder({ productId: fgId, quantity: 2, status: 'RELEASED' });
     const run = await createMrpRun({ name: 'NB peg' });
     await executeRun(run.id);
     const detail = await request(`/api/planning/mrp/runs/${run.id}`);
@@ -1199,9 +1199,9 @@ describe('M11 net-before-explosion (HOTFIX)', () => {
     const fgId = ensureProduct('PROD-FG', '生产供应扣减FG');
     const compA = ensureProduct('PROD-A', '生产供应扣减A');
     seedBom({ parentId: fgId, items: [{ productId: compA, quantity: 2 }] });
-    // FG sales 10, on-hand 0, PENDING production 4 (no receipt) → net = 6 → A gross = 12.
+    // FG sales 10, on-hand 0, RELEASED production 4 (no receipt) → net = 6 → A gross = 12.
     seedSalesOrder({ productId: fgId, quantity: 10 });
-    seedProductionOrder({ productId: fgId, quantity: 4, status: 'PENDING' });
+    seedProductionOrder({ productId: fgId, quantity: 4, status: 'RELEASED' });
     const run = await createMrpRun({ name: 'NB prod' });
     await executeRun(run.id);
     const detail = await request(`/api/planning/mrp/runs/${run.id}`);
@@ -1265,7 +1265,7 @@ describe('M11 legacy DB reopen is idempotent', () => {
     assert.equal(newRuns, tRuns);
     assert.equal(newResults, tResults);
     assert.equal(permsCount, tPerms);
-    assert.equal(permsCount, 135);
+    assert.equal(permsCount, 138);
     thirdDb.close();
     // Re-bind the global `database` to the reopened handle for cleanup.
     database = createDatabase(join(tempDir, 'erp.db'));

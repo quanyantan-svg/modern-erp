@@ -74,6 +74,9 @@ const HEAVY = [
 // KEEP / MERGE / DELETE / HEAVY classification for every file in this
 // manifest is recorded in docs/operations/testing.md §3.
 const FULL = [
+  // ----- B3120 Planning Domain Capability Closure -----
+  'server/planning-domain-closure.test.js',
+
   // ----- Domain Alignment — canonical 8 Domains + Platform ownership -----
   'server/v17-domain-alignment.test.js',
 

@@ -31,6 +31,7 @@ import {
   HttpError, allow, allowAny, readJson, requiredText, send,
 } from '../lib/http.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { createProductionOrderCommand } from './manufacturing-orders.js';
 
 const PI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
 const PUI_STATUS = { DRAFT: '草稿', RELEASED: '已下达', CANCELLED: '已取消' };
@@ -350,37 +351,24 @@ export async function generateProductionOrderFromInstruction(db, req, res, actor
   if (orderQuantity > remaining + 1e-9) throw new HttpError(409, `生产指令剩余可转数量为 ${remaining}，本次 ${orderQuantity} 超出`);
   if (remaining <= 0) throw new HttpError(409, '该生产指令明细已全部转为制令单');
 
-  const now = nowIso();
-  const poId = genId();
-  const poNo = 'MO-' + Date.now().toString(36).toUpperCase();
-
+  let result;
   transaction(db, () => {
-    db.prepare(`
-      INSERT INTO production_orders(id, order_no, product_id, bom_id, quantity, status, planned_start, planned_finish, remark, creator_id, created_at, updated_at,
-        source_type,production_instruction_id,production_instruction_item_id,bom_version_snapshot,routing_id_snapshot,routing_version_snapshot)
-      VALUES (?, ?, ?, ?, ?, 'PENDING', ?, NULL, ?, ?, ?, ?,'INSTRUCTION',?,?,?,?,?)
-    `).run(poId, poNo, item.product_id, item.bom_id, orderQuantity, item.need_by_date, `来自生产指令 ${header.instruction_no}`, actor.id, now, now,
-      header.id, item.id, db.prepare('SELECT version FROM boms WHERE id=?').get(item.bom_id)?.version || '', item.routing_id || null,
-      item.routing_id ? db.prepare('SELECT version FROM product_routings WHERE id=?').get(item.routing_id)?.version || '' : '');
-    const bomItems = db.prepare('SELECT * FROM bom_items WHERE bom_id=? ORDER BY line_no').all(item.bom_id);
-    if (!bomItems.length) throw new HttpError(409, 'BOM 没有物料明细，不能生成制令单');
-    const itemStmt = db.prepare('INSERT INTO production_order_items(id,order_id,product_id,quantity,consumed_quantity,line_no,bom_item_id,quantity_per_unit,scrap_rate_snapshot) VALUES(?,?,?,?,0,?,?,?,?)');
-    let lineNo = 1;
-    for (const bomItem of bomItems) {
-      const perUnit = Number(bomItem.quantity) * (1 + Number(bomItem.scrap_rate || 0));
-      itemStmt.run(genId(), poId, bomItem.product_id, perUnit * orderQuantity, lineNo++, bomItem.id, perUnit, Number(bomItem.scrap_rate || 0));
-    }
-    if (!item.production_order_id) db.prepare('UPDATE production_instruction_items SET production_order_id=? WHERE id=?').run(poId, targetItemId);
-    if (item.routing_id) {
-      const routingInsert = db.prepare(`INSERT INTO production_order_routing_snapshots(id,production_order_id,routing_id,sequence_no,operation_code,operation_name,work_center,setup_minutes,run_minutes_per_unit,notes,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
-      for (const op of db.prepare('SELECT * FROM product_routing_operations WHERE routing_id=? ORDER BY sequence_no').all(item.routing_id)) {
-        routingInsert.run(genId(), poId, item.routing_id, op.sequence_no, op.operation_code, op.operation_name, op.work_center, op.setup_minutes, op.run_minutes_per_unit, op.notes, now);
-      }
-    }
-    audit(db, actor.id, 'GENERATE', 'PRODUCTION_ORDER', poId, `由生产指令 ${header.instruction_no} 生成 ${poNo}`);
+    result = createProductionOrderCommand(db, { actor, input: {
+      productId: item.product_id,
+      quantity: orderQuantity,
+      plannedStart: item.need_by_date,
+      remark: `来自生产指令 ${header.instruction_no}`,
+      bomId: item.bom_id,
+      routingId: item.routing_id,
+      sourceType: 'INSTRUCTION',
+      productionInstructionId: header.id,
+      productionInstructionItemId: item.id,
+    } });
+    if (!item.production_order_id) db.prepare('UPDATE production_instruction_items SET production_order_id=? WHERE id=?').run(result.id, targetItemId);
+    audit(db, actor.id, 'GENERATE', 'PRODUCTION_ORDER', result.id, `由生产指令 ${header.instruction_no} 生成 ${result.orderNo}`);
   });
 
-  return send(res, 201, { id: poId, orderNo: poNo });
+  return send(res, 201, { id: result.id, orderNo: result.orderNo, status: result.status });
 }
 
 // ============================================================

@@ -128,7 +128,7 @@ function countVouchers() {
 
 describe('M13 — Inventory Scrap', () => {
   test('1. permission registry has 112 entries after M13 + M14 + Core Scope Cleanup + V17 Wave A', () => {
-    assert.equal(PERMISSIONS.length, 135);
+    assert.equal(PERMISSIONS.length, 138);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('INVENTORY_SCRAP_VIEW'));
     assert.ok(codes.has('INVENTORY_SCRAP_MANAGE'));
@@ -430,11 +430,11 @@ describe('M13 — Regression contracts preserved', () => {
     `).run(bomId, fg);
     database.prepare('INSERT INTO bom_items(id, bom_id, product_id, quantity, scrap_rate, line_no) VALUES(?,?,?,?,?,?)').run(id(), bomId, a, 2, 0, 1);
     database.prepare('INSERT INTO bom_items(id, bom_id, product_id, quantity, scrap_rate, line_no) VALUES(?,?,?,?,?,?)').run(id(), bomId, b, 3, 0, 2);
-    // Open PENDING production order for FG qty 2 -> contributes to open_production_supply.
+    // RELEASED production order for FG qty 2 -> contributes to firm open production supply.
     const moId = 'mo-rg-' + id().slice(0, 8);
     database.prepare(`
       INSERT INTO production_orders(id, order_no, product_id, quantity, status, planned_start, planned_finish, remark, creator_id, created_at, updated_at)
-      VALUES(?, ?, ?, ?, 'PENDING', '2026-08-01', '2026-09-15', '', 'user-admin', datetime('now'), datetime('now'))
+      VALUES(?, ?, ?, ?, 'RELEASED', '2026-08-01', '2026-09-15', '', 'user-admin', datetime('now'), datetime('now'))
     `).run(moId, 'MO-RG-' + moId.slice(-6), fg, 2);
     // APPROVED Sales Order: FG qty 20.
     const custId = 'cust-m13-rg';

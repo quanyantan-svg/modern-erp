@@ -29,6 +29,7 @@ import { migrateEngineeringSubstituteSchema } from './migrations/engineering-sub
 import { migrateEngineeringRoutingSchema } from './migrations/engineering-routing-schema.js';
 import { migrateEngineeringChangeSchema } from './migrations/engineering-change-schema.js';
 import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
+import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -106,6 +107,9 @@ export const PERMISSIONS = [
   ['REPORT_VIEW', '查看报表'],
   ['MRP_VIEW', '查看MRP计划'],
   ['MRP_MANAGE', '管理MRP计划'],
+  ['PLANNING_CONFIG_MANAGE', '管理计划参数与方案'],
+  ['PLANNED_ORDER_RELEASE', '确认与释放计划订单'],
+  ['PLANNING_RESERVATION_MANAGE', '管理计划预留'],
   ['WORK_CENTERS_VIEW', '查看工作中心'],
   ['WORK_CENTERS_MANAGE', '管理工作中心'],
   ['ROUTING_VIEW', '查看工序'],
@@ -211,6 +215,7 @@ function createSqliteDatabase(filename) {
   migrateProductRoutingSchema(db);
   migratePlanningSchema(db);
   migratePlanningDocumentsSchema(db);
+  migratePlanningDomainSchema(db);
   migrateInventoryExtensionsSchema(db);
   migrateDiscountsSchema(db);
   migrateLifecycleSchema(db);

@@ -35,7 +35,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 53);
+    assert.equal(keys.length, 55);
     assert.equal(new Set(keys).size, keys.length);
   });
 

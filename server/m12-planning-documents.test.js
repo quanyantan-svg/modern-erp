@@ -600,7 +600,7 @@ describe('G. M11 netting arithmetic regression', () => {
     const prodId = 'po-m11-net-' + id().slice(0, 6);
     database.prepare(`
       INSERT INTO production_orders(id,order_no,product_id,bom_id,quantity,status,planned_start,planned_finish,remark,creator_id,created_at,updated_at)
-      VALUES(?,?,?,NULL,2,'PENDING',NULL,NULL,'','user-admin',datetime('now'),datetime('now'))
+      VALUES(?,?,?,NULL,2,'RELEASED',NULL,NULL,'','user-admin',datetime('now'),datetime('now'))
     `).run(prodId, 'MO-M11-NET', fg);
     runId = await runMrp();
   });

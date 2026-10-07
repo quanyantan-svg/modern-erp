@@ -845,16 +845,20 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 
 | Capability | 手册要求基线 | 当前 Modern ERP 基线 | Coverage | 主要 Gap / 后续方向 |
 |---|---|---|---|---|
-| 计划方案 | 计划参数、范围、来源、需求/供应、净需求等方案配置。 | MRP run 基础有，方案配置不完整 | `PARTIAL` | 新增 Planning Scheme |
-| 需求来源 | 销售订单、预测、安全库存等形成需求。 | Sales Order + Forecast 已有 | `PARTIAL` | 补安全库存等来源 |
-| 预测与冲销 | 销售实际需求消耗预测。 | Forecast 已有；consumption 需复核 | `PARTIAL` | 补 Forecast Consumption |
-| 供需计算 | 现有库存、采购/生产供应参与净需求。 | MRP supply/demand 已有 | `COVERED` | 保持 |
-| BOM 展开 | 按 BOM 展开相关需求。 | 已有 | `COVERED` | 保持 |
-| 预留关系 | 强/弱预留及需求供应对应。 | Pegging 有，Reservation 不完整 | `PARTIAL` | 区分 Pegging vs Reservation |
-| MRP 运算模式 | 全局/选择/精确等运算方式。 | 基础 MRP run 已有 | `PARTIAL` | 补方案/范围模式 |
-| 计划订单 | MRP 结果形成计划订单并支持拆分、合并、关闭、调整。 | 当前 Production/Purchase Instruction 类似计划结果 | `PARTIAL` | 统一 Planned Order lifecycle |
-| 计划释放 | 计划订单释放为生产、委外或请购。 | 生产/采购释放已有；委外缺失 | `PARTIAL` | 补 Outsourcing release |
-| 计划工作台 | 计划员查看例外、动态平衡、级联变更。 | 有 MRP results/analytics，非完整 workbench | `PARTIAL` | 新增 Planner Workbench |
+| 计划参数与物料策略 | 系统参数、预留开关、安全库存、再订货点、最高库存、经济订货批量、制造策略。 | 产品存在部分 legacy 字段；无 Planning authoritative policy，MAKE/BUY 仍由 BOM presence 推断 | `SEMANTIC_MISMATCH` | 建立唯一 Planning 参数与物料策略写入面；legacy 字段只作迁移输入/兼容投影 |
+| 计划方案 | 可复用地配置范围、来源、需求/供应、净需求、合并、释放、仓库等参数。 | MRP run 只有一次性 horizon / demand mode | `MISSING` | 新增 Planning Scheme；单组织明确 `OUT_OF_SCOPE` |
+| 需求来源 | 销售订单、预测、安全库存及下阶 BOM 形成分时需求。 | Sales Order / Forecast / BOM component 已有，但安全库存与分时事件缺失 | `PARTIAL` | 引入 source-backed demand event 与 safety-stock floor |
+| 预测与冲销 | 已批准销售需求消耗已下达预测并可追溯。 | 仅用 `MAX(total sales,total forecast)` 隐式防双算 | `SEMANTIC_MISMATCH` | 新增确定性 consumption allocation 与结果查询 |
+| 供需计算 | 库存、采购、生产和计划供应参与分时净需求。 | 聚合净算已有；生产状态仍按旧 `PENDING/IN_PROGRESS`，没有 planned supply/time bucket | `SEMANTIC_MISMATCH` | 消费 V18 lifecycle；形成分时事件并防 PO/收货重复 |
+| BOM 展开 | 按有效、已批准、用途正确的 BOM 多层展开。 | 多层、损耗、net-before-explosion、cycle 已有；仍直接查 ACTIVE BOM | `SEMANTIC_MISMATCH` | 保留成熟数学，改用 Engineering resolver |
+| 替代料计划 | MRP 消费 Engineering substitute contract，并提供建议查询。 | Engineering resolver 已冻结，Planning 未消费 | `MISSING` | MANUAL 仅建议；其余采用保守、可解释 bounded 规则 |
+| Pegging | 解释 MRP 数量为何产生。 | `mrp_run_pegging` 已有 | `COVERED` | 保持为 calculation explanation，不与 Reservation 混用 |
+| 预留关系 | 强/弱/人工预留、释放策略和需求↔供应双向追溯。 | 无正式 Reservation；Pegging 不能替代 allocation | `MISSING` | 新增 reservation ledger、并发/超分配防护和执行 guard |
+| MRP 运算模式与日志 | Global / Selected / Precise Selected；保存选择、配置、状态、警告和失败诊断。 | 只有 demand source mode；completed snapshot 基础正确 | `PARTIAL` | 新增 calculation scope、source selection 和 immutable log |
+| 计划订单 | MRP/人工形成可修改业务实体，支持确认、拆分、合并、关闭、目标改变与批量维护。 | `mrp_run_results` immutable；Instruction 不能替代 Planned Order | `MISSING` | 新增 Planned Order 与 source-link；禁止反写 MRP result |
+| 计划释放 | MAKE/BUY/OUTSOURCE 受控释放并防超转换。 | 生产/采购指令已有；生产转换 raw INSERT 绕过 Manufacturing；委外执行缺失 | `SEMANTIC_MISMATCH` | MAKE 调 canonical Manufacturing command；BUY 保留采购桥；OUTSOURCE 仅 stable handoff |
+| 计划员工作台与报表 | 当前动态平衡、异常、供需/订单/预测消耗/预留/替代/MRP 日志查询。 | 只有历史 run viewer 与局部 analytics | `MISSING` | 建立共享动态 read model 与移动端工作面 |
+| 级联调整 | 销售订单/预测变更先预览影响，再只修改仍属 Planning 可变状态的对象。 | 无 | `MISSING` | 新增 bounded preview/apply；执行中/已收货/库存/会计事实 fail closed |
 
 ### 22.21 B3121 委外管理
 **主要目标 Domain：** Procurement & Outsourcing
@@ -1604,3 +1608,138 @@ Canonical product architecture 固定为：
 ---
 
 **MANUFACTURING & QUALITY DOMAIN CLOSURE REQUIREMENT — READY FOR DESIGN & IMPLEMENTATION**
+
+---
+
+## 30. Planning Domain Closure Requirement
+
+> 本节固化 B3120 Planning Domain Closure 的 Audit / Coverage / Requirement。
+> 未直接读取用户原始 Word 手册；Manual Evidence 来自本轮 Prompt 中由上游提取的 B3120，并由 B3118/B3119/B3101/B3104/B3121 支撑。Technical Design 见 `solution.md §25`。
+
+### 30.1 范围与 ownership
+
+Planning 负责 Forecast、Consumption、Demand/Supply calculation、MRP、Pegging、Planned Order、Reservation relationship、Planner Workbench、planning exception、cascade preview/apply 以及 Production/Purchase/Outsource planning handoff。Planning 不拥有 BOM/Substitute master、Production/Purchase/Outsource execution、physical inventory truth、AP/accounting 或 Multi-Organization。
+
+### 30.2 PL-01 ～ PL-45 Capability Audit Matrix
+
+| ID | Capability / repository evidence | Current coverage | Gap / implementation decision |
+|---|---|---|---|
+| PL-01 | 计划参数；当前无 authoritative source | `MISSING` | `NEW`：singleton 参数，至少包含 reservation enabled |
+| PL-02 | `products.reorder_point/min_stock/max_stock/lead_time_days` 存在，Product API 未形成完整策略 | `PARTIAL` | `CONVERGE`：Planning material policy；legacy 值只迁移/投影，补 safety stock 与 EOQ |
+| PL-03 | 当前 `有 ACTIVE BOM→MAKE，否则 BUY` | `SEMANTIC_MISMATCH` | `NEW`：bounded `AUTO/MAKE/BUY/OUTSOURCE`；其它截图字段 `DEFER_SOURCE_DETAIL` |
+| PL-04 | 无 Planning Scheme entity | `MISSING` | `NEW`：可复用 scheme；组织范围维持单组织 `OUT_OF_SCOPE` |
+| PL-05 | MRP run 有 horizon，但无 scheme default/snapshot | `PARTIAL` | `ENHANCE`：scheme default + run override + completed snapshot |
+| PL-06 | Sales/Forecast/BOM component 存在；Safety Stock 不存在 | `PARTIAL` | `ENHANCE`：可扩展 demand-source rows，纳入 safety-stock floor |
+| PL-07 | On-hand、open PO、open production 已有；planned supply 无 | `PARTIAL` | `ENHANCE`：source selection + Planned Order supply；Outsource execution deferred |
+| PL-08 | 当前库存基本全仓汇总；无 MRP warehouse scope | `MISSING` | `NEW`：scheme↔warehouse participation；不复制 warehouse master |
+| PL-09 | Forecast DRAFT→ACTIVE→CANCELLED、期间和 item 已有 | `COVERED` | `KEEP` 并在 consumption/read model 中增强 |
+| PL-10 | ACTIVE 可稳定表达“已下达/生效” | `COVERED` | `KEEP` storage enum；presentation 显示业务语义，不做机械 rename |
+| PL-11 | `MAX(total sales,total forecast)` 只做 product/run aggregate | `SEMANTIC_MISMATCH` | `NEW`：explicit Forecast Consumption allocation |
+| PL-12 | 无 Forecast Consumption Result 查询 | `MISSING` | `NEW`：bucket/original/consumed/remaining/SO/date trace |
+| PL-13 | `demand_source_mode` 与 calculation scope 混在 run 输入 | `MISSING` | `NEW`：`GLOBAL/SELECTED/PRECISE_SELECTED` + explicit selections |
+| PL-14 | MRP DRAFT→COMPLETED/CANCELLED，completed snapshot 不回写 | `COVERED` | `KEEP`；rerun 新建，Planned Order 不反写 result |
+| PL-15 | 只有 summary/audit；无参与文档、配置、warning/error execution log | `PARTIAL` | `ENHANCE`：immutable MRP log 与 source/config snapshot |
+| PL-16 | on-hand/open purchase/open production、多层 BOM、net-before-explosion 已有 | `COVERED` | `KEEP` mathematical invariants，按 scheme/time phase 扩展 |
+| PL-17 | 结果以 product/horizon 聚合；需求有 need_date 但供应无统一 event | `PARTIAL` | `NEW`：time-phased demand/supply events/read model |
+| PL-18 | APPROVED SO remaining + `requested_delivery_date`，legacy fallback 明确 | `COVERED` | `KEEP` authoritative date/lifecycle |
+| PL-19 | safety stock 未参加 MRP | `MISSING` | `NEW`：planning floor；每 product/horizon 只补足一次，禁止 bucket 重复需求 |
+| PL-20 | APPROVED PO minus CONFIRMED receipt，避免已收货重复计 open supply | `COVERED` | `ENHANCE`：expected date、scheme/warehouse eligibility |
+| PL-21 | Planning 仍只认 `PENDING/IN_PROGRESS` | `SEMANTIC_MISMATCH` | `CONVERGE`：仅 `RELEASED/IN_PROGRESS` 为 firm production supply；receipt 扣减 |
+| PL-22 | Planning 直接查 ACTIVE BOM | `SEMANTIC_MISMATCH` | `CONVERGE`：统一 `resolveEffectiveBomForCaller`，传 purpose/business date |
+| PL-23 | 多层/损耗/cycle/net-before-explosion/shared aggregation 已有 | `COVERED` | `KEEP`，新增能力不得回退 |
+| PL-24 | Engineering substitute master/resolver 已有；Planning 未消费 | `MISSING` | `ENHANCE`：保守消费；MANUAL 只建议，复杂细节不足则 partial |
+| PL-25 | 无 Material Substitute Suggestion 查询 | `MISSING` | `NEW`：主料/替代/availability/source/date/strategy/method/quantity basis |
+| PL-26 | `mrp_run_pegging` 已解释来源贡献 | `COVERED` | `KEEP` |
+| PL-27 | 无 Reservation，不能以 Pegging status 代替 | `MISSING` | `NEW`：独立实体和语义 |
+| PL-28 | 无 Strong Reservation | `MISSING` | `NEW`：MRP/人工建立；firm supply 超分配 fail closed |
+| PL-29 | 无 Weak Reservation | `MISSING` | `NEW`：MRP 建立，可按策略释放/被更高优先级替代 |
+| PL-30 | 无 reservation release policy | `MISSING` | `NEW`：`KEEP_ALL/RELEASE_WEAK` 并真实参与 run preparation |
+| PL-31 | 无 Manual Reservation Order | `MISSING` | `NEW`：无现存 supply 时可指定 expected supply + release date |
+| PL-32 | `mrp_run_results` 是 snapshot，不是 Planned Order | `MISSING` | `NEW`：MRP/manual Planned Order entity |
+| PL-33 | 无 Planned Order lifecycle | `MISSING` | `NEW`：DRAFT→CONFIRMED→RELEASED→CLOSED；CANCELLED 安全分支 |
+| PL-34 | 无 split | `MISSING` | `NEW`：transaction、quantity conservation、source trace/reservation adjustment |
+| PL-35 | 无 merge | `MISSING` | `NEW`：product/type/policy/date/downstream compatibility guard |
+| PL-36 | 无 batch maintenance | `MISSING` | `NEW`：preview→apply、全批 atomic、audit |
+| PL-37 | 无 supply target change | `MISSING` | `NEW`：release 前 `MAKE/BUY/OUTSOURCE` 受控变更并记录 reason |
+| PL-38 | Manufacturing 已有 bounded byproduct execution；Planning 无 planned output | `MISSING` | `NEW`：planned byproduct quantity；成本继续属 Finance |
+| PL-39 | Instruction bridge 已有；缺 Planned Order source/remaining control | `PARTIAL` | `ENHANCE`：Planned Order→Instruction，累计释放不得超量 |
+| PL-40 | 无 Planner Workbench | `MISSING` | `NEW`：动态 current balance、exceptions、actions |
+| PL-41 | 无 Cascade Adjustment | `MISSING` | `NEW`：Sales/Forecast preview-first bounded apply |
+| PL-42 | 无统一 Material Supply/Demand Status | `MISSING` | `NEW`：time bucket、on-hand/future supply/demand/projected/max warnings |
+| PL-43 | 无共享 Summary→Detail read model | `MISSING` | `NEW`：同一 event/read model，禁止第二套算法 |
+| PL-44 | 无 Order Supply/Demand Status | `MISSING` | `NEW`：Forecast/SO→planning/release/execution bounded trace |
+| PL-45 | 无 Reservation comprehensive/trace query | `MISSING` | `NEW`：Demand→Reservation→Supply 与反向查询 |
+
+### 30.3 Requirement contracts
+
+#### Planning foundation
+
+- `reservation enabled` 只允许一个 authoritative parameter source；关闭时禁止新增 reservation，但保留历史查询。
+- Material policy 每个 product 最多一条 active truth，字段至少含 safety stock、reorder point、maximum stock、EOQ、lead time、`AUTO/MAKE/BUY/OUTSOURCE`。`AUTO` 是兼容 heuristic；其它手册截图细节不猜测。
+- Planning Scheme 具有 code/name/active lifecycle、horizon、demand/supply source rows、calculation scope default、reservation release policy、merge/release policy和 warehouse participation。当前不增加 organization model。
+
+#### Forecast consumption and events
+
+- Consumption 只使用 ACTIVE forecast bucket 与 APPROVED Sales Order remaining demand；按同 product、同 run horizon、Sales need date/source identity 确定性分配；单一 Sales quantity 不得超额消费，单一 forecast bucket 不得变成负数。
+- 保存每次 completed run 的 consumption allocation；Forecast 后续状态/数据变化不得重写历史。
+- Demand/Supply event 至少保存 product、event date、source type/id/line、quantity、direction、status、warehouse、run；业务源仍是 authoritative document，不复制 source master。
+
+#### MRP
+
+- completed run immutable，scheme/config/source selections/log/event/result/pegging 均为 snapshot；重算必须新建 run。
+- `GLOBAL` 取 scheme 范围内全部 eligible sources；`SELECTED` 取选中来源涉及产品的 eligible demand；`PRECISE_SELECTED` 只取明确 source rows，BOM 下阶需求只由已选 demand 驱动。
+- 现有 net-before-explosion、cycle detection、scrap、shared-component aggregation 保持。
+- Production firm supply 仅来自 `RELEASED/IN_PROGRESS` 未入库余量；DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED 不计 firm supply。
+- Safety Stock 是 projected balance floor，不是每 bucket 重复 transactional demand。
+- BOM 必须通过 Engineering resolver；Substitute 的 MANUAL strategy 只生成 suggestion。
+
+#### Planned Order and release
+
+- Planned Order 独立于 immutable `mrp_run_results`，来源为 MRP 或 MANUAL；保存 source links、quantity/date/type/status、reservation/release state与 audit。
+- split/merge/target-change/batch 在 transaction 中重读状态和累计 release；数量守恒，来源 trace 不丢，失败零副作用。
+- MAKE：Planned Order→Production Instruction→canonical Manufacturing create command；禁止第二个 Production Order constructor。
+- BUY：Planned Order→Purchase Instruction→Purchase Requisition；采购执行 owner 不变。
+- OUTSOURCE：Planning target/handoff 可用；完整 Outsourcing Order/Issue/Receipt/AP 为 `CROSS_DOMAIN_DEPENDENCY`。
+
+#### Reservation
+
+- Pegging 与 Reservation 分表、分语义。
+- Strong/Weak/Manual reservation 数量必须为正，不得超过 remaining demand 或 eligible supply；并发时 transaction/lock 防 over-reserve。
+- Strong Reservation 被 Sales Delivery 与 Production Material Issue 的 centralized guard 尊重；Planning 不建立第二库存账。
+- Weak reservation 可按 scheme `RELEASE_WEAK` 在新 run preparation 时释放；Strong 不被该策略释放。release date 到期的 manual reservation 显式转为 RELEASED。
+
+#### Workbench, reports and cascade
+
+- Workbench 使用当前 authoritative source 构建动态 balance，不以历史 run 冒充当前状态；按 time bucket 展示 projected balance、shortage/excess/safety stock/reservation/exception。
+- 所有供需、预测冲销、预留、替代与 MRP 日志查询复用同一 read model/source service。
+- Cascade apply 只允许修改 DRAFT/CONFIRMED 且未释放的 Planning entity；执行中 Production、已收货 Purchase、Inventory、Accounting 一律作为 blocker，禁止自动改写。
+
+### 30.4 Permission / compatibility
+
+- 保留 `MRP_VIEW/MRP_MANAGE` 兼容；新增最小 Planning permission family：configuration、planned-order release、reservation manage；后端独立 fail closed。
+- 不删除/重命名现有 Forecast/MRP/Instruction/Requisition route/API；新字段和 endpoint additive。
+- Legacy `/api/mrp/calculate`、`/api/mrp/bom-explode`、`/api/mrp-plans*` 必须完成 caller proof：无 caller 时退出 active authority；需要兼容时只能适配 canonical service，不保留第二套算法。历史表不 DROP。
+
+### 30.5 Data / migration / rollback
+
+- schema additive、idempotent，保留历史 run、instruction id、production/procurement facts；SQLite/MySQL parity。
+- Planned Order、Reservation、Forecast Consumption 必须是结构化核心实体，不以 generic JSON blob 替代；snapshot/log payload 可使用 bounded JSON。
+- rollback 以应用代码回退和新增结构停止写入为主；不 destructive down-migrate，不 DROP legacy table，不伪造历史。
+
+### 30.6 Acceptance
+
+- focused：foundation、forecast、MRP modes/time phase/BOM/substitute、planned order、reservation/execution guards、workbench/report/cascade、downstream command、legacy convergence；
+- canonical：`pnpm test:fast`、`pnpm test`、`pnpm test:heavy`、`pnpm build`、`git diff --check`；
+- database：受保护 disposable MySQL 环境运行 `pnpm test:mysql` 与 `pnpm test:mysql:concurrency`，证明 release/reservation 不双发、不超分配；
+- browser：Forecast、MRP、Planned Orders、Planner Workbench、Instruction flow、Planning Configuration/Reservation 在 320/390/430/680 CSS px 无 document overflow，主要动作、长编码、time bucket、trace、split/merge、source selection 可用。
+
+### 30.7 Explicitly deferred / out of scope
+
+- `OUT_OF_SCOPE_PRODUCT_BASELINE`：Multi-Organization；
+- `CROSS_DOMAIN_DEPENDENCY`：完整 Outsourcing execution、Procurement sourcing、physical Inventory status/lock 深化；
+- `SOURCE_DETAIL_INSUFFICIENT`：截图级 Manufacturing Strategy 全字段、金蝶精确 forecast time-fence、复杂 substitute 数量算法；
+- 不实施 generic APS、Finance rewrite、Generic Workflow、destructive cleanup 或 legacy table DROP。
+
+---
+
+**PLANNING DOMAIN CLOSURE REQUIREMENT — APPROVED BY CONTINUOUS USER AUTHORIZATION FOR DESIGN & IMPLEMENTATION**
