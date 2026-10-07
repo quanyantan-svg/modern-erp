@@ -1923,9 +1923,17 @@ API：
 | E | `engineering-change.test.js` | transition / allowed operations by change type / impact preview / apply atomic / audit / rollback / use-up-old boundary |
 | F | `engineering-downstream.test.js` | production consumer stability / MRP consumer stability / outsource resolver contract
 | Frontend | `engineering-frontend-contract.test.js` + `scripts/acceptance/v17-engineering-frontend.mjs` | Registry/API contract；Edge 320/390/430/680 响应式与 runtime error |
-| MySQL schema | `engineering-mysql-schema.test.js` | 15 张工程表、28 个 additive 列、普通索引恢复与幂等性 |
+| MySQL schema | `engineering-mysql-schema.test.js`、`mysql-v14-1-hotfix-upgrade-path.integration.js` | 15 张工程表、5 张既有表上的 28 个 additive 列、7 个显式普通索引、metadata alias、existing DB upgrade、数据保留与二次启动幂等性 |
 
 所有 focused tests 纳入 `scripts/testing/test-suites.js`。
+
+#### MySQL parity blocker 实施证据（2026-10-07）
+
+- Root cause：`information_schema.COLUMNS` / `STATISTICS` 查询没有显式 alias，mysql2 返回 driver-native `COLUMN_NAME` / `INDEX_NAME`，而 reconciliation 读取 `row.column_name` / `row.index_name`；existing-column Set 因而得到 `undefined`，将已存在的 `id` 误判为缺失并执行重复 `ALTER TABLE ADD COLUMN id`。
+- Fix：`readMySqlColumnNames()` 使用 `COLUMN_NAME AS column_name` 并按 `ORDINAL_POSITION` 排序；`readMySqlIndexNames()` 使用 `INDEX_NAME AS index_name`。bootstrap 统一复用这两个 canonical inspection helper，不增加 `id` 特判、不吞掉 `ER_DUP_FIELDNAME`、不禁用 reconciliation。
+- Upgrade path：真实 MySQL 测试先构造 pre-Engineering schema，移除 15 张新表及代表性 additive 列，再连续初始化两次；验证新表/列只补齐一次、既有 Work Center 行与 Engineering permission mapping 不变、table count 恢复且稳定。
+- Fresh / second start：fresh bootstrap 的应用表集合与 canonical SQLite snapshot 精确相等，另仅有 2 张 MySQL infrastructure 表；第二次初始化无 duplicate table/column/index 且无数据变更。
+- Schema count：当前 snapshot / migration 计算结果为 15 张新表、28 个 additive 列、7 个显式普通索引；不再沿用旧的 174/172 hard-coded table count，MySQL gate 改为与实时权威 snapshot/source 精确比对。
 
 ### 23.16 Canonical Gates
 

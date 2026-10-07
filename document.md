@@ -1327,8 +1327,12 @@ Canonical product architecture 固定为：
 
 - 实施证据：Waves A–F backend/module/migration/focused integration 测试；Frontend 四个工作面及 Registry/Launcher 路由。
 - 响应式证据：真实 Edge 在 320 / 390 / 430 / 680 CSS px 访问 Engineering Reference / BOM / Substitute & Configurable / ECO，无页面水平溢出与 browser error。
-- Schema 证据：SQLite snapshot 含 15 张新工程表；MySQL bootstrap 对已完成 schema 执行 additive table/column/index reconciliation，覆盖 28 个既有表新增列并验证幂等。
-- 环境证据：当前主机未配置 `ERP_DB_HOST/PORT/NAME/USER/PASSWORD`；因此未执行会 reset/drop 的 live `test:mysql` / `test:mysql:concurrency`，不将结构合同测试伪报为 live MySQL PASS。
+- Schema 计数证据（由当前 canonical SQLite snapshot 与 5 个 Engineering migration 计算）：
+  - 15 张新表：`engineering_shifts`、`engineering_shift_patterns`、`engineering_calendar_templates`、`engineering_work_calendars`、`engineering_basic_activities`、`engineering_workshop_formulas`、`engineering_resources`、`engineering_equipment`、`engineering_operations`、`engineering_control_codes`、`engineering_substitute_schemes`、`engineering_substitutes`、`product_routing_operation_links`、`engineering_change_orders`、`engineering_change_items`；
+  - 5 张既有表上的 28 个 additive 列：`boms` 8 个、`bom_items` 7 个、`work_centers` 5 个、`product_routings` 1 个、`product_routing_operations` 7 个；
+  - 7 个显式普通索引：`idx_bom_items_product`、`idx_boms_product_purpose_status`、`idx_engineering_change_items_change`、`idx_engineering_change_orders_status`、`idx_engineering_substitutes_primary`、`idx_engineering_substitutes_scheme`、`idx_product_routing_operation_links_routing`。
+- MySQL parity 证据：真实 disposable MySQL 8 上 fresh bootstrap、V1.3/V1.4-shaped existing database additive upgrade、连续第二次初始化、Engineering 表/列恢复、原始行与 permission mapping 保留均通过；`pnpm test:mysql` 与 `pnpm test:mysql:concurrency` 最终 PASS。
+- BOM Permission Family：Original Gap `SEMANTIC_MISMATCH`；独立 `ENGINEERING_BOM_VIEW` / `ENGINEERING_BOM_MANAGE` / `ENGINEERING_BOM_APPROVE` 权限族及测试已落地，Final Coverage `COVERED`。
 - 最终保留 Gap：非 Shift 参考资料 update/deactivate；完整 APS；预计入供参与 Use-Up-Old；完整 MRP substitute 消费；Multi-Org/Mold/Auxiliary 的合法 deferred 范围。
 
 ---

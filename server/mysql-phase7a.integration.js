@@ -3,6 +3,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createDatabase, transaction } from './db.js';
+import { captureSqliteSnapshot } from './database/mysql-schema.js';
 import { createTempDb, createTempDir } from './test-utils/temp-db.js';
 import { allocateDocumentNumber } from './modules/commercial-golive.js';
 import { convertSqliteToMySql } from '../scripts/admin/convert-sqlite-to-mysql.mjs';
@@ -18,9 +19,14 @@ describe('V1.3 Phase 7A MySQL 8 compatibility gate', () => {
 
   test('fresh bootstrap is complete, repeatable, transactional and sequence-safe', () => {
     const db = mysql.db;
+    const expectedApplicationTables = captureSqliteSnapshot((path) => createDatabase(path), false)
+      .tables.map((table) => table.name).sort();
+    const actualTables = db.prepare('SHOW TABLES').all().map((row) => Object.values(row)[0]).sort();
+    const actualApplicationTables = actualTables.filter((name) => !['mysql_backend_metadata', 'mysql_transaction_gates'].includes(name));
     assert.equal(db.dialect, 'mysql');
     assert.equal(db.prepare('SELECT @@transaction_isolation level').get().level, 'READ-COMMITTED');
-    assert.equal(db.prepare('SHOW TABLES').all().length, 174);
+    assert.deepEqual(actualApplicationTables, expectedApplicationTables);
+    assert.equal(actualTables.length, expectedApplicationTables.length + 2);
     assert.equal(db.prepare("SELECT version FROM mysql_backend_metadata WHERE version='v1.3-phase7a'").get().version, 'v1.3-phase7a');
     assert.equal(db.prepare('SELECT purpose FROM mysql_transaction_gates WHERE gate_id=1').get().purpose, 'application-write');
 
@@ -41,7 +47,7 @@ describe('V1.3 Phase 7A MySQL 8 compatibility gate', () => {
 });
 
 describe('V1.3 Phase 7A SQLite to MySQL conversion rehearsal', () => {
-  let dir; let sourcePath;
+  let dir; let sourcePath; let sourceTableCount;
   before(() => {
     // The conversion source is deliberately outside the repository and uses
     // production seed rules so every synthetic business row has an explicit ID.
@@ -58,6 +64,7 @@ describe('V1.3 Phase 7A SQLite to MySQL conversion rehearsal', () => {
     db.prepare("INSERT INTO warehouses(id,code,name,active,created_at,updated_at) VALUES('conv-w','CONV-W','Conversion Warehouse',1,?,?)").run(at, at);
     db.prepare("INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code,tracking_policy,valuation_method,inventory_classification) VALUES('conv-p','CONV-P','Conversion Product','EA',12345,0,1,?,?,'EA','NONE','MOVING_AVERAGE','OTHER_INVENTORY')").run(at, at);
     db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('conv-i','conv-w','conv-p',12.5,?)").run(at);
+    sourceTableCount = db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get().n;
     db.close();
   });
   after(() => {
@@ -70,7 +77,7 @@ describe('V1.3 Phase 7A SQLite to MySQL conversion rehearsal', () => {
 
   test('all rows, primary IDs, relationships and control totals match', () => {
     const report = convertSqliteToMySql({ sourcePath });
-    assert.equal(report.tableCount, 172);
+    assert.equal(report.tableCount, sourceTableCount);
     assert.equal(report.rowCounts.customers, 1);
     assert.equal(report.rowCounts.suppliers, 1);
     assert.equal(report.rowCounts.inventory, 1);

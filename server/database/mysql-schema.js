@@ -149,6 +149,21 @@ export function planMySqlIndexReconciliation(snapshot, currentIndexes) {
   return statements;
 }
 
+export function readMySqlColumnNames(adapter, tableName) {
+  const rows = adapter.prepare(`SELECT COLUMN_NAME AS column_name
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?
+    ORDER BY ORDINAL_POSITION`).all(tableName);
+  return new Set(rows.map((row) => row.column_name));
+}
+
+export function readMySqlIndexNames(adapter, tableName) {
+  const rows = adapter.prepare(`SELECT DISTINCT INDEX_NAME AS index_name
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?`).all(tableName);
+  return new Set(rows.map((row) => row.index_name));
+}
+
 export function captureSqliteSnapshot(createSqliteSnapshot, seedDemo) {
   const path = join(tmpdir(), `modern-erp-mysql-schema-${randomUUID()}.db`);
   const priorNodeEnv = process.env.NODE_ENV;
@@ -197,8 +212,7 @@ export function bootstrapMySql(adapter, snapshot) {
   if (complete) {
     for (const table of snapshot.tables) {
       if (!existingNames.has(table.name)) continue;
-      const rows = adapter.prepare('SELECT column_name FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name=?').all(table.name);
-      currentColumns.set(table.name, new Set(rows.map((row) => row.column_name)));
+      currentColumns.set(table.name, readMySqlColumnNames(adapter, table.name));
     }
   }
 
@@ -211,8 +225,7 @@ export function bootstrapMySql(adapter, snapshot) {
     if (complete) {
       const currentIndexes = new Map();
       for (const table of snapshot.tables) {
-        const rows = adapter.prepare('SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name=?').all(table.name);
-        currentIndexes.set(table.name, new Set(rows.map((row) => row.index_name)));
+        currentIndexes.set(table.name, readMySqlIndexNames(adapter, table.name));
       }
       for (const statement of planMySqlIndexReconciliation(snapshot, currentIndexes)) adapter.exec(statement);
     }

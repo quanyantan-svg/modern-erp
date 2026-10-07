@@ -34,6 +34,23 @@ if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') throw new Error('MYSQL TE
 const at = '2026-09-28T00:00:00.000Z';
 const TRANSFER_TABLE = 'inventory_transfers';
 const CHECK_TABLE = 'inventory_checks';
+const ENGINEERING_TABLES = [
+  'engineering_shifts',
+  'engineering_shift_patterns',
+  'engineering_calendar_templates',
+  'engineering_work_calendars',
+  'engineering_basic_activities',
+  'engineering_workshop_formulas',
+  'engineering_resources',
+  'engineering_equipment',
+  'engineering_operations',
+  'engineering_control_codes',
+  'engineering_substitute_schemes',
+  'engineering_substitutes',
+  'product_routing_operation_links',
+  'engineering_change_orders',
+  'engineering_change_items',
+];
 
 function columnInfo(db, table, column) {
   return db.prepare(
@@ -276,6 +293,67 @@ describe('V1.4.1 hotfix — MySQL V1.3 → V1.4 existing-database upgrade path',
       assert.equal(second.prepare(`SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='business_date'`).get(TRANSFER_TABLE).n, 1);
       assert.equal(second.prepare(`SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='business_date'`).get(CHECK_TABLE).n, 1);
       assert.equal(second.prepare("SELECT COUNT(*) n FROM permissions WHERE code='INVENTORY_TRANSFER_CONFIRM'").get().n, 1);
+    } finally {
+      second.close();
+    }
+  });
+
+  test('existing pre-Engineering database receives additive schema once and preserves rows', () => {
+    db.prepare(`INSERT INTO work_centers
+      (id,code,name,type,capacity_hours,efficiency,unit_cost_cents,active,created_at)
+      VALUES('upg-work-center','UPG-WC','Legacy Work Center','PRODUCTION',8,1,0,1,?)`).run(at);
+    const permissionsBefore = db.prepare(
+      "SELECT role_id,permission_code FROM role_permissions WHERE permission_code LIKE 'ENGINEERING_%' ORDER BY role_id,permission_code",
+    ).all();
+    const tableCountBefore = tableCount(db);
+
+    db.exec('SET FOREIGN_KEY_CHECKS=0');
+    try {
+      for (const table of ENGINEERING_TABLES) db.exec(`DROP TABLE IF EXISTS \`${table}\``);
+      db.exec('ALTER TABLE boms DROP COLUMN approved_at');
+      db.exec('ALTER TABLE bom_items DROP COLUMN config_constraint');
+      db.exec('ALTER TABLE work_centers DROP COLUMN notes');
+      db.exec('ALTER TABLE product_routing_operations DROP COLUMN quality_policy');
+    } finally {
+      db.exec('SET FOREIGN_KEY_CHECKS=1');
+    }
+
+    const first = createDatabase({ backend: 'mysql' });
+    try {
+      const restoredTables = new Set(first.prepare('SHOW TABLES').all().map((row) => Object.values(row)[0]));
+      for (const table of ENGINEERING_TABLES) assert.ok(restoredTables.has(table), `${table} must be restored`);
+      for (const [table, column] of [
+        ['boms', 'approved_at'],
+        ['bom_items', 'config_constraint'],
+        ['work_centers', 'notes'],
+        ['product_routing_operations', 'quality_policy'],
+      ]) assert.ok(columnInfo(first, table, column), `${table}.${column} must be restored`);
+      assert.equal(first.prepare("SELECT code,name,active FROM work_centers WHERE id='upg-work-center'").get().code, 'UPG-WC');
+      assert.equal(tableCount(first), tableCountBefore);
+      assert.deepEqual(first.prepare(
+        "SELECT role_id,permission_code FROM role_permissions WHERE permission_code LIKE 'ENGINEERING_%' ORDER BY role_id,permission_code",
+      ).all(), permissionsBefore);
+    } finally {
+      first.close();
+    }
+
+    const second = createDatabase({ backend: 'mysql' });
+    try {
+      for (const [table, column] of [
+        ['boms', 'approved_at'],
+        ['bom_items', 'config_constraint'],
+        ['work_centers', 'notes'],
+        ['product_routing_operations', 'quality_policy'],
+      ]) {
+        assert.equal(second.prepare(
+          'SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?',
+        ).get(table, column).n, 1, `${table}.${column} must remain single on second startup`);
+      }
+      assert.equal(second.prepare("SELECT COUNT(*) n FROM work_centers WHERE id='upg-work-center'").get().n, 1);
+      assert.equal(tableCount(second), tableCountBefore);
+      assert.deepEqual(second.prepare(
+        "SELECT role_id,permission_code FROM role_permissions WHERE permission_code LIKE 'ENGINEERING_%' ORDER BY role_id,permission_code",
+      ).all(), permissionsBefore);
     } finally {
       second.close();
     }

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { captureSqliteSnapshot, planMySqlAdditiveReconciliation, planMySqlIndexReconciliation } from './database/mysql-schema.js';
+import {
+  captureSqliteSnapshot,
+  planMySqlAdditiveReconciliation,
+  planMySqlIndexReconciliation,
+  readMySqlColumnNames,
+  readMySqlIndexNames,
+} from './database/mysql-schema.js';
 import { createDatabase } from './db.js';
 
 const ENGINEERING_TABLES = [
@@ -20,6 +26,16 @@ const ENGINEERING_TABLES = [
   'product_routing_operation_links',
   'engineering_change_orders',
   'engineering_change_items',
+];
+
+const ENGINEERING_INDEXES = [
+  ['bom_items', 'idx_bom_items_product'],
+  ['boms', 'idx_boms_product_purpose_status'],
+  ['engineering_change_items', 'idx_engineering_change_items_change'],
+  ['engineering_change_orders', 'idx_engineering_change_orders_status'],
+  ['engineering_substitutes', 'idx_engineering_substitutes_primary'],
+  ['engineering_substitutes', 'idx_engineering_substitutes_scheme'],
+  ['product_routing_operation_links', 'idx_product_routing_operation_links_routing'],
 ];
 
 test('MySQL snapshot contains all 15 additive engineering tables', () => {
@@ -71,10 +87,31 @@ test('MySQL additive reconciliation is idempotent when schema already matches', 
 test('MySQL reconciliation restores ordinary engineering indexes', () => {
   const snapshot = captureSqliteSnapshot((path) => createDatabase(path), false);
   const indexes = new Map(snapshot.tables.map((table) => [table.name, new Set(table.indexes.map((index) => index.name))]));
-  indexes.get('boms').delete('idx_boms_product_purpose_status');
-  indexes.get('engineering_substitutes').delete('idx_engineering_substitutes_primary');
+  for (const [table, index] of ENGINEERING_INDEXES) {
+    assert.equal(indexes.get(table).delete(index), true, `${index} missing from canonical snapshot`);
+  }
   const plan = planMySqlIndexReconciliation(snapshot, indexes);
-  assert.equal(plan.length, 2);
-  assert.ok(plan.some((sql) => sql.includes('idx_boms_product_purpose_status')));
-  assert.ok(plan.some((sql) => sql.includes('idx_engineering_substitutes_primary')));
+  assert.equal(plan.length, 7);
+  for (const [, index] of ENGINEERING_INDEXES) assert.ok(plan.some((sql) => sql.includes(index)), `${index} must be restored`);
+});
+
+test('MySQL metadata inspection aliases driver-native uppercase keys to canonical names', () => {
+  const calls = [];
+  const adapter = {
+    prepare(sql) {
+      calls.push(sql);
+      if (sql.includes('COLUMN_NAME AS column_name')) {
+        return { all: () => [{ column_name: 'id' }, { column_name: 'purpose' }] };
+      }
+      if (sql.includes('INDEX_NAME AS index_name')) {
+        return { all: () => [{ index_name: 'PRIMARY' }, { index_name: 'idx_boms_product_purpose_status' }] };
+      }
+      throw new Error(`Metadata query lacks a canonical alias: ${sql}`);
+    },
+  };
+
+  assert.deepEqual([...readMySqlColumnNames(adapter, 'boms')], ['id', 'purpose']);
+  assert.deepEqual([...readMySqlIndexNames(adapter, 'boms')], ['PRIMARY', 'idx_boms_product_purpose_status']);
+  assert.match(calls[0], /ORDER BY ORDINAL_POSITION/);
+  assert.equal(calls.length, 2);
 });
