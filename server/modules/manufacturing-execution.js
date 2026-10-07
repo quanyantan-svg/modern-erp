@@ -4,6 +4,7 @@ import { HttpError, allow, allowAny, optionalText, readJson, send } from '../lib
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { allocateProportionalCents, assertFinancialPeriodsOpen, createSystemVoucher, postWipMovement } from './financial-inventory.js';
 import { productionNetReceived, productionRequirementSummary } from './production-workflow.js';
+import { isOperationInspectionRequired } from './manufacturing-quality.js';
 
 const EPS = 1e-9;
 const SCRAP_REASONS = new Set(['PROCESS_DEFECT', 'MATERIAL_DEFECT', 'SETUP_LOSS', 'QUALITY_FAILURE', 'OTHER']);
@@ -39,9 +40,10 @@ function operationTotals(db, operationId) {
     COALESCE(SUM(CASE WHEN r.status='CONFIRMED' THEN r.scrap_quantity ELSE 0 END),0)-COALESCE((SELECT SUM(scrap_quantity) FROM production_operation_report_reversals WHERE production_operation_id=?),0) scrap,
     COALESCE(SUM(CASE WHEN r.status='CONFIRMED' THEN r.labor_seconds ELSE 0 END),0)-COALESCE((SELECT SUM(labor_seconds) FROM production_operation_report_reversals WHERE production_operation_id=?),0) laborSeconds,
     COALESCE(SUM(CASE WHEN r.status='CONFIRMED' THEN r.machine_seconds ELSE 0 END),0)-COALESCE((SELECT SUM(machine_seconds) FROM production_operation_report_reversals WHERE production_operation_id=?),0) machineSeconds,
+    COALESCE(SUM(CASE WHEN r.status='CONFIRMED' THEN r.released_quantity ELSE 0 END),0)-COALESCE((SELECT SUM(good_quantity) FROM production_operation_report_reversals WHERE production_operation_id=?),0) released,
     SUM(CASE WHEN r.status='CONFIRMED' AND r.machine_seconds IS NULL THEN 1 ELSE 0 END) missingMachineTime
-    FROM production_operation_reports r WHERE r.production_operation_id=?`).get(operationId, operationId, operationId, operationId, operationId);
-  return { good: Number(row.good), scrap: Number(row.scrap), laborSeconds: Number(row.laborSeconds), machineSeconds: Number(row.machineSeconds), missingMachineTime: Number(row.missingMachineTime) };
+    FROM production_operation_reports r WHERE r.production_operation_id=?`).get(operationId, operationId, operationId, operationId, operationId, operationId);
+  return { good: Number(row.good), scrap: Number(row.scrap), laborSeconds: Number(row.laborSeconds), machineSeconds: Number(row.machineSeconds), released: Math.max(0, Number(row.released)), missingMachineTime: Number(row.missingMachineTime) };
 }
 
 function operations(db, orderId) {
@@ -51,7 +53,7 @@ function operations(db, orderId) {
 function availableInput(db, operation) {
   const rows = operations(db, operation.production_order_id);
   const index = rows.findIndex((x) => x.id === operation.id);
-  const totalInput = index === 0 ? materialSupportedQuantity(db, operation.production_order_id) : rows[index - 1].good;
+  const totalInput = index === 0 ? materialSupportedQuantity(db, operation.production_order_id) : rows[index - 1].released;
   return { totalInput, available: Math.max(0, totalInput - rows[index].good - rows[index].scrap), previous: index > 0 ? rows[index - 1] : null, current: rows[index] };
 }
 
@@ -110,8 +112,9 @@ export function snapshotManufacturingExecution(db, orderId) {
   const order = loadOrder(db, orderId);
   const snapshots = db.prepare('SELECT * FROM production_order_routing_snapshots WHERE production_order_id=? ORDER BY sequence_no').all(orderId);
   if (!db.prepare('SELECT 1 FROM production_order_operations WHERE production_order_id=?').get(orderId)) {
-    const insert = db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_id,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,planned_date,status,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT_STARTED',?,?)`);
+    const insert = db.prepare(`INSERT INTO production_order_operations(id,production_order_id,routing_snapshot_id,sequence_no,operation_code,operation_name,work_center_id,work_center_code,work_center_name,setup_seconds,run_seconds_per_unit,expected_yield_bps,labor_rate_cents_per_hour,overhead_rate_cents_per_hour,daily_capacity_minutes,planned_input_quantity,planned_date,status,created_at,updated_at,
+      control_code_id,control_code,control_participates_scheduling,control_reporting_method,control_inspection_method,is_outsource,quality_policy,topology)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'NOT_STARTED',?,?,?,?,?,?,?,?,?,?)`);
     const now = new Date().toISOString();
     snapshots.forEach((snap, index) => {
       const wc = snap.work_center_id
@@ -119,7 +122,8 @@ export function snapshotManufacturingExecution(db, orderId) {
         : db.prepare('SELECT * FROM work_centers WHERE code=? OR name=? LIMIT 1').get(snap.work_center, snap.work_center);
       const setupSeconds = Number(snap.setup_seconds) || Math.round(Number(snap.setup_minutes || 0) * 60);
       const runSeconds = Number(snap.run_seconds_per_unit) || Math.round(Number(snap.run_minutes_per_unit || 0) * 60);
-      insert.run(id(), orderId, snap.id, snap.sequence_no, snap.operation_code, snap.operation_name, wc?.id || null, wc?.code || snap.work_center || '', wc?.name || snap.work_center || '', setupSeconds, runSeconds, Number(snap.expected_yield_bps || 10000), Number(wc?.labor_rate_cents_per_hour || snap.labor_rate_cents_per_hour || 0), Number(wc?.overhead_rate_cents_per_hour || snap.overhead_rate_cents_per_hour || 0), Number(wc?.daily_capacity_minutes || snap.daily_capacity_minutes || 480), Number(order.quantity), plannedDate(order, index), now, now);
+      insert.run(id(), orderId, snap.id, snap.sequence_no, snap.operation_code, snap.operation_name, wc?.id || null, wc?.code || snap.work_center || '', wc?.name || snap.work_center || '', setupSeconds, runSeconds, Number(snap.expected_yield_bps || 10000), Number(wc?.labor_rate_cents_per_hour || snap.labor_rate_cents_per_hour || 0), Number(wc?.overhead_rate_cents_per_hour || snap.overhead_rate_cents_per_hour || 0), Number(wc?.daily_capacity_minutes || snap.daily_capacity_minutes || 480), Number(order.quantity), plannedDate(order, index), now, now,
+        snap.control_code_id || null, snap.control_code || '', Number(snap.control_participates_scheduling ?? 1), snap.control_reporting_method || 'MANUAL', snap.control_inspection_method || 'NONE', Number(snap.is_outsource || 0), snap.quality_policy || 'NONE', snap.topology || 'LINEAR');
     });
   }
   ensureCostBaseline(db, order);
@@ -154,7 +158,7 @@ export function assertRoutedReceiptLimit(db, orderId, additionalQuantity) {
   const ops = operations(db, orderId);
   if (!ops.length) return;
   const next = productionNetReceived(db, orderId) + Number(additionalQuantity);
-  if (next > ops.at(-1).good + EPS) throw new HttpError(409, `累计净入库 ${next} 超过末工序累计良品 ${ops.at(-1).good}`);
+  if (next > ops.at(-1).released + EPS) throw new HttpError(409, `累计净入库 ${next} 超过末工序质量放行量 ${ops.at(-1).released}`);
 }
 
 export function assertRoutedCompletion(db, orderId) {
@@ -163,7 +167,7 @@ export function assertRoutedCompletion(db, orderId) {
   if (!ops.length) return false;
   if (ops.some((x) => x.status !== 'COMPLETED')) throw new HttpError(409, '所有工序必须先完成');
   if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_order_id=? AND status='DRAFT'").get(orderId)) throw new HttpError(409, '存在未处理的草稿报工单');
-  const good = ops.at(-1).good;
+  const good = ops.at(-1).released;
   const scrap = ops.reduce((sum, x) => sum + x.scrap, 0);
   if (Math.abs(productionNetReceived(db, orderId) - good) > EPS) throw new HttpError(409, '净成品入库必须等于末工序累计良品');
   if (Math.abs(good + scrap - Number(order.quantity)) > EPS) throw new HttpError(409, '末工序良品与累计过程报废之和必须等于计划数量');
@@ -192,6 +196,7 @@ export async function createOperationReport(db, req, res, actor) {
   const body = await readJson(req); const order = loadOrder(db, body.productionOrderId);
   if (order.status !== 'IN_PROGRESS') throw new HttpError(409, '只有生产中的工单允许报工');
   const operation = db.prepare('SELECT * FROM production_order_operations WHERE id=? AND production_order_id=?').get(body.productionOperationId, order.id);
+  if (operation) assertTopologyReportingAllowed(db, operation.id);
   if (!operation || operation.status === 'COMPLETED' || operation.status === 'CANCELLED') throw new HttpError(409, '请选择可报工的工序');
   const good = nonNegative(body.goodQuantity, '良品数量'); const scrap = nonNegative(body.scrapQuantity, '报废数量');
   if (good + scrap <= EPS) throw new HttpError(400, '良品与报废数量之和必须大于 0');
@@ -216,7 +221,8 @@ export function confirmOperationReport(db, req, res, actor, reportId) {
     if (Number(report.good_quantity) + Number(report.scrap_quantity) > input.available + EPS) throw new HttpError(409, `本次报工超过可报工数量 ${input.available}`);
     assertFinancialPeriodsOpen(db,report.business_date);
     const priorConfirmed=Number(db.prepare("SELECT COUNT(*) n FROM production_operation_reports WHERE production_operation_id=? AND status='CONFIRMED' AND id<>?").get(operation.id,reportId).n); const processed=Number(report.good_quantity)+Number(report.scrap_quantity); const seconds=(priorConfirmed?0:Number(operation.setup_seconds))+Number(operation.run_seconds_per_unit)*processed; const laborCents=Math.round(seconds*Number(operation.labor_rate_cents_per_hour)/3600); const overheadCents=Math.round(seconds*Number(operation.overhead_rate_cents_per_hour)/3600); const conversionCents=laborCents+overheadCents;
-    const now = new Date().toISOString(); db.prepare("UPDATE production_operation_reports SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, reportId);
+    const releasedQuantity = isOperationInspectionRequired(db, operation, order.product_id) ? 0 : Number(report.good_quantity);
+    const now = new Date().toISOString(); db.prepare("UPDATE production_operation_reports SET status='CONFIRMED',released_quantity=?,confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?").run(releasedQuantity, actor.id, now, now, reportId);
     if(conversionCents>0){ const entries=[{role:'WIP',direction:'DEBIT',amountCents:conversionCents},...(laborCents?[{role:'LABOR_ABSORPTION',direction:'CREDIT',amountCents:laborCents}]:[]),...(overheadCents?[{role:'OVERHEAD_ABSORPTION',direction:'CREDIT',amountCents:overheadCents}]:[])]; const voucherId=createSystemVoucher(db,{sourceType:'PRODUCTION_OPERATION_ABSORPTION',sourceId:reportId,businessDate:report.business_date,actorId:actor.id,entries}); postWipMovement(db,{productionOrderId:order.id,businessDate:report.business_date,movementType:'CONVERSION_ABSORPTION',amountCents:conversionCents,sourceType:'PRODUCTION_OPERATION_REPORT',sourceId:reportId,voucherId}); }
     if (operation.status === 'NOT_STARTED') db.prepare("UPDATE production_order_operations SET status='IN_PROGRESS',updated_at=? WHERE id=?").run(now, operation.id);
     deriveProductionCost(db, order.id, true); saveIdempotency(db, 'OPERATION_REPORT_CONFIRM', reportId, key, fingerprint, { ok: true, id: reportId, status: 'CONFIRMED' });
@@ -262,7 +268,7 @@ export function completeOperation(db, res, actor, operationId) {
   if (!['NOT_STARTED', 'IN_PROGRESS'].includes(operation.status)) throw new HttpError(409, '当前工序状态不可完成');
   if (db.prepare("SELECT 1 FROM production_operation_reports WHERE production_operation_id=? AND status='DRAFT'").get(operationId)) throw new HttpError(409, '存在未处理的草稿报工单');
   const rows = operations(db, operation.production_order_id); const index = rows.findIndex((x) => x.id === operationId); const current = rows[index];
-  const expected = index === 0 ? Number(loadOrder(db, operation.production_order_id).quantity) : rows[index - 1].good;
+  const expected = index === 0 ? Number(loadOrder(db, operation.production_order_id).quantity) : rows[index - 1].released;
   if (index > 0 && rows[index - 1].status !== 'COMPLETED') throw new HttpError(409, '前工序尚未完成，当前工序不能最终完成');
   if (Math.abs(current.good + current.scrap - expected) > EPS) throw new HttpError(409, `工序尚有未核算投入，应核算 ${expected}`);
   const now = new Date().toISOString(); db.prepare("UPDATE production_order_operations SET status='COMPLETED',completed_by=?,completed_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, operationId); audit(db, actor.id, 'COMPLETE', 'PRODUCTION_ORDER_OPERATION', operationId, current.operation_name); return send(res, 200, { ok: true });
@@ -307,4 +313,272 @@ export function reconcileProductionCosts(db, res, actor) {
   allow(actor, 'PRODUCTION_COSTS_VIEW'); const mismatches = []; const cached = db.prepare('SELECT * FROM production_cost_summaries').all();
   for (const row of cached) { const actual = deriveProductionCost(db, row.production_order_id, false); if (Number(row.material_cost_cents) !== actual.materialCostCents || Number(row.labor_cost_cents) !== actual.laborCostCents || row.overhead_cost_cents !== actual.overheadCostCents || row.total_cost_cents !== actual.totalCostCents) mismatches.push({ productionOrderId: row.production_order_id, cached: row, recomputed: actual }); }
   audit(db, actor.id, 'CHECK', 'PRODUCTION_COST_RECONCILIATION', 'all', `${mismatches.length} mismatch(es)`); return send(res, 200, { ok: mismatches.length === 0, checkOnly: true, mismatches });
+}
+
+// ============ V18 Wave C: Operation Plan lifecycle + Scheduling ============
+
+function schedulingDay(db, operation, isoDate) {
+  const fallbackMinutes = Math.max(1, Number(operation.daily_capacity_minutes || 480));
+  if (!operation.work_center_id) return { working: true, workMinutes: fallbackMinutes };
+  const calendar = db.prepare(`SELECT c.start_date,c.end_date,t.work_days,t.shift_pattern_id
+    FROM work_centers w
+    LEFT JOIN engineering_work_calendars c ON c.id=w.calendar_id AND c.active=1
+    LEFT JOIN engineering_calendar_templates t ON t.id=c.template_id AND t.active=1
+    WHERE w.id=?`).get(operation.work_center_id);
+  if (!calendar?.start_date || !calendar?.end_date || !calendar.work_days) {
+    return { working: true, workMinutes: fallbackMinutes };
+  }
+  const workDays = new Set(JSON.parse(calendar.work_days).map(Number));
+  const working = isoDate >= calendar.start_date && isoDate <= calendar.end_date
+    && workDays.has(new Date(`${isoDate}T00:00:00Z`).getUTCDay());
+  if (!working) return { working: false, workMinutes: fallbackMinutes };
+  if (!calendar.shift_pattern_id) return { working: true, workMinutes: fallbackMinutes };
+  const pattern = db.prepare('SELECT shift_ids FROM engineering_shift_patterns WHERE id=? AND active=1').get(calendar.shift_pattern_id);
+  const shiftIds = pattern ? JSON.parse(pattern.shift_ids) : [];
+  if (!shiftIds.length) return { working: true, workMinutes: fallbackMinutes };
+  const placeholders = shiftIds.map(() => '?').join(',');
+  const shifts = db.prepare(`SELECT start_minute,end_minute FROM engineering_shifts WHERE active=1 AND id IN (${placeholders})`).all(...shiftIds);
+  const workMinutes = shifts.reduce((sum, shift) => sum + Math.max(0, Number(shift.end_minute) - Number(shift.start_minute)), 0);
+  return { working: true, workMinutes: workMinutes || fallbackMinutes };
+}
+
+function addWorkingMinutes(startDate, minutes, db, operation) {
+  let remaining = minutes;
+  let cursor = new Date(`${startDate}T00:00:00Z`);
+  for (let safety = 0; safety < 366 * 4 && remaining > 0; safety += 1) {
+    const isoDate = cursor.toISOString().slice(0, 10);
+    const day = schedulingDay(db, operation, isoDate);
+    if (day.working) {
+      const dayMinutes = day.workMinutes;
+      if (remaining <= dayMinutes) {
+        cursor = new Date(cursor.getTime() + remaining * 60 * 1000);
+        remaining = 0;
+        break;
+      }
+      remaining -= dayMinutes;
+    }
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return cursor.toISOString().slice(0, 10);
+}
+
+function subtractWorkingMinutes(endDate, minutes, db, operation) {
+  let remaining = minutes;
+  let cursor = new Date(`${endDate}T00:00:00Z`);
+  for (let safety = 0; safety < 366 * 4 && remaining > 0; safety += 1) {
+    const isoDate = cursor.toISOString().slice(0, 10);
+    const day = schedulingDay(db, operation, isoDate);
+    if (day.working) {
+      const dayMinutes = day.workMinutes;
+      const use = Math.min(remaining, dayMinutes);
+      remaining -= use;
+      cursor = new Date(cursor.getTime() - use * 60 * 1000);
+      if (remaining <= 0) break;
+    }
+    cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000);
+  }
+  return cursor.toISOString().slice(0, 10);
+}
+
+function operationDuration(op) {
+  const setup = Number(op.setup_seconds || 0);
+  const runPerUnit = Number(op.run_seconds_per_unit || 0);
+  const planned = Number(op.planned_input_quantity || 0);
+  return setup + runPerUnit * planned;
+}
+
+function capacityCheck(op) {
+  const capacityMinutes = Number(op.daily_capacity_minutes || 480);
+  const duration = operationDuration(op);
+  return duration / 60 <= capacityMinutes + EPS;
+}
+
+export function scheduleProductionOrder(db, res, actor, orderId, body) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const order = loadOrder(db, orderId);
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许排程');
+  const mode = String(body?.mode || 'FORWARD').toUpperCase();
+  if (!['FORWARD', 'BACKWARD'].includes(mode)) throw new HttpError(400, '排程模式必须是 FORWARD 或 BACKWARD');
+  const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=? ORDER BY sequence_no').all(orderId);
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  const overloads = [];
+  if (mode === 'FORWARD') {
+    let cursorDate = order.planned_start || new Date().toISOString().slice(0, 10);
+    transaction(db, () => {
+      for (const op of ops) {
+        const duration = operationDuration(op);
+        const startDate = cursorDate;
+        const finishDate = addWorkingMinutes(startDate, Math.ceil(duration / 60), db, op);
+        db.prepare('UPDATE production_order_operations SET planned_date=? WHERE id=?').run(startDate, op.id);
+        if (!capacityCheck(op)) overloads.push({ operationId: op.id, operationCode: op.operation_code, workCenter: op.work_center_code, durationMinutes: Math.ceil(duration / 60), capacityMinutes: op.daily_capacity_minutes });
+        cursorDate = finishDate;
+      }
+    });
+  } else {
+    let cursorDate = order.planned_finish || new Date().toISOString().slice(0, 10);
+    const reverse = [...ops].reverse();
+    transaction(db, () => {
+      for (const op of reverse) {
+        const duration = operationDuration(op);
+        const finishDate = cursorDate;
+        const startDate = subtractWorkingMinutes(finishDate, Math.ceil(duration / 60), db, op);
+        db.prepare('UPDATE production_order_operations SET planned_date=? WHERE id=?').run(startDate, op.id);
+        if (!capacityCheck(op)) overloads.push({ operationId: op.id, operationCode: op.operation_code, workCenter: op.work_center_code, durationMinutes: Math.ceil(duration / 60), capacityMinutes: op.daily_capacity_minutes });
+        cursorDate = startDate;
+      }
+    });
+  }
+  audit(db, actor.id, 'SCHEDULE', 'PRODUCTION_ORDER', orderId, `${mode} 排程完成; overloads=${overloads.length}`);
+  return send(res, 200, { ok: true, mode, overloads });
+}
+
+// ============ V18 Wave C/D: Operation Plan lifecycle + Topology ============
+
+const PLAN_STATUS_TRANSITIONS = Object.freeze({
+  NOT_STARTED: ['SUBMITTED'],
+  SUBMITTED: ['APPROVED', 'NOT_STARTED'],
+  APPROVED: ['RELEASED', 'NOT_STARTED'],
+  RELEASED: ['EXECUTABLE', 'NOT_STARTED'],
+  EXECUTABLE: [],
+});
+
+function assertPlanTransition(current, target) {
+  const allowed = PLAN_STATUS_TRANSITIONS[current.plan_status] || [];
+  if (!allowed.includes(target)) throw new HttpError(409, `当前计划状态 ${current.plan_status} 不允许转移至 ${target}`);
+}
+
+export function submitOperationPlan(db, res, actor, orderId) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const order = loadOrder(db, orderId);
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许提交 Operation Plan');
+  const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    for (const op of ops) {
+      assertPlanTransition(op, 'SUBMITTED');
+      db.prepare("UPDATE production_order_operations SET plan_status='SUBMITTED',plan_submitted_by=?,plan_submitted_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, op.id);
+    }
+    audit(db, actor.id, 'SUBMIT', 'PRODUCTION_OPERATION_PLAN', orderId, `提交 Operation Plan`);
+  });
+  return send(res, 200, { ok: true });
+}
+
+export function approveOperationPlan(db, res, actor, orderId) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const order = loadOrder(db, orderId);
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许审核 Operation Plan');
+  const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    for (const op of ops) {
+      assertPlanTransition(op, 'APPROVED');
+      db.prepare("UPDATE production_order_operations SET plan_status='APPROVED',plan_approved_by=?,plan_approved_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, op.id);
+    }
+    audit(db, actor.id, 'APPROVE', 'PRODUCTION_OPERATION_PLAN', orderId, `审核 Operation Plan`);
+  });
+  return send(res, 200, { ok: true });
+}
+
+export function releaseOperationPlan(db, res, actor, orderId) {
+  allow(actor, 'PRODUCTION_PLAN_MANAGE');
+  const order = loadOrder(db, orderId);
+  if (!['RELEASED', 'IN_PROGRESS'].includes(order.status)) throw new HttpError(409, '只有 RELEASED/IN_PROGRESS 工单允许下达 Operation Plan');
+  const ops = db.prepare('SELECT * FROM production_order_operations WHERE production_order_id=?').all(orderId);
+  if (!ops.length) throw new HttpError(409, '工单尚未生成 Operation Plan');
+  const now = new Date().toISOString();
+  transaction(db, () => {
+    for (const op of ops) {
+      assertPlanTransition(op, 'RELEASED');
+      db.prepare("UPDATE production_order_operations SET plan_status='RELEASED',plan_released_by=?,plan_released_at=?,updated_at=? WHERE id=?").run(actor.id, now, now, op.id);
+    }
+    for (const op of ops) db.prepare("UPDATE production_order_operations SET plan_status='EXECUTABLE',updated_at=? WHERE id=?").run(now, op.id);
+    audit(db, actor.id, 'RELEASE', 'PRODUCTION_OPERATION_PLAN', orderId, `下达并启用 Operation Plan`);
+  });
+  return send(res, 200, { ok: true });
+}
+
+export function assertTopologyReportingAllowed(db, operationId) {
+  const op = db.prepare('SELECT * FROM production_order_operations WHERE id=?').get(operationId);
+  if (!op) throw new HttpError(404, '工序不存在');
+  if (op.topology && op.topology !== 'LINEAR') {
+    throw new HttpError(409, `拓扑 ${op.topology} 暂未启用，不能直接报工`);
+  }
+  if (Number(op.is_outsource || 0) === 1) {
+    throw new HttpError(409, '委外工序需要 OUTSOURCING_HANDOFF_REQUIRED，内部不能直接报工');
+  }
+}
+
+export function listProductionOperationPlans(db, res, actor, orderId) {
+  allow(actor, 'PRODUCTION_PLAN_VIEW');
+  const rows = db.prepare(`SELECT * FROM production_order_operations WHERE production_order_id=? ORDER BY sequence_no`).all(orderId);
+  return send(res, 200, { operations: rows });
+}
+
+// ============ V18 Wave H: Production Execution / Material Issue Summary Analytics ============
+
+export function manufacturingExecutionSummaryReport(db, res, actor, url) {
+  allow(actor, 'PRODUCTION_ORDERS_VIEW');
+  const from = url.searchParams.get('from') || '';
+  const to = url.searchParams.get('to') || '';
+  const params = [];
+  const clauses = [];
+  if (from) { clauses.push('po.created_at >= ?'); params.push(from); }
+  if (to) { clauses.push('po.created_at <= ?'); params.push(to); }
+  const rows = db.prepare(`SELECT po.id orderId, po.order_no orderNo, po.product_id productId, po.quantity plannedQuantity,
+    po.status, po.planned_start plannedStart, po.planned_finish plannedFinish, po.actual_start actualStart, po.actual_finish actualFinish,
+    p.code productCode, p.name productName,
+    (SELECT COALESCE(SUM(good_quantity),0)-COALESCE((SELECT SUM(good_quantity) FROM production_operation_report_reversals WHERE production_order_id=po.id),0) FROM production_operation_reports r WHERE r.production_order_id=po.id AND r.status='CONFIRMED') reportedGood,
+    (SELECT COALESCE(SUM(scrap_quantity),0)-COALESCE((SELECT SUM(scrap_quantity) FROM production_operation_report_reversals WHERE production_order_id=po.id),0) FROM production_operation_reports r WHERE r.production_order_id=po.id AND r.status='CONFIRMED') reportedScrap,
+    (SELECT COALESCE(SUM(quantity),0)-COALESCE((SELECT SUM(quantity) FROM production_receipt_reversals WHERE production_order_id=po.id),0) FROM production_receipts WHERE production_order_id=po.id AND status='CONFIRMED') netReceived
+    FROM production_orders po JOIN products p ON p.id=po.product_id
+    ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
+    ORDER BY po.created_at DESC LIMIT 200`).all(...params);
+  const result = rows.map((r) => ({
+    orderId: r.orderId, orderNo: r.orderNo, productCode: r.productCode, productName: r.productName,
+    plannedQuantity: Number(r.plannedQuantity),
+    status: r.status,
+    reportedGood: Number(r.reportedGood),
+    reportedScrap: Number(r.reportedScrap),
+    netReceived: Number(r.netReceived),
+    progress: r.plannedQuantity > 0 ? Math.round(Number(r.netReceived) * 100 / Number(r.plannedQuantity)) : 0,
+    yield: Number(r.reportedGood) > 0 ? Math.round(Number(r.netReceived) * 10000 / Number(r.reportedGood)) : null,
+  }));
+  return send(res, 200, { rows: result });
+}
+
+export function materialIssueSummaryReport(db, res, actor, url) {
+  allow(actor, 'PRODUCTION_ORDERS_VIEW');
+  const from = url.searchParams.get('from') || '';
+  const to = url.searchParams.get('to') || '';
+  const params = [];
+  const clauses = [];
+  if (from) { clauses.push('po.created_at >= ?'); params.push(from); }
+  if (to) { clauses.push('po.created_at <= ?'); params.push(to); }
+  const rows = db.prepare(`SELECT r.id requirementId, r.order_id orderId, r.product_id productId, p.code productCode, p.name productName,
+    r.quantity requiredQuantity, r.quantity_per_unit quantityPerUnit,
+    (SELECT COALESCE(SUM(i.issue_quantity),0) FROM production_material_issue_items i JOIN production_material_issues h ON h.id=i.issue_id WHERE i.requirement_line_id=r.id AND h.status='CONFIRMED') issued,
+    (SELECT COALESCE(SUM(i.quantity),0) FROM production_material_supplement_items i JOIN production_material_supplements h ON h.id=i.supplement_id WHERE i.product_id=r.product_id AND h.production_order_id=r.order_id AND h.status='CONFIRMED') supplemented,
+    (SELECT COALESCE(SUM(i.quantity),0) FROM production_material_return_items i JOIN production_material_returns h ON h.id=i.return_id WHERE i.requirement_line_id=r.id AND h.status='CONFIRMED') returned
+    FROM production_order_items r
+    JOIN production_orders po ON po.id=r.order_id
+    JOIN products p ON p.id=r.product_id
+    ${clauses.length ? 'WHERE ' + clauses.join(' AND ') : ''}
+    ORDER BY po.created_at DESC, r.line_no, r.id LIMIT 200`).all(...params);
+  const result = rows.map((r) => {
+    const issued = Number(r.issued);
+    const supplemented = Number(r.supplemented);
+    const returned = Number(r.returned);
+    const net = issued + supplemented - returned;
+    return {
+      ...r,
+      requiredQuantity: Number(r.requiredQuantity),
+      quantityPerUnit: Number(r.quantityPerUnit),
+      issued, supplemented, returned,
+      net,
+      remaining: Math.max(0, Number(r.requiredQuantity) - net),
+    };
+  });
+  return send(res, 200, { rows: result });
 }

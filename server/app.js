@@ -221,6 +221,35 @@ import {
   createEngineeringChange, submitEngineeringChange, approveEngineeringChange, rejectEngineeringChange,
   previewImpactEngineeringChange, applyEngineeringChange, recordCleanup,
 } from './modules/engineering-change.js';
+// V18 — Manufacturing & Quality Domain Closure
+import {
+  listProductionOrders as listProductionOrdersV18,
+  getProductionOrder as getProductionOrderV18,
+  createProductionOrder as createProductionOrderV18,
+  changeProductionOrderState as changeProductionOrderStateV18,
+  changeProductionOrderStateByBody,
+} from './modules/manufacturing-orders.js';
+import {
+  scheduleProductionOrder as scheduleProductionOrderV18,
+  submitOperationPlan, approveOperationPlan, releaseOperationPlan,
+  manufacturingExecutionSummaryReport, materialIssueSummaryReport,
+} from './modules/manufacturing-execution.js';
+import {
+  createProductionMaterialSupplement, getProductionMaterialSupplement, listProductionMaterialSupplements,
+  confirmProductionMaterialSupplement, cancelProductionMaterialSupplement,
+  createProductionMaterialReturnWithReason,
+  createProductionBatchIssue, confirmProductionBatchIssue, cancelProductionBatchIssue,
+  getProductionBatchIssue, listProductionBatchIssues,
+} from './modules/manufacturing-materials.js';
+import {
+  listInspectionItems, createInspectionItem, getInspectionItem,
+  createInspectionDetectionValue,
+  listInspectionInstruments, createInspectionInstrument,
+  listInspectionPlans, createInspectionPlan, getInspectionPlan,
+  listProductionInspections, createProductionInspection, getProductionInspection,
+  completeProductionInspection, cancelProductionInspection,
+} from './modules/manufacturing-quality.js';
+import { productionScanLookup, productionScanIssue, productionScanReport } from './modules/manufacturing-scan.js';
 
 // V2 owned-route registrations — Waves 3A–3F / 4A–4C
 //
@@ -1163,6 +1192,268 @@ ownedRouteTable.register({
   path: /^\/api\/engineering\/changes\/([^/]+)\/cleanup$/,
   handler: ({ db, req, res, actor, params }) => recordCleanup(db, req, res, actor, params[0]),
   owner: 'server/modules/engineering-change.js',
+});
+
+// ============ V18 Manufacturing & Quality Domain Closure — Routes ============
+
+// Production orders (lifecycle Draft / Submit / Approve / Reject / Release / Start / Complete / Cancel)
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-orders',
+  handler: ({ db, res, actor, url }) => listProductionOrdersV18(db, res, actor, url),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/production-orders\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProductionOrderV18(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-orders',
+  handler: ({ db, req, res, actor }) => createProductionOrderV18(db, req, res, actor),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/state$/,
+  handler: ({ db, req, res, actor, params }) => changeProductionOrderStateV18(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-orders.js',
+});
+// V18 — legacy `action: start|complete|cancel` compatibility (returns 200, maps to new state machine).
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)$/,
+  handler: async ({ db, req, res, actor, params }) => {
+    const body = await readJson(req);
+    const targetMap = { start: 'IN_PROGRESS', complete: 'COMPLETED', cancel: 'CANCELLED', submit: 'SUBMITTED', approve: 'APPROVED', reject: 'REJECTED', release: 'RELEASED' };
+    const mapped = { ...body, target: (targetMap[String(body?.action ?? '').toLowerCase()] || body?.target || '').toUpperCase() };
+    if (!mapped.target) {
+      throw new HttpError(400, '不支持的操作');
+    }
+    return changeProductionOrderStateByBody(db, mapped, res, actor, params[0], { legacyAction: true });
+  },
+  owner: 'server/modules/manufacturing-orders.js',
+});
+
+// Material Execution — Supplement + Return Reason + Batch Picking
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-material-supplements',
+  handler: ({ db, res, actor, url }) => listProductionMaterialSupplements(db, res, actor, url),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/production-material-supplements\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProductionMaterialSupplement(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-material-supplements',
+  handler: ({ db, req, res, actor }) => createProductionMaterialSupplement(db, req, res, actor),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-material-supplements\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmProductionMaterialSupplement(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-material-supplements\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelProductionMaterialSupplement(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-material-returns-with-reason',
+  handler: ({ db, req, res, actor }) => createProductionMaterialReturnWithReason(db, req, res, actor),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-batch-issues',
+  handler: ({ db, res, actor, url }) => listProductionBatchIssues(db, res, actor, url),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/production-batch-issues\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProductionBatchIssue(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-batch-issues',
+  handler: ({ db, req, res, actor }) => createProductionBatchIssue(db, req, res, actor),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-batch-issues\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmProductionBatchIssue(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-batch-issues\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelProductionBatchIssue(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-materials.js',
+});
+
+// Operation Plan + Scheduling + Wave D
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/schedule$/,
+  handler: async ({ db, req, res, actor, params }) => {
+    const body = await readJson(req);
+    return scheduleProductionOrderV18(db, res, actor, params[0], body);
+  },
+  owner: 'server/modules/manufacturing-execution.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/plan\/submit$/,
+  handler: ({ db, res, actor, params }) => submitOperationPlan(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/plan\/approve$/,
+  handler: ({ db, res, actor, params }) => approveOperationPlan(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-orders\/([^/]+)\/plan\/release$/,
+  handler: ({ db, res, actor, params }) => releaseOperationPlan(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+
+// Manufacturing Quality master
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inspection-items',
+  handler: ({ db, res, actor, url }) => listInspectionItems(db, res, actor, url),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inspection-items',
+  handler: ({ db, req, res, actor }) => createInspectionItem(db, req, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/inspection-items\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getInspectionItem(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inspection-detection-values',
+  handler: ({ db, req, res, actor }) => createInspectionDetectionValue(db, req, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inspection-instruments',
+  handler: ({ db, res, actor }) => listInspectionInstruments(db, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inspection-instruments',
+  handler: ({ db, req, res, actor }) => createInspectionInstrument(db, req, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/inspection-plans',
+  handler: ({ db, res, actor, url }) => listInspectionPlans(db, res, actor, url),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/inspection-plans',
+  handler: ({ db, req, res, actor }) => createInspectionPlan(db, req, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/inspection-plans\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getInspectionPlan(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+
+// Production Inspection execution
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/production-inspections',
+  handler: ({ db, res, actor, url }) => listProductionInspections(db, res, actor, url),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-inspections',
+  handler: ({ db, req, res, actor }) => createProductionInspection(db, req, res, actor),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/production-inspections\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getProductionInspection(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-inspections\/([^/]+)\/complete$/,
+  handler: ({ db, req, res, actor, params }) => completeProductionInspection(db, req, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/production-inspections\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelProductionInspection(db, res, actor, params[0]),
+  owner: 'server/modules/manufacturing-quality.js',
+});
+
+// Production Scan Execution (Wave G)
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-scan/lookup',
+  handler: ({ db, req, res, actor }) => productionScanLookup(db, req, res, actor),
+  owner: 'server/modules/manufacturing-scan.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-scan/issue',
+  handler: ({ db, req, res, actor }) => productionScanIssue(db, req, res, actor),
+  owner: 'server/modules/manufacturing-scan.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/production-scan/report',
+  handler: ({ db, req, res, actor }) => productionScanReport(db, req, res, actor),
+  owner: 'server/modules/manufacturing-scan.js',
+});
+
+// Production Analytics (Wave H)
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/manufacturing-analytics/execution-summary',
+  handler: ({ db, res, actor, url }) => manufacturingExecutionSummaryReport(db, res, actor, url),
+  owner: 'server/modules/manufacturing-execution.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/manufacturing-analytics/material-issue-summary',
+  handler: ({ db, res, actor, url }) => materialIssueSummaryReport(db, res, actor, url),
+  owner: 'server/modules/manufacturing-execution.js',
 });
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -5176,7 +5467,7 @@ function listProductionOrders(db, res, actor, url) {
   const archiveFilter = lifecycleArchiveFilter('PRODUCTION_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'po.id' });
   if (archiveFilter.clause) where += ` AND ${archiveFilter.clause}`;
   if (status) { where += ' AND po.status = ?'; params.push(status); }
-  const sql = 'SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName, (SELECT sum(consumed_quantity) FROM production_order_items WHERE order_id=po.id) totalConsumed, (SELECT sum(quantity) FROM production_outputs WHERE order_id=po.id) totalOutput FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE ' + where + ' ORDER BY po.created_at DESC LIMIT 100';
+  const sql = 'SELECT po.*, p.code productCode, p.name productName, b.version bomVersion, creator.display_name creatorName, (SELECT sum(consumed_quantity) FROM production_order_items WHERE order_id=po.id) totalConsumed FROM production_orders po JOIN products p ON p.id=po.product_id LEFT JOIN boms b ON b.id=po.bom_id JOIN users creator ON creator.id=po.creator_id WHERE ' + where + ' ORDER BY po.created_at DESC LIMIT 100';
   return send(res, 200, { orders: db.prepare(sql).all(...params).map(row => ({ ...row, statusLabel: PO_STATUS[row.status] || row.status })) });
 }
 
@@ -5232,7 +5523,6 @@ function getProductionOrder(db, res, actor, poId) {
   order.materialReturns = db.prepare('SELECT id,return_no returnNo,status,return_date returnDate FROM production_material_returns WHERE production_order_id=? ORDER BY created_at').all(poId);
   order.productionReceipts = db.prepare('SELECT id,receipt_no receiptNo,status,quantity,receipt_date receiptDate FROM production_receipts WHERE production_order_id=? ORDER BY created_at').all(poId);
   order.receiptReversals = db.prepare('SELECT id,reversal_no reversalNo,status,quantity,reversal_date reversalDate FROM production_receipt_reversals WHERE production_order_id=? ORDER BY created_at').all(poId);
-  order.outputs = db.prepare('SELECT * FROM production_outputs WHERE order_id=? ORDER BY created_at DESC').all(poId);
   order.statusLabel = PO_STATUS[order.status] || order.status;
   return send(res, 200, { order });
 }
@@ -5286,40 +5576,11 @@ async function changeProductionOrderState(db, req, res, actor, poId) {
 
 // ============ Production Outputs ============
 
-async function createProductionOutput(db, req, res, actor) {
-  allow(actor, 'PRODUCTION_OUTPUT');
-  const body = await readJson(req);
-  const { orderId, quantity, qualifiedQuantity, outputDate, remark } = body;
-  const now = new Date().toISOString();
-  const outputId = id();
-  db.prepare('INSERT INTO production_outputs(id,order_id,quantity,output_date,qualified_quantity,remark,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?)').run(outputId, orderId, quantity, outputDate || now.slice(0,10), qualifiedQuantity || quantity, remark || '', actor.id, now);
-  // Update inventory for the finished product
-  const order = db.prepare('SELECT * FROM production_orders WHERE id=?').get(orderId);
-  if (order) {
-    // Add finished goods to inventory
-    db.prepare('UPDATE inventory SET quantity=quantity+? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(qualifiedQuantity || quantity, order.product_id);
-    // Consume materials from BOM
-    const items = db.prepare('SELECT * FROM production_order_items WHERE order_id=?').all(orderId);
-    // Validate stock availability before consuming materials (prevent negative inventory)
-    const warehouseId = db.prepare("SELECT value FROM settings WHERE key='?' AND active=1 LIMIT 1").get("default_warehouse")?.value;
-    for (const item of items) {
-      const inv = db.prepare("SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?").get(warehouseId, item.product_id);
-      if (!inv || inv.quantity < item.consumed_quantity) {
-        const product = db.prepare("SELECT code FROM products WHERE id=?").get(item.product_id);
-        throw new HttpError(400, (product?.code || item.product_id) + " 库存不足，需要 " + item.consumed_quantity.toFixed(3) + "，实际 " + (inv?.quantity || 0).toFixed(3));
-      }
-    }
-    // Now safe to consume materials
-    for (const item of items) {
-      db.prepare('UPDATE inventory SET quantity=quantity-? WHERE product_id=? AND warehouse_id=(SELECT value FROM settings WHERE key=? AND active=1 LIMIT 1)').run(item.consumed_quantity, item.product_id);
-      db.prepare('UPDATE production_order_items SET consumed_quantity=? WHERE id=?').run(item.quantity, item.id);
-      // Record inventory transactions
-      db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,creator_id,created_at) VALUES(?,(SELECT value FROM settings WHERE key=? LIMIT 1),?,?,\'OUT\',0,?,?,?,?)').run(id(), 'default_warehouse', item.product_id, item.consumed_quantity, 'PRODUCTION_OUTPUT', outputId, actor.id, now);
-    }
-  }
-  audit(db, actor.id, 'CREATE', 'PRODUCTION_OUTPUT', outputId, '生产完工入库 ' + quantity);
-  return send(res, 200, { id: outputId });
-}
+// V18 Wave A — legacy `production_outputs` handler retired.
+// The `production_outputs` table is preserved as historical/legacy data;
+// active finished-goods truth is canonical `production_receipts` (net received).
+// The handler below was never wired into the route table; kept as documentation
+// comment only. See `solution.md §24` for the legacy convergence contract.
 
 const PO_STATUS = { PENDING: '待生产', IN_PROGRESS: '生产中', COMPLETED: '已完成', CANCELLED: '已取消' };
 

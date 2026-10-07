@@ -28,6 +28,7 @@ import { migrateEngineeringBomSchema } from './migrations/engineering-bom-schema
 import { migrateEngineeringSubstituteSchema } from './migrations/engineering-substitute-schema.js';
 import { migrateEngineeringRoutingSchema } from './migrations/engineering-routing-schema.js';
 import { migrateEngineeringChangeSchema } from './migrations/engineering-change-schema.js';
+import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -133,6 +134,20 @@ export const PERMISSIONS = [
 
   ['PRODUCTION_MATERIAL_ISSUE_MANAGE', '管理用料出库'],
   ['PRODUCTION_RECEIPT_MANAGE', '管理生产入库'],
+  // V18 — Manufacturing & Quality Domain Closure
+  ['PRODUCTION_ORDERS_APPROVE', '审核生产工单'],
+  ['PRODUCTION_ORDERS_RELEASE', '下达生产工单'],
+  ['PRODUCTION_PLAN_VIEW', '查看生产工序计划'],
+  ['PRODUCTION_PLAN_MANAGE', '管理生产工序计划'],
+  ['PRODUCTION_SUPPLEMENT_MANAGE', '管理生产补料'],
+  ['PRODUCTION_RETURN_MANAGE', '管理生产退料'],
+  ['PRODUCTION_BATCH_ISSUE_MANAGE', '管理生产合并领料'],
+  ['PRODUCTION_INSPECTION_VIEW', '查看生产质量检验'],
+  ['PRODUCTION_INSPECTION_MANAGE', '管理与确认生产质量检验'],
+  ['PRODUCTION_QUALITY_CONFIG_VIEW', '查看生产质量配置'],
+  ['PRODUCTION_QUALITY_CONFIG_MANAGE', '管理生产质量配置'],
+  ['PRODUCTION_BYPART_MANAGE', '管理生产副产品'],
+  ['PRODUCTION_SCAN_EXECUTE', '执行生产扫码'],
 
   // M12 — Planning documents (Production Instruction, Purchase Instruction, Purchase Requisition)
   ['PRODUCTION_INSTRUCTION_VIEW', '查看生产指令'],
@@ -388,6 +403,7 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6DFinancialInventory(db);
   migrateV13Phase6ECommercialGoLive(db);
   migrateV13Phase7cPerformance(db);
+  migrateManufacturingQualitySchema(db);
   migrateR4PurchaseSourceCardinality(db);
   // V1.4-E2: authoritative business-date columns + canonical CONFIRM
   // permission. Order matters: schema columns first so the permission
