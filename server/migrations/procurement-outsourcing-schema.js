@@ -453,6 +453,139 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(business_status IN ('PENDING','CONFIRMED','CANCELLED'))
     );
     CREATE INDEX IF NOT EXISTS idx_vmi_ownership_transfers_receipt ON vmi_ownership_transfers(vmi_receipt_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_orders (
+      id TEXT PRIMARY KEY,
+      order_no TEXT NOT NULL UNIQUE,
+      supplier_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      order_quantity REAL NOT NULL,
+      required_quantity REAL NOT NULL,
+      unit TEXT NOT NULL DEFAULT 'EA',
+      source_type TEXT NOT NULL,
+      planning_handoff_id TEXT,
+      status TEXT NOT NULL DEFAULT 'DRAFT',
+      business_date TEXT NOT NULL,
+      expected_completion_date TEXT,
+      bom_id TEXT,
+      bom_version INTEGER,
+      remark TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      UNIQUE(planning_handoff_id),
+      CHECK(source_type IN ('PLANNING','MANUAL')),
+      CHECK(status IN ('DRAFT','PLAN_CONFIRMED','RELEASED','COMPLETED','CLOSED','CANCELLED'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_orders_supplier ON outsourcing_orders(supplier_id, status);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_material_list (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      required_quantity REAL NOT NULL,
+      unit TEXT NOT NULL,
+      issued_quantity REAL NOT NULL DEFAULT 0,
+      supplemented_quantity REAL NOT NULL DEFAULT 0,
+      returned_quantity REAL NOT NULL DEFAULT 0,
+      backflushed_quantity REAL NOT NULL DEFAULT 0,
+      bom_snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_material_list_order ON outsourcing_material_list(order_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_issues (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      material_list_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      issued_date TEXT NOT NULL,
+      from_warehouse_id TEXT NOT NULL,
+      to_warehouse_id TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      idempotency_key TEXT UNIQUE,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_issues_order ON outsourcing_issues(order_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_supplements (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      material_list_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      reason TEXT NOT NULL,
+      supplement_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS outsourcing_returns (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      material_list_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      from_warehouse_id TEXT NOT NULL,
+      to_warehouse_id TEXT NOT NULL,
+      return_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS outsourcing_receipts (
+      id TEXT PRIMARY KEY,
+      receipt_no TEXT NOT NULL UNIQUE,
+      order_id TEXT NOT NULL,
+      processing_po_id TEXT,
+      quantity REAL NOT NULL,
+      received_date TEXT NOT NULL,
+      supplier_id TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      processing_fee_cents INTEGER NOT NULL DEFAULT 0,
+      backflush_material_value_cents INTEGER NOT NULL DEFAULT 0,
+      total_cost_cents INTEGER NOT NULL DEFAULT 0,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (processing_po_id) REFERENCES purchase_orders(id),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_receipts_order ON outsourcing_receipts(order_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_receipt_items (
+      id TEXT PRIMARY KEY,
+      receipt_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit_price_cents INTEGER NOT NULL,
+      line_no INTEGER NOT NULL,
+      FOREIGN KEY (receipt_id) REFERENCES outsourcing_receipts(id),
+      FOREIGN KEY (product_id) REFERENCES products(id)
+    );
   `);
 
   const now = new Date().toISOString();

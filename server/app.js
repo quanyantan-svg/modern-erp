@@ -235,6 +235,20 @@ import {
   transferVmiOwnership,
 } from './modules/procurement-vmi.js';
 import {
+  backflushMaterial,
+  cancelOutsourcingOrder,
+  createOutsourcingOrder,
+  createOutsourcingReceipt,
+  getMaterialPosition,
+  getOutsourcingOrder,
+  issueMaterial,
+  listOutsourcingOrders,
+  returnMaterial,
+  snapshotMaterialList,
+  supplementMaterial,
+  transitionOutsourcingOrder,
+} from './modules/outsourcing.js';
+import {
   createRole,
   listRoles,
   updateRole,
@@ -736,6 +750,78 @@ ownedRouteTable.register({
   path: /^\/api\/procurement\/vmi\/summary\/([^/]+)$/,
   handler: ({ db, res, actor, params }) => getVmiSummary(db, res, actor, params[0]),
   owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/outsourcing/orders',
+  handler: ({ db, res, actor, url }) => listOutsourcingOrders(db, res, actor, url),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getOutsourcingOrder(db, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/orders',
+  handler: ({ db, req, res, actor }) => createOutsourcingOrder(db, req, res, actor),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/transition$/,
+  handler: ({ db, req, res, actor, params }) => transitionOutsourcingOrder(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/cancel$/,
+  handler: ({ db, req, res, actor, params }) => cancelOutsourcingOrder(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/material-list$/,
+  handler: ({ db, req, res, actor, params }) => snapshotMaterialList(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/issues$/,
+  handler: ({ db, req, res, actor, params }) => issueMaterial(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/supplements$/,
+  handler: ({ db, req, res, actor, params }) => supplementMaterial(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/returns$/,
+  handler: ({ db, req, res, actor, params }) => returnMaterial(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/backflush$/,
+  handler: ({ db, req, res, actor, params }) => backflushMaterial(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/receipts',
+  handler: ({ db, req, res, actor }) => createOutsourcingReceipt(db, req, res, actor),
+  owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/material-position$/,
+  handler: ({ db, res, actor, params }) => getMaterialPosition(db, res, actor, params[0]),
+  owner: 'server/modules/outsourcing.js',
 });
 ownedRouteTable.register({
   method: 'POST',
