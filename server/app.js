@@ -249,6 +249,12 @@ import {
   transitionOutsourcingOrder,
 } from './modules/outsourcing.js';
 import {
+  createOpeningOutsourcingOrder,
+  getOutsourcingExecutionReport,
+  getOutsourcingMaterialPositionReport,
+  getPurchaseExecutionReport,
+} from './modules/procurement-reports.js';
+import {
   createRole,
   listRoles,
   updateRole,
@@ -822,6 +828,30 @@ ownedRouteTable.register({
   path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/material-position$/,
   handler: ({ db, res, actor, params }) => getMaterialPosition(db, res, actor, params[0]),
   owner: 'server/modules/outsourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/procurement/execution',
+  handler: ({ db, res, actor, url }) => getPurchaseExecutionReport(db, res, actor, url),
+  owner: 'server/modules/procurement-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/outsourcing/execution',
+  handler: ({ db, res, actor, url }) => getOutsourcingExecutionReport(db, res, actor, url),
+  owner: 'server/modules/procurement-reports.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/reports/outsourcing/material-position',
+  handler: ({ db, res, actor, url }) => getOutsourcingMaterialPositionReport(db, res, actor, url),
+  owner: 'server/modules/procurement-reports.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/opening-orders',
+  handler: ({ db, req, res, actor }) => createOpeningOutsourcingOrder(db, req, res, actor),
+  owner: 'server/modules/procurement-reports.js',
 });
 ownedRouteTable.register({
   method: 'POST',
