@@ -172,6 +172,7 @@ async function createConfirmedReceipt(supplierId, totalCents) {
   // sales role no longer holds PURCHASE_RECEIPTS_MANAGE.
   const create = await request('/api/purchase-receipts', { token: warehouseToken, method: 'POST', body: {
     purchaseOrderId, supplierId, warehouseId, receiptDate: '2026-08-01', remark: 'm14 fixture',
+    billingMode: 'LEGACY_DIRECT',
     items: [{ purchaseOrderItemId, productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
@@ -211,7 +212,7 @@ function voucherCount(sourceType, sourceId) {
 
 describe('M14 — Sales Discount', () => {
   test('1. permission registry has 112 entries after M14 + Core Scope Cleanup + V17 Wave A; SALES_DISCOUNT_MANAGE / PURCHASE_DISCOUNT_MANAGE exist', () => {
-    assert.equal(PERMISSIONS.length, 138);
+    assert.equal(PERMISSIONS.length, 159);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('SALES_DISCOUNT_MANAGE'));
     assert.ok(codes.has('PURCHASE_DISCOUNT_MANAGE'));

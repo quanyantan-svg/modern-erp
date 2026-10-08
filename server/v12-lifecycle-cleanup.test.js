@@ -74,7 +74,8 @@ async function createConfirmedReceipt(quantity, receiptDate = '2026-09-21') {
   insert('purchase_order_items', { id: poItemId, order_id: poId, product_id: 'product-001', quantity, unit_price_cents: 200, amount_cents: quantity * 200, line_no: 1 });
   const create = await request('/api/purchase-receipts', { method: 'POST', body: {
     purchaseOrderId: poId, supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate,
-    remark: 'V1.2 lifecycle isolated fixture', items: [{ purchaseOrderItemId: poItemId, productId: 'product-001', quantity, unitPriceCents: 200 }],
+    remark: 'V1.2 lifecycle isolated fixture', billingMode: 'LEGACY_DIRECT',
+    items: [{ purchaseOrderItemId: poItemId, productId: 'product-001', quantity, unitPriceCents: 200 }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
   const quality = await request('/api/iqc', { method: 'POST', body: { purchase_receipt_id: create.data.id } });

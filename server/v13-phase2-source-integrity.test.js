@@ -84,7 +84,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
 
   test('purchase receipt inherits PO price, enforces partial quantity, and posts exact AP', async () => {
     insertPo('draft', 'DRAFT'); insertPo('submitted', 'SUBMITTED'); insertPo('po');
-    const base = { purchaseOrderId: 'po', supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-09-23', items: [{ purchaseOrderItemId: 'po-line', productId: 'p1', quantity: 30, unitPriceCents: 20000 }] };
+    const base = { purchaseOrderId: 'po', supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-09-23', billingMode: 'LEGACY_DIRECT', items: [{ purchaseOrderItemId: 'po-line', productId: 'p1', quantity: 30, unitPriceCents: 20000 }] };
     for (const source of ['draft','submitted']) assert.equal((await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, purchaseOrderId: source, items: [{ ...base.items[0], purchaseOrderItemId: `${source}-line` }] })).status, 409);
     assert.equal((await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, supplierId: 'sup2' })).status, 400);
     assert.equal((await request('/api/purchase-receipts', 'warehouse', 'POST', { ...base, items: [{ ...base.items[0], unitPriceCents: 200 }] })).status, 400);

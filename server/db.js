@@ -198,7 +198,6 @@ export const PERMISSIONS = [
   ['PROCUREMENT_CONFIG_MANAGE', '管理采购参数与采购基础资料'],
   ['SOURCING_VIEW', '查看采购寻源与配额'],
   ['SOURCING_MANAGE', '管理采购寻源与配额'],
-  ['SOURCING_OVERRIDE', '采购寻源人工覆盖'],
   ['PRICING_VIEW', '查看采购价格与折扣'],
   ['PRICING_MANAGE', '管理采购价格与折扣'],
   ['PO_CHANGE_VIEW', '查看采购订单变更'],

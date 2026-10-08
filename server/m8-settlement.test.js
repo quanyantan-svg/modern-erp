@@ -38,7 +38,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   after(async () => { await new Promise((done, fail) => server.close((error) => error ? fail(error) : done())); db.close(); rmSync(temp, { recursive: true, force: true }); });
 
   test('permission registry has 112 entries after M14 + Core Scope Cleanup + V17 Wave A; no sixth role', () => {
-    assert.equal(PERMISSIONS.length, 138);
+    assert.equal(PERMISSIONS.length, 159);
     for (const code of ['AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE']) assert.ok(PERMISSIONS.some(([item]) => item === code));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
   });
@@ -56,7 +56,7 @@ describe('M8 AR/AP and settlement workflow', () => {
   });
 
   test('sourced draft Purchase Receipt creates no AP; confirmation creates one exact-cent AP', async () => {
-    const created = await (await post('/api/purchase-receipts', 'warehouse', { purchaseOrderId: 'm8-po', supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', items: [{ purchaseOrderItemId: 'm8-poi', productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
+    const created = await (await post('/api/purchase-receipts', 'warehouse', { purchaseOrderId: 'm8-po', supplierId: 'supplier-001', warehouseId: 'warehouse-001', receiptDate: '2026-08-11', remark: '', billingMode: 'LEGACY_DIRECT', items: [{ purchaseOrderItemId: 'm8-poi', productId: 'product-002', quantity: 1, unitPriceCents: 12000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(created.id).n, 0);
     assert.equal((await passQuality('iqc', created.id, 1)).status, 200);
     assert.equal((await post(`/api/purchase-receipts/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);

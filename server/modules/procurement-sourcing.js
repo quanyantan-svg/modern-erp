@@ -19,7 +19,7 @@ function assertManagePermission(actor) {
 }
 
 function assertSourcingOverridePermission(actor) {
-  allowAny(actor, ['SOURCING_OVERRIDE', 'PROCUREMENT_CONFIG_MANAGE']);
+  allowAny(actor, ['PROCUREMENT_CONFIG_MANAGE']);
 }
 
 

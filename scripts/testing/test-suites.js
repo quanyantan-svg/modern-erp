@@ -74,6 +74,18 @@ const HEAVY = [
 // KEEP / MERGE / DELETE / HEAVY classification for every file in this
 // manifest is recorded in docs/operations/testing.md §3.
 const FULL = [
+  // ----- Procurement & Outsourcing Domain — Wave A foundation -----
+  'server/procurement-parameters.test.js',
+  'server/procurement-profiles.test.js',
+  'server/buyers.test.js',
+
+  // ----- Procurement & Outsourcing Domain — Wave B/C/D/E/F/G/H -----
+  'server/procurement-sourcing-pricing.test.js',
+  'server/procurement-orders.test.js',
+  'server/procurement-receiving-returns.test.js',
+  'server/procurement-vmi.test.js',
+  'server/outsourcing.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 
