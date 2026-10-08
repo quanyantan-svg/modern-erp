@@ -173,6 +173,59 @@ import {
   updateSupplier,
 } from './modules/suppliers.js';
 import {
+  getActiveParameters,
+  getProcurementParameters,
+  updateProcurementParameters,
+} from './modules/procurement-parameters.js';
+import {
+  addBuyerMembership,
+  createBuyer,
+  createPurchasingGroup,
+  getSupplierProcurementProfile,
+  listBuyers,
+  listPurchasingGroups,
+  removeBuyerMembership,
+  updateBuyer,
+  updatePurchasingGroup,
+  updateSupplierProcurementProfile,
+} from './modules/procurement-profiles.js';
+import {
+  createSourceEntry,
+  disableSourceEntry,
+  listSourcingSourceEntries,
+  listSourcingQuotas,
+  resolveSourcingDecision,
+  upsertQuota,
+} from './modules/procurement-sourcing.js';
+import {
+  adjustPriceList,
+  createPriceListEntry,
+  listDiscounts,
+  listPriceList,
+  upsertDiscount,
+} from './modules/procurement-pricing.js';
+import {
+  applyPurchaseOrderChange,
+  approvePurchaseOrderChange,
+  createDeliverySchedule,
+  createPurchaseOrderChange,
+  getPurchaseOrderExecutionView,
+  listDeliverySchedules,
+  listPurchaseOrderChanges,
+} from './modules/procurement-orders.js';
+import {
+  cancelReceiptNotice,
+  confirmReceiptNotice,
+  createReceiptNotice,
+  getReceiptNotice,
+  listReceiptNotices,
+} from './modules/procurement-receiving.js';
+import {
+  createReturnRequest,
+  listReturnRequests,
+  planPurchaseReturnBranches,
+} from './modules/procurement-returns.js';
+import {
   createRole,
   listRoles,
   updateRole,
@@ -404,6 +457,234 @@ ownedRouteTable.register({
   path: '/api/suppliers',
   handler: ({ db, res, actor, url }) => listSuppliers(db, res, actor, url),
   owner: 'server/modules/suppliers.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/parameters',
+  handler: ({ db, res, actor }) => getProcurementParameters(db, res, actor),
+  owner: 'server/modules/procurement-parameters.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: '/api/procurement/parameters',
+  handler: ({ db, req, res, actor }) => updateProcurementParameters(db, req, res, actor),
+  owner: 'server/modules/procurement-parameters.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/suppliers\/([^/]+)\/profile$/,
+  handler: ({ db, res, actor, params }) => getSupplierProcurementProfile(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/suppliers\/([^/]+)\/profile$/,
+  handler: ({ db, req, res, actor, params }) => updateSupplierProcurementProfile(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/buyers',
+  handler: ({ db, res, actor }) => listBuyers(db, res, actor),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/buyers',
+  handler: ({ db, req, res, actor }) => createBuyer(db, req, res, actor),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/buyers\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updateBuyer(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/purchasing-groups',
+  handler: ({ db, res, actor }) => listPurchasingGroups(db, res, actor),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/purchasing-groups',
+  handler: ({ db, req, res, actor }) => createPurchasingGroup(db, req, res, actor),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'PATCH',
+  path: /^\/api\/purchasing-groups\/([^/]+)$/,
+  handler: ({ db, req, res, actor, params }) => updatePurchasingGroup(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/purchasing-groups\/([^/]+)\/members$/,
+  handler: ({ db, req, res, actor, params }) => addBuyerMembership(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'DELETE',
+  path: /^\/api\/purchasing-groups\/([^/]+)\/members\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => removeBuyerMembership(db, res, actor, params[0], params[1]),
+  owner: 'server/modules/procurement-profiles.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/source-entries',
+  handler: ({ db, res, actor, url }) => listSourcingSourceEntries(db, res, actor, url),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/source-entries',
+  handler: ({ db, req, res, actor }) => createSourceEntry(db, req, res, actor),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/source-entries\/([^/]+)\/disable$/,
+  handler: ({ db, req, res, actor, params }) => disableSourceEntry(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/quotas',
+  handler: ({ db, res, actor, url }) => listSourcingQuotas(db, res, actor, url),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/quotas',
+  handler: ({ db, req, res, actor }) => upsertQuota(db, req, res, actor),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/sourcing-decisions',
+  handler: ({ db, req, res, actor }) => resolveSourcingDecision(db, req, res, actor),
+  owner: 'server/modules/procurement-sourcing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/price-list',
+  handler: ({ db, res, actor, url }) => listPriceList(db, res, actor, url),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/price-list',
+  handler: ({ db, req, res, actor }) => createPriceListEntry(db, req, res, actor),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/price-list\/([^/]+)\/adjust$/,
+  handler: ({ db, req, res, actor, params }) => adjustPriceList(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/discounts',
+  handler: ({ db, res, actor, url }) => listDiscounts(db, res, actor, url),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/discounts',
+  handler: ({ db, req, res, actor }) => upsertDiscount(db, req, res, actor),
+  owner: 'server/modules/procurement-pricing.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/purchase-orders\/([^/]+)\/delivery-schedules$/,
+  handler: ({ db, req, res, actor, params }) => createDeliverySchedule(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-orders\/([^/]+)\/delivery-schedules$/,
+  handler: ({ db, res, actor, params }) => listDeliverySchedules(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-orders\/([^/]+)\/execution$/,
+  handler: ({ db, res, actor, params }) => getPurchaseOrderExecutionView(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/purchase-order-changes',
+  handler: ({ db, req, res, actor }) => createPurchaseOrderChange(db, req, res, actor),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-orders\/([^/]+)\/changes$/,
+  handler: ({ db, res, actor, params }) => listPurchaseOrderChanges(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/purchase-order-changes\/([^/]+)\/approve$/,
+  handler: ({ db, req, res, actor, params }) => approvePurchaseOrderChange(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/purchase-order-changes\/([^/]+)\/apply$/,
+  handler: ({ db, req, res, actor, params }) => applyPurchaseOrderChange(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-orders.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/receipt-notices',
+  handler: ({ db, res, actor, url }) => listReceiptNotices(db, res, actor, url),
+  owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/receipt-notices\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getReceiptNotice(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/receipt-notices',
+  handler: ({ db, req, res, actor }) => createReceiptNotice(db, req, res, actor),
+  owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/receipt-notices\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmReceiptNotice(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/receipt-notices\/([^/]+)\/cancel$/,
+  handler: ({ db, res, actor, params }) => cancelReceiptNotice(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-receiving.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/return-requests',
+  handler: ({ db, res, actor, url }) => listReturnRequests(db, res, actor, url),
+  owner: 'server/modules/procurement-returns.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/return-requests',
+  handler: ({ db, req, res, actor }) => createReturnRequest(db, req, res, actor),
+  owner: 'server/modules/procurement-returns.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/purchase-receipts\/([^/]+)\/return-branch-plan$/,
+  handler: ({ db, res, actor, params }) => send(res, 200, { plan: planPurchaseReturnBranches(db, params[0]) }),
+  owner: 'server/modules/procurement-returns.js',
 });
 ownedRouteTable.register({
   method: 'POST',
@@ -2540,6 +2821,7 @@ function getPurchaseOrder(db, res, actor, orderId) {
   if (!order) throw new HttpError(404, '采购订单不存在');
   order.items = db.prepare(`SELECT i.id,i.product_id productId,p.code productCode,p.name productName,p.unit,
     i.quantity,i.unit_price_cents unitPriceCents,i.amount_cents amountCents,i.line_no lineNo,
+    i.is_gift_line isGiftLine,
     i.document_uom_code documentUomCode,i.document_quantity_num documentQuantityNumerator,
     i.document_quantity_den documentQuantityDenominator,i.conversion_numerator conversionNumerator,
     i.conversion_denominator conversionDenominator,i.base_quantity_num baseQuantityNumerator,i.base_quantity_den baseQuantityDenominator,
@@ -2554,13 +2836,21 @@ async function createPurchaseOrder(db, req, res, actor) {
   allow(actor, 'PURCHASE_ORDERS_CREATE');
   const body = await readJson(req); const input = purchaseOrderInput(db, body);
   const orderId = id(); const now = new Date().toISOString(); const orderNo = makePurchaseOrderNo();
+  // Wave A procurement: supplier snapshot for commercial identity;
+  // Wave C procurement-orders: business_type defaults to STANDARD_PURCHASE.
+  const supplier = db.prepare('SELECT contact,phone,address,default_payment_terms_days FROM suppliers WHERE id=?').get(input.supplierId);
+  const supplierContactSnapshot = supplier ? `${supplier.contact || ''}|${supplier.phone || ''}` : '';
+  const supplierAddressSnapshot = supplier?.address || '';
+  const paymentTermsSnapshot = input.paymentTerms || '';
   transaction(db, () => {
     db.prepare(`INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at,
-        order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address)
-      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        order_date,expected_delivery_date,payment_terms,payment_terms_days,supplier_contact_name,supplier_contact_phone,supplier_address,
+        business_type,supplier_contact_snapshot,supplier_address_snapshot,payment_terms_snapshot)
+      VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       orderId, orderNo, input.supplierId, input.totalCents, input.remark, actor.id, now, now,
       input.orderDate, input.expectedDeliveryDate, input.paymentTerms, input.paymentTermsDays,
       input.supplierContactName, input.supplierContactPhone, input.supplierAddress,
+      'STANDARD_PURCHASE', supplierContactSnapshot, supplierAddressSnapshot, paymentTermsSnapshot,
     );
     savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'CREATE', 'PURCHASE_ORDER', orderId, `创建采购订单 ${orderNo}`);
@@ -2600,11 +2890,11 @@ async function updatePurchaseOrder(db, req, res, actor, orderId) {
     );
     db.prepare('DELETE FROM purchase_order_items WHERE order_id=?').run(orderId);
     if (hasSourcedLines) {
-      const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,
+      const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,purchase_requisition_item_id,is_gift_line,
         document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
       for (const item of input.items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
-        item.purchaseRequisitionItemId, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
+        item.purchaseRequisitionItemId, item.isGiftLine, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator,
         item.conversionNumerator, item.conversionDenominator, item.baseQuantityNumerator, item.baseQuantityDenominator);
     } else savePurchaseOrderItems(db, orderId, input.items);
     audit(db, actor.id, 'UPDATE', 'PURCHASE_ORDER', orderId, `修改采购订单 ${current.order_no}`);
@@ -2634,11 +2924,16 @@ async function changePurchaseOrderState(db, req, res, actor, orderId, action) {
     if (!order.payment_terms) throw new HttpError(400, '提交前请填写付款条件');
     if (order.expected_delivery_date < order.order_date) throw new HttpError(400, '预计交期不能早于订单日期');
     {
-      const items = db.prepare('SELECT quantity, unit_price_cents FROM purchase_order_items WHERE order_id=?').all(orderId);
+      const items = db.prepare('SELECT quantity,unit_price_cents,amount_cents,is_gift_line FROM purchase_order_items WHERE order_id=?').all(orderId);
       if (!items.length) throw new HttpError(400, '采购订单至少需要一条明细');
       for (const line of items) {
-        if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents) || line.unit_price_cents <= 0) {
-          throw new HttpError(400, '提交前请确认每行数量和单价均大于 0');
+        if (!Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unit_price_cents)) {
+          throw new HttpError(400, '提交前请确认每行数量和单价合法');
+        }
+        if (line.is_gift_line) {
+          if (line.unit_price_cents !== 0 || line.amount_cents !== 0) throw new HttpError(400, '赠品行单价和金额必须为 0');
+        } else if (line.unit_price_cents <= 0 || line.amount_cents <= 0) {
+          throw new HttpError(400, '非赠品行提交前必须填写大于 0 的单价和金额');
         }
       }
     }
@@ -2748,8 +3043,9 @@ function purchaseOrderInput(db, body) {
       uomCode: item.uomCode || product.purchase_uom_code || product.base_uom_code,
     }, orderDate || new Date().toISOString().slice(0, 10));
     const quantity = snapshot.base.num / snapshot.base.den;
+    const isGiftLine = item.isGiftLine === true || item.isGiftLine === 1 || item.is_gift_line === true || item.is_gift_line === 1;
     const hasExplicitPrice = item.unitPriceCents !== undefined && item.unitPriceCents !== null && item.unitPriceCents !== '';
-    const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : Number(product.price_cents || 0);
+    const unitPriceCents = hasExplicitPrice ? Number(item.unitPriceCents) : (isGiftLine ? 0 : Number(product.price_cents || 0));
     // V1.3 Phase 1: a DRAFT may temporarily carry 0 unit price (a
     // generated PO from a PR without an estimate is the canonical
     // example). The submit gate enforces unit price > 0 — see
@@ -2761,8 +3057,9 @@ function purchaseOrderInput(db, body) {
     if (!Number.isInteger(unitPriceCents)) {
       throw new HttpError(400, `第 ${index + 1} 行单价必须为整数（分）`);
     }
+    if (isGiftLine && unitPriceCents !== 0) throw new HttpError(400, `第 ${index + 1} 行赠品单价必须为 0`);
     const amountCents = roundRational(BigInt(snapshot.doc.num) * BigInt(unitPriceCents), snapshot.doc.den);
-    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, lineNo: index + 1,
+    return { id: id(), productId: product.id, quantity, unitPriceCents, amountCents, isGiftLine: isGiftLine ? 1 : 0, lineNo: index + 1,
       documentUomCode: snapshot.conversion.uomCode, documentQuantityNumerator: snapshot.doc.num, documentQuantityDenominator: snapshot.doc.den,
       conversionNumerator: snapshot.conversion.numerator, conversionDenominator: snapshot.conversion.denominator,
       baseQuantityNumerator: snapshot.base.num, baseQuantityDenominator: snapshot.base.den };
@@ -2775,11 +3072,11 @@ function purchaseOrderInput(db, body) {
 }
 
 function savePurchaseOrderItems(db, orderId, items) {
-  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+  const statement = db.prepare(`INSERT INTO purchase_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,is_gift_line,
     document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   for (const item of items) statement.run(item.id, orderId, item.productId, item.quantity, item.unitPriceCents, item.amountCents, item.lineNo,
-    item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
+    item.isGiftLine, item.documentUomCode, item.documentQuantityNumerator, item.documentQuantityDenominator, item.conversionNumerator, item.conversionDenominator,
     item.baseQuantityNumerator, item.baseQuantityDenominator);
 }
 
@@ -4444,7 +4741,7 @@ async function createPurchaseReceipt(db, req, res, actor) {
   allow(actor, 'PURCHASE_RECEIPTS_MANAGE');
   const body = await readJson(req);
   const { purchaseOrderId, supplierId, warehouseId, remark, items } = body;
-  const billingMode = body.billingMode || 'LEGACY_DIRECT';
+  const billingMode = body.billingMode || getActiveParameters(db).defaultReceiptBillingMode;
   if (!['SEPARATE','AUTO_BILL','LEGACY_DIRECT'].includes(billingMode)) throw new HttpError(400, '无效采购计费模式');
   const receiptDate = normalizeDocumentDate(body?.receiptDate || new Date().toISOString().slice(0, 10), '收货日期');
   if (!purchaseOrderId) throw new HttpError(400, '正常采购收货必须选择已审批采购订单');

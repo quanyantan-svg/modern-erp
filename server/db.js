@@ -30,6 +30,7 @@ import { migrateEngineeringRoutingSchema } from './migrations/engineering-routin
 import { migrateEngineeringChangeSchema } from './migrations/engineering-change-schema.js';
 import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
+import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -192,6 +193,30 @@ export const PERMISSIONS = [
   ['ENGINEERING_CHANGE_MANAGE', '管理工程变更'],
   ['ENGINEERING_CHANGE_APPROVE', '审核工程变更'],
 
+  // Procurement & Outsourcing Domain Closure — Wave A
+  ['PROCUREMENT_CONFIG_VIEW', '查看采购参数与采购基础资料'],
+  ['PROCUREMENT_CONFIG_MANAGE', '管理采购参数与采购基础资料'],
+  ['SOURCING_VIEW', '查看采购寻源与配额'],
+  ['SOURCING_MANAGE', '管理采购寻源与配额'],
+  ['SOURCING_OVERRIDE', '采购寻源人工覆盖'],
+  ['PRICING_VIEW', '查看采购价格与折扣'],
+  ['PRICING_MANAGE', '管理采购价格与折扣'],
+  ['PO_CHANGE_VIEW', '查看采购订单变更'],
+  ['PO_CHANGE_MANAGE', '管理采购订单变更'],
+  ['RECEIPT_NOTICE_VIEW', '查看采购收货通知'],
+  ['RECEIPT_NOTICE_MANAGE', '管理采购收货通知'],
+  ['RETURN_REQUEST_VIEW', '查看采购退货申请'],
+  ['RETURN_REQUEST_MANAGE', '管理采购退货申请'],
+  ['VMI_VIEW', '查看 VMI 业务'],
+  ['VMI_MANAGE', '管理 VMI 业务'],
+  ['OUTSOURCING_VIEW', '查看委外业务'],
+  ['OUTSOURCING_MANAGE', '管理委外订单'],
+  ['OUTSOURCING_RELEASE', '下达与关闭委外订单'],
+  ['OUTSOURCING_MATERIAL_EXECUTE', '执行委外发料补料退料与倒冲'],
+  ['OUTSOURCING_RECEIVING_VIEW', '查看委外收货与质检'],
+  ['OUTSOURCING_RECEIVING_MANAGE', '管理委外收货与退货'],
+  ['PROCUREMENT_SCAN_EXECUTE', '执行采购扫码'],
+
 ];
 
 export function hashPassword(password, salt = randomBytes(16).toString('hex')) {
@@ -225,6 +250,7 @@ function createSqliteDatabase(filename) {
   migrateEngineeringSubstituteSchema(db);
   migrateEngineeringRoutingSchema(db);
   migrateEngineeringChangeSchema(db);
+  migrateProcurementOutsourcingSchema(db);
   normalizeCostRates(db);
   seed(db);
   // Add missing columns to existing tables
