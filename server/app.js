@@ -226,6 +226,15 @@ import {
   planPurchaseReturnBranches,
 } from './modules/procurement-returns.js';
 import {
+  confirmVmiReceipt,
+  createVmiAgreement,
+  createVmiConsumption,
+  createVmiReceipt,
+  getVmiSummary,
+  listVmiAgreements,
+  transferVmiOwnership,
+} from './modules/procurement-vmi.js';
+import {
   createRole,
   listRoles,
   updateRole,
@@ -685,6 +694,48 @@ ownedRouteTable.register({
   path: /^\/api\/purchase-receipts\/([^/]+)\/return-branch-plan$/,
   handler: ({ db, res, actor, params }) => send(res, 200, { plan: planPurchaseReturnBranches(db, params[0]) }),
   owner: 'server/modules/procurement-returns.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: '/api/procurement/vmi/agreements',
+  handler: ({ db, res, actor, url }) => listVmiAgreements(db, res, actor, url),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/vmi/agreements',
+  handler: ({ db, req, res, actor }) => createVmiAgreement(db, req, res, actor),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/vmi/receipts',
+  handler: ({ db, req, res, actor }) => createVmiReceipt(db, req, res, actor),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/vmi\/receipts\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmVmiReceipt(db, req, res, actor, params[0]),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/vmi/consumptions',
+  handler: ({ db, req, res, actor }) => createVmiConsumption(db, req, res, actor),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/vmi/ownership-transfers',
+  handler: ({ db, req, res, actor }) => transferVmiOwnership(db, req, res, actor),
+  owner: 'server/modules/procurement-vmi.js',
+});
+ownedRouteTable.register({
+  method: 'GET',
+  path: /^\/api\/procurement\/vmi\/summary\/([^/]+)$/,
+  handler: ({ db, res, actor, params }) => getVmiSummary(db, res, actor, params[0]),
+  owner: 'server/modules/procurement-vmi.js',
 });
 ownedRouteTable.register({
   method: 'POST',

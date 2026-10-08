@@ -372,6 +372,87 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(status IN ('DRAFT','SUBMITTED','APPROVED','REJECTED','CONVERTED'))
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_return_requests_receipt ON purchase_return_requests(receipt_id);
+
+    CREATE TABLE IF NOT EXISTS vmi_agreements (
+      id TEXT PRIMARY KEY,
+      supplier_id TEXT NOT NULL,
+      warehouse_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      min_stock REAL NOT NULL DEFAULT 0,
+      max_stock REAL NOT NULL DEFAULT 0,
+      reorder_level REAL NOT NULL DEFAULT 0,
+      effective_from TEXT NOT NULL,
+      effective_to TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      FOREIGN KEY (created_by) REFERENCES users(id),
+      CHECK(max_stock >= min_stock)
+    );
+    CREATE INDEX IF NOT EXISTS idx_vmi_agreements_effective ON vmi_agreements(supplier_id, product_id, warehouse_id, effective_from, effective_to);
+
+    CREATE TABLE IF NOT EXISTS vmi_receipts (
+      id TEXT PRIMARY KEY,
+      receipt_no TEXT NOT NULL UNIQUE,
+      supplier_id TEXT NOT NULL,
+      warehouse_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      received_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'PENDING',
+      handler_id TEXT NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      idempotency_key TEXT UNIQUE,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+      FOREIGN KEY (product_id) REFERENCES products(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      CHECK(business_status IN ('PENDING','CONFIRMED','CONSUMED','TRANSFERRED','CANCELLED'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vmi_receipts_supplier ON vmi_receipts(supplier_id, product_id, warehouse_id);
+
+    CREATE TABLE IF NOT EXISTS vmi_consumptions (
+      id TEXT PRIMARY KEY,
+      consumption_no TEXT NOT NULL UNIQUE,
+      vmi_receipt_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      consumed_date TEXT NOT NULL,
+      destination TEXT NOT NULL,
+      remark TEXT NOT NULL DEFAULT '',
+      business_status TEXT NOT NULL DEFAULT 'PENDING',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (vmi_receipt_id) REFERENCES vmi_receipts(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      CHECK(business_status IN ('PENDING','CONFIRMED','CANCELLED'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vmi_consumptions_receipt ON vmi_consumptions(vmi_receipt_id);
+
+    CREATE TABLE IF NOT EXISTS vmi_ownership_transfers (
+      id TEXT PRIMARY KEY,
+      transfer_no TEXT NOT NULL UNIQUE,
+      vmi_receipt_id TEXT NOT NULL,
+      settlement_quantity REAL NOT NULL,
+      settlement_amount_cents INTEGER NOT NULL,
+      transfer_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'PENDING',
+      supplier_bill_id TEXT,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (vmi_receipt_id) REFERENCES vmi_receipts(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      CHECK(business_status IN ('PENDING','CONFIRMED','CANCELLED'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vmi_ownership_transfers_receipt ON vmi_ownership_transfers(vmi_receipt_id);
   `);
 
   const now = new Date().toISOString();
