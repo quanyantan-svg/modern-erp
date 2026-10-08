@@ -110,7 +110,7 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(source_type IN ('PURCHASE','OUTSOURCE'))
     );
     CREATE INDEX IF NOT EXISTS idx_source_list_resolution
-      ON source_list_entries(product_id, source_type, enabled, effective_from, effective_to);
+      ON source_list_entries(product_id, source_type, enabled);
 
     CREATE TABLE IF NOT EXISTS source_list_versions (
       id TEXT PRIMARY KEY,
@@ -147,7 +147,7 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(proportion_den > 0)
     );
     CREATE INDEX IF NOT EXISTS idx_quota_resolution
-      ON quota_assignments(product_id, source_type, effective_from, effective_to);
+      ON quota_assignments(product_id, source_type);
 
     CREATE TABLE IF NOT EXISTS sourcing_decisions (
       id TEXT PRIMARY KEY,
@@ -211,7 +211,7 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(unit_price_cents >= 0)
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_price_resolution
-      ON purchase_price_list_entries(supplier_id, product_id, source_type, pricing_uom_code, status, effective_from, effective_to);
+      ON purchase_price_list_entries(supplier_id, product_id, pricing_uom_code, status);
 
     CREATE TABLE IF NOT EXISTS purchase_price_list_versions (
       id TEXT PRIMARY KEY,
@@ -251,7 +251,7 @@ export function migrateProcurementOutsourcingSchema(db) {
       CHECK(denominator > 0)
     );
     CREATE INDEX IF NOT EXISTS idx_pricing_discount_resolution
-      ON pricing_discount_schemes(supplier_id, product_id, source_type, status, effective_from, effective_to);
+      ON pricing_discount_schemes(supplier_id, product_id, status);
   `);
 
   safeAddColumn(db, 'suppliers', 'procurement_enabled', 'procurement_enabled INTEGER NOT NULL DEFAULT 1');
@@ -393,7 +393,7 @@ export function migrateProcurementOutsourcingSchema(db) {
       FOREIGN KEY (created_by) REFERENCES users(id),
       CHECK(max_stock >= min_stock)
     );
-    CREATE INDEX IF NOT EXISTS idx_vmi_agreements_effective ON vmi_agreements(supplier_id, product_id, warehouse_id, effective_from, effective_to);
+    CREATE INDEX IF NOT EXISTS idx_vmi_agreements_effective ON vmi_agreements(supplier_id, product_id);
 
     CREATE TABLE IF NOT EXISTS vmi_receipts (
       id TEXT PRIMARY KEY,
