@@ -88,6 +88,7 @@ const FULL = [
   'server/procurement-reports.test.js',
   'server/outsourcing-finance.test.js',
   'server/procurement-return-execution.test.js',
+  'server/procurement-execution-suite.test.js',
 
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',

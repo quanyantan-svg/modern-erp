@@ -191,11 +191,13 @@ export async function createFinishedReturn(db, req, res, actor) {
   const id = randomUUID(); const now = new Date().toISOString();
   const returnNo = 'OSRET-' + Date.now().toString().slice(-10);
   transaction(db, () => {
+    const productId = db.prepare('SELECT product_id FROM outsourcing_orders WHERE id=?').get(receipt.order_id).product_id;
     db.prepare(`INSERT INTO outsourcing_finished_returns(id,return_no,outsourcing_receipt_id,supplier_id,quantity,return_date,business_status,creator_id,created_at)
       VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, returnNo, receipt.id, receipt.supplier_id, Number(body.quantity), body.returnDate || now.slice(0, 10), actor.id, now);
     // Finished inventory reversal: deduct from inventory + insert OUT transaction.
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-      VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', db.prepare('SELECT product_id FROM outsourcing_orders WHERE id=?').get(receipt.order_id).product_id, Number(body.quantity), id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
+      VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', productId, Number(body.quantity), id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
+    db.prepare('UPDATE inventory SET quantity=quantity-?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(Number(body.quantity), now, 'warehouse-001', productId);
     audit(db, actor.id, 'CREATE', 'OUTSOURCING_FINISHED_RETURN', id, returnNo);
   });
   return send(res, 201, { id, returnNo });
