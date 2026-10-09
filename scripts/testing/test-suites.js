@@ -102,6 +102,14 @@ const FULL = [
   // VMI physical owner dimensional mutation + lock ordering.
   'server/inventory-mutation-wave-b.test.js',
 
+  // ----- V21 Inventory & Warehouse Domain Closure — Wave C native operations -----
+  // Opening initialization + Other Receipt/Issue + Stocktake APPROVE.
+  'server/inventory-stocktake-wave-c.test.js',
+
+  // ----- V21 Inventory & Warehouse Domain Closure — 14 Domain Race Matrix -----
+  // (MySQL concurrency gate re-runs the full race matrix on disposable MySQL.)
+  'server/inventory-domain-race.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 

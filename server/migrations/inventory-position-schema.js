@@ -221,6 +221,122 @@ export function migrateInventoryPositionSchema(db) {
     db.exec('PRAGMA foreign_keys=ON');
   }
 
+  // ---- Wave C tables: initialization, opening, native documents, stocktake, lot adjustment, form conversion ----
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_initialization (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK(status IN ('NOT_STARTED','OPEN','CLOSED')),
+      enabled_at TEXT,
+      opened_by TEXT,
+      opened_at TEXT,
+      closed_by TEXT,
+      closed_at TEXT,
+      reopen_count INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      FOREIGN KEY (opened_by) REFERENCES users(id),
+      FOREIGN KEY (closed_by) REFERENCES users(id)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS opening_inventory_documents (
+      id TEXT PRIMARY KEY,
+      doc_no TEXT NOT NULL UNIQUE,
+      initialization_id TEXT NOT NULL REFERENCES inventory_initialization(id),
+      business_date TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+      creator_id TEXT NOT NULL REFERENCES users(id),
+      confirmed_by TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      notes TEXT NOT NULL DEFAULT ''
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS opening_inventory_items (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES opening_inventory_documents(id),
+      product_id TEXT NOT NULL REFERENCES products(id),
+      warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+      bin_id TEXT,
+      owner_type TEXT NOT NULL DEFAULT 'ENTERPRISE',
+      owner_id TEXT,
+      stock_status TEXT NOT NULL DEFAULT 'AVAILABLE',
+      lot_id TEXT,
+      serial_id TEXT,
+      quantity REAL NOT NULL CHECK(quantity > 0),
+      position_key TEXT NOT NULL,
+      UNIQUE(document_id, product_id, position_key)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_native_documents (
+      id TEXT PRIMARY KEY,
+      doc_no TEXT NOT NULL UNIQUE,
+      doc_kind TEXT NOT NULL CHECK(doc_kind IN ('OTHER_RECEIPT','OTHER_ISSUE')),
+      business_date TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('DRAFT','CONFIRMED','CANCELLED')),
+      reason TEXT NOT NULL DEFAULT '',
+      creator_id TEXT NOT NULL REFERENCES users(id),
+      confirmed_by TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      notes TEXT NOT NULL DEFAULT ''
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_native_items (
+      id TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL REFERENCES inventory_native_documents(id),
+      product_id TEXT NOT NULL REFERENCES products(id),
+      warehouse_id TEXT NOT NULL REFERENCES warehouses(id),
+      bin_id TEXT,
+      owner_type TEXT NOT NULL DEFAULT 'ENTERPRISE',
+      owner_id TEXT,
+      stock_status TEXT NOT NULL DEFAULT 'AVAILABLE',
+      lot_id TEXT,
+      serial_id TEXT,
+      quantity REAL NOT NULL CHECK(quantity > 0),
+      line_no INTEGER NOT NULL,
+      UNIQUE(document_id, line_no)
+    );
+  `);
+
+  // ---- Extend inventory_checks with stocktake scope ----
+  safeAddColumn(db, 'inventory_checks', 'check_kind', `check_kind TEXT NOT NULL DEFAULT 'REGULAR' CHECK(check_kind IN ('REGULAR','CYCLE'))`);
+  safeAddColumn(db, 'inventory_checks', 'scope_strategy', `scope_strategy TEXT NOT NULL DEFAULT 'ALL'`);
+  safeAddColumn(db, 'inventory_checks', 'abc_classification', `abc_classification TEXT`);
+  safeAddColumn(db, 'inventory_checks', 'cycle_period_key', `cycle_period_key TEXT`);
+  safeAddColumn(db, 'inventory_checks', 'snapshot_at', `snapshot_at TEXT`);
+
+  safeAddColumn(db, 'inventory_check_items', 'position_key', `position_key TEXT`);
+  safeAddColumn(db, 'inventory_check_items', 'bin_id', `bin_id TEXT`);
+  safeAddColumn(db, 'inventory_check_items', 'owner_type', `owner_type TEXT NOT NULL DEFAULT 'ENTERPRISE'`);
+  safeAddColumn(db, 'inventory_check_items', 'owner_id', `owner_id TEXT`);
+  safeAddColumn(db, 'inventory_check_items', 'stock_status', `stock_status TEXT NOT NULL DEFAULT 'AVAILABLE'`);
+  safeAddColumn(db, 'inventory_check_items', 'lot_id', `lot_id TEXT`);
+  safeAddColumn(db, 'inventory_check_items', 'serial_id', `serial_id TEXT`);
+  safeAddColumn(db, 'inventory_check_items', 'snapshot_book_quantity', `snapshot_book_quantity REAL NOT NULL DEFAULT 0`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_abc_classifications (
+      id TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL REFERENCES products(id),
+      abc_class TEXT NOT NULL CHECK(abc_class IN ('A','B','C')),
+      effective_from TEXT NOT NULL,
+      effective_to TEXT,
+      basis TEXT NOT NULL DEFAULT 'VALUE',
+      finance_valuation_snapshot_id TEXT,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      created_at TEXT NOT NULL,
+      UNIQUE(product_id, effective_from)
+    );
+  `);
+
+
   // ---- §27.5 fail-closed reconciliation for LOT/SERIAL tracking products ----
   db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_reconciliation_results (

@@ -52,7 +52,7 @@ const SOURCE_TYPES = new Set([
   'VMI_RECEIPT', 'VMI_CONSUMPTION', 'VMI_OWNERSHIP_TRANSFER',
   'OUTSOURCING_ISSUE', 'OUTSOURCING_RETURN', 'OUTSOURCING_RECEIPT',
   'ENTRUSTED_RECEIPT', 'ENTRUSTED_ISSUE',
-  'BARCODE_SCAN_CONFIRM',
+  'BARCODE_SCAN_CONFIRM', 'OPENING_INVENTORY',
 ]);
 
 function buildIdentity({ productId, warehouseId, binId, ownerType, ownerId, stockStatus, lotId, serialId }) {
