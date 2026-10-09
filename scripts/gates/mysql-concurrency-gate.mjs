@@ -15,7 +15,11 @@ if (!/(?:test|phase7[bc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
   process.exit(2);
 }
 
-const child = spawn(process.execPath, ['--test', resolve(repoRoot, 'server/mysql-phase7b-concurrency.integration.js')], {
+const child = spawn(process.execPath, [
+  '--test',
+  resolve(repoRoot, 'server/mysql-phase7b-concurrency.integration.js'),
+  resolve(repoRoot, 'server/mysql-procurement-outsourcing-concurrency.integration.js'),
+], {
   cwd: repoRoot, env: { ...process.env, ERP_TEST_DB_BACKEND: 'mysql', NODE_ENV: 'test', ERP_SEED_DEMO: 'false' }, stdio: 'inherit',
 });
 child.on('exit', (code) => {
