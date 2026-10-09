@@ -91,6 +91,12 @@ const FULL = [
   'server/procurement-execution-suite.test.js',
   'server/out-final-acceptance.test.js',
 
+  // ----- V21 Inventory & Warehouse Domain Closure — Wave A foundation -----
+  // Pure / contract tests for canonical position identity, owner validation,
+  // stock status, warehouse bin, legacy read compatibility, migration safety.
+  'server/inventory-position-wave-a.test.js',
+  'server/inventory-position-integration.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 

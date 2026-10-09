@@ -32,6 +32,7 @@ import { migrateEngineeringChangeSchema } from './migrations/engineering-change-
 import { migrateManufacturingQualitySchema } from './migrations/manufacturing-quality-schema.js';
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
+import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -169,6 +170,33 @@ export const PERMISSIONS = [
   ['INVENTORY_SCRAP_MANAGE', '管理与确认库存报废'],
   ['INVENTORY_PERIOD_CLOSE_VIEW', '查看存货月结'],
   ['INVENTORY_PERIOD_CLOSE_MANAGE', '执行与反结存货月结'],
+
+  // V21 — Inventory & Warehouse Domain Closure (Wave A — foundation)
+  ['INVENTORY_PARAMETERS_VIEW', '查看库存参数'],
+  ['INVENTORY_PARAMETERS_MANAGE', '管理库存参数'],
+  ['WAREHOUSE_BIN_VIEW', '查看仓库仓位'],
+  ['WAREHOUSE_BIN_MANAGE', '管理仓库仓位'],
+  ['STOCK_STATUS_VIEW', '查看库存状态'],
+  ['STOCK_STATUS_MANAGE', '管理库存状态'],
+  ['OWNER_DIMENSION_VIEW', '查看货主维度'],
+  ['INVENTORY_LOCK_VIEW', '查看库存锁库'],
+  ['INVENTORY_LOCK_MANAGE', '管理库存锁库'],
+  ['INVENTORY_OPENING_VIEW', '查看库存初始化'],
+  ['INVENTORY_OPENING_MANAGE', '管理库存初始化'],
+  ['INVENTORY_NATIVE_DOCUMENT_VIEW', '查看库存原生单据'],
+  ['INVENTORY_NATIVE_DOCUMENT_MANAGE', '管理库存原生单据'],
+  ['INVENTORY_LOT_ADJUSTMENT_VIEW', '查看批号调整'],
+  ['INVENTORY_LOT_ADJUSTMENT_MANAGE', '管理批号调整'],
+  ['INVENTORY_FORM_CONVERSION_VIEW', '查看形态转换'],
+  ['INVENTORY_FORM_CONVERSION_MANAGE', '管理形态转换'],
+  ['INVENTORY_ASSEMBLY_VIEW', '查看组装拆卸'],
+  ['INVENTORY_ASSEMBLY_MANAGE', '管理组装拆卸'],
+  ['INVENTORY_BARCODE_RULE_VIEW', '查看条码规则'],
+  ['INVENTORY_BARCODE_RULE_MANAGE', '管理条码规则'],
+  ['INVENTORY_CONTAINER_VIEW', '查看容器包装'],
+  ['INVENTORY_CONTAINER_MANAGE', '管理容器包装'],
+  ['INVENTORY_REPORT_VIEW', '查看库存报表'],
+  ['INVENTORY_ABC_MANAGE', '管理 ABC 分类'],
 
   // M14 — Sales / Purchase Discount / Allowance
   ['SALES_DISCOUNT_MANAGE', '管理与确认销售附加折让'],
@@ -433,6 +461,7 @@ function createSqliteDatabase(filename) {
   migrateV13Phase6CManufacturingExecution(db);
   migrateV13Phase6DFinancialInventory(db);
   migrateV13Phase6ECommercialGoLive(db);
+  migrateInventoryPositionSchema(db);
   migrateV13Phase7cPerformance(db);
   migrateManufacturingQualitySchema(db);
   migrateR4PurchaseSourceCardinality(db);
@@ -1636,7 +1665,7 @@ function seedSchema(db) {
     // V1.3 Phase 1: WAREHOUSE owns physical stock execution including material
     // issue and production receipt. No MRP / no accounting / no self-approval of
     // inventory check (INVENTORY_CHECK_APPROVE is on reviewer only).
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE'],
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE', 'INVENTORY_PARAMETERS_VIEW', 'INVENTORY_PARAMETERS_MANAGE', 'WAREHOUSE_BIN_VIEW', 'WAREHOUSE_BIN_MANAGE', 'STOCK_STATUS_VIEW', 'STOCK_STATUS_MANAGE', 'OWNER_DIMENSION_VIEW', 'INVENTORY_LOCK_VIEW', 'INVENTORY_LOCK_MANAGE', 'INVENTORY_OPENING_VIEW', 'INVENTORY_OPENING_MANAGE', 'INVENTORY_NATIVE_DOCUMENT_VIEW', 'INVENTORY_NATIVE_DOCUMENT_MANAGE', 'INVENTORY_LOT_ADJUSTMENT_VIEW', 'INVENTORY_LOT_ADJUSTMENT_MANAGE', 'INVENTORY_FORM_CONVERSION_VIEW', 'INVENTORY_FORM_CONVERSION_MANAGE', 'INVENTORY_ASSEMBLY_VIEW', 'INVENTORY_ASSEMBLY_MANAGE', 'INVENTORY_BARCODE_RULE_VIEW', 'INVENTORY_BARCODE_RULE_MANAGE', 'INVENTORY_CONTAINER_VIEW', 'INVENTORY_CONTAINER_MANAGE', 'INVENTORY_REPORT_VIEW', 'INVENTORY_ABC_MANAGE', 'INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
