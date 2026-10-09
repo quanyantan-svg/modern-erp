@@ -588,6 +588,23 @@ export function migrateProcurementOutsourcingSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_outsourcing_receipt_items_receipt ON outsourcing_receipt_items(receipt_id);
 
+    CREATE TABLE IF NOT EXISTS outsourcing_cost_evidences (
+      id TEXT PRIMARY KEY,
+      outsourcing_receipt_id TEXT NOT NULL UNIQUE,
+      processing_po_id TEXT,
+      material_consumed_value_cents INTEGER NOT NULL DEFAULT 0,
+      processing_fee_provisional_cents INTEGER NOT NULL DEFAULT 0,
+      processing_fee_actual_cents INTEGER,
+      variance_cents INTEGER,
+      basis_status TEXT NOT NULL DEFAULT 'PROVISIONAL',
+      calculated_at TEXT NOT NULL,
+      FOREIGN KEY (outsourcing_receipt_id) REFERENCES outsourcing_receipts(id),
+      FOREIGN KEY (processing_po_id) REFERENCES purchase_orders(id),
+      CHECK(basis_status IN ('PROVISIONAL','FINAL'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_cost_evidences_receipt
+      ON outsourcing_cost_evidences(outsourcing_receipt_id);
+
     CREATE TABLE IF NOT EXISTS outsourcing_finished_returns (
       id TEXT PRIMARY KEY,
       return_no TEXT NOT NULL UNIQUE,
@@ -602,6 +619,24 @@ export function migrateProcurementOutsourcingSchema(db) {
       FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
       FOREIGN KEY (creator_id) REFERENCES users(id)
     );
+
+    CREATE TABLE IF NOT EXISTS outsourcing_finished_return_credits (
+      id TEXT PRIMARY KEY,
+      return_id TEXT NOT NULL,
+      supplier_bill_id TEXT NOT NULL,
+      supplier_bill_item_id TEXT NOT NULL,
+      commercial_credit_note_id TEXT NOT NULL,
+      billed_quantity REAL NOT NULL,
+      credit_cents INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (return_id) REFERENCES outsourcing_finished_returns(id),
+      FOREIGN KEY (supplier_bill_id) REFERENCES supplier_bills(id),
+      FOREIGN KEY (supplier_bill_item_id) REFERENCES supplier_bill_items(id),
+      FOREIGN KEY (commercial_credit_note_id) REFERENCES commercial_credit_notes(id),
+      UNIQUE(return_id, supplier_bill_item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_finished_return_credits_return
+      ON outsourcing_finished_return_credits(return_id);
 
     CREATE TABLE IF NOT EXISTS outsourcing_wip_transfers (
       id TEXT PRIMARY KEY,

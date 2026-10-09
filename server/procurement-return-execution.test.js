@@ -79,6 +79,20 @@ async function createAndConfirmReceipt(poTokens, { poId, billingMode, quantity =
   return { receiptId, receiptItemId };
 }
 
+function postedRoleLines(db, returnId) {
+  return db.prepare(`SELECT m.role_code,e.direction,e.amount_cents
+    FROM accounting_entries e
+    JOIN accounting_vouchers v ON v.id=e.voucher_id
+    JOIN account_role_mappings m ON m.subject_id=e.subject_id
+    WHERE v.source_type='PURCHASE_RETURN' AND v.source_id=? AND v.status='POSTED'
+    ORDER BY e.line_no,m.role_code`).all(returnId);
+}
+
+function roleAmount(lines, role, direction) {
+  return lines.filter((line) => line.role_code === role && line.direction === direction)
+    .reduce((sum, line) => sum + Number(line.amount_cents), 0);
+}
+
 describe('Purchase Return 4-branch execution-level financial evidence', () => {
   let fix;
   before(async () => { fix = await makeFixture(); });
@@ -104,6 +118,10 @@ describe('Purchase Return 4-branch execution-level financial evidence', () => {
     assert.ok(apAfter.amount_cents <= apBefore.amount_cents, 'AP amount must decrease after return');
     const invAfter = fix.db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity;
     assert.ok(Number(invAfter) < Number(invBefore), 'inventory must decrease after return');
+    const lines = postedRoleLines(fix.db, ret.data.id);
+    assert.equal(roleAmount(lines, 'ACCOUNTS_PAYABLE', 'DEBIT'), 5000);
+    assert.equal(roleAmount(lines, 'GRNI', 'DEBIT'), 0);
+    assert.equal(lines.filter((line) => line.role_code.endsWith('INVENTORY') && line.direction === 'CREDIT').reduce((sum, line) => sum + Number(line.amount_cents), 0), 5000);
   });
 
   test('SEPARATE unbilled: GRNI reversal; NO AP fabricated', async () => {
@@ -121,6 +139,10 @@ describe('Purchase Return 4-branch execution-level financial evidence', () => {
     assert.equal(apAfter, 0, 'SEPARATE unbilled return must NOT create AP credit');
     const invAfter = fix.db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity;
     assert.ok(Number(invAfter) >= 0, 'inventory must have moved (decreased or zero)');
+    const lines = postedRoleLines(fix.db, ret.data.id);
+    assert.equal(roleAmount(lines, 'GRNI', 'DEBIT'), 5000);
+    assert.equal(roleAmount(lines, 'ACCOUNTS_PAYABLE', 'DEBIT'), 0);
+    assert.equal(lines.filter((line) => line.role_code.endsWith('INVENTORY') && line.direction === 'CREDIT').reduce((sum, line) => sum + Number(line.amount_cents), 0), 5000);
   });
 
   test('SEPARATE billed: AP credit against canonical payable; no GRNI dup', async () => {
@@ -145,6 +167,10 @@ describe('Purchase Return 4-branch execution-level financial evidence', () => {
     const credit = fix.db.prepare("SELECT amount_cents FROM financial_credit_adjustments WHERE source_type='PURCHASE_RETURN' AND source_id=? AND side='AP'").get(ret.data.id);
     assert.ok(credit, 'AP credit adjustment must exist');
     assert.equal(credit.amount_cents, 5000, 'AP credit = billed-portion × unit price');
+    const lines = postedRoleLines(fix.db, ret.data.id);
+    assert.equal(roleAmount(lines, 'ACCOUNTS_PAYABLE', 'DEBIT'), 5000);
+    assert.equal(roleAmount(lines, 'GRNI', 'DEBIT'), 0);
+    assert.equal(lines.filter((line) => line.role_code.endsWith('INVENTORY') && line.direction === 'CREDIT').reduce((sum, line) => sum + Number(line.amount_cents), 0), 5000);
   });
 
   test('SEPARATE partial billed: billed-first deterministic split (40→AP / 30→GRNI)', async () => {
@@ -178,5 +204,9 @@ describe('Purchase Return 4-branch execution-level financial evidence', () => {
     assert.ok(grniRows.length >= 1, 'GRNI reversal voucher line must exist');
     const grniAmount = grniRows.reduce((s, r) => s + r.amount_cents, 0);
     assert.equal(grniAmount, 3000, 'GRNI reversal = unbilled-portion (3) × unit price (1000)');
+    const lines = postedRoleLines(fix.db, ret.data.id);
+    assert.equal(roleAmount(lines, 'ACCOUNTS_PAYABLE', 'DEBIT'), 4000);
+    assert.equal(roleAmount(lines, 'GRNI', 'DEBIT'), 3000);
+    assert.equal(lines.filter((line) => line.role_code.endsWith('INVENTORY') && line.direction === 'CREDIT').reduce((sum, line) => sum + Number(line.amount_cents), 0), 7000);
   });
 });

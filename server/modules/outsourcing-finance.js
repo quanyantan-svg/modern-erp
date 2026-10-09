@@ -4,7 +4,9 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
+import { createCommercialCreditNote } from './commercial-golive.js';
 import { backflushMaterial } from './outsourcing.js';
+import { ensurePayableSource } from './settlement-core.js';
 
 const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'];
 const FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE'];
@@ -14,6 +16,47 @@ function assertReceivingPermission(actor) { allowAny(actor, RECEIVE_PERMISSIONS)
 function assertFinancePermission(actor) { allowAny(actor, FINANCE_PERMISSIONS); }
 function assertMaterialPermission(actor) { allowAny(actor, MATERIAL_PERMISSIONS); }
 function assertScanPermission(actor) { allowAny(actor, ['PROCUREMENT_SCAN_EXECUTE', 'PURCHASE_RECEIPTS_MANAGE']); }
+
+function refreshOutsourcingCostEvidence(db, receiptId, calculatedAt = new Date().toISOString()) {
+  const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(receiptId);
+  if (!receipt) throw new HttpError(404, 'Outsourcing receipt not found');
+  const billed = db.prepare(`SELECT
+    COALESCE(SUM(sbi.base_quantity_num*1.0/sbi.base_quantity_den),0) billed_quantity,
+    COALESCE(SUM(sbi.gross_cents),0) actual_cents
+    FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id
+    WHERE sbi.commercial_source_type='OUTSOURCING_RECEIPT_ITEM'
+      AND sbi.commercial_source_id=? AND sb.status='POSTED'`).get(receiptId);
+  const returned = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) quantity
+    FROM outsourcing_finished_returns WHERE outsourcing_receipt_id=? AND business_status='CONFIRMED'`).get(receiptId).quantity);
+  const credits = db.prepare(`SELECT COALESCE(SUM(c.billed_quantity),0) credited_quantity,
+    COALESCE(SUM(c.credit_cents),0) credit_cents
+    FROM outsourcing_finished_return_credits c
+    JOIN outsourcing_finished_returns r ON r.id=c.return_id
+    WHERE r.outsourcing_receipt_id=? AND r.business_status='CONFIRMED'`).get(receiptId);
+  const netBilledQuantity = Number(billed.billed_quantity) - Number(credits.credited_quantity);
+  const netActualCents = Number(billed.actual_cents) - Number(credits.credit_cents);
+  const retainedQuantity = Math.max(0, Number(receipt.quantity) - returned);
+  const basisStatus = netBilledQuantity + 1e-9 >= retainedQuantity ? 'FINAL' : 'PROVISIONAL';
+  const actualCents = Number(billed.billed_quantity) > 0 ? netActualCents : null;
+  const varianceCents = actualCents === null ? null : actualCents - Number(receipt.processing_fee_cents);
+  db.prepare(`INSERT INTO outsourcing_cost_evidences(
+    id,outsourcing_receipt_id,processing_po_id,material_consumed_value_cents,
+    processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at
+  ) VALUES(?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(outsourcing_receipt_id) DO UPDATE SET
+    processing_po_id=excluded.processing_po_id,
+    material_consumed_value_cents=excluded.material_consumed_value_cents,
+    processing_fee_provisional_cents=excluded.processing_fee_provisional_cents,
+    processing_fee_actual_cents=excluded.processing_fee_actual_cents,
+    variance_cents=excluded.variance_cents,
+    basis_status=excluded.basis_status,
+    calculated_at=excluded.calculated_at`).run(
+    randomUUID(), receiptId, receipt.processing_po_id,
+    Number(receipt.backflush_material_value_cents), Number(receipt.processing_fee_cents),
+    actualCents, varianceCents, basisStatus, calculatedAt,
+  );
+  return db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receiptId);
+}
 
 /**
  * OUT-17 / OUT-19 atomic outsourcing receipt confirm.
@@ -87,6 +130,18 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
     db.prepare('UPDATE inventory SET quantity=quantity+?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(receipt.quantity, now, 'warehouse-001', order.product_id);
     // Update receipt with cost evidence: consumed material value + processing fee provisional.
     db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, updated_at=? WHERE id=?`).run(totalMaterialValue, totalMaterialValue + Number(receipt.processing_fee_cents), now, receiptId);
+    db.prepare(`INSERT INTO outsourcing_cost_evidences(
+      id,outsourcing_receipt_id,processing_po_id,material_consumed_value_cents,
+      processing_fee_provisional_cents,processing_fee_actual_cents,variance_cents,basis_status,calculated_at
+    ) VALUES(?,?,?,?,?,NULL,NULL,'PROVISIONAL',?)
+    ON CONFLICT(outsourcing_receipt_id) DO UPDATE SET
+      processing_po_id=excluded.processing_po_id,
+      material_consumed_value_cents=excluded.material_consumed_value_cents,
+      processing_fee_provisional_cents=excluded.processing_fee_provisional_cents,
+      calculated_at=excluded.calculated_at`).run(
+      randomUUID(), receiptId, receipt.processing_po_id, totalMaterialValue,
+      Number(receipt.processing_fee_cents), now,
+    );
     audit(db, actor.id, 'CONFIRM', 'OUTSOURCING_RECEIPT', receiptId, `material_value=${totalMaterialValue}; processing_fee=${receipt.processing_fee_cents}`);
   });
   return send(res, 200, { ok: true, totalMaterialValueCents: totalMaterialValue, incrementalRows });
@@ -130,7 +185,12 @@ export async function createProcessingFeeBill(db, req, res, actor) {
       const line = body.lines[i];
       const item = db.prepare(`SELECT ori.*, orr.received_date, orr.processing_fee_cents, orr.supplier_id FROM outsourcing_receipt_items ori JOIN outsourcing_receipts orr ON orr.id=ori.receipt_id WHERE ori.id=?`).get(line.outsourcingReceiptItemId);
       // Row lock via UPDATE; SQLite serializes via BEGIN IMMEDIATE.
-      const eligibleQty = Number(item.quantity);
+      const returnedQty = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_finished_returns
+        WHERE outsourcing_receipt_id=? AND business_status='CONFIRMED'`).get(item.receipt_id).q);
+      const priorItemQty = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_receipt_items
+        WHERE receipt_id=? AND line_no<?`).get(item.receipt_id, item.line_no).q);
+      const returnedAgainstItem = Math.min(Number(item.quantity), Math.max(0, returnedQty - priorItemQty));
+      const eligibleQty = Number(item.quantity) - returnedAgainstItem;
       const existingReserved = Number(db.prepare(`SELECT COALESCE(SUM(sbi.base_quantity_num*1.0/sbi.base_quantity_den),0) q
         FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id
         WHERE sbi.source_outsourcing_receipt_item_id=? AND sb.status IN ('DRAFT','WAITING_MATCH','POSTED')`).get(item.id).q);
@@ -167,10 +227,14 @@ export async function postProcessingFeeBill(db, req, res, actor, billId) {
   const now = new Date().toISOString();
   transaction(db, () => {
     db.prepare("UPDATE supplier_bills SET status='POSTED', posted_by=?, posted_at=? WHERE id=?").run(actor.id, now, billId);
-    // Create canonical AP for the bill: use existing ensurePayableSource via app.js handler signature
-    // (this is the cross-Domain Finance primitive; we only call the existing hook from settlement-core).
-    db.prepare(`INSERT OR IGNORE INTO account_payables(id,voucher_no,supplier_id,source_type,source_id,amount_cents,paid_cents,write_off_cents,status,due_date,creator_id,created_at)
-      VALUES(?,?,?,?,?,?,0,0,'PENDING',?,?,?)`).run(`ap-${billId}`, bill.bill_no, bill.supplier_id, 'SUPPLIER_BILL', billId, bill.net_cents, bill.bill_date, actor.id, now);
+    ensurePayableSource(db, {
+      id: billId, sourceType: 'SUPPLIER_BILL', sourceNo: bill.bill_no,
+      partyId: bill.supplier_id, businessDate: bill.bill_date,
+      effectCents: Number(bill.gross_cents), creatorId: bill.creator_id, createdAt: bill.created_at,
+    });
+    const receiptIds = db.prepare(`SELECT DISTINCT commercial_source_id receipt_id FROM supplier_bill_items
+      WHERE bill_id=? AND commercial_source_type='OUTSOURCING_RECEIPT_ITEM'`).all(billId);
+    for (const row of receiptIds) refreshOutsourcingCostEvidence(db, row.receipt_id, now);
     audit(db, actor.id, 'POST', 'SUPPLIER_BILL', billId, bill.bill_no);
   });
   return send(res, 200, { ok: true });
@@ -187,20 +251,73 @@ export async function createFinishedReturn(db, req, res, actor) {
   const receipt = db.prepare('SELECT * FROM outsourcing_receipts WHERE id=?').get(body.outsourcingReceiptId);
   if (!receipt) throw new HttpError(404, '委外收货不存在');
   if (receipt.business_status !== 'EFFECTED') throw new HttpError(409, '只有已生效的收货可以退货');
-  if (Number(body.quantity) > Number(receipt.quantity)) throw new HttpError(409, '退货数量超过收货数量');
+  const returnQuantity = Number(body.quantity);
+  if (!Number.isFinite(returnQuantity) || returnQuantity <= 0) throw new HttpError(400, '退货数量必须大于 0');
   const id = randomUUID(); const now = new Date().toISOString();
   const returnNo = 'OSRET-' + Date.now().toString().slice(-10);
+  let commercialCreditCents = 0;
+  let commercialCreditCount = 0;
   transaction(db, () => {
+    const alreadyReturned = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM outsourcing_finished_returns
+      WHERE outsourcing_receipt_id=? AND business_status='CONFIRMED'`).get(receipt.id).q);
+    if (returnQuantity > Number(receipt.quantity) - alreadyReturned + 1e-9) {
+      throw new HttpError(409, '退货数量超过收货剩余数量');
+    }
     const productId = db.prepare('SELECT product_id FROM outsourcing_orders WHERE id=?').get(receipt.order_id).product_id;
     db.prepare(`INSERT INTO outsourcing_finished_returns(id,return_no,outsourcing_receipt_id,supplier_id,quantity,return_date,business_status,creator_id,created_at)
-      VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, returnNo, receipt.id, receipt.supplier_id, Number(body.quantity), body.returnDate || now.slice(0, 10), actor.id, now);
+      VALUES(?,?,?,?,?,?,'CONFIRMED',?,?)`).run(id, returnNo, receipt.id, receipt.supplier_id, returnQuantity, body.returnDate || now.slice(0, 10), actor.id, now);
     // Finished inventory reversal: deduct from inventory + insert OUT transaction.
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
-      VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', productId, Number(body.quantity), id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
-    db.prepare('UPDATE inventory SET quantity=quantity-?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(Number(body.quantity), now, 'warehouse-001', productId);
+      VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', productId, returnQuantity, id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
+    const inventory = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get('warehouse-001', productId);
+    if (!inventory || Number(inventory.quantity) + 1e-9 < returnQuantity) throw new HttpError(409, '委外完工库存不足');
+    db.prepare('UPDATE inventory SET quantity=quantity-?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(returnQuantity, now, 'warehouse-001', productId);
+
+    let remainingBilledReturn = returnQuantity;
+    const postedLines = db.prepare(`SELECT sbi.id bill_item_id,sbi.bill_id,
+      sbi.base_quantity_num*1.0/sbi.base_quantity_den billed_quantity,sbi.gross_cents,
+      sb.supplier_id,sb.bill_no
+      FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id
+      WHERE sbi.commercial_source_type='OUTSOURCING_RECEIPT_ITEM'
+        AND sbi.commercial_source_id=? AND sb.status='POSTED'
+      ORDER BY sb.posted_at,sb.id,sbi.line_no,sbi.id`).all(receipt.id);
+    for (const line of postedLines) {
+      if (remainingBilledReturn <= 1e-9) break;
+      const prior = db.prepare(`SELECT COALESCE(SUM(billed_quantity),0) quantity,
+        COALESCE(SUM(credit_cents),0) cents FROM outsourcing_finished_return_credits
+        WHERE supplier_bill_item_id=?`).get(line.bill_item_id);
+      const availableQuantity = Number(line.billed_quantity) - Number(prior.quantity);
+      const availableCents = Number(line.gross_cents) - Number(prior.cents);
+      if (availableQuantity <= 1e-9 || availableCents <= 0) continue;
+      const creditedQuantity = Math.min(remainingBilledReturn, availableQuantity);
+      const creditCents = Math.abs(creditedQuantity - availableQuantity) <= 1e-9
+        ? availableCents
+        : Math.round(Number(line.gross_cents) * creditedQuantity / Number(line.billed_quantity));
+      const creditNote = createCommercialCreditNote(db, {
+        side: 'AP', sourceId: line.bill_id, grossCents: creditCents,
+        creditDate: body.returnDate || now.slice(0, 10), adjustmentType: 'RETURN',
+        reason: `委外完工退货 ${returnNo}`, actorId: actor.id,
+        idempotencyKey: `OUTSOURCING_FINISHED_RETURN:${id}:${line.bill_item_id}`,
+      });
+      db.prepare(`INSERT INTO outsourcing_finished_return_credits(
+        id,return_id,supplier_bill_id,supplier_bill_item_id,commercial_credit_note_id,
+        billed_quantity,credit_cents,created_at
+      ) VALUES(?,?,?,?,?,?,?,?)`).run(
+        randomUUID(), id, line.bill_id, line.bill_item_id, creditNote.id,
+        creditedQuantity, creditCents, now,
+      );
+      commercialCreditCents += creditCents;
+      commercialCreditCount += 1;
+      remainingBilledReturn -= creditedQuantity;
+    }
+    refreshOutsourcingCostEvidence(db, receipt.id, now);
     audit(db, actor.id, 'CREATE', 'OUTSOURCING_FINISHED_RETURN', id, returnNo);
   });
-  return send(res, 201, { id, returnNo });
+  return send(res, 201, {
+    id, returnNo,
+    commercialState: commercialCreditCount ? 'BILLED_CREDIT_POSTED' : 'UNBILLED_NO_AP_CREDIT',
+    commercialCreditCents,
+  });
 }
 
 /**

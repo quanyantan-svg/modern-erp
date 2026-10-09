@@ -53,6 +53,10 @@ export function getOutsourcingExecutionReport(db, res, actor, url) {
     COALESCE((SELECT SUM(quantity) FROM outsourcing_receipts WHERE order_id=oo.id AND business_status<>'CANCELLED'),0) cumulative_finished,
     oo.order_quantity order_quantity,
     COALESCE((SELECT SUM(processing_fee_cents) FROM outsourcing_receipts WHERE order_id=oo.id AND business_status<>'CANCELLED'),0) processing_fee_cents,
+    COALESCE((SELECT SUM(oce.material_consumed_value_cents) FROM outsourcing_cost_evidences oce JOIN outsourcing_receipts ore ON ore.id=oce.outsourcing_receipt_id WHERE ore.order_id=oo.id AND ore.business_status<>'CANCELLED'),0) material_consumed_value_cents,
+    COALESCE((SELECT SUM(oce.processing_fee_actual_cents) FROM outsourcing_cost_evidences oce JOIN outsourcing_receipts ore ON ore.id=oce.outsourcing_receipt_id WHERE ore.order_id=oo.id AND ore.business_status<>'CANCELLED'),0) processing_fee_actual_cents,
+    COALESCE((SELECT SUM(oce.variance_cents) FROM outsourcing_cost_evidences oce JOIN outsourcing_receipts ore ON ore.id=oce.outsourcing_receipt_id WHERE ore.order_id=oo.id AND ore.business_status<>'CANCELLED'),0) processing_fee_variance_cents,
+    COALESCE((SELECT SUM(CASE WHEN oce.basis_status='FINAL' THEN 0 ELSE 1 END) FROM outsourcing_receipts ore LEFT JOIN outsourcing_cost_evidences oce ON oce.outsourcing_receipt_id=ore.id WHERE ore.order_id=oo.id AND ore.business_status<>'CANCELLED'),0) provisional_cost_evidence_count,
     COALESCE((SELECT SUM(backflushed_quantity) FROM outsourcing_material_list WHERE order_id=oo.id),0) backflushed_total
     FROM outsourcing_orders oo JOIN suppliers s ON s.id=oo.supplier_id JOIN products p ON p.id=oo.product_id
     WHERE ${where.join(' AND ')}
@@ -70,6 +74,10 @@ export function getOutsourcingExecutionReport(db, res, actor, url) {
       cumulativeFinished: Number(row.cumulative_finished),
       orderQuantity: Number(row.order_quantity),
       processingFeeCents: Number(row.processing_fee_cents),
+      materialConsumedValueCents: Number(row.material_consumed_value_cents),
+      processingFeeActualCents: Number(row.processing_fee_actual_cents),
+      processingFeeVarianceCents: Number(row.processing_fee_variance_cents),
+      costEvidenceStatus: Number(row.provisional_cost_evidence_count) === 0 ? 'FINAL' : 'PROVISIONAL',
       backflushedTotal: Number(row.backflushed_total),
       progress: Number(row.order_quantity) > 0 ? Math.min(1, Number(row.cumulative_finished) / Number(row.order_quantity)) : 0,
     }));

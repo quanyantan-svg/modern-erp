@@ -82,11 +82,11 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Procurement & Outsourcing
 
-- Sourcing
-- Supplier Allocation / Quota
-- VMI
-- 独立 Receipt Notice/收料语义
-- 完整 Outsourcing 子域
+- 已实现 Sourcing、Supplier Allocation / Quota、采购价格与折扣、PO Change、Receipt Notice、采购退货四分支、Procurement Scan；
+- VMI business layer 已实现；Inventory owner-dimension 物理动作当前明确 fail closed；
+- Outsourcing Order、材料发/退/补、倒冲、收货、加工费 Supplier Bill/AP、成本证据、完工退货商业贷项、差异/WIP/报表已实现；
+- 2026-10-09 functional browser UAT 为 25/28 PASS；尚未关闭：authoritative Planning handoff consumption、Completion Receipt Notice、`OUTSOURCING_RECEIPT` Inspection；
+- responsive browser matrix 为 7 surfaces × 320/390/430/680 = 28/28 PASS；disposable MySQL 8 integration/concurrency/performance gates PASS。
 
 ### Manufacturing & Quality
 

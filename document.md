@@ -2165,3 +2165,20 @@ dependency 不进入 capability disposition 计数；它仅是 acceptance depend
 ---
 
 **PROCUREMENT & OUTSOURCING DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR USER REVIEW**
+
+### 31.11 Definitive Final Acceptance Evidence（2026-10-09）
+
+- Domain source-of-truth checkpoint：`1964648`；`document.md` / `solution.md` / `log/2026-10-08.md` 已独立提交，`APPLY_GUIDE.md` 保持用户原有 dirty state；
+- Functional Browser UAT：真实 Playwright Chromium + browser-authenticated mutation，`25/28 PASS`；
+- Responsive Browser UAT：7 surfaces × 4 widths（320 / 390 / 430 / 680）=`28/28 PASS`；
+- Purchase Return 四分支 persisted voucher proof：LEGACY_DIRECT、SEPARATE unbilled、SEPARATE billed、10 received / 4 billed / 7 return 均 PASS；partial split = AP/commercial credit 4,000 cents + GRNI reversal 3,000 cents；
+- OUT-21：`outsourcing_cost_evidences` 保存 consumed material carrying value、provisional fee、POSTED Supplier Bill actual fee、variance 与 `PROVISIONAL / FINAL`；
+- OUT-22：unbilled finished return 不制造 AP credit；billed return 通过 canonical Supplier Credit Note + `applyCreditAdjustment` 降低 AP，并保存 receipt item / bill item / credit note trace；
+- Focused inventory：12 files / 12 suites / 48 tests / 48 pass / 0 fail / 0 skipped / 0 todo；
+- disposable MySQL 8.0.37：`test:mysql` PASS、`test:mysql:concurrency` 13/13 PASS、`test:mysql:performance` PASS（20 writers / 400 operations / 0 errors）；
+- Final Acceptance blocker（不得 Freeze）：
+  1. `UAT-15`：Outsourcing Order 接受任意 `planningHandoffId`，但未重读/更新 authoritative `planning_outsource_handoffs`；
+  2. `UAT-21`：没有 executable Outsourcing Completion Receipt Notice contract；普通 Receipt Notice 对 Outsourcing source 返回 404/409；
+  3. `UAT-22`：IQC API 只接受 Purchase Receipt，`OUTSOURCING_RECEIPT` source contract 返回 400。
+
+因此本 Domain 当前状态为：`NOT READY`。其余 51 项不能抵消上述 3 项 acceptance failure；不得 Freeze。

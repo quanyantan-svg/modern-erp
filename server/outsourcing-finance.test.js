@@ -49,6 +49,12 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     const row = fixture.db.prepare("SELECT business_status, backflush_material_value_cents, total_cost_cents FROM outsourcing_receipts WHERE id=?").get(receipt.data.id);
     assert.equal(row.business_status, 'EFFECTED');
     assert.ok(Number(row.total_cost_cents) >= 30000);
+    const evidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.data.id);
+    assert.equal(evidence.material_consumed_value_cents, row.backflush_material_value_cents);
+    assert.equal(evidence.processing_fee_provisional_cents, 30000);
+    assert.equal(evidence.processing_fee_actual_cents, null);
+    assert.equal(evidence.variance_cents, null);
+    assert.equal(evidence.basis_status, 'PROVISIONAL');
   });
 
   test('OUT-20 processing fee bill: multi-bill partial, multi-receipt, race-safe reservation', async () => {
@@ -95,6 +101,23 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
     assert.equal(post.status, 200);
     const ap = fixture.db.prepare("SELECT amount_cents FROM account_payables WHERE source_id=?").get(billA.data.id);
     assert.equal(ap.amount_cents, 15000);
+    const provisional = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(r1.data.id);
+    assert.equal(provisional.processing_fee_actual_cents, 15000);
+    assert.equal(provisional.variance_cents, -45000);
+    assert.equal(provisional.basis_status, 'PROVISIONAL');
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billB.data.id}/post`, fixture.tokens.admin)).status, 200);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${billC.data.id}/post`, fixture.tokens.admin)).status, 200);
+    const finalEvidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(r1.data.id);
+    assert.equal(finalEvidence.material_consumed_value_cents, fixture.db.prepare('SELECT backflush_material_value_cents n FROM outsourcing_receipts WHERE id=?').get(r1.data.id).n);
+    assert.equal(finalEvidence.processing_fee_provisional_cents, 60000);
+    assert.equal(finalEvidence.processing_fee_actual_cents, 50000);
+    assert.equal(finalEvidence.variance_cents, -10000);
+    assert.equal(finalEvidence.basis_status, 'FINAL');
+    const report = await fixture.request('GET', '/api/reports/outsourcing/execution', fixture.tokens.admin);
+    const reportRow = report.data.report.find((entry) => entry.orderId === orderId);
+    assert.equal(reportRow.processingFeeActualCents, 50000);
+    assert.equal(reportRow.processingFeeVarianceCents, -10000);
+    assert.equal(reportRow.costEvidenceStatus, 'PROVISIONAL', 'second receipt remains provisional');
   });
 
   test('OUT-22 Finished Return: source confirmed receipt + inventory reversal + LOT/SERIAL provenance', async () => {
@@ -112,10 +135,61 @@ describe('Procurement Wave H/I closure: outsourcing receipt, processing fee bill
       outsourcingReceiptId: receipt.data.id, quantity: 5, returnDate: isoDate(0),
     });
     assert.equal(ret.status, 201, ret.data.error);
+    assert.equal(ret.data.commercialState, 'UNBILLED_NO_AP_CREDIT');
+    assert.equal(ret.data.commercialCreditCents, 0);
+    assert.equal(fixture.db.prepare("SELECT COUNT(*) n FROM financial_credit_adjustments WHERE source_type='SUPPLIER_CREDIT_NOTE'").get().n, 0);
+    const cumulativeOverRet = await fixture.request('POST', '/api/procurement/outsourcing/finished-returns', fixture.tokens.admin, {
+      outsourcingReceiptId: receipt.data.id, quantity: 16, returnDate: isoDate(0),
+    });
+    assert.equal(cumulativeOverRet.status, 409);
     const overRet = await fixture.request('POST', '/api/procurement/outsourcing/finished-returns', fixture.tokens.admin, {
       outsourcingReceiptId: receipt.data.id, quantity: 9999, returnDate: isoDate(0),
     });
     assert.equal(overRet.status, 409);
+  });
+
+  test('OUT-22 billed finished return: canonical supplier credit reduces AP and preserves trace', async () => {
+    await qualifyOutsourceSupplier();
+    const orderId = await createReleasedOrderWithMaterial();
+    const matId = fixture.db.prepare('SELECT id FROM outsourcing_material_list WHERE order_id=?').get(orderId).id;
+    await fixture.request('POST', `/api/procurement/outsourcing/orders/${orderId}/issues`, fixture.tokens.admin, {
+      materialListId: matId, quantity: 10, fromWarehouseId: 'warehouse-001', toWarehouseId: 'warehouse-002', issuedDate: isoDate(0),
+    });
+    const receipt = await fixture.request('POST', '/api/procurement/outsourcing/receipts', fixture.tokens.admin, {
+      orderId, quantity: 10, receivedDate: isoDate(0), processingFeeCents: 10000,
+    });
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/receipts/${receipt.data.id}/confirm`, fixture.tokens.admin)).status, 200);
+    const receiptItemId = `ori-billed-return-${receipt.data.id}`;
+    fixture.db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no)
+      VALUES(?,?,?,10,1000,1)`).run(receiptItemId, receipt.data.id, 'product-001');
+    const bill = await fixture.request('POST', '/api/procurement/outsourcing/processing-fee-bills', fixture.tokens.admin, {
+      supplierId: 'supplier-001', supplierInvoiceNo: `INV-${receipt.data.id}`, billDate: isoDate(0),
+      idempotencyKey: `bill-${receipt.data.id}`,
+      lines: [{ outsourcingReceiptItemId: receiptItemId, quantity: 10, unitPriceCents: 1000 }],
+    });
+    assert.equal(bill.status, 201, bill.data.error);
+    assert.equal((await fixture.request('POST', `/api/procurement/outsourcing/processing-fee-bills/${bill.data.id}/post`, fixture.tokens.admin)).status, 200);
+    const payableBefore = fixture.db.prepare("SELECT id,open_amount_cents FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=?").get(bill.data.id);
+    assert.equal(payableBefore.open_amount_cents, 10000);
+    const ret = await fixture.request('POST', '/api/procurement/outsourcing/finished-returns', fixture.tokens.admin, {
+      outsourcingReceiptId: receipt.data.id, quantity: 4, returnDate: isoDate(0),
+    });
+    assert.equal(ret.status, 201, ret.data.error);
+    assert.equal(ret.data.commercialState, 'BILLED_CREDIT_POSTED');
+    assert.equal(ret.data.commercialCreditCents, 4000);
+    const trace = fixture.db.prepare('SELECT * FROM outsourcing_finished_return_credits WHERE return_id=?').get(ret.data.id);
+    assert.equal(trace.supplier_bill_id, bill.data.id);
+    assert.equal(trace.billed_quantity, 4);
+    assert.equal(trace.credit_cents, 4000);
+    const note = fixture.db.prepare("SELECT * FROM commercial_credit_notes WHERE id=? AND side='AP' AND status='POSTED'").get(trace.commercial_credit_note_id);
+    assert.equal(note.gross_cents, 4000);
+    const adjustment = fixture.db.prepare("SELECT * FROM financial_credit_adjustments WHERE source_type='SUPPLIER_CREDIT_NOTE' AND source_id=? AND side='AP'").get(note.id);
+    assert.equal(adjustment.amount_cents, 4000);
+    const payableAfter = fixture.db.prepare('SELECT open_amount_cents FROM account_payables WHERE id=?').get(payableBefore.id);
+    assert.equal(payableAfter.open_amount_cents, 6000);
+    const evidence = fixture.db.prepare('SELECT * FROM outsourcing_cost_evidences WHERE outsourcing_receipt_id=?').get(receipt.data.id);
+    assert.equal(evidence.processing_fee_actual_cents, 6000);
+    assert.equal(evidence.basis_status, 'FINAL');
   });
 
   test('OUT-23 difference allocation: preview → apply with quantity conservation', async () => {
