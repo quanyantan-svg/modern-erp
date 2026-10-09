@@ -4,22 +4,19 @@ import { audit } from '../lib/audit.js';
 import {
   HttpError, allow, allowAny, assertAllowedFields, readJson, send,
 } from '../lib/http.js';
+import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 
 const VIEW_PERMISSIONS = ['VMI_VIEW', 'VMI_MANAGE'];
 
 function assertViewPermission(actor) { allowAny(actor, VIEW_PERMISSIONS); }
 function assertManagePermission(actor) { allow(actor, 'VMI_MANAGE'); }
 
+// V21 — Inventory owner dimension is now available.
+// All VMI physical mutations route through applyInventoryMutation dispatcher
+// (see solution.md §27.21 / §27.43.1). The legacy fail-closed helper has
+// been removed.
 function assertInventoryOwnerDimension() {
-  // Cross-domain dependency: physical owner-dimensional mutation must come
-  // through the Inventory contract. If the current Inventory domain does not
-  // support owner-dimension mutations, the business layer fails closed.
-  // The check below is intentionally fail-closed: any missing owner column
-  // in canonical inventory valuation prevents the mutation.
-  throw new HttpError(
-    409,
-    'INVENTORY_OWNER_DIMENSION_UNAVAILABLE: 库存 owner 维度尚未上线，VMI 业务层无法触发物理库存变更',
-  );
+  // No-op. Owner dimension is now available through Inventory domain.
 }
 
 function rowToAgreement(row) {
@@ -112,10 +109,30 @@ export async function confirmVmiReceipt(db, req, res, actor, receiptId) {
   const receipt = db.prepare('SELECT * FROM vmi_receipts WHERE id=?').get(receiptId);
   if (!receipt) throw new HttpError(404, 'VMI 收货不存在');
   if (receipt.business_status !== 'PENDING') throw new HttpError(409, '只有待确认状态可以确认');
-  // Cross-domain dependency: physical mutation must go through Inventory owner dimension.
-  assertInventoryOwnerDimension();
+  // V21 — physical mutation through applyInventoryMutation.
+  // VMI receipt: SUPPLIER-owned @ enterprise warehouse.
   const now = new Date().toISOString();
   transaction(db, () => {
+    applyInventoryMutation({
+      db,
+      sourceType: 'VMI_RECEIPT',
+      sourceId: receipt.id,
+      sourceItemId: receipt.id,
+      sourceNo: receipt.receipt_no,
+      businessDate: receipt.received_date || now.slice(0, 10),
+      actor: { id: actor.id },
+      movementKind: 'IN',
+      quantity: Number(receipt.quantity),
+      toPosition: {
+        productId: receipt.product_id,
+        warehouseId: receipt.warehouse_id,
+        ownerType: 'SUPPLIER',
+        ownerId: receipt.supplier_id,
+        stockStatus: 'AVAILABLE',
+      },
+      idempotencyKey: `VMI_RECEIPT:${receipt.id}`,
+      remark: `VMI receipt ${receipt.receipt_no}`,
+    });
     db.prepare('UPDATE vmi_receipts SET business_status=?,updated_at=? WHERE id=?').run('CONFIRMED', now, receiptId);
     audit(db, actor.id, 'CONFIRM', 'VMI_RECEIPT', receiptId, receipt.receipt_no);
   });
@@ -131,13 +148,31 @@ export async function createVmiConsumption(db, req, res, actor) {
   if (receipt.business_status !== 'CONFIRMED') throw new HttpError(409, '只有已确认收货可以消耗');
   const quantity = Number(body.quantity);
   if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, '数量必须大于 0');
-  // Cross-domain dependency: consumption requires Inventory owner dimension.
-  assertInventoryOwnerDimension();
+  // V21 — physical consumption through applyInventoryMutation (SUPPLIER-owned stock).
   const id = randomUUID(); const now = new Date().toISOString();
   const consumptionNo = 'VMI-CONS-' + Date.now().toString().slice(-10);
   transaction(db, () => {
+    applyInventoryMutation({
+      db,
+      sourceType: 'VMI_CONSUMPTION',
+      sourceId: id,
+      sourceItemId: id,
+      businessDate: body.consumedDate || now.slice(0, 10),
+      actor: { id: actor.id },
+      movementKind: 'OUT',
+      quantity,
+      fromPosition: {
+        productId: receipt.product_id,
+        warehouseId: receipt.warehouse_id,
+        ownerType: 'SUPPLIER',
+        ownerId: receipt.supplier_id,
+        stockStatus: 'AVAILABLE',
+      },
+      idempotencyKey: `VMI_CONSUMPTION:${id}`,
+      remark: `VMI consumption ${consumptionNo}`,
+    });
     db.prepare(`INSERT INTO vmi_consumptions(id,consumption_no,vmi_receipt_id,quantity,consumed_date,destination,remark,business_status,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,'PENDING',?,?,?)`).run(id, consumptionNo, receipt.id, quantity, body.consumedDate || now.slice(0, 10), body.destination || 'PRODUCTION', body.remark || '', actor.id, now, now);
+      VALUES(?,?,?,?,?,?,?,'CONFIRMED',?,?,?)`).run(id, consumptionNo, receipt.id, quantity, body.consumedDate || now.slice(0, 10), body.destination || 'PRODUCTION', body.remark || '', actor.id, now, now);
     audit(db, actor.id, 'CREATE', 'VMI_CONSUMPTION', id, consumptionNo);
   });
   return send(res, 201, { id, consumptionNo });
@@ -153,13 +188,38 @@ export async function transferVmiOwnership(db, req, res, actor) {
   // Idempotency: one ownership transfer per VMI receipt.
   const existing = db.prepare('SELECT id FROM vmi_ownership_transfers WHERE vmi_receipt_id=? AND business_status<>'+ "'CANCELLED'").get(receipt.id);
   if (existing) throw new HttpError(409, '同一 VMI 收货不能重复转移所有权');
-  // Cross-domain dependency: physical owner change requires Inventory owner dimension.
-  assertInventoryOwnerDimension();
+  // V21 — physical owner change through applyInventoryMutation.
   const id = randomUUID(); const now = new Date().toISOString();
   const transferNo = 'VMI-XFER-' + Date.now().toString().slice(-10);
   transaction(db, () => {
+    applyInventoryMutation({
+      db,
+      sourceType: 'VMI_OWNERSHIP_TRANSFER',
+      sourceId: id,
+      sourceItemId: id,
+      businessDate: body.transferDate || now.slice(0, 10),
+      actor: { id: actor.id },
+      movementKind: 'OWNER_CHANGE',
+      quantity: Number(body.settlementQuantity),
+      fromPosition: {
+        productId: receipt.product_id,
+        warehouseId: receipt.warehouse_id,
+        ownerType: 'SUPPLIER',
+        ownerId: receipt.supplier_id,
+        stockStatus: 'AVAILABLE',
+      },
+      toPosition: {
+        productId: receipt.product_id,
+        warehouseId: receipt.warehouse_id,
+        ownerType: 'ENTERPRISE',
+        ownerId: null,
+        stockStatus: 'AVAILABLE',
+      },
+      idempotencyKey: `VMI_OWNERSHIP_TRANSFER:${id}`,
+      remark: `VMI ownership transfer ${transferNo}`,
+    });
     db.prepare(`INSERT INTO vmi_ownership_transfers(id,transfer_no,vmi_receipt_id,settlement_quantity,settlement_amount_cents,transfer_date,business_status,supplier_bill_id,creator_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,'PENDING',?,?,?,?)`).run(id, transferNo, receipt.id, Number(body.settlementQuantity), Number(body.settlementAmountCents), body.transferDate || now.slice(0, 10), body.supplierBillId || null, actor.id, now, now);
+      VALUES(?,?,?,?,?,?,'CONFIRMED',?,?,?,?)`).run(id, transferNo, receipt.id, Number(body.settlementQuantity), Number(body.settlementAmountCents), body.transferDate || now.slice(0, 10), body.supplierBillId || null, actor.id, now, now);
     db.prepare('UPDATE vmi_receipts SET business_status=?,updated_at=? WHERE id=?').run('TRANSFERRED', now, receipt.id);
     audit(db, actor.id, 'CREATE', 'VMI_OWNERSHIP_TRANSFER', id, transferNo);
   });

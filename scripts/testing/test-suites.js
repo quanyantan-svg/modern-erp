@@ -97,6 +97,11 @@ const FULL = [
   'server/inventory-position-wave-a.test.js',
   'server/inventory-position-integration.test.js',
 
+  // ----- V21 Inventory & Warehouse Domain Closure — Wave B mutation contract -----
+  // applyInventoryMutation dispatcher + availability model + locks +
+  // VMI physical owner dimensional mutation + lock ordering.
+  'server/inventory-mutation-wave-b.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 
