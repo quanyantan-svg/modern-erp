@@ -586,7 +586,67 @@ export function migrateProcurementOutsourcingSchema(db) {
       FOREIGN KEY (receipt_id) REFERENCES outsourcing_receipts(id),
       FOREIGN KEY (product_id) REFERENCES products(id)
     );
+    CREATE INDEX IF NOT EXISTS idx_outsourcing_receipt_items_receipt ON outsourcing_receipt_items(receipt_id);
+
+    CREATE TABLE IF NOT EXISTS outsourcing_finished_returns (
+      id TEXT PRIMARY KEY,
+      return_no TEXT NOT NULL UNIQUE,
+      outsourcing_receipt_id TEXT NOT NULL,
+      supplier_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      return_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (outsourcing_receipt_id) REFERENCES outsourcing_receipts(id),
+      FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS outsourcing_wip_transfers (
+      id TEXT PRIMARY KEY,
+      transfer_no TEXT NOT NULL UNIQUE,
+      source_order_id TEXT NOT NULL,
+      target_order_id TEXT NOT NULL,
+      material_list_id TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      transfer_date TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'CONFIRMED',
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (source_order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (target_order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS outsourcing_period_differences (
+      id TEXT PRIMARY KEY,
+      order_id TEXT NOT NULL,
+      material_list_id TEXT NOT NULL,
+      expected_quantity REAL NOT NULL,
+      actual_quantity REAL NOT NULL,
+      difference_quantity REAL NOT NULL,
+      period_key TEXT NOT NULL,
+      business_status TEXT NOT NULL DEFAULT 'PREVIEW',
+      applied_supplement_id TEXT,
+      creator_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (order_id) REFERENCES outsourcing_orders(id),
+      FOREIGN KEY (material_list_id) REFERENCES outsourcing_material_list(id),
+      FOREIGN KEY (creator_id) REFERENCES users(id),
+      CHECK(business_status IN ('PREVIEW','ALLOCATED','APPLIED','CANCELLED'))
+    );
   `);
+
+  // Item-level commercial source for Supplier Bill (extending canonical supplier_bill_items).
+  safeAddColumn(db, 'supplier_bill_items', 'commercial_source_type', "commercial_source_type TEXT");
+  safeAddColumn(db, 'supplier_bill_items', 'commercial_source_id', 'commercial_source_id TEXT');
+  safeAddColumn(db, 'supplier_bill_items', 'commercial_source_item_id', 'commercial_source_item_id TEXT');
+  safeAddColumn(db, 'supplier_bill_items', 'source_outsourcing_receipt_item_id', 'source_outsourcing_receipt_item_id TEXT');
+  safeAddColumn(db, 'supplier_bill_items', 'source_outsourcing_po_line_id', 'source_outsourcing_po_line_id TEXT');
+  safeAddColumn(db, 'supplier_bill_items', 'source_outsourcing_receipt_id', 'source_outsourcing_receipt_id TEXT');
+  safeAddColumn(db, 'supplier_bills', 'source_outsourcing_receipt_id', 'source_outsourcing_receipt_id TEXT');
 
   const now = new Date().toISOString();
   db.prepare(`INSERT OR IGNORE INTO procurement_parameters(

@@ -439,9 +439,24 @@ function createSqliteDatabase(filename) {
   // permission. Order matters: schema columns first so the permission
   // seeder runs against a table set that already accepts the new field.
   migrateV14E2BusinessDate(db);
+  // Procurement & Outsourcing Domain Closure — late additive columns on
+  // tables created by V13 Phase 6E (which runs AFTER the main procurement
+  // migration). safeAddColumn ensures idempotency.
+  lateProcurementColumns(db);
   reconcileSettlementSubledgers(db);
 
   return db;
+}
+
+function lateProcurementColumns(db) {
+  const safeAddColumn = (table, ddl) => { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`); } catch (_) { /* already present */ } };
+  safeAddColumn('supplier_bill_items', 'commercial_source_type TEXT');
+  safeAddColumn('supplier_bill_items', 'commercial_source_id TEXT');
+  safeAddColumn('supplier_bill_items', 'commercial_source_item_id TEXT');
+  safeAddColumn('supplier_bill_items', 'source_outsourcing_receipt_item_id TEXT');
+  safeAddColumn('supplier_bill_items', 'source_outsourcing_po_line_id TEXT');
+  safeAddColumn('supplier_bill_items', 'source_outsourcing_receipt_id TEXT');
+  safeAddColumn('supplier_bills', 'source_outsourcing_receipt_id TEXT');
 }
 
 // V1.4-E2 permission reconciliation helper. Called from seed() after the
