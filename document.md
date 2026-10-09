@@ -2182,3 +2182,7 @@ dependency 不进入 capability disposition 计数；它仅是 acceptance depend
   3. `UAT-22`：IQC API 只接受 Purchase Receipt，`OUTSOURCING_RECEIPT` source contract 返回 400。
 
 因此本 Domain 当前状态为：`NOT READY`。其余 51 项不能抵消上述 3 项 acceptance failure；不得 Freeze。
+
+#### 31.11.1 MySQL concurrency evidence correction（2026-10-09）
+
+`pnpm test:mysql:concurrency` 在 disposable MySQL 8 上为 13/13 PASS，但现有 `server/mysql-phase7b-concurrency.integration.js` 只直接证明通用 row-lock / idempotency、合成的 Purchase Receipt / Supplier Bill / Material Issue 状态竞态及既有库存、结算、期间并发原语。它没有逐项执行本次最终验收指定的 Sourcing allocation、PR→PO、PO Change vs Receipt、Receipt Notice、Planning handoff、Outsourcing Receipt、Processing Fee partial bill、VMI Ownership Transfer 等真实 domain handler race。因此 MySQL gate PASS 不等于这 11 个指定场景已经全部具备 MySQL 实证；该差距是独立 Acceptance blocker，修复前同样不得 Freeze。
