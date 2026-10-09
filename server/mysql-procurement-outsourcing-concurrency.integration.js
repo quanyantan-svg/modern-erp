@@ -30,9 +30,18 @@ function seedCommonFixtures(db) {
   const supplierId = 'sup-po01';
   const productId = 'prod-po01';
   const now = isoDate(0);
+  // Probe table for the 11 procurement/outsourcing races. The schema is
+  // hand-written (not generated from a snapshot) so it must work under
+  // BOTH the SQLite daily path and the disposable MySQL concurrency
+  // gate. MySQL refuses TEXT as PRIMARY KEY without an explicit key
+  // length, so the id column is declared as VARCHAR(128) — the same
+  // convention used by the canonical MySQL schema mapper in
+  // server/database/mysql-schema.js. TEXT and REAL are valid on both
+  // backends for non-keyed columns and do not affect any race
+  // semantics.
   db.exec(`
     CREATE TABLE IF NOT EXISTS race_probe_generic (
-      id TEXT PRIMARY KEY,
+      id VARCHAR(128) PRIMARY KEY,
       scope TEXT NOT NULL,
       counter REAL NOT NULL,
       cap REAL NOT NULL,
@@ -46,6 +55,19 @@ describe('Procurement/Outsourcing domain-specific MySQL race tests (11 races)', 
   let harness; const report = [];
   before(async () => {
     harness = createTempDb({ label: 'mysql-procurement-outsourcing' });
+    // Positive MySQL dialect assertion. If the gate ever silently falls
+    // back to SQLite, every race below would still pass against the
+    // SQLite engine and mask a real MySQL failure. The concurrency gate
+    // already gates SQLite fallback, but a guard here ensures that if a
+    // future refactor of temp-db.js or this suite accidentally routes
+    // through SQLite, the suite fails loud instead of producing a false
+    // green.
+    if (harness.db.dialect !== 'mysql') {
+      throw new Error(
+        `Procurement/Outsourcing MySQL race suite expected db.dialect='mysql' but got '${harness.db.dialect}'. `
+        + `Set ERP_TEST_DB_BACKEND=mysql and ERP_DB_BACKEND=mysql before invoking this suite.`,
+      );
+    }
   });
   after(() => { harness?.cleanup(); });
 
