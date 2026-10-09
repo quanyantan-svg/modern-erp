@@ -7,6 +7,7 @@ import {
 import { createCommercialCreditNote } from './commercial-golive.js';
 import { backflushMaterial } from './outsourcing.js';
 import { ensurePayableSource } from './settlement-core.js';
+import { deriveQualityState } from './quality-gates.js';
 
 const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'];
 const FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE'];
@@ -86,11 +87,10 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       throw new HttpError(409, '处理 PO 与委外订单不兼容');
     }
   }
-  // OUT-18: validate quality. Use canonical deriveQualityState if available.
-  const deriveQuality = (db.modules && db.modules.deriveQualityState) || null;
-  if (typeof deriveQuality === 'function') {
-    const q = deriveQuality(db, 'OUTSOURCING_RECEIPT', receiptId);
-    if (q && q.required && !q.passed) throw new HttpError(409, '必须先通过质检');
+  // OUT-18: validate quality against OUTSOURCING_RECEIPT IQC source.
+  const q = deriveQualityState(db, 'IQC', receiptId, 'OUTSOURCING_RECEIPT');
+  if (!['PASS', 'WAIVED'].includes(q.code)) {
+    throw new HttpError(409, `委外入库单质量门禁未通过：${q.label}`);
   }
   const items = db.prepare('SELECT * FROM outsourcing_receipt_items WHERE receipt_id=? ORDER BY line_no').all(receiptId);
   const now = new Date().toISOString();
@@ -403,32 +403,64 @@ export async function createWipTransfer(db, req, res, actor) {
 /**
  * PRC-26 Procurement Scan: bounded wedge input from scanner/PDA.
  * Resolves document (PO or Notice) + product → adds to canonical Purchase Receipt draft.
+ *
+ * Cross-conversion guard (OUT-17):
+ *   - STANDARD_PURCHASE notice must never resolve to an Outsourcing Receipt;
+ *   - OUTSOURCE notice must never resolve to a Purchase Receipt.
+ *   The notice's business_type must match the requested conversion path.
  */
 export async function procurementScan(db, req, res, actor) {
   assertScanPermission(actor);
   const body = await readJson(req);
-  assertAllowedFields(body, ['scanCode', 'productId', 'warehouseId', 'quantity', 'lotCode', 'serialNumber', 'sourceType', 'sourceId']);
+  assertAllowedFields(body, ['scanCode', 'productId', 'warehouseId', 'quantity', 'lotCode', 'serialNumber', 'sourceType', 'sourceId', 'targetBusinessType']);
   if (!body.scanCode && !body.sourceId) throw new HttpError(400, '必须提供 scanCode 或 sourceId');
+  const targetBusinessType = String(body.targetBusinessType || 'STANDARD_PURCHASE').toUpperCase();
+  if (!['STANDARD_PURCHASE', 'OUTSOURCE'].includes(targetBusinessType)) {
+    throw new HttpError(400, 'targetBusinessType 必须是 STANDARD_PURCHASE 或 OUTSOURCE');
+  }
   let orderId = null;
+  let outsourceOrderId = null;
   if (body.sourceType === 'PURCHASE_ORDER' && body.sourceId) orderId = body.sourceId;
   if (body.sourceType === 'RECEIPT_NOTICE' && body.sourceId) {
-    const notice = db.prepare('SELECT purchase_order_id FROM receipt_notices WHERE id=?').get(body.sourceId);
+    const notice = db.prepare('SELECT id, business_type, purchase_order_id, outsourcing_order_id FROM receipt_notices WHERE id=?').get(body.sourceId);
     if (!notice) throw new HttpError(404, '收货通知不存在');
-    orderId = notice.purchase_order_id;
+    if (notice.business_type !== targetBusinessType) {
+      throw new HttpError(409, `通知单 business_type=${notice.business_type || 'STANDARD_PURCHASE'} 与目标 ${targetBusinessType} 不兼容`);
+    }
+    if (targetBusinessType === 'STANDARD_PURCHASE') {
+      orderId = notice.purchase_order_id;
+    } else {
+      outsourceOrderId = notice.outsourcing_order_id;
+    }
   }
-  if (!orderId) throw new HttpError(400, '无法解析扫描源');
-  const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
-  if (!order) throw new HttpError(404, '采购订单不存在');
-  if (order.status !== 'APPROVED') throw new HttpError(409, '只有已审批订单可扫码');
-  if (order.business_type !== 'STANDARD_PURCHASE') throw new HttpError(409, '委外订单不可走普通扫码收货');
-  // Lookup order item by product id
-  const orderItem = db.prepare('SELECT * FROM purchase_order_items WHERE order_id=? AND product_id=? LIMIT 1').get(orderId, body.productId);
-  if (!orderItem) throw new HttpError(409, '订单中无此产品');
-  // Return scan-resolved draft line. The downstream purchase-receipts POST will pick this up.
+  if (targetBusinessType === 'STANDARD_PURCHASE') {
+    if (!orderId) throw new HttpError(400, '无法解析扫描源');
+    const order = db.prepare('SELECT * FROM purchase_orders WHERE id=?').get(orderId);
+    if (!order) throw new HttpError(404, '采购订单不存在');
+    if (order.status !== 'APPROVED') throw new HttpError(409, '只有已审批订单可扫码');
+    if (order.business_type !== 'STANDARD_PURCHASE') throw new HttpError(409, '委外订单不可走普通扫码收货');
+    const orderItem = db.prepare('SELECT * FROM purchase_order_items WHERE order_id=? AND product_id=? LIMIT 1').get(orderId, body.productId);
+    if (!orderItem) throw new HttpError(409, '订单中无此产品');
+    return send(res, 200, {
+      scanResolution: {
+        businessType: 'STANDARD_PURCHASE',
+        orderId, orderItemId: orderItem.id, productId: body.productId, warehouseId: body.warehouseId,
+        quantity: Number(body.quantity || 0), lotCode: body.lotCode || null, serialNumber: body.serialNumber || null,
+      },
+    });
+  }
+  // OUTSOURCE path
+  if (!outsourceOrderId) throw new HttpError(400, '无法解析扫描源');
+  const order = db.prepare('SELECT * FROM outsourcing_orders WHERE id=?').get(outsourceOrderId);
+  if (!order) throw new HttpError(404, '委外订单不存在');
+  if (order.status !== 'RELEASED') throw new HttpError(409, '只有下达状态委外订单可扫码收货');
+  // Lookup an existing / auto-resolved DRAFT outsourcing receipt for the order,
+  // or return a stub pointer so the caller can create one downstream.
   return send(res, 200, {
     scanResolution: {
-      orderId, orderItemId: orderItem.id, productId: body.productId, warehouseId: body.warehouseId,
-      quantity: Number(body.quantity || 0), lotCode: body.lotCode || null, serialNumber: body.serialNumber || null,
+      businessType: 'OUTSOURCE',
+      outsourcingOrderId: order.id, productId: body.productId, warehouseId: body.warehouseId,
+      quantity: Number(body.quantity || 0),
     },
   });
 }

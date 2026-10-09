@@ -350,7 +350,17 @@ export function resolveQualityPolicy(db, operationType, productId, businessDate)
   const date = businessDate || today();
   const rows = db.prepare(`SELECT * FROM quality_control_points WHERE operation_type=? AND active=1 AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) AND (scope='GLOBAL' OR (scope='PRODUCT' AND product_id=?)) ORDER BY CASE scope WHEN 'PRODUCT' THEN 0 ELSE 1 END,version DESC`).all(operationType, date, date, productId);
   const qcp = rows[0];
-  if (!qcp) return { qcpId: null, version: null, inspectionRequired: true, samplingMode: 'FULL', samplingValue: null, failSafe: true };
+  // OUT-18: OUTSOURCING_RECEIPT defaults to WAIVED when no QCP exists.
+  // Rationale: supplier-side QC is typically controlled by the supplier's
+  // own QMS; enterprise-side inspects only when an explicit policy says
+  // so. This makes "valid WAIVED" a first-class state per spec §18 while
+  // keeping PURCHASE_RECEIPT / SALES_DELIVERY fail-safe closed.
+  if (!qcp) {
+    if (operationType === 'OUTSOURCING_RECEIPT') {
+      return { qcpId: null, version: null, inspectionRequired: false, samplingMode: 'FULL', samplingValue: null, failSafe: false, waiverReason: 'OUTSOURCE 默认供应商侧管控' };
+    }
+    return { qcpId: null, version: null, inspectionRequired: true, samplingMode: 'FULL', samplingValue: null, failSafe: true };
+  }
   return { qcpId: qcp.id, version: qcp.version, inspectionRequired: Boolean(qcp.inspection_required), samplingMode: qcp.sampling_mode, samplingValue: qcp.sampling_value, waiverReason: qcp.remarks };
 }
 

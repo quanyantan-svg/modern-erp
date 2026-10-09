@@ -82,14 +82,76 @@ export function getOutsourcingOrder(db, res, actor, orderId) {
 }
 
 /**
- * Create outsourcing order from PLANNING source: must consume planning_handoff_id exactly-once.
- * planning_handoff_id is UNIQUE in outsourcing_orders.
+ * OUT-05: Consume one `planning_outsource_handoffs` row exactly-once.
+ *
+ * Authoritative invariants:
+ *   - handoff.status MUST be 'PENDING' on consume (else 409 already consumed)
+ *   - no row may exist in `outsourcing_orders` where planning_handoff_id = id (UNIQUE)
+ *   - handoff.status is moved to 'CONSUMED' with target_outsourcing_order_id,
+ *     consumed_at, consumed_by set
+ *   - For PLANNING source orders, the canonical product / quantity / need_date
+ *     are derived from the handoff row, NOT from client-supplied values.
+ *
+ * Returns the authoritative handoff row plus caller-supplied order fields.
+ * Re-throws HTTP 404 / 409 for missing / already-consumed handoffs.
+ */
+function consumePlanningHandoff(db, { handoffId, actor, supplierId, bodyOrderId, bodyOrderNo, bodyBusinessDate, bodyExpectedCompletionDate, bodyBomId, bodyBomVersion, bodyRemark }) {
+  // Lock handoff row for atomic consume (works on both SQLite BEGIN IMMEDIATE
+  // and MySQL SELECT ... FOR UPDATE rows once wrapped in `transaction(db, …)`).
+  db.prepare(`UPDATE planning_outsource_handoffs SET id=id WHERE id=?`).run(handoffId);
+  const handoff = db.prepare('SELECT * FROM planning_outsource_handoffs WHERE id=?').get(handoffId);
+  if (!handoff) throw new HttpError(404, '计划移交单不存在');
+  if (handoff.status !== 'PENDING') {
+    throw new HttpError(409, `handoff 已不可消费：status=${handoff.status}`);
+  }
+  const existingOrder = db.prepare('SELECT id FROM outsourcing_orders WHERE planning_handoff_id=?').get(handoffId);
+  if (existingOrder) {
+    throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+  }
+  // Authoritative product / quantity / need_date come from the handoff.
+  // Client-supplied values for these fields are IGNORED on PLANNING source.
+  const orderId = bodyOrderId;
+  const orderNo = bodyOrderNo;
+  const now = new Date().toISOString();
+  try {
+    db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,'DRAFT',?,?,?,?,?,?,?,?)`).run(
+      orderId, orderNo, supplierId, handoff.product_id, Number(handoff.quantity), Number(handoff.quantity), 'EA',
+      'PLANNING', handoffId, bodyBusinessDate || now.slice(0, 10), bodyExpectedCompletionDate || handoff.need_date || null,
+      bodyBomId || null, bodyBomVersion || null, bodyRemark || '', actor.id, now, now,
+    );
+  } catch (err) {
+    if (/UNIQUE constraint failed: outsourcing_orders.planning_handoff_id/i.test(String(err.message))) {
+      throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+    }
+    throw err;
+  }
+  // Mark the handoff CONSUMED. Even if the order is later CANCELLED, the
+  // handoff must remain CONSUMED — Planning truth is immutable; produce a
+  // fresh planned order → fresh handoff if a new ORDER is needed.
+  db.prepare(`UPDATE planning_outsource_handoffs
+    SET status='CONSUMED', target_outsourcing_order_id=?, consumed_at=?, consumed_by=?
+    WHERE id=? AND status='PENDING'`).run(orderId, now, actor.id, handoffId);
+  audit(db, actor.id, 'CONSUMED', 'PLANNING_OUTSOURCE_HANDOFF', handoffId, `→ ${orderId}`);
+  return { handoff };
+}
+
+/**
+ * Create outsourcing order.
+ *
+ *   source_type='PLANNING': consume `planning_outsource_handoffs(id)` exactly-once.
+ *                           Authoritative product / quantity / need_date are
+ *                           taken from the handoff row.
+ *   source_type='MANUAL':   planning_handoff_id MUST be NULL; client supplies
+ *                           all canonical order fields.
  */
 export async function createOutsourcingOrder(db, req, res, actor) {
   assertManagePermission(actor);
   const body = await readJson(req);
   assertAllowedFields(body, ['supplierId', 'productId', 'orderQuantity', 'unit', 'planningHandoffId', 'businessDate', 'expectedCompletionDate', 'remark', 'bomId']);
-  const sourceType = body.planningHandoffId ? 'PLANNING' : 'MANUAL';
+  const hasHandoff = Boolean(body.planningHandoffId);
+  const sourceType = hasHandoff ? 'PLANNING' : 'MANUAL';
+  if (sourceType === 'MANUAL' && hasHandoff) throw new HttpError(400, 'MANUAL 订单不允许携带 planningHandoffId');
   // Supplier must be qualified for outsourcing.
   const supplier = db.prepare('SELECT id, qualification_status, qualification_valid_from, qualification_valid_to FROM suppliers WHERE id=? AND outsourcing_enabled=1').get(body.supplierId);
   if (!supplier) throw new HttpError(409, '供应商未启用委外资质');
@@ -100,20 +162,31 @@ export async function createOutsourcingOrder(db, req, res, actor) {
   const orderId = randomUUID(); const now = new Date().toISOString();
   const orderNo = 'OS-' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    try {
-      db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,'DRAFT',?,?,?,?,?,?,?,?)`).run(
-        orderId, orderNo, body.supplierId, body.productId, Number(body.orderQuantity), Number(body.orderQuantity), body.unit || 'EA',
-        sourceType, body.planningHandoffId || null, body.businessDate || today, body.expectedCompletionDate || null,
-        body.bomId || null, body.bomVersion || null, body.remark || '', actor.id, now, now,
-      );
-    } catch (err) {
-      if (/UNIQUE constraint failed: outsourcing_orders.planning_handoff_id/i.test(String(err.message))) {
-        throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+    if (sourceType === 'PLANNING') {
+      consumePlanningHandoff(db, {
+        handoffId: body.planningHandoffId, actor,
+        supplierId: body.supplierId,
+        bodyOrderId: orderId, bodyOrderNo: orderNo,
+        bodyBusinessDate: body.businessDate, bodyExpectedCompletionDate: body.expectedCompletionDate,
+        bodyBomId: body.bomId, bodyBomVersion: body.bomVersion, bodyRemark: body.remark,
+      });
+    } else {
+      // MANUAL source: canonical fields come from the client body.
+      try {
+        db.prepare(`INSERT INTO outsourcing_orders(id,order_no,supplier_id,product_id,order_quantity,required_quantity,unit,source_type,planning_handoff_id,status,business_date,expected_completion_date,bom_id,bom_version,remark,creator_id,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,NULL,'DRAFT',?,?,?,?,?,?,?,?)`).run(
+          orderId, orderNo, body.supplierId, body.productId, Number(body.orderQuantity), Number(body.orderQuantity), body.unit || 'EA',
+          sourceType, body.businessDate || today, body.expectedCompletionDate || null,
+          body.bomId || null, body.bomVersion || null, body.remark || '', actor.id, now, now,
+        );
+      } catch (err) {
+        if (/UNIQUE constraint failed: outsourcing_orders.planning_handoff_id/i.test(String(err.message))) {
+          throw new HttpError(409, 'planning_handoff_id 已被消费，不得重复');
+        }
+        throw err;
       }
-      throw err;
+      audit(db, actor.id, 'CREATE', 'OUTSOURCING_ORDER', orderId, orderNo);
     }
-    audit(db, actor.id, 'CREATE', 'OUTSOURCING_ORDER', orderId, orderNo);
   });
   return send(res, 201, { id: orderId, orderNo });
 }
