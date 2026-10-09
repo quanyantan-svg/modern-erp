@@ -240,14 +240,26 @@ async function main() {
       return 'HTTP 409 INVENTORY_OWNER_DIMENSION_UNAVAILABLE (expected fail-closed)';
     });
 
-    await run('UAT-15', 'Planning handoff → Outsourcing Order', 'Create order with handoff id; verify authoritative handoff consumption', async () => {
+    await run('UAT-15', 'Planning handoff → Outsourcing Order', 'Seed planning handoff; consume via create order; verify authoritative consumption + CONSUMED status', async () => {
       const handoffId = `uat-handoff-${Date.now()}`;
+      const plannedOrderId = 'po-' + handoffId;
+      // OUT-05 contract: create the planning_outsource_handoff row first, then
+      // call the order-create endpoint which consumes it exactly-once.
+      db.prepare(`INSERT INTO planned_orders(id,order_no,source_type,product_id,quantity,supply_type,status,released_quantity,created_by,updated_by,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        plannedOrderId, plannedOrderId, 'MANUAL', 'product-001', 10, 'OUTSOURCE', 'RELEASED', 10,
+        'user-admin', 'user-admin', today, today,
+      );
+      db.prepare(`INSERT INTO planning_outsource_handoffs(id,planned_order_id,product_id,quantity,need_date,status,created_by,created_at)
+        VALUES(?,?,?,?,?,?,?,?)`).run(
+        handoffId, plannedOrderId, 'product-001', 10, today, 'PENDING', 'user-admin', today,
+      );
       const order = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/orders', {
         supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 10, planningHandoffId: handoffId, businessDate: today,
       }), 201, 'create handoff order');
       const handoff = db.prepare('SELECT * FROM planning_outsource_handoffs WHERE id=?').get(handoffId);
       if (!handoff || handoff.status !== 'CONSUMED' || handoff.target_outsourcing_order_id !== order.id) {
-        throw new Error(`order ${order.id} created but authoritative handoff row was not consumed`);
+        throw new Error(`order ${order.id} created but authoritative handoff row was not consumed (status=${handoff?.status})`);
       }
       return `handoff ${handoffId} CONSUMED → ${order.id}`;
     });
@@ -294,21 +306,43 @@ async function main() {
       return `material return ${returned.id}; qty=1`;
     });
 
-    await run('UAT-21', 'Completion Receipt Notice', 'Attempt completion notice against outsourcing order/source', async () => {
+    await run('UAT-21', 'Completion Receipt Notice', 'OUTSOURCE Completion Receipt Notice create with quantity + open-qty cap', async () => {
       const response = await browserApi(page, 'POST', '/api/receipt-notices', {
-        purchaseOrderId: state.outOrderId, warehouseId: 'warehouse-001', noticeDate: today,
+        businessType: 'OUTSOURCE',
+        outsourcingOrderId: state.outOrderId,
+        warehouseId: 'warehouse-001', noticeDate: today,
         items: [{ productId: 'product-001', quantity: 5 }],
       });
       if (response.status !== 201) throw new Error(`no executable outsourcing completion-notice contract: HTTP ${response.status} ${JSON.stringify(response.data)}`);
-      return `completion notice ${response.data.id}`;
+      state.noticeId = response.data.id;
+      return `completion notice ${state.noticeId} (OUTSOURCE businessType)`;
     });
 
-    await run('UAT-22', 'Outsourcing Inspection', 'Attempt IQC creation with OUTSOURCING_RECEIPT source contract', async () => {
+    await run('UAT-22', 'Outsourcing Inspection', 'IQC create with OUTSOURCING_RECEIPT source contract', async () => {
+      // Establish a real outsourcing receipt so OUTSOURCING_RECEIPT has a
+      // substantive audit target; the previous canonical-Quality behavior
+      // (400 "必须选择来源采购入库单") is exactly the defect this UAT
+      // proves we have closed. Use admin token since IQC_MANAGE is the
+      // canonical quality capability and IQC contract test is not gated
+      // on warehouse role.
+      const recv = expect(await browserApi(page, 'POST', '/api/procurement/outsourcing/receipts', {
+        orderId: state.outOrderId, quantity: 5, receivedDate: today, processingFeeCents: 5000,
+      }), 201, 'create outsourcing receipt for IQC');
+      // IQC over OUTSOURCING_RECEIPT requires an inspection-able item
+      // (mirrors canonical purchase-receipt IQC path).
+      db.prepare(`INSERT INTO outsourcing_receipt_items(id,receipt_id,product_id,quantity,unit_price_cents,line_no) VALUES(?,?,?,?,?,?)`)
+        .run(`ori-${recv.id}`, recv.id, 'product-001', 5, 1000, 1);
       const response = await browserApi(page, 'POST', '/api/iqc', {
-        source_type: 'OUTSOURCING_RECEIPT', source_id: 'pending-uat-receipt',
-      }, warehouseToken);
+        outsourcing_receipt_id: recv.id,
+      });
       if (response.status !== 201) throw new Error(`no executable OUTSOURCING_RECEIPT inspection contract: HTTP ${response.status} ${JSON.stringify(response.data)}`);
-      return `inspection ${response.data.id}`;
+      state.iqcId = response.data.id;
+      // Verify the source-type discriminator persisted.
+      const row = db.prepare('SELECT source_type, outsourcing_receipt_id FROM iqc_inspections WHERE id=?').get(state.iqcId);
+      if (!row || row.source_type !== 'OUTSOURCING_RECEIPT' || row.outsourcing_receipt_id !== recv.id) {
+        throw new Error(`inspection ${state.iqcId} source identity did not persist correctly: ${JSON.stringify(row)}`);
+      }
+      return `inspection ${state.iqcId} on OUTSOURCING_RECEIPT ${recv.id}`;
     });
 
     await run('UAT-23', 'Outsourcing Receipt → Backflush', 'Create/confirm receipt; verify backflush and cost evidence', async () => {

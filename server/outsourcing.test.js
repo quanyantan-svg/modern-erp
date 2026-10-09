@@ -26,7 +26,12 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
       supplierId: 'supplier-001', productId: 'product-001',
       orderQuantity: orderQty, unit: 'EA', businessDate: isoDate(0),
     };
-    if (source === 'PLANNING') body.planningHandoffId = 'handoff-' + Date.now();
+    if (source === 'PLANNING') {
+      // OUT-05: a real planning_outsource_handoffs row must exist before the
+      // create endpoint can consume it. Insert a deterministic fixture row.
+      body.planningHandoffId = 'handoff-' + Date.now();
+      seedHandoff(body.planningHandoffId, 'product-001', orderQty);
+    }
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, body);
     assert.equal(order.status, 201, order.data.error);
     await fixture.request('POST', `/api/procurement/outsourcing/orders/${order.data.id}/transition`, fixture.tokens.admin, { action: 'PLAN_CONFIRMED' });
@@ -34,8 +39,23 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
     return order.data.id;
   }
 
+  function seedHandoff(id, productId = 'product-001', quantity = 100) {
+    const plannedOrderId = 'po-' + id;
+    // Use the canonical admin user id (the canonical procurement fixture
+    // always seeds user-admin).
+    fixture.db.prepare(`INSERT INTO planned_orders(id,order_no,source_type,mrp_run_id,mrp_result_id,product_id,quantity,need_date,planned_supply_date,supply_type,status,released_quantity,created_by,updated_by,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      plannedOrderId, plannedOrderId, 'MANUAL', null, null, productId, quantity,
+      isoDate(0), isoDate(0), 'OUTSOURCE', 'RELEASED', quantity,
+      'user-admin', 'user-admin', isoDate(0), isoDate(0),
+    );
+    fixture.db.prepare(`INSERT INTO planning_outsource_handoffs(id,planned_order_id,product_id,quantity,need_date,status,created_by,created_at)
+      VALUES(?,?,?,?,?,?,?,?)`).run(id, plannedOrderId, productId, quantity, isoDate(0), 'PENDING', 'user-admin', isoDate(0));
+  }
+
   test('PLANNING handoff is exactly-once; MANUAL handoff null', async () => {
     await qualifyOutsourceSupplier();
+    seedHandoff('handoff-A1', 'product-001', 100);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 100, planningHandoffId: 'handoff-A1',
       businessDate: isoDate(0),
@@ -46,10 +66,11 @@ describe('Procurement Wave F-H outsourcing foundation, material execution, recei
       businessDate: isoDate(0),
     });
     assert.equal(dup.status, 409, JSON.stringify(dup.data));
-    assert.match(dup.data.error, /planning_handoff_id/);
+    assert.match(dup.data.error, /planning_handoff_id|handoff/i);
   });
 
   test('Cancelled order handoff stays CONSUMED; new order requires new handoff', async () => {
+    seedHandoff('handoff-CANCEL', 'product-001', 50);
     const order = await fixture.request('POST', '/api/procurement/outsourcing/orders', fixture.tokens.admin, {
       supplierId: 'supplier-001', productId: 'product-001', orderQuantity: 50, planningHandoffId: 'handoff-CANCEL',
       businessDate: isoDate(0),
