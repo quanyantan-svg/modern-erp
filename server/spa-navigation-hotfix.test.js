@@ -129,7 +129,7 @@ describe('navigation state and regression contracts', () => {
     // SUPPLIERS_VIEW and INVENTORY_TRANSFER_CONFIRM (114); Core Scope
     // Cleanup removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW,
     // PROJECT_MANAGE (110).
-    assert.equal(PERMISSIONS.length, 138);
+    assert.equal(PERMISSIONS.length, 159);
   });
   test('exact targets initialize Sales Delivery and Purchase Receipt detail state', () => {
     assert.match(logisticsSource, /target\?\.page === 'sales-deliveries'[\s\S]{0,100}documentId/);

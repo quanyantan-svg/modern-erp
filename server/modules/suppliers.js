@@ -37,9 +37,13 @@ import { deleteMasterRecord } from './data-lifecycle.js';
 export function listSuppliers(db, res, actor, url) {
   allowAny(actor, ['SUPPLIERS_VIEW', 'SUPPLIERS_MANAGE']);
   const search = `%${url.searchParams.get('search')?.trim() ?? ''}%`;
-  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,active,created_at createdAt,updated_at updatedAt
+  const suppliers = db.prepare(`SELECT id,code,name,contact,phone,address,payment_terms_days paymentTermsDays,
+    procurement_enabled procurementEnabled,outsourcing_enabled outsourcingEnabled,supplier_category supplierCategory,
+    qualification_status qualificationStatus,qualification_valid_from qualificationValidFrom,qualification_valid_to qualificationValidTo,
+    default_payment_terms_days defaultPaymentTermsDays,default_currency defaultCurrency,supplier_wip_warehouse_id supplierWipWarehouseId,
+    outsourcing_qualification_note outsourcingQualificationNote,active,created_at createdAt,updated_at updatedAt
     FROM suppliers WHERE code LIKE ? OR name LIKE ? OR contact LIKE ? ORDER BY code`).all(search, search, search)
-    .map((row) => ({ ...row, active: Boolean(row.active) }));
+    .map((row) => ({ ...row, active: Boolean(row.active), procurementEnabled: Boolean(row.procurementEnabled), outsourcingEnabled: Boolean(row.outsourcingEnabled) }));
   return send(res, 200, { suppliers });
 }
 
