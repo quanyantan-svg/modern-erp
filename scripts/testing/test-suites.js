@@ -79,7 +79,7 @@ const FULL = [
   'server/procurement-profiles.test.js',
   'server/buyers.test.js',
 
-  // ----- Procurement & Outsourcing Domain — Wave B/C/D/E/F/G/H/I -----
+  // ----- Procurement & Outsourcing Domain — Wave B/C/D/E/F/G/H/I + Return Execution -----
   'server/procurement-sourcing-pricing.test.js',
   'server/procurement-orders.test.js',
   'server/procurement-receiving-returns.test.js',
@@ -87,6 +87,7 @@ const FULL = [
   'server/outsourcing.test.js',
   'server/procurement-reports.test.js',
   'server/outsourcing-finance.test.js',
+  'server/procurement-return-execution.test.js',
 
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',

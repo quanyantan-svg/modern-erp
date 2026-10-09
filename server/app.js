@@ -5497,16 +5497,68 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
       db.prepare('UPDATE purchase_returns SET total_cents=?,status=\'CONFIRMED\',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, returnId);
       const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(ret.supplier_id)?.name || '';
       const variance=authoritative.totalCents-carryingValueCents;
-      createSystemVoucher(db,{ sourceType:'PURCHASE_RETURN',sourceId:returnId,businessDate:locked.return_date,actorId:actor.id,entries:[
-        {role:'ACCOUNTS_PAYABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'采购退货 '+ret.return_no+' '+supplierName},
-        ...carryingEntries,
-        ...(variance>0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'CREDIT',amountCents:variance,summary:'采购退货差异'}]:variance<0?[{role:'PURCHASE_RETURN_VARIANCE',direction:'DEBIT',amountCents:-variance,summary:'采购退货差异'}]:[])
-      ]});
-      const sourceTerms = receipt.purchase_order_id ? db.prepare('SELECT payment_terms_days FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)?.payment_terms_days : null;
-      ensurePayableSource(db, { id: receipt.id, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, paymentTermsDays: sourceTerms, effectCents: receipt.total_cents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
-      const sourceAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE'").get(locked.receipt_id);
-      if (!sourceAp) throw new HttpError(409, '来源入库尚未生成权威应付');
-      applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: authoritative.totalCents, actorId: actor.id, createdAt: now });
+
+      // 4-branch financial semantics per Receipt billing_mode + Supplier Bill reservation status.
+      // LEGACY_DIRECT: AP debit; SEPARATE unbilled: GRNI debit only; SEPARATE billed: AP debit;
+      // SEPARATE partial billed (billed-first): AP debit for billed portion; GRNI debit for unbilled portion.
+      const billedByReceiptItem = db.prepare(`SELECT sbi.receipt_item_id,
+        COALESCE(SUM(sbi.base_quantity_num*1.0/sbi.base_quantity_den),0) billed_qty,
+        COALESCE(SUM(sbi.net_cents),0) billed_cents
+        FROM supplier_bill_items sbi JOIN supplier_bills sb ON sb.id=sbi.bill_id
+        WHERE sbi.receipt_id=? AND sb.status IN ('POSTED','WAITING_MATCH')
+        GROUP BY sbi.receipt_item_id`).all(receipt.id);
+      const billedMap = new Map(billedByReceiptItem.map((b) => [b.receipt_item_id, b]));
+      let apAmountCents = 0;
+      let grniAmountCents = 0;
+      const voucherEntries = [];
+      if (receipt.billing_mode === 'LEGACY_DIRECT') {
+        apAmountCents = authoritative.totalCents;
+        voucherEntries.push({ role: 'ACCOUNTS_PAYABLE', direction: 'DEBIT', amountCents: apAmountCents, summary: '采购退货 ' + ret.return_no + ' ' + supplierName });
+      } else {
+        // SEPARATE: billed-first deterministic split
+        for (const item of authoritative.items) {
+          const billed = Number(billedMap.get(item.receipt_item_id)?.billed_cents || 0);
+          const unit = Number(item.amount_cents) / Number(item.quantity || 1);
+          const retQty = Number(item.quantity);
+          const billedShare = Math.min(billed, Math.round(unit * retQty));
+          const unbilledShare = Math.max(0, Math.round(unit * retQty) - billedShare);
+          apAmountCents += billedShare;
+          grniAmountCents += unbilledShare;
+        }
+        if (apAmountCents > 0) voucherEntries.push({ role: 'ACCOUNTS_PAYABLE', direction: 'DEBIT', amountCents: apAmountCents, summary: '采购退货 AP 冲销 ' + ret.return_no });
+        if (grniAmountCents > 0) voucherEntries.push({ role: 'GRNI', direction: 'DEBIT', amountCents: grniAmountCents, summary: '采购退货 GRNI 冲销 ' + ret.return_no });
+      }
+      voucherEntries.push(...carryingEntries);
+      if (variance > 0) voucherEntries.push({ role: 'PURCHASE_RETURN_VARIANCE', direction: 'CREDIT', amountCents: variance, summary: '采购退货差异' });
+      else if (variance < 0) voucherEntries.push({ role: 'PURCHASE_RETURN_VARIANCE', direction: 'DEBIT', amountCents: -variance, summary: '采购退货差异' });
+      createSystemVoucher(db, { sourceType: 'PURCHASE_RETURN', sourceId: returnId, businessDate: locked.return_date, actorId: actor.id, entries: voucherEntries });
+
+      // AP credit only when there's actually an AP (LEGACY_DIRECT or SEPARATE billed).
+      if (apAmountCents > 0) {
+        if (receipt.billing_mode === 'LEGACY_DIRECT') {
+          const sourceTerms = receipt.purchase_order_id ? db.prepare('SELECT payment_terms_days FROM purchase_orders WHERE id=?').get(receipt.purchase_order_id)?.payment_terms_days : null;
+          ensurePayableSource(db, { id: receipt.id, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, paymentTermsDays: sourceTerms, effectCents: receipt.total_cents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+          const sourceAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE'").get(locked.receipt_id);
+          if (!sourceAp) throw new HttpError(409, '来源入库尚未生成权威应付');
+          applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: sourceAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: apAmountCents, actorId: actor.id, createdAt: now });
+        } else {
+          // SEPARATE: AP credit against the Supplier Bill source (billed portion).
+          const billedBills = db.prepare(`SELECT DISTINCT sb.id, sb.bill_no FROM supplier_bill_items sbi
+            JOIN supplier_bills sb ON sb.id=sbi.bill_id
+            WHERE sbi.receipt_id=? AND sb.status IN ('POSTED','WAITING_MATCH') ORDER BY sb.id`).all(receipt.id);
+          let remaining = apAmountCents;
+          for (const bill of billedBills) {
+            if (remaining <= 0) break;
+            ensurePayableSource(db, { id: bill.id, sourceType: 'SUPPLIER_BILL', sourceNo: bill.bill_no, partyId: receipt.supplier_id, businessDate: receipt.receipt_date, effectCents: 0, creatorId: receipt.creator_id, createdAt: receipt.created_at });
+            const billAp = db.prepare("SELECT id FROM account_payables WHERE source_type='SUPPLIER_BILL' AND source_id=? AND item_class='SOURCE'").get(bill.id);
+            if (!billAp) continue;
+            const billCents = Math.min(remaining, Number(db.prepare("SELECT amount_cents FROM account_payables WHERE id=?").get(billAp.id).amount_cents));
+            if (billCents <= 0) continue;
+            applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: returnId, sourceNo: ret.return_no, targetOpenItemId: billAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: billCents, actorId: actor.id, createdAt: now });
+            remaining -= billCents;
+          }
+        }
+      }
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
     });
   } else if (action === 'cancel') {
