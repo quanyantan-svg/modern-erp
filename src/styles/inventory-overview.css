@@ -1,0 +1,143 @@
+/* V21 — Inventory Overview (mobile-first).
+   Frozen by solution.md §27.47 (Mobile Inventory & Warehouse architecture).
+   390 CSS px primary; verified 320 / 430 / 680.
+*/
+
+.inventory-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.inventory-overview .overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.inventory-overview .overview-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.inventory-overview .overview-header button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  border: 1px solid var(--erp-border, #d0d7de);
+  background: var(--erp-bg, #ffffff);
+}
+
+.inventory-overview .overview-error {
+  background: var(--erp-error-bg, #fde7e9);
+  border: 1px solid var(--erp-error-border, #c5283d);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--erp-error-text, #c5283d);
+}
+
+.inventory-overview .overview-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 680px) {
+  .inventory-overview .overview-summary {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+.inventory-overview .overview-card {
+  background: var(--erp-card-bg, #ffffff);
+  border: 1px solid var(--erp-border, #e1e4e8);
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inventory-overview .overview-card header {
+  font-size: 12px;
+  color: var(--erp-text-muted, #5f6b7c);
+}
+
+.inventory-overview .overview-card strong {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.inventory-overview .overview-alerts {
+  background: var(--erp-warn-bg, #fff4e5);
+  border: 1px solid var(--erp-warn-border, #f1a049);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.inventory-overview .overview-alerts h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.inventory-overview .overview-alerts ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.inventory-overview .overview-detail h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.inventory-overview .overview-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+@media (min-width: 680px) {
+  .inventory-overview .overview-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.inventory-overview .overview-row {
+  background: var(--erp-card-bg, #ffffff);
+  border: 1px solid var(--erp-border, #e1e4e8);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.inventory-overview .overview-row header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.inventory-overview .overview-row dl {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 12px;
+  margin: 8px 0 0;
+}
+
+.inventory-overview .overview-row dl > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.inventory-overview .overview-row dt {
+  color: var(--erp-text-muted, #5f6b7c);
+}
+
+.inventory-overview .overview-row dd {
+  margin: 0;
+  font-weight: 500;
+}
