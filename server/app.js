@@ -255,6 +255,16 @@ import {
   getPurchaseExecutionReport,
 } from './modules/procurement-reports.js';
 import {
+  applyOutsourcingDifference,
+  confirmOutsourcingReceipt,
+  createFinishedReturn,
+  createProcessingFeeBill,
+  createWipTransfer,
+  postProcessingFeeBill,
+  previewOutsourcingDifference,
+  procurementScan,
+} from './modules/outsourcing-finance.js';
+import {
   createRole,
   listRoles,
   updateRole,
@@ -852,6 +862,54 @@ ownedRouteTable.register({
   path: '/api/procurement/outsourcing/opening-orders',
   handler: ({ db, req, res, actor }) => createOpeningOutsourcingOrder(db, req, res, actor),
   owner: 'server/modules/procurement-reports.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/receipts\/([^/]+)\/confirm$/,
+  handler: ({ db, req, res, actor, params }) => confirmOutsourcingReceipt(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/processing-fee-bills',
+  handler: ({ db, req, res, actor }) => createProcessingFeeBill(db, req, res, actor),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/processing-fee-bills\/([^/]+)\/post$/,
+  handler: ({ db, req, res, actor, params }) => postProcessingFeeBill(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/finished-returns',
+  handler: ({ db, req, res, actor }) => createFinishedReturn(db, req, res, actor),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/difference-preview$/,
+  handler: ({ db, req, res, actor, params }) => previewOutsourcingDifference(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: /^\/api\/procurement\/outsourcing\/orders\/([^/]+)\/difference-apply$/,
+  handler: ({ db, req, res, actor, params }) => applyOutsourcingDifference(db, req, res, actor, params[0]),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/outsourcing/wip-transfers',
+  handler: ({ db, req, res, actor }) => createWipTransfer(db, req, res, actor),
+  owner: 'server/modules/outsourcing-finance.js',
+});
+ownedRouteTable.register({
+  method: 'POST',
+  path: '/api/procurement/scan',
+  handler: ({ db, req, res, actor }) => procurementScan(db, req, res, actor),
+  owner: 'server/modules/outsourcing-finance.js',
 });
 ownedRouteTable.register({
   method: 'POST',
