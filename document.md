@@ -522,19 +522,31 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 ### 22.1 B3101 采购管理
 **主要目标 Domain：** Procurement & Outsourcing
 
-| Capability | 手册要求基线 | 当前 Modern ERP 基线 | Coverage | 主要 Gap / 后续方向 |
-|---|---|---|---|---|
-| 采购基础资料与参数 | 供应商、采购组织/业务组、采购参数、采购员、价格/折扣等基础设置必须支持采购业务默认值与控制。 | 供应商/采购基础已有；组织与采购参数体系不完整 | `PARTIAL` | 补采购参数、组织维度及更完整价格/折扣策略 |
-| 采购申请 | 支持手工请购，也可由销售/计划等需求生成；请购可分配供应商、拆分/合并并下推采购订单。 | Purchase Requisition + MRP/Purchase Instruction 已有 | `PARTIAL` | 补供应商分配、拆分/合并等完整控制 |
-| 采购订单 | 支持由请购生成或手工创建；冻结供应商、价格、交期、付款条款；支持赠品、变更与执行控制。 | Purchase Order、审批、来源追溯已存在 | `PARTIAL` | 补赠品、正式变更单、更多交付/预付控制 |
-| 收料/收货通知 | 采购订单可下推收料/收货通知，多订单可合并，作为检验或入库前置业务单据。 | 当前以 PO→Purchase Receipt 为主 | `MISSING` | 补独立 Receipt Notice/收料语义 |
-| 来料检验 | 需要检验的采购收料必须进入 IQC，再允许有效入库。 | IQC/quality gate 已有 | `COVERED` | 保持现有质量门禁并在采购链中完整映射 |
-| 采购入库 | 由收料/订单生成，处理批次、保质期、序列号、库存与后续应付/核算关系。 | Purchase Receipt + LOT/SERIAL + valuation 已有 | `COVERED` | 继续复用现有库存/身份/价值事实 |
-| 采购退货 | 支持按采购订单、收料、入库或退货申请退回，保留来源并影响库存与商业结算。 | Purchase Return/return flow 已有 | `PARTIAL` | 补退货申请及更完整来源组合 |
-| 寻源与配额 | 支持供应来源管理、供应商分配、配额/比例控制与采购来源决策。 | 无完整 sourcing/quota 子域 | `MISSING` | 新增 Sourcing / Quota capability |
-| VMI | 支持 VMI 库存、消耗汇总、所有权转移，并据此形成应付依据。 | 无 VMI 模型 | `MISSING` | 新增 VMI 库存与所有权转换 |
-| 采购价格/折扣/调价 | 支持采购价目、折扣、价格调整与订单取价。 | 有采购价格字段/折让基础，缺完整价目体系 | `PARTIAL` | 补 price list / discount policy / adjustment |
-| 采购执行报表 | 支持采购执行、全流程跟踪、按时交付等采购分析。 | Decision Reports 有采购统计/未收 | `PARTIAL` | 补完整采购执行与供应绩效分析 |
+> 本节已由 2026-10-08 PROCUREMENT & OUTSOURCING DOMAIN Audit passed 后的 Requirement 阶段升级为
+> Verified Audit Coverage / Target Requirement / Dependency / Acceptance Condition 列。
+> 详细 Capability ID 与完整矩阵见 `document.md §31`。
+
+| Capability | 手册要求基线 | Verified Audit Coverage | Target Requirement | Dependency | Acceptance Condition |
+|---|---|---|---|---|---|
+| 采购基础资料与参数（PRC-01 / PRC-02 / PRC-03） | 供应商、采购组织/业务组、采购参数、采购员、价格/折扣等基础设置必须支持采购业务默认值与控制。 | generic Supplier master 已存在；采购参数、采购组织/业务组、采购员、价格/折扣 baseline 不完整。Coverage = `PARTIAL` | 新增 `Procurement Parameters` owner（PRC-01）；扩展 Supplier 采购/委外 profile（PRC-02）；建立 Buyer / Purchasing Group（PRC-03）。新业务默认 `billing_mode = SEPARATE`；LEGACY_DIRECT 保留兼容 | 无 | 参数生效；Supplier profile 字段上线；Buyer / Purchasing Group CRUD 闭环；新业务默认 SEPARATE 可观测 |
+| 采购申请（PRC-11 / PRC-12） | 支持手工请购，也可由销售/计划等需求生成；请购可分配供应商、拆分/合并并下推采购订单。 | Purchase Requisition + MRP/Purchase Instruction 已有；Source-type trace 与 PR Split / Merge / Supplier Allocation 仍为 partial。Coverage = `PARTIAL` | 强化 source-line trace；明确手工 / 计划 / 销售来源事实；增强 PR Split/Merge/Supplier Allocation preview/audit | 无 | source line trace 完整；split / merge preview 与 apply 后剩余保护；supplier-part 分配不重写历史 |
+| 寻源 / 配额 / 寻源决策（PRC-04 / PRC-05 / PRC-06） | 支持供应来源管理、供应商分配、配额/比例控制与采购来源决策。 | 无独立 Source List / Quota / Sourcing Decision 子域。Coverage = `MISSING` | 新增 Source List（product/supplier/source_type/effective/enabled）；新增 Quota（PROPORTIONAL 比例供应分配，deterministic、quantity conservation、source-line trace、无超分配、并发安全）；新增 Sourcing Decision（PR Line → Source List Entry → Supplier → Allocated Quantity → Rule/Reason） | 无 | Source List CRUD；Quota deterministic allocation；Sourcing Decision 可追溯；并发防护 |
+| 采购价格 / 折扣 / 调价（PRC-07 / PRC-08 / PRC-09 / PRC-10） | 支持采购价目、折扣、价格调整与订单取价。 | PO line 已有价格字段；`purchase_discounts` 为 AP / settlement-stage allowance（Finance）；独立 Procurement Pricing Discount Table 缺失；Pricing UOM 取价规则缺失；Price Adjustment 缺失。Coverage = `PARTIAL`（PRC-08 = PARTIAL → ENHANCE） | 新增 Purchase Price List（supplier/product/source type/effective/pricing UOM/unit price/status/version）；扩展 Pricing UOM 取价规则；新增 Pricing Discount Table（pricing-side，**不得绑定 purchase_discounts**）；新增 effectivity-dated Price Adjustment（**禁止 retroactive 改写历史 PO/Receipt/Bill/AP**） | 无 | Price List 生效；Pricing UOM 生效；Pricing Discount 不进 AP；Price Adjustment 不回写历史；PO 冻结 resolved price evidence |
+| 采购订单（PRC-13） | 支持由请购生成或手工创建；冻结供应商、价格、交期、付款条款。 | Purchase Order、审批、来源追溯已存在。Coverage = `COVERED` | 保持现有 PO 审批 lifecycle（DRAFT → SUBMITTED → APPROVED / REJECTED）；Execution lifecycle 归 PRC-19 | 无 | PO 状态机与 source snapshot 不可写回修改 |
+| PO Commercial Snapshot（PRC-14） | PO 形成时冻结商业来源事实。 | supplier / contact / phone / address / expected delivery / payment terms / line price / PR source / document&base UOM quantity 已冻结。Coverage = `PARTIAL` → `ENHANCE` | 扩展 snapshot：supply supplier / settlement supplier / payee supplier / buyer / purchase group / price source / discount source / delivery schedule。默认 `settlement supplier = supply supplier`、`payee supplier = settlement supplier` | 无 | snapshot 字段 additive；默认规则可观测；payment execution 归 Finance Owner |
+| Gift / Free Item（PRC-15） | 支持合法赠品/样品 line。 | PO submit 强制 `unit_price_cents > 0`（`app.js:2398` & `2640`）。Coverage = `SEMANTIC_MISMATCH` | `→ CONVERGE`：增加 `is_gift_line` 标记或放宽到 `>= 0`；非赠品不得借 gift contract 绕过 commercial validation | 无 | legal Gift 实测可建模；非 gift line 不得 0 价 |
+| Delivery Schedule / Quantity Control（PRC-16） | 支持交付计划、量控、上下限容差。 | header `expected_delivery_date` + 硬性超收保护已有。Coverage = `PARTIAL` → `ENHANCE` | 新增 line/multi-delivery schedule + earliest/latest + upper/lower tolerance；lower-tolerance auto-close 算法 source 不足则不引入 | 无 | 多交付计划生效；tolerance 边界生效 |
+| Prepayment Requirement（PRC-17） | 预付要求/计划。 | 无完整 Prepayment Requirement。Coverage = `MISSING` | 新增 Procurement-owned Prepayment Requirement / Schedule；定义 Procurement → Finance handoff；不建立第二支付引擎 | Finance（`OWNS actual Payment / Allocation`） | Prepayment Requirement 生效；payment 走 canonical owner |
+| PO Change（PRC-18） | 支持正式受控变更。 | 无独立 PO Change order。Coverage = `MISSING` | 新增 `ADD / MODIFY / CANCEL` PO Change；保留 original / change / approval / audit / applied result；禁止历史覆盖；已执行 quantity / source identity 必须受保护 | 无 | PO Change CRUD；applied 后 source identity 不变；approval/audit 完整 |
+| PO Execution Status（PRC-19） | PO 履约状态权威供下游消费。 | MRP / Workbench 按 remaining supply；Reservation 按 Approved total - reserved。无 canonical PO execution state。Coverage = `SEMANTIC_MISMATCH` | `→ CONVERGE`：建立 canonical PO execution view/state：`OPEN / PARTIALLY_RECEIVED / FULFILLED/CLOSED / CANCELLED`；MRP / Workbench / Reservation / Receiving **全部消费同一 canonical open remaining quantity** | 无 | 三个 consumer 消费同一 canonical remaining；Reservation 不再用 Approved total |
+| Receipt Notice（PRC-20） | PO 可下推收料通知/ASN。 | 当前以 PO→Purchase Receipt 为主，无独立 Receipt Notice。Coverage = `MISSING` | 新增独立 Receipt Notice：PO → Receipt Notice → Receipt / IQC；兼容 multi-PO 合并；**不得改变 inventory / valuation / GRNI / AP** | 无 | Receipt Notice 不影响库存/账实/GRNI/AP |
+| 来料检验（PRC-21） | 需要检验的采购收料必须进入 IQC 再有效入库。 | IQC / quality gate 已成熟。Coverage = `COVERED` | 保持现有 quality gate；为 Outsourcing 增加 source-type 扩展（`OUTSOURCING_RECEIPT`，Design 决定 canonical name） | Quality（`OWNS engine`） | IQC 不变；Outsourcing source-type 接入不破坏 |
+| 采购入库（PRC-22） | 由收料/订单生成，处理批次、保质期、序列号、库存与后续应付/核算。 | Purchase Receipt + LOT/SERIAL + valuation 已有。Coverage = `COVERED` | 允许增强：Receipt Notice source；delivery schedule/tolerance enforcement；sourcing/commercial trace；MySQL source-line concurrency。**不得重写** inventory / LOT-SERIAL / IRPLUATION / IQC / idempotency / period control | 无 | 增强不重写既有主干 |
+| Billing Mode Semantics（PRC-23） | LEGACY_DIRECT / SEPARATE / AUTO_BILL 三链。 | 三链已实现；新业务默认 `LEGACY_DIRECT`。Coverage = `SEMANTIC_MISMATCH` | `→ CONVERGE`：默认 `billing_mode = SEPARATE`；`LEGACY_DIRECT` 仅兼容历史；`AUTO_BILL` 仍为合法显式 mode。账务 contract：LEGACY_DIRECT `Dr Inventory / Cr AP`；SEPARATE Receipt `Dr Inventory / Cr GRNI`；SEPARATE Supplier Bill `Dr GRNI (+Input Tax Receivable if applicable) / Cr AP`；AUTO_BILL 同事务原子两步 | 无 | 新业务默认 SEPARATE 可观测；三链账务 contract 不变；历史 LEGACY_DIRECT 数据不反写 |
+| Return Request（PRC-24） | 退货前置业务意图层。 | 无独立 Return Request 文档。Coverage = `MISSING` | 新增 Return Request（source / type / reason / method / replenishment / quantity）；未入库货物不得制造 inventory return | 无 | Return Request 与 Purchase Return execution 分离；未入库货物不被制造为 inventory return |
+| Purchase Return（PRC-25） | 支持按采购订单、收料、入库或退货申请退回。 | Purchase Return physical/value execution 已有；financial settlement 不分支按 `billing_mode` 或剩余开票量。Coverage = `SEMANTIC_MISMATCH` | `→ CONVERGE`：LEGACY_DIRECT → AP/commercial credit；SEPARATE unbilled → revoke GRNI（无 AP credit）；SEPARATE billed → AP/commercial credit；SEPARATE partially billed → deterministic split（unbilled → GRNI reversal；billed → AP credit）。库存 reversal 与 commercial/AP adjustment 分离但保持 source trace | Finance | 四分支账务正确；source trace 完整 |
+| Procurement Scan（PRC-26） | 收料/退货扫码。 | 无 Procurement Scan 入口。Coverage = `MISSING` | 新增 Procurement Scan bounded：PO or Receipt Notice → Purchase Receipt；scanner wedge + document/item identity + warehouse + qty + LOT/SERIAL。**不**做 camera SDK / barcode designer / label printing / generic PDA platform | 无 | Scan 入口不影响业务合同 |
+| 寻源 / 配额 / 价格报表（执行报表） | 采购执行、全流程跟踪、按时交付等采购分析。 | Decision Reports 有采购统计/未收。Coverage = `PARTIAL` | 补完整采购执行与供应绩效分析 | 无 | 报表字段覆盖 |
 
 ### 22.2 B3102 销售管理
 **主要目标 Domain：** Sales & Customer
@@ -863,17 +875,33 @@ B3101–B3122 是需求完整性与验收单位；8 Domains + Platform 是产品
 ### 22.21 B3121 委外管理
 **主要目标 Domain：** Procurement & Outsourcing
 
-| Capability | 手册要求基线 | 当前 Modern ERP 基线 | Coverage | 主要 Gap / 后续方向 |
-|---|---|---|---|---|
-| 委外基础资料 | 供应商需支持委外资格/类别，维护委外仓库/WIP 等。 | 无完整 Outsourcing master data | `MISSING` | 新增 |
-| 委外价格/寻源 | 复用采购寻源/价格并支持委外加工费。 | 无完整 sourcing/outsourcing pricing | `MISSING` | 新增 |
-| 委外订单 | 计划/手工形成委外订单并生成委外用料清单。 | 无 Outsourcing Order | `MISSING` | 新增 |
-| 委外用料 | 明确企业提供材料、用量与损耗。 | 无 | `MISSING` | 新增 |
-| 委外发料/退料/补料 | 向供应商发料及退/补料，企业保留材料所有权。 | 无完整委外执行 | `MISSING` | 新增 |
-| 委外收料/检验 | 供应商加工完成后收料并按要求检验。 | 采购收货/IQC 可复用底层 | `MISSING` | 新增 Outsourcing Receipt/Inspection |
-| 委外入库/退货 | 合格品入库及委外退货。 | 无 | `MISSING` | 新增 |
-| 委外加工费应付 | 加工费形成供应商应付。 | AP 底层可复用 | `MISSING` | 新增 source type/settlement |
-| 委外成本 | 材料成本+加工费，处理期末倒冲差异/WIP。 | 无完整委外成本 | `MISSING` | 新增，与 Inventory Cost/WIP 集成 |
+> 本节已由 2026-10-08 PROCUREMENT & OUTSOURCING DOMAIN Audit passed 后的 Requirement 阶段升级为
+> Verified Audit Coverage / Target Requirement / Dependency / Acceptance Condition 列。
+> 详细 Capability ID 与完整矩阵见 `document.md §31`。
+> 本节范围 = 委外管理；VMI 业务事实另见 §22.1 / §31。
+
+| Capability | 手册要求基线 | Verified Audit Coverage | Target Requirement | Dependency | Acceptance Condition |
+|---|---|---|---|---|---|
+| 委外基础资料（OUT-01 / OUT-04） | 供应商需支持委外资格/类别，维护委外仓库/WIP 等。 | Supplier master 已有；`is_outsourcing_supplier` flag 缺失；SUPPLIER-WIP WAREHOUSE 不存在。Coverage = `PARTIAL` | 扩展 PRC-02 Supplier Procurement Profile：outsourcing enabled / outsourcing qualification / supplier-WIP warehouse binding。Supplier WIP Warehouse = canonical Warehouse **location binding**，不是 supplier ownership | Inventory & Warehouse（warehouse foundation） | Supplier profile 字段上线；Supplier WIP Warehouse 绑定不创建第二 Warehouse master |
+| 委外寻源 / 委外加工费（OUT-02 / OUT-03） | 复用采购寻源/价格并支持委外加工费。 | 复用 procurement sourcing/pricing 缺失；Processing Price 不存在。Coverage = `MISSING` | 复用 Procurement sourcing/pricing infrastructure；`source_type = OUTSOURCE`；Processing Price = 加工费，不是 finished product full material cost | Procurement Sourcing & Pricing（PRC-04..07） | Outsourcing Source List 可用；Processing Price 仅与加工费绑 |
+| Planning Handoff（OUT-05） | 计划 OUTSOURCE / 委外订单来源。 | Frozen Planning `planning_outsource_handoffs(PENDING)` 已存在。Coverage = `PARTIAL` | Procurement/Outsourcing canonical owner 必须 exactly-once consume handoff：idempotent / source trace / concurrency-safe / status transition。Planning truth 不修改 | Planning（`OWNS upstream record`） | handoff consumption 一致；不双发 |
+| 委外订单（OUT-06） | 计划/手工形成委外订单并生成委外用料清单。 | 无 Outsourcing Order。Coverage = `MISSING` | 新增 Outsourcing Order；来源至少 `PLANNING` / `MANUAL`；operation outsourcing 后续 source 足够再加 source semantic；不得与 ordinary product outsourcing 混为匿名来源 | 无 | Outsourcing Order CRUD + lifecycle + 来源可验证 |
+| 委外 lifecycle（OUT-07） | 委外订单生命周期（PLAN_CONFIRMED / RELEASED / COMPLETED / CLOSED）。 | `MISSING`。Coverage = `MISSING` → `NEW` | 使用 source-backed Manual semantics：`PLAN_CONFIRMED / RELEASED / COMPLETED / CLOSED`；创建态、取消态、是否需要审批留 Design bounded；不得无证据把 `SUBMITTED / APPROVED` 宣列为必需阶段 | 无 | lifecycle 遵循 source-backed 4 状态 |
+| OUTSOURCE BOM（OUT-08） | 委外 BOM / 委外用料按 effective BOM 拉取。 | Frozen Engineering OUTSOURCE BOM resolver COVERED；Outsourcing Order 未消费。Coverage = `PARTIAL` | Outsourcing Order 必须消费 approved / effective / `purpose=OUTSOURCE` / business-date appropriate 的 BOM。禁止 `ACTIVE LIMIT 1` selector | Engineering（`OWNS BOM`） | 消费 canonical Engineering resolver；不建立第二选择器 |
+| 委外用料清单（OUT-09） | 明确企业提供材料、用量与损耗。 | 无 Outsourcing Material List。Coverage = `MISSING` | Order 保存/确认时形成 execution snapshot：BOM/version / component / per-unit quantity / scrap / required quantity。Release 后 master BOM 改变不回写历史。额外材料走 Supplement | 无 | snapshot 生效；不随 master BOM 漂移 |
+| 委外 PO（OUT-10） | 委外加工费商业承诺。 | 无 Outsourcing PO。Coverage = `MISSING` | OUT-10 = **processing-fee commercial commitment**，不是"采购企业提供给供应商的材料"。Requirement 推荐可表达为 `Purchase Order` + `business_type = OUTSOURCE` + `source = Outsourcing Order` + commercial price = processing fee；最终是否复用 canonical PO 由 Design 决定 | Procurement PO（`OWNS execution`） | 加工费走到 canonical Supplier Bill/AP；企业材料不入 PO line |
+| 委外发料/退料/补料（OUT-11 / OUT-12 / OUT-13） | 向供应商发料 / 退料 / 补料。 | Generic Inventory Transfer 存在但**不**绑定委外。Coverage = `MISSING` | 新增 `Issue / Supplement / Return`。Material movement：`Internal Warehouse ↔ Supplier WIP Warehouse` = location movement，**不是** ownership transfer。复用 canonical Inventory Transfer / tracking primitives | Inventory & Warehouse（`OWNS transfer primitives`） | 四个动作生效；LOT/SERIAL provenance 完整；不创建第二 inventory ledger |
+| 材料所有权（OUT-14） | 企业保留材料所有权。 | 当前 inventory 默认 enterprise-owned。Coverage = `PARTIAL` | Outsourcing 材料 enterprise-owned throughout：issue / supplement / supplier-WIP / return / backflush。新增 order-specific material position + supplier-WIP location + issued / returned / remaining / backflushed。**不是** new owner ledger | 无 | 企业所有权不漂移；order position 可追溯 |
+| LOT / SERIAL（OUT-15） | 委外材料 LOT/SERIAL provenance。 | LOT/SERIAL backbone existing；outsourcing consumer MISSING。Coverage = `PARTIAL` | 复用 existing canonical tracking；要求 issue → supplier WIP → return / backflush 持续可追 | Inventory & Warehouse（`OWNS LOT/SERIAL`） | provenance 完整；不建立第二 serial/lot engine |
+| Backflush（OUT-16） | 收料后按 BOM 倒冲领料。 | Manufacturing 有 backflush；outsourcing 无。Coverage = `MISSING` | 基于 Outsourcing Order + Material List + actual issued/supplemented/returned + receipt quantity + tracked identities 做 order-specific consumption；不得跨订单随意消费 Supplier WIP | 无 | backflush 不跨界；order position 守恒 |
+| Completion Receipt Notice（OUT-17） | 委外完成预到货通知。 | 无独立 Completion Receipt Notice。Coverage = `MISSING` | 新增 Completion Receipt Notice；**不**改变库存/GRNI/AP | 无 | Notice 不影响账实/GRNI/AP |
+| Inspection（OUT-18） | 委外收料检验。 | IQC COVERED；source-type 扩展缺失。Coverage = `PARTIAL` | 扩展 IQC source-type：`OUTSOURCING_RECEIPT`（Design 决定 canonical name） | Quality（`OWNS engine`） | source-type 接入不破坏 IQC |
+| Outsourcing Inbound（OUT-19） | 委外入库。 | 无委外收料。Coverage = `MISSING` | Flow：Outsourcing Order / Processing PO → Completion Receipt Notice → Quality（if required）→ Outsourcing Receipt → Enterprise Finished Inventory Recognition。Supplier WIP 是 source/location context；**不是** supplier-owned finished stock → enterprise ownership transfer。Supplier site 是 source/location context；只有 confirmed valid Outsourcing Receipt 才形成 enterprise warehouse finished inventory fact | 无 | 入库认可 enterprise owned；location 转移 + backflush + processing fee + cost evidence 完整 |
+| Processing Fee AP（OUT-20） | 加工费形成供应商应付。 | Canonical Supplier Bill / AP engine COVERED；OUTSOURCING_RECEIPT source-type 缺失。Coverage = `PARTIAL` | **必须扩展** canonical Supplier Bill source contract；不得建立 `Outsourcing Payable` 第二引擎。至少能 trace：Outsourcing Receipt / Outsourcing Receipt Item / Outsourcing PO line / processing quantity / processing fee | Finance（`OWNS Supplier Bill / AP`） | Processing Fee 进 canonical AP；不创建第二引擎 |
+| 委外成本（OUT-21） | 材料成本 + 加工费，处理期末倒冲差异 / WIP。 | Coverage = `MISSING` | 正确基础 = `consumed/backflushed material carrying value + processing fee`，**不是** `issued material + processing fee`。必须排除：issued but unused / returned / supplier-WIP remaining。Procurement/Outsourcing owner 提供 cost evidence；final costing adjustment / variance allocation 归 Finance | Finance（`OWNS final costing adjustment`） | cost 排除未耗 / 退回 / WIP 剩余；仅 consumed + processing fee |
+| 委外退货（OUT-22） | 委外入库后退货。 | 无委外退货。Coverage = `MISSING` | 来源：confirmed Outsourcing Receipt。要求 quantity cap / LOT/SERIAL / finished inventory reversal / processing-fee billability-credit handoff / material & cost trace。不得机械复用普通 Purchase Return 的 price semantics | 无 | 退货四元组完整；不复制普通 Purchase Return price |
+| Period-End / WIP / Opening / Reports（OUT-23） | 期末倒冲差异 / WIP / 开启。 | Generic Period Control 仅 integration backbone。Coverage = `MISSING` → `NEW / INTEGRATE` | 必须覆盖：backflush difference allocation（preview/apply/quantity conservation/audit）、supplier material balance、WIP transfer、opening outsourcing order、opening outsourcing WIP、execution summary、material issue summary/detail。Opening 期间不强制用 generic Period Close 判 PARTIAL | Finance（`OWNS period framework`） | 8 字段覆盖；opening 数据标记 OPENING；不虚构历史 accounting |
+| 委外工序边界（Outsourced Operation Boundary） | 工序级委外识别 / 内部不自动完成。 | Frozen `is_outsource` snapshot + `OUTSOURCING_HANDOFF_REQUIRED` fail closed 存在；无真实 operation handoff consumer。Coverage = `PARTIAL INTEGRATION` | 普通成品委外由 OUT-01~23 主线实现；工序级完整 lifecycle 不在本 Requirement 范围 | Manufacturing & Quality（`OWNS operation`） | outbound boundary fail closed；不宣称工序委外已完成 |
 
 ### 22.22 B3122 工作流设计与配置
 **主要目标 Domain：** Platform
@@ -1743,3 +1771,397 @@ Planning 负责 Forecast、Consumption、Demand/Supply calculation、MRP、Peggi
 ---
 
 **PLANNING DOMAIN CLOSURE REQUIREMENT — APPROVED BY CONTINUOUS USER AUTHORIZATION FOR DESIGN & IMPLEMENTATION**
+
+---
+
+## 31. Procurement & Outsourcing Domain Closure Requirement
+
+> 本节固化 Procurement & Outsourcing Domain Closure 的 Requirement 阶段成果。
+> Manual Evidence Baseline 来自上游已提供的 B3101 / B3121 + B3104 / B3105 / B3106 / B3108 / B3109 / B3119 / B3120；本节 Coverage 以 2026-10-08 PROCUREMENT & OUTSOURCING DOMAIN Audit PASS 为准。
+>
+> Design 见 `solution.md §26`（待用户 PASS 后展开）；本阶段不进入 Design / Implementation。
+>
+> 已知 Audit Normalization（用户最终确认）：
+> - PRC-08 = PARTIAL → ENHANCE；
+> - PRC-12 = PARTIAL → ENHANCE；
+> - PRC-14 = PARTIAL → ENHANCE；
+> - PRC-16 = PARTIAL → ENHANCE；
+> - PRC-23 = SEMANTIC_MISMATCH → CONVERGE；
+> - OUT-07 = MISSING → NEW；
+> - OUT-21 = MISSING；
+> - OUT-23 = MISSING → NEW / INTEGRATE。
+
+### 31.1 范围与 ownership
+
+Procurement & Outsourcing 拥有：
+
+- 采购参数 / Supplier 采购 profile / Buyer / Purchasing Group；
+- Sourcing / Quota / Sourcing Decision；
+- 采购价格体系（Price List / Pricing UOM / Pricing Discount / Price Adjustment）；
+- PR / PO / Receipt Notice / Purchase Return / Return Request；
+- 委外 supplier profile / Outsourcing Source List / Processing Price；
+- Outsourcing Order / Outsourcing Lifecycle（PLAN_CONFIRMED / RELEASED / COMPLETED / CLOSED）；
+- OUTSOURCE BOM consumption；
+- 委外 Material List / Issue / Supplement / Return / Backflush；
+- Outsourcing Receipt / Inspection / Inbound 入仓；
+- Processing Fee AP extension；
+- Procurement Scan 成本回入口；
+- VMI business documents（VMI Policy / Receipt / Consumption / Summary / Ownership Transfer / Supplier Bill handoff）。
+
+**不在本 Domain 范围：**
+
+- physical inventory truth、owner dimension（Inventory & Warehouse Domain）；
+- IQC engine 内部（Quality Domain）；
+- Supplier Bill / AP / GRNI / Payments / final costing adjustment（Finance Operations Domain）；
+- GL / Voucher / Period close（Accounting & Analytics Domain）；
+- MRP / Reservation（Planning Domain）；
+- BOM / Substitute / Routing master（Master & Engineering Domain）；
+- Production Order execution / Inspection（Manufacturing & Quality Domain）；
+- Multi-Org / Multi-Currency（OUT_OF_SCOPE_PRODUCT_BASELINE）；
+- 完整 B3105 PDA / camera SDK / label printing（Inventory & Warehouse Domain）；
+- Generic Workflow（Platform Domain）。
+
+### 31.2 Manual Evidence Baseline（摘要）
+
+完整证据来自上游已批准的 B3101 / B3121 + 支撑手册 B3104 / B3105 / B3106 / B3108 / B3109 / B3119 / B3120。下表为关键 contract：
+
+| 关键 contract | 含义 |
+|---|---|
+| 三账务链 | LEGACY_DIRECT `Dr Inventory / Cr AP`；SEPARATE Receipt `Dr Inventory / Cr GRNI`；SEPARATE Supplier Bill `Dr GRNI (+Input Tax Receivable if applicable) / Cr AP`；AUTO_BILL 同事务原子两步 |
+| 新业务默认 billing_mode | 必须为 `SEPARATE`；`LEGACY_DIRECT` 仅历史兼容 |
+| PO execution state | canonical 视图 OPEN / PARTIALLY_RECEIVED / FULFILLED/CLOSED / CANCELLED；MRP / Workbench / Reservation / Receiving **全部消费同一 canonical open remaining quantity** |
+| PR→PO | quantity / source / 累计 release / 剩余 / 逆算审计完整；source-line trace 不丢 |
+| Source List 启用时 | 无有效 Source List 的 supplier 不得静默使用；override 必须 permission + reason + audit |
+| Quota PROPORTIONAL | deterministic、quantity conservation、source-line trace、无超分配、并发安全；其它复杂 quota algorithm = `SOURCE_DETAIL_INSUFFICIENT` |
+| Sourcing Decision | PR Line → Source List Entry → Supplier → Allocated Quantity → Rule/Reason；不得仅依赖 `preferred_supplier_id` 或请求端临时 assignment |
+| Pricing Discount 因子 | **只**影响 procurement price resolution / PO snapshot；**不得**直接创建 AP credit；**不得** repurpose `purchase_discounts` |
+| Price Adjustment | effectivity-dated；**禁止** retroactive rewrite historical approved PO / Receipt / Bill / AP |
+| Receipt Notice | PO → Receipt Notice → Receipt / IQC；**不得** change inventory / valuation / GRNI / AP；支持 multi-PO consolidation |
+| Purchase Return 四分支 | LEGACY_DIRECT → AP/commercial credit；SEPARATE unbilled → reverse GRNI（无 AP credit）；SEPARATE billed → AP/commercial credit；SEPARATE partially billed → deterministic split（unbilled→GRNI reversal；billed→AP credit）；库存 reversal 与 commercial/AP adjustment 分离但 source trace |
+| Outsourcing ownership | Standard Outsourcing enterprise-owned throughout；Supplier WIP = location binding，**不是** ownership transfer；不得复用 VMI ownership semantics |
+| Outsourcing PO | processing-fee commitment；不得把 enterprise-supplied material 作为 PO line |
+| Outsourcing cost evidence | `consumed/backflushed material carrying value + processing fee`；**排除** issued but unused / returned / supplier-WIP remaining |
+| Outsourcing Lifecycle | `PLAN_CONFIRMED / RELEASED / COMPLETED / CLOSED`；**禁止**无证据把 `SUBMITTED / APPROVED` 列为必需阶段 |
+| OUTSOURCE BOM | Outsourcing Order 必须消费 approved / effective / `purpose=OUTSOURCE` / business-date appropriate BOM；禁止 `ACTIVE LIMIT 1` selector |
+| Handoff consumption | Planning `planning_outsource_handoffs(PENDING)` exactly-once consume；idempotent / source trace / concurrency-safe / status transition；Planning truth 不修改 |
+| VMI 区别 | VMI = physical at enterprise site + owner = supplier；standard outsourcing = owner = enterprise + physical at supplier；VMI full physical availability = `CROSS_DOMAIN_DEPENDENCY` |
+
+### 31.3 Capability Audit Matrix（已审计）
+
+#### 31.3.1 Procurement PRC-01 ~ PRC-26
+
+| ID | Capability | Audit Coverage | Implementation Decision |
+|---|---|---|---|
+| PRC-01 | Procurement Parameters | `MISSING` | `NEW`：source control enabled / quota control enabled / PR policy / default billing mode（SEPARATE）/ PO change policy / receiving tolerance / return policy-reasons；参数变化不反写历史已批准/已执行单据 |
+| PRC-02 | Supplier Procurement Profile | `PARTIAL → ENHANCE` | 扩展 Supplier profile：`procurement enabled / outsourcing enabled / supplier category / qualification / qualification validity / procurement defaults / payment-settlement defaults / supplier WIP warehouse binding where applicable`；**不**重建 Supplier |
+| PRC-03 | Buyer / Purchasing Group | `MISSING` | `NEW`：Buyer / Purchasing Group / membership / document assignment；server-side fail closed |
+| PRC-04 | Source List | `MISSING` | `NEW`：Product / Supplier / Source Type (`PURCHASE / OUTSOURCE`) / Effective Period / Enabled；启用 source control 时无有效 Source List 的 supplier 不得静默使用；override = permission + reason + audit |
+| PRC-05 | Quota | `MISSING` | `NEW`：bounded `PROPORTIONAL` 供应分配；deterministic / quantity conservation / source-line trace / no over-allocation / concurrency-safe；其它复杂 quota algorithm = `SOURCE_DETAIL_INSUFFICIENT` |
+| PRC-06 | Sourcing Decision | `MISSING` | `NEW`：PR Line → Source List Entry → Supplier → Allocated Quantity → Rule/Reason；不得仅依赖 `preferred_supplier_id` 或请求端临时 assignment |
+| PRC-07 | Purchase Price List | `MISSING` | `NEW`：supplier / product / source type / effective period / pricing UOM / unit price / status-version；单币种产品基线；不得顺手建立 Multi-Currency；PO 冻结 resolved price evidence |
+| PRC-08 | Pricing UOM | `PARTIAL → ENHANCE` | `ENHANCE`：当前 generic UOM conversion / purchase UOM / document quantity / base quantity snapshot / rational conversion KEEP；补 Pricing UOM ≠ Purchase/Document UOM 时的取价规则；禁止第二 UOM engine |
+| PRC-09 | Procurement Pricing Discount Table | `MISSING`（**不**复用 `purchase_discounts`） | `NEW`：procurement pricing-side discount；**仅**影响 price resolution / PO snapshot；**不得**直接创建 AP credit；existing `purchase_discounts` = AP / settlement-stage allowance（Finance）KEEP |
+| PRC-10 | Purchase Price Adjustment | `MISSING` | `NEW`：effectivity-dated price adjustment + new price version/history；**禁止** retroactive rewrite historical approved PO / Receipt / Bill / AP |
+| PRC-11 | Requisition Sources | `PARTIAL` | `ENHANCE`：固化 source-line trace；当前 `Manual / Planning-Purchase Instruction` 已存在；若 Sales-related direct PR 有真实 source 可作为 supported source；不得预先把 `Production Order direct / Sales Order direct / Safety Stock direct` 写成已确认事实；Planning demand 由 frozen Planning owner 管理 |
+| PRC-12 | PR Split / Merge / Supplier Allocation | `PARTIAL → ENHANCE` | `ENHANCE`：保留 per-line supplier assignment / partial quantity conversion / supplier grouping / remaining protection；新增 canonical sourcing allocation / split-merge planning fact / audit；**不**重写现有 batch converter |
+| PRC-13 | Purchase Order | `COVERED` | `KEEP`：现有 approval lifecycle `DRAFT → SUBMITTED → APPROVED / REJECTED`；**不**声称 current 有 CLOSED；Execution lifecycle 归 PRC-19 |
+| PRC-14 | PO Commercial Snapshot | `PARTIAL → ENHANCE` | `ENHANCE`：已冻结 supplier / contact / phone / address / expected delivery / payment terms / line price / PR source / document&base UOM quantity KEEP；新增 supply / settlement / payee supplier / buyer / purchase group / price source / discount source / delivery schedule；默认 `settlement supplier = supply supplier` / `payee supplier = settlement supplier`；payment execution 归 Finance Owner |
+| PRC-15 | Gift / Free Item | `SEMANTIC_MISMATCH → CONVERGE` | `CONVERGE`：合法赠品 `is_gift = true / unit_price = 0 / amount = 0`；普通非赠品不得借 gift contract 绕过 commercial validation |
+| PRC-16 | Delivery Schedule / Quantity Control | `PARTIAL → ENHANCE` | `ENHANCE`：header `expected_delivery_date` + 硬性超收保护 KEEP；新增 line/multi-delivery schedule + earliest/latest + upper/lower tolerance；lower-tolerance auto-close 算法 source 不足**不**猜 |
+| PRC-17 | Prepayment Requirement | `MISSING` | `NEW`：Procurement owns Prepayment Requirement / Schedule；Finance owns actual Payment / Allocation；Requirement 只定义 Procurement → Finance handoff；**不**建立第二支付引擎 |
+| PRC-18 | PO Change | `MISSING` | `NEW`：正式 business document；至少 `ADD / MODIFY / CANCEL`；可改变 quantity / price / delivery date/schedule；必须保留 original / change / approval-audit / applied result；禁止历史覆盖；已执行 quantity / source identity 受保护 |
+| PRC-19 | PO Execution Status | `SEMANTIC_MISMATCH → CONVERGE` | `CONVERGE`：建立 canonical PO execution view/state：`OPEN / PARTIALLY_RECEIVED / FULFILLED-CLOSED / CANCELLED where valid`；storage 由 Design 决定；**invariant**：MRP / Planner Workbench / Reservation / Receiving **全部消费同一 canonical `open remaining quantity`**；Reservation 不再使用 `Approved total` |
+| PRC-20 | Receipt Notice | `MISSING` | `NEW`：独立正式 document；PO → Receipt Notice → Receipt / IQC；支持 multi-PO consolidation；**绝对不** change inventory / valuation / GRNI / AP |
+| PRC-21 | Incoming Inspection | `COVERED` | `KEEP`：现有 IQC backbone；Procurement Requirement 只描述 source integration；Outsourcing 后续扩展 `OUTSOURCING_RECEIPT`（Design 决定 canonical source type）；**不**新建 Quality engine |
+| PRC-22 | Purchase Receipt | `COVERED` | `KEEP` + 增强：Receipt Notice source；delivery schedule/tolerance enforcement；sourcing/commercial trace；MySQL source-line concurrency；**不**重写 inventory / LOT-SERIAL / valuation / IQC / idempotency / period control |
+| PRC-23 | Billing Mode Semantics | `SEMANTIC_MISMATCH → CONVERGE` | `CONVERGE`：默认 `billing_mode = SEPARATE`；`LEGACY_DIRECT = compatibility only`；`AUTO_BILL = explicit valid mode`；账务 contract 不变（详见 §31.2 三账务链） |
+| PRC-24 | Return Request | `MISSING` | `NEW`：业务意图层；不得与 Purchase Return inventory execution 合并；至少 source / type / reason / method / replenishment method / quantity；未入库货物不得制造 inventory return |
+| PRC-25 | Purchase Return | `SEMANTIC_MISMATCH → CONVERGE` | `CONVERGE`：physical/value execution KEEP；financial settlement 四分支正确（详见 §31.2）；库存 reversal 与 commercial/AP adjustment 分离但保持 source trace |
+| PRC-26 | Procurement Scan | `MISSING` | `NEW` bounded：PO or Receipt Notice → Purchase Receipt；scanner wedge + document/item identity + warehouse + qty + LOT/SERIAL；**不**做 camera SDK / barcode designer / label printing / generic PDA platform |
+
+#### 31.3.2 VMI VMI-01 ~ VMI-05
+
+| ID | Capability | Audit Coverage | Implementation Decision |
+|---|---|---|---|
+| VMI-01 | VMI Policy / Agreement | `MISSING` | `NEW`：VMI Procurement business facts（bargain / settlement contract）；full owner-dimensional physical inventory 属 `CROSS_DOMAIN_DEPENDENCY` |
+| VMI-02 | VMI Receiving | `MISSING` | `NEW`：receive to supplier-owned bucket；不得伪造 owned inventory |
+| VMI-03 | VMI Consumption | `MISSING` | `NEW`：consume 不会 up supplier-owned bucket |
+| VMI-04 | VMI Consumption Summary / Ownership Transfer | `MISSING` | `NEW`：period summary → settlement window → ownership transfer trigger |
+| VMI-05 | VMI Ownership Transfer / Supplier Bill Handoff | `MISSING` | `NEW`：transfer `supplier → own` + 创建 Supplier Bill for released qty；不建立第二 owned inventory ledger |
+
+> VMI = `physical location = enterprise site / owner = supplier`；与 Standard Outsourcing 方向相反。VMI full physical availability 依赖 Inventory owner dimension（`CROSS_DOMAIN_DEPENDENCY`），但不阻塞 VMI business documents 设计。
+
+#### 31.3.3 Outsourcing OUT-01 ~ OUT-23
+
+| ID | Capability | Audit Coverage | Implementation Decision |
+|---|---|---|---|
+| OUT-01 | Outsourcing Supplier | `PARTIAL` | `ENHANCE`：扩展 PRC-02 Supplier Procurement Profile：`outsourcing enabled / outsourcing qualification / supplier WIP warehouse binding` |
+| OUT-02 | Outsourcing Source List | `MISSING` | `NEW`：复用 Procurement sourcing/pricing infrastructure；`source_type = OUTSOURCE` |
+| OUT-03 | Processing Price | `MISSING` | `NEW`：加工费；**不是** finished product full material cost |
+| OUT-04 | Supplier WIP Warehouse | `PARTIAL` | `ENHANCE`：canonical Warehouse bound to Supplier as outsourcing WIP **location**；**不是** ownership transfer；不创建第二 Warehouse master |
+| OUT-05 | Planning Handoff | `PARTIAL` | `ENHANCE`：exactly-once consume `planning_outsource_handoffs(PENDING)`；idempotent / source trace / concurrency-safe / status transition；Planning truth 不修改 |
+| OUT-06 | Outsourcing Order | `MISSING` | `NEW`：来源至少 `PLANNING / MANUAL`；operation outsourcing source semantic 后续 source 足够再加 |
+| OUT-07 | Outsourcing Lifecycle | `MISSING → NEW` | `NEW`：source-backed Manual semantics `PLAN_CONFIRMED / RELEASED / COMPLETED / CLOSED`；**不**写 `SUBMITTED / APPROVED` 为必需阶段；创建态 / 取消态 / 是否需要审批留 Design bounded |
+| OUT-08 | OUTSOURCE BOM | `PARTIAL` | `ENHANCE`：Outsourcing Order 必须消费 approved / effective / `purpose=OUTSOURCE` / business-date appropriate BOM；禁止 `ACTIVE LIMIT 1` selector |
+| OUT-09 | Outsourcing Material List | `MISSING` | `NEW`：Order 保存/确认时形成 execution snapshot（BOM/version / component / per-unit quantity / scrap / required quantity）；Release 后 master BOM 改变**不**回写历史；额外材料走 Supplement |
+| OUT-10 | Outsourcing PO | `MISSING` | `NEW`：**processing-fee commercial commitment**；不是 "采购企业提供给供应商的材料"；Requirement 推荐 `business_type = OUTSOURCE` + `source = Outsourcing Order` + commercial price = processing fee；最终是否复用 canonical PO 留 Design |
+| OUT-11 | Outsourcing Material Issue | `MISSING` | `NEW`：issue enterprise-owned materials to supplier WIP warehouse；复用 canonical Inventory Transfer / tracking primitives |
+| OUT-12 | Outsourcing Material Supplement | `MISSING` | `NEW`：与 Issue 同一链路；source-traceable |
+| OUT-13 | Outsourcing Material Return | `MISSING` | `NEW`：from supplier WIP → internal warehouse；复用 canonical Inventory Transfer / tracking primitives |
+| OUT-14 | Outsourcing Material Ownership | `PARTIAL` | `ENHANCE`：enterprise-owned throughout；新增 order-specific material position + supplier-WIP location + issued / returned / remaining / backflushed；**不**是 new owner ledger |
+| OUT-15 | LOT / SERIAL for Outsourcing Materials | `PARTIAL` | `ENHANCE`：复用 existing canonical tracking；要求 issue → supplier WIP → return / backflush 持续可追；禁止第二 serial/lot engine |
+| OUT-16 | Backflush | `MISSING` | `NEW`：基于 Outsourcing Order + Material List + actual issued/supplemented/returned + receipt quantity + tracked identities；order-specific consumption；不跨订单随意消费 Supplier WIP |
+| OUT-17 | Outsourcing Completion Receipt Notice | `MISSING` | `NEW`：不改变 inventory / GRNI / AP |
+| OUT-18 | Outsourcing Inspection | `PARTIAL` | `ENHANCE`：扩展 IQC source-type `OUTSOURCING_RECEIPT`（Design 决定 canonical name） |
+| OUT-19 | Outsourcing Inbound | `MISSING` | `NEW`：Flow：Outsourcing Order / Processing PO → Completion Receipt Notice → Quality（if required）→ Outsourcing Receipt → Enterprise Finished Inventory Recognition；**不**是 supplier-owned finished stock → enterprise ownership transfer；Supplier WIP 是 source/location context；只有 confirmed valid Outsourcing Receipt 才形成 enterprise warehouse finished inventory fact |
+| OUT-20 | Processing Fee AP | `PARTIAL` | `ENHANCE`：**必须扩展** canonical Supplier Bill source contract；不得建立 `Outsourcing Payable` 第二引擎；至少能 trace：Outsourcing Receipt / Outsourcing Receipt Item / Outsourcing PO line / processing quantity / processing fee |
+| OUT-21 | Outsourcing Cost Evidence | `MISSING` | `NEW`：正确基础 = `consumed/backflushed material carrying value + processing fee`；**排除** issued but unused / returned / supplier-WIP remaining；Procurement/Outsourcing owner 提供 cost evidence；final costing adjustment / variance allocation 归 Finance |
+| OUT-22 | Finished Return | `MISSING` | `NEW`：来源 = confirmed Outsourcing Receipt；要求 quantity cap / LOT-SERIAL / finished inventory reversal / processing-fee billability-credit handoff / material & cost trace；**不**机械复用普通 Purchase Return 的 price semantics |
+| OUT-23 | Period-End / WIP / Opening / Reports | `MISSING → NEW / INTEGRATE` | `NEW / INTEGRATE`：必须覆盖 backflush difference allocation / supplier material balance / WIP transfer / opening outsourcing order / opening outsourcing WIP / execution summary / material issue summary-detail；Opening 期间不强制用 generic Period Close 判 PARTIAL；不得用 generic Period Close 判 PARTIAL |
+
+### 31.4 目标 Capability Closure 要求
+
+| Domain Capability | 落地后 Coverage 目标 | 关键 Acceptance |
+|---|---|---|
+| Procurement Parameters (PRC-01) | `COVERED` | 参数生效；新业务默认 SEPARATE 可观测；参数变化不反写历史 |
+| Supplier Procurement Profile (PRC-02) | `COVERED` | procurement / outsourcing qualification / category / payment-settlement defaults；supplier WIP binding where applicable |
+| Buyer / Purchasing Group (PRC-03) | `COVERED` | server-side fail closed；不依赖前端隐藏 |
+| Sourcing (PRC-04 / PRC-05 / PRC-06) | `COVERED` | Source List enabled + Quota deterministic + Sourcing Decision 可追溯；override 审计完整 |
+| Pricing (PRC-07 / PRC-08 / PRC-09 / PRC-10) | `COVERED` | Price List / Pricing UOM / Pricing Discount / Price Adjustment 生效；PO 冻结 resolved price evidence；Pricing Discount **不**进 AP；Price Adjustment **不**回写历史 |
+| PR / PO (PRC-11 / PRC-12 / PRC-13 / PRC-14) | `COVERED` | source-line trace / split-merge audit / snapshot 完整 |
+| Gift (PRC-15) | `COVERED` | legal Gift 实测可建模；非 gift line 不得 0 价 |
+| Delivery Schedule (PRC-16) | `COVERED` | multi-delivery schedule + tolerance boundary 生效 |
+| Prepayment (PRC-17) | `COVERED` | Procurement→Finance handoff 完整；Finance 唯一支付 owner |
+| PO Change (PRC-18) | `COVERED` | ADD/MODIFY/CANCEL；original/change/audit/applied 完整 |
+| PO Execution (PRC-19) | `COVERED` | canonical execution state OPEN/PARTIALLY_RECEIVED/FULFILLED-CLOSED/CANCELLED；MRP/Workbench/Reservation/Receiving 同一消费 |
+| Receipt Notice (PRC-20) | `COVERED` | 不影响 inventory / valuation / GRNI / AP；multi-PO consolidation 可用 |
+| IQC (PRC-21) | `COVERED` | backbone KEEP；Outsourcing source-type 接入不破坏 |
+| Purchase Receipt (PRC-22) | `COVERED` | 增强不重写既有主干 |
+| Billing Mode (PRC-23) | `COVERED` | 默认 SEPARATE；三链账务 contract 不变；历史 LEGACY_DIRECT 数据不反写 |
+| Return Request (PRC-24) | `COVERED` | 与 Purchase Return execution 分离；未入库货物不被制造为 inventory return |
+| Purchase Return (PRC-25) | `COVERED` | 四分支账务正确；source trace 完整 |
+| Procurement Scan (PRC-26) | `COVERED` | bounded 入仓；不影响业务合同 |
+| VMI (VMI-01 ~ VMI-05) | `COVERED`（business layer） | VMI Policy / Consumption / Summary / Supplier Bill handoff 完整；不伪造 owned inventory |
+| Outsourcing (OUT-01 ~ OUT-23) | `COVERED` | 23 capability 全部落地；enterprise ownership 不漂移；location binding 完整；canonical Supplier Bill 扩展不创建第二引擎 |
+
+### 31.5 Permission 约束
+
+新增最小独立 permission 家族（back-end fail closed；不锁死最终 name）：
+
+- Procurement Configuration（含 Procurement Parameters / Buyer / Purchasing Group / Profile / Numbering / Tolerance）
+- Sourcing（Source List / Quota / Sourcing Decision）
+- Pricing（Price List / Pricing UOM / Pricing Discount / Price Adjustment）
+- PO Change（PO Change / PO Execution state management）
+- Receipt Notice（Receipt Notice create/confirm）
+- Return Request（Return Request create/review/post）
+- VMI（VMI policy / receiving / consumption / summary / ownership transfer）
+- Outsourcing View / Manage
+- Outsourcing Release（Outsourcing Order release/complete/close）
+- Outsourcing Material Execution（Issue / Supplement / Return / Backflush）
+- Outsourcing Receiving（Completion Receipt Notice / Inspection / Receipt / Return）
+
+兼容：保留既有 `SUPPLIERS_*` / `PURCHASE_REQUISITION_*` / `PURCHASE_ORDERS_*` / `PURCHASE_RECEIPTS_*` / `RETURNS_*` / `IQC_*` / `AP_*` / `PURCHASE_DISCOUNT_*`；5 个 role seed（admin / sales / warehouse / reviewer / accounting）继续按现有能力访问；新 permission admin 继承；其它角色保持现状。
+
+### 31.6 Compatibility / 不变性约束
+
+- 不删除 / 重命名现有 57 enabled + 5 disabled route key；本 Domain Closure additive 引入新 route 与 owner；
+- 不修改既有 `purchase_discounts` schema（保持现有 AP / settlement-stage allowance 语义）；
+- 不重写 Inventory / Quality / AP / GL / Period Close backbone；
+- 不重写 Manufacturing canonical owner；
+- 不修改既有的 SCHEMA SUPPLIER master；新字段以 additive 形式扩展；
+- 不 DROP historical table；
+- 不重命名既有 release tag；
+- SQLite + MySQL 8 schema parity；migration idempotent。
+
+### 31.7 Out of Scope（本 Domain Closure 不实施）
+
+- Multi-Org / Multi-Currency（OUT_OF_SCOPE_PRODUCT_BASELINE）；
+- 完整 B3105 PDA / camera SDK / label printing / generic PDA platform；
+- Finance engine rewrite（重写 Supplier Bill / AP / GRNI / Payments / Cost）；
+- Inventory ledger rewrite（含 owner dimension 的 invasive 改动）；
+- Generic Workflow redesign；
+- destructive data rewrite / DROP historical table / database reset；
+- 完整 Operation Outsourcing handoff（工序委外完整 lifecycle，Outsourced Operation Boundary = PARTIAL INTEGRATION）；
+- retroactive rewrite 历史 approved PO / Receipt / Bill / AP（PRC-10 Price Adjustment 的硬性禁止）。
+
+### 31.8 Acceptance Criteria
+
+#### A. Functional
+
+全部 PRC-01~26 + VMI-01~05 + OUT-01~23 = 54 项 capability 每一项都必须有 final capability disposition。本域 capability disposition **穷尽且仅**分为以下两类：
+
+```text
+DOMAIN-OWNED SOURCE-BACKED CAPABILITIES = 49
++
+MUST INTEGRATE capabilities = 5
+=
+54 capabilities
+```
+
+Cross-domain dependency 是 acceptance dependency metadata，不是 capability disposition；不得把任何 capability "挪入 CROSS_DOMAIN_DEPENDENCY" 来代替 disposition。
+
+1. **Procurement & Outsourcing Domain 自有的 source-backed capability = 49 项**
+
+   按 family 分组（25 PRC + 5 VMI + 19 OUT）：
+
+   - **PRC domain-owned = 25 项**（PRC-21 = integration-backed，本节不含）：
+     PRC-01 / PRC-02 / PRC-03 / PRC-04 / PRC-05 / PRC-06 / PRC-07 / PRC-08 / PRC-09 / PRC-10 / PRC-11 / PRC-12 / PRC-13 / PRC-14 / PRC-15 / PRC-16 / PRC-17 / PRC-18 / PRC-19 / PRC-20 / PRC-22 / PRC-23 / PRC-24 / PRC-25 / PRC-26
+   - **VMI domain-owned = 5 项**（**全部**）：
+     VMI-01 / VMI-02 / VMI-03 / VMI-04 / VMI-05
+   - **OUT domain-owned = 19 项**（OUT-08 / OUT-18 / OUT-20 / OUT-23 = integration-backed，本节不含）：
+     OUT-01 / OUT-02 / OUT-03 / OUT-04 / OUT-05 / OUT-06 / OUT-07 / OUT-09 / OUT-10 / OUT-11 / OUT-12 / OUT-13 / OUT-14 / OUT-15 / OUT-16 / OUT-17 / OUT-19 / OUT-21 / OUT-22
+
+   所有 49 项必须达到 Requirement 定义的目标闭环；不得残留未经用户批准的 `MISSING` / `SEMANTIC_MISMATCH`。其中 4 项历史 `SEMANTIC_MISMATCH` 的 `→ CONVERGE` invariant：
+   - PRC-15 Gift / Free Item：`is_gift_line` 标记 / `>= 0` 放宽；
+   - PRC-19 PO Execution Status：canonical `OPEN / PARTIALLY_RECEIVED / FULFILLED-CLOSED / CANCELLED`；MRP / Workbench / Reservation / Receiving 全部消费同一 canonical `open remaining quantity`；
+   - PRC-23 Billing Mode Semantics：默认 `SEPARATE`；`LEGACY_DIRECT = compatibility only`；`AUTO_BILL = explicit valid mode`；
+   - PRC-25 Purchase Return：LEGACY_DIRECT → AP/commercial credit；SEPARATE unbilled → reverse GRNI；SEPARATE billed → AP/commercial credit；SEPARATE partially billed → deterministic split（unbilled → GRNI reversal；billed → AP credit）。
+
+   **VMI-01~05 全部归本 Domain 完成**。VMI-01 Policy / Agreement、VMI-02 Receiving business fact、VMI-03 Consumption business fact、VMI-04 Consumption Summary / Settlement Window、VMI-05 Ownership Transfer business fact 五项的 business layer（policy、agreement、document、quantity、settlement、audit、idempotency / business lifecycle）全部由 Procurement & Outsourcing Domain owner 完成；不得将 VMI-03 / VMI-05 整个 capability defer 给 Inventory Domain。
+
+2. **MUST INTEGRATE capability = 5 项**
+
+   必须成功消费 canonical owner 的稳定 integration contract，**不得**建立 duplicate mutable truth：
+
+   - **PRC-21 IQC**：消费 `authoritative-quality.js`，不得新建 Quality engine；
+   - **OUT-08 OUTSOURCE BOM**：消费 `engineering-configurable-bom.js` resolver（`approved / effective / purpose=OUTSOURCE / business-date appropriate`），禁止 `ACTIVE LIMIT 1` selector；
+   - **OUT-18 Inspection**：扩展 IQC source-type `OUTSOURCING_RECEIPT`（canonical name 由 Design 决定）；
+   - **OUT-20 Processing Fee AP**：扩展 canonical Supplier Bill source contract，**不得**建立 `Outsourcing Payable` 第二引擎；至少能 trace Outsourcing Receipt / Outsourcing Receipt Item / Outsourcing PO line / processing quantity / processing fee；
+   - **OUT-23 Period-End**：复用 Period Close framework integration；opening 期间不强制用 generic Period Close 判 PARTIAL。
+
+3. **OUT_OF_SCOPE_PRODUCT_BASELINE**
+
+   仅允许用户已批准的明确产品基线项目：
+
+   - Multi-Organization；
+   - Multi-Currency；
+   - 完整 B3105 PDA / camera SDK / label printing / generic PDA platform；
+   - Finance engine rewrite；
+   - Inventory ledger rewrite（含 invasive owner-dimension 改造）；
+   - Generic Workflow redesign；
+   - destructive data rewrite / DROP historical table / database reset；
+   - 完整 Operation Outsourcing handoff lifecycle；
+   - retroactive rewrite 历史 approved PO / Receipt / Bill / AP（PRC-10 硬性禁止）；
+   - Standard Outsourcing 复用 VMI ownership semantics；
+   - enterprise-supplied material 入 OUT-10 PO line；
+   - supplier-owned finished stock 通过 OUT-19 VMI-style ownership transfer。
+
+最终不得存在 `unexplained MISSING / PARTIAL / SEMANTIC_MISMATCH`。任何 unresolved disposition 必须以 Hard Stop Conditions 形式回退至 Requirement/Design 层重新审视，**不得**通过偷换 disposition 类别伪装覆盖。
+
+---
+
+#### A.1 Cross-Domain Dependency Boundary（acceptance dependency metadata，**不是** capability disposition）
+
+Inventory & Warehouse Domain owns owner-dimensional physical inventory truth。本域通过该 dependency 把 owner-dimensional physical mutation 部分交给 Inventory Domain 实现。
+
+dependency 被以下 capability 调用，但**仅针对其物理库存 owner-dimensional mutation 部分**：
+
+| capability | Procurement 拥有 | Inventory 拥有 |
+|---|---|---|
+| VMI-02 Receiving | VMI receipt document、supplier / product / source、received quantity、business audit、idempotency / business lifecycle | post 入 supplier-owned physical stock；owner-dimensional availability 更新 |
+| VMI-03 Consumption | consumption document、supplier / product / source、consumed quantity、settlement trace、business audit、idempotency / business lifecycle | deduct supplier-owned physical stock；owner-dimensional availability 更新 |
+| VMI-05 Ownership Transfer | ownership-transfer business event、settlement quantity、supplier、source consumption、Supplier Bill handoff | physical owner change `supplier-owned → enterprise-owned` |
+
+dependency 不进入 capability disposition 计数；它仅是 acceptance dependency metadata。54-capability accounting 仍 = 49 domain-owned + 5 integration-backed。
+
+---
+
+#### A.2 Explicit Invariants
+
+- **VMI business-layer closure** `≠` **owner-dimensional Inventory closure**。本 Domain 完成 VMI business layer 不代表 Inventory owner-dimension 物理库存层就绪；二者验收分别独立。
+- **Inventory owner-dimension dependency** `≠` **VMI-01~05 capability disposition substitute**。Inventory owner-dimension dependency 不得成为将 VMI-01~05 推迟或标 PARTIAL 的理由；本 Domain 必须独立完成 VMI business layer。
+- **Capability disposition 穷尽且分类清晰**：任何 capability 必须落到 `Domain-owned source-backed` 或 `MUST INTEGRATE` 之一；不得以 `CROSS_DOMAIN_DEPENDENCY` 代替 disposition。
+- **Cross-domain dependency 仅记录 metadata**：用于 traceability 与 acceptance dependency 校验，不计入 capability 分类。
+
+#### B. Data / Schema
+
+- 新增表 / column 全部 additive；既有表 / 字段无破坏；
+- 既有的 SUPPLIER / `purchase_discounts` / Supplier Bill / AP / GRNI / IQC 表 / IBC 后续 schema 不破坏；
+- SQLite / MySQL 8 schema parity；migration idempotent；
+- Opening 期间 opening outsourcing order / opening outsourcing WIP 标记 `OPENING`；不虚构历史 accounting。
+
+#### C. Security
+
+- 所有 Procurement / Outsourcing mutation 必须 backend fail closed；
+- Frontend hidden 不等于 authorization；
+- Source control override = permission + reason + audit；
+- Audit 写入关键 PO / Receipt / Return / Outsourcing / VMI mutation。
+
+#### D. Test
+
+- Wave A focused：Procurement Parameters + Supplier Profile + Buyer；
+- Wave B focused：Sourcing / Quota / Pricing；
+- Wave C focused：PR / PO / PO Change / PO Execution；
+- Wave D focused：Receipt Notice / Purchase Return 四分支 / Procurement Scan；
+- Wave E focused：VMI business layer + Inventory owner dimension handshake；
+- Wave F focused：Outsourcing Foundation（profile / source list / processing price / WIP warehouse / handoff / order / lifecycle / BOM）；
+- Wave G focused：Outsourcing Materials（material list / PO / Issue / Supplement / Return / LOT-SERIAL / Backflush）；
+- Wave H focused：Outsourcing Receiving / Finance Handoff（notice / inspection / inbound / processing fee AP / cost evidence / finished return）；
+- Wave I focused：Period-End / WIP / Opening / Reports；
+- Wave J focused：UI / mobile convergence；
+- 全部 focused tests 纳入 `scripts/testing/test-suites.js`；
+- canonical gate：`pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm build` / `git diff --check` 全 PASS；
+- 若变更触及 MySQL 敏感路径且具备受保护 disposable MySQL 环境，运行 `pnpm test:mysql` + `pnpm test:mysql:concurrency` + `pnpm test:mysql:performance`。
+
+#### E. Concurrency critical sections
+
+以下区域必须为 critical section（Design 决定具体 SQL / lock strategy；本阶段不设计 SQL）：
+
+- Sourcing allocation；
+- PR → PO；
+- PO Change vs Receipt；
+- PO → Receipt Notice；
+- PO → Receipt；
+- Receipt → Return；
+- Receipt → Supplier Bill；
+- Planning OUTSOURCE handoff → Outsourcing Order；
+- Outsource Material Issue；
+- Outsource Receipt；
+- Processing Fee Bill；
+- VMI Ownership Transfer。
+
+#### F. UI / Mobile
+
+- 实际 operator workflow（user task；Design 决定 UI 结构）：
+  - PR → Sourcing → PO；
+  - PO → Receipt Notice → IQC → Receipt；
+  - Return Request → Purchase Return；
+  - VMI policy → receipt / consumption → settlement / ownership transfer；
+  - Planning OUTSOURCE → Outsourcing Order → Materials → Receiving → Processing Fee；
+- Mobile-first：390 CSS px 为主；同时验证 320 / 430 / 680；
+- LIST → DETAIL → EDITOR/WORKFLOW；
+- 仅 UI 任务显式加载 `.claude/skills/erp-mobile-taste/SKILL.md`；
+- 不得修改业务术语、API、权限、状态机、Approval/Confirm/Post/Reverse、source/downstream、inventory/accounting facts。
+
+#### G. Documentation / Log
+
+- `document.md §22.1 / §22.21 / §31` 同步更新；
+- `solution.md §26` 同步更新（Design；本阶段未开始）；
+- `log/2026-10-08.md` 追加本 Domain Closure Requirement 完整记录；
+- `README.md` 仓库地图与新增 page route / server module / 测试在 Design 完成后同步更新；
+- `APPLY_GUIDE.md` 不动。
+
+### 31.9 Hard Stop Conditions
+
+遇下列情况停止对应 sub-capability（不影响其它 sub-capability 推进）：
+
+1. Multi-Organization / Multi-Currency 需求出现；
+2. 需要重写 Inventory / Quality / AP / GL / Period Close / Production backbone；
+3. 需要 DROP historical table 或 destructive schema rewrite；
+4. 需要把 enterprise-supplied material 作为 PO line 入 OUT-10；
+5. 需要 retroactive rewrite 历史 approved PO / Receipt / Bill / AP；
+6. 需要把 Standard Outsourcing 复用 VMI ownership semantics；
+7. 需要把 supplier-owned finished stock 通过 OUT-19 建模为 VMI-style ownership transfer；
+8. source semantics 不足导致 lower-tolerance auto-close / 截图级 forecast time-fence / 复杂 substitute 数量算法 / 完整 quota algorithm 不得不猜测；
+9. MySQL migration 无法保证 parity；
+10. 需要把 Outsource Material Issue / Return 通过 raw UPDATE inventory balance（绕过 canonical inventory transfer）；
+11. 既有的 LEGACY_DIRECT 历史数据需要被反写以满足新默认；
+12. 既有的 IQC / OQC / QCP / Production / Planning / Engineering canonical owner 必须被破坏。
+
+### 31.10 最终接受状态
+
+本节 Requirement 包含 26 + 5 + 23 = 54 项 Capability / 10 个 Wave / 11 个新增 permission family。本节 Requirement 完成；下游 Design 见 `solution.md §26`（本阶段未开始）。等待用户 PASS。
+
+---
+
+**PROCUREMENT & OUTSOURCING DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR USER REVIEW**
