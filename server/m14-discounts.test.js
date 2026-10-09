@@ -252,10 +252,10 @@ describe('M14 — Sales Discount', () => {
 
     const registrySource = readFileSync(resolve('src/navigation/applicationRegistry.js'), 'utf8');
     assert.match(registrySource, /route\('sales-discounts','销售折让'[^\n]*SALES_DISCOUNT_MANAGE/);
-    assert.match(registrySource, /route\('purchase-discounts','采购折让'[^\n]*PURCHASE_DISCOUNT_MANAGE/);
+    assert.match(registrySource, /route\('purchase-discounts','应付折让'[^\n]*PURCHASE_DISCOUNT_MANAGE/);
     const launcher = buildMobileApplicationGroups([
       { key: 'sales-discounts', label: '销售折让' },
-      { key: 'purchase-discounts', label: '采购折让' },
+      { key: 'purchase-discounts', label: '应付折让' },
     ]);
     assert.deepEqual(launcher.flatMap((group) => group.items.map((item) => item.page)).sort(), [
       'purchase-discounts',

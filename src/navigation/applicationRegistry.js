@@ -23,7 +23,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('products','货品资料','master-engineering','FLOW_PRIMARY','LIST','primary','主数据与工程','products',{any:['PRODUCTS_VIEW','PRODUCTS_MANAGE']}),
   route('warehouses','仓库资料','inventory-warehouse','FLOW_PRIMARY','LIST','primary','库存与仓储','warehouses',{any:['WAREHOUSES_VIEW','WAREHOUSES_MANAGE']}),
   route('inventory','库存作业','inventory-warehouse','FLOW_PRIMARY','WORKFLOW','primary','库存与仓储','inventory',{any:['INVENTORY_VIEW']}),
-  route('purchase-receipts','采购入库','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseReceipts',{any:['PURCHASE_RECEIPTS_VIEW','PURCHASE_RECEIPTS_MANAGE']},{contextHint:'仓库验收'}),
+  route('purchase-receipts','采购收货','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseReceipts',{any:['PURCHASE_RECEIPTS_VIEW','PURCHASE_RECEIPTS_MANAGE']},{contextHint:'仓库验收'}),
   route('sales-deliveries','销售出货','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','salesDeliveries',{any:['SALES_DELIVERIES_VIEW','SALES_DELIVERIES_MANAGE']}),
   route('returns','退货管理','sales-customer','FLOW_SUPPORTING','LIST','secondary','销售与客户','returns',{any:['RETURNS_VIEW','RETURNS_MANAGE']}),
   route('inventory-transactions','库存异动明细','inventory-warehouse','REPORT','REPORT','contextual','库存与仓储','inventoryTransactions',{any:['INVENTORY_VIEW']}),
@@ -31,7 +31,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('inventory-scraps','存货报废','inventory-warehouse','FLOW_PRIMARY','LIST','primary','库存与仓储','inventoryScrap',{any:['INVENTORY_SCRAP_VIEW','INVENTORY_SCRAP_MANAGE']}),
   route('inventory-month-end','存货月结','inventory-warehouse','FLOW_PRIMARY','WORKFLOW','primary','库存与仓储','inventoryPeriod',{any:['INVENTORY_PERIOD_CLOSE_VIEW','INVENTORY_PERIOD_CLOSE_MANAGE']}),
   route('sales-discounts','销售折让','sales-customer','FLOW_INTERNAL_STEP','LIST','contextual','销售与客户','salesDiscount',{any:['SALES_DISCOUNT_MANAGE']},{parentRoute:'accounts-receivable'}),
-  route('purchase-discounts','采购折让','procurement-outsourcing','FLOW_INTERNAL_STEP','LIST','contextual','采购与委外','purchaseDiscount',{any:['PURCHASE_DISCOUNT_MANAGE']},{parentRoute:'accounts-payable'}),
+  route('purchase-discounts','应付折让','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','purchaseDiscount',{any:['PURCHASE_DISCOUNT_MANAGE']},{parentRoute:'accounts-payable'}),
   route('sales-invoices','销售发票','finance-operations','FLOW_INTERNAL_STEP','LIST','secondary','财务运营','accounting',{any:['AR_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-receivable'}),
   route('accounts-receivable','应收结算','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','accounting',{any:['AR_VIEW','COLLECTION_MANAGE']}),
   route('payment-collections','收款 / 核销','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','cashJournals',{any:['AR_VIEW','COLLECTION_MANAGE']},{parentRoute:'accounts-receivable'}),
@@ -63,6 +63,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('production-instructions','生产指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PRODUCTION_INSTRUCTION_VIEW']}),
   route('purchase-instructions','采购指令','planning','FLOW_PRIMARY','LIST','primary','计划','planningDocuments',{any:['PURCHASE_INSTRUCTION_VIEW']}),
   route('purchase-requisitions','请购单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
+  route('sourcing-pricing','寻源与定价','procurement-outsourcing','FLOW_SUPPORTING','WORKFLOW','primary','采购与委外','sourcingPricing',{any:['SOURCING_VIEW','PRICING_VIEW','PROCUREMENT_CONFIG_VIEW']}),
+  route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE']}),
   route('product-costs','标准成本','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('cost-rates','成本费率','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
@@ -162,6 +164,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
   'engineering-substitute': defaultScreen('../pages/engineering-substitute.jsx'),
   'engineering-change': defaultScreen('../pages/engineering-change.jsx'),
+  'sourcing-pricing': defaultScreen('../pages/sourcing-pricing.jsx'),
+  outsourcing: defaultScreen('../pages/outsourcing.jsx'),
 });
 
 const DETAIL_TARGET_ROUTES = new Set([
@@ -171,6 +175,7 @@ const DETAIL_TARGET_ROUTES = new Set([
   'production-instructions','purchase-instructions','purchase-requisitions',
   'planned-orders','planning-reservations','planning-configuration',
   'engineering-reference','engineering-substitute','engineering-change',
+  'sourcing-pricing','outsourcing',
 ]);
 const ROUTE_QUERY_KEYS = Object.freeze({
   orders: ['documentType'], 'purchase-orders': ['documentType'], 'purchase-receipts': ['documentType'],
@@ -221,12 +226,12 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
-  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['sales-discounts','销售折让','salesDiscount']]),
+  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}]]),
   launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
-  launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购入库','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['purchase-discounts','采购折让','purchaseDiscount']]),
+  launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
   launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
-  launcherGroup('finance-operations','Finance Operations','domain','finance', [['sales-invoices','销售发票','accounting'],['accounts-receivable','应收结算','accountsReceivable'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['accounts-payable','应付结算','accountsPayable'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['bank-accounts','银行账户','bankAccounts'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
+  launcherGroup('finance-operations','Finance Operations','domain','finance', [['sales-invoices','销售发票','accounting'],['sales-discounts','销售折让','salesDiscount'],['accounts-receivable','应收结算','accountsReceivable'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['accounts-payable','应付结算','accountsPayable'],['purchase-discounts','应付折让','purchaseDiscount'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['bank-accounts','银行账户','bankAccounts'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
   launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
     ['business-overview','业务总览','overview'],
     ['accounting','会计凭证','accounting'],

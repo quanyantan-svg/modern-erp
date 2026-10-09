@@ -6,7 +6,7 @@ import { APPROVAL_FAMILIES, ROUTE_PRESENTATIONS } from '../src/navigation/presen
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 test('D9 closes every active route on the shared 680px application rail', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 57);
+  assert.equal(ROUTE_PRESENTATIONS.length, 59);
   const styles = read('src/styles.css');
   assert.match(styles, /\.mobile-shell \{[\s\S]*--app-max-width: 680px;[\s\S]*--page-max-width: 680px;/);
   assert.match(styles, /\.mobile-application-view \{[\s\S]*max-width: 680px;/);

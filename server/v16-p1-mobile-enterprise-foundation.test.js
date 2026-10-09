@@ -199,7 +199,7 @@ describe('P1B — application launcher contract', () => {
     const sales = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'sales-customer');
     assert.deepEqual(
       sales.items.map((item) => item.page),
-      ['customers', 'orders', 'sales-deliveries', 'returns', 'sales-discounts']
+      ['customers', 'orders', 'sales-deliveries', 'returns']
     );
   });
 
@@ -207,7 +207,7 @@ describe('P1B — application launcher contract', () => {
     const purchasing = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'procurement-outsourcing');
     assert.deepEqual(
       purchasing.items.map((item) => item.page),
-      ['suppliers', 'purchase-requisitions', 'purchase-orders', 'purchase-receipts', 'returns', 'purchase-discounts']
+      ['suppliers', 'sourcing-pricing', 'purchase-requisitions', 'purchase-orders', 'purchase-receipts', 'returns', 'outsourcing']
     );
   });
 
@@ -354,7 +354,7 @@ describe('Scope — package version and route guards', () => {
     assert.equal(applicationRegistry.applicationRouteFor('dashboard')?.enabled, true);
   });
 
-  test('57 active routes are still reachable through launcher / utility / nav', () => {
+  test('59 active routes are still reachable through launcher / utility / nav', () => {
     const presentations = presentationMetadata.ROUTE_PRESENTATIONS;
     const enabledRoutes = presentations.map((p) => p.route);
     const allLauncherPages = new Set(

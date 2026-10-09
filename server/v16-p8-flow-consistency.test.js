@@ -47,14 +47,15 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 57 enabled + 5 disabled = 62 entries', () => {
+test('P8 route inventory: 59 enabled + 5 disabled = 64 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
   // planning-configuration) under planned-orders.
-  assert.equal(ROUTE_PRESENTATIONS.length, 57, 'ROUTE_PRESENTATIONS must hold 57 enabled canonical routes');
+  // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
+  assert.equal(ROUTE_PRESENTATIONS.length, 59, 'ROUTE_PRESENTATIONS must hold 59 enabled canonical routes');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 62);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 64);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {

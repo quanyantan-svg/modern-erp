@@ -179,7 +179,7 @@ describe('V1.6 P3.1 — sales-order micro polish contract', () => {
     //   - the back navigation chain in MobileShell / AppNavigationContext /
     //     App.jsx is still wired (P3.1 cleaned up dead back buttons; the
     //     canonical handler chain must remain).
-    assert.equal(ROUTE_PRESENTATIONS.length, 57, 'canonical 57 enabled routes must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 59, 'canonical 59 enabled routes must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesRoute = enabledByRoute.get('orders');

@@ -223,8 +223,8 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     );
   });
 
-  test('34. canonical 57 enabled / 5 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
-    assert.equal(ROUTE_PRESENTATIONS.length, 57, 'canonical 57 enabled routes must remain enabled');
+  test('34. canonical 59 enabled / 5 disabled routes remain and sales-deliveries parentRoute stays a primary', () => {
+    assert.equal(ROUTE_PRESENTATIONS.length, 59, 'canonical 59 enabled routes must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');
