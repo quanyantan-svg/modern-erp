@@ -110,6 +110,9 @@ const FULL = [
   // (MySQL concurrency gate re-runs the full race matrix on disposable MySQL.)
   'server/inventory-domain-race.test.js',
 
+  // ----- V21 Inventory & Warehouse Domain Closure — Wave D barcode/container/reports -----
+  'server/inventory-wave-d-reports.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 
