@@ -241,7 +241,7 @@ async function executeRun(runId, token = adminToken) {
 // =====================================================================
 describe('M11 permission registry and five-role contract', () => {
   test('1. registered permission count stays at 112 after M14 + Core Scope Cleanup + V17 Wave A; MRP_VIEW / MRP_MANAGE exist', () => {
-    assert.equal(PERMISSIONS.length, 159);
+    assert.equal(PERMISSIONS.length, 184);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('MRP_VIEW'));
     assert.ok(codes.has('MRP_MANAGE'));
@@ -1265,7 +1265,7 @@ describe('M11 legacy DB reopen is idempotent', () => {
     assert.equal(newRuns, tRuns);
     assert.equal(newResults, tResults);
     assert.equal(permsCount, tPerms);
-    assert.equal(permsCount, 159);
+    assert.equal(permsCount, 184);
     thirdDb.close();
     // Re-bind the global `database` to the reopened handle for cleanup.
     database = createDatabase(join(tempDir, 'erp.db'));

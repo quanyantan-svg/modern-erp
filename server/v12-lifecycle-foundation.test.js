@@ -92,7 +92,7 @@ describe('V1.2 lifecycle schema foundation', () => {
   });
 
   test('permission, role and approval contracts remain unchanged', () => {
-    assert.equal(PERMISSIONS.length, 159);
+    assert.equal(PERMISSIONS.length, 184);
     assert.equal(database.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
     assert.deepEqual(APPROVAL_DOCUMENT_TYPES, ['SALES_ORDER', 'PURCHASE_ORDER', 'INVENTORY_CHECK', 'ACCOUNTING_VOUCHER', 'PURCHASE_REQUISITION', 'PRODUCTION_ORDER']);
     assert.deepEqual(LIFECYCLE_CLASSIFICATIONS, ['SAFE_DELETE', 'SAFE_CHAIN_DELETE', 'SAFE_REVERSAL_CLEANUP', 'ARCHIVE_ONLY', 'BLOCKED']);

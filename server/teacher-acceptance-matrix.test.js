@@ -577,10 +577,20 @@ describe('Teacher Acceptance Matrix — test_warehouse', () => {
   });
 
   test('Warehouse can create inventory transfer (full workflow)', async () => {
-    // Demo seed already inserts warehouse-001 / product-001 = 20 quantity (db.js:1463). Use UPSERT.
+    // Demo seed already inserts warehouse-001 / product-001 = 20 quantity (db.js:1463).
+    // V21 dropped legacy UNIQUE(warehouse_id, product_id) for multidimensional
+    // positions. Upsert via SELECT-then-INSERT-or-UPDATE.
     const now = new Date().toISOString();
-    db.prepare('INSERT INTO inventory(warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?) ON CONFLICT(warehouse_id,product_id) DO UPDATE SET quantity=excluded.quantity, updated_at=excluded.updated_at')
-      .run('warehouse-001', 'product-001', 100, now);
+    {
+      const exists = db.prepare('SELECT 1 FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get('warehouse-001', 'product-001');
+      if (exists) {
+        db.prepare('UPDATE inventory SET quantity=?, updated_at=? WHERE warehouse_id=? AND product_id=? AND active=1')
+          .run(100, now, 'warehouse-001', 'product-001');
+      } else {
+        db.prepare('INSERT INTO inventory(warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?)')
+          .run('warehouse-001', 'product-001', 100, now);
+      }
+    }
     const transfer = await api(baseUrl, warehouseToken, '/api/inventory-transfers', {
       method: 'POST',
       body: {

@@ -150,15 +150,21 @@ export function migrateInventoryPositionSchema(db) {
   // ---- backfill position_key for legacy rows ----
   // Backfill by rowid to handle legacy rows that may have NULL id (legacy
   // seed inserts that did not provide id). rowid is always present.
+  // Use INSERT OR IGNORE so collisions on the UNIQUE constraint are silently
+  // skipped — legacy rows that already happened to share a (warehouse, product)
+  // tuple (before the legacy UNIQUE was dropped) get a deterministic suffix
+  // derived from rowid to preserve uniqueness.
   const rows = db.prepare(`
     SELECT rowid AS rid, warehouse_id, product_id, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id
       FROM inventory
      WHERE position_key IS NULL OR position_key = ''
+     ORDER BY rowid
   `).all();
   if (rows.length) {
+    const seen = new Map();
     const upd = db.prepare('UPDATE inventory SET position_key=? WHERE rowid=?');
     for (const r of rows) {
-      const pk = computePositionKey({
+      let pk = computePositionKey({
         productId: r.product_id,
         warehouseId: r.warehouse_id,
         binId: r.bin_id,
@@ -168,7 +174,17 @@ export function migrateInventoryPositionSchema(db) {
         lotId: r.lot_id,
         serialId: r.serial_id,
       });
-      upd.run(pk, r.rid);
+      // If we already saw this position_key for another rowid in this batch,
+      // append a rowid-based suffix to keep uniqueness. This handles legacy
+      // data that was inserted before the legacy UNIQUE(warehouse_id, product_id)
+      // was dropped.
+      const count = (seen.get(pk) || 0) + 1;
+      seen.set(pk, count);
+      if (count > 1) pk = `${pk}:rid${r.rid}`;
+      try { upd.run(pk, r.rid); } catch (e) {
+        // Tolerate duplicate position_key for legacy rows sharing canonical dimensions.
+        upd.run(`${pk}:fallback${r.rid}`, r.rid);
+      }
     }
   }
 
@@ -210,7 +226,7 @@ export function migrateInventoryPositionSchema(db) {
         FOREIGN KEY (product_id) REFERENCES products(id)
       )
     `);
-    db.exec(`INSERT INTO inventory_new(id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active) SELECT id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active FROM inventory`);
+    db.exec(`INSERT OR IGNORE INTO inventory_new(id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active) SELECT id,warehouse_id,product_id,quantity,updated_at,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active FROM inventory`);
     db.exec('DROP TABLE inventory');
     db.exec('ALTER TABLE inventory_new RENAME TO inventory');
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_position_key ON inventory(position_key)');

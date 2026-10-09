@@ -20,7 +20,7 @@ test('P0-A registry owns 59 active and 5 disabled unique routes with valid scree
   // Planning adds 2 contextual surfaces (planning-reservations, planning-configuration).
   // Procurement & Outsourcing Domain Closure adds 2 surfaces
   // (sourcing-pricing, outsourcing).
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 59);
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 62);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','fixed-assets','workflows','data-cleanup']);
@@ -44,7 +44,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 59);
+  assert.equal(ROUTE_PRESENTATIONS.length, 62);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));
