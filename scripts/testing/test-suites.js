@@ -113,6 +113,9 @@ const FULL = [
   // ----- V21 Inventory & Warehouse Domain Closure — Wave D barcode/container/reports -----
   'server/inventory-wave-d-reports.test.js',
 
+  // ----- V21 Inventory & Warehouse Domain Closure — Wave C extras (lot adjustment + form conversion) -----
+  'server/inventory-wave-c-extras.test.js',
+
   // ----- B3120 Planning Domain Capability Closure -----
   'server/planning-domain-closure.test.js',
 
