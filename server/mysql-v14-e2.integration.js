@@ -5,6 +5,7 @@ import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword } from './db.js';
 import { receiveValue } from './modules/financial-inventory.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 import { createTempDb } from './test-utils/temp-db.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
@@ -31,11 +32,6 @@ describe('V1.4-E2 MySQL business dates and transfer execution', () => {
     product.run('e2-none','E2-NONE','E2 None',at,at,'NONE','MOVING_AVERAGE','OTHER_INVENTORY');
     product.run('e2-lot','E2-LOT','E2 Lot',at,at,'LOT','LOT_SPECIFIC_POOL','RAW_MATERIAL');
     product.run('e2-serial','E2-SERIAL','E2 Serial',at,at,'SERIAL','SPECIFIC_SERIAL','FINISHED_GOOD');
-    const inventory = db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)');
-    for (const [productId, quantity] of [['e2-none',20],['e2-lot',2],['e2-serial',1]]) {
-      inventory.run(`inv-a-${productId}`, 'e2-wh-a', productId, quantity, at);
-      inventory.run(`inv-b-${productId}`, 'e2-wh-b', productId, 0, at);
-    }
     db.prepare(`INSERT INTO inventory_lots
       (id,product_id,lot_code,created_source_type,created_source_id,status,created_at)
       VALUES('e2-lot-id','e2-lot','E2-LOT-001','E2_SEED','e2-seed','AVAILABLE',?)`).run(at);
@@ -44,6 +40,14 @@ describe('V1.4-E2 MySQL business dates and transfer execution', () => {
     db.prepare(`INSERT INTO inventory_serials
       (id,product_id,serial_number,created_source_type,created_source_id,lifecycle_state,current_warehouse_id,updated_at,created_at)
       VALUES('e2-serial-id','e2-serial','E2-SN-001','E2_SEED','e2-seed','AVAILABLE','e2-wh-a',?,?)`).run(at, at);
+    for (const row of [
+      { warehouseId: 'e2-wh-a', productId: 'e2-none', quantity: 20 },
+      { warehouseId: 'e2-wh-b', productId: 'e2-none', quantity: 0 },
+      { warehouseId: 'e2-wh-a', productId: 'e2-lot', quantity: 2, position: { lotId: 'e2-lot-id' } },
+      { warehouseId: 'e2-wh-b', productId: 'e2-lot', quantity: 0, position: { lotId: 'e2-lot-id' } },
+      { warehouseId: 'e2-wh-a', productId: 'e2-serial', quantity: 1, position: { serialId: 'e2-serial-id' } },
+      { warehouseId: 'e2-wh-b', productId: 'e2-serial', quantity: 0, position: { serialId: 'e2-serial-id' } },
+    ]) upsertCanonicalInventory(db, row);
     receiveValue(db,{businessDate,productId:'e2-none',warehouseId:'e2-wh-a',quantity:20,valueCents:20000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-none-seed',sourceItemId:'e2-none-seed'});
     receiveValue(db,{businessDate,productId:'e2-lot',warehouseId:'e2-wh-a',lotId:'e2-lot-id',quantity:2,valueCents:4000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-lot-seed',sourceItemId:'e2-lot-seed'});
     receiveValue(db,{businessDate,productId:'e2-serial',warehouseId:'e2-wh-a',serialId:'e2-serial-id',quantity:1,valueCents:3000,movementType:'E2_SEED',sourceType:'E2_SEED',sourceId:'e2-serial-seed',sourceItemId:'e2-serial-seed'});

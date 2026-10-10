@@ -9,6 +9,8 @@
 //   inventory_stock_statuses        (canonical stock-status master)
 //   warehouse_bins                  (per-warehouse bin / location)
 //   inventory_locks                 (canonical lock truth — NOT inventory.is_locked)
+//   inventory_mutation_log           (canonical idempotency evidence)
+//   inventory_step_transfer_in_transit (derived step-transfer execution facts)
 //
 // Additive columns:
 //   warehouses: bin_enabled / is_supplier_wip / negative_stock_policy
@@ -129,6 +131,48 @@ export function migrateInventoryPositionSchema(db) {
   `);
   safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_locks_position ON inventory_locks(position_key, status)');
   safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_locks_product_wh ON inventory_locks(product_id, warehouse_id, status)');
+
+  // ---- inventory_mutation_log (canonical idempotency evidence) ----
+  // This table must exist before a physical mutation starts. Creating it from
+  // inside applyInventoryMutation would implicitly commit an active MySQL
+  // transaction and break atomicity on the first write.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_mutation_log (
+      id TEXT PRIMARY KEY,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      movement_group_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      movement_kind TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      business_date TEXT NOT NULL,
+      actor_id TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_source ON inventory_mutation_log(source_type, source_id)');
+
+  // ---- inventory_step_transfer_in_transit (derived execution facts) ----
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_step_transfer_in_transit (
+      id TEXT PRIMARY KEY,
+      source_transfer_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      warehouse_id_source TEXT NOT NULL,
+      warehouse_id_destination TEXT NOT NULL,
+      issued_qty REAL NOT NULL,
+      received_qty REAL NOT NULL DEFAULT 0,
+      returned_qty REAL NOT NULL DEFAULT 0,
+      cancelled_qty REAL NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'IN_TRANSIT' CHECK(status IN ('IN_TRANSIT','CLOSED','CANCELLED')),
+      created_at TEXT NOT NULL,
+      closed_at TEXT,
+      FOREIGN KEY (source_transfer_id) REFERENCES inventory_transfers(id),
+      FOREIGN KEY (warehouse_id_source) REFERENCES warehouses(id),
+      FOREIGN KEY (warehouse_id_destination) REFERENCES warehouses(id)
+    );
+  `);
+  safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_step_transfer_source ON inventory_step_transfer_in_transit(source_transfer_id, product_id)');
 
   // ---- warehouses additive columns ----
   safeAddColumn(db, 'warehouses', 'bin_enabled',           'bin_enabled INTEGER NOT NULL DEFAULT 0');

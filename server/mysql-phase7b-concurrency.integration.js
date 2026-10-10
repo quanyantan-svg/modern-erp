@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createTempDb } from './test-utils/temp-db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 import { createSystemVoucher, receiveValue, systemHealth } from './modules/financial-inventory.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -151,9 +152,12 @@ describe('V1.3 Phase 7B real MySQL concurrency and transaction hardening', () =>
     db.prepare(`INSERT INTO products
       (id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at,tracking_policy,valuation_method,inventory_classification)
       VALUES('e2-race-product','E2-RP','E2 Race Product','TEST','EA',0,0,1,?,?,'NONE','MOVING_AVERAGE','OTHER_INVENTORY')`).run(at, at);
-    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES
-      ('e2-race-inv-a','e2-race-a','e2-race-product',10,?),
-      ('e2-race-inv-b','e2-race-b','e2-race-product',0,?)`).run(at, at);
+    upsertCanonicalInventory(db, {
+      rowId: 'e2-race-inv-a', warehouseId: 'e2-race-a', productId: 'e2-race-product', quantity: 10,
+    });
+    upsertCanonicalInventory(db, {
+      rowId: 'e2-race-inv-b', warehouseId: 'e2-race-b', productId: 'e2-race-product', quantity: 0,
+    });
     db.prepare(`INSERT INTO inventory_transactions
       (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
       VALUES('e2-race-seed-tx','e2-race-a','e2-race-product',10,'IN',10,'E2_RACE_SEED','e2-race-seed','E2-RACE-SEED','',?,?,?)`)

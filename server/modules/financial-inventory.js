@@ -248,14 +248,19 @@ export function systemHealth(db, { asOfDate='9999-12-31' }={}) {
   const ledgerQuantity=Number(db.prepare("SELECT COALESCE(SUM(CASE WHEN direction='IN' THEN quantity_change ELSE -quantity_change END),0)n FROM inventory_transactions WHERE COALESCE(business_date,SUBSTR(created_at,1,10))<=?").get(asOfDate).n);
   checks.push(check('INVENTORY_QUANTITY_CACHE_VS_LEDGER',(currentQuantity-afterQuantity)-ledgerQuantity,[], '当前库存按后续移动回溯的数量应等于数量流水'));
   const trackedDifferences=[];
-  const lotRows=db.prepare(`SELECT i.warehouse_id,i.product_id,i.quantity canonical,COALESCE(SUM(b.quantity),0) dimension
-    FROM inventory i JOIN products p ON p.id=i.product_id AND p.tracking_policy='LOT'
-    LEFT JOIN inventory_lot_balances b ON b.warehouse_id=i.warehouse_id AND b.product_id=i.product_id
-    GROUP BY i.warehouse_id,i.product_id HAVING ABS(i.quantity-COALESCE(SUM(b.quantity),0))>?`).all(EPS);
-  const serialRows=db.prepare(`SELECT i.warehouse_id,i.product_id,i.quantity canonical,COUNT(s.id) dimension
-    FROM inventory i JOIN products p ON p.id=i.product_id AND p.tracking_policy='SERIAL'
-    LEFT JOIN inventory_serials s ON s.current_warehouse_id=i.warehouse_id AND s.product_id=i.product_id AND s.lifecycle_state IN ('AVAILABLE','HOLD')
-    GROUP BY i.warehouse_id,i.product_id HAVING ABS(i.quantity-COUNT(s.id))>?`).all(EPS);
+  const lotRows=db.prepare(`SELECT i.warehouse_id,i.product_id,i.canonical,COALESCE(b.dimension,0) dimension
+    FROM (SELECT warehouse_id,product_id,SUM(quantity) canonical FROM inventory WHERE active=1 GROUP BY warehouse_id,product_id) i
+    JOIN products p ON p.id=i.product_id AND p.tracking_policy='LOT'
+    LEFT JOIN (SELECT warehouse_id,product_id,SUM(quantity) dimension FROM inventory_lot_balances GROUP BY warehouse_id,product_id) b
+      ON b.warehouse_id=i.warehouse_id AND b.product_id=i.product_id
+    WHERE ABS(i.canonical-COALESCE(b.dimension,0))>?`).all(EPS);
+  const serialRows=db.prepare(`SELECT i.warehouse_id,i.product_id,i.canonical,COALESCE(s.dimension,0) dimension
+    FROM (SELECT warehouse_id,product_id,SUM(quantity) canonical FROM inventory WHERE active=1 GROUP BY warehouse_id,product_id) i
+    JOIN products p ON p.id=i.product_id AND p.tracking_policy='SERIAL'
+    LEFT JOIN (SELECT current_warehouse_id warehouse_id,product_id,COUNT(id) dimension FROM inventory_serials
+      WHERE lifecycle_state IN ('AVAILABLE','HOLD') GROUP BY current_warehouse_id,product_id) s
+      ON s.warehouse_id=i.warehouse_id AND s.product_id=i.product_id
+    WHERE ABS(i.canonical-COALESCE(s.dimension,0))>?`).all(EPS);
   for(const row of [...lotRows,...serialRows])trackedDifferences.push(`${row.warehouse_id}/${row.product_id}:${row.canonical}-${row.dimension}`);
   checks.push(check('TRACKED_DIMENSION_VS_CANONICAL',trackedDifferences.length,trackedDifferences,'LOT/SERIAL 在库身份汇总应等于仓库货品库存'));
   const ledger=db.prepare("SELECT COALESCE(SUM(value_delta_cents),0) n FROM inventory_valuation_movements WHERE status='POSTED'").get().n;

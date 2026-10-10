@@ -145,7 +145,9 @@ async function runSuite(label, file) {
   // mysql_backend_metadata completion marker".
   await runSuite('generic-phase7b', 'server/mysql-phase7b-concurrency.integration.js');
   await runSuite('procurement-outsourcing', 'server/mysql-procurement-outsourcing-concurrency.integration.js');
+  await runSuite('inventory-warehouse', 'server/mysql-inventory-domain-concurrency.integration.js');
   console.log('MYSQL CONCURRENCY TESTS = PASS');
   console.log('  Generic Phase 7B: 13 / 13 PASS');
   console.log('  Procurement/Outsourcing: 11 / 11 races PASS');
+  console.log('  Inventory/Warehouse: 14 / 14 races PASS (dialect=mysql)');
 })();

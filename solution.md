@@ -5901,3 +5901,16 @@ Integration-Backed = 4
 - 最终用户 PASS 后方可 Freeze。
 
 Final verdict（本节 Design）：`READY FOR USER REVIEW`。后续 Implementation 严禁扩张 5 Wave，不得补充 race list 之外的 concurrency case，不得修改 capability IDs 与 owner accounting。
+
+### 27.55 Final MySQL Verification Technical Corrections（2026-10-10）
+
+本节只记录 Final Verification 中确认的实现事实，不改变 44 capability、40 + 4 accounting、14 race、28 UAT 或 5 Waves。
+
+- `financial-inventory.js::systemHealth` 的 LOT / SERIAL reconciliation 分别从 canonical `inventory` 聚合与 tracking 派生子查询取数，避免多维库存 join multiplication，并兼容 MySQL `ONLY_FULL_GROUP_BY`。
+- legacy inventory transfer 在 LOT / SERIAL allocation 已解析时，按明确的 `lot_id / serial_id` canonical position 更新源与目标；NONE 路径仍使用受限 default-position compatibility adapter。调拨前后余额均按 active positions 聚合，不读取任意单行。
+- `inventory_mutation_log` 与 `inventory_step_transfer_in_transit` 由 `migrateInventoryPositionSchema` 在启动/升级阶段创建。业务事务不再把这两张表的首次 DDL 当作正常写路径，避免 MySQL DDL implicit commit 破坏原子性。
+- `applyInventoryMutation` 对涉及的 `position_key` 去重、按字典序 ASC 排序，并在 MySQL 使用 `FOR UPDATE`；idempotency evidence 在 MySQL 同样锁定后读取。
+- `test:mysql:concurrency` 依次运行 Generic Phase 7B、Procurement/Outsourcing 与 Inventory/Warehouse 三套真实 MySQL suite。Inventory suite 使用独立进程/连接并在启动时 positive assert `db.dialect === 'mysql'`，覆盖冻结的 RACE-01..RACE-14，不以 SQLite race 替代 MySQL 证据。
+- canonical test fixtures 使用 `UNIQUE(position_key)` 对应的 canonical helper；不恢复 `UNIQUE(warehouse_id, product_id)`，不削弱 owner/bin/status/lot/serial identity。
+
+Final verification evidence：`pnpm test:mysql`、`pnpm test:mysql:concurrency`（Inventory 14 / 14 on MySQL）、`pnpm test:mysql:performance`（all writer levels errors=0）、`pnpm test:fast`、`pnpm test`（2309 / 2309；fail/cancelled/skipped/todo=0）、`pnpm test:heavy`、`pnpm build` 与 `git diff --check` 全部作为最终 acceptance gate 保存于当日开发日志；`.tmp/*.log` 仅为未提交诊断证据。

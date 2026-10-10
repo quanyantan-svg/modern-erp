@@ -2,7 +2,7 @@
 import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
-import { adjustInventory, setInventoryQuantity } from './lib/stock.js';
+import { adjustInventory, adjustInventoryAtPosition, setInventoryQuantity } from './lib/stock.js';
 import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
@@ -4026,11 +4026,21 @@ export function confirmInventoryTransfer(db, actor, transferId, confirmedAt = ne
     assertFinancialPeriodsOpen(db, businessDate);
     const items = db.prepare('SELECT * FROM inventory_transfer_items WHERE transfer_id=?').all(transferId);
     for (const item of items) {
-      const source = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(transfer.from_warehouse_id, item.product_id);
+      const source = db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.from_warehouse_id, item.product_id);
       if (!source || source.quantity < item.quantity) throw new HttpError(400, '源仓库库存不足');
-      transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate });
-      const sourceBalance = adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, confirmedAt);
-      const targetBalance = adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, confirmedAt);
+      const trackingAllocations = transferTrackedInventory(db, { sourceId: transferId, sourceItemId: item.id, productId: item.product_id, fromWarehouseId: transfer.from_warehouse_id, toWarehouseId: transfer.to_warehouse_id, quantity: item.quantity, businessDate });
+      if (trackingAllocations.length) {
+        for (const allocation of trackingAllocations) {
+          const position = { lotId: allocation.lot_id || null, serialId: allocation.serial_id || null };
+          adjustInventoryAtPosition(db, { warehouseId: transfer.from_warehouse_id, productId: item.product_id, quantityChange: -Number(allocation.quantity), now: confirmedAt, ...position });
+          adjustInventoryAtPosition(db, { warehouseId: transfer.to_warehouse_id, productId: item.product_id, quantityChange: Number(allocation.quantity), now: confirmedAt, ...position });
+        }
+      } else {
+        adjustInventory(db, transfer.from_warehouse_id, item.product_id, -item.quantity, confirmedAt);
+        adjustInventory(db, transfer.to_warehouse_id, item.product_id, item.quantity, confirmedAt);
+      }
+      const sourceBalance = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.from_warehouse_id, item.product_id).quantity);
+      const targetBalance = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(transfer.to_warehouse_id, item.product_id).quantity);
       const insertTransaction = db.prepare(`INSERT INTO inventory_transactions
         (id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);

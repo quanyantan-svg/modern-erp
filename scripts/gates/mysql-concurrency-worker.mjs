@@ -6,6 +6,7 @@ import { allocateDocumentNumber } from '../../server/modules/commercial-golive.j
 import { idempotencyReplay, saveIdempotency } from '../../server/modules/financial-controls.js';
 import { confirmInventoryTransfer } from '../../server/app.js';
 import { closeInventoryPeriodCommand } from '../../server/modules/inventory-period-close.js';
+import { applyInventoryMutation } from '../../server/lib/inventory-mutation.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
@@ -32,6 +33,88 @@ function saveEffect(key, payload, resourceId, kind, result) {
 }
 
 function execute(command) {
+  if (command.action === 'inventory-mutation') {
+    return applyInventoryMutation({
+      ...command.input,
+      db,
+      actor: { id: command.actorId },
+    });
+  }
+  if (command.action === 'inventory-step-receive') {
+    return transaction(db, () => {
+      const row = db.prepare(`SELECT * FROM inventory_step_transfer_in_transit WHERE id=? FOR UPDATE`).get(command.stepId);
+      if (!row) throw Object.assign(new Error('STEP_TRANSFER_NOT_FOUND'), { code: 'STEP_TRANSFER_NOT_FOUND' });
+      const remaining = Number(row.issued_qty) - Number(row.received_qty) - Number(row.returned_qty) - Number(row.cancelled_qty);
+      if (Number(command.quantity) > remaining) {
+        throw Object.assign(new Error('IN_TRANSIT_INSUFFICIENT'), { code: 'IN_TRANSIT_INSUFFICIENT' });
+      }
+      const result = applyInventoryMutation({
+        db,
+        sourceType: 'INVENTORY_STEP_TRANSFER_IN',
+        sourceId: row.source_transfer_id,
+        sourceItemId: row.id,
+        businessDate: command.businessDate,
+        actor: { id: command.actorId },
+        movementKind: 'IN',
+        quantity: Number(command.quantity),
+        toPosition: command.toPosition,
+        idempotencyKey: command.idempotencyKey,
+      });
+      db.prepare(`UPDATE inventory_step_transfer_in_transit
+        SET received_qty=received_qty+?, status=IF(issued_qty-received_qty-?-returned_qty-cancelled_qty=0,'CLOSED',status)
+        WHERE id=?`).run(Number(command.quantity), Number(command.quantity), row.id);
+      return result;
+    });
+  }
+  if (command.action === 'inventory-lock-create') {
+    return transaction(db, () => {
+      const position = db.prepare('SELECT quantity FROM inventory WHERE position_key=? FOR UPDATE').get(command.positionKey);
+      const onHand = Number(position?.quantity || 0);
+      const locked = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_locks
+        WHERE position_key=? AND status='ACTIVE' FOR UPDATE`).get(command.positionKey)?.q || 0);
+      if (locked + Number(command.quantity) > onHand) {
+        throw Object.assign(new Error('INVENTORY_LOCK_EXCEEDS_AVAILABLE'), { code: 'INVENTORY_LOCK_EXCEEDS_AVAILABLE' });
+      }
+      db.prepare(`INSERT INTO inventory_locks
+        (id,product_id,warehouse_id,position_key,quantity,reason,status,locked_by,locked_at,source_type,source_id)
+        VALUES(?,?,?,?,?,?,'ACTIVE',?,?,?,?)`).run(
+        command.lockId, command.productId, command.warehouseId, command.positionKey,
+        Number(command.quantity), 'MYSQL_RACE', command.actorId, new Date().toISOString(),
+        'INVENTORY_LOCK', command.lockId,
+      );
+      return { committed: true, lockId: command.lockId };
+    });
+  }
+  if (command.action === 'inventory-reserve') {
+    return transaction(db, () => {
+      db.prepare(`INSERT INTO planning_reservations
+        (id,reservation_no,reservation_type,product_id,warehouse_id,quantity,status,created_by,created_at,updated_at,
+         demand_source_type,demand_source_id,supply_source_type,supply_source_id,supply_source_line_id)
+        VALUES(?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?,?)`).run(
+        command.reservationId, command.reservationNo, 'STRONG', command.productId,
+        command.warehouseId, Number(command.quantity), command.actorId,
+        command.createdAt, command.createdAt, 'PLAN', command.reservationId,
+        'PLANNED_ORDER', command.reservationId, `${command.reservationId}:line`,
+      );
+      return { committed: true };
+    });
+  }
+  if (command.action === 'inventory-close-period') {
+    return transaction(db, () => {
+      db.prepare(`INSERT IGNORE INTO inventory_period_closures(id,period_key,status,closed_by,closed_at)
+        VALUES(?,?,'CLOSED',?,?)`).run(command.closureId, command.periodKey, command.actorId, command.closedAt);
+      return { committed: true };
+    });
+  }
+  if (command.action === 'inventory-close-initialization') {
+    return transaction(db, () => {
+      const row = db.prepare('SELECT status FROM inventory_initialization WHERE id=? FOR UPDATE').get(command.initializationId);
+      if (!row || row.status !== 'OPEN') throw Object.assign(new Error('INITIALIZATION_NOT_OPEN'), { code: 'INITIALIZATION_NOT_OPEN' });
+      db.prepare(`UPDATE inventory_initialization SET status='CLOSED',closed_by=?,closed_at=? WHERE id=?`)
+        .run(command.actorId, command.closedAt, command.initializationId);
+      return { committed: true };
+    });
+  }
   if (command.action === 'inventory-period-close') {
     return closeInventoryPeriodCommand(db, { id: command.actorId }, {
       period: command.period, confirmWarnings: Boolean(command.confirmWarnings), notes: command.notes || '',

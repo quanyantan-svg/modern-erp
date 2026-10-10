@@ -15,6 +15,8 @@ import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 function nowIso() { return new Date().toISOString(); }
 
 function ensureTable(db) {
+  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_step_transfer_in_transit'").get();
+  if (exists) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS inventory_step_transfer_in_transit (
       id TEXT PRIMARY KEY,

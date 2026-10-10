@@ -181,7 +181,8 @@ export function applyInventoryMutation(input) {
   // Idempotency replay
   let result = null;
   const runMutation = (db) => {
-    const replay = db.prepare(`SELECT movement_group_id FROM inventory_mutation_log WHERE idempotency_key=?`).get(input.idempotencyKey);
+    const replaySql = `SELECT movement_group_id FROM inventory_mutation_log WHERE idempotency_key=?${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`;
+    const replay = db.prepare(replaySql).get(input.idempotencyKey);
     if (replay) {
       result = { replayed: true, movementGroupId: replay.movement_group_id };
       return;
@@ -192,10 +193,11 @@ export function applyInventoryMutation(input) {
     if (toPos)   validateInventoryMaster(db, toPos);
 
     // Lock target positions (canonical order ASC) via SELECT … FOR UPDATE equivalent.
-    const positions = [fromPos, toPos].filter(Boolean).map((p) => p.positionKey).sort();
+    const positions = [...new Set([fromPos, toPos].filter(Boolean).map((p) => p.positionKey))].sort();
     const placeholders = positions.map(() => '?').join(',');
     if (positions.length) {
-      db.prepare(`SELECT id, quantity FROM inventory WHERE position_key IN (${placeholders}) ORDER BY position_key ASC`).all(...positions);
+      const lockSql = `SELECT id, quantity FROM inventory WHERE position_key IN (${placeholders}) ORDER BY position_key ASC${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`;
+      db.prepare(lockSql).all(...positions);
     }
 
     const movements = [];
@@ -304,6 +306,8 @@ export function applyInventoryMutation(input) {
 
   // Ensure mutation_log table exists (idempotent minimal migration in dispatcher).
   const ensureLogTable = (db) => {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_mutation_log'").get();
+    if (exists) return;
     db.exec(`
       CREATE TABLE IF NOT EXISTS inventory_mutation_log (
         id TEXT PRIMARY KEY,

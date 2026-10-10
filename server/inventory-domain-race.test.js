@@ -142,6 +142,9 @@ describe('V21 — 14 Inventory Domain Races', () => {
       actor: ACTOR, movementKind: 'OUT', quantity: 10,
       fromPosition: { productId: 'p-1', warehouseId: 'wh-A', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE' },
       idempotencyKey: 'STEP_OUT:r3:10' });
+    db.prepare(`INSERT INTO inventory_transfers
+      (id, transfer_no, from_warehouse_id, to_warehouse_id, status, remark, creator_id, created_at, updated_at, business_date)
+      VALUES('r3', 'R3', 'wh-A', 'wh-B', 'DRAFT', '', 'u-act', ?, ?, '2026-10-10')`).run(new Date().toISOString(), new Date().toISOString());
     db.prepare(`INSERT INTO inventory_step_transfer_in_transit(id, source_transfer_id, product_id, warehouse_id_source, warehouse_id_destination, issued_qty, status, created_at) VALUES('r3-row', 'r3', 'p-1', 'wh-A', 'wh-B', 10, 'IN_TRANSIT', ?)`).run(new Date().toISOString());
     // First receive 4 (in_transit=6)
     applyInventoryMutation({ db, sourceType: 'INVENTORY_STEP_TRANSFER_IN', sourceId: 'r3', sourceItemId: 'r3-row', businessDate: '2026-10-10',
