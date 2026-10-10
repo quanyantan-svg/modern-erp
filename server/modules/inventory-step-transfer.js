@@ -9,7 +9,7 @@
 
 import { transaction, id as genId } from '../db.js';
 import { audit } from '../lib/audit.js';
-import { HttpError, allow, assertAllowedFields, readJson, send } from '../lib/http.js';
+import { HttpError, allow, allowAny, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
 
 function nowIso() { return new Date().toISOString(); }
@@ -202,7 +202,7 @@ export function returnToSource(db, res, actor, sourceTransferId, productId, from
 }
 
 export function getInTransit(db, res, actor, sourceTransferId) {
-  allow(actor, 'INVENTORY_TRANSFER_VIEW');
+  allowAny(actor, ['INVENTORY_VIEW', 'INVENTORY_TRANSFER_VIEW']);
   ensureTable(db);
   const rows = db.prepare(`
     SELECT source_transfer_id sourceTransferId, product_id productId,

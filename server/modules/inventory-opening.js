@@ -87,9 +87,9 @@ export async function createOpeningDocument(db, req, res, actor) {
         serialId: item.serialId ?? null,
       });
       db.prepare(`
-        INSERT INTO opening_inventory_items(id, document_id, product_id, warehouse_id, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, quantity, position_key, line_no)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(genId(), docId, productId, warehouseId, item.binId ?? null, item.ownerType ?? 'ENTERPRISE', item.ownerType === 'ENTERPRISE' ? null : (item.ownerId ?? null), item.stockStatus ?? 'AVAILABLE', item.lotId ?? null, item.serialId ?? null, quantity, pk, lineNo++);
+        INSERT INTO opening_inventory_items(id, document_id, product_id, warehouse_id, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, quantity, position_key)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(genId(), docId, productId, warehouseId, item.binId ?? null, item.ownerType ?? 'ENTERPRISE', item.ownerType === 'ENTERPRISE' ? null : (item.ownerId ?? null), item.stockStatus ?? 'AVAILABLE', item.lotId ?? null, item.serialId ?? null, quantity, pk);
     }
     audit(db, actor.id, 'CREATE', 'OPENING_INVENTORY', docId, `Create opening ${docNo}`);
   });

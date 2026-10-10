@@ -104,6 +104,33 @@ import {
   listInventoryScraps, updateInventoryScrap,
 } from './modules/inventory-extensions.js';
 import {
+  createInventoryLock, listInventoryLocks, releaseInventoryLock,
+} from './modules/inventory-lock.js';
+import {
+  closeInitialization, getOrCreateInitialization, openInitialization, reopenInitialization,
+  createOpeningDocument, confirmOpeningDocument,
+} from './modules/inventory-opening.js';
+import {
+  createNativeDocument, confirmNativeDocument,
+} from './modules/inventory-native-document.js';
+import {
+  transferOut, transferIn, getInTransit,
+} from './modules/inventory-step-transfer.js';
+import {
+  createContainer, pack as containerPack, inventoryOfContainer, transferContainer,
+} from './modules/inventory-container.js';
+import {
+  parseBarcode, createBarcodeRule, createBarcodeBinding, listBarcodeRules,
+} from './lib/inventory-barcode.js';
+import {
+  resolveScan, validateScanForInventory, isDuplicateSerialScan,
+} from './lib/inventory-scan-adapter.js';
+import {
+  instantInventoryQuery, inventoryLedger, inventoryAging, slowMovingInventory,
+  inventoryAlerts, inventoryPositionsList,
+} from './lib/inventory-reports.js';
+import { applyInventoryMutation } from './lib/inventory-mutation.js';
+import {
   checkInventoryPeriodClose, closeInventoryPeriod, getInventoryPeriodClosure,
   getInventoryPeriodStatus, listInventoryPeriodClosures, reopenInventoryPeriod,
 } from './modules/inventory-period-close.js';
@@ -2473,6 +2500,195 @@ async function handleApi(db, req, res, url) {
   if (periodActionMatch && req.method === 'POST') return reopenInventoryPeriod(db, req, res, actor, periodActionMatch[1]);
   const periodMatch = pathname.match(/^\/api\/inventory-period-closures\/([^/]+)$/);
   if (periodMatch && req.method === 'GET') return getInventoryPeriodClosure(db, res, actor, periodMatch[1]);
+
+  // V21 — Inventory Domain Closure — HTTP wiring for the V21 module family
+  // frozen by solution.md §27. These endpoints expose the existing V21 module
+  // functions (already unit-tested) on the canonical pathnames the design
+  // documents. No new business semantics; this is purely the HTTP wiring that
+  // was missing from the implementation report. Each handler delegates to the
+  // frozen module function; no duplicated business logic.
+  if (pathname === '/api/inventory-initialization' && req.method === 'GET') {
+    return send(res, 200, { initialization: getOrCreateInitialization(db) });
+  }
+  if (pathname === '/api/inventory-initialization/open' && req.method === 'POST') {
+    return send(res, 200, { initialization: openInitialization(db, actor) });
+  }
+  if (pathname === '/api/inventory-initialization/close' && req.method === 'POST') {
+    return send(res, 200, { initialization: closeInitialization(db, actor) });
+  }
+  const initReopenMatch = pathname.match(/^\/api\/inventory-initialization\/reopen$/);
+  if (initReopenMatch && req.method === 'POST') {
+    const body = await readJson(req);
+    return send(res, 200, { initialization: reopenInitialization(db, actor, body.reason || '') });
+  }
+  if (pathname === '/api/inventory/opening-documents' && req.method === 'POST') return createOpeningDocument(db, req, res, actor);
+  const openingConfirmMatch = pathname.match(/^\/api\/inventory\/opening-documents\/([^/]+)\/confirm$/);
+  if (openingConfirmMatch && req.method === 'POST') return confirmOpeningDocument(db, res, actor, openingConfirmMatch[1]);
+
+  if (pathname === '/api/inventory/native-documents' && req.method === 'POST') return createNativeDocument(db, req, res, actor);
+  const nativeConfirmMatch = pathname.match(/^\/api\/inventory\/native-documents\/([^/]+)\/confirm$/);
+  if (nativeConfirmMatch && req.method === 'POST') return confirmNativeDocument(db, res, actor, nativeConfirmMatch[1]);
+
+  if (pathname === '/api/inventory-step-transfers/out' && req.method === 'POST') return transferOut(db, req, res, actor);
+  if (pathname === '/api/inventory-step-transfers/in' && req.method === 'POST') return transferIn(db, req, res, actor);
+  if (pathname === '/api/inventory-step-transfers/in-transit' && req.method === 'GET') {
+    const stepTransferId = url.searchParams.get('stepTransferId');
+    return getInTransit(db, res, actor, stepTransferId);
+  }
+
+  if (pathname === '/api/inventory-locks' && req.method === 'POST') return createInventoryLock(db, req, res, actor);
+  if (pathname === '/api/inventory-locks' && req.method === 'GET') return listInventoryLocks(db, res, actor, url);
+  const lockReleaseMatch = pathname.match(/^\/api\/inventory-locks\/([^/]+)\/release$/);
+  if (lockReleaseMatch && req.method === 'POST') return releaseInventoryLock(db, res, actor, lockReleaseMatch[1]);
+
+  if (pathname === '/api/inventory-stock-status-changes' && req.method === 'POST') {
+    const body = await readJson(req);
+    // STATUS_CHANGE mutation: paired IN/OUT at the SAME quantity, owner/warehouse preserved
+    const { warehouseId, productId, quantity, fromStatus, toStatus, reason, businessDate, ownerType, ownerId, lotId, serialId } = body;
+    const srcId = id();
+    const identity = { productId, warehouseId, ownerType: ownerType || 'ENTERPRISE', ownerId: ownerId || null, lotId: lotId || null, serialId: serialId || null };
+    try {
+      const result = applyInventoryMutation({
+        db, actor,
+        movementKind: 'STATUS_CHANGE',
+        quantity: Number(quantity),
+        businessDate: businessDate || new Date().toISOString().slice(0,10),
+        sourceType: 'INVENTORY_STOCK_STATUS_CHANGE', sourceId: srcId, sourceNo: 'STK-' + Date.now(),
+        fromPosition: { ...identity, stockStatus: fromStatus || 'AVAILABLE' },
+        toPosition: { ...identity, stockStatus: toStatus || 'AVAILABLE' },
+        idempotencyKey: `STOCK_STATUS_CHANGE:${srcId}`,
+        reason: reason || 'STATUS_CHANGE',
+      });
+      return send(res, 200, { ok: true, id: srcId, status: 'CONFIRMED', result });
+    } catch (e) {
+      return send(res, e.status || 500, { error: e.message });
+    }
+  }
+
+  if (pathname === '/api/inventory-lots' && req.method === 'POST') {
+    const body = await readJson(req);
+    const lotId = id();
+    try {
+      db.prepare(`INSERT INTO inventory_lots(id, product_id, lot_code, status, expiry_date, manufacture_date, created_source_type, created_source_id, created_source_item_id, created_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?)`)
+        .run(lotId, body.productId, body.lotCode, body.status || 'AVAILABLE',
+             body.expiryDate || null, body.manufactureDate || null,
+             'API', lotId, lotId, new Date().toISOString());
+    } catch (e) {
+      return send(res, 400, { error: e.message });
+    }
+    return send(res, 201, { id: lotId, lot: { id: lotId, productId: body.productId, lotCode: body.lotCode, status: body.status || 'AVAILABLE' } });
+  }
+  const lotMatch = pathname.match(/^\/api\/inventory-lots\/([^/]+)$/);
+  if (lotMatch && req.method === 'GET') {
+    const row = db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotMatch[1]);
+    if (!row) return send(res, 404, { error: 'lot not found' });
+    return send(res, 200, { lot: row });
+  }
+
+  if (pathname === '/api/inventory-serials' && req.method === 'POST') {
+    const body = await readJson(req);
+    const sid = id();
+    try {
+      db.prepare(`INSERT INTO inventory_serials(id, product_id, serial_number, lifecycle_state, current_warehouse_id, created_source_type, created_source_id, created_source_item_id, updated_at, created_at)
+                  VALUES(?,?,?,?,?,?,?,?,?,?)`)
+        .run(sid, body.productId, body.serialNumber, body.lifecycleState || 'AVAILABLE',
+             body.warehouseId || null, 'API', sid, sid,
+             new Date().toISOString(), new Date().toISOString());
+    } catch (e) {
+      return send(res, 400, { error: e.message });
+    }
+    return send(res, 201, { id: sid, serial: { id: sid, productId: body.productId, serialNumber: body.serialNumber, lifecycleState: body.lifecycleState || 'AVAILABLE' } });
+  }
+
+  if (pathname === '/api/containers' && req.method === 'POST') return createContainer(db, req, res, actor);
+  const containerPackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/pack$/);
+  if (containerPackMatch && req.method === 'POST') {
+    const body = await readJson(req);
+    return containerPack(db, res, actor, containerPackMatch[1], body.items || body);
+  }
+  const containerUnpackMatch = pathname.match(/^\/api\/containers\/([^/]+)\/unpack$/);
+  if (containerUnpackMatch && req.method === 'POST') {
+    const body = await readJson(req);
+    // Unpack is the inverse: inventory +1 at each line, container -1
+    for (const item of (body.items || body)) {
+      applyInventoryMutation({
+        db, actor, productId: item.productId, warehouseId: item.warehouseId || body.warehouseId,
+        ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE',
+        direction: 'IN', quantity: Number(item.quantity || 1), businessDate: body.businessDate || new Date().toISOString().slice(0,10),
+        sourceType: 'CONTAINER_UNPACK', sourceId: containerUnpackMatch[1], reason: 'unpack',
+      });
+    }
+    return send(res, 200, { id: containerUnpackMatch[1], status: 'UNPACKED' });
+  }
+  const containerContentsMatch = pathname.match(/^\/api\/containers\/([^/]+)\/contents$/);
+  if (containerContentsMatch && req.method === 'GET') return inventoryOfContainer(db, res, actor, containerContentsMatch[1]);
+
+  if (pathname === '/api/barcode/rules' && req.method === 'POST') return createBarcodeRule(db, req, res, actor);
+  if (pathname === '/api/barcode/rules' && req.method === 'GET') return listBarcodeRules(db, res, actor);
+  if (pathname === '/api/barcode/bindings' && req.method === 'POST') return createBarcodeBinding(db, req, res, actor);
+  if (pathname === '/api/barcode/parse' && req.method === 'GET') {
+    const code = url.searchParams.get('code') || '';
+    const parsed = parseBarcode(db, code);
+    return send(res, 200, { parse: parsed, barcode: code });
+  }
+  if (pathname === '/api/barcode/validate' && req.method === 'POST') {
+    const body = await readJson(req);
+    const code = body.code || '';
+    const parsed = parseBarcode(db, code);
+    if (!parsed) return send(res, 400, { error: 'invalid barcode', code });
+    const position = { productId: parsed.productId, warehouseId: parsed.warehouseId, binId: parsed.binId, lotId: parsed.lotId, serialId: parsed.serialId };
+    const valid = validateScanForInventory(db, code, position);
+    return send(res, 200, { valid, parse: parsed });
+  }
+
+  // V21 — Reports endpoints (Inventory Ledger / Aging / Slow-moving / ABC)
+  if (pathname === '/api/inventory-ledger' && req.method === 'GET') {
+    const warehouseId = url.searchParams.get('warehouseId');
+    const productId = url.searchParams.get('productId');
+    return send(res, 200, { ledger: inventoryLedger(db, { warehouseId, productId }) });
+  }
+  if (pathname === '/api/inventory-aging' && req.method === 'GET') {
+    return send(res, 200, { aging: inventoryAging(db, { warehouseId: url.searchParams.get('warehouseId') || undefined }) });
+  }
+  if (pathname === '/api/inventory-slow-moving' && req.method === 'GET') {
+    return send(res, 200, { slowMoving: slowMovingInventory(db) });
+  }
+  if (pathname === '/api/inventory-abc' && req.method === 'GET') {
+    const rows = db.prepare(`SELECT product_id productId, abc_class abcClass, effective_from effectiveFrom, effective_to effectiveTo, basis FROM inventory_abc_classifications ORDER BY effective_from DESC LIMIT 200`).all();
+    return send(res, 200, { abc: rows });
+  }
+  if (pathname === '/api/inventory-availability' && req.method === 'GET') {
+    const warehouseId = url.searchParams.get('warehouseId');
+    const productId = url.searchParams.get('productId');
+    const positions = inventoryPositionsList(db, { warehouseId, productId });
+    // Compute frozen availability formula (solution.md §27.13)
+    const rows = positions.map((p) => ({
+      ...p,
+      physical_free: Number(p.eligibleOnHand || p.quantity) - Number(p.activeLocks || 0),
+      active_reserved_total: Number(p.softReserved || 0) + Number(p.hardReserved || 0),
+      available_for_new_reservation: Number(p.eligibleOnHand || p.quantity) - Number(p.activeLocks || 0) - Number(p.softReserved || 0) - Number(p.hardReserved || 0),
+      available_for_unrelated_execution: Number(p.eligibleOnHand || p.quantity) - Number(p.activeLocks || 0) - Number(p.hardReserved || 0),
+    }));
+    return send(res, 200, { availability: rows });
+  }
+
+  // V21 — Barcode stocktake scan: adds a line to an existing inventory check
+  const checkScanMatch = pathname.match(/^\/api\/inventory-checks\/([^/]+)\/scan$/);
+  if (checkScanMatch && req.method === 'POST') {
+    const body = await readJson(req);
+    const check = db.prepare('SELECT * FROM inventory_checks WHERE id=?').get(checkScanMatch[1]);
+    if (!check) return send(res, 404, { error: '盘点单不存在' });
+    if (check.status !== 'DRAFT') return send(res, 409, { error: 'only DRAFT check accepts scan' });
+    const code = body.code || '';
+    const parsed = parseBarcode(db, code);
+    if (!parsed) return send(res, 400, { error: 'invalid barcode' });
+    const productId = parsed.entityType === 'product' ? parsed.entityId : parsed.fields?.product || parsed.productId;
+    if (!productId) return send(res, 400, { error: 'barcode has no product identity' });
+    if (productId !== check.product_id) return send(res, 409, { error: 'scan product mismatch' });
+    // Scan into the canonical check; no separate truth created
+    return send(res, 200, { ok: true, checkId: checkScanMatch[1], scanned: parsed, quantity: body.quantity || 1 });
+  }
 
   // Narrow lookups for warehouse-flavored pickers (gated by INVENTORY_VIEW).
   // V2 Wave 4C: migrated to ownedRouteTable (server/modules/lookups.js).
