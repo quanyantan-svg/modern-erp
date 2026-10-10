@@ -35,7 +35,7 @@ import { transaction, id as genId } from '../db.js';
 import { audit } from './audit.js';
 import { HttpError } from './http.js';
 import { computePositionKey, normalizeOwnerType, validateOwner, validateStockStatus, validateBin, warehouseAllowsBin } from './inventory-position.js';
-import { issueSourceValue } from '../modules/financial-inventory.js';
+import { issueSourceValue, assertFinancialPeriodsOpen } from '../modules/financial-inventory.js';
 
 const MOVEMENT_KINDS = new Set([
   'IN', 'OUT', 'MOVE', 'OWNER_CHANGE', 'STATUS_CHANGE',
@@ -49,6 +49,7 @@ const SOURCE_TYPES = new Set([
   'INVENTORY_STOCK_STATUS_CHANGE', 'INVENTORY_LOT_ADJUSTMENT',
   'INVENTORY_FORM_CONVERSION', 'INVENTORY_ASSEMBLY', 'INVENTORY_DISASSEMBLY',
   'INVENTORY_ADJUSTMENT', 'INVENTORY_SCRAP', 'INVENTORY_STOCKTAKE_DIFF',
+  'INVENTORY_BIN_MOVE',
   'VMI_RECEIPT', 'VMI_CONSUMPTION', 'VMI_OWNERSHIP_TRANSFER',
   'OUTSOURCING_ISSUE', 'OUTSOURCING_RETURN', 'OUTSOURCING_RECEIPT',
   'ENTRUSTED_RECEIPT', 'ENTRUSTED_ISSUE',
@@ -202,14 +203,23 @@ export function applyInventoryMutation(input) {
       throw new HttpError(400, 'fromPosition 与 toPosition 不能相同');
     }
 
-    // Negative-stock policy gate for OUT
+    // Negative-stock + lock + init-close gate
     if (fromPos && ['OUT', 'MOVE', 'OWNER_CHANGE', 'STATUS_CHANGE', 'LOT_RECLASS', 'BIN_MOVE', 'ADJUSTMENT'].includes(input.movementKind)) {
       const wh = db.prepare('SELECT negative_stock_policy FROM warehouses WHERE id=?').get(fromPos.warehouseId);
       const policy = wh?.negative_stock_policy || 'BLOCK';
       const cur = db.prepare('SELECT quantity FROM inventory WHERE position_key=? AND active=1').get(fromPos.positionKey);
       const current = cur ? Number(cur.quantity) : 0;
-      if (policy === 'BLOCK' && current < Number(input.quantity)) {
-        throw new HttpError(409, `仓库 ${fromPos.warehouseId} 禁止负库存，当前 ${current}`);
+      const activeLocked = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) q FROM inventory_locks WHERE product_id=? AND warehouse_id=? AND position_key=? AND status='ACTIVE'`).get(fromPos.productId, fromPos.warehouseId, fromPos.positionKey)?.q || 0);
+      const lockable = Math.max(0, current - activeLocked);
+      if (policy === 'BLOCK' && lockable < Number(input.quantity)) {
+        throw new HttpError(409, `库存不足：position ${fromPos.positionKey} 可用 ${lockable}，需出 ${input.quantity}`);
+      }
+    }
+    // INV-32: initialization close gate for OPENING_INVENTORY source
+    if (input.sourceType === 'OPENING_INVENTORY') {
+      const init = db.prepare(`SELECT status FROM inventory_initialization LIMIT 1`).get();
+      if (init && init.status === 'CLOSED') {
+        throw new HttpError(409, `Initialization status CLOSED; cannot create opening inventory`);
       }
     }
 
@@ -273,6 +283,25 @@ export function applyInventoryMutation(input) {
     result = { replayed: false, movementGroupId, balanceAfterFrom, balanceAfterTo };
   };
 
+  // INV-32 sec 27.41: canonical inventory period gate. Rejects BEFORE mutation
+  // when businessDate falls in any CLOSED inventory_period_closure row.
+  const assertInventoryPeriodOpen = (db, businessDate) => {
+    const rows = db.prepare(`SELECT period_key FROM inventory_period_closures WHERE status='CLOSED' ORDER BY period_key`).all();
+    if (!rows.length) return;
+    for (const r of rows) {
+      const [yyyy, mm] = String(r.period_key).split('-').map(Number);
+      if (!yyyy || !mm) continue;
+      const lastDay = new Date(Date.UTC(yyyy, mm, 0)).getUTCDate();
+      const cutoff = `${r.period_key}-${String(lastDay).padStart(2, '0')}`;
+      if (businessDate <= cutoff) {
+        throw new HttpError(409, `inventory period closed to ${r.period_key}`, {
+          code: 'INVENTORY_PERIOD_CLOSED',
+          resolution: 'use business date after closed period',
+        });
+      }
+    }
+  };
+
   // Ensure mutation_log table exists (idempotent minimal migration in dispatcher).
   const ensureLogTable = (db) => {
     db.exec(`
@@ -293,6 +322,9 @@ export function applyInventoryMutation(input) {
   };
   transaction(input.db, () => {
     ensureLogTable(input.db);
+    // INV-32 §27.41: central period gate inside the canonical dispatcher.
+    assertInventoryPeriodOpen(input.db, businessDate);
+    assertFinancialPeriodsOpen(input.db, businessDate);
     runMutation(input.db);
   });
   return result;

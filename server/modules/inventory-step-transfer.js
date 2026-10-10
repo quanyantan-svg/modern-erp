@@ -1,12 +1,11 @@
-// V21 — Step Transfer / In-Transit (Wave B).
+// V21 — Step Transfer / In-Transit (Final Closure).
 //
 // Frozen by `solution.md §27.20` (Domain 5 Closure Design).
-//
-// in-transit quantity derived from execution facts:
-//   in_transit_qty = issued_qty - received_qty - returned_qty - cancelled_qty
-//
-// inventory_step_transfer_in_transit holds execution facts ONLY.
-// Not a second stock balance.
+// In-transit quantity is DERIVED from execution facts (NOT a second balance).
+//   in_transit_qty = issued - received - returned - cancelled
+// All physical mutations route through applyInventoryMutation dispatcher.
+// Over-receive is rejected by the dispatcher when the position has no stock;
+// the step-transfer layer enforces the in-transit availability bound.
 
 import { transaction, id as genId } from '../db.js';
 import { audit } from '../lib/audit.js';
@@ -38,18 +37,15 @@ function ensureTable(db) {
   `);
 }
 
-function getOrCreateStepRow(db, sourceTransferId, productId, sourceWh, destWh) {
-  let row = db.prepare(`
+function getStepRow(db, sourceTransferId, productId, sourceWh, destWh) {
+  return db.prepare(`
     SELECT * FROM inventory_step_transfer_in_transit
      WHERE source_transfer_id=? AND product_id=? AND warehouse_id_source=? AND warehouse_id_destination=?
   `).get(sourceTransferId, productId, sourceWh, destWh);
-  if (row) return row;
-  const id = genId();
-  db.prepare(`
-    INSERT INTO inventory_step_transfer_in_transit(id, source_transfer_id, product_id, warehouse_id_source, warehouse_id_destination, issued_qty, received_qty, returned_qty, cancelled_qty, status, created_at)
-    VALUES(?, ?, ?, ?, ?, 0, 0, 0, 0, 'IN_TRANSIT', ?)
-  `).run(id, sourceTransferId, productId, sourceWh, destWh, nowIso());
-  return db.prepare(`SELECT * FROM inventory_step_transfer_in_transit WHERE id=?`).get(id);
+}
+
+function computeInTransit(row) {
+  return Number(row.issued_qty) - Number(row.received_qty) - Number(row.returned_qty) - Number(row.cancelled_qty);
 }
 
 export async function transferOut(db, req, res, actor) {
@@ -57,19 +53,15 @@ export async function transferOut(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['sourceTransferId','productId','quantity','fromWarehouseId','toWarehouseId','businessDate']);
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity 必须为正');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
   const transferId = String(body.sourceTransferId);
-  const stepTransfer = db.prepare(`SELECT * FROM inventory_transfers WHERE id=?`).get(transferId);
-  if (!stepTransfer) throw new HttpError(404, '原调拨单不存在');
-  if (stepTransfer.from_warehouse_id !== String(body.fromWarehouseId) || stepTransfer.to_warehouse_id !== String(body.toWarehouseId)) {
-    throw new HttpError(400, '原调拨单方向与本次不一致');
-  }
   const now = nowIso();
   const businessDate = body.businessDate || now.slice(0, 10);
   const stepId = genId();
   transaction(db, () => {
     ensureTable(db);
-    getOrCreateStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    getStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    // Physical OUT (BLOCK policy enforced by applyInventoryMutation).
     applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_OUT',
@@ -79,11 +71,23 @@ export async function transferOut(db, req, res, actor) {
       actor: { id: actor.id },
       movementKind: 'OUT',
       quantity,
-      fromPosition: { productId: body.productId, warehouseId: body.fromWarehouseId, stockStatus: 'AVAILABLE' },
-      idempotencyKey: `STEP_OUT:${transferId}:${body.productId}:${quantity}:${now}`,
+      fromPosition: {
+        productId: body.productId,
+        warehouseId: body.fromWarehouseId,
+        ownerType: 'ENTERPRISE',
+        ownerId: null,
+        stockStatus: 'AVAILABLE',
+      },
+      idempotencyKey: `STEP_OUT:${transferId}:${stepId}`,
       remark: `Step transfer out ${body.productId}`,
     });
-    db.prepare(`UPDATE inventory_step_transfer_in_transit SET issued_qty=issued_qty+? WHERE id=(SELECT id FROM inventory_step_transfer_in_transit WHERE source_transfer_id=? AND product_id=? AND warehouse_id_source=? AND warehouse_id_destination=?)`).run(quantity, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    // Update or insert step row.
+    const existing = getStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    if (existing) {
+      db.prepare(`UPDATE inventory_step_transfer_in_transit SET issued_qty=issued_qty+? WHERE id=?`).run(quantity, existing.id);
+    } else {
+      db.prepare(`INSERT INTO inventory_step_transfer_in_transit(id, source_transfer_id, product_id, warehouse_id_source, warehouse_id_destination, issued_qty, received_qty, returned_qty, cancelled_qty, status, created_at) VALUES(?, ?, ?, ?, ?, ?, 0, 0, 0, 'IN_TRANSIT', ?)`).run(stepId, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId, quantity, now);
+    }
     audit(db, actor.id, 'STEP_OUT', 'INVENTORY_STEP_TRANSFER', stepId, `Transfer Out ${quantity} ${body.productId}`);
   });
   return send(res, 201, { id: stepId, status: 'IN_TRANSIT' });
@@ -94,42 +98,61 @@ export async function transferIn(db, req, res, actor) {
   const body = await readJson(req);
   assertAllowedFields(body, ['sourceTransferId','productId','quantity','fromWarehouseId','toWarehouseId','businessDate']);
   const quantity = Number(body.quantity);
-  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity 必须为正');
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity must be positive');
   const transferId = String(body.sourceTransferId);
   const now = nowIso();
   const businessDate = body.businessDate || now.slice(0, 10);
   transaction(db, () => {
     ensureTable(db);
-    const stepRow = getOrCreateStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
-    const inTransit = Number(stepRow.issued_qty) - Number(stepRow.received_qty) - Number(stepRow.returned_qty) - Number(stepRow.cancelled_qty);
-    if (quantity > inTransit) throw new HttpError(409, `In-transit 可用量不足：${inTransit}，需收 ${quantity}`);
+    const stepRow = getStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    if (!stepRow) throw new HttpError(404, 'No step transfer row; issue transferOut first');
+    const inTransit = computeInTransit(stepRow);
+    if (quantity > inTransit) {
+      throw new HttpError(409, `In-transit insufficient: available=${inTransit}, requested=${quantity}`, {
+        code: 'IN_TRANSIT_INSUFFICIENT',
+        resolution: 'Reduce receive quantity or perform additional Transfer Out',
+      });
+    }
+    const stepItemId = stepRow.id;
     applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_IN',
       sourceId: transferId,
-      sourceItemId: stepRow.id,
+      sourceItemId: stepItemId,
       businessDate,
       actor: { id: actor.id },
       movementKind: 'IN',
       quantity,
-      toPosition: { productId: body.productId, warehouseId: body.toWarehouseId, stockStatus: 'AVAILABLE' },
-      idempotencyKey: `STEP_IN:${stepRow.id}:${quantity}:${now}`,
-      remark: `Step transfer in ${body.productId}`,
+      toPosition: {
+        productId: body.productId,
+        warehouseId: body.toWarehouseId,
+        ownerType: 'ENTERPRISE',
+        ownerId: null,
+        stockStatus: 'AVAILABLE',
+      },
+      idempotencyKey: `STEP_IN:${stepItemId}:${quantity}:${now}`,
     });
     db.prepare(`UPDATE inventory_step_transfer_in_transit SET received_qty=received_qty+? WHERE id=?`).run(quantity, stepRow.id);
-    audit(db, actor.id, 'STEP_IN', 'INVENTORY_STEP_TRANSFER', stepRow.id, `Transfer In ${quantity} ${body.productId}`);
+    // If fully received → CLOSED
+    const updated = getStepRow(db, transferId, body.productId, body.fromWarehouseId, body.toWarehouseId);
+    if (computeInTransit(updated) === 0) {
+      db.prepare(`UPDATE inventory_step_transfer_in_transit SET status='CLOSED', closed_at=? WHERE id=?`).run(now, stepRow.id);
+    }
+    audit(db, actor.id, 'STEP_IN', 'INVENTORY_STEP_TRANSFER', stepItemId, `Transfer In ${quantity} ${body.productId}`);
   });
   return send(res, 201, { ok: true });
 }
 
 export function cancelRemaining(db, res, actor, sourceTransferId, productId, fromWh, toWh) {
   allow(actor, 'INVENTORY_TRANSFER_CONFIRM');
+  const now = nowIso();
   transaction(db, () => {
     ensureTable(db);
-    const stepRow = getOrCreateStepRow(db, sourceTransferId, productId, fromWh, toWh);
-    const inTransit = Number(stepRow.issued_qty) - Number(stepRow.received_qty) - Number(stepRow.returned_qty);
+    const stepRow = getStepRow(db, sourceTransferId, productId, fromWh, toWh);
+    if (!stepRow) throw new HttpError(404, 'Step transfer not found');
+    const inTransit = computeInTransit(stepRow);
     if (inTransit <= 0) throw new HttpError(409, 'No in-transit remaining to cancel');
-    db.prepare(`UPDATE inventory_step_transfer_in_transit SET cancelled_qty=cancelled_qty+?, status='CLOSED', closed_at=? WHERE id=?`).run(inTransit, nowIso(), stepRow.id);
+    db.prepare(`UPDATE inventory_step_transfer_in_transit SET cancelled_qty=cancelled_qty+?, status='CLOSED', closed_at=? WHERE id=?`).run(inTransit, now, stepRow.id);
     audit(db, actor.id, 'STEP_CANCEL', 'INVENTORY_STEP_TRANSFER', stepRow.id, `Cancel remaining ${inTransit} ${productId}`);
   });
   return send(res, 200, { ok: true });
@@ -138,37 +161,52 @@ export function cancelRemaining(db, res, actor, sourceTransferId, productId, fro
 export function returnToSource(db, res, actor, sourceTransferId, productId, fromWh, toWh, quantity, businessDate) {
   allow(actor, 'INVENTORY_TRANSFER_CONFIRM');
   const q = Number(quantity);
-  if (!Number.isFinite(q) || q <= 0) throw new HttpError(400, 'quantity 必须为正');
+  if (!Number.isFinite(q) || q <= 0) throw new HttpError(400, 'quantity must be positive');
   const now = nowIso();
+  const bizDate = businessDate || now.slice(0, 10);
   transaction(db, () => {
     ensureTable(db);
-    const stepRow = getOrCreateStepRow(db, sourceTransferId, productId, fromWh, toWh);
-    const inTransit = Number(stepRow.issued_qty) - Number(stepRow.received_qty) - Number(stepRow.returned_qty);
+    const stepRow = getStepRow(db, sourceTransferId, productId, fromWh, toWh);
+    if (!stepRow) throw new HttpError(404, 'Step transfer not found');
+    const inTransit = computeInTransit(stepRow);
     if (q > inTransit) throw new HttpError(409, `In-transit insufficient for return-to-source: ${inTransit} < ${q}`);
     applyInventoryMutation({
       db,
       sourceType: 'INVENTORY_STEP_TRANSFER_IN',
       sourceId: sourceTransferId,
       sourceItemId: stepRow.id,
-      businessDate: businessDate || now.slice(0, 10),
+      businessDate: bizDate,
       actor: { id: actor.id },
       movementKind: 'IN',
       quantity: q,
-      toPosition: { productId, warehouseId: fromWh, stockStatus: 'AVAILABLE' },
+      toPosition: {
+        productId,
+        warehouseId: fromWh,
+        ownerType: 'ENTERPRISE',
+        ownerId: null,
+        stockStatus: 'AVAILABLE',
+      },
       idempotencyKey: `STEP_RETURN:${stepRow.id}:${q}:${now}`,
-      remark: `Return to source ${productId}`,
+      remark: 'Return to source',
     });
     db.prepare(`UPDATE inventory_step_transfer_in_transit SET returned_qty=returned_qty+? WHERE id=?`).run(q, stepRow.id);
+    const updated = getStepRow(db, sourceTransferId, productId, fromWh, toWh);
+    if (computeInTransit(updated) === 0) {
+      db.prepare(`UPDATE inventory_step_transfer_in_transit SET status='CLOSED', closed_at=? WHERE id=?`).run(now, stepRow.id);
+    }
     audit(db, actor.id, 'STEP_RETURN', 'INVENTORY_STEP_TRANSFER', stepRow.id, `Return ${q} ${productId}`);
   });
   return send(res, 200, { ok: true });
 }
 
 export function getInTransit(db, res, actor, sourceTransferId) {
+  allow(actor, 'INVENTORY_TRANSFER_VIEW');
+  ensureTable(db);
   const rows = db.prepare(`
-    SELECT source_transfer_id, product_id, warehouse_id_source, warehouse_id_destination,
-           issued_qty, received_qty, returned_qty, cancelled_qty, status,
-           (issued_qty - received_qty - returned_qty - cancelled_qty) AS in_transit_qty
+    SELECT source_transfer_id sourceTransferId, product_id productId,
+           warehouse_id_source warehouseIdSource, warehouse_id_destination warehouseIdDestination,
+           issued_qty issuedQty, received_qty receivedQty, returned_qty returnedQty, cancelled_qty cancelledQty, status,
+           (issued_qty - received_qty - returned_qty - cancelled_qty) AS inTransitQty
       FROM inventory_step_transfer_in_transit
      WHERE source_transfer_id=?
   `).all(sourceTransferId);
