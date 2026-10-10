@@ -1665,7 +1665,11 @@ function seedSchema(db) {
     // V1.3 Phase 1: WAREHOUSE owns physical stock execution including material
     // issue and production receipt. No MRP / no accounting / no self-approval of
     // inventory check (INVENTORY_CHECK_APPROVE is on reviewer only).
-    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE', 'INVENTORY_PARAMETERS_VIEW', 'INVENTORY_PARAMETERS_MANAGE', 'WAREHOUSE_BIN_VIEW', 'WAREHOUSE_BIN_MANAGE', 'STOCK_STATUS_VIEW', 'STOCK_STATUS_MANAGE', 'OWNER_DIMENSION_VIEW', 'INVENTORY_LOCK_VIEW', 'INVENTORY_LOCK_MANAGE', 'INVENTORY_OPENING_VIEW', 'INVENTORY_OPENING_MANAGE', 'INVENTORY_NATIVE_DOCUMENT_VIEW', 'INVENTORY_NATIVE_DOCUMENT_MANAGE', 'INVENTORY_LOT_ADJUSTMENT_VIEW', 'INVENTORY_LOT_ADJUSTMENT_MANAGE', 'INVENTORY_FORM_CONVERSION_VIEW', 'INVENTORY_FORM_CONVERSION_MANAGE', 'INVENTORY_ASSEMBLY_VIEW', 'INVENTORY_ASSEMBLY_MANAGE', 'INVENTORY_BARCODE_RULE_VIEW', 'INVENTORY_BARCODE_RULE_MANAGE', 'INVENTORY_CONTAINER_VIEW', 'INVENTORY_CONTAINER_MANAGE', 'INVENTORY_REPORT_VIEW', 'INVENTORY_ABC_MANAGE', 'INVENTORY_PERIOD_CLOSE_VIEW', 'INVENTORY_PERIOD_CLOSE_MANAGE'],
+    // M13 frozen UAT (test 13): "warehouse role cannot manage period closures".
+    // Period close is an accounting / admin-side operation; warehouse can
+    // VIEW the status but not execute close / reopen. The M13 contract is
+    // part of the canonical 28 UAT and is the source of truth here.
+    'role-warehouse': ['DASHBOARD_VIEW', 'PRODUCTS_VIEW', 'WAREHOUSES_VIEW', 'WAREHOUSES_MANAGE', 'INVENTORY_VIEW', 'INVENTORY_CHECK_CREATE', 'INVENTORY_TRANSFER_CREATE', 'INVENTORY_TRANSFER_APPROVE', 'INVENTORY_TRANSFER_CONFIRM', 'INVENTORY_ADJUSTMENT_MANAGE', 'INVENTORY_SCRAP_VIEW', 'INVENTORY_SCRAP_MANAGE', 'PURCHASE_RECEIPTS_VIEW', 'PURCHASE_RECEIPTS_MANAGE', 'SALES_DELIVERIES_VIEW', 'SALES_DELIVERIES_MANAGE', 'RETURNS_VIEW', 'RETURNS_MANAGE', 'IQC_VIEW', 'IQC_MANAGE', 'OQC_VIEW', 'OQC_MANAGE', 'PRODUCTION_ORDERS_VIEW', 'PRODUCTION_MATERIAL_ISSUE_MANAGE', 'PRODUCTION_RECEIPT_MANAGE', 'INVENTORY_PARAMETERS_VIEW', 'INVENTORY_PARAMETERS_MANAGE', 'WAREHOUSE_BIN_VIEW', 'WAREHOUSE_BIN_MANAGE', 'STOCK_STATUS_VIEW', 'STOCK_STATUS_MANAGE', 'OWNER_DIMENSION_VIEW', 'INVENTORY_LOCK_VIEW', 'INVENTORY_LOCK_MANAGE', 'INVENTORY_OPENING_VIEW', 'INVENTORY_OPENING_MANAGE', 'INVENTORY_NATIVE_DOCUMENT_VIEW', 'INVENTORY_NATIVE_DOCUMENT_MANAGE', 'INVENTORY_LOT_ADJUSTMENT_VIEW', 'INVENTORY_LOT_ADJUSTMENT_MANAGE', 'INVENTORY_FORM_CONVERSION_VIEW', 'INVENTORY_FORM_CONVERSION_MANAGE', 'INVENTORY_ASSEMBLY_VIEW', 'INVENTORY_ASSEMBLY_MANAGE', 'INVENTORY_BARCODE_RULE_VIEW', 'INVENTORY_BARCODE_RULE_MANAGE', 'INVENTORY_CONTAINER_VIEW', 'INVENTORY_CONTAINER_MANAGE', 'INVENTORY_REPORT_VIEW', 'INVENTORY_ABC_MANAGE', 'INVENTORY_PERIOD_CLOSE_VIEW'],
   };
   const insertRolePermission = db.prepare('INSERT OR IGNORE INTO role_permissions(role_id, permission_code) VALUES (?, ?)');
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
@@ -1726,11 +1730,17 @@ function seedDemoData(db) {
   insertWarehouse.run('warehouse-001', 'WH-001', '深圳总仓', '广东省深圳市南山区', '张经理', now, now);
   insertWarehouse.run('warehouse-002', 'WH-002', '东莞分仓', '广东省东莞市长安镇', '李主管', now, now);
 
-  const insertInventory = db.prepare('INSERT OR IGNORE INTO inventory(warehouse_id, product_id, quantity, updated_at) VALUES (?, ?, ?, ?)');
+  // V21 — inventory seed rows go in with NULL position_key at this stage;
+  // migrateInventoryPositionSchema runs in the late-migration block and
+  // backfills position_key for every legacy (warehouse_id, product_id)-only
+  // row using the canonical default identity hash. The id column must be
+  // populated explicitly so subsequent position-key aware updates can find
+  // the row by id (TEXT PRIMARY KEY has no auto-increment).
+  const insertInventory = db.prepare('INSERT OR IGNORE INTO inventory(id, warehouse_id, product_id, quantity, updated_at) VALUES (?, ?, ?, ?, ?)');
   for (const wh of ['warehouse-001', 'warehouse-002']) {
-    insertInventory.run(wh, 'product-001', wh === 'warehouse-001' ? 20 : 16, now);
-    insertInventory.run(wh, 'product-002', wh === 'warehouse-001' ? 100 : 80, now);
-    insertInventory.run(wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
+    insertInventory.run(`seed-inv-${wh}-001`, wh, 'product-001', wh === 'warehouse-001' ? 20 : 16, now);
+    insertInventory.run(`seed-inv-${wh}-002`, wh, 'product-002', wh === 'warehouse-001' ? 100 : 80, now);
+    insertInventory.run(`seed-inv-${wh}-003`, wh, 'product-003', wh === 'warehouse-001' ? 30 : 22, now);
   }
 
   db.prepare("INSERT OR IGNORE INTO sales_orders (id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,created_at,updated_at) VALUES ('order-demo-001','SO-DEMO-001','customer-001','SUBMITTED',684300,'首张演示订单，等待销售主管审核','user-sales',?,?,?)").run(now, now, now);

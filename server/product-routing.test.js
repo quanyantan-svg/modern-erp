@@ -110,18 +110,58 @@ describe('M10 schema and legacy safety', () => {
 });
 
 describe('M10 permission and role contract', () => {
-  test('keeps routing permissions and includes the single canonical transfer-confirm permission', () => {
+  test('keeps routing permissions, includes the single canonical transfer-confirm permission, and registers the V21 inventory permissions', () => {
     const codes = PERMISSIONS.map(([code]) => code);
-    assert.equal(codes.length, 159);
+    // V21 Domain 5 Closure (Wave A) added the 25 frozen INV-* permissions
+    // (parameters / locks / opening / native documents / lot adjustment /
+    // form conversion / assembly / barcode / container / reports / ABC /
+    // warehouse-bin / stock-status / owner-dimension). Each maps 1:1 to a
+    // frozen INV capability. 159 (pre-Wave-A) + 25 = 184. The count alone
+    // is enforced for the silent-addition guard; specific codes are
+    // asserted below so future additions must be named.
+    assert.equal(codes.length, 184);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
     assert.equal(codes.filter((code) => code === 'INVENTORY_TRANSFER_CONFIRM').length, 1);
     assert.ok(codes.includes('INVENTORY_TRANSFER_APPROVE'), 'legacy alias remains registered');
+    // V21 inventory permission codes (asserted by name; do not silently
+    // grow the registry without updating the canonical contract).
+    for (const code of [
+      'INVENTORY_PARAMETERS_VIEW', 'INVENTORY_PARAMETERS_MANAGE',
+      'INVENTORY_LOCK_VIEW', 'INVENTORY_LOCK_MANAGE',
+      'INVENTORY_OPENING_VIEW', 'INVENTORY_OPENING_MANAGE',
+      'INVENTORY_NATIVE_DOCUMENT_VIEW', 'INVENTORY_NATIVE_DOCUMENT_MANAGE',
+      'INVENTORY_LOT_ADJUSTMENT_VIEW', 'INVENTORY_LOT_ADJUSTMENT_MANAGE',
+      'INVENTORY_FORM_CONVERSION_VIEW', 'INVENTORY_FORM_CONVERSION_MANAGE',
+      'INVENTORY_ASSEMBLY_VIEW', 'INVENTORY_ASSEMBLY_MANAGE',
+      'INVENTORY_BARCODE_RULE_VIEW', 'INVENTORY_BARCODE_RULE_MANAGE',
+      'INVENTORY_CONTAINER_VIEW', 'INVENTORY_CONTAINER_MANAGE',
+      'INVENTORY_REPORT_VIEW', 'INVENTORY_ABC_MANAGE',
+      'WAREHOUSE_BIN_VIEW', 'WAREHOUSE_BIN_MANAGE',
+      'STOCK_STATUS_VIEW', 'STOCK_STATUS_MANAGE',
+      'OWNER_DIMENSION_VIEW',
+    ]) {
+      assert.ok(codes.includes(code), `V21 inventory permission ${code} must remain in the registry`);
+    }
+    // No duplicate codes in the registry.
+    const seen = new Set();
+    for (const code of codes) {
+      assert.ok(!seen.has(code), `duplicate permission code in registry: ${code}`);
+      seen.add(code);
+    }
     for (const roleId of ['role-admin', 'role-warehouse']) {
       assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get(roleId, 'INVENTORY_TRANSFER_CONFIRM').count, 1, roleId);
     }
     for (const roleId of ['role-sales', 'role-reviewer', 'role-accounting']) {
       assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get(roleId, 'INVENTORY_TRANSFER_CONFIRM').count, 0, roleId);
+    }
+    // M13 frozen UAT: warehouse role cannot manage inventory period closures.
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get('role-warehouse', 'INVENTORY_PERIOD_CLOSE_MANAGE').count, 0, 'warehouse must not hold INVENTORY_PERIOD_CLOSE_MANAGE per M13 test 13');
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get('role-warehouse', 'INVENTORY_PERIOD_CLOSE_VIEW').count, 1, 'warehouse may view inventory period closures');
+    // Admin reconciliation: admin holds every permission in the registry.
+    const all = PERMISSIONS.map(([code]) => code);
+    for (const code of all) {
+      assert.equal(db.prepare('SELECT COUNT(*) count FROM role_permissions WHERE role_id=? AND permission_code=?').get('role-admin', code).count, 1, `admin must hold ${code}`);
     }
   });
 

@@ -48,6 +48,7 @@ import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword } from './db.js';
 
@@ -204,7 +205,7 @@ describe('v1.0.1 — narrow supplier / customer lookup endpoints', () => {
       VALUES('cus-it-1','C-IT-1','深圳测试客户','l','1','sz',1,?,?)`).run(now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh-it-1','WH-IT-1','主仓','','m',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p-it-1','P-IT-1','入库测试品','TEST','个',1500,0,1,?,?)").run(now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv-it-1','wh-it-1','p-it-1',100,?)").run(now);
+    upsertCanonicalInventory(db, { warehouseId: 'wh-it-1', productId: 'p-it-1', quantity: 100, position: {}, rowId: 'inv-it-1' });
 
     const h = hashPassword('wh-it-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
@@ -435,7 +436,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
       VALUES('cus-1','C-001','测试客户','c','1','sz',1,?,?)`).run(now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh-1','WH-001','主仓','','m',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p-1','P-001','出库测试品','T','个',1000,0,1,?,?)").run(now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv-sd-1','wh-1','p-1',10,?)").run(now);
+    upsertCanonicalInventory(db, { warehouseId: 'wh-1', productId: 'p-1', quantity: 10, position: {}, rowId: 'inv-sd-1' });
 
     const h = hashPassword('wh-sd-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
@@ -541,7 +542,7 @@ describe('v1.0.1 — warehouse returns full path (sales + purchase)', () => {
       VALUES('cus-r','C-R','销售退货客户','l','1','a',1,?,?)`).run(now, now);
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh-r','WH-R','主仓','','m',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p-r','P-R','退货测试品','T','个',800,0,1,?,?)").run(now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv-r-1','wh-r','p-r',20,?)").run(now);
+    upsertCanonicalInventory(db, { warehouseId: 'wh-r', productId: 'p-r', quantity: 20, position: {}, rowId: 'inv-r-1' });
 
     const h = hashPassword('wh-rt-1234');
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)

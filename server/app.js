@@ -2,7 +2,7 @@
 import { id, transaction, verifyPassword } from './db.js';
 import { randomUUID } from 'node:crypto';
 import { audit } from './lib/audit.js';
-import { adjustInventory } from './lib/stock.js';
+import { adjustInventory, setInventoryQuantity } from './lib/stock.js';
 import { listNotifications, markNotificationRead } from './modules/platform-notifications.js';
 import { createWorkflow, listWorkflows } from './modules/platform-workflows.js';
 import {
@@ -3613,12 +3613,16 @@ async function approveInventoryCheck(db, req, res, actor, checkId) {
     if (!businessDate || !/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new HttpError(409, '盘点单缺少权威业务日期，无法审批');
     transaction(db, () => {
       assertFinancialPeriodsOpen(db, businessDate);
-      const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(check.warehouse_id, check.product_id);
+      const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(check.warehouse_id, check.product_id);
       if (!current) throw new HttpError(409, '库存记录不存在');
       if (current.quantity !== check.system_quantity) throw new HttpError(409, '库存已变化，请重新盘点');
       if (check.difference !== 0) postTrackedMovement(db, { sourceType: 'INVENTORY_CHECK', sourceId: checkId, sourceItemId: checkId, productId: check.product_id, warehouseId: check.warehouse_id, quantity: Math.abs(check.difference), direction: check.difference > 0 ? 'IN' : 'OUT', businessDate });
       db.prepare("UPDATE inventory_checks SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE id=?").run(actor.id, now, checkId);
-      db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(check.actual_quantity, now, check.warehouse_id, check.product_id);
+      // V21 — write at the canonical default position so the multidimensional
+      // identity is preserved. The previous UPDATE against the legacy
+      // (warehouse_id, product_id) tuple could touch the wrong row once a
+      // second position (e.g. lot) co-exists in the same warehouse+product.
+      setInventoryQuantity(db, check.warehouse_id, check.product_id, check.actual_quantity, now);
       if (check.difference !== 0) {
         const transactionId=id(); db.prepare("INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,?,?,'INVENTORY_CHECK',?,?,?,?,?,?)")
           .run(transactionId, check.warehouse_id, check.product_id, Math.abs(check.difference), check.difference > 0 ? 'IN' : 'OUT', check.actual_quantity, checkId, check.check_no, '盘点调整', actor.id, now, businessDate);
@@ -3886,7 +3890,10 @@ async function reverseInventoryControl(db, req, res, actor, sourceType, sourceId
     }
     for (const [key, delta] of netByStock) {
       const [warehouseId, productId] = key.split('\u0000');
-      const current = Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId)?.quantity || 0);
+      // V21 — sum across canonical positions (default + bin + lot/serial);
+      // legacy single-row read cannot see split positions and would falsely
+      // report 'insufficient stock' on reversal.
+      const current = Number(db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(warehouseId, productId)?.q || 0);
       if (current + delta < -1e-9) throw new HttpError(409, '原入库数量已不可用，不能冲销');
     }
     reverseTrackedSource(db, { originalSourceType: sourceType, originalSourceId: sourceId, reversalSourceType, reversalSourceId: reversalId, businessDate });

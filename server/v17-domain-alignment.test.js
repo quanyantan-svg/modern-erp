@@ -12,7 +12,11 @@ const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
 test('Domain Alignment keeps 59 active and 5 disabled routes on canonical domains (after Procurement & Outsourcing closure: +sourcing-pricing +outsourcing)', () => {
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 69);
+  // V1.6.2 frozen route catalogue: 59 active + 5 disabled. The Wave E
+  // inventory routes are merged into the canonical inventory hub per
+  // solution.md §27.43 mobile route architecture (≤ 8 inventory routes
+  // / ≤ 6 launcher tiles).
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 59);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);

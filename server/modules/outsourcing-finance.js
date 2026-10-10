@@ -8,6 +8,7 @@ import { createCommercialCreditNote } from './commercial-golive.js';
 import { backflushMaterial } from './outsourcing.js';
 import { ensurePayableSource } from './settlement-core.js';
 import { deriveQualityState } from './quality-gates.js';
+import { adjustInventory } from '../lib/stock.js';
 
 const RECEIVE_PERMISSIONS = ['OUTSOURCING_RECEIVING_MANAGE', 'OUTSOURCING_MANAGE'];
 const FINANCE_PERMISSIONS = ['SUPPLIER_BILL_MANAGE', 'OUTSOURCING_MANAGE'];
@@ -124,10 +125,11 @@ export async function confirmOutsourcingReceipt(db, req, res, actor, receiptId) 
       incrementalRows.push({ materialListId: m.id, incremental, carryingValueCents: materialValue });
     }
     // Recognize finished inventory: insert finished item row into finished_inventory_position (canonical inventory).
-    // We use inventory table update with +receipt.quantity against the finished product.
+    // V21 — write at the canonical default position via adjustInventory so
+    // the multidimensional identity is preserved.
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
       VALUES(?,?,?,?,'IN','OUTSOURCING_RECEIPT',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', order.product_id, receipt.quantity, receiptId, receipt.receipt_no, '委外加工入库', actor.id, now, receipt.received_date);
-    db.prepare('UPDATE inventory SET quantity=quantity+?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(receipt.quantity, now, 'warehouse-001', order.product_id);
+    adjustInventory(db, 'warehouse-001', order.product_id, Number(receipt.quantity), now);
     // Update receipt with cost evidence: consumed material value + processing fee provisional.
     db.prepare(`UPDATE outsourcing_receipts SET business_status='EFFECTED', backflush_material_value_cents=?, total_cost_cents=?, updated_at=? WHERE id=?`).run(totalMaterialValue, totalMaterialValue + Number(receipt.processing_fee_cents), now, receiptId);
     db.prepare(`INSERT INTO outsourcing_cost_evidences(
@@ -269,9 +271,12 @@ export async function createFinishedReturn(db, req, res, actor) {
     // Finished inventory reversal: deduct from inventory + insert OUT transaction.
     db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,source_type,source_id,source_no,remark,creator_id,created_at,business_date)
       VALUES(?,?,?,?,'OUT','OUTSOURCING_FINISHED_RETURN',?,?,?,?,?,?)`).run(randomUUID(), 'warehouse-001', productId, returnQuantity, id, returnNo, '委外加工退货', actor.id, now, body.returnDate || now.slice(0, 10));
-    const inventory = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get('warehouse-001', productId);
-    if (!inventory || Number(inventory.quantity) + 1e-9 < returnQuantity) throw new HttpError(409, '委外完工库存不足');
-    db.prepare('UPDATE inventory SET quantity=quantity-?, updated_at=? WHERE warehouse_id=? AND product_id=?').run(returnQuantity, now, 'warehouse-001', productId);
+    // V21 — sum across canonical positions and route the write through
+    // adjustInventory (position_key aware, refuses to operate on non-default
+    // identities).
+    const inventory = db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get('warehouse-001', productId);
+    if (!inventory || Number(inventory.q) + 1e-9 < returnQuantity) throw new HttpError(409, '委外完工库存不足');
+    adjustInventory(db, 'warehouse-001', productId, -Number(returnQuantity), now);
 
     let remainingBilledReturn = returnQuantity;
     const postedLines = db.prepare(`SELECT sbi.id bill_item_id,sbi.bill_id,

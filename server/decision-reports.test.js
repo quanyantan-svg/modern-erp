@@ -41,6 +41,7 @@ import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS } from './db.js';
 import { DECISION_REPORT_SOURCE_LABELS } from './modules/decision-reports.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -645,11 +646,10 @@ describe('M7 — inventory movements end-to-end', () => {
   });
 
   test('selected product and warehouse reconcile canonical inventory with latest ledger balance', async () => {
-    database.prepare(`
-      INSERT INTO inventory(id, warehouse_id, product_id, quantity, updated_at)
-      VALUES ('inv-m7-reconcile', 'warehouse-001', 'product-001', 109, '2026-09-15T10:00:00')
-      ON CONFLICT(warehouse_id, product_id) DO UPDATE SET quantity=excluded.quantity, updated_at=excluded.updated_at
-    `).run();
+    upsertCanonicalInventory(database, {
+      warehouseId: 'warehouse-001', productId: 'product-001', quantity: 109,
+      position: {},
+    });
     database.prepare(`
       INSERT INTO inventory_transactions(id, warehouse_id, product_id, quantity_change, direction, balance_after, source_type, source_id, source_no, created_at, business_date)
       VALUES ('m7-reconcile-latest', 'warehouse-001', 'product-001', 1, 'IN', 109, 'INVENTORY_ADJUSTMENT', 'm7-reconcile-source', 'ADJ-RECONCILE', '2098-01-01T10:00:00', '2098-01-01')

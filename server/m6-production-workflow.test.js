@@ -21,6 +21,7 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS, id } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 let baseUrl;
 let database;
@@ -79,12 +80,9 @@ function seedBomAndOrder() {
   const itemStmt = database.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,?,?)');
   itemStmt.run(id(), bomId, 'product-002', 2, 0, 1);
   itemStmt.run(id(), bomId, 'product-003', 1, 0, 2);
-  database.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,datetime('now'))")
-    .run(invP2, warehouseId, 'product-002', 50);
-  database.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,datetime('now'))")
-    .run(invP3, warehouseId, 'product-003', 3);
-  database.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,datetime('now'))")
-    .run(invP1, warehouseId, 'product-001', 0);
+  upsertCanonicalInventory(database, { warehouseId, productId: 'product-002', quantity: 50, position: {}, rowId: invP2 });
+  upsertCanonicalInventory(database, { warehouseId, productId: 'product-003', quantity: 3, position: {}, rowId: invP3 });
+  upsertCanonicalInventory(database, { warehouseId, productId: 'product-001', quantity: 0, position: {}, rowId: invP1 });
   return { bomId, warehouseId };
 }
 

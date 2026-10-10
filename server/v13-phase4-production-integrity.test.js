@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { createApp } from './app.js';
 import { id } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 let handle; let db; let server; let baseUrl; let admin; let warehouse; let sales; let accounting;
 
@@ -28,7 +29,7 @@ function seedX100() {
   db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh-x100','WH-X100','X100仓','','',1,?,?)").run(now, now);
   db.prepare("INSERT INTO boms(id,product_id,version,status,remark,creator_id,created_at,updated_at) VALUES('bom-x100','fg-x100','1.0','ACTIVE','','user-admin',?,?)").run(now, now);
   for (const [line, product] of [['bi-pcb', 'pcb-x100'], ['bi-case', 'case-x100'], ['bi-psu', 'psu-x100']]) db.prepare('INSERT INTO bom_items(id,bom_id,product_id,quantity,scrap_rate,line_no) VALUES(?,?,?,?,0,?)').run(line, 'bom-x100', product, 1, products.findIndex((p) => p[0] === product));
-  for (const [product, quantity] of [['pcb-x100', 100], ['case-x100', 100], ['psu-x100', 100], ['fg-x100', 20]]) db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)').run(id(), 'wh-x100', product, quantity, now);
+  for (const [product, quantity] of [['pcb-x100', 100], ['case-x100', 100], ['psu-x100', 100], ['fg-x100', 20]]) upsertCanonicalInventory(db, { warehouseId: 'wh-x100', productId: product, quantity, position: {} });
 }
 
 describe('V1.3 Phase 4 production source and snapshot contracts', () => {

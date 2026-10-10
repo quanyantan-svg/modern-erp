@@ -3,6 +3,7 @@ import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, send } from '../lib/http.js';
 import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
+import { setInventoryQuantity } from '../lib/stock.js';
 
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
@@ -326,10 +327,14 @@ export async function reverseOperationalReturn(db, req, res, actor, side, return
   const replay = idempotencyReplay(db, `${side}_RETURN_REVERSAL`, returnId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
     for (const item of items) {
-      const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(header.warehouse_id, item.original.product_id);
-      const delta = sales ? -item.quantity : item.quantity; const after = Number(current?.quantity || 0) + delta;
-      if (current) db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?').run(after, at, header.warehouse_id, item.original.product_id);
-      else db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)').run(randomUUID(), header.warehouse_id, item.original.product_id, after, at);
+      const current = db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(header.warehouse_id, item.original.product_id);
+      const delta = sales ? -item.quantity : item.quantity; const after = Number(current?.q || 0) + delta;
+      // V21 — write at the canonical default position (ENTERPRISE / AVAILABLE
+      // / NULL-bin / NULL-lot / NULL-serial). setInventoryQuantity refuses
+      // bin-enabled warehouses and LOT/SERIAL-tracked products so legacy
+      // shims cannot reintroduce the dropped UNIQUE(warehouse_id, product_id)
+      // collision.
+      setInventoryQuantity(db, header.warehouse_id, item.original.product_id, after, at);
       db.prepare(`INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(), header.warehouse_id, item.original.product_id, item.quantity, sales ? 'OUT' : 'IN', after, sales ? 'SALES_RETURN_REVERSAL' : 'PURCHASE_RETURN_REVERSAL', id, reversalNo, reason, actor.id, at);
     }

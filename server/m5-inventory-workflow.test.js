@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,8 +28,8 @@ describe('M5 inventory workflow', () => {
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh2','WH2','副仓','','',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p1','P1','货品一','','个',100,0,1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p2','P2','货品二','','箱',200,0,1,?,?)").run(now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('i1','wh','p1',10,?)").run(now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('i2','wh','p2',20,?)").run(now);
+    upsertCanonicalInventory(db, { warehouseId: 'wh', productId: 'p1', quantity: 10, position: {}, rowId: 'i1' });
+    upsertCanonicalInventory(db, { warehouseId: 'wh', productId: 'p2', quantity: 20, position: {}, rowId: 'i2' });
     for (const [name, role] of [['admin', 'role-admin'], ['warehouse', 'role-warehouse'], ['sales', 'role-sales'], ['reviewer', 'role-reviewer'], ['accounting', 'role-accounting']]) {
       const password = `${name}-m5-password`; const hashed = hashPassword(password);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`u-${name}`, name, name, hashed.hash, hashed.salt, role, now);

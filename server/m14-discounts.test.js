@@ -25,6 +25,7 @@ import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS } from './db.js';
 import { applyCreditAdjustment } from './modules/settlement-core.js';
 import { buildMobileApplicationGroups } from '../src/navigation/applicationMetadata.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 let baseUrl;
 let database;
@@ -126,12 +127,9 @@ function ensureWarehouse(code, name = code) {
 }
 
 function seedInventory(warehouseId, productId, quantity) {
-  const ex = database.prepare('SELECT id FROM inventory WHERE warehouse_id=? AND product_id=?').get(warehouseId, productId);
-  if (ex) {
-    database.prepare('UPDATE inventory SET quantity=?, updated_at=datetime(\'now\') WHERE warehouse_id=? AND product_id=?').run(quantity, warehouseId, productId);
-  } else {
-    database.prepare('INSERT INTO inventory(id, warehouse_id, product_id, quantity, updated_at) VALUES(?, ?, ?, ?, datetime(\'now\'))').run(`inv-m14-${warehouseId}-${productId}`, warehouseId, productId, quantity);
-  }
+  upsertCanonicalInventory(database, {
+    warehouseId, productId, quantity, position: {},
+  });
 }
 
 async function createConfirmedDelivery(customerId, totalCents) {

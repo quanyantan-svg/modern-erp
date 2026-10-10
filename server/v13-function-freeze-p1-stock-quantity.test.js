@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { hashPassword } from './db.js';
 import { createTempDb } from './test-utils/temp-db.js';
 import { receiveValue, issueValue } from './modules/financial-inventory.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 // V1.3 Function-Freeze P1 cleanup regression tests.
 //
@@ -43,7 +44,9 @@ async function setup() {
 // downstream reports and receiveValue/issueValue flows behave correctly.
 function plantInventory(db, productId, warehouseId, quantity) {
   const now = new Date().toISOString();
-  db.prepare("INSERT OR REPLACE INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)").run(`inv-${productId}-${warehouseId}`, warehouseId, productId, quantity, now);
+  upsertCanonicalInventory(db, {
+    warehouseId, productId, quantity, position: {},
+  });
   // Plant a POSTED balance movement at the canonical standard cost so
   // downstream flows (issueValue, etc.) find a non-LEGACY_UNVALUED row.
   receiveValue(db, { businessDate: '2026-09-25', productId, warehouseId, quantity, valueCents: 1000, movementType: 'OPENING_BALANCE', sourceType: 'OPENING_BATCH', sourceId: `ob-${productId}-${warehouseId}`, valuationBasis: 'CONTROLLED_OPENING' });

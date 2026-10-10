@@ -64,6 +64,9 @@ export function approveStocktake(db, res, actor, checkId) {
   if (check.status !== 'SUBMITTED') throw new HttpError(409, `状态 ${check.status} 不可审批`);
   const items = db.prepare(`SELECT * FROM inventory_check_items WHERE check_id=?`).all(checkId);
   const now = nowIso();
+  // Authoritative business date is YYYY-MM-DD only. checked_at is the
+  // event timestamp; never substitute it for the period/valuation date.
+  const businessDate = check.business_date || String(check.checked_at || now).slice(0, 10);
   // Each applyInventoryMutation opens its own transaction; do NOT wrap in
   // an outer transaction (SQLite forbids nested transactions on the same handle).
   for (const item of items) {
@@ -75,7 +78,7 @@ export function approveStocktake(db, res, actor, checkId) {
       sourceId: checkId,
       sourceItemId: item.id,
       sourceNo: check.check_no,
-      businessDate: check.checked_at || now.slice(0, 10),
+      businessDate,
       actor,
       movementKind: 'ADJUSTMENT',
       quantity: Math.abs(diff),

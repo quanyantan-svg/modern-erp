@@ -1,6 +1,7 @@
 import { id, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, HttpError, optionalText, readJson, requiredText, send } from '../lib/http.js';
+import { setInventoryQuantity } from '../lib/stock.js';
 
 export const LIFECYCLE_CLASSIFICATIONS = Object.freeze([
   'SAFE_DELETE',
@@ -802,8 +803,11 @@ function applyInventoryCleanup(db, groups, actorId) {
   const updateBalance = db.prepare('UPDATE inventory_transactions SET balance_after=? WHERE id=?');
   for (const group of groups) {
     for (const transactionId of group.transactionIds) remove.run(transactionId);
-    db.prepare('UPDATE inventory SET quantity=?,updated_at=? WHERE warehouse_id=? AND product_id=?')
-      .run(Math.max(0, group.resultingQuantity), new Date().toISOString(), group.warehouseId, group.productId);
+    // V21 — write at the canonical default position so the multidimensional
+    // identity is preserved. The legacy UPDATE against (warehouse_id,
+    // product_id) could touch the wrong row once a second position (e.g. lot)
+    // co-exists in the same warehouse+product tuple.
+    setInventoryQuantity(db, group.warehouseId, group.productId, Math.max(0, group.resultingQuantity), new Date().toISOString());
 
     const remaining = db.prepare(`
       SELECT id,quantity_change,direction FROM inventory_transactions

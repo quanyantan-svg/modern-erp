@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword, PERMISSIONS } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -191,6 +192,11 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
         ('wh-A','p-1',100,'${now}'),
         ('wh-B','p-1',0,  '${now}');
     `);
+    // V21 — canonicalize the fixture rows so position_key aware reads and
+    // the adjustInventory shim converge on the same canonical row.
+    upsertCanonicalInventory(db, { warehouseId: 'wh-A', productId: 'p-1', quantity: 100, position: {} });
+    upsertCanonicalInventory(db, { warehouseId: 'wh-B', productId: 'p-1', quantity: 0, position: {} });
+    db.prepare('DELETE FROM inventory WHERE position_key IS NULL').run();
 
     const roleWarehouse = db.prepare("SELECT id FROM roles WHERE code='WAREHOUSE'").get();
     const roleAccounting = db.prepare("SELECT id FROM roles WHERE code='ACCOUNTING'").get();
@@ -230,8 +236,8 @@ describe('v1.0.1 — warehouse inventory transfer workflow (create + transfer + 
 
   beforeEach(async () => {
     // Reset the stock and clear prior transfer rows so each test starts clean.
-    db.prepare("UPDATE inventory SET quantity=? WHERE warehouse_id='wh-A' AND product_id='p-1'").run(100);
-    db.prepare("UPDATE inventory SET quantity=? WHERE warehouse_id='wh-B' AND product_id='p-1'").run(0);
+    upsertCanonicalInventory(db, { warehouseId: 'wh-A', productId: 'p-1', quantity: 100, position: {} });
+    upsertCanonicalInventory(db, { warehouseId: 'wh-B', productId: 'p-1', quantity: 0, position: {} });
     db.prepare("DELETE FROM accounting_entries WHERE voucher_id IN (SELECT id FROM accounting_vouchers WHERE source_type='INVENTORY_TRANSFER')").run();
     db.prepare("DELETE FROM accounting_vouchers WHERE source_type='INVENTORY_TRANSFER'").run();
     db.prepare("DELETE FROM inventory_transfer_items WHERE transfer_id IN (SELECT id FROM inventory_transfers)").run();

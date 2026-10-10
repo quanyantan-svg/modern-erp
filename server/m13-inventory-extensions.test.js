@@ -19,6 +19,7 @@ import { join, resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, id, PERMISSIONS } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 let baseUrl;
 let database;
@@ -101,12 +102,10 @@ function ensureWarehouse(code, name = code) {
 }
 
 function setInventory(warehouseId, productId, qty) {
-  database.prepare(`
-    INSERT INTO inventory(id, warehouse_id, product_id, quantity, updated_at)
-    VALUES(?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(warehouse_id, product_id) DO UPDATE SET
-      quantity = excluded.quantity, updated_at = excluded.updated_at
-  `).run(id(), warehouseId, productId, qty);
+  // V21 — canonical helper replaces legacy ON CONFLICT(warehouse_id, product_id).
+  upsertCanonicalInventory(database, {
+    warehouseId, productId, quantity: qty, position: {},
+  });
 }
 
 function getInventoryQty(warehouseId, productId) {

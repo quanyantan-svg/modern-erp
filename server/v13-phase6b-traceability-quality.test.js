@@ -8,6 +8,7 @@ import {
   holdIdentity, postTrackedMovement, reconcileTrackedInventory, resolveQualityPolicy,
   saveTrackedAllocations, traceIdentity, trackingSnapshot, transferTrackedInventory,
 } from './modules/traceability-quality.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 describe('V1.3 Phase 6B lot, serial, genealogy and configurable quality', () => {
   let handle; let db;
@@ -15,7 +16,10 @@ describe('V1.3 Phase 6B lot, serial, genealogy and configurable quality', () => 
   const warehouse = { id: 'user-warehouse', roleCode: 'WAREHOUSE', permissions: ['INVENTORY_VIEW','WAREHOUSES_MANAGE','PRODUCTION_RECEIPT_MANAGE'] };
   const at = '2026-09-24T00:00:00.000Z';
   const addProduct = (id, code) => db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES(?,?,?,'测试','个',100,0,1,?,?)").run(id, code, code, at, at);
-  const stock = (warehouseId, productId, quantity) => db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(warehouse_id,product_id) DO UPDATE SET quantity=excluded.quantity,updated_at=excluded.updated_at`).run(`inv-${warehouseId}-${productId}`, warehouseId, productId, quantity, at);
+  // V21 — canonical helper replaces legacy ON CONFLICT(warehouse_id, product_id).
+  const stock = (warehouseId, productId, quantity) => upsertCanonicalInventory(db, {
+    warehouseId, productId, quantity, position: {},
+  });
 
   before(() => { handle = createTempDb({ label: 'v13-p6b' }); db = handle.db; for (const [id, code] of [['p-lot','LOT-P'],['p-serial','SER-P'],['fg-serial','X100-FG'],['p-none','NONE-P'],['p-safe','SAFE-P']]) addProduct(id, code); });
   after(() => handle.cleanup());

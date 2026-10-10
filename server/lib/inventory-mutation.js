@@ -320,12 +320,25 @@ export function applyInventoryMutation(input) {
       CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_source ON inventory_mutation_log(source_type, source_id);
     `);
   };
-  transaction(input.db, () => {
+  // Detect an already-open transaction so nested callers (e.g. VMI/transfer
+  // owners) can rely on a single outer commit. SQLite's BEGIN IMMEDIATE in a
+  // nested transaction is rejected as "cannot start a transaction within a
+  // transaction", so we hand control back to the caller's transaction by
+  // running the mutation body directly.
+  const inOpenTransaction = () => {
+    try { return Boolean(input.db.isTransaction) || (input.db.getters?.isTransaction?.() === true); }
+    catch { return false; }
+  };
+  const execute = () => {
     ensureLogTable(input.db);
-    // INV-32 §27.41: central period gate inside the canonical dispatcher.
     assertInventoryPeriodOpen(input.db, businessDate);
     assertFinancialPeriodsOpen(input.db, businessDate);
     runMutation(input.db);
-  });
+  };
+  if (inOpenTransaction()) {
+    execute();
+  } else {
+    transaction(input.db, execute);
+  }
   return result;
 }

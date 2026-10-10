@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, hashPassword } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 describe('v1.0.1-rc.3 business document integrity', () => {
   let tmp;
@@ -42,8 +43,8 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES('wh','WH','Warehouse','','',1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p1','P1','Product 1','','EA',12345,0,1,?,?)").run(now, now);
     db.prepare("INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at) VALUES('p2','P2','Product 2','','EA',500,0,1,?,?)").run(now, now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv1','wh','p1',100,?)").run(now);
-    db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('inv2','wh','p2',100,?)").run(now);
+    upsertCanonicalInventory(db, { warehouseId: 'wh', productId: 'p1', quantity: 100, position: {}, rowId: 'inv1' });
+    upsertCanonicalInventory(db, { warehouseId: 'wh', productId: 'p2', quantity: 100, position: {}, rowId: 'inv2' });
 
     for (const [name, role, password] of [['warehouse', 'role-warehouse', 'warehouse-test-1234'], ['admin', 'role-admin', 'admin-test-1234'], ['sales', 'role-sales', 'sales-test-1234'], ['reviewer', 'role-reviewer', 'reviewer-test-1234']]) {
       const hash = hashPassword(password);
