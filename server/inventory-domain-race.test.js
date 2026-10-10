@@ -13,6 +13,7 @@ import { createDatabase } from './db.js';
 import { applyInventoryMutation } from './lib/inventory-mutation.js';
 import { computePositionKey } from './lib/inventory-position.js';
 import { computeAvailability } from './lib/inventory-availability.js';
+import { confirmNativeDocument } from './modules/inventory-native-document.js';
 import {
   transferOut, transferIn, getInTransit,
 } from './modules/inventory-step-transfer.js';
@@ -264,21 +265,33 @@ describe('V21 — 14 Inventory Domain Races', () => {
   test('RACE-10 same SERIAL consumed twice: second consumption rejected', () => {
     clearRows(db);
     db.prepare(`UPDATE products SET tracking_policy='SERIAL' WHERE id='p-1'`).run();
-    // insert inventory_serials first so the FK in validateInventoryMaster passes
-    db.prepare(`INSERT INTO inventory_serials(id, product_id, serial_number, lifecycle_state, current_warehouse_id, created_source_type, created_source_id, updated_at, created_at) VALUES('ser-r10','p-1','SER-R10','AVAILABLE','wh-A','OTHER_RECEIPT','R10-R',?,?)`).run(new Date().toISOString(), new Date().toISOString());
-    applyInventoryMutation({ db, sourceType: 'OTHER_RECEIPT', sourceId: 'r10-r', businessDate: '2026-10-10',
-      actor: ACTOR, movementKind: 'IN', quantity: 1,
-      toPosition: { productId: 'p-1', warehouseId: 'wh-A', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE' },
-      idempotencyKey: 'R10:R' });
-    applyInventoryMutation({ db, sourceType: 'OTHER_ISSUE', sourceId: 'r10-o1', businessDate: '2026-10-10',
-      actor: ACTOR, movementKind: 'OUT', quantity: 1,
-      fromPosition: { productId: 'p-1', warehouseId: 'wh-A', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE' },
-      idempotencyKey: 'R10:O1' });
-    assert.throws(() => applyInventoryMutation({
-      db, sourceType: 'OTHER_ISSUE', sourceId: 'r10-o2', businessDate: '2026-10-10',
-      actor: ACTOR, movementKind: 'OUT', quantity: 1,
-      fromPosition: { productId: 'p-1', warehouseId: 'wh-A', ownerType: 'ENTERPRISE', stockStatus: 'AVAILABLE', serialId: 'ser-r10' },
-      idempotencyKey: 'R10:O2' }), /inv.+stock|inv.+block|库存不足|禁止负库存/);
+    db.prepare('DELETE FROM inventory_serials').run();
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO inventory_serials(id,product_id,serial_number,lifecycle_state,current_warehouse_id,created_source_type,created_source_id,updated_at,created_at)
+      VALUES('ser-r10','p-1','SER-R10','AVAILABLE','wh-A','API','ser-r10',?,?)`).run(now, now);
+    const insertDoc = db.prepare(`INSERT INTO inventory_native_documents(id,doc_no,doc_kind,business_date,status,reason,creator_id,created_at,notes)
+      VALUES(?,?,?,'2026-10-10','DRAFT','','u-act',?,'')`);
+    const insertItem = db.prepare(`INSERT INTO inventory_native_items(id,document_id,product_id,warehouse_id,owner_type,stock_status,serial_id,quantity,line_no)
+      VALUES(?,?,'p-1','wh-A','ENTERPRISE','AVAILABLE','ser-r10',1,1)`);
+    insertDoc.run('r10-r', 'R10-R', 'OTHER_RECEIPT', now);
+    insertItem.run('r10-r-i', 'r10-r');
+    const receiptRes = makeRes();
+    confirmNativeDocument(db, receiptRes, ACTOR, 'r10-r');
+    assert.equal(receiptRes.statusCode, 200);
+    insertDoc.run('r10-o1', 'R10-O1', 'OTHER_ISSUE', now);
+    insertItem.run('r10-o1-i', 'r10-o1');
+    const issueRes = makeRes();
+    confirmNativeDocument(db, issueRes, ACTOR, 'r10-o1');
+    assert.equal(issueRes.statusCode, 200);
+    const serial = db.prepare("SELECT lifecycle_state,current_warehouse_id FROM inventory_serials WHERE id='ser-r10'").get();
+    assert.equal(serial.lifecycle_state, 'CONSUMED');
+    assert.equal(serial.current_warehouse_id, null);
+    assert.equal(db.prepare("SELECT quantity FROM inventory WHERE serial_id='ser-r10'").get().quantity, 0);
+    insertDoc.run('r10-o2', 'R10-O2', 'OTHER_ISSUE', now);
+    insertItem.run('r10-o2-i', 'r10-o2');
+    assert.throws(() => confirmNativeDocument(db, makeRes(), ACTOR, 'r10-o2'), (error) => error.status === 409);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_id='r10-o2'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM tracked_inventory_movements WHERE source_id='r10-o2'").get().n, 0);
   });
 
   test('RACE-11 bin move vs outbound: BIN_MOVE + OUT serial preserves total', () => {

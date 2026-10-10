@@ -205,6 +205,34 @@ function assertReturnProvenance(db, sourceType, sourceId, allocations) {
   }
 }
 
+export function transitionSerialForInventoryMovement(db, {
+  serialId, productId, warehouseId, direction, sourceType, at = nowIso(),
+}) {
+  if (!serialId) return null;
+  const serial = db.prepare('SELECT * FROM inventory_serials WHERE id=?').get(serialId);
+  if (!serial || serial.product_id !== productId) {
+    throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号不存在或与货品不匹配', '刷新序列号列表后重试');
+  }
+  if (direction === 'IN') {
+    if (!['AVAILABLE', 'CONSUMED', 'DELIVERED'].includes(serial.lifecycle_state)) {
+      throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号当前不可入库', '确认序列号生命周期后重试');
+    }
+    db.prepare("UPDATE inventory_serials SET lifecycle_state='AVAILABLE',current_warehouse_id=?,updated_at=? WHERE id=?")
+      .run(warehouseId, at, serialId);
+    return { lifecycleState: 'AVAILABLE', currentWarehouseId: warehouseId };
+  }
+  if (direction !== 'OUT') throw new HttpError(400, `不支持的 SERIAL movement direction: ${direction}`);
+  if (serial.lifecycle_state !== 'AVAILABLE' || serial.current_warehouse_id !== warehouseId) {
+    throw trackingError(409, 'SERIAL_NOT_AVAILABLE', '序列号不在指定仓库或当前不可用', '刷新序列号列表并选择当前仓库中的可用序列号');
+  }
+  const lifecycleState = sourceType === 'SALES_DELIVERY'
+    ? 'DELIVERED'
+    : sourceType.includes('SCRAP') ? 'SCRAPPED' : 'CONSUMED';
+  db.prepare('UPDATE inventory_serials SET lifecycle_state=?,current_warehouse_id=NULL,updated_at=? WHERE id=?')
+    .run(lifecycleState, at, serialId);
+  return { lifecycleState, currentWarehouseId: null };
+}
+
 export function postTrackedMovement(db, { sourceType, sourceId, sourceItemId, productId, warehouseId, quantity, direction, businessDate, returnToHold = false }) {
   const product = productTracking(db, productId);
   if (product.tracking_policy === 'NONE') return [];

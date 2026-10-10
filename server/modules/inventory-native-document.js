@@ -6,6 +6,7 @@ import { transaction, id as genId } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, assertAllowedFields, readJson, send } from '../lib/http.js';
 import { applyInventoryMutation } from '../lib/inventory-mutation.js';
+import { transitionSerialForInventoryMovement } from './traceability-quality.js';
 
 function nowIso() { return new Date().toISOString(); }
 
@@ -78,6 +79,13 @@ export function confirmNativeDocument(db, res, actor, docId) {
         },
         idempotencyKey: `${sourceType}:${item.id}`,
         remark: `${sourceType} ${doc.doc_no}`,
+      });
+      transitionSerialForInventoryMovement(db, {
+        serialId: item.serial_id,
+        productId: item.product_id,
+        warehouseId: item.warehouse_id,
+        direction: movementKind,
+        sourceType,
       });
     }
     db.prepare(`UPDATE inventory_native_documents SET status='CONFIRMED', confirmed_by=?, confirmed_at=? WHERE id=?`).run(actor.id, now, docId);
