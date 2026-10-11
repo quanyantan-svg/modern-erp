@@ -16,7 +16,7 @@
 
 import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { id } from '../db.js';
+import { id, transaction } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
@@ -28,10 +28,10 @@ export async function postAdvanceReceipt(db, req, res, actor) {
   const amount = Number(body.amountCents);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(400, 'amountCents 必须为正整数');
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
-  assertFinanceBusinessDateOpen(db, 'AR', businessDate);
   const now = new Date().toISOString();
   const balanceId = id();
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, 'AR', businessDate);
     // create a payment_collections header (existing mature path) with explicit_unapplied=1
     db.prepare(
       `INSERT INTO payment_collections(id, collection_no, customer_id, receivable_id, amount_cents, payment_method, collection_date, remark, creator_id, created_at, status, external_reference, reversed_amount_cents, reversal_status, settlement_account_id, unapplied_amount_cents, explicit_unapplied)
@@ -52,16 +52,17 @@ export async function postAdvanceReceipt(db, req, res, actor) {
 
 export async function postBalanceApplication(db, req, res, actor) {
   // FO25 — apply unapplied balance to eligible FINAL open item.
-  allow(actor, 'FINANCE_MANAGE');
   const body = await readJson(req);
   const balanceId = requiredText(body.balanceId, 'balanceId', 64);
   const targetOpenItemId = requiredText(body.openItemId, 'openItemId', 64);
   const side = requiredText(body.side, 'side', 4);
+  allow(actor, side === 'AR' ? 'COLLECTION_MANAGE' : 'PAYMENT_MANAGE');
   const amount = Number(body.amountCents);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(400, 'amountCents 必须为正整数');
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const now = new Date().toISOString();
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, side, businessDate);
     // delegate to balance_applications (existing mature primitive)
     db.prepare(
       `INSERT INTO balance_applications(id, application_no, side, balance_kind, balance_id, target_open_item_id, amount_cents, business_date, reason, status, creator_id, created_at)
@@ -78,7 +79,5 @@ export async function postBalanceApplication(db, req, res, actor) {
 
 function runInTransaction(db, fn) {
   if (db.isTransaction) { fn(); return; }
-  db.exec('BEGIN IMMEDIATE');
-  try { fn(); db.exec('COMMIT'); }
-  catch (e) { db.exec('ROLLBACK'); throw e; }
+  return transaction(db, fn);
 }

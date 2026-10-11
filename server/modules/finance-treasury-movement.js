@@ -15,7 +15,7 @@
 
 import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { id } from '../db.js';
+import { id, transaction } from '../db.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 export function applyTreasuryMovement(db, input) {
@@ -31,7 +31,8 @@ export function applyTreasuryMovement(db, input) {
   const movementGroupId = input.movementGroupId || idempotencyKey;
 
   assertFinanceBusinessDateOpen(db, 'TREASURY', businessDate);
-  const account = db.prepare(`SELECT id, active FROM bank_accounts WHERE id=?`).get(settlementAccountId);
+  const lock = db.dialect === 'mysql' && db.isTransaction ? ' FOR UPDATE' : '';
+  const account = db.prepare(`SELECT id, active FROM bank_accounts WHERE id=?${lock}`).get(settlementAccountId);
   if (!account || !account.active) throw new HttpError(409, '结算账户不存在或未启用');
   const existing = db.prepare(`SELECT * FROM finance_treasury_movements WHERE idempotency_key=?`).get(idempotencyKey);
   if (existing) {
@@ -98,13 +99,13 @@ export async function postTreasuryTransfer(db, req, res, actor) {
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const reason = requiredText(body.reason ?? 'internal transfer', 'reason', 256);
   const now = new Date().toISOString();
-  const groupId = `TRANSFER-${now}-${id().slice(0, 6)}`;
+  const groupId = requiredText(body.idempotencyKey || `TRANSFER-${now}-${id().slice(0, 6)}`, 'idempotencyKey', 64);
   // deterministic lock order: sort ASC
   const accounts = [fromAccountId, toAccountId].sort();
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  transaction(db, () => {
+    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
     for (const accountId of accounts) {
-      const account = db.prepare(`SELECT id FROM bank_accounts WHERE id=? AND active=1`).get(accountId);
+      const account = db.prepare(`SELECT id FROM bank_accounts WHERE id=? AND active=1${lock}`).get(accountId);
       if (!account) throw new HttpError(409, '内部转账账户不存在或未启用');
     }
     // apply OUT then IN
@@ -120,11 +121,7 @@ export async function postTreasuryTransfer(db, req, res, actor) {
       idempotencyKey: `TREASURY_TRANSFER:${groupId}:IN`, movementGroupId: groupId,
       createdBy: actor.id,
     });
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
-  }
-  audit(db, actor.id, 'TREASURY_TRANSFER', groupId, reason);
+    audit(db, actor.id, 'TREASURY_TRANSFER', groupId, reason);
+  });
   return send(res, 200, { movementGroupId: groupId });
 }

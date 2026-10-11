@@ -21,7 +21,7 @@ import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 export function listAccountReceivables(db, res, actor, query = {}) {
-  allow(actor, 'AR_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AR_VIEW');
   const rows = db.prepare(
     `SELECT id, voucher_no, customer_id, source_type, source_id, amount_cents,
             open_amount_cents, paid_cents, write_off_cents, status, due_date, business_date,
@@ -36,7 +36,7 @@ export function listAccountReceivables(db, res, actor, query = {}) {
 }
 
 export function getAccountReceivable(db, res, actor, arId) {
-  allow(actor, 'AR_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AR_VIEW');
   const row = db.prepare(`SELECT * FROM account_receivables WHERE id=?`).get(arId);
   if (!row) throw new HttpError(404, '应收账款不存在');
   return send(res, 200, { receivable: row });
@@ -44,7 +44,7 @@ export function getAccountReceivable(db, res, actor, arId) {
 
 // Manually create AR (FO14 — Other / Manual AR).
 export async function createManualAccountReceivable(db, req, res, actor) {
-  allow(actor, 'AR_VIEW', 'FINANCE_MANAGE');
+  allow(actor, 'FINANCE_INVOICE_MANAGE');
   const body = await readJson(req);
   const customerId = requiredText(body.customerId, 'customerId', 64);
   const amount = Number(body.amountCents);
@@ -52,11 +52,11 @@ export async function createManualAccountReceivable(db, req, res, actor) {
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const reason = requiredText(body.reason, 'reason', 256);
   const sourceType = 'MANUAL';
-  assertFinanceBusinessDateOpen(db, 'AR', businessDate);
   const policy = resolveRecognitionPolicy(db, 'AR', sourceType, customerId, businessDate);
   const now = new Date().toISOString();
   const arId = id();
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, 'AR', businessDate);
     db.prepare(
       `INSERT INTO account_receivables(
          id, voucher_no, customer_id, source_type, source_id,

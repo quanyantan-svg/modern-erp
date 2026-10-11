@@ -14,7 +14,7 @@
 
 import { HttpError, allow, send, readJson, requiredText, optionalText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { id } from '../db.js';
+import { id, transaction } from '../db.js';
 
 export const VALID_CLOSE_TYPES = Object.freeze(['AR', 'AP', 'TREASURY']);
 
@@ -22,8 +22,9 @@ export function assertFinanceBusinessDateOpen(db, closeType, businessDate) {
   if (!VALID_CLOSE_TYPES.includes(closeType)) {
     throw new HttpError(400, 'closeType 必须是 AR / AP / TREASURY');
   }
+  const lock = db.dialect === 'mysql' && db.isTransaction ? ' FOR UPDATE' : '';
   const row = db.prepare(
-    `SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?`
+    `SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`
   ).get(closeType);
   if (!row) throw new HttpError(500, `business-close anchor missing for ${closeType}`);
   const closedThrough = row.closed_through_date || '';
@@ -55,7 +56,8 @@ export async function closeBusiness(db, req, res, actor, closeType) {
   const closedThroughDate = requiredText(body.closedThroughDate, 'closedThroughDate', 16);
   const now = new Date().toISOString();
   runInTransaction(db, () => {
-    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?`).get(closeType);
+    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(closeType);
     if (!row) throw new HttpError(500, `business-close anchor missing for ${closeType}`);
     if (row.closed_through_date && row.closed_through_date >= closedThroughDate) {
       throw new HttpError(409, `${closeType} 已结账至 ${row.closed_through_date}，不可回退`);
@@ -78,7 +80,8 @@ export async function reopenBusiness(db, req, res, actor, closeType) {
   const reopenReason = optionalText(body.reopenReason ?? '', 256);
   const now = new Date().toISOString();
   runInTransaction(db, () => {
-    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?`).get(closeType);
+    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(closeType);
     if (!row || !row.closed_through_date) {
       throw new HttpError(409, `${closeType} 未结账，无需重开`);
     }
@@ -95,7 +98,5 @@ export async function reopenBusiness(db, req, res, actor, closeType) {
 
 function runInTransaction(db, fn) {
   if (db.isTransaction) { fn(); return; }
-  db.exec('BEGIN IMMEDIATE');
-  try { fn(); db.exec('COMMIT'); }
-  catch (e) { db.exec('ROLLBACK'); throw e; }
+  return transaction(db, fn);
 }

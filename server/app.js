@@ -147,6 +147,7 @@ import {
   requireSettlementAccount, reverseOperationalReturn, settlementAccountReconciliation,
 } from './modules/financial-controls.js';
 import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
+import { handleFinanceRoute } from './modules/finance-routes.js';
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
@@ -2106,6 +2107,7 @@ async function handleApi(db, req, res, url) {
   const actor = authenticate(db, req);
   req.actor = actor;
   if (req.method === 'GET' && pathname === '/api/auth/me') return send(res, 200, { user: actor });
+  if (await handleFinanceRoute(db, req, res, actor, url)) return;
   if (req.method === 'GET' && pathname === '/api/dashboard') return dashboard(db, res, actor);
   if (req.method === 'GET' && pathname === '/api/system-health') return systemHealthHandler(db, res, actor, url);
   if (req.method === 'GET' && pathname === '/api/reports/inventory-valuation') return inventoryValuationReport(db, res, actor, url);

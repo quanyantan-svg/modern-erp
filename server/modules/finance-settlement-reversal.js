@@ -16,11 +16,12 @@ import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 export async function postSettlementReversal(db, req, res, actor) {
-  allow(actor, 'FINANCE_MANAGE');
   const body = await readJson(req);
   const settlementType = requiredText(body.settlementType, 'settlementType', 16);
+  allow(actor, settlementType === 'COLLECTION' ? 'COLLECTION_MANAGE' : 'PAYMENT_MANAGE');
   const settlementId = requiredText(body.settlementId, 'settlementId', 64);
   const amount = Number(body.amountCents);
   if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(400, 'amountCents 必须为正整数');
@@ -33,6 +34,7 @@ export async function postSettlementReversal(db, req, res, actor) {
   const reversalId = id();
   const reversalNo = `REVERSAL-${now.slice(0, 10)}-${reversalId.slice(0, 6)}`;
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, settlementType === 'COLLECTION' ? 'AR' : 'AP', businessDate);
     db.prepare(
       `INSERT INTO settlement_reversals(id, reversal_no, settlement_type, settlement_id, amount_cents, business_date, reason, status, creator_id, created_at)
        VALUES(?,?,?,?,?,?,?, 'CONFIRMED', ?, ?)`

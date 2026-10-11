@@ -7,13 +7,13 @@ import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
 
 export function listFinancePaymentTerms(db, res, actor) {
-  allow(actor, 'AR_VIEW', 'AP_VIEW');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_VIEW');
   const rows = db.prepare(`SELECT * FROM finance_payment_terms ORDER BY code ASC`).all();
   return send(res, 200, { terms: rows.map(rowToTerm) });
 }
 
 export async function upsertFinancePaymentTerm(db, req, res, actor) {
-  allow(actor, 'FINANCE_PARAMETERS_MANAGE');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_MANAGE');
   const body = await readJson(req);
   const code = requiredText(body.code, '条款编码', 64);
   const name = optionalText(body.name ?? '', 128);

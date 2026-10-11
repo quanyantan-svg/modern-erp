@@ -301,7 +301,7 @@ describe('Permissions — canonical registry count', () => {
     // active permission codes (CRM_VIEW, CRM_MANAGE,
     // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
     // remain.
-    assert.equal(perms.length, 184, `PERMISSIONS array must include the approved Procurement & Outsourcing permission families (got ${perms.length})`);
+    assert.equal(perms.length, 204, `PERMISSIONS array must include the approved Finance Operations permission family (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);
@@ -316,12 +316,12 @@ describe('Permissions — canonical registry count', () => {
     assert.equal(perms.filter(([code]) => code === 'PROJECT_MANAGE').length, 0);
   });
 
-  test('role-accounting has 20 permissions after M8 + M14 narrow grants', () => {
+  test('role-accounting has 40 permissions after Finance Operations bounded grants', () => {
     const dbSrc = readRoot('server/db.js');
     const accountingMatch = dbSrc.match(/'role-accounting':\s*\[([^\]]+)\]/);
     assert.ok(accountingMatch, 'role-accounting must exist in db.js');
     const count = (accountingMatch[1].match(/'/g) || []).length;
-    assert.equal(count / 2, 20, `role-accounting must have 20 permissions (got ${count / 2})`);
+    assert.equal(count / 2, 40, `role-accounting must have 40 permissions (got ${count / 2})`);
   });
 });
 

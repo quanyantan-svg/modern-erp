@@ -13,13 +13,13 @@ const VALID_METHOD = new Set(['AUTO', 'MANUAL']);
 const VALID_SIDE = new Set(['AR', 'AP']);
 
 export function listSettlementSchemes(db, res, actor) {
-  allow(actor, 'AR_VIEW', 'AP_VIEW');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_VIEW');
   const rows = db.prepare(`SELECT * FROM finance_settlement_schemes ORDER BY side, scheme_code`).all();
   return send(res, 200, { schemes: rows });
 }
 
 export async function upsertSettlementScheme(db, req, res, actor) {
-  allow(actor, 'FINANCE_PARAMETERS_MANAGE');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_MANAGE');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
   if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');

@@ -116,10 +116,10 @@ describe('M10 permission and role contract', () => {
     // (parameters / locks / opening / native documents / lot adjustment /
     // form conversion / assembly / barcode / container / reports / ABC /
     // warehouse-bin / stock-status / owner-dimension). Each maps 1:1 to a
-    // frozen INV capability. 159 (pre-Wave-A) + 25 = 184. The count alone
+    // frozen INV capability plus the bounded Finance Operations family.
     // is enforced for the silent-addition guard; specific codes are
     // asserted below so future additions must be named.
-    assert.equal(codes.length, 184);
+    assert.equal(codes.length, 204);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
     assert.equal(codes.filter((code) => code === 'INVENTORY_TRANSFER_CONFIRM').length, 1);

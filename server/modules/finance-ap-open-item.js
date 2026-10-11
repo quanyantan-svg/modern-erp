@@ -11,7 +11,7 @@ import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 export function listAccountPayables(db, res, actor, query = {}) {
-  allow(actor, 'AP_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AP_VIEW');
   const rows = db.prepare(
     `SELECT id, voucher_no, supplier_id, source_type, source_id, amount_cents,
             open_amount_cents, paid_cents, write_off_cents, status, due_date, business_date,
@@ -26,14 +26,14 @@ export function listAccountPayables(db, res, actor, query = {}) {
 }
 
 export function getAccountPayable(db, res, actor, apId) {
-  allow(actor, 'AP_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AP_VIEW');
   const row = db.prepare(`SELECT * FROM account_payables WHERE id=?`).get(apId);
   if (!row) throw new HttpError(404, '应付账款不存在');
   return send(res, 200, { payable: row });
 }
 
 export async function createManualAccountPayable(db, req, res, actor) {
-  allow(actor, 'AP_VIEW', 'FINANCE_MANAGE');
+  allow(actor, 'FINANCE_INVOICE_MANAGE');
   const body = await readJson(req);
   const supplierId = requiredText(body.supplierId, 'supplierId', 64);
   const amount = Number(body.amountCents);
@@ -41,11 +41,11 @@ export async function createManualAccountPayable(db, req, res, actor) {
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
   const reason = requiredText(body.reason, 'reason', 256);
   const sourceType = 'MANUAL';
-  assertFinanceBusinessDateOpen(db, 'AP', businessDate);
   const policy = resolveRecognitionPolicy(db, 'AP', sourceType, supplierId, businessDate);
   const now = new Date().toISOString();
   const apId = id();
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, 'AP', businessDate);
     db.prepare(
       `INSERT INTO account_payables(
          id, voucher_no, supplier_id, source_type, source_id,

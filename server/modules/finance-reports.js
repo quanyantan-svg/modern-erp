@@ -8,7 +8,7 @@
 import { HttpError, allow, send } from '../lib/http.js';
 
 export function arSummary(db, res, actor) {
-  allow(actor, 'AR_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AR_VIEW');
   const rows = db.prepare(`
     SELECT
       customer_id,
@@ -25,7 +25,7 @@ export function arSummary(db, res, actor) {
 }
 
 export function apSummary(db, res, actor) {
-  allow(actor, 'AP_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AP_VIEW');
   const rows = db.prepare(`
     SELECT
       supplier_id,
@@ -42,7 +42,7 @@ export function apSummary(db, res, actor) {
 }
 
 export function arAging(db, res, actor) {
-  allow(actor, 'AR_VIEW', 'FINANCE_VIEW');
+  allow(actor, 'FINANCE_AR_VIEW');
   const today = new Date().toISOString().slice(0, 10);
   const rows = db.prepare(`
     SELECT

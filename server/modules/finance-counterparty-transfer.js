@@ -19,11 +19,13 @@ import { id } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { applyCreditAdjustment } from './settlement-core.js';
 
 export async function postCounterpartyTransfer(db, req, res, actor) {
   allow(actor, 'FINANCE_TRANSFER_MANAGE');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
+  if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 必须为 AR/AP');
   const sourcePartyId = requiredText(body.sourcePartyId, 'sourcePartyId', 64);
   const targetPartyId = requiredText(body.targetPartyId, 'targetPartyId', 64);
   const businessDate = requiredText(body.businessDate, 'businessDate', 16);
@@ -32,13 +34,13 @@ export async function postCounterpartyTransfer(db, req, res, actor) {
   if (!lines.length) throw new HttpError(400, '请提供至少一条 transfer line');
   if (sourcePartyId === targetPartyId) throw new HttpError(400, 'source / target party 必须不同');
 
-  assertFinanceBusinessDateOpen(db, side, businessDate);
   const now = new Date().toISOString();
   const transferId = id();
   const transferNo = `TRANSFER-${now.slice(0, 10)}-${transferId.slice(0, 6)}`;
 
   let totalCents = 0;
   runInTransaction(db, () => {
+    assertFinanceBusinessDateOpen(db, side, businessDate);
     db.prepare(
       `INSERT INTO finance_counterparty_transfers(id, transfer_no, side, source_party_id, target_party_id,
         business_date, reason, status, creator_id, confirmer_id, created_at, confirmed_at)
@@ -84,6 +86,14 @@ export async function postCounterpartyTransfer(db, req, res, actor) {
       policy.mode, actor.id, now, now,
     );
     db.prepare(`UPDATE account_${side === 'AR' ? 'receivables' : 'payables'} SET open_amount_cents=? WHERE id=?`).run(totalCents, targetItemId);
+    for (const oi of openItems) {
+      applyCreditAdjustment(db, {
+        side, adjustmentType: 'OTHER', sourceType: 'FINANCE_TRANSFER',
+        sourceId: `${transferId}:${oi.openItemId}`, sourceNo: transferNo,
+        targetOpenItemId: oi.openItemId, partyId: sourcePartyId,
+        businessDate, amountCents: oi.amount, actorId: actor.id, createdAt: now,
+      });
+    }
     audit(db, actor.id, 'COUNTERPARTY_TRANSFER', `FINANCE_COUNTERPARTY_TRANSFER_${side}`, transferId, transferNo);
 
     // refresh canonical open amounts (still inside outer transaction;

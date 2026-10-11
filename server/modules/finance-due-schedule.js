@@ -13,7 +13,7 @@ const VALID_SIDE = new Set(['AR', 'AP']);
 const VALID_STATUS = new Set(['PENDING', 'PARTIAL', 'SETTLED', 'REVERSED']);
 
 export function listDueSchedules(db, res, actor, side, openItemId) {
-  allow(actor, 'AR_VIEW', 'AP_VIEW');
+  allow(actor, side === 'AR' ? 'FINANCE_AR_VIEW' : 'FINANCE_AP_VIEW');
   if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');
   const rows = db.prepare(
     `SELECT id, side, open_item_id, sequence, due_date, scheduled_amount_cents,
@@ -26,10 +26,10 @@ export function listDueSchedules(db, res, actor, side, openItemId) {
 }
 
 export async function upsertDueSchedules(db, req, res, actor) {
-  allow(actor, 'AR_VIEW', 'AP_VIEW');
   const body = await readJson(req);
   const side = requiredText(body.side, 'side', 4);
   if (!VALID_SIDE.has(side)) throw new HttpError(400, 'side 必须是 AR 或 AP');
+  allow(actor, side === 'AR' ? 'FINANCE_AR_VIEW' : 'FINANCE_AP_VIEW');
   const openItemId = requiredText(body.openItemId, 'openItemId', 64);
   assertOpenItemSide(db, side, openItemId);
 

@@ -103,6 +103,11 @@ export function migrateV22FinanceWaveDTreasury(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_finance_notes_lookup ON finance_notes(direction, status);
   `);
+  // FO42/43 execution evidence required by the bounded note lifecycle.
+  addColumn(db, 'ALTER TABLE finance_notes ADD COLUMN settlement_account_id TEXT');
+  addColumn(db, 'ALTER TABLE finance_notes ADD COLUMN settled_by TEXT');
+  addColumn(db, 'ALTER TABLE finance_notes ADD COLUMN settled_at TEXT');
+  addColumn(db, 'ALTER TABLE finance_notes ADD COLUMN settlement_movement_id TEXT');
 
   // -----------------------------------------------------------------
   // FO44 — payment requests
@@ -127,6 +132,21 @@ export function migrateV22FinanceWaveDTreasury(db) {
     CREATE INDEX IF NOT EXISTS idx_finance_payment_requests_status
       ON finance_payment_requests(side, status, business_date);
   `);
+  addColumn(db, 'ALTER TABLE finance_payment_requests ADD COLUMN settlement_account_id TEXT');
+  addColumn(db, 'ALTER TABLE finance_payment_requests ADD COLUMN payment_method TEXT');
+  addColumn(db, 'ALTER TABLE finance_payment_requests ADD COLUMN treasury_movement_id TEXT');
+  addColumn(db, 'ALTER TABLE finance_payment_requests ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT ""');
+
+  // FO46/47 converge existing statement tables to the frozen first-class
+  // imported-line contract without creating a second statement ledger.
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN external_transaction_date TEXT');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN value_date TEXT');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN amount_cents INTEGER NOT NULL DEFAULT 0');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN direction TEXT');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN bank_reference TEXT NOT NULL DEFAULT ""');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN description TEXT NOT NULL DEFAULT ""');
+  addColumn(db, 'ALTER TABLE bank_statement_items ADD COLUMN import_fingerprint TEXT');
+  addColumn(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_statement_item_import_fingerprint ON bank_statement_items(import_fingerprint) WHERE import_fingerprint IS NOT NULL');
 
   // -----------------------------------------------------------------
   // FO45 — cash count header + lines
@@ -149,7 +169,6 @@ export function migrateV22FinanceWaveDTreasury(db) {
     CREATE INDEX IF NOT EXISTS idx_finance_cash_counts_account
       ON finance_cash_counts(settlement_account_id, count_date);
   `);
-
   db.exec(`
     CREATE TABLE IF NOT EXISTS finance_cash_count_lines (
       id TEXT PRIMARY KEY,
@@ -161,7 +180,6 @@ export function migrateV22FinanceWaveDTreasury(db) {
       UNIQUE(count_id, denomination)
     );
   `);
-
   // -----------------------------------------------------------------
   // FO47 — bank statement import batches
   // -----------------------------------------------------------------
@@ -176,6 +194,7 @@ export function migrateV22FinanceWaveDTreasury(db) {
       UNIQUE(file_name, fingerprint)
     );
   `);
+  addColumn(db, 'ALTER TABLE finance_bank_statement_imports ADD COLUMN statement_id TEXT');
 
   // -----------------------------------------------------------------
   // FO48 — bank reconciliation header + matches

@@ -40,7 +40,7 @@ function actor() {
   return {
     id: 'user-admin',
     permissions: [
-      'AR_VIEW', 'AP_VIEW', 'FINANCE_VIEW',
+      'FINANCE_AR_VIEW', 'FINANCE_AP_VIEW',
       'FINANCE_TREASURY_VIEW', 'ACCOUNTING_VIEW',
     ],
   };

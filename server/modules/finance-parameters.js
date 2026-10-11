@@ -23,13 +23,13 @@ function rowToParam(row) {
 }
 
 export function listFinanceParameters(db, res, actor) {
-  allow(actor, 'FINANCE_PARAMETERS_VIEW', 'AR_VIEW', 'AP_VIEW');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_VIEW');
   const rows = db.prepare(`SELECT * FROM finance_parameters ORDER BY code ASC`).all();
   return send(res, 200, { parameters: rows.map(rowToParam) });
 }
 
 export async function upsertFinanceParameter(db, req, res, actor) {
-  allow(actor, 'FINANCE_PARAMETERS_MANAGE');
+  allow(actor, 'FINANCE_RECOGNITION_POLICY_MANAGE');
   const body = await readJson(req);
   const code = requiredText(body.code, '参数编码', 64);
   const name = optionalText(body.name ?? '', 128);

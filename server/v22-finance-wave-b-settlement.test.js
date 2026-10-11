@@ -19,8 +19,8 @@ function actor(extra = []) {
   return {
     id: 'user-admin',
     permissions: [
-      'FINANCE_MANAGE', 'FINANCE_TRANSFER_MANAGE', 'FINANCE_BAD_DEBT_MANAGE',
-      'COLLECTION_MANAGE', 'AR_VIEW', 'AP_VIEW', 'FINANCE_VIEW',
+      'FINANCE_TRANSFER_MANAGE', 'FINANCE_BAD_DEBT_MANAGE',
+      'COLLECTION_MANAGE', 'PAYMENT_MANAGE', 'FINANCE_AR_VIEW', 'FINANCE_AP_VIEW',
       ...extra,
     ],
   };
@@ -48,8 +48,8 @@ function mkAR(db, id, customerId, amount, status = 'PENDING') {
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO account_receivables(id, voucher_no, customer_id, source_type, source_id,
      amount_cents, paid_cents, write_off_cents, status, due_date,
-     business_date, recognition_mode, item_kind, conversion_state, creator_id, created_at, updated_at)
-     VALUES(?, ?, ?, 'MANUAL', ?, ?, 0, 0, ?, '2026-12-31', '2026-01-01', 'DIRECT_BUSINESS_OPEN_ITEM', 'FINAL', 'OPEN', 'user-admin', ?, ?)`)
+     business_date, recognition_mode, item_kind, item_class, conversion_state, creator_id, created_at, updated_at)
+     VALUES(?, ?, ?, 'MANUAL', ?, ?, 0, 0, ?, '2026-12-31', '2026-01-01', 'DIRECT_BUSINESS_OPEN_ITEM', 'FINAL', 'SOURCE', 'OPEN', 'user-admin', ?, ?)`)
     .run(id, `V-${id}`, customerId, id, amount, status, now, now);
   db.prepare(`UPDATE account_receivables SET open_amount_cents=? WHERE id=?`).run(amount, id);
 }
@@ -58,8 +58,8 @@ function mkAP(db, id, supplierId, amount, status = 'PENDING') {
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO account_payables(id, voucher_no, supplier_id, source_type, source_id,
      amount_cents, paid_cents, write_off_cents, status, due_date,
-     business_date, recognition_mode, item_kind, conversion_state, creator_id, created_at, updated_at)
-     VALUES(?, ?, ?, 'MANUAL', ?, ?, 0, 0, ?, '2026-12-31', '2026-01-01', 'DIRECT_BUSINESS_OPEN_ITEM', 'FINAL', 'OPEN', 'user-admin', ?, ?)`)
+     business_date, recognition_mode, item_kind, item_class, conversion_state, creator_id, created_at, updated_at)
+     VALUES(?, ?, ?, 'MANUAL', ?, ?, 0, 0, ?, '2026-12-31', '2026-01-01', 'DIRECT_BUSINESS_OPEN_ITEM', 'FINAL', 'SOURCE', 'OPEN', 'user-admin', ?, ?)`)
     .run(id, `V-${id}`, supplierId, id, amount, status, now, now);
   db.prepare(`UPDATE account_payables SET open_amount_cents=? WHERE id=?`).run(amount, id);
 }
@@ -88,6 +88,12 @@ test('finance_counterparty_transfers: AR transfer creates target FINAL open item
   assert.ok(targets.length >= 1);
   const target = targets[targets.length - 1];
   assert.equal(target.item_kind, 'FINAL');
+  assert.equal(target.amount_cents, 100000);
+  assert.equal(target.open_amount_cents, 100000);
+  assert.equal(db.prepare(`SELECT open_amount_cents FROM account_receivables WHERE id='ar-1'`).get().open_amount_cents, 40000);
+  assert.equal(db.prepare(`SELECT open_amount_cents FROM account_receivables WHERE id='ar-2'`).get().open_amount_cents, 10000);
+  const remainingExposure = db.prepare(`SELECT SUM(open_amount_cents) total FROM account_receivables WHERE id IN ('ar-1','ar-2',?)`).get(target.id).total;
+  assert.equal(remainingExposure, 150000);
 });
 
 test('finance_bad_debt_provisions insert + status', async () => {
