@@ -492,6 +492,17 @@ const FULL = [
   // effect VIEW, refresh / reconcile, manual AR / AP, provisional
   // conversion.
   'server/v22-finance-wave-a-foundation.test.js',
+  // Wave B settlement convergence: counterparty transfer, settlement
+  // reversal, unapplied balance (advance / application / refund),
+  // bad-debt provision.
+  'server/v22-finance-wave-b-settlement.test.js',
+  // Wave C invoice / recognition convergence: invoice source cardinality,
+  // credit_state additive columns, provisional conversion operational entry.
+  'server/v22-finance-wave-c-invoice.test.js',
+  // Wave D treasury convergence: finance_treasury_movements,
+  // applyTreasuryMovement single canonical writer, paired internal transfers,
+  // balance reconciliation health.
+  'server/v22-finance-wave-d-treasury.test.js',
 ];
 
 // FAST — subset of FULL that excludes tests requiring Vite SSR,
