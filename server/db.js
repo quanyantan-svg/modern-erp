@@ -23,6 +23,8 @@ import { migrateV13Phase6ECommercialGoLive } from './migrations/v13-phase6e-comm
 import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performance.js';
 import { migrateR4PurchaseSourceCardinality } from './migrations/r4-purchase-source-cardinality.js';
 import { migrateV14OutProcurementFinalAcceptance } from './migrations/v14-out-procurement-final-acceptance.js';
+import { migrateV22FinanceWaveAFoundation } from './migrations/v22-finance-wave-a-foundation.js';
+import { ensureFinanceOpenItemEffectsView } from './modules/finance-open-item-effect-view.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 import { migrateEngineeringReferenceSchema } from './migrations/engineering-reference-schema.js';
 import { migrateEngineeringBomSchema } from './migrations/engineering-bom-schema.js';
@@ -475,6 +477,10 @@ function createSqliteDatabase(filename) {
   lateProcurementColumns(db);
   migrateV14OutProcurementFinalAcceptance(db);
   reconcileSettlementSubledgers(db);
+  // V22 — Finance Operations Wave A foundation (FO01/02/03/04/05/51/52/53 + AR/AP additive cols).
+  migrateV22FinanceWaveAFoundation(db);
+  // V22 — finance_open_item_effects DERIVED SQL VIEW (non-persisted).
+  ensureFinanceOpenItemEffectsView(db);
 
   return db;
 }

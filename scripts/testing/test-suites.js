@@ -485,6 +485,13 @@ const FULL = [
   //   also fails the canonical daily gate, but it does NOT classify itself
   //   as "unclassified".
   'server/test-suite-governance.test.js',
+
+  // ----- V22 — Finance Operations Domain Closure -----
+  // Wave A foundation: parameters, recognition policy, payment terms,
+  // due schedule, settlement schemes, business-close anchors, open-item
+  // effect VIEW, refresh / reconcile, manual AR / AP, provisional
+  // conversion.
+  'server/v22-finance-wave-a-foundation.test.js',
 ];
 
 // FAST — subset of FULL that excludes tests requiring Vite SSR,
