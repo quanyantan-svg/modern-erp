@@ -38,10 +38,15 @@ export function refreshOpenAmount(db, openItemId) {
   const status = deriveStatus(header, remaining);
   const table = header.side === 'AR' ? 'account_receivables' : 'account_payables';
   const now = new Date().toISOString();
-  runInTransaction(db, () => {
+  if (db.isTransaction) {
     db.prepare(`UPDATE ${table} SET open_amount_cents=?, status=?, updated_at=? WHERE id=?`)
       .run(remaining, status, now, openItemId);
-  });
+  } else {
+    runInTransaction(db, () => {
+      db.prepare(`UPDATE ${table} SET open_amount_cents=?, status=?, updated_at=? WHERE id=?`)
+        .run(remaining, status, now, openItemId);
+    });
+  }
   return { openItemId, side: header.side, remaining, status };
 }
 
@@ -63,7 +68,7 @@ function deriveStatus(header, remaining) {
 }
 
 function runInTransaction(db, fn) {
-  if (db.inTransaction && db.inTransaction()) { fn(); return; }
+  if (db.isTransaction) { fn(); return; }
   db.exec('BEGIN IMMEDIATE');
   try { fn(); db.exec('COMMIT'); }
   catch (e) { db.exec('ROLLBACK'); throw e; }
