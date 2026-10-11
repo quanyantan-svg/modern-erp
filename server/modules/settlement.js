@@ -5,6 +5,7 @@ import { transaction } from '../db.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { checkSettlementInvariants, openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { idempotencyReplay, recordPrepayment, recordSettlementMovement, requestFingerprint, requireSettlementAccount, saveIdempotency } from './financial-controls.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 const STATUS_OUT = { PENDING: 'OPEN', PARTIAL: 'PARTIALLY_SETTLED', COMPLETED: 'SETTLED', WRITTEN_OFF: 'SETTLED' };
 const STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分收款', SETTLED: '已结清' };
@@ -200,8 +201,7 @@ export async function createSettlementDocument(db, req, res, actor, kind) {
   if (!Number.isSafeInteger(unappliedAmountCents) || unappliedAmountCents < 0) throw new HttpError(400, '未核销金额必须是非负整数分');
   const explicitUnapplied = body.explicitUnapplied === true;
   if (unappliedAmountCents > 0 && !explicitUnapplied) throw new HttpError(409, '保留未核销现金必须由用户明确选择');
-  const settlementAccountId = String(body.settlementAccountId || '').trim();
-  requireSettlementAccount(db, paymentMethod, settlementAccountId);
+  const settlementAccountId = requireSettlementAccount(db, paymentMethod, String(body.settlementAccountId || '').trim()).id;
   transaction(db, () => {
     db.prepare(`INSERT INTO ${cfg.table}(id,${cfg.numberColumn},${cfg.partyColumn},amount_cents,payment_method,bank_account,${cfg.dateColumn},remark,creator_id,created_at,status,updated_at,external_reference,settlement_account_id,unapplied_amount_cents,explicit_unapplied) VALUES(?,?,?,?,?,?,?,?,?,?,'DRAFT',?,?,?,?,?)`)
       .run(documentId, documentNo, partyId, amountCents, paymentMethod, '', businessDate, optionalText(body.remark, 500), actor.id, createdAt, createdAt, optionalText(body.externalReference, 100), settlementAccountId, unappliedAmountCents, explicitUnapplied ? 1 : 0);
@@ -217,8 +217,8 @@ export async function updateSettlementDocument(db, req, res, actor, kind, docume
   if (!['CASH', 'BANK'].includes(paymentMethod)) throw new HttpError(400, '收付方式仅支持现金或银行'); const allocations = validateAllocations(db, cfg, partyId, body.allocations || []); const updatedAt = new Date().toISOString();
   const unapplied = Number(body.unappliedAmountCents || 0); if (!Number.isSafeInteger(unapplied) || unapplied < 0) throw new HttpError(400, '未核销金额必须是非负整数分');
   if (unapplied > 0 && body.explicitUnapplied !== true) throw new HttpError(409, '保留未核销现金必须由用户明确选择');
-  requireSettlementAccount(db, paymentMethod, body.settlementAccountId);
-  transaction(db, () => { db.prepare(`UPDATE ${cfg.table} SET ${cfg.partyColumn}=?,amount_cents=?,payment_method=?,bank_account='',${cfg.dateColumn}=?,remark=?,external_reference=?,updated_at=?,settlement_account_id=?,unapplied_amount_cents=?,explicit_unapplied=? WHERE id=?`).run(partyId, amountCents, paymentMethod, businessDate, optionalText(body.remark, 500), optionalText(body.externalReference, 100), updatedAt, body.settlementAccountId, unapplied, body.explicitUnapplied === true ? 1 : 0, documentId); saveAllocations(db, cfg, documentId, allocations); audit(db, actor.id, 'UPDATE', cfg.entity, documentId, `修改${cfg.auditNoun} ${current[cfg.numberColumn]}`); });
+  const settlementAccountId = requireSettlementAccount(db, paymentMethod, body.settlementAccountId).id;
+  transaction(db, () => { db.prepare(`UPDATE ${cfg.table} SET ${cfg.partyColumn}=?,amount_cents=?,payment_method=?,bank_account='',${cfg.dateColumn}=?,remark=?,external_reference=?,updated_at=?,settlement_account_id=?,unapplied_amount_cents=?,explicit_unapplied=? WHERE id=?`).run(partyId, amountCents, paymentMethod, businessDate, optionalText(body.remark, 500), optionalText(body.externalReference, 100), updatedAt, settlementAccountId, unapplied, body.explicitUnapplied === true ? 1 : 0, documentId); saveAllocations(db, cfg, documentId, allocations); audit(db, actor.id, 'UPDATE', cfg.entity, documentId, `修改${cfg.auditNoun} ${current[cfg.numberColumn]}`); });
   return send(res, 200, { ok: true });
 }
 
@@ -244,6 +244,7 @@ export async function confirmSettlementDocument(db, req, res, actor, kind, docum
   const replay = idempotencyReplay(db, `${kind}_CONFIRM`, documentId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
     const document = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(documentId); if (!document) throw new HttpError(404, `${cfg.auditNoun}不存在`); if (document.status !== 'DRAFT') throw new HttpError(409, `${cfg.auditNoun}不是可确认的草稿状态`);
+    assertFinanceBusinessDateOpen(db, cfg.side, document[cfg.dateColumn]);
     const documentFk = cfg.table === 'payment_collections' ? 'collection_id' : 'disbursement_id'; const allocations = db.prepare(`SELECT ai.*,s.${cfg.partyColumn} partyId FROM ${cfg.itemTable} ai JOIN ${cfg.sourceTable} s ON s.id=ai.${cfg.sourceFk} WHERE ai.${documentFk}=?`).all(documentId);
     const total = allocations.reduce((sum, item) => sum + item.amount_cents, 0);
     if (total + Number(document.unapplied_amount_cents) !== document.amount_cents) throw new HttpError(409, '单据金额必须等于核销合计加明确保留的未核销金额');
@@ -267,7 +268,7 @@ export async function confirmSettlementDocument(db, req, res, actor, kind, docum
     db.prepare(`UPDATE ${cfg.table} SET status='CONFIRMED',confirmed_by=?,confirmed_at=?,updated_at=? WHERE id=?`).run(actor.id, confirmedAt, confirmedAt, documentId);
     for (const item of allocations) refreshOpenItem(db, cfg.side, item[cfg.sourceFk], confirmedAt);
     if (document.unapplied_amount_cents > 0) recordPrepayment(db, { side: isCollection ? 'CUSTOMER' : 'SUPPLIER', partyId: document[cfg.partyColumn], sourceType: cfg.voucherSource, sourceId: documentId, sourceNo: document[cfg.numberColumn], amountCents: document.unapplied_amount_cents, businessDate: document[cfg.dateColumn], accountId: account.id, actorId: actor.id });
-    recordSettlementMovement(db, { accountId: account.id, sourceType: cfg.voucherSource, sourceId: documentId, direction: isCollection ? 'IN' : 'OUT', amountCents: document.amount_cents, businessDate: document[cfg.dateColumn], voucherId });
+    recordSettlementMovement(db, { accountId: account.id, sourceType: cfg.voucherSource, sourceId: documentId, direction: isCollection ? 'IN' : 'OUT', amountCents: document.amount_cents, businessDate: document[cfg.dateColumn], voucherId, actorId: actor.id });
     saveIdempotency(db, `${kind}_CONFIRM`, documentId, key, fingerprint, { ok: true, id: documentId, status: 'CONFIRMED' });
     audit(db, actor.id, 'CONFIRM', cfg.entity, documentId, `确认${cfg.auditNoun} ${document[cfg.numberColumn]}`);
   });
@@ -320,6 +321,7 @@ export async function reverseSettlementDocument(db, req, res, actor, kind, docum
     const document = db.prepare(`SELECT * FROM ${cfg.table} WHERE id=?`).get(documentId);
     if (!document) throw new HttpError(404, `${cfg.auditNoun}不存在`);
     if (document.status !== 'CONFIRMED') throw new HttpError(409, `${cfg.auditNoun}尚未确认`);
+    assertFinanceBusinessDateOpen(db, cfg.side, businessDate);
     const documentFk = kind === 'COLLECTION' ? 'collection_id' : 'disbursement_id';
     const allocations = db.prepare(`SELECT * FROM ${cfg.itemTable} WHERE ${documentFk}=?`).all(documentId);
     const remainingTotal = Number(document.amount_cents) - Number(document.reversed_amount_cents);
@@ -351,7 +353,7 @@ export async function reverseSettlementDocument(db, req, res, actor, kind, docum
     db.prepare(`UPDATE ${cfg.table} SET reversed_amount_cents=?,reversal_status=?,updated_at=? WHERE id=?`).run(newReversed, newReversed === document.amount_cents ? 'FULL' : 'PARTIAL', at, documentId);
     for (const item of allocations) refreshOpenItem(db, cfg.side, item[cfg.sourceFk], at);
     const movement = db.prepare('SELECT * FROM settlement_account_movements WHERE source_type=? AND source_id=?').get(cfg.voucherSource, documentId);
-    recordSettlementMovement(db, { accountId: movement.settlement_account_id, sourceType: `${cfg.voucherSource}_REVERSAL`, sourceId: reversalId, direction: kind === 'COLLECTION' ? 'OUT' : 'IN', amountCents: reversalAmount, businessDate, voucherId: db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(`${cfg.voucherSource}_REVERSAL`, reversalId).id });
+    recordSettlementMovement(db, { accountId: movement.settlement_account_id, sourceType: `${cfg.voucherSource}_REVERSAL`, sourceId: reversalId, direction: kind === 'COLLECTION' ? 'OUT' : 'IN', amountCents: reversalAmount, businessDate, voucherId: db.prepare('SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?').get(`${cfg.voucherSource}_REVERSAL`, reversalId).id, actorId: actor.id });
     saveIdempotency(db, `${kind}_REVERSAL`, documentId, key, fingerprint, { id: reversalId, reversalNo, status: 'CONFIRMED', amountCents: reversalAmount });
     audit(db, actor.id, 'REVERSE', cfg.entity, documentId, `${cfg.auditNoun}部分冲销 ${reversalNo}：${reason}`);
   });

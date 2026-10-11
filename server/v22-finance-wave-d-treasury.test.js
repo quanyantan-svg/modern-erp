@@ -106,14 +106,11 @@ test('applyTreasuryMovement idempotency: same key returns existing row', () => {
     businessDate: '2026-02-15', sourceType: 'COLLECTION', sourceId: 'pc-3',
     idempotencyKey: 'IDEM_KEY_1', createdBy: 'user-admin',
   });
-  let threw = false;
-  let m2 = null;
-  try {
-    m2 = applyTreasuryMovement(db, {
-      settlementAccountId: 'ba-1', direction: 'IN', amountCents: 5000,
-      businessDate: '2026-02-15', sourceType: 'COLLECTION', sourceId: 'pc-3',
-      idempotencyKey: 'IDEM_KEY_1', createdBy: 'user-admin',
-    });
-  } catch (e) { threw = true; }
-  assert.equal(threw, true, 'duplicate idempotency_key rejected');
+  const m2 = applyTreasuryMovement(db, {
+    settlementAccountId: 'ba-1', direction: 'IN', amountCents: 5000,
+    businessDate: '2026-02-15', sourceType: 'COLLECTION', sourceId: 'pc-3',
+    idempotencyKey: 'IDEM_KEY_1', createdBy: 'user-admin',
+  });
+  assert.equal(m2, m1);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM finance_treasury_movements WHERE idempotency_key='IDEM_KEY_1'").get().n, 1);
 });

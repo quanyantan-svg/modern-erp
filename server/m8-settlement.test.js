@@ -96,13 +96,15 @@ describe('M8 AR/AP and settlement workflow', () => {
     const freshArId = ensureReceivableSource(db, { id: 'm8-collection-ar', sourceType: 'SALES_DELIVERY', sourceNo: 'SD-M8-COLL', partyId: 'customer-003', businessDate: '2026-08-13', effectCents: 10000, creatorId: 'user-sales', createdAt: stamp });
     const draftResponse = await post('/api/payment-collections', 'accounting', { customerId: 'customer-003', businessDate: '2026-08-13', amountCents: 4000, paymentMethod: 'BANK', allocations: [{ receivableId: freshArId, amountCents: 4000 }] });
     assert.equal(draftResponse.status, 201); const draft = await draftResponse.json(); assert.equal(db.prepare('SELECT paid_cents FROM account_receivables WHERE id=?').get(freshArId).paid_cents, 0); assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='PAYMENT_COLLECTION' AND source_id=?").get(draft.id).n, 0);
-    assert.equal((await post(`/api/payment-collections/${draft.id}/confirm`, 'accounting')).status, 200);
+    const partialConfirm = await post(`/api/payment-collections/${draft.id}/confirm`, 'accounting');
+    assert.equal(partialConfirm.status, 200, await partialConfirm.text());
     let ar = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(freshArId); assert.equal(ar.paid_cents, 4000); assert.equal(ar.status, 'PARTIAL');
     const entries = db.prepare("SELECT s.code,e.direction,e.amount_cents FROM accounting_vouchers v JOIN accounting_entries e ON e.voucher_id=v.id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.source_type='PAYMENT_COLLECTION' AND v.source_id=? ORDER BY e.direction").all(draft.id);
     assert.deepEqual(entries.map((x) => [x.code, x.direction, x.amount_cents]), [['1122', 'CREDIT', 4000], ['1002', 'DEBIT', 4000]]);
     assert.equal((await post(`/api/payment-collections/${draft.id}/confirm`, 'accounting')).status, 200); assert.equal(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_id=?").get(draft.id).n, 1);
     const final = await (await post('/api/payment-collections', 'accounting', { customerId: 'customer-003', businessDate: '2026-08-14', amountCents: 6000, paymentMethod: 'CASH', allocations: [{ receivableId: freshArId, amountCents: 6000 }] })).json();
-    assert.equal((await post(`/api/payment-collections/${final.id}/confirm`, 'accounting')).status, 200); ar = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(freshArId); assert.equal(ar.paid_cents, 10000); assert.equal(ar.status, 'COMPLETED'); assert.equal(ar.amount_cents - ar.paid_cents, 0);
+    const finalConfirm = await post(`/api/payment-collections/${final.id}/confirm`, 'accounting');
+    assert.equal(finalConfirm.status, 200, await finalConfirm.text()); ar = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(freshArId); assert.equal(ar.paid_cents, 10000); assert.equal(ar.status, 'COMPLETED'); assert.equal(ar.amount_cents - ar.paid_cents, 0);
   });
 
   test('payment supports partial and full AP settlement with canonical account mapping', async () => {
@@ -113,7 +115,8 @@ describe('M8 AR/AP and settlement workflow', () => {
     const freshApId = ensurePayableSource(db, { id: 'm8-payment-ap', sourceType: 'PURCHASE_RECEIPT', sourceNo: 'PR-M8-PAY', partyId: 'supplier-003', businessDate: '2026-08-15', effectCents: 12000, creatorId: 'user-sales', createdAt: stamp });
     for (const [amount, method] of [[5000, 'BANK'], [7000, 'CASH']]) {
       const draft = await (await post('/api/payment-disbursements', 'accounting', { supplierId: 'supplier-003', businessDate: '2026-08-15', amountCents: amount, paymentMethod: method, allocations: [{ payableId: freshApId, amountCents: amount }] })).json();
-      assert.equal((await post(`/api/payment-disbursements/${draft.id}/confirm`, 'accounting')).status, 200);
+      const confirm = await post(`/api/payment-disbursements/${draft.id}/confirm`, 'accounting');
+      assert.equal(confirm.status, 200, await confirm.text());
       const entries = db.prepare("SELECT s.code,e.direction FROM accounting_vouchers v JOIN accounting_entries e ON e.voucher_id=v.id JOIN accounting_subjects s ON s.id=e.subject_id WHERE v.source_type='PAYMENT_DISBURSEMENT' AND v.source_id=? ORDER BY e.direction").all(draft.id);
       assert.equal(entries.find((x) => x.direction === 'DEBIT').code, '2202'); assert.equal(entries.find((x) => x.direction === 'CREDIT').code, method === 'CASH' ? '1001' : '1002');
     }

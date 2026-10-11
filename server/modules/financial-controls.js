@@ -4,6 +4,8 @@ import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, send } from '../lib/http.js';
 import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { setInventoryQuantity } from '../lib/stock.js';
+import { applyTreasuryMovement } from './finance-treasury-movement.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
@@ -65,21 +67,35 @@ export function requireSettlementAccount(db, paymentMethod, accountId) {
     return { id: account.id, name: `${account.bank_name} ${account.account_name} ${account.account_no}`.trim(), subjectCode: '1002' };
   }
   if (paymentMethod === 'CASH') {
-    const subject = db.prepare("SELECT id,name FROM accounting_subjects WHERE id=? AND code='1001' AND active=1").get(accountId);
-    if (!subject) throw new HttpError(409, '现金结算必须选择权威库存现金科目');
-    return { id: subject.id, name: subject.name, subjectCode: '1001' };
+    let account = db.prepare("SELECT id,account_name FROM bank_accounts WHERE id=? AND account_type='CASH' AND active=1").get(accountId);
+    if (!account) {
+      const legacySubject = db.prepare("SELECT id FROM accounting_subjects WHERE id=? AND code='1001' AND active=1").get(accountId);
+      if (legacySubject) {
+        account = db.prepare("SELECT id,account_name FROM bank_accounts WHERE account_type='CASH' AND active=1 AND (accounting_subject_id=? OR code='CASH-DEFAULT') ORDER BY CASE WHEN accounting_subject_id=? THEN 0 ELSE 1 END,created_at,id LIMIT 1")
+          .get(legacySubject.id, legacySubject.id);
+      }
+    }
+    if (!account) throw new HttpError(409, '现金结算必须选择有效的现金结算账户');
+    return { id: account.id, name: account.account_name, subjectCode: '1001' };
   }
   throw new HttpError(400, '收付方式仅支持现金或银行');
 }
 
-export function recordSettlementMovement(db, { accountId, sourceType, sourceId, direction, amountCents, businessDate, voucherId }) {
-  const bank = db.prepare('SELECT balance_cents FROM bank_accounts WHERE id=?').get(accountId);
-  if (bank) {
-    db.prepare("INSERT OR IGNORE INTO settlement_account_balance_baselines(settlement_account_id,baseline_cents,captured_at) VALUES(?,?,?)").run(accountId, bank.balance_cents, now());
-    db.prepare('UPDATE bank_accounts SET balance_cents=balance_cents+?,updated_at=? WHERE id=?').run(direction === 'IN' ? amountCents : -amountCents, now(), accountId);
-  }
+export function recordSettlementMovement(db, { accountId, sourceType, sourceId, direction, amountCents, businessDate, voucherId, actorId = 'system' }) {
+  const movementId = applyTreasuryMovement(db, {
+    settlementAccountId: accountId,
+    sourceType,
+    sourceId,
+    direction,
+    amountCents,
+    businessDate,
+    accountingEventId: voucherId || null,
+    idempotencyKey: `${sourceType}:${sourceId}`,
+    createdBy: actorId,
+  });
   db.prepare(`INSERT INTO settlement_account_movements(id,settlement_account_id,source_type,source_id,direction,amount_cents,business_date,voucher_id,created_at)
-    VALUES(?,?,?,?,?,?,?,?,?)`).run(randomUUID(), accountId, sourceType, sourceId, direction, amountCents, businessDate, voucherId, now());
+    VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`).run(movementId, accountId, sourceType, sourceId, direction, amountCents, businessDate, voucherId, now());
+  return movementId;
 }
 
 export function recordPrepayment(db, { side, partyId, sourceType, sourceId, sourceNo, amountCents, businessDate, accountId, actorId }) {
@@ -136,6 +152,7 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   if (amount > available || amount > snap.openCents) throw new HttpError(409, '应用金额超过可用余额或目标未结金额');
   const id = randomUUID(); const at = now(); const applicationNo = number(side === 'AR' ? 'ARAPP' : 'APAPP');
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, side, date(body.businessDate));
     db.prepare(`INSERT INTO balance_applications(id,application_no,side,balance_kind,balance_id,target_open_item_id,amount_cents,business_date,reason,creator_id,created_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id, applicationNo, side, balance.balance_type, balance.id, body.openItemId, amount, date(body.businessDate), String(body.reason || ''), actor.id, at);
     refreshOpenItem(db, side, body.openItemId, at);
@@ -151,6 +168,7 @@ export async function reverseBalanceApplication(db, req, res, actor, application
   if (application.status !== 'CONFIRMED') throw new HttpError(409, '余额应用已经冲销');
   if (!String(body.reason || '').trim()) throw new HttpError(400, '请填写冲销原因');
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, application.side, date(body.businessDate));
     db.prepare("UPDATE balance_applications SET status='REVERSED',reversed_by=?,reversed_at=?,reversal_reason=? WHERE id=?").run(actor.id, now(), String(body.reason).trim(), applicationId);
     refreshOpenItem(db, application.side, application.target_open_item_id);
     audit(db, actor.id, 'REVERSE', 'BALANCE_APPLICATION', applicationId, String(body.reason).trim());
@@ -172,6 +190,7 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body); const idempotencyScope = `${side}:${balance.id}`;
   const replay = idempotencyReplay(db, 'REFUND_CONFIRM', idempotencyScope, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, side === 'CUSTOMER' ? 'AR' : 'AP', businessDate);
     const controlCode = side === 'CUSTOMER' ? '1122' : '2202';
     const subjects = db.prepare('SELECT id,code FROM accounting_subjects WHERE active=1 AND code IN (?,?)').all(account.subjectCode, controlCode);
     const map = Object.fromEntries(subjects.map((s) => [s.code, s.id]));
@@ -181,7 +200,7 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
     const voucherId = generateVoucher(db, 'FINANCIAL_REFUND', id, entries, actor, businessDate);
     db.prepare(`INSERT INTO financial_refunds(id,refund_no,side,balance_id,party_id,amount_cents,business_date,settlement_account_id,payment_method,reference,reason,creator_id,created_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, refundNo, side, balance.id, body.partyId, amount, businessDate, account.id, method, String(body.reference || ''), reason, actor.id, now());
-    recordSettlementMovement(db, { accountId: account.id, sourceType: 'FINANCIAL_REFUND', sourceId: id, direction: side === 'CUSTOMER' ? 'OUT' : 'IN', amountCents: amount, businessDate, voucherId });
+    recordSettlementMovement(db, { accountId: account.id, sourceType: 'FINANCIAL_REFUND', sourceId: id, direction: side === 'CUSTOMER' ? 'OUT' : 'IN', amountCents: amount, businessDate, voucherId, actorId: actor.id });
     saveIdempotency(db, 'REFUND_CONFIRM', idempotencyScope, key, fingerprint, { id, refundNo, status: 'CONFIRMED' });
     audit(db, actor.id, 'CONFIRM', 'FINANCIAL_REFUND', id, `${refundNo} ${reason}`);
   });
@@ -197,13 +216,14 @@ export async function reverseRefund(db, req, res, actor, refundId, generateVouch
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body);
   const replay = idempotencyReplay(db, 'REFUND_REVERSAL', refundId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, refund.side === 'CUSTOMER' ? 'AR' : 'AP', businessDate);
     const voucher = db.prepare("SELECT id FROM accounting_vouchers WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(refundId);
     const entries = db.prepare('SELECT subject_id subjectId,direction,amount_cents amountCents FROM accounting_entries WHERE voucher_id=?').all(voucher.id)
       .map((e) => ({ ...e, direction: e.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT' }));
     const voucherId = generateVoucher(db, 'FINANCIAL_REFUND_REVERSAL', id, entries, actor, businessDate);
     db.prepare('INSERT INTO financial_refund_reversals(id,reversal_no,refund_id,amount_cents,business_date,reason,creator_id,created_at) VALUES(?,?,?,?,?,?,?,?)').run(id, reversalNo, refundId, refund.amount_cents, businessDate, reason, actor.id, now());
     db.prepare("UPDATE financial_refunds SET status='REVERSED' WHERE id=?").run(refundId);
-    recordSettlementMovement(db, { accountId: refund.settlement_account_id, sourceType: 'FINANCIAL_REFUND_REVERSAL', sourceId: id, direction: refund.side === 'CUSTOMER' ? 'IN' : 'OUT', amountCents: refund.amount_cents, businessDate, voucherId });
+    recordSettlementMovement(db, { accountId: refund.settlement_account_id, sourceType: 'FINANCIAL_REFUND_REVERSAL', sourceId: id, direction: refund.side === 'CUSTOMER' ? 'IN' : 'OUT', amountCents: refund.amount_cents, businessDate, voucherId, actorId: actor.id });
     saveIdempotency(db, 'REFUND_REVERSAL', refundId, key, fingerprint, { id, reversalNo, status: 'CONFIRMED' });
     audit(db, actor.id, 'REVERSE', 'FINANCIAL_REFUND', refundId, `${reversalNo} ${reason}`);
   });
@@ -242,6 +262,7 @@ export async function actOnWriteOff(db, req, res, actor, writeOffId, action, gen
   const key = req.headers['idempotency-key']; const fingerprint = requestFingerprint(body);
   const replay = idempotencyReplay(db, 'WRITE_OFF_CONFIRM', writeOffId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, row.side, row.business_date);
     const snap = openItemSnapshot(db, row.side, row.open_item_id); if (row.amount_cents > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');
     const expense = db.prepare("SELECT id FROM accounting_subjects WHERE code='6401' AND active=1").get(); const control = db.prepare('SELECT id FROM accounting_subjects WHERE code=? AND active=1').get(row.side === 'AR' ? '1122' : '2202');
     const entries = row.side === 'AR'
@@ -264,6 +285,7 @@ export async function reverseWriteOff(db, req, res, actor, writeOffId, generateV
   const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(400, '请填写冲销原因');
   const businessDate = date(body.businessDate); const id = randomUUID(); const reversalNo = number('WOR');
   transaction(db, () => {
+    assertFinanceBusinessDateOpen(db, row.side, businessDate);
     const original = db.prepare("SELECT id FROM accounting_vouchers WHERE source_type='FINANCIAL_WRITE_OFF' AND source_id=?").get(writeOffId);
     const entries = db.prepare('SELECT subject_id subjectId,direction FROM accounting_entries WHERE voucher_id=?').all(original.id).map((e) => ({ ...e, amountCents: amount, direction: e.direction === 'DEBIT' ? 'CREDIT' : 'DEBIT' }));
     generateVoucher(db, 'FINANCIAL_WRITE_OFF_REVERSAL', id, entries, actor, businessDate);

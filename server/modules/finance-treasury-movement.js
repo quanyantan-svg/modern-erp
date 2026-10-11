@@ -16,6 +16,7 @@
 import { HttpError, allow, send, readJson, requiredText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import { id } from '../db.js';
+import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
 export function applyTreasuryMovement(db, input) {
   const settlementAccountId = requiredText(input.settlementAccountId, 'settlementAccountId', 64);
@@ -28,6 +29,21 @@ export function applyTreasuryMovement(db, input) {
   const sourceId = requiredText(input.sourceId, 'sourceId', 64);
   const idempotencyKey = requiredText(input.idempotencyKey, 'idempotencyKey', 256);
   const movementGroupId = input.movementGroupId || idempotencyKey;
+
+  assertFinanceBusinessDateOpen(db, 'TREASURY', businessDate);
+  const account = db.prepare(`SELECT id, active FROM bank_accounts WHERE id=?`).get(settlementAccountId);
+  if (!account || !account.active) throw new HttpError(409, '结算账户不存在或未启用');
+  const existing = db.prepare(`SELECT * FROM finance_treasury_movements WHERE idempotency_key=?`).get(idempotencyKey);
+  if (existing) {
+    const same = existing.settlement_account_id === settlementAccountId
+      && existing.direction === direction
+      && Number(existing.amount_cents) === amountCents
+      && existing.business_date === businessDate
+      && existing.source_type === sourceType
+      && existing.source_id === sourceId;
+    if (!same) throw new HttpError(409, '同一 Treasury 幂等键不能用于不同经济事项');
+    return existing.id;
+  }
 
   const movementId = id();
   const now = new Date().toISOString();
@@ -87,6 +103,10 @@ export async function postTreasuryTransfer(db, req, res, actor) {
   const accounts = [fromAccountId, toAccountId].sort();
   db.exec('BEGIN IMMEDIATE');
   try {
+    for (const accountId of accounts) {
+      const account = db.prepare(`SELECT id FROM bank_accounts WHERE id=? AND active=1`).get(accountId);
+      if (!account) throw new HttpError(409, '内部转账账户不存在或未启用');
+    }
     // apply OUT then IN
     applyTreasuryMovement(db, {
       settlementAccountId: fromAccountId, direction: 'OUT', amountCents: amount,

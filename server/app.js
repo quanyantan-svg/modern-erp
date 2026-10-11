@@ -144,8 +144,9 @@ import {
   actOnWriteOff, applyUnappliedBalance, createRefund, createWriteOff,
   idempotencyReplay, requestFingerprint, saveIdempotency,
   listUnappliedBalances, reverseBalanceApplication, reverseRefund, reverseWriteOff,
-  reverseOperationalReturn, settlementAccountReconciliation,
+  requireSettlementAccount, reverseOperationalReturn, settlementAccountReconciliation,
 } from './modules/financial-controls.js';
+import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
@@ -4768,17 +4769,30 @@ async function createCashJournal(db, req, res, actor) {
   const journalId = id();
   const now = new Date().toISOString();
   const journalNo = 'CJ-' + Date.now().toString().slice(-10);
+  const normalizedAccountType = account_type || 'CASH';
+  const settlementAccount = requireSettlementAccount(
+    db,
+    normalizedAccountType === 'BANK' ? 'BANK' : 'CASH',
+    bank_id || subject_id || 'finance-cash-default',
+  );
   
   transaction(db, () => {
     db.prepare(`INSERT INTO cash_journals(id, journal_no, journal_type, account_type, bank_id, amount_cents, direction, counterparty_type, counterparty_id, counterparty_name, subject_id, summary, operator_id, journal_date, remark, created_at)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(journalId, journalNo, journal_type || 'RECEIPT', account_type || 'CASH', bank_id || null, amount_cents, direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
+      .run(journalId, journalNo, journal_type || 'RECEIPT', normalizedAccountType, settlementAccount.id, amount_cents, direction || 'IN', counterparty_type || null, counterparty_id || null, counterparty_name || '', subject_id || null, summary || '', actor.id, journal_date, remark || '', now);
     
-    // 更新银行账户余额
-    if (bank_id && account_type === 'BANK') {
-      const change = direction === 'IN' ? amount_cents : -amount_cents;
-      db.prepare('UPDATE bank_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?').run(change, now, bank_id);
-    }
+    // cash_journals is compatibility evidence only. Economic cash/bank impact
+    // always converges through the canonical Treasury movement writer.
+    applyTreasuryMovement(db, {
+      settlementAccountId: settlementAccount.id,
+      direction: direction || 'IN',
+      amountCents: amount_cents,
+      businessDate: journal_date,
+      sourceType: 'CASH_JOURNAL_COMPAT',
+      sourceId: journalId,
+      idempotencyKey: `CASH_JOURNAL_COMPAT:${journalId}`,
+      createdBy: actor.id,
+    });
     
     audit(db, actor.id, 'CREATE', 'CASH_JOURNAL', journalId, `${direction === 'IN' ? '收款' : '付款'} ${journalNo} ${amount_cents}分`);
   });
@@ -4805,9 +4819,9 @@ async function createBankAccount(db, req, res, actor) {
   const accountId = id();
   const now = new Date().toISOString();
   
-  db.prepare(`INSERT INTO bank_accounts(id, bank_name, account_no, account_name, account_type, balance_cents, created_at, updated_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', initial_balance_cents, now, now);
+  db.prepare(`INSERT INTO bank_accounts(id, bank_name, account_no, account_name, account_type, balance_cents, created_at, updated_at, code, opening_balance_cents)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(accountId, bank_name, account_no, account_name, account_type || 'CHECKING', initial_balance_cents, now, now, accountId, initial_balance_cents);
   
   return send(res, 201, { id: accountId });
 }

@@ -30,7 +30,26 @@ export function migrateV22FinanceWaveDTreasury(db) {
   addColumn(db, 'ALTER TABLE bank_accounts ADD COLUMN opening_balance_cents INTEGER NOT NULL DEFAULT 0');
   addColumn(db, 'ALTER TABLE bank_accounts ADD COLUMN accounting_role TEXT NOT NULL DEFAULT ""');
   addColumn(db, 'ALTER TABLE bank_accounts ADD COLUMN accounting_subject_id TEXT');
+  // `code IS NULL` is the one-time legacy-row marker. Preserve the former
+  // authoritative balance as the canonical opening before balance_cents is
+  // converted to a derived projection, then give every legacy row a stable
+  // code. Re-running the migration cannot absorb later movements into opening.
+  db.exec(`UPDATE bank_accounts SET opening_balance_cents=balance_cents WHERE code IS NULL`);
+  db.exec(`UPDATE bank_accounts SET code=id WHERE code IS NULL`);
   addColumn(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_accounts_code ON bank_accounts(code) WHERE code IS NOT NULL');
+
+  // CASH is an operational settlement account, never an implicit GL subject.
+  // A deterministic compatibility row lets legacy clients that submitted the
+  // 1001 subject id resolve to the new canonical account identity.
+  const cashAccount = db.prepare("SELECT id FROM bank_accounts WHERE account_type='CASH' ORDER BY created_at,id LIMIT 1").get();
+  if (!cashAccount) {
+    const createdAt = new Date().toISOString();
+    db.prepare(`INSERT INTO bank_accounts(
+      id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at,
+      code,opening_balance_cents,accounting_role,accounting_subject_id)
+      VALUES('finance-cash-default','现金','CASH-DEFAULT','库存现金','CASH',0,'CNY',1,?,?,
+      'CASH-DEFAULT',0,'CASH','subject-001')`).run(createdAt, createdAt);
+  }
 
   // -----------------------------------------------------------------
   // FO39 — canonical treasury movement ledger
