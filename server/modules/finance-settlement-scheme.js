@@ -49,7 +49,7 @@ export async function upsertSettlementScheme(db, req, res, actor) {
 }
 
 function runInTransaction(db, fn) {
-  if (db.inTransaction && db.inTransaction()) { fn(); return; }
+  if (db.isTransaction) { fn(); return; }
   db.exec('BEGIN IMMEDIATE');
   try { fn(); db.exec('COMMIT'); }
   catch (e) { db.exec('ROLLBACK'); throw e; }

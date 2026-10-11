@@ -24,6 +24,9 @@ import { migrateV13Phase7cPerformance } from './migrations/v13-phase7c-performan
 import { migrateR4PurchaseSourceCardinality } from './migrations/r4-purchase-source-cardinality.js';
 import { migrateV14OutProcurementFinalAcceptance } from './migrations/v14-out-procurement-final-acceptance.js';
 import { migrateV22FinanceWaveAFoundation } from './migrations/v22-finance-wave-a-foundation.js';
+import { migrateV22FinanceWaveBSettlement } from './migrations/v22-finance-wave-b-settlement.js';
+import { migrateV22FinanceWaveCInvoice } from './migrations/v22-finance-wave-c-invoice.js';
+import { migrateV22FinanceWaveDTreasury } from './migrations/v22-finance-wave-d-treasury.js';
 import { ensureFinanceOpenItemEffectsView } from './modules/finance-open-item-effect-view.js';
 import { migrateSettlementSchema, reconcileSettlementSubledgers } from './modules/settlement-core.js';
 import { migrateEngineeringReferenceSchema } from './migrations/engineering-reference-schema.js';
@@ -479,6 +482,11 @@ function createSqliteDatabase(filename) {
   reconcileSettlementSubledgers(db);
   // V22 — Finance Operations Wave A foundation (FO01/02/03/04/05/51/52/53 + AR/AP additive cols).
   migrateV22FinanceWaveAFoundation(db);
+  // V22 — Finance Operations Wave B settlement convergence
+  // (FO15 counterparty transfers + FO28 bad-debt provisions).
+  migrateV22FinanceWaveBSettlement(db);
+  migrateV22FinanceWaveCInvoice(db);
+  migrateV22FinanceWaveDTreasury(db);
   // V22 — finance_open_item_effects DERIVED SQL VIEW (non-persisted).
   ensureFinanceOpenItemEffectsView(db);
 
