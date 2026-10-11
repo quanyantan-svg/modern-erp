@@ -503,6 +503,9 @@ const FULL = [
   // applyTreasuryMovement single canonical writer, paired internal transfers,
   // balance reconciliation health.
   'server/v22-finance-wave-d-treasury.test.js',
+  // Wave E reporting convergence: AR/AP summaries and aging, Treasury
+  // movement/balance projections, and Treasury-to-GL check-only reconcile.
+  'server/v22-finance-wave-e-reports.test.js',
 ];
 
 // FAST — subset of FULL that excludes tests requiring Vite SSR,
