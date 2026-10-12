@@ -4182,3 +4182,1009 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 ---
 
 **FINANCE OPERATIONS DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR USER REVIEW**
+
+---
+
+## 34. Sales & Customer Domain Closure Requirement
+
+> 本节固化 Sales & Customer Domain Closure 的 Requirement 阶段成果。
+> Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 B3104 库存 / B3106 存货核算 / B3108–B3113 应收/应付/发票/出纳 / B3114–B3117 总账/报表/经营会计 / B3119-B3120 生产/计划 / B3121 委外 等其它 domain 的边界）。
+> 本节 Coverage 以 Sales & Customer Domain Audit 在 2026-10-12 经过 Final Arithmetic & Mapping Closure 后发布的 audit 为准：
+>
+> ```text
+>   Capabilities audited        = 36
+>   COVERED                     =  9
+>   PARTIAL                     =  3
+>   MISSING                     = 24
+>   SEMANTIC_MISMATCH           =  0
+>   OUT_OF_SCOPE                =  0
+>
+>   Gap IDs                     = 25
+>   Requirement candidates      = 24 (RC-01..RC-24)
+>
+>   Frozen-domain bypasses      = 0
+>   Concurrency candidates      = 15 (R-SAL-01..R-SAL-15; 5 REAL + 10 DORMANT)
+> ```
+>
+> 本节不进入 Design / Implementation / Migration / API / UI / Test 任一阶段。Design 见 `solution.md`（后续章节号待用户 PASS 后展开）。
+> 本节不重写已 frozen 的 Master & Engineering / Planning / Procurement & Outsourcing / Manufacturing & Quality / Inventory & Warehouse / Finance Operations 中的任何 capability 或 canonical fact。Sales & Customer 通过消费这些 frozen canonical truth 完成自身业务，不允许 second-truth / shadow ledger。
+>
+> 已被外部评审 PASS / FROZEN 的 audit 不在本节重开。
+
+### 34.1 范围与 Ownership
+
+#### 34.1.1 Sales & Customer 拥有（canonical business owner）
+
+- **Sales Commercial Foundation（SC01–SC08）**：Sales Parameters；Customer Commercial Extensions（Settlement Party / Payer / Salesperson / Sales Group / Customer-Material Cross Reference / Commercial Defaults / Sellable Scope）；Sales / Pricing UoM 商业使用；Over-/Under-Delivery Tolerance。
+- **Quotation（SC09–SC14）**：Quotation document lifecycle；validity；conversion into Sales Order；repeated-conversion policy；commercial terms snapshot；capacity tracking。
+- **Sales Pricing（SC15–SC20）**：Sales Price List；Customer / Material applicability；UOM / quantity breaks；effective dates；priority / fallback；manual override (with separate authority)；immutable resolved-price snapshot at order time。**单一 base currency baseline**。
+- **Order-Time Discount（SC21–SC23）**：Sales Discount scheme / table；order-line / header；automatic + manual selection + override authority；immutable snapshot at order time。**与 Finance post-delivery Sales Discount / Allowance (M14) 严格区分**。
+- **Sales Order（SC24–SC36）**：header + lines + commercial parties + commercial terms snapshot + per-line snapshot（price / UoM / discount / tax-basis / gift）+ Gift Line + Delivery Schedule + Prepayment setting + Reservation intent + Status Machine + Required Fields Submission gate + Edit Policy + Source document identity。
+- **Sales Order Change（SC37–SC40）**：post-approval controlled change document；change reason / before-after / line-level trace；change approval / audit / effective version；constraint invariant。
+- **Sales Order Fulfillment / Close（SC41–SC44）**：remaining commercial obligation；partial fulfillment；full fulfillment / controlled close；controlled cancellation / termination。
+- **Delivery Notice（SC45–SC48）**：commercial instruction document；scheduled / notified / cancelled / remaining quantity；own lifecycle (do not mutate stock)；Linkage to Sales Delivery。
+- **Sales Delivery（SC49–SC53）**：commercial execution document；reservation + prepayment + credit gate consumption；OQC / Inventory canonical / Valuation / COGS / Finance recognition adapters；idempotent confirm + audit；source-line capacity enforcement。
+- **Sales Return（SC54–SC58）**：three canonical commercial modes (against delivery / against original SO / bounded no-source)；commercial source distinction；capacity / inventory IN / value restore / Finance credit adjustment integration。
+- **Replacement / Replenishment（SC59–SC61）**：Return + Replacement obligation；replacement fulfillment state；replacement source link (without silent original history reopen)。
+- **Prepayment Gate（SC62–SC65）**：required prepayment amount / ratio；gate stage configuration；gate result + override；refund integration。
+- **Reservation Intent（SC66–SC68）**：Sales-→-Planning request；state read；release intent；react to change / cancel / close / return / replacement。**Sales does not own canonical reserved quantity truth**。
+- **Service Item Sales（SC69–SC71）**：service-type commercial item identity；order line + service fulfillment / confirmation；finance recognition without inventory mutation。
+- **Consignment（SC72–SC77）**：consignment commercial instruction；customer / consignment location；consigned quantity + ownership-retention commercial state；settlement confirmation；consignment commercial return；consignment reporting。
+- **Sales Reporting（SC78–SC81）**：execution reports；outstanding；gross profit (integrated with Inventory / Finance valuation evidence)；ranking by customer / material / salesperson / sales group。
+- **Credit Foundation + Credit Parameters + Rules + Profile + Occupancy + Check + Special Approval + Recalculation + Query + Evaluation（SC82–SC107）**：B3103 Credit Management 9 capability 的完整 business ownership；Sales consumes Finance canonical AR / advance / unapplied / refund / write-off 作为 input facts，从不写第二套。
+
+#### 34.1.2 Sales & Customer 不拥有（仅 consume frozen domain canonical）
+
+- Customer 身份 foundation → **Master & Engineering**（identity）；
+- Product / Material identity 与 UOM foundation / UoM conversion 物理定义 → **Master & Engineering**；
+- Warehouse identity / layout → **Master & Engineering**；
+- Physical inventory truth / on-hand / locks / LOT-SERIAL / location / ownership dimension → **Inventory & Warehouse (V21 §32)**；
+- Reservation canonical truth / MRP / demand planning → **Planning (V19 §30)**；
+- OQC / IQC / Quality 引擎 → **Manufacturing & Quality (V18 §29)**；
+- AR / AP open-item truth → **Finance Operations (V22 §33)**；
+- Advance Receipt / Unapplied Balance / Refund / Write-off / Collection / Invoice operational truth → **Finance Operations (V22 §33)**；
+- Treasury → **Finance Operations (V22 §33)**；
+- Voucher / GL / Period close / Financial statements / Management accounting → **Accounting & Analytics**；
+- RBAC / Workflow mechanics / Audit / Notification / Numbering / generic parameter & rule infrastructure / document relation-conversion → **Platform**；
+- Statutory e-invoice / 外部税务硬件集成 → **OUT_OF_SCOPE**。
+
+#### 34.1.3 已被过往实现冻结的 Sales-owned 边界
+
+- `sales_orders` / `sales_order_items` / `sales_deliveries` / `sales_delivery_items` / `return_orders` / `return_order_items` 的商业 schema 与 status 语义属于这一 baseline；
+- M14 Sales Discount / Allowance post-delivery operational finance adjustment 的 commercial authoring 由 Sales owns (route `sales-discounts`)；其 finance 经济效果委托至 Finance canonical adapter（`applyCreditAdjustment` + `generateVoucher`）；customer settlement / credit-adjustment balance constraint 由 Finance 拥有，**不属于 B3103 Credit Management**；
+- Sales Order Header 上已 frozen 的 ship-to / requested-delivery-date / payment-terms submission gate；
+- 已 covered 的：canonical OQC gate、Inventory physical mutation、Finance recognition adapter、idempotent confirm、source-line remaining enforcement。
+
+### 34.2 Capability Catalogue（final）
+
+```text
+Total capabilities                  = 114
+DOMAIN_OWNED                       = 100
+INTEGRATION_BACKED                 =   3
+EXISTING_REUSE                     =  11
+OUT_OF_SCOPE                       =   0
+
+Sum check: 100 + 3 + 11 + 0 = 114  ✓
+```
+
+#### 34.2.1 Scope Status Semantics（统一）
+
+```text
+DOMAIN_OWNED        = new or materially-extended Sales business semantics owned by this Domain
+EXISTING_REUSE       = already implemented and verified in current repository,
+                       preserved without semantic redesign
+INTEGRATION_BACKED   = authoritative behavior supplied by a frozen Domain or
+                       Platform mechanism; Sales 商业语义仍归此 Domain,
+                       仅 consume / delegate through the frozen adapter
+OUT_OF_SCOPE         = explicitly excluded in this baseline
+```
+
+Integration-Backed 不转移 Sales 商业 ownership；不得后续把 Integration-Backed 升级为
+Domain-Owned，或把 Domain-Owned 降级为 Integration-Backed，除非 Domain Closure 重新授权。
+
+#### 34.2.2 3 项 INTEGRATION_BACKED capability（行为由 frozen Domain / Platform 提供）
+
+```text
+SC51  Sales Delivery Adapters (OQC + Inventory canonical + Valuation + COGS +
+      Finance Recognition)                              [INTEGRATION_BACKED]
+SC58  Sales Return Adapters (Inventory IN + Value Restore + Finance Credit
+      Adjustment via Finance canonical)                 [INTEGRATION_BACKED]
+SC71  Service Finance Recognition (no inventory OUT;
+      AR / Revenue via Finance canonical adapter)        [INTEGRATION_BACKED]
+```
+
+#### 34.2.3 11 项 EXISTING_REUSE capability（已实现并验证，不 semantic redesign）
+
+```text
+SC24  Sales Order Header (commercial structure preserved)
+SC25  Sales Order Lines
+SC33  SO Status Machine + Approval (DRAFT / SUBMITTED / APPROVED / REJECTED;
+      SOD CREATE != APPROVE)
+SC34  SO Required Commercial Fields for Submission (gating at V1.3 Phase 1)
+SC35  SO Edit Policy (DRAFT / REJECTED only mutable)
+SC36  SO Source Document Identity (customer reference; existing field semantics)
+SC49  Sales Delivery (commercial execution document)
+SC52  SD Idempotent Confirm + Audit
+SC53  SD Source-Line Capacity Enforcement (remaining-not-over-execution invariant)
+SC54  Return against Confirmed Sales Delivery (DELIVERY_BACKED;
+      preserve existing behavior)
+SC79  Sales Outstanding (decision-reports sales-outstanding already implemented)
+```
+
+#### 34.2.4 100 项 DOMAIN_OWNED capability（其余 SC01..SC114）
+
+```text
+除上述 3 项 INTEGRATION_BACKED 与 11 项 EXISTING_REUSE 之外的所有 SC capability
+（涵盖 SC01..SC23 / SC26..SC32 / SC37..SC48 / SC50 / SC55..SC57 / SC59..SC70 /
+ SC72..SC78 / SC80..SC81 / SC82..SC107 / SC108..SC114）均为 DOMAIN_OWNED；
+每条 DOMAIN_OWNED capability 的 商业语义（what it means）归 Sales & Customer；
+其实现可消费 frozen Domain canonical adapter，
+但不得因 consume 而降级为 INTEGRATION_BACKED。
+```
+
+Capability 不可在 Design / Implementation 阶段新增 ID；如需新增必须重开 Requirement。
+
+### 34.3 Capability IDs（SC01..SC114）
+
+#### 34.3.1 Sales Commercial Foundation（SC01–SC08）
+
+```text
+SC01 Sales Parameters                                                              [DOMAIN_OWNED]
+SC02 Customer Commercial Extensions                                                [DOMAIN_OWNED]
+SC03 Settlement Party                                                              [DOMAIN_OWNED]
+SC04 Payer                                                                         [DOMAIN_OWNED]
+SC05 Salesperson                                                                   [DOMAIN_OWNED]
+SC06 Sales Group                                                                   [DOMAIN_OWNED]
+SC07 Customer-Material Cross Reference + Sellable Scope                             [DOMAIN_OWNED]
+SC08 Commercial Defaults + Sales/Pricing UoM Usage + Over-/Under-Delivery Tolerance [DOMAIN_OWNED]
+```
+
+#### 34.3.2 Quotation（SC09–SC14）
+
+```text
+SC09 Quotation Header                                                              [DOMAIN_OWNED]
+SC10 Quotation Lines                                                               [DOMAIN_OWNED]
+SC11 Quotation Validity Period + Expired Quotation Rejection                       [DOMAIN_OWNED]
+SC12 Quotation Lifecycle + Commercial Terms Snapshot                               [DOMAIN_OWNED]
+SC13 Quotation → Sales Order Conversion                                            [DOMAIN_OWNED]
+SC14 Quotation Repeated-Conversion Policy + Capacity Tracking                      [DOMAIN_OWNED]
+```
+
+#### 34.3.3 Sales Pricing（SC15–SC20）
+
+```text
+SC15 Sales Price List Master (effective dates)                                    [DOMAIN_OWNED]
+SC16 Price Customer / Material Applicability                                       [DOMAIN_OWNED]
+SC17 Price Sales/Pricing UoM + Quantity Breaks                                     [DOMAIN_OWNED]
+SC18 Price Priority + Fallback                                                     [DOMAIN_OWNED]
+SC19 Manual Price Override (separate authority)                                   [DOMAIN_OWNED]
+SC20 Order-Time Resolved-Price Snapshot (immutable)                                [DOMAIN_OWNED]
+```
+
+> 单 base currency baseline；multi-currency 不在本 baseline（§34.10）。
+> 商业 document 形状 / 物理 storage 由 Design 决定；本节不 prescribe 表名 / 列名 / cache 选择。
+
+#### 34.3.4 Order-Time Discount（SC21–SC23）
+
+```text
+SC21 Sales Discount Scheme / Table                                                 [DOMAIN_OWNED]
+SC22 Order-Line / Header Discount (auto + manual + override authority)             [DOMAIN_OWNED]
+SC23 Order-Time Discount Snapshot (immutable)                                      [DOMAIN_OWNED]
+```
+
+> 与 Finance post-delivery Sales Discount / Allowance（M14 covered）严格分离；本节 capability 仅约束 B3102 订单时折扣。
+
+#### 34.3.5 Sales Order（SC24–SC36）
+
+```text
+SC24 Sales Order Header                                                            [EXISTING_REUSE]
+SC25 Sales Order Lines                                                             [EXISTING_REUSE]
+SC26 SO Commercial Parties (ship-to / settlement party / payer / salesperson /
+     sales group / customer-material identity)                                   [DOMAIN_OWNED]
+SC27 SO Commercial Terms Snapshot (payment terms / commercial tax-basis
+     assumption / commercial defaults)                                            [DOMAIN_OWNED]
+SC28 SO Per-Line Snapshot (price / UoM / discount / commercial tax-basis
+     assumption / gift flag; immutable business-time assumption)                    [DOMAIN_OWNED]
+SC29 SO Gift Line (selling price = 0; inventory OUT / reservation / OQC / COGS /
+     source-line trace continue)                                                  [DOMAIN_OWNED]
+SC30 SO Delivery Schedule (planned date + tolerance upper / lower)                 [DOMAIN_OWNED]
+SC31 SO Prepayment Requirement Setting                                            [DOMAIN_OWNED]
+SC32 SO Reservation Intent (Sales → Planning)                                     [DOMAIN_OWNED]
+SC33 SO Status Machine + Approval (DRAFT / SUBMITTED / APPROVED / REJECTED;
+     SOD CREATE != APPROVE)                                                       [EXISTING_REUSE]
+SC34 SO Required Commercial Fields for Submission (gating)                        [EXISTING_REUSE]
+SC35 SO Edit Policy (DRAFT / REJECTED only mutable; APPROVED 经 SC37..SC40
+     change document; existing semantics)                                        [EXISTING_REUSE]
+SC36 SO Source Document Identity (customer / quotation source where applicable)    [EXISTING_REUSE]
+```
+
+> SC29 Gift Line 语义：selling price = 0；inventory OUT / reservation 消耗 / OQC / LOT-SERIAL / COGS / source-line trace 全部继续；零收入不等于零成本。
+> SC27 / SC28 commercial tax-basis assumption = 商业侧 假定 snapshot（tax code / tax rate / tax-inclusive vs tax-exclusive）；statutory / invoice final tax truth 仍归 Finance Operations canonical；商业 storage 形状由 Design 决定。
+
+#### 34.3.6 Sales Order Change（SC37–SC40）
+
+```text
+SC37 Sales Order Change Document (post-approval controlled change)                  [DOMAIN_OWNED]
+SC38 Change Reason + Before/After + Line-Level Trace                               [DOMAIN_OWNED]
+SC39 Change Approval Workflow + Audit + Effective Version                          [DOMAIN_OWNED]
+SC40 Change Invariant (executed / delivered / invoiced / financially-recognized
+     history 不可静默改写)                                                          [DOMAIN_OWNED]
+```
+
+> Change document 只作用于尚未 executed 的剩余 obligations。已 executed 经济历史的纠错必须经现有 domain reversal / return / credit adjustment 机制，不为普通 unexecuted-order change 强制 Finance voucher reversal。
+
+#### 34.3.7 Sales Order Fulfillment / Close（SC41–SC44）
+
+```text
+SC41 SO Remaining Commercial Obligation (Sales 商业 read-only / projection)      [DOMAIN_OWNED]
+SC42 SO Partial Fulfillment                                                       [DOMAIN_OWNED]
+SC43 SO Full Fulfillment / Controlled Close                                        [DOMAIN_OWNED]
+SC44 SO Controlled Cancellation / Termination                                     [DOMAIN_OWNED]
+```
+
+> SC41–SC44 仅约束商业语义；persisted state / derived projection / hybrid 由 Design 决定。冻结 Finance / Inventory period truth 不得依赖 Sales closure；closure state 是 Sales-owned projection，下游消费者 read-only integrate。
+
+#### 34.3.8 Delivery Notice（SC45–SC48）
+
+```text
+SC45 Delivery Notice Header (commercial instruction)                                [DOMAIN_OWNED]
+SC46 Delivery Notice Lines (scheduled / notified / cancelled-notified / remaining)   [DOMAIN_OWNED]
+SC47 Delivery Notice Lifecycle (NOT mutate inventory)                              [DOMAIN_OWNED]
+SC48 Delivery Notice ↔ Sales Delivery Linkage                                       [DOMAIN_OWNED]
+```
+
+> Delivery Notice = 商业履行指令；Sales Delivery = 商业执行单据；Inventory = 物理 truth。**Delivery Notice 不得与 Sales Delivery 折叠**（依据 §4.1 frozen product-scope decision）。
+
+#### 34.3.9 Sales Delivery（SC49–SC53）
+
+```text
+SC49 Sales Delivery (commercial execution)                                          [EXISTING_REUSE]
+SC50 SD Reservation + Prepayment + Credit Gate Consumption
+     (gates governed by SC68 / SC65 / SC95; Sales-owned gate semantics)            [DOMAIN_OWNED]
+SC51 SD OQC + Inventory Canonical + Valuation + COGS + Finance Recognition
+     Adapters                                                                      [INTEGRATION_BACKED]
+SC52 SD Idempotent Confirm + Audit                                                  [EXISTING_REUSE]
+SC53 SD Source-Line Capacity Enforcement (remaining-not-over-execution invariant)   [EXISTING_REUSE]
+```
+
+#### 34.3.10 Sales Return（SC54–SC58）
+
+```text
+SC54 Return against Confirmed Sales Delivery (DELIVERY_BACKED;
+     preserve existing behavior)                                                   [EXISTING_REUSE]
+SC55 Return against Original Sales Order (SO_BACKED; without requiring Delivery)    [DOMAIN_OWNED]
+SC56 No-Source Return (NO_SOURCE; bounded commercial document)                       [DOMAIN_OWNED]
+SC57 Return Commercial Source Distinction (DELIVERY_BACKED / SO_BACKED /
+     NO_SOURCE explicit)                                                          [DOMAIN_OWNED]
+SC58 Return Capacity + Inventory IN + Value Restore + Finance Credit Adjustment
+     via Finance canonical                                                         [INTEGRATION_BACKED]
+```
+
+> 三种 return 商业源显式区分；NO_SOURCE 不得伪造源销售；Finance 借贷记除非 Finance-side 具备有效 basis，否则不自动生成。
+
+#### 34.3.11 Replacement / Replenishment（SC59–SC61）
+
+```text
+SC59 Return + Replacement Obligation (commercial source + replacement quantity)   [DOMAIN_OWNED]
+SC60 Replacement Fulfillment State (open / partial / fulfilled / cancelled)         [DOMAIN_OWNED]
+SC61 Replacement Source Link (no silent original executed-history reopen)           [DOMAIN_OWNED]
+```
+
+> Replacement 必须显式表达为新 / 重开的商业义务，不静默改写原订单 executed history。
+
+#### 34.3.12 Prepayment Gate（SC62–SC65）
+
+```text
+SC62 Required Prepayment Amount / Ratio (per SO / per SO line)                    [DOMAIN_OWNED]
+SC63 Prepayment Gate Stage Configuration
+     (Planning Release / Reservation / Delivery)                                  [DOMAIN_OWNED]
+SC64 Gate Result (PASS / WARN / BLOCK / OVERRIDE) + Override Policy                [DOMAIN_OWNED]
+SC65 Prepayment Refund Integration (consume Finance refund canonical;
+     do NOT create second advance-receipt ledger)                                   [DOMAIN_OWNED]
+```
+
+> Sales 拥有商业规则；Finance 拥有 money truth。Gate 不得反向写 Finance canonical。
+
+#### 34.3.13 Reservation Intent（SC66–SC68）
+
+```text
+SC66 Reservation Intent Request (Sales → Planning)                                [DOMAIN_OWNED]
+SC67 Reservation State View (Sales reads canonical Planning reservation)            [DOMAIN_OWNED]
+SC68 Reservation Release Intent + React to SO Change / Cancel / Close /
+     Return / Replacement                                                          [DOMAIN_OWNED]
+```
+
+> canonical reserved quantity 在 Planning；Sales 不得维护第二个 reservation ledger。
+
+#### 34.3.14 Service Item Sales（SC69–SC71）
+
+```text
+SC69 Service-Type Commercial Item Identity
+     (extends Master & Engineering Product 商业 classification)                     [DOMAIN_OWNED]
+SC70 Service Sales Order Line + Service Fulfillment / Confirmation                 [DOMAIN_OWNED]
+SC71 Service Finance Recognition (no inventory OUT; AR / Revenue via Finance
+     canonical adapter)                                                             [INTEGRATION_BACKED]
+```
+
+> Service Item 必须不触发 inventory 物理 movement；保留 Finance 收入链路；Master & Engineering 仍拥有 Product identity foundation。
+
+#### 34.3.15 Consignment（SC72–SC77）
+
+```text
+SC72 Consignment Instruction (commercial; reference to Inventory CUSTOMER-owned
+     position; 商业 document 形状由 Design 决定)                                    [DOMAIN_OWNED]
+SC73 Consignment Location (commercial identity, ≠ physical warehouse)              [DOMAIN_OWNED]
+SC74 Consigned Quantity Tracking + Ownership-Retention Commercial State            [DOMAIN_OWNED]
+SC75 Consignment Settlement Confirmation                                           [DOMAIN_OWNED]
+SC76 Consignment Commercial Return                                                  [DOMAIN_OWNED]
+SC77 Consignment Reporting                                                          [DOMAIN_OWNED]
+```
+
+> Consignment 商业流程不替代 Inventory 物理 truth；不替代 Finance AR / settlement canonical truth。
+
+#### 34.3.16 Sales Reporting（SC78–SC81）
+
+```text
+SC78 Sales Execution Reports (Quotation / SO / Delivery Notice / Sales Delivery /
+     Return / Replacement; existing decision-reports sales-summary /
+     sales-outstanding extended)                                                   [DOMAIN_OWNED]
+SC79 Sales Outstanding (未交 / 未结; existing decision-reports sales-outstanding)   [EXISTING_REUSE]
+SC80 Sales Gross Profit (与 Inventory / Finance valuation evidence 集成)               [DOMAIN_OWNED]
+SC81 Sales Ranking (customer / material / salesperson / sales group)                  [DOMAIN_OWNED]
+```
+
+> Reporting 必须消费 canonical facts；不允许 reporting shadow ledger。
+
+#### 34.3.17 Credit Foundation Invariant（SC82）
+
+```text
+SC82 Credit Exposure Canonical-Fact Invariant                                      [DOMAIN_OWNED]
+```
+
+> foundation invariant：信用敞口必须派生自 canonical 事实；不得成为第二套 Sales / Finance truth。
+
+#### 34.3.18 Credit Parameters（SC83–SC84）
+
+```text
+SC83 Credit Management Enabled / Disabled + Scope                                 [DOMAIN_OWNED]
+SC84 Credit Control Timing + Control Strength                                     [DOMAIN_OWNED]
+```
+
+> 商业语义 = Sales-owned；实现可消费 Platform generic parameter infrastructure。
+> 不为整个 SC capability 标 INTEGRATION_BACKED，因为 商业 meaning 仍归 Sales。
+
+#### 34.3.19 Credit Rules（SC85–SC86）
+
+```text
+SC85 Credit Check Rule Model (rule per stage / scenario / timing / strength /
+     credit item)                                                                   [DOMAIN_OWNED]
+SC86 Credit Rule Result Types (WARNING / BLOCK)                                    [DOMAIN_OWNED]
+```
+
+> 商业语义 = Sales-owned；实现可消费 Platform generic rule infrastructure。
+> 不为整个 SC capability 标 INTEGRATION_BACKED。
+
+#### 34.3.20 Credit Profile（SC87–SC89）
+
+```text
+SC87 Credit Profile (credit object + customer + optional salesperson dimension
+     where valid)                                                                  [DOMAIN_OWNED]
+SC88 Credit Profile Effective Dates + Overdue-Day Policy                           [DOMAIN_OWNED]
+SC89 Credit Profile Initial State + Rating + Applicable Rule + Status             [DOMAIN_OWNED]
+```
+
+> Customer identity foundation 仍归 Master & Engineering；Sales extends。
+
+#### 34.3.21 Credit Occupancy / Exposure（SC90–SC92）
+
+```text
+SC90 Exposure Component Composition                                                [DOMAIN_OWNED]
+SC91 Exposure Transition Rules (防止 SO exposure 与 AR exposure 重复计)              [DOMAIN_OWNED]
+SC92 Used / Available / Over-Limit Calculation                                      [DOMAIN_OWNED]
+```
+
+> 最高风险 capability 之一；SC91 transition rule 必须防止:
+>
+> ```text
+> approved SO exposure  →  delivered AR exposure 视为同一经济义务的不同阶段，转换时原 SO exposure 必须随状态转移被释放 / 重声明，不得与 active AR exposure 同时计入 used credit。
+> ```
+>
+> SC90 exposure component 派生自 Finance canonical AR / advance / unapplied / refund / write-off + Planning approved SO commitment；不建立 second ledger。
+
+#### 34.3.22 Credit Check（SC93–SC95）
+
+```text
+SC93 Credit Check Stage: SO Submit                                                 [DOMAIN_OWNED]
+SC94 Credit Check Stage: SO Approve + Sales Delivery Confirm                       [DOMAIN_OWNED]
+SC95 Credit Check Mandatory BLOCK + Audit (Sales owns rule meaning;
+     Platform owns authorization / audit mechanics)                               [DOMAIN_OWNED]
+```
+
+> Credit Rule 决定哪些 stage 是 mandatory BLOCK；mandatory BLOCK 必须在 backend fail closed；frontend 可见性 !== authorization。
+
+#### 34.3.23 Credit Special Approval（SC96–SC98）
+
+```text
+SC96 Credit Special Approval Request (reason + requested override + requested
+     expiry / scope)                                                                [DOMAIN_OWNED]
+SC97 Credit Special Approval Decision (bounded authority + ceiling + scope /
+     expiry)                                                                       [DOMAIN_OWNED]
+SC98 Credit Special Approval Audit + Linkage (Sales owns business scope /
+     ceiling / expiry; Platform owns workflow / approval mechanics)               [DOMAIN_OWNED]
+```
+
+> Sales owns 商业语义（什么构成 valid override ceiling、scope / expiry）；Platform owns workflow / approval mechanics。
+> Approved special exception must be bounded to its authorized source / scope；不得 unlimited permanent bypass。
+
+#### 34.3.24 Credit Recalculation（SC99–SC100）
+
+```text
+SC99 Credit CHECK-only Reconciliation                                              [DOMAIN_OWNED]
+SC100 Credit Deterministic Recalculation (不 mutate Sales / Inventory / Finance /
+      Accounting 历史事实; 若重建派生 cache，必须先读 latest canonical snapshot，
+      且 must never overwrite in-flight concurrent credit decision)               [DOMAIN_OWNED]
+```
+
+#### 34.3.25 Credit Query / Exception（SC101–SC102）
+
+```text
+SC101 Credit Query (limit / used / remaining / component breakdown)                [DOMAIN_OWNED]
+SC102 Credit Exception History (over-limit / overdue / warning / block / special
+      approvals / reason)                                                          [DOMAIN_OWNED]
+```
+
+#### 34.3.26 Credit Evaluation（SC103–SC107）
+
+```text
+SC103 Credit Indicator (QUALITATIVE / QUANTITATIVE)                                [DOMAIN_OWNED]
+SC104 Credit Rating Scheme                                                         [DOMAIN_OWNED]
+SC105 Credit Evaluation Model + Indicator Weight + Scoring Sheet                   [DOMAIN_OWNED]
+SC106 Credit Bounded Multi-Scorer (per-process allowed; NOT enterprise-wide open
+      scorer)                                                                       [DOMAIN_OWNED]
+SC107 Credit Rating Result Application → Credit Profile                            [DOMAIN_OWNED]
+```
+
+> baseline 之内；external bureau / AI / ML / complex corporate-risk analytics = OUT_OF_SCOPE（§34.10）。
+
+#### 34.3.27 Permissions / RBAC / SOD（SC108–SC114）
+
+```text
+SC108 Sales View / Create / Manage / Approve                                       [DOMAIN_OWNED]
+SC109 Pricing View / Manage + Price Override Authority                              [DOMAIN_OWNED]
+SC110 Quotation / Return / Consignment / Service Sales Manage                        [DOMAIN_OWNED]
+SC111 Credit View / Manage / Evaluate / Special Approve                            [DOMAIN_OWNED]
+SC112 Replacement / Replenishment Manage                                            [DOMAIN_OWNED]
+SC113 Consignment Manage + Service Item Authoring                                  [DOMAIN_OWNED]
+SC114 SOD Principles (VIEW != WRITE; CREATE != APPROVE;
+      PRICE OVERRIDE 需要单独 authority;
+      CREDIT SPECIAL APPROVAL 需要 bounded authority)                              [DOMAIN_OWNED]
+```
+
+> Requirement 仅定义 capability-level intent 与不变量；具体 permission code 由 Design 在冻结 permission registry 内命名。
+
+### 34.4 Business Invariants（S01..S20）
+
+```text
+S01  Sales commercial truth ≠ Inventory physical truth
+S02  Sales commercial truth ≠ Finance open-item truth
+S03  Sales commercial truth ≠ Voucher / GL truth (Accounting & Analytics)
+S04  Quotation conversion 必须 preserves source trace (line capacity / customer / commercial terms)
+S05  Approved historical execution cannot be silently rewritten（见 SC40 强制）
+S06  Source-line capacity cannot be over-executed (Sales Delivery-item quantity ≤ SO item remaining；cross-ref SC53)
+S07  Gift revenue zero ≠ inventory / cost zero（SC29 强制）
+S08  Service fulfillment ≠ Inventory movement (无 inventory OUT；SC70 / SC71)
+S09  Delivery Notice ≠ Sales Delivery ≠ Inventory Movement（商业指令 vs 商业执行 vs 物理 truth 三层）
+S10  Return ≠ Delete; Replacement ≠ Return; NO_SOURCE Return ≠ 伪造源销售
+S11  No-Source Return must visibly remain NO_SOURCE (SC57 强制显示)
+S12  Reservation intent ≠ canonical reservation truth (Planning owns；Sales owns intent only)
+S13  Prepayment Gate ≠ Advance-Receipt truth (Finance owns；Sales owns 商业 gate)
+S14  Credit exposure must not double-count stages (SC91 transition rule 强制)
+S15  Credit Check mandatory BLOCK must fail closed in backend (frontend 可见性 !== authorization)
+S16  Credit exception is bounded (scope / expiry / authority ceiling；SC97 强制)
+S17  Credit Recalculation must not rewrite Sales / Inventory / Finance historical truth (SC100 强制)
+S18  Consignment location ≠ ownership ≠ settlement (physical inventory ≠ commercial ownership ≠ AR / settlement)
+S19  Business dates are authoritative (所有商业文档 / canonical fact 均以 YYYY-MM-DD business_date 为口径；created_at / confirmed_at 仅作 audit timestamp)
+S20  Same base currency baseline for Sales Pricing; multi-currency explicitly OUT_OF_SCOPE 此 baseline
+```
+
+后续 Design / Implementation 不得破坏以上 invariant；如需新增 invariant，必须重开 Requirement。
+
+### 34.5 Frozen Functional Sales UAT（UAT-S-01..UAT-S-44）
+
+每条 SC capability 至少一条 acceptance reference（Functional UAT / Race / Structural-RBAC assertion）。Coverage validation 见 §34.13 trace + 每条 UAT 末尾的 `[SCxx]` 标注。
+
+```text
+UAT-S-01  Quotation 创建 + validity + expired-rejection                              [SC09..SC12]
+UAT-S-02  Quotation → Sales Order 单次转换                                          [SC13]
+UAT-S-03  Quotation → Sales Order 重复转换 (受 SC14 策略约束)                        [SC14]
+UAT-S-04  Sales Price List 生效日期 + 优先级 + fallback                             [SC15..SC18]
+UAT-S-05  Price Customer / Material / UoM 解析                                      [SC16..SC17]
+UAT-S-06  Quantity Break 应用                                                      [SC17]
+UAT-S-07  Manual Price Override (需要单独 authority)                               [SC19 + UAT-S-44]
+UAT-S-08  Order-Time Resolved-Price Snapshot 不可变                               [SC20]
+UAT-S-09  Order-Time Discount (line + header; auto + manual)                       [SC21..SC23]
+UAT-S-10  Sales Order 全部 commercial parties (ship-to / settlement / payer /
+            salesperson / sales group / customer-material)                         [SC26]
+UAT-S-11  Sales Order Gift Line (selling price = 0, inventory / OQC / COGS /
+            source-trace continue; zero revenue != zero cost)                       [SC29]
+UAT-S-12  Sales Order commercial tax-basis assumption snapshot
+            (commercial; final invoice tax 仍归 Finance)                            [SC27-SC28]
+UAT-S-13  Sales Order Required Commercial Fields Submission Gate                  [SC34]
+UAT-S-14  Sales Order Approval (SOD; CREATE != APPROVE)                             [SC33 + UAT-S-44]
+UAT-S-15  Sales Order Change (post-approval; reason + before-after; audit)          [SC37..SC40]
+UAT-S-16  Sales Order Fulfillment / Partial / Controlled Close /
+            Cancellation                                                            [SC41..SC44]
+UAT-S-17  Delivery Notice 创建 + scheduled / notified / cancelled-notified /
+            remaining capacity                                                       [SC45..SC48]
+UAT-S-18  Sales Delivery Confirm (OQC + Reservation + Prepayment + Credit
+            gates integration; source-line capacity)                              [SC49..SC53]
+UAT-S-19  Sales Return against Delivery (DELIVERY_BACKED; preserve behavior)       [SC54]
+UAT-S-20  Sales Return against Original SO (SO_BACKED, no fake Delivery)            [SC55-SC57]
+UAT-S-21  Sales Return No-Source (NO_SOURCE 可见; no fake source sale)             [SC56-SC57]
+UAT-S-22  Replacement Obligation (Return + Replacement; replacement fulfillment
+            state)                                                                   [SC59..SC61]
+UAT-S-23  Prepayment Gate (Planning Release / Reservation / Delivery stage)        [SC62..SC65]
+UAT-S-24  Reservation Intent request / view / release /
+            react-to-change-cancel-close-return-replacement                          [SC66..SC68]
+UAT-S-25  Service Item Sales (no inventory OUT; finance recognition)               [SC69..SC71]
+UAT-S-26  Consignment Instruction + Settlement                                       [SC72..SC75]
+UAT-S-27  Consignment Return + Reporting                                             [SC76..SC77]
+UAT-S-28  Customer Commercial Extensions (settlement party / payer /
+            salesperson / sales group / customer-material)                            [SC02..SC07]
+UAT-S-29  Sales Credit Profile 创建 + 生效日期 + overdue-day policy                [SC87..SC89]
+UAT-S-30  Credit Parameters (enabled / scope / timing / strength) + Credit Rules
+            (per stage / scenario / timing / strength / credit item)               [SC83..SC86]
+UAT-S-31  Credit Occupancy Transition (SO exposure → delivered AR exposure
+            不重复计; transition rule; component composition)                       [SC90..SC92]
+UAT-S-32  Credit Check at SO Submit / Approve / Delivery (PASS / WARNING /
+            BLOCK / SPECIAL_APPROVAL_REQUIRED; backend fail-closed)                [SC93..SC95]
+UAT-S-33  Credit Special Approval (bounded authority + scope + expiry)              [SC96..SC98]
+UAT-S-34  Credit Recalculation (CHECK-only + deterministic rebuild;
+            no historical truth mutation)                                             [SC99..SC100]
+UAT-S-35  Credit Query (limit / used / remaining / component breakdown /
+            exception history)                                                       [SC101..SC102]
+UAT-S-36  Credit Evaluation (bounded qualitative / quantitative + scoring sheet +
+            multi-scorer; result → Credit Profile)                                   [SC103..SC107]
+UAT-S-37  Sales Reporting — Execution Surface (Quotation / SO / Delivery
+            Notice / Sales Delivery / Return / Replacement execution evidence;
+            existing decision-reports sales-summary extended)                            [SC78]
+UAT-S-38  Sales Reporting — Outstanding + Gross Profit + Ranking
+            (Reporting dimensions: customer / material / salesperson / sales group;
+            outstanding 未交 / 未结; gross profit 与 Inventory / Finance valuation
+            evidence 集成; ranking 复用 canonical facts)                              [SC79, SC80, SC81]
+UAT-S-39  Sales Order Edit Policy DRAFT/REJECTED only                                [SC35]
+UAT-S-40  Reservation Intent canonical read-only                                    [SC67]
+UAT-S-41  Consignment commercial 三层 distinction (location != ownership !=
+            settlement)                                                              [SC73..SC74 + S18]
+UAT-S-42  Sales Order commercial terms snapshot commercial 假定（不 statutory
+            invoice tax truth; cross-ref SC27-SC28 + I4 + S02 + S03）              [SC27-SC28]
+UAT-S-43  Gift Line cost retention (COGS continues even when revenue = 0; S07)      [SC29 + S07]
+UAT-S-44  Permission / RBAC / SOD (P1-P5):
+            VIEW ≠ WRITE (SC108 + SC114)
+            CREATE ≠ APPROVE (SC108 + SC114)
+            PRICE OVERRIDE 单独 authority (SC109 + SC114)
+            CREDIT SPECIAL APPROVAL bounded authority (SC111 + SC114)
+            Unauthorized backend mutation fails (SC95 / SC97 + SC114)
+            Frontend hidden is NOT authorization (SC95 + SC114)
+```
+
+### 34.6 Sales MySQL Race Requirement（R-SAL-01..R-SAL-24）
+
+```text
+Total = 24 races
+  R-SAL-01..15 = from frozen audit (15)
+  R-SAL-16..22 = 7 new business races (Delivery Notice / SO Change / Close /
+                 Consignment / Service)
+  R-SAL-23    = Credit Deterministic Recalculation (cache rebuild) race;
+                只在 persisted cache rebuild 存在时 materializable
+                (CONDITIONAL)
+  R-SAL-24    = Credit Policy / Profile Mutation vs Credit Check
+                (DORMANT; distinct from R-SAL-12; protects coherent policy /
+                profile / limit / rule / overdue / rating-result snapshot
+                consistency)
+```
+
+#### 34.6.1 R-SAL-12 与 R-SAL-24 区分
+
+```text
+R-SAL-12  Credit Check vs another SO consuming same credit
+          → protects exposure / capacity consumption
+          → canonical lock identity = Credit Profile identity + SC91 transition-lock
+
+R-SAL-24  Credit Policy / Profile Mutation vs Credit Check (NEW; not subsumed)
+          → protects coherent effective-policy-snapshot consistency
+          → canonical lock identity = effective policy / profile version identity
+          → mutation side may include: Credit Parameters; Credit Check Rule;
+            Credit Profile; Credit Limit; Overdue-Day Policy; Rating Result
+            applied to Credit Profile; or any other effective credit-control value
+          → does NOT require all these to share one physical record
+          → this is a business-snapshot invariant
+```
+
+#### 34.6.2 R-SAL-24 Required Invariant
+
+```text
+one credit decision → one coherent effective policy version
+```
+
+valid serialization outcome A:
+  Credit Check logically precedes policy mutation
+  → check uses the complete OLD effective snapshot
+
+valid serialization outcome B:
+  Policy mutation logically precedes Credit Check
+  → check uses the complete NEW effective snapshot
+
+Forbidden:
+  one Credit Check combines old credit limit + new rule + old overdue policy +
+  new rating/profile state, or any other mixed-version decision
+
+Race-corollary invariant (R-SAL-24 special approval consistency):
+  Where a Credit Check returns SPECIAL_APPROVAL_REQUIRED, the Special Approval
+  request must trace to the exact Credit Check / policy snapshot that produced it;
+  a later policy mutation must not silently reinterpret an already approved
+  exception; if revalidation is required by policy, it must be explicit.
+
+> Requirement 不 prescribe 物理 lock / version column / 表 schema。Design 决定。
+> 仅约束 商业 语义 invariants：coherent snapshot per decision + audit-traceability of decision-source.
+
+| ID | Concurrent Operations | Canonical Lock Identity | Business Invariant | Final Economic State |
+|---|---|---|---|---|
+| R-SAL-01 | Sales Delivery confirm × 2 against same SO line remaining | Sales delivery-item source-line identity (Sales-owned source lock) | S05 + S06 | Combined delivered qty ≤ SO item remaining |
+| R-SAL-02 | Sales Delivery confirm × 2 against same Reservation | Planning reservation canonical identity | S12 | combined consumption ≤ reservation |
+| R-SAL-03 | Sales Return confirm × 2 against same delivery-item remaining | Sales return source-line identity | S06 + S10 | combined returned qty ≤ delivery-item remaining |
+| R-SAL-04 | M14 Sales Discount confirm × 2 against same source AR | Finance canonical AR (item_class=SOURCE) identity | (Finance F1 family) + S13 | combined discount ≤ AR open amount |
+| R-SAL-05 | Sales Delivery confirm vs Sales Return confirm (same physical race) | Inventory canonical position + Sales commercial identities | S01 + Inventory frozen writer | exact-once net physical effect; zero negative stock |
+| R-SAL-06 | Quotation conversion × 2 against same Quotation line | SC13 Quotation line identity | S04 + S06 | converted qty ≤ quotation line remaining; SO aggregate ≤ quotation aggregate |
+| R-SAL-07 | SO approve vs SO Change | SC40 change-document identity | S05 | approve OR change wins; approved-and-changed never silent-rewrite |
+| R-SAL-08 | SO Change vs Delivery creation | SC40 change identity vs SC53 delivery-item identity | S05 + S06 | change applies to remaining obligation only |
+| R-SAL-09 | Sales Delivery vs Return / Reopen | Delivery-item + Return-item identities | S05 + S10 | satisfied obligation may close; reopen is explicit; no silent relive |
+| R-SAL-10 | Sales Return vs Replacement fulfillment | Return-item (SC57) vs Replacement (SC59-SC61) identity | S10 + SC61 | replacement state machine consistent with source return |
+| R-SAL-11 | Pricing update vs Order approval | Sales Price List effective-date identity vs SO identity | S20 | snapshot is immutable; price change never rewrites already-approved SO price |
+| R-SAL-12 | Credit Check vs another SO consuming same credit | Credit Profile identity + SC91 transition-lock identity | S14 + S15 | combined commit ≤ limit; mandatory BLOCK fail-closed |
+| R-SAL-13 | Credit Special Approval vs Order approval | SC96 special-approval identity vs SO identity | S16 | either special-approval OR standard approval wins; never both silently |
+| R-SAL-14 | Credit release vs Collection / Return | Credit Occupancy identity vs Finance refund/collection canonical | (Finance F8 family) + S14 | credit release uses transition rule, never double-counts |
+| R-SAL-15 | Prepayment Gate vs Refund / Application | SC62 required-amount identity vs Finance refund canonical identity | S13 | gate vs refund snapshot reconciled; no second advance ledger |
+| R-SAL-16 | Delivery Notice create/confirm × 2 against same SO notice capacity | SC46 Delivery Notice line notice-capacity identity | S04 + S06 | combined notified qty ≤ SO item remaining notice capacity |
+| R-SAL-17 | Sales Delivery confirm × 2 against same Delivery Notice remaining capacity | SC46 Delivery Notice remaining identity | S09 + S06 | combined delivered qty ≤ Delivery Notice remaining |
+| R-SAL-18 | SO Change vs Delivery Notice creation / confirmation | SC40 change-document identity vs SC46/SC48 Delivery Notice identity | S05 + S09 | Change applies to remaining obligation only; Delivery Notice serializes against latest change effective |
+| R-SAL-19 | SO Close/Cancel (SC43/SC44) vs Delivery Notice or Sales Delivery confirmation | SC43/SC44 close state identity vs SC46/SC49 confirmation identity | S05 + S09 | One transition wins; close/cancel never silently coerces already-confirmed commercial execution |
+| R-SAL-20 | Consignment Settlement × 2 against same unsettled consigned quantity | SC74 consignment outstanding qty identity | SC74 + S18 | combined settled qty ≤ consigned outstanding; settlement serialization |
+| R-SAL-21 | Consignment Settlement vs Consignment Commercial Return | SC74 settlement identity vs SC76 commercial return identity | SC74 + SC76 + S18 | Either settlement or return commits; combined effect ≤ consigned outstanding at any time |
+| R-SAL-22 | Service Fulfillment Confirmation × 2 against same Service order remaining | SC70 service remaining identity | S08 | combined confirmation qty ≤ service-order remaining; no double-confirm |
+| R-SAL-23 | Credit Deterministic Recalculation / Cache Rebuild vs New Credit-consuming Sales Transaction (only when persisted cache rebuild exists) | Credit Occupancy derived-cache identity vs SO Check identity | S14 + S17 + SC100 | (a) Rebuild reads latest canonical snapshot before applying; (b) In-flight credit decision in concurrent transaction wins for that transaction; (c) Rebuild never overwrites in-flight decision's snapshot; (d) Rebuild never mutates canonical Sales / Inventory / Finance / Accounting historical truth |
+| R-SAL-24 | Credit Policy / Profile Mutation vs Credit Check (DORMANT) | Effective policy / profile / limit / rule / overdue / rating-result version identity | §34.6.2 (one credit decision → one coherent effective policy version) + §34.6.2 (special-approval trace consistency) | One Credit Check uses exactly one coherent effective policy snapshot; special-approval trace preserves the snapshot source; no mixed-version decision |
+
+> R-SAL-01..R-SAL-15 **来源于 Sales & Customer Domain Audit FINAL ARITHMETIC & MAPPING CLOSURE**。
+> R-SAL-16..R-SAL-22 是本 Requirement 阶段为新增 capability 主动引入的业务 race。
+> R-SAL-23 只在 persisted derived cache rebuild 实现时 materializable；否则可视为 R-SAL-12 的 deterministic 子情况（不计入 race ID）。
+> R-SAL-24 是 cooldown 闭包新引入的独立 race ID，专门保护 **coherent effective policy / profile snapshot**；与 R-SAL-12 (exposure / capacity consumption) 区分；不允许 subsume。
+> 后续 Design 阶段可基于新增 SC capabilities 增列 R-SAL-25+；不得删除 R-SAL-01..R-SAL-24。
+
+**Race Coverage Snapshot:**
+
+```text
+R-SAL-01..R-SAL-15  → 5 REAL covered today + 10 DORMANT pending capability implementation
+R-SAL-16..R-SAL-22  → 7 new DORMANT business races
+R-SAL-23            → 1 CONDITIONAL (materializable only with persisted cache rebuild)
+R-SAL-24            → 1 DORMANT (coherent effective policy-snapshot consistency)
+Total               → 24 (5 REAL + 17 DORMANT + 1 CONDITIONAL on R-SAL-23 + 1 DORMANT on R-SAL-24)
+No subsumed Race ID (former "Credit Profile mutation → R-SAL-12 subsumed" clause removed).
+```
+
+### 34.7 Permission / RBAC / SOD
+
+- 业务 capability 意图（不冻结 permission code 名字）：SC108–SC114；
+- 五大不可破坏原则：
+
+```text
+P1  VIEW  ≠ WRITE
+P2  CREATE ≠ APPROVE
+P3  PRICE OVERRIDE 需要单独 authority (separate from CREATE)
+P4  CREDIT SPECIAL APPROVAL 需要 bounded authority (separate from standard approval)
+P5  AUDIT trail 不得被任何其它 capability 跳过
+```
+
+- 已 frozen 5 角色（admin / sales / reviewer / warehouse / accounting）继续保持；本节 capability 仅规定 intent，不为 Design 阶段新引入 role。
+- Sales 商业文档上的 SOD `creator_id ≠ reviewer_id` 已 covered today（sale_orders.approval flow）；不得因本 Domain capability 增加而放宽。
+
+### 34.8 Cross-Domain Boundary Table
+
+```text
+15 capability families 显式列出
+```
+
+| # | Capability Family | Sales owner (SC IDs) | Frozen-domain dependency | Read / Write direction | Forbidden duplicate truth |
+|---|---|---|---|---|---|
+| 1 | Customer commercial extensions | SC02..SC07, SC26, SC36 | Master & Engineering (Customer identity) | R/W: Sales extends Customer; reads identity | 不得 second Customer identity |
+| 2 | Quotation / Sales Order / Sales Order Change / Sales Delivery / Sales Return / Replacement / Delivery Notice | SC09..SC14, SC24..SC44, SC45..SC48, SC49..SC53, SC54..SC58, SC59..SC61 | Master & Engineering (Customer / Product / UoM); Inventory & Warehouse (physical); Manufacturing & Quality (OQC); Finance Operations (AR / settlement recognition) | R/W: Sales owns commercial field; consume frozen canonical; never write physical truth | 不得 second physical / second AR ledger |
+| 3 | Sales Pricing | SC15..SC20 | Master & Engineering (Product reference / UoM) | R/W: Sales owns price list + snapshot | 不得 second pricing engine behind frozen domain |
+| 4 | Order-Time Discount | SC21..SC23 | Finance Operations (customer settlement / credit-adjustment balance constraint — Finance-owned, NOT B3103 Credit) | R/W: Sales 拥有 order-time discount; consumes Finance constraint at confirm | 不得 second settlement ledger; 不得把 discount 静默注入 Finance voucher |
+| 5 | Prepayment Gate | SC62..SC65 | Finance Operations (Advance Receipt / Unapplied Balance / Refund) | R/W: Sales 决定 gate rule; Finance 拥有 money truth | 不得 second advance ledger |
+| 6 | Reservation Intent | SC32, SC66..SC68 | Planning (canonical reservation) + Inventory (availability / locks) | R/W: Sales requests / reads; Planning owns canonical | 不得 second reserved-quantity ledger |
+| 7 | Service Item Sales | SC69..SC71 | Finance Operations (Revenue / AR recognition); Master & Engineering (Product identity) | R/W: Sales owns commercial; Finance owns finance | 不得 force warehouse OUT |
+| 8 | Consignment | SC72..SC77 | Inventory & Warehouse (CUSTOMER-owned position 物理层); Finance Operations (settlement 商业层) | R/W: Sales owns commercial lifecycle; consumes frozen canonical | 不得 second consignment stock balance |
+| 9 | Sales Reporting | SC78..SC81 | Inventory & Warehouse (qty); Finance Operations (revenue / AR); Planning (open demand) | R: Sales reports; canonical read-only | 不得 reporting shadow ledger |
+| 10 | Credit Parameters / Rules | SC83..SC86 | Platform (parameter / rule infrastructure) | R/W: Sales owns semantic; Platform owns mechanics | 不得 make Platform the business owner |
+| 11 | Credit Profile | SC87..SC89 | Master & Engineering (Customer identity) | R/W: Sales extends customer | 不得 second Customer identity |
+| 12 | Credit Occupancy / Exposure | SC82, SC90..SC92 | Finance Operations (AR / advance / unapplied / refund / write-off); Planning (approved SO commitment) | R: Sales consumes canonical facts; builds exposure | 不得 second Sales / Finance exposure ledger |
+| 13 | Credit Check | SC93..SC95 | Finance Operations (AR / prepayment / refund); Platform (audit / authorization) | R/W: Sales owns rule semantics; backend fail-closed BLOCK | 不得 UI-only control |
+| 14 | Credit Special Approval | SC96..SC98 | Platform (workflow / approval mechanics) | R/W: Sales owns scope / ceiling / expiry; Platform owns flow | 不得 unlimited permanent bypass |
+| 15 | Credit Recalculation / Query / Evaluation | SC99..SC107 | Finance Operations (canonical facts read); Platform (storage / read RBAC) | R: read-only from canonical + cache (where cache rebuild exists per SC100 invariant) | 不得 mutate Sales / Inventory / Finance historical truth |
+
+> 准确计数：**15 capability families** 在本表显式列出。
+> Accounting & Analytics 在本节列作下游消费者；不在本阶段 Design。
+
+### 34.9 Compatibility / 不变性约束
+
+- 已 covered 的下游约束不得破坏：
+  - **I1 — One AR truth**：Finance Operations F1；Sales 通过 Finance canonical adapter 写入 AR / advance / refund，不绕过；
+  - **I2 — One physical stock truth**：Inventory V21；Sales Delivery / Sales Return 通过 canonical writer (`applyInventoryMutation` + `postTrackedMovement`) 完成 physical effect；
+  - **I3 — One reservation truth**：Planning V19；Sales 通过 `assertStrongReservationAvailability` 读取，不写第二套；
+  - **I4 — One Tax truth (statutory)**：Accounting & Analytics (财务凭证 statutory tax) downstream；Sales 仅拥有 **commercial tax-basis assumption** snapshot（SC27 header 假定 + SC28 per-line 假定）；commercial tax-basis assumption != statutory invoice tax truth（S02 + S03 family invariant）；商业 storage 形状由 Design 决定；本节不 prescribe 表名 / 列名 / cache-view-table 选型；
+  - **I5 — Business date is authoritative**：`sales_orders.order_date` / `requested_delivery_date`、`sales_deliveries.delivery_date`、`return_orders.return_date` 作为 canonical period 锚点；`created_at` / `confirmed_at` 仅 audit timestamp；
+  - **I6 — Source identity preserved**：Quotation → Sales Order → Delivery Notice → Sales Delivery → Sales Return → Finance AR adapter 的 source-document identity 链路全程保留。
+
+- 不得通过本节 capability 重写其它已 frozen domain 的 canonical owner / invariant。
+
+### 34.10 Out of Scope（本 Domain Closure 不实施）
+
+```text
+Multi-currency / FX（SC15–SC20 baseline = 单 base currency）
+External tax hardware / 法定电子发票 集成
+External credit bureau
+AI / ML risk scoring
+复杂 corporate-risk analytics
+第三方金融数据
+Customer portal
+Salesforce-style CRM extension (sustained Core Scope Cleanup 决定)
+Marketing automation
+Full CPQ product configurator
+复杂 contract lifecycle management
+Multi-organization consolidation
+Generic Workflow 实现自身 (Platform 范围)
+```
+
+不应仅因为 CRM 扩展 out-of-scope 而删减 Customer / Supplier Contact / 收货地址 / 结算方 等核心 Sales-owned 功能。
+本节 §34 全部 capability 均建立在 `document.md §15` (Core Scope Cleanup) 已认可的 Sales 范围内。
+
+### 34.11 Acceptance Criteria
+
+```text
+A. Sales Capability Catalogue
+   114 capability IDs (SC01..SC114)
+   100 DOMAIN_OWNED + 3 INTEGRATION_BACKED + 11 EXISTING_REUSE + 0 OUT_OF_SCOPE
+   Sum check: 100 + 3 + 11 + 0 = 114  ✓
+   与 frozen audit 36 capability / 25 Gap / 24 RC 全量 traceability
+B. Manual Trace
+   B3102 销售管理 → SC01..SC81
+   B3103 信用管理 → SC82..SC107
+   Boundaries → SC108..SC114 (Permissions / SOD)
+C. Invariant Trace
+   20 invariant S01..S20 在所有 capability 中贯彻
+   每条 invariant 使用 S## 单一命名空间；不混用 SC##
+D. UAT Trace
+   44 UAT (UAT-S-01..UAT-S-44)
+   每条 SC capability 至少一条 acceptance reference（Functional UAT / Race /
+   Structural-RBAC assertion）
+E. Race Trace
+   24 races (R-SAL-01..R-SAL-24)
+   5 REAL (covered today) + 10 DORMANT (audit) + 7 DORMANT (new business)
+   + R-SAL-23 CONDITIONAL (materializable when persisted cache rebuild exists)
+   + R-SAL-24 DORMANT (coherent effective policy-snapshot consistency)
+   不允许 subsume R-SAL-24 进入 R-SAL-12；不允许删除既有 24 race ID
+   可新增 R-SAL-N+ 但不得删除既有
+F. Cross-Domain Trace
+   Sales consumes Master & Engineering / Planning / Manufacturing & Quality /
+   Inventory & Warehouse / Finance Operations canonical
+   Sales does NOT write physical / AR / Voucher / GL truth 第二份
+   15 capability families (§34.8) 显式列出
+G. Frozen-Domain Integrity
+   0 high-risk frozen-domain bypass；本节 capability 实现不能引入新的 bypass
+H. Domain Closure Coverage
+   0 SEMANTIC_MISMATCH, 0 OUT_OF_SCOPE；audit MISSING 全部被本 §34 收尾为 SC capability with INVARIANT
+```
+
+### 34.12 Hard Stop Conditions
+
+遇下列情况停止对应 sub-capability（不影响其它 sub-capability 推进）：
+
+```text
+1.  Multi-currency / FX 需求被引入（SC15–SC20 baseline = 单 base currency）；
+2.  需要重写 Customer identity foundation（Master & Engineering 拥有）；
+3.  需要重写 Product / Material / UoOM foundation（Master & Engineering 拥有）；
+4.  需要把 Sales 写入 Physical Inventory truth 第二份（Inventory & Warehouse 拥有）；
+5.  需要把 Sales 写入 Reservation canonical truth 第二份（Planning 拥有）；
+6.  需要 Sales 维护 credit exposure second ledger（Finance canonical 是 single exposure truth）；
+7.  需要 DROPhistorical sales / delivery / return / discount / credit 事实表；
+8.  需要 retroactive rewrite 已 approved / 已 executed / 已 financially-recognized 销售历史；
+9.  需要让 Credit Check 仅 UI 控制而 backend fail-open；
+10. 需要让 Credit Special Approval unlimited permanent bypass；
+11. 需要把 Customer settlement / credit-adjustment balance constraint 改名为 B3103 Credit Management feature；
+12. 需要把 Consignment 商业流程落到 Inventory 物理 truth 第二份；
+13. 需要把 Service Item Sales 强制 warehouse OUT；
+14. 需要把 Reporting shadow ledger 注入 SC78–SC81；
+15. 需要把 Sales Order closure / cancel 状态反向重写 Finance / Inventory period truth；
+16. 需要为普通 unexecuted-order change 强制 Finance voucher reversal；
+17. SC40 / SC91 transition rule 被弱化；
+18. MySQL migration 无法保证 parity；
+19. 引入 external credit bureau / AI / ML / 第三方金融数据 (OUT_OF_SCOPE §34.10)；
+20. 引入需要 generic Workflow 替换 5 审批族。
+```
+
+### 34.13 Requirement Traceability Matrix
+
+每条 frozen Audit Capability (CAP-1..CAP-36) 显式 row；no range approximation；不 invent Gap 仅为填链。
+
+Trace structure per row:
+
+```text
+Manual → Audit Cap → Audit Coverage → Gap (if applicable) →
+        RC (if applicable) → SC family → Scope Status → Acceptance refs
+```
+
+`(EX)` = EXISTING_REUSE；`(IB)` = INTEGRATION_BACKED；未标注 = DOMAIN_OWNED。`—` 表示该 field 不适用 (例如 COVERED Audit Capability 无 Gap / RC)。
+
+```text
+Manual  | Audit Cap | Audit Cov. | Audit Gap       | RC      | SC family    | SC IDs
+--------+-----------+------------+-----------------+---------+--------------+--------------------------------------------
+B3102   | CAP-1     | PARTIAL    | GAP-SC-09       | RC-08   | Comm Found.  | SC01, SC02, SC03, SC04, SC05, SC06, SC07, SC08,
+        |           |            |                 |         |              | SC26, SC27, SC31
+B3102   | CAP-2     | MISSING    | GAP-SC-01       | RC-01   | Quotation    | SC09, SC10, SC11, SC12, SC13, SC14
+B3102   | CAP-3     | COVERED    | —               | —       | SO Header    | SC24 (EX)
+B3102   | CAP-4     | COVERED    | —               | —       | SO Snapshot  | SC20 + SC25 + SC28 [price snapshot] (EX)
+B3102   | CAP-5     | COVERED    | —               | —       | SO Snapshot  | SC25 + SC28 [UoM snapshot] (EX)
+B3102   | CAP-6     | MISSING    | GAP-SC-15       | RC-24   | SO Terms     | SC27, SC28 [commercial tax-basis assumption]
+B3102   | CAP-7     | MISSING    | GAP-SC-16       | RC-07   | OTD          | SC21, SC22, SC23 [order-line discount snapshot]
+B3102   | CAP-8     | PARTIAL    | GAP-SC-09       | RC-08   | SO Parties   | SC26 (+ SC02..SC07)
+B3102   | CAP-9     | MISSING    | GAP-SC-10       | RC-09   | SO Gift      | SC29
+B3102   | CAP-10    | COVERED    | —               | —       | SO Status    | SC33, SC34, SC35 (EX)
+B3102   | CAP-11    | MISSING    | GAP-SC-02       | RC-02   | SO Change    | SC37, SC38, SC39, SC40
+B3102   | CAP-12    | MISSING    | GAP-SC-12       | RC-22   | SO Fulfill   | SC41, SC42, SC43, SC44
+B3102   | CAP-13    | MISSING    | GAP-SC-11       | RC-10   | Prepay       | SC62, SC63, SC64, SC65
+B3102   | CAP-14    | MISSING    | GAP-SC-03       | RC-03   | Delivery Nt  | SC45, SC46, SC47, SC48
+B3102   | CAP-15    | COVERED    | —               | —       | Sales Deliv. | SC49, SC50, SC52, SC53 (EX) + SC51 (IB adapter)
+B3102   | CAP-16    | COVERED    | —               | —       | SD OQC       | SC51 (IB adapter)
+B3102   | CAP-17    | COVERED    | —               | —       | Return       | SC54 (EX)
+B3102   | CAP-18    | MISSING    | GAP-SC-04       | RC-23   | Return       | SC55, SC57
+B3102   | CAP-19    | MISSING    | GAP-SC-06       | RC-05   | Return       | SC56, SC57
+B3102   | CAP-20    | MISSING    | GAP-SC-05       | RC-04   | Replacement  | SC59, SC60, SC61
+B3102   | CAP-21    | MISSING    | GAP-SC-07       | RC-06   | Pricing      | SC15, SC16, SC17, SC18, SC19, SC20
+B3102   | CAP-22    | MISSING    | GAP-SC-08 + 16  | RC-07   | OTD          | SC21, SC22, SC23
+B3102   | CAP-23    | COVERED    | —               | —       | (consume M14 | sales-discounts route / discounts.js
+        |           |            |                 |         |  EX)         | module; not in SC numbering)
+B3102   | CAP-24    | PARTIAL    | (bounded)       | (EX+new)| Reservation  | SC32, SC66, SC67, SC68
+B3102   | CAP-25    | MISSING    | GAP-SC-14       | RC-12   | Consignment  | SC72, SC73, SC74, SC75, SC76, SC77
+B3102   | CAP-26    | MISSING    | GAP-SC-13       | RC-11   | Service Item | SC69, SC70 + SC71 (IB adapter)
+B3102   | CAP-27    | COVERED    | —               | —       | Reporting    | SC78, SC79, SC80, SC81 (SC79 EX)
+B3103   | CAP-28    | MISSING    | GAP-SC-17       | RC-13   | Credit Param | SC83, SC84
+B3103   | CAP-29    | MISSING    | GAP-SC-18       | RC-14   | Credit Rules | SC85, SC86
+B3103   | CAP-30    | MISSING    | GAP-SC-19       | RC-15   | Credit Prof. | SC87, SC88, SC89
+B3103   | CAP-31    | MISSING    | GAP-SC-20       | RC-16   | Credit Occ.  | SC82 (foundation) + SC90, SC91, SC92
+B3103   | CAP-32    | MISSING    | GAP-SC-21       | RC-17   | Credit Check | SC93, SC94, SC95
+B3103   | CAP-33    | MISSING    | GAP-SC-22       | RC-18   | Special Appr | SC96, SC97, SC98
+B3103   | CAP-34    | MISSING    | GAP-SC-23       | RC-19   | Recalc       | SC99, SC100
+B3103   | CAP-35    | MISSING    | GAP-SC-24       | RC-20   | Query        | SC101, SC102
+B3103   | CAP-36    | MISSING    | GAP-SC-25       | RC-21   | Evaluation   | SC103, SC104, SC105, SC106, SC107
+```
+
+> 注：Permissions / SOD (SC108..SC114) **不是** Audit Capability。是 Requirement-derived cross-cutting capability family，单独在 `§34.13.2 SC Acceptance Coverage Validation` 与 `§34.8` cross-domain row 17 中处理。
+> Audit 36 capability 与本节 114 SC capability 之间非 1:1；某些 SC 同时承担多个 audit capability（如 SC26 横跨 CAP-1 / CAP-8；SC27 / SC28 横跨 CAP-4 / CAP-6 / CAP-7）。
+> 任何 audit capability 没有 SC 覆盖即为 orphan。→ 当前表所有 36 audit capability 均被覆盖。
+
+#### 34.13.1 SC Acceptance Coverage Validation (per §11 acceptance refs)
+
+每条 SC capability 至少 reference 一条 acceptance（Functional UAT / Race / Structural-RBAC assertion）：
+
+```text
+SC01..SC08    → UAT-S-28 (Customer Commercial Extensions) + §34.7 Permission
+SC09..SC14    → UAT-S-01..03 (Quotation lifecycle + conversion)
+SC15..SC20    → UAT-S-04..08 (Pricing + override + snapshot) + R-SAL-11
+SC21..SC23    → UAT-S-09 (Order-Time Discount) + UAT-S-07 (override)
+SC24..SC36    → UAT-S-10..16 (parties/gift/tax-terms/submit/change/fulfill) + UAT-S-39
+                + R-SAL-07..R-SAL-08 (SO Change race)
+SC37..SC40    → UAT-S-15 (SO Change) + R-SAL-07..R-SAL-08..R-SAL-18..R-SAL-19
+SC41..SC44    → UAT-S-16 (Fulfillment / partial / close / cancel)
+SC45..SC48    → UAT-S-17 (Delivery Notice capacity) + R-SAL-16..R-SAL-19
+SC49..SC53    → UAT-S-18 (Sales Delivery Confirm) + R-SAL-01, R-SAL-05, R-SAL-17
+SC54..SC58    → UAT-S-19..21 (3-Return modes) + UAT-S-41 + R-SAL-03, R-SAL-09, R-SAL-10
+SC59..SC61    → UAT-S-22 (Replacement) + R-SAL-10
+SC62..SC65    → UAT-S-23 (Prepayment Gate) + R-SAL-15
+SC66..SC68    → UAT-S-24 (Reservation Intent) + UAT-S-40 + R-SAL-02 (consume only)
+SC69..SC71    → UAT-S-25 (Service Item) + R-SAL-22
+SC72..SC77    → UAT-S-26..27 (Consignment) + UAT-S-41 + R-SAL-20, R-SAL-21
+SC78..SC81    → UAT-S-37 (Reporting - execution surface)
+                + UAT-S-38 (Reporting - outstanding + gross profit + ranking dimensions)
+SC82..SC107   → UAT-S-29..36 (Credit family)
+                + R-SAL-04, R-SAL-12, R-SAL-13, R-SAL-14, R-SAL-23, R-SAL-24
+SC108..SC114  → UAT-S-44 (Permission / RBAC / SOD) + §34.7 P1..P5 principles
+```
+
+Race coverage (concurrency acceptance):
+  R-SAL-01..R-SAL-24 each IS its own concurrency acceptance entry.
+  Functional UAT 不 aggregate races into one UAT ID; UAT-S-38 is a real Sales Reporting functional UAT, NOT a race-aggregation slot.
+
+> No orphan SC ID.
+
+#### 34.13.2 Permissions / SOD Cross-Cutting Coverage Validation
+
+`SC108..SC114` (Permissions / RBAC / SOD) 是 Requirement-derived cross-cutting capability family，**不**算 Audit Capability (CAP-1..CAP-36)；它们覆盖 `§34.7 P1..P5` 五大原则 (VIEW ≠ WRITE / CREATE ≠ APPROVE / PRICE OVERRIDE 单独 authority / CREDIT SPECIAL APPROVAL bounded / AUDIT 不跳过)，并通过 UAT-S-44 + Race 不可绕过。Audit CAP trace 不因此失配。
+
+#### 34.13.3 Frozen Audit CAP Trace 36/36 Validation
+
+```text
+expected Audit capabilities  = 36   (CAP-1..CAP-36)
+traced Audit capabilities    = 36
+missing                      = 0
+unmapped                     = 0
+conflicting duplicate trace  = 0
+orphan trace row             = 0
+CAP-1..CAP-36 → SC mapping    = all present (§34.13 main table)
+
+Permissions / SOD family (SC108..SC114) is Requirement-derived cross-cutting,
+NOT counted as Audit CAP. Audit CAP trace remains exactly 36/36; the
+§34.13 main table contains 36 CAP rows + 1 separate note row for Permissions
+clarification. The Permissions row is NOT counted toward the Audit 36/36.
+```
+
+### 34.14 最终接受状态
+
+本节 Requirement 包含：
+
+```text
+Capability Catalogue          = 114    (SC01..SC114)
+DOMAIN_OWNED                 = 100
+INTEGRATION_BACKED           =   3    (SC51, SC58, SC71 — adapters from frozen Domain)
+EXISTING_REUSE               =  11    (SC24, SC25, SC33, SC34, SC35, SC36,
+                                       SC49, SC52, SC53, SC54, SC79)
+OUT_OF_SCOPE                 =   0
+
+  Note: OUT_OF_SCOPE = 0 means zero SC capability IDs are classified OUT_OF_SCOPE
+  in this domain closure. §34.10 still defines product-scope exclusions that
+  intentionally have no SC ID (multi-currency, external credit bureau, AI/ML,
+  CRM extensions, Generic Workflow implementation itself, etc). No dummy SC IDs
+  are created for excluded products; this statement and §34.10 are NOT contradictory.
+
+Business Invariants          = 20     (S01..S20; single namespace)
+
+Frozen Functional Sales UAT  = 44     (UAT-S-01..UAT-S-44)
+  - 43 functional/business UAT
+  - 0 race-aggregation UAT (race acceptance is per-R-SAL-N)
+
+Sales MySQL Races            = 24     (R-SAL-01..R-SAL-24)
+  REAL                       =   5    (R-SAL-01..05)
+  DORMANT (audit)            =  10    (R-SAL-06..15)
+  DORMANT (new business)     =   7    (R-SAL-16..22)
+  CONDITIONAL                =   1    (R-SAL-23, when persisted cache rebuild exists)
+  DORMANT (policy-snapshot)  =   1    (R-SAL-24)
+  No subsumed Race ID
+
+Permissions / RBAC / SOD principles = 5   (P1..P5)
+
+Cross-Domain Boundary families    = 15
+Hard Stop Conditions               = 20
+```
+
+Sum checks:
+
+```text
+100 + 3 + 11 + 0 = 114  ✓
+5 + 10 + 7 + 1 + 1 = 24  ✓
+24 Race IDs enumerated; 0 missing; 0 duplicate
+36 Audit CAP-1..CAP-36 enumerated; 0 missing; 0 unmapped; 0 conflicting duplicate
+44 UAT IDs enumerated; 0 missing; 0 duplicate
+114 SC IDs enumerated; 0 missing; 0 orphan (per §34.13.1)
+20 Invariant IDs enumerated (S01..S20); 0 missing; 0 duplicate
+```
+
+本节 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 完整对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用；B3102 / B3103 全部 capability 经追溯矩阵映射至 SC。
+
+> Note：本节多次提到的 import / adapter 函数名称（`applyInventoryMutation` / `postTrackedMovement` / `assertStrongReservationAvailability` / `applyCreditAdjustment` / `generateVoucher`）均为 **[current implementation reference]**，仅作现状 evidence；不 prescribe 新模块 / 新函数 / 新 migration。Design 决定 persistent storage / cache / view / table choice 与本节 capability 商业语义的行为一致性。
+
+下游 Design 见 `solution.md`（后续章节号待用户 PASS 后展开）。本阶段未进入 Design。
+
+等待用户 `REQUIREMENT PASS` 明确批准。
+
+---
+
+**SALES & CUSTOMER DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR EXTERNAL REVIEW**
