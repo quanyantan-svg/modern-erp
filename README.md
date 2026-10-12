@@ -50,6 +50,7 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - SQLite 本地/测试兼容路径；
 - MySQL 8 一等运行路径；
 - applicationRegistry / RouteLocation / MobileShell；
+- Finance Operations 三种确认模式、正式/暂估 AR/AP、结算与资金 canonical writer、票据/付款申请/现金盘点/银行对账及六入口移动信息架构；
 - route ownership、domain module extraction、测试分层和部署基础。
 - Master & Engineering 工程基础资料、BOM 治理/分析、替代料与可配置 BOM、Routing enrichment/topology、bounded ECO 及移动端工作面。
 
@@ -107,10 +108,8 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Finance Operations
 
-- Provisional AP / AR
-- 完整 Treasury / Cashier
-- Payment Request
-- Bills 生命周期
+- 更深的票据背书/贴现会计联动与现金预测
+- 批量发票、法定电子发票及税务硬件集成
 - 完整 Fixed Asset 生命周期
 - Purchase Expense Allocation
 - 多币种
@@ -268,6 +267,7 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:mysql` | MySQL 兼容 gate |
 | `pnpm test:mysql:concurrency` | MySQL 并发 gate |
 | `pnpm test:mysql:performance` | MySQL 性能测试 |
+| `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
 | `pnpm backup-db` | SQLite 备份 |
 | `pnpm restore-db -- <file>` | SQLite 恢复 |
 | `pnpm setup-admin -- --username <name> --password <secret>` | 显式创建首个管理员 |
@@ -315,6 +315,7 @@ log/
 - `src/pages/platform-notifications.jsx` / `platform-workflows.jsx`：Platform 通知与工作流用户界面 owner；
 - `src/pages/engineering-reference.jsx` / `engineering-substitute.jsx` / `engineering-change.jsx`：Master & Engineering 工程资料、替代/配置、ECO 工作面；
 - `src/pages/planning-workbench.jsx`：Planning 计划订单与计划员例外工作台；
+- `src/pages/finance-operations.jsx`：Finance Operations 发票与资金 hub；应收、收款、应付、付款沿用各自 canonical 工作面；
 - `src/components/BomGovernancePanel.jsx`：BOM lifecycle、tree/analysis 与 batch preview→apply 可复用工作面；
 - `src/navigation/routeLocation.js`：hash RouteLocation 解析/序列化/规范化；
 - `server/app.js`：HTTP 生命周期、认证分发和仍未拆出的 handler；

@@ -32,14 +32,16 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('inventory-month-end','存货月结','inventory-warehouse','FLOW_PRIMARY','WORKFLOW','primary','库存与仓储','inventoryPeriod',{any:['INVENTORY_PERIOD_CLOSE_VIEW','INVENTORY_PERIOD_CLOSE_MANAGE']}),
   route('sales-discounts','销售折让','sales-customer','FLOW_INTERNAL_STEP','LIST','contextual','销售与客户','salesDiscount',{any:['SALES_DISCOUNT_MANAGE']},{parentRoute:'accounts-receivable'}),
   route('purchase-discounts','应付折让','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','purchaseDiscount',{any:['PURCHASE_DISCOUNT_MANAGE']},{parentRoute:'accounts-payable'}),
-  route('sales-invoices','销售发票','finance-operations','FLOW_INTERNAL_STEP','LIST','secondary','财务运营','accounting',{any:['AR_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-receivable'}),
+  route('finance-invoices','发票管理','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','accounting',{any:['FINANCE_INVOICE_VIEW','FINANCE_INVOICE_MANAGE','AR_VIEW','AP_VIEW']}),
+  route('finance-treasury','资金管理','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','bankAccounts',{any:['FINANCE_TREASURY_VIEW','FINANCE_TREASURY_MANAGE']}),
+  route('sales-invoices','销售发票','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','accounting',{any:['AR_VIEW','ACCOUNTING_VIEW']},{parentRoute:'finance-invoices'}),
   route('accounts-receivable','应收结算','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','accounting',{any:['AR_VIEW','COLLECTION_MANAGE']}),
-  route('payment-collections','收款 / 核销','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','cashJournals',{any:['AR_VIEW','COLLECTION_MANAGE']},{parentRoute:'accounts-receivable'}),
-  route('accounts-payable','应付结算','finance-operations','FLOW_PRIMARY','WORKFLOW','secondary','财务运营','accounting',{any:['AP_VIEW','PAYMENT_MANAGE']}),
-  route('supplier-bills','供应商账单','finance-operations','FLOW_INTERNAL_STEP','LIST','secondary','财务运营','accounting',{any:['AP_VIEW','ACCOUNTING_VIEW']},{parentRoute:'accounts-payable'}),
-  route('payment-disbursements','付款 / 核销','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','bankAccounts',{any:['AP_VIEW','PAYMENT_MANAGE']},{parentRoute:'accounts-payable'}),
+  route('payment-collections','收款 / 核销','finance-operations','FLOW_PRIMARY','LIST','primary','财务运营','cashJournals',{any:['AR_VIEW','COLLECTION_MANAGE']},{parentRoute:'accounts-receivable'}),
+  route('accounts-payable','应付结算','finance-operations','FLOW_PRIMARY','WORKFLOW','primary','财务运营','accounting',{any:['AP_VIEW','PAYMENT_MANAGE']}),
+  route('supplier-bills','供应商账单','finance-operations','FLOW_INTERNAL_STEP','LIST','contextual','财务运营','accounting',{any:['AP_VIEW','ACCOUNTING_VIEW']},{parentRoute:'finance-invoices'}),
+  route('payment-disbursements','付款 / 核销','finance-operations','FLOW_PRIMARY','LIST','primary','财务运营','bankAccounts',{any:['AP_VIEW','PAYMENT_MANAGE']},{parentRoute:'accounts-payable'}),
   route('accounting','会计凭证','accounting-analytics','FLOW_SUPPORTING','LIST','secondary','会计与分析','accounting',{any:['ACCOUNTING_VIEW']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
-  route('bank-accounts','银行账户','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','bankAccounts',{any:['BANK_ACCOUNTS_VIEW','BANK_ACCOUNTS_MANAGE']},{desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
+  route('bank-accounts','银行账户','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','bankAccounts',{any:['BANK_ACCOUNTS_VIEW','BANK_ACCOUNTS_MANAGE']},{parentRoute:'finance-treasury',desktopExposure:'role-workspace',mobileExposure:'role-workspace'}),
   route('decision-reports','经营分析','accounting-analytics','REPORT','REPORT','primary','会计与分析','reports',{any:['REPORT_VIEW']}),
   route('boms','BOM','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','boms',{any:['ENGINEERING_BOM_VIEW','ENGINEERING_BOM_MANAGE','PRODUCTION_ORDERS_CREATE']}),
   route('product-routings','制品工序标准','master-engineering','ADVANCED_CONFIGURATION','CONFIG','secondary','主数据与工程','routings',{any:['ROUTING_VIEW','ROUTING_MANAGE']}),
@@ -118,6 +120,7 @@ const loadScreenModule = (path) => {
     case '../pages/engineering-reference.jsx': return import('../pages/engineering-reference.jsx');
     case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
     case '../pages/engineering-change.jsx': return import('../pages/engineering-change.jsx');
+    case '../pages/finance-operations.jsx': return import('../pages/finance-operations.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -142,6 +145,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   oqc: named('../pages/quality.jsx','OQCInspections'), 'quality-control-points': named('../pages/quality.jsx','QualityControlPoints'),
   notifications: named('../pages/platform-notifications.jsx','Notifications'), workflows: named('../pages/platform-workflows.jsx','Workflows'),
   accounting: named('../pages/accounting.jsx','Accounting'), 'sales-invoices': named('../pages/commercial-go-live.jsx','SalesInvoices'),
+  'finance-invoices': named('../pages/finance-operations.jsx','FinanceInvoices'),
+  'finance-treasury': named('../pages/finance-operations.jsx','FinanceTreasury'),
   'supplier-bills': named('../pages/commercial-go-live.jsx','SupplierBills'), 'accounts-receivable': named('../pages/settlement.jsx','Receivables'),
   'payment-collections': named('../pages/settlement.jsx','Collections'), 'accounts-payable': named('../pages/settlement.jsx','Payables'),
   'payment-disbursements': named('../pages/settlement.jsx','Payments'), 'decision-reports': defaultScreen('../pages/decision-reports.jsx'),
@@ -189,8 +194,8 @@ const ROUTE_QUERY_KEYS = Object.freeze({
 });
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
-  'dashboard','sales-discounts','purchase-discounts','sales-invoices','payment-collections','supplier-bills',
-  'payment-disbursements','bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
+  'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
+  'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
   'notifications','planning-reservations','planning-configuration',
 ]);
 const classificationFor = (routeKey) => INTERNAL_ROUTES.has(routeKey) ? 'INTERNAL' : (CONTEXTUAL_ROUTES.has(routeKey) ? 'CONTEXTUAL' : 'CORE');
@@ -231,7 +236,7 @@ export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),
   launcherGroup('inventory-warehouse','Inventory & Warehouse','domain','inventory', [['warehouses','仓库资料','warehouses'],['inventory','库存作业','inventory'],['inventory-scraps','存货报废','inventoryScrap'],['inventory-month-end','存货月结','inventoryPeriod'],['inventory-transactions','库存异动','inventoryTransactions'],['traceability','批次 / 序列号','traceability']]),
-  launcherGroup('finance-operations','Finance Operations','domain','finance', [['sales-invoices','销售发票','accounting'],['sales-discounts','销售折让','salesDiscount'],['accounts-receivable','应收结算','accountsReceivable'],['payment-collections','收款 / 核销','paymentCollections'],['supplier-bills','供应商账单','accounting'],['accounts-payable','应付结算','accountsPayable'],['purchase-discounts','应付折让','purchaseDiscount'],['payment-disbursements','付款 / 核销','paymentDisbursements'],['bank-accounts','银行账户','bankAccounts'],['product-costs','标准成本','costAccounting'],['cost-rates','成本费率','costAccounting']]),
+  launcherGroup('finance-operations','Finance Operations','domain','finance', [['accounts-receivable','应收','accountsReceivable'],['payment-collections','收款','paymentCollections'],['accounts-payable','应付','accountsPayable'],['payment-disbursements','付款','paymentDisbursements'],['finance-invoices','发票','accounting'],['finance-treasury','资金','bankAccounts']]),
   launcherGroup('accounting-analytics','Accounting & Analytics','domain','analytics', [
     ['business-overview','业务总览','overview'],
     ['accounting','会计凭证','accounting'],
