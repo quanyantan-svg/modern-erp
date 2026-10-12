@@ -1,11 +1,11 @@
 // V22 — Finance Operations Domain real MySQL race worker.
 //
-// Each worker opens its own MySQL connection and executes one finance
-// action per stdin request. The orchestrator
+// Each worker opens its own MySQL connection and executes finance
+// actions received as JSON-lines on stdin. The orchestrator
 // (server/mysql-finance-operations-concurrency.integration.js) spawns
-// N workers and races actions through Promise.allSettled so each
-// scenario commits against the *real* MySQL engine, never the
-// in-memory SQLite fallback.
+// N workers and races actions through Promise.allSettled plus an event
+// channel so each scenario commits against the *real* MySQL engine,
+// never the in-memory SQLite fallback.
 //
 // The MySQL dialect is asserted on bootstrap. If the gate silently
 // degraded to SQLite this worker would still complete every action and
@@ -17,13 +17,10 @@
 //                                                            paid_cents, amount_cents)
 //   AP recognition effect    : account_payables         (mirrors account_receivables)
 //   Voucher effect           : accounting_vouchers + accounting_entries
-//                              (UNIQUE on (source_type, source_id) is asserted by the
-//                               orchestrator via generateVoucher's existing-voucher short-circuit
-//                               + canonical postSalesInvoice idempotent-guard)
 //   Sales invoice state      : sales_invoices            (status, gross_cents, tax_cents)
 //   Supplier bill state      : supplier_bills            (status, total_amount_cents, tax_cents)
 //   Invoice source relation  : finance_invoice_source_links (UNIQUE(invoice_id, source_type, source_id))
-//   Prepayment                : settlement_unapplied_balances (balance_type=PREPAYMENT)
+//   Prepayment               : settlement_unapplied_balances (balance_type=PREPAYMENT)
 //   Balance application      : balance_applications
 //   Treasury movement        : finance_treasury_movements
 //   Bank statement           : bank_statements + bank_statement_items (matched_cents)
@@ -53,6 +50,8 @@ if (db.dialect !== 'mysql') {
   process.exit(2);
 }
 
+const BUSINESS_DATE = '2026-10-12';
+
 const ACTOR = { id: 'finance-race-actor', role: 'role-accounting', permissions: [
   'AR_VIEW', 'COLLECTION_MANAGE',
   'AP_VIEW', 'PAYMENT_MANAGE',
@@ -63,11 +62,15 @@ const ACTOR = { id: 'finance-race-actor', role: 'role-accounting', permissions: 
 ] };
 
 // Held-session state for RACE-15 deterministic close-anchor ordering.
-// The orchestrator acquires the anchor in worker A, runs a single body
-// of work in that same connection's transaction, and either commits or
-// rolls back. Worker B's later operations then see the committed state
-// — exactly the serialization the canonical `assertFinanceBusinessDateOpen`
-// + `closeBusiness` FOR UPDATE pattern guarantees in production.
+// Two independent worker processes hold two independent MySQL connections.
+// Worker A acquires the close anchor first via `acquire-close-anchor`
+// (BEGIN + SELECT FOR UPDATE), runs a body of work, and either commits
+// or rolls back. Worker B starts its own transaction via `begin-held`
+// then attempts the SAME anchor row via `lock-held-anchor`; the SQL
+// `SELECT ... FOR UPDATE` blocks at the MySQL layer until A commits.
+// The orchestrator can fire-and-forget B's lock attempt (saving the
+// Promise but not awaiting) and orchestrate A's commit before the lock
+// can complete — proving real lock contention.
 let heldSession = null;
 
 class HeldSessionBusy extends Error { constructor() { super('Worker is currently holding a session'); this.code = 'HELD_SESSION_BUSY'; } }
@@ -79,9 +82,18 @@ function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0
 
 function lockForUpdate() { return db.dialect === 'mysql' ? ' FOR UPDATE' : ''; }
 
+function writeEvent(type, payload) {
+  // Event line written to stdout alongside standard request responses.
+  // Orchestrator consumes these to sequence the lock-holder's commit
+  // BEFORE the competitor's lock acquisition resolves. The events are
+  // emitted at real SQL boundaries (pre-SELECT-FOR-UPDATE and
+  // post-lock-acquired) — they are NOT sleep-based inference.
+  try {
+    process.stdout.write(`${JSON.stringify({ event: true, type, ...payload })}\n`);
+  } catch { /* stdout may be closing; ignore */ }
+}
+
 function requireItemFinalAr(db, id, lock) {
-  // Canonical FINAL-only eligibility for ordinary collection. PROVISIONAL
-  // or non-FINAL rows are never drained by ordinary settlement.
   const row = db.prepare(`SELECT id, amount_cents, paid_cents, write_off_cents, item_kind, conversion_state, item_class FROM account_receivables WHERE id=?${lock}`).get(id);
   if (!row) throw Object.assign(new Error('OPEN_ITEM_NOT_FOUND'), { code: 'OPEN_ITEM_NOT_FOUND' });
   if (row.item_class !== 'SOURCE' || row.item_kind !== 'FINAL' || row.conversion_state !== 'OPEN') {
@@ -285,9 +297,6 @@ function writeOffOpenItem(db, command) {
 }
 
 function convertProvisional(db, command) {
-  // Race-safe path mirror of finance-provisional-conversion. Locking on
-  // the source provisional row prevents an ordinary settlement from
-  // observing an item_kind=PROVISIONAL drain.
   return transaction(db, () => {
     const lock = lockForUpdate();
     const source = db.prepare(`SELECT * FROM account_receivables WHERE id=? AND item_kind='PROVISIONAL'${lock}`).get(command.sourceOpenItemId);
@@ -390,7 +399,12 @@ function closeBusinessDate(db, command) {
   });
 }
 
+// ============================ held-session actions ============================
+
 function acquireCloseAnchor(command) {
+  // BEGIN + SELECT FOR UPDATE on the close anchor. Used by the
+  // lock-holder worker (e.g. RACE-15A dated transaction, RACE-15B close)
+  // to atomically own the anchor in its own connection's transaction.
   if (heldSession) throw new HeldSessionBusy();
   db.exec('BEGIN');
   try {
@@ -400,7 +414,7 @@ function acquireCloseAnchor(command) {
       db.exec('ROLLBACK');
       throw Object.assign(new Error('ANCHOR_MISSING'), { code: 'ANCHOR_MISSING' });
     }
-    heldSession = { closeType: command.closeType, closedThroughDate: row.closed_through_date || '' };
+    heldSession = { closeType: command.closeType, locked: true, closedThroughDate: row.closed_through_date || '' };
     return { locked: true, closeType: command.closeType, closedThroughDate: heldSession.closedThroughDate };
   } catch (error) {
     if (!heldSession) throw error;
@@ -408,11 +422,48 @@ function acquireCloseAnchor(command) {
   }
 }
 
+function beginHeld(command) {
+  // BEGIN only — no anchor acquisition. Used by the competitor worker
+  // so it can later attempt the lock while the holder is still committed.
+  if (heldSession) throw new HeldSessionBusy();
+  db.exec('BEGIN');
+  heldSession = { closeType: command?.closeType || 'AR', locked: false, closedThroughDate: '' };
+  writeEvent('HELD_BEGAN', { closeType: heldSession.closeType, ts: Date.now() });
+  return { began: true, closeType: heldSession.closeType };
+}
+
+function lockHeldAnchor(command) {
+  // Assumes BEGIN already done. The SQL `SELECT ... FOR UPDATE` BLOCKS
+  // here if another connection still holds the row — that blocking IS
+  // the real MySQL lock contention this race proves. We emit
+  // LOCK_ATTEMPT_STARTED before the SQL attempt and LOCK_ACQUIRED after
+  // the row lock actually returns. Lock contention is recorded by the
+  // orchestrator via event timestamps; we use them to sequence A's
+  // commit BEFORE the lock can resolve.
+  if (!heldSession) throw new HeldSessionMissing();
+  if (heldSession.locked) {
+    return { locked: true, alreadyLocked: true, closeType: heldSession.closeType, closedThroughDate: heldSession.closedThroughDate };
+  }
+  writeEvent('LOCK_ATTEMPT_STARTED', { closeType: command.closeType, ts: Date.now() });
+  let row;
+  try {
+    const lock = lockForUpdate();
+    row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(command.closeType);
+  } catch (error) {
+    writeEvent('LOCK_ATTEMPT_ERROR', { closeType: command.closeType, message: error.message, ts: Date.now() });
+    throw error;
+  }
+  if (!row) throw Object.assign(new Error('ANCHOR_MISSING'), { code: 'ANCHOR_MISSING' });
+  writeEvent('LOCK_ACQUIRED', { closeType: command.closeType, closedThroughDate: row.closed_through_date || '', ts: Date.now() });
+  heldSession.locked = true;
+  heldSession.closeType = command.closeType;
+  heldSession.closedThroughDate = row.closed_through_date || '';
+  return { locked: true, closeType: command.closeType, closedThroughDate: heldSession.closedThroughDate };
+}
+
 function extendHeldWithCollection(command) {
   if (!heldSession) throw new HeldSessionMissing();
-  // Continues the held transaction. The session is BEGIN'd and the
-  // close-anchor FOR UPDATE is already held; this adds the dated
-  // economic write under the same lock window.
+  if (!heldSession.locked) throw new HeldSessionBusy();
   if (heldSession.closeType !== 'AR') {
     throw Object.assign(new Error('HELD_NOT_AR'), { code: 'HELD_NOT_AR' });
   }
@@ -427,8 +478,6 @@ function extendHeldWithCollection(command) {
   if (command.amountCents > openCents) {
     throw Object.assign(new Error('INSUFFICIENT_OPEN'), { code: 'INSUFFICIENT_OPEN' });
   }
-  // Re-read the close anchor inside the same held transaction to
-  // re-validate the business date (mirrors production).
   const closeAnchor = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?`).get('AR');
   if (closeAnchor?.closed_through_date && command.businessDate <= closeAnchor.closed_through_date) {
     throw Object.assign(new Error('CLOSED_DATE'), { code: 'CLOSED_DATE', through: closeAnchor.closed_through_date });
@@ -457,6 +506,7 @@ function extendHeldWithCollection(command) {
 
 function extendHeldWithClose(command) {
   if (!heldSession) throw new HeldSessionMissing();
+  if (!heldSession.locked) throw new HeldSessionBusy();
   if (heldSession.closeType !== command.closeType) {
     throw Object.assign(new Error('HELD_MISMATCH'), { code: 'HELD_MISMATCH', held: heldSession.closeType, requested: command.closeType });
   }
@@ -465,6 +515,11 @@ function extendHeldWithClose(command) {
   }
   db.prepare(`UPDATE finance_business_close_state SET closed_through_date=?, updated_at=?, updated_by=? WHERE close_type=?`)
     .run(command.closedThroughDate, isoNow(), ACTOR.id, command.closeType);
+  // History row mirrors production `closeBusiness` behaviour.
+  db.prepare(`INSERT INTO finance_business_closures(id, close_type, closed_through_date, status, closed_by, closed_at, created_at)
+    VALUES(?, ?, ?, 'CLOSED', ?, ?, ?)`)
+    .run(randomUUID(), command.closeType, command.closedThroughDate, ACTOR.id, isoNow(), isoNow());
+  heldSession.closedThroughDate = command.closedThroughDate;
   return { wrote: true, closedThroughDate: command.closedThroughDate };
 }
 
@@ -473,6 +528,7 @@ function commitHeld() {
   const snapshot = heldSession;
   db.exec('COMMIT');
   heldSession = null;
+  writeEvent('HELD_COMMITTED', { closeType: snapshot.closeType, ts: Date.now() });
   return { committed: true, closeType: snapshot.closeType };
 }
 
@@ -481,23 +537,15 @@ function rollbackHeld() {
   const snapshot = heldSession;
   db.exec('ROLLBACK');
   heldSession = null;
+  writeEvent('HELD_ROLLED_BACK', { closeType: snapshot.closeType, ts: Date.now() });
   return { rolledBack: true, closeType: snapshot.closeType };
 }
 
 function heldSessionState() {
-  return { held: Boolean(heldSession), closeType: heldSession?.closeType || null, closedThroughDate: heldSession?.closedThroughDate || null };
+  return { held: Boolean(heldSession), locked: heldSession?.locked || false, closeType: heldSession?.closeType || null, closedThroughDate: heldSession?.closedThroughDate || null };
 }
 
 function postSalesInvoiceRaceSafe(db, command) {
-  // Race-safe mirror of postSalesInvoice used only by RACE-10 / RACE-11
-  // economic-uniqueness races. The PRODUCTION function (server/modules/
-  // commercial-golive.js postSalesInvoice) does the same SELECT →
-  // recognition → voucher → status transition pattern.
-  //
-  // The store-side canonical idempotency-key on sales_invoices prevents
-  // duplicate rows at the schema level. The lock on the SELECT status
-  // row plus the existing-voucher short-circuit (with FOR UPDATE) prevents
-  // double-POST + double-voucher on concurrent calls.
   return transaction(db, () => {
     const lock = lockForUpdate();
     const invoice = db.prepare(`SELECT id, status FROM sales_invoices WHERE id=?${lock}`).get(command.invoiceId);
@@ -505,10 +553,6 @@ function postSalesInvoiceRaceSafe(db, command) {
     if (invoice.status === 'POSTED') return { alreadyPosted: true, invoiceId: command.invoiceId };
     if (invoice.status !== 'DRAFT') throw Object.assign(new Error('STATUS_NOT_DRAFT'), { code: 'STATUS_NOT_DRAFT', status: invoice.status });
     assertFinanceBusinessDateOpen(db, 'AR', command.invoiceDate || BUSINESS_DATE);
-    // existing-voucher short-circuit (mirrors generateVoucher). The
-    // FOR UPDATE lock on the existing row + a unique constraint on
-    // accounting_vouchers(source_type,source_id) — both must hold —
-    // ensures exactly one voucher row survives the race.
     const existingVoucher = db.prepare(`SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?${lock}`).get('SALES_INVOICE', command.invoiceId);
     let voucherId = existingVoucher?.id;
     if (!voucherId) {
@@ -527,8 +571,6 @@ function postSalesInvoiceRaceSafe(db, command) {
           .run(randomUUID(), voucherId, revenueSubject.id, 'CREDIT', grossCents, '销售发票收入');
       }
     }
-    // Idempotent invoice source-link (mirrors recordInvoiceLinks
-    // INSERT … ON CONFLICT skip). One source-link per invoice+source.
     if (command.sourceType && command.sourceId) {
       const linkId = `${command.invoiceId}:${command.sourceType}:${command.sourceId}`;
       db.prepare(`INSERT IGNORE INTO finance_invoice_source_links(id, invoice_id, invoice_side, source_type, source_id, source_line_id, invoiced_quantity, invoiced_amount_cents, created_at) VALUES(?,?,?,?,?,'',?,?,?)`)
@@ -618,7 +660,9 @@ function execute(command) {
   if (command.action === 'statement-reconcile') return reconcileStatementLine(db, command);
   if (command.action === 'business-close') return closeBusinessDate(db, command);
   // Held-session actions for RACE-15 deterministic close-anchor ordering.
-  if (command.action === 'acquire-anchor') return acquireCloseAnchor(command);
+  if (command.action === 'acquire-close-anchor') return acquireCloseAnchor(command);
+  if (command.action === 'begin-held') return beginHeld(command);
+  if (command.action === 'lock-held-anchor') return lockHeldAnchor(command);
   if (command.action === 'extend-held-collection') return extendHeldWithCollection(command);
   if (command.action === 'extend-held-close') return extendHeldWithClose(command);
   if (command.action === 'commit-held') return commitHeld();
@@ -639,7 +683,7 @@ lines.on('line', (line) => {
     process.stdout.write(`${JSON.stringify({ id: request?.id, ok: false, error: {
       message: error.message, code: error.code || null,
       status: error.status || null,
-      conflict: ['INSUFFICIENT_OPEN', 'CONVERTED', 'NOT_DRAFT', 'ALREADY_CLOSED', 'ALREADY_MATCHED', 'STATE_DRIFT', 'STATUS_NOT_CONFIRMED', 'NOT_FINAL_SOURCE', 'INSUFFICIENT_BALANCE', 'BOOK_INSUFFICIENT', 'STATEMENT_EXCEEDS', 'PROVISIONAL_NOT_FOUND'].includes(error.code),
+      conflict: ['INSUFFICIENT_OPEN', 'CONVERTED', 'NOT_DRAFT', 'ALREADY_CLOSED', 'ALREADY_MATCHED', 'STATE_DRIFT', 'STATUS_NOT_CONFIRMED', 'NOT_FINAL_SOURCE', 'INSUFFICIENT_BALANCE', 'BOOK_INSUFFICIENT', 'STATEMENT_EXCEEDS', 'PROVISIONAL_NOT_FOUND', 'CLOSED_DATE'].includes(error.code),
     } })}\n`);
   }
 });

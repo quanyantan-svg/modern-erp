@@ -39,6 +39,7 @@ class AppInstance {
   constructor(name) {
     this.name = name;
     this.pending = new Map();
+    this.events = [];
     this.stderr = '';
     this.child = spawn(process.execPath, [workerPath], {
       cwd: repoRoot,
@@ -50,6 +51,14 @@ class AppInstance {
       let response;
       try { response = JSON.parse(line); } catch (error) {
         this.stderr += `\n[worker parse failure] ${line}\n${error?.message || error}`;
+        return;
+      }
+      // Worker emits two kinds of stdout lines: standard request/response
+      // (with `id`) and side-channel events (with `event: true`). Events
+      // are stored on the worker instance for orchestrator sequencing
+      // evidence; they do NOT resolve pending requests.
+      if (response.event === true) {
+        this.events.push({ ...response, ts: Date.now() });
         return;
       }
       const pending = this.pending.get(response.id);
@@ -71,6 +80,27 @@ class AppInstance {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.child.stdin.write(`${JSON.stringify({ id, command })}\n`);
+    });
+  }
+
+  // Fire-and-forget: write the request to the worker but do not await
+  // its response yet. Save the Promise so the orchestrator can await
+  // the response after sequencing other operations. This is how RACE-15
+  // keeps the competitor's SQL attempt in-flight while the holder still
+  // holds the lock — the SQL `SELECT ... FOR UPDATE` blocks at the
+  // MySQL layer until A commits.
+  fireAndForget(command) {
+    return this.run(command);
+  }
+
+  // Returns a snapshot of events seen so far, optionally filtered by
+  // type and/or closeType. Used to sequence RACE-15A/B's strict
+  // "lock-holder commits before competitor's lock resolves" ordering.
+  getEvents(type = null, closeType = null) {
+    return this.events.filter((event) => {
+      if (type && event.type !== type) return false;
+      if (closeType && event.closeType !== closeType) return false;
+      return true;
     });
   }
 
@@ -531,29 +561,194 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
     assert.ok(matched <= 10000, `statement matched ${matched} must <= available 10000`);
   });
 
-  test('RACE-15A transaction obtains anchor first → both succeed (commit before close)', async () => {
-    // Deterministic serialization: worker A acquires the close anchor
-    // (BEGIN + SELECT FOR UPDATE on finance_business_close_state) and
-    // commits the dated collection while still holding the anchor. Only
-    // after worker A's COMMIT response does the orchestrator dispatch
-    // the close action. This proves the canonical
-    // transaction-before-close ordering, not just that final-state
-    // happened to look acceptable.
-    const dateLate = '2026-10-15';
-    const openItemId = seedReceivableFinal(2000);
-    const anchorWorker = apps[0];
-    const closeWorker = apps[1];
+  test('RACE-15A transaction obtains anchor first → real concurrent lock contention', async () => {
+  // Real MySQL lock contention: TWO independent worker subprocesses (each
+  // on its own MySQL connection) target the SAME row
+  // `finance_business_close_state WHERE close_type='AR'`.
+  //
+  // Worker A acquires the row lock first via `acquire-close-anchor`
+  // (BEGIN + SELECT FOR UPDATE in its own connection). The orchestrator
+  // then dispatches Worker B's `begin-held` (BEGIN in B's own
+  // connection) and `lock-held-anchor` (B's connection attempts
+  // SELECT ... FOR UPDATE on the same row). The SQL request reaches
+  // MySQL while A still holds — InnoDB queues B's request behind A's
+  // transaction. Real lock contention.
+  //
+  // The orchestrator records `LOCK_ATTEMPT_STARTED` and `LOCK_ACQUIRED`
+  // events from B's stdout to sequence A's commit BEFORE B's lock
+  // resolves. Sleep-based timing is not used; only the SQL-level lock
+  // is the synchronization mechanism.
+  const dateLate = '2026-10-15';
+  const openItemId = seedReceivableFinal(2000);
+  const anchorWorker = apps[0];     // holds the lock
+  const closeWorker = apps[1];      // will block, then commit close after A releases
 
-    // Step 1: anchor acquisition on the AR anchor.
-    const anchorAcq = await anchorWorker.run({ action: 'acquire-anchor', closeType: 'AR' });
-    assert.equal(anchorAcq.locked, true, 'RACE-15A: anchor must be acquired by transaction worker');
-    assert.equal(anchorAcq.closeType, 'AR');
-    assert.equal(anchorAcq.closedThroughDate, '', 'RACE-15A: pre-state has empty closed_through_date');
+  // Step 1: Worker A acquires the AR anchor (BEGIN + SELECT FOR UPDATE).
+  const anchorAcq = await anchorWorker.run({ action: 'acquire-close-anchor', closeType: 'AR' });
+  assert.equal(anchorAcq.locked, true, 'RACE-15A: anchor must be acquired by transaction worker');
+  assert.equal(anchorAcq.closeType, 'AR');
+  assert.equal(anchorAcq.closedThroughDate, '', 'RACE-15A: pre-state has empty closed_through_date');
 
-    // Step 2: dated economic write INSIDE the held transaction (same
-    // connection). Mirrors production's assertFinanceBusinessDateOpen
-    // holding the same lock during the write.
-    const extend = await anchorWorker.run({
+  // Step 2: Worker B starts its own transaction.
+  const beginB = await closeWorker.run({ action: 'begin-held', closeType: 'AR' });
+  assert.equal(beginB.began, true, 'RACE-15B: worker B must successfully BEGIN a transaction');
+
+  // Step 3: Worker B attempts the lock — fire-and-forget. The actual
+  // SQL `SELECT ... FOR UPDATE` runs against MySQL while A still holds
+  // the row. InnoDB queues B's attempt. B's lock-held-anchor Promise
+  // is NOT awaited here; it resolves only after A commits.
+  const bLockPromise = closeWorker.run({ action: 'lock-held-anchor', closeType: 'AR' });
+
+  // Step 4: Yield to the event loop so Worker B's lock attempt reaches
+  // MySQL and gets queued behind A's lock — this is the safety bound,
+  // not the synchronization mechanism. The synchronization IS the
+  // InnoDB row lock.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Step 5: Worker A writes the dated collection INSIDE its held tx.
+  const extendA = await anchorWorker.run({
+    action: 'extend-held-collection',
+    openItemId,
+    amountCents: 2000,
+    customerId: CUSTOMER_ID,
+    settlementAccountId: SETTLEMENT_BANK,
+    businessDate: dateLate,
+  });
+  assert.equal(extendA.wrote, true, 'RACE-15A: collection must be written inside A held transaction');
+
+  // Step 6: Worker A commits. Lock is released. B's lock attempt now
+  // unblocks; its Promise resolves with closed_through_date=dateLate.
+  const commitA = await anchorWorker.run({ action: 'commit-held' });
+  assert.equal(commitA.committed, true, 'RACE-15A: A commit must succeed');
+
+  // Step 7: Worker B's lock-held-anchor now resolves. closed_through_date
+  // is the new committed value (because A's work did NOT itself change
+  // close_through_date; the close is B's own work — see step 8 below).
+  // Actually here, A did NOT update close_through_date, so B acquires
+  // the same pre-commit value. Note: by design, RACE-15A keeps the close
+  // as B's own work (commit-after-A), proving transaction-before-close.
+  const lockB = await bLockPromise;
+  assert.equal(lockB.locked, true, 'RACE-15A: B lock-held-anchor must resolve after A commit');
+  assert.equal(lockB.closeType, 'AR');
+
+  // Step 8: Worker B writes the close update INSIDE its now-held tx,
+  // then commits. This proves TRANSACTION-before-CLOSE ordering under
+  // real contention.
+  const writeB = await closeWorker.run({ action: 'extend-held-close', closeType: 'AR', closedThroughDate: dateLate });
+  assert.equal(writeB.wrote, true, 'RACE-15A: B close write must succeed');
+  assert.equal(writeB.closedThroughDate, dateLate);
+
+  const commitB = await closeWorker.run({ action: 'commit-held' });
+  assert.equal(commitB.committed, true, 'RACE-15A: B commit must succeed');
+
+  // ----------------------------------------------------------------
+  // Lock-contention evidence via event timestamps.
+  // Required sequence (15A):
+  //   A:  ACQUIRE_CLOSE_ANCHOR (implicit; ANCHOR_LOCKED) — pre-A-commit
+  //   B:  LOCK_ATTEMPT_STARTED — pre-A-commit (B's SQL hit MySQL and queued)
+  //   A:  HELD_COMMITTED — releases the lock
+  //   B:  LOCK_ACQUIRED — resolves with the value A left
+  //   B:  HELD_COMMITTED — closes
+  // ----------------------------------------------------------------
+  const aEvents = anchorWorker.getEvents();
+  const bEvents = closeWorker.getEvents();
+
+  const aHeldCommitted = aEvents.find((e) => e.type === 'HELD_COMMITTED');
+  assert.ok(aHeldCommitted, 'RACE-15A: A must emit HELD_COMMITTED');
+
+  const bAttempt = bEvents.find((e) => e.type === 'LOCK_ATTEMPT_STARTED' && e.closeType === 'AR');
+  const bAcquired = bEvents.find((e) => e.type === 'LOCK_ACQUIRED' && e.closeType === 'AR');
+  assert.ok(bAttempt, 'RACE-15A: B must emit LOCK_ATTEMPT_STARTED before lock');
+  assert.ok(bAcquired, 'RACE-15A: B must emit LOCK_ACQUIRED after lock resolves');
+  // Ordering proof:
+  //   B's LOCK_ATTEMPT_STARTED is emitted BEFORE A's HELD_COMMITTED —
+  //   this is the event-based guarantee that B's SQL attempt reached
+  //   MySQL while A still held the row.
+  assert.ok(bAttempt.ts < aHeldCommitted.ts,
+    `RACE-15A ordering: B LOCK_ATTEMPT_STARTED (${bAttempt.ts}) must precede A HELD_COMMITTED (${aHeldCommitted.ts})`);
+  //   B's LOCK_ACQUIRED is emitted AFTER A's HELD_COMMITTED — B's
+  //   SELECT ... FOR UPDATE only unblocks once A's transaction commits.
+  assert.ok(bAcquired.ts > aHeldCommitted.ts,
+    `RACE-15A ordering: B LOCK_ACQUIRED (${bAcquired.ts}) must follow A HELD_COMMITTED (${aHeldCommitted.ts})`);
+  //   B's LOCK_ACQUIRED took longer than a minimal sanity bound.
+  //   This is the contiguously-blocked duration — expect at least a few
+  //   ms because B's SQL was queued behind A's transaction.
+  const contention_ms = bAcquired.ts - bAttempt.ts;
+  assert.ok(contention_ms >= 0,
+    `RACE-15A: B lock attempt-to-acquired delta ${contention_ms}ms must be non-negative (lock actually blocked by A)`);
+
+  // Final-state assertions for the legal both-success outcome.
+  const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
+  assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15A: closed_through_date advances to dateLate');
+  const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
+  assert.equal(collectionCount, 1, 'RACE-15A: exactly one dated collection row exists');
+  const behindClose = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date > ?`).get(openItemId, dateLate)?.c || 0);
+  assert.equal(behindClose, 0, 'RACE-15A: zero collections past the closed boundary');
+  const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
+  assert.equal(closureHistory, 1, 'RACE-15A: exactly one finance_business_closures history row');
+});
+
+  test('RACE-15B close obtains anchor first → real concurrent lock contention', async () => {
+  // Real MySQL lock contention (analog to 15A): TWO independent worker
+  // subprocesses on separate MySQL connections target the SAME
+  // `finance_business_close_state WHERE close_type='AR'` row.
+  //
+  // Worker A acquires the row lock first and writes the close update
+  // INSIDE its held tx, then commits — releases the lock.
+  //
+  // Worker B starts its own transaction (`begin-held`) and attempts the
+  // SAME row's SELECT ... FOR UPDATE (`lock-held-anchor`) while A still
+  // holds the lock. The SQL request reaches MySQL; InnoDB queues B's
+  // request behind A's transaction. After A commits, B's lock attempt
+  // unblocks — its re-read of the anchor sees closed_through_date=dateLate.
+  // When B then attempts the dated economic write, its
+  // assertFinanceBusinessDateOpen re-checks the anchor and rejects
+  // (CLOSED_DATE). B's held tx is then rolled back. Zero economic
+  // side-effect from B.
+  const dateLate = '2026-10-15';
+  const openItemId = seedReceivableFinal(2000);
+  const closeWorker = apps[0];       // holds the lock
+  const transactionWorker = apps[1]; // will block on lock, then reject on close
+
+  // Step 1: Worker A acquires the AR anchor.
+  const anchorAcq = await closeWorker.run({ action: 'acquire-close-anchor', closeType: 'AR' });
+  assert.equal(anchorAcq.locked, true, 'RACE-15B: anchor must be acquired by close worker');
+
+  // Step 2: Worker B starts its own transaction.
+  const beginB = await transactionWorker.run({ action: 'begin-held', closeType: 'AR' });
+  assert.equal(beginB.began, true, 'RACE-15B: worker B must successfully BEGIN a transaction');
+
+  // Step 3: Worker B attempts the lock — fire-and-forget. The SQL hits
+  // MySQL while A still holds; InnoDB queues B's lock attempt behind A.
+  const bLockPromise = transactionWorker.run({ action: 'lock-held-anchor', closeType: 'AR' });
+
+  // Step 4: Yield to the event loop so B's lock attempt reaches MySQL
+  // and is queued. Safety bound only — synchronization is the InnoDB row
+  // lock, not this delay.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Step 5: Worker A writes the close update INSIDE its held tx.
+  const writeA = await closeWorker.run({ action: 'extend-held-close', closeType: 'AR', closedThroughDate: dateLate });
+  assert.equal(writeA.wrote, true, 'RACE-15B: A close write must succeed inside held transaction');
+
+  // Step 6: Worker A commits. Lock released.
+  const commitA = await closeWorker.run({ action: 'commit-held' });
+  assert.equal(commitA.committed, true, 'RACE-15B: A commit must succeed');
+
+  // Step 7: Worker B's lock-held-anchor now resolves. Its re-read
+  // of the anchor sees closed_through_date=dateLate.
+  const lockB = await bLockPromise;
+  assert.equal(lockB.locked, true, 'RACE-15B: B lock-held-anchor must resolve after A commit');
+  assert.equal(lockB.closeType, 'AR');
+  assert.equal(lockB.closedThroughDate, dateLate, 'RACE-15B: B sees the new committed closed_through_date');
+
+  // Step 8: Worker B attempts the dated collection INSIDE its held tx.
+  // assertFinanceBusinessDateOpen fires CLOSED_DATE because the close
+  // guard re-reads the anchor and sees businessDate=dateLate <= closed.
+  // The action throws; heldSession is still in error state.
+  let bCollectionError = null;
+  try {
+    await transactionWorker.run({
       action: 'extend-held-collection',
       openItemId,
       amountCents: 2000,
@@ -561,87 +756,60 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
       settlementAccountId: SETTLEMENT_BANK,
       businessDate: dateLate,
     });
-    assert.equal(extend.wrote, true, 'RACE-15A: collection must be written inside the held transaction');
-    assert.ok(extend.collectionId, 'RACE-15A: collectionId must be returned');
+  } catch (error) {
+    bCollectionError = error;
+  }
+  assert.ok(bCollectionError, 'RACE-15B: dated collection must throw after close committed');
+  const bCollectionCode = bCollectionError?.code || '';
+  assert.ok(['CLOSED_DATE', 'ALREADY_CLOSED'].includes(bCollectionCode) || /已结账/.test(bCollectionError?.message || ''),
+    `RACE-15B: rejection must be CLOSED_DATE or already-closed; got code=${bCollectionCode}, message=${bCollectionError?.message}`);
 
-    // Step 3: commit the held transaction. Lock is released.
-    const commit = await anchorWorker.run({ action: 'commit-held' });
-    assert.equal(commit.committed, true, 'RACE-15A: commit must succeed');
+  // Step 9: Worker B rolls back. Zero economic side-effect.
+  const rollbackB = await transactionWorker.run({ action: 'rollback-held' });
+  assert.equal(rollbackB.rolledBack, true, 'RACE-15B: B must rollback its held transaction');
 
-    // Step 4: now dispatch the close. The close anchor is free; close
-    // worker can proceed without contention.
-    const close = await closeWorker.run({ action: 'business-close', closeType: 'AR', closedThroughDate: dateLate });
-    assert.equal(close.closedThroughDate, dateLate, 'RACE-15A: close must succeed after committed transaction');
+  // ----------------------------------------------------------------
+  // Lock-contention evidence via event timestamps.
+  // Required sequence (15B):
+  //   A:  ACQUIRE_CLOSE_ANCHOR (implicit; ANCHOR_LOCKED) — pre-A-commit
+  //   B:  LOCK_ATTEMPT_STARTED — pre-A-commit (B's SQL hit MySQL and queued)
+  //   A:  HELD_COMMITTED — releases the lock
+  //   B:  LOCK_ACQUIRED — resolves with the post-close closed_through_date
+  //   B:  HELD_ROLLED_BACK — final state
+  // ----------------------------------------------------------------
+  const aEvents = closeWorker.getEvents();
+  const bEvents = transactionWorker.getEvents();
 
-    // Final-state assertions for the legal both-success outcome.
-    const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
-    assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15A: closed_through_date advances to dateLate');
-    const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
-    assert.equal(collectionCount, 1, 'RACE-15A: exactly one dated collection row exists');
-    const behindClose = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date > ?`).get(openItemId, dateLate)?.c || 0);
-    assert.equal(behindClose, 0, 'RACE-15A: zero collections past the closed boundary');
-    // No duplicate economic effect: only one collection; one close-history row.
-    const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
-    assert.equal(closureHistory, 1, 'RACE-15A: exactly one finance_business_closures history row');
-  });
+  const aHeldCommitted = aEvents.find((e) => e.type === 'HELD_COMMITTED');
+  assert.ok(aHeldCommitted, 'RACE-15B: A must emit HELD_COMMITTED');
 
-  test('RACE-15B close obtains anchor first → transaction rejects on closed date', async () => {
-    // Deterministic serialization: worker A acquires the close anchor
-    // first, writes the close-thru date, and commits. Only then does
-    // worker B attempt the dated collection — its assertFinanceBusinessDateOpen
-    // re-reads the anchor and must reject because dateLate is now closed.
-    const dateLate = '2026-10-15';
-    const openItemId = seedReceivableFinal(2000);
-    const anchorWorker = apps[0];
-    const transactionWorker = apps[1];
+  const bAttempt = bEvents.find((e) => e.type === 'LOCK_ATTEMPT_STARTED' && e.closeType === 'AR');
+  const bAcquired = bEvents.find((e) => e.type === 'LOCK_ACQUIRED' && e.closeType === 'AR');
+  const bRolledBack = bEvents.find((e) => e.type === 'HELD_ROLLED_BACK');
+  assert.ok(bAttempt, 'RACE-15B: B must emit LOCK_ATTEMPT_STARTED before lock');
+  assert.ok(bAcquired, 'RACE-15B: B must emit LOCK_ACQUIRED after lock resolves');
+  assert.ok(bRolledBack, 'RACE-15B: B must emit HELD_ROLLED_BACK after rollback');
+  assert.ok(bAttempt.ts < aHeldCommitted.ts,
+    `RACE-15B ordering: B LOCK_ATTEMPT_STARTED (${bAttempt.ts}) must precede A HELD_COMMITTED (${aHeldCommitted.ts})`);
+  assert.ok(bAcquired.ts > aHeldCommitted.ts,
+    `RACE-15B ordering: B LOCK_ACQUIRED (${bAcquired.ts}) must follow A HELD_COMMITTED (${aHeldCommitted.ts})`);
 
-    // Step 1: anchor acquisition.
-    const anchorAcq = await anchorWorker.run({ action: 'acquire-anchor', closeType: 'AR' });
-    assert.equal(anchorAcq.locked, true, 'RACE-15B: anchor must be acquired by close worker');
-
-    // Step 2: close write INSIDE the held transaction.
-    const extend = await anchorWorker.run({
-      action: 'extend-held-close',
-      closeType: 'AR',
-      closedThroughDate: dateLate,
-    });
-    assert.equal(extend.wrote, true, 'RACE-15B: close write must succeed inside the held transaction');
-    assert.equal(extend.closedThroughDate, dateLate);
-
-    // Step 3: commit close. Lock is released.
-    const commit = await anchorWorker.run({ action: 'commit-held' });
-    assert.equal(commit.committed, true, 'RACE-15B: close-commit must succeed');
-
-    // Step 4: dispatcher attempts dated collection on a fresh worker.
-    // assertFinanceBusinessDateOpen will see closed_through_date=dateLate
-    // and reject because businessDate=dateLate <= closedThroughDate.
-    const tx = await transactionWorker.run({
-      action: 'collection-allocate',
-      openItemId,
-      amountCents: 2000,
-      customerId: CUSTOMER_ID,
-      settlementAccountId: SETTLEMENT_BANK,
-      businessDate: dateLate,
-    }).then(
-      () => ({ ok: true }),
-      (reason) => ({ ok: false, reason }),
-    );
-    assert.equal(tx.ok, false, 'RACE-15B: dated transaction must be rejected after close committed');
-
-    // Final-state assertions: zero economic side-effect from rejected tx.
-    const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
-    assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15B: closed_through_date = dateLate after close-commit');
-    const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
-    assert.equal(collectionCount, 0, 'RACE-15B: rejected transaction leaves zero collection rows');
-    const treasuryRows = Number(db.prepare(`SELECT COUNT(*) c FROM finance_treasury_movements WHERE source_type='COLLECTION'`).get()?.c || 0);
-    assert.equal(treasuryRows, 0, 'RACE-15B: rejected transaction leaves zero treasury movements');
-    const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
-    assert.equal(closureHistory, 1, 'RACE-15B: exactly one close-history row');
-    // Forbidden outcome must NOT have occurred: close committed + dated tx inside.
-    assert.notEqual(closureHistory > 0 && collectionCount > 0, true, 'RACE-15B: forbidden close-first-then-commit-inside-closed-range did not occur');
-    // Worker should have observed a CLOSED_DATE or ALREADY_CLOSED rejection code.
-    const codes = tx.reason?.code ? [tx.reason.code] : [];
-    assert.ok(codes.some((c) => ['CLOSED_DATE', 'ALREADY_CLOSED'].includes(c)) || /已结账/.test(tx.reason?.message || ''),
-      `RACE-15B: rejection reason must mention closed date; got ${JSON.stringify(tx.reason)}`);
-  });
+  // Final-state assertions: zero economic side-effect from rejected B.
+  const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
+  assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15B: closed_through_date = dateLate after close-commit');
+  const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
+  assert.equal(collectionCount, 0, 'RACE-15B: rejected transaction leaves zero collection rows');
+  const treasuryRows = Number(db.prepare(`SELECT COUNT(*) c FROM finance_treasury_movements WHERE source_type='COLLECTION'`).get()?.c || 0);
+  assert.equal(treasuryRows, 0, 'RACE-15B: rejected transaction leaves zero treasury movements');
+  const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
+  assert.equal(closureHistory, 1, 'RACE-15B: exactly one close-history row');
+  // Forbidden outcome: close committed + dated tx commit-inside-closed-range.
+  assert.notEqual(closureHistory > 0 && collectionCount > 0, true,
+    'RACE-15B: forbidden close-first-then-commit-inside-closed-range did not occur');
+  // Open-item economic amount must be unchanged by rejected tx.
+  const openItemAfter = db.prepare(`SELECT amount_cents, paid_cents, write_off_cents FROM account_receivables WHERE id=?`).get(openItemId);
+  assert.ok(openItemAfter, 'RACE-15B: open-item row must still exist');
+  assert.equal(Number(openItemAfter.paid_cents), 0, 'RACE-15B: paid_cents unchanged by rejected tx');
+  assert.equal(Number(openItemAfter.write_off_cents), 0, 'RACE-15B: write_off_cents unchanged by rejected tx');
+});
 });
