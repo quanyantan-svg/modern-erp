@@ -251,14 +251,24 @@ describe('M14 — Sales Discount', () => {
     const registrySource = readFileSync(resolve('src/navigation/applicationRegistry.js'), 'utf8');
     assert.match(registrySource, /route\('sales-discounts','销售折让'[^\n]*SALES_DISCOUNT_MANAGE/);
     assert.match(registrySource, /route\('purchase-discounts','应付折让'[^\n]*PURCHASE_DISCOUNT_MANAGE/);
+
+    const { ACTIVE_APPLICATION_ROUTES } = await import('../src/navigation/applicationRegistry.js');
+    const discountRoutes = Object.fromEntries(
+      ACTIVE_APPLICATION_ROUTES
+        .filter((route) => route.key === 'sales-discounts' || route.key === 'purchase-discounts')
+        .map((route) => [route.key, route]),
+    );
+    assert.equal(discountRoutes['sales-discounts']?.parentRoute, 'accounts-receivable');
+    assert.equal(discountRoutes['purchase-discounts']?.parentRoute, 'accounts-payable');
+
+    // Contextual discount routes are nested under AR / AP and intentionally
+    // do NOT appear in the six-primary Finance Operations launcher.
     const launcher = buildMobileApplicationGroups([
       { key: 'sales-discounts', label: '销售折让' },
       { key: 'purchase-discounts', label: '应付折让' },
     ]);
-    assert.deepEqual(launcher.flatMap((group) => group.items.map((item) => item.page)).sort(), [
-      'purchase-discounts',
-      'sales-discounts',
-    ]);
+    const flatItems = launcher.flatMap((group) => group.items.map((item) => item.page));
+    assert.deepEqual(flatItems, [], 'discount contextual routes must not be promoted into the primary launcher');
   });
 
   test('3. DRAFT create -> edit -> cancel leaves no AR / voucher trace', async () => {

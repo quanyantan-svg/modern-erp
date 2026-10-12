@@ -47,15 +47,17 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 59 enabled + 5 disabled = 64 entries', () => {
+test('P8 route inventory: 61 enabled + 5 disabled = 66 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
   // planning-configuration) under planned-orders.
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
-  assert.equal(ROUTE_PRESENTATIONS.length, 59, 'ROUTE_PRESENTATIONS must hold 59 enabled canonical routes');
+  // Finance Operations Domain Closure adds finance-invoices + finance-treasury
+  // as dedicated primary routes, raising the count from 59 to 61.
+  assert.equal(ROUTE_PRESENTATIONS.length, 61, 'ROUTE_PRESENTATIONS must hold 61 enabled canonical routes');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 64);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 66);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -175,17 +177,24 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // (8 O2C/P2P quality and settlement children + material-requirements-plan).
   // The tasks/timesheets project children were removed with the Project
   // Management extension in Core Scope Cleanup.
-  assert.equal(contextualCount, 11, 'contextual routes with parentRoute must total 11 (9 historical + planning-reservations + planning-configuration)');
+  // Finance Operations Domain Closure adds bank-accounts under finance-treasury
+  // (sales-invoices + supplier-bills keep their contextual status but now parent
+  // under the dedicated finance-invoices route), bringing the count to 12.
+  assert.equal(contextualCount, 12, 'contextual routes with parentRoute must total 12 (historical 9 + planning 2 + bank-accounts under finance-treasury)');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {
+  // After Finance Operations closure, sales-invoices and supplier-bills are
+  // contextual children of the dedicated primary finance-invoices route; the
+  // rest of the AR / AP children stay nested under their AR / AP parents.
   const expected = {
     'sales-discounts': 'accounts-receivable',
     'purchase-discounts': 'accounts-payable',
-    'sales-invoices': 'accounts-receivable',
+    'sales-invoices': 'finance-invoices',
     'payment-collections': 'accounts-receivable',
     'payment-disbursements': 'accounts-payable',
-    'supplier-bills': 'accounts-payable',
+    'supplier-bills': 'finance-invoices',
+    'bank-accounts': 'finance-treasury',
     iqc: 'purchase-receipts',
     oqc: 'sales-deliveries',
   };

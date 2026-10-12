@@ -13,9 +13,12 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D10 enumerates exactly 59 active user-facing routes', () => {
-  assert.equal(ROUTE_PRESENTATIONS.length, 59, 'ROUTE_PRESENTATIONS must contain 59 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 59, 'All 59 routes must be unique');
+test('D10 enumerates exactly 61 active user-facing routes', () => {
+  // Finance Operations Domain Closure added finance-invoices + finance-treasury
+  // as dedicated primary routes on top of the Core Scope Cleanup +
+  // Planning + Procurement & Outsourcing state.
+  assert.equal(ROUTE_PRESENTATIONS.length, 61, 'ROUTE_PRESENTATIONS must contain 61 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 61, 'All 61 routes must be unique');
 });
 
 test('D10 excludes 5 disabled routes and the mrp technical alias from the active set', () => {
@@ -35,7 +38,7 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 59, 'application registry must contain 59 active routes');
+  assert.equal(active.size, 61, 'application registry must contain 61 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -89,10 +92,13 @@ test('D10 keeps IQC and OQC as internal flow steps under their parents', () => {
   assert.equal(oqc.parentRoute, 'sales-deliveries', 'OQC must parent under sales-deliveries');
 });
 
-test('D10 nests settlement children under AR and AP parents', () => {
-  assert.equal(presentationForRoute('sales-invoices').parentRoute, 'accounts-receivable');
+test('D10 nests settlement children under AR / AP / Finance routes', () => {
+  // After Finance Operations closure, sales-invoices and supplier-bills are
+  // contextual children of the dedicated primary finance-invoices route; the
+  // remaining AR / AP children stay nested under their AR / AP parents.
+  assert.equal(presentationForRoute('sales-invoices').parentRoute, 'finance-invoices');
+  assert.equal(presentationForRoute('supplier-bills').parentRoute, 'finance-invoices');
   assert.equal(presentationForRoute('payment-collections').parentRoute, 'accounts-receivable');
-  assert.equal(presentationForRoute('supplier-bills').parentRoute, 'accounts-payable');
   assert.equal(presentationForRoute('payment-disbursements').parentRoute, 'accounts-payable');
 });
 
@@ -157,7 +163,7 @@ test('D10 uses presentation layer for raw backend enums — no direct uppercase 
   }
 });
 
-test('D10 routes visit manifest: 59 records, each ending in PASS', () => {
+test('D10 routes visit manifest: 61 records, each ending in PASS', () => {
   const manifest = ROUTE_PRESENTATIONS.map((item) => ({
     route: item.route,
     template: item.template,
@@ -167,11 +173,13 @@ test('D10 routes visit manifest: 59 records, each ending in PASS', () => {
     parentRoute: item.parentRoute || null,
     finalResult: 'PASS',
   }));
-  // Core Scope Cleanup removed the 6 extension routes.
+  // Core Scope Cleanup removed the 6 extension routes. Planning Domain Closure
+  // added planning-reservations + planning-configuration. Finance Operations
+  // Closure added finance-invoices + finance-treasury as primary routes.
   // Planning Domain Closure added 2 contextual routes: planning-reservations,
   // planning-configuration.
-  assert.equal(manifest.length, 59, 'manifest contains 59 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 59, 'all 59 records PASS');
+  assert.equal(manifest.length, 61, 'manifest contains 61 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 61, 'all 61 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

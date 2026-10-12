@@ -35,7 +35,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 59);
+    assert.equal(keys.length, 61);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -98,8 +98,13 @@ describe('V1.6 site-wide rollout source contract', () => {
   });
 
   test('every enabled route has a final frozen or migrated implementation classification', () => {
+    // Finance Operations Domain Closure introduces a distinct
+    // "Finance CLOSURE" implementation status for routes that were born
+    // canonical in the closure phase (finance-invoices, finance-treasury)
+    // or whose relationship was re-parented during the closure
+    // (sales-invoices, supplier-bills, bank-accounts).
     for (const { route, line } of enabledMatrixRows()) {
-      assert.match(line, /\| (?:V1\.6 (?:FROZEN|MIGRATED)|V1\.7 ADDED) \| PASS \|/, `${route} needs final implementation state`);
+      assert.match(line, /\| (?:V1\.6 (?:FROZEN|MIGRATED)|V1\.7 ADDED|Finance CLOSURE) \| PASS \|/, `${route} needs final implementation state`);
       assert.doesNotMatch(line, /UNKNOWN|TODO|NOT REVIEWED|FRONTEND-LIMITED/);
     }
   });
