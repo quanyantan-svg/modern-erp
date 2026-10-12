@@ -18,6 +18,7 @@
     "test:mysql": "node scripts/gates/mysql-gate.mjs",
     "test:mysql:concurrency": "node scripts/gates/mysql-concurrency-gate.mjs",
     "test:mysql:performance": "node scripts/diagnostics/mysql-phase7c-performance.mjs",
+    "test:mysql:finance-concurrency": "node scripts/gates/mysql-finance-concurrency-gate.mjs",
     "test:finance:responsive": "node scripts/acceptance/finance-operations-responsive-uat.mjs",
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
     "reset-data": "node server/reset-data.js",
