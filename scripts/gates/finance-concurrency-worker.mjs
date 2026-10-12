@@ -62,6 +62,17 @@ const ACTOR = { id: 'finance-race-actor', role: 'role-accounting', permissions: 
   'ACCOUNTING_VIEW', 'VOUCHER_SUBMIT', 'REPORT_VIEW',
 ] };
 
+// Held-session state for RACE-15 deterministic close-anchor ordering.
+// The orchestrator acquires the anchor in worker A, runs a single body
+// of work in that same connection's transaction, and either commits or
+// rolls back. Worker B's later operations then see the committed state
+// — exactly the serialization the canonical `assertFinanceBusinessDateOpen`
+// + `closeBusiness` FOR UPDATE pattern guarantees in production.
+let heldSession = null;
+
+class HeldSessionBusy extends Error { constructor() { super('Worker is currently holding a session'); this.code = 'HELD_SESSION_BUSY'; } }
+class HeldSessionMissing extends Error { constructor() { super('Worker is not holding a session'); this.code = 'HELD_SESSION_MISSING'; } }
+
 function isoNow() { return new Date().toISOString(); }
 function nowMs() { return Date.now(); }
 function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
@@ -379,6 +390,104 @@ function closeBusinessDate(db, command) {
   });
 }
 
+function acquireCloseAnchor(command) {
+  if (heldSession) throw new HeldSessionBusy();
+  db.exec('BEGIN');
+  try {
+    const lock = lockForUpdate();
+    const row = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?${lock}`).get(command.closeType);
+    if (!row) {
+      db.exec('ROLLBACK');
+      throw Object.assign(new Error('ANCHOR_MISSING'), { code: 'ANCHOR_MISSING' });
+    }
+    heldSession = { closeType: command.closeType, closedThroughDate: row.closed_through_date || '' };
+    return { locked: true, closeType: command.closeType, closedThroughDate: heldSession.closedThroughDate };
+  } catch (error) {
+    if (!heldSession) throw error;
+    throw error;
+  }
+}
+
+function extendHeldWithCollection(command) {
+  if (!heldSession) throw new HeldSessionMissing();
+  // Continues the held transaction. The session is BEGIN'd and the
+  // close-anchor FOR UPDATE is already held; this adds the dated
+  // economic write under the same lock window.
+  if (heldSession.closeType !== 'AR') {
+    throw Object.assign(new Error('HELD_NOT_AR'), { code: 'HELD_NOT_AR' });
+  }
+  const targetTable = 'account_receivables';
+  const lock = lockForUpdate();
+  const open = db.prepare(`SELECT id, amount_cents, paid_cents, write_off_cents, item_class, item_kind, conversion_state FROM ${targetTable} WHERE id=?${lock}`).get(command.openItemId);
+  if (!open) throw Object.assign(new Error('OPEN_ITEM_NOT_FOUND'), { code: 'OPEN_ITEM_NOT_FOUND' });
+  if (open.item_class !== 'SOURCE' || open.item_kind !== 'FINAL' || open.conversion_state !== 'OPEN') {
+    throw Object.assign(new Error('NOT_FINAL_SOURCE'), { code: 'NOT_FINAL_SOURCE', itemKind: open.item_kind, conversionState: open.conversion_state });
+  }
+  const openCents = Number(open.amount_cents) - Number(open.paid_cents) - Number(open.write_off_cents);
+  if (command.amountCents > openCents) {
+    throw Object.assign(new Error('INSUFFICIENT_OPEN'), { code: 'INSUFFICIENT_OPEN' });
+  }
+  // Re-read the close anchor inside the same held transaction to
+  // re-validate the business date (mirrors production).
+  const closeAnchor = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?`).get('AR');
+  if (closeAnchor?.closed_through_date && command.businessDate <= closeAnchor.closed_through_date) {
+    throw Object.assign(new Error('CLOSED_DATE'), { code: 'CLOSED_DATE', through: closeAnchor.closed_through_date });
+  }
+  const collectionId = randomUUID();
+  db.prepare(`INSERT INTO payment_collections(id, collection_no, customer_id, receivable_id, amount_cents, payment_method, collection_date, remark, creator_id, created_at, status, bank_account, confirmed_by, confirmed_at, updated_at, external_reference, reversed_amount_cents, reversal_status, settlement_account_id, unapplied_amount_cents, explicit_unapplied)
+    VALUES(?,?,?,?,?,?,?,?,?,?,'CONFIRMED','',?,?,?,'',0,'NONE',?,0,0)`)
+    .run(collectionId, command.collectionNo || `RACE-${collectionId.slice(0, 8)}`,
+         command.customerId, command.openItemId, command.amountCents,
+         command.paymentMethod || 'BANK', command.businessDate, command.reason || '',
+         ACTOR.id, isoNow(), ACTOR.id, isoNow(), isoNow(),
+         command.settlementAccountId);
+  db.prepare(`UPDATE account_receivables SET paid_cents=paid_cents+?, updated_at=? WHERE id=?`)
+    .run(command.amountCents, isoNow(), command.openItemId);
+  recordSettlementMovement(db, {
+    accountId: command.settlementAccountId,
+    sourceType: 'COLLECTION',
+    sourceId: collectionId,
+    direction: 'IN',
+    amountCents: command.amountCents,
+    businessDate: command.businessDate,
+    actorId: ACTOR.id,
+  });
+  return { wrote: true, collectionId, amountCents: command.amountCents };
+}
+
+function extendHeldWithClose(command) {
+  if (!heldSession) throw new HeldSessionMissing();
+  if (heldSession.closeType !== command.closeType) {
+    throw Object.assign(new Error('HELD_MISMATCH'), { code: 'HELD_MISMATCH', held: heldSession.closeType, requested: command.closeType });
+  }
+  if (heldSession.closedThroughDate && heldSession.closedThroughDate >= command.closedThroughDate) {
+    throw Object.assign(new Error('ALREADY_CLOSED'), { code: 'ALREADY_CLOSED', through: heldSession.closedThroughDate });
+  }
+  db.prepare(`UPDATE finance_business_close_state SET closed_through_date=?, updated_at=?, updated_by=? WHERE close_type=?`)
+    .run(command.closedThroughDate, isoNow(), ACTOR.id, command.closeType);
+  return { wrote: true, closedThroughDate: command.closedThroughDate };
+}
+
+function commitHeld() {
+  if (!heldSession) throw new HeldSessionMissing();
+  const snapshot = heldSession;
+  db.exec('COMMIT');
+  heldSession = null;
+  return { committed: true, closeType: snapshot.closeType };
+}
+
+function rollbackHeld() {
+  if (!heldSession) throw new HeldSessionMissing();
+  const snapshot = heldSession;
+  db.exec('ROLLBACK');
+  heldSession = null;
+  return { rolledBack: true, closeType: snapshot.closeType };
+}
+
+function heldSessionState() {
+  return { held: Boolean(heldSession), closeType: heldSession?.closeType || null, closedThroughDate: heldSession?.closedThroughDate || null };
+}
+
 function postSalesInvoiceRaceSafe(db, command) {
   // Race-safe mirror of postSalesInvoice used only by RACE-10 / RACE-11
   // economic-uniqueness races. The PRODUCTION function (server/modules/
@@ -508,6 +617,13 @@ function execute(command) {
   if (command.action === 'treasury-transfer') return postTreasuryTransfer(db, command);
   if (command.action === 'statement-reconcile') return reconcileStatementLine(db, command);
   if (command.action === 'business-close') return closeBusinessDate(db, command);
+  // Held-session actions for RACE-15 deterministic close-anchor ordering.
+  if (command.action === 'acquire-anchor') return acquireCloseAnchor(command);
+  if (command.action === 'extend-held-collection') return extendHeldWithCollection(command);
+  if (command.action === 'extend-held-close') return extendHeldWithClose(command);
+  if (command.action === 'commit-held') return commitHeld();
+  if (command.action === 'rollback-held') return rollbackHeld();
+  if (command.action === 'held-state') return heldSessionState();
   if (command.action === 'hold') { sleep(command.ms); return { heldMs: command.ms }; }
   throw new Error(`Unknown action: ${command.action}`);
 }

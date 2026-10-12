@@ -531,34 +531,117 @@ describe('V22 Finance Operations real MySQL race matrix (15 races)', () => {
     assert.ok(matched <= 10000, `statement matched ${matched} must <= available 10000`);
   });
 
-  test('RACE-15 Business close vs dated transaction — serializable on close anchor', async () => {
+  test('RACE-15A transaction obtains anchor first → both succeed (commit before close)', async () => {
+    // Deterministic serialization: worker A acquires the close anchor
+    // (BEGIN + SELECT FOR UPDATE on finance_business_close_state) and
+    // commits the dated collection while still holding the anchor. Only
+    // after worker A's COMMIT response does the orchestrator dispatch
+    // the close action. This proves the canonical
+    // transaction-before-close ordering, not just that final-state
+    // happened to look acceptable.
     const dateLate = '2026-10-15';
     const openItemId = seedReceivableFinal(2000);
-    const results = await race([
-      { action: 'business-close', closeType: 'AR', closedThroughDate: dateLate },
-      { action: 'collection-allocate', openItemId, amountCents: 2000, customerId: CUSTOMER_ID, settlementAccountId: SETTLEMENT_BANK, businessDate: dateLate },
-    ]);
-    // Final-state invariants — close and dated write serialize on the SAME
-    // finance_business_close_state row, so two legal outcomes both exist:
-    //   (A) TRANSACTION first, then CLOSE     → both may succeed (transaction
-    //                                            committed with business_date
-    //                                            inside the range pre-close)
-    //   (B) CLOSE first, then TRANSACTION     → close commits first;
-    //                                            transaction rejects
-    // The forbidden outcome is: close commits first AND a transaction
-    // dated inside the newly-closed range commits afterward.
-    const finalClose = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get()?.closed_through_date || '';
-    const lateCollectionCommitted = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
-    if (finalClose === dateLate && lateCollectionCommitted > 0) {
-      assert.fail('FORBIDDEN outcome: close committed first AND dated collection committed after — serialization broke');
-    }
-    // CLOSE-then-COLLECTION: collection must have rejected with zero side effect.
-    // COLLECTION-then-CLOSE: both may succeed; verify the serialization lock protected the anchor.
-    if (finalClose === dateLate) {
-      assert.equal(lateCollectionCommitted, 0, 'close committed first; collection must have rejected');
-    }
-    // In either case: zero behind-the-close economic write.
+    const anchorWorker = apps[0];
+    const closeWorker = apps[1];
+
+    // Step 1: anchor acquisition on the AR anchor.
+    const anchorAcq = await anchorWorker.run({ action: 'acquire-anchor', closeType: 'AR' });
+    assert.equal(anchorAcq.locked, true, 'RACE-15A: anchor must be acquired by transaction worker');
+    assert.equal(anchorAcq.closeType, 'AR');
+    assert.equal(anchorAcq.closedThroughDate, '', 'RACE-15A: pre-state has empty closed_through_date');
+
+    // Step 2: dated economic write INSIDE the held transaction (same
+    // connection). Mirrors production's assertFinanceBusinessDateOpen
+    // holding the same lock during the write.
+    const extend = await anchorWorker.run({
+      action: 'extend-held-collection',
+      openItemId,
+      amountCents: 2000,
+      customerId: CUSTOMER_ID,
+      settlementAccountId: SETTLEMENT_BANK,
+      businessDate: dateLate,
+    });
+    assert.equal(extend.wrote, true, 'RACE-15A: collection must be written inside the held transaction');
+    assert.ok(extend.collectionId, 'RACE-15A: collectionId must be returned');
+
+    // Step 3: commit the held transaction. Lock is released.
+    const commit = await anchorWorker.run({ action: 'commit-held' });
+    assert.equal(commit.committed, true, 'RACE-15A: commit must succeed');
+
+    // Step 4: now dispatch the close. The close anchor is free; close
+    // worker can proceed without contention.
+    const close = await closeWorker.run({ action: 'business-close', closeType: 'AR', closedThroughDate: dateLate });
+    assert.equal(close.closedThroughDate, dateLate, 'RACE-15A: close must succeed after committed transaction');
+
+    // Final-state assertions for the legal both-success outcome.
+    const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
+    assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15A: closed_through_date advances to dateLate');
+    const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
+    assert.equal(collectionCount, 1, 'RACE-15A: exactly one dated collection row exists');
     const behindClose = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date > ?`).get(openItemId, dateLate)?.c || 0);
-    assert.equal(behindClose, 0, 'no committed collections past the closed boundary');
+    assert.equal(behindClose, 0, 'RACE-15A: zero collections past the closed boundary');
+    // No duplicate economic effect: only one collection; one close-history row.
+    const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
+    assert.equal(closureHistory, 1, 'RACE-15A: exactly one finance_business_closures history row');
+  });
+
+  test('RACE-15B close obtains anchor first → transaction rejects on closed date', async () => {
+    // Deterministic serialization: worker A acquires the close anchor
+    // first, writes the close-thru date, and commits. Only then does
+    // worker B attempt the dated collection — its assertFinanceBusinessDateOpen
+    // re-reads the anchor and must reject because dateLate is now closed.
+    const dateLate = '2026-10-15';
+    const openItemId = seedReceivableFinal(2000);
+    const anchorWorker = apps[0];
+    const transactionWorker = apps[1];
+
+    // Step 1: anchor acquisition.
+    const anchorAcq = await anchorWorker.run({ action: 'acquire-anchor', closeType: 'AR' });
+    assert.equal(anchorAcq.locked, true, 'RACE-15B: anchor must be acquired by close worker');
+
+    // Step 2: close write INSIDE the held transaction.
+    const extend = await anchorWorker.run({
+      action: 'extend-held-close',
+      closeType: 'AR',
+      closedThroughDate: dateLate,
+    });
+    assert.equal(extend.wrote, true, 'RACE-15B: close write must succeed inside the held transaction');
+    assert.equal(extend.closedThroughDate, dateLate);
+
+    // Step 3: commit close. Lock is released.
+    const commit = await anchorWorker.run({ action: 'commit-held' });
+    assert.equal(commit.committed, true, 'RACE-15B: close-commit must succeed');
+
+    // Step 4: dispatcher attempts dated collection on a fresh worker.
+    // assertFinanceBusinessDateOpen will see closed_through_date=dateLate
+    // and reject because businessDate=dateLate <= closedThroughDate.
+    const tx = await transactionWorker.run({
+      action: 'collection-allocate',
+      openItemId,
+      amountCents: 2000,
+      customerId: CUSTOMER_ID,
+      settlementAccountId: SETTLEMENT_BANK,
+      businessDate: dateLate,
+    }).then(
+      () => ({ ok: true }),
+      (reason) => ({ ok: false, reason }),
+    );
+    assert.equal(tx.ok, false, 'RACE-15B: dated transaction must be rejected after close committed');
+
+    // Final-state assertions: zero economic side-effect from rejected tx.
+    const finalCloseRow = db.prepare(`SELECT closed_through_date FROM finance_business_close_state WHERE close_type='AR'`).get();
+    assert.equal(finalCloseRow.closed_through_date, dateLate, 'RACE-15B: closed_through_date = dateLate after close-commit');
+    const collectionCount = Number(db.prepare(`SELECT COUNT(*) c FROM payment_collections WHERE receivable_id=? AND status='CONFIRMED' AND collection_date=?`).get(openItemId, dateLate)?.c || 0);
+    assert.equal(collectionCount, 0, 'RACE-15B: rejected transaction leaves zero collection rows');
+    const treasuryRows = Number(db.prepare(`SELECT COUNT(*) c FROM finance_treasury_movements WHERE source_type='COLLECTION'`).get()?.c || 0);
+    assert.equal(treasuryRows, 0, 'RACE-15B: rejected transaction leaves zero treasury movements');
+    const closureHistory = Number(db.prepare(`SELECT COUNT(*) c FROM finance_business_closures WHERE close_type='AR' AND closed_through_date=?`).get(dateLate)?.c || 0);
+    assert.equal(closureHistory, 1, 'RACE-15B: exactly one close-history row');
+    // Forbidden outcome must NOT have occurred: close committed + dated tx inside.
+    assert.notEqual(closureHistory > 0 && collectionCount > 0, true, 'RACE-15B: forbidden close-first-then-commit-inside-closed-range did not occur');
+    // Worker should have observed a CLOSED_DATE or ALREADY_CLOSED rejection code.
+    const codes = tx.reason?.code ? [tx.reason.code] : [];
+    assert.ok(codes.some((c) => ['CLOSED_DATE', 'ALREADY_CLOSED'].includes(c)) || /已结账/.test(tx.reason?.message || ''),
+      `RACE-15B: rejection reason must mention closed date; got ${JSON.stringify(tx.reason)}`);
   });
 });
