@@ -89,8 +89,11 @@ describe('SEPARATE default runtime proof + Processing Fee AP execution + Wave H 
       });
     }
     await fix.request('POST', `/api/purchase-receipts/${create.data.id}`, fix.tokens.warehouse, { action: 'confirm' });
-    const apCount = fix.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(create.data.id).n;
-    assert.equal(apCount, 0, 'SEPARATE unbilled confirm must NOT create AP');
+    const apRows = fix.db.prepare("SELECT item_kind,conversion_state FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").all(create.data.id);
+    assert.equal(apRows.filter((row) => row.item_kind === 'FINAL').length, 0, 'SEPARATE unbilled confirm must NOT create final AP');
+    assert.equal(apRows.length, 1, 'SEPARATE unbilled confirm creates one explicit provisional AP');
+    assert.equal(apRows[0].item_kind, 'PROVISIONAL');
+    assert.equal(apRows[0].conversion_state, 'OPEN');
     // Inventory increased
     const inv = fix.db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get();
     assert.ok(Number(inv.quantity) >= 10, 'inventory must reflect receipt');

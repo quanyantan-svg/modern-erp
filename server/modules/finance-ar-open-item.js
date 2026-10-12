@@ -15,7 +15,7 @@
 
 import { HttpError, allow, send, readJson, requiredText, optionalText } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { id } from '../db.js';
+import { id, transaction } from '../db.js';
 import { resolveRecognitionPolicy, RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
@@ -60,11 +60,11 @@ export async function createManualAccountReceivable(db, req, res, actor) {
     db.prepare(
       `INSERT INTO account_receivables(
          id, voucher_no, customer_id, source_type, source_id,
-         amount_cents, amount_cents, paid_cents, write_off_cents,
+         amount_cents, open_amount_cents, paid_cents, write_off_cents,
          status, due_date, business_date, recognition_mode, item_kind,
          conversion_state, settlement_account_id,
-         creator_id, created_at, updated_at)
-       VALUES(?,?,?,?,?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, 'FINAL', 'OPEN', NULL, ?, ?, ?)`
+         creator_id, created_at, updated_at, item_class)
+       VALUES(?,?,?,?,?, ?, ?, 0, 0, 'PENDING', ?, ?, ?, 'FINAL', 'OPEN', NULL, ?, ?, ?, 'SOURCE')`
     ).run(
       arId, `MANUAL-${now}-${arId.slice(0, 6)}`, customerId, sourceType, customerId,
       amount, amount, businessDate, businessDate, policy.mode, actor.id, now, now,
@@ -88,11 +88,11 @@ export function createProvisionalAR(db, source, amountCents, businessDate, party
   db.prepare(
     `INSERT INTO account_receivables(
        id, voucher_no, customer_id, source_type, source_id,
-       amount_cents, amount_cents, paid_cents, write_off_cents,
+       amount_cents, open_amount_cents, paid_cents, write_off_cents,
        status, due_date, business_date, recognition_mode, item_kind,
        conversion_state, settlement_account_id,
-       creator_id, created_at, updated_at)
-     VALUES(?,?,?,?,?, ?, ?, 0, 0, 'PENDING', ?, ?, 'PROVISIONAL_TO_FINANCIAL', 'PROVISIONAL', 'OPEN', NULL, ?, ?, ?)`
+       creator_id, created_at, updated_at, item_class)
+     VALUES(?,?,?,?,?, ?, ?, 0, 0, 'PENDING', ?, ?, 'PROVISIONAL_TO_FINANCIAL', 'PROVISIONAL', 'OPEN', NULL, ?, ?, ?, 'SOURCE')`
   ).run(
     arId, `PROV-${now}-${arId.slice(0, 6)}`, partyId, source.sourceType, source.sourceId,
     amountCents, amountCents, businessDate, businessDate, actor.id, now, now,
@@ -110,7 +110,5 @@ export function setRecognitionModeAndKind(db, openItemId, side, recognitionMode,
 
 function runInTransaction(db, fn) {
   if (db.isTransaction) { fn(); return; }
-  db.exec('BEGIN IMMEDIATE');
-  try { fn(); db.exec('COMMIT'); }
-  catch (e) { db.exec('ROLLBACK'); throw e; }
+  return transaction(db, fn);
 }

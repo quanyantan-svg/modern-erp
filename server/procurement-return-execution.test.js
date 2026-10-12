@@ -127,16 +127,17 @@ describe('Purchase Return 4-branch execution-level financial evidence', () => {
   test('SEPARATE unbilled: GRNI reversal; NO AP fabricated', async () => {
     const poId = await createApprovedPO(fix);
     const { receiptId, receiptItemId } = await createAndConfirmReceipt(fix, { poId, billingMode: 'SEPARATE' });
-    const apBefore = fix.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId).n;
-    assert.equal(apBefore, 0, 'SEPARATE unbilled must NOT create AP');
+    const apBefore = fix.db.prepare("SELECT id,item_kind,open_amount_cents FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId);
+    assert.equal(apBefore.item_kind, 'PROVISIONAL', 'SEPARATE unbilled creates provisional rather than final AP');
     const ret = await fix.request('POST', '/api/purchase-returns', fix.tokens.warehouse, {
       receiptId, supplierId: 'supplier-001', warehouseId: 'warehouse-001',
       items: [{ receiptItemId, productId: 'product-001', quantity: 5, unitPriceCents: 1000 }],
     });
     assert.equal(ret.status, 201, ret.data.error);
     await fix.request('POST', `/api/purchase-returns/${ret.data.id}`, fix.tokens.warehouse, { action: 'confirm' });
-    const apAfter = fix.db.prepare("SELECT COUNT(*) n FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=?").get(receiptId).n;
-    assert.equal(apAfter, 0, 'SEPARATE unbilled return must NOT create AP credit');
+    const apAfter = fix.db.prepare("SELECT item_kind,open_amount_cents FROM account_payables WHERE id=?").get(apBefore.id);
+    assert.equal(apAfter.item_kind, 'PROVISIONAL');
+    assert.equal(apAfter.open_amount_cents, Number(apBefore.open_amount_cents) - 5000, 'unbilled return reduces provisional AP without fabricating final AP');
     const invAfter = fix.db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity;
     assert.ok(Number(invAfter) >= 0, 'inventory must have moved (decreased or zero)');
     const lines = postedRoleLines(fix.db, ret.data.id);

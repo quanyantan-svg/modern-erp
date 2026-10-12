@@ -28,10 +28,10 @@ export function resolveRecognitionPolicy(db, side, sourceType, sourceId, busines
   const sourceOverride = db.prepare(
     `SELECT recognition_mode, effective_date
        FROM finance_recognition_policy
-      WHERE side=? AND source_type=? AND source_id=? AND active=1
+      WHERE side=? AND source_type=? AND source_id=? AND active=1 AND effective_date<=?
       ORDER BY effective_date DESC, id ASC
       LIMIT 1`
-  ).get(side, sourceType, sourceId);
+  ).get(side, sourceType, sourceId, businessDate || '9999-12-31');
   if (sourceOverride) {
     if (sourceOverride.effective_date && businessDate && businessDate < sourceOverride.effective_date) {
       // effective in future → fall through to site-wide
@@ -39,18 +39,40 @@ export function resolveRecognitionPolicy(db, side, sourceType, sourceId, busines
       return { mode: sourceOverride.recognition_mode, scope: 'SOURCE' };
     }
   }
+  const legacyDocument = sourceType === 'SALES_DELIVERY'
+    ? db.prepare('SELECT billing_mode FROM sales_deliveries WHERE id=?').get(sourceId)
+    : sourceType === 'PURCHASE_RECEIPT'
+      ? db.prepare('SELECT billing_mode FROM purchase_receipts WHERE id=?').get(sourceId)
+      : null;
+  if (legacyDocument) {
+    const direct = legacyDocument.billing_mode === 'LEGACY_DIRECT';
+    return { mode: direct ? RECOGNITION_MODES.DIRECT : RECOGNITION_MODES.INVOICE_DRIVEN, scope: 'LEGACY_DOCUMENT' };
+  }
   // 2. site-wide active default
   const siteWide = db.prepare(
     `SELECT recognition_mode
        FROM finance_recognition_policy
-      WHERE side=? AND source_type=? AND source_id IS NULL AND active=1
+      WHERE side=? AND source_type=? AND source_id IS NULL AND active=1 AND effective_date<=?
       ORDER BY effective_date DESC, id ASC
       LIMIT 1`
-  ).get(side, sourceType);
+  ).get(side, sourceType, businessDate || '9999-12-31');
   if (siteWide) return { mode: siteWide.recognition_mode, scope: 'SITE' };
 
   // 3. last-resort safe default = DIRECT_BUSINESS_OPEN_ITEM
   return { mode: 'DIRECT_BUSINESS_OPEN_ITEM', scope: 'FALLBACK' };
+}
+
+export function setSourceRecognitionPolicy(db, { side, sourceType, sourceId, recognitionMode, effectiveDate, actorId }) {
+  if (!VALID_MODES.has(recognitionMode)) throw new HttpError(400, 'recognitionMode 非法');
+  const existing = db.prepare('SELECT id FROM finance_recognition_policy WHERE side=? AND source_type=? AND source_id=? AND effective_date=?').get(side, sourceType, sourceId, effectiveDate);
+  const policyId = existing?.id || randomUUID();
+  const now = new Date().toISOString();
+  if (existing) {
+    db.prepare('UPDATE finance_recognition_policy SET recognition_mode=?,active=1,created_by=?,created_at=? WHERE id=?').run(recognitionMode, actorId, now, policyId);
+  } else {
+    db.prepare('INSERT INTO finance_recognition_policy(id,side,source_type,source_id,recognition_mode,effective_date,active,created_by,created_at) VALUES(?,?,?,?,?,?,1,?,?)').run(policyId, side, sourceType, sourceId, recognitionMode, effectiveDate, actorId, now);
+  }
+  return policyId;
 }
 
 export const RECOGNITION_MODES = Object.freeze({

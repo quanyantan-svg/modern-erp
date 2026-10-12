@@ -12,7 +12,7 @@
 function addColumn(db, sql) {
   try { db.exec(sql); }
   catch (error) {
-    if (!String(error.message).includes('duplicate column name')) throw error;
+    if (error?.code !== 'ER_DUP_FIELDNAME' && !String(error.message).toLowerCase().includes('duplicate column name')) throw error;
   }
 }
 
@@ -43,8 +43,16 @@ export function migrateV22FinanceWaveCInvoice(db) {
   // FO33 / FO34 — credit_state + credited_amount_cents on sales_invoices / supplier_bills
   // -----------------------------------------------------------------
   for (const table of ['sales_invoices', 'supplier_bills']) {
+    addColumn(db, `ALTER TABLE ${table} ADD COLUMN recognition_mode TEXT`);
+    addColumn(db, `ALTER TABLE ${table} ADD COLUMN open_item_id TEXT`);
+    addColumn(db, `ALTER TABLE ${table} ADD COLUMN provisional_origin_id TEXT`);
     addColumn(db, `ALTER TABLE ${table} ADD COLUMN credit_state TEXT NOT NULL DEFAULT 'NONE' CHECK(credit_state IN ('NONE','PARTIAL','FULL'))`);
     addColumn(db, `ALTER TABLE ${table} ADD COLUMN credited_amount_cents INTEGER NOT NULL DEFAULT 0`);
     addColumn(db, `ALTER TABLE ${table} ADD COLUMN remaining_creditable_amount_cents INTEGER NOT NULL DEFAULT 0`);
+  }
+  addColumn(db, `ALTER TABLE supplier_bills ADD COLUMN verification_state TEXT NOT NULL DEFAULT 'UNVERIFIED' CHECK(verification_state IN ('UNVERIFIED','VERIFIED','CERTIFIED','REJECTED'))`);
+  for (const table of ['sales_invoices', 'supplier_bills']) {
+    db.prepare(`UPDATE ${table} SET remaining_creditable_amount_cents=gross_cents-credited_amount_cents
+      WHERE remaining_creditable_amount_cents=0 AND gross_cents>credited_amount_cents`).run();
   }
 }

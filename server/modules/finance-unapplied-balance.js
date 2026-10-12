@@ -19,6 +19,7 @@ import { audit } from '../lib/audit.js';
 import { id, transaction } from '../db.js';
 import { refreshOpenAmount, assertOpenAmountReconciled } from './finance-refresh-open-amount.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { openItemSnapshot, unappliedBalanceSnapshot } from './settlement-core.js';
 
 export async function postAdvanceReceipt(db, req, res, actor) {
   // FO23 customer-side prepayment. Side=CUSTOMER, balance_type=PREPAYMENT.
@@ -63,6 +64,15 @@ export async function postBalanceApplication(db, req, res, actor) {
   const now = new Date().toISOString();
   runInTransaction(db, () => {
     assertFinanceBusinessDateOpen(db, side, businessDate);
+    const balance = db.prepare('SELECT * FROM settlement_unapplied_balances WHERE id=?').get(balanceId);
+    if (!balance || balance.status !== 'OPEN') throw new HttpError(409, '未核销余额不存在或已关闭');
+    const expectedBalanceSide = side === 'AR' ? 'CUSTOMER' : side === 'AP' ? 'SUPPLIER' : null;
+    if (!expectedBalanceSide || balance.side !== expectedBalanceSide) throw new HttpError(409, '余额方向与目标项目不匹配');
+    const target = openItemSnapshot(db, side, targetOpenItemId);
+    if (!target || target.row.item_class !== 'SOURCE' || target.row.item_kind !== 'FINAL' || target.row.conversion_state !== 'OPEN') throw new HttpError(409, '目标必须是可结算的最终应收/应付项目');
+    const partyId = side === 'AR' ? target.row.customer_id : target.row.supplier_id;
+    if (partyId !== balance.party_id) throw new HttpError(409, '余额与目标项目必须属于同一往来单位');
+    if (amount > target.openCents || amount > unappliedBalanceSnapshot(db, balanceId).remainingCents) throw new HttpError(409, '应用金额超过当前可用余额或目标未结金额');
     // delegate to balance_applications (existing mature primitive)
     db.prepare(
       `INSERT INTO balance_applications(id, application_no, side, balance_kind, balance_id, target_open_item_id, amount_cents, business_date, reason, status, creator_id, created_at)

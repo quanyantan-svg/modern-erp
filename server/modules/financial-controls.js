@@ -146,6 +146,7 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   if (balance.side !== expectedBalanceSide) throw new HttpError(409, '余额方向与目标项目不匹配');
   const snap = openItemSnapshot(db, side, body.openItemId);
   if (!snap || snap.row.item_class !== 'SOURCE') throw new HttpError(404, '权威应收/应付来源不存在');
+  if (snap.row.item_kind !== 'FINAL' || snap.row.conversion_state !== 'OPEN') throw new HttpError(409, '暂估或已转换项目不能用于余额应用');
   const partyId = side === 'AR' ? snap.row.customer_id : snap.row.supplier_id;
   if (partyId !== balance.party_id) throw new HttpError(409, '余额与目标项目必须属于同一往来单位');
   const amount = cents(body.amountCents); const available = unappliedBalanceSnapshot(db, balance.id).remainingCents;
@@ -153,6 +154,10 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   const id = randomUUID(); const at = now(); const applicationNo = number(side === 'AR' ? 'ARAPP' : 'APAPP');
   transaction(db, () => {
     assertFinanceBusinessDateOpen(db, side, date(body.businessDate));
+    const current = openItemSnapshot(db, side, body.openItemId);
+    if (!current || current.row.item_class !== 'SOURCE' || current.row.item_kind !== 'FINAL' || current.row.conversion_state !== 'OPEN') throw new HttpError(409, '目标应收/应付已不可用于余额应用');
+    const currentAvailable = unappliedBalanceSnapshot(db, balance.id).remainingCents;
+    if (amount > currentAvailable || amount > current.openCents) throw new HttpError(409, '应用金额超过当前可用余额或目标未结金额');
     db.prepare(`INSERT INTO balance_applications(id,application_no,side,balance_kind,balance_id,target_open_item_id,amount_cents,business_date,reason,creator_id,created_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(id, applicationNo, side, balance.balance_type, balance.id, body.openItemId, amount, date(body.businessDate), String(body.reason || ''), actor.id, at);
     refreshOpenItem(db, side, body.openItemId, at);
@@ -234,6 +239,7 @@ export async function createWriteOff(db, req, res, actor) {
   allow(actor, 'VOUCHER_SUBMIT'); const body = await readJson(req); const side = String(body.side || '').toUpperCase();
   if (!['AR', 'AP'].includes(side)) throw new HttpError(400, 'side 仅支持 AR/AP');
   const snap = openItemSnapshot(db, side, body.openItemId); if (!snap || snap.row.item_class !== 'SOURCE') throw new HttpError(404, '权威应收/应付不存在');
+  if (snap.row.item_kind !== 'FINAL' || snap.row.conversion_state !== 'OPEN') throw new HttpError(409, '暂估或已转换项目不能创建核销单');
   const amount = cents(body.amountCents); if (amount > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');
   const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(400, '请填写核销原因');
   const id = randomUUID(); const writeOffNo = number(side === 'AR' ? 'ARWO' : 'APWO');
@@ -263,7 +269,9 @@ export async function actOnWriteOff(db, req, res, actor, writeOffId, action, gen
   const replay = idempotencyReplay(db, 'WRITE_OFF_CONFIRM', writeOffId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
     assertFinanceBusinessDateOpen(db, row.side, row.business_date);
-    const snap = openItemSnapshot(db, row.side, row.open_item_id); if (row.amount_cents > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');
+    const snap = openItemSnapshot(db, row.side, row.open_item_id);
+    if (!snap || snap.row.item_class !== 'SOURCE' || snap.row.item_kind !== 'FINAL' || snap.row.conversion_state !== 'OPEN') throw new HttpError(409, '目标应收/应付已不可核销');
+    if (row.amount_cents > snap.openCents) throw new HttpError(409, '核销金额超过当前未结余额');
     const expense = db.prepare("SELECT id FROM accounting_subjects WHERE code='6401' AND active=1").get(); const control = db.prepare('SELECT id FROM accounting_subjects WHERE code=? AND active=1').get(row.side === 'AR' ? '1122' : '2202');
     const entries = row.side === 'AR'
       ? [{ subjectId: expense.id, direction: 'DEBIT', amountCents: row.amount_cents }, { subjectId: control.id, direction: 'CREDIT', amountCents: row.amount_cents }]

@@ -18,7 +18,7 @@ export function arSummary(db, res, actor) {
       SUM(paid_cents) AS total_paid_cents,
       SUM(write_off_cents) AS total_write_off_cents
     FROM account_receivables
-    WHERE status IN ('PENDING','PARTIAL')
+    WHERE status IN ('PENDING','PARTIAL') AND COALESCE(conversion_state,'OPEN')='OPEN'
     GROUP BY customer_id
   `).all();
   return send(res, 200, { rows });
@@ -35,7 +35,7 @@ export function apSummary(db, res, actor) {
       SUM(paid_cents) AS total_paid_cents,
       SUM(write_off_cents) AS total_write_off_cents
     FROM account_payables
-    WHERE status IN ('PENDING','PARTIAL')
+    WHERE status IN ('PENDING','PARTIAL') AND COALESCE(conversion_state,'OPEN')='OPEN'
     GROUP BY supplier_id
   `).all();
   return send(res, 200, { rows });
@@ -44,16 +44,12 @@ export function apSummary(db, res, actor) {
 export function arAging(db, res, actor) {
   allow(actor, 'FINANCE_AR_VIEW');
   const today = new Date().toISOString().slice(0, 10);
-  const rows = db.prepare(`
-    SELECT
-      CASE
-        WHEN ? > due_date THEN CAST((julianday(?) - julianday(due_date)) AS INTEGER)
-        ELSE 0
-      END AS days_overdue,
-      id, voucher_no, customer_id, due_date, open_amount_cents
-    FROM account_receivables
-    WHERE open_amount_cents > 0
-  `).all(today, today);
+  const todayMs = Date.parse(`${today}T00:00:00Z`);
+  const rows = db.prepare(`SELECT id,voucher_no,customer_id,due_date,open_amount_cents FROM account_receivables
+    WHERE open_amount_cents>0 AND COALESCE(conversion_state,'OPEN')='OPEN'`).all().map((row) => {
+    const dueMs = Date.parse(`${row.due_date}T00:00:00Z`);
+    return { days_overdue: Number.isFinite(dueMs) && todayMs > dueMs ? Math.floor((todayMs - dueMs) / 86400000) : 0, ...row };
+  });
   return send(res, 200, { rows });
 }
 

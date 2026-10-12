@@ -148,6 +148,8 @@ import {
 } from './modules/financial-controls.js';
 import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
 import { handleFinanceRoute } from './modules/finance-routes.js';
+import { recognizeFinanceExposure } from './modules/finance-recognition.js';
+import { RECOGNITION_MODES, setSourceRecognitionPolicy } from './modules/finance-recognition-policy.js';
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
@@ -5231,6 +5233,9 @@ async function createPurchaseReceipt(db, req, res, actor) {
   const receiptNo = 'PR' + Date.now().toString().slice(-10);
   transaction(db, () => {
     db.prepare('INSERT INTO purchase_receipts(id,receipt_no,purchase_order_id,supplier_id,warehouse_id,handler_id,status,total_cents,receipt_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(receiptId, receiptNo, purchaseOrderId, source.supplier_id, warehouseId, actor.id, input.totalCents, receiptDate, optionalText(remark, 500), actor.id, now, now, billingMode);
+    setSourceRecognitionPolicy(db, { side: 'AP', sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId,
+      recognitionMode: billingMode === 'LEGACY_DIRECT' ? RECOGNITION_MODES.DIRECT : RECOGNITION_MODES.PROVISIONAL,
+      effectiveDate: receiptDate, actorId: actor.id });
     replaceLogisticsItems(db, 'purchase_receipt_items', 'receipt_id', receiptId, input.items, 'purchase_order_item_id');
     configureTrackedDraftLines(db, { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, itemTable: 'purchase_receipt_items', foreignKey: 'receipt_id', rawItems: items, businessDate: receiptDate });
     audit(db, actor.id, 'CREATE', 'PURCHASE_RECEIPT', receiptId, '创建采购入库单 ' + receiptNo);
@@ -5332,10 +5337,15 @@ async function confirmPurchaseReceipt(db, req, res, actor, receiptId) {
         inventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'DEBIT',amountCents:Number(item.amount_cents),summary:'采购入库 '+receipt.receipt_no});
       }
       db.prepare('UPDATE purchase_receipts SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, receiptId);
-      if (locked.billing_mode === 'LEGACY_DIRECT') {
+      const recognition = recognizeFinanceExposure(db, {
+        side: 'AP', source: { sourceType: 'PURCHASE_RECEIPT', sourceId: receiptId, sourceNo: receipt.receipt_no },
+        invoice: null, amountCents: authoritative.totalCents, businessDate: locked.receipt_date,
+        partyId: receipt.supplier_id, paymentTermsDays: po.payment_terms_days,
+        actorId: actor.id, createdAt: receipt.created_at,
+      });
+      if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
         const supplierName = db.prepare('SELECT name FROM suppliers WHERE id = ?').get(receipt.supplier_id)?.name || '';
         createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'ACCOUNTS_PAYABLE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购入库 '+receipt.receipt_no+' '+supplierName}]});
-        ensurePayableSource(db, { id: receiptId, sourceType: 'PURCHASE_RECEIPT', sourceNo: receipt.receipt_no, partyId: receipt.supplier_id, businessDate: locked.receipt_date, paymentTermsDays: po.payment_terms_days, effectCents: authoritative.totalCents, creatorId: receipt.creator_id, createdAt: receipt.created_at });
       } else {
         createSystemVoucher(db,{sourceType:'PURCHASE_RECEIPT',sourceId:receiptId,businessDate:locked.receipt_date,actorId:actor.id,entries:[...inventoryEntries,{role:'GRNI',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'采购收货 GRNI '+receipt.receipt_no}]});
         if (locked.billing_mode === 'AUTO_BILL') autoBillReceipt(db, receiptId, actor.id, `AUTO_BILL:${receiptId}`);
@@ -5391,6 +5401,9 @@ async function createSalesDelivery(db, req, res, actor) {
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
     db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now, billingMode);
+    setSourceRecognitionPolicy(db, { side: 'AR', sourceType: 'SALES_DELIVERY', sourceId: deliveryId,
+      recognitionMode: billingMode === 'LEGACY_DIRECT' ? RECOGNITION_MODES.DIRECT : RECOGNITION_MODES.INVOICE_DRIVEN,
+      effectiveDate: deliveryDate, actorId: actor.id });
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
     configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: items, businessDate: deliveryDate });
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
@@ -5490,10 +5503,15 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
       createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
-      if (locked.billing_mode === 'LEGACY_DIRECT') {
+      const recognition = recognizeFinanceExposure(db, {
+        side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: delivery.delivery_no },
+        invoice: null, amountCents: authoritative.totalCents, businessDate: locked.delivery_date,
+        partyId: delivery.customer_id, paymentTermsDays: so.payment_terms_days,
+        actorId: actor.id, createdAt: delivery.created_at,
+      });
+      if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
         const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
         createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
-        ensureReceivableSource(db, { id: deliveryId, sourceType: 'SALES_DELIVERY', sourceNo: delivery.delivery_no, partyId: delivery.customer_id, businessDate: locked.delivery_date, paymentTermsDays: so.payment_terms_days, effectCents: authoritative.totalCents, creatorId: delivery.creator_id, createdAt: delivery.created_at });
       } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
@@ -5807,6 +5825,10 @@ async function confirmPurchaseReturn(db, req, res, actor, returnId) {
             remaining -= billCents;
           }
         }
+      }
+      if (grniAmountCents > 0) {
+        const provisionalAp = db.prepare("SELECT id FROM account_payables WHERE source_type='PURCHASE_RECEIPT' AND source_id=? AND item_class='SOURCE' AND item_kind='PROVISIONAL' AND conversion_state='OPEN'").get(locked.receipt_id);
+        if (provisionalAp) applyCreditAdjustment(db, { side: 'AP', adjustmentType: 'RETURN', sourceType: 'PURCHASE_RETURN', sourceId: apAmountCents > 0 ? `${returnId}:PROVISIONAL` : returnId, sourceNo: ret.return_no, targetOpenItemId: provisionalAp.id, partyId: ret.supplier_id, businessDate: locked.return_date, amountCents: grniAmountCents, actorId: actor.id, createdAt: now });
       }
       audit(db, actor.id, 'CONFIRM', 'PURCHASE_RETURN', returnId, '确认采购退货 ' + ret.return_no);
     });

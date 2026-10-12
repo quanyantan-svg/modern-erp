@@ -126,12 +126,12 @@ function statement(db, kind, url) {
   const sourceFk = ar ? 'receivable_id' : 'payable_id'; const documentFk = ar ? 'collection_id' : 'disbursement_id'; const settlementDate = ar ? 'collection_date' : 'disbursement_date';
   const partyId = url.searchParams.get(ar ? 'customer' : 'supplier'); if (!partyId) throw new HttpError(400, ar ? '请选择客户' : '请选择供应商');
   const from = url.searchParams.get('dateFrom') || '0000-01-01'; const to = url.searchParams.get('dateTo') || '9999-12-31';
-  const beforeSources = db.prepare(`SELECT COALESCE(SUM(amount_cents+adjustment_cents),0) n FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date<?`).get(partyId, from).n;
+  const beforeSources = db.prepare(`SELECT COALESCE(SUM(amount_cents+adjustment_cents),0) n FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date<? AND COALESCE(conversion_state,'OPEN')='OPEN'`).get(partyId, from).n;
   const beforeSettled = db.prepare(`SELECT COALESCE(SUM(ai.amount_cents),0) n FROM ${allocationTable} ai JOIN ${settlementTable} d ON d.id=ai.${documentFk} WHERE d.${partyColumn}=? AND d.status='CONFIRMED' AND d.${settlementDate}<?`).get(partyId, from).n;
-  const period = db.prepare(`SELECT COALESCE(SUM(CASE WHEN amount_cents>0 THEN amount_cents ELSE 0 END),0) increases,COALESCE(SUM(CASE WHEN adjustment_cents<0 THEN -adjustment_cents ELSE 0 END),0) adjustments FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ?`).get(partyId, from, to);
+  const period = db.prepare(`SELECT COALESCE(SUM(CASE WHEN amount_cents>0 THEN amount_cents ELSE 0 END),0) increases,COALESCE(SUM(CASE WHEN adjustment_cents<0 THEN -adjustment_cents ELSE 0 END),0) adjustments FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ? AND COALESCE(conversion_state,'OPEN')='OPEN'`).get(partyId, from, to);
   const settled = db.prepare(`SELECT COALESCE(SUM(ai.amount_cents),0) n FROM ${allocationTable} ai JOIN ${settlementTable} d ON d.id=ai.${documentFk} WHERE d.${partyColumn}=? AND d.status='CONFIRMED' AND d.${settlementDate} BETWEEN ? AND ?`).get(partyId, from, to).n;
   const requestedStatus = url.searchParams.get('status');
-  const rows = db.prepare(`SELECT * FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ?${requestedStatus ? ' AND status=?' : ''} ORDER BY business_date,created_at`).all(...(requestedStatus ? [partyId, from, to, statusFilter(requestedStatus)] : [partyId, from, to])).map((row) => sourceStatus(row, !ar));
+  const rows = db.prepare(`SELECT * FROM ${sourceTable} WHERE ${partyColumn}=? AND business_date BETWEEN ? AND ? AND COALESCE(conversion_state,'OPEN')='OPEN'${requestedStatus ? ' AND status=?' : ''} ORDER BY business_date,created_at`).all(...(requestedStatus ? [partyId, from, to, statusFilter(requestedStatus)] : [partyId, from, to])).map((row) => sourceStatus(row, !ar));
   const preRangeOutstandingCents = beforeSources - beforeSettled;
   return { rows, summary: { preRangeOutstandingCents, increaseCents: period.increases, adjustmentCents: period.adjustments, settledCents: settled, endingOutstandingCents: preRangeOutstandingCents + period.increases - period.adjustments - settled } };
 }
@@ -254,7 +254,7 @@ export async function confirmSettlementDocument(db, req, res, actor, kind, docum
     for (const item of allocations) {
       if (item.partyId !== document[cfg.partyColumn]) throw new HttpError(409, `核销记录必须属于同一${cfg.partyLabel}`);
       const snap = openItemSnapshot(db, cfg.side, item[cfg.sourceFk]);
-      if (!snap || snap.row.item_class !== 'SOURCE' || snap.openCents <= 0) throw new HttpError(409, '待核销项目已结清或非权威来源');
+      if (!snap || snap.row.item_class !== 'SOURCE' || snap.row.item_kind !== 'FINAL' || snap.openCents <= 0) throw new HttpError(409, '待核销项目已结清、非最终项目或非权威来源');
       if (item.amount_cents > snap.openCents) throw new HttpError(409, cfg.settledLabel ? '付款金额超过当前未付余额' : '收款金额超过当前未收余额');
       db.prepare(`UPDATE ${cfg.itemTable} SET open_before_cents=?,open_after_cents=? WHERE id=?`).run(snap.openCents, snap.openCents - item.amount_cents, item.id);
     }

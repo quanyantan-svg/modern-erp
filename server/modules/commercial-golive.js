@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { HttpError, allowAny, readJson, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource } from './settlement-core.js';
+import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource, openItemSnapshot } from './settlement-core.js';
 import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, receiveValue, systemHealth } from './financial-inventory.js';
 import { setInventoryQuantity } from '../lib/stock.js';
+import { recognizeFinanceExposure } from './finance-recognition.js';
+import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 
 const stamp = () => new Date().toISOString();
 const int = (value, label, { min = 0 } = {}) => {
@@ -116,10 +118,23 @@ export function createSalesInvoice(db, input) {
     const invoiceId = randomUUID(); const now = stamp(); const invoiceNo = allocateDocumentNumber(db, 'SI', date, input.idempotencyKey || `SI:${invoiceId}`);
     db.prepare(`INSERT INTO sales_invoices(id,invoice_no,customer_id,invoice_date,status,tax_mode,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at,idempotency_key)
       VALUES(?,?,?,?,'DRAFT',?,?,?,?,?,?,?,?)`).run(invoiceId, invoiceNo, input.customerId, date, input.taxMode || 'NO_TAX', totals.netCents, totals.taxCents, totals.grossCents, JSON.stringify(lines.map(x => x.tax)), input.actorId, now, input.idempotencyKey || null);
+    db.prepare('UPDATE sales_invoices SET remaining_creditable_amount_cents=? WHERE id=?').run(totals.grossCents, invoiceId);
     const insert = db.prepare(`INSERT INTO sales_invoice_items(id,invoice_id,delivery_id,delivery_item_id,product_id,document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,unit_price_cents,net_cents,tax_cents,gross_cents,tax_code,tax_rate_numerator,tax_rate_denominator,line_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const line of lines) insert.run(line.id, invoiceId, line.deliveryId, line.deliveryItemId, line.productId, line.qty.conversion.uomCode, line.qty.doc.num, line.qty.doc.den, line.qty.conversion.numerator, line.qty.conversion.denominator, line.qty.base.num, line.qty.base.den, line.unitPriceCents, line.netCents, line.taxCents, line.grossCents, line.tax.code, line.tax.rateNumerator, line.tax.rateDenominator, line.lineNo);
     audit(db, input.actorId, 'CREATE', 'SALES_INVOICE', invoiceId, `创建销售发票 ${invoiceNo}`);
     return db.prepare('SELECT * FROM sales_invoices WHERE id=?').get(invoiceId);
+  });
+}
+
+function salesInvoiceRecognitionSources(db, invoiceId) {
+  const lines = db.prepare(`SELECT i.delivery_id source_id,i.delivery_item_id source_line_id,i.base_quantity_num,i.base_quantity_den,i.gross_cents,d.delivery_no source_no
+    FROM sales_invoice_items i JOIN sales_deliveries d ON d.id=i.delivery_id WHERE i.invoice_id=? ORDER BY i.line_no`).all(invoiceId);
+  return lines.map((line) => {
+    const delivered = Number(db.prepare('SELECT quantity FROM sales_delivery_items WHERE id=?').get(line.source_line_id)?.quantity || 0);
+    const invoiced = Number(db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices h ON h.id=i.invoice_id WHERE i.delivery_item_id=? AND (h.status='POSTED' OR h.id=?)`).get(line.source_line_id, invoiceId).n);
+    const quantity = Number(line.base_quantity_num) / Number(line.base_quantity_den || 1);
+    return { sourceType: 'SALES_DELIVERY', sourceId: line.source_id, sourceNo: line.source_no, sourceLineId: line.source_line_id,
+      invoicedQuantity: Number.isSafeInteger(quantity) ? quantity : 0, invoicedAmountCents: Number(line.gross_cents), fullyInvoiced: invoiced + 1e-9 >= delivered };
   });
 }
 
@@ -132,12 +147,19 @@ export function postSalesInvoice(db, invoiceId, actorId) {
       const posted = db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices h ON h.id=i.invoice_id WHERE i.delivery_item_id=? AND h.status='POSTED' AND h.id<>?`).get(line.delivery_item_id, invoiceId).n;
       if (Number(posted) + line.base_quantity_num / line.base_quantity_den > Number(delivered) + 1e-9) throw new HttpError(409, '累计开票数量超过已交付数量');
     }
-    createSystemVoucher(db, { sourceType: 'SALES_INVOICE', sourceId: invoiceId, businessDate: invoice.invoice_date, actorId, entries: [
+    const sources = salesInvoiceRecognitionSources(db, invoiceId);
+    if (!sources.length) throw new HttpError(409, '销售发票缺少已确认出库来源');
+    const recognition = recognizeFinanceExposure(db, {
+      side: 'AR', source: sources[0], sources,
+      invoice: { id: invoiceId, no: invoice.invoice_no, type: 'SALES_INVOICE' },
+      amountCents: Number(invoice.gross_cents), businessDate: invoice.invoice_date,
+      partyId: invoice.customer_id, actorId, createdAt: invoice.created_at,
+    });
+    if (recognition.recognitionMode !== RECOGNITION_MODES.DIRECT) createSystemVoucher(db, { sourceType: 'SALES_INVOICE', sourceId: invoiceId, businessDate: invoice.invoice_date, actorId, entries: [
       { role: 'ACCOUNTS_RECEIVABLE', direction: 'DEBIT', amountCents: invoice.gross_cents, summary: `销售发票 ${invoice.invoice_no}` },
       { role: 'SALES_REVENUE', direction: 'CREDIT', amountCents: invoice.net_cents, summary: '销售收入' },
       ...(invoice.tax_cents ? [{ role: 'OUTPUT_TAX_PAYABLE', direction: 'CREDIT', amountCents: invoice.tax_cents, summary: '销项税' }] : []),
     ] });
-    ensureReceivableSource(db, { id: invoiceId, sourceType: 'SALES_INVOICE', sourceNo: invoice.invoice_no, partyId: invoice.customer_id, businessDate: invoice.invoice_date, effectCents: invoice.gross_cents, creatorId: invoice.creator_id, createdAt: invoice.created_at });
     db.prepare("UPDATE sales_invoices SET status='POSTED',posted_by=?,posted_at=? WHERE id=?").run(actorId, stamp(), invoiceId); audit(db, actorId, 'POST', 'SALES_INVOICE', invoiceId, `过账 ${invoice.invoice_no}`);
     return db.prepare('SELECT * FROM sales_invoices WHERE id=?').get(invoiceId);
   });
@@ -164,9 +186,22 @@ export function createSupplierBill(db, input) {
     const id = randomUUID(); const now = stamp(); const no = allocateDocumentNumber(db, 'PB', input.billDate, input.idempotencyKey || `PB:${id}`);
     db.prepare(`INSERT INTO supplier_bills(id,bill_no,supplier_id,supplier_invoice_no,bill_date,status,tax_mode,net_cents,tax_cents,gross_cents,grni_cents,variance_cents,tax_snapshot_json,creator_id,created_at,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(id, no, input.supplierId, input.supplierInvoiceNo, input.billDate, matched ? 'DRAFT' : 'WAITING_MATCH', input.taxMode || 'NO_TAX', totals.netCents, totals.taxCents, totals.grossCents, grni, totals.netCents - grni, JSON.stringify(lines.map(x => x.tax)), input.actorId, now, input.idempotencyKey || null);
+    db.prepare('UPDATE supplier_bills SET remaining_creditable_amount_cents=? WHERE id=?').run(totals.grossCents, id);
     const insert = db.prepare(`INSERT INTO supplier_bill_items(id,bill_id,receipt_id,receipt_item_id,purchase_order_item_id,product_id,document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,unit_price_cents,matched_unit_price_cents,net_cents,tax_cents,gross_cents,tax_code,tax_rate_numerator,tax_rate_denominator,line_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     for (const x of lines) insert.run(x.id, id, x.source?.receipt_id || null, x.source?.id || null, x.source?.purchase_order_item_id || null, x.productId, x.qty.conversion.uomCode, x.qty.doc.num, x.qty.doc.den, x.qty.conversion.numerator, x.qty.conversion.denominator, x.qty.base.num, x.qty.base.den, x.unitPriceCents, x.source?.unit_price_cents ?? null, x.netCents, x.taxCents, x.grossCents, x.tax.code, x.tax.rateNumerator, x.tax.rateDenominator, x.lineNo);
     return db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(id);
+  });
+}
+
+function supplierBillRecognitionSources(db, billId) {
+  const lines = db.prepare(`SELECT i.receipt_id source_id,i.receipt_item_id source_line_id,i.base_quantity_num,i.base_quantity_den,i.gross_cents,r.receipt_no source_no
+    FROM supplier_bill_items i JOIN purchase_receipts r ON r.id=i.receipt_id WHERE i.bill_id=? ORDER BY i.line_no`).all(billId);
+  return lines.map((line) => {
+    const received = Number(db.prepare('SELECT quantity FROM purchase_receipt_items WHERE id=?').get(line.source_line_id)?.quantity || 0);
+    const invoiced = Number(db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM supplier_bill_items i JOIN supplier_bills h ON h.id=i.bill_id WHERE i.receipt_item_id=? AND (h.status='POSTED' OR h.id=?)`).get(line.source_line_id, billId).n);
+    const quantity = Number(line.base_quantity_num) / Number(line.base_quantity_den || 1);
+    return { sourceType: 'PURCHASE_RECEIPT', sourceId: line.source_id, sourceNo: line.source_no, sourceLineId: line.source_line_id,
+      invoicedQuantity: Number.isSafeInteger(quantity) ? quantity : 0, invoicedAmountCents: Number(line.gross_cents), fullyInvoiced: invoiced + 1e-9 >= received };
   });
 }
 
@@ -174,13 +209,20 @@ export function postSupplierBill(db, billId, actorId) {
   return atomic(db, () => {
     const bill = db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId); if (!bill) throw new HttpError(404, '供应商账单不存在'); if (bill.status === 'POSTED') return bill; if (bill.status === 'WAITING_MATCH') throw new HttpError(409, '发票尚未完成收货匹配'); if (bill.status !== 'DRAFT') throw new HttpError(409, '只能过账草稿账单');
     assertFinancialPeriodsOpen(db, bill.bill_date); const variance = Number(bill.variance_cents);
-    createSystemVoucher(db, { sourceType: 'SUPPLIER_BILL', sourceId: billId, businessDate: bill.bill_date, actorId, entries: [
+    const sources = supplierBillRecognitionSources(db, billId);
+    if (!sources.length) throw new HttpError(409, '供应商账单缺少已确认收货来源');
+    const recognition = recognizeFinanceExposure(db, {
+      side: 'AP', source: sources[0], sources,
+      invoice: { id: billId, no: bill.bill_no, type: 'SUPPLIER_BILL' },
+      amountCents: Number(bill.gross_cents), businessDate: bill.bill_date,
+      partyId: bill.supplier_id, actorId, createdAt: bill.created_at,
+    });
+    if (recognition.recognitionMode !== RECOGNITION_MODES.DIRECT) createSystemVoucher(db, { sourceType: 'SUPPLIER_BILL', sourceId: billId, businessDate: bill.bill_date, actorId, entries: [
       { role: 'GRNI', direction: 'DEBIT', amountCents: bill.grni_cents, summary: `结转 GRNI ${bill.bill_no}` },
       ...(bill.tax_cents ? [{ role: 'INPUT_TAX_RECEIVABLE', direction: 'DEBIT', amountCents: bill.tax_cents, summary: '进项税' }] : []),
       ...(variance > 0 ? [{ role: 'PURCHASE_PRICE_VARIANCE', direction: 'DEBIT', amountCents: variance, summary: '采购价差' }] : variance < 0 ? [{ role: 'PURCHASE_PRICE_VARIANCE', direction: 'CREDIT', amountCents: -variance, summary: '采购价差' }] : []),
       { role: 'ACCOUNTS_PAYABLE', direction: 'CREDIT', amountCents: bill.gross_cents, summary: `供应商账单 ${bill.bill_no}` },
     ] });
-    ensurePayableSource(db, { id: billId, sourceType: 'SUPPLIER_BILL', sourceNo: bill.bill_no, partyId: bill.supplier_id, businessDate: bill.bill_date, effectCents: bill.gross_cents, creatorId: bill.creator_id, createdAt: bill.created_at });
     db.prepare("UPDATE supplier_bills SET status='POSTED',posted_by=?,posted_at=? WHERE id=?").run(actorId, stamp(), billId); return db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);
   });
 }
@@ -192,6 +234,8 @@ export function createCommercialCreditNote(db, input) {
     assertFinancialPeriodsOpen(db, input.creditDate);
     const sales = input.side === 'AR'; const header = db.prepare(`SELECT * FROM ${sales ? 'sales_invoices' : 'supplier_bills'} WHERE id=? AND status='POSTED'`).get(input.sourceId); if (!header) throw new HttpError(409, '只能对已过账发票/账单开具贷项');
     const gross = int(input.grossCents ?? header.gross_cents, '贷项总额', { min: 1 }); if (gross > header.gross_cents) throw new HttpError(409, '贷项不能超过原单');
+    const remainingCreditable = Number(header.gross_cents) - Number(header.credited_amount_cents || 0);
+    if (gross > remainingCreditable) throw new HttpError(409, '贷记金额超过发票剩余可贷记金额');
     const net = roundRational(BigInt(gross) * BigInt(header.net_cents), header.gross_cents); const tax = gross - net; const id = randomUUID(); const no = allocateDocumentNumber(db, sales ? 'SCN' : 'PCN', input.creditDate, input.idempotencyKey || `CN:${id}`); const now = stamp();
     const adjustmentType = ['RETURN', 'DISCOUNT', 'OTHER'].includes(input.adjustmentType) ? input.adjustmentType : 'OTHER';
     db.prepare(`INSERT INTO commercial_credit_notes(id,credit_no,side,source_type,source_id,party_id,credit_date,reason,status,net_cents,tax_cents,gross_cents,tax_snapshot_json,creator_id,created_at,posted_by,posted_at,idempotency_key,adjustment_type) VALUES(?,?,?,?,?,?,?,?, 'POSTED',?,?,?,?,?,?,?,?,?,?)`)
@@ -211,8 +255,23 @@ export function createCommercialCreditNote(db, input) {
     createSystemVoucher(db, { sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: id, businessDate: input.creditDate, actorId: input.actorId, entries: sales ? [
       { role: 'SALES_REVENUE', direction: 'DEBIT', amountCents: net, summary: no }, ...(tax ? [{ role: 'OUTPUT_TAX_PAYABLE', direction: 'DEBIT', amountCents: tax, summary: no }] : []), { role: 'ACCOUNTS_RECEIVABLE', direction: 'CREDIT', amountCents: gross, summary: no },
     ] : supplierEntries });
-    const open = db.prepare(`SELECT id FROM ${sales ? 'account_receivables' : 'account_payables'} WHERE source_type=? AND source_id=?`).get(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id);
-    applyCreditAdjustment(db, { side: input.side, adjustmentType, sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: id, sourceNo: no, targetOpenItemId: open.id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: gross, actorId: input.actorId, createdAt: now });
+    const openItemTable = sales ? 'account_receivables' : 'account_payables';
+    let targets = header.open_item_id ? [{ id: header.open_item_id }] : db.prepare(`SELECT id FROM ${openItemTable} WHERE source_type=? AND source_id=?`).all(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id);
+    if (!targets.length) targets = db.prepare(`SELECT DISTINCT o.id FROM finance_invoice_source_links l JOIN ${openItemTable} o ON o.source_type=l.source_type AND o.source_id=l.source_id WHERE l.invoice_id=? AND l.invoice_side=? ORDER BY o.id`).all(header.id, sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL');
+    if (!targets.length) throw new HttpError(409, '发票未关联可贷记的最终 open item');
+    let unapplied = gross;
+    for (let index = 0; index < targets.length && unapplied > 0; index += 1) {
+      const snapshot = openItemSnapshot(db, input.side, targets[index].id);
+      if (!snapshot || snapshot.row.item_kind !== 'FINAL') continue;
+      const amount = Math.min(unapplied, snapshot.openCents);
+      if (amount <= 0) continue;
+      applyCreditAdjustment(db, { side: input.side, adjustmentType, sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: targets.length === 1 ? id : `${id}:${index + 1}`, sourceNo: no, targetOpenItemId: targets[index].id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: amount, actorId: input.actorId, createdAt: now });
+      unapplied -= amount;
+    }
+    if (unapplied > 0) throw new HttpError(409, '贷记金额超过关联 open item 可用余额');
+    const credited = Number(header.credited_amount_cents || 0) + gross;
+    db.prepare(`UPDATE ${sales ? 'sales_invoices' : 'supplier_bills'} SET credited_amount_cents=?,remaining_creditable_amount_cents=?,credit_state=? WHERE id=?`)
+      .run(credited, Number(header.gross_cents) - credited, credited === Number(header.gross_cents) ? 'FULL' : 'PARTIAL', header.id);
     return db.prepare('SELECT * FROM commercial_credit_notes WHERE id=?').get(id);
   });
 }
@@ -232,7 +291,7 @@ export function commercialReconciliation(db) {
     ['SALES_INVOICE', 'sales_invoices', 'account_receivables', 'gross_cents', 'ACCOUNTS_RECEIVABLE'],
     ['SUPPLIER_BILL', 'supplier_bills', 'account_payables', 'gross_cents', 'ACCOUNTS_PAYABLE'],
   ];
-  for (const [source, table, ledger, amount, role] of specs) for (const row of db.prepare(`SELECT h.id,h.${amount} amount,COALESCE(o.amount_cents,0) subledger FROM ${table} h LEFT JOIN ${ledger} o ON o.source_type=? AND o.source_id=h.id WHERE h.status='POSTED'`).all(source)) {
+  for (const [source, table, ledger, amount, role] of specs) for (const row of db.prepare(`SELECT h.id,h.${amount} amount,COALESCE(o.amount_cents,0) subledger FROM ${table} h LEFT JOIN ${ledger} o ON o.source_type=? AND o.source_id=h.id WHERE h.status='POSTED' AND COALESCE(h.recognition_mode,'INVOICE_DRIVEN_OPEN_ITEM')<>'DIRECT_BUSINESS_OPEN_ITEM'`).all(source)) {
     const gl = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN e.direction=(SELECT direction FROM accounting_subjects s JOIN account_role_mappings m ON m.subject_id=s.id WHERE m.role_code=?) THEN e.amount_cents ELSE -e.amount_cents END),0) n FROM accounting_entries e JOIN accounting_vouchers v ON v.id=e.voucher_id WHERE v.source_type=? AND v.source_id=? AND v.status='POSTED' AND e.subject_id=(SELECT subject_id FROM account_role_mappings WHERE role_code=?)`).get(role, source, row.id, role).n);
     checks.push({ code: `${source}_TO_SUBLEDGER_GL`, sourceId: row.id, expectedCents: row.amount, subledgerCents: row.subledger, glCents: gl, status: row.amount === row.subledger && row.amount === gl ? 'PASS' : 'FAIL', severity: 'BLOCKING' });
   }
