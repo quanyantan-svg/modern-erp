@@ -55,13 +55,13 @@ export function applyTreasuryMovement(db, input) {
        reversal_of_movement_id, movement_group_id, accounting_event_id, status, idempotency_key,
        created_by, created_at)
      VALUES(
-       $id, $sa, $d, $a, $bd, $st, $si, $ct, $ci, $er, $rev, $mg, $ae, 'CONFIRMED', $ik, $cb, $ca)`
-  ).run({
-    $id: movementId, $sa: settlementAccountId, $d: direction, $a: amountCents, $bd: businessDate,
-    $st: sourceType, $si: sourceId, $ct: input.counterpartyType || '', $ci: input.counterpartyId || '', $er: input.externalReference || '',
-    $rev: input.reversalOfMovementId || null, $mg: movementGroupId, $ae: input.accountingEventId || null,
-    $ik: idempotencyKey, $cb: input.createdBy || 'system', $ca: now,
-  });
+       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?, ?)`
+  ).run(
+    movementId, settlementAccountId, direction, amountCents, businessDate,
+    sourceType, sourceId, input.counterpartyType || '', input.counterpartyId || '', input.externalReference || '',
+    input.reversalOfMovementId || null, movementGroupId, input.accountingEventId || null,
+    idempotencyKey, input.createdBy || 'system', now,
+  );
   refreshSettlementAccountBalance(db, settlementAccountId);
   audit(db, input.createdBy || 'system', 'TREASURY_MOVEMENT', movementId, idempotencyKey);
   return movementId;

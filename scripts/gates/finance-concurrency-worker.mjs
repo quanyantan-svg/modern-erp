@@ -40,6 +40,7 @@ import { transaction } from '../../server/db.js';
 import { applyTreasuryMovement } from '../../server/modules/finance-treasury-movement.js';
 import { recordSettlementMovement } from '../../server/modules/financial-controls.js';
 import { assertFinanceBusinessDateOpen } from '../../server/modules/finance-business-close.js';
+import { unappliedBalanceSnapshot } from '../../server/modules/settlement-core.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -216,7 +217,8 @@ function applyBalanceApplication(db, command) {
     const lock = lockForUpdate();
     const balance = db.prepare(`SELECT * FROM settlement_unapplied_balances WHERE id=?${lock}`).get(command.balanceId);
     if (!balance) throw Object.assign(new Error('BALANCE_NOT_FOUND'), { code: 'BALANCE_NOT_FOUND' });
-    if (Number(balance.remaining_cents) < command.amountCents) {
+    const remainingCents = unappliedBalanceSnapshot(db, balance.id)?.remainingCents ?? 0;
+    if (remainingCents < command.amountCents) {
       throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { code: 'INSUFFICIENT_BALANCE' });
     }
     const targetTable = command.side === 'AR' ? 'account_receivables' : 'account_payables';
@@ -234,11 +236,9 @@ function applyBalanceApplication(db, command) {
       .run(applicationId, `RACE-APP-${applicationId.slice(0, 8)}`, side, balance.balance_type,
            balance.id, command.openItemId, command.amountCents, command.businessDate,
            command.reason || '', ACTOR.id, isoNow());
-    db.prepare(`UPDATE settlement_unapplied_balances SET remaining_cents=remaining_cents-?, updated_at=? WHERE id=?`)
-      .run(command.amountCents, isoNow(), balance.id);
     db.prepare(`UPDATE ${targetTable} SET paid_cents=paid_cents+?, updated_at=? WHERE id=?`)
       .run(command.amountCents, isoNow(), command.openItemId);
-    return { applicationId, remainingAfter: Number(balance.remaining_cents) - command.amountCents };
+    return { applicationId, remainingAfter: remainingCents - command.amountCents };
   });
 }
 
@@ -247,16 +247,18 @@ function refundFromBalance(db, command) {
     const lock = lockForUpdate();
     const balance = db.prepare(`SELECT * FROM settlement_unapplied_balances WHERE id=?${lock}`).get(command.balanceId);
     if (!balance) throw Object.assign(new Error('BALANCE_NOT_FOUND'), { code: 'BALANCE_NOT_FOUND' });
-    if (Number(balance.remaining_cents) < command.amountCents) {
+    const remainingCents = unappliedBalanceSnapshot(db, balance.id)?.remainingCents ?? 0;
+    if (remainingCents < command.amountCents) {
       throw Object.assign(new Error('INSUFFICIENT_BALANCE'), { code: 'INSUFFICIENT_BALANCE' });
     }
     assertFinanceBusinessDateOpen(db, balance.side === 'CUSTOMER' ? 'AR' : 'AP', command.businessDate);
     const refundId = randomUUID();
     const refundNo = `RACE-REF-${refundId.slice(0, 8)}`;
-    db.prepare(`INSERT INTO financial_refunds(id, refund_no, side, party_id, settlement_account_id, amount_cents, business_date, reason, status, creator_id, created_at)
-      VALUES(?,?,?,?,?,?,?,?,'CONFIRMED',?,?)`)
-      .run(refundId, refundNo, balance.side, balance.party_id, command.settlementAccountId,
-           command.amountCents, command.businessDate, command.reason || '', ACTOR.id, isoNow());
+    db.prepare(`INSERT INTO financial_refunds(id, refund_no, side, balance_id, party_id, amount_cents, business_date, settlement_account_id, payment_method, reference, reason, status, creator_id, created_at)
+      VALUES(?,?,?,?,?,?,?,?,'BANK','',?,'CONFIRMED',?,?)`)
+      .run(refundId, refundNo, balance.side, balance.id, balance.party_id,
+           command.amountCents, command.businessDate, command.settlementAccountId,
+           command.reason || '', ACTOR.id, isoNow());
     const direction = balance.side === 'CUSTOMER' ? 'OUT' : 'IN';
     recordSettlementMovement(db, {
       accountId: command.settlementAccountId,
@@ -267,8 +269,6 @@ function refundFromBalance(db, command) {
       businessDate: command.businessDate,
       actorId: ACTOR.id,
     });
-    db.prepare(`UPDATE settlement_unapplied_balances SET remaining_cents=remaining_cents-?, updated_at=? WHERE id=?`)
-      .run(command.amountCents, isoNow(), balance.id);
     return { refundId, refundNo };
   });
 }
@@ -314,18 +314,23 @@ function convertProvisional(db, command) {
 function transferOpenItem(db, command) {
   return transaction(db, () => {
     const lock = lockForUpdate();
-    const source = db.prepare(`SELECT * FROM account_receivables WHERE id=?${lock}`).get(command.sourceOpenItemId);
+    const side = command.side === 'AP' ? 'AP' : 'AR';
+    const table = side === 'AP' ? 'account_payables' : 'account_receivables';
+    const partyColumn = side === 'AP' ? 'supplier_id' : 'customer_id';
+    const source = db.prepare(`SELECT * FROM ${table} WHERE id=?${lock}`).get(command.sourceOpenItemId);
     if (!source) throw Object.assign(new Error('SOURCE_NOT_FOUND'), { code: 'SOURCE_NOT_FOUND' });
     if (Number(source.amount_cents - source.paid_cents - source.write_off_cents) !== command.amountCents) {
       throw Object.assign(new Error('STATE_DRIFT'), { code: 'STATE_DRIFT' });
     }
-    assertFinanceBusinessDateOpen(db, 'AR', command.businessDate);
-    db.prepare(`UPDATE account_receivables SET status='COMPLETED', updated_at=? WHERE id=?`)
+    assertFinanceBusinessDateOpen(db, side, command.businessDate);
+    db.prepare(`UPDATE ${table} SET status='COMPLETED', updated_at=? WHERE id=?`)
       .run(isoNow(), command.sourceOpenItemId);
     const targetId = randomUUID();
-    db.prepare(`INSERT INTO account_receivables(id, voucher_no, customer_id, source_type, source_id, source_no, amount_cents, paid_cents, write_off_cents, status, due_date, business_date, recognition_mode, item_kind, conversion_state, item_class, creator_id, created_at, updated_at)
+    db.prepare(`INSERT INTO ${table}(id, voucher_no, ${partyColumn}, source_type, source_id, source_no, amount_cents, paid_cents, write_off_cents, status, due_date, business_date, recognition_mode, item_kind, conversion_state, item_class, creator_id, created_at, updated_at)
       VALUES(?,?,?,?,?,?,?,0,0,'PENDING',?,?,?,?, 'OPEN', 'SOURCE', ?, ?, ?)`)
-      .run(targetId, `CT-${targetId.slice(0, 8)}`, command.targetCustomerId || source.customer_id,
+      .run(targetId, `CT-${targetId.slice(0, 8)}`, side === 'AP'
+        ? (command.targetSupplierId || source.supplier_id)
+        : (command.targetCustomerId || source.customer_id),
            'COUNTERPARTY_TRANSFER', command.transferId || randomUUID(),
            command.transferId || '',
            Number(source.amount_cents), command.dueDate || command.businessDate,
@@ -370,18 +375,20 @@ function reconcileStatementLine(db, command) {
     const lock = lockForUpdate();
     const line = db.prepare(`SELECT * FROM bank_statement_items WHERE id=?${lock}`).get(command.statementLineId);
     if (!line) throw Object.assign(new Error('LINE_NOT_FOUND'), { code: 'LINE_NOT_FOUND' });
-    if (Number(line.matched_cents || 0) + command.amountCents > Number(line.amount_cents)) {
+    const lineMatched = Number(db.prepare(`SELECT COALESCE(SUM(matched_amount_cents),0) s FROM finance_bank_reconciliation_matches WHERE statement_line_id=?`).get(command.statementLineId)?.s || 0);
+    if (lineMatched + command.amountCents > Number(line.amount_cents)) {
       throw Object.assign(new Error('STATEMENT_EXCEEDS'), { code: 'STATEMENT_EXCEEDS' });
     }
     const book = db.prepare(`SELECT * FROM finance_treasury_movements WHERE id=?${lock}`).get(command.bookMovementId);
     if (!book) throw Object.assign(new Error('BOOK_NOT_FOUND'), { code: 'BOOK_NOT_FOUND' });
-    const used = Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) s FROM bank_statement_items WHERE matched_cents>0 AND id=?`).get(command.statementLineId)?.s || 0);
+    const used = Number(db.prepare(`SELECT COALESCE(SUM(matched_amount_cents),0) s FROM finance_bank_reconciliation_matches WHERE treasury_movement_id=?`).get(command.bookMovementId)?.s || 0);
     if (command.amountCents > Number(book.amount_cents) - used) {
       throw Object.assign(new Error('BOOK_INSUFFICIENT'), { code: 'BOOK_INSUFFICIENT' });
     }
-    db.prepare(`UPDATE bank_statement_items SET matched_cents=matched_cents+?, updated_at=? WHERE id=?`)
-      .run(command.amountCents, isoNow(), command.statementLineId);
-    return { statementMatchedAfter: Number(line.matched_cents || 0) + command.amountCents };
+    db.prepare(`INSERT INTO finance_bank_reconciliation_matches(id,reconciliation_id,statement_line_id,treasury_movement_id,matched_amount_cents,match_method,matched_by,matched_at)
+      VALUES(?,?,?,?,?,'MANUAL',?,?)`)
+      .run(randomUUID(), command.reconciliationId, command.statementLineId, command.bookMovementId, command.amountCents, ACTOR.id, isoNow());
+    return { statementMatchedAfter: lineMatched + command.amountCents };
   });
 }
 
@@ -545,6 +552,15 @@ function heldSessionState() {
   return { held: Boolean(heldSession), locked: heldSession?.locked || false, closeType: heldSession?.closeType || null, closedThroughDate: heldSession?.closedThroughDate || null };
 }
 
+function connectionIdentity() {
+  const row = db.prepare('SELECT CONNECTION_ID() connection_id').get();
+  const connectionId = Number(row?.connection_id);
+  if (!Number.isSafeInteger(connectionId) || connectionId <= 0) {
+    throw Object.assign(new Error('Unable to resolve MySQL CONNECTION_ID()'), { code: 'MYSQL_CONNECTION_ID_UNAVAILABLE' });
+  }
+  return { connectionId };
+}
+
 function postSalesInvoiceRaceSafe(db, command) {
   return transaction(db, () => {
     const lock = lockForUpdate();
@@ -589,7 +605,7 @@ function postSupplierBillRaceSafe(db, command) {
     if (!bill) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
     if (bill.status === 'POSTED') return { alreadyPosted: true, billId: command.billId };
     if (bill.status === 'WAITING_MATCH') throw Object.assign(new Error('STATUS_NOT_MATCHED'), { code: 'STATUS_NOT_MATCHED', status: bill.status });
-    if (bill.status !== 'MATCHED') throw Object.assign(new Error('STATUS_NOT_MATCHED'), { code: 'STATUS_NOT_MATCHED', status: bill.status });
+    if (bill.status !== 'DRAFT') throw Object.assign(new Error('STATUS_NOT_MATCHED'), { code: 'STATUS_NOT_MATCHED', status: bill.status });
     assertFinanceBusinessDateOpen(db, 'AP', command.billDate || BUSINESS_DATE);
     const existingVoucher = db.prepare(`SELECT id FROM accounting_vouchers WHERE source_type=? AND source_id=?${lock}`).get('SUPPLIER_BILL', command.billId);
     let voucherId = existingVoucher?.id;
@@ -635,10 +651,10 @@ function matchSupplierBillSafe(db, command) {
     const lock = lockForUpdate();
     const bill = db.prepare(`SELECT * FROM supplier_bills WHERE id=?${lock}`).get(command.billId);
     if (!bill) throw Object.assign(new Error('NOT_FOUND'), { code: 'NOT_FOUND' });
-    if (bill.status === 'MATCHED') return { alreadyMatched: true };
+    if (bill.status === 'DRAFT') return { alreadyMatched: true };
     if (bill.status !== 'WAITING_MATCH') throw Object.assign(new Error('STATUS_NOT_WAITING_MATCH'), { code: 'STATUS_NOT_WAITING_MATCH', status: bill.status });
-    db.prepare(`UPDATE supplier_bills SET status='MATCHED', matched_unit_price_cents=?, updated_at=? WHERE id=?`)
-      .run(command.amountCents, isoNow(), command.billId);
+    db.prepare(`UPDATE supplier_bills SET status='DRAFT', grni_cents=?, variance_cents=net_cents-? WHERE id=?`)
+      .run(command.amountCents, command.amountCents, command.billId);
     return { matched: true };
   });
 }
@@ -668,6 +684,7 @@ function execute(command) {
   if (command.action === 'commit-held') return commitHeld();
   if (command.action === 'rollback-held') return rollbackHeld();
   if (command.action === 'held-state') return heldSessionState();
+  if (command.action === 'connection-id') return connectionIdentity();
   if (command.action === 'hold') { sleep(command.ms); return { heldMs: command.ms }; }
   throw new Error(`Unknown action: ${command.action}`);
 }

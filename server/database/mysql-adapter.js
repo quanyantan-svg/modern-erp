@@ -51,6 +51,10 @@ export function translateSqliteSql(sql) {
   translated = translated.replace(/\bMAX\s*\(\s*0\s*,/gi, 'GREATEST(0,');
   translated = translated.replace(/\bMIN\s*\(\s*0\s*,/gi, 'LEAST(0,');
   translated = translated.replace(/CAST\s*\(([^)]+)\s+AS\s+INTEGER\s*\)/gi, 'CAST($1 AS SIGNED)');
+  if (/\bON\s+CONFLICT\s*(?:\([^)]+\))?\s+DO\s+NOTHING\b/i.test(translated)) {
+    translated = translated.replace(/\s+ON\s+CONFLICT\s*(?:\([^)]+\))?\s+DO\s+NOTHING\b/gi, '');
+    translated = translated.replace(/^INSERT\s+INTO\b/i, 'INSERT IGNORE INTO');
+  }
   translated = translated.replace(
     /\bON\s+CONFLICT\s*\([^)]+\)\s+DO\s+UPDATE\s+SET\s+([\s\S]+)$/i,
     (_match, assignments) => `ON DUPLICATE KEY UPDATE ${assignments.replace(/\bexcluded\.([a-zA-Z_][\w]*)/gi, 'VALUES($1)')}`,
