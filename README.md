@@ -266,6 +266,7 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:list` | 列出 FULL suite 文件 |
 | `pnpm test:mysql` | MySQL 兼容 gate |
 | `pnpm test:mysql:concurrency` | MySQL 并发 gate |
+| `pnpm test:mysql:finance-concurrency` | Finance Operations 域 15 路 MySQL 真并发回归（RACE-01..15） |
 | `pnpm test:mysql:performance` | MySQL 性能测试 |
 | `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
 | `pnpm test:finance:uat` | Finance Operations 58 项能力矩阵 + 32 项最终业务 UAT |
@@ -363,6 +364,7 @@ pnpm test:heavy
 ```bash
 pnpm test:mysql
 pnpm test:mysql:concurrency
+pnpm test:mysql:finance-concurrency
 ```
 
 release candidate / migration release / 生产认证可运行：
