@@ -21,6 +21,8 @@ import { createManualAccountReceivable, listAccountReceivables } from './modules
 import { createManualAccountPayable, listAccountPayables } from './modules/finance-ap-open-item.js';
 import { refreshOpenAmount, computeCanonicalRemaining, assertOpenAmountReconciled } from './modules/finance-refresh-open-amount.js';
 import { convertProvisionalToFinancial } from './modules/finance-provisional-conversion.js';
+import { postArOpening } from './modules/finance-ar-init.js';
+import { postApOpening } from './modules/finance-ap-init.js';
 
 function bootstrap() {
   const db = createDatabase(':memory:');
@@ -39,6 +41,43 @@ function actor() {
     ],
   };
 }
+
+function bodyReq(body) {
+  return { headers: { 'content-type': 'application/json' }, [Symbol.asyncIterator]: async function* () { yield Buffer.from(JSON.stringify(body)); } };
+}
+
+function captureRes() {
+  const res = { statusCode: null, body: null, setHeader() {}, getHeader() { return null; }, write() {}, on() {}, once() {} };
+  res.end = (chunk) => { if (chunk) res.body = JSON.parse(chunk); };
+  return res;
+}
+
+test('AR initialization persists one opening open item and due schedule date', () => {
+  const db = bootstrap();
+  const id = postArOpening(db, { customerId: 'customer-001', amountCents: 12000, businessDate: '2026-01-01' }, actor());
+  const row = db.prepare('SELECT * FROM account_receivables WHERE id=?').get(id);
+  assert.equal(row.source_type, 'OPENING'); assert.equal(row.open_amount_cents, 12000); assert.equal(row.due_date, '2026-01-01');
+});
+
+test('AP initialization persists one opening open item and due schedule date', () => {
+  const db = bootstrap();
+  const id = postApOpening(db, { supplierId: 'supplier-001', amountCents: 9000, businessDate: '2026-01-02' }, actor());
+  const row = db.prepare('SELECT * FROM account_payables WHERE id=?').get(id);
+  assert.equal(row.source_type, 'OPENING'); assert.equal(row.open_amount_cents, 9000); assert.equal(row.due_date, '2026-01-02');
+});
+
+test('AR AP and Treasury business close and reopen remain independent', async () => {
+  const db = bootstrap();
+  for (const type of ['AR', 'AP', 'TREASURY']) {
+    const closed = captureRes(); await closeBusiness(db, bodyReq({ closedThroughDate: '2026-06-30' }), closed, actor(), type);
+    assert.equal(closed.statusCode, 200); assert.equal(db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(type).closed_through_date, '2026-06-30');
+    const other = ['AR', 'AP', 'TREASURY'].filter((x) => x !== type);
+    for (const untouched of other) assert.equal(db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(untouched).closed_through_date, '');
+    const reopened = captureRes(); await reopenBusiness(db, bodyReq({ reopenReason: 'UAT reopen' }), reopened, actor(), type);
+    assert.equal(reopened.statusCode, 200); assert.equal(db.prepare('SELECT closed_through_date FROM finance_business_close_state WHERE close_type=?').get(type).closed_through_date, '');
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM finance_business_closures').get().n, 6);
+});
 
 test('finance_parameters CRUD + idempotency', () => {
   const db = bootstrap();

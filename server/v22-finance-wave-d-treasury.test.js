@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 
 import { createDatabase } from './db.js';
 import { applyTreasuryMovement, refreshSettlementAccountBalance, assertBalanceReconciled, postTreasuryTransfer } from './modules/finance-treasury-movement.js';
+import { postTreasuryOpening } from './modules/finance-treasury-init.js';
 
 function bootstrap() {
   const db = createDatabase(':memory:');
@@ -50,6 +51,14 @@ test('applyTreasuryMovement: IN increments balance', () => {
   });
   const bal = refreshSettlementAccountBalance(db, 'ba-1');
   assert.equal(bal, 130000); // 100000 opening + 30000 IN
+});
+
+test('Treasury initialization persists opening on canonical settlement account', async () => {
+  const db = bootstrap(); const res = mkRes();
+  await postTreasuryOpening(db, await mkReq({ accountId: 'ba-1', openingBalanceCents: 125000, businessDate: '2026-01-01' }), res, actor());
+  assert.equal(res.statusCode, 200);
+  const account = db.prepare("SELECT opening_balance_cents,balance_cents FROM bank_accounts WHERE id='ba-1'").get();
+  assert.equal(account.opening_balance_cents, 125000); assert.equal(account.balance_cents, 125000);
 });
 
 test('applyTreasuryMovement: OUT decrements balance', () => {

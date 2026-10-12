@@ -96,6 +96,22 @@ test('finance_counterparty_transfers: AR transfer creates target FINAL open item
   assert.equal(remainingExposure, 150000);
 });
 
+test('finance_counterparty_transfers: AP transfer conserves supplier exposure', async () => {
+  const db = bootstrap();
+  mkAP(db, 'ap-transfer-1', 'supplier-001', 70000);
+  const res = mkRes();
+  await postCounterpartyTransfer(db, await mkReq({
+    side: 'AP', sourcePartyId: 'supplier-001', targetPartyId: 'supplier-002',
+    businessDate: '2026-02-15', reason: 'supplier reassignment',
+    lines: [{ openItemId: 'ap-transfer-1', amountCents: 30000 }],
+  }), res, actor());
+  assert.equal(res.statusCode, 200);
+  const target = db.prepare("SELECT * FROM account_payables WHERE supplier_id='supplier-002' AND source_type='FINANCE_TRANSFER'").get();
+  assert.equal(target.item_kind, 'FINAL'); assert.equal(target.open_amount_cents, 30000);
+  const source = db.prepare("SELECT open_amount_cents FROM account_payables WHERE id='ap-transfer-1'").get();
+  assert.equal(source.open_amount_cents, 40000); assert.equal(source.open_amount_cents + target.open_amount_cents, 70000);
+});
+
 test('finance_bad_debt_provisions insert + status', async () => {
   const db = bootstrap();
   mkAR(db, 'ar-bd-1', 'customer-001', 100000);

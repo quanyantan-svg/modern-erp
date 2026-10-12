@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase, PERMISSIONS } from './db.js';
+import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
 
 let temp; let db; let server; let base; const tokens = {};
 const request = (path, role, method = 'GET', body) => fetch(base + path, {
@@ -72,7 +73,13 @@ test('cash count records variance without mutating canonical cash balance', asyn
 });
 
 test('bank import is idempotent and reconciliation preserves Treasury truth with derived unmatched balances', async () => {
-  const paymentMovement = db.prepare("SELECT * FROM finance_treasury_movements WHERE source_type='PAYMENT_REQUEST' ORDER BY created_at DESC LIMIT 1").get();
+  let paymentMovement = db.prepare("SELECT * FROM finance_treasury_movements WHERE source_type='PAYMENT_REQUEST' ORDER BY created_at DESC LIMIT 1").get();
+  if (!paymentMovement) {
+    applyTreasuryMovement(db, { settlementAccountId: 'finance-test-bank', direction: 'OUT', amountCents: 18000,
+      businessDate: '2026-10-11', sourceType: 'PAYMENT_REQUEST', sourceId: 'standalone-bank-recon',
+      idempotencyKey: 'PAYMENT_REQUEST:standalone-bank-recon', createdBy: 'user-admin' });
+    paymentMovement = db.prepare("SELECT * FROM finance_treasury_movements WHERE source_id='standalone-bank-recon'").get();
+  }
   const payload = { fileName: 'statement-2026-10.csv', bankAccountId: 'finance-test-bank', statementNo: 'BST-202610', statementDate: '2026-10-11', period: '2026-10', openingBalanceCents: 112000, closingBalanceCents: 94000, lines: [{ transactionDate: '2026-10-11', valueDate: '2026-10-11', amountCents: 18000, direction: 'OUT', balanceCents: 94000, counterparty: '供应商一', bankReference: 'BANK-PAY-1', description: '付款申请执行' }] };
   const imported = await (await request('/api/finance/bank-statements/import', 'accounting', 'POST', payload)).json();
   const replay = await (await request('/api/finance/bank-statements/import', 'accounting', 'POST', payload)).json();

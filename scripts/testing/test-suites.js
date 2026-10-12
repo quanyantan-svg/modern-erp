@@ -508,6 +508,7 @@ const FULL = [
   'server/v22-finance-wave-e-reports.test.js',
   'server/v22-finance-recovery-api.test.js',
   'server/v22-finance-recognition-production.test.js',
+  'server/v22-finance-invoice-lifecycle.test.js',
 ];
 
 // FAST — subset of FULL that excludes tests requiring Vite SSR,

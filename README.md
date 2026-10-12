@@ -268,6 +268,9 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:mysql:concurrency` | MySQL 并发 gate |
 | `pnpm test:mysql:performance` | MySQL 性能测试 |
 | `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
+| `pnpm test:finance:uat` | Finance Operations 58 项能力矩阵 + 32 项最终业务 UAT |
+
+Finance Operations 的 FO01–FO58 服务、界面/API、schema、测试与 UAT 追溯见 [能力矩阵](docs/operations/finance-operations-capability-matrix.md)。
 | `pnpm backup-db` | SQLite 备份 |
 | `pnpm restore-db -- <file>` | SQLite 恢复 |
 | `pnpm setup-admin -- --username <name> --password <secret>` | 显式创建首个管理员 |
