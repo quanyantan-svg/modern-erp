@@ -67,8 +67,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('purchase-requisitions','请购单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','planningDocuments',{any:['PURCHASE_REQUISITION_VIEW']}),
   route('sourcing-pricing','寻源与定价','procurement-outsourcing','FLOW_SUPPORTING','WORKFLOW','primary','采购与委外','sourcingPricing',{any:['SOURCING_VIEW','PRICING_VIEW','PROCUREMENT_CONFIG_VIEW']}),
   route('outsourcing','委外加工','procurement-outsourcing','FLOW_PRIMARY','WORKFLOW','primary','采购与委外','outsourcing',{any:['OUTSOURCING_VIEW','OUTSOURCING_MANAGE']}),
-  route('product-costs','标准成本','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
-  route('cost-rates','成本费率','finance-operations','ADVANCED_CONFIGURATION','CONFIG','contextual','财务运营','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('product-costs','标准成本','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
+  route('cost-rates','成本费率','accounting-analytics','ADVANCED_CONFIGURATION','CONFIG','contextual','会计与分析','costAccounting',{any:['COST_VIEW','COST_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
   route('iqc','IQC 来料检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','iqc',{any:['IQC_VIEW','IQC_MANAGE']},{parentRoute:'purchase-receipts'}),
   route('oqc','OQC 出货检验','manufacturing-quality','FLOW_INTERNAL_STEP','WORKFLOW','contextual','制造与质量','oqc',{any:['OQC_VIEW','OQC_MANAGE']},{parentRoute:'sales-deliveries'}),
   route('quality-control-points','质量规则','manufacturing-quality','ADVANCED_CONFIGURATION','CONFIG','contextual','制造与质量','iqc',{any:['USERS_MANAGE']},{desktopExposure:'advanced-config',mobileExposure:'advanced-config'}),
@@ -79,7 +79,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
 const DISABLED_ROUTE_DEFINITIONS = Object.freeze([
   route('cash-journals','现金日记账','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','cashJournals',{any:['CASH_JOURNALS_VIEW','CASH_JOURNALS_MANAGE']},{enabled:false}),
   route('bills','票据管理','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','bills',{any:['BILLS_VIEW','BILLS_MANAGE']},{enabled:false}),
-  route('fixed-assets','固定资产','finance-operations','SYSTEM_SUPPORT','LIST','contextual','财务运营','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{enabled:false}),
+  route('fixed-assets','固定资产','accounting-analytics','SYSTEM_SUPPORT','LIST','contextual','会计与分析','fixedAssets',{any:['FIXED_ASSETS_VIEW','FIXED_ASSETS_MANAGE']},{enabled:false}),
   route('workflows','审批流','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','approvals',{any:['WORKFLOW_VIEW','WORKFLOW_MANAGE']},{enabled:false}),
   route('data-cleanup','数据整理','platform','SYSTEM_SUPPORT','CONFIG','contextual','系统设置','cleanup',{permission:'USERS_MANAGE'},{enabled:false}),
 ]);
