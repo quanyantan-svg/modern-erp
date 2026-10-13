@@ -5135,7 +5135,7 @@ SC37..SC40    → UAT-S-15 (SO Change) + R-SAL-07..R-SAL-08..R-SAL-18..R-SAL-19
 SC41..SC44    → UAT-S-16 (Fulfillment / partial / close / cancel)
 SC45..SC48    → UAT-S-17 (Delivery Notice capacity) + R-SAL-16..R-SAL-19
 SC49..SC53    → UAT-S-18 (Sales Delivery Confirm) + R-SAL-01, R-SAL-05, R-SAL-17
-SC54..SC58    → UAT-S-19..21 (3-Return modes) + UAT-S-41 + R-SAL-03, R-SAL-09, R-SAL-10
+SC54..SC58    → UAT-S-19..21 (3-Return modes) + R-SAL-03, R-SAL-09, R-SAL-10
 SC59..SC61    → UAT-S-22 (Replacement) + R-SAL-10
 SC62..SC65    → UAT-S-23 (Prepayment Gate) + R-SAL-15
 SC66..SC68    → UAT-S-24 (Reservation Intent) + UAT-S-40 + R-SAL-02 (consume only)
