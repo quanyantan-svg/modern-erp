@@ -12392,3 +12392,729 @@ External review freezes.
 | Acceptance Architecture | §29.49 |
 | Final Design State | §29.50 |
 | Cross-References | §29.51 |
+
+---
+
+## 30. Sales & Customer Domain Implementation Wave Plan
+
+> This is the Implementation Sequencing Plan only. It does NOT alter or reinterpret any frozen §29 Design semantics. Implementation may begin only after external review of this plan and the frozen Design freeze checkpoint (`e2186520cb59513fcb0feeed70066e8b2ac43b47`).
+> Plan-only output: no code, no migrations, no schema, no tests, no stages, no commits, no pushes, no tag, no version bump.
+
+### 30.1 Total final wave count
+
+```text
+14 implementation waves (Wave 0 through Wave 13)
+```
+
+Each wave is small enough that one engineer / coding agent can implement, test, review the diff, and reason about its invariants as one coherent checkpoint. Regrouping / splitting is permitted if Implementation evidence demands it; this plan is the baseline.
+
+### 30.2 Wave summary table
+
+| Wave | One-line business objective | Primary SC IDs (count) | Primary new physical tables | Primary file changes (planned; not yet executed) |
+|---|---|---|---|---|
+| 0 | Schema / shared Sales infrastructure + migration runner readiness | n/a (foundation) | 0 | server/migrations/* (infrastructure; no new tables yet); existing migration files remain untouched |
+| 1 | Customer commercial extensions + service classification foundation | 8 + 1 (SC01..SC08, SC69) | 3 (customer_commercial_extensions, customer_material_xref, product_commercial_classification) | server/modules/customers.js extension path; users columns extension; new module files for extensions; src/pages/master-data.jsx extended |
+| 2 | Pricing engine + Order-Time Discount | 9 (SC15..SC23) | 5 (sales_price_lists, sales_price_list_entries, sales_price_list_versions, sales_discount_schemes, sales_discount_scheme_rules) | server/modules/pricing.js (new); server/modules/discount.js (new); src/pages/* pricing sub-page; src/api.js (price/discount resolver) |
+| 3 | Quotation + Quotation conversion | 6 (SC09..SC14) | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | server/modules/quotation.js (new); src/pages/quotations.jsx (new route); conversion API with idempotency |
+| 4 | Sales Order enrichment + lifecycle + Change | 18 (SC24..SC44) | 2 (sales_order_changes, sales_order_change_lines) | server/app.js SO handlers extended; sales_orders + sales_order_items columns additive; src/pages/master-data.jsx SO editor extended; SO Change API + workflow |
+| 5 | Delivery Notice + Sales Delivery convergence | 9 (SC45..SC53) | 2 (delivery_notices, delivery_notice_lines) | server/app.js SD handlers extended; new delivery_notice module; src/pages/delivery-notices.jsx (new route); mandatory DN for new SD |
+| 6 | Returns + Replacement | 8 (SC54..SC61) | 2 (sales_order_replacements, sales_order_replacement_lines) | server/app.js SR handlers extended; return_orders.commercial_source_marker additive col; src/pages/returns.jsx extended with replacement tab |
+| 7 | Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent | 7 (SC62..SC68) | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | server/modules/finance-adapter.js (locked-read); server/modules/prepayment.js (new); Finance V22 bounded extension (applyUnappliedBalance / createRefund / reverseSettlementDocument acquire parent balance FOR UPDATE) |
+| 8 | Service Fulfillment + Consignment commercial | 9 (SC69..SC77) | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | server/modules/service-fulfillment.js; server/modules/consignment.js; src/pages/consignment.jsx; SD confirm gate |
+| 9 | Credit stable anchor + Credit Policy + Profile foundation | 5 (SC83..SC89) | 5 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile) | server/modules/credit-anchor.js (new; ensureCreditLockAnchor + first-use provisioning); server/modules/credit-policy.js; legacy credit_profile backfill in migration |
+| 10 | Credit Check + Special Approval + Exposure | 9 (SC90..SC98) | 2 (credit_check_results, credit_special_approval) | server/modules/credit-check.js (evaluateCredit service); server/modules/credit-special-approval.js; PURE_DERIVED exposure; recognition-mode aware |
+| 11 | Credit Evaluation + Reconciliation + Query | 9 (SC99..SC107) | 6 (credit_evaluation_indicator, credit_evaluation_scheme, credit_evaluation_model, credit_evaluation_scoring_sheet, credit_evaluation_result, credit_recalculation_history) | server/modules/credit-evaluation.js; credit_query_snapshot (DERIVED C-02) + credit_exposure_view (DERIVED C-01) query layer |
+| 12 | Mobile IA + Reporting + Compatibility convergence | 4 (SC78..SC81) + 7 (SC108..SC114) | 0 | new routes (quotations, delivery-notices, sales-order-changes, sales-order-replacements, service-fulfillments, consignment-commercial, credit-*); sales-customer launcher ≤ 6 primary entries; decision reports extensions; src/styles/*; src/api.js extensions |
+| 13 | MySQL race hardening + Final domain acceptance | n/a (verification) | 0 | tests only; real MySQL functional + concurrency + performance gates; 24 race evidence plan executed |
+
+### 30.3 Dependency DAG
+
+```text
+Wave 0 (Schema / shared Sales infrastructure)
+  └─ Wave 1 (Customer commercial extensions + service classification foundation)
+       ├─ Wave 2 (Pricing + Order-Time Discount)
+       │    └─ Wave 3 (Quotation + Quotation conversion)
+       │         └─ Wave 4 (Sales Order enrichment + lifecycle + Change)
+       │              ├─ Wave 5 (Delivery Notice + Sales Delivery convergence)
+       │              │    └─ Wave 6 (Returns + Replacement)
+       │              │         └─ Wave 8 (Service Fulfillment + Consignment)
+       │              ├─ Wave 7 (Finance V22 R-SAL-15 extension + Prepayment Gate + Reservation Intent)
+       │              │    └─┐
+       │              └─ Wave 9 (Credit stable anchor + Policy + Profile foundation)
+       │                   └─ Wave 10 (Credit Check + Special Approval + Exposure)
+       │                        └─ Wave 11 (Credit Evaluation + Query)
+       ├─ Wave 6 ─┐
+       │         │
+       ├─ Wave 7 ─┤
+       │         │
+       ├─ Wave 8 ─┼→ Wave 12 (Mobile IA + Reporting + Compatibility convergence) → Wave 13 (MySQL race hardening + Final domain acceptance)
+       │         │
+       └─ Wave 11 ┘
+```
+
+No cycles. Every dependency is explicit. Wave 12 depends on Waves 6 / 7 / 8 / 11 (the branches that produce the workflows Wave 12 must report / expose / reconcile). **Wave 13 depends on Wave 12**; the convergence edge is `Wave 12 → Wave 13`, which transitively requires every preceding business branch.
+
+### 30.4 SC allocation (114/114, duplicates 0, missing 0)
+
+```text
+SC expected = 114
+SC assigned = 114
+duplicates  = 0
+missing    = 0
+```
+
+| Wave | SC IDs (count) |
+|---|---|
+| 1 | SC01, SC02, SC03, SC04, SC05, SC06, SC07, SC08, SC69 (9) |
+| 2 | SC15, SC16, SC17, SC18, SC19, SC20, SC21, SC22, SC23 (9) |
+| 3 | SC09, SC10, SC11, SC12, SC13, SC14 (6) |
+| 4 | SC24, SC25, SC26, SC27, SC28, SC29, SC30, SC31, SC32, SC33, SC34, SC35, SC36, SC37, SC38, SC39, SC40, SC41, SC42, SC43, SC44 (21 — note: SC36 was SO Source Document Identity; SC37–SC40 are SO Change; SC41–SC44 are Fulfillment / Close) |
+| 5 | SC45, SC46, SC47, SC48, SC49, SC50, SC51, SC52, SC53 (9) |
+| 6 | SC54, SC55, SC56, SC57, SC58, SC59, SC60, SC61 (8) |
+| 7 | SC62, SC63, SC64, SC65, SC66, SC67, SC68 (7) |
+| 8 | SC70, SC71, SC72, SC73, SC74, SC75, SC76, SC77 (8) |
+| 9 | SC83, SC84, SC85, SC86, SC87, SC88, SC89 (7) |
+| 10 | **SC82, SC90, SC91, SC92, SC93, SC94, SC95, SC96, SC97, SC98** (10 — SC82 Credit Exposure Canonical-Fact Invariant primary here; runtime credit check / exposure / special approval require it) |
+| 11 | SC99, SC100, SC101, SC102, SC103, SC104, SC105, SC106, SC107 (9) |
+| 12 | SC78, SC79, SC80, SC81, SC108, SC109, SC110, SC111, SC112, SC113, SC114 (11) |
+| 13 | verification only (all 114 SC acceptance covered by 1–12; Wave 13 verifies) |
+
+Sum check: 9+9+6+21+9+8+7+8+7+10+9+11 = 114 ✓ (Wave 0 = n/a, Wave 13 = verification).
+
+### 30.5 Invariant allocation (20/20)
+
+```text
+S expected = 20
+S assigned = 20
+missing   = 0
+```
+
+| Invariant | First enforcing wave | Final verifying wave |
+|---|---|---|
+| S01 (commercial ≠ inventory) | 1 (Customer commercial extensions; SD confirm path enforces) | 13 (full MySQL regression) |
+| S02 (commercial ≠ AR) | 4 (SO enrichment; AR adapter paths) | 13 |
+| S03 (commercial ≠ GL) | 4 (voucher flows deferred to Finance) | 13 |
+| S04 (Quotation conversion preserves source trace) | 3 (Quotation conversion) | 13 |
+| S05 (history not silently rewritten) | 4 (SO Change; commercial_close_state) | 13 |
+| S06 (source-line capacity not over-executed) | 5 (DN capacity; SD confirm) | 13 |
+| S07 (Gift revenue 0 ≠ cost 0) | 4 (is_gift_line flag; COGS continues) | 13 |
+| S08 (Service ≠ Inventory) | 8 (Service Fulfillment gate; no inventory OUT) | 13 |
+| S09 (DN ≠ SD ≠ Inventory) | 5 (DN lifecycle; SD reads DN; Inventory V21) | 13 |
+| S10 (Return ≠ Delete; Replacement ≠ Return; NO_SOURCE ≠ fake sale) | 6 (3-mode return; replacement) | 13 |
+| S11 (NO_SOURCE marker) | 6 (NO_SOURCE commercial_source_marker) | 13 |
+| S12 (Reservation intent ≠ canonical reservation) | 7 (sales_reservation_intent; Planning canonical) | 13 |
+| S13 (Prepayment Gate ≠ Advance-Receipt truth) | 7 (R-SAL-15 financeAdapter; canonical V22 balance lock) | 13 |
+| S14 (Credit exposure no double-count) | 10 (recognition-mode aware bucket transition) | 13 |
+| S15 (BLOCK fail-closed) | 10 (evaluateCredit + ensureCreditLockAnchor) | 13 |
+| S16 (Credit exception bounded) | 10 (credit_special_approval; ceiling + scope + expiry) | 13 |
+| S17 (Recalculation no historical rewrite) | 11 (credit_recalculation_history; CHECK-only default) | 13 |
+| S18 (Consignment location ≠ ownership ≠ settlement) | 8 (3-layer separation) | 13 |
+| S19 (Business dates authoritative) | 4 (SO creation; enforced ISO date) | 13 |
+| S20 (Single base currency) | 2 (Pricing engine; no multi-currency) | 13 |
+
+### 30.6 UAT allocation (44/44)
+
+```text
+UAT expected = 44
+assigned    = 44
+missing     = 0
+```
+
+| Wave | UAT IDs (count) |
+|---|---|
+| 1 | UAT-S-28 (Customer Commercial Extensions) (1) |
+| 2 | UAT-S-04..08 (Pricing + override + snapshot) + UAT-S-07 (override) + UAT-S-09 (Discount) (6) |
+| 3 | UAT-S-01..03 (Quotation lifecycle + conversion) (3) |
+| 4 | UAT-S-10..16 (SO parties / gift / tax terms / submit / change / fulfill) + UAT-S-39 (edit policy) (8) |
+| 5 | UAT-S-17 (DN capacity) + UAT-S-18 (SD confirm) (2) |
+| 6 | UAT-S-19..21 (3-Return modes) + UAT-S-22 (Replacement) + UAT-S-41 (commercial source distinction) (5) |
+| 7 | UAT-S-23 (Prepayment Gate) + UAT-S-24 (Reservation Intent) + UAT-S-40 (canonical read-only) (3) |
+| 8 | UAT-S-25 (Service Item) + UAT-S-26..27 (Consignment) (3) |
+| 9 | UAT-S-29 (Credit Profile) + UAT-S-30 (Credit Parameters + Rules) (2) |
+| 10 | UAT-S-31 (Occupancy transition) + UAT-S-32 (Credit Check) + UAT-S-33 (Special Approval) (3) |
+| 11 | UAT-S-34 (Recalculation) + UAT-S-35 (Query + Exception) + UAT-S-36 (Evaluation) (3) |
+| 12 | UAT-S-37 (Reporting — execution) + UAT-S-38 (Reporting — outstanding + GP + ranking) + UAT-S-44 (Permission / RBAC / SOD) (3) |
+
+Sum: 1+6+3+8+2+5+3+3+2+3+3+3 = 44 ✓
+
+### 30.7 Race allocation (24/24)
+
+```text
+Race Requirement IDs assigned = 24 / 24
+
+Materialized executable MySQL race scenarios
+= 23  (all R-SAL-01..24 except R-SAL-23)
+
+Conditional structural race
+= 1
+  R-SAL-23
+  (frozen PURE_DERIVED baseline; structurally non-materialized under current baseline)
+
+Race coverage
+= 24 / 24  (R-SAL-23 covered as structural assertion, not materialized test)
+TBD = 0
+```
+
+R-SAL-23 keeps its frozen PURE_DERIVED conditional semantics; structurally possible from Wave 9 onward (anchor infrastructure), but materially non-materialized until persisted cache is introduced (which is NOT the chosen baseline).
+
+Acceptance form under the frozen baseline:
+
+```text
+Race coverage                 = 24 / 24
+Materialized MySQL race tests = 23
+Structural assertion races     = 1 (R-SAL-23: "no persisted mutable Credit Exposure
+                              cache exists; no stale rebuild can overwrite newer
+                              exposure state; therefore the cache-rebuild race
+                              is structurally non-materialized")
+```
+
+If implementation later proposes a persisted Credit Exposure cache, STOP + REQUIREMENT_REOPEN_REQUIRED / DESIGN_REOPEN_REQUIRED.
+
+| Race | First structurally possible | First executable MySQL test | Final acceptance |
+|---|---|---|---|
+| R-SAL-01 | 5 (SD confirm) | 5 | 13 |
+| R-SAL-02 | 7 (Reservation Intent + Planning) | 7 | 13 |
+| R-SAL-03 | 6 (Return) | 6 | 13 |
+| R-SAL-04 | 4 (M14 Sales Discount; existing) | 4 (already exists) | 13 |
+| R-SAL-05 | 5 (SD vs SR) | 5 | 13 |
+| R-SAL-06 | 3 (Quotation convert) | 3 | 13 |
+| R-SAL-07 | 4 (SO Change vs approve) | 4 | 13 |
+| R-SAL-08 | 4 (SO Change vs SD) | 4 | 13 |
+| R-SAL-09 | 6 (SD vs Return/Reopen) | 6 | 13 |
+| R-SAL-10 | 6 (Return vs Replacement) | 6 | 13 |
+| R-SAL-11 | 2 (Pricing vs Order approval) | 2 | 13 |
+| R-SAL-12 | 9 (CREDIT_OBJECT anchor) | 9 | 13 |
+| R-SAL-13 | 10 (Special Approval vs Order) | 10 | 13 |
+| R-SAL-14 | 10 (Credit release vs Collection/Return) | 10 | 13 |
+| R-SAL-15 | 7 (Prepayment Gate vs Finance) | 7 | 13 |
+| R-SAL-16 | 5 (DN create vs SO capacity) | 5 | 13 |
+| R-SAL-17 | 5 (SD vs DN remaining) | 5 | 13 |
+| R-SAL-18 | 5 (SO Change vs DN) | 5 | 13 |
+| R-SAL-19 | 5 (SO Close vs DN/SD) | 5 | 13 |
+| R-SAL-20 | 8 (Consignment settlement) | 8 | 13 |
+| R-SAL-21 | 8 (Consignment settlement vs return) | 8 | 13 |
+| R-SAL-22 | 8 (Service fulfillment) | 8 | 13 |
+| R-SAL-23 | 9 (Credit recalculation; PURE_DERIVED) | 13 (only structurally asserted) | 13 (structural assertion) |
+| R-SAL-24 | 9 (POLICY_SCOPE + CREDIT_OBJECT) | 9 | 13 |
+
+### 30.8 Physical schema / migration allocation
+
+```text
+new physical tables total = 38
+frozen existing-table extension inventory = 5 tables / 22 logical fields
+actual NEW extension fields requiring schema migration = 21
+existing reused extension fields requiring NO ADD COLUMN = 1
+  sales_deliveries.billing_mode
+duplicate ADD attempts = 0
+```
+
+The frozen §29 inventory is a logical Design inventory. The implementation migration inventory below records the repository-evidenced physical state separately; it does not alter the frozen 5-table / 22-field classification.
+
+| Existing table | Logical field | Frozen §29 classification | Current physical state | Implementation wave | Migration action |
+|---|---|---|---|---:|---|
+| `sales_orders` | `salesperson_code` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `sales_group_code` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `settlement_party_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `payer_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `customer_material_xref_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `commercial_tax_code` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `tax_inclusive` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `required_prepayment_cents` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `reservation_intent_state` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `commercial_close_state` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `gift_summary_cents` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_orders` | `commercial_pricing_uom_code` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `is_gift_line` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `commercial_tax_basis` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `tax_inclusive_assumption` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `pricing_uom_code_applied` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `qty_break_applied_min` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `qty_break_applied_max` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_deliveries` | `delivery_notice_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
+| `sales_deliveries` | `billing_mode` | `EXISTING_REUSED_FIELD` | `EXISTS` (`v13-phase6e-commercial-golive`) | 5 | `REUSE_EXISTING` |
+| `sales_delivery_items` | `delivery_notice_line_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
+| `return_orders` | `commercial_source_marker` | `NEW_LOGICAL_FIELD` | `ABSENT` | 6 | `ADD` |
+
+```text
+logical extension fields = 22 / 22
+new schema fields to add = 21
+existing extension fields reused = 1
+duplicate ADD attempts = 0
+```
+
+| Wave | New tables | Existing tables extended | Migration scope (planned) |
+|---|---|---|---|
+| 0 | 0 | 0 | migration runner readiness only; no new migration content |
+| 1 | 3 (customer_commercial_extensions, customer_material_xref, product_commercial_classification) | users (add salesperson_code, sales_group_code nullable) | new migration file (additive; no schema rewrite); legacy customer backfill on `customer_commercial_extensions` for existing customers; SQLite + MySQL compatible |
+| 2 | 5 (sales_price_lists, sales_price_list_entries, sales_price_list_versions, sales_discount_schemes, sales_discount_scheme_rules) | 0 | new migration file; UNIQUE on (price_list_id, material_id, customer_id, pricing_uom_code, qty_break_min, version, effective_from) for entries; SQLite + MySQL compatible |
+| 3 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | new migration file; UNIQUE on (quotation_id, line_no); PR UNIQUE on (quotation_id, sales_order_line_id); idempotency_key column |
+| 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols: salesperson_code, sales_group_code, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code), sales_order_items (+ 6 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max) | new migration file for new tables; ADD COLUMN for additive cols; effective_version counter on sales_orders; legacy rows: NULL additive cols → display `(legacy)` |
+| 5 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`; reuse existing `billing_mode`), sales_delivery_items (+ `delivery_notice_line_id`) | new migration file for new tables; `sales_deliveries.delivery_notice_id` → new schema field as designed (`ADD`); `sales_delivery_items.delivery_notice_line_id` → new schema field as designed (`ADD`); `sales_deliveries.billing_mode` → existing field, reuse / compatibility convergence (`REUSE_EXISTING`; **NO duplicate ADD COLUMN**); legacy SD rows: NULL `delivery_notice_id` → legacy path (read OK) |
+| 6 | 2 (sales_order_replacements, sales_order_replacement_lines) | return_orders (+ commercial_source_marker) | new migration file; ADD COLUMN; PR UNIQUE on (quotation_id, sales_order_line_id) for SO 3-mode conversion; legacy return rows: NULL → treat as DELIVERY_BACKED |
+| 7 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new migration file; PK on (sales_order_id, line_no); snapshot_key as idempotency anchor; R-SAL-15 shared Finance balance lock contract (BOUNDED INTEGRATION CONTRACT EXTENSION) |
+| 8 | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | 0 | new migration file; consignment FK; consignment_commodity_locations is the commercial location identity (≠ physical warehouse_id) |
+| 9 | 5 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile) + credit_profile_ratings (A-52, 1 more) | 0 | new migration file; UNIQUE (anchor_key) NOT NULL on credit_lock_anchors; PK on credit_parameters (code, effective_from); PK on credit_profile (customer_id, salesperson_id, credit_object_type, credit_object_id, effective_from); legacy bootstrap migration for credit_profile + credit_lock_anchors over existing credit_profile tuples |
+| 10 | 2 (credit_check_results, credit_special_approval) | 0 | new migration file; PR UNIQUE (source_credit_check_result_id) on credit_special_approval; FK to credit_policy_snapshots + credit_control_anchor |
+| 11 | 6 (credit_evaluation_indicator, credit_evaluation_scheme, credit_evaluation_model, credit_evaluation_scoring_sheet, credit_evaluation_result, credit_recalculation_history) | 0 | new migration file; bounded multi-scorer per scoring_sheet |
+| 12 | 0 | 0 | no schema changes; UI work only |
+| 13 | 0 | 0 | no schema changes; tests only |
+
+Sum check: 3+5+3+2+2+2+3+4+6+2+6 = 38 ✓ (matches frozen Design)
+
+### 30.9 Finance V22 R-SAL-15 bounded extension wave
+
+The Finance V22 R-SAL-15 bounded extension is scheduled in **Wave 7 (Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent)**.
+
+Required contract introduced in Wave 7:
+
+```text
+financeAdapter.resolveEligiblePrepaymentForSalesGate(
+  customer_id, business_date, gate_stage, sales_order_id,
+  remaining_required_cents, lockMode = FOR UPDATE,
+  db_transaction_context
+) → acquires FOR UPDATE on canonical V22 settlement_unapplied_balances
+  (balance_type = 'PREPAYMENT') in deterministic order, re-reads child
+  effects (balance_applications, financial_refunds, applicable reversal
+  effects), returns remaining eligible amount and source_balance_locked
+  identities; locks held until caller transaction commits / rolls back.
+
+Finance V22 mutations:
+  applyUnappliedBalance
+  → acquires settlement_unapplied_balances.id FOR UPDATE
+    before remaining-capacity validation
+  createRefund
+  → acquires parent settlement_unapplied_balances.id FOR UPDATE
+    before remaining-capacity validation
+  reverseSettlementDocument (PREPAYMENT / UNAPPLIED reduction)
+  → acquires parent settlement_unapplied_balances.id FOR UPDATE
+    before remaining / validation / settlement_reversal_items mutation
+```
+
+Finance business semantics UNCHANGED. Canonical balance UNCHANGED. NO conditional wording. NO new Finance balance.
+
+Wave 7 reports separately (per task §25) the Finance files changed and why each change is bounded.
+
+Wave 7 must exist before the Sales Prepayment Gate is considered complete. Wave 11 (Credit Evaluation + Query) does NOT depend on Prepayment Gate; it can proceed in parallel after Wave 10.
+
+### 30.10 Credit implementation sequence
+
+Credit implementation sequence is:
+
+```text
+Wave 9  : credit_lock_anchors + credit_policy_snapshots + credit_parameters
+         + credit_check_rules + credit_profile (+ credit_profile_ratings)
+         + ensureCreditLockAnchor provisioning + legacy bootstrap
+         (stable anchor; must exist BEFORE any Credit Check / mutation)
+
+Wave 10 : credit_check_results + credit_special_approval
+         + evaluateCredit() service
+         + PURE_DERIVED exposure derivation
+         + recognition-mode aware (DIRECT_BUSINESS / INVOICE_DRIVEN /
+           PROVISIONAL_TO_FINANCIAL) bucket transition
+         (R-SAL-12 anchored on CREDIT_OBJECT; R-SAL-13; R-SAL-14)
+
+Wave 11 : credit_evaluation_indicator + scheme + model + scoring_sheet
+         + result + credit_recalculation_history
+         + credit_query_snapshot (DERIVED C-02) + credit_exposure_view
+         (DERIVED C-01) query layer
+         (R-SAL-23 conditional on PURE_DERIVED)
+
+Wave 13 : MySQL race hardening + final domain acceptance (all materialized Sales MySQL race scenarios + R-SAL-23 structural assertion; no artificial Credit Exposure cache introduced)
+```
+
+R-SAL-12 / R-SAL-13 / R-SAL-14 become executable from Wave 10 onward. R-SAL-23 remains a structural assertion under the frozen PURE_DERIVED baseline (no persisted cache introduced; Wave 13 documents the conditional status). R-SAL-24 anchor infrastructure becomes executable from Wave 9 onward.
+
+### 30.11 Mobile / frontend sequence
+
+Frontend work is concentrated in **Wave 12 (Mobile IA + Reporting + Compatibility convergence)** but each prior wave that introduces a user-visible workflow may include a small frontend integration AFTER the backend contract is stable.
+
+| Wave | Backend stability point | Frontend integration scope |
+|---|---|---|
+| 1 | customer_commercial_extensions | customer detail extension panel; (none) for new route |
+| 3 | quotation API | quotations new route (LIST / DETAIL / EDITOR / CONVERT-TO-SO) |
+| 4 | SO enrichment + change | SO editor extended; SO change workflow (LIST / DETAIL / EDITOR) |
+| 5 | DN API | delivery-notices new route (LIST / DETAIL / EDITOR) |
+| 6 | return + replacement | returns route extended with replacement tab |
+| 7 | Prepayment Gate | prepayment sub-page inside SO context |
+| 8 | service + consignment | service-fulfillment list inside SO; consignment new route |
+| 9 | credit_lock_anchors | (admin / setup only) |
+| 10 | credit check + special approval | credit-check evaluate surface; credit-special-approvals new route |
+| 11 | credit evaluation | credit-evaluation new route |
+| 12 | (consolidation) | new sales-customer launcher (≤ 6 primary entries); decision reports extensions; consolidated responsive acceptance reruns |
+
+Widths remain 320 / 390 / 430 / 680. 390px is primary. Touch targets ≥ 44 CSS px. Core tasks do not depend on permanent horizontal scroll.
+
+### 30.12 MySQL verification sequence
+
+MySQL verification is **NOT** deferred to the final wave.
+
+For every wave that introduces any of the following:
+
+```text
+FOR UPDATE
+source capacity
+credit anchor
+Finance shared lock
+idempotency uniqueness
+```
+
+a MySQL verification checkpoint is planned **within that wave**.
+
+| Wave | MySQL verification scope |
+|---|---|
+| 0 | migration runner on real MySQL (smoke) |
+| 1 | UNIQUE on customer_commercial_extensions; legacy backfill uniqueness on MySQL |
+| 2 | UNIQUE on price list entries; CHECK constraints; effective_from MySQL semantics |
+| 3 | UNIQUE on conversion PK; idempotency_key UNIQUE on real MySQL |
+| 4 | effective_version monotonic on MySQL; PR UNIQUE on change lines |
+| 5 | DN capacity locks; legacy SD path coexistence on MySQL |
+| 6 | return source marker; replacement line capacity on MySQL |
+| 7 | R-SAL-15 financeAdapter locked-read on real MySQL; PREPAYMENT balance FOR UPDATE |
+| 8 | service fulfillment FOR UPDATE; consignment lock |
+| 9 | FOR UPDATE on credit_lock_anchors; ensureCreditLockAnchor convergence; legacy bootstrap on real MySQL |
+| 10 | R-SAL-12 / R-SAL-13 / R-SAL-14 on real MySQL with full anchor |
+| 11 | R-SAL-23 conditional; bounded multi-scorer locks on real MySQL |
+| 12 | UI integration smoke on real MySQL |
+| 13 | all materialized Sales MySQL race scenarios (R-SAL-01..22 + R-SAL-24) + R-SAL-23 structural assertion; pnpm test:mysql / pnpm test:mysql:concurrency |
+
+Wave 13 reruns all 23 materialized Sales MySQL race scenarios on real MySQL and verifies the R-SAL-23 structural assertion.
+
+### 30.13 Final domain acceptance wave (Wave 13)
+
+Wave 13 final domain acceptance runs:
+
+```text
+focused unit + integration per wave
+Functional Sales UAT 44 / 44 (UAT-S-01..44 all executable)
+Responsive browser matrix 320 / 390 / 430 / 680
+FAST
+FULL
+HEAVY
+build
+git diff --check
+SQLite compatibility per §29.42
+real MySQL functional
+generic MySQL concurrency
+Sales MySQL concurrency
+  materialized executable MySQL race scenarios = 23  (R-SAL-01..22, R-SAL-24)
+  structural assertion
+    R-SAL-23  (PURE_DERIVED baseline; "no persisted mutable Credit Exposure
+               cache exists; no stale rebuild can overwrite newer
+               exposure state; cache-rebuild race structurally
+               non-materialized under the current baseline")
+  = 23 + 1 = 24 / 24 requirement coverage
+MySQL performance (if scale requires)
+```
+
+Acceptance criteria match §34.11 (8 criteria A–H) with final counts 114/114 / 20/20 / 44/44 / 24/24 (23 materialized + 1 structural) / 36-36 / 0 TBD.
+
+R-SAL-23 acceptance form is a structural assertion under the PURE_DERIVED baseline. No artificial cache is created just to make R-SAL-23 materialized.
+
+### 30.14 Risk matrix
+
+| Wave | Risk | Classification | Reason |
+|---|---|---|---|
+| 0 | migration runner | LOW | infrastructure only |
+| 1 | customer commercial extensions; backfill on existing customers | MEDIUM | legacy customer backfill could conflict; mitigated by deterministic migration |
+| 2 | pricing resolver; price snapshot immutability | MEDIUM | multi-currency, UoM, qty-break; resolved snapshot must be immutable (R-SAL-11) |
+| 3 | quotation convert × 2; capacity; idempotency | HIGH | R-SAL-06 is the first user-visible source-capacity race |
+| 4 | SO Change effective_version; commercial_close_state; historical immutability | HIGH | S05 (R-SAL-07 / R-SAL-08) |
+| 5 | Delivery Notice mandatory new-flow; legacy coexistence | HIGH | R-SAL-16 / R-SAL-17 / R-SAL-18 / R-SAL-19; S09; legacy SD still works |
+| 6 | 3-mode return; replacement; order-backed without fake delivery | HIGH | R-SAL-09 / R-SAL-10; S10 / S11 |
+| 7 | Finance V22 bounded extension; PREPAYMENT parent balance lock | **CRITICAL** | S12 / S13; R-SAL-15; one bounded Finance extension |
+| 8 | Service Fulfillment; Consignment ownership (Enterprise not Customer) | **HIGH** | S08 / S18; three-layer separation (commercial / inventory / settlement); R-SAL-20 / R-SAL-21; cross-domain lock on canonical V22 settlement; no second Finance balance |
+| 9 | credit_lock_anchors + ensureCreditLockAnchor provisioning | **CRITICAL** | anchor infrastructure precedes any Credit runtime; legacy backfill on real MySQL |
+| 10 | R-SAL-12 / R-SAL-13 / R-SAL-14; recognition-mode aware; OLD/NEW snapshot | **CRITICAL** | S14 / S15 / S16; R-SAL-24; first executable Credit Check |
+| 11 | credit evaluation; bounded multi-scorer; recalculation | MEDIUM | R-SAL-23 conditional on PURE_DERIVED |
+| 12 | Mobile IA; routes; launcher | MEDIUM | responsive matrix rerun; no schema |
+| 13 | all materialized Sales MySQL race scenarios + R-SAL-23 structural assertion; final acceptance | **CRITICAL** | 23 materialized + 1 structural = 24 / 24 requirement coverage under PURE_DERIVED baseline; final domain acceptance |
+
+### 30.15 Stop conditions
+
+Each wave has explicit stop conditions. The Implementation agent MUST NOT silently "work around" any of these.
+
+| Wave | Stop conditions (must be surfaced and reported) |
+|---|---|
+| all | capacity invariant cannot be preserved |
+| all | frozen domain requires semantic change → REQUIREMENT_REOPEN_REQUIRED or DESIGN_REOPEN_REQUIRED |
+| all | legacy data cannot migrate safely (no historical rewrite) |
+| all | SQLite / MySQL semantics diverge (cannot produce same lock contract) |
+| all | Credit exposure double-count discovered (R-SAL-12 invariant breach) |
+| all | Finance adapter cannot inherit caller transaction (R-SAL-15 architectural breach) |
+| all | APPLY_GUIDE.md appears in git diff --cached (user-owned state must not be staged) |
+| 4 | SO Change cannot satisfy R-SAL-07 / R-SAL-08 (e.g. effective_version breaks) |
+| 5 | New SD still allowed to bypass Delivery Notice (forbidden by §29.12.0) |
+| 7 | Finance V22 cannot provide parent balance lock (extension cannot be implemented) |
+| 9 | ensureCreditLockAnchor cannot be made create-or-converge safe (no fail-open) |
+| 10 | Recognition-mode transition produces mixed-version decision (R-SAL-24 breach) |
+| 10 | Recognition-mode transition produces mixed-version decision (R-SAL-24 breach) |
+
+### 30.15.1 Per-wave backend authorization (incremental RBAC / SOD)
+
+SC108..SC114 (Permissions / RBAC / SOD) is primarily **allocated to Wave 12** for final permission matrix completion, launcher exposure, and UAT-S-44 final proof. However, **every earlier wave introducing a protected backend endpoint or mutation must implement its applicable** `backend permission check` **+** `SOD restriction` **+** `negative authorization test` **in the same wave**. Frontend-hidden-only is forbidden.
+
+| Wave | Endpoint / mutation introduced | Required backend authorization (same wave) |
+|---|---|---|
+| 1 | customer_commercial_extensions update | permission check + SOD on salesperson / sales_group assignment |
+| 2 | pricing resolver, price_override, discount resolver | permission check + separate override authority (PRICE OVERRIDE) per §34.7 P3 |
+| 3 | quotation convert → SO | permission check |
+| 4 | SO submit / approve / reject / close / cancel; SO Change apply | permission check + SOD (creator ≠ approver) per §34.7 P2 |
+| 5 | DN confirm; SD confirm | permission check + reservation intent / prepayment / credit gate consumption |
+| 6 | return confirm; replacement fulfill | permission check + return-mode / replacement-state guard |
+| 7 | prepayment gate evaluate; reservation intent request/release | permission check + Prepayment override authority |
+| 8 | service fulfillment confirm; consignment settle/return | permission check + Consignment owner-attribute guard (SELLER, NOT CUSTOMER) |
+| 9 | credit anchor admin; profile rating apply; policy mutation | permission check + Credit Management must be enabled OR fail-closed per §29.22.1 |
+| 10 | credit check evaluate; special approval request/decide | permission check + bounded authority ceiling for special approval per §34.7 P4 + fail-closed BLOCK if mandatory rule + missing profile |
+| 11 | evaluation scoring finalize; recalculation run | permission check + bounded multi-scorer aggregation |
+| 12 | final permission matrix; launcher exposure; cross-workflow SOD consolidation; UAT-S-44 final proof | consolidates the per-wave negative authorization tests; no retroactive security; no wave accepted frontend-hidden-only |
+| 13 | verification only | re-runs the per-wave negative authorization test suite; full RBAC regression |
+
+No wave may be accepted with `frontend-hidden only` authorization. If a wave cannot represent its required authorization while SC108..SC114 primary wave is Wave 12, the per-wave negative authorization for that endpoint must still be added in the wave that introduces the endpoint; Wave 12 only consolidates the final matrix.
+
+For each wave the following fields are planned (not yet implemented):
+
+```text
+Wave ID
+
+Business objective
+
+SC IDs
+
+Invariant IDs
+
+UAT IDs
+
+Race IDs
+
+Dependencies (from §30.3 DAG)
+
+Physical tables added (from §30.8)
+
+Existing tables extended (from §30.8)
+
+Backend files expected to change
+
+Frontend files expected to change
+
+Tests expected to be added/updated
+
+Migration scope (from §30.8)
+
+Compatibility responsibilities (legacy SD without DN; products.price_cents legacy fallback; legacy customer; legacy return source marker)
+
+Frozen-domain integrations (Finance V22 R-SAL-15 from Wave 7; Accounting & Analytics reads; Platform A-21 idempotency)
+
+Explicit OUT OF WAVE items (do not creep scope)
+
+Acceptance gates (focused + integration + R-SAL evidence + MySQL checkpoint if applicable)
+
+Commit boundary (one primary local commit after external review; no push)
+```
+
+### 30.16 Per-wave contract (canonical pattern)
+
+For each wave the following fields are planned (not yet implemented):
+
+```text
+Wave ID
+
+Business objective
+
+SC IDs
+
+Invariant IDs
+
+UAT IDs
+
+Race IDs
+
+Dependencies (from §30.3 DAG)
+
+Physical tables added (from §30.8)
+
+Existing tables extended (from §30.8)
+
+Backend files expected to change
+
+Frontend files expected to change
+
+Tests expected to be added/updated
+
+Migration scope (from §30.8)
+
+Compatibility responsibilities (legacy SD without DN; products.price_cents legacy fallback; legacy customer; legacy return source marker)
+
+Frozen-domain integrations (Finance V22 R-SAL-15 from Wave 7; Accounting & Analytics reads; Platform A-21 idempotency)
+
+Explicit OUT OF WAVE items (do not creep scope)
+
+Acceptance gates (focused + integration + R-SAL evidence + MySQL checkpoint if applicable)
+
+Commit boundary (one primary local commit after external review; no push)
+```
+
+### 30.17 Wave contract table (concise)
+
+| Wave | Dependencies | New tables | Existing ext | Backend files | Frontend files | Tests | Migration | Compatibility | Frozen-domain integration | OUT OF WAVE | Acceptance | Commit boundary |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | n/a | 0 | 0 | server/migrations/* runner; no new migration | none | migration-runner smoke | infrastructure | n/a | none | migration-runner passes on SQLite + MySQL | n/a | one local commit after review |
+| 1 | Wave 0 | 3 (customer_commercial_extensions, customer_material_xref, product_commercial_classification) | users (+ salesperson_code, sales_group_code) | server/modules/customers.js (extension path); server/db.js (or migration) for users cols; new module files for extensions | src/pages/master-data.jsx (customer detail extension panel) | unit + integration (extension path; legacy backfill; UNIQUE) | new migration file; legacy backfill | customers without extensions show (none); products without is_service_classification default to NO | n/a (no Finance) | focused tests + integration; user permission gate | one local commit |
+| 2 | Wave 1 | 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | 0 | server/modules/pricing.js; server/modules/discount.js; src/api.js (resolver) | src/pages/* pricing sub-page | unit (resolver) + integration | new migration file; UNIQUE + effective_from on entries | products.price_cents legacy read fallback (5th) | n/a (no Finance) | focused tests + integration; no new flow yet | one local commit |
+| 3 | Wave 2 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | server/modules/quotation.js; server/app.js (routes); src/pages/quotations.jsx | src/pages/quotations.jsx (LIST / DETAIL / EDITOR / CONVERT) | unit + R-SAL-06 test | new migration file; PK + PR UNIQUE | n/a | n/a | UAT-S-01..03; R-SAL-06 evidence | one local commit |
+| 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols); sales_order_items (+ 6 cols) | server/app.js (SO + change handlers); src/pages/master-data.jsx (SO editor + change workflow) | SO editor extended; change workflow | unit + R-SAL-07 / R-SAL-08 tests; effective_version monotonic | additive migration; legacy rows NULL → display (legacy) | legacy SO without commercial snapshots → display (legacy) | n/a | UAT-S-10..16; S05 invariant proof | one local commit |
+| 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`; reuse existing `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | server/app.js (SD handlers); new delivery_notice module; src/pages/delivery-notices.jsx | delivery-notices new route | unit + R-SAL-16 / R-SAL-17 / R-SAL-18 / R-SAL-19 tests | additive migration for the two notice identity fields; `billing_mode` = `REUSE_EXISTING`, NO duplicate ADD COLUMN | legacy SD without DN still allowed (read-only); existing billing mode converged compatibly | n/a | UAT-S-17 / S-18; S09 invariant proof | one local commit |
+| 6 | Wave 5 | 2 (sales_order_replacements, sales_order_replacement_lines) | return_orders (+ commercial_source_marker) | server/app.js (SR handlers); src/pages/returns.jsx (replacement tab) | returns route extended | unit + R-SAL-09 / R-SAL-10 tests | additive migration | legacy returns without commercial_source_marker → treat as DELIVERY_BACKED | n/a | UAT-S-19..22 + S-41; S10 / S11 invariant proof | one local commit |
+| 7 | Waves 5, 6 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new financeAdapter with locked-read; new prepayment module; new reservation_intent module; Finance V22 bounded extension (applyUnappliedBalance, createRefund, reverseSettlementDocument for PREPAYMENT reduction — all acquire parent settlement_unapplied_balances FOR UPDATE) | prepayment sub-page inside SO; reservation intent list | unit + R-SAL-02 / R-SAL-15 tests; Finance Adapter locked-read on real MySQL | new migration file; UNIQUE on (sales_order_id, line_no); idempotency snapshot_key | n/a | **Finance V22 R-SAL-15 bounded extension (CRITICAL) — see §30.9** | UAT-S-23 + S-24 + S-40; S12 / S13 invariant proof | one local commit + separate Finance files change report (per §25) |
+| 8 | Wave 7 | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | 0 | new service-fulfillment module; new consignment module; SD confirm gate (service items require confirmation) | src/pages/consignment.jsx; service sub-page inside SO | unit + R-SAL-20 / R-SAL-21 / R-SAL-22 tests | new migration file | n/a | n/a | UAT-S-25..27; S08 / S18 invariant proof | one local commit |
+| 9 | Wave 1 (foundation) | 5 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile) + credit_profile_ratings (1 more) = 6 | 0 | new credit-anchor module; ensureCreditLockAnchor provisioning; new credit-policy module; new credit-profile module; legacy backfill on real MySQL | credit-anchor admin / setup only; legacy bootstrap on real MySQL | unit + R-SAL-12 anchor lock test + R-SAL-24 anchor lock test; legacy bootstrap on real MySQL | new migration file; UNIQUE (anchor_key) NOT NULL; PK on credit_parameters (code, effective_from); legacy backfill on existing credit_profile tuples | n/a | n/a (no Finance) | UAT-S-29 + S-30; first anchor infrastructure in place; no fail-open | one local commit |
+| 10 | Wave 9 | 2 (credit_check_results, credit_special_approval) | 0 | evaluateCredit() service; credit-special-approval workflow | credit-check evaluate surface; credit-special-approvals new route | unit + R-SAL-12 / R-SAL-13 / R-SAL-14 tests; recognition-mode tests; MySQL FOR UPDATE on real MySQL | new migration file; PR UNIQUE (source_credit_check_result_id) | n/a | n/a (Credit Special Approval uses existing Platform approval) | UAT-S-31..33; S14 / S15 / S16 invariant proof; first executable Credit runtime | one local commit |
+| 11 | Waves 7, 10 | 6 (credit_evaluation_indicator, credit_evaluation_scheme, credit_evaluation_model, credit_evaluation_scoring_sheet, credit_evaluation_result, credit_recalculation_history) | 0 | new credit-evaluation module; credit_query_snapshot (DERIVED C-02); credit_exposure_view (DERIVED C-01) | credit-evaluation new route | unit + R-SAL-23 conditional test (PURE_DERIVED default); bounded multi-scorer aggregation | new migration file; bounded multi-scorer per scoring_sheet | n/a | n/a | UAT-S-34..36; S17 invariant proof; PURE_DERIVED default | one local commit |
+| 12 | Waves 6, 7, 8, 11 | 0 | 0 | (no backend changes except small integration) | new routes (quotations / delivery-notices / sales-order-changes / sales-order-replacements / service-fulfillments / consignment-commercial / credit-*); sales-customer launcher ≤ 6 primary entries; decision reports extensions; src/styles/* | responsive matrix reruns (320/390/430/680); 390px primary | none | n/a | n/a | UAT-S-37 + S-38 + S-44; full responsive acceptance | one local commit |
+| 13 | Wave 12 | 0 | 0 | (verification only) | (verification only) | all 23 materialized Sales MySQL race scenarios + R-SAL-23 structural assertion; pnpm test:mysql / pnpm test:mysql:concurrency; full FAST / FULL / HEAVY | none | n/a | n/a | full domain acceptance: 36/36 Audit CAP; 24/24 race (23 materialized + 1 structural); 44/44 UAT; 114/114 SC coverage; 0 TBD | one local commit |
+
+### 30.18 Wave dependency DAG (text form)
+
+```text
+Wave 0 (Schema / shared Sales infrastructure)
+  └─ Wave 1 (Customer commercial extensions + service classification foundation)
+       ├─ Wave 2 (Pricing + Order-Time Discount)
+       │    └─ Wave 3 (Quotation + Quotation conversion)
+       │         └─ Wave 4 (Sales Order enrichment + lifecycle + Change)
+       │              ├─ Wave 5 (Delivery Notice + Sales Delivery convergence)
+       │              │    └─ Wave 6 (Returns + Replacement)
+       │              │         └─ Wave 8 (Service Fulfillment + Consignment)
+       │              ├─ Wave 7 (Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent)
+       │              │    └─┐
+       │              └─ Wave 9 (Credit stable anchor + Policy + Profile foundation)
+       │                   └─ Wave 10 (Credit Check + Special Approval + Exposure)
+       │                        └─ Wave 11 (Credit Evaluation + Query)
+       ├─ Wave 6 ─┐
+       ├─ Wave 7 ─┤
+       ├─ Wave 8 ─┼→ Wave 12 (Mobile IA + Reporting + Compatibility convergence) → Wave 13 (MySQL race hardening + Final domain acceptance)
+       └─ Wave 11 ┘
+```
+
+No cycles. Every edge is explicit. Wave 12 depends on Waves 6 / 7 / 8 / 11, and Wave 13 depends on Wave 12.
+
+### 30.19 SC trace 114/114 (validation)
+
+```text
+SC expected = 114
+SC assigned = 114
+duplicates  = 0
+missing     = 0
+```
+
+Per-SC primary wave assignment is recorded in §30.4.
+
+### 30.20 Invariant trace 20/20 (validation)
+
+```text
+S expected = 20
+S assigned = 20
+missing   = 0
+```
+
+Per-invariant first enforcing wave + final verifying wave is recorded in §30.5.
+
+### 30.21 UAT trace 44/44 (validation)
+
+```text
+UAT expected = 44
+assigned    = 44
+missing     = 0
+```
+
+Per-UAT wave assignment is recorded in §30.6.
+
+### 30.22 Race trace 24/24 (validation)
+
+```text
+Race Requirement coverage        = 24 / 24
+Materialized executable scenarios = 23
+Conditional structural races      = 1 (R-SAL-23)
+final acceptance                   = 24 / 24
+TBD                                = 0
+```
+
+Per-Race wave assignment is recorded in §30.7.
+
+### 30.23 Frozen-domain boundary (Planning, not change)
+
+No change to frozen-domain contracts in Planning.
+
+| Frozen Domain | Classification |
+|---|---|
+| Master & Engineering (V17) | NO CHANGE |
+| Planning (V19) | NO CHANGE |
+| Manufacturing & Quality (V18) | NO CHANGE |
+| Inventory & Warehouse (V21) | NO CHANGE |
+| Finance Operations (V22) | BOUNDED INTEGRATION CONTRACT EXTENSION (scheduled in Wave 7) |
+| Accounting & Analytics | NO CHANGE |
+| Platform / shared / Idempotency (A-21) | NO CHANGE |
+
+### 30.24 Documentation updates planned
+
+For each future Implementation wave:
+
+```text
+solution.md
+→ implementation-specific function / module relationships (NOT changing frozen Design)
+   (append to §30 with wave updates; not altering §29)
+
+README.md
+→ only if structure / runtime / repo usage changes (NO change unless Wave 0 / 12 introduces one)
+
+log/YYYY-MM-DD.md
+→ append-only development record per wave
+```
+
+If Implementation discovers genuine Requirement contradiction → STOP + REQUIREMENT_REOPEN_REQUIRED. If genuine frozen Design contradiction → STOP + DESIGN_REOPEN_REQUIRED. Do not silently drift.
+
+### 30.25 Commit strategy (per wave)
+
+Each wave receives ONE primary local checkpoint commit after external review.
+
+```text
+feat(sales): <wave business objective>
+test(sales): <wave focused tests>
+fix(sales): <fixes if needed>
+```
+
+No single giant commit. No push until external authorization.
+
+---
+
+## 30.26 Final Wave-Plan Summary
+
+This Implementation Wave Plan final closure is complete and ready for external freeze.
+
+```text
+14 implementation waves (Wave 0..13)
+SC: 114/114, duplicates 0, missing 0
+Invariant: 20/20
+UAT: 44/44
+Race: 24/24, TBD 0
+Materialized executable MySQL races: 23
+Conditional structural races: 1 (R-SAL-23)
+Physical NEW tables: 38
+Frozen existing-table extension inventory: 5 tables / 22 logical fields
+Actual extension migration work: 21 NEW fields
+Existing extension fields reused: 1 (sales_deliveries.billing_mode)
+Wave 13 dependency: Wave 12 → Wave 13
+Finance V22 R-SAL-15 extension scheduled in Wave 7 (CRITICAL; before Sales Prepayment Gate completion).
+credit_lock_anchors introduced in Wave 9 (BEFORE any Credit runtime).
+PURE_DERIVED exposure preserved (no mutable exposure balance).
+Frozen-domain contracts unchanged from Design freeze.
+```
+
+Do NOT claim the plan frozen. External review freezes the plan.
+
+```text
+SALES & CUSTOMER DOMAIN
+
+IMPLEMENTATION WAVE PLAN — COMPLETE
+READY FOR EXTERNAL FREEZE
+```
+
+Do NOT begin Wave 0. Do NOT write code. Do NOT stage. Do NOT commit. Do NOT push.
