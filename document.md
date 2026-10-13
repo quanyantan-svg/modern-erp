@@ -4187,7 +4187,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 
 ## 34. Sales & Customer Domain Closure Requirement
 
-> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 的语义与验收追溯缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；修订完成后状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement。
+> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷现已闭合，当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement。
 > Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 B3104 库存 / B3106 存货核算 / B3108–B3113 应收/应付/发票/出纳 / B3114–B3117 总账/报表/经营会计 / B3119-B3120 生产/计划 / B3121 委外 等其它 domain 的边界）。
 > 本节 Coverage 以 Sales & Customer Domain Audit 在 2026-10-12 经过 Final Arithmetic & Mapping Closure 后发布的 audit 为准：
 >
@@ -4341,11 +4341,15 @@ SC08 Commercial Defaults + Sales/Pricing UoM Usage + Over-/Under-Delivery Tolera
 
 本次有限重开对 B3102 可直接读取证据的约束如下（不以通用经验替换手册语义）：
 
-- SC01 同时包含 Sales **系统级参数**与**单据类型级控制参数**；参数族由对应 capability 有界定义，不猜测手册未给出的截图字段名。至少包含可售控制、客户物料对应启用，以及相关能力可执行时的订单变更模式、交货计划/数量控制、预留行为等控制语义。
+- SC01 同时包含 Sales **系统级参数**与**单据类型级控制参数**；参数族由对应 capability 有界定义，不猜测手册未给出的截图字段名。订单变更模式固定为 `DISABLED / CONTROLLED_DIRECT / CONTROLLED_DOCUMENT / BOTH`；此外至少包含可售控制、客户物料对应启用、交货计划/数量控制、预留行为等控制语义。参数解析结果在变更申请时形成不可变 snapshot；后续参数变化不得追溯重写已批准/已应用变更。
 - SC06 不仅是销售组身份，还包含销售员可属于多个销售组、一个默认组，以及后续报价、销售订单、报表携带 `sales_group_id` 后由后端执行的组数据隔离/可见性。
 - SC08 三个不可拆缺维度为：客户商业默认值；销售 UoM / 计价 UoM 及其基于 Master canonical conversion 的自动换算；超交/欠交容差默认值及其进入订单交货计划快照后的执行控制。
 - SC30 的 bounded baseline 为每个 Sales Order line 一条交货计划：计划日期 + 上/下容差快照。现有可读证据未证明一行多交期，不在本 Requirement 中虚构多 schedule；若未来直接手册证据要求多 schedule，必须重开 Requirement / Design。
 - B3102 客户默认值包括结算方式、付款条件、销售员、价目表、折扣表；客户物料对应须由系统参数启用，且同一内部物料允许保留多个历史客户物料编码。
+- SC07 将“客户物料对应”与“可销范围”分为两项独立能力：前者只翻译 customer material code/name ↔ canonical product；后者覆盖 customer–material、salesperson–material、salesperson–customer 三个维度，并支持 ALLOW / DENY、business-date 生效与后端执行。参数关闭只停用对应规则族，不得绕过 A-61 `sales_enabled` 或 RBAC。官方资料允许客户料号在适用条件下对应多个内部物料；本 Requirement 不主动收紧为全局一对一。候选多于一个时必须由用户显式选择内部物料并重新校验 effective mapping，不得静默自动解析。
+- SC06 默认组合同：没有 active membership 时允许零默认但不得创建/处理 group-scoped 新单据；恰有一个 active membership 时该 membership 必须为默认；多个 active memberships 时必须恰有一个默认。默认 membership/group 停用或过期后，新业务解析 fail closed，须受控重选；历史 Quotation/SO 的 group snapshot 不变。未关联 salesperson 的登录用户同样 fail closed，只有显式跨组权限可访问，并须留审计。
+- SC06 数据范围合同：`sales_group_data_scope_enabled=TRUE` 时按 login→salesperson→business-date effective membership 限制 quotation/SO/report 的读、写、审批、导出；`FALSE` 不解释为全员跨组可见，而是普通用户不得使用 group-scoped 访问，只有显式跨组权限可绕过。Wave 3/4 首次引入 Quotation/SO 时后端即须执行，Wave 12 仅做报表收敛与综合验收。
+- SC08 / SC69 对缺失 A-61 分类 fail closed：历史只读可显示 `(unclassified legacy)`；任何新 quotation/SO/price/reservation/delivery write 均要求 active classification 且 `sales_enabled=TRUE`。Sales/Pricing UoM 仅可在存在 active Master canonical base UoM 时受控回退；缺失 conversion、缺失 tolerance default 或 inactive classification 均 BLOCK。缺失分类不得隐式等同于 non-service 或可售。
 
 直接证据复核来源：金蝶开放平台《销售管理系统参数》《销售系统参数》《客户物料对应表》《业务员》《数据权限》《销售价目表》。仓库未保存可直接读取的 B3102 原始 Word，故本次以 `document.md §22` baseline 与上述官方页面交叉约束；不得据此扩展 B3102 范围。
 
@@ -4403,8 +4407,8 @@ SC32 SO Reservation Intent (Sales → Planning)                                 
 SC33 SO Status Machine + Approval (DRAFT / SUBMITTED / APPROVED / REJECTED;
      SOD CREATE != APPROVE)                                                       [EXISTING_REUSE]
 SC34 SO Required Commercial Fields for Submission (gating)                        [EXISTING_REUSE]
-SC35 SO Edit Policy (DRAFT / REJECTED only mutable; APPROVED 经 SC37..SC40
-     change document; existing semantics)                                        [EXISTING_REUSE]
+SC35 SO Edit Policy (DRAFT / REJECTED direct mutable; APPROVED 仅可经 SC37..SC40
+     批准的受控直接变更或变更单路径修改)                                           [EXISTING_REUSE]
 SC36 SO Source Document Identity (customer / quotation source where applicable)    [EXISTING_REUSE]
 ```
 
@@ -4414,14 +4418,15 @@ SC36 SO Source Document Identity (customer / quotation source where applicable) 
 #### 34.3.6 Sales Order Change（SC37–SC40）
 
 ```text
-SC37 Sales Order Change Document (post-approval controlled change)                  [DOMAIN_OWNED]
+SC37 Sales Order Controlled Change (post-approval controlled-direct or
+     formal change-document mode; both are legal per approved DR-SAL-01)           [DOMAIN_OWNED]
 SC38 Change Reason + Before/After + Line-Level Trace                               [DOMAIN_OWNED]
-SC39 Change Approval Workflow + Audit + Effective Version                          [DOMAIN_OWNED]
+SC39 Shared Change Approval/Application + Audit + Effective Version                 [DOMAIN_OWNED]
 SC40 Change Invariant (executed / delivered / invoiced / financially-recognized
      history 不可静默改写)                                                          [DOMAIN_OWNED]
 ```
 
-> Change document 只作用于尚未 executed 的剩余 obligations。已 executed 经济历史的纠错必须经现有 domain reversal / return / credit adjustment 机制，不为普通 unexecuted-order change 强制 Finance voucher reversal。
+> DR-SAL-01 Option A 已批准。四模式合同：`DISABLED` 禁止 APPROVED SO 变更；`CONTROLLED_DIRECT` 仅允许从 SO 上发起受控直接路径；`CONTROLLED_DOCUMENT` 仅允许正式变更单；`BOTH` 允许两条路径但不合并、不降低各自 RBAC/SOD/approval gate。两条合法路径共用同一 canonical application contract，并且都只作用于尚未 executed 的剩余 obligations。受控直接变更也必须生成 append-only change evidence，记录 before/after/reason/requester/approver/application actor、参数 snapshot、effective version 与 audit，绝不是对 APPROVED row 的无版本覆盖。已 executed 数量、来源关系、库存与财务历史只能经既有 reversal/return/credit-adjustment 机制纠正。
 
 #### 34.3.7 Sales Order Fulfillment / Close（SC41–SC44）
 
@@ -4443,7 +4448,7 @@ SC47 Delivery Notice Lifecycle (NOT mutate inventory)                           
 SC48 Delivery Notice ↔ Sales Delivery Linkage                                       [DOMAIN_OWNED]
 ```
 
-> Delivery Notice = 商业履行指令；Sales Delivery = 商业执行单据；Inventory = 物理 truth。**Delivery Notice 不得与 Sales Delivery 折叠**（依据 §4.1 frozen product-scope decision）。
+> Delivery Notice = 可选的商业履行指令；Sales Delivery = 商业执行单据；Inventory = 物理 truth。B3102 同时允许 `SO → SD` 与 `SO → DN → SD`：两条路径必须保留真实 source-line identity，直接出库不得制造虚假 DN。Delivery Notice 与 Sales Delivery 仍不得折叠。
 
 #### 34.3.9 Sales Delivery（SC49–SC53）
 
@@ -4505,6 +4510,8 @@ SC68 Reservation Release Intent + React to SO Change / Cancel / Close /
 ```
 
 > canonical reserved quantity 在 Planning；Sales 不得维护第二个 reservation ledger。
+>
+> B3102 行为合同分为四类：未启用预留时可创建 Inventory-owned 库存锁定；手工预留与库存量预留委托 Planning canonical reservation；预计量预留也委托 Planning，但现有 `EXPECTED` 无有限供给容量校验，故为 `BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED`，不得宣称 frozen Planning 已完整支持。调整/释放必须由 Sales intent 驱动 canonical adapter，且 SO 变更、取消、交付、受控关闭、退货、换补货均需按来源行重算或释放；任何失败不得留下 Sales shadow balance。
 
 #### 34.3.14 Service Item Sales（SC69–SC71）
 
@@ -4521,8 +4528,8 @@ SC71 Service Finance Recognition (no inventory OUT; AR / Revenue via Finance
 #### 34.3.15 Consignment（SC72–SC77）
 
 ```text
-SC72 Consignment Instruction (commercial; reference to Inventory CUSTOMER-owned
-     position; 商业 document 形状由 Design 决定)                                    [DOMAIN_OWNED]
+SC72 Consignment Instruction (commercial; Inventory position remains
+     ENTERPRISE/seller-owned until settlement/title-transfer event)               [DOMAIN_OWNED]
 SC73 Consignment Location (commercial identity, ≠ physical warehouse)              [DOMAIN_OWNED]
 SC74 Consigned Quantity Tracking + Ownership-Retention Commercial State            [DOMAIN_OWNED]
 SC75 Consignment Settlement Confirmation                                           [DOMAIN_OWNED]
@@ -4530,7 +4537,7 @@ SC76 Consignment Commercial Return                                              
 SC77 Consignment Reporting                                                          [DOMAIN_OWNED]
 ```
 
-> Consignment 商业流程不替代 Inventory 物理 truth；不替代 Finance AR / settlement canonical truth。
+> Consignment 商业流程不替代 Inventory 物理 truth；不替代 Finance AR / settlement canonical truth。客户/寄售地点仅表达 physical location / custody，不等于 CUSTOMER ownership；结算/产权转移前保持卖方 `ENTERPRISE` ownership，寄售退回保持/恢复卖方 ownership。
 
 #### 34.3.16 Sales Reporting（SC78–SC81）
 
@@ -4723,14 +4730,19 @@ UAT-S-12  Sales Order commercial tax-basis assumption snapshot
 UAT-S-13  Sales Order Required Commercial Fields Submission Gate                  [SC34]
 UAT-S-14  Sales Order Approval (SOD; CREATE != APPROVE)                             [SC33 + UAT-S-44]
 UAT-S-15  Sales Order Change (post-approval; reason + before-after; audit)；
-            system/document-type order-change mode 禁用时 backend BLOCK             [SC01, SC37..SC40]
+            分别验证 DISABLED / CONTROLLED_DIRECT / CONTROLLED_DOCUMENT / BOTH；
+            direct 与 document 两条路径均经过 approval、RBAC/SOD、shared apply、
+            idempotency、effective-version 与 append-only evidence；BOTH 不得绕过；
+            已执行数量/来源/库存/财务事实受保护，非法或 stale 变更零副作用；
+            SO Change vs Delivery 并发只能有一个合法序列化结果                 [SC01, SC37..SC40]
 UAT-S-16  Sales Order Fulfillment / Partial / Controlled Close /
             Cancellation                                                            [SC41..SC44]
 UAT-S-17  Delivery Notice 创建 + line planned-delivery-date / upper-lower tolerance
             snapshot；scheduled / notified / cancelled-notified / remaining capacity；
             cumulative notified over upper tolerated quantity is backend BLOCK       [SC01, SC08, SC30, SC45..SC48]
 UAT-S-18  Sales Delivery Confirm (OQC + Reservation + Prepayment + Credit gates；
-            source-line capacity)；cumulative delivered over upper bound is BLOCK；
+            DIRECT_ORDER 与 DELIVERY_NOTICE 两条真实 source-line path；不得 fake DN)；
+            cumulative delivered over upper bound is BLOCK；
             delivered >= lower bound may controlled-close remainder with reason/audit，
             below lower bound cannot close as fulfilled                              [SC01, SC08, SC30, SC49..SC53]
 UAT-S-19  Sales Return against Delivery (DELIVERY_BACKED; preserve behavior)       [SC54]
@@ -4741,7 +4753,9 @@ UAT-S-22  Replacement Obligation (Return + Replacement; replacement fulfillment
 UAT-S-23  Prepayment Gate (Planning Release / Reservation / Delivery stage)        [SC62..SC65]
 UAT-S-24  Reservation Intent request / view / release /
             react-to-change-cancel-close-return-replacement；system/document-type
-            reservation behavior is resolved and enforced in backend                 [SC01, SC66..SC68]
+            DISABLED / INVENTORY_LOCK / MANUAL / ON_HAND / EXPECTED behavior
+            is resolved and enforced in backend；EXPECTED 未完成 bounded Planning
+            contract extension前 fail closed                                         [SC01, SC66..SC68]
 UAT-S-25  Service Item Sales (no inventory OUT; finance recognition)               [SC69..SC71]
 UAT-S-26  Consignment Instruction + Settlement                                       [SC72..SC75]
 UAT-S-27  Consignment Return + Reporting                                             [SC76..SC77]
@@ -4749,7 +4763,10 @@ UAT-S-28  Sales foundation：bounded SYSTEM / DOCUMENT_TYPE parameter resolution
             customer defaults (settlement method / payment terms / salesperson /
             price list / discount table)；salesperson multi-group + one default；
             customer-material feature enable；sellable-control enable + customer-level
-            mapped-only scope + document-entry backend enforcement                    [SC01..SC08]
+            independent customer-material translation；customer–material、
+            salesperson–material、salesperson–customer 允销/限销；product
+            sales_enabled fail-closed；group default/data-scope backend enforcement。
+            Wave 1/4 仅作 focused checkpoint，final-completion owner = Wave 7          [SC01..SC08]
 UAT-S-29  Sales Credit Profile 创建 + 生效日期 + overdue-day policy                [SC87..SC89]
 UAT-S-30  Credit Parameters (enabled / scope / timing / strength) + Credit Rules
             (per stage / scenario / timing / strength / credit item)               [SC83..SC86]
@@ -4924,7 +4941,7 @@ P5  AUDIT trail 不得被任何其它 capability 跳过
 | 5 | Prepayment Gate | SC62..SC65 | Finance Operations (Advance Receipt / Unapplied Balance / Refund) | R/W: Sales 决定 gate rule; Finance 拥有 money truth | 不得 second advance ledger |
 | 6 | Reservation Intent | SC32, SC66..SC68 | Planning (canonical reservation) + Inventory (availability / locks) | R/W: Sales requests / reads; Planning owns canonical | 不得 second reserved-quantity ledger |
 | 7 | Service Item Sales | SC69..SC71 | Finance Operations (Revenue / AR recognition); Master & Engineering (Product identity) | R/W: Sales owns commercial; Finance owns finance | 不得 force warehouse OUT |
-| 8 | Consignment | SC72..SC77 | Inventory & Warehouse (CUSTOMER-owned position 物理层); Finance Operations (settlement 商业层) | R/W: Sales owns commercial lifecycle; consumes frozen canonical | 不得 second consignment stock balance |
+| 8 | Consignment | SC72..SC77 | Inventory & Warehouse (ENTERPRISE/seller-owned position until settlement/title transfer); Finance Operations (settlement 商业层) | R/W: Sales owns commercial lifecycle; consumes frozen canonical | 不得 second consignment stock balance；不得以 CUSTOMER-owned 伪装寄售 |
 | 9 | Sales Reporting | SC78..SC81 | Inventory & Warehouse (qty); Finance Operations (revenue / AR); Planning (open demand) | R: Sales reports; canonical read-only | 不得 reporting shadow ledger |
 | 10 | Credit Parameters / Rules | SC83..SC86 | Platform (parameter / rule infrastructure) | R/W: Sales owns semantic; Platform owns mechanics | 不得 make Platform the business owner |
 | 11 | Credit Profile | SC87..SC89 | Master & Engineering (Customer identity) | R/W: Sales extends customer | 不得 second Customer identity |
@@ -4944,7 +4961,7 @@ P5  AUDIT trail 不得被任何其它 capability 跳过
   - **I3 — One reservation truth**：Planning V19；Sales 通过 `assertStrongReservationAvailability` 读取，不写第二套；
   - **I4 — One Tax truth (statutory)**：Accounting & Analytics (财务凭证 statutory tax) downstream；Sales 仅拥有 **commercial tax-basis assumption** snapshot（SC27 header 假定 + SC28 per-line 假定）；commercial tax-basis assumption != statutory invoice tax truth（S02 + S03 family invariant）；商业 storage 形状由 Design 决定；本节不 prescribe 表名 / 列名 / cache-view-table 选型；
   - **I5 — Business date is authoritative**：`sales_orders.order_date` / `requested_delivery_date`、`sales_deliveries.delivery_date`、`return_orders.return_date` 作为 canonical period 锚点；`created_at` / `confirmed_at` 仅 audit timestamp；
-  - **I6 — Source identity preserved**：Quotation → Sales Order → Delivery Notice → Sales Delivery → Sales Return → Finance AR adapter 的 source-document identity 链路全程保留。
+  - **I6 — Source identity preserved**：Quotation → Sales Order → (`Delivery Notice` optional) → Sales Delivery → Sales Return → Finance AR adapter 的 source-document identity 链路全程保留；直接出库保留 SO line identity，不制造虚假 DN。
 
 - 不得通过本节 capability 重写其它已 frozen domain 的 canonical owner / invariant。
 
@@ -5208,14 +5225,32 @@ Sum checks:
 20 Invariant IDs enumerated (S01..S20); 0 missing; 0 duplicate
 ```
 
-本节有限重开的 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 完整对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条实际测试其语义的 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用；B3102 / B3103 全部 capability 经追溯矩阵映射至 SC。当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不得据此声称 Requirement 已重新 PASS / FROZEN。
+本节有限重开的 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 保持结构对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用。DR-SAL-01 Option A 已获用户批准，SC37..SC40 与 UAT-S-15 的 Requirement 决策缺口已闭合；当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，仍不得声称 Requirement PASS / FROZEN。
 
 > Note：本节多次提到的 import / adapter 函数名称（`applyInventoryMutation` / `postTrackedMovement` / `assertStrongReservationAvailability` / `applyCreditAdjustment` / `generateVoucher`）均为 **[current implementation reference]**，仅作现状 evidence；不 prescribe 新模块 / 新函数 / 新 migration。Design 决定 persistent storage / cache / view / table choice 与本节 capability 商业语义的行为一致性。
 
 下游 Design 见 `solution.md §29–§30`。Wave 1 implementation 仍被阻塞，须待本次 Requirement / Design 远端外部评审确认后方可进入。
 
-等待用户 `REQUIREMENT PASS` 明确批准。
+### 34.15 Limited Reopen Decision Records
+
+#### DR-SAL-01 — Sales Order change mode (`OPTION A APPROVED`, CLOSED FOR REVIEW)
+
+- Manual / repository baseline：订单批准后允许“受控直接变更”或“变更单/工作流”，两者均须保留历史。
+- 用户决策：正式批准 Option A，固定为 `DISABLED / CONTROLLED_DIRECT / CONTROLLED_DOCUMENT / BOTH`。
+- 两种合法路径共用 canonical application service；受控直接路径也创建 append-only evidence，并执行 before/after、reason、requester/approver/application actor、approval/effective-version/audit。
+- `BOTH` 只表示两条入口都可用，不是 approval、permission、SOD、idempotency、concurrency 或 invariant bypass。
+- 决策影响：A-65 enum、SC01、SC35、SC37..SC40、UAT-S-15 与 Wave 4 合同已同步；不新增 SC/UAT/Race/table/field ID。
+
+#### DR-SAL-02 — Customer-material multiplicity (`DESIGN_DECISION`, CLOSED FOR REVIEW)
+
+不采用全局一对一收紧；允许同一客户料号在相同业务日期存在多个适用内部物料候选。系统不自动猜测：操作员显式选择 `product_id` 后，后端验证 customer、code、product 与 business date 的 effective mapping；仍不唯一或无匹配则 BLOCK。故不存在 intentional bounded deviation，也不需要用 xref 替代 Sellable Scope。
+
+#### DR-SAL-03 — Reservation behavior (`DESIGN_DECISION`, CLOSED FOR REVIEW)
+
+Requirement 固定为 `DISABLED / INVENTORY_LOCK / MANUAL_RESERVATION / ON_HAND_RESERVATION / EXPECTED_SUPPLY_RESERVATION` 五种行为；DOCUMENT_TYPE 可完整覆盖 SYSTEM row。Inventory lock 使用 Inventory canonical truth；后三种 reservation 使用 Planning canonical truth。现有 Planning `EXPECTED` 没有有限容量权威来源，登记 `BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED`，未完成扩展前该模式 backend fail closed。
+
+所有已知 Requirement 决策缺口已闭合，等待 remote external review；不得自行声明 `REQUIREMENT PASS / FROZEN`。
 
 ---
 
-**SALES & CUSTOMER DOMAIN CLOSURE REQUIREMENT — COMPLETE / READY FOR EXTERNAL REVIEW**
+**SALES & CUSTOMER DOMAIN LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW**
