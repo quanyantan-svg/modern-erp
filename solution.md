@@ -13118,3 +13118,74 @@ READY FOR EXTERNAL FREEZE
 ```
 
 Do NOT begin Wave 0. Do NOT write code. Do NOT stage. Do NOT commit. Do NOT push.
+
+---
+
+## 31. Sales & Customer Domain Implementation — Wave 0
+
+> Post-freeze implementation record for the externally frozen §29 Design and §30 Wave Plan. This section records repository implementation facts only; it does not modify §29 or §30 semantics.
+
+### 31.1 Scope and zero-DDL boundary
+
+Wave 0 implements only the shared Sales & Customer migration infrastructure:
+
+```text
+SC implemented             = 0
+NEW Sales business tables  = 0
+NEW Sales business fields  = 0
+business API               = 0
+frontend                   = 0
+```
+
+`server/migrations/sales-customer-domain.js` owns the single canonical entrypoint `migrateSalesCustomerDomain(db)` and the bounded test helper `runSalesCustomerMigrations(db, steps)`. The production registry is frozen and empty in Wave 0; no dummy schema or persistent migration journal exists.
+
+### 31.2 Registry and execution contract
+
+Each future registry step has:
+
+```text
+id       globally unique non-empty step identity
+wave     integer Wave 0..13 ordering key
+migrate  migrate(db) implementation
+```
+
+Before executing any step, the runner validates the complete registry, rejects duplicate IDs / invalid waves / missing migration functions, and orders steps by `wave ASC, id ASC`. Each step receives the exact caller database object. The runner adds no implicit transaction around the registry because SQLite and MySQL DDL transaction behavior differs.
+
+The runner does not catch migration errors. A known idempotent condition must be handled precisely inside the owning future migration; every unexpected SQL, constraint, or adapter error propagates and fails database initialization closed.
+
+### 31.3 SQLite execution path
+
+```text
+createSqliteDatabase(filename)
+  → existing canonical schema and frozen domain migrations
+  → Finance open-item derived view reconciliation
+  → migrateSalesCustomerDomain(sqliteDb)
+  → return sqliteDb
+```
+
+The Sales entrypoint is additive and placed after its prerequisite frozen domain schema. Existing migrations are not reordered. Fresh SQLite and existing SQLite reopen use the same zero-step Wave 0 registry.
+
+### 31.4 Fresh MySQL bootstrap path
+
+```text
+capture migrated SQLite snapshot
+  → bootstrapMySql(liveAdapter, snapshot)
+  → existing live MySQL reconciliation
+  → migrateSalesCustomerDomain(liveAdapter)
+  → return liveAdapter
+```
+
+The temporary SQLite snapshot passes through the Sales runner before capture. The live MySQL adapter intentionally replays the same registry after bootstrap. Therefore every future Sales migration must be idempotent: on fresh MySQL the live replay is a no-op/reconciliation over snapshot-created schema.
+
+### 31.5 Existing MySQL live-upgrade path
+
+For an already-existing MySQL database, `bootstrapMySql` retains its current lifecycle and `createDatabase` invokes `migrateSalesCustomerDomain` on the returned live `MySqlSyncAdapter`. Future additive Sales migrations therefore reach existing MySQL directly instead of relying only on the fresh SQLite snapshot. The Sales runner owns neither connection creation nor connection lifecycle; if live replay fails, `createDatabase` closes the adapter and propagates the error.
+
+### 31.6 Tests and MySQL gate
+
+- `server/sales-customer-wave0-migration-runner.test.js`: zero-step production registry, deterministic ordering, same-adapter passthrough, exactly-once-per-invocation, validation-before-execution, duplicate rejection, error propagation, fresh/reopened SQLite zero-business-schema, and structural production wiring.
+- `server/mysql-sales-customer-wave0.integration.js`: protected disposable MySQL smoke; asserts `MySqlSyncAdapter`, runs a harmless injected `SELECT 1`, verifies continued connection usability, and proves none of the 38 frozen future Sales tables exists.
+- `scripts/gates/mysql-gate.mjs`: includes the Wave 0 smoke without changing the existing reset guard, target validation, or cleanup architecture.
+- `scripts/testing/test-suites.js`: classifies the focused `*.test.js` in FULL; it is not FAST because it creates/reopens a temporary SQLite database.
+
+No Sales permission, role mapping, route, UI, business table, extension field, or `sales_deliveries.billing_mode` convergence is introduced by Wave 0.

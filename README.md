@@ -327,6 +327,7 @@ log/
 - `server/modules/platform-notifications.js` / `platform-workflows.js`：Platform 通知与工作流 API owner；
 - `server/modules/planning.js` / `planning-domain.js`：MRP 运算与 Planning 方案、预测冲销、计划订单、预留、工作台 canonical owner；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
+- `server/migrations/sales-customer-domain.js`：Sales & Customer 按 Wave/id 确定排序的 canonical migration entrypoint；SQLite 初始化与 MySQL live-upgrade 共用，所有未来步骤必须幂等；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；
 - `server/migrations/`：增量 schema migration；
 - `scripts/testing/`：suite manifest、runner 和 governance；

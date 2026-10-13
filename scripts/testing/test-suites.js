@@ -74,6 +74,11 @@ const HEAVY = [
 // KEEP / MERGE / DELETE / HEAVY classification for every file in this
 // manifest is recorded in docs/operations/testing.md §3.
 const FULL = [
+  // ----- Sales & Customer Domain — Wave 0 migration infrastructure -----
+  // Canonical zero-step registry, deterministic runner, fail-closed errors,
+  // SQLite fresh/reopen wiring, and zero future Sales business schema.
+  'server/sales-customer-wave0-migration-runner.test.js',
+
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
   'server/procurement-parameters.test.js',
   'server/procurement-profiles.test.js',

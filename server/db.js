@@ -38,6 +38,7 @@ import { migrateManufacturingQualitySchema } from './migrations/manufacturing-qu
 import { migratePlanningDomainSchema } from './migrations/planning-domain-schema.js';
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
+import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 
 export const PERMISSIONS = [
   ['SUPPLIERS_VIEW', '查看供应商'],
@@ -511,6 +512,11 @@ function createSqliteDatabase(filename) {
   migrateV22FinanceWaveDTreasury(db);
   // V22 — finance_open_item_effects DERIVED SQL VIEW (non-persisted).
   ensureFinanceOpenItemEffectsView(db);
+  // Sales & Customer Wave 0 — canonical ordered migration entrypoint.
+  // The production registry is intentionally empty until Wave 1. Keep this
+  // after frozen prerequisite domain schema so future Sales steps can safely
+  // consume their canonical owners without reordering existing migrations.
+  migrateSalesCustomerDomain(db);
 
   return db;
 }
@@ -545,10 +551,21 @@ export function createDatabase(target) {
   if (typeof target === 'string') return createSqliteDatabase(target);
   const config = resolveDatabaseConfig(target);
   if (config.backend === 'sqlite') return createSqliteDatabase(config.path);
-  return createMySqlDatabase(config, {
+  const db = createMySqlDatabase(config, {
     createSqliteSnapshot: (filename) => createSqliteDatabase(filename),
     seedDemo: shouldSeedDemoData(),
   });
+  try {
+    // The fresh bootstrap snapshot already passed through the same canonical
+    // runner. Replaying it on the live adapter is intentional: future steps
+    // must be idempotent so this is a no-op/reconciliation for fresh MySQL and
+    // the additive upgrade path for an existing MySQL database.
+    migrateSalesCustomerDomain(db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
 // Idempotent migration for purchase_receipts / sales_deliveries /

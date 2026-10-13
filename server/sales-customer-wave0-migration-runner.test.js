@@ -1,0 +1,199 @@
+import assert from 'node:assert/strict';
+import { rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { test } from 'node:test';
+import { createDatabase } from './db.js';
+import {
+  SALES_CUSTOMER_MIGRATIONS,
+  migrateSalesCustomerDomain,
+  runSalesCustomerMigrations,
+} from './migrations/sales-customer-domain.js';
+import { createTempDir } from './test-utils/temp-db.js';
+
+const FUTURE_SALES_TABLES = [
+  'sales_quotations',
+  'sales_quotation_lines',
+  'sales_quotation_conversions',
+  'sales_price_lists',
+  'sales_price_list_entries',
+  'sales_price_list_versions',
+  'sales_discount_schemes',
+  'sales_discount_scheme_rules',
+  'sales_order_changes',
+  'sales_order_change_lines',
+  'delivery_notices',
+  'delivery_notice_lines',
+  'sales_order_replacements',
+  'sales_order_replacement_lines',
+  'customer_commercial_extensions',
+  'customer_material_xref',
+  'sales_prepayment_requirements',
+  'sales_prepayment_gate_results',
+  'sales_reservation_intent',
+  'service_fulfillments',
+  'consignment_commercial_documents',
+  'consignment_commercial_lines',
+  'consignment_commodity_locations',
+  'credit_parameters',
+  'credit_check_rules',
+  'credit_policy_snapshots',
+  'credit_profile',
+  'credit_profile_ratings',
+  'credit_special_approval',
+  'credit_check_results',
+  'credit_evaluation_indicator',
+  'credit_evaluation_scheme',
+  'credit_evaluation_model',
+  'credit_evaluation_scoring_sheet',
+  'credit_evaluation_result',
+  'credit_recalculation_history',
+  'product_commercial_classification',
+  'credit_lock_anchors',
+];
+
+const FUTURE_SALES_COLUMNS = {
+  sales_orders: [
+    'salesperson_code', 'sales_group_code', 'settlement_party_id', 'payer_id',
+    'customer_material_xref_id', 'commercial_tax_code', 'tax_inclusive',
+    'required_prepayment_cents', 'reservation_intent_state',
+    'commercial_close_state', 'gift_summary_cents', 'commercial_pricing_uom_code',
+  ],
+  sales_order_items: [
+    'is_gift_line', 'commercial_tax_basis', 'tax_inclusive_assumption',
+    'pricing_uom_code_applied', 'qty_break_applied_min', 'qty_break_applied_max',
+  ],
+  sales_deliveries: ['delivery_notice_id'],
+  sales_delivery_items: ['delivery_notice_line_id'],
+  return_orders: ['commercial_source_marker'],
+};
+
+function assertNoFutureSalesSchema(db) {
+  const placeholders = FUTURE_SALES_TABLES.map(() => '?').join(',');
+  const tables = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`,
+  ).all(...FUTURE_SALES_TABLES);
+  assert.deepEqual(tables, [], 'Wave 0 must not create any frozen future Sales table');
+
+  for (const [table, forbiddenColumns] of Object.entries(FUTURE_SALES_COLUMNS)) {
+    const actual = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+    for (const column of forbiddenColumns) {
+      assert.equal(actual.has(column), false, `Wave 0 must not add ${table}.${column}`);
+    }
+  }
+}
+
+test('canonical Wave 0 registry is frozen, empty, and succeeds without schema work', () => {
+  assert.equal(FUTURE_SALES_TABLES.length, 38);
+  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 21);
+  assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 0);
+  const db = new DatabaseSync(':memory:');
+  try {
+    assert.deepEqual(migrateSalesCustomerDomain(db), []);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all(), []);
+  } finally {
+    db.close();
+  }
+});
+
+test('injected steps run exactly once in deterministic wave/id order with the same adapter', () => {
+  const db = { marker: 'same-adapter' };
+  const calls = [];
+  const steps = [
+    { id: 'wave-2-b', wave: 2, migrate: (received) => calls.push(['wave-2-b', received]) },
+    { id: 'wave-1-z', wave: 1, migrate: (received) => calls.push(['wave-1-z', received]) },
+    { id: 'wave-1-a', wave: 1, migrate: (received) => calls.push(['wave-1-a', received]) },
+  ];
+
+  assert.deepEqual(runSalesCustomerMigrations(db, steps), ['wave-1-a', 'wave-1-z', 'wave-2-b']);
+  assert.deepEqual(calls.map(([id]) => id), ['wave-1-a', 'wave-1-z', 'wave-2-b']);
+  assert.equal(calls.every(([, received]) => received === db), true);
+  assert.deepEqual(steps.map((step) => step.id), ['wave-2-b', 'wave-1-z', 'wave-1-a'], 'caller registry order is not mutated');
+});
+
+test('each explicit runner invocation executes each step once', () => {
+  let executions = 0;
+  const steps = [{ id: 'repeatable-test-step', wave: 1, migrate: () => { executions += 1; } }];
+  runSalesCustomerMigrations({}, steps);
+  runSalesCustomerMigrations({}, steps);
+  assert.equal(executions, 2);
+});
+
+test('duplicate and invalid registry definitions fail before any step executes', () => {
+  let executions = 0;
+  const migrate = () => { executions += 1; };
+  assert.throws(
+    () => runSalesCustomerMigrations({}, [
+      { id: 'duplicate', wave: 1, migrate },
+      { id: 'duplicate', wave: 2, migrate },
+    ]),
+    /Duplicate Sales & Customer migration step id: duplicate/,
+  );
+  assert.throws(
+    () => runSalesCustomerMigrations({}, [{ id: 'invalid-wave', wave: 14, migrate }]),
+    /invalid wave/,
+  );
+  assert.throws(
+    () => runSalesCustomerMigrations({}, [{ id: 'missing-migrate', wave: 1 }]),
+    /requires migrate\(db\)/,
+  );
+  assert.equal(executions, 0);
+});
+
+test('migration errors propagate and stop later steps', () => {
+  const calls = [];
+  const expected = new Error('wave-step-failed');
+  assert.throws(
+    () => runSalesCustomerMigrations({}, [
+      { id: '01-before', wave: 1, migrate: () => calls.push('before') },
+      { id: '02-fail', wave: 1, migrate: () => { throw expected; } },
+      { id: '03-after', wave: 1, migrate: () => calls.push('after') },
+    ]),
+    (error) => error === expected,
+  );
+  assert.deepEqual(calls, ['before']);
+});
+
+test('fresh SQLite and existing SQLite reopen execute Wave 0 without future Sales schema', () => {
+  const dir = createTempDir('sales-wave0');
+  const dbPath = join(dir, 'wave0.db');
+  try {
+    const fresh = createDatabase(dbPath);
+    try {
+      assertNoFutureSalesSchema(fresh);
+      assert.ok(fresh.prepare("SELECT 1 FROM pragma_table_info('sales_deliveries') WHERE name='billing_mode'").get(), 'existing billing_mode remains intact');
+    } finally {
+      fresh.close();
+    }
+
+    const reopened = createDatabase(dbPath);
+    try {
+      assertNoFutureSalesSchema(reopened);
+      assert.equal(reopened.prepare('SELECT 1 value').get().value, 1);
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+});
+
+test('database factory wires the canonical runner after SQLite prerequisites and after live MySQL open', async () => {
+  const source = await readFile(new URL('./db.js', import.meta.url), 'utf8');
+  assert.match(source, /import \{ migrateSalesCustomerDomain \} from '\.\/migrations\/sales-customer-domain\.js';/);
+
+  const sqliteStart = source.indexOf('function createSqliteDatabase(filename)');
+  const sqliteEnd = source.indexOf('\nfunction lateProcurementColumns', sqliteStart);
+  const sqliteFactory = source.slice(sqliteStart, sqliteEnd);
+  assert.ok(sqliteFactory.indexOf('ensureFinanceOpenItemEffectsView(db);') < sqliteFactory.indexOf('migrateSalesCustomerDomain(db);'));
+  assert.ok(sqliteFactory.indexOf('migrateSalesCustomerDomain(db);') < sqliteFactory.lastIndexOf('return db;'));
+
+  const factoryStart = source.indexOf('export function createDatabase(target)');
+  const factoryEnd = source.indexOf('\n// Idempotent migration for purchase_receipts', factoryStart);
+  const factory = source.slice(factoryStart, factoryEnd);
+  assert.ok(factory.indexOf('const db = createMySqlDatabase') < factory.indexOf('migrateSalesCustomerDomain(db);'));
+  assert.ok(factory.indexOf('migrateSalesCustomerDomain(db);') < factory.indexOf('return db;'));
+  assert.match(factory, /catch \(error\) \{\s+db\.close\(\);\s+throw error;/);
+});
