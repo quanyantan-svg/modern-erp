@@ -8717,13 +8717,13 @@ Final verdict（本 Design）：`READY FOR USER REVIEW`。
 
 ## 29. Sales & Customer Domain Technical Design
 
-> 本节原冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果；2026-10-13 因 Wave 1 物理模型与依赖矛盾被限定重开。Requirement 语义不变；本次仅修正 §29 / §30 的 Wave 1 salesperson / sales-group identity、物理表、前向 FK 与分配计数。修订完成后状态为 `READY FOR EXTERNAL REVIEW`，不自动重新冻结 Design。
+> 本节原冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果；2026-10-13 远端外部评审进一步发现 SC01 / SC08 / SC30、effective overlap、sellable scope 与 Sales-group isolation 缺口，故 Requirement 与 Design 被再次有限重开。本次修正 §29 / §30 的有界物理模型、执行合同、验收追溯与计数；完成后状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement / Design。
 
 ```text
 AUDIT                         PASS / FROZEN
-REQUIREMENT                   PASS / FROZEN
-DESIGN                        REOPENED — WAVE 1 PHYSICAL MODEL CORRECTION
-IMPLEMENTATION WAVE PLAN      REOPENED — WAVE 1 DEPENDENCY / COUNT CORRECTION
+REQUIREMENT                   LIMITED REOPEN CLOSURE — READY FOR REMOTE EXTERNAL REVIEW
+DESIGN                        REOPEN CLOSURE — READY FOR REMOTE EXTERNAL REVIEW
+IMPLEMENTATION WAVE PLAN      REOPEN CLOSURE — READY FOR REMOTE EXTERNAL REVIEW
 WAVE 0                        PASS / FROZEN
 WAVE 1 IMPLEMENTATION         BLOCKED
 ```
@@ -8770,7 +8770,7 @@ Sales & Customer 是以下能力的唯一 canonical business owner：
 - AR / AP open-item truth（Finance Operations）
 - Advance Receipt / Unapplied Balance / Refund / Write-off / Collection / Invoice operational truth / Treasury（Finance Operations）
 - Voucher / GL / Period close / Financial reports（Accounting & Analytics）
-- RBAC / Workflow mechanics / Audit notification / Numbering / generic parameter-rule infrastructure / document relation-conversion（Platform）
+- RBAC / Workflow mechanics / Audit notification / Numbering / generic mechanics / document relation-conversion（Platform）；Sales parameter namespace、bounded codes、validation、storage 与 business semantics 不因使用 Platform mechanics 而转移 ownership
 
 #### 29.1.3 Architecture 原则
 
@@ -8802,7 +8802,7 @@ Source-identity 保持 : Quotation → SO → Delivery Notice → Sales Delivery
 | G | 原 §30.2 / §30.8 | `sales_price_lists` is created only in Wave 2 |
 | H | 原 §29.4.1 | `commercial_defaults_snapshot_id` had no canonical physical target anywhere in §29 inventory |
 
-Correction decisions below supersede only these contradictory physical allocations. `document.md §34` remains unchanged.
+Correction decisions below supersede these contradictory physical allocations and the later remote-review defects recorded in `document.md §34` (SC01 / SC08 / SC30 semantics and acceptance). SC / Invariant / UAT / Race counts remain unchanged.
 
 ```text
 Classification dimensions:
@@ -8894,13 +8894,15 @@ A physical TABLE = a single SQL relation; columns are NOT counted as tables.
 | A-62 | `credit_lock_anchors` (REFINED; replaces original A-62 design) | NEW (stable long-lived lock identity; one generic table; anchor_type ∈ {CREDIT_OBJECT, POLICY_SCOPE}) | §29.20 / §29.21 / §29.25.2-3 — stable Credit-control anchor (CREDIT_OBJECT + POLICY_SCOPE) | Sales & Customer |
 | A-63 | `sales_groups` | NEW | §29.4.2 — canonical Sales group identity | Sales & Customer |
 | A-64 | `salesperson_profiles` | NEW | §29.4.2 — canonical Sales salesperson identity; optional login link | Sales & Customer |
+| A-65 | `sales_parameters` | NEW | §29.4.5 — bounded SYSTEM / DOCUMENT_TYPE Sales configuration | Sales & Customer |
+| A-66 | `salesperson_group_memberships` | NEW | §29.4.2 — multi-group membership + one default group | Sales & Customer |
 
 Counts:
 
 ```text
-Physical tables total                                  = 64
+Physical tables total                                  = 66
   EXISTING_CONVERGE  (incl. frozen)                   = 24  (A-01..A-24)
-  NEW (physical tables in §29 Domain closure)         = 40  (A-25..A-64)
+  NEW (physical tables in §29 Domain closure)         = 42  (A-25..A-66)
   DEPRECATED_NO_NEW_WRITES (tables)                   =  0
 ```
 
@@ -8909,18 +8911,18 @@ Physical tables total                                  = 64
 | Existing Table | New logical field(s) | Business purpose | Owner | Compatibility rule |
 |---|---|---|---|---|
 | A-02 `sales_orders` | `salesperson_id`, `sales_group_id`, `settlement_party_id`, `payer_id`, `customer_material_xref_id`, `commercial_tax_code`, `tax_inclusive`, `required_prepayment_cents`, `reservation_intent_state`, `commercial_close_state`, `gift_summary_cents`, `commercial_pricing_uom_code` | SO commercial extension & lifecycle / closure (§29.8 / §29.10) | Sales & Customer | legacy rows: NULL → display `(legacy)`; no fabrication |
-| A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max` | Line-level commercial snapshot; gift line marker; pricing/uom resolved snapshots | Sales & Customer | legacy rows: NULL → display `(legacy)` |
+| A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max`, `planned_delivery_date`, `upper_delivery_tolerance_bps`, `lower_delivery_tolerance_bps` | Line-level commercial snapshot; gift line marker; pricing/uom resolved snapshots; bounded one-schedule-per-line delivery plan/tolerance snapshot | Sales & Customer | legacy rows: NULL → display `(legacy)`; legacy tolerance does not get reinterpreted from later defaults |
 | A-04 `sales_deliveries` | `delivery_notice_id`, `billing_mode` (existing) | DN source-line identity; preserved mode | Sales & Customer | legacy rows: NULL `delivery_notice_id` allowed (legacy path) |
 | A-05 `sales_delivery_items` | `delivery_notice_line_id` | DN line capacity anchor (§29.11 / §29.17) | Sales & Customer | legacy rows: NULL `delivery_notice_line_id` allowed (legacy path) |
 | A-06 `return_orders` | `commercial_source_marker` (CHECK: DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE) | Three-mode explicit | Sales & Customer | legacy rows: NULL → treat as DELIVERY_BACKED |
-| A-39 `customer_commercial_extensions` | `default_pricing_list_id` | Wave 2 adds the FK only after A-28 `sales_price_lists` exists; Requirement semantic retained without a dangling Wave 1 pseudo-FK | Sales & Customer | Wave 1 rows remain valid with field absent; Wave 2 adds nullable FK without fabricating a default |
+| A-39 `customer_commercial_extensions` | `default_pricing_list_id`, `default_discount_scheme_id` | Wave 2 adds FKs only after A-28 `sales_price_lists` and A-31 `sales_discount_schemes` exist; B3102 customer default semantics retained without dangling Wave 1 pseudo-FKs | Sales & Customer | Wave 1 rows remain valid with fields absent; Wave 2 adds nullable FKs without fabricating defaults |
 | A-19 `account_receivables` | (none this closure) | AR canonical owner = Finance; Sales reads only | Finance Operations | n/a |
 
 Counts:
 
 ```text
 Existing-table extensions                                  = 6  (five pre-existing tables + A-39 extended in Wave 2)
-New logical fields across extensions                       = 23
+New logical fields across extensions                       = 27
 (no new physical tables created from this sub-class)
 ```
 
@@ -8982,9 +8984,9 @@ Per §29.18 + Micro-Closure §8: prefer Sales-owned commercial product extension
 Chosen: Option A  Sales-owned commercial product extension table
   object: product_commercial_classification (A-61)
   product_id: FK to products.id (Master-owned identity; Sales only reads)
+  sales_enabled + Sales/Pricing UoM references + upper/lower tolerance defaults
   service_classification (bool)
-  effective_from / effective_to
-  business_unit (Sales & Customer)
+  one current row per product; transactional audit history
   no write to products table; no Master-frozen-column alteration
 ```
 
@@ -9001,13 +9003,14 @@ Per §29.19 corrected design (rebuild in this §29 of the corrected micro-closur
 #### 29.2.1 Recalculated counts (Micro-Closure)
 
 ```text
-A  Physical tables total                     = 64
+A  Physical tables total                     = 66
      EXISTING_CONVERGE                       = 24  (A-01..A-24)
-     NEW                                     = 40  (A-25..A-64)
+     NEW                                     = 42  (A-25..A-66)
      DEPRECATED_NO_NEW_WRITES (tables)      =  0
 
 B  Existing-table extensions                = 6  covered tables across the wave sequence
-                                                 (6 extensions, 23 new logical fields)
+                                                 (6 extensions, 27 logical fields;
+                                                  26 ADD + 1 existing reused field)
 
 C  Derived views / projections               = 5  logical objects
      persisted? YES                         = 0
@@ -9018,7 +9021,7 @@ D  Compatibility behaviors                  = 5  legacy read = YES; new write th
 E  Deprecated fields (no-new-write)         = 1  (products.price_cents; single classification)
 
 Sum check:
-  A tables:  24 + 40 + 0 = 64 ✓
+  A tables:  24 + 42 + 0 = 66 ✓
   Sub-categories are disjoint (every table belongs to exactly one of A classifications)
   Columns are NEVER counted as tables (see B for column extensions)
 
@@ -9081,6 +9084,7 @@ default_salesperson_id         (FK salesperson_profiles.id, NULL)
 default_sales_group_id         (FK sales_groups.id, NULL)
 default_payment_terms_days     (INTEGER, NULL, CHECK >= 0)
 default_settlement_method      (TEXT, NULL)
+sellable_scope_mode            (TEXT, NOT NULL, CHECK IN 'ALL_SALES_ENABLED','MAPPED_ONLY')
 effective_to                   (DATE, NULL; CHECK effective_to >= effective_from)
 created_at / updated_at        (NOT NULL audit timestamps)
 created_by / updated_by        (FK users.id, NULL; audit actor only, not salesperson identity)
@@ -9089,11 +9093,13 @@ PRIMARY KEY (customer_id, effective_from)
 
 Notes:
 - Ship-to / Settlement Party / Payer 不必自有 Customer row；可以引用同一 Customer（self）。
-- 主键：`PRIMARY KEY (customer_id, effective_from)` 唯一定位一条。
-- `effective_to IS NULL` 表示当前 effective record；effective row 本身即版本身份，不增加另一套 mutable `version` / `active` truth。
+- 主键：`PRIMARY KEY (customer_id, effective_from)` 仅定位一条版本，**不**被误认为能够阻止区间重叠。
+- Hard invariant：对同一 `customer_id` 与任一 `business_date`，至多一条 extension row 满足 `effective_from <= business_date AND (effective_to IS NULL OR business_date <= effective_to)`；同一 customer 的两个有效区间不得重叠。
+- Cross-dialect mutation：SQLite 使用 `BEGIN IMMEDIATE`；MySQL 在同一 transaction 中先 `SELECT customers.id ... FOR UPDATE`，以 Master customer identity row 作为稳定的 customer-scoped serialization anchor，再重读全部相关 effective rows。发现 overlap 时明确拒绝；仅显式的 controlled supersession 可先把上一行 `effective_to` 设为新行前一业务日，然后写新行与 audit，最后 commit。读取 Master row 的锁不会转移 customer identity ownership，且不得修改 Master row。
+- `effective_to IS NULL` 表示 open-ended effective record；effective row 本身即版本身份，不增加另一套 mutable `version` truth。
 - Frozen `customers.payment_terms_days` 保留（legacy compatibility）；不在 Wave 1 修改 `customers`。Extension 中的 nullable default 不反写 Master row，也不为历史 customer fabrication。
 - `credit_limit` 不在本表重复定义；属于 `credit_profile`（§29.22）。SC1 在 §34.1 中明示 `credit_limit` 不归 Customer commercial master（避免 double-counting）。
-- `default_pricing_list_id` 保留 Requirement 语义，但归 Wave 2：A-28 `sales_price_lists` 创建后，Wave 2 才向 A-39 增加 nullable FK。Wave 1 不创建字段、不创建 TEXT pseudo-FK、不提前创建 price-list table。
+- `default_pricing_list_id` / `default_discount_scheme_id` 保留 B3102 customer-default 语义，但归 Wave 2：A-28 `sales_price_lists` / A-31 `sales_discount_schemes` 创建后才向 A-39 增加 nullable FK。Wave 1 不创建字段、不创建 TEXT pseudo-FK、不提前创建 target table。
 - `commercial_defaults_snapshot_id` 从 target physical design 删除：Requirement 未要求 customer-default snapshot identity，且无 canonical target。变更历史由 A-22 `audit_logs`；交易时不可变事实由后续 Sales document snapshot 保存。
 
 Wave 1 field disposition（no TBD）：
@@ -9103,9 +9109,10 @@ Wave 1 field disposition（no TBD）：
 | `customer_id`, `effective_from`, `effective_to` | `WAVE_1_PHYSICAL` | Master FK + effective-dated identity |
 | `settlement_party_customer_id`, `payer_customer_id` | `WAVE_1_PHYSICAL` | SC03 / SC04; canonical customer references |
 | `default_salesperson_id`, `default_sales_group_id` | `WAVE_1_PHYSICAL` | SC05 / SC06; canonical Sales-owned references |
-| `default_payment_terms_days`, `default_settlement_method` | `WAVE_1_PHYSICAL` | nullable commercial defaults; no Master rewrite |
+| `default_payment_terms_days`, `default_settlement_method`, `sellable_scope_mode` | `WAVE_1_PHYSICAL` | nullable commercial defaults + coherent customer-level sellable policy; no Master rewrite |
 | `created_at`, `updated_at`, `created_by`, `updated_by` | `WAVE_1_PHYSICAL` | audit metadata; actor identity is not salesperson identity |
-| `default_pricing_list_id` | `DEFER_TO_WAVE_2` | A-28 target does not exist before Wave 2; SC08 primary wave moves to Wave 2 |
+| `default_pricing_list_id` | `DEFER_TO_WAVE_2` | A-28 target does not exist before Wave 2; SC08 final completion remains Wave 5 after tolerance execution |
+| `default_discount_scheme_id` | `DEFER_TO_WAVE_2` | A-31 target does not exist before Wave 2; nullable customer discount-table default, no fabrication |
 | any prepayment / reservation / credit default | `DEFER_TO_LATER_WAVE` | owned by Waves 7 / 9+; not introduced in Wave 1 |
 | `commercial_defaults_snapshot_id` | `REMOVED_AS_INVALID_DESIGN` | no Requirement mandate and no canonical physical target |
 
@@ -9127,16 +9134,28 @@ salesperson_profiles (A-64):
   salesperson_code      (TEXT, NOT NULL, UNIQUE)
   name                  (TEXT, NOT NULL)
   user_id               (FK users.id, NULL, UNIQUE)
-  sales_group_id        (FK sales_groups.id, NULL)
   active                (BOOLEAN, NOT NULL, DEFAULT TRUE)
   created_at / updated_at (NOT NULL)
+
+salesperson_group_memberships (A-66):
+  id                    (PK)
+  salesperson_id        (FK salesperson_profiles.id, NOT NULL)
+  sales_group_id        (FK sales_groups.id, NOT NULL)
+  is_default            (BOOLEAN, NOT NULL, DEFAULT FALSE)
+  active                (BOOLEAN, NOT NULL, DEFAULT TRUE)
+  effective_from        (DATE, NOT NULL)
+  effective_to          (DATE, NULL; CHECK effective_to >= effective_from)
+  created_at / updated_at / created_by / updated_by
+  UNIQUE (salesperson_id, sales_group_id, effective_from)
 ```
 
 - `user_id IS NULL` 合法：salesperson 可以没有 ERP login；login user 不自动成为 salesperson。
 - `users.id` 只作为可选 login link / audit actor；`salesperson_profiles.id` 是唯一 Sales salesperson identity。
 - `sales_groups.id` 是唯一 group identity；Customer default、Quotation、SO 与后续 Credit salesperson dimension 均引用 ID，不存 canonical group free text。
+- 一个 salesperson 可同时属于多个 effective sales group，但任一 `business_date` 至多一个 membership 为 default。membership mutation 以 `salesperson_profiles.id` 为稳定锁锚：SQLite `BEGIN IMMEDIATE`；MySQL `SELECT salesperson_profiles.id ... FOR UPDATE`，重读 memberships 后校验重叠与 one-default，再与 audit 同 transaction 写入。`salesperson_profiles` 不再保存歧义的单值 `sales_group_id`。
+- Quotation（Wave 3）与 Sales Order（Wave 4）写入时 snapshot `sales_group_id`；从这些单据存在起，后端 query/mutation 按当前 login → `salesperson_profiles.user_id` → effective memberships 解析可见 group，不能仅靠前端隐藏。Report（Wave 12）复用相同 data-scope predicate；跨组访问只有显式全局权限可绕过并记录 audit。SC06 的 final-completion wave 因此是 Wave 12，而非建表的 Wave 1。
 - 历史 row 缺 salesperson / group 时显示 `(unassigned)`，不 fabrication 商业事实。
-- Wave 1 对 `users` / `customers` / `products` / `sales_orders` / `sales_order_items` 的 schema extension 均为 0。
+- Wave 1 对 `users` / `customers` / `products` / `sales_orders` / `sales_order_items` 的 schema extension 均为 0；A-65 / A-66 均为 Sales-owned 新表。
 
 #### 29.4.3 Customer-Material Cross Reference
 
@@ -9149,7 +9168,6 @@ product_id                 (FK products.id, NOT NULL)
 customer_material_code     (TEXT, NULL)
 customer_material_name     (TEXT, NULL; customer-facing identity only)
 commercial_uom_code        (TEXT, NULL; FK/contract to existing canonical UOM)
-sellable_scope             (CHECK IN 'ALL','EXCLUSIVE','RESTRICTED')
 effective_from             (DATE, NOT NULL)
 effective_to               (DATE, NULL; CHECK effective_to >= effective_from)
 active                     (BOOLEAN, NOT NULL, DEFAULT TRUE)
@@ -9159,11 +9177,10 @@ UNIQUE (customer_id, customer_material_code, effective_from)
 ```
 
 - `customer_material_code` / `customer_material_name` = customer-specific mapping；canonical product identity 始终是 `products.id`，不复制 product code / name / base UOM truth。
-- `sellable_scope`：
-  - `ALL` = 默认可售
-  - `EXCLUSIVE` = 该 customer 只能卖此 customer-material-code 对应的 material
-  - `RESTRICTED` = 该 customer 不能卖 list 外的 material
-- `effective_to IS NULL` 表示当前。
+- xref row 只表达 customer code/name ↔ internal `product_id` 的翻译与 membership，不承载 customer-wide `ALL / EXCLUSIVE / RESTRICTED` 策略。customer-level 策略唯一存于 A-39 `sellable_scope_mode`。
+- Hard invariants：任一 `business_date`，同一 `(customer_id, product_id)` 至多一条 effective mapping；同一 `(customer_id, customer_material_code)` 至多解析到一个 effective target product。多个历史 customer material codes 可以映射到同一 internal product，但同一 code 不得同时解析到两个 product。
+- mutation 与 A-39 共用 customer-scoped stable anchor：SQLite `BEGIN IMMEDIATE`；MySQL `SELECT customers.id ... FOR UPDATE`；锁内重读两种 key 的全部 relevant intervals，拒绝任一维度 overlap，或执行显式 controlled supersession，再写 xref + audit 后 commit。两个 `UNIQUE(..., effective_from)` 只负责 identity，不能替代 interval validation。
+- `effective_to IS NULL` 表示 open-ended current candidate；实际 effective row 必须以传入的 authoritative `business_date` 解析。
 
 #### 29.4.4 Order-time Frozen Commercial Defaults
 
@@ -9181,7 +9198,27 @@ Snapshot columns 是 additive；不改写 existing historical orders（FROZEN）
 
 #### 29.4.5 Sales Parameters (SC01)
 
-SC01 不建立 generic kitchen-sink parameter table，也不复用 Wave 9 `credit_parameters` 冒充 Sales foundation。Wave 1 的 Sales-foundation parameters 由 A-39 / A-40 / A-61 / A-63 / A-64 的 bounded active/effective/default semantics 承载；pricing / discount / consignment / credit 参数分别由其后续 owner wave 承载。`Sales Parameters` 是业务 enable/default 语义，不混入 Security，也不要求 Wave 1 新增第六张表。
+实际仓库复核结论：现有 `inventory_parameters`、`planning_parameters`、`procurement_parameters`、`finance_parameters` 与 accounting config 都是各领域自有的显式 schema/module；仓库没有可安全承载 Sales-owned SYSTEM / DOCUMENT_TYPE 参数语义的 canonical generic Platform parameter storage。A-21 `idempotency_records` 等 Platform shared mechanics 也不是参数存储。因此采用 Sales-owned bounded table A-65，而不创建 uncontrolled generic key/value store，也不复用 Wave 9 `credit_parameters`。
+
+```text
+sales_parameters (A-65):
+  scope_key                         (PK; 'SYSTEM' or 'DOCUMENT_TYPE:<bounded-code>')
+  scope_type                        (CHECK IN 'SYSTEM','DOCUMENT_TYPE')
+  document_type                     (NULL for SYSTEM; bounded code for DOCUMENT_TYPE)
+  sellable_control_enabled          (BOOLEAN NOT NULL)
+  customer_material_xref_enabled    (BOOLEAN NOT NULL)
+  sales_group_data_scope_enabled    (BOOLEAN NOT NULL)
+  delivery_schedule_enabled         (BOOLEAN NOT NULL)
+  delivery_quantity_control_enabled (BOOLEAN NOT NULL)
+  order_change_mode                 (CHECK IN 'DISABLED','CONTROLLED_DOCUMENT')
+  reservation_behavior              (CHECK IN 'DISABLED','MANUAL_INTENT')
+  active / created_at / updated_at / created_by / updated_by
+```
+
+- `scope_type='SYSTEM'` 时 `document_type IS NULL`；`DOCUMENT_TYPE` 时必须为 Sales registry 中的 bounded document type。所有 code 均由 Sales validator 白名单校验，不接受任意 key/value。
+- resolution deterministic：先读取 exact active `DOCUMENT_TYPE:<code>` row；存在时该完整控制行覆盖 SYSTEM，否则使用唯一 active SYSTEM row；缺少 SYSTEM row 或 code 非法时 backend fail closed。Platform 只提供 transaction/audit/RBAC 等通用 mechanics，不拥有 parameter namespace/code/validation/business meaning。
+- feature enable 与业务事实分离：`customer_material_xref_enabled` 决定客户料号字段/解析是否可用；`sellable_control_enabled` 决定是否执行 A-39 sellable scope；两者互不替代。启用 sellable control 且 A-39 为 `MAPPED_ONLY` 时，业务单据录入/保存必须存在 business_date 上 effective A-40 membership；`ALL_SALES_ENABLED` 仍要求 A-61 `sales_enabled=TRUE`。所有检查在 backend 执行，frontend hidden 不是 authorization。
+- 后续能力依赖：Wave 4 执行 `order_change_mode`；Wave 5 执行 delivery schedule/quantity controls；Wave 7 执行 `reservation_behavior`。A-65 从 Wave 1 一次建立完整 bounded columns，但 SC01 的 primary/final-completion wave 是 Wave 7。
 
 ### 29.5 Quotation Technical Design
 
@@ -9270,7 +9307,7 @@ Constraints:
 
 ### 29.6 Sales Pricing Technical Design
 
-Wave 2 dependency order is fixed: create A-28 `sales_price_lists`, then add nullable `customer_commercial_extensions.default_pricing_list_id` with an FK to A-28. Wave 1 contains neither that column nor any unvalidated placeholder.
+Wave 2 dependency order is fixed: create A-28 `sales_price_lists` and A-31 `sales_discount_schemes`, then add nullable `customer_commercial_extensions.default_pricing_list_id` / `default_discount_scheme_id` with FKs to those targets. Wave 1 contains neither column nor any unvalidated placeholder.
 
 #### 29.6.1 物理对象
 
@@ -9473,6 +9510,9 @@ tax_inclusive_assumption       (NEW — bool nullable)
 pricing_uom_code_applied       (NEW)
 qty_break_applied_min           (NEW REAL nullable)
 qty_break_applied_max           (NEW REAL nullable)
+planned_delivery_date           (NEW DATE nullable; one-schedule-per-line identity = sales_order_items.id)
+upper_delivery_tolerance_bps    (NEW INTEGER nullable; CHECK >= 0)
+lower_delivery_tolerance_bps    (NEW INTEGER nullable; CHECK 0..10000)
 ```
 
 > 不破坏 existing rows；legacy rows 缺新字段为 NULL，行为为 PARTIAL compatibility。
@@ -9480,6 +9520,25 @@ qty_break_applied_max           (NEW REAL nullable)
 #### 29.8.3 Commercial Party Snapshot
 
 SO create 时将 `customer_commercial_extensions` 当前 effective record 冻结进 SO header snapshot columns（per §29.4.4）。Effective dating 通过 `effective_from / effective_to` 在 `customer_commercial_extensions` 表本身表达；SO 时序上不再 re-evaluate。
+
+#### 29.8.3.1 SC30 Delivery Schedule + SC08 Tolerance Snapshot
+
+现有 B3102 可读证据只证明交货计划/交货日期与超交、欠交控制，未证明一个 SO line 必须支持多个 schedule。bounded baseline 因而采用 **line-level single schedule snapshot**，不虚构 dedicated `sales_order_delivery_schedules` relation：`sales_order_items.id` 同时是 source-line identity 与该行唯一 schedule identity；`planned_delivery_date` 可由 header `requested_delivery_date` 默认，但最终逐行存储。
+
+在 SO create/approval（以首次形成 APPROVED immutable obligation 为最终冻结点）从 A-61 默认值解析并写入 line snapshot；审批后不得由 later master/default change 重算。只有 SC37–SC40 controlled SO Change 可对**未执行剩余量**产生新 effective version，且保留 before/after/reason/audit；已经 notified/delivered 的历史不改写。
+
+```text
+base_qty                = sales_order_items.quantity in Sales UoM
+upper_tolerated_qty     = base_qty × (10000 + upper_delivery_tolerance_bps) / 10000
+lower_tolerated_qty     = base_qty × (10000 - lower_delivery_tolerance_bps) / 10000
+```
+
+quantity 使用现有 deterministic decimal/quantity convention 做整数刻度或数据库精确十进制运算，统一舍入规则后比较；禁止 binary-float 临界比较。Sales/Pricing UoM 不同则先通过 canonical `product_uom_conversions` 归一至 Sales UoM；缺 conversion 时 backend BLOCK。
+
+- Delivery Notice（Wave 5）在 source-line lock 内重读 `SUM(active notified qty)`，新累计值超过 `upper_tolerated_qty` 时 BLOCK，失败副作用为零。
+- Sales Delivery（Wave 5）在同一 transaction 内重读 DN/SO source capacity，`SUM(confirmed delivered qty)` 超 upper bound 时 BLOCK，失败副作用为零。
+- 正常完成点仍是 ordered `base_qty`。若 delivered qty 已达到 lower bound，可通过显式 controlled close 豁免 remainder，必须记录 reason、actor、before/after 与 audit；低于 lower bound 不得标记 fulfilled，必须用 controlled change/cancel 处理剩余义务。
+- `delivery_schedule_enabled` / `delivery_quantity_control_enabled` 按 A-65 SYSTEM/DOCUMENT_TYPE resolution 执行；配置关闭不删除已批准快照，也不重写历史。
 
 #### 29.8.4 Commercial Tax-Basis Assumption Snapshot
 
@@ -10367,11 +10426,18 @@ Compatibility behavior: if Master later adds `products.is_service` at a frozen
 product_commercial_classification:
   id
   product_id (FK products.id, NOT NULL; UNIQUE per product)
+  sales_enabled (bool default true)
+  sales_uom_code (FK uoms.code, nullable; NULL means canonical product/base UoM)
+  pricing_uom_code (FK uoms.code, nullable)
+  default_upper_delivery_tolerance_bps (INTEGER NOT NULL default 0; CHECK >= 0)
+  default_lower_delivery_tolerance_bps (INTEGER NOT NULL default 0; CHECK 0..10000)
   service_classification (bool default false)
-  service_kind (text nullable; future bounded extension)
-  effective_from, effective_to (DATE)
-  created_at, created_by
+  service_kind (text nullable; bounded Sales code when service_classification=true)
+  active (bool default true)
+  created_at, updated_at, created_by, updated_by
 ```
+
+此表是每个 product 一条 current Sales commercial classification；变更历史由 transactional `audit_logs` 保存，不同时维护 contradictory effective intervals。UoM identity 与 conversion truth 始终来自 Master-owned A-15 `uoms` / A-16 `product_uom_conversions`，本表只引用 Sales 使用/计价 UoM，不复制 conversion。两 UoM 不同时必须存在 canonical conversion，否则报价/订单解析 fail closed。tolerance 是 SC08 默认值，进入 SO line 后以 §29.8.3.1 snapshot 为执行真理；后续默认变化不得重解释已批准订单。
 
 #### 29.18.1 物理对象
 
@@ -11969,12 +12035,15 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | `sales_groups.group_code UNIQUE NOT NULL` | one canonical Sales group code |
 | `salesperson_profiles.salesperson_code UNIQUE NOT NULL` | one canonical Sales salesperson code |
 | `salesperson_profiles.user_id UNIQUE NULLABLE FK users.id` | optional one-to-one login link; salesperson may exist without login |
-| `salesperson_profiles.sales_group_id NULLABLE FK sales_groups.id` | canonical group reference; no free-text group identity |
-| `customer_commercial_extensions PK (customer_id, effective_from)` | effective-dated commercial extension identity |
+| `salesperson_group_memberships UNIQUE (salesperson_id, sales_group_id, effective_from)` | multi-group membership identity; one effective default is transactionally enforced under salesperson anchor lock |
+| `sales_parameters.scope_key PK` + bounded scope/code CHECK | one explicit SYSTEM row or document-type override; no arbitrary KV |
+| `customer_commercial_extensions PK (customer_id, effective_from)` | version identity only; no-overlap is transactionally enforced under customer anchor lock |
 | `customer_commercial_extensions` party / salesperson / group FKs | no orphan Master or Sales commercial references |
 | `customer_material_xref UNIQUE (customer_id, product_id, effective_from)` | one effective mapping identity per customer / product / start date |
-| `customer_material_xref.sellable_scope CHECK` | `ALL / EXCLUSIVE / RESTRICTED` only |
-| `product_commercial_classification.product_id UNIQUE FK products.id` | one Sales commercial classification per Master product; no `products` mutation |
+| `customer_material_xref UNIQUE (customer_id, customer_material_code, effective_from)` | code version identity; interval overlap on both lookup dimensions is transactionally rejected |
+| `customer_commercial_extensions.sellable_scope_mode CHECK` | coherent customer-level `ALL_SALES_ENABLED / MAPPED_ONLY`; xref rows remain memberships |
+| `product_commercial_classification.product_id UNIQUE FK products.id` | one current Sales commercial classification/default set per Master product; no `products` mutation |
+| `sales_order_items` tolerance snapshot CHECK | upper bps >= 0; lower bps 0..10000; immutable approved execution baseline |
 | `sales_orders.order_no UNIQUE` | no duplicate order |
 | `sales_deliveries.delivery_no UNIQUE` | R-SAL-01 anchor |
 | `sales_deliveries.sales_order_id` FK (existing) | no orphan |
@@ -12318,18 +12387,18 @@ Sales & Customer Domain Design contains:
   - 1 invariant traceability (§29.48)
   - 1 acceptance architecture (§29.49)
 
-Physical model counts (post-Wave-1-Design-Reopen rebuild):
-  A tables total                  = 64
+Physical model counts (post-remote-review rebuild):
+  A tables total                  = 66
     EXISTING_CONVERGE              = 24
-    NEW                            = 40   (A-63 sales_groups + A-64 salesperson_profiles added)
+    NEW                            = 42   (through A-66; includes Sales parameters + salesperson/group memberships)
     DEPRECATED_NO_NEW_WRITES (tbl) =  0
-  B existing-table extensions      =  6 (with 23 new logical fields)
+  B existing-table extensions      =  6 (27 logical fields; 26 ADD + 1 reused)
   C derived views / projections   =  5 (4 pure-no + 1 controlled-hybrid; C-06 removed)
   D compatibility behaviors        =  5 (legacy read=YES; new write through bypass=NO)
   E deprecated-no-new-write fields =  1 (products.price_cents; single classification)
 
 Sum check:
-  A tables: 24 + 40 + 0 = 64 ✓
+  A tables: 24 + 42 + 0 = 66 ✓
   Sub-categories are disjoint (every table belongs to exactly one of A classifications)
   Columns are NEVER counted as tables (see B for column extensions)
 
@@ -12372,7 +12441,7 @@ Sales never writes second ledger:
 | Inventory & Warehouse (V21) | physical inventory truth; on-hand; locks; owner_type; consignment-position (ENTERPRISE-owned during consignment, see §29.19) | NO direct write (NO CHANGE) | `applyInventoryMutation`, `postTrackedMovement` adapters | **NO CHANGE** — V21 canonical position supports `owner_type = ENTERPRISE` at any position; consignment_commodity_location is modeled as a warehouse_id; consignment uses existing ENTERPRISE owner marker; no schema change required (see §29.19.4); do NOT silently redefine CUSTOMER-owned |
 | Finance Operations (V22) | AR open amount; advance / unapplied / refund / write-off; collection; invoice; treasury; provisional / financial recognition; eligible prepayment (per §29.16); `settlement_unapplied_balances` (PREPAYMENT parent balance row) | NO (NO CHANGE) | `recognizeFinanceExposure` / `applyCreditAdjustment` / `generateVoucher` / `createSystemVoucher`; `financeAdapter.resolveCreditExposureComponents`, `financeAdapter.resolveARForCustomerSalesContext`; **`financeAdapter.resolveEligiblePrepaymentForSalesGate(..., lockMode = FOR_UPDATE)`** for R-SAL-15; **Finance mutations `applyUnappliedBalance` / `createRefund` / `reverseSettlementDocument` (PREPAYMENT/UNAPPLIED reduction)** must acquire `settlement_unapplied_balances.id FOR UPDATE` | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** (Repository-Evidence Final Closure; no conditional wording) for the canonical `lockMode = FOR_UPDATE` parent-balance row contract; see §29.16.3.8; other reads are NO CHANGE — Sales reads via adapter only; never reconstructs AR truth |
 | Accounting & Analytics | voucher / GL | NO (NO CHANGE) | n/a | NO CHANGE |
-| Platform | login/user identity; RBAC; workflow mechanics; audit notification; numbering; generic parameter & rule infrastructure; document relation-conversion; **shared canonical idempotency_records (A-21)** | limited writes (ApprovalRequests for SALES_ORDER family); A-64 may hold a nullable FK to `users.id` but never writes Platform user business fields | generic Platform services; Sales uses A-21 for Sales command identities (Sales owns the namespace meaning, not the storage infrastructure) | **NO CHANGE** — no Sales columns on `users`; Platform owns login mechanics, Sales owns salesperson identity |
+| Platform | login/user identity; RBAC; workflow mechanics; audit notification; numbering; generic mechanics; document relation-conversion; **shared canonical idempotency_records (A-21)** | limited writes (ApprovalRequests for SALES_ORDER family); A-64 may hold a nullable FK to `users.id` but never writes Platform user business fields | Platform provides mechanics only; actual repo has no suitable generic parameter storage, so A-65 storage + namespace/codes/validation/business semantics remain Sales-owned; Sales uses A-21 for command identities | **NO CHANGE** — no Sales columns on `users` and no new Platform schema; Platform owns login/mechanics, Sales owns salesperson identity and Sales parameter semantics |
 
 Required Sales Design change to a frozen domain = **NO CHANGE for most frozen domains** EXCEPT:
 
@@ -12481,7 +12550,7 @@ External review freezes.
 
 ## 30. Sales & Customer Domain Implementation Wave Plan
 
-> This is the Implementation Sequencing Plan only. It was limitedly reopened on 2026-10-13 together with §29 to correct Wave 1 physical identity, dependency, and count contradictions. Requirement semantics remain frozen; implementation remains blocked until external review re-freezes the corrected Design / Plan.
+> This is the Implementation Sequencing Plan only. It was limitedly reopened on 2026-10-13 together with §29 to close the remote-review Requirement / Design defects. Implementation remains blocked until remote external review re-freezes the corrected Requirement / Design / Plan.
 > Plan-only output: no code, no migrations, no schema, no tests, no stages, no commits, no pushes, no tag, no version bump.
 
 ### 30.1 Total final wave count
@@ -12497,18 +12566,18 @@ Each wave is small enough that one engineer / coding agent can implement, test, 
 | Wave | One-line business objective | Primary SC IDs (count) | Primary new physical tables | Primary file changes (planned; not yet executed) |
 |---|---|---|---|---|
 | 0 | Schema / shared Sales infrastructure + migration runner readiness | n/a (foundation) | 0 | server/migrations/* (infrastructure; no new tables yet); existing migration files remain untouched |
-| 1 | Sales Groups + Salesperson Profiles + Customer commercial extension foundation + customer-material xref + service classification foundation | 8 (SC01..SC07, SC69) | 5 (`sales_groups`, `salesperson_profiles`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | Sales-owned foundation modules + customer detail integration; no `users` / Master schema extension |
-| 2 | Pricing engine + Order-Time Discount + customer default price-list reference | 10 (SC08, SC15..SC23) | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | pricing / discount modules; add A-39 nullable `default_pricing_list_id` only after A-28 exists; pricing UI |
+| 1 | Sales parameters + Sales Groups / multi-membership + Customer commercial extension/xref + product commercial classification foundation | 6 (SC02..SC05, SC07, SC69) | 7 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | Sales-owned foundation modules + customer detail integration; no `users` / Master schema extension |
+| 2 | Pricing engine + Order-Time Discount + customer price-list/discount-table defaults | 9 (SC15..SC23) | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | add A-39 nullable default FKs only after A-28/A-31 exist; pricing UI |
 | 3 | Quotation + Quotation conversion | 6 (SC09..SC14) | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | server/modules/quotation.js (new); src/pages/quotations.jsx (new route); conversion API with idempotency |
-| 4 | Sales Order enrichment + lifecycle + Change | 21 (SC24..SC44) | 2 (sales_order_changes, sales_order_change_lines) | server/app.js SO handlers extended; sales_orders + sales_order_items columns additive; src/pages/master-data.jsx SO editor extended; SO Change API + workflow |
-| 5 | Delivery Notice + Sales Delivery convergence | 9 (SC45..SC53) | 2 (delivery_notices, delivery_notice_lines) | server/app.js SD handlers extended; new delivery_notice module; src/pages/delivery-notices.jsx (new route); mandatory DN for new SD |
+| 4 | Sales Order enrichment + lifecycle + Change + line schedule snapshot | 20 (SC24..SC29, SC31..SC44) | 2 (sales_order_changes, sales_order_change_lines) | server/app.js SO handlers extended; sales_orders + sales_order_items columns additive; line schedule/tolerance snapshot; SO Change API + workflow |
+| 5 | Delivery Notice + Sales Delivery convergence + tolerance execution | 11 (SC08, SC30, SC45..SC53) | 2 (delivery_notices, delivery_notice_lines) | DN/SD source-capacity plus upper/lower tolerance enforcement; mandatory DN for new SD |
 | 6 | Returns + Replacement | 8 (SC54..SC61) | 2 (sales_order_replacements, sales_order_replacement_lines) | server/app.js SR handlers extended; return_orders.commercial_source_marker additive col; src/pages/returns.jsx extended with replacement tab |
-| 7 | Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent | 7 (SC62..SC68) | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | server/modules/finance-adapter.js (locked-read); server/modules/prepayment.js (new); Finance V22 bounded extension (applyUnappliedBalance / createRefund / reverseSettlementDocument acquire parent balance FOR UPDATE) |
+| 7 | Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent | 8 (SC01, SC62..SC68) | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | final SC01 execution via reservation behavior after order-change and delivery parameter controls; Finance locked-read extension |
 | 8 | Service Fulfillment + Consignment commercial | 8 (SC70..SC77) | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | server/modules/service-fulfillment.js; server/modules/consignment.js; src/pages/consignment.jsx; SD confirm gate |
 | 9 | Credit stable anchor + Credit Policy + Profile foundation | 7 (SC83..SC89) | 6 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile, credit_profile_ratings) | server/modules/credit-anchor.js (new; ensureCreditLockAnchor + first-use provisioning); server/modules/credit-policy.js; legacy credit_profile backfill in migration |
 | 10 | Credit Check + Special Approval + Exposure | 10 (SC82, SC90..SC98) | 2 (credit_check_results, credit_special_approval) | server/modules/credit-check.js (evaluateCredit service); server/modules/credit-special-approval.js; PURE_DERIVED exposure; recognition-mode aware |
 | 11 | Credit Evaluation + Reconciliation + Query | 9 (SC99..SC107) | 6 (credit_evaluation_indicator, credit_evaluation_scheme, credit_evaluation_model, credit_evaluation_scoring_sheet, credit_evaluation_result, credit_recalculation_history) | server/modules/credit-evaluation.js; credit_query_snapshot (DERIVED C-02) + credit_exposure_view (DERIVED C-01) query layer |
-| 12 | Mobile IA + Reporting + Compatibility convergence | 4 (SC78..SC81) + 7 (SC108..SC114) | 0 | new routes (quotations, delivery-notices, sales-order-changes, sales-order-replacements, service-fulfillments, consignment-commercial, credit-*); sales-customer launcher ≤ 6 primary entries; decision reports extensions; src/styles/*; src/api.js extensions |
+| 12 | Mobile IA + Reporting + Compatibility + Sales-group data-scope convergence | 5 (SC06, SC78..SC81) + 7 (SC108..SC114) | 0 | final backend group-filter/report proof + new routes; launcher ≤ 6 primary entries; decision reports extensions; responsive convergence |
 | 13 | MySQL race hardening + Final domain acceptance | n/a (verification) | 0 | tests only; real MySQL functional + concurrency + performance gates; 24 race evidence plan executed |
 
 ### 30.3 Dependency DAG
@@ -12549,23 +12618,23 @@ missing    = 0
 
 | Wave | SC IDs (count) |
 |---|---|
-| 1 | SC01, SC02, SC03, SC04, SC05, SC06, SC07, SC69 (8) |
-| 2 | SC08, SC15, SC16, SC17, SC18, SC19, SC20, SC21, SC22, SC23 (10) |
+| 1 | SC02, SC03, SC04, SC05, SC07, SC69 (6) |
+| 2 | SC15, SC16, SC17, SC18, SC19, SC20, SC21, SC22, SC23 (9) |
 | 3 | SC09, SC10, SC11, SC12, SC13, SC14 (6) |
-| 4 | SC24, SC25, SC26, SC27, SC28, SC29, SC30, SC31, SC32, SC33, SC34, SC35, SC36, SC37, SC38, SC39, SC40, SC41, SC42, SC43, SC44 (21 — note: SC36 was SO Source Document Identity; SC37–SC40 are SO Change; SC41–SC44 are Fulfillment / Close) |
-| 5 | SC45, SC46, SC47, SC48, SC49, SC50, SC51, SC52, SC53 (9) |
+| 4 | SC24, SC25, SC26, SC27, SC28, SC29, SC31, SC32, SC33, SC34, SC35, SC36, SC37, SC38, SC39, SC40, SC41, SC42, SC43, SC44 (20) |
+| 5 | SC08, SC30, SC45, SC46, SC47, SC48, SC49, SC50, SC51, SC52, SC53 (11) |
 | 6 | SC54, SC55, SC56, SC57, SC58, SC59, SC60, SC61 (8) |
-| 7 | SC62, SC63, SC64, SC65, SC66, SC67, SC68 (7) |
+| 7 | SC01, SC62, SC63, SC64, SC65, SC66, SC67, SC68 (8) |
 | 8 | SC70, SC71, SC72, SC73, SC74, SC75, SC76, SC77 (8) |
 | 9 | SC83, SC84, SC85, SC86, SC87, SC88, SC89 (7) |
-| 10 | **SC82, SC90, SC91, SC92, SC93, SC94, SC95, SC96, SC97, SC98** (10 — SC82 Credit Exposure Canonical-Fact Invariant primary here; runtime credit check / exposure / special approval require it) |
+| 10 | **SC82, SC90, SC91, SC92, SC93, SC94, SC95, SC96, SC97, SC98** (10 — Credit Exposure Canonical-Fact Invariant is primary here; runtime credit check / exposure / special approval require it) |
 | 11 | SC99, SC100, SC101, SC102, SC103, SC104, SC105, SC106, SC107 (9) |
-| 12 | SC78, SC79, SC80, SC81, SC108, SC109, SC110, SC111, SC112, SC113, SC114 (11) |
+| 12 | SC06, SC78, SC79, SC80, SC81, SC108, SC109, SC110, SC111, SC112, SC113, SC114 (12) |
 | 13 | verification only (all 114 SC acceptance covered by 1–12; Wave 13 verifies) |
 
-Sum check: 8+10+6+21+9+8+7+8+7+10+9+11 = 114 ✓ (Wave 0 = n/a, Wave 13 = verification).
+Sum check: 6+9+6+20+11+8+8+8+7+10+9+12 = 114 ✓ (Wave 0 = n/a, Wave 13 = verification).
 
-SC08 owns the customer default price-list reference through “Commercial Defaults + Sales/Pricing UoM Usage + Over-/Under-Delivery Tolerance” (`document.md §34.3.1`). Because its price-list target and pricing-UoM behavior are unavailable before Wave 2, SC08 primary implementation / final acceptance moves from Wave 1 to Wave 2. No SC ID is added, removed, or duplicated.
+Primary wave means earliest **final-completion** wave, not first table creation. SC01 completes in Wave 7 (parameter storage W1; order-change W4; delivery controls W5; reservation behavior W7). SC06 completes in Wave 12 (identity/membership W1; Quotation/SO group snapshots W3/W4; final report/backend data-scope proof W12). SC08 and SC30 complete in Wave 5 when commercial defaults/UoM resolution plus line snapshot and DN/SD tolerance execution are all executable. No SC ID is added, removed, or duplicated.
 
 ### 30.5 Invariant allocation (20/20)
 
@@ -12608,10 +12677,10 @@ missing     = 0
 
 | Wave | UAT IDs (count) |
 |---|---|
-| 1 | UAT-S-28 (Customer Commercial Extensions) (1) |
+| 1 | no final-completion UAT (foundation focused tests only) (0) |
 | 2 | UAT-S-04..08 (Pricing + override + snapshot) + UAT-S-07 (override) + UAT-S-09 (Discount) (6) |
 | 3 | UAT-S-01..03 (Quotation lifecycle + conversion) (3) |
-| 4 | UAT-S-10..16 (SO parties / gift / tax terms / submit / change / fulfill) + UAT-S-39 (edit policy) (8) |
+| 4 | UAT-S-10..16 (SO parties / gift / tax terms / submit / change / fulfill) + UAT-S-28 (Sales foundation through document-entry enforcement) + UAT-S-39 (edit policy) (9) |
 | 5 | UAT-S-17 (DN capacity) + UAT-S-18 (SD confirm) (2) |
 | 6 | UAT-S-19..21 (3-Return modes) + UAT-S-22 (Replacement) + UAT-S-41 (commercial source distinction) (5) |
 | 7 | UAT-S-23 (Prepayment Gate) + UAT-S-24 (Reservation Intent) + UAT-S-40 (canonical read-only) (3) |
@@ -12621,7 +12690,7 @@ missing     = 0
 | 11 | UAT-S-34 (Recalculation) + UAT-S-35 (Query + Exception) + UAT-S-36 (Evaluation) (3) |
 | 12 | UAT-S-37 (Reporting — execution) + UAT-S-38 (Reporting — outstanding + GP + ranking) + UAT-S-44 (Permission / RBAC / SOD) (3) |
 
-Sum: 1+6+3+8+2+5+3+3+2+3+3+3 = 44 ✓
+Sum: 0+6+3+9+2+5+3+3+2+3+3+3 = 44 ✓
 
 ### 30.7 Race allocation (24/24)
 
@@ -12686,19 +12755,20 @@ If implementation later proposes a persisted Credit Exposure cache, STOP + REQUI
 ### 30.8 Physical schema / migration allocation
 
 ```text
-new physical tables total = 40
-corrected existing-table extension inventory = 6 tables / 23 logical fields
-actual NEW extension fields requiring schema migration = 22
+new physical tables total = 42
+corrected existing-table extension inventory = 6 tables / 27 logical fields
+actual NEW extension fields requiring schema migration = 26
 existing reused extension fields requiring NO ADD COLUMN = 1
   sales_deliveries.billing_mode
 duplicate ADD attempts = 0
 ```
 
-The corrected §29 inventory is the logical Design inventory. Wave 1 adds exactly five Sales-owned tables and zero fields to existing tables. Wave 2 adds the nullable `default_pricing_list_id` field to the Wave-1-created A-39 table only after A-28 exists.
+The corrected §29 inventory is the logical Design inventory. Wave 1 adds seven Sales-owned tables and zero fields to existing tables. Wave 2 adds nullable `default_pricing_list_id` / `default_discount_scheme_id` only after A-28/A-31 exist.
 
 | Existing table | Logical field | Frozen §29 classification | Current physical state | Implementation wave | Migration action |
 |---|---|---|---|---:|---|
 | `customer_commercial_extensions` | `default_pricing_list_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 2 | `ADD` after `sales_price_lists`; nullable FK, no fabricated default |
+| `customer_commercial_extensions` | `default_discount_scheme_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 2 | `ADD` after `sales_discount_schemes`; nullable FK, no fabricated default |
 | `sales_orders` | `salesperson_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; FK A-64 |
 | `sales_orders` | `sales_group_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; FK A-63 |
 | `sales_orders` | `settlement_party_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
@@ -12717,14 +12787,17 @@ The corrected §29 inventory is the logical Design inventory. Wave 1 adds exactl
 | `sales_order_items` | `pricing_uom_code_applied` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
 | `sales_order_items` | `qty_break_applied_min` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
 | `sales_order_items` | `qty_break_applied_max` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD` |
+| `sales_order_items` | `planned_delivery_date` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; bounded one-schedule-per-line identity is the item id |
+| `sales_order_items` | `upper_delivery_tolerance_bps` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; immutable approved snapshot; CHECK >= 0 |
+| `sales_order_items` | `lower_delivery_tolerance_bps` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; immutable approved snapshot; CHECK 0..10000 |
 | `sales_deliveries` | `delivery_notice_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
 | `sales_deliveries` | `billing_mode` | `EXISTING_REUSED_FIELD` | `EXISTS` (`v13-phase6e-commercial-golive`) | 5 | `REUSE_EXISTING` |
 | `sales_delivery_items` | `delivery_notice_line_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
 | `return_orders` | `commercial_source_marker` | `NEW_LOGICAL_FIELD` | `ABSENT` | 6 | `ADD` |
 
 ```text
-logical extension fields = 23 / 23
-new schema fields to add = 22
+logical extension fields = 27 / 27
+new schema fields to add = 26
 existing extension fields reused = 1
 duplicate ADD attempts = 0
 ```
@@ -12732,10 +12805,10 @@ duplicate ADD attempts = 0
 | Wave | New tables | Existing tables extended | Migration scope (planned) |
 |---|---|---|---|
 | 0 | 0 | 0 | migration runner readiness only; no new migration content |
-| 1 | 5 (`sales_groups`, `salesperson_profiles`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | 0 | one Wave 1 registry step; no `users` / Master extension; no Wave-2 FK; legacy customers without extension remain readable; SQLite + MySQL compatible |
-| 2 | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | `customer_commercial_extensions` (+ `default_pricing_list_id`) | create A-28 before adding nullable FK to A-39; UNIQUE on price-list entries; SQLite + MySQL compatible |
+| 1 | 7 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | 0 | bounded Sales parameter codes; customer/person anchor overlap locks; no `users` / Master extension; no Wave-2 FK; SQLite + MySQL compatible |
+| 2 | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | `customer_commercial_extensions` (+ `default_pricing_list_id`, `default_discount_scheme_id`) | create A-28/A-31 before adding nullable FKs to A-39; SQLite + MySQL compatible |
 | 3 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | new migration file; UNIQUE on (quotation_id, line_no); PR UNIQUE on (quotation_id, sales_order_line_id); idempotency_key column |
-| 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code), sales_order_items (+ 6 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max) | new migration file for new tables; ADD COLUMN for additive cols; effective_version counter on sales_orders; legacy rows: NULL additive cols → display `(legacy)` |
+| 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code), sales_order_items (+ 9 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max, planned_delivery_date, upper_delivery_tolerance_bps, lower_delivery_tolerance_bps) | additive snapshot columns; immutable after approval except controlled change for unexecuted remainder; legacy NULL is not backfilled from later defaults |
 | 5 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`; reuse existing `billing_mode`), sales_delivery_items (+ `delivery_notice_line_id`) | new migration file for new tables; `sales_deliveries.delivery_notice_id` → new schema field as designed (`ADD`); `sales_delivery_items.delivery_notice_line_id` → new schema field as designed (`ADD`); `sales_deliveries.billing_mode` → existing field, reuse / compatibility convergence (`REUSE_EXISTING`; **NO duplicate ADD COLUMN**); legacy SD rows: NULL `delivery_notice_id` → legacy path (read OK) |
 | 6 | 2 (sales_order_replacements, sales_order_replacement_lines) | return_orders (+ commercial_source_marker) | new migration file; ADD COLUMN; PR UNIQUE on (quotation_id, sales_order_line_id) for SO 3-mode conversion; legacy return rows: NULL → treat as DELIVERY_BACKED |
 | 7 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new migration file; PK on (sales_order_id, line_no); snapshot_key as idempotency anchor; R-SAL-15 shared Finance balance lock contract (BOUNDED INTEGRATION CONTRACT EXTENSION) |
@@ -12746,9 +12819,9 @@ duplicate ADD attempts = 0
 | 12 | 0 | 0 | no schema changes; UI work only |
 | 13 | 0 | 0 | no schema changes; tests only |
 
-Sum check: 5+5+3+2+2+2+3+4+6+2+6 = 40 ✓ (matches corrected Design)
+Sum check: 7+5+3+2+2+2+3+4+6+2+6 = 42 ✓ (matches corrected Design)
 
-Wave 1 proof: NEW tables = 5; existing-table extension tables = 0; existing-table extension fields = 0; dangling FK targets = 0; undefined physical FK identities = 0; Wave-2 early business tables = 0.
+Wave 1 proof: NEW tables = 7; existing-table extension tables = 0; existing-table extension fields = 0; dangling FK targets = 0; undefined physical FK identities = 0; Wave-2 early business tables = 0.
 
 ### 30.9 Finance V22 R-SAL-15 bounded extension wave
 
@@ -12852,7 +12925,7 @@ a MySQL verification checkpoint is planned **within that wave**.
 | Wave | MySQL verification scope |
 |---|---|
 | 0 | migration runner on real MySQL (smoke) |
-| 1 | five-table FK / UNIQUE / CHECK parity; customer extension effective-row uniqueness; legacy customer compatibility; salesperson optional-user uniqueness; second initialization idempotency |
+| 1 | seven-table FK / UNIQUE / CHECK parity; SYSTEM/document-type parameter resolution; customer/xref interval-overlap rejection under customer anchor; salesperson multi-group/one-default under salesperson anchor; legacy compatibility; second initialization idempotency |
 | 2 | UNIQUE on price list entries; CHECK constraints; effective_from MySQL semantics |
 | 3 | UNIQUE on conversion PK; idempotency_key UNIQUE on real MySQL |
 | 4 | effective_version monotonic on MySQL; PR UNIQUE on change lines |
@@ -12904,7 +12977,7 @@ R-SAL-23 acceptance form is a structural assertion under the PURE_DERIVED baseli
 | Wave | Risk | Classification | Reason |
 |---|---|---|---|
 | 0 | migration runner | LOW | infrastructure only |
-| 1 | five-table Sales commercial identity foundation | MEDIUM | FK / UNIQUE / effective-row parity and optional user link require SQLite/MySQL proof; legacy customers remain valid without fabricated extension rows |
+| 1 | seven-table Sales commercial/parameter identity foundation | HIGH | cross-dialect interval locking, bounded parameter resolution, multi-group/default membership and optional user link require SQLite/MySQL proof |
 | 2 | pricing resolver; price snapshot immutability | MEDIUM | multi-currency, UoM, qty-break; resolved snapshot must be immutable (R-SAL-11) |
 | 3 | quotation convert × 2; capacity; idempotency | HIGH | R-SAL-06 is the first user-visible source-capacity race |
 | 4 | SO Change effective_version; commercial_close_state; historical immutability | HIGH | S05 (R-SAL-07 / R-SAL-08) |
@@ -12931,7 +13004,7 @@ Each wave has explicit stop conditions. The Implementation agent MUST NOT silent
 | all | Credit exposure double-count discovered (R-SAL-12 invariant breach) |
 | all | Finance adapter cannot inherit caller transaction (R-SAL-15 architectural breach) |
 | all | APPLY_GUIDE.md appears in git diff --cached (user-owned state must not be staged) |
-| 1 | Wave 1 needs any sixth table, any existing-table field, a Platform/Master schema change, or a Wave-2 FK target |
+| 1 | Wave 1 needs an eighth table, any existing-table field, a Platform/Master schema change, an unbounded parameter code, or a Wave-2 FK target |
 | 4 | SO Change cannot satisfy R-SAL-07 / R-SAL-08 (e.g. effective_version breaks) |
 | 5 | New SD still allowed to bypass Delivery Notice (forbidden by §29.12.0) |
 | 7 | Finance V22 cannot provide parent balance lock (extension cannot be implemented) |
@@ -12944,7 +13017,7 @@ SC108..SC114 (Permissions / RBAC / SOD) is primarily **allocated to Wave 12** fo
 
 | Wave | Endpoint / mutation introduced | Required backend authorization (same wave) |
 |---|---|---|
-| 1 | sales group / salesperson profile / customer commercial extension / xref / classification mutation | permission check + SOD on canonical salesperson-profile / sales-group assignment |
+| 1 | Sales parameter / sales group / salesperson membership / customer commercial extension / xref / classification mutation | permission check + SOD on canonical parameter and salesperson/group assignment; backend data scope cannot be delegated to frontend |
 | 2 | pricing resolver, price_override, discount resolver | permission check + separate override authority (PRICE OVERRIDE) per §34.7 P3 |
 | 3 | quotation convert → SO | permission check |
 | 4 | SO submit / approve / reject / close / cancel; SO Change apply | permission check + SOD (creator ≠ approver) per §34.7 P2 |
@@ -13047,11 +13120,11 @@ Commit boundary (one primary local commit after external review; no push)
 | Wave | Dependencies | New tables | Existing ext | Backend files | Frontend files | Tests | Migration | Compatibility | Frozen-domain integration | OUT OF WAVE | Acceptance | Commit boundary |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | n/a | 0 | 0 | server/migrations/* runner; no new migration | none | migration-runner smoke | infrastructure | n/a | none | migration-runner passes on SQLite + MySQL | n/a | one local commit after review |
-| 1 | Wave 0 | 5 (`sales_groups`, `salesperson_profiles`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | 0 | bounded Sales foundation modules; no Platform / Master schema changes | customer detail extension panel only | unit + integration for five-table identity / FK / UNIQUE / CHECK / legacy compatibility | Wave 1 registry steps; no forward FK | customers without extension show `(none)`; products without classification resolve as non-service; salesperson may lack login | Master / Platform read-only FK targets | focused tests + integration + MySQL checkpoint; protected mutation permission gate | one local commit after external review |
-| 2 | Wave 1 | 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | `customer_commercial_extensions.default_pricing_list_id` | pricing / discount modules; resolver API | pricing sub-page | resolver + FK-addition integration | create price-list target, then add nullable FK; UNIQUE + effective_from on entries | no fabricated customer default; products.price_cents legacy read fallback (5th) | n/a (no Finance) | focused tests + integration; SC08 final acceptance joins pricing defaults / UoM semantics | one local commit |
+| 1 | Wave 0 | 7 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `product_commercial_classification`) | 0 | bounded Sales foundation modules; no Platform / Master schema changes | customer detail extension panel only | parameter resolution + interval races + membership/default + FK/CHECK/legacy tests | Wave 1 registry steps; no forward FK | customers without extension show `(none)`; products without classification resolve non-service; salesperson may lack login | Master/Platform read-only targets; Platform mechanics only | focused integration + SQLite/MySQL locking checkpoint; permission gate | one local commit after external review |
+| 2 | Wave 1 | 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | A-39 `default_pricing_list_id` + `default_discount_scheme_id` | pricing / discount modules; resolver API | pricing sub-page | resolver + FK-addition + Sales/Pricing UoM conversion integration | create A-28/A-31 then nullable FKs; canonical UoM conversion required | no fabricated default; products.price_cents legacy fallback | n/a | partial SC08 evidence only; final acceptance waits for Wave 5 tolerance execution | one local commit |
 | 3 | Wave 2 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | server/modules/quotation.js; server/app.js (routes); src/pages/quotations.jsx | src/pages/quotations.jsx (LIST / DETAIL / EDITOR / CONVERT) | unit + R-SAL-06 test | new migration file; PK + PR UNIQUE | n/a | n/a | UAT-S-01..03; R-SAL-06 evidence | one local commit |
-| 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols); sales_order_items (+ 6 cols) | server/app.js (SO + change handlers); src/pages/master-data.jsx (SO editor + change workflow) | SO editor extended; change workflow | unit + R-SAL-07 / R-SAL-08 tests; effective_version monotonic | additive migration; legacy rows NULL → display (legacy) | legacy SO without commercial snapshots → display (legacy) | n/a | UAT-S-10..16; S05 invariant proof | one local commit |
-| 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`; reuse existing `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | server/app.js (SD handlers); new delivery_notice module; src/pages/delivery-notices.jsx | delivery-notices new route | unit + R-SAL-16 / R-SAL-17 / R-SAL-18 / R-SAL-19 tests | additive migration for the two notice identity fields; `billing_mode` = `REUSE_EXISTING`, NO duplicate ADD COLUMN | legacy SD without DN still allowed (read-only); existing billing mode converged compatibly | n/a | UAT-S-17 / S-18; S09 invariant proof | one local commit |
+| 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 12 cols); sales_order_items (+ 9 cols) | SO/change handlers + line schedule snapshot | SO editor/change workflow | UAT-S-10..16, UAT-S-28 + change/tolerance snapshot tests | additive migration; legacy NULL retained | later defaults never rewrite approved lines | n/a | SC30 snapshot evidence; final SC08/SC30 waits for W5 enforcement | one local commit |
+| 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`; reuse `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | DN/SD capacity + tolerance enforcement | delivery-notices route | upper BLOCK + lower controlled-close + races | additive two notice identities; no duplicate billing_mode | legacy SD read-only; no historical reinterpretation | n/a | UAT-S-17/S-18; SC08+SC30 final completion; S09 | one local commit |
 | 6 | Wave 5 | 2 (sales_order_replacements, sales_order_replacement_lines) | return_orders (+ commercial_source_marker) | server/app.js (SR handlers); src/pages/returns.jsx (replacement tab) | returns route extended | unit + R-SAL-09 / R-SAL-10 tests | additive migration | legacy returns without commercial_source_marker → treat as DELIVERY_BACKED | n/a | UAT-S-19..22 + S-41; S10 / S11 invariant proof | one local commit |
 | 7 | Waves 5, 6 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new financeAdapter with locked-read; new prepayment module; new reservation_intent module; Finance V22 bounded extension (applyUnappliedBalance, createRefund, reverseSettlementDocument for PREPAYMENT reduction — all acquire parent settlement_unapplied_balances FOR UPDATE) | prepayment sub-page inside SO; reservation intent list | unit + R-SAL-02 / R-SAL-15 tests; Finance Adapter locked-read on real MySQL | new migration file; UNIQUE on (sales_order_id, line_no); idempotency snapshot_key | n/a | **Finance V22 R-SAL-15 bounded extension (CRITICAL) — see §30.9** | UAT-S-23 + S-24 + S-40; S12 / S13 invariant proof | one local commit + separate Finance files change report (per §25) |
 | 8 | Wave 7 | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | 0 | new service-fulfillment module; new consignment module; SD confirm gate (service items require confirmation) | src/pages/consignment.jsx; service sub-page inside SO | unit + R-SAL-20 / R-SAL-21 / R-SAL-22 tests | new migration file | n/a | n/a | UAT-S-25..27; S08 / S18 invariant proof | one local commit |
@@ -13176,7 +13249,7 @@ No single giant commit. No push until external authorization.
 
 ## 30.26 Final Wave-Plan Summary
 
-This corrected Implementation Wave Plan is complete and ready for external review. It is not re-frozen by this edit; Wave 1 implementation remains blocked.
+This Requirement / Design reopen closure is complete and ready for remote external review. It is not re-frozen by this edit; Wave 1 implementation remains blocked.
 
 ```text
 14 implementation waves (Wave 0..13)
@@ -13186,20 +13259,20 @@ UAT: 44/44
 Race: 24/24, TBD 0
 Materialized executable MySQL races: 23
 Conditional structural races: 1 (R-SAL-23)
-Physical tables: 64 = 24 EXISTING_CONVERGE + 40 NEW + 0 deprecated tables
-Physical NEW tables: 40
-Corrected existing-table extension inventory: 6 tables / 23 logical fields
-Actual extension migration work: 22 NEW fields
+Physical tables: 66 = 24 EXISTING_CONVERGE + 42 NEW + 0 deprecated tables
+Physical NEW tables: 42
+Corrected existing-table extension inventory: 6 tables / 27 logical fields
+Actual extension migration work: 26 NEW fields
 Existing extension fields reused: 1 (sales_deliveries.billing_mode)
-Wave 1 physical allocation: 5 NEW tables / 0 existing-table extensions / 0 existing-table fields
-Wave 2 dependency correction: creates sales_price_lists before adding customer_commercial_extensions.default_pricing_list_id
+Wave 1 physical allocation: 7 NEW tables / 0 existing-table extensions / 0 existing-table fields
+Wave 2 dependency correction: creates sales_price_lists / sales_discount_schemes before adding A-39 default FKs
 Sales fields on Platform users / Master customers / Master products: 0
 Wave 13 dependency: Wave 12 → Wave 13
 Finance V22 R-SAL-15 extension scheduled in Wave 7 (CRITICAL; before Sales Prepayment Gate completion).
 credit_lock_anchors introduced in Wave 9 (BEFORE any Credit runtime).
 PURE_DERIVED exposure preserved (no mutable exposure balance).
 Master & Engineering boundary: NO CHANGE.
-Platform boundary: NO CHANGE.
+Platform boundary: NO schema change; generic mechanics remain Platform-owned, A-65 parameter storage/namespace/validation/semantics are Sales-owned.
 TBD: 0.
 ```
 
@@ -13208,9 +13281,10 @@ Do NOT claim the plan frozen. External review freezes the plan.
 ```text
 SALES & CUSTOMER DOMAIN
 
-WAVE 1 DESIGN REOPEN — COMPLETE
-READY FOR EXTERNAL REVIEW
-IMPLEMENTATION STILL BLOCKED
+REQUIREMENT / DESIGN REOPEN CLOSURE — COMPLETE
+READY FOR REMOTE EXTERNAL REVIEW
+
+WAVE 1 IMPLEMENTATION STILL BLOCKED
 ```
 
 Wave 0 remains frozen at `73abaa146c644df72d2c040af4c26548bf92e880`. Do NOT begin Wave 1 implementation. Do NOT write code. Do NOT stage. Do NOT commit. Do NOT push.

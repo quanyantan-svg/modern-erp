@@ -4187,7 +4187,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 
 ## 34. Sales & Customer Domain Closure Requirement
 
-> 本节固化 Sales & Customer Domain Closure 的 Requirement 阶段成果。
+> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 的语义与验收追溯缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；修订完成后状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement。
 > Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 B3104 库存 / B3106 存货核算 / B3108–B3113 应收/应付/发票/出纳 / B3114–B3117 总账/报表/经营会计 / B3119-B3120 生产/计划 / B3121 委外 等其它 domain 的边界）。
 > 本节 Coverage 以 Sales & Customer Domain Audit 在 2026-10-12 经过 Final Arithmetic & Mapping Closure 后发布的 audit 为准：
 >
@@ -4338,6 +4338,16 @@ SC06 Sales Group                                                                
 SC07 Customer-Material Cross Reference + Sellable Scope                             [DOMAIN_OWNED]
 SC08 Commercial Defaults + Sales/Pricing UoM Usage + Over-/Under-Delivery Tolerance [DOMAIN_OWNED]
 ```
+
+本次有限重开对 B3102 可直接读取证据的约束如下（不以通用经验替换手册语义）：
+
+- SC01 同时包含 Sales **系统级参数**与**单据类型级控制参数**；参数族由对应 capability 有界定义，不猜测手册未给出的截图字段名。至少包含可售控制、客户物料对应启用，以及相关能力可执行时的订单变更模式、交货计划/数量控制、预留行为等控制语义。
+- SC06 不仅是销售组身份，还包含销售员可属于多个销售组、一个默认组，以及后续报价、销售订单、报表携带 `sales_group_id` 后由后端执行的组数据隔离/可见性。
+- SC08 三个不可拆缺维度为：客户商业默认值；销售 UoM / 计价 UoM 及其基于 Master canonical conversion 的自动换算；超交/欠交容差默认值及其进入订单交货计划快照后的执行控制。
+- SC30 的 bounded baseline 为每个 Sales Order line 一条交货计划：计划日期 + 上/下容差快照。现有可读证据未证明一行多交期，不在本 Requirement 中虚构多 schedule；若未来直接手册证据要求多 schedule，必须重开 Requirement / Design。
+- B3102 客户默认值包括结算方式、付款条件、销售员、价目表、折扣表；客户物料对应须由系统参数启用，且同一内部物料允许保留多个历史客户物料编码。
+
+直接证据复核来源：金蝶开放平台《销售管理系统参数》《销售系统参数》《客户物料对应表》《业务员》《数据权限》《销售价目表》。仓库未保存可直接读取的 B3102 原始 Word，故本次以 `document.md §22` baseline 与上述官方页面交叉约束；不得据此扩展 B3102 范围。
 
 #### 34.3.2 Quotation（SC09–SC14）
 
@@ -4698,26 +4708,31 @@ UAT-S-01  Quotation 创建 + validity + expired-rejection                       
 UAT-S-02  Quotation → Sales Order 单次转换                                          [SC13]
 UAT-S-03  Quotation → Sales Order 重复转换 (受 SC14 策略约束)                        [SC14]
 UAT-S-04  Sales Price List 生效日期 + 优先级 + fallback                             [SC15..SC18]
-UAT-S-05  Price Customer / Material / UoM 解析                                      [SC16..SC17]
+UAT-S-05  Price Customer / Material / UoM 解析；Sales UoM 与 Pricing UoM 不同时，
+            必须使用 canonical conversion 自动换算，缺失换算时 backend BLOCK       [SC08, SC16..SC17]
 UAT-S-06  Quantity Break 应用                                                      [SC17]
 UAT-S-07  Manual Price Override (需要单独 authority)                               [SC19 + UAT-S-44]
 UAT-S-08  Order-Time Resolved-Price Snapshot 不可变                               [SC20]
 UAT-S-09  Order-Time Discount (line + header; auto + manual)                       [SC21..SC23]
 UAT-S-10  Sales Order 全部 commercial parties (ship-to / settlement / payer /
-            salesperson / sales group / customer-material)                         [SC26]
+            salesperson / sales group / customer-material)，并冻结 group identity   [SC06, SC26]
 UAT-S-11  Sales Order Gift Line (selling price = 0, inventory / OQC / COGS /
             source-trace continue; zero revenue != zero cost)                       [SC29]
 UAT-S-12  Sales Order commercial tax-basis assumption snapshot
             (commercial; final invoice tax 仍归 Finance)                            [SC27-SC28]
 UAT-S-13  Sales Order Required Commercial Fields Submission Gate                  [SC34]
 UAT-S-14  Sales Order Approval (SOD; CREATE != APPROVE)                             [SC33 + UAT-S-44]
-UAT-S-15  Sales Order Change (post-approval; reason + before-after; audit)          [SC37..SC40]
+UAT-S-15  Sales Order Change (post-approval; reason + before-after; audit)；
+            system/document-type order-change mode 禁用时 backend BLOCK             [SC01, SC37..SC40]
 UAT-S-16  Sales Order Fulfillment / Partial / Controlled Close /
             Cancellation                                                            [SC41..SC44]
-UAT-S-17  Delivery Notice 创建 + scheduled / notified / cancelled-notified /
-            remaining capacity                                                       [SC45..SC48]
-UAT-S-18  Sales Delivery Confirm (OQC + Reservation + Prepayment + Credit
-            gates integration; source-line capacity)                              [SC49..SC53]
+UAT-S-17  Delivery Notice 创建 + line planned-delivery-date / upper-lower tolerance
+            snapshot；scheduled / notified / cancelled-notified / remaining capacity；
+            cumulative notified over upper tolerated quantity is backend BLOCK       [SC01, SC08, SC30, SC45..SC48]
+UAT-S-18  Sales Delivery Confirm (OQC + Reservation + Prepayment + Credit gates；
+            source-line capacity)；cumulative delivered over upper bound is BLOCK；
+            delivered >= lower bound may controlled-close remainder with reason/audit，
+            below lower bound cannot close as fulfilled                              [SC01, SC08, SC30, SC49..SC53]
 UAT-S-19  Sales Return against Delivery (DELIVERY_BACKED; preserve behavior)       [SC54]
 UAT-S-20  Sales Return against Original SO (SO_BACKED, no fake Delivery)            [SC55-SC57]
 UAT-S-21  Sales Return No-Source (NO_SOURCE 可见; no fake source sale)             [SC56-SC57]
@@ -4725,12 +4740,16 @@ UAT-S-22  Replacement Obligation (Return + Replacement; replacement fulfillment
             state)                                                                   [SC59..SC61]
 UAT-S-23  Prepayment Gate (Planning Release / Reservation / Delivery stage)        [SC62..SC65]
 UAT-S-24  Reservation Intent request / view / release /
-            react-to-change-cancel-close-return-replacement                          [SC66..SC68]
+            react-to-change-cancel-close-return-replacement；system/document-type
+            reservation behavior is resolved and enforced in backend                 [SC01, SC66..SC68]
 UAT-S-25  Service Item Sales (no inventory OUT; finance recognition)               [SC69..SC71]
 UAT-S-26  Consignment Instruction + Settlement                                       [SC72..SC75]
 UAT-S-27  Consignment Return + Reporting                                             [SC76..SC77]
-UAT-S-28  Customer Commercial Extensions (settlement party / payer /
-            salesperson / sales group / customer-material)                            [SC02..SC07]
+UAT-S-28  Sales foundation：bounded SYSTEM / DOCUMENT_TYPE parameter resolution；
+            customer defaults (settlement method / payment terms / salesperson /
+            price list / discount table)；salesperson multi-group + one default；
+            customer-material feature enable；sellable-control enable + customer-level
+            mapped-only scope + document-entry backend enforcement                    [SC01..SC08]
 UAT-S-29  Sales Credit Profile 创建 + 生效日期 + overdue-day policy                [SC87..SC89]
 UAT-S-30  Credit Parameters (enabled / scope / timing / strength) + Credit Rules
             (per stage / scenario / timing / strength / credit item)               [SC83..SC86]
@@ -4766,6 +4785,8 @@ UAT-S-44  Permission / RBAC / SOD (P1-P5):
             CREDIT SPECIAL APPROVAL bounded authority (SC111 + SC114)
             Unauthorized backend mutation fails (SC95 / SC97 + SC114)
             Frontend hidden is NOT authorization (SC95 + SC114)
+            Sales-group data scope is enforced in backend for Quotation / Sales Order /
+            Reports once they carry sales_group_id; other-group data is not exposed   (SC06 + SC108..SC114)
 ```
 
 ### 34.6 Sales MySQL Race Requirement（R-SAL-01..R-SAL-24）
@@ -5077,12 +5098,22 @@ B3103   | CAP-36    | MISSING    | GAP-SC-25       | RC-21   | Evaluation   | SC
 每条 SC capability 至少 reference 一条 acceptance（Functional UAT / Race / Structural-RBAC assertion）：
 
 ```text
-SC01..SC08    → UAT-S-28 (Customer Commercial Extensions) + §34.7 Permission
+SC01           → UAT-S-28 (SYSTEM / DOCUMENT_TYPE parameters + feature enables)
+                 + UAT-S-15 (order-change mode) + UAT-S-17..18 (delivery controls)
+                 + UAT-S-24 (reservation behavior) + §34.7 Permission
+SC02..SC05,SC07 → UAT-S-28 (Customer Commercial Extensions / xref / sellable scope)
+SC06           → UAT-S-28 (identity + multi-group/default) + UAT-S-10 (SO group snapshot)
+                 + UAT-S-44 (backend group data scope)
+SC08           → UAT-S-28 (commercial defaults) + UAT-S-05 (Sales/Pricing UoM conversion)
+                 + UAT-S-17..18 (tolerance snapshot + DN/SD enforcement)
 SC09..SC14    → UAT-S-01..03 (Quotation lifecycle + conversion)
 SC15..SC20    → UAT-S-04..08 (Pricing + override + snapshot) + R-SAL-11
 SC21..SC23    → UAT-S-09 (Order-Time Discount) + UAT-S-07 (override)
-SC24..SC36    → UAT-S-10..16 (parties/gift/tax-terms/submit/change/fulfill) + UAT-S-39
+SC24..SC29,SC31..SC36 → UAT-S-10..16 (parties/gift/tax-terms/submit/change/fulfill) + UAT-S-39
                 + R-SAL-07..R-SAL-08 (SO Change race)
+SC30           → UAT-S-17..18 (planned date + upper/lower tolerance snapshot and execution)
+SC27..SC28     → UAT-S-42 (commercial terms/tax-basis snapshot is not statutory invoice truth)
+SC29           → UAT-S-43 (gift-line revenue zero does not erase COGS)
 SC37..SC40    → UAT-S-15 (SO Change) + R-SAL-07..R-SAL-08..R-SAL-18..R-SAL-19
 SC41..SC44    → UAT-S-16 (Fulfillment / partial / close / cancel)
 SC45..SC48    → UAT-S-17 (Delivery Notice capacity) + R-SAL-16..R-SAL-19
@@ -5177,11 +5208,11 @@ Sum checks:
 20 Invariant IDs enumerated (S01..S20); 0 missing; 0 duplicate
 ```
 
-本节 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 完整对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用；B3102 / B3103 全部 capability 经追溯矩阵映射至 SC。
+本节有限重开的 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 完整对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条实际测试其语义的 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用；B3102 / B3103 全部 capability 经追溯矩阵映射至 SC。当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不得据此声称 Requirement 已重新 PASS / FROZEN。
 
 > Note：本节多次提到的 import / adapter 函数名称（`applyInventoryMutation` / `postTrackedMovement` / `assertStrongReservationAvailability` / `applyCreditAdjustment` / `generateVoucher`）均为 **[current implementation reference]**，仅作现状 evidence；不 prescribe 新模块 / 新函数 / 新 migration。Design 决定 persistent storage / cache / view / table choice 与本节 capability 商业语义的行为一致性。
 
-下游 Design 见 `solution.md`（后续章节号待用户 PASS 后展开）。本阶段未进入 Design。
+下游 Design 见 `solution.md §29–§30`。Wave 1 implementation 仍被阻塞，须待本次 Requirement / Design 远端外部评审确认后方可进入。
 
 等待用户 `REQUIREMENT PASS` 明确批准。
 
