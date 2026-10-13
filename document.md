@@ -4187,7 +4187,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 
 ## 34. Sales & Customer Domain Closure Requirement
 
-> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷现已闭合，当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement。
+> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷已闭合。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；本节 Requirement 现为 `PASS / FROZEN`，冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。
 > Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 B3104 库存 / B3106 存货核算 / B3108–B3113 应收/应付/发票/出纳 / B3114–B3117 总账/报表/经营会计 / B3119-B3120 生产/计划 / B3121 委外 等其它 domain 的边界）。
 > 本节 Coverage 以 Sales & Customer Domain Audit 在 2026-10-12 经过 Final Arithmetic & Mapping Closure 后发布的 audit 为准：
 >
@@ -4206,7 +4206,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 >   Concurrency candidates      = 15 (R-SAL-01..R-SAL-15; 5 REAL + 10 DORMANT)
 > ```
 >
-> 本节不进入 Design / Implementation / Migration / API / UI / Test 任一阶段。Design 见 `solution.md`（后续章节号待用户 PASS 后展开）。
+> 本节不执行 Implementation / Migration / API / UI / Test。已冻结 Technical Design 与 Implementation Wave Plan 见 `solution.md §29–§30`。
 > 本节不重写已 frozen 的 Master & Engineering / Planning / Procurement & Outsourcing / Manufacturing & Quality / Inventory & Warehouse / Finance Operations 中的任何 capability 或 canonical fact。Sales & Customer 通过消费这些 frozen canonical truth 完成自身业务，不允许 second-truth / shadow ledger。
 >
 > 已被外部评审 PASS / FROZEN 的 audit 不在本节重开。
@@ -5225,15 +5225,42 @@ Sum checks:
 20 Invariant IDs enumerated (S01..S20); 0 missing; 0 duplicate
 ```
 
-本节有限重开的 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 保持结构对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用。DR-SAL-01 Option A 已获用户批准，SC37..SC40 与 UAT-S-15 的 Requirement 决策缺口已闭合；当前状态为 `READY FOR REMOTE EXTERNAL REVIEW`，仍不得声称 Requirement PASS / FROZEN。
+本节有限重开的 Requirement 与 frozen audit (Capabilities 36, COVERED 9, PARTIAL 3, MISSING 24, Gaps 25, RCs 24, Races 15) 保持结构对齐：每个 audit MISSING / PARTIAL capability 至少被一条 SC capability + 一条 invariant 覆盖；每条 SC capability 至少被一条 acceptance reference 覆盖（Functional UAT / Race / RBAC assertion）；每个 RC 至少被一条 SC family 引用。DR-SAL-01 Option A 已获用户批准，SC37..SC40 与 UAT-S-15 的 Requirement 决策缺口已闭合。外部评审已 PASS，用户 Freeze approval 已确认，本节 Requirement 正式 `PASS / FROZEN`。
+
+Official Freeze Record（2026-10-14）：
+
+```text
+SALES & CUSTOMER DOMAIN
+
+REQUIREMENT: PASS / FROZEN
+TECHNICAL DESIGN: PASS / FROZEN
+IMPLEMENTATION WAVE PLAN: PASS / FROZEN
+
+FREEZE CONTENT BASELINE:
+5469891b78acb5b03940944698e5c51a38cf5491
+
+EXTERNAL REVIEW: PASS
+USER FREEZE APPROVAL: CONFIRMED
+
+WAVE 0:
+PASS / FROZEN
+73abaa146c644df72d2c040af4c26548bf92e880
+
+WAVES 1–13:
+NOT IMPLEMENTED / NOT ACCEPTED
+
+NEXT:
+APPLY_GUIDE.md isolated forward correction,
+then Sales Wave 1 implementation.
+```
 
 > Note：本节多次提到的 import / adapter 函数名称（`applyInventoryMutation` / `postTrackedMovement` / `assertStrongReservationAvailability` / `applyCreditAdjustment` / `generateVoucher`）均为 **[current implementation reference]**，仅作现状 evidence；不 prescribe 新模块 / 新函数 / 新 migration。Design 决定 persistent storage / cache / view / table choice 与本节 capability 商业语义的行为一致性。
 
-下游 Design 见 `solution.md §29–§30`。Wave 1 implementation 仍被阻塞，须待本次 Requirement / Design 远端外部评审确认后方可进入。
+下游 Design / Wave Plan 见 `solution.md §29–§30`，现均已 `PASS / FROZEN`。Waves 1–13 尚未实施、尚未验收；下一步顺序为先完成 `APPLY_GUIDE.md` 隔离前向纠偏，再按独立授权进入 Sales Wave 1 implementation。
 
 ### 34.15 Limited Reopen Decision Records
 
-#### DR-SAL-01 — Sales Order change mode (`OPTION A APPROVED`, CLOSED FOR REVIEW)
+#### DR-SAL-01 — Sales Order change mode (`OPTION A APPROVED`, FROZEN)
 
 - Manual / repository baseline：订单批准后允许“受控直接变更”或“变更单/工作流”，两者均须保留历史。
 - 用户决策：正式批准 Option A，固定为 `DISABLED / CONTROLLED_DIRECT / CONTROLLED_DOCUMENT / BOTH`。
@@ -5241,16 +5268,16 @@ Sum checks:
 - `BOTH` 只表示两条入口都可用，不是 approval、permission、SOD、idempotency、concurrency 或 invariant bypass。
 - 决策影响：A-65 enum、SC01、SC35、SC37..SC40、UAT-S-15 与 Wave 4 合同已同步；不新增 SC/UAT/Race/table/field ID。
 
-#### DR-SAL-02 — Customer-material multiplicity (`DESIGN_DECISION`, CLOSED FOR REVIEW)
+#### DR-SAL-02 — Customer-material multiplicity (`DESIGN_DECISION`, FROZEN)
 
 不采用全局一对一收紧；允许同一客户料号在相同业务日期存在多个适用内部物料候选。系统不自动猜测：操作员显式选择 `product_id` 后，后端验证 customer、code、product 与 business date 的 effective mapping；仍不唯一或无匹配则 BLOCK。故不存在 intentional bounded deviation，也不需要用 xref 替代 Sellable Scope。
 
-#### DR-SAL-03 — Reservation behavior (`DESIGN_DECISION`, CLOSED FOR REVIEW)
+#### DR-SAL-03 — Reservation behavior (`DESIGN_DECISION`, FROZEN)
 
 Requirement 固定为 `DISABLED / INVENTORY_LOCK / MANUAL_RESERVATION / ON_HAND_RESERVATION / EXPECTED_SUPPLY_RESERVATION` 五种行为；DOCUMENT_TYPE 可完整覆盖 SYSTEM row。Inventory lock 使用 Inventory canonical truth；后三种 reservation 使用 Planning canonical truth。现有 Planning `EXPECTED` 没有有限容量权威来源，登记 `BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED`，未完成扩展前该模式 backend fail closed。
 
-所有已知 Requirement 决策缺口已闭合，等待 remote external review；不得自行声明 `REQUIREMENT PASS / FROZEN`。
+所有已知 Requirement 决策缺口已闭合；外部评审已 PASS，用户 Freeze approval 已确认，Requirement 正式 `PASS / FROZEN`。
 
 ---
 
-**SALES & CUSTOMER DOMAIN LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW**
+**SALES & CUSTOMER DOMAIN REQUIREMENT — PASS / FROZEN @ `5469891b78acb5b03940944698e5c51a38cf5491`**

@@ -8717,15 +8717,15 @@ Final verdict（本 Design）：`READY FOR USER REVIEW`。
 
 ## 29. Sales & Customer Domain Technical Design
 
-> 本节原冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果；2026-10-13 远端外部评审进一步发现订单变更、预留、直出、sellable scope、物理计数与 Sales-group isolation 缺口，故 Requirement 与 Design 被再次有限重开。本次修正 §29 / §30 的有界物理模型、执行合同、验收追溯与计数；DR-SAL-01 Option A 已获用户批准并完成设计闭环，状态为 `READY FOR REMOTE EXTERNAL REVIEW`，不自动重新冻结 Requirement / Design。
+> 本节原冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果；2026-10-13 远端外部评审进一步发现订单变更、预留、直出、sellable scope、物理计数与 Sales-group isolation 缺口，故 Requirement 与 Design 被再次有限重开。本次修正 §29 / §30 的有界物理模型、执行合同、验收追溯与计数；DR-SAL-01 Option A 已获用户批准并完成设计闭环。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。
 
 ```text
 AUDIT                         PASS / FROZEN
-REQUIREMENT                   LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW
-DESIGN                        LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW
-IMPLEMENTATION WAVE PLAN      LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW
+REQUIREMENT                   PASS / FROZEN
+TECHNICAL DESIGN              PASS / FROZEN
+IMPLEMENTATION WAVE PLAN      PASS / FROZEN
 WAVE 0                        PASS / FROZEN
-WAVE 1 IMPLEMENTATION         BLOCKED
+WAVES 1–13                    NOT IMPLEMENTED / NOT ACCEPTED
 ```
 > Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 Master & Engineering / Planning / Procurement & Outsourcing / Manufacturing & Quality / Inventory & Warehouse / Finance Operations 等其它 domain 的边界）。
 > 本节 Coverage 以 Sales & Customer Domain Requirement（`document.md §34`，commit `414f2bb603fb1e9966d61811787b81f79103ecba`）为准：
@@ -9664,7 +9664,7 @@ DR-SAL-01 Option A 已由用户正式批准：
 - `CONTROLLED_DOCUMENT`：只接受 formal change document；
 - `BOTH`：接受两条路径，但不能借另一入口绕过 permission/approval/SOD。
 
-两条路径共享 A-33/A-34 evidence、canonical application service、lock order、idempotency namespace、audit 与 version rules；四模式决策不新增物理表，但 canonical version contract 要求在既有 A-02 增加一个 `effective_version` 字段。SC37..SC40 / UAT-S-15 的设计决策缺口已闭合，等待 remote external review，不代表 PASS/FROZEN。
+两条路径共享 A-33/A-34 evidence、canonical application service、lock order、idempotency namespace、audit 与 version rules；四模式决策不新增物理表，但 canonical version contract 要求在既有 A-02 增加一个 `effective_version` 字段。SC37..SC40 / UAT-S-15 的设计决策缺口已闭合；外部评审已 PASS，用户 Freeze approval 已确认，本 Technical Design 正式 `PASS / FROZEN`。
 
 ### 29.10 Sales Order Fulfillment / Close Lifecycle
 
@@ -12503,12 +12503,12 @@ Sum check:
   Sub-categories are disjoint (every table belongs to exactly one of A classifications)
   Columns are NEVER counted as tables (see B for column extensions)
 
-Sum checks (structural trace complete; product decision still open):
+Sum checks (structural trace complete; product decisions frozen):
   114 SC  : 114 designed 0 orphan
    20 S##  : 20 designed 0 missing
    44 UAT  : 44 designed 0 missing
    24 RACE : 24 designed 0 missing 0 TBD
-   36 CAP  : trace preserved; Requirement not re-frozen
+   36 CAP  : trace preserved; Requirement PASS / FROZEN
    15 Cross-Domain Boundary families  : 1:1 with §34.8
 
 Frozen Dependency Discipline:
@@ -12532,7 +12532,7 @@ Sales never writes second ledger:
   - no Sales-side credit exposure mutable ledger
   - credit exposure = DERIVED (§29.24 default)
 
-DR-SAL-01 Option A is approved and its design gate is closed for review: A-65 carries all four modes, both paths use the shared application service, and SC37..SC40 / UAT-S-15 / Wave 4 are internally aligned. This is `READY FOR REMOTE EXTERNAL REVIEW`, not PASS/FROZEN.
+DR-SAL-01 Option A is approved: A-65 carries all four modes, both paths use the shared application service, and SC37..SC40 / UAT-S-15 / Wave 4 are internally aligned. External review returned PASS and user Freeze approval is confirmed; this Technical Design is `PASS / FROZEN` at content baseline `5469891b78acb5b03940944698e5c51a38cf5491`.
 
 #### 29.50.1 Frozen-domain boundary matrix (task §21)
 
@@ -12580,15 +12580,15 @@ Out of Design scope (per §34.10; not in this Domain closure):
   - mobile IA wider than launcher ≤ 6 primary entries
   - schema migration code (Implementation)
 
-External Review Required:
+External Review Result — PASS:
   - per §34.13 36/36 CAP trace
   - per §34.13.1 114/114 SC acceptance coverage
   - per §34.5 44 UAT-IDs
   - per §34.6 24 race IDs (no TBD)
   - per §34.4 20 invariants
 
-Design does NOT yet pass / freeze.
-External review freezes.
+Technical Design: PASS / FROZEN.
+User Freeze approval: CONFIRMED.
 ```
 
 ---
@@ -12653,7 +12653,7 @@ External review freezes.
 
 ## 30. Sales & Customer Domain Implementation Wave Plan
 
-> This is the Implementation Sequencing Plan only. It was limitedly reopened on 2026-10-13 together with §29 to close the remote-review Requirement / Design defects. Implementation remains blocked until remote external review re-freezes the corrected Requirement / Design / Plan.
+> This is the Implementation Sequencing Plan only. It was limitedly reopened on 2026-10-13 together with §29 to close the remote-review Requirement / Design defects. External review returned PASS and user Freeze approval is confirmed; the plan is now `PASS / FROZEN`. Waves 1–13 remain `NOT IMPLEMENTED / NOT ACCEPTED`.
 > Plan-only output: no code, no migrations, no schema, no tests, no stages, no commits, no pushes, no tag, no version bump.
 
 ### 30.1 Total final wave count
@@ -13356,7 +13356,7 @@ No single giant commit. No push until external authorization.
 
 ## 30.26 Final Wave-Plan Summary
 
-This limited reopen has closed all identified documentation defects, including approved DR-SAL-01 Option A. It is ready for remote external review, not re-frozen; Wave 1 implementation remains blocked.
+This limited reopen closed all identified documentation defects, including approved DR-SAL-01 Option A. External review returned PASS and the user approved formal Freeze. Requirement, Technical Design and Implementation Wave Plan are now `PASS / FROZEN` at content baseline `5469891b78acb5b03940944698e5c51a38cf5491`; Waves 1–13 remain not implemented and not accepted.
 
 ```text
 14 implementation waves (Wave 0..13)
@@ -13383,17 +13383,32 @@ Platform boundary: NO schema change; generic mechanics remain Platform-owned, A-
 Open product decisions: 0 (DR-SAL-01 Option A approved and documented).
 ```
 
-Do NOT claim the plan frozen. External review freezes the plan.
-
 ```text
 SALES & CUSTOMER DOMAIN
 
-LIMITED REOPEN — READY FOR REMOTE EXTERNAL REVIEW
+REQUIREMENT: PASS / FROZEN
+TECHNICAL DESIGN: PASS / FROZEN
+IMPLEMENTATION WAVE PLAN: PASS / FROZEN
 
-WAVE 1 IMPLEMENTATION STILL BLOCKED
+FREEZE CONTENT BASELINE:
+5469891b78acb5b03940944698e5c51a38cf5491
+
+EXTERNAL REVIEW: PASS
+USER FREEZE APPROVAL: CONFIRMED
+
+WAVE 0:
+PASS / FROZEN
+73abaa146c644df72d2c040af4c26548bf92e880
+
+WAVES 1–13:
+NOT IMPLEMENTED / NOT ACCEPTED
+
+NEXT:
+APPLY_GUIDE.md isolated forward correction,
+then Sales Wave 1 implementation.
 ```
 
-Wave 0 remains frozen at `73abaa146c644df72d2c040af4c26548bf92e880`. Do NOT begin Wave 1 implementation. Do NOT write code. Do NOT stage. Do NOT commit. Do NOT push.
+The future freeze-record commit SHA is record metadata and must not be confused with the frozen content baseline above. This task does not begin the `APPLY_GUIDE.md` correction or Wave 1 implementation and does not stage, commit or push.
 
 ---
 
