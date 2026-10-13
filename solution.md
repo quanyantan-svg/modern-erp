@@ -8712,3 +8712,3683 @@ Final verdict（本 Design）：`READY FOR USER REVIEW`。
 | Audit / Error | §28.26 |
 | Rollback | §28.27 |
 | Final Acceptance | §28.28 |
+
+---
+
+## 29. Sales & Customer Domain Technical Design
+
+> 本节冻结 Sales & Customer Domain Closure 的 Technical Design 阶段成果。
+> Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 Master & Engineering / Planning / Procurement & Outsourcing / Manufacturing & Quality / Inventory & Warehouse / Finance Operations 等其它 domain 的边界）。
+> 本节 Coverage 以 Sales & Customer Domain Requirement（`document.md §34`，commit `414f2bb603fb1e9966d61811787b81f79103ecba`）为准：
+>
+> ```text
+>   Sales Capabilities           = 114   (SC01..SC114)
+>   DOMAIN_OWNED                = 100
+>   INTEGRATION_BACKED          =   3   (SC51, SC58, SC71)
+>   EXISTING_REUSE              =  11   (SC24, SC25, SC33, SC34, SC35, SC36,
+>                                       SC49, SC52, SC53, SC54, SC79)
+>   OUT_OF_SCOPE                =   0
+>
+>   Business Invariants         = 20    (S01..S20)
+>   Functional UAT              = 44    (UAT-S-01..UAT-S-44)
+>   MySQL Races                 = 24    (R-SAL-01..R-SAL-24)
+>   Cross-Domain Boundary Fam   = 15
+>
+>   Audit CAP Trace             = 36/36 (CAP-1..CAP-36)
+>   SC Acceptance Coverage      = 114/114
+> ```
+>
+> 本节不进入 Implementation / Migration / Code / Schema / Test 任一阶段。Design 阶段成果再经外部 Review 后方进入 Implementation。
+> 本节不重写已 frozen 的 Master & Engineering / Planning / Procurement & Outsourcing / Manufacturing & Quality / Inventory & Warehouse / Finance Operations 中的任何 capability 或 canonical fact。Sales & Customer 通过消费这些 frozen canonical truth 完成自身业务，不允许 second-truth / shadow ledger。
+
+### 29.1 范围与 Architecture
+
+#### 29.1.1 Sales & Customer 拥有
+
+Sales & Customer 是以下能力的唯一 canonical business owner：
+
+- **商业 Sales Truth**：Customer Commercial Extensions / Quotation / Sales Order / Sales Order Change / Delivery Notice / Sales Delivery / Sales Return / Replacement & Replenishment / Service Item Sales / Consignment 商业 lifecycle / Prepayment Gate 商业规则 / Sales Pricing / Order-Time Discount / Sales Reporting projections / Sales Reservation Intent。
+- **Credit 商业语义全部 9 capability**：Credit Parameters / Rules / Profile / Occupancy / Check / Special Approval / Recalculation / Query / Evaluation。
+
+#### 29.1.2 Sales & Customer 不拥有
+
+- Customer 身份 foundation（Master & Engineering）
+- Product / Material identity 与 UoM foundation（Master & Engineering）
+- Warehouse identity / layout（Master & Engineering）
+- Physical inventory truth / on-hand / locks / LOT-SERIAL / location / ownership dimension（Inventory & Warehouse）
+- Reservation canonical truth / MRP / demand planning（Planning）
+- OQC / Quality 引擎（Manufacturing & Quality）
+- AR / AP open-item truth（Finance Operations）
+- Advance Receipt / Unapplied Balance / Refund / Write-off / Collection / Invoice operational truth / Treasury（Finance Operations）
+- Voucher / GL / Period close / Financial reports（Accounting & Analytics）
+- RBAC / Workflow mechanics / Audit notification / Numbering / generic parameter-rule infrastructure / document relation-conversion（Platform）
+
+#### 29.1.3 Architecture 原则
+
+```text
+商业-物理-truth 分离  : Sales commercial truth ≠ Inventory/Finance/Reservation
+                                      canonical truth
+派生真理原则        : 优先 derived / projected truth；不建立 second mutable ledger
+frozen-domain 适配器: 物理 mutation 永远走 frozen Domain canonical writer
+Audit 强制          : 关键 mutation 与 audit 共享 transaction boundary
+Effective snapshot  : Credit Check 使用一个 coherent effective policy snapshot
+                                              (R-SAL-24 business-snapshot invariant)
+Backend fail-closed : mandatory BLOCK 必 backend fail closed；前端 hidden !== 控制
+Source-identity 保持 : Quotation → SO → Delivery Notice → Sales Delivery → Return
+                                      → Finance AR adapter 链路全程保留
+```
+
+### 29.2 Physical Model Inventory（machine-checkable）
+
+```text
+Classification dimensions:
+  TABLES:
+    EXISTING_CONVERGE          → 已存在并将由本 Domain 继续使用，不修改语义
+    NEW                        → 本 Design 新增的物理表（additive migration only）
+    DEPRECATED_NO_NEW_WRITES   → 保留读取能力；禁止新写入；迁移期间兼容
+
+  COLUMN EXTENSIONS (separate inventory, see B):
+    additive migration; not table count
+
+  DERIVED VIEWS (separate inventory, see C):
+    query-layer projection only; no physical table
+
+  COMPATIBILITY BEHAVIORS (separate inventory, see D):
+    legacy read path; no new writes; not a table
+
+  DEPRECATED FIELDS (separate inventory, see E):
+    single physical classification; distinct from COMPATIBILITY
+```
+
+#### A. Physical Tables
+
+A physical TABLE = a single SQL relation; columns are NOT counted as tables.
+
+| # | Table | Classification | Migration Source / Origin | Owner Domain |
+|---|---|---|---|---|
+| A-01 | `customers` | EXISTING_CONVERGE | db.js:934 | Master & Engineering |
+| A-02 | `sales_orders` | EXISTING_CONVERGE | db.js:972 (additive cols in §29.8.2) | Sales & Customer |
+| A-03 | `sales_order_items` | EXISTING_CONVERGE | db.js:991 (additive cols in §29.8.2) | Sales & Customer |
+| A-04 | `sales_deliveries` | EXISTING_CONVERGE | db.js:1175 | Sales & Customer |
+| A-05 | `sales_delivery_items` | EXISTING_CONVERGE | db.js:1198 | Sales & Customer |
+| A-06 | `return_orders` | EXISTING_CONVERGE | db.js:1208 (additive col: commercial_source_marker) | Sales & Customer / Procurement & Outsourcing (shared) |
+| A-07 | `return_order_items` | EXISTING_CONVERGE | db.js:1232 | Sales & Customer / Procurement & Outsourcing (shared) |
+| A-08 | `sales_discounts` | EXISTING_CONVERGE | discounts-schema.js:28 | Sales & Customer (route-table owned) — M14 post-delivery finance adjustment |
+| A-09 | `sales_invoices` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:70 | Finance Operations |
+| A-10 | `sales_invoice_items` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:78 | Finance Operations |
+| A-11 | `commercial_credit_notes` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:111 | Finance Operations |
+| A-12 | `document_sequences` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:63 | Platform (numbering) |
+| A-13 | `document_number_allocations` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:67 | Platform (numbering) |
+| A-14 | `tax_codes` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:57 | Finance Operations |
+| A-15 | `uoms` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:46 | Master & Engineering |
+| A-16 | `product_uom_conversions` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:50 | Master & Engineering |
+| A-17 | `planning_reservations` | EXISTING_CONVERGE (frozen) | planning-domain-schema.js | Planning |
+| A-18 | `inventory_*` family (canonical position table from V21) | EXISTING_CONVERGE (frozen) | v21 migrations | Inventory & Warehouse |
+| A-19 | `account_receivables` / `account_payables` | EXISTING_CONVERGE (frozen) | v22 migrations | Finance Operations |
+| A-20 | `account_role_mappings` | EXISTING_CONVERGE (frozen) | v13-phase6d-financial-inventory.js | Finance Operations |
+| A-21 | `idempotency_records` | EXISTING_CONVERGE | v13-phase6a-financial-controls.js:144 | **Platform / shared** infrastructure; Sales uses it for Sales command identities (semantic namespaces: quotation conversion / DN confirm / service fulfillment / etc.) — Sales owns the namespace meaning, not the storage infrastructure |
+| A-22 | `audit_logs` | EXISTING_CONVERGE (frozen) | db.js | Platform |
+| A-23 | `lifecycle_archives` | EXISTING_CONVERGE | lifecycle-schema.js | Platform |
+| A-24 | `approval_requests` | EXISTING_CONVERGE (frozen for SALES_ORDER family) | db.js:1030 | Platform |
+| A-25 | `sales_quotations` | NEW | §29.5 | Sales & Customer |
+| A-26 | `sales_quotation_lines` | NEW | §29.5 | Sales & Customer |
+| A-27 | `sales_quotation_conversions` | NEW | §29.5.3 | Sales & Customer — explicit conversion evidence |
+| A-28 | `sales_price_lists` | NEW | §29.6 | Sales & Customer |
+| A-29 | `sales_price_list_entries` | NEW | §29.6 | Sales & Customer |
+| A-30 | `sales_price_list_versions` | NEW | §29.6 | Sales & Customer |
+| A-31 | `sales_discount_schemes` | NEW | §29.7 | Sales & Customer |
+| A-32 | `sales_discount_scheme_rules` | NEW | §29.7 | Sales & Customer |
+| A-33 | `sales_order_changes` | NEW | §29.9 | Sales & Customer |
+| A-34 | `sales_order_change_lines` | NEW | §29.9 | Sales & Customer |
+| A-35 | `delivery_notices` | NEW | §29.11 | Sales & Customer |
+| A-36 | `delivery_notice_lines` | NEW | §29.11 | Sales & Customer |
+| A-37 | `sales_order_replacements` | NEW (header) | §29.14 | Sales & Customer |
+| A-38 | `sales_order_replacement_lines` | NEW (line) | §29.14 | Sales & Customer |
+| A-39 | `customer_commercial_extensions` | NEW | §29.4 | Sales & Customer (extends Master customer identity) |
+| A-40 | `customer_material_xref` | NEW | §29.4 | Sales & Customer |
+| A-41 | `sales_prepayment_requirements` | NEW | §29.16 | Sales & Customer |
+| A-42 | `sales_prepayment_gate_results` | NEW | §29.16 | Sales & Customer |
+| A-43 | `sales_reservation_intent` | NEW | §29.17 | Sales & Customer (intent state only; canonical reserved qty in `planning_reservations`) |
+| A-44 | `service_fulfillments` | NEW | §29.18 | Sales & Customer |
+| A-45 | `consignment_commercial_documents` | NEW | §29.19 | Sales & Customer (commercial layer; physical layer is Inventory) |
+| A-46 | `consignment_commercial_lines` | NEW | §29.19 | Sales & Customer (commercial layer) |
+| A-47 | `consignment_commodity_locations` | NEW (commercial) | §29.19 | Sales & Customer (commercial consignment location identity, ≠ physical warehouse) |
+| A-48 | `credit_parameters` | NEW | §29.21 | Sales & Customer |
+| A-49 | `credit_check_rules` | NEW | §29.21 | Sales & Customer |
+| A-50 | `credit_policy_snapshots` | NEW (R-SAL-24 lockable anchor row) | §29.21 | Sales & Customer |
+| A-51 | `credit_profile` | NEW | §29.22 | Sales & Customer (extends customer identity) |
+| A-52 | `credit_profile_ratings` | NEW | §29.22 | Sales & Customer |
+| A-53 | `credit_special_approval` | NEW | §29.26 | Sales & Customer |
+| A-54 | `credit_check_results` | NEW | §29.25 | Sales & Customer (decision artifact, not exposure ledger) |
+| A-55 | `credit_evaluation_indicator` | NEW | §29.27 | Sales & Customer |
+| A-56 | `credit_evaluation_scheme` | NEW | §29.27 | Sales & Customer |
+| A-57 | `credit_evaluation_model` | NEW | §29.27 | Sales & Customer |
+| A-58 | `credit_evaluation_scoring_sheet` | NEW | §29.27 | Sales & Customer |
+| A-59 | `credit_evaluation_result` | NEW | §29.27 | Sales & Customer |
+| A-60 | `credit_recalculation_history` | NEW | §29.28 | Sales & Customer |
+| A-61 | `product_commercial_classification` | NEW (Sales-owned extension table) | §29.18 — Service Item boundary | Sales & Customer (extends Master product identity at commercial level) |
+| A-62 | `credit_lock_anchors` (REFINED; replaces original A-62 design) | NEW (stable long-lived lock identity; one generic table; anchor_type ∈ {CREDIT_OBJECT, POLICY_SCOPE}) | §29.20 / §29.21 / §29.25.2-3 — stable Credit-control anchor (CREDIT_OBJECT + POLICY_SCOPE) | Sales & Customer |
+
+Counts:
+
+```text
+Physical tables total                                  = 62
+  EXISTING_CONVERGE  (incl. frozen)                   = 24  (A-01..A-24)
+  NEW (physical tables in §29 Domain closure)         = 38  (A-25..A-62)
+  DEPRECATED_NO_NEW_WRITES (tables)                   =  0
+```
+
+#### B. Existing-Table Extensions (column additions; do NOT count as tables)
+
+| Existing Table | New logical field(s) | Business purpose | Owner | Compatibility rule |
+|---|---|---|---|---|
+| A-02 `sales_orders` | `salesperson_code`, `sales_group_code`, `settlement_party_id`, `payer_id`, `customer_material_xref_id`, `commercial_tax_code`, `tax_inclusive`, `required_prepayment_cents`, `reservation_intent_state`, `commercial_close_state` | SO commercial extension & lifecycle / closure (§29.8 / §29.10) | Sales & Customer | legacy rows: NULL → display `(legacy)`; no fabrication |
+| A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max` | Line-level commercial snapshot; gift line marker; pricing/uom resolved snapshots | Sales & Customer | legacy rows: NULL → display `(legacy)` |
+| A-04 `sales_deliveries` | `delivery_notice_id`, `billing_mode` (existing) | DN source-line identity; preserved mode | Sales & Customer | legacy rows: NULL `delivery_notice_id` allowed (legacy path) |
+| A-05 `sales_delivery_items` | `delivery_notice_line_id` | DN line capacity anchor (§29.11 / §29.17) | Sales & Customer | legacy rows: NULL `delivery_notice_line_id` allowed (legacy path) |
+| A-06 `return_orders` | `commercial_source_marker` (CHECK: DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE) | Three-mode explicit | Sales & Customer | legacy rows: NULL → treat as DELIVERY_BACKED |
+| A-19 `account_receivables` | (none this closure) | AR canonical owner = Finance; Sales reads only | Finance Operations | n/a |
+
+Counts:
+
+```text
+Existing-table extensions                                  = 5  (covered tables above)
+New logical fields across extensions                       = 22
+(no new physical tables created from this sub-class)
+```
+
+#### C. Derived Views / Projections
+
+| # | Derived object | Canonical source facts | Persisted? | Rebuild semantics |
+|---|---|---|---|---|
+| C-01 | `credit_exposure_view` | approved SO commitment + delivered-not-settled + Finance AR open + overdue state + eligible advance / unapplied + returns / credits + collections + write-offs (per §29.23) | NO (DERIVED projection; §29.24 default) | PURE_DERIVED; not stored; computed on read |
+| C-02 | `credit_query_snapshot` | credit_profile + effective credit_policy_snapshots + finance adapter response | NO | query at access time |
+| C-03 | `customer_open_exposure_summary` | C-01 per customer_id | NO | per query |
+| C-04 | `sales_outstanding_projection` | sales_orders × sales_deliveries (per Requirement §34.5 UAT-S-37 / UAT-S-38) | NO | existing decision-reports; extended |
+| C-05 | `sales_order_fulfillment_projection` | sales_orders.commercial_close_state + derived (deliveries, returns) | CONTROLLED HYBRID (§29.10): commercial_close_state PERSISTED; partial fulfillment DERIVED | at read time |
+
+Counts:
+
+```text
+Derived views / projections                                = 4 pure-no + 1 controlled-hybrid = 5 logical objects
+  persisted? YES                                           = 0
+  persisted? NO                                            = 5
+```
+
+C-06 removed: `idempotency_records` is already counted as physical table A-21; reading the same object via two categories is double-count. Sales semantic idempotency namespaces (quotation conversion, delivery notice confirm, service fulfillment confirm, etc.) are explained in §29.45 (Idempotency Design) — they USE A-21 as the shared storage; they do not create a new derived object.
+
+#### D. Compatibility Behaviors (separate dimension; not a table)
+
+| # | Legacy path | New write allowed? | New read allowed? | Notes |
+|---|---|---|---|---|
+| D-01 | Legacy Sales Delivery without Delivery Notice (`delivery_notice_id = NULL`) | NO for new normal flow (§29.11); legacy rows retained | YES (read) | legacy rows pre-cutover stay valid; new flow MUST use DN |
+| D-02 | Legacy Sales Order without commercial parties / tax-basis / prepayment / reservation_intent columns | NO for new normal flow | YES (display `(legacy)`) | legacy rows remain valid; no fabrication |
+| D-03 | Legacy Sales Return without `commercial_source_marker` | NO (must set marker on new entry) | YES (treat NULL as DELIVERY_BACKED) | full backward compatible read |
+| D-04 | Legacy Customer without commercial extensions | NO (new entries must record extension) | YES (display `(none)`) | backward compatible |
+| D-05 | Legacy Credit Profile missing | policy-dependent; §29.27 + §29.12 fail-closed rule | YES (display `(none)`) | missing required profile must trigger config BLOCK, NOT silent PASS |
+| D-06 | Legacy `products.price_cents` as pricing fallback | NO (DEPRECATED) | YES (legacy fallback only) | explicit class: DEPRECATED_NO_NEW_WRITES (NOT COMPATIBILITY); see E |
+
+Counts:
+
+```text
+Compatibility behaviors                                    = 6
+  new write through legacy bypass                          = 0 (ALL legacy paths disabled for new writes)
+  legacy correction (bounded)                              = pending case-by-case policy
+  legacy read                                              = 6 (all legacy reads allowed)
+```
+
+#### E. Deprecated Fields / No-New-Write Surfaces (single physical classification)
+
+| # | Deprecated field / object | Physical classification | Compatibility behavior | Notes |
+|---|---|---|---|---|
+| E-01 | `products.price_cents` | **DEPRECATED_NO_NEW_WRITES** | may be READ as legacy pricing fallback (5th in §29.6.2 resolver priority chain); must NOT be treated as canonical new Sales Pricing truth | single classification; distinct from COMPATIBILITY behavior dimension |
+
+Counts:
+
+```text
+Deprecated-no-new-write fields/tables                     = 1
+```
+
+#### F. Service Item classification storage
+
+Per §29.18 + Micro-Closure §8: prefer Sales-owned commercial product extension over adding column to frozen Master `products` table.
+
+```text
+Chosen: Option A  Sales-owned commercial product extension table
+  object: product_commercial_classification (A-61)
+  product_id: FK to products.id (Master-owned identity; Sales only reads)
+  service_classification (bool)
+  effective_from / effective_to
+  business_unit (Sales & Customer)
+  no write to products table; no Master-frozen-column alteration
+```
+
+If frozen Domain (Master & Engineering) implements an additive `products.is_service` column at a later date, Sales will switch to read that attribute via cross-domain contract; this Domain closure does NOT depend on it.
+
+#### G. Consignment location-vs-ownership inventory clarification
+
+This Domain closure requires the seller retain inventory ownership at consignment shipment and transfer ownership at settlement/return. The current Inventory V21 model carries customer-owned positions for genuinely customer-owned / entrusted stock, which is a DIFFERENT business meaning and must not be conflated with sales consignment.
+
+Per §29.19 corrected design (rebuild in this §29 of the corrected micro-closure) consignment makes seller retention explicit; no fake CUSTOMER-owned position is created for consigned stock.
+
+**Frozen-domain integration contract status: NO CHANGE required for design.** The seller-ownership retention on consignment is expressed entirely in the new consignment commercial documents + inventory transfer with seller ownership marker; existing Inventory V21 canonical `inventory` position already records warehouse_id + owner_type / owner_id, and Sales only requests transfers with `owner_type = ENTERPRISE` (seller) during consignment shipment. The owner attribute in V21 already distinguishes ENTERPRISE from CUSTOMER at the position-key level. No `BOUNDED INTEGRATION CONTRACT EXTENSION` is required for §29.19 given this interpretation; if a future Implementation evidence shows seller-ownership cannot currently be represented on consignment transfer through Inventory V21, then `BOUNDED INTEGRATION CONTRACT EXTENSION` is filed and the model is revised before Implementation. (No silent CUSTOMER-owned redefinition.)
+
+#### 29.2.1 Recalculated counts (Micro-Closure)
+
+```text
+A  Physical tables total                     = 61
+     EXISTING_CONVERGE                       = 24  (A-01..A-24)
+     NEW                                     = 37  (A-25..A-61)
+     DEPRECATED_NO_NEW_WRITES (tables)      =  0
+
+B  Existing-table extensions                = 5  covered existing tables
+                                                 (5 extensions, 22 new logical fields)
+
+C  Derived views / projections               = 6  logical objects
+     persisted? YES                         = 0
+     persisted? NO                          = 6
+
+D  Compatibility behaviors                  = 6  legacy read = YES; new write through legacy bypass = NO
+
+E  Deprecated fields (no-new-write)         = 1  (products.price_cents; single classification)
+
+Sum check:
+  A tables:  24 + 37 + 0 = 61 ✓
+  Sub-categories are disjoint (every table belongs to exactly one of A classifications)
+  Columns are NEVER counted as tables (see B for column extensions)
+
+
+### 29.3 Canonical Writer Inventory
+
+下表列出关键 business fact 的 canonical writer / service owner 与 Sales direct-write 权限：
+
+| Business fact | Canonical writer / owner | Sales may write directly? | Adapter | Transaction boundary | Audit owner |
+|---|---|---|---|---|---|
+| Sales Order (header + lines) | Sales `sales_order_canonical_writer` | YES (own commercial) | n/a | one transaction: SO + items + commercial snapshot | audit_logs |
+| Quotation (header + lines) | Sales `quotation_canonical_writer` | YES | n/a | one transaction | audit_logs |
+| Pricing snapshot | Sales `pricing_canonical_writer` (resolveSalesPrice + persist) | YES | n/a | one transaction with SO creation | audit_logs |
+| Order-Time Discount snapshot | Sales `discount_canonical_writer` | YES | n/a | one transaction with SO creation | audit_logs |
+| Delivery Notice | Sales `delivery_notice_canonical_writer` | YES | n/a | one transaction | audit_logs |
+| Sales Delivery | Sales `sales_delivery_canonical_writer` (Phase 6E) | YES (commercial) | invokes Inventory V21 `applyInventoryMutation` + OQC + Finance recognition | one transaction: SO inventory + AR recognition + COGS | audit_logs |
+| Sales Return (DELIVERY_BACKED) | Sales `sales_return_canonical_writer` | YES | invokes Inventory V21 restoreSourceValue + Finance credit adjustment | one transaction | audit_logs |
+| Sales Return (ORDER_BACKED / NO_SOURCE) | Sales `sales_return_canonical_writer` (new mode) | YES (commercial only) | Finance credit 边界 by source availability | one transaction with explicit source marker | audit_logs |
+| Replacement obligation | Sales `replacement_canonical_writer` | YES | no inventory/finance bypass; via replacement_delivery_link | one transaction | audit_logs |
+| Reservation Intent | Sales `reservation_intent_writer` | YES (intent only) | Planning reservation canonical reader | one transaction intent-state write | audit_logs |
+| Prepayment Gate evaluation | Sales `prepayment_gate_evaluator` (uses Finance canon) | YES (rule only) | reads Finance `settlement_unapplied_balances` / advance receipts | one transaction (gate decision) | audit_logs |
+| Consignment commercial doc | Sales `consignment_commercial_writer` | YES (commercial layer only) | reads Inventory CUSTOMER-owned position; writes Finance settlement ref | one transaction per layer | audit_logs |
+| Service fulfillment confirmation | Sales `service_fulfillment_writer` | YES | invokes Finance recognition; no inventory OUT | one transaction | audit_logs |
+| Credit Parameters / Rules | Sales `credit_policy_writer` (Platform parameter infra) | YES (semantic) | Platform parameter storage | one transaction | audit_logs |
+| Credit Profile (rating applied) | Sales `credit_profile_writer` | YES | n/a | one transaction | audit_logs |
+| Credit Check decision | Sales `credit_check_evaluator` | YES | reads Finance AR + Planning exposure | one transaction; fail-closed BLOCK | audit_logs + credit_policy_snapshot_ref |
+| Credit Special Approval | Sales (semantic) + Platform (workflow infra) | YES (semantic) | Platform workflow infra; bounded authority | one transaction; **preserves check + snapshot identity** | audit_logs |
+| Credit Recalculation | Sales (rebuild logic) | YES (pure CHECK-only by default; cache optional per §29.24) | Finance AR canonical | rebuild tx; cannot mutate historical canonical | audit_logs |
+| Credit Evaluation Indicators/Scheme/Model/Sheet/Result | Sales `credit_evaluation_writer` | YES | NO external bureau / AI / ML | one transaction per artifact | audit_logs |
+| Customer identity | Master & Engineering | NO | n/a (read-only via canonical adapter) | n/a | n/a |
+| Material identity + UOM | Master & Engineering | NO | n/a | n/a | n/a |
+| Warehouse identity | Master & Engineering | NO | n/a | n/a | n/a |
+| Physical inventory truth | Inventory & Warehouse (V21) | NO | `applyInventoryMutation` adapter | one tx on Inventory side | n/a |
+| LOT / SERIAL | Inventory & Warehouse | NO | postTrackedMovement adapter | n/a | n/a |
+| Inventory Locks | Inventory & Warehouse | NO | n/a | n/a | n/a |
+| Reservation canonical quantity | Planning (V19) | NO | `assertStrongReservationAvailability` reader | n/a | n/a |
+| OQC | Manufacturing & Quality (V18) | NO | quality gate adapter | one tx | n/a |
+| AR open amount | Finance Operations (V22) | NO | `recognizeFinanceExposure` / `applyCreditAdjustment` | one tx | n/a |
+| Advance Receipt / Unapplied | Finance Operations | NO | read | n/a | n/a |
+| Collection / Refund / Write-off | Finance Operations | NO | write via canonical adapter | one tx | n/a |
+| Invoice operational finance truth | Finance Operations | NO | postSalesInvoice / postSupplierBill | one tx | n/a |
+| Treasury | Finance Operations | NO | applyTreasuryMovement | one tx | n/a |
+| Voucher / GL | Accounting & Analytics | NO | n/a | n/a | n/a |
+| RBAC / Audit notification / Numbering | Platform | NO | Platform parameters / generic services | per Platform | Platform |
+
+> Audit 必须 与 mutation 共享 transaction boundary；不允许 mutation 提交后 audit 才写。
+
+### 29.4 Sales Commercial Foundation
+
+#### 29.4.1 Customer Commercial Extensions
+
+Customer identity foundation = Master & Engineering。Sales 通过 `customer_commercial_extensions` 表（NEW #35）extending customer identity；该表 columns 仅是 commercial facets：
+
+```text
+customer_id          (FK to customers.id)
+settlement_party_id (FK customers.id or NULL; payer/ship-to 同一类型扩展)
+payer_id            (FK customers.id or NULL)
+salesperson_id      (FK users.id   or NULL; 仅在 user 角色允许时)
+sales_group_code    (text or NULL)
+default_payment_terms_days (integer or NULL; mirror to customers.payment_terms_days)
+default_settlement_method (enum or text or NULL)
+default_pricing_list_id   (FK sales_price_lists.id or NULL)
+commercial_defaults_snapshot_id (FK to snapshot table)
+effective_from      (date)
+effective_to        (date or NULL)
+created_at / updated_at
+created_by / updated_by (FK users.id)
+```
+
+Notes:
+- Ship-to / Settlement Party / Payer 不必自有 Customer row；可以引用同一 Customer（self）。
+- 主键：`PRIMARY KEY (customer_id, effective_from)` 唯一定位一条。
+- `effective_to IS NULL` 表示当前 effective record。
+- Frozen customer.payment_terms_days 保留（legacy compatibility），但新的 commercial scope 通过 `customer_commercial_extensions` 表归一。
+- `credit_limit` 不在本表重复定义；属于 `credit_profile`（§29.22）。SC1 在 §34.1 中明示 `credit_limit` 不归 Customer commercial master（避免 double-counting）。
+
+#### 29.4.2 Salesperson / Sales Group
+
+- `salesperson` = existing `users.role-sales` 的 bounded projection；新增 `users` optional columns：`salesperson_code` (UNIQUE) + `sales_group_code`。
+- 新 `sales_group` 表仅维护 sales_group_code / name / description；SO/Quotation 仅存 sales_group_code 引用。
+- 历史 rows sales_group 缺失时显示 `(unassigned)`，不 fabrication 商业事实。
+
+#### 29.4.3 Customer-Material Cross Reference
+
+`customer_material_xref` (NEW #36)：
+
+```text
+id
+customer_id (FK customers.id)
+material_id (FK products.id)
+customer_material_code (text; nullable)
+commercial_uom_code (text; nullable)
+sellable_scope (enum: ALL / EXCLUSIVE / RESTRICTED)
+effective_from / effective_to
+created_at / created_by
+PRIMARY KEY (customer_id, material_id, effective_from)
+```
+
+- `customer_material_code` = customer-specific 物料 mapping；多 customer-code 对一个 internal-material。
+- `sellable_scope`：
+  - `ALL` = 默认可售
+  - `EXCLUSIVE` = 该 customer 只能卖此 customer-material-code 对应的 material
+  - `RESTRICTED` = 该 customer 不能卖 list 外的 material
+- `effective_to IS NULL` 表示当前。
+
+#### 29.4.4 Order-time Frozen Commercial Defaults
+
+SO create-time 形如：
+
+```text
+SO_id  →  stored: (ship_to_contact / ship_to_phone / ship_to_address /
+                   salesperson_code / sales_group_code /
+                   settlement_party_id / payer_id / customer_material_xref_id /
+                   commercial_tax_code / tax_inclusive_flag /
+                   commercial_pricing_uom_code)
+```
+
+Snapshot columns 是 additive；不改写 existing historical orders（FROZEN）。
+
+#### 29.4.5 Sales Parameters (SC01)
+
+`credit_parameters` 表（NEW #42）提供 sales-level parameter；其他参数（pricing / discount / consignment）通过自身表承载。`Sales Parameters` = business enable 与 system-level Sales 切换，不混入 Security。
+
+### 29.5 Quotation Technical Design
+
+#### 29.5.1 Lifecycle
+
+```text
+DRAFT
+EFFECTIVE        (i.e. ACTIVE; frozen as 'EFFECTIVE' = APPROVED if Quotation needs approval per policy)
+EXPIRED          (validity < business_date; auto-transition by trigger / runtime check)
+CLOSED           (cancelled by user; partial-conversion preserved)
+FULLY_CONVERTED  (when converted qty = qty aggregate; remains in history)
+```
+
+> 本 Design 不强制 Quotation approval。Approval 是 policy 选项；若启用则 state `EFFECTIVE` 是 approval 的产物。
+
+#### 29.5.2 物理对象
+
+`sales_quotations` (NEW #22) + `sales_quotation_lines` (NEW #23)：
+
+```text
+sales_quotations:
+  id, quotation_no (UNIQUE), customer_id (FK), salesperson_code, sales_group_code,
+  status (CHECK IN 'DRAFT', 'EFFECTIVE', 'EXPIRED', 'CLOSED', 'FULLY_CONVERTED'),
+  currency_code (single base currency only; NOT multi-currency),
+  valid_from, valid_to,
+  payment_terms, payment_terms_days,
+  commercial_tax_code (or NULL), tax_inclusive (bool or NULL),
+  total_cents (computed),
+  converted_total_cents (computed),
+  created_at / updated_at, creator_id, reviewer_id,
+  remarks
+
+sales_quotation_lines:
+  id, quotation_id (FK), line_no,
+  material_id (FK), commercial_uom_code,
+  quantity (REAL), unit_price_cents, amount_cents,
+  converted_qty (REAL; SUM of all SO lines sourced from this quotation line),
+  remaining_qty (generated column from quantity - converted_qty),
+  discount_snapshot (see §29.7),
+  tax_basis_assumption (commercial; not statutory),
+  remarks
+```
+
+#### 29.5.3 Conversion → Sales Order (canonical choice)
+
+This Domain keeps `sales_quotation_conversions` as an EXPLICIT physical conversion-evidence table (chosen canonical option; no duplicate conversion truth via Platform relation infra).
+
+`sales_quotation_conversions` (NEW, physical table — see §29.2 A-27):
+
+```text
+sales_quotation_conversions:
+  id                              (PK)
+  quotation_id                   (FK sales_quotations.id)
+  quotation_line_id              (FK sales_quotation_lines.id)
+  sales_order_id                 (FK sales_orders.id)
+  sales_order_item_id            (FK sales_order_items.id)
+  converted_qty                  (REAL; signed positive for normal conversion;
+                                   conversion CANNOT exceed remaining)
+  converted_unit_price_cents      (snapshot at conversion time; required)
+  converted_amount_cents         (snapshot; required for audit)
+  converted_uom_code             (snapshot UoM; nullable if UoM is the same)
+  business_date                  (date of conversion)
+  converted_at                   (timestamp; audit)
+  converted_by                   (FK users.id; audit)
+  idempotency_key                (UNIQUE with sales_quotation_conversions.id)
+  PR UNIQUE (quotation_line_id, sales_order_item_id)
+```
+
+Constraints:
+
+- `converted_qty ≤ SO item quantity` per conversion row.
+- Per quotation_line: `SUM(converted_qty) ≤ sales_quotation_lines.quantity`.
+- Repeated conversion (Requirement SC14): allowed only when:
+  - `quotations.status = 'EFFECTIVE'`
+  - `quotation.valid_to >= business_date`
+  - `SUM(converted_qty for this quotation_line) < quotation_line.quantity`
+- Each conversion commits as ONE tx: insert + capacity re-read + check + audit.
+
+#### 29.5.4 Capacity Trace & Audit
+
+- `sales_quotation_lines.remaining_qty` is computed as `quantity - SUM(sales_quotation_conversions.converted_qty for this quotation_line_id)`. Generated column at SQL layer.
+- Each conversion writes audit `entity_type = 'SALES_QUOTATION_CONVERSION'`, `detail = {quotation_id, quotation_line_id, sales_order_id, sales_order_item_id, converted_qty, business_date}`.
+- Capacity anchor for R-SAL-06: `sales_quotation_lines.id` (FOR UPDATE on this row when converting); secondary FOR UPDATE on `sales_order_items.id` at SO item side to prevent post-submit frozen-line mutation.
+
+### 29.6 Sales Pricing Technical Design
+
+#### 29.6.1 物理对象
+
+`sales_price_lists` (NEW #24) + `sales_price_list_entries` (NEW #25) + `sales_price_list_versions` (NEW #26)：
+
+```text
+sales_price_lists:
+  id, price_list_code (UNIQUE), name, currency_code (single base),
+  priority (int; lower = higher priority), fallback_price_list_id (FK self),
+  effective_from, effective_to,
+  status (CHECK IN 'DRAFT', 'ACTIVE', 'INACTIVE'),
+  created_at, created_by
+
+sales_price_list_entries:
+  id, price_list_id (FK), material_id (FK),
+  customer_id (FK; NULL = all customer),
+  pricing_uom_code, base_uom_code, conversion_factor (REAL),
+  qty_break_min (REAL inclusive), qty_break_max (REAL inclusive),
+  unit_price_cents,
+  effective_from, effective_to,
+  version (int),
+  PRIMARY KEY (price_list_id, material_id, customer_id, pricing_uom_code,
+               qty_break_min, version, effective_from)
+
+sales_price_list_versions:  -- snapshot history (append-only)
+  id, entry_id (FK sales_price_list_entries.id), version, snapshot_json,
+  created_at, created_by
+```
+
+#### 29.6.2 Resolver Service
+
+`resolveSalesPrice(context)` 商业 signature（伪）：
+
+```text
+INPUT:
+  customer_id
+  material_id
+  pricing_uom_code
+  quantity
+  business_date
+  applicable_price_list_ids (from customer_commercial_extensions.default +
+                              applicable lists per list effective window)
+  context_priority (sortable list)
+
+OUTPUT:
+  resolved_price_cents   (bigint)
+  source_rule_identity   (sales_price_list_entry.id + version)
+  effective_range        (date range applied)
+  uom_applied            (pricing_uom_code or base if converted)
+  qty_break_applied      (the matched qty_break_min/max)
+  override_state         ('NONE' | 'OVERRIDDEN' | 'OVERRIDE_AUTHORITY_REQUIRED')
+  snapshot_evidence      (the canonical price_list_entry row id + version)
+
+PRECONDITIONS:
+  - one base currency only
+  - pricing_uom_code must equal an existing entry pricing_uom_code OR
+    a valid conversion factor to base_uom_code
+  - priority + fallback resolution deterministic given same inputs
+
+FALLBACKS (in priority order):
+  1. customer-specific entry in applicable list effective range
+  2. price-list-wide entry (customer_id NULL) in applicable list
+  3. next higher-priority list in fallback chain
+  4. customer_commercial_extensions.default_pricing_list
+  5. product reference price (legacy `products.price_cents`) — DEPRECATED but COMPATIBILITY for legacy SO without commercial price snapshot
+  6. (NO silent fallback after confirmed APPLIED)
+
+OVERRIDE:
+  - actor with PRICE_OVERRIDE permission may input manual price_cents
+  - override_state = 'OVERRIDDEN', reason captured in `sales_pricing_override_log`
+  - no silent overwrite of an approved SO price (R-SAL-11)
+```
+
+#### 29.6.3 Snapshot
+
+每次 SO create 持久化：
+
+```text
+sales_order_items.price_snapshot_identity  (json or normalized cols):
+  resolved_price_cents
+  source_list_id, source_entry_id, version
+  uom_code_applied
+  qty_break_min, qty_break_max
+  effective_from, effective_to
+  override_state
+  override_reason_id (FK nullable)
+  created_at (which IS business_date if requested; otherwise actual timestamp)
+```
+
+Snapshot is **immutable**: SO line after APPROVED does not allow pricing re-derive to overwrite (R-SAL-11 / S20).
+
+### 29.7 Order-Time Discount Technical Design
+
+#### 29.7.1 物理对象
+
+`sales_discount_schemes` (NEW #27) + `sales_discount_scheme_rules` (NEW #28) + `sales_order_discount_snapshot` (NEW persist cols on `sales_order_items` + `sales_orders` header)：
+
+```text
+sales_discount_schemes:
+  id, scheme_code (UNIQUE), name, currency_code,
+  effective_from, effective_to, status ('ACTIVE'|'INACTIVE')
+
+sales_discount_scheme_rules:
+  id, scheme_id (FK), material_id (FK nullable),
+  customer_id (FK nullable), pricing_uom_code (nullable),
+  line_scope ('LINE'|'HEADER'), discount_kind ('PERCENT'|'AMOUNT'),
+  discount_value (REAL; PERCENT = 0.05 = 5%, AMOUNT = cents),
+  priority (int), fallback_scheme_id (FK nullable),
+  qty_break_min / qty_break_max (REAL),
+  effective_from, effective_to
+```
+
+#### 29.7.2 解析
+
+`resolveOrderTimeDiscount(context)`：
+
+```text
+INPUT: customer_id, material_id, pricing_uom_code, quantity, business_date,
+       ordered base_price_cents, applicable_scheme_ids
+OUTPUT:
+  line_discount_cents (per line)
+  header_discount_cents (per SO)
+  total_discount_cents (line + header; line computed first then header applied on
+                                          discounted subtotal)
+  applied_rule_ids (1..N; explanation evidence)
+  applied_priority (snapshot for audit)
+```
+
+#### 29.7.3 与 pricing / 商业 amount 区分
+
+```text
+base/resolved_price  : 来自 §29.6
+discount             : 来自 §29.7
+final commercial price = base - line_discount - (header_discount applied on
+                                              discounted subtotal)
+commercial amount    = final commercial price × qty
+```
+
+#### 29.7.4 与 M14 Sales Discount 区分
+
+M14 (`sales_discounts`) = post-delivery finance adjustment integration。Finance canonical adapter 写入。本 Design 不让 order-time discount 进入 M14 path；M14 与 order-time discount 是 distinct canonical truth tables。
+
+#### 29.7.5 Snapshot
+
+```text
+sales_order_items.discount_snapshot_identity = (resolved scheme ids,
+                                                per-line amount_cents,
+                                                header share if applicable,
+                                                effective priority order)
+```
+
+### 29.8 Sales Order Canonical Model
+
+#### 29.8.1 Lifecycle
+
+```text
+DRAFT
+SUBMITTED
+APPROVED
+REJECTED
++ 设计上叠加 (controlled hybrid) 商业 fulfillment projection:
+  REMAINING_OBLIGATION_PARTIAL (no persisted state; derived)
+  REMAINING_OBLIGATION_FULL_DONE (no persisted state; derived)
+  CLOSED_COMMERCIALLY (persisted via SC43, requires explicit close action)
+  CANCELLED_COMMERCIALLY (persisted via SC44, requires explicit cancel)
+```
+
+> `CLOSED_COMMERCIALLY` 与 `CANCELLED_COMMERCIALLY` 是 persisted state in `sales_orders.commercial_status`；FROZEN lifecycle status (DRAFT/SUBMITTED/APPROVED/REJECTED) 与商业 close state 是两个 orthogonal dimensions（不 mix）。
+
+#### 29.8.2 Schema Additive
+
+`sales_orders` 新 additive columns：
+
+```text
+order_date                       (date — already from v13-phase1)
+requested_delivery_date          (date — already)
+payment_terms, payment_terms_days (already)
+ship_to_contact_name, ship_to_phone, ship_to_address (already)
+salesperson_code                  (NEW — varchar nullable)
+sales_group_code                  (NEW — varchar nullable)
+settlement_party_id              (NEW — FK customers nullable)
+payer_id                         (NEW — FK customers nullable)
+customer_material_xref_id        (NEW — FK customer_material_xref nullable)
+default_pricing_uom_code         (NEW — derived from extension)
+commercial_tax_code              (NEW — derived from extension)
+tax_inclusive                    (NEW — bool nullable)
+required_prepayment_cents         (NEW — int nullable, 0 means none)
+reservation_intent_state         (NEW — enum: 'NONE'|'REQUESTED'|'GRANTED'|'RELEASED')
+gift_summary_cents                (NEW — sum of is_gift_line amount_cents)
+commercial_close_state           (NEW — 'OPEN'|'PARTIAL_DONE'|'CLOSED'|'CANCELLED')
+```
+
+`sales_order_items` 新 additive columns：
+
+```text
+is_gift_line                   (NEW — bool default false)
+commercial_tax_basis           (NEW — varchar code nullable; commercial only,
+                                not statutory invoice tax)
+tax_inclusive_assumption       (NEW — bool nullable)
+pricing_uom_code_applied       (NEW)
+qty_break_applied_min           (NEW REAL nullable)
+qty_break_applied_max           (NEW REAL nullable)
+```
+
+> 不破坏 existing rows；legacy rows 缺新字段为 NULL，行为为 PARTIAL compatibility。
+
+#### 29.8.3 Commercial Party Snapshot
+
+SO create 时将 `customer_commercial_extensions` 当前 effective record 冻结进 SO header snapshot columns（per §29.4.4）。Effective dating 通过 `effective_from / effective_to` 在 `customer_commercial_extensions` 表本身表达；SO 时序上不再 re-evaluate。
+
+#### 29.8.4 Commercial Tax-Basis Assumption Snapshot
+
+Requirement SC27 / SC28 / RC-24:
+
+```text
+SO Header column commercial_tax_code  — commercial tax code (nullable)
+SO Header column tax_inclusive         — bool (nullable)
+SO Item column commercial_tax_basis    — commercial tax-basis assumption per item
+SO Item column tax_inclusive_assumption
+```
+
+> Tax Snapshot 是 commercial assumption 持久化；statutory invoice tax truth 仍归 Finance Operations canonical `sales_invoices` + `account_role_mappings`。Sales 不 mirror statutory tax ledger；Sales 不 compute invoice tax。
+
+#### 29.8.5 Compatibility
+
+- Legacy Sales Orders without commercial parties / tax-basis / prepayment / reservation_intent: SO business 显示 `(legacy)` 标记；不 fabrication 商业事实。
+- 任何 historical modification：禁止 retro-rewrite；只允许 forward-only SO Change (SC37..SC40)。
+
+### 29.9 Sales Order Change Technical Design
+
+#### 29.9.1 物理对象
+
+`sales_order_changes` (NEW #29) + `sales_order_change_lines` (NEW #30) + `sales_order_change_state_machine`：
+
+```text
+sales_order_changes:
+  id, change_no (UNIQUE), sales_order_id (FK),
+  state (CHECK IN 'DRAFT','SUBMITTED','APPROVED','REJECTED','CANCELLED'),
+  reason_code (enum), reason_text,
+  before_snapshot_hash, after_snapshot_hash,
+  effective_version (int; SO has effective_version counter),
+  requested_by, requested_at,
+  reviewer_id, reviewed_at,
+  created_at
+
+sales_order_change_lines:
+  id, change_id (FK), line_no,
+  op ('ADD','MODIFY','CANCEL'),
+  sales_order_item_id (FK; NULL for ADD),
+  before_values_json, after_values_json, qty_delta, amount_delta,
+  delivered_before_qty, delivered_after_qty,
+  constraint_check_result
+```
+
+#### 29.9.2 约束 (R-SAL-07 / R-SAL-08 + SC40 invariant)
+
+```text
+applied rule:
+- change may only modify fields whose CURRENT_delivered_qty == 0
+- qty cannot be reduced below SUM(sales_delivery_items.qty for so_item)
+- planned delivery schedule 不能 reduce below already-notified Delivery Notice
+- prepayment requirement 边界 由 prepayment_gate re-evaluation (§29.16)
+- credit 边界 by SC95 + R-SAL-24 (re-evaluate against current policy snapshot)
+- pricing snapshot 不变 (R-SAL-11)
+- historic price/discount 字段 never overwritten (SC40)
+- executed inventory/finance history NOT touched; reversal/credit mechanisms
+  走 frozen-domain adapters
+```
+
+#### 29.9.3 Effective Versioning
+
+SO header 有 effective_version；每次 approved change 递增。Old sales_order_changes 行不可更新；新 SO Change 引用 effective_version + 1.
+
+#### 29.9.4 Approval workflow
+
+SO Change belongs to SALES_ORDER approval family (current Platform)。`approval_requests` row 由 SO Change apply 创建；State machine：
+
+```text
+DRAFT → SUBMITTED → APPROVED (effect at next SO state read)
+                    ↘ REJECTED (rolled back, no SO state change)
+```
+
+> 若 SO Change 涉及 credit / prepayment / reservation, additional gate evidence 必 by §29.16 + §29.17 + §29.25.
+
+### 29.10 Sales Order Fulfillment / Close Lifecycle
+
+#### 29.10.1 Design 决定（controlled hybrid）
+
+本 Design 采用 **controlled hybrid**：
+
+```text
+A. PERSIST commercial_close_state (列) ONLY on completion:
+     OPEN → COMMERCIALLY_CLOSED
+     OPEN → COMMERCIALLY_CANCELLED
+   (semantic state change requires explicit user action; partial fulfillment
+    does not persist state transitions)
+B. PARTIAL fulfillment state is DERIVED from:
+     sales_deliveries.sales_order_id × sales_order_items.quantity
+     vs sales_deliveries 聚合
+     (no persisted 'partially fulfilled' bit)
+C. REMAINING_OBLIGATION_FROZEN: never overwritten in place; period close and
+   finance close NEVER depend on SO closure. SO closure is a Sales-side
+   projection only.
+```
+
+#### 29.10.2 Effective Identity
+
+```text
+Sales commercial close_state = persisted in sales_orders.commercial_close_state
+                                   ('OPEN' | 'PARTIAL_DONE' | 'CLOSED' | 'CANCELLED')
+PARTIAL_DONE = derived (no persisted bit); triggers if
+              SUM(deliveries.confirmed) > 0 AND SUM(deliveries.confirmed) < ordered_qty
+CLOSED = persisted via explicit action + completed check
+CANCELLED = persisted via explicit action + reason + audit
+```
+
+### 29.11 Delivery Notice Technical Design
+
+#### 29.11.1 物理对象
+
+`delivery_notices` (NEW #31) + `delivery_notice_lines` (NEW #32)：
+
+```text
+delivery_notices:
+  id, notice_no (UNIQUE), sales_order_id (FK),
+  state ('DRAFT','CONFIRMED','CANCELLED','CLOSED'),
+  warehouse_id (FK), ship_to_snapshot_json,
+  planned_delivery_date, business_date,
+  customer_id, customer_snapshot,
+  creator_id, created_at,
+  confirmed_at, confirmed_by
+
+delivery_notice_lines:
+  id, delivery_notice_id (FK), sales_order_item_id (FK),
+  scheduled_qty (REAL),
+  notified_qty (REAL; sum of all confirmed Sales Delivery referenced),
+  cancelled_notified_qty (REAL; cancelled or reversed notice qty),
+  remaining_notified_qty (GENERATED: scheduled - notified)
+  PRIMARY KEY (delivery_notice_id, sales_order_item_id)
+```
+
+#### 29.11.2 链
+
+```text
+Sales Order
+→ Delivery Notice (商业指令；不 mutate stock)
+→ Sales Delivery (实际执行；consumes Delivery Notice remaining)
+→ Inventory physical outbound (canonical V21)
+```
+
+#### 29.11.3 多 Sales Delivery 对同一 Delivery Notice
+
+允许：同一 Delivery Notice 的同一 line 可以由多个 Sales Delivery 消费，按 `sales_delivery_items.delivery_notice_line_id` 加 references 累加 notified_qty。
+
+#### 29.11.4 不 mutate inventory
+
+Delivery Notice CONFIRM 不写 inventory；只写 delivery_notice_lines 自身 rows。
+
+#### 29.11.5 容量 invariant (R-SAL-16 / R-SAL-17)
+
+```text
+scheduled_qty ≤ SO line qty (audit snapshot)
+remaining_notified_qty = scheduled_qty - notified_qty (GENERATED)
+delivery_notified_qty ≤ scheduled_qty
+sales_delivery_items (for this DN line) qty ≤ remaining_notified_qty
+```
+
+Locking: Sales-Delivery confirm 必 lock both:
+1. `sales_delivery_items source_line_identity` (for SDD capacity)
+2. `delivery_notice_lines remaining_notified_qty` (for DN capacity)
+
+→ SQLite `BEGIN IMMEDIATE`; MySQL `SELECT … FOR UPDATE` on both targets before compute and write.
+
+### 29.12 Sales Delivery Convergence
+
+#### 29.12.0 Mandatory Delivery Notice for NEW NORMAL Sales Delivery flow
+
+Frozen Requirement chain is:
+
+```text
+Sales Order
+→ Delivery Notice
+→ Sales Delivery
+→ Inventory physical outbound
+```
+
+Compatibility boundary:
+
+| Compliance path | Legacy read | Legacy mutate (correction) | New write through legacy bypass |
+|---|---|---|---|
+| Legacy Sales Delivery (`delivery_notice_id IS NULL`) | YES | bounded (Policy §29.45 correction) | **NO** for new normal flow |
+| New normal Sales Delivery | n/a | n/a | Delivery Notice **REQUIRED** |
+
+Therefore the canonical new-flow invariant:
+
+```text
+NEW Sales Delivery after domain cutover MUST have non-null delivery_notice_id
+and at least one sales_delivery_items.delivery_notice_line_id reference.
+```
+
+The "may reference DN" wording in earlier drafts is hereby REPLACED with the canonical above. No silent legacy bypass for new writes.
+
+#### 29.12.1 Compatibility Design (legacy SDs read-only preserved)
+
+```text
+legacy SD row pre-cutover:
+  delivery_notice_id IS NULL, sales_delivery_items.delivery_notice_line_id IS NULL
+  → read path allowed
+  → correction path governed by Policy §29.45 only (no automatic fill-in)
+  → no new mutation can make delivery_notice_id IS NOT NULL
+new normal SD after cutover:
+  delivery_notice_id IS NOT NULL, sales_delivery_items.delivery_notice_line_id IS NOT NULL
+```
+
+#### 29.12.2 Existing Invariants preserved
+
+```text
+- OQC gate (assertQualityGate 'OQC')
+- Inventory canonical writer (applyInventoryMutation, postTrackedMovement)
+- LOT/SERIAL tracking
+- valuation / COGS (issueSourceValue)
+- Finance recognition adapter (recognizeFinanceExposure auto Invoice if
+  billing_mode = DIRECT_BILL; or post AR if LEGACY_DIRECT)
+- Idempotency (idempotency-key on confirm)
+- Audit (audit_logs entity_type='SALES_DELIVERY')
+```
+
+### 29.13 Sales Return Technical Design
+
+#### 29.13.1 物理对象
+
+`return_orders.source_type` 已存在 'PURCHASE' | 'SALES'；新增 commercial_source_marker column：
+
+```text
+return_orders.commercial_source_marker  -- NEW
+  CHECK IN ('DELIVERY_BACKED', 'ORDER_BACKED', 'NO_SOURCE')
+```
+
+(DESIGN alternative): 新建 `return_modes` 表；本 Design 选 column-additive 保持最小 invasive.
+
+#### 29.13.2 三种 mode
+
+| Mode | Required source | Inventory effect | Finance effect | Audit |
+|---|---|---|---|---|
+| DELIVERY_BACKED (SC54) | `sales_delivery_items.id` | IN (applyInventoryMutation) | applyCreditAdjustment (DR AR / CR Sales Revenue voucher) | full audit |
+| ORDER_BACKED (SC55) | `sales_order_items.id` + `sales_deliveries.delivery_id IS NULL for that item`（NO delivery was done）| based on §29.19 / source evidence availability | applyCreditAdjustment bounded by source evidence | full audit + explicit source marker |
+| NO_SOURCE (SC56) | no source sales row | IN (inventory receipts) | 仅 当 Finance-side 具备有效 basis 时才生成 credit; 否则 only inventory + audit | full audit + explicit `NO_SOURCE` marker |
+
+#### 29.13.3 容量 invariant
+
+```text
+return_qty ≤ source_line_remaining_qty
+R-SAL-03 source-line remaining holds
+```
+
+#### 29.13.4 ORDER_BACKED guardrail
+
+A `ORDER_BACKED` return must NOT automatically imply:
+
+```text
+- a fake Delivery
+- a fake Invoice
+- a fake AR row
+```
+
+It may record the document; any Inventory IN effect is conditional on actual warehouse movement (manual acceptance); any Finance credit is conditional on Finance-side basis.
+
+#### 29.13.5 NO_SOURCE guardrail
+
+```text
+return_orders.commercial_source_marker = 'NO_SOURCE'
++ mandatory fields: customer_id, material_id, quantity, warehouse_id,
+  reason_code, business_date, authorization_role.
++ NO automatic Finance credit; only inventory receipt + audit.
++ visible in Sales UI as "无来源销售退货" separate from DELIVERY_BACKED and
+  ORDER_BACKED; not mergeable.
+```
+
+### 29.14 Replacement / Replenishment Technical Design
+
+#### 29.14.1 物理对象（header + line）
+
+Replacement is LINE-CAPACITY based. Identity anchor:
+
+```text
+Source return line = return_order_items.id  (preferred; matches source-capacity unit)
+  Header object     = sales_order_replacements          (NEW A-37 header; line-aggregate)
+  Line object       = sales_order_replacement_lines     (NEW A-38 line; per material / qty)
+```
+
+`sales_order_replacements` (NEW A-37 header):
+
+```text
+sales_order_replacements:
+  id, replacement_no (UNIQUE),
+  source_return_id (FK return_orders.id, NOT NULL),
+  state ('OPEN','IN_PROGRESS','FULFILLED','CANCELLED'),
+  replacement_quantity (header roll-up; computed from lines),
+  fulfilled_quantity   (header roll-up; computed from lines),
+  remaining_quantity   (header roll-up; computed from lines),
+  delivery_link_id (FK sales_deliveries.id nullable),
+  created_at, creator_id, closed_at, closed_by
+```
+
+`sales_order_replacement_lines` (NEW A-38 line):
+
+```text
+sales_order_replacement_lines:
+  id, replacement_id (FK sales_order_replacements.id),
+  line_no,
+  source_return_item_id (FK return_order_items.id, NOT NULL),
+  replacement_material_id (FK products.id),
+  replacement_quantity (REAL),
+  fulfilled_quantity (REAL, GENERATED = SUM(sales_replacement_fulfillments where confirmed))
+  remaining_quantity (REAL, GENERATED = replacement_quantity - fulfilled_quantity)
+  replacement_uom_code
+  business_date
+  created_at
+```
+
+`sales_replacement_fulfillments` (NEW link table; one-row per confirmed replacement_delivery item):
+
+```text
+sales_replacement_fulfillments:
+  id, replacement_line_id (FK sales_order_replacement_lines.id),
+  sales_delivery_id (FK sales_deliveries.id),
+  sales_delivery_item_id (FK sales_delivery_items.id),
+  fulfilled_qty, business_date
+```
+
+#### 29.14.2 Constraints
+
+```text
+- replacement_quantity (header) = SUM(sales_order_replacement_lines.replacement_quantity)
+- fulfilled_quantity (header)   = SUM(sales_order_replacement_lines.fulfilled_quantity)
+- remaining_quantity            = SUM(remaining across lines)
+- replacement_quantity per line ≤ source_return_item.quantity (R-SAL-10 lock anchor)
+- 不 reopen 原 SO 的 executed history；replacement 是一个新商业 obligation
+- inventory effect 仅 when replacement_delivery confirm (canonical Inventory V21)
+- finance effect 仅 when replacement delivery confirm + canonical AR adapter
+- no second inventory ledger; no second AR ledger
+```
+
+#### 29.14.3 与 Quotation / SO / Delivery / Prepayment 互动
+
+- Replacement 可以触发新的 Quotation（policy-dependent）；不是 mandatory.
+- Replacement 可以触发 Prepayment Gate（policy-dependent）。
+- Replacement fulfillment 走 new Sales Delivery + Inventory physical outbound.
+- Replacement delivery source line integrity: `sales_delivery_items.delivery_notice_id` MAY reference a Delivery Notice created for the replacement, or NO Delivery Notice if replacement is a one-shot direct delivery (subject to Product Domain rule at implementation evidence).
+
+#### 29.14.4 Capacity anchor (R-SAL-10)
+
+For R-SAL-10 lock matrix:
+
+```text
+canonical lock identity = return_order_items.id (line-level)
+secondary lock for confirmation = sales_order_replacement_lines.id (line-level)
+delivery consume lock = sales_delivery_items.id (already established)
+```
+
+Frozen-domain integrity: replacement creation does NOT silently rewrite `return_orders` or `sales_delivery_items`; replacement is a new obligation that DELIBERATELY references the source return line by FK.
+
+### 29.15 Gift Line Technical Design
+
+#### 29.15.1 标识
+
+`sales_order_items.is_gift_line` (NEW bool default false).
+
+#### 29.15.2 语义
+
+```text
+selling price = 0 (unit_price_cents = 0; amount_cents = 0)
+commercial amount = 0
+commercial tax basis = 0 (regardless of tax-inclusive flag)
+inventory / reservation / OQC / COGS / source-line trace continue normally
+COGS continues; revenue 0
+```
+
+#### 29.15.3 链
+
+```text
+SO (is_gift_line true)
+→ Delivery Notice (line carries gift marker)
+→ Sales Delivery (line executes inventory OUT normally)
+→ Sales Invoice or M14 economics
+  (commercial amount = 0; COGS still booked; gift cost retention per Finance
+   adapter decision; SC29 + S07 invariant)
+```
+
+#### 29.15.4 Audit
+
+Gift line on SO 触发 audit `entity_type=SALES_ORDER, action=GIFT_LINE_ADDED, detail=line_no`.
+
+### 29.16 Prepayment Gate Technical Design
+
+#### 29.16.1 物理对象
+
+`sales_prepayment_requirements` (NEW #37) + `sales_prepayment_gate_results` (NEW #38)：
+
+```text
+sales_prepayment_requirements:
+  id, sales_order_id, line_no,
+  required_amount_cents, ratio_basis ('LINE_VALUE'|'ORDER_VALUE'),
+  effective_from, effective_to,
+  created_at, created_by
+  PRIMARY KEY (sales_order_id, line_no)
+
+sales_prepayment_gate_results:
+  id, sales_order_id (FK),
+  stage ('PLANNING_RELEASE','RESERVATION','DELIVERY'),
+  eligible_advance_cents (from Finance advance/unapplied reads; bounded),
+  remaining_required_cents (GENERATED: required_amount - advance_applied),
+  decision ('PASS','WARN','BLOCK','OVERRIDE_REQUIRED'),
+  override_reason, overridden_by,
+  evaluated_at, evaluated_by,
+  snapshot_key (idempotency / replay)
+  PRIMARY KEY (sales_order_id, stage, snapshot_key)
+```
+
+#### 29.16.2 Evaluator (one canonical Finance-side value with shared lock)
+
+```text
+Chosen Design: Sales calls a Sales-owned Finance adapter that reads ONE canonical
+Finance-side eligible prepayment value AND acquires the canonical Finance
+balance locks in the SAME database connection/transaction as the Sales gate
+mutation.
+
+Sales does NOT independently SUM:
+  advance_receipts + settlement_unapplied_balances + applied_applications;
+  those are NOT proven disjoint in the frozen Finance domain.
+
+Sales calls:
+  financeAdapter.resolveEligiblePrepaymentForSalesGate(
+    customer_id, business_date, gate_stage, sales_order_id,
+    remaining_required_cents,
+    lockMode = FOR_UPDATE         ← locks the canonical Finance balance rows
+  )
+  → returns:
+    eligible_amount_cents             (single canonical value)
+    source_balance_identities         (ref to balance rows consumed in this read)
+    already_applied_amount_cents       (applied by previous gates / refunds)
+    refunded_amount_cents             (refunded portion reducing remaining)
+    remaining_eligible_cents           (eligible_amount - already_applied)
+    decision_hint                     (Finance hint: OK / WATCH / NOT-OK)
+    business_date
+    contract_version                  (frozen Finance contract snapshot)
+```
+
+The adapter must:
+
+```text
+identify all canonical Finance balance rows that contribute to eligible
+eligible prepayment (customer's unapplied + advance + applied + refunded
+pool), lock them in deterministic order, re-read eligible / applied /
+refunded / remaining, return the decision evidence to Sales.
+```
+
+Sales gate logic (consumer, in same connection/transaction):
+
+```text
+evaluateSalesPrepaymentGate(sales_order_id, stage):
+  1. lock sales_prepayment_requirements for sales_order_id
+  2. call financeAdapter.resolveEligiblePrepaymentForSalesGate(
+       ..., lockMode = FOR_UPDATE
+     )  → acquires canonical Finance balance locks in this transaction
+  3. compute remaining_required_cents
+  4. compare Finance remaining_eligible_cents vs required remaining
+  5. emit decision (PASS / WARN / BLOCK / OVERRIDE_REQUIRED)
+  6. write sales_prepayment_gate_results row in same transaction
+     with source_balance_identities captured (audit trace)
+  7. write audit
+  8. COMMIT
+```
+
+R-SAL-15 serialization (Final Closure design):
+
+```text
+The Sales gate + Finance refund/Application serialize on the SAME canonical
+Finance balance locks acquired inside the SAME transaction/connection by
+the financeAdapter.
+
+Sales gate wins first:
+  financeAdapter locks canonical Finance balances FOR UPDATE
+  gate reads locked eligible balance
+  sales_prepayment_gate_results inserted
+  COMMIT
+  then Finance refund / Application proceeds (must acquire SAME locks)
+
+Finance mutation wins first:
+  financeAdapter locks canonical Finance balances FOR UPDATE
+  eligible balance changes
+  Finance mutation commits
+  Sales gate acquires the same locks
+  re-reads reduced balance
+  PASS / BLOCK is decided from new state
+```
+
+Forbidden:
+
+```text
+Sales passes from a stale eligible amount
+while a concurrent Finance mutation has already consumed / refunded it.
+```
+
+#### 29.16.3 Frozen-domain contract status for R-SAL-15 (Final Closure)
+
+Canonical V22 identities and locked set (Final Closure implementation-ready):
+
+```text
+which canonical Finance row identities are locked
+  (per V22 §33 frozen accounting settlement / prepayment flow):
+
+  settlement_unapplied_balances       (the unapplied credit memo / unapplied balance
+                                       pool that contributes to "eligible prepayment")
+  payment_collections                  (customer prepayments / advance receipts applied
+                                       by collection; reduces remaining available)
+  financial_credit_adjustments         (refund / write-off / credit adjustment operations
+                                       that reduce remaining eligible)
+
+  These are the actual V22 canonical objects used by the Prepayment Gate
+  eligible-amount computation. NO new Finance balance is invented.
+```
+
+```text
+deterministic Finance lock order
+  (must match the order used by Finance refund / Application path):
+
+  1. settlement_unapplied_balances FOR UPDATE
+       (per customer, per business_date)
+  2. payment_collections FOR UPDATE
+       (per customer, per business_date)
+  3. financial_credit_adjustments FOR UPDATE
+       (per customer, per business_date)
+```
+
+```text
+which Finance refund / application paths already use those locks
+  (existing V22 §33.39 / §28 Finance-specific concurrency requires):
+
+  Yes — Finance refund paths in v22 Financial Controls already
+  acquire these canonical Finance balance locks when reducing
+  eligible amount. Sales does NOT introduce new Finance locking.
+```
+
+```text
+which paths need the bounded contract extension
+  (the missing piece from current V22):
+
+  The locked-READ contract variant (lockMode = FOR UPDATE on the
+  SAME canonical Finance balance set, returning the same evidence
+  to the caller) is not yet exposed. Current V22 returns the
+  eligible value but does not acquire FOR UPDATE on the balance
+  set as part of the read. This read-then-acquire pattern is the
+  missing piece required by R-SAL-15. Bounded contract extension only.
+```
+
+The shared contract:
+
+```text
+Sales gate locked-read
+and
+Finance balance-reducing mutation
+serialize on the SAME Finance economic balance identity.
+```
+
+#### 29.16.3.1 Canonical Finance parent balance lock identity (Final Two-Point Closure)
+
+The canonical economic balance identity for Sales Prepayment Gate is:
+
+```text
+settlement_unapplied_balances.id
+(where balance_type = 'PREPAYMENT')
+```
+
+This is the PRIMARY cross-domain lock identity for R-SAL-15. Child facts read
+beneath the parent balance lock (NOT primary locks themselves):
+
+```text
+balance_applications         (consumes PREPAYMENT balance)
+financial_refunds            (refunds PREPAYMENT balance)
+applicable reversal effects (e.g. settlement_unapplied_balances reversal rows
+                             that reduce the eligible prepayment pool)
+```
+
+`payment_collections` is a SOURCE DOCUMENT (the customer advance that originally
+created the PREPAYMENT balance) — it is NOT the primary balance serialization
+lock. The canonical R-SAL-15 lock set is the parent balance row.
+
+#### 29.16.3.2 Canonical remaining-prepayment formula (per eligible balance)
+
+For each eligible Finance PREPAYMENT balance row (locked FOR UPDATE):
+
+```text
+remaining
+
+=
+  settlement_unapplied_balances.original_amount_cents
+
+- confirmed balance_applications                   (consumed portion)
+
+- confirmed financial_refunds                      (refunded portion)
+
+- applicable unapplied-balance reversal effects    (reversal portion)
+```
+
+Use the exact existing V22 canonical reversal semantics. Do NOT invent another
+balance or another decrement field. The financeAdapter returns the remaining
+eligible amount per eligible balance and the source identities for audit.
+
+#### 29.16.3.3 Frozen-domain contract status for R-SAL-15 (Final Two-Point Closure)
+
+```text
+Finance business semantics                            NO CHANGE
+Finance canonical balance (settlement_unapplied_balances)  NO CHANGE
+sales locked-read adapter for R-SAL-15              BOUNDED INTEGRATION CONTRACT EXTENSION
+Finance mutation path that reduces remaining     NO CHANGE if it already
+  eligible prepayment                                  locks settlement_unapplied_balances.id;
+                                                       otherwise BOUNDED INTEGRATION
+                                                       CONTRACT EXTENSION
+```
+
+`payment_collections` and `financial_credit_adjustments` are NOT the primary lock
+set; they are source documents / economic evidence respectively. They are not
+re-defined in this Design.
+
+If V22 later exposes a similar locked-read contract on the parent balance
+row, the extension collapses to a no-op without semantics change.
+
+#### 29.16.3.4 Required adapter contract (Sales locked-read)
+
+```text
+financeAdapter.resolveEligiblePrepaymentForSalesGate(
+  customer_id, business_date, gate_stage, sales_order_id,
+  remaining_required_cents, lockMode = FOR_UPDATE,
+  db_transaction_context
+)
+  1. identify eligible PREPAYMENT settlement_unapplied_balances rows
+  2. order their IDs deterministically (lexicographic by balance id)
+  3. SELECT those balance rows FOR UPDATE
+  4. under those locks re-read canonical child effects:
+       balance_applications
+       financial_refunds
+       applicable reversal effects
+  5. calculate remaining eligible prepayment per balance per §29.16.3.2 formula
+  6. return evidence to Sales (eligible_amount_cents, source_balance_locked
+     identities, already_applied, refunded, remaining_eligible, decision_hint,
+     business_date, contract_version)
+  7. keep locks until caller transaction commits / rolls back
+```
+
+If multiple balance rows contribute:
+
+```text
+lock all eligible balance rows
+in one deterministic order
+```
+
+#### 29.16.3.5 Finance mutation paths MUST acquire the same parent balance lock
+
+Any Finance operation that REDUCES remaining eligible prepayment must first
+serialize on:
+
+```text
+settlement_unapplied_balances.id FOR UPDATE
+```
+
+before re-reading remaining balance and writing its child effect.
+
+At minimum verify / design this contract for:
+
+```text
+Balance Application
+Unapplied-Balance Refund
+any reversal / mutation that reduces the currently eligible prepayment amount
+```
+
+The child rows:
+
+```text
+balance_applications
+financial_refunds
+settlement_reversal_items
+```
+
+are economic evidence / effects. They are NOT the primary cross-domain lock
+identity.
+
+#### 29.16.3.6 R-SAL-15 serialization
+
+```text
+Sales Gate wins:
+  Sales locks PREPAYMENT balance row(s) FOR UPDATE
+  recomputes remaining eligible amount
+  evaluates gate
+  writes gated Sales mutation
+  COMMIT
+  Finance Application / Refund then acquires the balance lock
+  and sees post-Sales state
+
+Finance mutation wins:
+  Finance locks PREPAYMENT balance row FOR UPDATE
+  writes Application / Refund / relevant effect
+  COMMIT
+  Sales later acquires balance row lock
+  recomputes lower remaining amount
+  PASS / BLOCK uses new state
+```
+
+Forbidden:
+
+```text
+Sales PASS based on stale prepayment balance
+while Finance concurrently consumes / refunds the same balance
+```
+
+#### 29.16.3.7 Exact bounded-extension classification against actual V22
+
+Inspect current V22 implementation. The required lock contract is:
+
+```text
+Finance owned lock (settlement_unapplied_balances.id)
++ Sales locked-read adapter that returns the same evidence to caller
++ Finance mutation path that acquires the same lock before reducing balance
+```
+
+The bounded extension is the missing SALES-side locked-READ adapter contract.
+Finance business semantics are unchanged. Finance canonical balance is unchanged.
+Finance mutation paths that ALREADY acquire the parent balance lock are
+unchanged. Only the SALES-side locked-READ adapter requires the extension.
+
+If a V22 mutation path that reduces remaining eligible prepayment does not yet
+acquire the parent balance lock, that path is also BOUNDED INTEGRATION
+CONTRACT EXTENSION (Finance-owned change; same contract target).
+
+#### 29.16.3.8 Frozen-domain contract summary (Repository-Evidence Final Closure; no conditional)
+
+```text
+CURRENT V22 DOES NOT YET PROVIDE
+THE REQUIRED MYSQL PARENT-BALANCE ROW LOCK
+ON ALL R-SAL-15 BALANCE-REDUCING PATHS.
+```
+
+| Component | Classification |
+|---|---|
+| Finance business semantics | **NO CHANGE** |
+| Finance canonical balance (`settlement_unapplied_balances`) | **NO CHANGE** |
+| Sales locked-read adapter for R-SAL-15 (`resolveEligiblePrepaymentForSalesGate`) | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** |
+| Finance mutation `applyUnappliedBalance` (acquires `settlement_unapplied_balances.id FOR UPDATE` before re-read/validation) | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** |
+| Finance mutation `createRefund` (acquires parent balance `FOR UPDATE` before capacity decision) | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** |
+| Finance mutation `reverseSettlementDocument` for PREPAYMENT / UNAPPLIED reduction (acquires parent balance `FOR UPDATE` before remaining / validation / reversal mutation) | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** (only the PREPAYMENT / eligible-unapplied reduction semantics relevant to R-SAL-15; do NOT redesign unrelated reversal behavior) |
+| Finance increasing-balance reversals (reverse Balance Application, reverse Refund) | **NO CHANGE** (they restore eligible prepayment; conservative temporary BLOCK on the next Sales risk-increasing evaluation is acceptable; they may use the same parent-lock helper if that simplifies Finance concurrency, but that is an implementation choice, not a Requirement change) |
+| Source document linkage `payment_collections` | **NO CHANGE** (not the primary lock) |
+
+The Finance Operations bounded extension is **ONE bounded Finance integration contract extension**, scoped to:
+
+```text
+A. Add transactional locked-read contract:
+   resolveEligiblePrepaymentForSalesGate(...)
+B. Locked-read accepts caller DB transaction/context.
+C. It locks eligible PREPAYMENT settlement_unapplied_balances.id FOR UPDATE
+   inside the same connection/transaction.
+D. applyUnappliedBalance acquires the same parent lock before
+   remaining-capacity validation.
+E. createRefund acquires the same parent lock before
+   remaining-capacity validation.
+F. PREPAYMENT / UNAPPLIED balance-reducing reverseSettlementDocument
+   acquires the same parent lock before remaining / validation /
+   settlement_reversal_items mutation.
+```
+
+This is **NOT**:
+
+```text
+Finance semantic redesign
+new Finance ledger
+new balance truth
+new recognition model
+```
+
+#### 29.16.4 Invariant: no double-count
+
+```text
+one advance / prepayment economic amount
+must never satisfy the Prepayment Gate twice;
+the canonical eligible amount + applied amount + refunded amount accounting
+is Finance-owned; Sales reads once per gate evaluation via the adapter;
+the same Finance-side canonical locks serialize Sales gate and Finance
+refund / Application.
+```
+
+#### 29.16.5 R-SAL-15 transaction-context contract (Final Closure)
+
+The application architecture required to safely share canonical Finance locks is:
+
+```text
+ONE DB TRANSACTION / ONE CONNECTION
+shared by:
+  1. Sales Prepayment Gate evaluation (lock sales_prepayment_requirements;
+     call financeAdapter)
+  2. financeAdapter locked-READ on canonical Finance balance set
+     (settlement_unapplied_balances + payment_collections +
+      financial_credit_adjustments) FOR UPDATE
+  3. Sales gated mutation (e.g. write sales_prepayment_gate_results;
+     possibly update Sales source fact inside the same gate result)
+  4. COMMIT (atomic)
+```
+
+If the existing `financeAdapter` implementation starts its OWN transaction, the
+Design requires the adapter to accept the CALLER's transaction / connection /
+context instead of opening a new one. Concretely:
+
+```text
+financeAdapter.resolveEligiblePrepaymentForSalesGate(
+  customer_id, business_date, gate_stage, sales_order_id,
+  remaining_required_cents, lockMode = FOR_UPDATE,
+  db_transaction_context              ← caller provides the same tx
+) → returns the same evidence as today, but acquired under the caller's
+   transaction; Sales gate and Sales gated mutation are atomic with the
+   Finance locked-READ.
+
+financeAdapter MUST NOT open a new db transaction independently when the
+caller provides a transaction context.
+```
+
+If at the time of Implementation the existing `financeAdapter` is found to
+require its own transaction (not callable within the caller's tx), the
+bounded contract extension above includes the migration of the adapter to
+"inherits caller transaction" semantics. No Finance semantic redesign.
+
+The required outcome at runtime is exactly:
+
+```text
+one DB transaction
+one connection
+shared canonical Finance locks
+Sales decision + gated Sales mutation
+```
+
+where the gated operation requires atomic protection.
+
+### 29.17 Reservation Intent Design
+
+#### 29.17.1 物理对象
+
+`sales_reservation_intent` (NEW #57)：
+
+```text
+sales_reservation_intent:
+  id, sales_order_id (FK), sales_order_item_id (FK), product_id, warehouse_id,
+  intent_state ('NONE','REQUESTED','GRANTED','RELEASED','CONSUMED'),
+  requested_at, released_at,
+  planning_reservation_id (FK nullable to planning_reservations.id),
+  consumer_event (e.g. 'DELIVERY_CONFIRMED', 'SO_CHANGED', 'CANCELLED')
+```
+
+Rules:
+- Sales REQUEST → Planning reservation 作者 = Planning；Sales 写入 intent only.
+- Sales 读取 `planning_reservations` via `assertStrongReservationAvailability`.
+- delivery confirmed → Sales 将 intent 标识 CONSUMED.
+
+R-SAL-02: Sales Delivery × 2 against same reservation 已 covered by Planning's `assertStrongReservationAvailability`; Sales 引用 its result via the same identity.
+
+#### 29.17.2 React to events
+
+```text
+SO Change      → re-derive intent request (Plan-side reaction)
+SO Cancel/Close → release intent
+Delivery       → consumption (intake reservation)
+Return         → release (if delivery confirmed)
+Replacement    → re-request
+```
+
+### 29.18 Service Item Sales Technical Design
+
+#### 29.18.0 Frozen-Master boundary decision
+
+This Domain closure adopts **Option A** from the Micro-Closure menu: Sales-owned commercial product extension table `product_commercial_classification` (NEW A-61). Sales does NOT silently add columns to frozen-Master-owned `products` table.
+
+```text
+Business owner      : Sales & Customer (commercial classification is a Sales business concept)
+Physical owner      : Sales & Customer — a NEW Sales-owned table keyed by product_id
+Read direction      : Sales reads `products` (Master identity) only as FK target
+Write direction     : Sales writes ONLY to `product_commercial_classification`
+                     NO writes to `products` table
+Compatibility behavior: if Master later adds `products.is_service` at a frozen
+                       contract level, Sales switches to read that column via the
+                       platform integration contract; this Domain closure does NOT
+                       depend on it.
+```
+
+`product_commercial_classification` (NEW A-61):
+
+```text
+product_commercial_classification:
+  id
+  product_id (FK products.id, NOT NULL; UNIQUE per product)
+  service_classification (bool default false)
+  service_kind (text nullable; future bounded extension)
+  effective_from, effective_to (DATE)
+  created_at, created_by
+```
+
+#### 29.18.1 物理对象
+
+```text
+service_fulfillments (NEW A-44):
+  id, sales_order_id (FK), sales_order_item_id (FK),
+  confirmation_state ('PENDING','CONFIRMED','CANCELLED'),
+  confirmation_qty (REAL; remaining = SO line qty - SUM(confirmation_qty)),
+  confirmation_at, confirmed_by,
+  finance_recognition_id (FK nullable to Finance adapter result)
+```
+
+#### 29.18.2 决策点
+
+Sales Delivery confirm path:
+
+```text
+if JOIN product_commercial_classification → service_classification = TRUE for this
+   sales_order_item_id.product_id:
+   if confirmation exists in service_fulfillments for that line: do inventory OUT 0
+   else: BLOCK (cannot confirm; service not confirmed)
+else:
+   proceed with inventory OUT (current path)
+```
+
+#### 29.18.3 Frozen Master & Engineering boundary
+
+```text
+- products table is frozen-Master-owned; Sales does NOT add is_service column
+- Sales-owned commercial classification in product_commercial_classification
+- Read cross-domain contract:
+    Sales uses products.id (FK only)
+    NO write back to products
+- Compatibility fallback: if Master later canonicalizes is_service at frozen
+    product level, Sales switches to that contract path; this Domain closure does
+    NOT block on that
+```
+
+### 29.19 Consignment Three-Truth Design
+
+#### 29.19.0 Critical ownership correction (Micro-Closure)
+
+The previous draft mapped Sales Consignment physical truth to `inventory V21 CUSTOMER-owned` position. This is **wrong** by §7 corrected semantics:
+
+```text
+WRONG:  physical ownership at consignment = CUSTOMER-owned
+RIGHT:  physical ownership at consignment = seller/our organization (ENTERPRISE-owned
+       in Inventory V21 position-key); until settlement / ownership-transfer event.
+       CUSTOMER-owned position represents a DIFFERENT business meaning
+       (entrusted stock / customer-owned material), NOT consignment.
+```
+
+Sales Consignment at Layer 2 (Inventory) MUST keep ownership = `owner_type='ENTERPRISE'` with location = customer / consignment site. Settlement / return triggers ownership transfer (Layout-2 → Layout-3 → finance).
+
+#### 29.19.1 Three truth layers (corrected)
+
+```text
+Layer 1 : Sales & Customer commercial layer
+         consignment_commercial_documents (NEW A-45)
+         consignment_commercial_lines (NEW A-46)
+         consignment_commodity_locations (NEW A-47; commercial location identity)
+         consigned_quantity, settled_quantity, returned_quantity,
+         remaining_consigned_quantity
+
+Layer 2 : Inventory & Warehouse physical layer
+         inventory_v21 canonical position (owner_type = ENTERPRISE during consignment;
+                                            location = consignment_commodity_location FK or
+                                            warehouse_id; no CUSTOMER-owner assignment
+                                            for consignment)
+         tracked_inventory_movements / inventory_v21 carrier types
+
+Layer 3 : Finance Operations settlement layer
+         account_receivables (settlement vs AR)
+         financial_credit_adjustments (settlement reversal / return)
+```
+
+Ownership transition (canonical):
+
+```text
+Settlement (SALES decision):
+  Layer 1 settlement confirmation → ownership at Layer 2 transfers:
+    Layer 2 position.ENTERPRISE → Layer 2 position.CUSTOMER-owned OR out
+    of layer 2 inventory (depending on settlement = sale or = return)
+  Layer 3 AR adapter writes corresponding Finance economic effect.
+
+Return (SALES decision):
+  Layer 1 commercial return → Layer 2 inventory restore with same Layer 2 owner
+  identity (ENTERPRISE). No second physical ledger.
+```
+
+#### 29.19.2 Chain (corrected)
+
+```text
+Consignment Instruction
+  → Sales-only commercial document
+  → Inventory physical transfer (canonical writer applyInventoryMutation;
+     owner_type = ENTERPRISE; location = consignment_commodity_location)
+  → Customer Settlement Confirmation (Sales business process; triggers Finance
+     settlement + ownership transfer at Layer 2)
+  → Consignment Commercial Return (Sales business process; Layer 2 inventory
+     restore with ENTERPRISE ownership; Layer 3 refund)
+```
+
+#### 29.19.3 Capacity (corrected)
+
+```text
+Layer 1 capacity     = SUM(consignment_commercial_lines.consigned_quantity) -
+                       SUM(consignment_commercial_lines.settled_quantity) -
+                       SUM(consignment_commercial_lines.returned_quantity)
+Layer 2 capacity     = Inventory ENTERPRISE-owned position at
+                       consignment_commodity_location
+                       (must equal Layer 1 capacity modulo settlement timing lag)
+Layer 3 settlement    = sum(amount) in finance settlement subledger
+                       (must equal Layer 1 settled total modulo refund lag)
+
+R-SAL-20 / R-SAL-21: Layer 1 + Layer 3 must serialize on Layer 1
+   remaining_consigned_capacity (canonical lock identity = consignment_commercial_lines.id).
+   Layer 2 mutations triggered by Layer 1 must be audited cross-layer.
+   Layer 2 owner always = ENTERPRISE during consignment; settlement → ownership
+   transfer event.
+```
+
+#### 29.19.4 Frozen-domain integration contract status
+
+```text
+Inventory V21 (canonical_position): owner_type / owner_id attributes at position-key
+  level ALREADY distinguish ENTERPRISE / CUSTOMER ownership.
+  This Domain closure uses ENTERPRISE for consignment; no BOUNDED INTEGRATION
+  CONTRACT EXTENSION is required FOR §29.19 given this interpretation.
+
+IF Implementation phase discovers Inventory V21 cannot currently express
+ENTERPRISE-owned at consignment_commodity_location, then file:
+
+  FROZEN_DOMAIN_INTEGRATION_CONTRACT_EXTENSION_REQUIRED
+
+and revise this §29.19 before Implementation begins. Do NOT silently redefine
+CUSTOMER-owned as a proxy.
+```
+
+#### 29.19.5 Distinction from CUSTOMER-owned (entrusted material)
+
+```text
+Customs Customer-owned (entrusted material):
+  meaning       = customer-owned stock physically at our warehouse
+                 OUR organization may sell/use it only per entrusted rule
+  Layer 2 owner = CUSTOMER (different from consignment!)
+  Layer 1       = Inventory V21 canonical_CUSTOMER-owned_entrusted flow
+
+Consignment:
+  meaning       = seller-owned stock physically at customer / consignment site
+  Layer 2 owner = ENTERPRISE (seller)
+  Layer 1       = consignment_commercial_documents (this Design)
+
+These are TWO DIFFERENT business meanings.
+They MUST NOT share identifier.
+```
+
+### 29.20 Credit Architecture Overview
+
+```text
+Layer A: Credit Policy       (parameters + rules; effective-dated, with
+                                lockable snapshot anchor)
+Layer B: Credit Profile      (per-customer limit; rating; overdue policy;
+                                effective-dated, lockable against mutations)
+Layer C: Credit Exposure     (PURE_DERIVED; never a mutable second ledger;
+                                consumed from Finance + Sales canonical facts)
+Layer D: Credit Decision     (credit_check_result; with policy + profile
+                                snapshot identity; R-SAL-24 + R-SAL-12)
+Layer E: Credit Exception    (credit_special_approval; bounded authority;
+                                §29.26; snapshot-locked)
+Layer F: Credit Evaluation   (indicator / scheme / model / scoring sheet /
+                                result / rating applied to profile)
+
+Recognition-mode aware:
+  Credit Exposure MUST consume the same Finance recognition-mode contracts
+  as V22 §28.2 (DIRECT_BUSINESS_OPEN_ITEM, INVOICE_DRIVEN_OPEN_ITEM,
+  PROVISIONAL_TO_FINANCIAL). Bucket transitions differ by mode.
+
+Sales never writes:
+  AR open items
+  Advance Receipt / Unapplied
+  Collection / Refund / Write-off
+  Invoice / Treasury / Voucher / GL
+
+Sales reads via:
+  financeAdapter.resolveCreditExposureComponents(...) (§29.23)
+  financeAdapter.resolveEligiblePrepaymentForSalesGate(...) (§29.16)
+  financeAdapter.resolveARForCustomerSalesContext(...) (§29.23)
+  assertStrongReservationAvailability (Planning, §29.17)
+  applyInventoryMutation / postTrackedMovement (Inventory V21, on SD confirm)
+  OQC adapter (M&Q V18, on SD confirm)
+```
+
+### 29.21 Credit Policy / Version / Effective Snapshot
+
+Stable long-lived lock identity (Lock-Anchor Final Closure decision):
+
+```text
+credit_lock_anchors (REFINED; replaces A-62):
+  id (PK; stable, never replaced)
+  anchor_key           (NOT NULL, UNIQUE; canonical non-null uniqueness identity)
+  anchor_type          (CHECK IN ('CREDIT_OBJECT','POLICY_SCOPE'))
+  customer_id          (FK customers.id, nullable)
+  salesperson_id         (FK users.id, nullable)
+  credit_object_type   (text, nullable; CREDIT_OBJECT anchor only)
+  credit_object_id     (text, nullable; CREDIT_OBJECT anchor only)
+  policy_scope_type    (text, nullable; POLICY_SCOPE anchor only;
+                        e.g. 'GLOBAL', 'SALES_ORG', etc.)
+  policy_scope_id      (text, nullable; POLICY_SCOPE anchor only)
+  created_at
+```
+
+Why `anchor_key` is the canonical uniqueness (not nullable composite UNIQUE):
+
+```text
+- sales_lock_anchor (decomposed nullable columns) is permitted to have
+  multiple rows where any nullable component is NULL under MySQL (and
+  would also behave inconsistently under partial-index MySQL semantics
+  vs SQLite).
+- anchor_key is a NOT NULL deterministic string built at provisioning,
+  e.g. for CREDIT_OBJECT:
+      CUSTOMER:<customer-id>:SALESPERSON:<id-or-ALL>:OBJECT:<type>:<id>
+  e.g. for POLICY_SCOPE:
+      POLICY_SCOPE:<scope_type>:<scope_id-or-GLOBAL>
+- UNIQUE(anchor_key) provides reliable cross-dialect (SQLite + MySQL) uniqueness.
+- Decomposed nullable columns (customer_id / salesperson_id / policy_scope_*) are
+  retained for FK + query convenience; they are NOT the sole uniqueness
+  guarantee.
+
+This anchor row is the PRIMARY long-lived lock identity for ALL Credit-control
+serialization (R-SAL-12, R-SAL-24, R-SAL-13). It is created once per logical
+scope and never replaced when profile / policy / snapshot versions change. New
+profile effective rows or new policy snapshot rows are added beneath this
+stable anchor.
+
+#### 29.21.1 Anchor provisioning lifecycle (Final Closure)
+
+Preferred rule:
+
+```text
+credit-lock anchor is provisioned
+BEFORE any credit-consuming transaction can execute.
+```
+
+Provisioning paths:
+
+```text
+CREDIT_OBJECT anchor:
+  - new customer: provisioned at customer creation OR on first
+    credit-controlled transaction; creation is the SAME DB transaction
+    as the first authorized credit-controlled read/write
+  - new salesperson-specific credit object: provisioned at first
+    credit-controlled transaction on that salesperson+customer combination
+  - legacy customer backfill: deterministic bootstrap at domain cutover
+    (one-time migration) over existing customers with credit_profile;
+    creates anchor_key for each (customer, salesperson, credit_object_type,
+    credit_object_id) tuple present in legacy credit_profile rows
+
+POLICY_SCOPE anchor:
+  - GLOBAL: provisioned at system install (or one-time bootstrap migration)
+  - additional policy scope: provisioned at first policy scope creation
+  - always present; if missing unexpectedly → FAIL CLOSED
+```
+
+Mandatory Credit Check must NEVER behave as:
+
+```text
+anchor missing
+→ skip credit control
+```
+
+The rule is:
+
+```text
+anchor missing unexpectedly
+→ FAIL CLOSED
+until safely provisioned.
+```
+
+A first-use anchor creation INSIDE the first credit-controlled transaction
+without a separate provisioning step is forbidden; it would create a
+definition-vs-first-use race. The provisioning step is a distinct transaction
+(or part of a system-init migration) that completes before any credit
+consumption can race.
+
+#### 29.21.2 Two anchor types — separation (Final Closure)
+
+There are two different concurrency identities, kept separate:
+
+```text
+A. CREDIT_OBJECT anchor (one row per credit object):
+   protects customer/salesperson credit capacity + profile-effective state
+   + risk-increasing Sales transactions
+   used by R-SAL-12 + Profile mutation + rating-result application
+
+B. POLICY_SCOPE anchor (one row per policy scope):
+   protects effective Credit Parameters + Credit Rules + scope-wide policy
+   policy scope may be: GLOBAL, organization, sales org, other frozen
+     Requirement-supported scope
+   used by R-SAL-24 (policy/rule mutation path) + shared read of
+     Credit Check (FOR SHARE under MySQL; same-tx serial under SQLite)
+```
+
+A single logical operation that legitimately touches BOTH (combined
+mutation) acquires both anchors in a single deterministic order — see §29.25.3.
+
+#### 29.21.3 Anchor first-use concurrency protocol (Final Two-Point Closure)
+
+Two concurrent Credit Checks must not both observe:
+
+```text
+anchor does not yet exist
+```
+
+before either obtains the stable row lock. Therefore, every Credit-controlled
+path begins with one canonical provisioning concept (name not design-finalizing):
+
+```text
+ensureCreditLockAnchor(anchor_type, anchor_key_components)
+  → returns the canonical credit_lock_anchors.id FOR that anchor_key
+```
+
+Required semantics:
+
+```text
+1. derive deterministic non-null anchor_key from input components
+   (CREDIT_OBJECT or POLICY_SCOPE)
+2. attempt to provision the anchor (INSERT)
+3. if INSERT succeeds:
+     use the inserted row
+4. if concurrent INSERT wins and this INSERT hits UNIQUE(anchor_key):
+     re-read the already-created canonical row
+     do NOT fail the business operation merely because another
+     transaction provisioned it
+5. acquire the canonical anchor row using the required lock mode
+   (FOR UPDATE for the mutating path; FOR SHARE for the read-only path
+   on POLICY_SCOPE; see §29.25.2-3)
+6. only after the lock is acquired may Credit Check / mutation continue
+```
+
+The required invariant:
+
+```text
+one logical credit-control scope
+→ exactly one canonical anchor
+→ all contenders converge on that same row
+```
+
+Anchors are provisioned:
+
+```text
+CREDIT_OBJECT:
+  - at customer creation (or first credit-controlled transaction)
+  - via deterministic bootstrap migration for legacy customers
+POLICY_SCOPE:
+  - at system install (GLOBAL anchor)
+  - via deterministic bootstrap migration for additional policy scopes
+```
+
+If an expected anchor is missing unexpectedly at the start of a mandatory
+Credit Check / mutation, the only allowed behavior is:
+
+```text
+attempt safe deterministic provisioning once;
+if it still cannot resolve the canonical row → FAIL CLOSED
+```
+
+Forbidden:
+
+```text
+anchor missing
+→ continue without lock
+```
+
+#### 29.21.4 Cross-dialect provisioning semantics
+
+```text
+SQLite (BEGIN IMMEDIATE):
+  anchor provisioning occurs inside BEGIN IMMEDIATE before the protected
+  Credit decision / mutation proceeds. The serialized write discipline
+  matches the rest of the Sales mutex model; first-write wins, follow-on
+  reads see the canonical row.
+
+MySQL 8 (deterministic anchor_key + UNIQUE):
+  concurrent INSERTs of the same anchor_key collide on UNIQUE;
+  the loser catches the duplicate-key error and re-reads the canonical row.
+  The pattern is:
+    INSERT credit_lock_anchors (...)  →  on UNIQUE violation → SELECT
+    the canonical row by anchor_key (FOR UPDATE / FOR SHARE as
+    appropriate).
+  Do NOT continue the Credit decision without re-acquiring the
+  canonical row's lock; that is the first-use race this protocol prevents.
+```
+
+The protocol is the first-line guard against first-use race; FOR UPDATE / FOR
+SHARE on the canonical row is the second-line guard.
+
+物理对象 (versioned records, NOT the lock anchor):
+
+```text
+credit_parameters (NEW A-48):
+  id, code (UNIQUE), value_text, value_int, value_bool, value_date,
+  effective_from, effective_to,
+  status ('DRAFT','ACTIVE','INACTIVE'),
+  created_at, created_by, superseded_by_id (nullable)
+  PRIMARY KEY (code, effective_from)
+
+credit_check_rules (NEW A-49):
+  id, rule_code, business_stage ('SO_SUBMIT','SO_APPROVE','SALES_DELIVERY_CONFIRM'),
+  scenario ('STANDARD','OVERRIDE_REQUEST','WARNING_ONLY','BLOCK'),
+  check_timing ('BEFORE_WRITE','AFTER_WRITE_DEFERRED'),
+  control_strength ('WARNING','BLOCK'),
+  credit_item (enum; L | D | ...; referenced entity),
+  recognition_mode (CHECK IN recognized V22 modes;
+                    NULL means applies to all modes),
+  effective_from, effective_to, status,
+  result_payload_json
+```
+
+```text
+credit_policy_snapshots (NEW A-50; DECISION EVIDENCE identity, NOT primary lock):
+  id (PK)
+  snapshot_fingerprint (UNIQUE; computed from parameter_set + rule_set
+                         + profile_effective_state + business_date)
+  captured_at (timestamp)
+  captured_by (FK users.id)
+  credit_control_anchor_id (FK A-62; the stable lock anchor)
+  parameter_set_hash (text)
+  rule_set_hash (text)
+  profile_effective_state_hash (text)
+  business_date (DATE)
+  notes_json (text nullable)
+```
+
+Lock identity (Final Closure decision):
+
+```text
+PRIMARY long-lived lock identity:
+  credit_control_anchor.id (NEW A-62)
+  - one stable row per (customer, salesperson, credit_object_type, credit_object_id)
+  - UNIQUE
+  - never replaced when profile / policy / snapshot versions change
+  - acquired FOR UPDATE at the start of every Credit Check + every Credit
+    mutation path
+
+DECISION EVIDENCE identity (separately retained):
+  credit_policy_snapshots.id (NEW A-50)
+  - append-only by fingerprint
+  - bound to credit_check_result row + credit_special_approval row
+  - historical evidence, not the lock anchor itself
+```
+
+Lock acquisition order (Final Closure):
+
+```text
+1. credit_control_anchor (stable) FOR UPDATE  ← PRIMARY LOCK
+2. credit_profile (effective row at business_date) FOR UPDATE
+3. credit_policy_snapshots (NEW or matched by fingerprint) FOR UPDATE
+4. credit_check_rules (effective) FOR UPDATE
+5. effective version reads (parameters, rules) under those locks
+```
+
+Lock identity and decision-evidence identity are distinct (§29.5):
+
+```text
+lock identity       = credit_control_anchor.id   (stable; used for FOR UPDATE)
+decision evidence  = credit_policy_snapshots.id + snapshot_fingerprint
+                       (append-only; bound to credit_check_result row)
+```
+
+R-SAL-24 invariant enforced (Final Closure):
+
+```text
+Inside one Credit Check evaluation, all parameters and rules MUST come from
+ONE snapshot identity (one credit_policy_snapshots row).
+After evaluation, snapshot_identity (credit_policy_snapshots.id + fingerprint)
+binds to credit_check_result row.
+Later policy mutation CANNOT reinterpret this decision's outcome; if
+revalidation required by policy, a NEW credit_policy_snapshots row + NEW
+credit_check_result must be produced.
+```
+
+### 29.22 Credit Profile
+
+`credit_profile` (NEW A-51) + `credit_profile_ratings` (NEW A-52)：
+
+```text
+credit_profile:
+  id, customer_id (FK), salesperson_id (FK users nullable),
+  credit_object_type, credit_object_id,
+  credit_limit_cents (BIGINT NULL = unbounded),
+  initial_state (enum), status ('ACTIVE','SUSPENDED','CLOSED'),
+  rating_grade, rating_effective_from, rating_effective_to,
+  rule_id (FK credit_check_rules.id),
+  effective_from, effective_to,
+  created_at, created_by,
+  PRIMARY KEY (customer_id, salesperson_id, credit_object_type, credit_object_id, effective_from)
+  FK: implicit logical reference to credit_control_anchor.id (A-62) for the
+     same (customer_id, salesperson_id, credit_object_type, credit_object_id)
+```
+
+`credit_profile_ratings`:
+  id, credit_profile_id (FK), evaluation_result_id (FK credit_evaluation_result.id),
+  applied_at, applied_by,
+  superseded_at (nullable)
+
+Effective-dating via `effective_from / effective_to`. SO Check at SO_SUBMIT reads effective profile at business_date; the effective row is locked FOR UPDATE during evaluation. Profile mutation FOR UPDATE acquires the same stable `credit_control_anchor.id` (A-62) lock before new profile rows may take effect, until in-flight checks complete.
+
+Customer identity (Master & Engineering) remains in the composite primary key (`customer_id`); Sales extends.
+
+#### 29.22.1 Credit missing-profile compatibility (fail-closed rule)
+
+```text
+Credit Management disabled              → no credit enforcement (gate bypassed)
+Customer / scenario exempt by rule      → no credit enforcement (explicit rule)
+Credit Management enabled
+  AND mandatory rule applies            → credit_profile required; if missing/invalid
+                                          → FAIL CLOSED (config / credit-control BLOCK)
+```
+
+A missing required Credit Profile MUST never silently turn mandatory Credit Control off. Legacy compatibility cannot weaken mandatory BLOCK fail-closed.
+
+Customer-readable display for missing-profile cases: `Credit profile required` + admin action item; never PASS without evaluation.
+
+### 29.23 Credit Occupancy / Exposure Model
+
+#### 29.23.1 设计：PURE_DERIVED 投影 (not persisted mutable)
+
+```text
+Credit exposure = DERIVED computation over canonical facts.
+No physical `credit_exposure` table.
+
+Source canonical facts:
+  Sales: sales_orders.approved exposure (total_cents of APPROVED SO within exposure window)
+  Sales: sales_deliveries.delivered-not-yet-settled exposure
+  Finance: account_receivables.open amount
+  Finance: settlement_unapplied_balances (eligible advance offsets)
+  Finance: financial_credit_adjustments (returns / discounts / write-offs)
+  Finance: payment_collections (collection reductions)
+
+Equation (transition-aware):
+
+E = SUM(approved SO commitment, age <= window or until delivered)
+  + SUM(delivered-not-settled)
+  + SUM(AR open by source SO item)
+  + SUM(overdue AR)
+  - SUM(eligible advance / unapplied applied)
+  - SUM(returns / credits applied)
+  - SUM(collections applied)
+  - SUM(write-offs)
+```
+
+#### 29.23.2 Recognition-mode-aware bucket transition (Final Closure exact matrix)
+
+For the same economic amount X (or any sub-amount), the bucket transitions are
+mutually exclusive. The same amount X is in exactly one of A / B / C / P / E /
+D-overdue (where D is a subset of C) at any instant.
+
+```text
+Mode 1: DIRECT_BUSINESS_OPEN_ITEM (LEGACY_DIRECT semantic)
+  Before delivery of X:
+    A (approved SO commitment) = X
+    B (delivered-not-settled)  = 0
+    C (final AR open)         = 0
+    P (provisional)           = 0
+  On Sales Delivery confirm, Finance creates final AR in the canonical
+  Sales+Finance transition. For quantity/value X committed in the SO:
+    A -= X
+    C += X
+  (atomic / logically as one transition; no separately additive B for the
+  same portion after final AR exists. Any internal transient calculation
+  is NEVER separately countable exposure.)
+
+Mode 2: INVOICE_DRIVEN_OPEN_ITEM (SEPARATE semantic)
+  Before delivery of X:
+    A = X; B = C = P = 0
+  At Sales Delivery confirm:
+    A -= X
+    B += X              ← operational evidence; no AR yet
+  At Sales Invoice post:
+    B -= X
+    C += X              ← final AR open
+
+Mode 3: PROVISIONAL_TO_FINANCIAL (AUTO_BILL semantic)
+  Before delivery of X:
+    A = X; B = C = P = 0
+  At source / delivery recognition:
+    A -= X
+    P += X              ← provisional exposure
+  At provisional → final conversion (Sales Invoice / final receipt post):
+    P -= X
+    C += X              ← final AR open
+  No ordinary settlement against P; no P + C coexistence for same X.
+```
+
+Partial-quantity / partial-value transitions example (per task §7):
+
+```text
+SO value = 100
+
+deliver 40  (Mode 2):
+  A = 60
+  B = 40
+  C = 0
+
+Invoice 25:
+  A = 60
+  B = 15
+  C = 25
+
+Collection 10:
+  A = 60
+  B = 15
+  C = 15
+```
+
+Mode 1 / Mode 3 follow the same partial arithmetic over the corresponding
+buckets. The exact exposure formula must make it impossible for one economic
+amount to occupy two incompatible stages simultaneously.
+
+Overdue (D): NOT a separate additive exposure bucket. D is a subset of C
+(AR open) per the V22 frozen overdue / provisioning_status semantic.
+Therefore:
+
+  used credit
+  must NOT add:  C + overdue(C)
+  (unless the frozen Requirement explicitly defines an extra risk multiplier,
+   which it did not)
+```
+
+#### 29.23.3 Forbidden double-count (recognition-mode aware)
+
+```text
+For mode 1:  SO commitment + delivered-not-settled + AR open CANNOT count the
+            same economic amount twice; Bucket A reduces as B grows; B reduces
+            as C grows; C reduces as E grows.
+For mode 2:  A → B is non-AR; B → C is AR at invoice post; no other overlap.
+For mode 3:  A0 → P (Provisional) at receipt; P → C at final; A0 does NOT
+            become C directly; P is NOT in approved SO commitment E.
+            Provisional + AR open cannot both count.
+required invariant:
+  one economic customer exposure
+  must occupy exactly the intended credit-risk bucket(s)
+  under the active recognition mode
+```
+
+#### 29.23.4 Eligibility & R-SAL-15 (Prepayment Gate)
+
+The Prepayment Gate reads ONE canonical Finance-side eligible prepayment value via `financeAdapter.resolveEligiblePrepaymentForSalesGate(...)` (see §29.16); no SUM of disjoint balance rows. The eligible amount is per (customer, business_date, gate_stage, sales_order_id, remaining_required_cents). Sales records the gate decision in `sales_prepayment_gate_results` with the source balance identities captured (audit trace).
+
+#### 29.23.5 Sales cannot reconstruct AR truth
+
+```text
+Sales MUST NOT:
+  reconstruct AR truth independently
+  reinterpret provisional/final Finance recognition
+  mutate Finance open items
+
+Sales MUST use:
+  frozen Finance recognition / source adapter or canonical query contract;
+  if a new read adapter needed, define the integration contract (NOT a second
+  Sales ledger).
+```
+
+#### 29.23.6 Forbidden
+
+```text
+no second mutable Sales/Finance credit exposure ledger
+no SUM that silently double-counts SO + delivered + AR + overdue (per mode)
+no static copy of canonical figures into Sales tables
+no single static pre-computed credit_exposure row anywhere
+```
+
+#### 29.23.7 Amount-delta clarification (Final Closure)
+
+`X` in §29.23.2 transitions means **matched economic credit-risk amount** (matched
+at Sales side), not blindly the SO line quantity. If the downstream final AR differs
+from the upstream commercial exposure due to legitimate:
+
+```text
+tax assumption → invoice tax truth
+rounding (cents)
+bounded invoice adjustment
+```
+
+then the transition is conceptually:
+
+```text
+release upstream commercial exposure amount U (from Sales side)
+add canonical downstream exposure amount F (from Finance AR)
+```
+
+rather than assuming `U == F`. The delta is `F - U`; it is explicit, non-duplicative,
+and reconciled by canonical Finance AR truth. Still never count the same economic
+component in two incompatible stages simultaneously. Do NOT redesign Finance
+recognition; this only reconciles the Sales-side exposure component with the
+Finance-side AR component per bucket transition.
+
+### 29.24 Credit Projection / Cache Decision
+
+#### 29.24.1 Decision: PURE_DERIVED (default baseline)
+
+```text
+chosen: PURE_DERIVED
+evidence: frozen §33 Finance V22 + V21 Inventory + V19 Planning canonical
+         provide all source facts; query-layer projection is sufficient for
+         current scale.
+
+implication:
+  R-SAL-23 = structurally NON_MATERIALIZED (no rebuild cache to protect).
+  R-SAL-23 remains in this Requirement set as conditional for transparency but
+  does NOT need an executable Materialize gate under this choice.
+```
+
+#### 29.24.2 If a future scope requires persisted cache
+
+```text
+would require: source facts remain canonical;
+              rebuild deterministic;
+              CHECK reconciliation available;
+              drift detectable;
+              rebuild must never overwrite newer exposure state
+              (the one economic amount invariant);
+              R-SAL-23 becomes mandatory executable concurrency acceptance.
+```
+
+Decision: stay PURE_DERIVED for this baseline; if future Implementation evidence changes, re-open Requirement.
+
+### 29.25 Credit Check Technical Design
+
+`evaluateCredit(input)`:
+
+```text
+INPUT:
+  customer_id
+  salesperson_id (nullable)
+  sales_order_id / sales_delivery_id (which stage)
+  business_date
+  proposed_exposure_delta_cents
+  recognition_mode                       (one of V22 §28.2 modes; defaulted
+                                          from sales_delivery.billing_mode or
+                                          financeAdapter.active_mode)
+
+PROCESS (canonical lock order; see §29.43; Lock-Anchor Final Closure):
+  0a. acquire POLICY_SCOPE anchor (NEW A-62 row WHERE anchor_type='POLICY_SCOPE')
+      FOR SHARE  (MySQL; read of shared policy) — multiple Credit Checks may
+                share-policy-read concurrently
+      [SQLite: BEGIN IMMEDIATE serializes writers; same effective result]
+  0b. acquire CREDIT_OBJECT anchor (NEW A-62 row WHERE anchor_type='CREDIT_OBJECT'
+      AND anchor_key matches the credit object) FOR UPDATE
+  1. read financeAdapter.resolveCreditExposureComponents(...) including:
+     - current approved SO commitment (per mode)
+     - delivered-not-settled (per mode)
+     - Finance AR open amount (per mode)
+     - eligible prepayment via
+       financeAdapter.resolveEligiblePrepaymentForSalesGate(..., lockMode=FOR_UPDATE)
+       (one canonical Finance value + same-tx shared lock; see §29.16)
+     - already applied via earlier gates / refunds / write-offs
+     (every component carries its source identity for audit)
+  2. acquire remaining locks in canonical order:
+     a. credit_profile effective row FOR UPDATE
+     b. credit_policy_snapshots FOR UPDATE (create or select by fingerprint)
+     c. credit_check_rules effective rows FOR UPDATE
+  3. read effective policy snapshot identity
+     (= credit_policy_snapshots.snapshot_fingerprint)
+  4. compute current exposure E per §29.23.2 (recognition-mode aware)
+  5. proposed_total = E + proposed_exposure_delta_cents
+     (also accounting for any offset consumed by this Prepayment Gate application)
+  6. available_buffer = credit_limit - E (effective profile)
+  7. decision:
+     if rule STRENGTH = BLOCK and proposed_total > credit_limit:
+       decision = 'BLOCK'  (mandatory; backend fail-closed)
+     elif rule STRENGTH = WARNING and ... :
+       decision = 'WARNING'
+     if special_approval_available and approved_authority(scope):
+       decision = 'SPECIAL_APPROVAL_REQUIRED'
+     else (no configured rule / no matching):
+       decision = 'PASS'
+  8. capture credit_policy_snapshots.id + fingerprint in result record
+     (decision evidence; NOT the primary lock — see §29.21)
+  9. write credit_check_result (NEW A-54) in same tx (commit-or-rollback)
+ 10. write audit with policy_snapshot_fingerprint + business_date
+ 11. COMMIT (releases credit_control_anchor lock)
+```
+
+#### 29.25.1 credit_check_result (NEW A-54)
+
+```text
+credit_check_result:
+  id (PK),
+  sales_order_id (FK), sales_delivery_id (FK nullable),
+  stage, proposed_delta_cents,
+  credit_control_anchor_id (FK A-62; the stable lock anchor),
+  credit_policy_snapshots_id (FK; DECISION EVIDENCE identity),
+  policy_snapshot_fingerprint (text),
+  profile_effective_state_hash (text),
+  recognition_mode (text),
+  decision ('PASS','WARNING','BLOCK','SPECIAL_APPROVAL_REQUIRED'),
+  reason_codes_json,
+  component_breakdown_json (per bucket, recognition-mode aware),
+  eligible_prepayment_source_identity (text),
+  special_approval_id (FK nullable; must equal the credit_special_approval.id
+                        bound on success),
+  evaluated_at, evaluated_by
+```
+
+Decision artifact; NOT a second exposure ledger. Source-of-truth for `Special Approval`
+must point back at the exact `(credit_policy_snapshots_id, fingerprint)` pair that
+produced the `SPECIAL_APPROVAL_REQUIRED` decision.
+
+#### 29.25.2 R-SAL-12 anchor (PURE_DERIVED exposure; credit consumption serialization)
+
+Credit Exposure has no persisted mutable row; therefore R-SAL-12 must serialize on a
+Sales-owned ANCHOR — not on a nonexistent exposure balance row.
+
+```text
+PRIMARY long-lived lock identity for R-SAL-12 =
+    credit_lock_anchors.id  (REFINED, replaces A-62;
+                              anchor_type = 'CREDIT_OBJECT';
+                              UNIQUE on anchor_key)
+    FOR UPDATE on the credit-object anchor row
+```
+
+For two concurrent risk-increasing Sales transactions (e.g. two SO submits, two SD
+confirms, or SO submit + SD confirm with overlapping risk-increasing delta), both must
+acquire the credit-object anchor row FOR UPDATE in the SAME canonical order; whichever
+wins blocks the other at the anchor row lock. The blocked transaction reads the updated
+state (which now includes the winner's committed Sales source fact) and re-evaluates
+against it.
+
+```text
+risk-increasing transaction A  vs  risk-increasing transaction B
+  → serialize on credit_lock_anchors.id
+    (anchor_type='CREDIT_OBJECT', anchor_key matches this credit object)
+    FOR UPDATE
+  → POLICY_SCOPE anchor FOR SHARE already acquired (allows multiple
+    concurrent policy reads during this credit check)
+  → credit_profile effective row + credit_policy_snapshots + rules
+    are acquired beneath the anchor
+  → one wins; the loser re-reads and re-evaluates
+  → combined committing commitments ≤ available credit capacity
+```
+
+The decision does NOT lock any non-existent Credit Exposure balance row; it uses
+the stable credit-object anchor as the serialization identity.
+
+Risk-releasing Finance event
+(collection, refund, write-off, overdue transition)
+  → Finance-owned; visible to Sales via Finance canonical source adapter
+  → if visibility lag → conservative temporary BLOCK on the next Sales
+    risk-increasing evaluation is acceptable (mandatory BLOCK fail-closed)
+  → never causes over-credit approval
+
+Distinction between risk-increasing and risk-releasing events is essential. Sales-owned
+anchors do not require frozen Finance mutations to acquire new locks; only Sales-owned
+readers acquire them.
+
+#### 29.25.3 R-SAL-24 (coherent effective policy snapshot; two anchor types; lock order)
+
+R-SAL-24 protects two independent mutation classes against a Credit Check; the final
+model distinguishes them.
+
+```text
+CREDIT_CHECK path (consumer of policy):
+  1. acquire POLICY_SCOPE anchor FOR SHARE  (multiple checks may share
+                                              policy reads concurrently;
+                                              FOR SHARE under MySQL; same-tx
+                                              serial under SQLite BEGIN IMMEDIATE)
+  2. acquire CREDIT_OBJECT anchor FOR UPDATE
+  3. resolve effective: parameters / rules / profile / limit / overdue / rating
+  4. construct one immutable decision snapshot (credit_policy_snapshots insert
+     or select by fingerprint; record fingerprint + anchor identity)
+  5. evaluate decision; bind to credit_check_result
+  6. commit
+
+POLICY / RULE MUTATION path:
+  1. acquire POLICY_SCOPE anchor FOR UPDATE  (exclusive on policy scope)
+  2. apply new effective version(s) of credit_parameters / credit_check_rules
+  3. effective rows that change in the window may produce a new
+     credit_policy_snapshots fingerprint on subsequent Credit Check
+  4. commit
+
+PROFILE / LIMIT / RATING MUTATION path:
+  1. acquire CREDIT_OBJECT anchor FOR UPDATE
+  2. apply new effective version of credit_profile (or rating_result application)
+  3. commit
+
+COMBINED POLICY + PROFILE MUTATION (one operation legitimately touches both):
+  1. acquire POLICY_SCOPE anchor FOR UPDATE  (FIRST)
+  2. acquire CREDIT_OBJECT anchor FOR UPDATE  (SECOND)
+  Never reverse this order in another mutation path.
+```
+
+Immutable / append-only semantic for snapshots (Final Closure clarification):
+
+```text
+credit_policy_snapshots is IMMUTABLE / APPEND-ONLY.
+
+A policy / profile mutation:
+  1. acquires the appropriate anchor FOR UPDATE (POLICY_SCOPE and / or
+     CREDIT_OBJECT)
+  2. changes the EFFECTIVE source records (credit_parameters / credit_check_rules
+     / credit_profile / rating application) under the lock
+  3. commits; the existing credit_policy_snapshots rows are NOT modified
+  4. a subsequent Credit Check observes a DIFFERENT fingerprint and either
+     picks the existing matching row (fingerprint unchanged) or inserts a NEW
+     credit_policy_snapshots row (fingerprint changed)
+
+No mutation ever "updates" an existing credit_policy_snapshots row.
+The row, once written, is historical evidence — append-only by definition.
+```
+
+```text
+Credit Check path
+  → acquire POLICY_SCOPE anchor FOR SHARE
+  → acquire CREDIT_OBJECT anchor FOR UPDATE
+  → create or select credit_policy_snapshots row by fingerprint
+    (FOR UPDATE on the existing row if fingerprint matches; new INSERT
+     if fingerprint does not match any existing row)
+  → read effective parameters / rules / profile / limit / overdue / rating
+  → evaluate decision; bind decision to credit_check_result row
+  → commit
+
+Allowed outcome per single Credit Check:
+  complete OLD snapshot
+  or
+  complete NEW snapshot
+
+Forbidden:
+  mixed OLD/NEW components
+
+`credit_policy_snapshots.id` is the decision evidence / version identity;
+it is NOT the primary stable serialization anchor (that is
+credit_lock_anchors.id where anchor_type='CREDIT_OBJECT' or 'POLICY_SCOPE').
+```
+
+`credit_lock_anchors.id` is the SERIALIZATION identity (lock).
+`credit_policy_snapshots.id` is the DECISION EVIDENCE identity (append-only history).
+The two are distinct; do NOT conflate.
+
+#### 29.25.4 Special Approval snapshot identity (preserved)
+
+```text
+Credit Special Approval row carries:
+  source_credit_check_result_id (FK credit_check_result.id; UNIQUE)
+  source_credit_policy_snapshots_id (FK; same snapshot row as the check)
+  source_policy_snapshot_fingerprint (text)
+  source_profile_effective_state_hash (text)
+```
+
+The Special Approval row is bound to the exact `(credit_policy_snapshots.id,
+fingerprint)` pair that produced the `SPECIAL_APPROVAL_REQUIRED` decision. The
+stable `credit_control_anchor.id` is for SERIALIZATION only; the snapshot is for
+HISTORICAL EVIDENCE only. They are distinct identities; do NOT conflate.
+
+### 29.26 Credit Special Approval Technical Design
+
+`credit_special_approval` (NEW A-53)：
+
+```text
+credit_special_approval:
+  id, source_credit_check_result_id (FK credit_check_result.id; UNIQUE),
+  source_sales_order_id (FK),
+  source_credit_policy_snapshots_id (FK; same snapshot row as the check; NOT NULL),
+  source_policy_snapshot_fingerprint, source_profile_effective_state_hash,
+  reason, requested_override_cents, requested_expiry_business_date,
+  requested_ceiling_cents,
+  authority_ceiling_cents (snapshot from user.role at request time),
+  decision ('PENDING','APPROVED','REJECTED'),
+  approved_override_cents, approved_ceiling_cents, approved_expiry_business_date,
+  scope ('ONE_TIME','TIME_BOUNDED','OBJECT_BOUNDED'),
+  approver_id, decided_at,
+  audit_id
+  PRIMARY KEY (source_credit_check_result_id)
+```
+
+Constraints:
+- approved_override_cents ≤ requested_override_cents ≤ authority_ceiling_cents at request time
+- approved_expiry ≥ business_date; not in the past
+- snapshot identity MUST match source_credit_check_result's snapshot identity
+  (matched via source_credit_policy_snapshots_id + fingerprint)
+- A later policy mutation CANNOT reinterpret this approval; if revalidation required by policy (e.g. rating downgrade), it must produce a NEW credit_check_result and NEW approval request — the old approval is read-only history
+
+R-SAL-13 + R-SAL-24 interplay:
+- Special Approval consumes R-SAL-13 with the `credit_special_approval` row lock
+  (UNIQUE on source_credit_check_result_id) + the snapshot row lock
+- The check that produced SPECIAL_APPROVAL_REQUIRED was bound to one snapshot
+  (source_credit_policy_snapshots_id)
+- The approval row carries the same snapshot identity
+- A different credit check (different snapshot, e.g. next SO) gets a new approval flow
+
+### 29.27 Credit Evaluation
+
+`credit_evaluation_indicator` (NEW #47) + `credit_evaluation_scheme` (NEW #48) + `credit_evaluation_model` (NEW #49) + `credit_evaluation_scoring_sheet` (NEW #50) + `credit_evaluation_result` (NEW #51)。
+
+Per-evaluator bounded. NO external bureau / AI / ML / complex corporate-risk analytics.
+
+```text
+credit_evaluation_indicator:
+  id, code (UNIQUE), kind ('QUALITATIVE'|'QUANTITATIVE'),
+  description, max_score (REAL)
+
+credit_evaluation_scheme:
+  id, code (UNIQUE), name, rating_grades_json
+
+credit_evaluation_model:
+  id, scheme_id (FK), name,
+  applicable_from, applicable_to,
+  indicator_weights_json,  -- [{indicator_id, weight}]
+  scoring_sheet_template_json
+
+credit_evaluation_scoring_sheet:
+  id, model_id (FK), evaluator_id (FK users.id),
+  customer_id (FK), profile_snapshot_identity,
+  sheet_data_json,
+  submitted_at, finalized_at
+
+credit_evaluation_result:
+  id, sheet_id (FK), scheme_id (FK),
+  total_score, rating_grade,
+  applied_at, applied_by,
+  applied_to_profile_id (FK credit_profile.id)
+  -- can apply update via credit_profile_ratings
+```
+
+Bounded multi-scorer via SC106: aggregation restricted to within one scoring_sheet instance with multiple evaluator entries; no global open-scorer pool.
+
+### 29.28 Credit Recalculation
+
+`credit_recalculation_history` (NEW #52)：
+
+```text
+credit_recalculation_history:
+  id, kind ('CHECK_ONLY','DETERMINISTIC_REBUILD'),
+  triggered_by, triggered_at,
+  source_snapshot_window, scope_filter_json,
+  result_summary, duration_ms,
+  inconsistency_count, drift_detected
+```
+
+This history table is ONLY for human audit trail of when reconciliations ran; it does NOT store any derived/exposure data that would create a second ledger.
+
+R-SAL-23 conditional semantics preserved (see §29.24). Pure CHECK-only is default; deterministic rebuild NOT exercised against any materialized cache in this baseline.
+
+### 29.29 Credit Query / Exception History (DERIVED)
+
+Layer 4 read-side:
+
+```text
+credit_query_snapshot -- DERIVED view only; not a table
+exception_history -- READ from credit_check_result + credit_special_approval
+                     joined with source SO / SD
+```
+
+No physical table for these results; constructed by query at the time of access.
+
+### 29.30 Source / Capacity Model (canonical edge table, Micro-Closure corrected)
+
+For every edge: source identity / target identity / original capacity / executed or converted / reversed or cancelled / remaining / canonical lock anchor.
+For non-quantity edges: `capacity = N/A`.
+
+| # | Source | Target | Source identity | Source line | Original capacity | Executed / Converted | Reversed / Cancelled | Remaining | Canonical lock anchor |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | Quotation line | Sales Order line | sales_quotation_lines.id | sales_order_items.id | sales_quotation_lines.quantity | sales_quotation_conversions.converted_qty | (R-SAL-06; none today) | quantity − SUM(converted_qty) | sales_quotation_lines.id (R-SAL-06) |
+| 2 | Sales Order line | Delivery Notice line | sales_order_items.id | sales_order_items.id | sales_order_items.quantity | SUM(delivery_notice_lines.scheduled_qty) | delivery_notice_lines.cancelled_notified_qty | SO quantity − SUM(scheduled) | sales_order_items.id (R-SAL-16) |
+| 3 | Delivery Notice line | Sales Delivery line | delivery_notice_lines.id | sales_delivery_items.delivery_notice_line_id (= DN line id) | scheduled_qty − notified_qty | sales_delivery_items.delivery_notice_line → SD item qty | (none) | scheduled − confirmed − claimed | delivery_notice_lines.id (R-SAL-17) |
+| 4 | Sales Delivery line | Delivery-backed Return line | sales_delivery_items.id (with `commercial_source_marker = 'DELIVERY_BACKED'`) | return_order_items.delivery_item_id | sales_delivery_items.quantity | SUM(return_order_items.qty where delivery_item_id = this SD item) | (per return reversal) | SD item qty − returned qty | sales_delivery_items.id (R-SAL-03) |
+| 5 | Sales Order line | Order-backed Return line | sales_order_items.id (with `commercial_source_marker = 'ORDER_BACKED'` and NO corresponding SD for that line) | return_order_items.sales_order_item_id | sales_order_items.quantity | SUM(return_order_items.qty where so_item_id = this line) | (per return reversal) | SO line qty − returned qty | sales_order_items.id (R-SAL-18 / Capacity edge) |
+| 6 | No-source Return | (explicit NO_SOURCE capacity policy) | n/a | return_order_items.id where `commercial_source_marker='NO_SOURCE'` | capacity = N/A (consignment-inventory economics not derived from any SO/SD/return aggregate) | n/a | n/a | n/a | n/a |
+| 7 | Return line | Replacement obligation | return_order_items.id | sales_order_replacement_lines.source_return_item_id | return_order_items.qty (return_qty) | sales_order_replacement_lines.replacement_quantity + sales_replacement_fulfillments.fulfilled_qty | (per cancel/return) | replacement quantity − fulfilled | return_order_items.id (R-SAL-10) + sales_order_replacement_lines.id |
+| 8 | Sales Order / line | Sales Order Change | sales_orders.id + sales_order_items.id | sales_order_changes.id + sales_order_change_lines.id | capacity = N/A (not a quantity edge; change is a delta document) | sales_order_change_lines.op ∈ {ADD,MODIFY,CANCEL} applied to remaining obligation | REJECTED change lines | remaining-not-yet-delivered (after applied change) | sales_order_changes.id + sales_order_items.id (R-SAL-07 / 08 / 18) |
+| 9 | Sales Order line | Reservation Intent | sales_order_items.id | sales_reservation_intent.id | sales_order_items.quantity | requested_qty (intent) + Planning canonical consumed | released / canceled | qty − Planning consumed (canonical in Planning) | sales_order_items.id (consume-side) + sales_reservation_intent.id (intent-side) |
+| 10 | Sales Order | Prepayment Gate evaluation | sales_orders.id | sales_prepayment_requirements.id | required_prepayment_cents | eligible_prepayment_cents (per gate evaluation; from Finance adapter) | (none) | required − applied (cumulative gate-eligible) | **V22 Finance parent balance lock**: `settlement_unapplied_balances.id` (balance_type='PREPAYMENT') FOR UPDATE inside SAME connection/transaction via financeAdapter (R-SAL-15 primary lock; per §29.16.3.1); sales_prepayment_requirements.id + sales_prepayment_gate_results.snapshot_key as Sales-owned record/audit identity |
+| 11 | SO service line | Service Fulfillment | sales_order_items.id (with `product_commercial_classification.service_classification = TRUE`) | service_fulfillments.sales_order_item_id | sales_order_items.quantity | service_fulfillments.confirmation_qty | (per cancel) | qty − confirmed | sales_order_items.id (capacity anchor) + service_fulfillments.id (R-SAL-22) |
+| 12 | Consignment line | Settlement | consignment_commercial_lines.id (where `commercial_source_marker` indicates commercial settlement path) | (settlement row in finance canonical AR) | consigned_quantity | settled qty (per settlement event) | (per settlement reversal) | consigned − settled | consignment_commercial_lines.id (R-SAL-20) |
+| 13 | Consignment line | Consignment Return | consignment_commercial_lines.id | (return row in finance canonical refund) | consigned_quantity | returned qty | (per return reversal) | consigned − settled − returned | consignment_commercial_lines.id (R-SAL-21) |
+| 14 | Sales / Finance canonical facts | Credit Exposure (DERIVED) | sales_orders / sales_deliveries / Finance canonical rows | sales_orders / sales_deliveries / account_receivables etc. | proposed_exposure_delta (input) | credit_check_result.decision consumed | (none; DERIVED) | E = computed per §29.23 (PURE_DERIVED) | **credit_control_anchor.id** (NEW A-62; PRIMARY long-lived lock); secondary: credit_profile effective row + credit_policy_snapshots (R-SAL-12 / 24, see §29.25.2-3) |
+| 15 | Credit Check Result | Credit Special Approval | credit_check_result.id (where decision = 'SPECIAL_APPROVAL_REQUIRED') | credit_special_approval.source_credit_check_result_id | capacity = N/A (not a quantity edge; approval is a bounded exception request) | approved_override_cents (per decision) | REJECTED approval | n/a (bounded authority check, not running total) | credit_special_approval.id (UNIQUE on source_credit_check_result_id) + credit_policy_snapshots.id (R-SAL-13) |
+
+#### 29.30.1 Direction audit (sources of edge)
+
+```text
+Quotation → SO  ✓  source: quotation line; target: SO line
+SO → Delivery Notice  ✓  source: SO line; target: DN line
+Delivery Notice → SD  ✓  source: DN line; target: SD line
+SD → Return (DELIVERY_BACKED)  ✓  source: SD line; target: delivery_item_id on return line
+SO → Return (ORDER_BACKED)  ✓  source: SO line; target: so_item_id on return line
+NO_SOURCE Return  ✓  source: explicit NO_SOURCE marker; no upstream capacity edge
+Return → Replacement  ✓  source: return line; target: replacement line
+SO → SO Change  ✓  source: SO; target: change document (NOT vice-versa)
+SO → Reservation Intent  ✓  source: SO line; target: intent row
+SO → Prepayment Gate  ✓  source: SO; target: gate evaluation
+SO service line → Service Fulfillment  ✓  source: SO line; target: fulfillment
+Consignment line → Settlement / Return  ✓  source: commercial line; target: settlement/return financial row
+Sales / Finance facts → Credit Exposure  ✓  source: canonical facts; target: DERIVED
+Credit Check Result → Credit Special Approval  ✓  source: check result; target: approval
+```
+
+No edge direction is reversed in this table.
+
+### 29.31 API Inventory
+
+> 每个 API 在 design 上明确 method / path / purpose / permission / identity / source-cap / idempotency / tx。本节不写 handler 代码。
+
+#### 29.31.1 Quotation API surface
+
+```text
+GET    /api/sales-quotations              list (status filter)
+GET    /api/sales-quotations/:id          detail (with lines + remaining)
+POST   /api/sales-quotations              create (DRAFT)
+PATCH  /api/sales-quotations/:id          mutate (DRAFT only)
+POST   /api/sales-quotations/:id/effective-publish  DRAFT→EFFECTIVE (if approval policy)
+POST   /api/sales-quotations/:id/cancel   DRAFT/EFFECTIVE→CLOSED (with reason)
+POST   /api/sales-quotations/:id/convert-to-so
+       body: {line_selections, qty_per_line}
+       converts to SO via canonical sales_order_canonical_writer
+       idempotency: (idempotency-key) → lock + check + insert conversions
+```
+
+#### 29.31.2 Sales Pricing API surface
+
+```text
+GET    /api/sales-price-lists                list
+CRUD   /api/sales-price-lists/:id           list create update delete (DRAFT only)
+POST   /api/sales-price-lists/:id/activate   ACTIVATE (frozen effective window)
+POST   /api/sales-price-lists/:id/retire     RETIRE (INACTIVE)
+GET    /api/sales-pricing/resolve           POST body input → returns resolved price
+                                              (no side effect; pure resolver)
+```
+
+#### 29.31.3 Order-Time Discount API surface
+
+```text
+GET    /api/sales-discount-schemes
+CRUD   /api/sales-discount-schemes/:id
+GET    /api/sales-discounts/resolve          POST input → resolved order-time discount
+                                              (no side effect)
+```
+
+#### 29.31.4 Sales Order API surface (canonical)
+
+```text
+GET    /api/sales-orders                    list
+GET    /api/sales-orders/:id                detail (commercial party snap, snapshot, lines)
+POST   /api/sales-orders                    create (commercial party default snapshot)
+PATCH  /api/sales-orders/:id                update (DRAFT/REJECTED only)
+POST   /api/sales-orders/:id/submit          DRAFT→SUBMITTED
+POST   /api/sales-orders/:id/approve         SUBMITTED→APPROVED  (SOD; SALES_ORDER family)
+POST   /api/sales-orders/:id/reject          SUBMITTED→REJECTED  (with reason)
+POST   /api/sales-orders/:id/close           commercial close (SC43) — explicit action
+POST   /api/sales-orders/:id/cancel          commercial cancel (SC44) — explicit action
+POST   /api/sales-orders/:id/gift-line       add gift line (SC29) — additive
+GET    /api/sales-orders/:id/fulfillment     DERIVED projection (partial/full/etc)
+```
+
+#### 29.31.5 Sales Order Change API surface
+
+```text
+POST   /api/sales-order-changes               create change document (DRAFT)
+PATCH  /api/sales-order-changes/:id          change lines
+POST   /api/sales-order-changes/:id/submit    DRAFT→SUBMITTED (platform approval create)
+POST   /api/sales-order-changes/:id/approve   SUBMITTED→APPROVED
+POST   /api/sales-order-changes/:id/reject    SUBMITTED→REJECTED
+POST   /api/sales-order-changes/:id/cancel    DRAFT→CANCELLED (no SO state change)
+```
+
+#### 29.31.6 Delivery Notice API surface
+
+```text
+GET    /api/delivery-notices                 list
+GET    /api/delivery-notices/:id             detail (lines + remaining)
+POST   /api/delivery-notices                 create (DRAFT)
+PATCH  /api/delivery-notices/:id             lines
+POST   /api/delivery-notices/:id/confirm     DRAFT→CONFIRMED
+POST   /api/delivery-notices/:id/cancel       DRAFT/CONFIRMED→CANCELLED
+```
+
+#### 29.31.7 Sales Delivery (existing) — converged
+
+```text
+GET    /api/sales-deliveries                (existing)
+POST   /api/sales-deliveries                (existing) — now with optional deliveryNoticeId
+PATCH  /api/sales-deliveries/:id            (existing)
+POST   /api/sales-deliveries/:id/confirm    (existing) — extended: also locks
+                                                  delivery_notice remaining + uses
+                                                  applyInventoryMutation + OQC + Finance
+                                                  recognition. Delivery Notice lock identity
+                                                  becomes part of the confirm path. Service
+                                                  items require service_fulfillments pre-check.
+```
+
+#### 29.31.8 Sales Return (existing) — extended
+
+```text
+GET    /api/sales-returns                   (existing)
+POST   /api/sales-returns                   (existing; must specify
+                                              commercialSourceMarker ∈
+                                              {DELIVERY_BACKED, ORDER_BACKED, NO_SOURCE})
+PATCH  /api/sales-returns/:id               (existing)
+POST   /api/sales-returns/:id/confirm       (existing; with mode-specific behavior)
+```
+
+#### 29.31.9 Replacement API surface
+
+```text
+GET    /api/sales-order-replacements
+POST   /api/sales-order-replacements         create from return
+PATCH  /api/sales-order-replacements/:id    update state
+POST   /api/sales-order-replacements/:id/fulfill  create replacement_delivery_link
+```
+
+#### 29.31.10 Prepayment Gate API surface
+
+```text
+GET    /api/sales-prepayment-requirements
+POST   /api/sales-prepayment-gate/evaluate
+       body: {sales_order_id, stage}
+       → returns {decision, eligible_advance_cents, remaining_required_cents}
+```
+
+#### 29.31.11 Reservation Intent API surface
+
+```text
+POST   /api/sales-reservation-intent/request       create intent request
+POST   /api/sales-reservation-intent/release       release intent
+GET    /api/sales-reservation-intent                  list (by SO)
+```
+
+#### 29.31.12 Service Fulfillment API surface
+
+```text
+POST   /api/service-fulfillments                   create PENDING (per SO line)
+POST   /api/service-fulfillments/:id/confirm       → CONFIRMED (triggers Finance recognition)
+POST   /api/service-fulfillments/:id/cancel
+```
+
+#### 29.31.13 Consignment Commercial API surface
+
+```text
+GET    /api/consignment-commercial-documents
+POST   /api/consignment-commercial-documents         create instruction
+PATCH  /api/consignment-commercial-documents/:id
+POST   /api/consignment-commercial-documents/:id/settle      settlement confirmation (→ Finance)
+POST   /api/consignment-commercial-documents/:id/return       commercial return (→ Inventory + Finance)
+GET    /api/consignment-commercial-documents/:id/remaining    remaining capacity
+```
+
+#### 29.31.14 Credit API surface
+
+```text
+GET    /api/credit-parameters              (active effective at business_date)
+GET    /api/credit-check-rules
+POST   /api/credit-parameters              create (DRAFT)
+POST   /api/credit-parameters/:id/activate set effective_from
+POST   /api/credit-check-rules/:id/activate
+
+GET    /api/credit-profile                 per customer (effective at business_date)
+POST   /api/credit-profile                 create / update (effective-dated)
+GET    /api/credit-profile/:id/ratings
+
+POST   /api/credit-check/evaluate
+       body: {customer_id, salesperson_id, sales_order_id/sales_delivery_id,
+              stage, business_date, proposed_exposure_delta}
+       → returns {decision, component_breakdown, snapshot_identity,
+                   special_approval_requirement}
+       idempotency: (idempotency-key) required
+
+POST   /api/credit-special-approval       request with reason + requested override
+POST   /api/credit-special-approval/:id/decide    decision (bounded authority check)
+
+POST   /api/credit-evaluation/indicator   create indicator
+POST   /api/credit-evaluation/scheme
+POST   /api/credit-evaluation/model
+POST   /api/credit-evaluation/scoring-sheets    create sheet (bound evaluators)
+POST   /api/credit-evaluation/scoring-sheets/:id/finalize
+POST   /api/credit-evaluation/scoring-sheets/:id/apply-to-profile
+POST   /api/credit-recalculation/run              CHECK_ONLY by default
+GET    /api/credit-query                    limit / used / remaining / components
+GET    /api/credit-exceptions               exception history (DERIVED query)
+```
+
+#### 29.31.15 Customer Commercial Extensions API surface
+
+```text
+GET    /api/customer-commercial-extensions
+POST   /api/customer-commercial-extensions     create effective-dated
+PATCH  /api/customer-commercial-extensions/:id
+GET    /api/customer-material-xref
+POST   /api/customer-material-xref
+```
+
+#### 29.31.16 Permission Intents (SC108..SC114)
+
+```text
+sales:view
+sales:create
+sales:manage
+sales:approve
+
+pricing:view
+pricing:manage
+pricing:override                 (SC109; PRICE OVERRIDE separate authority)
+
+quotation:manage
+return:manage
+consignment:manage
+service-sales:manage
+replacement:manage
+
+credit:view
+credit:manage
+credit:evaluate
+credit:special-approve            (SC111; bounded authority)
+```
+
+### 29.32 Lifecycle Inventory
+
+| State Machine | States |
+|---|---|
+| Quotation (§29.5.1) | DRAFT → EFFECTIVE → (CLOSE_CANCELLED) ∨ FULLY_CONVERTED ∨ EXPIRED |
+| Sales Order (frozen) | DRAFT → SUBMITTED → APPROVED → REJECTED |
+| Sales Order (commercial close; §29.10) | overlay: OPEN → CLOSED_COMMERCIALLY / CANCELLED_COMMERCIALLY |
+| Sales Order Change (§29.9.3) | DRAFT → SUBMITTED → APPROVED → REJECTED (→ CANCELLED) |
+| Delivery Notice (§29.11.1) | DRAFT → CONFIRMED → CANCELLED / CLOSED (by exhaustion) |
+| Sales Delivery (frozen) | DRAFT → CONFIRMED → CANCELLED |
+| Sales Return (frozen + commercial_marker) | DRAFT → CONFIRMED → CANCELLED with marker |
+| Replacement (§29.14.1) | OPEN → IN_PROGRESS → FULFILLED / CANCELLED |
+| Service Fulfillment (§29.18.1) | PENDING → CONFIRMED → CANCELLED |
+| Consignment Commercial (§29.19.2) | DRAFT → INSTRUCTION → PARTIAL_SETTLED → SETTLED ∨ RETURNED ∨ CANCELLED |
+| Prepayment Gate (§29.16.2) | PASS / WARN / BLOCK / OVERRIDE_REQUIRED (per stage) |
+| Credit Special Approval (§29.26) | PENDING → APPROVED / REJECTED |
+| Credit Evaluation Sheet (§29.27) | DRAFT → SUBMITTED → FINALIZED → APPLIED (to profile) |
+
+### 29.33 RBAC / SOD Design
+
+目标：映射 SC108..SC114 与 §34.7 P1..P5 至现行 Platform permission registry。
+
+```text
+Backend authorization (FAIL-CLOSED):
+- VIEW      ≠ WRITE       (P1)
+- CREATE    ≠ APPROVE    (P2)
+- PRICE_OVERRIDE separate authority
+             (P3 — sales:create / pricing:override 不能 same user)
+- CREDIT_SPECIAL_APPROVE bounded authority
+             (P4 — credit:special-approve 受 user.role ceiling 制约)
+- AUDIT 不可跳过
+             (P5 — critical mutation 与 audit_logs 共 tx)
+
+SOD on Sales Order approval:
+- creator_id ≠ reviewer_id (frozen in M3R)
+
+Frontend visibility is NOT authorization.
+hidden field != bypass; 必须 backend allow 拒绝。
+```
+
+#### 29.33.1 Existing Permission Codes (重用 + 冻结扩展)
+
+Reuse (frozen):
+```text
+SALES_ORDER (family): sales:view / sales:create / sales:approve / sales:reject
+                      (current per-platform mapping for SALES_ORDER approval family)
+
+Standard 5-role baseline (frozen):
+  role-sales, role-reviewer, role-warehouse, role-accounting, role-admin
+  (frozen §34.7)
+```
+
+New (additive, business-meaning from §34.7):
+```text
+sales:manage (SC108)
+pricing:view / pricing:manage / pricing:override (SC109)
+quotation:manage (SC110)
+return:manage (SC110)
+consignment:manage (SC110, SC113)
+service-sales:manage (SC110, SC113)
+replacement:manage (SC112)
+credit:view / credit:manage / credit:evaluate / credit:special-approve (SC111)
+```
+
+#### 29.33.2 Backend Authorization Ownership
+
+Every Sales-owned write API has:
+
+```text
+checkPermissionOrForbid(actor, permissionCode, resourceType, resourceId)
+```
+
+writes audit `entity_type=SOMETHING, action=AUTH_DENIED` for fail-closed cases.
+
+### 29.34 Approval / Workflow Boundary
+
+Current Platform approval family `SALES_ORDER` must remain working.
+
+New approval needs:
+
+```text
+Sales Order Change         :  SALES_ORDER family; reason required; pre-effect-version check
+Credit Special Approval    :  new approval family = 'CREDIT_SPECIAL_APPROVAL';
+                              bounded authority; ceiling; expiry; scope
+Quotation approval (optional policy): new family = 'QUOTATION_APPROVAL' (optional,
+                                     policy-dependent; off by default)
+Delivery Notice approval   :  not required; CONFIRM is direct by Sales user
+Replacement approval       :  policy-dependent; default = none;
+                              SALES_ORDER family for replacement delivery link
+Service Fulfillment approval: not required; CONFIRM is direct by Sales user
+```
+
+Generic Workflow itself remains Platform-scope (OUT_OF_SCOPE §34.10).
+
+Use bounded existing Platform approval mechanics (SALES_ORDER family + new CREDIT_SPECIAL_APPROVAL family) where possible; do NOT implement Generic Workflow engine.
+
+### 29.35 Audit Design
+
+Critical mutations require audit; mutation + audit shared transaction boundary where possible.
+
+```text
+entity_type                  audited actions (action label)
+sales_quotation              CREATE / UPDATE / STATE_TRANSITION / CONVERT_TO_SO
+sales_price_list            CREATE / UPDATE / ACTIVATE / RETIRE
+sales_price_list_entry      CREATE / UPDATE / VERSION (snapshot history)
+sales_discount_scheme       CREATE / UPDATE / ACTIVATE / RESOLVE
+sales_order                 CREATE / UPDATE / SUBMIT / APPROVE / REJECT / GIFT_LINE_ADDED
+                            CLOSE_COMMERCIALLY / CANCEL_COMMERCIALLY
+sales_order_change          CREATE / SUBMIT / APPROVE / REJECT / CANCEL
+sales_order_change_line     ADD / MODIFY / CANCEL (per-line)
+delivery_notice             CREATE / CONFIRM / CANCEL
+sales_delivery              CREATE / UPDATE / CONFIRM / CANCEL (existing)
+sales_return                CREATE / UPDATE / CONFIRM / CANCEL (existing; +mode)
+sales_order_replacement     CREATE / UPDATE / FULFILL / CANCEL
+sales_reservation_intent    REQUEST / RELEASE / CONSUME
+sales_prepayment_requirement CREATE / UPDATE
+sales_prepayment_gate_result EVALUATE
+service_fulfillment         CREATE / CONFIRM / CANCEL
+consignment_commercial_doc  CREATE / SETTLE / RETURN / CANCEL
+consignment_commercial_line UPDATE
+credit_parameters          CREATE / ACTIVATE
+credit_check_rules          CREATE / ACTIVATE
+credit_profile              CREATE / UPDATE / EFFECTIVE_SET
+credit_profile_ratings      APPLY
+credit_check_result         EVALUATE
+credit_special_approval     REQUEST / DECIDE
+credit_evaluation_indicator CREATE
+credit_evaluation_scheme     CREATE
+credit_evaluation_model     CREATE
+credit_evaluation_scoring_sheet CREATE / SUBMIT / FINALIZE / APPLY
+credit_recalculation_history RUN
+```
+
+Audit entity values MUST reference `policy_snapshot_identity` for any credit-related audit row (per R-SAL-24 design enforcement).
+
+### 29.36 Mobile IA Design
+
+Sales & Customer launcher goal: ≤ 6 primary entries.
+
+Design proposal:
+
+```text
+Sales & Customer launcher:
+  Customers           (SC02..SC07; existing route customers)
+  Quotations          (SC09..SC14; new route quotations/primary)
+  Orders              (SC24..SC44; existing route orders)
+  Fulfillment         (SC45..SC58; combined entry: Delivery Notice + Sales Delivery + Return)
+                      (Navigation: notice/delivery/return contextual tabs)
+  Returns / Replacements (SC54..SC61; existing route returns with new tab: replacement)
+  Credit              (SC82..SC107; new route credit/workspace)
+```
+
+Total primary launcher entries = 6.
+
+Contextual surfaces (not in launcher):
+
+```text
+Pricing             → pricing sub-page accessible from Orders
+Quotation detail    → route quotations/:id
+Discount            → route sales-discounts (existing; AR/parent chain)
+Consignment         → route consignment accessible from Customers OR a contextual detail tab
+Service sales       → conditional; standard SO item type is service when product.is_service_classification
+```
+
+### 29.37 Route Design
+
+`applicationRegistry.js` remains canonical front-end route truth.
+
+```text
+Existing routes (frozen compatibility):
+  customers
+  orders (sales order list / detail / editor)
+  sales-deliveries
+  returns (sales returns AND purchase returns)
+  sales-discounts
+  sales-invoices
+
+New routes (NEW):
+  quotations                  → list / detail / editor / conversion-to-SO
+  delivery-notices            → list / detail / editor
+  sales-orders-change         → list / detail / editor  (route id: 'sales-order-changes')
+  sales-order-replacements    → list / detail / editor (under returns parentRoute)
+  service-fulfillments        → list / detail (under orders parentRoute)
+  consignment-commercial      → list / detail / editor (under customers parentRoute)
+  customer-commercial-extensions  → detail within customer profile (NOT a primary route)
+  customer-material-xref      → detail within customer profile (NOT a primary route)
+  prepayment-gate             → embedded in order / delivery flows (NOT a primary route)
+  credit-parameters           → settings under credit workspace
+  credit-profile              → list under credit workspace
+  credit-check-rules          → settings under credit workspace
+  credit-check-evaluate       → embedded in SO/SD checkout
+  credit-special-approvals     → list under credit workspace
+  credit-evaluation            → list under credit workspace
+  credit-query                 → query surface under credit workspace
+  credit-exceptions            → query surface under credit workspace
+
+Aliases (compat):
+  none mandatory; existing routes retained
+```
+
+domain assignment:
+all new routes → `sales-customer`.
+
+access RBAC: per SC108..SC114 / §34.7.
+
+mobile exposure per:
+```text
+  primary (launcher ≤ 6 entries):  customers, quotations, orders, fulfillment, returns-replacements, credit
+  contextual (never in launcher): pricing, quotation-detail, discount, consignment, service-sales, prepayment, all credit sub-routes
+  workflow (mobile-first editor): orders-editor, quotation-editor, delivery-notice-editor, credit-special-approvals-detail
+  report (mobile-tolerant):  sales-summary, sales-outstanding (existing decision-reports entry points)
+```
+
+### 29.38 Responsive Design
+
+```text
+widths        : 320 / 390 / 430 / 680
+primary      : 390
+touch target : ≥ 44 CSS px
+horizontal   : permanent horizontal scroll NOT for core tasks
+core pattern : LIST → DETAIL → EDITOR / WORKFLOW
+```
+
+Each new workflow specifies:
+
+```text
+LIST    : customer / quotation / order / DN / replacement / credit list views
+DETAIL  : detail of each entity with sectioned (commercial / finance / inventory / audit)
+EDITOR  : for create / update / state transitions; modal or full-page per §34.7
+WORKFLOW: for state machine-driven flows (DRAFT→EFFECTIVE→CONVERT; CREDIT→CHECK→SPECIAL_APPROVE)
+```
+
+### 29.39 Reporting Design
+
+Existing decision-reports sales-summary / sales-outstanding extended; new projections:
+
+```text
+Quotation execution         : SC78 ← decision-reports sales-quotation-summary
+Sales Order execution       : SC78 ← decision-reports sales-summary (existing extended)
+Delivery Notice execution   : SC78 ← new sales-delivery-notice-execution
+Sales Delivery execution     : SC78 ← decision-reports sales-outstanding (existing extended)
+Return execution            : SC78 ← new sales-return-execution (3 modes split)
+Replacement execution       : SC78 ← new sales-replacement-execution
+Consignment execution       : SC78 ← new consignment-execution (3-layer split)
+Credit exceptions            : SC78 ← new credit-exception-list
+
+Sales Outstanding            : SC79 ← decision-reports sales-outstanding (existing)
+Sales Gross Profit           : SC80 ← existing; consumes canonical valuation evidence
+Sales Ranking                 : SC81 ← new sales-ranking by (customer, material, salesperson, sales_group)
+                             dimensions
+```
+
+Reports use canonical business dates (§34.4 S19 invariant).
+
+No shadow ledger for Sales cost: gross profit consumes canonical cost from Inventory V21 + Finance V22.
+
+### 29.40 Historical Compatibility (new-flow enforcement + fail-closed)
+
+| Existing concept | Row without new field | Legacy read | Legacy mutate (correction) | New write through legacy bypass |
+|---|---|---|---|---|
+| Legacy SO without tax_basis snapshot | NULL commercial_tax_code column | YES (display `(legacy)`) | bounded (Policy §29.45) | NO (new normal flow requires commercial snapshot) |
+| Legacy SD without Delivery Notice | delivery_notice_id IS NULL | YES (read) | bounded (Policy §29.45; no auto-fill) | NO (new normal flow REQUIRES DN; see §29.12.0) |
+| Legacy Order without commercial parties | NULL salesperson / sales_group / settlement_party / payer | YES (display `(legacy)`) | bounded | NO |
+| Legacy Returns without `commercial_source_marker` | NULL → treat as DELIVERY_BACKED | YES | bounded | NO (new entries must set marker) |
+| Legacy Customers without commercial extensions | NULL | YES (display `(none)`) | bounded | NO |
+| Legacy Credit Profile missing | NULL credit_profile row | YES (display `(none)`) | per §29.22.1 rule (FAIL CLOSED if Credit Management enabled + mandatory rule) | per §29.22.1; no new write allows "no profile" exception to silent PASS |
+| Legacy tax basis | NULL | YES (treat as no commercial tax snapshot) | bounded | NO |
+| Legacy product reference price (products.price_cents) | DEPRECATED_NO_NEW_WRITES; read as legacy pricing fallback (5th in §29.6.2) | YES (legacy read) | n/a | NO (new writes use Sales Pricing engine; legacy fallback read-only) |
+
+> Default rule: legacy read = YES, legacy correction (bounded) = policy-defined, new write through legacy bypass = NO.
+> Compatibility must not become a permanent bypass around new canonical contracts.
+> 禁止 retroactive rewrite of historical rows; 只 forward-only SO Change 允许。
+
+### 29.41 Schema Constraints (proposed; no migration code)
+
+| Constraint | Enforces |
+|---|---|
+| `customers.id` PK | identity foundation invariant (Master & Engineering) |
+| `sales_orders.order_no UNIQUE` | no duplicate order |
+| `sales_deliveries.delivery_no UNIQUE` | R-SAL-01 anchor |
+| `sales_deliveries.sales_order_id` FK (existing) | no orphan |
+| `sales_delivery_items.sales_order_item_id` FK | source-line identity |
+| `sales_delivery_items.delivery_notice_line_id` FK (NEW nullable) | R-SAL-17 anchor; legacy NULL allowed |
+| `return_orders.source_type CHECK` (existing) | source-type invariant |
+| `return_orders.commercial_source_marker CHECK` (NEW) | 3-modes invariant |
+| `sales_quotation_lines PK (quotation_id, line_no)` | canonical line |
+| `sales_quotation_conversions PK (quotation_id, sales_order_line_id)` | source-line conversion uniqueness |
+| `delivery_notices.notice_no UNIQUE` | identity |
+| `delivery_notice_lines PK (delivery_notice_id, sales_order_item_id)` | capacity invariant |
+| `sales_order_changes.change_no UNIQUE` | identity |
+| `sales_order_replacements.replacement_no UNIQUE` | identity |
+| `sales_order_replacements.source_return_id FK` | replacement ↔ return |
+| `credit_parameters PK (code, effective_from)` | effective-dated uniqueness |
+| `credit_check_rules.rule_code UNIQUE per effective_from` | effective-dated uniqueness |
+| `credit_profile PK (customer_id, salesperson_id, credit_object_type, credit_object_id, effective_from)` | effective-dated uniqueness |
+| `credit_special_approval PK (source_credit_check_result_id)` | one-time-only approval per check |
+| `consignment_commercial_lines PK (doc_id, material_id, lot_code effective)` | consignment stream integrity |
+| `idempotency_records PK (entity_type, entity_id, idempotency_key)` | command idempotency |
+
+### 29.42 SQLite / MySQL Parity
+
+Hardening surface checklist (anticipated hazards):
+
+```text
+- partial-index: ensure no UNIQUE … WHERE clauses; use plain UNIQUE
+  on (effective_from) composite keys.
+- UPSERT: avoid SQLite-only ON CONFLICT syntax that has no MySQL 8
+  direct equivalent. Use INSERT-or-check-then-UPDATE; or use INSERT IGNORE
+  with care for InnoDB semantics.
+- concurrent UPDATE: avoid SQLite-only UPSERT / DO NOTHING that bypasses
+  row-lock in MySQL. For capacity updates use explicit
+  SELECT ... FOR UPDATE then UPDATE; never rely on conditional UPDATE.
+- JSON: store JSON in TEXT / JSON columns using universal JSON1 / MySQL JSON
+  document with same content semantics.
+- AUTOINCREMENT: rely on explicit id generation; do not assume auto-assigned
+  values exist on both engines identically. Use TEXT IDs consistent with
+  current implementation.
+- date / time: store ISO date (YYYY-MM-DD) for business_date; full ISO 8601
+  for timestamp columns. Timezone normalize at app boundary.
+- defaults: every column with default has explicit default; not engine-specific.
+
+Tests:
+  SQLite parity = node --test that runs both engines on the same SQL.
+  Real MySQL = pnpm test:mysql / pnpm test:mysql:concurrency per §34.6 races.
+```
+
+### 29.43 Transaction Model
+
+#### 29.43.1 SQLite strategy
+
+```text
+WRITE tx:
+  BEGIN IMMEDIATE   (whole DB write lock to serialize concurrent writers; freezer-friendly)
+  SELECT ... FOR UPDATE (MySQL only; not used on SQLite; SQLite serializes via BEGIN IMMEDIATE)
+  capacity read + check
+  capacity write
+  audit write
+  COMMIT
+
+READ tx:
+  BEGIN DEFERRED   (default; let SQLite upgrade to IMMEDIATE if writer pending)
+```
+
+#### 29.43.2 MySQL strategy
+
+```text
+WRITE tx:
+  START TRANSACTION
+  SELECT … FOR UPDATE on
+    source line identity (sales_order_items.id / sales_delivery_items.id /
+                          delivery_notice_lines.id / return_orders.id / etc.)
+    Credit Profile identity (credit_profile.id)
+    credit_special_approval source (credit_special_approval.source_credit_check_result_id)
+  computed capacity check INSIDE transaction
+  capacity write
+  audit write
+  COMMIT
+
+READ tx:
+  SELECT … (no lock; READ COMMITTED default)
+
+Lock ordering (canonical, Micro-Closure corrected):
+  Acquire lock identities in one deterministic order:
+    1. Sales-owned business / capacity anchor (preferred)
+       (sales_order_items.id / sales_delivery_items.id /
+        delivery_notice_lines.id / return_order_items.id /
+        sales_order_replacement_lines.id / service_fulfillments.id /
+        consignment_commercial_lines.id / sales_quotation_lines.id)
+    2. Sales-owned Credit anchors (R-SAL-12 / 24):
+       - credit_profile (effective row) FOR UPDATE
+       - credit_policy_snapshots FOR UPDATE
+       - credit_check_rules (effective) FOR UPDATE
+    3. Sales-owned Prepayment anchor (R-SAL-15):
+       - sales_prepayment_requirements / sales_prepayment_gate_results (snapshot_key)
+    4. Cross-domain read rows that the frozen integration contract requires
+       (acquire only if necessary):
+       - approval_requests (frozen Platform) FOR UPDATE
+       - planning_reservations FOR UPDATE (consume-side, R-SAL-02)
+       - account_receivables / settlement_unapplied_balances via canonical
+         Finance read adapter; NOT a Sales-owned lock; not a FOR UPDATE
+         on Finance rows unless the frozen Finance contract specifies it
+    5. audit_logs (no lock; append-only)
+
+  Do NOT acquire the same lock classes in reverse order in another mutation
+  path.
+
+  Commit / rollback releases transaction locks atomically.
+
+  Cross-domain read rows are NOT locked by default; Sales reads use canonical
+  read adapters; only acquire the cross-domain FOR UPDATE if the frozen
+  contract specifies it (rare).
+
+Lock order rule: never read a row without FOR UPDATE first then update; never
+rely on timeouts/sleeps.
+
+### 29.44 R-SAL-01..24 Lock Matrix
+
+| Race | Op A | Op B | Lock identity | Lock acquisition order | Allowed serialization | Forbidden final state | Required invariants | SQLite | MySQL | Acceptance plan |
+|---|---|---|---|---|---|---|---|---|---|---|
+| R-SAL-01 | SD confirm × 2 vs same SO line | — | sales_delivery_items source line | SD item → SO item | One wins; second re-reads remaining ≥ 0 | over-delivered (SO line remaining) | S05, S06 | source-line identity FOR UPDATE; remaining compute before write | source-line FOR UPDATE | R-SAL-01 test |
+| R-SAL-02 | SD confirm × 2 vs same Planning reservation | — | planning_reservations.id | Planning reservation FIRST, then SD item | One wins; partial consumption serialized through Planning | reservation overstep | S12 | Planning canonical FOR UPDATE on its row; SD reads via assertStrongReservationAvailability | planning + SD FOR UPDATE | R-SAL-02 test |
+| R-SAL-03 | SR confirm × 2 vs same delivery_item | — | return_order_items.delivery_item_id | delivery item → return item → AR adapter | One wins; second sees reduced remaining | over-return (> delivery qty) | S06, S10 | delivery_item FOR UPDATE; remaining compute before write | FOR UPDATE both | R-SAL-03 test |
+| R-SAL-04 | M14 sales discount confirm × 2 vs same source AR | — | M14 sales_discounts.source_receivable_id → AR.id | AR row → discount row | One wins; second sees reduced remaining | over-discount (remaining ≤ 0) | S13 | AR FOR UPDATE then discount insert | FOR UPDATE both | R-SAL-04 test (M14 existing) |
+| R-SAL-05 | SD confirm vs SR confirm (same physical race) | — | Inventory V21 canonical position (position_key) | inventory canonical → SD/SR line | exact-once net effect | net negative inventory | S01, Inventory frozen writer | inventory FOR UPDATE on position_key | FOR UPDATE position | R-SAL-05 test |
+| R-SAL-06 | Quotation convert × 2 vs same Q line | — | sales_quotation_lines.id | quotation line → SO item → conversions insert | combined ≤ line qty | over-conversion | S04, S06 | quotation line FOR UPDATE; remaining compute | FOR UPDATE | R-SAL-06 test |
+| R-SAL-07 | SO approve vs SO change | — | sales_order_changes.id AND sales_orders.id (effective_version lock) | SO header FOR UPDATE → change FOR UPDATE | one wins; effective_version monotonic | silent state rewrite of approved history | S05 | effective_version conditional update | FOR UPDATE both | R-SAL-07 test |
+| R-SAL-08 | SO change vs Delivery create | — | sales_order_changes.id AND sales_delivery_items (line ref) | SO change FOR UPDATE → SD item FOR UPDATE | change applies to remaining only | change ships locked SD items | S05, S06 | conditional checks pending SD constraint | FOR UPDATE both | R-SAL-08 test |
+| R-SAL-09 | Delivery vs Return/Reopen | — | delivery_items → return_items → AR update | both FOR UPDATE | one wins; reopen explicit | silent relive of cleared | S05, S10 | idempotent return + reopen | FOR UPDATE both | R-SAL-09 test |
+| R-SAL-10 | Return vs Replacement fulfillment | — | return_order_items.id (line) + sales_order_replacement_lines.id (line) | return-line FOR UPDATE → replacement-line FOR UPDATE | state machine consistent; combined fulfilled ≤ return_qty | inconsistent state | S10, S61 | replacement fulfillment rejects if remaining < qty; line-level anchor | FOR UPDATE both | R-SAL-10 test |
+| R-SAL-11 | Pricing update vs Order approval | — | sales_order_items.price_snapshot_identity (immutable) | pricing list FOR UPDATE → SO item FOR UPDATE | snapshot immutable | price rewrites approved SO price | S20 | snapshot columns write-once; UPDATE blocked after APPROVED | FOR UPDATE SO item | R-SAL-11 test |
+| R-SAL-12 | Credit Check × 2 vs same credit object (PURE_DERIVED exposure) | — | **credit_lock_anchors.id** (REFINED A-62; anchor_type='CREDIT_OBJECT'; UNIQUE on anchor_key) | 1) POLICY_SCOPE anchor FOR SHARE; 2) CREDIT_OBJECT anchor FOR UPDATE; 3) credit_profile effective row FOR UPDATE; 4) credit_policy_snapshots create-or-select FOR UPDATE; 5) credit_check_rules effective rows FOR UPDATE | one wins; the loser re-reads and re-evaluates against updated state; multiple concurrent Credit Checks may share the same policy read (FOR SHARE) but serialize per credit object; combined committing commitments ≤ available credit | combined committing commitments > available credit; or check reads from stale eligible balance while concurrent Finance mutation has already consumed/refunded it | S14, S15 | PRIMARY long-lived lock identity = CREDIT_OBJECT anchor; Prepayment Gate acquires same Finance canonical locks via financeAdapter (see R-SAL-15); risk-releasing Finance events do not need to acquire Sales anchor; visibility lag → conservative temporary BLOCK acceptable, never over-credit approval | FOR UPDATE anchor (CREDIT_OBJECT) → profile → snapshot → rules; FOR SHARE on POLICY_SCOPE | R-SAL-12 test |
+| R-SAL-13 | Credit Special Approval vs Order approval | — | credit_special_approval.source_credit_check_result_id (PK) + credit_policy_snapshots.id + sales_orders.id (effective_version) | approval FOR UPDATE → snapshot FOR UPDATE → SO FOR UPDATE | either special-approve or standard approval wins; never both silently | both silently | S16 | approval + SO tx; check + approval PK link | FOR UPDATE all three | R-SAL-13 test |
+| R-SAL-14 | Credit release vs Collection / Return | — | credit_exposure_view (DERIVED) over Finance canonical AR / settlement_unapplied / financial_credit_adjustments | collection/return FOR UPDATE (Finance-owned rows) | transition rule prevents double-count | double-count | S14 | OCCUPANCY transition rule (per §29.23.2) at write; recognition-mode aware | FOR UPDATE on Finance-side rows | R-SAL-14 test |
+| R-SAL-15 | Prepayment Gate vs Refund / Application | — | **canonical V22 Finance parent balance lock**: `settlement_unapplied_balances.id` (balance_type = 'PREPAYMENT') inside SAME connection/transaction via financeAdapter (lockMode = FOR UPDATE); child facts read beneath the parent lock (balance_applications, financial_refunds, applicable reversal effects); `payment_collections` is source document, NOT primary lock | financeAdapter resolves eligible prepayment and acquires FOR UPDATE on the parent balance rows in deterministic id order; reads child effects beneath; remaining = original_amount - confirmed balance_applications - confirmed financial_refunds - applicable reversal effects (per §29.16.3.2); Sales gate + Finance mutation serialize on SAME parent balance lock | one wins; either Sales gate first then Finance mutation, or Finance mutation first then Sales gate re-reads reduced balance; same economic amount never satisfies gate twice | Sales gate passes from stale eligible balance while concurrent Finance mutation has already consumed/refunded it | S13 | shared contract: financeAdapter.resolveEligiblePrepaymentForSalesGate(..., lockMode = FOR UPDATE) acquires FOR UPDATE on canonical V22 settlement_unapplied_balances rows; inherited caller transaction per §29.16.5; Finance business semantics unchanged; canonical balance unchanged; only the Sales locked-read adapter requires extension; if a V22 mutation path does not yet acquire the parent balance lock, that path also requires extension → BOUNDED INTEGRATION CONTRACT EXTENSION (see §29.16.3.1-7) | FOR UPDATE on `settlement_unapplied_balances.id` (PREPAYMENT) via financeAdapter | R-SAL-15 test |
+| R-SAL-16 | DN create × 2 vs same SO line | — | sales_order_items.id (line) | SO item FOR UPDATE (first) | combined scheduled_qty ≤ SO line qty | over-scheduled | S04, S06 | SO item FOR UPDATE before aggregate | FOR UPDATE SO item | R-SAL-16 test |
+| R-SAL-17 | SD confirm × 2 vs same DN remaining | — | delivery_notice_lines.id (line) | DN line FOR UPDATE (first) | combined delivered_qty ≤ DN remaining | over-delivered | S09, S06 | DN line FOR UPDATE before aggregate; legacy SD allowed (delivery_notice_id IS NULL) with SO line FOR UPDATE | FOR UPDATE DN line | R-SAL-17 test |
+| R-SAL-18 | SO Change vs DN create/confirm | — | sales_order_changes.id + delivery_notice_lines (affected) | SO change FOR UPDATE → DN line FOR UPDATE | change applies to remaining obligation only | change after concurrent DN confirm | S05, S09 | effective_version + DN remaining recompute | FOR UPDATE both | R-SAL-18 test |
+| R-SAL-19 | SO Close/Cancel vs DN/SD confirm | — | sales_orders.id (commercial_close_state) + DN/SD | SO header FOR UPDATE → DN/SD FOR UPDATE | one wins; close does not silently coerce | silent coercion | S05, S09 | close_action + pending-DN check | FOR UPDATE both | R-SAL-19 test |
+| R-SAL-20 | Consignment settlement × 2 vs same unsettled consigned quantity | — | consignment_commercial_lines.id (commercial line; seller ownership at Layer 2 per §29.19) | commercial line FOR UPDATE | combined settled ≤ consigned (seller ownership, not CUSTOMER-owned) | over-settled (seller ownership preserved until settlement event) | S18, §29.19 ownership correction | commercial line FOR UPDATE before aggregate; Inventory V21 position remains ENTERPRISE-owned during consignment | FOR UPDATE commercial line | R-SAL-20 test |
+| R-SAL-21 | Consignment settlement vs consignment return | — | consignment_commercial_lines.id | commercial line FOR UPDATE | settlement or return commits; combined ≤ consigned; seller ownership preserved until settlement event | over-settled + returned; silent CUSTOMER-owner redefinition | S18, §29.19 | settlement + return serialized on same line; Layer 2 owner remains ENTERPRISE until settlement | FOR UPDATE commercial line | R-SAL-21 test |
+| R-SAL-22 | Service fulfillment × 2 vs same Service order remaining | — | sales_order_items.id (service line) | SO service line FOR UPDATE (first) | combined confirmation_qty ≤ service line qty | over-confirmed | S08 | no inventory OUT path; service-only; service_classification = TRUE precondition | FOR UPDATE SO line + service_fulfillments | R-SAL-22 test |
+| R-SAL-23 | Credit Recalculation vs new credit-consuming SO tx (CONDITIONAL — materializes only if §29.24 deviates from PURE_DERIVED) | — | N/A under PURE_DERIVED choice (§29.24) | N/A | N/A (rebuild is non-mutating) | stale rebuild overwrite of newer state | S14, S17, SC100 | under PURE_DERIVED: R-SAL-23 = structurally non-materialized | FOR UPDATE under materialized mode | none needed today; documented for future |
+| R-SAL-24 | Credit Policy / Profile Mutation vs Credit Check | — | **credit_lock_anchors.id** (REFINED A-62); two anchor types distinguished: POLICY_SCOPE (for policy/rule mutation + shared read) and CREDIT_OBJECT (for profile mutation + shared read); secondary: credit_policy_snapshots.id (decision evidence identity; append-only by fingerprint) | Credit Check: 1) POLICY_SCOPE FOR SHARE; 2) CREDIT_OBJECT FOR UPDATE; 3) effective policy / profile / limit / overdue / rating read; 4) snapshot create-or-select FOR UPDATE; 5) evaluate. Policy/Rule Mutation: 1) POLICY_SCOPE FOR UPDATE; 2) apply new effective version; 3) commit (snapshot fingerprint may change on next read). Profile/Limit/Rating Mutation: 1) CREDIT_OBJECT FOR UPDATE; 2) apply new effective version; 3) commit. Combined Policy+Profile Mutation: 1) POLICY_SCOPE FOR UPDATE; 2) CREDIT_OBJECT FOR UPDATE; never reverse order. | one wins; check uses complete OLD or complete NEW snapshot; mutation appends new snapshot (immutable); if check was in-flight, it blocks on anchor until mutation completes, then re-reads | mixed OLD/NEW values inside one check evaluation | R-SAL-24 invariant (one credit decision = one coherent effective policy version) | both paths acquire the appropriate anchor (CREDIT_OBJECT and/or POLICY_SCOPE) FOR UPDATE first; snapshot is decision evidence, NOT the lock; if V22 changes effective rows, new credit_policy_snapshots row inserted as append-only; stable non-null canonical anchor_key is the lock identity (Final Closure decision) | FOR UPDATE / FOR SHARE on appropriate anchor; snapshot create-or-select FOR UPDATE | R-SAL-24 test |
+
+### 29.45 Idempotency Design
+
+```text
+Command idempotency required for (at minimum):
+
+- POST /api/sales-quotations/:id/convert-to-so
+- POST /api/sales-orders/:id/submit
+- POST /api/sales-orders/:id/approve
+- POST /api/sales-orders/:id/reject
+- POST /api/sales-orders/:id/close
+- POST /api/sales-orders/:id/cancel
+- POST /api/sales-order-changes/:id/approve
+- POST /api/delivery-notices/:id/confirm
+- POST /api/sales-deliveries/:id/confirm
+- POST /api/sales-returns/:id/confirm
+- POST /api/sales-order-replacements/:id/fulfill
+- POST /api/service-fulfillments/:id/confirm
+- POST /api/consignment-commercial-documents/:id/settle
+- POST /api/consignment-commercial-documents/:id/return
+- POST /api/credit-check/evaluate
+- POST /api/credit-special-approval/:id/decide
+- POST /api/credit-evaluation/scoring-sheets/:id/finalize
+- POST /api/credit-evaluation/scoring-sheets/:id/apply-to-profile
+```
+
+Idempotency key: client-provided `Idempotency-Key` HTTP header OR deterministic body key.
+
+```text
+same key + same payload  → replay (return existing result)
+same key + diff payload  → 409 Conflict (per existing M14 / V22 pattern)
+no key                   → 400 Bad Request (require key on these)
+```
+
+Persisted via `idempotency_records` (existing).
+
+### 29.46 Implementation Waves
+
+```text
+Wave A  Foundation / Commercial Extensions / Pricing / Quotation
+  - M3R-style foundation: customer_commercial_extensions,
+    customer_material_xref, salesperson/sales_group
+  - Pricing engine + price list + override authority
+  - Quotation document lifecycle + conversion
+
+Wave B  Sales Order Enrichment / Change / Lifecycle
+  - SO commercial parties, tax-basis snapshot, prepayment requirement,
+    reservation intent field, gift line flag, fulfillment projection
+  - SO Change document
+
+Wave C  Delivery Notice / Return / Replacement
+  - Delivery Notice doc + capacity invariants
+  - Sales Return 3-mode (DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE)
+  - Replacement obligation + state machine
+  - Sales Delivery convergence (DN ref + delivery_notice_id column)
+
+Wave D  Prepayment / Reservation Intent / Service Item Sales / Consignment
+  - Prepayment Gate evaluator
+  - Reservation intent writer + Planning integration
+  - Service Item classification + confirmation
+  - Consignment commercial document (3-layer)
+
+Wave E  Credit Foundation / Exposure / Check / Approval / Evaluation
+  - credit_parameters + credit_check_rules (effective-dated)
+  - credit_profile + credit_profile_ratings + credit_evaluation*
+  - credit_check_result + credit_special_approval
+  - credit_recalculation_history (CHECK-only)
+  - credit_query / exception DERIVED surfaces
+
+Wave F  Mobile IA / Reporting / Compatibility Convergence
+  - new routes (quotations, delivery-notices, sales-order-changes,
+    replacements, service-fulfillments, consignment-commercial, credit)
+  - launcher converge (≤ 6 primary entries)
+  - extended decision-reports (sales-quotation-summary, sales-delivery-notice-
+    execution, sales-replacement-execution, sales-ranking, credit-exceptions)
+  - legacy compatibility behavior
+
+Wave G  Concurrency / MySQL Hardening / Final Acceptance
+  - R-SAL-01..24 evidence
+  - 36 / 36 audit + 24 / 24 race + 44 / 44 UAT evidence
+  - real MySQL functional + concurrency + performance gates
+  - build, git diff --check, gates
+```
+
+### 29.47 SC Design Traceability
+
+```text
+SC01..SC114 expected = 114
+SC01..SC114 designed  = 114
+missing              = 0
+```
+
+Per-SC trace table is finalized in `document.md §34.13` (Manual → Audit CAP → Coverage → Gap → RC → SC family). This §29 Design contributes the per-SC physical mapping as below.
+
+Per-SC trace conventions:
+
+| Field | Source |
+|---|---|
+| SC ID | §34.3 |
+| Requirement family | §34.3 (SC name) + §34.2 (scope status) |
+| Physical model | this §29.2 + §29.4-29.27 |
+| Service/owner | this §29.3 |
+| API | this §29.31 |
+| Permission | this §29.33 |
+| Transaction | this §29.43 |
+| Audit | this §29.35 |
+| UAT refs | this §29.39 |
+| Race refs | this §29.44 |
+| Implementation wave | this §29.46 |
+
+(No orphan SC; capability 1=physical 1-or-more rows is NOT required; classification per §29.2.1.)
+
+### 29.48 Invariant Traceability
+
+```text
+S01..S20 expected = 20
+S01..S20 designed = 20
+missing          = 0
+```
+
+Per-invariant mechanism map:
+
+| ID | Invariant | Design mechanism | Physical constraint | Transaction check |
+|---|---|---|---|---|
+| S01 | Sales commercial ≠ Inventory physical truth | 商业 fields never write to inventory_* | inventory_* columns immutable to Sales | never OUT_OF_SCOPE code path writes inventory directly |
+| S02 | Sales commercial ≠ Finance open-item truth | AR / advance written only via Finance adapter | n/a (Sales has no AR table write) | Finance adapter enforces |
+| S03 | Sales commercial ≠ GL truth | voucher engine is Accounting & Analytics | n/a | n/a |
+| S04 | Quotation conversion preserves source trace | sales_quotation_conversions table | PK on (quotation_id, sales_order_line_id) | verified in convert-to-so |
+| S05 | Approved history cannot be silently rewritten | SO Change document + effective_version + READ-ONLY past snapshot | sales_order_items snapshot immutable past SUBMIT | FOR UPDATE + state machine |
+| S06 | Source-line capacity cannot be over-executed | sales_delivery_items / return_order_items / delivery_notice_lines capacity checks | FK + capacity check | FOR UPDATE on line + capacity compute |
+| S07 | Gift revenue 0 ≠ inventory/cost 0 | is_gift_line + commercial amount 0; COGS continues | flag column | confirmed at confirm path |
+| S08 | Service fulfillment ≠ inventory movement | service_fulfillments + products.is_service_classification gate | service lines block SD confirm | pre-check at SD confirm |
+| S09 | Delivery Notice ≠ Sales Delivery ≠ Inventory Movement | three distinct tables; not collapsed | PK + FK on their own paths | separate FOR UPDATE |
+| S10 | Return ≠ Delete; Replacement ≠ Return; NO_SOURCE ≠ fake sale | explicit commercial_source_marker; replacement FK to return | CHECK constraint | FOR UPDATE on mode-specific source |
+| S11 | No-Source Return must visibly remain NO_SOURCE | commercial_source_marker = 'NO_SOURCE' | check constraint | explicit marker on every read |
+| S12 | Reservation intent ≠ canonical reservation truth | sales_reservation_intent + planning_reservations | n/a (Sales has no canonical reserved qty) | intent does not write reserved qty |
+| S13 | Prepayment Gate ≠ Advance-Receipt truth | Sales owns gate decision; Finance owns money truth | n/a (Finance balance canonical) | gate reads only, writes only result |
+| S14 | Credit exposure must not double-count stages | bucket transition model §29.23 | n/a (DERIVED) | transition rule at every credit-touching write |
+| S15 | Credit Check mandatory BLOCK must fail closed | evaluateCredit MUST return BLOCK on over-limit; backend enforces | n/a | fail-closed enforced in backend authorization |
+| S16 | Credit exception is bounded | credit_special_approval ceiling/expiry/scope | scope + ceiling columns | FOR UPDATE on approval PK |
+| S17 | Credit Recalculation must not rewrite historical truth | credit_recalculation_history records but never mutates canonical | n/a | CHECK-only / cache-optional |
+| S18 | Consignment location ≠ ownership ≠ settlement | three-layer separation; Sales reads Inventory CUSTOMER-owned position | n/a (Sales has no own physical ledger) | settlement serialized on commercial line |
+| S19 | Business dates are authoritative | ISO YYYY-MM-DD business_date columns throughout | date columns | validated at API entry |
+| S20 | Same base currency baseline; multi-currency OUT_OF_SCOPE | currency_code column is single base; multi-currency out-of-scope per §34.10 | n/a (single currency enforced) | API rejects non-base |
+
+### 29.49 Acceptance Architecture
+
+Design target gates:
+
+```text
+focused unit/integration      : per SC capability (Wave A..F)
+Functional Sales UAT         : 44 scenarios (§34.5; UAT-S-01..44)
+Responsive browser matrix    : 320 / 390 / 430 / 680 (Wave F)
+FAST                         : pnpm test:fast
+FULL                         : pnpm test (canonical FULL regression)
+HEAVY                        : pnpm test:heavy
+build                        : pnpm build
+git diff --check             : clean (no semantic / whitespace error)
+SQLite compatibility          : node --test with both engines (per §29.42)
+real MySQL functional        : pnpm test:mysql
+generic MySQL concurrency    : pnpm test:mysql:concurrency
+Sales MySQL concurrency      : R-SAL-01..24 evidence plan (§29.44)
+MySQL performance (if applies): pnpm test:mysql:performance (only if scale requires)
+```
+
+These gates must pass before Implementation is frozen.
+
+### 29.50 Final Design State
+
+```text
+Sales & Customer Domain Design contains:
+  - 1 architectural scope statement (§29.1)
+  - 1 physical-model inventory (§29.2; 5 sub-categories A..E)
+  - 1 canonical-writer inventory (§29.3)
+  - 1 commercial foundation design (§29.4)
+  - 11 capability-family designs (§29.5-29.16 / 29.17-29.18 / 29.19 / 29.20-29.29)
+  - 1 source-capacity edge table (§29.30; 15 edges)
+  - 1 API inventory (§29.31)
+  - 1 lifecycle inventory (§29.32)
+  - 1 RBAC/SOD design (§29.33)
+  - 1 approval boundary (§29.34)
+  - 1 audit design (§29.35)
+  - 1 Mobile IA design (§29.36)
+  - 1 route design (§29.37)
+  - 1 responsive design (§29.38)
+  - 1 reporting design (§29.39)
+  - 1 historical compatibility matrix (§29.40; legacy-bypass-default-NO)
+  - 1 schema constraints table (§29.41)
+  - 1 SQLite/MySQL parity checklist (§29.42)
+  - 1 transaction model (§29.43; canonical lock order)
+  - 1 R-SAL-01..24 lock matrix (§29.44; with corrected lockable anchors)
+  - 1 idempotency design (§29.45)
+  - 1 implementation waves (§29.46)
+  - 1 SC design traceability commitment (§29.47)
+  - 1 invariant traceability (§29.48)
+  - 1 acceptance architecture (§29.49)
+
+Physical model counts (post-Micro-Closure rebuild):
+  A tables total                  = 62
+    EXISTING_CONVERGE              = 24
+    NEW                            = 38   (added A-62 credit_control_anchor)
+    DEPRECATED_NO_NEW_WRITES (tbl) =  0
+  B existing-table extensions      =  5 (with 22 new logical fields)
+  C derived views / projections   =  5 (4 pure-no + 1 controlled-hybrid; C-06 removed)
+  D compatibility behaviors        =  6 (legacy read=YES; new write through bypass=NO)
+  E deprecated-no-new-write fields =  1 (products.price_cents; single classification)
+
+Sum check:
+  A tables: 24 + 38 + 0 = 62 ✓
+  Sub-categories are disjoint (every table belongs to exactly one of A classifications)
+  Columns are NEVER counted as tables (see B for column extensions)
+
+Sum checks (Design trace closed):
+  114 SC  : 114 designed 0 orphan
+   20 S##  : 20 designed 0 missing
+   44 UAT  : 44 designed 0 missing
+   24 RACE : 24 designed 0 missing 0 TBD
+   36 CAP  : Requirement frozen
+   15 Cross-Domain Boundary families  : 1:1 with §34.8
+
+Frozen Dependency Discipline:
+  - Customer identity  → Master & Engineering
+  - Material identity  → Master & Engineering
+  - Physical inventory → Inventory & Warehouse (V21 §32)
+  - Reservation        → Planning (V19 §30)
+  - OQC                → Manufacturing & Quality (V18 §29)
+  - AR / Advance / Refund / Write-off / Invoice / Treasury → Finance Operations (V22 §33)
+  - Voucher / GL       → Accounting & Analytics
+  - RBAC / Workflow / Audit notification / Numbering → Platform
+
+Sales never writes second ledger:
+  - no Sales-side inventory table write
+  - no Sales-side AR write
+  - no Sales-side reservation qty write
+  - no Sales-side voucher write
+  - no Sales-side credit exposure mutable ledger
+  - credit exposure = DERIVED (§29.24 default)
+
+#### 29.50.1 Frozen-domain boundary matrix (task §21)
+
+| Frozen Domain | Canonical truth consumed by Sales | Sales write allowed? | Adapter / contract | Design change required to frozen domain? |
+|---|---|---|---|---|
+| Master & Engineering (V17) | customer identity; product identity; warehouse identity; UoM foundation; service classification (via own table `product_commercial_classification`, NOT by adding column to products) | NO (NO CHANGE) | Customer/Product/Warehouse UoM as FK target; Service classification via Sales-owned extension | NO CHANGE — Sales does not add column to products |
+| Planning (V19) | reservation canonical quantity (read-only) | NO (NO CHANGE) | `assertStrongReservationAvailability` reader | NO CHANGE |
+| Manufacturing & Quality (V18) | OQC outcome | NO (NO CHANGE) | `assertQualityGate('OQC', deliveryId)` reader | NO CHANGE |
+| Inventory & Warehouse (V21) | physical inventory truth; on-hand; locks; owner_type; consignment-position (ENTERPRISE-owned during consignment, see §29.19) | NO direct write (NO CHANGE) | `applyInventoryMutation`, `postTrackedMovement` adapters | **NO CHANGE** — V21 canonical position supports `owner_type = ENTERPRISE` at any position; consignment_commodity_location is modeled as a warehouse_id; consignment uses existing ENTERPRISE owner marker; no schema change required (see §29.19.4); do NOT silently redefine CUSTOMER-owned |
+| Finance Operations (V22) | AR open amount; advance / unapplied / refund / write-off; collection; invoice; treasury; provisional / financial recognition; eligible prepayment (per §29.16); `settlement_unapplied_balances` (PREPAYMENT parent balance row) | NO (NO CHANGE) | `recognizeFinanceExposure` / `applyCreditAdjustment` / `generateVoucher` / `createSystemVoucher`; `financeAdapter.resolveCreditExposureComponents`, `financeAdapter.resolveARForCustomerSalesContext`; **`financeAdapter.resolveEligiblePrepaymentForSalesGate(..., lockMode = FOR_UPDATE)`** for R-SAL-15; **Finance mutations `applyUnappliedBalance` / `createRefund` / `reverseSettlementDocument` (PREPAYMENT/UNAPPLIED reduction)** must acquire `settlement_unapplied_balances.id FOR UPDATE` | **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** (Repository-Evidence Final Closure; no conditional wording) for the canonical `lockMode = FOR_UPDATE` parent-balance row contract; see §29.16.3.8; other reads are NO CHANGE — Sales reads via adapter only; never reconstructs AR truth |
+| Accounting & Analytics | voucher / GL | NO (NO CHANGE) | n/a | NO CHANGE |
+| Platform | RBAC; workflow mechanics; audit notification; numbering; generic parameter & rule infrastructure; document relation-conversion; **shared canonical idempotency_records (A-21)** | limited writes (ApprovalRequests for SALES_ORDER family) | generic Platform services; Sales uses A-21 for Sales command identities (Sales owns the namespace meaning, not the storage infrastructure) | **NO CHANGE** — Platform owns mechanics; Sales owns semantics |
+
+Required Sales Design change to a frozen domain = **NO CHANGE for most frozen domains** EXCEPT:
+
+- **Inventory & Warehouse (V21) / Consignment**: **NO CHANGE** (V21 canonical position supports `owner_type = ENTERPRISE` at any position; consignment_commodity_location is modeled as a warehouse_id; no schema change required; see §29.19.4).
+- **Finance Operations (V22) / Prepayment Gate (R-SAL-15)**: **BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED** (Repository-Evidence Final Closure decision; no conditional wording).
+  Sales requires `financeAdapter.resolveEligiblePrepaymentForSalesGate(..., lockMode = FOR_UPDATE)` to acquire canonical Finance `settlement_unapplied_balances.id` (PREPAYMENT) FOR UPDATE in the same transaction.
+  Current V22 does NOT yet provide the required MySQL parent-balance row lock on all R-SAL-15 balance-reducing paths; therefore the bounded extension covers:
+    - Sales transactional locked-read adapter
+    - Finance `applyUnappliedBalance` (acquire parent balance FOR UPDATE before re-read/validation)
+    - Finance `createRefund` (acquire parent balance FOR UPDATE before capacity decision)
+    - Finance `reverseSettlementDocument` for PREPAYMENT / UNAPPLIED reduction (acquire parent balance FOR UPDATE before remaining / validation / `settlement_reversal_items` mutation)
+  Business semantics: UNCHANGED; canonical balance: `settlement_unapplied_balances` (NO CHANGE); duplicate truth: NONE.
+  See §29.16.3.
+- **Platform / shared / Idempotency (A-21 idempotency_records)**: **NO CHANGE**. A-21 is shared Platform infrastructure. Sales uses it for Sales command identities (semantic namespaces: quotation conversion, DN confirm, service fulfillment confirm, etc.). Sales owns the namespace meaning, not the storage infrastructure. See §29.16.2 / §29.45.
+
+The 18 sales credits / 9 credit capability business semantics remain entirely within Sales-owned tables (sales_credit_parameters, sales_credit_check_rules, sales_credit_policy_snapshots, sales_credit_profile, sales_credit_check_result, sales_credit_special_approval, sales_credit_evaluation_*, sales_credit_recalculation_history) and consume Finance + Planning + Inventory canonical facts via existing adapters.
+
+If Implementation evidence shows any of these require a frozen-domain schema change, then file:
+
+  FROZEN_DOMAIN_INTEGRATION_DEFECT  (not a silent change)
+
+or:
+
+  BOUNDED INTEGRATION CONTRACT EXTENSION  (documented, scoped, auditable)
+
+and revise this §29.50.1 before Implementation. Do NOT silently alter a frozen Domain schema.
+
+Out of Design scope (per §34.10; not in this Domain closure):
+  - multi-currency
+  - external credit bureau / AI / ML / complex corporate-risk analytics
+  - CRM extension
+  - Generic Workflow engine
+  - mobile IA wider than launcher ≤ 6 primary entries
+  - schema migration code (Implementation)
+
+External Review Required:
+  - per §34.13 36/36 CAP trace
+  - per §34.13.1 114/114 SC acceptance coverage
+  - per §34.5 44 UAT-IDs
+  - per §34.6 24 race IDs (no TBD)
+  - per §34.4 20 invariants
+
+Design does NOT yet pass / freeze.
+External review freezes.
+```
+
+---
+
+### 29.51 Cross-References (§29 only)
+
+| Topic | Section |
+|---|---|
+| Architecture / Ownership | §29.1 |
+| Physical Model Inventory | §29.2 |
+| Canonical Writer Inventory | §29.3 |
+| Sales Commercial Foundation | §29.4 |
+| Quotation Design | §29.5 |
+| Sales Pricing Design | §29.6 |
+| Order-Time Discount Design | §29.7 |
+| Sales Order Canonical Model | §29.8 |
+| Sales Order Change Design | §29.9 |
+| Sales Order Fulfillment / Close Lifecycle | §29.10 |
+| Delivery Notice Design | §29.11 |
+| Sales Delivery Convergence | §29.12 |
+| Sales Return Design | §29.13 |
+| Replacement / Replenishment Design | §29.14 |
+| Gift Line Design | §29.15 |
+| Prepayment Gate Design | §29.16 |
+| Reservation Intent Design | §29.17 |
+| Service Item Sales Design | §29.18 |
+| Consignment Three-Truth Design | §29.19 |
+| Credit Architecture Overview | §29.20 |
+| Credit Policy / Version / Effective Snapshot | §29.21 |
+| Credit Profile | §29.22 |
+| Credit Occupancy / Exposure Model | §29.23 |
+| Credit Projection / Cache Decision | §29.24 |
+| Credit Check Design | §29.25 |
+| Credit Special Approval Design | §29.26 |
+| Credit Evaluation | §29.27 |
+| Credit Recalculation | §29.28 |
+| Credit Query / Exception History | §29.29 |
+| Source / Capacity Model | §29.30 |
+| API Inventory | §29.31 |
+| Lifecycle Inventory | §29.32 |
+| RBAC / SOD Design | §29.33 |
+| Approval / Workflow Boundary | §29.34 |
+| Audit Design | §29.35 |
+| Mobile IA Design | §29.36 |
+| Route Design | §29.37 |
+| Responsive Design | §29.38 |
+| Reporting Design | §29.39 |
+| Historical Compatibility | §29.40 |
+| Schema Constraints | §29.41 |
+| SQLite / MySQL Parity | §29.42 |
+| Transaction Model | §29.43 |
+| R-SAL-01..24 Lock Matrix | §29.44 |
+| Idempotency Design | §29.45 |
+| Implementation Waves | §29.46 |
+| SC Design Traceability | §29.47 |
+| Invariant Traceability | §29.48 |
+| Acceptance Architecture | §29.49 |
+| Final Design State | §29.50 |
+| Cross-References | §29.51 |
