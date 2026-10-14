@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
+import { MySqlSyncAdapter } from '../../server/database/mysql-adapter.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -88,7 +88,16 @@ function resetMySql() {
   console.error(`  database=${resetConfig.database}`);
   console.error(`  user=${resetConfig.user}`);
 
-  const db = createDatabase(resetConfig);
+  // Use the raw adapter for cleanup so an interrupted bootstrap that left a
+  // deliberately rejected partial schema can still be recovered safely.
+  const db = new MySqlSyncAdapter({
+    host: resetConfig.host,
+    port: resetConfig.port,
+    database: resetConfig.database,
+    user: resetConfig.user,
+    password: resetConfig.password,
+    ssl: resetConfig.ssl,
+  });
   try {
     const actualDb = db.dialect === 'mysql'
       ? db.prepare('SELECT DATABASE() AS db').get().db

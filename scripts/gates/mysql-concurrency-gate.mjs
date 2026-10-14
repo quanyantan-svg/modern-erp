@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
+import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -109,6 +110,23 @@ function tee(stream, target, capture) {
   });
 }
 
+// Parse Node's built-in TAP summary trailer and the strict fail-closed
+// assertion are imported from ./tap-summary.js. The parser is
+// exercised independently by scripts/gate-tap-parser.test.js so the
+// regex / numeric semantics stay correct without running the gate.
+//
+// Both functions are imported; both are used by runSuite below.
+// Node's --test emits the trailer on stderr when the TTY reporter is
+// the default spec reporter; we read both streams in `tee` so the
+// regex works against either one. Every required field MUST be
+// present in the captured output; missing fields fail closed. The
+// gate never hard-codes a PASS string — it derives every reported
+// number from the TAP trailer of the spawned child.
+//
+// duration_ms may be emitted as either an integer or a decimal. We
+// parse it as a finite non-negative number rather than a safe integer.
+// All other counters MUST be non-negative safe integers.
+
 async function runSuite(label, file) {
   resetMySql(label);
   const capture = { value: '' };
@@ -135,6 +153,9 @@ async function runSuite(label, file) {
     console.error(`=== END MYSQL CONCURRENCY FAILURE DIAGNOSTIC (${label}) ===`);
     process.exit(code || 1);
   }
+  const summary = parseTapSummary(capture.value);
+  assertTapSummaryStrict(label, summary);
+  return { code, summary };
 }
 
 (async () => {
@@ -143,11 +164,24 @@ async function runSuite(label, file) {
   // second reset, the procurement-outsourcing suite's bootstrap would
   // fail closed with "Refusing partial MySQL schema without
   // mysql_backend_metadata completion marker".
-  await runSuite('generic-phase7b', 'server/mysql-phase7b-concurrency.integration.js');
-  await runSuite('procurement-outsourcing', 'server/mysql-procurement-outsourcing-concurrency.integration.js');
-  await runSuite('inventory-warehouse', 'server/mysql-inventory-domain-concurrency.integration.js');
+  const suites = [
+    { label: 'generic-phase7b', file: 'server/mysql-phase7b-concurrency.integration.js' },
+    { label: 'procurement-outsourcing', file: 'server/mysql-procurement-outsourcing-concurrency.integration.js' },
+    { label: 'inventory-warehouse', file: 'server/mysql-inventory-domain-concurrency.integration.js' },
+    { label: 'sales-customer-wave1', file: 'server/mysql-sales-customer-wave1-concurrency.integration.js' },
+    { label: 'sales-customer-wave1-upgrade', file: 'server/mysql-sales-customer-wave1-upgrade.integration.js' },
+  ];
+  const results = [];
+  for (const suite of suites) {
+    const { summary } = await runSuite(suite.label, suite.file);
+    results.push({ ...suite, summary });
+  }
   console.log('MYSQL CONCURRENCY TESTS = PASS');
-  console.log('  Generic Phase 7B: 13 / 13 PASS');
-  console.log('  Procurement/Outsourcing: 11 / 11 races PASS');
-  console.log('  Inventory/Warehouse: 14 / 14 races PASS (dialect=mysql)');
+  for (const result of results) {
+    const { summary } = result;
+    const durationStr = Number.isFinite(summary.durationMs)
+      ? `${(summary.durationMs / 1000).toFixed(2)}s`
+      : 'unknown';
+    console.log(`  ${result.label}: ${summary.pass} / ${summary.tests} PASS (skipped ${summary.skipped ?? 0}, cancelled ${summary.cancelled ?? 0}, todo ${summary.todo ?? 0}, duration_ms ${summary.durationMs ?? '?'} = ${durationStr})`);
+  }
 })();

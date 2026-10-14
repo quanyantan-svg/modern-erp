@@ -1,8 +1,7 @@
 // Sales & Customer domain migration registry.
 //
-// Wave 0 establishes the canonical cross-dialect entrypoint only. The
-// production registry intentionally contains zero business migration steps:
-// Waves 1..12 own the additive Sales schema described by solution.md §29/§30.
+// Wave 0 established the canonical cross-dialect entrypoint. Wave 1 registers
+// the bounded eight-table Commercial Foundation migration.
 //
 // Every future step must be idempotent. A fresh MySQL database is built from
 // an already-migrated SQLite snapshot and then replays this same registry on
@@ -10,7 +9,15 @@
 // its additive upgrade path. Known idempotent conditions belong inside the
 // individual step. Unexpected errors propagate and fail database startup.
 
-export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([]);
+import { migrateSalesCustomerWave1Foundation } from './sales-customer-wave1-foundation.js';
+
+export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
+  Object.freeze({
+    id: 'wave-1-commercial-foundation',
+    wave: 1,
+    migrate: migrateSalesCustomerWave1Foundation,
+  }),
+]);
 
 function compareSteps(left, right) {
   if (left.wave !== right.wave) return left.wave - right.wave;

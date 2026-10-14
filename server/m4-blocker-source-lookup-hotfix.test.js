@@ -451,7 +451,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
   describe('F. SECURITY — registry + role permission stability', () => {
     test('26. PERMISSIONS registry size after M14 + Core Scope Cleanup', () => {
-      assert.equal(PERMISSIONS.length, 204, 'PERMISSIONS count includes the approved Finance Operations permission family');
+      assert.equal(PERMISSIONS.length, 208, 'PERMISSIONS count includes the approved Sales Wave 1 and Finance Operations permission families');
     });
 
     test('27. role-warehouse permission set unchanged from M5 baseline', () => {

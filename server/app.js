@@ -197,6 +197,16 @@ import {
   listCustomers,
   updateCustomer,
 } from './modules/customers.js';
+import { listSalesParameters, upsertSalesParameters } from './modules/sales-parameters.js';
+import {
+  listSalesGroups, listSalespersonMemberships, listSalespersons,
+  saveSalesGroup, saveSalesperson, saveSalespersonMembership,
+} from './modules/sales-foundation.js';
+import {
+  createCustomerCommercialExtension, listCustomerCommercialExtensions, updateCustomerCommercialExtension,
+  listCustomerMaterialXref, listProductCommercialClassifications, listSellableScopeRules,
+  saveCustomerMaterialXref, saveProductCommercialClassification, saveSellableScopeRule,
+} from './modules/sales-commercial-foundation.js';
 import {
   createSupplier,
   deleteSupplier,
@@ -504,6 +514,36 @@ ownedRouteTable.register({
   handler: ({ db, res, actor, url }) => listCustomers(db, res, actor, url),
   owner: 'server/modules/customers.js',
 });
+ownedRouteTable.register({
+  method: 'GET', path: '/api/sales/parameters',
+  handler: ({ db, res, actor }) => listSalesParameters(db, res, actor),
+  owner: 'server/modules/sales-parameters.js',
+});
+ownedRouteTable.register({
+  method: 'PUT', path: '/api/sales/parameters',
+  handler: ({ db, req, res, actor }) => upsertSalesParameters(db, req, res, actor),
+  owner: 'server/modules/sales-parameters.js',
+});
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/groups', handler: ({ db, res, actor }) => listSalesGroups(db, res, actor), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales/groups', handler: ({ db, req, res, actor }) => saveSalesGroup(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/groups\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesGroup(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/salespersons', handler: ({ db, res, actor }) => listSalespersons(db, res, actor), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales/salespersons', handler: ({ db, req, res, actor }) => saveSalesperson(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/salespersons\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesperson(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/memberships', handler: ({ db, res, actor, url }) => listSalespersonMemberships(db, res, actor, url), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales/memberships', handler: ({ db, req, res, actor }) => saveSalespersonMembership(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/memberships\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalespersonMembership(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/customer-commercial-extensions', handler: ({ db, res, actor, url }) => listCustomerCommercialExtensions(db, res, actor, url), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/customer-commercial-extensions', handler: ({ db, req, res, actor }) => createCustomerCommercialExtension(db, req, res, actor), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/customer-commercial-extensions\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => updateCustomerCommercialExtension(db, req, res, actor, params[0]), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/customer-material-xref', handler: ({ db, res, actor, url }) => listCustomerMaterialXref(db, res, actor, url), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/customer-material-xref', handler: ({ db, req, res, actor }) => saveCustomerMaterialXref(db, req, res, actor), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/customer-material-xref\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveCustomerMaterialXref(db, req, res, actor, params[0]), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/sellable-scope-rules', handler: ({ db, res, actor, url }) => listSellableScopeRules(db, res, actor, url), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales/sellable-scope-rules', handler: ({ db, req, res, actor }) => saveSellableScopeRule(db, req, res, actor), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/sellable-scope-rules\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSellableScopeRule(db, req, res, actor, params[0]), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales/product-classifications', handler: ({ db, res, actor, url }) => listProductCommercialClassifications(db, res, actor, url), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'PUT', path: '/api/sales/product-classifications', handler: ({ db, req, res, actor }) => saveProductCommercialClassification(db, req, res, actor), owner: 'server/modules/sales-commercial-foundation.js' });
 ownedRouteTable.register({
   method: 'POST',
   path: '/api/customers',

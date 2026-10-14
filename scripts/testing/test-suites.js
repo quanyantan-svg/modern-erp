@@ -78,6 +78,7 @@ const FULL = [
   // Canonical zero-step registry, deterministic runner, fail-closed errors,
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
   'server/sales-customer-wave0-migration-runner.test.js',
+  'server/sales-customer-wave1-foundation.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
   'server/procurement-parameters.test.js',
@@ -491,6 +492,18 @@ const FULL = [
   //   as "unclassified".
   'server/test-suite-governance.test.js',
 
+  // Concurrency lock-observer unit tests. Pure-function coverage of the
+  // lock-wait observation contract (idle, Query activity, performance
+  // schema wait rows, partial / full downgrades). Lives in server/ so
+  // the manifest's `server/` discovery picks it up automatically.
+  'server/concurrency-lock-observer.test.js',
+
+  // Gate TAP parser unit tests. Pure-function coverage of the gate's
+  // TAP summary parser and strict fail-closed assertion. Lives in
+  // scripts/ so it is registered explicitly (the suite manifest's
+  // `server/ + src/lib/` discovery does not pick up scripts/).
+  'scripts/gate-tap-parser.test.js',
+
   // ----- V22 — Finance Operations Domain Closure -----
   // Wave A foundation: parameters, recognition policy, payment terms,
   // due schedule, settlement schemes, business-close anchors, open-item
@@ -554,6 +567,13 @@ const FAST = [
   // milliseconds and gives immediate feedback if any future contributor
   // forgets to classify a new *.test.js.
   'server/test-suite-governance.test.js',
+
+  // Gate TAP parser unit tests. Pure-function coverage of the gate's
+  // TAP summary parser and strict fail-closed assertion. Runs in
+  // milliseconds; lives under scripts/ so it is registered explicitly
+  // (the suite manifest's `server/ + src/lib/` discovery does not pick
+  // up scripts/).
+  'scripts/gate-tap-parser.test.js',
 ];
 
 const SUITES = Object.freeze({

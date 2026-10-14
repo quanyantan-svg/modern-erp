@@ -10,9 +10,10 @@ import {
   migrateSalesCustomerDomain,
   runSalesCustomerMigrations,
 } from './migrations/sales-customer-domain.js';
+import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
 import { createTempDir } from './test-utils/temp-db.js';
 
-const FUTURE_SALES_TABLES = [
+const WAVE2_PLUS_SALES_TABLES = [
   'sales_quotations',
   'sales_quotation_lines',
   'sales_quotation_conversions',
@@ -27,8 +28,6 @@ const FUTURE_SALES_TABLES = [
   'delivery_notice_lines',
   'sales_order_replacements',
   'sales_order_replacement_lines',
-  'customer_commercial_extensions',
-  'customer_material_xref',
   'sales_prepayment_requirements',
   'sales_prepayment_gate_results',
   'sales_reservation_intent',
@@ -49,32 +48,36 @@ const FUTURE_SALES_TABLES = [
   'credit_evaluation_scoring_sheet',
   'credit_evaluation_result',
   'credit_recalculation_history',
-  'product_commercial_classification',
   'credit_lock_anchors',
 ];
 
 const FUTURE_SALES_COLUMNS = {
   sales_orders: [
-    'salesperson_code', 'sales_group_code', 'settlement_party_id', 'payer_id',
+    'salesperson_id', 'sales_group_id', 'settlement_party_id', 'payer_id',
     'customer_material_xref_id', 'commercial_tax_code', 'tax_inclusive',
     'required_prepayment_cents', 'reservation_intent_state',
-    'commercial_close_state', 'gift_summary_cents', 'commercial_pricing_uom_code',
+    'commercial_close_state', 'gift_summary_cents', 'commercial_pricing_uom_code', 'effective_version',
   ],
   sales_order_items: [
     'is_gift_line', 'commercial_tax_basis', 'tax_inclusive_assumption',
     'pricing_uom_code_applied', 'qty_break_applied_min', 'qty_break_applied_max',
+    'planned_delivery_date', 'upper_delivery_tolerance_bps', 'lower_delivery_tolerance_bps',
   ],
-  sales_deliveries: ['delivery_notice_id'],
+  sales_deliveries: ['delivery_notice_id', 'source_mode'],
   sales_delivery_items: ['delivery_notice_line_id'],
   return_orders: ['commercial_source_marker'],
+  customer_commercial_extensions: ['default_pricing_list_id', 'default_discount_scheme_id'],
 };
 
-function assertNoFutureSalesSchema(db) {
-  const placeholders = FUTURE_SALES_TABLES.map(() => '?').join(',');
+function assertWave1ProductionSchema(db) {
+  const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
+  const wave1 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave1Placeholders}) ORDER BY name`).all(...SALES_WAVE1_TABLES);
+  assert.deepEqual(wave1.map((row) => row.name), [...SALES_WAVE1_TABLES].sort());
+  const placeholders = WAVE2_PLUS_SALES_TABLES.map(() => '?').join(',');
   const tables = db.prepare(
     `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`,
-  ).all(...FUTURE_SALES_TABLES);
-  assert.deepEqual(tables, [], 'Wave 0 must not create any frozen future Sales table');
+  ).all(...WAVE2_PLUS_SALES_TABLES);
+  assert.deepEqual(tables, [], 'Wave 1 must not create any Wave 2+ Sales table');
 
   for (const [table, forbiddenColumns] of Object.entries(FUTURE_SALES_COLUMNS)) {
     const actual = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -84,14 +87,14 @@ function assertNoFutureSalesSchema(db) {
   }
 }
 
-test('canonical Wave 0 registry is frozen, empty, and succeeds without schema work', () => {
-  assert.equal(FUTURE_SALES_TABLES.length, 38);
-  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 21);
+test('canonical production registry contains only the frozen Wave 1 foundation step', () => {
+  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 28);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 0);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 1);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   const db = new DatabaseSync(':memory:');
   try {
-    assert.deepEqual(migrateSalesCustomerDomain(db), []);
+    assert.deepEqual(runSalesCustomerMigrations(db, []), [], 'explicit empty fixture preserves historical Wave 0 semantics');
     assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all(), []);
   } finally {
     db.close();
@@ -156,13 +159,13 @@ test('migration errors propagate and stop later steps', () => {
   assert.deepEqual(calls, ['before']);
 });
 
-test('fresh SQLite and existing SQLite reopen execute Wave 0 without future Sales schema', () => {
+test('fresh SQLite and existing SQLite reopen execute Wave 1 idempotently without forward schema', () => {
   const dir = createTempDir('sales-wave0');
   const dbPath = join(dir, 'wave0.db');
   try {
     const fresh = createDatabase(dbPath);
     try {
-      assertNoFutureSalesSchema(fresh);
+      assertWave1ProductionSchema(fresh);
       assert.ok(fresh.prepare("SELECT 1 FROM pragma_table_info('sales_deliveries') WHERE name='billing_mode'").get(), 'existing billing_mode remains intact');
     } finally {
       fresh.close();
@@ -170,7 +173,7 @@ test('fresh SQLite and existing SQLite reopen execute Wave 0 without future Sale
 
     const reopened = createDatabase(dbPath);
     try {
-      assertNoFutureSalesSchema(reopened);
+      assertWave1ProductionSchema(reopened);
       assert.equal(reopened.prepare('SELECT 1 value').get().value, 1);
     } finally {
       reopened.close();

@@ -301,7 +301,11 @@ describe('Permissions — canonical registry count', () => {
     // active permission codes (CRM_VIEW, CRM_MANAGE,
     // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
     // remain.
-    assert.equal(perms.length, 204, `PERMISSIONS array must include the approved Finance Operations permission family (got ${perms.length})`);
+    assert.equal(perms.length, 208, `PERMISSIONS array must include the approved Sales Wave 1 and Finance Operations permission families (got ${perms.length})`);
+    assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_VIEW').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'SALES_PARAMETERS_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'SALES_COMMERCIAL_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'INVENTORY_ADJUSTMENT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_MATERIAL_ISSUE_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'PRODUCTION_RECEIPT_MANAGE').length, 1);

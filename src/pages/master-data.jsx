@@ -264,7 +264,7 @@ function SupplierModal({ value, onClose, onSaved, notify }) {
 }
 
 export function Customers({ user, notify }) {
-  const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null);
+  const [items, setItems] = useState([]); const [search, setSearch] = useState(''); const [editing, setEditing] = useState(null); const [commercialCustomer, setCommercialCustomer] = useState(null);
   const load = () => api(`/api/customers?search=${encodeURIComponent(search)}`).then((r) => setItems(r.customers)).catch((e) => notify(e.message, 'error'));
   // Effect 回调只能返回清理函数，不能直接返回 load() 产生的 Promise。
   useEffect(() => { void load(); }, []);
@@ -272,10 +272,103 @@ export function Customers({ user, notify }) {
     <BusinessPageHeader title="客户资料" help={<HelpDisclosure summary="主数据说明"><p>客户编码、结算条款与联系方式供销售及应收业务引用；停用不删除历史引用。</p></HelpDisclosure>}/>
     <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索客户编码、名称或联系人" action={can(user, 'CUSTOMERS_MANAGE') && <button className="primary" onClick={() => setEditing({})}>＋ 新增客户</button>}/>
     <div className="table-wrap"><table><thead><tr><th>客户编码</th><th>客户名称</th><th>联系人</th><th>联系电话</th><th>地址</th><th>账期</th><th>状态</th><th/></tr></thead><tbody>
-      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td>{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
+      {items.map((item) => <tr key={item.id}><td className="mono">{item.code}</td><td><strong>{item.name}</strong></td><td>{item.contact || '—'}</td><td>{item.phone || '—'}</td><td className="dim">{item.address || '—'}</td><td>{item.paymentTermsDays} 天</td><td><Active active={item.active}/></td><td className="actions">{(can(user, 'SALES_FOUNDATION_VIEW') || can(user, 'SALES_FOUNDATION_MANAGE') || can(user, 'SALES_COMMERCIAL_MANAGE')) && <button type="button" className="row-action" onClick={() => setCommercialCustomer(item)}>商业资料</button>}{can(user, 'CUSTOMERS_MANAGE') && <MasterActions item={item} label="客户" endpoint="/api/customers" onEdit={setEditing} onChanged={load} notify={notify}/>}</td></tr>)}
     </tbody></table>{!items.length && <Empty title="还没有客户" text="创建客户后，就可以建立销售订单。"/>}</div>
     {editing && <CustomerModal value={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); notify('客户资料已保存'); }} notify={notify}/>} 
+    {commercialCustomer && <CustomerCommercialPanel customer={commercialCustomer} user={user} onClose={() => setCommercialCustomer(null)} notify={notify}/>}
   </BusinessPageShell>;
+}
+
+function CustomerCommercialPanel({ customer, user, onClose, notify }) {
+  const canManage = can(user, 'SALES_COMMERCIAL_MANAGE');
+  const canView = can(user, 'SALES_FOUNDATION_VIEW') || can(user, 'SALES_FOUNDATION_MANAGE') || can(user, 'SALES_COMMERCIAL_MANAGE') || can(user, 'USERS_MANAGE');
+  const [extensions, setExtensions] = useState(null);
+  const [xrefs, setXrefs] = useState(null);
+  const [accessDenied, setAccessDenied] = useState(!canView);
+  const [lookups, setLookups] = useState({ customers: [], salespersons: [], salesGroups: [], products: [] });
+  const [extensionForm, setExtensionForm] = useState({
+    effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: '', settlementPartyCustomerId: customer.id,
+    payerCustomerId: customer.id, defaultSalespersonId: '', defaultSalesGroupId: '', defaultPaymentTermsDays: customer.paymentTermsDays ?? '',
+    defaultSettlementMethod: '', sellableScopeMode: 'ALL_SALES_ENABLED', supersedeCurrent: true,
+  });
+  const [xrefForm, setXrefForm] = useState({ productId: '', customerMaterialCode: '', customerMaterialName: '', commercialUomCode: '', effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: '' });
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    if (accessDenied) return;
+    try {
+      const [extensionData, xrefData] = await Promise.all([
+        api(`/api/customer-commercial-extensions?customerId=${encodeURIComponent(customer.id)}`),
+        api(`/api/customer-material-xref?customerId=${encodeURIComponent(customer.id)}`),
+      ]);
+      setExtensions(extensionData.extensions || []); setXrefs(xrefData.xrefs || []);
+      if (canManage) {
+        const [customerData, salespersonData, groupData, productData] = await Promise.all([
+          api('/api/customers'), api('/api/sales/salespersons'), api('/api/sales/groups'), api('/api/products'),
+        ]);
+        setLookups({ customers: customerData.customers || [], salespersons: salespersonData.salespersons || [], salesGroups: groupData.salesGroups || [], products: productData.products || [] });
+      }
+    } catch (error) {
+      const status = error && (error.status || (error.code === 'PERMISSION_DENIED' ? 403 : 0));
+      if (status === 403) {
+        setAccessDenied(true); setExtensions([]); setXrefs([]);
+        return;
+      }
+      notify(error.message, 'error'); setExtensions([]); setXrefs([]);
+    }
+  }
+  useEffect(() => { void load(); }, [customer.id]);
+
+  async function saveExtension(event) {
+    event.preventDefault(); setBusy(true);
+    try {
+      await api('/api/customer-commercial-extensions', { method: 'POST', body: { ...extensionForm, customerId: customer.id, defaultPaymentTermsDays: extensionForm.defaultPaymentTermsDays === '' ? null : Number(extensionForm.defaultPaymentTermsDays) } });
+      notify('客户商业扩展已保存'); await load();
+    } catch (error) { notify(error.message, 'error'); } finally { setBusy(false); }
+  }
+
+  async function saveXref(event) {
+    event.preventDefault(); setBusy(true);
+    try {
+      await api('/api/customer-material-xref', { method: 'POST', body: { ...xrefForm, customerId: customer.id } });
+      notify('客户物料对应已保存'); setXrefForm((current) => ({ ...current, productId: '', customerMaterialCode: '', customerMaterialName: '' })); await load();
+    } catch (error) { notify(error.message, 'error'); } finally { setBusy(false); }
+  }
+
+  return <Modal title={`${customer.code} · 商业资料`} onClose={onClose} wide>
+    <div className="customer-commercial-panel">
+      <header className="customer-commercial-panel__summary"><strong>{customer.name}</strong><span>{canManage ? '可维护' : (accessDenied ? '受限' : '只读')}</span></header>
+      {accessDenied ? <Empty title="没有查看商业资料的权限" text="客户级商业资料由销售域 SALES_FOUNDATION_* / SALES_COMMERCIAL_MANAGE 管理，当前角色不在范围内。"/> : extensions === null ? <Loading/> : <section className="customer-commercial-section" aria-labelledby="commercial-extension-heading">
+        <div className="customer-commercial-section__head"><div><h3 id="commercial-extension-heading">商业扩展</h3><p>按业务日期保留结算方、付款方和销售归属版本。</p></div></div>
+        {extensions.length ? <div className="commercial-version-list">{extensions.map((row) => <article key={row.id} className="commercial-version-row"><div><strong>{row.effectiveFrom} — {row.effectiveTo || '长期'}</strong><span>{row.sellableScopeMode === 'RULE_CONTROLLED' ? '规则控制' : '全部已启用产品'}</span></div><dl><div><dt>结算方</dt><dd>{row.settlementPartyName || '未设置'}</dd></div><div><dt>付款方</dt><dd>{row.payerName || '未设置'}</dd></div><div><dt>默认销售员 / 组</dt><dd>{[row.defaultSalespersonName, row.defaultSalesGroupName].filter(Boolean).join(' / ') || '未设置'}</dd></div><div><dt>付款条款</dt><dd>{row.defaultPaymentTermsDays === null ? '未设置' : `${row.defaultPaymentTermsDays} 天`}</dd></div></dl></article>)}</div> : <Empty title="尚无商业扩展" text="历史客户保持只读兼容；新商业写入前需显式建立有效版本。"/>}
+        {canManage && <form className="form-grid customer-commercial-form" onSubmit={saveExtension}>
+          <label>生效日期<input type="date" required value={extensionForm.effectiveFrom} onChange={(e) => setExtensionForm({ ...extensionForm, effectiveFrom: e.target.value })}/></label>
+          <label>结束日期<input type="date" value={extensionForm.effectiveTo} onChange={(e) => setExtensionForm({ ...extensionForm, effectiveTo: e.target.value })}/></label>
+          <label>结算方<select value={extensionForm.settlementPartyCustomerId} onChange={(e) => setExtensionForm({ ...extensionForm, settlementPartyCustomerId: e.target.value })}><option value="">未设置</option>{lookups.customers.map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}</select></label>
+          <label>付款方<select value={extensionForm.payerCustomerId} onChange={(e) => setExtensionForm({ ...extensionForm, payerCustomerId: e.target.value })}><option value="">未设置</option>{lookups.customers.map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}</select></label>
+          <label>默认销售员<select value={extensionForm.defaultSalespersonId} onChange={(e) => setExtensionForm({ ...extensionForm, defaultSalespersonId: e.target.value })}><option value="">未设置</option>{lookups.salespersons.filter((row) => row.active).map((row) => <option key={row.id} value={row.id}>{row.salespersonCode} · {row.name}</option>)}</select></label>
+          <label>默认销售组<select value={extensionForm.defaultSalesGroupId} onChange={(e) => setExtensionForm({ ...extensionForm, defaultSalesGroupId: e.target.value })}><option value="">未设置</option>{lookups.salesGroups.filter((row) => row.active).map((row) => <option key={row.id} value={row.id}>{row.groupCode} · {row.name}</option>)}</select></label>
+          <label>默认付款条款（天）<input type="number" min="0" max="3650" value={extensionForm.defaultPaymentTermsDays} onChange={(e) => setExtensionForm({ ...extensionForm, defaultPaymentTermsDays: e.target.value })}/></label>
+          <label>结算方式<input value={extensionForm.defaultSettlementMethod} onChange={(e) => setExtensionForm({ ...extensionForm, defaultSettlementMethod: e.target.value })} placeholder="可选"/></label>
+          <label className="full">可销范围<select value={extensionForm.sellableScopeMode} onChange={(e) => setExtensionForm({ ...extensionForm, sellableScopeMode: e.target.value })}><option value="ALL_SALES_ENABLED">全部已启用产品</option><option value="RULE_CONTROLLED">按规则控制</option></select></label>
+          <label className="check full"><input type="checkbox" checked={extensionForm.supersedeCurrent} onChange={(e) => setExtensionForm({ ...extensionForm, supersedeCurrent: e.target.checked })}/> 受控关闭当前版本并接替</label>
+          <div className="customer-commercial-actions full"><button className="primary" disabled={busy}>{busy ? '保存中…' : '保存商业扩展'}</button></div>
+        </form>}
+      </section>}
+      {xrefs !== null && <section className="customer-commercial-section" aria-labelledby="xref-heading">
+        <div className="customer-commercial-section__head"><div><h3 id="xref-heading">客户物料对应</h3><p>仅翻译客户料号与内部产品；候选不自动猜测。</p></div></div>
+        {xrefs.length ? <div className="commercial-xref-list">{xrefs.map((row) => <div key={row.id}><strong>{row.customerMaterialCode || row.customerMaterialName}</strong><span>{row.productCode} · {row.productName}</span><small>{row.effectiveFrom} — {row.effectiveTo || '长期'}</small></div>)}</div> : <p className="dim">暂无客户物料对应。</p>}
+        {canManage && <form className="form-grid customer-commercial-form" onSubmit={saveXref}>
+          <label className="full">内部产品<select required value={xrefForm.productId} onChange={(e) => setXrefForm({ ...xrefForm, productId: e.target.value })}><option value="">请选择</option>{lookups.products.filter((row) => row.active).map((row) => <option key={row.id} value={row.id}>{row.code} · {row.name}</option>)}</select></label>
+          <label>客户物料编码<input value={xrefForm.customerMaterialCode} onChange={(e) => setXrefForm({ ...xrefForm, customerMaterialCode: e.target.value })}/></label>
+          <label>客户物料名称<input value={xrefForm.customerMaterialName} onChange={(e) => setXrefForm({ ...xrefForm, customerMaterialName: e.target.value })}/></label>
+          <label>生效日期<input type="date" required value={xrefForm.effectiveFrom} onChange={(e) => setXrefForm({ ...xrefForm, effectiveFrom: e.target.value })}/></label>
+          <label>结束日期<input type="date" value={xrefForm.effectiveTo} onChange={(e) => setXrefForm({ ...xrefForm, effectiveTo: e.target.value })}/></label>
+          <div className="customer-commercial-actions full"><button className="secondary" disabled={busy}>{busy ? '保存中…' : '新增物料对应'}</button></div>
+        </form>}
+      </section>}
+    </div>
+  </Modal>;
 }
 
 function CustomerModal({ value, onClose, onSaved, notify }) {
