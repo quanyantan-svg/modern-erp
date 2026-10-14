@@ -39,6 +39,7 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - 客户、供应商、产品、仓库、BOM、工艺路线、工作中心等主数据；
 - 销售订单、发货、退货、销售发票、AR 与收款/核销；
 - Sales Wave 1 商业基础：销售参数、销售组/销售员/有效期成员关系、客户商业扩展、客户物料对应、产品销售分类与可售范围规则；
+- Sales Wave 2 定价与订单时折扣：base currency 价目表、不可变价格版本、客户/物料/UoM/数量阶梯/日期解析、LINE/HEADER 折扣、手工覆盖权限及纯读证据；SQLite/MySQL 共用五表与客户默认配置；
 - 请购、采购订单、收货、退货、供应商账单、AP 与付款/核销；
 - Forecast、可追溯预测冲销、Planning Scheme、MRP、Demand/Supply、Pegging、Planned Order、Reservation、计划员工作台、生产/采购指令与请购；
 - 生产工单审批/下达、BOM/Routing snapshot、工序计划与正排/倒排、领料/退料/补料、工序报工、生产入库、WIP 与生产成本归集；
@@ -70,7 +71,6 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 ### Sales & Customer
 
 - Quotation
-- Price List / Pricing Engine
 - Sales Order Change
 - Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval
 - 更完整的 replacement / replenishment obligation
@@ -271,6 +271,7 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:mysql:performance` | MySQL 性能测试 |
 | `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
 | `pnpm test:finance:uat` | Finance Operations 58 项能力矩阵 + 32 项最终业务 UAT |
+| `pnpm test:sales:wave2-responsive` | Sales Wave 2 定价/折扣工作面 320/390/430/680 真实浏览器验收 |
 
 Finance Operations 的 FO01–FO58 服务、界面/API、schema、测试与 UAT 追溯见 [能力矩阵](docs/operations/finance-operations-capability-matrix.md)。
 | `pnpm backup-db` | SQLite 备份 |
@@ -328,6 +329,8 @@ log/
 - `server/modules/platform-notifications.js` / `platform-workflows.js`：Platform 通知与工作流 API owner；
 - `server/modules/planning.js` / `planning-domain.js`：MRP 运算与 Planning 方案、预测冲销、计划订单、预留、工作台 canonical owner；
 - `server/modules/sales-parameters.js` / `sales-foundation.js` / `sales-commercial-foundation.js`：Sales Wave 1 参数、组织人员和商业资料 canonical owner；
+- `server/modules/sales-pricing.js`：Sales Wave 2 价目表、价格版本、折扣规则、生命周期及两个纯读 resolver 的 canonical owner；
+- `server/migrations/sales-customer-wave2-pricing.js`：Wave 2 五表、客户商业扩展两个可空 FK、四列业务 UNIQUE 与双数据库身份触发器；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
 - `server/migrations/sales-customer-domain.js`：Sales & Customer 按 Wave/id 确定排序的 canonical migration entrypoint；SQLite 初始化与 MySQL live-upgrade 共用，所有未来步骤必须幂等；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；

@@ -47,7 +47,7 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 61 enabled + 5 disabled = 66 entries', () => {
+test('P8 route inventory: 62 enabled + 5 disabled = 67 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
@@ -55,9 +55,9 @@ test('P8 route inventory: 61 enabled + 5 disabled = 66 entries', () => {
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
   // Finance Operations Domain Closure adds finance-invoices + finance-treasury
   // as dedicated primary routes, raising the count from 59 to 61.
-  assert.equal(ROUTE_PRESENTATIONS.length, 61, 'ROUTE_PRESENTATIONS must hold 61 enabled canonical routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 62, 'ROUTE_PRESENTATIONS must include the Sales Wave 2 contextual route');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 66);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 67);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -180,7 +180,8 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // Finance Operations Domain Closure adds bank-accounts under finance-treasury
   // (sales-invoices + supplier-bills keep their contextual status but now parent
   // under the dedicated finance-invoices route), bringing the count to 12.
-  assert.equal(contextualCount, 12, 'contextual routes with parentRoute must total 12 (historical 9 + planning 2 + bank-accounts under finance-treasury)');
+  // Sales Wave 2 adds sales-pricing as a contextual child of customers.
+  assert.equal(contextualCount, 13, 'contextual routes with parentRoute must total 13 after Sales Wave 2 adds sales-pricing under customers');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {

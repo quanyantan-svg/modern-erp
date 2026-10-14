@@ -13,6 +13,7 @@ const route = (route, title, domain, semanticLevel, template, level, navGroup, i
 });
 
 const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
+  route('sales-pricing','销售定价与订单时折扣','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','salesDiscount',{any:['SALES_PRICING_VIEW','SALES_PRICING_MANAGE','SALES_PRICING_OVERRIDE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('business-overview','业务总览','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','primary','会计与分析','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
   route('dashboard','工作台','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','secondary','会计与分析','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
   route('orders','销售订单','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','ORDERS_CREATE']}),
@@ -121,6 +122,7 @@ const loadScreenModule = (path) => {
     case '../pages/engineering-substitute.jsx': return import('../pages/engineering-substitute.jsx');
     case '../pages/engineering-change.jsx': return import('../pages/engineering-change.jsx');
     case '../pages/finance-operations.jsx': return import('../pages/finance-operations.jsx');
+    case '../pages/sales-pricing.jsx': return import('../pages/sales-pricing.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -133,6 +135,7 @@ const defaultScreen = (modulePath) => Object.freeze({
   loader: () => loadScreenModule(modulePath).then((module) => ({ default: module.default })),
 });
 const SCREEN_DEFINITIONS = Object.freeze({
+  'sales-pricing': defaultScreen('../pages/sales-pricing.jsx'),
   'business-overview': defaultScreen('../pages/business-overview.jsx'), dashboard: named('../pages/master-data.jsx','Dashboard'),
   orders: named('../pages/master-data.jsx','Orders'), approvals: defaultScreen('../components/MobileApprovalCenter.jsx'),
   customers: named('../pages/master-data.jsx','Customers'), suppliers: named('../pages/master-data.jsx','Suppliers'),
@@ -194,6 +197,7 @@ const ROUTE_QUERY_KEYS = Object.freeze({
 });
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
+  'sales-pricing',
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
   'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
   'notifications','planning-reservations','planning-configuration',

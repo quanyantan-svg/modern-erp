@@ -79,6 +79,7 @@ const FULL = [
   // SQLite fresh/reopen wiring, and zero future Sales business schema.
   'server/sales-customer-wave0-migration-runner.test.js',
   'server/sales-customer-wave1-foundation.test.js',
+  'server/sales-customer-wave2-pricing.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
   'server/procurement-parameters.test.js',

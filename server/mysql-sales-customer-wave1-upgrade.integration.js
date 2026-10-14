@@ -95,11 +95,12 @@ import { bootstrapMySql, captureSqliteSnapshot } from './database/mysql-schema.j
 import { resolveDatabaseConfig } from './database/config.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
+import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
+
+const IMPLEMENTED_SALES_TABLES = [...SALES_WAVE1_TABLES, ...SALES_WAVE2_TABLES];
 
 const WAVE2_PLUS_TABLES = [
   'sales_quotations', 'sales_quotation_lines', 'sales_quotation_conversions',
-  'sales_price_lists', 'sales_price_list_entries', 'sales_price_list_versions',
-  'sales_discount_schemes', 'sales_discount_scheme_rules',
   'sales_order_changes', 'sales_order_change_lines',
   'delivery_notices', 'delivery_notice_lines',
   'sales_order_replacements', 'sales_order_replacement_lines',
@@ -217,11 +218,11 @@ function runSqlitePreflight() {
   assert.ok(fullSnapshot.tables.length > 0,
     'captureSqliteSnapshot must produce at least one table');
   const filtered = {
-    tables: fullSnapshot.tables.filter((table) => !SALES_WAVE1_TABLES.includes(table.name)),
+    tables: fullSnapshot.tables.filter((table) => !IMPLEMENTED_SALES_TABLES.includes(table.name)),
   };
   assert.ok(filtered.tables.length > 0,
     'filtered pre-Wave-1 snapshot must contain at least one canonical table');
-  for (const t of SALES_WAVE1_TABLES) {
+  for (const t of IMPLEMENTED_SALES_TABLES) {
     assert.equal(filtered.tables.some((table) => table.name === t), false,
       `Wave-1 table ${t} must not appear in the pre-Wave-1 snapshot`);
   }
@@ -325,8 +326,8 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
         );
       }
       const remainingWave1 = preCheckAdapter.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${SALES_WAVE1_TABLES.map(() => '?').join(',')})`).all(...SALES_WAVE1_TABLES);
-      assert.deepEqual(remainingWave1, [], 'no Wave-1 table may exist in the protected DB before this test runs');
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${IMPLEMENTED_SALES_TABLES.map(() => '?').join(',')})`).all(...IMPLEMENTED_SALES_TABLES);
+      assert.deepEqual(remainingWave1, [], 'no Wave-1/2 table may exist in the protected DB before this test runs');
       const remainingWave2 = preCheckAdapter.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${WAVE2_PLUS_TABLES.map(() => '?').join(',')})`).all(...WAVE2_PLUS_TABLES);
       assert.deepEqual(remainingWave2, [], 'no Wave-2+ table may exist in the protected DB before this test runs');
@@ -359,12 +360,12 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
     });
     after(() => { try { preDb?.close(); } catch { /* ignore */ } });
 
-    test('A-1 dialect is real MySQL and the eight Wave-1 tables do NOT exist', () => {
+    test('A-1 dialect is real MySQL and Wave-1/2 tables do NOT exist', () => {
       assert.equal(preDb.dialect, 'mysql');
-      const placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
+      const placeholders = IMPLEMENTED_SALES_TABLES.map(() => '?').join(',');
       const rows = preDb.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})`).all(...SALES_WAVE1_TABLES);
-      assert.deepEqual(rows, [], 'pre-Wave-1 fixture must not contain any Wave-1 table');
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})`).all(...IMPLEMENTED_SALES_TABLES);
+      assert.deepEqual(rows, [], 'pre-upgrade fixture must not contain any Wave-1/2 table');
     });
 
     test('A-2 representative pre-Wave-1 business tables contain seeded rows', () => {
@@ -464,19 +465,19 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
     });
     after(() => { try { upgraded?.close(); } catch { /* ignore */ } });
 
-    test('B-1 exactly the eight Wave-1 tables are materialised by the canonical upgrade', () => {
-      const expected = [...SALES_WAVE1_TABLES].sort();
+    test('B-1 exactly the approved Wave-1/2 tables are materialised by the canonical upgrade', () => {
+      const expected = [...IMPLEMENTED_SALES_TABLES].sort();
       const placeholders = expected.map(() => '?').join(',');
       const rows = upgraded.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders}) ORDER BY TABLE_NAME`).all(...expected);
       assert.deepEqual(rows.map((row) => row.name), expected);
     });
 
-    test('B-2 no Wave-2+ Sales table is materialised by the canonical upgrade', () => {
+    test('B-2 no Wave-3+ Sales table is materialised by the canonical upgrade', () => {
       const placeholders = WAVE2_PLUS_TABLES.map(() => '?').join(',');
       const rows = upgraded.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})`).all(...WAVE2_PLUS_TABLES);
-      assert.deepEqual(rows, [], 'Wave-2+ tables must not appear after the canonical upgrade');
+      assert.deepEqual(rows, [], 'Wave-3+ tables must not appear after the canonical upgrade');
     });
 
     test('B-3 representative pre-Wave-1 table row counts are preserved (no data loss)', () => {
@@ -544,6 +545,44 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
       }
     });
 
+    test('B-7A Wave-2 FK, UNIQUE and trigger metadata are exact after upgrade', () => {
+      const columns = upgraded.prepare(`SELECT COLUMN_NAME name,IS_NULLABLE nullable FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'
+          AND COLUMN_NAME IN ('default_pricing_list_id','default_discount_scheme_id') ORDER BY COLUMN_NAME`).all();
+      assert.deepEqual(columns.map((row) => [row.name,row.nullable]), [
+        ['default_discount_scheme_id','YES'],['default_pricing_list_id','YES'],
+      ]);
+      const foreignKeys = upgraded.prepare(`SELECT CONSTRAINT_NAME name,COLUMN_NAME column_name,REFERENCED_TABLE_NAME target
+        FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE()
+          AND TABLE_NAME='customer_commercial_extensions'
+          AND COLUMN_NAME IN ('default_pricing_list_id','default_discount_scheme_id')
+          AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY COLUMN_NAME`).all();
+      assert.deepEqual(foreignKeys.map((row) => [row.name,row.column_name,row.target]), [
+        ['fk_customer_commercial_default_discount_scheme','default_discount_scheme_id','sales_discount_schemes'],
+        ['fk_customer_commercial_default_price_list','default_pricing_list_id','sales_price_lists'],
+      ]);
+      const triggers = upgraded.prepare(`SELECT TRIGGER_NAME name,ACTION_TIMING timing,EVENT_MANIPULATION event_name,
+        EVENT_OBJECT_TABLE table_name,ACTION_STATEMENT statement FROM information_schema.TRIGGERS
+        WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME IN
+          ('trg_sales_price_entries_identity_bi','trg_sales_price_entries_identity_bu') ORDER BY TRIGGER_NAME`).all();
+      assert.deepEqual(triggers.map((row) => [row.name,row.timing,row.event_name,row.table_name]), [
+        ['trg_sales_price_entries_identity_bi','BEFORE','INSERT','sales_price_list_entries'],
+        ['trg_sales_price_entries_identity_bu','BEFORE','UPDATE','sales_price_list_entries'],
+      ]);
+      for (const trigger of triggers) {
+        assert.match(trigger.statement, /BINARY NEW\.material_identity_key/);
+        assert.match(trigger.statement, /BINARY NEW\.customer_scope_key/);
+        assert.match(trigger.statement, /BINARY NEW\.pricing_identity_key/);
+      }
+      const uniqueColumns = upgraded.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name
+        FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE()
+          AND TABLE_NAME='sales_price_list_entries' AND NON_UNIQUE=0 AND INDEX_NAME<>'PRIMARY'
+        ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all();
+      const grouped = Map.groupBy(uniqueColumns, (row) => row.index_name);
+      assert.ok([...grouped.values()].some((rows) => rows.map((row) => row.column_name).join(',')
+        === 'price_list_id,material_identity_key,customer_scope_key,pricing_identity_key'));
+    });
+
     test('B-8 CHECK constraints on Wave-1 tables are enforced after the upgrade', () => {
       let rejected = false;
       try {
@@ -580,7 +619,7 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
 
     test('R-PHP-1 a second canonical createDatabase() replay does not duplicate rows or tables', async () => {
       const executed = migrateSalesCustomerDomain(upgradedAgain);
-      assert.deepEqual(executed, ['wave-1-commercial-foundation']);
+      assert.deepEqual(executed, ['wave-1-commercial-foundation', 'wave-2-pricing-discount']);
 
       // Row counts must still match the post-upgrade values.
       for (const table of [...REQUIRED_REPRESENTATIVE_TABLES, ...COUNT_PRESERVED_TABLES]) {
@@ -589,7 +628,7 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
           `${table} row count must be preserved after migration replay`);
       }
       // The eight Wave-1 tables must still be present, no duplicates.
-      const expected = [...SALES_WAVE1_TABLES].sort();
+      const expected = [...IMPLEMENTED_SALES_TABLES].sort();
       const placeholders = expected.map(() => '?').join(',');
       const rows = upgradedAgain.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders}) ORDER BY TABLE_NAME`).all(...expected);

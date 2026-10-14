@@ -208,6 +208,13 @@ import {
   saveCustomerMaterialXref, saveProductCommercialClassification, saveSellableScopeRule,
 } from './modules/sales-commercial-foundation.js';
 import {
+  activateDiscountScheme, activatePriceList, appendDiscountRuleVersion, appendPriceVersion,
+  createDiscountRule, createDiscountScheme, createPriceEntry, createSalesPriceList,
+  deleteDiscountScheme, deletePriceEntry, deleteSalesPriceList, getDiscountScheme, getSalesPriceList,
+  listDiscountSchemes, listSalesPriceLists, resolveOrderTimeDiscountHttp, resolveSalesPriceHttp,
+  retireDiscountScheme, retirePriceList, updateDiscountScheme, updatePriceEntry, updateSalesPriceList,
+} from './modules/sales-pricing.js';
+import {
   createSupplier,
   deleteSupplier,
   listSuppliers,
@@ -544,6 +551,28 @@ ownedRouteTable.register({ method: 'POST', path: '/api/sales/sellable-scope-rule
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/sellable-scope-rules\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSellableScopeRule(db, req, res, actor, params[0]), owner: 'server/modules/sales-commercial-foundation.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales/product-classifications', handler: ({ db, res, actor, url }) => listProductCommercialClassifications(db, res, actor, url), owner: 'server/modules/sales-commercial-foundation.js' });
 ownedRouteTable.register({ method: 'PUT', path: '/api/sales/product-classifications', handler: ({ db, req, res, actor }) => saveProductCommercialClassification(db, req, res, actor), owner: 'server/modules/sales-commercial-foundation.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-price-lists', handler: ({ db,res,actor }) => listSalesPriceLists(db,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-price-lists', handler: ({ db,req,res,actor }) => createSalesPriceList(db,req,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-price-lists\/([^/]+)$/, handler: ({ db,res,actor,params }) => getSalesPriceList(db,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-price-lists\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateSalesPriceList(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'DELETE', path: /^\/api\/sales-price-lists\/([^/]+)$/, handler: ({ db,res,actor,params }) => deleteSalesPriceList(db,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-price-lists\/([^/]+)\/entries$/, handler: ({ db,req,res,actor,params }) => createPriceEntry(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-price-lists\/([^/]+)\/entries\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updatePriceEntry(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-price-lists\/([^/]+)\/entries\/([^/]+)\/versions$/, handler: ({ db,req,res,actor,params }) => appendPriceVersion(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'DELETE', path: /^\/api\/sales-price-lists\/([^/]+)\/entries\/([^/]+)$/, handler: ({ db,res,actor,params }) => deletePriceEntry(db,res,actor,params[0],params[1]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-price-lists\/([^/]+)\/activate$/, handler: ({ db,req,res,actor,params }) => activatePriceList(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-price-lists\/([^/]+)\/retire$/, handler: ({ db,req,res,actor,params }) => retirePriceList(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-pricing/resolve', handler: ({ db,req,res,actor }) => resolveSalesPriceHttp(db,req,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-discount-schemes', handler: ({ db,res,actor }) => listDiscountSchemes(db,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-discount-schemes', handler: ({ db,req,res,actor }) => createDiscountScheme(db,req,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-discount-schemes\/([^/]+)$/, handler: ({ db,res,actor,params }) => getDiscountScheme(db,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-discount-schemes\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateDiscountScheme(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'DELETE', path: /^\/api\/sales-discount-schemes\/([^/]+)$/, handler: ({ db,res,actor,params }) => deleteDiscountScheme(db,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/rules$/, handler: ({ db,req,res,actor,params }) => createDiscountRule(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/rules\/([^/]+)\/versions$/, handler: ({ db,req,res,actor,params }) => appendDiscountRuleVersion(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/activate$/, handler: ({ db,req,res,actor,params }) => activateDiscountScheme(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/retire$/, handler: ({ db,req,res,actor,params }) => retireDiscountScheme(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-discounts/resolve', handler: ({ db,req,res,actor }) => resolveOrderTimeDiscountHttp(db,req,res,actor), owner: 'server/modules/sales-pricing.js' });
 ownedRouteTable.register({
   method: 'POST',
   path: '/api/customers',

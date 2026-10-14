@@ -9323,29 +9323,63 @@ Wave 2 dependency order is fixed: create A-28 `sales_price_lists` and A-31 `sale
 
 ```text
 sales_price_lists:
-  id, price_list_code (UNIQUE), name, currency_code (single base),
+  id (TEXT PK), price_list_code (UNIQUE NOT NULL), name, currency_code (single base),
   priority (int; lower = higher priority), fallback_price_list_id (FK self),
   effective_from, effective_to,
-  status (CHECK IN 'DRAFT', 'ACTIVE', 'INACTIVE'),
-  created_at, created_by
+  status (CHECK IN 'DRAFT', 'ACTIVE', 'RETIRED'),
+  activated_at/by, retired_at/by, created_at/by, updated_at/by
 
 sales_price_list_entries:
-  id, price_list_id (FK), material_id (FK),
-  customer_id (FK; NULL = all customer),
-  pricing_uom_code, base_uom_code, conversion_factor (REAL),
-  qty_break_min (REAL inclusive), qty_break_max (REAL inclusive),
-  unit_price_cents,
+  id (TEXT PK), price_list_id (FK), material_id (FK products.id),
+  customer_id (FK customers.id; NULL = all customers),
+  customer_scope_type (NOT NULL; 'ALL' | 'CUSTOMER'),
+  material_identity_key (NOT NULL; canonical ASCII, length <= 128),
+  customer_scope_key (NOT NULL; canonical ASCII, length <= 128),
+  pricing_uom_code (FK uoms.code),
+  pricing_identity_key (NOT NULL; canonical ASCII, length <= 128),
+  qty_break_min_micros (safe integer; inclusive),
+  qty_break_max_micros (safe integer nullable; inclusive; NULL = unbounded),
   effective_from, effective_to,
-  version (int),
-  PRIMARY KEY (price_list_id, material_id, customer_id, pricing_uom_code,
-               qty_break_min, version, effective_from)
+  created_at, created_by,
+  UNIQUE (price_list_id, material_identity_key,
+          customer_scope_key, pricing_identity_key)
 
 sales_price_list_versions:  -- snapshot history (append-only)
-  id, entry_id (FK sales_price_list_entries.id), version, snapshot_json,
+  id (TEXT PK), entry_id (FK sales_price_list_entries.id),
+  version (safe integer >= 1), unit_price_cents (safe integer >= 0),
+  snapshot_json,
   created_at, created_by
+  UNIQUE (entry_id, version)
 ```
 
-#### 29.6.2 Resolver Service
+Identity / constraint contract:
+
+- `sales_price_list_entries.id` is the sole row PK on both engines. `sales_price_list_versions.entry_id` therefore references an actually unique target. No nullable column participates in a PK.
+- `sales_price_lists.id` is a service-generated lower-case RFC-4122 UUID (36 ASCII characters) and is immutable. The three non-null normalized identity keys use the following exact, case-stable encoding over UTF-8 bytes; upper-case hexadecimal means two ASCII hex characters per byte and no delimiter appears inside an encoded component:
+  - `material_identity_key = 'M:' + HEX(material_id)`; `material_id` must encode to 1..63 UTF-8 bytes, so the key is 4..128 ASCII characters.
+  - `customer_scope_key = 'A'` when `(customer_scope_type='ALL', customer_id IS NULL)`; otherwise `customer_scope_key = 'C:' + HEX(customer_id)` when `(customer_scope_type='CUSTOMER', customer_id IS NOT NULL)`. A customer id used by pricing must encode to 1..63 UTF-8 bytes. `A` cannot collide with any `C:` identity.
+  - `pricing_identity_key = 'U:' + HEX(pricing_uom_code) + '|Q:' + PAD16(qty_break_min_micros) + '|D:' + YYYYMMDD(effective_from)`. Pricing UoM codes are limited to 1..32 UTF-8 bytes; quantity minimum is a non-negative safe integer rendered as exactly 16 decimal digits; date is a validated ISO date with hyphens removed. The maximum key length is 96 ASCII characters.
+- Inputs exceeding these bounds fail with `PRICE_IDENTITY_COMPONENT_TOO_LONG`; the service never truncates, case-folds, hashes, or substitutes them. It re-derives all three keys and compares exact equality before INSERT. Identity-bearing fields and keys cannot be updated in place, even in DRAFT: a DRAFT identity change deletes/recreates the entry with a new `id`; price changes append only a version. This removes key-drift update paths.
+- Database CHECKs enforce the list UUID/identity-key non-null and length bounds plus the ALL/CUSTOMER nullability/prefix shape. Wave-2 migration also installs exactly two dialect-local, metadata-checked guards: `trg_sales_price_entries_identity_bi` (`BEFORE INSERT`) and `trg_sales_price_entries_identity_bu` (`BEFORE UPDATE`). SQLite compares against its native `hex()` encoding; MySQL live registry replay compares against `HEX()`/`CONCAT()` encoding. They reject any byte-for-byte derivation mismatch and any in-place identity-field/key update. Trigger creation is idempotent through `sqlite_master` / `information_schema.TRIGGERS` inspection and requires no global Adapter change. The backend performs the same derivation before SQL.
+- Trigger derivation is exact, not implementation-defined: SQLite uses `'M:' || hex(material_id)`, `CASE ... 'A' ... 'C:' || hex(customer_id)`, and `'U:' || hex(pricing_uom_code) || '|Q:' || printf('%016d', qty_break_min_micros) || '|D:' || replace(effective_from,'-','')`; MySQL uses the equivalent `CONCAT`, `HEX`, `LPAD(CAST(... AS CHAR),16,'0')`, and `REPLACE`. Component bounds use SQLite BLOB byte length and MySQL `OCTET_LENGTH`, so multibyte input has identical acceptance. The canonical uppercase hex output is compared byte-for-byte under both databases.
+- The plain four-column UNIQUE is the database business-uniqueness authority on both engines, while the guard triggers prevent alternate-key bypass. No partial, expression, seven-column, or generated SHA/digest index is permitted.
+- Current `mysqlType()` maps every indexed TEXT component to `VARCHAR(128)`. The four-column utf8mb4 worst-case key budget is `4 × 128 × 4 = 2048` bytes, below InnoDB's 3072-byte limit; therefore neither prefix indexing nor digest fallback is needed.
+- `effective_to IS NULL` means open-ended and every date range is inclusive. `effective_to < effective_from`, negative breaks, or `max < min` is rejected.
+- For the same list/material/customer scope/UoM, quantity-break rectangles must not overlap when their inclusive business-date ranges overlap. Adjacent breaks therefore require `previous.max < next.min`; equality is an overlap. The service enforces this after locking the owning list row and re-reading all peers in the same transaction.
+- Entry identity/range fields are mutable only while the owning list is `DRAFT`. A version row is never updated or deleted. Editing a draft price appends `version=max+1`; activation freezes the list, all entries, and all versions. A commercial change after activation requires a new list identity; retirement only changes the list lifecycle fields and never rewrites history.
+- FK targets, CHECKs, the ordered four-column UNIQUE, safe-integer bounds, normalized-key derivation, and immutability guards have identical SQLite/MySQL acceptance tests. Application validation supplements rather than replaces DB constraints.
+
+#### 29.6.2 Canonical UoM and quantity normalization
+
+- Wave 2 creates no conversion column or conversion table. `base_uom_code`, `conversion_factor`, floating quantity breaks, and any Sales-owned UoM truth are forbidden.
+- The frozen inventory label at §29.2 E-01 uses “legacy pricing fallback” only for historical-document/reference display. This bounded correction removes the former fifth resolver fallback; no new pricing decision may read `products.price_cents`.
+- Given `material_id`, `pricing_uom_code`, and `business_date`, resolve exactly one active Master-owned A-16 `product_uom_conversions` row satisfying `effective_from <= business_date <= effective_to` (NULL end = open) and whose `base_uom_code` equals the product base UoM. Base-UoM pricing uses evidence `(uom_code=base, numerator=1, denominator=1, version=0)` without inserting a conversion row.
+- Direction is frozen as `base quantity = document/pricing quantity × numerator ÷ denominator`, matching the canonical Master service. The resolver never inverts this ratio implicitly.
+- API quantities are decimal strings with at most six fractional digits, parsed to safe integer micro-units (`1 unit = 1,000,000 micros`). Convert the requested document quantity to base rational quantity, then into the candidate entry's pricing UoM by the candidate's effective conversion. Round exactly once to pricing-UoM micros using non-negative `HALF_UP`; compare the resulting integer against inclusive break bounds. Money is not rounded during this normalization.
+- Missing, inactive, future-only, expired, wrong-product, wrong-base, ambiguous, non-positive, unsafe-integer, or zero-denominator conversion evidence fails closed with 409. No legacy factor or `products.price_cents` can repair that failure.
+- Resolver evidence includes requested UoM/quantity micros plus both conversion identities and immutable `{id, numerator, denominator, version, effective_from, effective_to}` values. It is an output evidence envelope in Wave 2; Wave 4 persists it on the SO line. Later Master conversion changes must not reinterpret persisted evidence.
+
+#### 29.6.3 Resolver Service
 
 `resolveSalesPrice(context)` 商业 signature（伪）：
 
@@ -9354,118 +9388,179 @@ INPUT:
   customer_id
   material_id
   pricing_uom_code
-  quantity
+  quantity_decimal
   business_date
-  applicable_price_list_ids (from customer_commercial_extensions.default +
-                              applicable lists per list effective window)
-  context_priority (sortable list)
+  explicit_price_list_ids[]  (optional; caller order is significant)
+  manual_price_cents         (optional)
+  override_reason            (required with manual price)
 
 OUTPUT:
   resolved_price_cents   (bigint)
-  source_rule_identity   (sales_price_list_entry.id + version)
+  source_rule_identity   (list id + entry id + version row id/version)
   effective_range        (date range applied)
-  uom_applied            (pricing_uom_code or base if converted)
-  qty_break_applied      (the matched qty_break_min/max)
-  override_state         ('NONE' | 'OVERRIDDEN' | 'OVERRIDE_AUTHORITY_REQUIRED')
-  snapshot_evidence      (the canonical price_list_entry row id + version)
+  uom_evidence           (requested + candidate canonical rational snapshots)
+  qty_break_applied      (integer micros min/max + normalized quantity)
+  override_state         ('NONE' | 'OVERRIDDEN'; unauthorized requests are errors)
+  snapshot_evidence      (immutable output envelope; no Wave-2 SO persistence)
 
 PRECONDITIONS:
   - one base currency only
-  - pricing_uom_code must equal an existing entry pricing_uom_code OR
-    a valid conversion factor to base_uom_code
-  - priority + fallback resolution deterministic given same inputs
-
-FALLBACKS (in priority order):
-  1. customer-specific entry in applicable list effective range
-  2. price-list-wide entry (customer_id NULL) in applicable list
-  3. next higher-priority list in fallback chain
-  4. customer_commercial_extensions.default_pricing_list
-  5. product reference price (legacy `products.price_cents`) — DEPRECATED but COMPATIBILITY for legacy SO without commercial price snapshot
-  6. (NO silent fallback after confirmed APPLIED)
+  - all candidate lists are ACTIVE and list/entry dates include business_date
+  - list currency equals the configured base currency; no FX conversion
+  - canonical UoM evidence satisfies §29.6.2
 
 OVERRIDE:
-  - actor with PRICE_OVERRIDE permission may input manual price_cents
-  - override_state = 'OVERRIDDEN', reason captured in `sales_pricing_override_log`
-  - no silent overwrite of an approved SO price (R-SAL-11)
+  - manual price must be a non-negative safe integer and requires
+    pricing:override plus a trimmed non-empty reason
+  - resolver returns override evidence but performs zero DB mutation
+  - no sales_pricing_override_log and no override_reason_id table/FK exist
 ```
 
-#### 29.6.3 Snapshot
+Exact candidate order:
 
-每次 SO create 持久化：
+1. Normalize and de-duplicate `explicit_price_list_ids` preserving caller order; each explicit id must be visible and applicable or the request fails closed (it is never silently skipped).
+2. Append the customer's effective `default_pricing_list_id` if non-null and not already present. A missing/inactive/out-of-date configured default fails closed.
+3. If neither source produces a root list, return `PRICE_NOT_CONFIGURED`; do not scan arbitrary ACTIVE lists.
+4. Resolve each root completely before the next root. Within one list, customer-specific entries precede list-wide entries. Within the same scope, choose the matching break with greatest `qty_break_min_micros`, then latest `effective_from`, then lexicographically smallest `entry.id`; choose that entry's greatest version, then smallest version-row id. If supposedly unique state leaves another tie, fail closed as corrupted metadata.
+5. When a list has no matching entry, follow its `fallback_price_list_id` chain depth-first. A fallback target must be ACTIVE, effective, same currency, and not previously visited. Activation validates the full chain under deterministic list-id locks; self-reference, cycle, missing target, or repeated node is rejected. Runtime repeats the visited-set guard and fails closed on corrupted chains.
+6. List `priority` is not an invitation to scan globally. It is used only to order multiple customer defaults if legacy data temporarily exposes more than one effective extension (`priority`, then list id); current Wave-1 authority should yield one. Explicit caller order always wins. No unspecified “next higher-priority list” exists.
+7. `products.price_cents` is excluded from all new resolver/write paths. It remains display/read compatibility for historical documents only (§29.40); `PRICE_NOT_CONFIGURED` is returned instead of bypassing the engine.
 
-```text
-sales_order_items.price_snapshot_identity  (json or normalized cols):
-  resolved_price_cents
-  source_list_id, source_entry_id, version
-  uom_code_applied
-  qty_break_min, qty_break_max
-  effective_from, effective_to
-  override_state
-  override_reason_id (FK nullable)
-  created_at (which IS business_date if requested; otherwise actual timestamp)
-```
+Decision examples:
 
-Snapshot is **immutable**: SO line after APPROVED does not allow pricing re-derive to overwrite (R-SAL-11 / S20).
+| Situation | Deterministic result |
+|---|---|
+| Explicit L2 then L1; L2 has list-wide match and L1 has customer match | L2 list-wide wins: root order precedes customer scope across roots |
+| Root L1 has customer and list-wide matches | L1 customer match wins |
+| L1 has no match and falls back to L3; L2 is next explicit root | L3 is evaluated before L2 |
+| Two matching breaks start at 10.000000 and 20.000000 pricing units | greatest qualifying minimum (20.000000) wins; boundaries are inclusive |
+| No explicit/default root, but product has legacy price | `PRICE_NOT_CONFIGURED`; legacy price is not returned |
+| Fallback L1 → L2 → L1 | activation and runtime both reject the cycle |
+
+#### 29.6.4 Lifecycle, locking, and evidence boundary
+
+- Create/update/delete-entry/version operations require `pricing:manage` and a locked `DRAFT` list. Activation and retirement require `Idempotency-Key`; exact replay returns the stored result from existing Platform A-21 mechanics, while key/payload mismatch is 409.
+- Activation locks the root and reachable fallback lists in ascending id order, re-reads all entries/versions and canonical effective UoM evidence, validates uniqueness/range/cycle/currency, then writes `ACTIVE` plus `audit_logs` in one transaction. An empty list or entry without a version cannot activate. Retirement locks and transitions only `ACTIVE → RETIRED`; repeated same-key replay is stable, while direct replay with a different key against an already retired list is 409.
+- `POST /api/sales-pricing/resolve` is pure: read-only transaction, zero writes to the five Wave-2 tables, `audit_logs`, or idempotency state. Its result is preview/decision evidence, not an approved-order snapshot.
+- Wave 2 does **not** add or mutate `sales_orders` / `sales_order_items`. The output evidence contract contains resolved cents, list/entry/version identities, date/break/UoM evidence, override actor/reason when applicable, and resolver contract version `SALES_PRICE_V1`. Wave 4 owns actual SO create persistence and approved-order immutability. Therefore UAT-S-08 resolver evidence is executable in Wave 2, while the approved-SO half of R-SAL-11 is not complete before Wave 4.
 
 ### 29.7 Order-Time Discount Technical Design
 
 #### 29.7.1 物理对象
 
-`sales_discount_schemes` (NEW #27) + `sales_discount_scheme_rules` (NEW #28) + `sales_order_discount_snapshot` (NEW persist cols on `sales_order_items` + `sales_orders` header)：
+`sales_discount_schemes` (NEW #27) + `sales_discount_scheme_rules` (NEW #28). Wave 2 adds no SO snapshot table or SO columns：
 
 ```text
 sales_discount_schemes:
-  id, scheme_code (UNIQUE), name, currency_code,
-  effective_from, effective_to, status ('ACTIVE'|'INACTIVE')
+  id (TEXT PK), scheme_code (UNIQUE NOT NULL), name, currency_code,
+  priority (int; lower = higher priority), fallback_scheme_id (FK self nullable),
+  effective_from, effective_to, version (safe integer >= 1),
+  status ('DRAFT'|'ACTIVE'|'RETIRED'),
+  activated_at/by, retired_at/by, created_at/by, updated_at/by
 
 sales_discount_scheme_rules:
-  id, scheme_id (FK), material_id (FK nullable),
-  customer_id (FK nullable), pricing_uom_code (nullable),
-  line_scope ('LINE'|'HEADER'), discount_kind ('PERCENT'|'AMOUNT'),
-  discount_value (REAL; PERCENT = 0.05 = 5%, AMOUNT = cents),
-  priority (int), fallback_scheme_id (FK nullable),
-  qty_break_min / qty_break_max (REAL),
-  effective_from, effective_to
+  id (TEXT PK), scheme_id (FK), rule_key (NOT NULL), rule_version (safe integer >= 1),
+  enabled (0|1; NOT NULL DEFAULT 1),
+  material_id (FK nullable), customer_id (FK nullable),
+  customer_scope_type ('ALL'|'CUSTOMER'), customer_scope_key (NOT NULL),
+  pricing_uom_code (FK uoms.code nullable),
+  line_scope ('LINE'|'HEADER'), application_mode ('AUTOMATIC'|'MANUAL'),
+  discount_kind ('PERCENT'|'AMOUNT'),
+  discount_bps (safe integer nullable; 0..10000),
+  discount_amount_cents (safe integer nullable; >= 0),
+  priority (int; lower first),
+  qty_break_min_micros (safe integer NOT NULL DEFAULT 0),
+  qty_break_max_micros (safe integer nullable),
+  effective_from, effective_to, created_at, created_by,
+  UNIQUE (scheme_id, rule_key, rule_version)
 ```
+
+- PERCENT requires only `discount_bps`; AMOUNT requires only `discount_amount_cents`. `REAL`, fraction-valued percent, per-unit fixed amount, and dual-populated value columns are forbidden. An AMOUNT rule means one total discount amount for the matched line or header, never cents-per-unit.
+- LINE applicability may use `material_id`, customer scope, `pricing_uom_code`, quantity break, and inclusive business-date range. Nullable material/UoM means any value; minimum 0 + NULL maximum means any non-negative quantity.
+- HEADER applicability is order-level only. Its database CHECK requires `material_id IS NULL`, `pricing_uom_code IS NULL`, `qty_break_min_micros = 0`, and `qty_break_max_micros IS NULL`; backend create/append/activate validation repeats the same rule and returns 422 for any violation. HEADER still uses customer scope, inclusive business date, priority, scheme fallback, AUTOMATIC/MANUAL ordering, override authority, and reason. Its calculation base is the whole order subtotal after every LINE stage.
+- Customer scope normalization, date/break validity, canonical UoM lookup for LINE only, safe-integer rules, ACTIVE immutability, fallback-cycle checks, scheme-row locking, activation/retirement replay, and audit transaction follow §29.6.
+- Each rule-version row is append-only from creation. A DRAFT edit appends `rule_version=max+1` under the locked scheme; it does not PATCH or delete the prior version. Logical removal appends a later version with `enabled=0` and its intended `effective_from`. For a business date, group rows by `(scheme_id, rule_key)`, restrict to versions with `effective_from <= business_date`, then choose exactly the greatest `rule_version`. If that chosen version is disabled or its `effective_to < business_date`, the rule_key contributes nothing; an older version never revives as fallback. Activation requires versions to be positive, unique, gap-free, and non-decreasing by `effective_from`; ACTIVE schemes freeze every version. Later terms require a cloned DRAFT scheme/version.
+- `UNIQUE (scheme_id, rule_key, rule_version)` is a three-column Bootstrap-supported database constraint; the greatest-version rule is the single current logical version. Scheme `version` plus selected rule `id/rule_key/rule_version` is returned as immutable evidence. No sixth history/snapshot/override table is created.
 
 #### 29.7.2 解析
 
 `resolveOrderTimeDiscount(context)`：
 
 ```text
-INPUT: customer_id, material_id, pricing_uom_code, quantity, business_date,
-       ordered base_price_cents, applicable_scheme_ids
+INPUT: customer_id, business_date, explicit_scheme_ids[],
+       lines[{line_id, line_no, material_id, requested_uom_code,
+              quantity_decimal, explicit_price_list_ids[],
+              expected_pricing_evidence?}],
+       manual_rule_selections[{rule_id, line_id nullable}], override_reason
 OUTPUT:
-  line_discount_cents (per line)
-  header_discount_cents (per SO)
-  total_discount_cents (line + header; line computed first then header applied on
-                                          discounted subtotal)
-  applied_rule_ids (1..N; explanation evidence)
-  applied_priority (snapshot for audit)
+  line_discount_cents_by_line
+  header_discount_cents_total + header_allocation_cents_by_line
+  total_discount_cents
+  applied_rule_evidence[] (scheme id/version + rule id/key/version + order)
+  rounding_evidence ('HALF_UP_CENT_V1' + allocation trace)
 ```
+
+Scheme roots use explicit caller order, then the one effective customer default, then each root's validated fallback chain; no global ACTIVE scan occurs. Before applicability ranking, each `(scheme_id, rule_key)` contributes only the current business-date version selected by the preceding contract; a disabled/expired current version contributes nothing and a requested historical manual `rule_id` is rejected. Among enabled current versions, customer-specific precedes list-wide, lower rule priority precedes higher, greatest qualifying break minimum precedes lower for LINE only, latest effective start precedes earlier, and lexicographically smallest rule id is the final stable tie-break. Ambiguous corrupted state fails closed.
+
+Pricing authority boundary:
+
+- The discount resolver does not accept client-supplied unit price, normalized quantity, or pricing evidence as authority. For every line it invokes the canonical §29.6 price resolver server-side under the same read snapshot using customer/material/requested UoM/quantity/business date/explicit-list context; manual price follows the existing `pricing:override` + reason contract.
+- `expected_pricing_evidence`, when present, is only an optimistic assertion. Its price, list/entry/version, UoM conversion identities, normalized quantity, effective range, and fingerprint must exactly match the server result or the request fails 409. The server calculation always uses its own result.
+- Consequently Wave-2 output remains a zero-write preview but is based on canonical server facts and is safe for later Wave-4 reuse. No authoritative SO writer may persist a client-provided preview without re-resolving/revalidating inside that writer's transaction.
+
+Calculation pipeline (all operands safe integers):
+
+1. For each line, use the server-resolved price and normalized pricing quantity to compute `gross_line_cents = floor((resolved_unit_price_cents × normalized_pricing_quantity_micros + 500000) / 1000000)`. This is the single non-negative HALF_UP rounding from price × pricing-UoM quantity to line cents; unsafe multiplication or an expected-evidence mismatch fails closed.
+2. Select at most one current AUTOMATIC LINE rule per line using material/customer/UoM/quantity/date applicability. If the caller supplies one current applicable MANUAL LINE rule for that line, apply it second to the remaining line amount. Each manual rule requires `pricing:override` and the same non-empty `override_reason`; no permission or reason means 403/422, not silent omission. More than one manual rule per line/scope is rejected.
+3. PERCENT amount is `floor((current_base_cents × discount_bps + 5000) / 10000)` (non-negative HALF_UP to one cent). AMOUNT uses the exact stored total cents. If a stage discount exceeds its current base, reject the entire request with 409; do not cap. A result of exactly zero is valid, never negative.
+4. Sum all post-LINE amounts into the order discounted subtotal. Select at most one current AUTOMATIC HEADER rule using only customer/date/priority/fallback applicability, then at most one current authorized MANUAL HEADER rule, each applied to the remaining order subtotal. HEADER never evaluates material, UoM, or quantity break. Thus all LINE stages precede all HEADER stages; AUTOMATIC precedes MANUAL within each scope.
+5. Allocate each header-stage total across lines proportional to the line amounts entering that header stage. First assign floor shares; distribute remainder cents by descending fractional remainder, then ascending `line_no`, then lexicographically ascending `line_id`. Zero-base lines receive zero. Allocation sum must equal the header discount exactly. Each later header stage uses the amounts remaining after the earlier allocated stage.
+6. Verify every line and order result remains `>= 0`, all sums are safe integers, and `total_discount = sum(line discounts) + sum(header allocations)`. Any violation fails atomically with zero side effects.
+
+Integer-cents worked examples:
+
+| Case | Calculation | Result |
+|---|---|---|
+| Line auto then manual | `1000 cents × 3,000,000 micros / 1,000,000 = 3000`; auto `1250 bps` gives `floor((3000×1250+5000)/10000)=375`; manual fixed `125` applies to remaining `2625` | line discount `500`; final line `2500` cents |
+| Header percent + remainder | post-line amounts are line 1=`1001`, line 2=`2000`; subtotal `3001`; `1000 bps` gives `floor((3001×1000+5000)/10000)=300`; floor proportional shares are `100` and `199`, with one remainder cent | fractions rank line 2 first, so allocations are `100` and `200`; exact total `300` |
+| Half-cent edge | current base `1` cent, `5000 bps` | `(1×5000+5000)/10000 = 1` cent under HALF_UP; final amount `0` is valid |
+| Over-discount | current base `100` cents, fixed discount `101` | reject 409 with zero output mutation; never cap to `100` |
 
 #### 29.7.3 与 pricing / 商业 amount 区分
 
 ```text
-base/resolved_price  : 来自 §29.6
-discount             : 来自 §29.7
-final commercial price = base - line_discount - (header_discount applied on
-                                              discounted subtotal)
-commercial amount    = final commercial price × qty
+gross line amount       : resolved price × quantity, rounded by the commercial
+                          amount contract before discount resolution
+post-line subtotal      : gross line amount - automatic line - manual line
+final commercial amount : post-line subtotal - allocated automatic header
+                          - allocated manual header
 ```
+
+No “final unit price” is reverse-derived from allocated cents. UAT-S-09 freezes calculation/evidence at amount level with this ordering, cent rounding, allocation, and zero-floor contract.
 
 #### 29.7.4 与 M14 Sales Discount 区分
 
 M14 (`sales_discounts`) = post-delivery finance adjustment integration。Finance canonical adapter 写入。本 Design 不让 order-time discount 进入 M14 path；M14 与 order-time discount 是 distinct canonical truth tables。
 
-#### 29.7.5 Snapshot
+#### 29.7.5 Evidence / cross-wave boundary
 
-```text
-sales_order_items.discount_snapshot_identity = (resolved scheme ids,
-                                                per-line amount_cents,
-                                                header share if applicable,
-                                                effective priority order)
-```
+- `POST /api/sales-discounts/resolve` is read-only and writes neither pricing tables nor `audit_logs`. It returns the complete calculation envelope: input fingerprint, scheme/rule versions, ordered stages, bases, bps/fixed cents, per-stage discount, header allocation trace, final line totals, actor id for manual selection, reason text, and contract version `ORDER_DISCOUNT_V1`.
+- Wave 2 owns executable UAT-S-04..S-07 configuration/lifecycle/authorization behavior, UAT-S-08 price resolver evidence, and UAT-S-09 discount calculation/evidence. It does not claim actual SO persistence.
+- Wave 4 persists the price and discount evidence on SO create and enforces write-once approved-order history for S19/S20/R-SAL-11. No Wave-4 column or handler is introduced by Wave 2, and R-SAL-11 remains incomplete until its approved-SO concurrency test passes.
+
+#### 29.7.6 Bounded design-reopen trace and implementation gate
+
+| Original finding | Frozen source | Resolution | Updated section | Binding implementation rule | Required test |
+|---|---|---|---|---|---|
+| F1 — entry identity / nullable PK / version FK | SC15..SC20; S19/S20 | independent entry PK; bounded canonical material/customer/pricing identity keys; Bootstrap-supported four-column business UNIQUE; version FK to unique id; overlap rejection and append-only versions | §29.6.1, §29.41–43 | no nullable/7-column/hash identity; derive keys exactly; key fields never update in place; ACTIVE rows immutable | SQLite/MySQL fresh + existing-upgrade + second-init ordered-index metadata; duplicate probes; encoding bounds; boundary overlap; immutability |
+| F2 — duplicate UoM truth | SC16/SC17; UAT-S-05/06 | Master A-16 rational lookup by business date; direction, micros precision, HALF_UP point and evidence frozen; no Sales factor | §29.6.2, §29.42 | read canonical numerator/denominator only; missing/ambiguous/unsafe conversion 409 | base/non-base/effective-date/direction/rounding/fail-closed cases on both DBs |
+| F3 — ambiguous price precedence / legacy bypass | SC15..SC20; UAT-S-04..08 | explicit roots → effective customer default; customer before list-wide inside root; depth-first fallback; stable tie-break; cycle reject; no global scan or legacy fallback | §29.6.3, §29.40 | implement decision table literally; unresolved is `PRICE_NOT_CONFIGURED` | every decision-table row; fallback cycle; corrupted tie; product legacy price cannot rescue new resolve |
+| F4 — floating/ambiguous discount | SC21..SC23; UAT-S-09 | bps/cents only; LINE filters separated from order-level HEADER; greatest rule version only; server-canonical pricing input; unchanged HALF_UP/largest-remainder algorithm | §29.7.1–5 | HEADER has no material/UoM/break; no historical-version fallback; client price evidence is assertion only | DB/backend HEADER rejection; current/disabled/inapplicable-version cases; canonical price mismatch; percent/fixed, allocation, edge and override cases |
+| F5 — API / permission / audit ambiguity | SC19/SC109/SC114; P1/P3/P5 | POST-only zero-write resolvers; exact three-permission five-role matrix; atomic lifecycle audit; A-21 replay; no override log | §29.31.2–3, §29.33, §29.35 | exact endpoint/method and authority; manage/override independent; preview never writes | positive/negative matrix for five roles; resolver DB diff = zero; activate/retire audit rollback/replay/payload mismatch |
+| F6 — MySQL additive reconciliation gap | S19/S20; SQLite/MySQL acceptance | target-first five-table creation; <=4-column inline entry UNIQUE; two nullable fields and named real MySQL FKs; preserve rows; mismatch fail-closed | §29.41–43, §30.8, §30.12 | fresh/upgrade/repeat converge without Adapter or generated-index changes | SQLite PRAGMA + MySQL information_schema ordered UNIQUE/FK/CHECK assertions; no `__partial_*`; duplicate probes and row-count preservation |
+| F7 — Wave-plan/UI/acceptance inconsistency | mobile-first governance; UAT-S-04..09; S19/S20; R-SAL-11 | contextual sub-page/no top-level route/four-width matrix; Wave 2 proves config/resolvers/evidence while Wave 4 persists SO snapshot and completes race proof | §29.6.4, §29.7.5, §29.43 R-SAL-11, §30.2/11/17 | no UI implementation or SO schema/writer in Wave 2; no premature R-SAL-11 PASS | route/launcher/four-width acceptance later; Wave-2 UAT-S-04..09 + structural R-SAL-11; Wave-4 persistence/write-once/concurrency test |
+
+Closure count for this reopen: original findings `7/7` resolved; authorized correction workstreams A–H `8/8` covered; Wave-2 new tables `5/5`; existing-table fields `2/2`; permission codes `3/3`; frozen roles mapped `5/5`; UAT allocated `6/6` (`UAT-S-04..09`); unresolved design decisions `0`; `TBD = 0`. This is a design gate only: implementation remains prohibited until external approval.
 
 ### 29.8 Sales Order Canonical Model
 
@@ -11630,21 +11725,45 @@ POST   /api/sales-quotations/:id/convert-to-so
 
 ```text
 GET    /api/sales-price-lists                list
-CRUD   /api/sales-price-lists/:id           list create update delete (DRAFT only)
+POST   /api/sales-price-lists                create DRAFT
+GET    /api/sales-price-lists/:id            detail + entries + versions
+PATCH  /api/sales-price-lists/:id            update DRAFT header only
+DELETE /api/sales-price-lists/:id            delete never-activated DRAFT only
+POST   /api/sales-price-lists/:id/entries    create DRAFT entry + version 1
+PATCH  /api/sales-price-lists/:id/entries/:entryId
+                                               update DRAFT non-key range fields only;
+                                               identity change = delete/recreate
+POST   /api/sales-price-lists/:id/entries/:entryId/versions
+                                               append immutable DRAFT price version
+DELETE /api/sales-price-lists/:id/entries/:entryId
+                                               delete DRAFT entry only
 POST   /api/sales-price-lists/:id/activate   ACTIVATE (frozen effective window)
-POST   /api/sales-price-lists/:id/retire     RETIRE (INACTIVE)
-GET    /api/sales-pricing/resolve           POST body input → returns resolved price
-                                              (no side effect; pure resolver)
+POST   /api/sales-price-lists/:id/retire     ACTIVE → RETIRED
+POST   /api/sales-pricing/resolve            body input → resolved price/evidence
+                                              (read-only; zero DB mutation)
 ```
+
+All reads/resolution require `pricing:view`; configuration mutations require `pricing:manage`; manual price requires `pricing:override`. Activation/retirement require `Idempotency-Key` and the atomic validation/audit contract in §29.6.4. There is no GET-with-body resolver and no pricing override log endpoint.
 
 #### 29.31.3 Order-Time Discount API surface
 
 ```text
 GET    /api/sales-discount-schemes
-CRUD   /api/sales-discount-schemes/:id
-GET    /api/sales-discounts/resolve          POST input → resolved order-time discount
-                                              (no side effect)
+POST   /api/sales-discount-schemes            create DRAFT
+GET    /api/sales-discount-schemes/:id        detail + immutable rule versions
+PATCH  /api/sales-discount-schemes/:id        update DRAFT header only
+DELETE /api/sales-discount-schemes/:id        delete never-activated DRAFT only
+POST   /api/sales-discount-schemes/:id/rules  create DRAFT rule
+POST   /api/sales-discount-schemes/:id/rules/:ruleKey/versions
+                                                append DRAFT rule version;
+                                                enabled=0 is logical removal
+POST   /api/sales-discount-schemes/:id/activate
+POST   /api/sales-discount-schemes/:id/retire
+POST   /api/sales-discounts/resolve            body input → calculation/evidence
+                                                (read-only; zero DB mutation)
 ```
+
+The same `pricing:view` / `pricing:manage` split applies. Supplying any MANUAL rule additionally requires `pricing:override` plus reason; `pricing:manage` never implies override and `pricing:override` never implies manage. No Wave-4 writer is required to implement or test Wave-2 preview authorization.
 
 #### 29.31.4 Sales Order API surface (canonical)
 
@@ -11914,6 +12033,23 @@ checkPermissionOrForbid(actor, permissionCode, resourceType, resourceId)
 
 writes audit `entity_type=SOMETHING, action=AUTH_DENIED` for fail-closed cases.
 
+#### 29.33.3 Wave-2 exact pricing matrix
+
+Permission codes are frozen for Wave 2 as three independent authorities:
+
+| Role | `pricing:view` | `pricing:manage` | `pricing:override` |
+|---|---:|---:|---:|
+| `role-admin` | YES | YES | YES |
+| `role-sales` | YES | YES | NO |
+| `role-reviewer` | YES | NO | YES |
+| `role-warehouse` | NO | NO | NO |
+| `role-accounting` | YES | NO | NO |
+
+- `pricing:manage` does not imply `pricing:override`; `pricing:override` does not imply `pricing:manage`. Every endpoint checks the exact authority even when the actor has another pricing authority.
+- `pricing:view` covers list/scheme reads and both pure resolver previews. `pricing:manage` covers DRAFT configuration plus activate/retire. `pricing:override` is additionally required when a price or MANUAL discount rule is supplied.
+- Manual preview requires the override actor and non-empty reason in the returned evidence. The resolver has no Sales-document creator context and remains zero-write, so Wave 2 tests permission/reason decisions without a Wave-4 writer. Wave 4 must persist actual override actor/reason and enforce `sales:create` actor ≠ override actor for the SO mutation, including an admin who owns both permissions.
+- Denied configuration mutations write `AUTH_DENIED` through the existing audit service. Denied or successful pure resolver previews write no `audit_logs` row; HTTP security/access observability is not a business mutation audit. No endpoint may create a pricing-specific override log.
+
 ### 29.34 Approval / Workflow Boundary
 
 Current Platform approval family `SALES_ORDER` must remain working.
@@ -11945,9 +12081,11 @@ Critical mutations require audit; mutation + audit shared transaction boundary w
 ```text
 entity_type                  audited actions (action label)
 sales_quotation              CREATE / UPDATE / STATE_TRANSITION / CONVERT_TO_SO
-sales_price_list            CREATE / UPDATE / ACTIVATE / RETIRE
-sales_price_list_entry      CREATE / UPDATE / VERSION (snapshot history)
-sales_discount_scheme       CREATE / UPDATE / ACTIVATE / RESOLVE
+sales_price_list            CREATE / UPDATE / DELETE_DRAFT / ACTIVATE / RETIRE
+sales_price_list_entry      CREATE / UPDATE_DRAFT / DELETE_DRAFT /
+                            APPEND_VERSION (append-only version evidence)
+sales_discount_scheme       CREATE / UPDATE / DELETE_DRAFT / ACTIVATE / RETIRE
+sales_discount_scheme_rule  CREATE / UPDATE_DRAFT / DELETE_DRAFT
 sales_order                 CREATE / UPDATE / SUBMIT / APPROVE / REJECT / GIFT_LINE_ADDED
                             CLOSE_COMMERCIALLY / CANCEL_COMMERCIALLY
 sales_order_change          CREATE_DIRECT_REQUEST / CREATE_DOCUMENT / SUBMIT /
@@ -11980,6 +12118,8 @@ credit_recalculation_history RUN
 ```
 
 Audit entity values MUST reference `policy_snapshot_identity` for any credit-related audit row (per R-SAL-24 design enforcement).
+
+Wave-2 pricing/scheme activation and retirement validate state and write the business row plus exactly one action audit in one transaction. Exact `Idempotency-Key` replay returns the stored original response with zero business/audit mutation; payload mismatch fails 409. `POST .../resolve` never appears as a business audit action because both resolvers are strictly zero-mutation. Actual order-time manual override audit belongs to the future Wave-4 SO writer and reuses `audit_logs`; no sixth Wave-2 business table is allocated.
 
 ### 29.36 Mobile IA Design
 
@@ -12114,7 +12254,7 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | Legacy Customers without commercial extensions | NULL | YES (display `(none)`) | bounded | NO |
 | Legacy Credit Profile missing | NULL credit_profile row | YES (display `(none)`) | per §29.22.1 rule (FAIL CLOSED if Credit Management enabled + mandatory rule) | per §29.22.1; no new write allows "no profile" exception to silent PASS |
 | Legacy tax basis | NULL | YES (treat as no commercial tax snapshot) | bounded | NO |
-| Legacy product reference price (products.price_cents) | DEPRECATED_NO_NEW_WRITES; read as legacy pricing fallback (5th in §29.6.2) | YES (legacy read) | n/a | NO (new writes use Sales Pricing engine; legacy fallback read-only) |
+| Legacy product reference price (`products.price_cents`) | DEPRECATED_NO_NEW_WRITES; historical display/read only, never returned by §29.6 resolver | YES (legacy document/reference read) | n/a | NO (new preview/write requires the Sales Pricing engine and returns `PRICE_NOT_CONFIGURED` when unresolved) |
 
 > Default rule: legacy read = YES, legacy correction (bounded) = policy-defined, new write through legacy bypass = NO.
 > Compatibility must not become a permanent bypass around new canonical contracts.
@@ -12137,6 +12277,17 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | no UNIQUE on `(customer_id, customer_material_code, effective_from)` alone | preserves approved multi-product candidates; explicit product selection + effective validation resolves ambiguity |
 | `customer_commercial_extensions.sellable_scope_mode CHECK` | coherent customer-level `ALL_SALES_ENABLED / RULE_CONTROLLED`; xref remains translation only, A-69 owns allow/deny scope |
 | `product_commercial_classification.product_id UNIQUE FK products.id` | one current Sales commercial classification/default set per Master product; no `products` mutation |
+| `sales_price_lists.id PK`; `price_list_code UNIQUE`; lifecycle/date/currency CHECKs | stable list identity; one base currency; DRAFT → ACTIVE → RETIRED only |
+| `sales_price_list_entries.id PK` + four-column business UNIQUE | version FK has a real unique target; `(price_list_id, material_identity_key, customer_scope_key, pricing_identity_key)` is directly materialized by current MySQL Bootstrap (`<=4` columns) and SQLite |
+| price entry normalized-key CHECK / service derivation | bounded ASCII material/customer/pricing keys encode the complete semantic identity without nullable columns, delimiter ambiguity, truncation, case-folding, or generated hash index |
+| price entry quantity/date CHECK + transactional overlap rejection | integer-micro inclusive breaks and inclusive effective dates never overlap for the same business scope |
+| `sales_price_list_versions UNIQUE(entry_id, version)` + integer cents CHECK | append-only exact price version; no floating money |
+| `sales_discount_schemes.id PK`; `scheme_code UNIQUE`; lifecycle/date/currency CHECKs | stable scheme/version identity and deterministic fallback root |
+| `sales_discount_scheme_rules UNIQUE(scheme_id, rule_key, rule_version)` | immutable rule-version evidence without a sixth table |
+| discount kind/value CHECK | PERCENT has integer 0..10000 bps only; AMOUNT has non-negative integer cents only; exactly one value populated |
+| discount LINE/HEADER applicability CHECK | HEADER requires material/UoM NULL and break `[0, unbounded]`; LINE alone may filter material/UoM/quantity |
+| discount greatest-version selection under scheme lock | one current version per rule_key; disabled/inapplicable greatest version never falls back to history |
+| Wave-2 target-first FKs + A-39 nullable default FKs | five targets are created first; both customer defaults are real FKs with no fabricated value |
 | `sales_order_items` tolerance snapshot CHECK | upper bps >= 0; lower bps 0..10000; immutable approved execution baseline |
 | `sales_orders.order_no UNIQUE` | no duplicate order |
 | `sales_orders.effective_version INTEGER NOT NULL DEFAULT 1 CHECK (effective_version >= 1)` | one monotonic current-version anchor; application also requires locked-read + conditional CAS update |
@@ -12183,6 +12334,40 @@ Hardening surface checklist (anticipated hazards):
 - date / time: store ISO date (YYYY-MM-DD) for business_date; full ISO 8601
   for timestamp columns. Timezone normalize at app boundary.
 - defaults: every column with default has explicit default; not engine-specific.
+- nullable identity: never use nullable `customer_id` in PK/UNIQUE semantics.
+  Price entry uniqueness is the ordered four-column plain UNIQUE on list id plus
+  three bounded canonical ASCII keys; it is not a seven-column SQLite autoindex
+  and does not use `generatedPartialIndex()` / SHA digest behavior.
+- quantity/money: no REAL/FLOAT for quantity breaks, percentages, or cents;
+  micro-quantity, basis points, and cents are safe integers at API/service/DB boundaries.
+- FK upgrade: SQLite must expose the two A-39 defaults through
+  `PRAGMA foreign_key_list`; MySQL must add named `ALTER TABLE ... ADD CONSTRAINT`
+  FKs and verify them through `information_schema.REFERENTIAL_CONSTRAINTS` /
+  `KEY_COLUMN_USAGE`. A column-shaped match without its FK is not success.
+- metadata reconciliation: fresh init, upgrade from exact Wave-1 baseline, and
+  repeated init must converge to exactly five new tables + two nullable fields.
+  Expected missing objects are added; compatible existing objects are retained;
+  any unexpected type/nullability/default/PK/UNIQUE/CHECK/FK/index mismatch fails
+  closed before business handlers are enabled. Existing rows are never rewritten.
+- price-entry UNIQUE acceptance is path-specific and mandatory:
+  SQLite fresh: PRAGMA index_list/index_info reports one UNIQUE with ordered
+    columns (price_list_id, material_identity_key, customer_scope_key,
+    pricing_identity_key); sqlite_master reports both identity guard triggers;
+    duplicate canonical, forged-key INSERT, and identity UPDATE are rejected.
+  MySQL fresh: information_schema.STATISTICS reports NON_UNIQUE=0 with the same
+    four SEQ_IN_INDEX columns; this is emitted inline by tableDefinition().
+    The subsequent canonical Sales registry replay installs exactly the two
+    MySQL guard triggers, verified through information_schema.TRIGGERS.
+  Existing MySQL upgrade: when the complete pre-Wave-2 database lacks the table,
+    tableDefinition() creates it with the same inline <=4-column UNIQUE; the
+    design does not depend on planMySqlIndexReconciliation(), which skips
+    origin='u', or on generatedPartialIndex(). Live Wave-2 registry replay then
+    installs/verifies the guards. A pre-existing incompatible table/index/trigger
+    is an unexpected mismatch and startup fails closed.
+  Second initialization: exactly one equivalent UNIQUE remains, duplicate
+    canonical/forged-key/identity-update probes still fail, exactly two guards
+    remain, table/row/index counts are unchanged, and no generated __partial_*
+    column/index exists.
 
 Tests:
   SQLite parity = node --test that runs both engines on the same SQL.
@@ -12201,6 +12386,11 @@ WRITE tx:
   capacity write
   audit write
   COMMIT
+
+  Wave-2 list/scheme mutation:
+    BEGIN IMMEDIATE → read owning list/scheme + peers → validate state, overlaps,
+    fallback graph, versions and canonical UoM → mutate → audit → COMMIT.
+    Resolver preview uses READ tx only and writes nothing.
 
 READ tx:
   BEGIN DEFERRED   (default; let SQLite upgrade to IMMEDIATE if writer pending)
@@ -12221,6 +12411,13 @@ WRITE tx:
   audit write
   COMMIT
 
+  Wave-2 list/scheme mutation:
+    lock all affected sales_price_lists or sales_discount_schemes rows in
+    ascending id order; then lock entry/rule/version rows in ascending id order;
+    re-read overlap/fallback/UoM authority; mutate + audit atomically. Activation
+    of a fallback graph locks every reachable header before validation. Resolver
+    preview is a non-locking consistent read and performs zero DB mutation.
+
 READ tx:
   SELECT … (no lock; READ COMMITTED default)
 
@@ -12230,7 +12427,8 @@ Lock ordering (canonical, Micro-Closure corrected):
        (sales_order_items.id / sales_delivery_items.id /
         delivery_notice_lines.id / return_order_items.id /
         sales_order_replacement_lines.id / service_fulfillments.id /
-        consignment_commercial_lines.id / sales_quotation_lines.id)
+         consignment_commercial_lines.id / sales_quotation_lines.id /
+         sales_price_lists.id / sales_discount_schemes.id)
     2. Sales-owned Credit anchors (R-SAL-12 / 24):
        - credit_profile (effective row) FOR UPDATE
        - credit_policy_snapshots FOR UPDATE
@@ -12272,7 +12470,7 @@ rely on timeouts/sleeps.
 | R-SAL-08 | SO change application vs direct/notice-backed Delivery create/confirm | direct + document | sales_orders.id + affected sales_order_items.id + SD source-line identity | SO header → affected SO lines → DN line when present → SD item | change sees executed quantity or delivery sees new version; only one valid serialization | change reduces/reassigns already shipping line | S05, S06 | both paths share apply service; delivery re-reads effective version/capacity | same source lock order | R-SAL-08 test |
 | R-SAL-09 | Delivery vs Return/Reopen | — | delivery_items → return_items → AR update | both FOR UPDATE | one wins; reopen explicit | silent relive of cleared | S05, S10 | idempotent return + reopen | FOR UPDATE both | R-SAL-09 test |
 | R-SAL-10 | Return vs Replacement fulfillment | — | return_order_items.id (line) + sales_order_replacement_lines.id (line) | return-line FOR UPDATE → replacement-line FOR UPDATE | state machine consistent; combined fulfilled ≤ return_qty | inconsistent state | S10, S61 | replacement fulfillment rejects if remaining < qty; line-level anchor | FOR UPDATE both | R-SAL-10 test |
-| R-SAL-11 | Pricing update vs Order approval | — | sales_order_items.price_snapshot_identity (immutable) | pricing list FOR UPDATE → SO item FOR UPDATE | snapshot immutable | price rewrites approved SO price | S20 | snapshot columns write-once; UPDATE blocked after APPROVED | FOR UPDATE SO item | R-SAL-11 test |
+| R-SAL-11 | Pricing update vs Order approval | — | Wave-2 list/version identity + Wave-4 `sales_order_items.price_snapshot_identity` (immutable) | Wave 2 freezes ACTIVE pricing versions; Wave 4 locks SO item on create/approve and persists the selected evidence | resolver evidence is immutable by version; future approved SO snapshot remains unchanged | price change rewrites approved SO price | S20 | Wave-2 structural/version test now; Wave-4 snapshot write-once + concurrent approval test later | same two-wave boundary; no Wave-2 SO schema | Wave-2 partial evidence + Wave-4 final R-SAL-11 test |
 | R-SAL-12 | Credit Check × 2 vs same credit object (PURE_DERIVED exposure) | — | **credit_lock_anchors.id** (REFINED A-62; anchor_type='CREDIT_OBJECT'; UNIQUE on anchor_key) | 1) POLICY_SCOPE anchor FOR SHARE; 2) CREDIT_OBJECT anchor FOR UPDATE; 3) credit_profile effective row FOR UPDATE; 4) credit_policy_snapshots create-or-select FOR UPDATE; 5) credit_check_rules effective rows FOR UPDATE | one wins; the loser re-reads and re-evaluates against updated state; multiple concurrent Credit Checks may share the same policy read (FOR SHARE) but serialize per credit object; combined committing commitments ≤ available credit | combined committing commitments > available credit; or check reads from stale eligible balance while concurrent Finance mutation has already consumed/refunded it | S14, S15 | PRIMARY long-lived lock identity = CREDIT_OBJECT anchor; Prepayment Gate acquires same Finance canonical locks via financeAdapter (see R-SAL-15); risk-releasing Finance events do not need to acquire Sales anchor; visibility lag → conservative temporary BLOCK acceptable, never over-credit approval | FOR UPDATE anchor (CREDIT_OBJECT) → profile → snapshot → rules; FOR SHARE on POLICY_SCOPE | R-SAL-12 test |
 | R-SAL-13 | Credit Special Approval vs Order approval | — | credit_special_approval.source_credit_check_result_id (PK) + credit_policy_snapshots.id + sales_orders.id (effective_version) | approval FOR UPDATE → snapshot FOR UPDATE → SO FOR UPDATE | either special-approve or standard approval wins; never both silently | both silently | S16 | approval + SO tx; check + approval PK link | FOR UPDATE all three | R-SAL-13 test |
 | R-SAL-14 | Credit release vs Collection / Return | — | credit_exposure_view (DERIVED) over Finance canonical AR / settlement_unapplied / financial_credit_adjustments | collection/return FOR UPDATE (Finance-owned rows) | transition rule prevents double-count | double-count | S14 | OCCUPANCY transition rule (per §29.23.2) at write; recognition-mode aware | FOR UPDATE on Finance-side rows | R-SAL-14 test |
@@ -12670,7 +12868,7 @@ Each wave is small enough that one engineer / coding agent can implement, test, 
 |---|---|---|---|---|
 | 0 | Schema / shared Sales infrastructure + migration runner readiness | n/a (foundation) | 0 | server/migrations/* (infrastructure; no new tables yet); existing migration files remain untouched |
 | 1 | Sales parameters + Sales Groups / multi-membership + Customer commercial extension/xref + sellable rules + product commercial classification foundation | 6 (SC02..SC05, SC07, SC69) | 8 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `sales_sellable_scope_rules`, `product_commercial_classification`) | Sales-owned foundation modules + customer detail integration; no `users` / Master schema extension |
-| 2 | Pricing engine + Order-Time Discount + customer price-list/discount-table defaults | 9 (SC15..SC23) | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | add A-39 nullable default FKs only after A-28/A-31 exist; pricing UI |
+| 2 | Pricing engine + Order-Time Discount + customer price-list/discount-table defaults | 9 (SC15..SC23) | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | add exactly two A-39 nullable default FKs only after A-28/A-31 exist; contextual pricing/discount sub-page under existing Sales & Customer navigation; no top-level route |
 | 3 | Quotation + Quotation conversion | 6 (SC09..SC14) | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | server/modules/quotation.js (new); src/pages/quotations.jsx (new route); conversion API with idempotency |
 | 4 | Sales Order enrichment + lifecycle + two-path Change + line schedule snapshot | 20 (SC24..SC29, SC31..SC44) | 2 (sales_order_changes, sales_order_change_lines) | shared canonical change application service; direct/document request handlers; additive SO/line snapshots; approval/version/audit concurrency contract |
 | 5 | Delivery Notice + direct/notice-backed Sales Delivery convergence + tolerance execution | 11 (SC08, SC30, SC45..SC53) | 2 (delivery_notices, delivery_notice_lines) | truthful DIRECT_ORDER / DELIVERY_NOTICE source identity; shared SO capacity/gates plus DN capacity where applicable |
@@ -12913,7 +13111,7 @@ duplicate ADD attempts = 0
 |---|---|---|---|
 | 0 | 0 | 0 | migration runner readiness only; no new migration content |
 | 1 | 8 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `sales_sellable_scope_rules`, `product_commercial_classification`) | 0 | bounded Sales parameter codes; independent xref/sellable rules; customer/person anchor overlap locks; no `users` / Master extension; no Wave-2 FK; SQLite + MySQL compatible |
-| 2 | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | `customer_commercial_extensions` (+ `default_pricing_list_id`, `default_discount_scheme_id`) | create A-28/A-31 before adding nullable FKs to A-39; SQLite + MySQL compatible |
+| 2 | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | `customer_commercial_extensions` (+ exactly `default_pricing_list_id`, `default_discount_scheme_id`, both nullable) | create all five targets with PK/UNIQUE/CHECK/FK metadata first; current Bootstrap materializes the four-column entry UNIQUE inline; canonical registry replay installs/verifies dialect-local normalized-key guards; add the two fields without rewriting rows; SQLite verifies PRAGMA/sqlite_master and MySQL verifies named real FKs/index/triggers through information_schema; fresh/upgrade/repeat converge or fail closed on mismatch |
 | 3 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | new migration file; UNIQUE on (quotation_id, line_no); PR UNIQUE on (quotation_id, sales_order_line_id); idempotency_key column |
 | 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code, effective_version), sales_order_items (+ 9 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max, planned_delivery_date, upper_delivery_tolerance_bps, lower_delivery_tolerance_bps) | additive snapshot columns; nullable legacy commercial fields are not backfilled from later defaults; `effective_version` alone is NOT NULL, initializes/backfills to compatibility baseline `1`, then advances only through locked canonical change application + CAS |
 | 5 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse existing `billing_mode`), sales_delivery_items (+ `delivery_notice_line_id`) | source_mode truthfully distinguishes direct/notice/legacy; no fake DN; common SO line lock/tolerance/gates, plus DN lock only for notice-backed path; billing_mode reused, no duplicate ADD |
@@ -13000,6 +13198,7 @@ Frontend work is concentrated in **Wave 12 (Mobile IA + Reporting + Compatibilit
 | Wave | Backend stability point | Frontend integration scope |
 |---|---|---|
 | 1 | customer_commercial_extensions | customer detail extension panel; (none) for new route |
+| 2 | pure price/discount resolvers + DRAFT/ACTIVE/RETIRED lifecycle | one contextual pricing/discount sub-page reached from existing Sales & Customer navigation; no new launcher tile or top-level route; LIST → DETAIL → EDITOR/WORKFLOW pattern |
 | 3 | quotation API | quotations new route (LIST / DETAIL / EDITOR / CONVERT-TO-SO) |
 | 4 | SO enrichment + change | SO editor extended; SO change workflow (LIST / DETAIL / EDITOR) |
 | 5 | DN API | delivery-notices new route (LIST / DETAIL / EDITOR) |
@@ -13011,7 +13210,7 @@ Frontend work is concentrated in **Wave 12 (Mobile IA + Reporting + Compatibilit
 | 11 | credit evaluation | credit-evaluation new route |
 | 12 | (consolidation) | new sales-customer launcher (≤ 6 primary entries); decision reports extensions; consolidated responsive acceptance reruns |
 
-Widths remain 320 / 390 / 430 / 680. 390px is primary. Touch targets ≥ 44 CSS px. Core tasks do not depend on permanent horizontal scroll.
+Widths remain 320 / 390 / 430 / 680. 390px is primary. Wave-2 contextual pricing UI is included in the same matrix. Touch targets ≥ 44 CSS px. Core tasks do not depend on permanent horizontal scroll. This section schedules later implementation only; the bounded design reopen changes no frontend code.
 
 ### 30.12 MySQL verification sequence
 
@@ -13033,7 +13232,7 @@ a MySQL verification checkpoint is planned **within that wave**.
 |---|---|
 | 0 | migration runner on real MySQL (smoke) |
 | 1 | eight-table FK / UNIQUE / CHECK parity; SYSTEM/document-type parameter resolution; independent xref/sellable interval rejection; salesperson multi-group/exactly-one-default; legacy fail-closed; second initialization idempotency |
-| 2 | UNIQUE on price list entries; CHECK constraints; effective_from MySQL semantics |
+| 2 | fresh Wave-2 init, exact Wave-1 upgrade, and repeated init; exactly five tables + two nullable A-39 fields; entry PK + ordered four-column normalized-key UNIQUE materialized inline by current Bootstrap, with no generated digest; duplicate probe and version FK target; LINE/HEADER CHECK parity; greatest discount rule version only; server-canonical pricing evidence; integer micros/bps/cents; named A-39 MySQL FKs + SQLite FK metadata; overlap/cycle rejection; ACTIVE immutability; resolver zero-write; lifecycle replay/audit |
 | 3 | UNIQUE on conversion PK; idempotency_key UNIQUE on real MySQL |
 | 4 | four-mode/path parity; request/apply idempotency; effective_version monotonic; R-SAL-07/08 shared lock order on MySQL |
 | 5 | DN capacity locks; legacy SD path coexistence on MySQL |
@@ -13228,7 +13427,7 @@ Commit boundary (one primary local commit after external review; no push)
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | n/a | 0 | 0 | server/migrations/* runner; no new migration | none | migration-runner smoke | infrastructure | n/a | none | migration-runner passes on SQLite + MySQL | n/a | one local commit after review |
 | 1 | Wave 0 | 8 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `sales_sellable_scope_rules`, `product_commercial_classification`) | 0 | bounded Sales foundation modules; no Platform / Master schema changes | customer detail extension panel only | parameter/xref/sellable interval races + membership exactly-one/default + FK/CHECK/legacy tests | Wave 1 registry steps; no forward FK | legacy missing extension/classification read-only; new writes fail closed; salesperson may lack login but cannot access group-scoped docs | Master/Platform read-only targets; Platform mechanics only | focused integration + SQLite/MySQL locking checkpoint; permission gate | one local commit after external review |
-| 2 | Wave 1 | 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | A-39 `default_pricing_list_id` + `default_discount_scheme_id` | pricing / discount modules; resolver API | pricing sub-page | resolver + FK-addition + Sales/Pricing UoM conversion integration | create A-28/A-31 then nullable FKs; canonical UoM conversion required | no fabricated default; products.price_cents legacy fallback | n/a | partial SC08 evidence only; final acceptance waits for Wave 5 tolerance execution | one local commit |
+| 2 | Wave 1 | exactly 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | A-39 exactly two nullable FKs: `default_pricing_list_id` + `default_discount_scheme_id` | pricing/discount lifecycle modules; two POST pure resolver APIs; existing audit/idempotency services | contextual pricing/discount sub-page under existing Sales & Customer navigation; no top-level route | UAT-S-04..07 configuration/lifecycle/override; UAT-S-08 resolver evidence; UAT-S-09 deterministic discount calculation; four-column entry UNIQUE fresh/upgrade/repeat; LINE/HEADER + greatest-rule-version checks; canonical pricing mismatch; FK/CHECK/UoM/cycle/overlap/zero-write/RBAC/replay/audit parity | target-first five-table create; current Bootstrap inline <=4-column UNIQUE; no Adapter/generated digest; preserve rows; add/verify two real nullable FKs; fresh/upgrade/repeat convergence, mismatch fail-closed | no fabricated default; `products.price_cents` historical read/display only and never a new resolver/write fallback | Master UoM read-only; Platform `audit_logs`/A-21 mechanics reused with no schema change | no quotation/SO schema or writer, no actual SO snapshot persistence, no Master/Inventory/Finance/Platform schema, no sixth table | SC15..SC23 and UAT-S-04..09 Wave-2 evidence; S19/S20 preserved; R-SAL-11 only structural/version evidence until Wave-4 SO persistence + immutability test | one local commit after external review |
 | 3 | Wave 2 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | quotation handlers with group-scope backend predicate from first route | quotations LIST / DETAIL / EDITOR / CONVERT | unit + R-SAL-06 + fail-closed group access | new migration file; PK + PR UNIQUE | n/a | n/a | UAT-S-01..03; R-SAL-06 evidence; UAT-S-28 partial | one local commit |
 | 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols, including `effective_version`); sales_order_items (+ 9 cols) | shared change application service; direct/document handlers; group-scope + line snapshot; locked-read + version CAS | SO direct-change action + change-document workflow | UAT-S-10..16 including four-mode UAT-S-15; R-SAL-07/08; UAT-S-28 partial | additive migration; legacy nullable commercial fields retained; version initializes/backfills to baseline `1` and is not client-writable | later parameters/defaults never rewrite APPLIED history; approved snapshots/evidence remain append-only | n/a | SC37..SC40/UAT-S-15 final owner Wave 4; SC30 final W5 | one local commit |
 | 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | direct/notice source capacity + tolerance enforcement | delivery-notices route | upper BLOCK + lower controlled-close + direct/notice races | explicit source_mode; no fake DN; no duplicate billing_mode | LEGACY_UNCLASSIFIED read-only | n/a | UAT-S-17/S-18; SC08+SC30 final completion; S09 | one local commit |
@@ -13586,3 +13785,37 @@ The gate-level breakdown (52 / 13 / 12 / 14 / 4 / 18 = 113) is the only executio
 - No user Acceptance/Freeze claim is made by this subsection; final Freeze remains an explicit user decision recorded separately.
 
 Wave 1 does not implement quotation, pricing, credit, reservation, delivery scheduling/control or order-change execution. It does not claim user Acceptance/Freeze; those remain external decisions after review.
+
+---
+
+## 33. Sales & Customer Domain Implementation — Wave 2 Pricing and Order-Time Discount
+
+> Post-design implementation record for the approved §29.6–§29.7 and §29.31.2–§29.31.3 contracts. This records repository facts only; it does not alter the frozen Requirement/Design or claim user Acceptance/Freeze.
+
+### 33.1 Bounded schema and migration
+
+The Sales registry runs `wave-2-pricing-discount` after Wave 1. `server/migrations/sales-customer-wave2-pricing.js` creates exactly `sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, and `sales_discount_scheme_rules`. It adds only the nullable real FKs `customer_commercial_extensions.default_pricing_list_id` and `default_discount_scheme_id`. No SO/SO-line or Master/Finance/Inventory/Platform schema changes are made.
+
+Price-entry business uniqueness is the four-column database UNIQUE `(price_list_id, material_identity_key, customer_scope_key, pricing_identity_key)`. The independent entry UUID remains the PK and version rows reference it. Backend and the exactly named before-insert/before-update triggers derive and verify uppercase UTF-8 hexadecimal identity keys byte-for-byte, enforce component limits without truncation, case-folding or digest fallback, and reject identity-field updates. SQLite fresh/reopen and MySQL fresh/live replay share the registry; live MySQL replay adds/verifies the two named customer-default FKs and trigger metadata without changing the global adapter.
+
+### 33.2 Canonical services and API ownership
+
+`server/modules/sales-pricing.js` owns all §29.31.2/§29.31.3 routes. DRAFT writes lock/re-read the owner, validate references/ranges/UoM truth, and write audit in the same transaction. Price and discount rule versions append only. Activation validates completeness, fallback chains and canonical UoM evidence before freezing; retirement is `ACTIVE → RETIRED`. Both transitions reuse Platform idempotency: exact replay has zero additional state/audit effect and changed payload under the same key is rejected.
+
+The price resolver applies explicit roots, the effective customer default, depth-first fallback, customer-before-all scope, integer quantity micros, Master rational conversions and the greatest immutable price version. It never reads `products.price_cents`. The discount resolver re-runs canonical pricing for every line; client expected evidence is an exact-match assertion only. LINE rules can filter material/customer/UoM/quantity/date. HEADER rules are database- and backend-constrained to order scope and use the post-LINE subtotal. Greatest effective rule version wins; disabled or expired current history cannot resurrect an older version. Integer cents/bps, HALF_UP and largest-remainder allocation remain authoritative.
+
+Both resolver POSTs require view authority and write no business/audit/idempotency state. Manual price or MANUAL discount additionally requires override authority and a reason. No override log, sixth table or M14 write exists.
+
+### 33.3 Authorization, UI and verification
+
+The independent permissions are `SALES_PRICING_VIEW`, `SALES_PRICING_MANAGE`, and `SALES_PRICING_OVERRIDE`: Admin all; Sales view/manage; Reviewer view/override; Warehouse none; Accounting view. Every endpoint checks its exact authority.
+
+`sales-pricing` is a contextual child route of the existing Sales & Customer customer surface and is absent from launcher groups. `src/pages/sales-pricing.jsx` supplies the bounded responsive list/configuration entry surface without a new top-level application.
+
+### 33.4 Implementation self-review closure
+
+The final implementation review preserves immutable pricing history: a DRAFT entry with any version, and a DRAFT list containing entries, cannot be hard-deleted. Identity replacement therefore creates a new entry while retaining prior version evidence. Resolver HTTP handlers execute their complete canonical read path in one read transaction and remain zero-write. Activation validates the complete fallback interval, acquires MySQL fallback locks in deterministic ascending ID order, and uses the full action plus request body as its idempotency fingerprint. Customer defaults must be ACTIVE and applicable on the commercial-extension effective date.
+
+The MySQL contracts assert exact nullable column metadata, exact FK names/columns/targets, exact ordered four-column UNIQUE metadata, and exact BEFORE INSERT/UPDATE identity-trigger metadata and bytewise action signatures for fresh and existing-upgrade paths. Responsive acceptance exercises 320 / 390 / 430 / 680 CSS px, verifies no page overflow, and verifies a 44 px minimum interactive target. These are implementation/verification facts only; user Acceptance/Freeze remains external.
+
+Verification ownership: `server/sales-customer-wave2-pricing.test.js` covers SQLite schema/FK/UNIQUE/triggers, five-role RBAC, identity immutability, versions, replay, pure resolvers, HEADER constraints, LINE→HEADER arithmetic and evidence mismatch; the migration-runner test covers fresh/reopen; the protected MySQL fresh and existing-upgrade suites cover fresh/live replay/second initialization. Wave 2 returns evidence only; SO persistence and final R-SAL-11 remain Wave 4.

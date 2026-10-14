@@ -3,6 +3,7 @@ import { after, before, describe, test } from 'node:test';
 import { MySqlSyncAdapter } from './database/mysql-adapter.js';
 import { runSalesCustomerMigrations } from './migrations/sales-customer-domain.js';
 import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
+import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
 import { createTempDb } from './test-utils/temp-db.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
@@ -15,8 +16,6 @@ if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
 
 const WAVE2_PLUS_SALES_TABLES = [
   'sales_quotations', 'sales_quotation_lines', 'sales_quotation_conversions',
-  'sales_price_lists', 'sales_price_list_entries', 'sales_price_list_versions',
-  'sales_discount_schemes', 'sales_discount_scheme_rules',
   'sales_order_changes', 'sales_order_change_lines',
   'delivery_notices', 'delivery_notice_lines',
   'sales_order_replacements', 'sales_order_replacement_lines',
@@ -47,7 +46,6 @@ const FUTURE_SALES_COLUMNS = {
   sales_deliveries: ['delivery_notice_id', 'source_mode'],
   sales_delivery_items: ['delivery_notice_line_id'],
   return_orders: ['commercial_source_marker'],
-  customer_commercial_extensions: ['default_pricing_list_id', 'default_discount_scheme_id'],
 };
 
 describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => {
@@ -81,11 +79,14 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.equal(db.prepare('SELECT 1 AS value').get().value, 1);
   });
 
-  test('Wave 1 creates exactly its eight tables and no Wave 2+ Sales table', () => {
-    assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 28);
+  test('Wave 2 creates exactly five additional tables and no Wave 3+ Sales table', () => {
+    assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 26);
     const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
     const wave1 = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${wave1Placeholders}) ORDER BY TABLE_NAME`).all(...SALES_WAVE1_TABLES);
     assert.deepEqual(wave1.map((row) => row.table_name), [...SALES_WAVE1_TABLES].sort());
+    const wave2Placeholders = SALES_WAVE2_TABLES.map(() => '?').join(',');
+    const wave2 = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${wave2Placeholders}) ORDER BY TABLE_NAME`).all(...SALES_WAVE2_TABLES);
+    assert.deepEqual(wave2.map((row) => row.table_name), [...SALES_WAVE2_TABLES].sort());
     const placeholders = WAVE2_PLUS_SALES_TABLES.map(() => '?').join(',');
     const rows = db.prepare(
       `SELECT TABLE_NAME table_name
@@ -94,6 +95,36 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
         ORDER BY TABLE_NAME`,
     ).all(...WAVE2_PLUS_SALES_TABLES);
     assert.deepEqual(rows, []);
+
+    const defaults = db.prepare(`SELECT COLUMN_NAME column_name,IS_NULLABLE is_nullable FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'
+        AND COLUMN_NAME IN ('default_pricing_list_id','default_discount_scheme_id') ORDER BY COLUMN_NAME`).all();
+    assert.deepEqual(defaults.map((row) => [row.column_name,row.is_nullable]), [['default_discount_scheme_id','YES'],['default_pricing_list_id','YES']]);
+    const defaultFks = db.prepare(`SELECT CONSTRAINT_NAME constraint_name,COLUMN_NAME column_name,REFERENCED_TABLE_NAME target
+      FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'
+        AND COLUMN_NAME IN ('default_pricing_list_id','default_discount_scheme_id') AND REFERENCED_TABLE_NAME IS NOT NULL ORDER BY COLUMN_NAME`).all();
+    assert.deepEqual(defaultFks.map((row) => [row.constraint_name,row.column_name,row.target]), [
+      ['fk_customer_commercial_default_discount_scheme','default_discount_scheme_id','sales_discount_schemes'],
+      ['fk_customer_commercial_default_price_list','default_pricing_list_id','sales_price_lists'],
+    ]);
+    const triggers = db.prepare(`SELECT TRIGGER_NAME trigger_name,ACTION_TIMING action_timing,EVENT_MANIPULATION event_name,
+      EVENT_OBJECT_TABLE table_name,ACTION_STATEMENT action_statement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE()
+      AND TRIGGER_NAME IN ('trg_sales_price_entries_identity_bi','trg_sales_price_entries_identity_bu') ORDER BY TRIGGER_NAME`).all();
+    assert.deepEqual(triggers.map((row) => [row.trigger_name,row.action_timing,row.event_name,row.table_name]), [
+      ['trg_sales_price_entries_identity_bi','BEFORE','INSERT','sales_price_list_entries'],
+      ['trg_sales_price_entries_identity_bu','BEFORE','UPDATE','sales_price_list_entries'],
+    ]);
+    for (const trigger of triggers) {
+      assert.match(trigger.action_statement, /BINARY NEW\.material_identity_key/);
+      assert.match(trigger.action_statement, /BINARY NEW\.customer_scope_key/);
+      assert.match(trigger.action_statement, /BINARY NEW\.pricing_identity_key/);
+    }
+    const uniqueIndexes = db.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name,SEQ_IN_INDEX sequence_no
+      FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sales_price_list_entries'
+      AND NON_UNIQUE=0 AND INDEX_NAME<>'PRIMARY' ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all();
+    const groupedIndexes = Map.groupBy(uniqueIndexes, (row) => row.index_name);
+    assert.ok([...groupedIndexes.values()].some((rows) => rows.map((row) => row.column_name).join(',')
+      === 'price_list_id,material_identity_key,customer_scope_key,pricing_identity_key'));
 
     for (const [table, columns] of Object.entries(FUTURE_SALES_COLUMNS)) {
       const columnPlaceholders = columns.map(() => '?').join(',');

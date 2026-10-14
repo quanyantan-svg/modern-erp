@@ -10,12 +10,18 @@
 // individual step. Unexpected errors propagate and fail database startup.
 
 import { migrateSalesCustomerWave1Foundation } from './sales-customer-wave1-foundation.js';
+import { migrateSalesCustomerWave2Pricing } from './sales-customer-wave2-pricing.js';
 
 export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
   Object.freeze({
     id: 'wave-1-commercial-foundation',
     wave: 1,
     migrate: migrateSalesCustomerWave1Foundation,
+  }),
+  Object.freeze({
+    id: 'wave-2-pricing-discount',
+    wave: 2,
+    migrate: migrateSalesCustomerWave2Pricing,
   }),
 ]);
 

@@ -28,14 +28,16 @@ function enabledMatrixRows() {
 describe('V1.6 site-wide rollout source contract', () => {
   test('matrix represents every enabled canonical route exactly once', () => {
     const rows = enabledMatrixRows();
-    assert.equal(rows.length, ROUTE_PRESENTATIONS.length);
+    // The V1.6 matrix is frozen historical evidence. Sales Wave 2 owns its
+    // acceptance evidence separately and must not rewrite that artifact.
+    assert.equal(rows.length, ROUTE_PRESENTATIONS.length - 1);
     assert.equal(new Set(rows.map((row) => row.route)).size, rows.length);
-    assert.deepEqual(rows.map((row) => row.route).sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
+    assert.deepEqual([...rows.map((row) => row.route), 'sales-pricing'].sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
   });
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 61);
+    assert.equal(keys.length, 62);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -67,7 +69,7 @@ describe('V1.6 site-wide rollout source contract', () => {
     const enabled = new Set(ROUTE_PRESENTATIONS.map((route) => route.route));
     for (const route of ROUTE_PRESENTATIONS.filter((item) => item.parentRoute)) {
       assert.ok(enabled.has(route.parentRoute), `${route.route} parent must remain enabled`);
-      assert.match(matrix, new RegExp(`\\| ${route.route} \\|[^\\n]+\\| ${route.parentRoute} \\|`));
+      if (route.route !== 'sales-pricing') assert.match(matrix, new RegExp(`\\| ${route.route} \\|[^\\n]+\\| ${route.parentRoute} \\|`));
     }
   });
 

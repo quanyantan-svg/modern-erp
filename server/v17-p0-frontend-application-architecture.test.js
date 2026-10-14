@@ -12,7 +12,7 @@ import { normalizeRouteLocation, parseRouteLocation, serializeRouteLocation, val
 
 const read = (path) => readFileSync(resolve(path), 'utf8');
 
-test('P0-A registry owns 61 active and 5 disabled unique routes with valid screens, access and parents', () => {
+test('P0-A registry owns 62 active and 5 disabled unique routes with valid screens, access and parents', () => {
   // Finance Operations closure adds invoice and treasury hubs while keeping
   // the prior deep-link routes available.
   // inventory mobile routes are merged into the canonical inventory hub
@@ -24,7 +24,7 @@ test('P0-A registry owns 61 active and 5 disabled unique routes with valid scree
   // Planning adds 2 contextual surfaces (planning-reservations, planning-configuration).
   // Procurement & Outsourcing Domain Closure adds 2 surfaces
   // (sourcing-pricing, outsourcing).
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 61);
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 62);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   assert.equal(new Set(APPLICATION_ROUTES.map((route) => route.key)).size, APPLICATION_ROUTES.length);
   assert.deepEqual(DISABLED_APPLICATION_ROUTES.map((route) => route.key), ['cash-journals','bills','fixed-assets','workflows','data-cleanup']);
@@ -48,7 +48,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
     assert.equal(entry.group, group.key, `${entry.key} parent group`);
     assert.equal(groupKeys.has(entry.group), true, `${entry.key} valid group`);
   }
-  assert.equal(ROUTE_PRESENTATIONS.length, 61);
+  assert.equal(ROUTE_PRESENTATIONS.length, 62);
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5);
   assert.deepEqual(MOBILE_APPLICATION_GROUPS.map((group) => group.key), APPLICATION_LAUNCHER_GROUPS.map((group) => group.key));
   const corePages = MOBILE_APPLICATION_GROUPS.filter((group) => group.kind === 'domain').flatMap((group) => group.items.map((item) => item.page));
@@ -59,7 +59,7 @@ test('P0-A aliases and launcher entries are conflict-free registry projections',
 
 test('P0-A registry preserves V1.6 rollout classification and application groups', () => {
   const internal = ['manufacturing-analytics','material-requirements-plan'];
-  const contextual = ['bank-accounts','cost-rates','dashboard','iqc','notifications','oqc','planning-configuration','planning-reservations','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-invoices','supplier-bills'];
+  const contextual = ['bank-accounts','cost-rates','dashboard','iqc','notifications','oqc','planning-configuration','planning-reservations','product-costs','purchase-discounts','quality-control-points','sales-discounts','sales-invoices','sales-pricing','supplier-bills'];
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'INTERNAL').map((route) => route.key).sort(), internal);
   assert.deepEqual(ACTIVE_APPLICATION_ROUTES.filter((route) => route.classification === 'CONTEXTUAL').map((route) => route.key).sort(), contextual);
   assert.deepEqual(

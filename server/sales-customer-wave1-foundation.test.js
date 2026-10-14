@@ -7,6 +7,7 @@ import { after, before, describe, test } from 'node:test';
 import { createApp } from './app.js';
 import { createDatabase } from './db.js';
 import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
+import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
 import { assertSellableProduct, resolveCustomerMaterialXref } from './modules/sales-commercial-foundation.js';
 import { resolveSalesParameters } from './modules/sales-parameters.js';
 
@@ -43,11 +44,10 @@ after(async () => {
 });
 
 describe('Sales & Customer Wave 1 — Commercial Foundation', () => {
-  test('creates exactly eight Wave 1 tables and no existing-table fields or Wave 2 tables', () => {
+  test('preserves exactly eight Wave 1 tables alongside the bounded Wave 2 schema', () => {
     const names = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sales_parameters','sales_groups','salesperson_profiles','salesperson_group_memberships','customer_commercial_extensions','customer_material_xref','sales_sellable_scope_rules','product_commercial_classification') ORDER BY name").all().map((row) => row.name);
     assert.deepEqual(names, [...SALES_WAVE1_TABLES].sort());
     for (const [table, forbidden] of Object.entries({
-      customers: ['default_pricing_list_id', 'default_discount_scheme_id'],
       products: ['sales_enabled', 'service_classification'],
       users: ['salesperson_code', 'sales_group_code'],
       sales_orders: ['salesperson_id', 'sales_group_id', 'effective_version'],
@@ -55,7 +55,11 @@ describe('Sales & Customer Wave 1 — Commercial Foundation', () => {
       const columns = new Set(database.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
       for (const column of forbidden) assert.equal(columns.has(column), false, `${table}.${column} must remain absent`);
     }
-    assert.equal(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sales_price_lists'").get(), undefined);
+    const wave2 = database.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${SALES_WAVE2_TABLES.map(() => '?').join(',')}) ORDER BY name`).all(...SALES_WAVE2_TABLES).map((row) => row.name);
+    assert.deepEqual(wave2, [...SALES_WAVE2_TABLES].sort());
+    const extensionColumns = new Set(database.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
+    assert.equal(extensionColumns.has('default_pricing_list_id'), true);
+    assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
   });
 
   test('parameter resolver is fail-closed and applies DOCUMENT_TYPE over SYSTEM', async () => {

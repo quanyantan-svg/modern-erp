@@ -41,6 +41,9 @@ import { migrateInventoryPositionSchema } from './migrations/inventory-position-
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 
 export const PERMISSIONS = [
+  ['SALES_PRICING_VIEW', '查看销售定价与订单时折扣'],
+  ['SALES_PRICING_MANAGE', '管理销售定价与订单时折扣'],
+  ['SALES_PRICING_OVERRIDE', '执行销售价格与订单时折扣覆盖'],
   ['SUPPLIERS_VIEW', '查看供应商'],
   ['SUPPLIERS_MANAGE', '管理供应商资料'],
   ['DASHBOARD_VIEW', '查看仪表板'],
@@ -1732,6 +1735,14 @@ function seedSchema(db) {
   for (const [roleId, permissions] of Object.entries(rolePermissions)) {
     for (const permission of permissions) insertRolePermission.run(roleId, permission);
   }
+  const wave2PricingRolePermissions = {
+    'role-sales': ['SALES_PRICING_VIEW', 'SALES_PRICING_MANAGE'],
+    'role-reviewer': ['SALES_PRICING_VIEW', 'SALES_PRICING_OVERRIDE'],
+    'role-accounting': ['SALES_PRICING_VIEW'],
+  };
+  for (const [roleId, permissions] of Object.entries(wave2PricingRolePermissions)) {
+    for (const permission of permissions) insertRolePermission.run(roleId, permission);
+  }
 
   const insertSubject = db.prepare('INSERT OR IGNORE INTO accounting_subjects(id, code, name, type, direction, active) VALUES (?, ?, ?, ?, ?, 1)');
   for (const s of [
@@ -1878,6 +1889,18 @@ export function transaction(db, work) {
       }
       waitForTransactionRetry(attempt);
     }
+  }
+}
+
+export function readTransaction(db, work) {
+  db.exec('BEGIN');
+  try {
+    const result = work();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+    throw error;
   }
 }
 export function id() {

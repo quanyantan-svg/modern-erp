@@ -11,17 +11,13 @@ import {
   runSalesCustomerMigrations,
 } from './migrations/sales-customer-domain.js';
 import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
+import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
 import { createTempDir } from './test-utils/temp-db.js';
 
 const WAVE2_PLUS_SALES_TABLES = [
   'sales_quotations',
   'sales_quotation_lines',
   'sales_quotation_conversions',
-  'sales_price_lists',
-  'sales_price_list_entries',
-  'sales_price_list_versions',
-  'sales_discount_schemes',
-  'sales_discount_scheme_rules',
   'sales_order_changes',
   'sales_order_change_lines',
   'delivery_notices',
@@ -66,18 +62,23 @@ const FUTURE_SALES_COLUMNS = {
   sales_deliveries: ['delivery_notice_id', 'source_mode'],
   sales_delivery_items: ['delivery_notice_line_id'],
   return_orders: ['commercial_source_marker'],
-  customer_commercial_extensions: ['default_pricing_list_id', 'default_discount_scheme_id'],
 };
 
-function assertWave1ProductionSchema(db) {
+function assertWave2ProductionSchema(db) {
   const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
   const wave1 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave1Placeholders}) ORDER BY name`).all(...SALES_WAVE1_TABLES);
   assert.deepEqual(wave1.map((row) => row.name), [...SALES_WAVE1_TABLES].sort());
+  const wave2Placeholders = SALES_WAVE2_TABLES.map(() => '?').join(',');
+  const wave2 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave2Placeholders}) ORDER BY name`).all(...SALES_WAVE2_TABLES);
+  assert.deepEqual(wave2.map((row) => row.name), [...SALES_WAVE2_TABLES].sort());
   const placeholders = WAVE2_PLUS_SALES_TABLES.map(() => '?').join(',');
   const tables = db.prepare(
     `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`,
   ).all(...WAVE2_PLUS_SALES_TABLES);
-  assert.deepEqual(tables, [], 'Wave 1 must not create any Wave 2+ Sales table');
+  assert.deepEqual(tables, [], 'Wave 2 must not create any Wave 3+ Sales table');
+  const extensionColumns = new Set(db.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
+  assert.equal(extensionColumns.has('default_pricing_list_id'), true);
+  assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
 
   for (const [table, forbiddenColumns] of Object.entries(FUTURE_SALES_COLUMNS)) {
     const actual = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -87,11 +88,12 @@ function assertWave1ProductionSchema(db) {
   }
 }
 
-test('canonical production registry contains only the frozen Wave 1 foundation step', () => {
-  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 28);
+test('canonical production registry contains the approved Wave 1 and Wave 2 steps', () => {
+  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 26);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 1);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 2);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
+  assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
   const db = new DatabaseSync(':memory:');
   try {
     assert.deepEqual(runSalesCustomerMigrations(db, []), [], 'explicit empty fixture preserves historical Wave 0 semantics');
@@ -159,13 +161,13 @@ test('migration errors propagate and stop later steps', () => {
   assert.deepEqual(calls, ['before']);
 });
 
-test('fresh SQLite and existing SQLite reopen execute Wave 1 idempotently without forward schema', () => {
+test('fresh SQLite and existing SQLite reopen execute Wave 2 idempotently without forward schema', () => {
   const dir = createTempDir('sales-wave0');
   const dbPath = join(dir, 'wave0.db');
   try {
     const fresh = createDatabase(dbPath);
     try {
-      assertWave1ProductionSchema(fresh);
+      assertWave2ProductionSchema(fresh);
       assert.ok(fresh.prepare("SELECT 1 FROM pragma_table_info('sales_deliveries') WHERE name='billing_mode'").get(), 'existing billing_mode remains intact');
     } finally {
       fresh.close();
@@ -173,7 +175,7 @@ test('fresh SQLite and existing SQLite reopen execute Wave 1 idempotently withou
 
     const reopened = createDatabase(dbPath);
     try {
-      assertWave1ProductionSchema(reopened);
+      assertWave2ProductionSchema(reopened);
       assert.equal(reopened.prepare('SELECT 1 value').get().value, 1);
     } finally {
       reopened.close();

@@ -21,6 +21,7 @@
     "test:mysql:finance-concurrency": "node scripts/gates/mysql-finance-concurrency-gate.mjs",
     "test:finance:responsive": "node scripts/acceptance/finance-operations-responsive-uat.mjs",
     "test:finance:uat": "node scripts/acceptance/finance-operations-final-uat.mjs",
+    "test:sales:wave2-responsive": "node scripts/acceptance/sales-customer-wave2-responsive.mjs",
     "reset-data": "node server/reset-data.js",
     "backup-db": "node scripts/admin/backup-db.mjs",
     "restore-db": "node scripts/admin/restore-db.mjs",

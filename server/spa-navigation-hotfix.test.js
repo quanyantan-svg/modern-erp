@@ -129,7 +129,7 @@ describe('navigation state and regression contracts', () => {
     // SUPPLIERS_VIEW and INVENTORY_TRANSFER_CONFIRM (114); Core Scope
     // Cleanup removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW,
     // PROJECT_MANAGE (110).
-    assert.equal(PERMISSIONS.length, 208);
+    assert.equal(PERMISSIONS.length, 211);
     assert.equal(PERMISSIONS.filter(([code]) => code.startsWith('SALES_')).length >= 4, true);
   });
   test('exact targets initialize Sales Delivery and Purchase Receipt detail state', () => {

@@ -35,6 +35,10 @@ function extensionRow(row) {
     defaultSalespersonName: row.default_salesperson_name,
     defaultSalesGroupId: row.default_sales_group_id,
     defaultSalesGroupName: row.default_sales_group_name,
+    defaultPricingListId: row.default_pricing_list_id,
+    defaultPricingListName: row.default_pricing_list_name,
+    defaultDiscountSchemeId: row.default_discount_scheme_id,
+    defaultDiscountSchemeName: row.default_discount_scheme_name,
     defaultPaymentTermsDays: row.default_payment_terms_days,
     defaultSettlementMethod: row.default_settlement_method,
     sellableScopeMode: row.sellable_scope_mode,
@@ -45,12 +49,15 @@ function extensionRow(row) {
 
 const EXTENSION_SELECT = `SELECT e.*,
   sp.name settlement_party_name,py.name payer_name,
-  s.name default_salesperson_name,g.name default_sales_group_name
+  s.name default_salesperson_name,g.name default_sales_group_name,
+  pl.name default_pricing_list_name,ds.name default_discount_scheme_name
   FROM customer_commercial_extensions e
   LEFT JOIN customers sp ON sp.id=e.settlement_party_customer_id
   LEFT JOIN customers py ON py.id=e.payer_customer_id
   LEFT JOIN salesperson_profiles s ON s.id=e.default_salesperson_id
-  LEFT JOIN sales_groups g ON g.id=e.default_sales_group_id`;
+  LEFT JOIN sales_groups g ON g.id=e.default_sales_group_id
+  LEFT JOIN sales_price_lists pl ON pl.id=e.default_pricing_list_id
+  LEFT JOIN sales_discount_schemes ds ON ds.id=e.default_discount_scheme_id`;
 
 export function listCustomerCommercialExtensions(db, res, actor, url) {
   allowAny(actor, VIEW);
@@ -66,7 +73,7 @@ export function listCustomerCommercialExtensions(db, res, actor, url) {
 function extensionInput(body) {
   assertAllowedFields(body, [
     'customerId', 'effectiveFrom', 'effectiveTo', 'settlementPartyCustomerId', 'payerCustomerId',
-    'defaultSalespersonId', 'defaultSalesGroupId', 'defaultPaymentTermsDays',
+    'defaultSalespersonId', 'defaultSalesGroupId', 'defaultPricingListId', 'defaultDiscountSchemeId', 'defaultPaymentTermsDays',
     'defaultSettlementMethod', 'sellableScopeMode', 'supersedeCurrent',
   ]);
   const customerId = nullableId(body.customerId);
@@ -85,6 +92,8 @@ function extensionInput(body) {
     payerCustomerId: nullableId(body.payerCustomerId),
     defaultSalespersonId: nullableId(body.defaultSalespersonId),
     defaultSalesGroupId: nullableId(body.defaultSalesGroupId),
+    defaultPricingListId: nullableId(body.defaultPricingListId),
+    defaultDiscountSchemeId: nullableId(body.defaultDiscountSchemeId),
     defaultPaymentTermsDays: days,
     defaultSettlementMethod: optionalText(body.defaultSettlementMethod, 50) || null,
     sellableScopeMode: mode,
@@ -98,6 +107,14 @@ function validateExtensionRefs(db, value) {
   }
   if (value.defaultSalespersonId && !db.prepare('SELECT 1 FROM salesperson_profiles WHERE id=? AND active=1').get(value.defaultSalespersonId)) throw new HttpError(400, '默认销售员不存在或已停用');
   if (value.defaultSalesGroupId && !db.prepare('SELECT 1 FROM sales_groups WHERE id=? AND active=1').get(value.defaultSalesGroupId)) throw new HttpError(400, '默认销售组不存在或已停用');
+  if (value.defaultPricingListId && !db.prepare(`SELECT 1 FROM sales_price_lists WHERE id=? AND status='ACTIVE'
+    AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).get(value.defaultPricingListId, value.effectiveFrom, value.effectiveFrom)) {
+    throw new HttpError(400, '默认价目表不存在、未启用或在扩展生效日不可用');
+  }
+  if (value.defaultDiscountSchemeId && !db.prepare(`SELECT 1 FROM sales_discount_schemes WHERE id=? AND status='ACTIVE'
+    AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).get(value.defaultDiscountSchemeId, value.effectiveFrom, value.effectiveFrom)) {
+    throw new HttpError(400, '默认折扣方案不存在、未启用或在扩展生效日不可用');
+  }
   if (value.defaultSalespersonId && value.defaultSalesGroupId) {
     const valid = db.prepare(`SELECT 1 FROM salesperson_group_memberships WHERE salesperson_id=? AND sales_group_id=? AND active=1
       AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`).get(value.defaultSalespersonId, value.defaultSalesGroupId, value.effectiveFrom, value.effectiveFrom);
@@ -125,10 +142,10 @@ export async function createCustomerCommercialExtension(db, req, res, actor) {
       throw conflict('客户商业扩展有效期与现有版本重叠', 'CUSTOMER_COMMERCIAL_INTERVAL_OVERLAP');
     }
     db.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,settlement_party_customer_id,payer_customer_id,
-      default_salesperson_id,default_sales_group_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,effective_to,
-      created_at,updated_at,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      default_salesperson_id,default_sales_group_id,default_pricing_list_id,default_discount_scheme_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,effective_to,
+      created_at,updated_at,created_by,updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(value.customerId, value.effectiveFrom, value.settlementPartyCustomerId, value.payerCustomerId,
-        value.defaultSalespersonId, value.defaultSalesGroupId, value.defaultPaymentTermsDays, value.defaultSettlementMethod,
+        value.defaultSalespersonId, value.defaultSalesGroupId, value.defaultPricingListId, value.defaultDiscountSchemeId, value.defaultPaymentTermsDays, value.defaultSettlementMethod,
         value.sellableScopeMode, value.effectiveTo, now, now, actor.id, actor.id);
     audit(db, actor.id, 'CREATE', 'CUSTOMER_COMMERCIAL_EXTENSION', `${value.customerId}:${value.effectiveFrom}`, value.sellableScopeMode);
   });
@@ -143,7 +160,7 @@ export async function updateCustomerCommercialExtension(db, req, res, actor, ver
   const customerId = versionId.slice(0, split);
   const effectiveFrom = normalizeBusinessDate(versionId.slice(split + 1), '生效日期');
   const body = await readJson(req);
-  assertAllowedFields(body, ['effectiveTo', 'settlementPartyCustomerId', 'payerCustomerId', 'defaultSalespersonId', 'defaultSalesGroupId', 'defaultPaymentTermsDays', 'defaultSettlementMethod', 'sellableScopeMode']);
+  assertAllowedFields(body, ['effectiveTo', 'settlementPartyCustomerId', 'payerCustomerId', 'defaultSalespersonId', 'defaultSalesGroupId', 'defaultPricingListId', 'defaultDiscountSchemeId', 'defaultPaymentTermsDays', 'defaultSettlementMethod', 'sellableScopeMode']);
   const now = new Date().toISOString();
   runSalesWrite(db, () => {
     if (!lockById(db, 'customers', customerId)) throw new HttpError(404, '客户不存在');
@@ -157,6 +174,8 @@ export async function updateCustomerCommercialExtension(db, req, res, actor, ver
       payerCustomerId: body.payerCustomerId === undefined ? old.payer_customer_id : body.payerCustomerId,
       defaultSalespersonId: body.defaultSalespersonId === undefined ? old.default_salesperson_id : body.defaultSalespersonId,
       defaultSalesGroupId: body.defaultSalesGroupId === undefined ? old.default_sales_group_id : body.defaultSalesGroupId,
+      defaultPricingListId: body.defaultPricingListId === undefined ? old.default_pricing_list_id : body.defaultPricingListId,
+      defaultDiscountSchemeId: body.defaultDiscountSchemeId === undefined ? old.default_discount_scheme_id : body.defaultDiscountSchemeId,
       defaultPaymentTermsDays: body.defaultPaymentTermsDays === undefined ? old.default_payment_terms_days : body.defaultPaymentTermsDays,
       defaultSettlementMethod: body.defaultSettlementMethod === undefined ? old.default_settlement_method : body.defaultSettlementMethod,
       sellableScopeMode: body.sellableScopeMode === undefined ? old.sellable_scope_mode : body.sellableScopeMode,
@@ -164,9 +183,9 @@ export async function updateCustomerCommercialExtension(db, req, res, actor, ver
     validateExtensionRefs(db, value);
     const peers = db.prepare('SELECT * FROM customer_commercial_extensions WHERE customer_id=? AND effective_from<>?').all(customerId, effectiveFrom);
     if (peers.some((row) => intervalsOverlap(row.effective_from, row.effective_to, effectiveFrom, value.effectiveTo))) throw conflict('修改后的有效期与其他版本重叠', 'CUSTOMER_COMMERCIAL_INTERVAL_OVERLAP');
-    db.prepare(`UPDATE customer_commercial_extensions SET settlement_party_customer_id=?,payer_customer_id=?,default_salesperson_id=?,default_sales_group_id=?,default_payment_terms_days=?,default_settlement_method=?,sellable_scope_mode=?,effective_to=?,updated_at=?,updated_by=? WHERE customer_id=? AND effective_from=?`)
+    db.prepare(`UPDATE customer_commercial_extensions SET settlement_party_customer_id=?,payer_customer_id=?,default_salesperson_id=?,default_sales_group_id=?,default_pricing_list_id=?,default_discount_scheme_id=?,default_payment_terms_days=?,default_settlement_method=?,sellable_scope_mode=?,effective_to=?,updated_at=?,updated_by=? WHERE customer_id=? AND effective_from=?`)
       .run(value.settlementPartyCustomerId, value.payerCustomerId, value.defaultSalespersonId, value.defaultSalesGroupId,
-        value.defaultPaymentTermsDays, value.defaultSettlementMethod, value.sellableScopeMode, value.effectiveTo,
+        value.defaultPricingListId, value.defaultDiscountSchemeId, value.defaultPaymentTermsDays, value.defaultSettlementMethod, value.sellableScopeMode, value.effectiveTo,
         now, actor.id, customerId, effectiveFrom);
     audit(db, actor.id, 'UPDATE', 'CUSTOMER_COMMERCIAL_EXTENSION', `${customerId}:${effectiveFrom}`, value.sellableScopeMode);
   });
