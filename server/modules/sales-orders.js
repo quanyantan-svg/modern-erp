@@ -19,6 +19,28 @@ const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(mi
 function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
 function effectiveExtension(db, customerId, businessDate) { return currentCommercialExtension(db, customerId, businessDate); }
 
+function authorizedOverrideEvidence(db, source, actor, expected) {
+  const authorizationId = String(source.priceOverrideAuthorizationId || '').trim();
+  if (!authorizationId) return null;
+  const row = db.prepare(`SELECT * FROM audit_logs WHERE id=? AND entity_type='SALES_PRICE_OVERRIDE_AUTHORIZATION'
+    AND action='AUTHORIZE'${lockSuffix(db)}`).get(authorizationId);
+  if (!row) throw new HttpError(409, '价格覆盖授权不存在', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
+  if (row.user_id === actor.id) throw new HttpError(409, '订单创建人与价格覆盖授权人必须分离', { code: 'SALES_PRICE_OVERRIDE_SOD' });
+  const value = parse(row.detail, '价格覆盖授权');
+  if (value.customerId !== expected.customerId || value.businessDate !== expected.businessDate
+    || value.materialId !== expected.materialId || value.uomCode !== expected.uomCode
+    || Number(value.quantityMicros) !== expected.quantityMicros) throw new HttpError(409, '价格覆盖授权与订单行不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_MISMATCH' });
+  if (db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
+    throw new HttpError(409, '价格覆盖授权已使用', { code: 'PRICE_OVERRIDE_AUTHORIZATION_USED' });
+  }
+  const snapshot = validatePriceSnapshot(db, value.priceSnapshot, { businessDate: expected.businessDate, materialId: expected.materialId,
+    uomCode: expected.uomCode, quantityMicros: expected.quantityMicros, unitPriceCents: value.priceSnapshot.unitPriceCents,
+    grossCents: value.priceSnapshot.grossAmountCents });
+  if (snapshot.evidence.overrideState !== 'OVERRIDDEN' || snapshot.evidence.overrideEvidence?.actorId !== row.user_id
+    || snapshot.evidence.overrideEvidence?.authority !== 'SALES_PRICING_OVERRIDE') throw new HttpError(409, '价格覆盖授权证据无效', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
+  return { ...snapshot.evidence, overrideEvidence: { ...snapshot.evidence.overrideEvidence, authorizationId } };
+}
+
 function zeroDiscountEvidence(lineIds, pricing, grossByLine) {
   const final = Object.fromEntries(lineIds.map((lineId) => [lineId, grossByLine[lineId]]));
   const result = {
@@ -95,7 +117,7 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
     const materialId = String(source.productId || source.materialId || '').trim();
     const uomCode = String(source.uomCode || source.requestedUomCode || db.prepare('SELECT base_uom_code FROM products WHERE id=?').get(materialId)?.base_uom_code || '').trim();
     assertSellableProduct(db, { customerId, salespersonId, productId: materialId, businessDate, documentType: 'SALES_ORDER' });
-    const evidence = resolveSalesPrice(db, {
+    const evidence = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros }) || resolveSalesPrice(db, {
       customerId, salespersonId, materialId, pricingUomCode: uomCode, quantityDecimal: microsDecimal(quantityMicros), businessDate,
       explicitPriceListIds: source.explicitPriceListIds || body.explicitPriceListIds,
       manualPriceCents: source.manualPriceCents, overrideReason: source.overrideReason || body.overrideReason,
@@ -119,7 +141,7 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
         manualPriceCents: line.evidence.overrideState === 'OVERRIDDEN' ? line.evidence.resolvedPriceCents : undefined,
         overrideReason: line.evidence.overrideEvidence?.reason,
         expectedPricingEvidence: line.evidence })),
-    }, actor);
+    }, actor, { trustedPricingEvidence: true });
   } catch (error) {
     if (error?.details?.code !== 'DISCOUNT_NOT_CONFIGURED') throw error;
     discount = zeroDiscountEvidence(lineInputs.map((line) => line.lineId), Object.fromEntries(lineInputs.map((line) => [line.lineId, line.evidence])), Object.fromEntries(lineInputs.map((line) => [line.lineId, line.gross])));
@@ -200,6 +222,33 @@ export function insertSalesOrderLines(db, orderId, lines) {
     line.documentUomCode, line.documentQuantityNum, line.documentQuantityDen, line.conversionNumerator, line.conversionDenominator,
     line.baseQuantityNum, line.baseQuantityDen, line.isGiftLine, line.taxBasis, line.taxInclusive, line.pricingUom, line.qtyMin, line.qtyMax,
     line.plannedDate ?? null, line.upperTolerance, line.lowerTolerance, json(line.priceSnapshot), json(line.discountSnapshot));
+}
+
+export async function authorizeSalesPriceOverride(db, req, res, actor) {
+  requireSalesPermission(actor, 'SALES_PRICING_OVERRIDE');
+  const body = await readJson(req);
+  const businessDate = normalizeBusinessDate(body.businessDate || body.orderDate || DAY(), '订单日期');
+  const customer = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(body.customerId);
+  if (!customer) throw new HttpError(422, '客户不存在或已停用');
+  const extension = effectiveExtension(db, customer.id, businessDate);
+  const salespersonId = body.salespersonId || extension.default_salesperson_id;
+  let result;
+  transaction(db, () => {
+    const lines = buildAuthoritativeSalesLines(db, { customerId: customer.id, orderDate: businessDate,
+      requestedDeliveryDate: body.requestedDeliveryDate || businessDate, items: [{ productId: body.productId || body.materialId,
+        uomCode: body.uomCode, quantityMicros: body.quantityMicros, quantityDecimal: body.quantityDecimal,
+        manualPriceCents: body.manualPriceCents, overrideReason: body.overrideReason }] }, actor,
+    businessDate, customer.id, salespersonId, { enforceCreatorOverrideSod: false });
+    const line = lines[0]; const authorizationId = id();
+    const detail = { contractVersion: 'SALES_PRICE_OVERRIDE_AUTHORIZATION_V1', authorizationId, customerId: customer.id,
+      businessDate, materialId: line.productId, uomCode: line.documentUomCode, quantityMicros: line.quantityMicros,
+      priceSnapshot: line.priceSnapshot };
+    db.prepare("INSERT INTO audit_logs(id,user_id,action,entity_type,entity_id,detail,created_at) VALUES(?,?,'AUTHORIZE','SALES_PRICE_OVERRIDE_AUTHORIZATION',?,?,?)")
+      .run(authorizationId, actor.id, authorizationId, JSON.stringify(detail), NOW());
+    result = { authorizationId, businessDate, materialId: line.productId, uomCode: line.documentUomCode,
+      quantityMicros: line.quantityMicros, manualPriceCents: line.priceSnapshot.unitPriceCents };
+  });
+  return send(res, 201, result);
 }
 
 export function createSalesOrderCanonical(db, { body, actor, quotationLines = null, idempotencyKey = null, idempotencyScope = actor.id }) {
@@ -344,7 +393,13 @@ export function getSalesOrder(db, res, actor, orderId) {
     salespersonId: order.salesperson_id, salesGroupId: order.sales_group_id,
     items, history, fulfillment: projection(db, orderId) } });
 }
-export function getSalesOrderFulfillment(db, res, actor, orderId) { requireSalesPermission(actor, 'ORDERS_VIEW'); return send(res, 200, { lines: projection(db, orderId) }); }
+export function getSalesOrderFulfillment(db, res, actor, orderId) {
+  requireSalesPermission(actor, 'ORDERS_VIEW');
+  const order = db.prepare('SELECT id,sales_group_id,order_date FROM sales_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '销售订单不存在');
+  if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER' });
+  return send(res, 200, { lines: projection(db, orderId) });
+}
 
 export async function salesOrderAction(db, req, res, actor, orderId, action, { requireIdempotencyKey = true } = {}) {
   if (action === 'submit') requireSalesPermission(actor, 'ORDERS_SUBMIT');
@@ -360,7 +415,19 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
     const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId); if (!order) throw new HttpError(404, '销售订单不存在');
     if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER', write: true });
     if (action === 'submit') { if (!['DRAFT','REJECTED'].includes(order.status)) throw new HttpError(409, '订单状态不可提交');
+      if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+      if (!order.requested_delivery_date) throw new HttpError(400, '提交前请填写要求交期');
+      if (order.requested_delivery_date < order.order_date) throw new HttpError(400, '要求交期不能早于订单日期');
+      if (!String(order.ship_to_contact_name || '').trim()) throw new HttpError(400, '提交前请填写收货联系人');
+      if (!String(order.ship_to_phone || '').trim()) throw new HttpError(400, '提交前请填写收货电话');
+      if (!String(order.ship_to_address || '').trim()) throw new HttpError(400, '提交前请填写收货地址');
+      if (!String(order.payment_terms || '').trim()) throw new HttpError(400, '提交前请填写付款条件');
+      const invalidLine = db.prepare(`SELECT 1 FROM sales_order_items WHERE order_id=? AND
+        (quantity<=0 OR amount_cents<0 OR (COALESCE(is_gift_line,0)=0 AND (unit_price_cents<=0 OR amount_cents<=0))
+         OR (COALESCE(is_gift_line,0)=1 AND amount_cents<>0)) LIMIT 1`).get(orderId);
+      if (invalidLine) throw new HttpError(409, '订单明细金额或赠品商业属性无效', { code: 'SALES_ORDER_LINE_INVALID' });
       const missing = db.prepare("SELECT 1 FROM sales_order_items WHERE order_id=? AND (price_snapshot_json IS NULL OR discount_snapshot_json IS NULL) LIMIT 1").get(orderId); if (missing) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
+      validateStoredOrderSnapshots(db, order);
       db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,updated_at=? WHERE id=?").run(NOW(), NOW(), orderId);
     } else if (action === 'approve' || action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
       if (action === 'approve') { validateStoredOrderSnapshots(db, order); db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId); }

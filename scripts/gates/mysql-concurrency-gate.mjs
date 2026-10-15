@@ -171,6 +171,7 @@ async function runSuite(label, file) {
     { label: 'sales-customer-wave1', file: 'server/mysql-sales-customer-wave1-concurrency.integration.js' },
     { label: 'sales-customer-wave1-upgrade', file: 'server/mysql-sales-customer-wave1-upgrade.integration.js' },
     { label: 'sales-customer-wave2', file: 'server/mysql-sales-customer-wave2-concurrency.integration.js' },
+    { label: 'sales-customer-batch-a', file: 'server/mysql-sales-customer-batch-a-concurrency.integration.js' },
   ];
   const results = [];
   for (const suite of suites) {

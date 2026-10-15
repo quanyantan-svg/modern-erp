@@ -243,7 +243,7 @@ function discountAmount(base,rule){const result=rule.discount_kind==='PERCENT'?h
 function verifyExpected(expected,actual){if(!expected)return;if(requestFingerprint(expected)!==requestFingerprint(actual))fail(409,'PRICING_EVIDENCE_MISMATCH','客户端价格证据与服务器权威价格不一致');}
 function chooseRule(rules,{scope,mode,customerId,materialId,uom,quantity}){const matches=rules.filter((r)=>r.line_scope===scope&&r.application_mode===mode&&(r.customer_id===customerId||r.customer_scope_type==='ALL')&&(scope==='HEADER'||((!r.material_id||r.material_id===materialId)&&(!r.pricing_uom_code||r.pricing_uom_code===uom)&&quantity>=Number(r.qty_break_min_micros)&&(r.qty_break_max_micros===null||quantity<=Number(r.qty_break_max_micros)))));matches.sort((a,b)=>Number(a.__schemeOrder||0)-Number(b.__schemeOrder||0)||(a.customer_id?0:1)-(b.customer_id?0:1)||Number(a.priority)-Number(b.priority)||(scope==='LINE'?Number(b.qty_break_min_micros)-Number(a.qty_break_min_micros):0)||b.effective_from.localeCompare(a.effective_from)||a.id.localeCompare(b.id));return matches[0]||null;}
 function schemeRules(db,input,customerId,businessDate){const extension=currentExtension(db,customerId,businessDate);const roots=uniqueRoots(input.explicitSchemeIds,extension?.default_discount_scheme_id);if(!roots.length)fail(409,'DISCOUNT_NOT_CONFIGURED','未配置适用折扣方案');const result=[];for(const root of roots){const path=new Set();let cursor=root;while(cursor){if(path.has(cursor))fail(409,'FALLBACK_CYCLE','折扣方案回退链存在循环');path.add(cursor);const scheme=db.prepare('SELECT * FROM sales_discount_schemes WHERE id=?').get(cursor);if(!scheme||scheme.status!=='ACTIVE'||scheme.effective_from>businessDate||(scheme.effective_to&&scheme.effective_to<businessDate))fail(409,'DISCOUNT_SCHEME_NOT_APPLICABLE','折扣方案不可用');result.push({scheme,rules:currentRules(db,cursor,businessDate)});cursor=scheme.fallback_scheme_id;}}return result;}
-export function resolveOrderTimeDiscount(db,input,actor){
+export function resolveOrderTimeDiscount(db,input,actor,{trustedPricingEvidence=false}={}){
   const customerId=text(input.customerId,'customer id',63),businessDate=normalizeBusinessDate(input.businessDate);
   if(!Array.isArray(input.lines)||!input.lines.length)fail(422,'DISCOUNT_LINES_REQUIRED','至少需要一条订单行');
   const lineIds=input.lines.map((line)=>text(line.lineId,'line id',128));
@@ -258,7 +258,9 @@ export function resolveOrderTimeDiscount(db,input,actor){
   const lineResults=[],evidence=[];
   for(const [lineIndex,source] of input.lines.entries()){
     const lineId=lineIds[lineIndex];
-    const pricing=resolveSalesPrice(db,{customerId,salespersonId:input.salespersonId,materialId:source.materialId,pricingUomCode:source.requestedUomCode,quantityDecimal:source.quantityDecimal,businessDate,explicitPriceListIds:source.explicitPriceListIds,manualPriceCents:source.manualPriceCents,overrideReason:source.overrideReason??overrideReason},actor);
+    const pricing=trustedPricingEvidence&&source.expectedPricingEvidence
+      ? source.expectedPricingEvidence
+      : resolveSalesPrice(db,{customerId,salespersonId:input.salespersonId,materialId:source.materialId,pricingUomCode:source.requestedUomCode,quantityDecimal:source.quantityDecimal,businessDate,explicitPriceListIds:source.explicitPriceListIds,manualPriceCents:source.manualPriceCents,overrideReason:source.overrideReason??overrideReason},actor);
     verifyExpected(source.expectedPricingEvidence,pricing);
     const gross=asSafeNumber(halfUp(BigInt(pricing.resolvedPriceCents)*BigInt(pricing.normalizedPricingQuantityMicros),1_000_000n));
     let remaining=gross,discount=0;

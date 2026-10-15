@@ -216,7 +216,7 @@ import {
 } from './modules/sales-pricing.js';
 import {
   addSalesOrderGiftLine, createSalesOrder as createCanonicalSalesOrder, getSalesOrder as getCanonicalSalesOrder,
-  getSalesOrderFulfillment, listSalesOrders as listCanonicalSalesOrders, salesOrderAction, updateSalesOrder as updateCanonicalSalesOrder,
+  authorizeSalesPriceOverride, getSalesOrderFulfillment, listSalesOrders as listCanonicalSalesOrders, salesOrderAction, updateSalesOrder as updateCanonicalSalesOrder,
 } from './modules/sales-orders.js';
 import {
   convertSalesQuotation, createSalesQuotation, getSalesQuotation, listSalesQuotations,
@@ -602,6 +602,7 @@ ownedRouteTable.register({ method: 'POST', path: '/api/sales-orders', handler: (
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/controlled-change$/, handler: ({ db,req,res,actor,params }) => createDirectSalesOrderChange(db,req,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/gift-line$/, handler: ({ db,req,res,actor,params }) => addSalesOrderGiftLine(db,req,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-orders\/([^/]+)\/fulfillment$/, handler: ({ db,res,actor,params }) => getSalesOrderFulfillment(db,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-price-overrides/authorize', handler: ({ db,req,res,actor }) => authorizeSalesPriceOverride(db,req,res,actor), owner: 'server/modules/sales-orders.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/(submit|approve|reject|close|cancel)$/, handler: ({ db,req,res,actor,params }) => salesOrderAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-orders.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-orders\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCanonicalSalesOrder(db,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-orders\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateCanonicalSalesOrder(db,req,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });

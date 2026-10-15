@@ -11,6 +11,7 @@ const NOW = () => new Date().toISOString();
 const makeNo = () => `SOC-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const parse = (value) => JSON.parse(value);
+const scaleHalfUp = (value, targetMicros, sourceMicros) => Number((BigInt(value) * BigInt(targetMicros) + BigInt(sourceMicros) / 2n) / BigInt(sourceMicros));
 const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
 
 function parameterSnapshot(db, path) {
@@ -32,6 +33,62 @@ function currentLine(db, orderId, itemId) {
   return db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(itemId, orderId);
 }
 
+function latestLineCommercialEvidence(db, orderId, itemId) {
+  if (!itemId) return null;
+  const row = db.prepare(`SELECT l.after_values_json FROM sales_order_change_lines l
+    JOIN sales_order_changes c ON c.id=l.change_id
+    WHERE c.sales_order_id=? AND l.sales_order_item_id=? AND c.state='APPLIED'
+    ORDER BY c.target_effective_version DESC,l.line_no DESC LIMIT 1`).get(orderId, itemId);
+  return row ? parse(row.after_values_json)?.effectiveCommercialEvidence ?? null : null;
+}
+
+function effectiveCommercialEvidence(db, order, before, after) {
+  const priceSnapshot = before?.price_snapshot_json ? parse(before.price_snapshot_json) : after.priceSnapshot;
+  const discountSnapshot = before?.discount_snapshot_json ? parse(before.discount_snapshot_json) : after.discountSnapshot;
+  const candidate = latestLineCommercialEvidence(db, order.id, before?.id);
+  const prior = validEffectiveEvidenceArithmetic(candidate) ? candidate : null;
+  const sourceMicros = prior ? Number(prior.quantityMicros) : Number(priceSnapshot.quantityMicros ?? after.quantityMicros);
+  const sourceGrossCents = prior ? Number(prior.effectiveGrossCents) : Number(discountSnapshot.grossAmountCents);
+  const sourceLineDiscountCents = prior ? Number(prior.effectiveLineDiscountCents) : Number(discountSnapshot.lineDiscountCents);
+  if (!Number.isSafeInteger(sourceMicros) || sourceMicros <= 0
+    || !Number.isSafeInteger(sourceGrossCents) || sourceGrossCents < 0
+    || !Number.isSafeInteger(sourceLineDiscountCents) || sourceLineDiscountCents < 0) {
+    throw new HttpError(409, 'Invalid source values in sales-order-change evidence', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+  }
+  const effectiveGrossCents = scaleHalfUp(sourceGrossCents, Number(after.quantityMicros), sourceMicros);
+  const effectiveLineDiscountCents = scaleHalfUp(sourceLineDiscountCents, Number(after.quantityMicros), sourceMicros);
+  const effectiveHeaderAllocationCents = effectiveGrossCents - effectiveLineDiscountCents - Number(after.amountCents);
+  if (![effectiveGrossCents, effectiveLineDiscountCents, effectiveHeaderAllocationCents].every(Number.isSafeInteger)
+    || effectiveHeaderAllocationCents < 0) throw new HttpError(409, 'Invalid LINE/HEADER evidence for sales-order change', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+  return { contractVersion: 'SO_CHANGE_COMMERCIAL_EVIDENCE_V1', baseEffectiveVersion: Number(order.effective_version),
+    targetEffectiveVersion: Number(order.effective_version) + 1, quantityMicros: Number(after.quantityMicros),
+    documentUomCode: before?.document_uom_code || after.documentUomCode, unitPriceCents: Number(after.unitPriceCents),
+    calculationStages: [
+      { stage: 'GROSS', amountCents: effectiveGrossCents },
+      { stage: 'LINE', discountCents: effectiveLineDiscountCents, amountAfterCents: effectiveGrossCents - effectiveLineDiscountCents },
+      { stage: 'HEADER', discountCents: effectiveHeaderAllocationCents, amountAfterCents: Number(after.amountCents) },
+    ],
+    effectiveGrossCents, effectiveLineDiscountCents, effectiveHeaderAllocationCents,
+    finalAmountCents: Number(after.amountCents), originalPriceSnapshot: priceSnapshot, originalDiscountSnapshot: discountSnapshot,
+    originalEvidenceHash: hash([priceSnapshot, discountSnapshot]) };
+}
+
+function validEffectiveEvidenceArithmetic(evidence) {
+  const stages = evidence?.calculationStages;
+  const amounts = [evidence?.effectiveGrossCents, evidence?.effectiveLineDiscountCents,
+    evidence?.effectiveHeaderAllocationCents, evidence?.finalAmountCents].map(Number);
+  return amounts.every((value) => Number.isSafeInteger(value) && value >= 0)
+    && Array.isArray(stages) && stages.length === 3
+    && stages[0]?.stage === 'GROSS' && stages[1]?.stage === 'LINE' && stages[2]?.stage === 'HEADER'
+    && Number(evidence.effectiveGrossCents) === Number(stages[0].amountCents)
+    && Number(evidence.effectiveLineDiscountCents) === Number(stages[1].discountCents)
+    && Number(stages[1].amountAfterCents) === Number(evidence.effectiveGrossCents) - Number(evidence.effectiveLineDiscountCents)
+    && Number(evidence.effectiveHeaderAllocationCents) === Number(stages[2].discountCents)
+    && Number(stages[2].amountAfterCents) === Number(evidence.finalAmountCents)
+    && Number(evidence.effectiveGrossCents) - Number(evidence.effectiveLineDiscountCents)
+      - Number(evidence.effectiveHeaderAllocationCents) === Number(evidence.finalAmountCents);
+}
+
 function executionFloorMicros(db, itemId) {
   const delivered = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN d.status='CONFIRMED' THEN di.quantity ELSE 0 END),0) value
     FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id WHERE di.sales_order_item_id=?`).get(itemId).value || 0);
@@ -49,6 +106,7 @@ function normalizedLines(db, order, operations, actor) {
     if (op === 'ADD') {
       const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id)[0];
       authoritative.lineNo = null;
+      authoritative.effectiveCommercialEvidence = effectiveCommercialEvidence(db, order, null, authoritative);
       return { lineNo: index + 1, op, itemId: null, before: null, after: authoritative, beforeMicros: 0, floor: 0 };
     }
     const itemId = String(source.salesOrderItemId || '');
@@ -60,6 +118,7 @@ function normalizedLines(db, order, operations, actor) {
     if (quantityMicros < floor) throw new HttpError(409, '变更后数量不得低于已通知或已交付事实', { code: 'SALES_ORDER_CHANGE_EXECUTED_FLOOR' });
     const after = { quantityMicros, plannedDeliveryDate: source.plannedDeliveryDate ?? before.planned_delivery_date,
       unitPriceCents: Number(before.unit_price_cents), amountCents: beforeMicros ? Math.round(Number(before.amount_cents) * quantityMicros / beforeMicros) : 0 };
+    after.effectiveCommercialEvidence = effectiveCommercialEvidence(db, order, before, after);
     return { lineNo: index + 1, op, itemId, before, after, beforeMicros, floor };
   });
 }
@@ -171,6 +230,14 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
     const before = parse(line.before_values_json); const after = parse(line.after_values_json);
     if (line.op === 'ADD') {
       if (line.sales_order_item_id !== null || before?.exists !== false || before?.op !== 'ADD') throw new HttpError(409, '新增行变更证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+      const evidence = after.effectiveCommercialEvidence;
+      if (!evidence || evidence.contractVersion !== 'SO_CHANGE_COMMERCIAL_EVIDENCE_V1'
+        || Number(evidence.baseEffectiveVersion) !== expectedBaseVersion || Number(evidence.targetEffectiveVersion) !== expectedBaseVersion + 1
+        || evidence.documentUomCode !== after.documentUomCode || Number(evidence.quantityMicros) !== Number(after.quantityMicros)
+        || Number(evidence.finalAmountCents) !== Number(after.amountCents) || !validEffectiveEvidenceArithmetic(evidence)
+        || evidence.originalEvidenceHash !== hash([after.priceSnapshot, after.discountSnapshot])) {
+        throw new HttpError(409, '新增行变更商业证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+      }
       const lineNo = Number(db.prepare('SELECT COALESCE(MAX(line_no),0)+1 value FROM sales_order_items WHERE order_id=?').get(order.id).value);
       insertSalesOrderLines(db, order.id, [{ ...after, lineNo }]);
       totalDelta += Number(after.amountCents);
@@ -180,6 +247,15 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
     if (!current || Math.round(Number(current.quantity) * 1_000_000) !== Number(before.quantityMicros)
       || Number(current.amount_cents) !== Number(before.amount_cents)) throw new HttpError(409, '订单明细已变化，变更申请已过期', { code: 'SALES_ORDER_CHANGE_STALE_LINE' });
     const floor = executionFloorMicros(db, current.id); if (Number(after.quantityMicros) < floor) throw new HttpError(409, '变更后数量低于当前已执行事实');
+    const evidence = after.effectiveCommercialEvidence;
+    if (!evidence || evidence.contractVersion !== 'SO_CHANGE_COMMERCIAL_EVIDENCE_V1'
+      || Number(evidence.baseEffectiveVersion) !== expectedBaseVersion || Number(evidence.targetEffectiveVersion) !== expectedBaseVersion + 1
+      || evidence.documentUomCode !== current.document_uom_code || Number(evidence.quantityMicros) !== Number(after.quantityMicros)
+      || Number(evidence.finalAmountCents) !== Number(after.amountCents)
+      || !validEffectiveEvidenceArithmetic(evidence)
+      || evidence.originalEvidenceHash !== hash([parse(current.price_snapshot_json), parse(current.discount_snapshot_json)])) {
+      throw new HttpError(409, '订单变更商业证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+    }
     db.prepare(`UPDATE sales_order_items SET quantity=?,amount_cents=?,document_quantity_num=?,planned_delivery_date=? WHERE id=?`)
       .run(Number(after.quantityMicros) / 1_000_000, Number(after.amountCents), Number(after.quantityMicros), after.plannedDeliveryDate, current.id);
     totalDelta += Number(after.amountCents) - Number(current.amount_cents);
@@ -187,12 +263,41 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
   const changed = db.prepare('UPDATE sales_orders SET total_cents=total_cents+?,effective_version=effective_version+1,updated_at=? WHERE id=? AND effective_version=?')
     .run(totalDelta, NOW(), order.id, expectedBaseVersion);
   if (Number(changed.changes ?? changed.affectedRows) !== 1) throw new HttpError(409, '订单版本 CAS 冲突', { code: 'SALES_ORDER_CHANGE_CAS_CONFLICT' });
+  validateEffectiveOrderCommercialEvidence(db, order.id, expectedBaseVersion + 1);
   const stamp = NOW(); db.prepare("UPDATE sales_order_changes SET state='APPLIED',approver_id=?,approved_at=?,applied_by=?,applied_at=?,application_idempotency_key=?,updated_at=? WHERE id=?")
     .run(actor.id, stamp, actor.id, stamp, key, stamp, changeId);
   db.prepare("UPDATE approval_requests SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE source_type='SALES_ORDER_CHANGE' AND source_id=? AND status='PENDING'").run(actor.id, stamp, changeId);
   const result = { id: changeId, salesOrderId: order.id, effectiveVersion: expectedBaseVersion + 1, state: 'APPLIED' };
   saveIdempotency(db, 'SALES_ORDER_CHANGE_APPLY', changeId, key, fingerprint, result); audit(db, actor.id, 'APPROVE_AND_APPLY', 'SALES_ORDER_CHANGE', changeId, JSON.stringify(result));
   return result;
+}
+
+export function validateEffectiveOrderCommercialEvidence(db, orderId, expectedVersion) {
+  const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId);
+  if (!order || Number(order.effective_version) !== Number(expectedVersion)) throw new HttpError(409, '订单有效版本不一致', { code: 'SALES_ORDER_EFFECTIVE_EVIDENCE_MISMATCH' });
+  const currentLines = db.prepare('SELECT * FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(orderId);
+  const latest = new Map();
+  const applied = db.prepare(`SELECT l.*,c.target_effective_version FROM sales_order_change_lines l
+    JOIN sales_order_changes c ON c.id=l.change_id WHERE c.sales_order_id=? AND c.state='APPLIED'
+    ORDER BY c.target_effective_version,l.line_no`).all(orderId);
+  for (const row of applied) {
+    const after = parse(row.after_values_json); const itemId = row.sales_order_item_id || after.id;
+    if (itemId) latest.set(itemId, { after, targetVersion: Number(row.target_effective_version) });
+  }
+  let total = 0;
+  for (const line of currentLines) {
+    total += Number(line.amount_cents); const versioned = latest.get(line.id); if (!versioned) continue;
+    const evidence = versioned.after.effectiveCommercialEvidence;
+    if (!evidence || Number(evidence.targetEffectiveVersion) !== versioned.targetVersion
+      || Number(versioned.after.quantityMicros) !== Number(line.document_quantity_num)
+      || Number(versioned.after.amountCents) !== Number(line.amount_cents)
+      || !validEffectiveEvidenceArithmetic(evidence)
+      || (versioned.after.documentUomCode && versioned.after.documentUomCode !== line.document_uom_code)) {
+      throw new HttpError(409, '当前订单行与有效版本商业证据不一致', { code: 'SALES_ORDER_EFFECTIVE_EVIDENCE_MISMATCH' });
+    }
+  }
+  if (!Number.isSafeInteger(total) || total !== Number(order.total_cents)) throw new HttpError(409, '当前订单总额与有效版本商业证据不一致', { code: 'SALES_ORDER_EFFECTIVE_EVIDENCE_MISMATCH' });
+  return true;
 }
 
 export async function salesOrderChangeAction(db, req, res, actor, changeId, action) {

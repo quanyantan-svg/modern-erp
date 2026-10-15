@@ -160,8 +160,12 @@ export async function convertSalesQuotation(db, req, res, actor, quotationId) {
     const businessDate = normalizeBusinessDate(body.businessDate || DAY(), '转换业务日期');
     if (quotation.status !== 'EFFECTIVE' || quotation.valid_from > businessDate || quotation.valid_to < businessDate) throw new HttpError(409, '报价未生效或已过期');
     if (!Array.isArray(body.lineSelections) || !body.lineSelections.length) throw new HttpError(422, '至少选择一条报价明细');
+    const selectedLineIds = new Set();
     const selected = [];
     for (const input of body.lineSelections) {
+      const selectedLineId = String(input.quotationLineId || '');
+      if (!selectedLineId || selectedLineIds.has(selectedLineId)) throw new HttpError(422, '同一转换请求不得重复选择报价行', { code: 'DUPLICATE_QUOTATION_LINE' });
+      selectedLineIds.add(selectedLineId);
       const line = db.prepare(`SELECT * FROM sales_quotation_lines WHERE id=? AND quotation_id=?${lockSuffix(db)}`).get(input.quotationLineId, quotationId);
       if (!line) throw new HttpError(422, '报价明细不存在');
       const quantityMicros = safe(input.quantityMicros, '转换数量', 1);
@@ -179,7 +183,8 @@ export async function convertSalesQuotation(db, req, res, actor, quotationId) {
       db.prepare(`INSERT INTO sales_quotation_conversions(id,quotation_id,quotation_line_id,sales_order_id,sales_order_item_id,
         converted_qty_micros,converted_unit_price_cents,converted_amount_cents,converted_uom_code,business_date,converted_at,converted_by,idempotency_key)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(id(), quotationId, item.row.id, order.id, orderItemId, item.quantityMicros,
-          item.orderLine.unitPriceCents, item.orderLine.amountCents, item.orderLine.documentUomCode, businessDate, stamp, actor.id, key);
+          item.orderLine.unitPriceCents, item.orderLine.amountCents, item.orderLine.documentUomCode, businessDate, stamp, actor.id,
+          `LINE:${requestFingerprint({ requestKey: key, quotationLineId: item.row.id })}`);
       db.prepare('UPDATE sales_quotation_lines SET converted_qty_micros=converted_qty_micros+? WHERE id=?').run(item.quantityMicros, item.row.id);
     });
     const remaining = Number(db.prepare('SELECT COALESCE(SUM(quantity_micros-converted_qty_micros),0) value FROM sales_quotation_lines WHERE quotation_id=?').get(quotationId).value);
