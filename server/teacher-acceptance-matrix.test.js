@@ -52,6 +52,36 @@ async function fetchJson(baseUrl, token, path) {
   return { status: response.status, body: response.status === 200 ? await response.json() : null };
 }
 
+function seedAuthoritativeSalesContract(db) {
+  const stamp = new Date().toISOString();
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  db.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run(uom, uom, stamp, stamp);
+  db.prepare(`INSERT INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,customer_material_xref_enabled,
+    sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,order_change_mode,reservation_behavior,
+    active,created_at,updated_at,created_by,updated_by) VALUES('SYSTEM','SYSTEM',NULL,0,0,1,1,1,'BOTH','DISABLED',1,?,?,?,?)`)
+    .run(stamp, stamp, 'user-admin', 'user-admin');
+  db.prepare("INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES('matrix-group','MATRIX','Matrix Sales',1,?,?)").run(stamp, stamp);
+  db.prepare("INSERT INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('matrix-salesperson','MATRIX-SP','Matrix Sales','user-sales',1,?,?)").run(stamp, stamp);
+  db.prepare(`INSERT INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+    VALUES('matrix-membership','matrix-salesperson','matrix-group','2026-01-01',1,1,?,?,?,?)`).run(stamp, stamp, 'user-admin', 'user-admin');
+  db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,sales_uom_code,pricing_uom_code,
+    default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,service_classification,active,created_at,updated_at)
+    VALUES('matrix-class','product-001',1,?,?,0,0,0,1,?,?)`).run(uom, uom, stamp, stamp);
+  const priceListId = '22222222-2222-4222-8222-222222222222';
+  db.prepare(`INSERT INTO sales_price_lists(id,price_list_code,name,currency_code,priority,effective_from,status,activated_at,activated_by,created_at,created_by,updated_at,updated_by)
+    VALUES(?,'MATRIX-PL','Matrix price','CNY',0,'2026-01-01','ACTIVE',?,'user-reviewer',?,'user-sales',?,'user-sales')`).run(priceListId, stamp, stamp, stamp);
+  const materialKey = `M:${Buffer.from('product-001').toString('hex').toUpperCase()}`;
+  const pricingKey = `U:${Buffer.from(uom).toString('hex').toUpperCase()}|Q:0000000000000000|D:20260101`;
+  db.prepare(`INSERT INTO sales_price_list_entries(id,price_list_id,material_id,customer_id,customer_scope_type,material_identity_key,customer_scope_key,
+    pricing_uom_code,pricing_identity_key,qty_break_min_micros,effective_from,created_at,created_by)
+    VALUES('matrix-entry',?,'product-001',NULL,'ALL',?,'A',?,?,0,'2026-01-01',?,'user-sales')`).run(priceListId, materialKey, uom, pricingKey, stamp);
+  db.prepare("INSERT INTO sales_price_list_versions(id,entry_id,version,unit_price_cents,snapshot_json,created_at,created_by) VALUES('matrix-version','matrix-entry',1,100000,'{}',?,'user-sales')").run(stamp);
+  db.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,settlement_party_customer_id,payer_customer_id,
+    default_salesperson_id,default_sales_group_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,created_at,updated_at,
+    created_by,updated_by,default_pricing_list_id) VALUES('customer-001','2026-01-01','customer-001','customer-001','matrix-salesperson','matrix-group',30,'MONTHLY','ALL_SALES_ENABLED',?,?,?,?,?)`)
+    .run(stamp, stamp, 'user-admin', 'user-admin', priceListId);
+}
+
 // Build the role × page matrix from the canonical registry.
 const NAV_MATRIX = ACTIVE_APPLICATION_ROUTES.map((route) => ({
   key: route.key, label: route.title,
@@ -289,6 +319,7 @@ describe('Teacher Acceptance Matrix — test_sales', () => {
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'modern-erp-matrix-sales-'));
     db = createDatabase(join(tmp, 'erp.db'));
+    seedAuthoritativeSalesContract(db);
     ({ server, baseUrl } = await startApi(db));
     salesToken = await login(baseUrl, 'sales', 'sales123');
     adminToken = await login(baseUrl, 'admin', 'admin123');
@@ -387,6 +418,7 @@ describe('Teacher Acceptance Matrix — test_reviewer', () => {
   before(async () => {
     tmp = mkdtempSync(join(tmpdir(), 'modern-erp-matrix-reviewer-'));
     db = createDatabase(join(tmp, 'erp.db'));
+    seedAuthoritativeSalesContract(db);
     ({ server, baseUrl } = await startApi(db));
     salesToken = await login(baseUrl, 'sales', 'sales123');
     reviewerToken = await login(baseUrl, 'reviewer', 'review123');

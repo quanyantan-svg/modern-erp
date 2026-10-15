@@ -38,13 +38,13 @@ describe('M8 AR/AP and settlement workflow', () => {
   after(async () => { await new Promise((done, fail) => server.close((error) => error ? fail(error) : done())); db.close(); rmSync(temp, { recursive: true, force: true }); });
 
   test('permission registry has 112 entries after M14 + Core Scope Cleanup + V17 Wave A; no sixth role', () => {
-    assert.equal(PERMISSIONS.length, 211);
+    assert.equal(PERMISSIONS.length, 217);
     for (const code of ['AR_VIEW', 'COLLECTION_MANAGE', 'AP_VIEW', 'PAYMENT_MANAGE']) assert.ok(PERMISSIONS.some(([item]) => item === code));
     assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n, 5);
   });
 
   test('sourced draft Sales Delivery creates no AR; confirmation creates one exact-cent AR and retry cannot duplicate it', async () => {
-    const created = await (await post('/api/sales-deliveries', 'warehouse', { salesOrderId: 'm8-so', customerId: 'customer-001', warehouseId: 'warehouse-001', deliveryDate: '2026-08-10', remark: '', items: [{ salesOrderItemId: 'm8-soi', productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
+    const created = await (await post('/api/sales-deliveries', 'warehouse', { salesOrderId: 'm8-so', customerId: 'customer-001', warehouseId: 'warehouse-001', sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-08-10', remark: '', items: [{ salesOrderItemId: 'm8-soi', productId: 'product-001', quantity: 1, unitPriceCents: 10000 }] })).json();
     assert.equal(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(created.id).n, 0);
     assert.equal((await passQuality('oqc', created.id, 1)).status, 200);
     assert.equal((await post(`/api/sales-deliveries/${created.id}`, 'warehouse', { action: 'confirm' })).status, 200);

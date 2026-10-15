@@ -115,6 +115,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
     db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,submitted_at,reviewed_at,created_at,updated_at) VALUES('so-rej','SO-REJ',?,'REJECTED',4000,'','u-sales',?,?,?,?)").run(customerId, now, now, now, now);
     // items for approved sales order (prefill target)
     db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('soi-1','so-app',?,3,1000,3000,1)").run(productId);
+    db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('soi-sub','so-sub',?,2,1000,2000,1)").run(productId);
 
     // Purchase Orders: one of each status
     db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,submitted_at,reviewed_at,created_at,updated_at) VALUES('po-draft','PO-DRAFT',?,'DRAFT',1000,'','u-sales',NULL,NULL,?,?)").run(supplierId, now, now);
@@ -215,7 +216,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const noSrc = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
-          customerId, warehouseId,
+          customerId, warehouseId, sourceMode: 'DIRECT_ORDER',
           items: [{ productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       });
@@ -224,7 +225,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const withSrc = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
-          salesOrderId: approvedSoId, customerId, warehouseId,
+          salesOrderId: approvedSoId, customerId, warehouseId, sourceMode: 'DIRECT_ORDER',
           items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       });
@@ -412,7 +413,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
     test('22/23. direct Sales Delivery / Purchase Receipt are refused', async () => {
       const r1 = await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
-        body: JSON.stringify({ customerId, warehouseId, items: [{ productId, quantity: 1, unitPriceCents: 1000 }] }),
+        body: JSON.stringify({ customerId, warehouseId, sourceMode: 'DIRECT_ORDER', items: [{ productId, quantity: 1, unitPriceCents: 1000 }] }),
       });
       assert.equal(r1.status, 400);
       const r2 = await fetch(`${baseUrl}/api/purchase-receipts`, {
@@ -451,7 +452,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
 
   describe('F. SECURITY — registry + role permission stability', () => {
     test('26. PERMISSIONS registry size after M14 + Core Scope Cleanup', () => {
-      assert.equal(PERMISSIONS.length, 211, 'PERMISSIONS count includes the approved Sales Wave 2 pricing family');
+      assert.equal(PERMISSIONS.length, 217, 'PERMISSIONS count includes the approved Sales Batch A family');
     });
 
     test('27. role-warehouse permission set unchanged from M5 baseline', () => {
@@ -540,7 +541,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const created = await (await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
-          salesOrderId: approvedSoId, customerId, warehouseId,
+          salesOrderId: approvedSoId, customerId, warehouseId, sourceMode: 'DIRECT_ORDER',
           items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       })).json();
@@ -554,7 +555,7 @@ describe('m4-blocker-hotfix — scoped logistics source lookups', () => {
       const created = await (await fetch(`${baseUrl}/api/sales-deliveries`, {
         method: 'POST', headers: authHeaders(warehouseToken),
         body: JSON.stringify({
-          salesOrderId: approvedSoId, customerId, warehouseId,
+          salesOrderId: approvedSoId, customerId, warehouseId, sourceMode: 'DIRECT_ORDER',
           items: [{ salesOrderItemId: 'soi-1', productId, quantity: 1, unitPriceCents: 1000 }],
         }),
       })).json();

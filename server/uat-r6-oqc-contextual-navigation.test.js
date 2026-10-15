@@ -38,7 +38,7 @@ function seedDelivery() {
   const deliveryItemId = `r6-sdi-${n}`;
   db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,total_cents,status,creator_id,created_at,updated_at) VALUES(?,?,?,1000,'APPROVED','user-sales',?,?)").run(orderId, `SO-R6-${n}`, 'customer-001', at, at);
   db.prepare('INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,1)').run(orderItemId, orderId, 'product-001', 2, 500, 1000);
-  db.prepare("INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,1000,'DRAFT',?,?, 'user-warehouse',?,?, 'SEPARATE')")
+  db.prepare("INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,status,delivery_date,remark,creator_id,created_at,updated_at,billing_mode,source_mode) VALUES(?,?,?,?,?,?,1000,'DRAFT',?,?, 'user-warehouse',?,?, 'SEPARATE','DIRECT_ORDER')")
     .run(deliveryId, `SD-R6-${n}`, orderId, 'customer-001', 'warehouse-001', 'user-warehouse', '2026-10-15', 'UAT-002 fixture', at, at);
   db.prepare('INSERT INTO sales_delivery_items(id,delivery_id,sales_order_item_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES(?,?,?,?,?,?,?,1)')
     .run(deliveryItemId, deliveryId, orderItemId, 'product-001', 2, 500, 1000);

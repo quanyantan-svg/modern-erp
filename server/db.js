@@ -41,6 +41,12 @@ import { migrateInventoryPositionSchema } from './migrations/inventory-position-
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 
 export const PERMISSIONS = [
+  ['SALES_MANAGE', '管理销售商业单据'],
+  ['SALES_QUOTATION_MANAGE', '管理销售报价'],
+  ['SALES_ORDER_CHANGE_DIRECT_REQUEST', '发起销售订单直接受控变更'],
+  ['SALES_ORDER_CHANGE_DOCUMENT_MANAGE', '管理销售订单变更单'],
+  ['SALES_ORDER_CHANGE_APPROVE', '审批并应用销售订单变更'],
+  ['SALES_CROSS_GROUP', '跨销售组访问销售单据'],
   ['SALES_PRICING_VIEW', '查看销售定价与订单时折扣'],
   ['SALES_PRICING_MANAGE', '管理销售定价与订单时折扣'],
   ['SALES_PRICING_OVERRIDE', '执行销售价格与订单时折扣覆盖'],
@@ -1741,6 +1747,13 @@ function seedSchema(db) {
     'role-accounting': ['SALES_PRICING_VIEW'],
   };
   for (const [roleId, permissions] of Object.entries(wave2PricingRolePermissions)) {
+    for (const permission of permissions) insertRolePermission.run(roleId, permission);
+  }
+  const batchASalesRolePermissions = {
+    'role-sales': ['SALES_MANAGE', 'SALES_QUOTATION_MANAGE', 'SALES_ORDER_CHANGE_DIRECT_REQUEST', 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE'],
+    'role-reviewer': ['SALES_ORDER_CHANGE_APPROVE', 'SALES_CROSS_GROUP', 'ORDERS_REJECT'],
+  };
+  for (const [roleId, permissions] of Object.entries(batchASalesRolePermissions)) {
     for (const permission of permissions) insertRolePermission.run(roleId, permission);
   }
 

@@ -1,0 +1,218 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { after, before, test } from 'node:test';
+import { createApp } from './app.js';
+import { createDatabase } from './db.js';
+
+let db; let server; let baseUrl; let tempDir; let canonicalOrderId; let quotationId; let quotationLineId; const tokens = {};
+async function request(path, { token = tokens.admin, method = 'GET', body, key } = {}) {
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (key) headers['idempotency-key'] = key;
+  const response = await fetch(baseUrl + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { status: response.status, data: await response.json().catch(() => ({})) };
+}
+async function login(username, password) {
+  const response = await request('/api/auth/login', { token: '', method: 'POST', body: { username, password } });
+  assert.equal(response.status, 200, JSON.stringify(response.data)); return response.data.token;
+}
+
+before(async () => {
+  tempDir = mkdtempSync(join(tmpdir(), 'sales-batch-a-')); db = createDatabase(join(tempDir, 'erp.db')); const stamp = new Date().toISOString();
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  db.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run(uom, uom, stamp, stamp);
+  db.prepare(`INSERT INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,customer_material_xref_enabled,
+    sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,order_change_mode,reservation_behavior,
+    active,created_at,updated_at,created_by,updated_by) VALUES('SYSTEM','SYSTEM',NULL,0,0,1,1,1,'BOTH','DISABLED',1,?,?,?,?)`)
+    .run(stamp, stamp, 'user-admin', 'user-admin');
+  db.prepare("INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES('batch-group','BATCH','Batch A',1,?,?)")
+    .run(stamp, stamp);
+  db.prepare("INSERT INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('batch-salesperson','BATCH-SP','Batch Sales','user-sales',1,?,?)")
+    .run(stamp, stamp);
+  db.prepare(`INSERT INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+    VALUES('batch-membership','batch-salesperson','batch-group','2026-01-01',1,1,?,?,?,?)`).run(stamp, stamp, 'user-admin', 'user-admin');
+  db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,sales_uom_code,pricing_uom_code,
+    default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,service_classification,active,created_at,updated_at)
+    VALUES('batch-class','product-001',1,?,?,1000,500,0,1,?,?)`).run(uom, uom, stamp, stamp);
+  const priceListId = '11111111-1111-4111-8111-111111111111';
+  db.prepare(`INSERT INTO sales_price_lists(id,price_list_code,name,currency_code,priority,effective_from,status,activated_at,activated_by,created_at,created_by,updated_at,updated_by)
+    VALUES(?,'BATCH-PL','Batch price','CNY',0,'2026-01-01','ACTIVE',?,'user-reviewer',?,'user-sales',?,'user-sales')`).run(priceListId, stamp, stamp, stamp);
+  const materialKey = `M:${Buffer.from('product-001').toString('hex').toUpperCase()}`;
+  const pricingKey = `U:${Buffer.from(uom).toString('hex').toUpperCase()}|Q:0000000000000000|D:20260101`;
+  db.prepare(`INSERT INTO sales_price_list_entries(id,price_list_id,material_id,customer_id,customer_scope_type,material_identity_key,customer_scope_key,
+    pricing_uom_code,pricing_identity_key,qty_break_min_micros,effective_from,created_at,created_by)
+    VALUES('batch-entry',?,'product-001',NULL,'ALL',?,'A',?,?,0,'2026-01-01',?,'user-sales')`).run(priceListId, materialKey, uom, pricingKey, stamp);
+  db.prepare("INSERT INTO sales_price_list_versions(id,entry_id,version,unit_price_cents,snapshot_json,created_at,created_by) VALUES('batch-version','batch-entry',1,1250,'{}',?,'user-sales')").run(stamp);
+  db.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,settlement_party_customer_id,payer_customer_id,
+    default_salesperson_id,default_sales_group_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,created_at,updated_at,
+    created_by,updated_by,default_pricing_list_id) VALUES('customer-001','2026-01-01','customer-001','customer-001','batch-salesperson','batch-group',30,'MONTHLY','ALL_SALES_ENABLED',?,?,?,?,?)`)
+    .run(stamp, stamp, 'user-admin', 'user-admin', priceListId);
+  server = createServer(createApp(db, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done)); baseUrl = `http://127.0.0.1:${server.address().port}`;
+  tokens.admin = await login('admin', 'admin123'); tokens.sales = await login('sales', 'sales123'); tokens.reviewer = await login('reviewer', 'review123');
+});
+after(async () => { if (server) await new Promise((done) => server.close(done)); db?.close(); if (tempDir) rmSync(tempDir, { recursive: true, force: true }); });
+
+test('Wave 3-5 schema is exactly seven tables and eleven SO item columns', () => {
+  const expected = ['sales_quotations','sales_quotation_lines','sales_quotation_conversions','sales_order_changes','sales_order_change_lines','delivery_notices','delivery_notice_lines'].sort();
+  const rows = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${expected.map(() => '?').join(',')}) ORDER BY name`).all(...expected).map((row) => row.name);
+  assert.deepEqual(rows, expected);
+  const columns = new Set(db.prepare('PRAGMA table_info(sales_order_items)').all().map((row) => row.name));
+  for (const name of ['is_gift_line','commercial_tax_basis','tax_inclusive_assumption','pricing_uom_code_applied','qty_break_applied_min','qty_break_applied_max','planned_delivery_date','upper_delivery_tolerance_bps','lower_delivery_tolerance_bps','price_snapshot_json','discount_snapshot_json']) assert.ok(columns.has(name), name);
+});
+
+test('canonical order writer ignores forged client snapshots and persists server evidence', async () => {
+  const body = { customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20', items: [{ productId: 'product-001', uomCode: db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code, quantityDecimal: '2', priceSnapshot: { forged: true }, discountSnapshot: { forged: true } }] };
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', body, key: 'order-create-1' });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  canonicalOrderId = created.data.id;
+  const item = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id);
+  assert.ok(item.price_snapshot_json); assert.ok(item.discount_snapshot_json); assert.equal(JSON.parse(item.price_snapshot_json).forged, undefined);
+  assert.equal(JSON.parse(item.price_snapshot_json).evidence.versionId, 'batch-version'); assert.equal(JSON.parse(item.discount_snapshot_json).evidence.explicitZeroDiscount, true);
+  const replay = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', body, key: 'order-create-1' });
+  assert.equal(replay.status, 200); assert.equal(replay.data.id, created.data.id); assert.equal(replay.data.replayed, true);
+});
+
+test('quotation converts through canonical SO writer and source evidence', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const quote = await request('/api/sales-quotations', { token: tokens.sales, method: 'POST', body: { customerId: 'customer-001', validFrom: '2026-10-15', validTo: '2026-12-31', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '4' }] } });
+  assert.equal(quote.status, 201, JSON.stringify(quote.data)); quotationId = quote.data.quotation.id; quotationLineId = quote.data.quotation.lines[0].id;
+  assert.equal((await request(`/api/sales-quotations/${quotationId}/effective-publish`, { token: tokens.sales, method: 'POST', body: {} })).status, 200);
+  const converted = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-convert-1', body: { businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 2_000_000 }] } });
+  assert.equal(converted.status, 201, JSON.stringify(converted.data));
+  const relation = db.prepare('SELECT * FROM sales_quotation_conversions WHERE quotation_id=?').get(quotationId); assert.equal(relation.sales_order_id, converted.data.salesOrderId); assert.equal(relation.quotation_line_id, quotationLineId);
+  const repeated = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-convert-2', body: { businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 2_000_000 }] } });
+  assert.equal(repeated.status, 201, JSON.stringify(repeated.data)); assert.equal(db.prepare('SELECT status FROM sales_quotations WHERE id=?').get(quotationId).status, 'FULLY_CONVERTED');
+  const excess = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-convert-3', body: { businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 1 }] } });
+  assert.equal(excess.status, 409);
+});
+
+test('manual price override requires RBAC and preserves actor/reason with converter SOD', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const body = { customerId: 'customer-001', validFrom: '2026-10-15', validTo: '2026-12-31',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', manualPriceCents: 1100, overrideReason: 'approved campaign exception' }] };
+  const denied = await request('/api/sales-quotations', { token: tokens.sales, method: 'POST', body });
+  assert.equal(denied.status, 403);
+  const quote = await request('/api/sales-quotations', { token: tokens.admin, method: 'POST', body });
+  assert.equal(quote.status, 201, JSON.stringify(quote.data));
+  const quoteId = quote.data.quotation.id; const quoteLineId = quote.data.quotation.lines[0].id;
+  assert.equal((await request(`/api/sales-quotations/${quoteId}/effective-publish`, { token: tokens.admin, method: 'POST', body: {} })).status, 200);
+  const converted = await request(`/api/sales-quotations/${quoteId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'manual-override-convert',
+    body: { businessDate: '2026-10-15', lineSelections: [{ quotationLineId: quoteLineId, quantityMicros: 1_000_000 }] } });
+  assert.equal(converted.status, 201, JSON.stringify(converted.data));
+  const stored = db.prepare('SELECT price_snapshot_json FROM sales_order_items WHERE order_id=?').get(converted.data.salesOrderId);
+  const snapshot = JSON.parse(stored.price_snapshot_json);
+  assert.equal(snapshot.evidence.overrideState, 'OVERRIDDEN');
+  assert.equal(snapshot.evidence.overrideEvidence.actorId, 'user-admin');
+  assert.equal(snapshot.evidence.overrideEvidence.authority, 'SALES_PRICING_OVERRIDE');
+  assert.equal(snapshot.evidence.overrideEvidence.reason, 'approved campaign exception');
+  assert.equal(snapshot.catalogUnitPriceCents, 1250);
+  assert.equal(snapshot.unitPriceCents, 1100);
+  assert.notEqual(snapshot.evidence.overrideEvidence.actorId, 'user-sales');
+});
+
+test('legacy NULL snapshots remain readable while a new line without snapshots cannot submit', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'missing-snapshot-order', body: { customerId: 'customer-001', orderDate: '2026-10-15', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  db.prepare('UPDATE sales_order_items SET price_snapshot_json=NULL,discount_snapshot_json=NULL WHERE order_id=?').run(created.data.id);
+  const read = await request(`/api/sales-orders/${created.data.id}`, { token: tokens.sales });
+  assert.equal(read.status, 200); assert.equal(read.data.order.items[0].priceSnapshot, null); assert.equal(read.data.order.items[0].discountSnapshot, null);
+  const submitted = await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'missing-snapshot-submit', body: {} });
+  assert.equal(submitted.status, 409); assert.equal(submitted.data.details?.code || submitted.data.code, 'SALES_SNAPSHOT_REQUIRED');
+});
+
+test('approval and both concurrent change requests use one CAS application service', async () => {
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/submit`, { token: tokens.sales, method: 'POST', body: {}, key: 'so-submit-1' })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/approve`, { token: tokens.reviewer, method: 'POST', body: {}, key: 'so-approve-1' })).status, 200);
+  const itemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(canonicalOrderId).id;
+  const payloadA = { reasonCode: 'CUSTOMER_REQUEST', reason: 'increase A', lines: [{ op: 'MODIFY', salesOrderItemId: itemId, quantityMicros: 3_000_000 }] };
+  const payloadB = { reasonCode: 'CUSTOMER_REQUEST', reason: 'increase B', lines: [{ op: 'MODIFY', salesOrderItemId: itemId, quantityMicros: 4_000_000 }] };
+  const first = await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', body: payloadA, key: 'change-request-a' });
+  const second = await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', body: payloadB, key: 'change-request-b' });
+  assert.equal(first.status, 201, JSON.stringify(first.data)); assert.equal(second.status, 201, JSON.stringify(second.data));
+  const applied = await request(`/api/sales-order-changes/${first.data.id}/approve`, { token: tokens.reviewer, method: 'POST', body: {}, key: 'change-apply-a' });
+  assert.equal(applied.status, 200, JSON.stringify(applied.data)); assert.equal(applied.data.effectiveVersion, 2);
+  const stale = await request(`/api/sales-order-changes/${second.data.id}/approve`, { token: tokens.reviewer, method: 'POST', body: {}, key: 'change-apply-b' });
+  assert.equal(stale.status, 409); assert.equal(db.prepare('SELECT effective_version FROM sales_orders WHERE id=?').get(canonicalOrderId).effective_version, 2);
+  const before = db.prepare('SELECT price_snapshot_json,discount_snapshot_json FROM sales_order_items WHERE order_id=?').get(canonicalOrderId);
+  const patch = await request(`/api/sales-orders/${canonicalOrderId}`, { token: tokens.sales, method: 'PATCH', body: { items: [{ productId: 'product-001', uomCode: 'PCS', quantityDecimal: '9' }] } });
+  assert.equal(patch.status, 409);
+  const after = db.prepare('SELECT price_snapshot_json,discount_snapshot_json FROM sales_order_items WHERE order_id=?').get(canonicalOrderId);
+  assert.deepEqual(after, before);
+});
+
+test('approved-order ADD change creates a new authoritative snapshot line', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const requested = await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'change-add-request', body: { reasonCode: 'CUSTOMER_REQUEST', reason: 'add approved line', lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceSnapshot: { forged: true } }] } });
+  assert.equal(requested.status, 201, JSON.stringify(requested.data));
+  const applied = await request(`/api/sales-order-changes/${requested.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'change-add-apply', body: {} });
+  assert.equal(applied.status, 200, JSON.stringify(applied.data));
+  const row = db.prepare('SELECT * FROM sales_order_items WHERE order_id=? ORDER BY line_no DESC LIMIT 1').get(canonicalOrderId);
+  assert.ok(row.price_snapshot_json); assert.ok(row.discount_snapshot_json);
+  assert.equal(JSON.parse(row.price_snapshot_json).forged, undefined);
+  assert.equal(JSON.parse(row.price_snapshot_json).evidence.versionId, 'batch-version');
+});
+
+test('four order-change modes admit only their frozen authoring paths', async () => {
+  const item = db.prepare('SELECT id,quantity FROM sales_order_items WHERE order_id=? ORDER BY line_no LIMIT 1').get(canonicalOrderId);
+  const body = { salesOrderId: canonicalOrderId, reasonCode: 'CUSTOMER_REQUEST', reason: 'mode matrix', lines: [{ op: 'MODIFY', salesOrderItemId: item.id, quantityMicros: Math.round(Number(item.quantity) * 1_000_000) }] };
+  const setMode = (mode) => db.prepare("UPDATE sales_parameters SET order_change_mode=? WHERE scope_type='SYSTEM'").run(mode);
+  setMode('DISABLED');
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'mode-disabled-direct', body })).status, 409);
+  assert.equal((await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body })).status, 409);
+  setMode('CONTROLLED_DIRECT');
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'mode-direct', body })).status, 201);
+  assert.equal((await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body })).status, 409);
+  setMode('CONTROLLED_DOCUMENT');
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'mode-document-direct', body })).status, 409);
+  assert.equal((await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body })).status, 201);
+  setMode('BOTH');
+  assert.equal((await request(`/api/sales-orders/${canonicalOrderId}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'mode-both-direct', body })).status, 201);
+  assert.equal((await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body })).status, 201);
+});
+
+test('delivery notice confirmation changes no inventory and preserves source capacity', async () => {
+  const item = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(canonicalOrderId); const warehouseId = 'warehouse-001';
+  const before = db.prepare('SELECT COALESCE(SUM(quantity),0) value FROM inventory').get().value;
+  const created = await request('/api/delivery-notices', { token: tokens.sales, method: 'POST', body: { salesOrderId: canonicalOrderId, warehouseId, businessDate: '2026-10-15', plannedDeliveryDate: '2026-10-20', lines: [{ salesOrderItemId: item.id, scheduledQtyMicros: 2_000_000 }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data)); const noticeId = created.data.notice.id;
+  const confirmed = await request(`/api/delivery-notices/${noticeId}/confirm`, { token: tokens.sales, method: 'POST', body: {}, key: 'dn-confirm-1' });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.data)); assert.equal(db.prepare('SELECT COALESCE(SUM(quantity),0) value FROM inventory').get().value, before);
+  const replay = await request(`/api/delivery-notices/${noticeId}/confirm`, { token: tokens.sales, method: 'POST', body: {}, key: 'dn-confirm-1' }); assert.equal(replay.status, 200); assert.equal(replay.data.replayed, true);
+  const lineId = db.prepare('SELECT id FROM delivery_notice_lines WHERE delivery_notice_id=?').get(noticeId).id;
+  const delivery = await request('/api/sales-deliveries', { token: tokens.admin, method: 'POST', body: { salesOrderId: canonicalOrderId, warehouseId, sourceMode: 'DELIVERY_NOTICE', deliveryNoticeId: noticeId, items: [{ salesOrderItemId: item.id, deliveryNoticeLineId: lineId, quantity: 1 }] } });
+  assert.equal(delivery.status, 201, JSON.stringify(delivery.data));
+  const stored = db.prepare('SELECT source_mode,delivery_notice_id FROM sales_deliveries WHERE id=?').get(delivery.data.id); assert.equal(stored.source_mode, 'DELIVERY_NOTICE'); assert.equal(stored.delivery_notice_id, noticeId);
+});
+
+test('competing delivery notices cannot over-commit one order line tolerance', async () => {
+  const item = db.prepare('SELECT id FROM sales_order_items WHERE order_id=? ORDER BY line_no LIMIT 1').get(canonicalOrderId);
+  const body = { salesOrderId: canonicalOrderId, warehouseId: 'warehouse-001', businessDate: '2026-10-15', plannedDeliveryDate: '2026-10-20', lines: [{ salesOrderItemId: item.id, scheduledQtyMicros: 1_300_000 }] };
+  const first = await request('/api/delivery-notices', { token: tokens.sales, method: 'POST', body });
+  const second = await request('/api/delivery-notices', { token: tokens.sales, method: 'POST', body });
+  assert.equal(first.status, 201); assert.equal(second.status, 201);
+  assert.equal((await request(`/api/delivery-notices/${first.data.notice.id}/confirm`, { token: tokens.sales, method: 'POST', key: 'capacity-first', body: {} })).status, 200);
+  const blocked = await request(`/api/delivery-notices/${second.data.notice.id}/confirm`, { token: tokens.sales, method: 'POST', key: 'capacity-second', body: {} });
+  assert.equal(blocked.status, 409);
+  assert.equal(db.prepare('SELECT state FROM delivery_notices WHERE id=?').get(second.data.notice.id).state, 'DRAFT');
+});
+
+test('gift order keeps catalog price evidence with zero revenue', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'gift-order-1', body: { customerId: 'customer-001', orderDate: '2026-10-15', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', isGiftLine: true }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data)); const line = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id); const snapshot = JSON.parse(line.price_snapshot_json);
+  assert.equal(line.unit_price_cents, 0); assert.equal(line.amount_cents, 0); assert.equal(snapshot.catalogUnitPriceCents, 1250); assert.equal(snapshot.giftLine, true);
+});
+
+test('Batch A frontend routes and responsive contract cover 320/390/430/680', () => {
+  const registry = readFileSync(resolve('src/navigation/applicationRegistry.js'), 'utf8');
+  const page = readFileSync(resolve('src/pages/sales-batch-a.jsx'), 'utf8');
+  const styles = readFileSync(resolve('src/styles.css'), 'utf8');
+  for (const route of ['quotations','delivery-notices','sales-order-changes']) assert.match(registry, new RegExp(`route\\('${route}'`));
+  for (const surface of ['QuotationEditor','QuotationDetail','DeliveryNoticeEditor','DeliveryNoticeDetail','ChangeEditor','ChangeDetail']) assert.match(page, new RegExp(`function ${surface}`));
+  assert.match(page, /LIST|RecordList/); assert.match(page, /Idempotency-Key/); assert.match(styles, /@media \(max-width:680px\)/);
+  for (const width of [320,390,430,680]) assert.ok(width <= 680 && styles.includes('.sales-batch-line'));
+});

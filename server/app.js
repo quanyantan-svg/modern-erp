@@ -215,6 +215,24 @@ import {
   retireDiscountScheme, retirePriceList, updateDiscountScheme, updatePriceEntry, updateSalesPriceList,
 } from './modules/sales-pricing.js';
 import {
+  addSalesOrderGiftLine, createSalesOrder as createCanonicalSalesOrder, getSalesOrder as getCanonicalSalesOrder,
+  getSalesOrderFulfillment, listSalesOrders as listCanonicalSalesOrders, salesOrderAction, updateSalesOrder as updateCanonicalSalesOrder,
+} from './modules/sales-orders.js';
+import {
+  convertSalesQuotation, createSalesQuotation, getSalesQuotation, listSalesQuotations,
+  salesQuotationAction, updateSalesQuotation,
+} from './modules/sales-quotations.js';
+import {
+  createDirectSalesOrderChange, createSalesOrderChange, getSalesOrderChange, listSalesOrderChanges,
+  salesOrderChangeAction, updateSalesOrderChange,
+} from './modules/sales-order-changes.js';
+import {
+  createDeliveryNotice, deliveryNoticeAction, getDeliveryNotice, listDeliveryNotices, updateDeliveryNotice,
+} from './modules/delivery-notices.js';
+import {
+  lockAndConsumeSalesDeliveryCapacity, persistSalesDeliveryNoticeLineIds, validateSalesDeliverySource,
+} from './modules/sales-delivery-source.js';
+import {
   createSupplier,
   deleteSupplier,
   listSuppliers,
@@ -573,6 +591,30 @@ ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/activate$/, handler: ({ db,req,res,actor,params }) => activateDiscountScheme(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-discount-schemes\/([^/]+)\/retire$/, handler: ({ db,req,res,actor,params }) => retireDiscountScheme(db,req,res,actor,params[0]), owner: 'server/modules/sales-pricing.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales-discounts/resolve', handler: ({ db,req,res,actor }) => resolveOrderTimeDiscountHttp(db,req,res,actor), owner: 'server/modules/sales-pricing.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-quotations', handler: ({ db,res,actor,url }) => listSalesQuotations(db,res,actor,url), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-quotations', handler: ({ db,req,res,actor }) => createSalesQuotation(db,req,res,actor), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-quotations\/([^/]+)\/convert-to-so$/, handler: ({ db,req,res,actor,params }) => convertSalesQuotation(db,req,res,actor,params[0]), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-quotations\/([^/]+)\/(effective-publish|cancel)$/, handler: ({ db,req,res,actor,params }) => salesQuotationAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-quotations\/([^/]+)$/, handler: ({ db,res,actor,params }) => getSalesQuotation(db,res,actor,params[0]), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-quotations\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateSalesQuotation(db,req,res,actor,params[0]), owner: 'server/modules/sales-quotations.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-orders', handler: ({ db,res,actor,url }) => listCanonicalSalesOrders(db,res,actor,url), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-orders', handler: ({ db,req,res,actor }) => createCanonicalSalesOrder(db,req,res,actor), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/controlled-change$/, handler: ({ db,req,res,actor,params }) => createDirectSalesOrderChange(db,req,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/gift-line$/, handler: ({ db,req,res,actor,params }) => addSalesOrderGiftLine(db,req,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-orders\/([^/]+)\/fulfillment$/, handler: ({ db,res,actor,params }) => getSalesOrderFulfillment(db,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/(submit|approve|reject|close|cancel)$/, handler: ({ db,req,res,actor,params }) => salesOrderAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-orders\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCanonicalSalesOrder(db,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-orders\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateCanonicalSalesOrder(db,req,res,actor,params[0]), owner: 'server/modules/sales-orders.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-order-changes', handler: ({ db,req,res,actor }) => createSalesOrderChange(db,req,res,actor), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-order-changes', handler: ({ db,res,actor,url }) => listSalesOrderChanges(db,res,actor,url), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-order-changes\/([^/]+)\/(submit|approve|reject|cancel)$/, handler: ({ db,req,res,actor,params }) => salesOrderChangeAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-order-changes\/([^/]+)$/, handler: ({ db,res,actor,params }) => getSalesOrderChange(db,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-order-changes\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateSalesOrderChange(db,req,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/delivery-notices', handler: ({ db,res,actor,url }) => listDeliveryNotices(db,res,actor,url), owner: 'server/modules/delivery-notices.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/delivery-notices', handler: ({ db,req,res,actor }) => createDeliveryNotice(db,req,res,actor), owner: 'server/modules/delivery-notices.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/delivery-notices\/([^/]+)\/(confirm|cancel)$/, handler: ({ db,req,res,actor,params }) => deliveryNoticeAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/delivery-notices.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/delivery-notices\/([^/]+)$/, handler: ({ db,res,actor,params }) => getDeliveryNotice(db,res,actor,params[0]), owner: 'server/modules/delivery-notices.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/delivery-notices\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateDeliveryNotice(db,req,res,actor,params[0]), owner: 'server/modules/delivery-notices.js' });
 ownedRouteTable.register({
   method: 'POST',
   path: '/api/customers',
@@ -2209,13 +2251,13 @@ async function handleApi(db, req, res, url) {
   if (pathname === '/api/production-genealogy' && req.method === 'POST') return genealogyHandler(db, req, res, actor);
   if (pathname === '/api/quality-control-points' && req.method === 'GET') return listQcpHandler(db, res, actor);
   if (pathname === '/api/quality-control-points' && req.method === 'POST') return createQcpHandler(db, req, res, actor);
-  if (pathname === '/api/orders' && req.method === 'GET') return listOrders(db, res, actor, url);
-  if (pathname === '/api/orders' && req.method === 'POST') return createOrder(db, req, res, actor);
+  if (pathname === '/api/orders' && req.method === 'GET') return listCanonicalSalesOrders(db, res, actor, url);
+  if (pathname === '/api/orders' && req.method === 'POST') return createCanonicalSalesOrder(db, req, res, actor, { requireIdempotencyKey: false });
   const orderActionMatch = pathname.match(/^\/api\/orders\/([^/]+)\/(submit|approve|reject)$/);
-  if (orderActionMatch && req.method === 'POST') return changeOrderState(db, req, res, actor, orderActionMatch[1], orderActionMatch[2]);
+  if (orderActionMatch && req.method === 'POST') return salesOrderAction(db, req, res, actor, orderActionMatch[1], orderActionMatch[2], { requireIdempotencyKey: false });
   const orderMatch = pathname.match(/^\/api\/orders\/([^/]+)$/);
-  if (orderMatch && req.method === 'GET') return getOrder(db, res, actor, orderMatch[1]);
-  if (orderMatch && req.method === 'PUT') return updateOrder(db, req, res, actor, orderMatch[1]);
+  if (orderMatch && req.method === 'GET') return getCanonicalSalesOrder(db, res, actor, orderMatch[1]);
+  if (orderMatch && (req.method === 'PUT' || req.method === 'PATCH')) return updateCanonicalSalesOrder(db, req, res, actor, orderMatch[1]);
   if (orderMatch && req.method === 'DELETE') return deleteDraftDocument(db, res, actor, 'salesOrder', orderMatch[1]);
   const salesWorkflowMatch = pathname.match(/^\/api\/workflow\/sales-orders\/([^/]+)$/);
   if (salesWorkflowMatch && req.method === 'GET') return getSalesOrderWorkflow(db, res, actor, salesWorkflowMatch[1]);
@@ -4043,10 +4085,10 @@ function sourceLineId(item, camel, snake) {
 }
 
 function normalizeSourcedLogisticsItems(db, items, {
-  sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake,
+  sourceTable, sourceHeaderColumn, sourceHeaderId, sourceIdCamel, sourceIdSnake, useSourceAmountRatio = false,
 }) {
   if (!Array.isArray(items) || items.length === 0) throw new HttpError(400, '请添加来源明细');
-  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents,document_uom_code,document_quantity_num,
+  const sourceStmt = db.prepare(`SELECT id,product_id,quantity,unit_price_cents,amount_cents,document_uom_code,document_quantity_num,
     document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den
     FROM ${sourceTable} WHERE id=? AND ${sourceHeaderColumn}=?`);
   let totalCents = 0;
@@ -4067,7 +4109,9 @@ function normalizeSourcedLogisticsItems(db, items, {
     const conversionDenominator = Number(source.conversion_denominator || 1);
     const documentQuantity = rational(BigInt(quantity) * BigInt(conversionDenominator), conversionNumerator);
     const baseQuantity = rational(quantity, 1);
-    const amountCents = roundRational(BigInt(documentQuantity.num) * BigInt(source.unit_price_cents), documentQuantity.den);
+    const amountCents = useSourceAmountRatio
+      ? roundRational(BigInt(source.amount_cents) * BigInt(quantity) * 1_000_000n, BigInt(Math.round(Number(source.quantity) * 1_000_000)))
+      : roundRational(BigInt(documentQuantity.num) * BigInt(source.unit_price_cents), documentQuantity.den);
     totalCents += amountCents;
     if (!Number.isSafeInteger(totalCents)) throw new HttpError(400, '单据金额超出安全范围');
     return { sourceItemId: source.id, productId: source.product_id, quantity, unitPriceCents: source.unit_price_cents, amountCents, lineNo: index + 1,
@@ -4105,15 +4149,15 @@ function fulfillmentState(executed, sourceQuantity, labels) {
   return executed >= sourceQuantity ? labels[2] : labels[1];
 }
 
-function authoritativeLogisticsTotal(db, table, foreignKey, documentId) {
+function authoritativeLogisticsTotal(db, table, foreignKey, documentId, { preserveAmount = false } = {}) {
   const items = db.prepare(`SELECT * FROM ${table} WHERE ${foreignKey}=? ORDER BY line_no`).all(documentId);
   if (!items.length) throw new HttpError(409, '单据没有明细，无法确认');
   let totalCents = 0;
   for (const item of items) {
     const quantity = Number(item.quantity);
     const unitPriceCents = Number(item.unit_price_cents);
-    if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) throw new HttpError(409, '单据明细数量或单价不正确');
-    const amountCents = quantity * unitPriceCents;
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0) throw new HttpError(409, '单据明细数量或单价不正确');
+    const amountCents = preserveAmount ? Number(item.amount_cents) : quantity * unitPriceCents;
     if (!Number.isSafeInteger(amountCents) || amountCents < 0) throw new HttpError(409, '单据明细金额不正确');
     if (Number(item.amount_cents) !== amountCents) db.prepare(`UPDATE ${table} SET amount_cents=? WHERE id=?`).run(amountCents, item.id);
     item.amount_cents = amountCents;
@@ -5458,10 +5502,14 @@ async function createSalesDelivery(db, req, res, actor) {
   if (!source) throw new HttpError(400, '销售订单不存在');
   if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批销售订单可以出货');
   if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售订单不一致');
+  const sourceContract = validateSalesDeliverySource(db, body, salesOrderId);
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
-  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: salesOrderId, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
-  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
+  const input = normalizeSourcedLogisticsItems(db, items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: salesOrderId, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id', useSourceAmountRatio: true });
   for (const item of input.items) {
+    const sourceLine = db.prepare('SELECT quantity,upper_delivery_tolerance_bps FROM sales_order_items WHERE id=?').get(item.sourceItemId);
+    const delivered = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.sourceItemId);
+    const upperCapacity = Number(sourceLine.quantity) * (10000 + Number(sourceLine.upper_delivery_tolerance_bps || 0)) / 10000;
+    if (delivered + Number(item.quantity) > upperCapacity) throw new HttpError(409, '销售出库数量超过订单行剩余容差容量');
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
   }
@@ -5469,11 +5517,12 @@ async function createSalesDelivery(db, req, res, actor) {
   const now = new Date().toISOString();
   const deliveryNo = 'SD' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,billing_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now, billingMode);
+    db.prepare('INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,status,total_cents,delivery_date,remark,creator_id,created_at,updated_at,billing_mode,delivery_notice_id,source_mode) VALUES(?,?,?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?,?,?)').run(deliveryId, deliveryNo, salesOrderId, source.customer_id, warehouseId, actor.id, input.totalCents, deliveryDate, optionalText(remark, 500), actor.id, now, now, billingMode, sourceContract.deliveryNoticeId, sourceContract.sourceMode);
     setSourceRecognitionPolicy(db, { side: 'AR', sourceType: 'SALES_DELIVERY', sourceId: deliveryId,
       recognitionMode: billingMode === 'LEGACY_DIRECT' ? RECOGNITION_MODES.DIRECT : RECOGNITION_MODES.INVOICE_DRIVEN,
       effectiveDate: deliveryDate, actorId: actor.id });
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    persistSalesDeliveryNoticeLineIds(db, deliveryId, items, sourceContract.sourceMode);
     configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: items, businessDate: deliveryDate });
     audit(db, actor.id, 'CREATE', 'SALES_DELIVERY', deliveryId, '创建销售出库单 ' + deliveryNo);
   });
@@ -5508,9 +5557,11 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
   const body = await readJson(req);
   if (body.salesOrderId !== undefined && body.salesOrderId !== current.sales_order_id) throw new HttpError(409, '销售订单来源不可修改');
   if (body.customerId !== undefined && body.customerId !== current.customer_id) throw new HttpError(409, '来源客户不可修改');
+  if (body.sourceMode !== undefined && body.sourceMode !== current.source_mode) throw new HttpError(409, '来源模式不可修改');
+  if (body.deliveryNoticeId !== undefined && body.deliveryNoticeId !== current.delivery_notice_id) throw new HttpError(409, '发货通知来源不可修改');
+  const sourceContract = validateSalesDeliverySource(db, { ...body, sourceMode: current.source_mode, deliveryNoticeId: current.delivery_notice_id }, current.sales_order_id);
   requireActiveReference(db, 'warehouses', body.warehouseId, '仓库');
-  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.sales_order_id, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id' });
-  assertRemainingQuantity(db, input, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, '出货');
+  const input = normalizeSourcedLogisticsItems(db, body.items, { sourceTable: 'sales_order_items', sourceHeaderColumn: 'order_id', sourceHeaderId: current.sales_order_id, sourceIdCamel: 'salesOrderItemId', sourceIdSnake: 'sales_order_item_id', useSourceAmountRatio: true });
   assertImmutableSourceItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, 'sales_order_item_id', input.items);
   const now = new Date().toISOString();
   transaction(db, () => {
@@ -5519,6 +5570,7 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
     db.prepare("DELETE FROM logistics_quality_policy_snapshots WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
     db.prepare("DELETE FROM tracked_source_allocations WHERE source_type='SALES_DELIVERY' AND source_id=?").run(deliveryId);
     replaceLogisticsItems(db, 'sales_delivery_items', 'delivery_id', deliveryId, input.items, 'sales_order_item_id');
+    persistSalesDeliveryNoticeLineIds(db, deliveryId, body.items, sourceContract.sourceMode);
     configureTrackedDraftLines(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, itemTable: 'sales_delivery_items', foreignKey: 'delivery_id', rawItems: body.items, businessDate: body.deliveryDate || current.delivery_date });
     audit(db, actor.id, 'UPDATE', 'SALES_DELIVERY', deliveryId, '修改销售出库 ' + current.delivery_no);
   });
@@ -5538,19 +5590,18 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
     transaction(db, () => {
       const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      lockAndConsumeSalesDeliveryCapacity(db, deliveryId);
       if (!locked.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
       const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
       if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
       if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       assertQualityGate(db, 'OQC', deliveryId);
       assertFinancialPeriodsOpen(db, locked.delivery_date);
-      const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId);
+      const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId, { preserveAmount: true });
       let cogsCents=0; const cogsInventoryEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(item.sales_order_item_id, so.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
-        const already = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, sourceItem.id, deliveryId);
-        if (already + Number(item.quantity) > Number(sourceItem.quantity)) throw new HttpError(409, '出货数量超过销售订单剩余可交数量');
         // Inventory, valuation and COGS use the base-UOM quantity so that
         // UOM conversions never inflate or deflate canonical inventory.
         // Legacy / seed rows that pre-date Phase 6E may not have base

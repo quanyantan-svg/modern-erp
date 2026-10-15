@@ -13,12 +13,12 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D10 baseline plus Sales Wave 2 enumerates 62 active user-facing routes', () => {
+test('D10 baseline plus Sales Batch A enumerates 65 active user-facing routes', () => {
   // Finance Operations Domain Closure added finance-invoices + finance-treasury
   // as dedicated primary routes on top of the Core Scope Cleanup +
   // Planning + Procurement & Outsourcing state.
-  assert.equal(ROUTE_PRESENTATIONS.length, 62, 'ROUTE_PRESENTATIONS must contain 62 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 62, 'All 62 routes must be unique');
+  assert.equal(ROUTE_PRESENTATIONS.length, 65, 'ROUTE_PRESENTATIONS must contain 65 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 65, 'All 65 routes must be unique');
 });
 
 test('D10 excludes 5 disabled routes and the mrp technical alias from the active set', () => {
@@ -38,7 +38,7 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 62, 'application registry must contain 62 active routes');
+  assert.equal(active.size, 65, 'application registry must contain 65 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -163,7 +163,7 @@ test('D10 uses presentation layer for raw backend enums — no direct uppercase 
   }
 });
 
-test('D10 routes visit manifest: 62 records, each ending in PASS', () => {
+test('D10 routes visit manifest: 65 records, each ending in PASS', () => {
   const manifest = ROUTE_PRESENTATIONS.map((item) => ({
     route: item.route,
     template: item.template,
@@ -178,8 +178,8 @@ test('D10 routes visit manifest: 62 records, each ending in PASS', () => {
   // Closure added finance-invoices + finance-treasury as primary routes.
   // Planning Domain Closure added 2 contextual routes: planning-reservations,
   // planning-configuration.
-  assert.equal(manifest.length, 62, 'manifest contains 62 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 62, 'all 62 records PASS');
+  assert.equal(manifest.length, 65, 'manifest contains 65 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === 'PASS').length, 65, 'all 65 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

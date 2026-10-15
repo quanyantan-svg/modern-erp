@@ -40,6 +40,7 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 - 销售订单、发货、退货、销售发票、AR 与收款/核销；
 - Sales Wave 1 商业基础：销售参数、销售组/销售员/有效期成员关系、客户商业扩展、客户物料对应、产品销售分类与可售范围规则；
 - Sales Wave 2 定价与订单时折扣：base currency 价目表、不可变价格版本、客户/物料/UoM/数量阶梯/日期解析、LINE/HEADER 折扣、手工覆盖权限及纯读证据；SQLite/MySQL 共用五表与客户默认配置；
+- Sales Wave 3–5：报价生命周期与分批转单、Canonical SO Writer 的价格/折扣不可变快照、审批后受控订单变更、发货通知与 DIRECT_ORDER / DELIVERY_NOTICE 双来源销售出库；
 - 请购、采购订单、收货、退货、供应商账单、AP 与付款/核销；
 - Forecast、可追溯预测冲销、Planning Scheme、MRP、Demand/Supply、Pegging、Planned Order、Reservation、计划员工作台、生产/采购指令与请购；
 - 生产工单审批/下达、BOM/Routing snapshot、工序计划与正排/倒排、领料/退料/补料、工序报工、生产入库、WIP 与生产成本归集；
@@ -70,8 +71,6 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Sales & Customer
 
-- Quotation
-- Sales Order Change
 - Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval
 - 更完整的 replacement / replenishment obligation
 
@@ -330,7 +329,10 @@ log/
 - `server/modules/planning.js` / `planning-domain.js`：MRP 运算与 Planning 方案、预测冲销、计划订单、预留、工作台 canonical owner；
 - `server/modules/sales-parameters.js` / `sales-foundation.js` / `sales-commercial-foundation.js`：Sales Wave 1 参数、组织人员和商业资料 canonical owner；
 - `server/modules/sales-pricing.js`：Sales Wave 2 价目表、价格版本、折扣规则、生命周期及两个纯读 resolver 的 canonical owner；
+- `server/modules/sales-quotations.js` / `sales-orders.js` / `sales-order-changes.js`：Sales Wave 3–4 报价、权威订单写入与受控变更 owner；
+- `server/modules/delivery-notices.js` / `sales-delivery-source.js`：Sales Wave 5 发货通知和销售出库来源/容量控制 owner；
 - `server/migrations/sales-customer-wave2-pricing.js`：Wave 2 五表、客户商业扩展两个可空 FK、四列业务 UNIQUE 与双数据库身份触发器；
+- `server/migrations/sales-customer-wave3-quotation.js` / `sales-customer-wave4-orders.js` / `sales-customer-wave5-delivery.js`：Batch A 七张新表及既有订单/出库表 additive schema；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
 - `server/migrations/sales-customer-domain.js`：Sales & Customer 按 Wave/id 确定排序的 canonical migration entrypoint；SQLite 初始化与 MySQL live-upgrade 共用，所有未来步骤必须幂等；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；

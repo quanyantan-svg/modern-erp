@@ -14,7 +14,7 @@ import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation
 import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
 import { createTempDir } from './test-utils/temp-db.js';
 
-const WAVE2_PLUS_SALES_TABLES = [
+const BATCH_A_TABLES = [
   'sales_quotations',
   'sales_quotation_lines',
   'sales_quotation_conversions',
@@ -22,6 +22,9 @@ const WAVE2_PLUS_SALES_TABLES = [
   'sales_order_change_lines',
   'delivery_notices',
   'delivery_notice_lines',
+];
+
+const WAVE6_PLUS_SALES_TABLES = [
   'sales_order_replacements',
   'sales_order_replacement_lines',
   'sales_prepayment_requirements',
@@ -47,7 +50,7 @@ const WAVE2_PLUS_SALES_TABLES = [
   'credit_lock_anchors',
 ];
 
-const FUTURE_SALES_COLUMNS = {
+const BATCH_A_COLUMNS = {
   sales_orders: [
     'salesperson_id', 'sales_group_id', 'settlement_party_id', 'payer_id',
     'customer_material_xref_id', 'commercial_tax_code', 'tax_inclusive',
@@ -58,42 +61,43 @@ const FUTURE_SALES_COLUMNS = {
     'is_gift_line', 'commercial_tax_basis', 'tax_inclusive_assumption',
     'pricing_uom_code_applied', 'qty_break_applied_min', 'qty_break_applied_max',
     'planned_delivery_date', 'upper_delivery_tolerance_bps', 'lower_delivery_tolerance_bps',
+    'price_snapshot_json', 'discount_snapshot_json',
   ],
   sales_deliveries: ['delivery_notice_id', 'source_mode'],
   sales_delivery_items: ['delivery_notice_line_id'],
-  return_orders: ['commercial_source_marker'],
 };
 
-function assertWave2ProductionSchema(db) {
+function assertBatchAProductionSchema(db) {
   const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
   const wave1 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave1Placeholders}) ORDER BY name`).all(...SALES_WAVE1_TABLES);
   assert.deepEqual(wave1.map((row) => row.name), [...SALES_WAVE1_TABLES].sort());
   const wave2Placeholders = SALES_WAVE2_TABLES.map(() => '?').join(',');
   const wave2 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave2Placeholders}) ORDER BY name`).all(...SALES_WAVE2_TABLES);
   assert.deepEqual(wave2.map((row) => row.name), [...SALES_WAVE2_TABLES].sort());
-  const placeholders = WAVE2_PLUS_SALES_TABLES.map(() => '?').join(',');
-  const tables = db.prepare(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`,
-  ).all(...WAVE2_PLUS_SALES_TABLES);
-  assert.deepEqual(tables, [], 'Wave 2 must not create any Wave 3+ Sales table');
+  const placeholders = BATCH_A_TABLES.map(() => '?').join(',');
+  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`).all(...BATCH_A_TABLES);
+  assert.deepEqual(tables.map((row) => row.name), [...BATCH_A_TABLES].sort());
+  const futurePlaceholders = WAVE6_PLUS_SALES_TABLES.map(() => '?').join(',');
+  const future = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${futurePlaceholders}) ORDER BY name`).all(...WAVE6_PLUS_SALES_TABLES);
+  assert.deepEqual(future, [], 'Batch A must not create any Wave 6+ Sales table');
   const extensionColumns = new Set(db.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
   assert.equal(extensionColumns.has('default_pricing_list_id'), true);
   assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
 
-  for (const [table, forbiddenColumns] of Object.entries(FUTURE_SALES_COLUMNS)) {
+  for (const [table, expectedColumns] of Object.entries(BATCH_A_COLUMNS)) {
     const actual = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
-    for (const column of forbiddenColumns) {
-      assert.equal(actual.has(column), false, `Wave 0 must not add ${table}.${column}`);
-    }
+    for (const column of expectedColumns) assert.equal(actual.has(column), true, `Batch A must add ${table}.${column}`);
   }
+  assert.equal(new Set(db.prepare('PRAGMA table_info(return_orders)').all().map((row) => row.name)).has('commercial_source_marker'), false);
 }
 
-test('canonical production registry contains the approved Wave 1 and Wave 2 steps', () => {
-  assert.equal(Object.values(FUTURE_SALES_COLUMNS).flat().length, 26);
+test('canonical production registry contains approved Wave 1 through Wave 5 steps', () => {
+  assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 2);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 5);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
+  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice']);
   const db = new DatabaseSync(':memory:');
   try {
     assert.deepEqual(runSalesCustomerMigrations(db, []), [], 'explicit empty fixture preserves historical Wave 0 semantics');
@@ -161,13 +165,13 @@ test('migration errors propagate and stop later steps', () => {
   assert.deepEqual(calls, ['before']);
 });
 
-test('fresh SQLite and existing SQLite reopen execute Wave 2 idempotently without forward schema', () => {
+test('fresh SQLite and existing SQLite reopen execute Batch A idempotently without Wave 6+ schema', () => {
   const dir = createTempDir('sales-wave0');
   const dbPath = join(dir, 'wave0.db');
   try {
     const fresh = createDatabase(dbPath);
     try {
-      assertWave2ProductionSchema(fresh);
+      assertBatchAProductionSchema(fresh);
       assert.ok(fresh.prepare("SELECT 1 FROM pragma_table_info('sales_deliveries') WHERE name='billing_mode'").get(), 'existing billing_mode remains intact');
     } finally {
       fresh.close();
@@ -175,7 +179,7 @@ test('fresh SQLite and existing SQLite reopen execute Wave 2 idempotently withou
 
     const reopened = createDatabase(dbPath);
     try {
-      assertWave2ProductionSchema(reopened);
+      assertBatchAProductionSchema(reopened);
       assert.equal(reopened.prepare('SELECT 1 value').get().value, 1);
     } finally {
       reopened.close();

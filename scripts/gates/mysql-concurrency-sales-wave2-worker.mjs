@@ -4,10 +4,11 @@ import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { readTransaction } from '../../server/db.js';
 import { updateCustomerCommercialExtension } from '../../server/modules/sales-commercial-foundation.js';
 import { activatePriceList, appendPriceVersion, resolveSalesPrice, retirePriceList } from '../../server/modules/sales-pricing.js';
+import { salesOrderAction } from '../../server/modules/sales-orders.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
-const actor = { id: '00000000-0000-4000-8000-000000000001', permissions: ['SALES_PRICING_VIEW', 'SALES_PRICING_MANAGE', 'SALES_COMMERCIAL_MANAGE'] };
+const actor = { id: '00000000-0000-4000-8000-000000000001', permissions: ['SALES_PRICING_VIEW', 'SALES_PRICING_MANAGE', 'SALES_COMMERCIAL_MANAGE', 'ORDERS_APPROVE'] };
 
 function connectionId() { return Number(db.prepare('SELECT CONNECTION_ID() id').get().id); }
 function request(body, key) {
@@ -52,6 +53,7 @@ async function execute(command) {
   if (command.action === 'activate-price-list') return invoke((res) => activatePriceList(db, request({}, command.key), res, actor, command.listId));
   if (command.action === 'retire-price-list') return invoke((res) => retirePriceList(db, request({}, command.key), res, actor, command.listId));
   if (command.action === 'update-customer-default') return invoke((res) => updateCustomerCommercialExtension(db, request(command.body), res, actor, command.versionId));
+  if (command.action === 'approve-sales-order') return invoke((res) => salesOrderAction(db, request({}, command.key), res, actor, command.orderId, 'approve'));
   if (command.action === 'close') { db.close(); return { closed: true }; }
   throw new Error(`Unknown action: ${command.action}`);
 }

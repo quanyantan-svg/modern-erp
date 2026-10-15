@@ -50,7 +50,6 @@ describe('Sales & Customer Wave 1 — Commercial Foundation', () => {
     for (const [table, forbidden] of Object.entries({
       products: ['sales_enabled', 'service_classification'],
       users: ['salesperson_code', 'sales_group_code'],
-      sales_orders: ['salesperson_id', 'sales_group_id', 'effective_version'],
     })) {
       const columns = new Set(database.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
       for (const column of forbidden) assert.equal(columns.has(column), false, `${table}.${column} must remain absent`);

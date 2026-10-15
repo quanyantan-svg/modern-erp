@@ -17,6 +17,9 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('business-overview','业务总览','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','primary','会计与分析','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
   route('dashboard','工作台','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','secondary','会计与分析','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
   route('orders','销售订单','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','ORDERS_CREATE']}),
+  route('quotations','销售报价','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','SALES_QUOTATION_MANAGE']}),
+  route('delivery-notices','交货通知','sales-customer','FLOW_INTERNAL_STEP','LIST','contextual','销售与客户','salesDeliveries',{any:['ORDERS_VIEW','SALES_DELIVERIES_VIEW','SALES_MANAGE']},{parentRoute:'sales-deliveries',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-order-changes','销售订单变更','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','orders',{any:['ORDERS_VIEW','SALES_ORDER_CHANGE_DOCUMENT_MANAGE','SALES_ORDER_CHANGE_DIRECT_REQUEST','SALES_ORDER_CHANGE_APPROVE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('approvals','业务审批','platform','FLOW_SUPPORTING','WORKFLOW','primary','系统设置','approvals',{permission:'ORDERS_APPROVE'},{mobileExposure:'approval-tab',desktopExposure:'global',approvalFamilies:APPROVAL_FAMILIES}),
   route('purchase-orders','采购订单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseOrders',{any:['PURCHASE_ORDERS_VIEW','PURCHASE_ORDERS_CREATE']}),
   route('suppliers','供应商资料','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','suppliers',{any:['SUPPLIERS_VIEW','SUPPLIERS_MANAGE']}),
@@ -123,6 +126,7 @@ const loadScreenModule = (path) => {
     case '../pages/engineering-change.jsx': return import('../pages/engineering-change.jsx');
     case '../pages/finance-operations.jsx': return import('../pages/finance-operations.jsx');
     case '../pages/sales-pricing.jsx': return import('../pages/sales-pricing.jsx');
+    case '../pages/sales-batch-a.jsx': return import('../pages/sales-batch-a.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -136,6 +140,9 @@ const defaultScreen = (modulePath) => Object.freeze({
 });
 const SCREEN_DEFINITIONS = Object.freeze({
   'sales-pricing': defaultScreen('../pages/sales-pricing.jsx'),
+  quotations: named('../pages/sales-batch-a.jsx','Quotations'),
+  'delivery-notices': named('../pages/sales-batch-a.jsx','DeliveryNotices'),
+  'sales-order-changes': named('../pages/sales-batch-a.jsx','SalesOrderChanges'),
   'business-overview': defaultScreen('../pages/business-overview.jsx'), dashboard: named('../pages/master-data.jsx','Dashboard'),
   orders: named('../pages/master-data.jsx','Orders'), approvals: defaultScreen('../components/MobileApprovalCenter.jsx'),
   customers: named('../pages/master-data.jsx','Customers'), suppliers: named('../pages/master-data.jsx','Suppliers'),
@@ -177,7 +184,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
 });
 
 const DETAIL_TARGET_ROUTES = new Set([
-  'orders','purchase-orders','purchase-receipts','sales-deliveries','returns','sales-invoices','supplier-bills','accounting',
+  'orders','quotations','delivery-notices','sales-order-changes','purchase-orders','purchase-receipts','sales-deliveries','returns','sales-invoices','supplier-bills','accounting',
   'accounts-receivable','accounts-payable','payment-collections','payment-disbursements','forecasts','mrp-runs',
   'material-requirements-plan','production-orders','material-issues','production-receipts','product-routings','iqc','oqc',
   'production-instructions','purchase-instructions','purchase-requisitions',
@@ -198,6 +205,7 @@ const ROUTE_QUERY_KEYS = Object.freeze({
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
   'sales-pricing',
+  'delivery-notices','sales-order-changes',
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
   'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
   'notifications','planning-reservations','planning-configuration',
@@ -235,7 +243,7 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
-  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}]]),
+  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['quotations','销售报价','orders'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}]]),
   launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),

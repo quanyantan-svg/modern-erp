@@ -64,6 +64,33 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
       const hash = hashPassword(`${name}-uat-1234`);
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)').run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    // The canonical Sales writer resolves commercial facts server-side. This
+    // legacy cross-domain UAT therefore carries real Wave 1/2 authorities.
+    db.prepare("INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES('EA','EA',1,?,?)").run(now, now);
+    db.prepare(`INSERT INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,customer_material_xref_enabled,
+      sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,order_change_mode,reservation_behavior,
+      active,created_at,updated_at,created_by,updated_by) VALUES('SYSTEM','SYSTEM',NULL,0,0,1,1,1,'BOTH','DISABLED',1,?,?,?,?)`)
+      .run(now, now, 'user-admin', 'user-admin');
+    db.prepare("INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES('uat-sales-group','UAT-SALES','UAT Sales',1,?,?)").run(now, now);
+    db.prepare("INSERT INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('uat-salesperson','UAT-SP','UAT Sales','user-sales',1,?,?)").run(now, now);
+    db.prepare(`INSERT INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+      VALUES('uat-sales-membership','uat-salesperson','uat-sales-group','2026-01-01',1,1,?,?,?,?)`).run(now, now, 'user-admin', 'user-admin');
+    db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,sales_uom_code,pricing_uom_code,
+      default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,service_classification,active,created_at,updated_at)
+      VALUES('uat-product-class','uat-p',1,'EA','EA',0,0,0,1,?,?)`).run(now, now);
+    const priceListId = '33333333-3333-4333-8333-333333333333';
+    db.prepare(`INSERT INTO sales_price_lists(id,price_list_code,name,currency_code,priority,effective_from,status,activated_at,activated_by,created_at,created_by,updated_at,updated_by)
+      VALUES(?,'UAT-PL','UAT price','CNY',0,'2026-01-01','ACTIVE',?,'user-reviewer',?,'user-sales',?,'user-sales')`).run(priceListId, now, now, now);
+    const materialKey = `M:${Buffer.from('uat-p').toString('hex').toUpperCase()}`;
+    const pricingKey = `U:${Buffer.from('EA').toString('hex').toUpperCase()}|Q:0000000000000000|D:20260101`;
+    db.prepare(`INSERT INTO sales_price_list_entries(id,price_list_id,material_id,customer_id,customer_scope_type,material_identity_key,customer_scope_key,
+      pricing_uom_code,pricing_identity_key,qty_break_min_micros,effective_from,created_at,created_by)
+      VALUES('uat-price-entry',?,'uat-p',NULL,'ALL',?,'A','EA',?,0,'2026-01-01',?,'user-sales')`).run(priceListId, materialKey, pricingKey, now);
+    db.prepare("INSERT INTO sales_price_list_versions(id,entry_id,version,unit_price_cents,snapshot_json,created_at,created_by) VALUES('uat-price-version','uat-price-entry',1,50000,'{}',?,'user-sales')").run(now);
+    db.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,settlement_party_customer_id,payer_customer_id,
+      default_salesperson_id,default_sales_group_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,created_at,updated_at,
+      created_by,updated_by,default_pricing_list_id) VALUES('uat-c','2026-01-01','uat-c','uat-c','uat-salesperson','uat-sales-group',30,'MONTHLY','ALL_SALES_ENABLED',?,?,?,?,?)`)
+      .run(now, now, 'user-admin', 'user-admin', priceListId);
     server = createServer(createApp(db, { distDir: resolve('dist') }));
     await new Promise((done) => server.listen(0, '127.0.0.1', done));
     baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -147,7 +174,7 @@ describe('V1.3 Phase 6E commercial go-live end-to-end UAT', () => {
     assert.equal((await request(`/api/orders/${so.data.id}/approve`, 'reviewer', 'POST', {})).status, 200);
     const soItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(so.data.id).id;
     const del = await request('/api/sales-deliveries', 'warehouse', 'POST', {
-      customerId: 'uat-c', warehouseId: 'uat-w', salesOrderId: so.data.id, deliveryDate: date, billingMode: 'SEPARATE',
+      customerId: 'uat-c', warehouseId: 'uat-w', salesOrderId: so.data.id, sourceMode: 'DIRECT_ORDER', deliveryDate: date, billingMode: 'SEPARATE',
       items: [{ productId: 'uat-p', quantity: 60, unitPriceCents: 50000, salesOrderItemId: soItemId }],
     });
     assert.equal(del.status, 201, del.data.error);

@@ -144,7 +144,7 @@ async function createConfirmedDelivery(customerId, totalCents) {
   // V1.3 Phase 1: physical stock execution belongs to warehouse; the
   // sales role no longer holds SALES_DELIVERIES_MANAGE.
   const create = await request('/api/sales-deliveries', { token: warehouseToken, method: 'POST', body: {
-    salesOrderId, customerId, warehouseId, deliveryDate: '2026-08-01', remark: 'm14 fixture',
+    salesOrderId, customerId, warehouseId, sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-08-01', remark: 'm14 fixture',
     items: [{ salesOrderItemId, productId, quantity: 1, unitPriceCents: totalCents }],
   } });
   assert.equal(create.status, 201, JSON.stringify(create.data));
@@ -210,7 +210,7 @@ function voucherCount(sourceType, sourceId) {
 
 describe('M14 — Sales Discount', () => {
   test('1. permission registry has 112 entries after M14 + Core Scope Cleanup + V17 Wave A; SALES_DISCOUNT_MANAGE / PURCHASE_DISCOUNT_MANAGE exist', () => {
-    assert.equal(PERMISSIONS.length, 211);
+    assert.equal(PERMISSIONS.length, 217);
     const codes = new Set(PERMISSIONS.map(([code]) => code));
     assert.ok(codes.has('SALES_DISCOUNT_MANAGE'));
     assert.ok(codes.has('PURCHASE_DISCOUNT_MANAGE'));

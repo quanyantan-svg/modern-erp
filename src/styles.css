@@ -3091,6 +3091,18 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
 @media (max-width:1119px) { .business-page-shell { padding:var(--page-padding-tablet); } .business-detail-layout { grid-template-columns:minmax(0,1fr); } }
 @media (max-width:767px) { .business-page-shell { padding:var(--page-padding-mobile); } .page-header__secondary--collapsible { display:none; } .business-content-section > header { align-items:stretch; flex-direction:column; } }
 
+/* Sales & Customer Batch A: LIST → DETAIL → EDITOR/WORKFLOW surfaces. */
+.sales-batch-list,.sales-batch-detail { min-width:0; }
+.sales-batch-form { display:grid; gap:var(--section-spacing); }
+.sales-batch-lines { display:grid; gap:12px; }
+.sales-batch-line { display:grid; grid-template-columns:minmax(0,2fr) minmax(110px,1fr) minmax(120px,1fr) auto; align-items:end; gap:12px; padding:14px; border:1px solid var(--border-subtle); border-radius:var(--radius-lg); }
+.sales-batch-detail .record-list { display:grid; gap:12px; }
+@media (max-width:680px) {
+  .sales-batch-line { grid-template-columns:minmax(0,1fr); }
+  .sales-batch-editor .sheet__body { padding-bottom:calc(20px + env(safe-area-inset-bottom,0px)); }
+  .sales-batch-form .bottom-action-bar { position:sticky; bottom:0; z-index:2; }
+}
+
 /* V1.5 D2.1 — canonical 680px single-rail prototype refinement. */
 .mobile-shell:has(.application-workspace),
 .mobile-shell:has(.flow-overview),

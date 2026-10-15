@@ -463,7 +463,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
 
     res = await fetch(`${baseUrl}/api/sales-deliveries`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 3, unitPriceCents: 1000 }] }),
+      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', sourceMode: 'DIRECT_ORDER', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 3, unitPriceCents: 1000 }] }),
     });
     assert.equal(res.status, 201);
     const created = await res.json();
@@ -506,7 +506,7 @@ describe('v1.0.1 — warehouse sales-delivery full path', () => {
   test('create rejects over-quantity (stock validation)', async () => {
     const res = await fetch(`${baseUrl}/api/sales-deliveries`, {
       method: 'POST', headers: { 'Authorization': `Bearer ${warehouseToken}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 9999, unitPriceCents: 1000 }] }),
+      body: JSON.stringify({ salesOrderId: 'so-sd', customerId: 'cus-1', warehouseId: 'wh-1', sourceMode: 'DIRECT_ORDER', items: [{ salesOrderItemId: 'soi-sd', productId: 'p-1', quantity: 9999, unitPriceCents: 1000 }] }),
     });
     assert.equal(res.status, 400);
     const body = await res.json();

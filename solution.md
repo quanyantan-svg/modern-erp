@@ -8914,7 +8914,7 @@ Physical tables total                                  = 69
 | Existing Table | New logical field(s) | Business purpose | Owner | Compatibility rule |
 |---|---|---|---|---|
 | A-02 `sales_orders` | `salesperson_id`, `sales_group_id`, `settlement_party_id`, `payer_id`, `customer_material_xref_id`, `commercial_tax_code`, `tax_inclusive`, `required_prepayment_cents`, `reservation_intent_state`, `commercial_close_state`, `gift_summary_cents`, `commercial_pricing_uom_code`, `effective_version` | SO commercial extension, lifecycle / closure and monotonic controlled-change concurrency anchor (§29.8 / §29.9 / §29.10) | Sales & Customer | nullable commercial fields on legacy rows display `(legacy)` without fabrication; `effective_version` is `INTEGER NOT NULL DEFAULT 1`, and migration backfills legacy rows to compatibility baseline `1` without inventing prior versions |
-| A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max`, `planned_delivery_date`, `upper_delivery_tolerance_bps`, `lower_delivery_tolerance_bps` | Line-level commercial snapshot; gift line marker; pricing/uom resolved snapshots; bounded one-schedule-per-line delivery plan/tolerance snapshot | Sales & Customer | legacy rows: NULL → display `(legacy)`; legacy tolerance does not get reinterpreted from later defaults |
+| A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max`, `planned_delivery_date`, `upper_delivery_tolerance_bps`, `lower_delivery_tolerance_bps`, `price_snapshot_json`, `discount_snapshot_json` | Line-level commercial snapshot; authoritative price/version/UoM and discount-stage evidence; gift line marker; bounded one-schedule-per-line delivery plan/tolerance snapshot | Sales & Customer | both JSON columns remain nullable for legacy rows and display `(legacy)`; every Batch A canonical new line requires valid non-empty server-generated evidence; legacy tolerance does not get reinterpreted from later defaults |
 | A-04 `sales_deliveries` | `delivery_notice_id`, `source_mode`, `billing_mode` (existing) | truthful DIRECT_ORDER / DELIVERY_NOTICE source discriminator; preserved billing mode | Sales & Customer | legacy rows: `source_mode=LEGACY_UNCLASSIFIED`; no fabricated DN |
 | A-05 `sales_delivery_items` | `delivery_notice_line_id` | DN line capacity anchor (§29.11 / §29.17) | Sales & Customer | legacy rows: NULL `delivery_notice_line_id` allowed (legacy path) |
 | A-06 `return_orders` | `commercial_source_marker` (CHECK: DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE) | Three-mode explicit | Sales & Customer | legacy rows: NULL → treat as DELIVERY_BACKED |
@@ -8925,7 +8925,7 @@ Counts:
 
 ```text
 Existing-table extensions                                  = 6  (five pre-existing tables + A-39 extended in Wave 2)
-New logical fields across extensions                       = 29
+New logical fields across extensions                       = 31
 (no new physical tables created from this sub-class)
 ```
 
@@ -9013,8 +9013,8 @@ A  Physical tables total                     = 69
      DEPRECATED_NO_NEW_WRITES (tables)      =  0
 
 B  Existing-table extensions                = 6  covered tables across the wave sequence
-                                                 (6 extensions, 29 logical fields;
-                                                  28 ADD + 1 existing reused field)
+                                                 (6 extensions, 31 logical fields;
+                                                  30 ADD + 1 existing reused field)
 
 C  Derived views / projections               = 5  logical objects
      persisted? YES                         = 0
@@ -9443,6 +9443,7 @@ Decision examples:
 - Activation locks the root and reachable fallback lists in ascending id order, re-reads all entries/versions and canonical effective UoM evidence, validates uniqueness/range/cycle/currency, then writes `ACTIVE` plus `audit_logs` in one transaction. An empty list or entry without a version cannot activate. Retirement locks and transitions only `ACTIVE → RETIRED`; repeated same-key replay is stable, while direct replay with a different key against an already retired list is 409.
 - `POST /api/sales-pricing/resolve` is pure: read-only transaction, zero writes to the five Wave-2 tables, `audit_logs`, or idempotency state. Its result is preview/decision evidence, not an approved-order snapshot.
 - Wave 2 does **not** add or mutate `sales_orders` / `sales_order_items`. The output evidence contract contains resolved cents, list/entry/version identities, date/break/UoM evidence, override actor/reason when applicable, and resolver contract version `SALES_PRICE_V1`. Wave 4 owns actual SO create persistence and approved-order immutability. Therefore UAT-S-08 resolver evidence is executable in Wave 2, while the approved-SO half of R-SAL-11 is not complete before Wave 4.
+- Approved Limited Design Reopen mapping: the Wave-4 canonical writer re-runs this resolver inside its transaction and serializes the complete versioned envelope into `sales_order_items.price_snapshot_json`. The JSON includes contract version, business date, request fingerprint, price-list/entry/version identities, immutable version/catalog unit cents separately from resolved unit cents, requested and pricing UoM rational evidence, quantity evidence, gross line cents, and any authorized manual-override actor/`SALES_PRICING_OVERRIDE` authority/reason. Client JSON is never authoritative; the writer and approval path recompute the evidence fingerprint and cross-check version/catalog price, resolved order price, UoM, quantity and gross amount.
 
 ### 29.7 Order-Time Discount Technical Design
 
@@ -9547,6 +9548,7 @@ M14 (`sales_discounts`) = post-delivery finance adjustment integration。Finance
 - `POST /api/sales-discounts/resolve` is read-only and writes neither pricing tables nor `audit_logs`. It returns the complete calculation envelope: input fingerprint, scheme/rule versions, ordered stages, bases, bps/fixed cents, per-stage discount, header allocation trace, final line totals, actor id for manual selection, reason text, and contract version `ORDER_DISCOUNT_V1`.
 - Wave 2 owns executable UAT-S-04..S-07 configuration/lifecycle/authorization behavior, UAT-S-08 price resolver evidence, and UAT-S-09 discount calculation/evidence. It does not claim actual SO persistence.
 - Wave 4 persists the price and discount evidence on SO create and enforces write-once approved-order history for S19/S20/R-SAL-11. No Wave-4 column or handler is introduced by Wave 2, and R-SAL-11 remains incomplete until its approved-SO concurrency test passes.
+- The approved Wave-4 persistence target is `sales_order_items.discount_snapshot_json`. Its versioned envelope contains `ORDER_DISCOUNT_V1`, request fingerprint, selected scheme/rule identities and versions, ordered LINE/HEADER stages, exact cents and HEADER allocation, rounding evidence, final commercial amount, explicit zero-discount evidence when no rule applies, and manual override actor/reason when present. The canonical writer re-resolves and verifies this evidence against `amount_cents`, line/order totals and the paired price snapshot before INSERT.
 
 #### 29.7.6 Bounded design-reopen trace and implementation gate
 
@@ -9594,7 +9596,7 @@ sales_group_id                    (NEW — FK sales_groups.id nullable)
 settlement_party_id              (NEW — FK customers nullable)
 payer_id                         (NEW — FK customers nullable)
 customer_material_xref_id        (NEW — FK customer_material_xref nullable)
-default_pricing_uom_code         (NEW — derived from extension)
+commercial_pricing_uom_code      (NEW — resolved commercial pricing UoM snapshot)
 commercial_tax_code              (NEW — derived from extension)
 tax_inclusive                    (NEW — bool nullable)
 required_prepayment_cents         (NEW — int nullable, 0 means none)
@@ -9616,6 +9618,8 @@ qty_break_applied_max           (NEW REAL nullable)
 planned_delivery_date           (NEW DATE nullable; one-schedule-per-line identity = sales_order_items.id)
 upper_delivery_tolerance_bps    (NEW INTEGER nullable; CHECK >= 0)
 lower_delivery_tolerance_bps    (NEW INTEGER nullable; CHECK 0..10000)
+price_snapshot_json             (NEW TEXT/JSON nullable for legacy; mandatory non-empty canonical evidence for Batch A new lines)
+discount_snapshot_json          (NEW TEXT/JSON nullable for legacy; mandatory non-empty canonical evidence, including explicit zero discount)
 ```
 
 > 不破坏 existing rows；legacy rows 缺新字段为 NULL，行为为 PARTIAL compatibility。
@@ -12289,6 +12293,7 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | discount greatest-version selection under scheme lock | one current version per rule_key; disabled/inapplicable greatest version never falls back to history |
 | Wave-2 target-first FKs + A-39 nullable default FKs | five targets are created first; both customer defaults are real FKs with no fabricated value |
 | `sales_order_items` tolerance snapshot CHECK | upper bps >= 0; lower bps 0..10000; immutable approved execution baseline |
+| `sales_order_items.price_snapshot_json` / `discount_snapshot_json` | nullable physical compatibility for legacy rows; canonical Batch A writer requires valid non-empty versioned server evidence and rejects forged/missing/mismatched snapshots; approved history is write-once |
 | `sales_orders.order_no UNIQUE` | no duplicate order |
 | `sales_orders.effective_version INTEGER NOT NULL DEFAULT 1 CHECK (effective_version >= 1)` | one monotonic current-version anchor; application also requires locked-read + conditional CAS update |
 | `sales_order_changes.change_no UNIQUE` + `application_idempotency_key UNIQUE` | one evidence identity and exact-once application |
@@ -12328,6 +12333,7 @@ Hardening surface checklist (anticipated hazards):
   SELECT ... FOR UPDATE then UPDATE; never rely on conditional UPDATE.
 - JSON: store JSON in TEXT / JSON columns using universal JSON1 / MySQL JSON
   document with same content semantics.
+- Sales line snapshot JSON follows the existing Bootstrap type mapping: canonical SQLite `TEXT` is reconciled to the adapter-supported MySQL JSON/text representation without raw SQLite DDL replay. Application validation is authoritative for the versioned envelope, safe integers and cross-field equality on both engines.
 - AUTOINCREMENT: rely on explicit id generation; do not assume auto-assigned
   values exist on both engines identically. Use TEXT IDs consistent with
   current implementation.
@@ -12375,6 +12381,8 @@ Tests:
 ```
 
 ### 29.43 Transaction Model
+
+The canonical SO writer re-runs Pricing and Discount resolution after acquiring its transaction gate and before inserting any SO row. It serializes only the resulting server envelopes into `price_snapshot_json` / `discount_snapshot_json`, verifies unit price, gross/final line cents, UoM evidence, header allocation and order total, and commits the two snapshots with the line/header/audit/idempotency facts. A supplied client snapshot is only an optimistic assertion and any mismatch rolls back with zero side effects. Ordinary PATCH never accepts either snapshot for an approved SO.
 
 #### 29.43.1 SQLite strategy
 
@@ -12470,7 +12478,7 @@ rely on timeouts/sleeps.
 | R-SAL-08 | SO change application vs direct/notice-backed Delivery create/confirm | direct + document | sales_orders.id + affected sales_order_items.id + SD source-line identity | SO header → affected SO lines → DN line when present → SD item | change sees executed quantity or delivery sees new version; only one valid serialization | change reduces/reassigns already shipping line | S05, S06 | both paths share apply service; delivery re-reads effective version/capacity | same source lock order | R-SAL-08 test |
 | R-SAL-09 | Delivery vs Return/Reopen | — | delivery_items → return_items → AR update | both FOR UPDATE | one wins; reopen explicit | silent relive of cleared | S05, S10 | idempotent return + reopen | FOR UPDATE both | R-SAL-09 test |
 | R-SAL-10 | Return vs Replacement fulfillment | — | return_order_items.id (line) + sales_order_replacement_lines.id (line) | return-line FOR UPDATE → replacement-line FOR UPDATE | state machine consistent; combined fulfilled ≤ return_qty | inconsistent state | S10, S61 | replacement fulfillment rejects if remaining < qty; line-level anchor | FOR UPDATE both | R-SAL-10 test |
-| R-SAL-11 | Pricing update vs Order approval | — | Wave-2 list/version identity + Wave-4 `sales_order_items.price_snapshot_identity` (immutable) | Wave 2 freezes ACTIVE pricing versions; Wave 4 locks SO item on create/approve and persists the selected evidence | resolver evidence is immutable by version; future approved SO snapshot remains unchanged | price change rewrites approved SO price | S20 | Wave-2 structural/version test now; Wave-4 snapshot write-once + concurrent approval test later | same two-wave boundary; no Wave-2 SO schema | Wave-2 partial evidence + Wave-4 final R-SAL-11 test |
+| R-SAL-11 | Pricing update vs Order approval | — | Wave-2 list/version identity + immutable identity properties inside Wave-4 `sales_order_items.price_snapshot_json` | Wave 2 freezes ACTIVE pricing versions; Wave 4 locks SO item on create/approve and persists the server-generated evidence | resolver evidence is immutable by version; future approved SO snapshot remains unchanged | price change rewrites approved SO price | S20 | Wave-2 structural/version test now; Wave-4 snapshot write-once + concurrent approval test later | same two-wave boundary; no Wave-2 SO schema | Wave-2 partial evidence + Wave-4 final R-SAL-11 test |
 | R-SAL-12 | Credit Check × 2 vs same credit object (PURE_DERIVED exposure) | — | **credit_lock_anchors.id** (REFINED A-62; anchor_type='CREDIT_OBJECT'; UNIQUE on anchor_key) | 1) POLICY_SCOPE anchor FOR SHARE; 2) CREDIT_OBJECT anchor FOR UPDATE; 3) credit_profile effective row FOR UPDATE; 4) credit_policy_snapshots create-or-select FOR UPDATE; 5) credit_check_rules effective rows FOR UPDATE | one wins; the loser re-reads and re-evaluates against updated state; multiple concurrent Credit Checks may share the same policy read (FOR SHARE) but serialize per credit object; combined committing commitments ≤ available credit | combined committing commitments > available credit; or check reads from stale eligible balance while concurrent Finance mutation has already consumed/refunded it | S14, S15 | PRIMARY long-lived lock identity = CREDIT_OBJECT anchor; Prepayment Gate acquires same Finance canonical locks via financeAdapter (see R-SAL-15); risk-releasing Finance events do not need to acquire Sales anchor; visibility lag → conservative temporary BLOCK acceptable, never over-credit approval | FOR UPDATE anchor (CREDIT_OBJECT) → profile → snapshot → rules; FOR SHARE on POLICY_SCOPE | R-SAL-12 test |
 | R-SAL-13 | Credit Special Approval vs Order approval | — | credit_special_approval.source_credit_check_result_id (PK) + credit_policy_snapshots.id + sales_orders.id (effective_version) | approval FOR UPDATE → snapshot FOR UPDATE → SO FOR UPDATE | either special-approve or standard approval wins; never both silently | both silently | S16 | approval + SO tx; check + approval PK link | FOR UPDATE all three | R-SAL-13 test |
 | R-SAL-14 | Credit release vs Collection / Return | — | credit_exposure_view (DERIVED) over Finance canonical AR / settlement_unapplied / financial_credit_adjustments | collection/return FOR UPDATE (Finance-owned rows) | transition rule prevents double-count | double-count | S14 | OCCUPANCY transition rule (per §29.23.2) at write; recognition-mode aware | FOR UPDATE on Finance-side rows | R-SAL-14 test |
@@ -12691,7 +12699,7 @@ Physical model counts (post-remote-review rebuild):
     EXISTING_CONVERGE              = 25
     NEW                            = 44   (A-25..A-66 + A-68..A-69)
     DEPRECATED_NO_NEW_WRITES (tbl) =  0
-  B existing-table extensions      =  6 (29 logical fields; 28 ADD + 1 reused)
+  B existing-table extensions      =  6 (31 logical fields; 30 ADD + 1 reused)
   C derived views / projections   =  5 (4 pure-no + 1 controlled-hybrid; C-06 removed)
   D compatibility behaviors        =  6 (legacy read=YES; new write through bypass=NO)
   E deprecated-no-new-write fields =  1 (products.price_cents; single classification)
@@ -13059,8 +13067,8 @@ If implementation later proposes a persisted Credit Exposure cache, STOP + REQUI
 
 ```text
 new physical tables total = 44
-corrected existing-table extension inventory = 6 tables / 29 logical fields
-actual NEW extension fields requiring schema migration = 28
+corrected existing-table extension inventory = 6 tables / 31 logical fields
+actual NEW extension fields requiring schema migration = 30
 existing reused extension fields requiring NO ADD COLUMN = 1
   sales_deliveries.billing_mode
 duplicate ADD attempts = 0
@@ -13094,6 +13102,8 @@ The corrected §29 inventory is the logical Design inventory. Wave 1 adds eight 
 | `sales_order_items` | `planned_delivery_date` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; bounded one-schedule-per-line identity is the item id |
 | `sales_order_items` | `upper_delivery_tolerance_bps` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; immutable approved snapshot; CHECK >= 0 |
 | `sales_order_items` | `lower_delivery_tolerance_bps` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; immutable approved snapshot; CHECK 0..10000 |
+| `sales_order_items` | `price_snapshot_json` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; nullable physical compatibility, mandatory validated server evidence for every Batch A new line; immutable after approval |
+| `sales_order_items` | `discount_snapshot_json` | `NEW_LOGICAL_FIELD` | `ABSENT` | 4 | `ADD`; nullable physical compatibility, mandatory ordered stage/allocation evidence including explicit zero discount; immutable after approval |
 | `sales_deliveries` | `delivery_notice_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
 | `sales_deliveries` | `source_mode` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD`; CHECK DIRECT_ORDER / DELIVERY_NOTICE / LEGACY_UNCLASSIFIED |
 | `sales_deliveries` | `billing_mode` | `EXISTING_REUSED_FIELD` | `EXISTS` (`v13-phase6e-commercial-golive`) | 5 | `REUSE_EXISTING` |
@@ -13101,8 +13111,8 @@ The corrected §29 inventory is the logical Design inventory. Wave 1 adds eight 
 | `return_orders` | `commercial_source_marker` | `NEW_LOGICAL_FIELD` | `ABSENT` | 6 | `ADD` |
 
 ```text
-logical extension fields = 29 / 29
-new schema fields to add = 28
+logical extension fields = 31 / 31
+new schema fields to add = 30
 existing extension fields reused = 1
 duplicate ADD attempts = 0
 ```
@@ -13113,7 +13123,7 @@ duplicate ADD attempts = 0
 | 1 | 8 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `sales_sellable_scope_rules`, `product_commercial_classification`) | 0 | bounded Sales parameter codes; independent xref/sellable rules; customer/person anchor overlap locks; no `users` / Master extension; no Wave-2 FK; SQLite + MySQL compatible |
 | 2 | 5 (`sales_price_lists`, `sales_price_list_entries`, `sales_price_list_versions`, `sales_discount_schemes`, `sales_discount_scheme_rules`) | `customer_commercial_extensions` (+ exactly `default_pricing_list_id`, `default_discount_scheme_id`, both nullable) | create all five targets with PK/UNIQUE/CHECK/FK metadata first; current Bootstrap materializes the four-column entry UNIQUE inline; canonical registry replay installs/verifies dialect-local normalized-key guards; add the two fields without rewriting rows; SQLite verifies PRAGMA/sqlite_master and MySQL verifies named real FKs/index/triggers through information_schema; fresh/upgrade/repeat converge or fail closed on mismatch |
 | 3 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | new migration file; UNIQUE on (quotation_id, line_no); PR UNIQUE on (quotation_id, sales_order_line_id); idempotency_key column |
-| 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code, effective_version), sales_order_items (+ 9 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max, planned_delivery_date, upper_delivery_tolerance_bps, lower_delivery_tolerance_bps) | additive snapshot columns; nullable legacy commercial fields are not backfilled from later defaults; `effective_version` alone is NOT NULL, initializes/backfills to compatibility baseline `1`, then advances only through locked canonical change application + CAS |
+| 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code, effective_version), sales_order_items (+ 11 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max, planned_delivery_date, upper_delivery_tolerance_bps, lower_delivery_tolerance_bps, price_snapshot_json, discount_snapshot_json) | additive snapshot columns; JSON columns and other commercial fields remain nullable for legacy rows but are mandatory in the canonical new writer; `effective_version` alone is NOT NULL, initializes/backfills to compatibility baseline `1`, then advances only through locked canonical change application + CAS |
 | 5 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse existing `billing_mode`), sales_delivery_items (+ `delivery_notice_line_id`) | source_mode truthfully distinguishes direct/notice/legacy; no fake DN; common SO line lock/tolerance/gates, plus DN lock only for notice-backed path; billing_mode reused, no duplicate ADD |
 | 6 | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | return_orders (+ commercial_source_marker) | new migration file; explicit replacement fulfillment evidence; legacy return rows NULL marker → treat as DELIVERY_BACKED |
 | 7 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new migration file; PK on (sales_order_id, line_no); snapshot_key idempotency; Finance R-SAL-15 extension plus Planning EXPECTED-supply bounded contract extension before enabling that mode |
@@ -13429,7 +13439,7 @@ Commit boundary (one primary local commit after external review; no push)
 | 1 | Wave 0 | 8 (`sales_parameters`, `sales_groups`, `salesperson_profiles`, `salesperson_group_memberships`, `customer_commercial_extensions`, `customer_material_xref`, `sales_sellable_scope_rules`, `product_commercial_classification`) | 0 | bounded Sales foundation modules; no Platform / Master schema changes | customer detail extension panel only | parameter/xref/sellable interval races + membership exactly-one/default + FK/CHECK/legacy tests | Wave 1 registry steps; no forward FK | legacy missing extension/classification read-only; new writes fail closed; salesperson may lack login but cannot access group-scoped docs | Master/Platform read-only targets; Platform mechanics only | focused integration + SQLite/MySQL locking checkpoint; permission gate | one local commit after external review |
 | 2 | Wave 1 | exactly 5 (price_lists, price_list_entries, price_list_versions, discount_schemes, discount_scheme_rules) | A-39 exactly two nullable FKs: `default_pricing_list_id` + `default_discount_scheme_id` | pricing/discount lifecycle modules; two POST pure resolver APIs; existing audit/idempotency services | contextual pricing/discount sub-page under existing Sales & Customer navigation; no top-level route | UAT-S-04..07 configuration/lifecycle/override; UAT-S-08 resolver evidence; UAT-S-09 deterministic discount calculation; four-column entry UNIQUE fresh/upgrade/repeat; LINE/HEADER + greatest-rule-version checks; canonical pricing mismatch; FK/CHECK/UoM/cycle/overlap/zero-write/RBAC/replay/audit parity | target-first five-table create; current Bootstrap inline <=4-column UNIQUE; no Adapter/generated digest; preserve rows; add/verify two real nullable FKs; fresh/upgrade/repeat convergence, mismatch fail-closed | no fabricated default; `products.price_cents` historical read/display only and never a new resolver/write fallback | Master UoM read-only; Platform `audit_logs`/A-21 mechanics reused with no schema change | no quotation/SO schema or writer, no actual SO snapshot persistence, no Master/Inventory/Finance/Platform schema, no sixth table | SC15..SC23 and UAT-S-04..09 Wave-2 evidence; S19/S20 preserved; R-SAL-11 only structural/version evidence until Wave-4 SO persistence + immutability test | one local commit after external review |
 | 3 | Wave 2 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | quotation handlers with group-scope backend predicate from first route | quotations LIST / DETAIL / EDITOR / CONVERT | unit + R-SAL-06 + fail-closed group access | new migration file; PK + PR UNIQUE | n/a | n/a | UAT-S-01..03; R-SAL-06 evidence; UAT-S-28 partial | one local commit |
-| 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols, including `effective_version`); sales_order_items (+ 9 cols) | shared change application service; direct/document handlers; group-scope + line snapshot; locked-read + version CAS | SO direct-change action + change-document workflow | UAT-S-10..16 including four-mode UAT-S-15; R-SAL-07/08; UAT-S-28 partial | additive migration; legacy nullable commercial fields retained; version initializes/backfills to baseline `1` and is not client-writable | later parameters/defaults never rewrite APPLIED history; approved snapshots/evidence remain append-only | n/a | SC37..SC40/UAT-S-15 final owner Wave 4; SC30 final W5 | one local commit |
+| 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols, including `effective_version`); sales_order_items (+ 11 cols, including `price_snapshot_json` / `discount_snapshot_json`) | shared canonical writer/change application service; direct/document handlers; group-scope + authoritative line snapshots; locked-read + version CAS | SO direct-change action + change-document workflow | UAT-S-10..16 including four-mode UAT-S-15; R-SAL-07/08/11; UAT-S-28 partial | additive migration; snapshot JSON nullable for legacy but required for new canonical lines; version initializes/backfills to baseline `1` and is not client-writable | later parameters/defaults never rewrite APPLIED history; approved snapshots/evidence remain append-only | n/a | SC37..SC40/UAT-S-15 final owner Wave 4; SC30 final W5 | one local commit |
 | 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | direct/notice source capacity + tolerance enforcement | delivery-notices route | upper BLOCK + lower controlled-close + direct/notice races | explicit source_mode; no fake DN; no duplicate billing_mode | LEGACY_UNCLASSIFIED read-only | n/a | UAT-S-17/S-18; SC08+SC30 final completion; S09 | one local commit |
 | 6 | Wave 5 | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | return_orders (+ commercial_source_marker) | SR handlers; returns replacement tab | returns route extended | unit + R-SAL-09 / R-SAL-10 tests | additive migration | legacy returns without marker → DELIVERY_BACKED | n/a | UAT-S-19..22; S10/S11 | one local commit |
 | 7 | Waves 5, 6 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | finance locked-read; reservation intent adapters; Finance V22 bounded extension | prepayment/reservation sub-pages | R-SAL-02/R-SAL-15; MySQL locked-read; reservation mode matrix | new migration file; idempotency snapshot_key | n/a | Finance extension + Planning EXPECTED finite-capacity bounded extension | UAT-S-23/S-24/S-28/S-40 final; S12/S13 | one local commit + cross-domain change reports |
@@ -13567,7 +13577,7 @@ Materialized executable MySQL races: 23
 Conditional structural races: 1 (R-SAL-23)
 Physical tables: 69 = 25 EXISTING_CONVERGE + 44 NEW + 0 deprecated tables
 Physical NEW tables: 44
-Corrected existing-table extension inventory: 6 tables / 29 logical fields
+Corrected existing-table extension inventory: 6 tables / 31 logical fields
 Actual extension migration work: 28 NEW fields
 Existing extension fields reused: 1 (sales_deliveries.billing_mode)
 Wave 1 physical allocation: 8 NEW tables / 0 existing-table extensions / 0 existing-table fields
@@ -13839,3 +13849,36 @@ On MySQL, `migrateSalesCustomerWave2Pricing` now fails closed unless all five Wa
 The existing `trg_sales_price_entries_identity_bi` and `trg_sales_price_entries_identity_bu` creation statements remain the only MySQL identity-trigger implementation. The registry creates a missing trigger through the existing worker, then validates timing, event, owner table and bytewise identity fragments through `information_schema.TRIGGERS`; replay validates existing triggers without recreating them. No global MySQL adapter, isolation, business route, table inventory, historical row or Wave 3+ contract changes are part of this remediation.
 
 `server/sales-customer-wave2-mysql-migration.test.js` supplies executable adapter-level dispatch coverage: MySQL receives no raw Wave 2 `CREATE TABLE` or SQLite-style `ADD COLUMN`, expected bootstrap-generated FK names reconcile once, replay is idempotent, and missing table/column or unexpected FK/PK metadata fails closed. The protected real-MySQL fresh suite remains `server/mysql-sales-customer-wave0.integration.js`; the existing-schema additive/replay suite remains `server/mysql-sales-customer-wave1-upgrade.integration.js`; Wave 2 multi-session behavior remains in `server/mysql-sales-customer-wave2-concurrency.integration.js`.
+
+---
+
+## 34. Sales & Customer Domain Implementation — Batch A (Waves 3–5) Mapping
+
+> 本节仅记录已冻结 `§29–§30` 的实施映射，不改变 Requirement、SC、UAT、Race、schema 数量或跨域 ownership。实施基线为 `feature/sales-batch-a@af29569ed838493cca942a52361c9c2b391b93c7`。
+
+### 34.1 Canonical owners and compatibility dispatch
+
+- `server/modules/sales-orders.js` 是 Wave 4 后唯一 Sales Order create/update/lifecycle writer；新 `/api/sales-orders` 与兼容 `/api/orders` 只做同一 handler 的 route alias，报价转换直接调用同一 transaction-aware service，不保留第二套旧写入实现。
+- `server/modules/sales-quotations.js` 拥有 Quotation lifecycle、conversion evidence、R-SAL-06 capacity 与 group-scope authorization。
+- `server/modules/sales-order-changes.js` 拥有两种 authoring path，并统一调用 `applySalesOrderChange()`；版本 CAS、容量重读、approval、idempotency、audit 在同一 transaction。
+- `server/modules/delivery-notices.js` 拥有 DN lifecycle；`server/modules/sales-delivery-source.js` 提供 DIRECT_ORDER / DELIVERY_NOTICE 的公共来源与容量校验，由既有 Sales Delivery handler 调用，库存、LOT/SERIAL、OQC、valuation/COGS 与 Finance writer 不复制。
+
+### 34.2 Derived quantity and identity mapping
+
+- `sales_quotation_conversions` 是 converted quantity 权威证据；`sales_quotation_lines.converted_qty` 仅为同事务维护的可核对缓存。读取时按 evidence 聚合对账并计算 `remainingQty=quantity-converted`，不使用跨表 generated expression。
+- `delivery_notice_lines.id` 是稳定 FK / lock identity；`UNIQUE(delivery_notice_id,sales_order_item_id)` 是业务复合唯一性。notified/remaining 由引用该 line 的 Sales Delivery evidence 聚合；缓存字段只在同一 transaction 更新并对账。
+- 锁顺序固定为：全局 transaction gate（MySQL runtime）→ document header → 按 ID 排序的 SO line → DN line（若有）→ delivery/change/conversion evidence → idempotency/audit。SQLite 使用 `BEGIN IMMEDIATE`；MySQL 在 transaction gate 后对相同业务 anchor 使用 `FOR UPDATE`。
+
+### 34.3 Wave mapping and deferred gates
+
+- Wave 3：SC09–SC14、UAT-S-01..03、R-SAL-06；三张新表；报价 LIST/DETAIL/EDITOR/CONVERT。
+- Wave 4：SC24–SC29、SC31–SC44、UAT-S-10..16/S-39/S-42/S-43、R-SAL-07/08/11；两张新表、SO 13 列、SO item 11 列（含 `price_snapshot_json` / `discount_snapshot_json`）；四模式 change matrix 与 fulfillment/close projection。
+- Wave 5：SC08/SC30/SC45–SC53、UAT-S-17..18、R-SAL-01/16/17/18/19；两张新表、Sales Delivery 三个 additive source fields（复用 `billing_mode`）。
+- Wave 7 Prepayment/Reservation Intent 与 Wave 9–10 Credit 尚未实现时，不创建 stub 或假 PASS：仅当订单 snapshot/参数要求对应 gate 时返回明确 409；零预付款、`DISABLED` reservation 与未启用 Credit 保持可执行。后续 Wave 的完整 UAT 项仍标记为外部前置，不在 Batch A 声称完成。
+
+### 34.4 Migration, API, UI and verification evidence plan
+
+- Migration registry 严格追加 Wave 3 → 4 → 5。SQLite canonical snapshot 执行 dialect-local DDL；MySQL bootstrap/additive reconciliation 先物化 snapshot，live registry 只校验/补充方言正确 metadata，不重放 SQLite `CREATE TABLE`。
+- 新 API 与兼容 alias 均注册到 `ownedRouteTable`，backend permission 分为 quotation view/manage、sales view/create/manage/approve、change direct/document/approve、DN view/manage/approve、delivery view/manage/approve。
+- `applicationRegistry.js` 仍是 route canonical source；新增页面沿用现有 LIST → DETAIL → EDITOR/WORKFLOW 模式并验证 320/390/430/680。
+- 测试证据按 Wave focused → FAST/FULL/HEAVY/build/diff-check；protected MySQL fresh/upgrade/replay/concurrency 仅在 guard 环境可用时运行，否则记录 NOT RUN。

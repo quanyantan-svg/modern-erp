@@ -6,6 +6,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
+import { requestFingerprint } from './modules/financial-controls.js';
+import { resolveSalesPrice } from './modules/sales-pricing.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPath = join(repoRoot, 'scripts', 'gates', 'mysql-concurrency-sales-wave2-worker.mjs');
@@ -22,6 +24,9 @@ const LIST_B = '00000000-0000-4000-8000-000000000105';
 const ENTRY_OLD = '00000000-0000-4000-8000-000000000201';
 const ENTRY_ALT = '00000000-0000-4000-8000-000000000202';
 const ENTRY_DRAFT = '00000000-0000-4000-8000-000000000203';
+const ORDER = '00000000-0000-4000-8000-000000000401';
+const ORDER_LINE = '00000000-0000-4000-8000-000000000402';
+const CREATOR = '00000000-0000-4000-8000-000000000403';
 
 class Worker {
   constructor(name) {
@@ -77,6 +82,8 @@ describe('Sales & Customer Wave 2 real MySQL coherent resolver and writer concur
     db.prepare("INSERT INTO roles(id,code,name,description,system_role,created_at) VALUES('wave2-role','WAVE2','Wave2','',0,?)").run(stamp);
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at,name)
       VALUES(?,'wave2-actor','Wave2 Actor','','','wave2-role',1,?,'Wave2 Actor')`).run(ACTOR, stamp);
+    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at,name)
+      VALUES(?,'wave2-creator','Wave2 Creator','','','wave2-role',1,?,'Wave2 Creator')`).run(CREATOR, stamp);
     db.prepare('INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,0,1,?,?)')
       .run(CUSTOMER, 'W2-C', 'Wave2 Customer', '', '', '', stamp, stamp);
     db.prepare('INSERT IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run('EA', 'Each', stamp, stamp);
@@ -111,6 +118,27 @@ describe('Sales & Customer Wave 2 real MySQL coherent resolver and writer concur
       default_settlement_method,sellable_scope_mode,effective_to,created_at,updated_at,created_by,updated_by)
       VALUES(?,'2026-01-01',?,NULL,NULL,'ALL_SALES_ENABLED',NULL,?,?,?,?)`)
       .run(CUSTOMER, LIST_OLD, stamp, stamp, ACTOR, ACTOR);
+    const evidence = resolveSalesPrice(db, resolverBody(), { id: ACTOR, permissions: ['SALES_PRICING_VIEW'] });
+    const priceSnapshot = { contractVersion: 'SALES_PRICE_SNAPSHOT_V1', businessDate: '2026-10-15', requestFingerprint: evidence.fingerprint,
+      materialId: PRODUCT, requestedUomCode: 'EA', quantityMicros: 1_000_000, unitPriceCents: 100, catalogUnitPriceCents: 100,
+      grossAmountCents: 100, giftLine: false, evidence };
+    const discountEvidence = { contractVersion: 'ORDER_DISCOUNT_V1', explicitZeroDiscount: true,
+      lineDiscountCentsByLine: { [ORDER_LINE]: 0 }, headerDiscountCentsTotal: 0,
+      headerAllocationCentsByLine: { [ORDER_LINE]: 0 }, totalDiscountCents: 0,
+      finalLineCentsByLine: { [ORDER_LINE]: 100 }, appliedRuleEvidence: [],
+      pricingEvidenceByLine: { [ORDER_LINE]: evidence },
+      roundingEvidence: { contract: 'HALF_UP_CENT_V1', allocation: 'LARGEST_REMAINDER_LINE_NO_LINE_ID' }, manualOverride: null };
+    discountEvidence.fingerprint = requestFingerprint(discountEvidence);
+    const discountSnapshot = { contractVersion: 'ORDER_DISCOUNT_SNAPSHOT_V1', businessDate: '2026-10-15', requestFingerprint: discountEvidence.fingerprint,
+      lineId: ORDER_LINE, grossAmountCents: 100, finalAmountCents: 100, lineDiscountCents: 0, headerAllocationCents: 0, evidence: discountEvidence };
+    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at,order_date,
+      requested_delivery_date,reservation_intent_state,commercial_close_state,effective_version) VALUES(?, 'SO-R-SAL-11',?,'SUBMITTED',100,'',?,?,?,'2026-10-15','2026-10-15','NONE','OPEN',1)`)
+      .run(ORDER, CUSTOMER, CREATOR, stamp, stamp);
+    db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,document_uom_code,
+      document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,
+      is_gift_line,pricing_uom_code_applied,upper_delivery_tolerance_bps,lower_delivery_tolerance_bps,price_snapshot_json,discount_snapshot_json)
+      VALUES(?,?,?,1,100,100,1,'EA',1000000,1000000,1,1,1000000,1000000,0,'EA',0,0,?,?)`)
+      .run(ORDER_LINE, ORDER, PRODUCT, JSON.stringify(priceSnapshot), JSON.stringify(discountSnapshot));
     resolver = new Worker('resolver'); writer = new Worker('writer');
     resolverRegistration = await resolver.run({ action: 'register' }); writerRegistration = await writer.run({ action: 'register' });
     assert.notEqual(resolverRegistration.connectionId, writerRegistration.connectionId);
@@ -207,5 +235,18 @@ describe('Sales & Customer Wave 2 real MySQL coherent resolver and writer concur
     assert.equal(cycle.code, 'FALLBACK_CYCLE');
     db.prepare('UPDATE sales_price_lists SET fallback_price_list_id=NULL WHERE id=?').run(LIST_OLD);
     assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM mysql_transaction_gates WHERE gate_id=1').get().n), 1);
+  });
+
+  test('R-SAL-11 order approval and pricing retirement preserve the immutable SO snapshot', async () => {
+    db.prepare("UPDATE sales_orders SET status='SUBMITTED',reviewer_id=NULL,reviewed_at=NULL WHERE id=?").run(ORDER);
+    const before = db.prepare('SELECT price_snapshot_json,discount_snapshot_json FROM sales_order_items WHERE id=?').get(ORDER_LINE);
+    const [approval, retirement] = await Promise.all([
+      resolver.run({ action: 'approve-sales-order', orderId: ORDER, key: `r-sal-11-approve-${randomUUID()}` }),
+      writer.run({ action: 'retire-price-list', listId: LIST_OLD, key: `r-sal-11-retire-${randomUUID()}` }),
+    ]);
+    assert.equal(approval.status, 200, JSON.stringify(approval));
+    assert.equal(retirement.status, 200, JSON.stringify(retirement));
+    assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(ORDER).status, 'APPROVED');
+    assert.deepEqual(db.prepare('SELECT price_snapshot_json,discount_snapshot_json FROM sales_order_items WHERE id=?').get(ORDER_LINE), before);
   });
 });

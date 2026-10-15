@@ -119,7 +119,7 @@ describe('M10 permission and role contract', () => {
     // frozen INV capability plus the bounded Finance Operations family.
     // is enforced for the silent-addition guard; specific codes are
     // asserted below so future additions must be named.
-    assert.equal(codes.length, 211);
+    assert.equal(codes.length, 217);
     assert.ok(codes.includes('ROUTING_VIEW'));
     assert.ok(codes.includes('ROUTING_MANAGE'));
     assert.equal(codes.filter((code) => code === 'INVENTORY_TRANSFER_CONFIRM').length, 1);

@@ -1,0 +1,375 @@
+import { createHash } from 'node:crypto';
+import { id, transaction } from '../db.js';
+import { audit } from '../lib/audit.js';
+import { HttpError, normalizeBusinessDate, readJson, send } from '../lib/http.js';
+import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
+import { resolveOrderTimeDiscount, resolveSalesPrice } from './sales-pricing.js';
+import { assertSellableProduct } from './sales-commercial-foundation.js';
+import { assertGroupScope, currentCommercialExtension, lockSuffix, requireSalesPermission } from './sales-scope.js';
+import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+
+const DAY = () => new Date().toISOString().slice(0, 10);
+const NOW = () => new Date().toISOString();
+const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const json = (value) => JSON.stringify(value);
+const parse = (value, label) => { try { return JSON.parse(value); } catch { throw new HttpError(409, `${label}损坏`, { code: 'SALES_SNAPSHOT_CORRUPT' }); } };
+const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
+const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(micros % 1_000_000).padStart(6, '0')}`;
+
+function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
+function effectiveExtension(db, customerId, businessDate) { return currentCommercialExtension(db, customerId, businessDate); }
+
+function zeroDiscountEvidence(lineIds, pricing, grossByLine) {
+  const final = Object.fromEntries(lineIds.map((lineId) => [lineId, grossByLine[lineId]]));
+  const result = {
+    contractVersion: 'ORDER_DISCOUNT_V1', explicitZeroDiscount: true,
+    lineDiscountCentsByLine: Object.fromEntries(lineIds.map((lineId) => [lineId, 0])),
+    headerDiscountCentsTotal: 0, headerAllocationCentsByLine: Object.fromEntries(lineIds.map((lineId) => [lineId, 0])),
+    totalDiscountCents: 0, finalLineCentsByLine: final, appliedRuleEvidence: [], pricingEvidenceByLine: pricing,
+    roundingEvidence: { contract: 'HALF_UP_CENT_V1', allocation: 'LARGEST_REMAINDER_LINE_NO_LINE_ID' }, manualOverride: null,
+  };
+  result.fingerprint = requestFingerprint(result);
+  return result;
+}
+
+function validatePriceSnapshot(db, snapshot, expected) {
+  if (!snapshot || snapshot.contractVersion !== 'SALES_PRICE_SNAPSHOT_V1' || !snapshot.evidence) throw new HttpError(409, '价格快照缺失或版本无效', { code: 'PRICE_SNAPSHOT_REQUIRED' });
+  const evidence = snapshot.evidence;
+  const { fingerprint, ...fingerprintPayload } = evidence;
+  if (!fingerprint || snapshot.requestFingerprint !== fingerprint || requestFingerprint(fingerprintPayload) !== fingerprint
+    || evidence.contractVersion !== 'SALES_PRICE_V1') {
+    throw new HttpError(409, '价格快照指纹或解析器版本不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+  }
+  const version = db.prepare(`SELECT v.id,v.entry_id,v.version,v.unit_price_cents,e.price_list_id,e.pricing_uom_code
+    FROM sales_price_list_versions v JOIN sales_price_list_entries e ON e.id=v.entry_id WHERE v.id=?`).get(evidence.versionId);
+  if (!version || version.entry_id !== evidence.entryId || version.price_list_id !== evidence.priceListId
+    || Number(version.version) !== Number(evidence.version)
+    || Number(version.unit_price_cents) !== Number(snapshot.catalogUnitPriceCents ?? evidence.resolvedPriceCents)) {
+    throw new HttpError(409, '价格版本证据不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+  }
+  if (snapshot.businessDate !== expected.businessDate || snapshot.materialId !== expected.materialId
+    || snapshot.requestedUomCode !== expected.uomCode || safe(snapshot.quantityMicros, '快照数量', 1) !== expected.quantityMicros
+    || safe(snapshot.unitPriceCents, '快照单价') !== expected.unitPriceCents || safe(snapshot.grossAmountCents, '快照金额') !== expected.grossCents) {
+    throw new HttpError(409, '价格快照与订单行不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+  }
+  const evidenceRequestedQuantity = safe(evidence.requestedQuantityMicros, '请求数量', 1);
+  const normalizedForSnapshot = Number((BigInt(safe(evidence.normalizedPricingQuantityMicros, '计价数量', 1)) * BigInt(expected.quantityMicros)
+    + BigInt(evidenceRequestedQuantity) / 2n) / BigInt(evidenceRequestedQuantity));
+  const calculatedGross = Number((BigInt(safe(evidence.resolvedPriceCents, '解析单价')) * BigInt(normalizedForSnapshot) + 500000n) / 1000000n);
+  if (expected.quantityMicros > evidenceRequestedQuantity
+    || evidence.requestedUomEvidence?.uomCode !== expected.uomCode
+    || calculatedGross !== expected.grossCents
+    || (snapshot.giftLine ? expected.unitPriceCents !== 0 : expected.unitPriceCents !== safe(evidence.resolvedPriceCents, '解析单价'))) {
+    throw new HttpError(409, '价格快照数量、计量单位或金额证据不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+  }
+  if (evidence.overrideState === 'OVERRIDDEN') {
+    if (!evidence.overrideEvidence?.actorId || evidence.overrideEvidence.authority !== 'SALES_PRICING_OVERRIDE' || !evidence.overrideEvidence.reason) {
+      throw new HttpError(409, '手工价格覆盖证据不完整', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+    }
+  } else if (evidence.overrideState !== 'NONE' || evidence.overrideEvidence != null || safe(evidence.resolvedPriceCents, '解析单价') !== safe(evidence.catalogUnitPriceCents, '目录单价')) {
+    throw new HttpError(409, '价格覆盖状态与版本原价不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
+  }
+  return snapshot;
+}
+
+function validateDiscountSnapshot(snapshot, expected) {
+  if (!snapshot || snapshot.contractVersion !== 'ORDER_DISCOUNT_SNAPSHOT_V1' || !snapshot.evidence) throw new HttpError(409, '折扣快照缺失或版本无效', { code: 'DISCOUNT_SNAPSHOT_REQUIRED' });
+  const { fingerprint, ...fingerprintPayload } = snapshot.evidence;
+  if (!fingerprint || snapshot.requestFingerprint !== fingerprint || requestFingerprint(fingerprintPayload) !== fingerprint
+    || snapshot.evidence.contractVersion !== 'ORDER_DISCOUNT_V1') {
+    throw new HttpError(409, '折扣快照指纹或解析器版本不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+  }
+  if (snapshot.businessDate !== expected.businessDate || snapshot.lineId !== expected.lineId
+    || safe(snapshot.grossAmountCents, '折扣前金额') !== expected.grossCents
+    || safe(snapshot.finalAmountCents, '折扣后金额') !== expected.finalCents) {
+    throw new HttpError(409, '折扣快照与订单行不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+  }
+  return snapshot;
+}
+
+export function buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId, { enforceCreatorOverrideSod = true } = {}) {
+  if (!Array.isArray(body.items) || !body.items.length) throw new HttpError(422, '销售订单至少需要一条明细');
+  const lineInputs = body.items.map((source, index) => {
+    const lineId = id();
+    const quantityMicros = safe(source.quantityMicros ?? Math.round(Number(source.quantityDecimal ?? source.quantity) * 1_000_000), `第${index + 1}行数量`, 1);
+    const materialId = String(source.productId || source.materialId || '').trim();
+    const uomCode = String(source.uomCode || source.requestedUomCode || db.prepare('SELECT base_uom_code FROM products WHERE id=?').get(materialId)?.base_uom_code || '').trim();
+    assertSellableProduct(db, { customerId, salespersonId, productId: materialId, businessDate, documentType: 'SALES_ORDER' });
+    const evidence = resolveSalesPrice(db, {
+      customerId, salespersonId, materialId, pricingUomCode: uomCode, quantityDecimal: microsDecimal(quantityMicros), businessDate,
+      explicitPriceListIds: source.explicitPriceListIds || body.explicitPriceListIds,
+      manualPriceCents: source.manualPriceCents, overrideReason: source.overrideReason || body.overrideReason,
+    }, actor);
+    if (enforceCreatorOverrideSod && evidence.overrideState === 'OVERRIDDEN' && evidence.overrideEvidence?.actorId === actor.id) {
+      throw new HttpError(409, '订单创建人与价格覆盖人必须分离', { code: 'SALES_PRICE_OVERRIDE_SOD' });
+    }
+    const gross = Math.floor((evidence.resolvedPriceCents * evidence.normalizedPricingQuantityMicros + 500000) / 1000000);
+    if (!Number.isSafeInteger(gross)) throw new HttpError(422, '行金额超出安全范围');
+    return { source, lineId, lineNo: index + 1, quantityMicros, materialId, uomCode, evidence, gross };
+  });
+  const discountInput = body.discount || {};
+  let discount;
+  try {
+    discount = resolveOrderTimeDiscount(db, {
+      customerId, salespersonId, businessDate, explicitSchemeIds: discountInput.explicitSchemeIds,
+      manualRuleSelections: discountInput.manualRuleSelections, overrideReason: discountInput.overrideReason,
+      lines: lineInputs.map((line) => ({ lineId: line.lineId, lineNo: line.lineNo, materialId: line.materialId,
+        requestedUomCode: line.uomCode, quantityDecimal: microsDecimal(line.quantityMicros),
+        explicitPriceListIds: line.source.explicitPriceListIds || body.explicitPriceListIds,
+        manualPriceCents: line.evidence.overrideState === 'OVERRIDDEN' ? line.evidence.resolvedPriceCents : undefined,
+        overrideReason: line.evidence.overrideEvidence?.reason,
+        expectedPricingEvidence: line.evidence })),
+    }, actor);
+  } catch (error) {
+    if (error?.details?.code !== 'DISCOUNT_NOT_CONFIGURED') throw error;
+    discount = zeroDiscountEvidence(lineInputs.map((line) => line.lineId), Object.fromEntries(lineInputs.map((line) => [line.lineId, line.evidence])), Object.fromEntries(lineInputs.map((line) => [line.lineId, line.gross])));
+  }
+  return lineInputs.map((line) => {
+    const isGift = Boolean(line.source.isGiftLine);
+    const finalCents = isGift ? 0 : safe(discount.finalLineCentsByLine[line.lineId], '最终商业金额');
+    const classification = db.prepare('SELECT * FROM product_commercial_classification WHERE product_id=? AND active=1').get(line.materialId);
+    const priceSnapshot = { contractVersion: 'SALES_PRICE_SNAPSHOT_V1', businessDate, requestFingerprint: line.evidence.fingerprint,
+      materialId: line.materialId, requestedUomCode: line.uomCode, quantityMicros: line.quantityMicros,
+      unitPriceCents: isGift ? 0 : line.evidence.resolvedPriceCents, catalogUnitPriceCents: line.evidence.catalogUnitPriceCents,
+      grossAmountCents: line.gross, giftLine: isGift, evidence: line.evidence };
+    const discountSnapshot = { contractVersion: 'ORDER_DISCOUNT_SNAPSHOT_V1', businessDate, requestFingerprint: discount.fingerprint,
+      lineId: line.lineId, grossAmountCents: line.gross, finalAmountCents: finalCents,
+      lineDiscountCents: isGift ? line.gross : safe(discount.lineDiscountCentsByLine[line.lineId], '行折扣'),
+      headerAllocationCents: isGift ? 0 : safe(discount.headerAllocationCentsByLine[line.lineId], '整单分摊'), evidence: discount };
+    return { id: line.lineId, productId: line.materialId, lineNo: line.lineNo, quantityMicros: line.quantityMicros,
+      quantity: line.quantityMicros / 1_000_000, unitPriceCents: priceSnapshot.unitPriceCents, amountCents: finalCents,
+      documentUomCode: line.uomCode, documentQuantityNum: line.quantityMicros, documentQuantityDen: 1_000_000,
+      conversionNumerator: line.evidence.requestedUomEvidence.numerator, conversionDenominator: line.evidence.requestedUomEvidence.denominator,
+      baseQuantityNum: line.quantityMicros * line.evidence.requestedUomEvidence.numerator,
+      baseQuantityDen: 1_000_000 * line.evidence.requestedUomEvidence.denominator,
+      isGiftLine: isGift ? 1 : 0, taxBasis: line.source.commercialTaxBasis || null,
+      taxInclusive: line.source.taxInclusiveAssumption ?? null, pricingUom: line.evidence.pricingUomEvidence.uomCode,
+      qtyMin: line.evidence.qtyBreakApplied.min, qtyMax: line.evidence.qtyBreakApplied.max,
+      plannedDate: line.source.plannedDeliveryDate || body.requestedDeliveryDate,
+      upperTolerance: classification.default_upper_delivery_tolerance_bps, lowerTolerance: classification.default_lower_delivery_tolerance_bps,
+      priceSnapshot, discountSnapshot };
+  });
+}
+
+function validateFrozenLines(db, lines, businessDate, actor) {
+  return lines.map((line, index) => {
+    const price = typeof line.priceSnapshot === 'string' ? parse(line.priceSnapshot, '价格快照') : line.priceSnapshot;
+    const discount = typeof line.discountSnapshot === 'string' ? parse(line.discountSnapshot, '折扣快照') : line.discountSnapshot;
+    const expected = { businessDate, materialId: line.productId, uomCode: line.documentUomCode, quantityMicros: safe(line.quantityMicros, '数量', 1), unitPriceCents: safe(line.unitPriceCents, '单价'), grossCents: safe(line.grossAmountCents, '金额') };
+    if (price.evidence?.overrideState === 'OVERRIDDEN' && price.evidence.overrideEvidence?.actorId === actor.id) {
+      throw new HttpError(409, '订单创建人与价格覆盖人必须分离', { code: 'SALES_PRICE_OVERRIDE_SOD' });
+    }
+    validatePriceSnapshot(db, price, expected);
+    validateDiscountSnapshot(discount, { businessDate, lineId: line.sourceLineId || line.id, grossCents: expected.grossCents, finalCents: safe(line.amountCents, '最终金额') });
+    const orderLineId = id();
+    return { ...line, id: orderLineId, lineNo: index + 1, quantity: expected.quantityMicros / 1_000_000, quantityMicros: expected.quantityMicros,
+      priceSnapshot: price, discountSnapshot: { ...discount, lineId: orderLineId } };
+  });
+}
+
+function validateStoredOrderSnapshots(db, order) {
+  const lines = db.prepare(`SELECT * FROM sales_order_items WHERE order_id=? ORDER BY id${lockSuffix(db)}`).all(order.id);
+  if (!lines.length) throw new HttpError(409, '销售订单必须至少包含一条明细', { code: 'SALES_SNAPSHOT_REQUIRED' });
+  // Physical snapshot columns are nullable by the approved reopen contract.
+  // A wholly NULL set is a pre-Batch-A submitted document and remains
+  // approvable; every API-created Batch-A document is stopped at submit if a
+  // snapshot is absent. Mixed/partial evidence is never treated as legacy.
+  if (lines.every((line) => line.price_snapshot_json == null && line.discount_snapshot_json == null)) return;
+  let total = 0;
+  for (const line of lines) {
+    if (!line.price_snapshot_json || !line.discount_snapshot_json) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
+    const price = parse(line.price_snapshot_json, '价格快照');
+    const discount = parse(line.discount_snapshot_json, '折扣快照');
+    const quantityMicros = safe(line.document_quantity_num ?? Math.round(Number(line.quantity) * 1_000_000), '订单行数量', 1);
+    validatePriceSnapshot(db, price, { businessDate: order.order_date, materialId: line.product_id, uomCode: line.document_uom_code,
+      quantityMicros, unitPriceCents: safe(line.unit_price_cents, '订单行单价'), grossCents: safe(price.grossAmountCents, '订单行原价金额') });
+    validateDiscountSnapshot(discount, { businessDate: order.order_date, lineId: line.id,
+      grossCents: safe(price.grossAmountCents, '订单行原价金额'), finalCents: safe(line.amount_cents, '订单行商业金额') });
+    total += Number(line.amount_cents);
+  }
+  if (!Number.isSafeInteger(total) || total !== Number(order.total_cents)) throw new HttpError(409, '订单行快照金额与订单总额不一致', { code: 'SALES_SNAPSHOT_MISMATCH' });
+}
+
+export function insertSalesOrderLines(db, orderId, lines) {
+  const stmt = db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,
+    document_uom_code,document_quantity_num,document_quantity_den,conversion_numerator,conversion_denominator,base_quantity_num,base_quantity_den,
+    is_gift_line,commercial_tax_basis,tax_inclusive_assumption,pricing_uom_code_applied,qty_break_applied_min,qty_break_applied_max,
+    planned_delivery_date,upper_delivery_tolerance_bps,lower_delivery_tolerance_bps,price_snapshot_json,discount_snapshot_json)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  for (const line of lines) stmt.run(line.id, orderId, line.productId, line.quantity, line.unitPriceCents, line.amountCents, line.lineNo,
+    line.documentUomCode, line.documentQuantityNum, line.documentQuantityDen, line.conversionNumerator, line.conversionDenominator,
+    line.baseQuantityNum, line.baseQuantityDen, line.isGiftLine, line.taxBasis, line.taxInclusive, line.pricingUom, line.qtyMin, line.qtyMax,
+    line.plannedDate ?? null, line.upperTolerance, line.lowerTolerance, json(line.priceSnapshot), json(line.discountSnapshot));
+}
+
+export function createSalesOrderCanonical(db, { body, actor, quotationLines = null, idempotencyKey = null, idempotencyScope = actor.id }) {
+  const businessDate = normalizeBusinessDate(body.orderDate || body.businessDate || DAY(), '订单日期');
+  const customer = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(body.customerId);
+  if (!customer) throw new HttpError(422, '客户不存在或已停用');
+  const extension = effectiveExtension(db, customer.id, businessDate);
+  const salespersonId = body.salespersonId || extension.default_salesperson_id;
+  const salesGroupId = body.salesGroupId || extension.default_sales_group_id;
+  if (!salespersonId || !salesGroupId) throw new HttpError(409, '客户缺少有效销售员或销售组默认值', { code: 'SALES_COMMERCIAL_DEFAULTS_REQUIRED' });
+  assertGroupScope(db, actor, { salesGroupId, businessDate, documentType: 'SALES_ORDER', write: true });
+  const lines = quotationLines ? validateFrozenLines(db, quotationLines, businessDate, actor) : buildAuthoritativeSalesLines(db, body, actor, businessDate, customer.id, salespersonId);
+  const totalCents = lines.reduce((sum, line) => { const next = sum + line.amountCents; if (!Number.isSafeInteger(next)) throw new HttpError(422, '订单金额超出安全范围'); return next; }, 0);
+  const orderId = id(); const orderNo = makeNo('SO'); const stamp = NOW();
+  db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at,
+    order_date,requested_delivery_date,payment_terms,payment_terms_days,ship_to_contact_name,ship_to_phone,ship_to_address,
+    salesperson_id,sales_group_id,settlement_party_id,payer_id,customer_material_xref_id,commercial_tax_code,tax_inclusive,
+    required_prepayment_cents,reservation_intent_state,commercial_close_state,gift_summary_cents,commercial_pricing_uom_code,effective_version)
+    VALUES(?,?,?,'DRAFT',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,1)`)
+    .run(orderId, orderNo, customer.id, totalCents, String(body.remark || '').slice(0, 500), actor.id, stamp, stamp,
+      businessDate, normalizeBusinessDate(body.requestedDeliveryDate || businessDate, '要求交期'), String(body.paymentTerms || extension.default_settlement_method || ''),
+      safe(body.paymentTermsDays ?? extension.default_payment_terms_days ?? 0, '付款账期'), body.shipToContactName || customer.contact || '', body.shipToPhone || customer.phone || '', body.shipToAddress || customer.address || '',
+      salespersonId, salesGroupId, extension.settlement_party_customer_id || customer.id, extension.payer_customer_id || customer.id,
+      body.customerMaterialXrefId || null, body.commercialTaxCode || null, body.taxInclusive ?? null,
+      safe(body.requiredPrepaymentCents ?? 0, '预付款要求'), 'NONE', lines.filter((line) => line.isGiftLine).reduce((sum, line) => sum + line.priceSnapshot.grossAmountCents, 0), lines[0]?.pricingUom || null);
+  insertSalesOrderLines(db, orderId, lines);
+  audit(db, actor.id, 'CREATE', 'SALES_ORDER', orderId, json({ orderNo, evidenceHash: hash(lines.map((line) => [line.priceSnapshot, line.discountSnapshot])) }));
+  if (idempotencyKey) saveIdempotency(db, 'SALES_ORDER_CREATE', idempotencyScope, idempotencyKey, requestFingerprint(body), { id: orderId, orderNo });
+  return { id: orderId, orderNo, itemIds: lines.map((line) => line.id), totalCents };
+}
+
+export async function createSalesOrder(db, req, res, actor, { requireIdempotencyKey = true } = {}) {
+  requireSalesPermission(actor, 'ORDERS_CREATE');
+  const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim();
+  if (requireIdempotencyKey && !key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const fingerprint = requestFingerprint(body);
+  const replay = key ? idempotencyReplay(db, 'SALES_ORDER_CREATE', actor.id, key, fingerprint) : null;
+  if (replay) return send(res, 200, { ...replay, replayed: true });
+  let result; transaction(db, () => { result = createSalesOrderCanonical(db, { body, actor, idempotencyKey: key, idempotencyScope: actor.id }); });
+  return send(res, 201, result);
+}
+
+export async function updateSalesOrder(db, req, res, actor, orderId) {
+  requireSalesPermission(actor, 'ORDERS_CREATE'); const body = await readJson(req); let result;
+  transaction(db, () => {
+    const current = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId);
+    if (!current) throw new HttpError(404, '销售订单不存在');
+    if (!['DRAFT','REJECTED'].includes(current.status)) throw new HttpError(409, '只有草稿或已驳回订单可以编辑');
+    if (current.creator_id !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能编辑自己创建的订单');
+    const customerId = body.customerId || current.customer_id; const businessDate = normalizeBusinessDate(body.orderDate || current.order_date, '订单日期');
+    const customer = db.prepare('SELECT * FROM customers WHERE id=? AND active=1').get(customerId); if (!customer) throw new HttpError(422, '客户不存在或已停用');
+    const extension = effectiveExtension(db, customerId, businessDate); const salespersonId = body.salespersonId || current.salesperson_id || extension.default_salesperson_id;
+    const salesGroupId = body.salesGroupId || current.sales_group_id || extension.default_sales_group_id;
+    assertGroupScope(db, actor, { salesGroupId, businessDate, documentType: 'SALES_ORDER', write: true });
+    const lines = buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId);
+    const total = lines.reduce((sum, line) => sum + line.amountCents, 0); const stamp = NOW();
+    db.prepare('DELETE FROM sales_order_items WHERE order_id=?').run(orderId); insertSalesOrderLines(db, orderId, lines);
+    db.prepare(`UPDATE sales_orders SET customer_id=?,total_cents=?,remark=?,updated_at=?,order_date=?,requested_delivery_date=?,
+      payment_terms=?,payment_terms_days=?,ship_to_contact_name=?,ship_to_phone=?,ship_to_address=?,salesperson_id=?,sales_group_id=?,
+      settlement_party_id=?,payer_id=?,commercial_tax_code=?,tax_inclusive=?,gift_summary_cents=?,commercial_pricing_uom_code=? WHERE id=?`)
+      .run(customerId, total, String(body.remark ?? current.remark ?? '').slice(0, 500), stamp, businessDate,
+        normalizeBusinessDate(body.requestedDeliveryDate || current.requested_delivery_date || businessDate, '要求交期'),
+        String(body.paymentTerms ?? current.payment_terms ?? extension.default_settlement_method ?? ''),
+        safe(body.paymentTermsDays ?? current.payment_terms_days ?? extension.default_payment_terms_days ?? 0, '付款账期'),
+        body.shipToContactName ?? current.ship_to_contact_name ?? customer.contact ?? '', body.shipToPhone ?? current.ship_to_phone ?? customer.phone ?? '',
+        body.shipToAddress ?? current.ship_to_address ?? customer.address ?? '', salespersonId, salesGroupId,
+        extension.settlement_party_customer_id || customerId, extension.payer_customer_id || customerId,
+        body.commercialTaxCode ?? current.commercial_tax_code, body.taxInclusive ?? current.tax_inclusive,
+        lines.filter((line) => line.isGiftLine).reduce((sum, line) => sum + line.priceSnapshot.grossAmountCents, 0), lines[0]?.pricingUom || null, orderId);
+    audit(db, actor.id, 'UPDATE', 'SALES_ORDER', orderId, JSON.stringify({ evidenceHash: hash(lines.map((line) => [line.priceSnapshot, line.discountSnapshot])) }));
+    result = { id: orderId, totalCents: total };
+  }); return send(res, 200, result);
+}
+
+export async function addSalesOrderGiftLine(db, req, res, actor, orderId) {
+  requireSalesPermission(actor, 'ORDERS_CREATE'); const body = await readJson(req); let result;
+  transaction(db, () => {
+    // Scope is rechecked inside the mutation transaction so a stale UI cannot
+    // add a gift line to another sales group's order.
+    const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId); if (!order) throw new HttpError(404, '销售订单不存在');
+    if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER', write: true });
+    if (!['DRAFT','REJECTED'].includes(order.status)) throw new HttpError(409, '已提交或已审批订单只能通过受控变更处理');
+    const lines = buildAuthoritativeSalesLines(db, { ...body, requestedDeliveryDate: order.requested_delivery_date,
+      items: [{ ...(body.item || body), isGiftLine: true }] }, actor, order.order_date, order.customer_id, order.salesperson_id);
+    const line = lines[0]; line.lineNo = Number(db.prepare('SELECT COALESCE(MAX(line_no),0)+1 value FROM sales_order_items WHERE order_id=?').get(orderId).value);
+    insertSalesOrderLines(db, orderId, [line]); db.prepare('UPDATE sales_orders SET gift_summary_cents=gift_summary_cents+?,updated_at=? WHERE id=?').run(line.priceSnapshot.grossAmountCents, NOW(), orderId);
+    audit(db, actor.id, 'GIFT_LINE_ADDED', 'SALES_ORDER', orderId, JSON.stringify({ itemId: line.id, catalogUnitPriceCents: line.priceSnapshot.catalogUnitPriceCents })); result = { id: orderId, itemId: line.id };
+  }); return send(res, 201, result);
+}
+
+function projection(db, orderId) {
+  const lines = db.prepare(`SELECT i.id,i.quantity,i.upper_delivery_tolerance_bps,i.lower_delivery_tolerance_bps,
+    COALESCE((SELECT SUM(di.quantity) FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id WHERE di.sales_order_item_id=i.id AND d.status='CONFIRMED'),0) delivered
+    FROM sales_order_items i WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
+  return lines.map((line) => ({ ...line, remainingQuantity: Math.max(0, Number(line.quantity) - Number(line.delivered)),
+    fulfillmentState: Number(line.delivered) >= Number(line.quantity) ? 'FULLY_DELIVERED' : Number(line.delivered) > 0 ? 'PARTIALLY_DELIVERED' : 'NOT_DELIVERED' }));
+}
+
+export function listSalesOrders(db, res, actor, url) {
+  requireSalesPermission(actor, 'ORDERS_VIEW');
+  const where = []; const params = [];
+  const archiveFilter = lifecycleArchiveFilter('SALES_ORDER', { includeArchived: url.searchParams.get('includeArchived') === 'true', idExpression: 'so.id' });
+  if (archiveFilter.clause) where.push(archiveFilter.clause);
+  const status = String(url.searchParams.get('status') || '').trim();
+  if (status) { where.push('so.status=?'); params.push(status); }
+  const search = String(url.searchParams.get('search') || '').trim();
+  if (search) { where.push('(so.order_no LIKE ? OR c.name LIKE ?)'); params.push(`%${search}%`, `%${search}%`); }
+  const candidates = db.prepare(`SELECT so.*,c.code customer_code,c.name customer_name FROM sales_orders so JOIN customers c ON c.id=so.customer_id
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY so.created_at DESC`).all(...params);
+  const rows = candidates.filter((order) => {
+    if (!order.sales_group_id) return true;
+    try {
+      assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER' });
+      return true;
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 403) return false;
+      throw error;
+    }
+  });
+  return send(res, 200, { orders: rows });
+}
+export function getSalesOrder(db, res, actor, orderId) {
+  requireSalesPermission(actor, 'ORDERS_VIEW');
+  const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId); if (!order) throw new HttpError(404, '销售订单不存在');
+  if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER' });
+  const items = db.prepare(`SELECT i.*,p.code productCode,p.name productName,p.unit FROM sales_order_items i
+    JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.line_no`).all(orderId).map((row) => ({ ...row,
+    productId: row.product_id, unitPriceCents: row.unit_price_cents, amountCents: row.amount_cents, lineNo: row.line_no,
+    documentUomCode: row.document_uom_code, documentQuantityNumerator: row.document_quantity_num,
+    documentQuantityDenominator: row.document_quantity_den, conversionNumerator: row.conversion_numerator,
+    conversionDenominator: row.conversion_denominator, baseQuantityNumerator: row.base_quantity_num, baseQuantityDenominator: row.base_quantity_den,
+    priceSnapshot: row.price_snapshot_json ? parse(row.price_snapshot_json, '价格快照') : null,
+    discountSnapshot: row.discount_snapshot_json ? parse(row.discount_snapshot_json, '折扣快照') : null }));
+  const history = db.prepare(`SELECT l.action,l.detail,l.created_at createdAt,u.display_name userName
+    FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.entity_type='SALES_ORDER' AND l.entity_id=? ORDER BY l.created_at`).all(orderId);
+  const customer = db.prepare('SELECT code,name FROM customers WHERE id=?').get(order.customer_id) || {};
+  return send(res, 200, { order: { ...order,
+    orderNo: order.order_no, customerId: order.customer_id, customerCode: customer.code, customerName: customer.name,
+    totalCents: order.total_cents, orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date,
+    paymentTerms: order.payment_terms, paymentTermsDays: order.payment_terms_days,
+    shipToContactName: order.ship_to_contact_name, shipToPhone: order.ship_to_phone, shipToAddress: order.ship_to_address,
+    salespersonId: order.salesperson_id, salesGroupId: order.sales_group_id,
+    items, history, fulfillment: projection(db, orderId) } });
+}
+export function getSalesOrderFulfillment(db, res, actor, orderId) { requireSalesPermission(actor, 'ORDERS_VIEW'); return send(res, 200, { lines: projection(db, orderId) }); }
+
+export async function salesOrderAction(db, req, res, actor, orderId, action, { requireIdempotencyKey = true } = {}) {
+  if (action === 'submit') requireSalesPermission(actor, 'ORDERS_SUBMIT');
+  else if (action === 'approve') requireSalesPermission(actor, 'ORDERS_APPROVE');
+  else if (action === 'reject') requireSalesPermission(actor, 'ORDERS_REJECT');
+  else if (action === 'close' || action === 'cancel') requireSalesPermission(actor, 'SALES_MANAGE');
+  else throw new HttpError(400, '无效订单动作');
+  const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim(); if (requireIdempotencyKey && !key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const operation = `SALES_ORDER_${action.toUpperCase()}`; const fingerprint = requestFingerprint({ action, body });
+  const replay = key ? idempotencyReplay(db, operation, orderId, key, fingerprint) : null; if (replay) return send(res, 200, { ...replay, replayed: true });
+  let result;
+  transaction(db, () => {
+    const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId); if (!order) throw new HttpError(404, '销售订单不存在');
+    if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER', write: true });
+    if (action === 'submit') { if (!['DRAFT','REJECTED'].includes(order.status)) throw new HttpError(409, '订单状态不可提交');
+      const missing = db.prepare("SELECT 1 FROM sales_order_items WHERE order_id=? AND (price_snapshot_json IS NULL OR discount_snapshot_json IS NULL) LIMIT 1").get(orderId); if (missing) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
+      db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,updated_at=? WHERE id=?").run(NOW(), NOW(), orderId);
+    } else if (action === 'approve' || action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
+      if (action === 'approve') { validateStoredOrderSnapshots(db, order); db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId); }
+      else db.prepare("UPDATE sales_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?").run(actor.id, NOW(), String(body.reason || '').trim(), NOW(), orderId);
+    } else if (action === 'close' || action === 'cancel') { if (order.status !== 'APPROVED' || order.commercial_close_state !== 'OPEN') throw new HttpError(409, '订单不可关闭'); if (!String(body.reason || '').trim()) throw new HttpError(422, '关闭原因必填');
+      const facts = projection(db, orderId); if (action === 'cancel' && facts.some((line) => Number(line.delivered) > 0)) throw new HttpError(409, '已有交付事实的订单不能商业取消');
+      db.prepare('UPDATE sales_orders SET commercial_close_state=?,remark=?,updated_at=? WHERE id=?').run(action === 'close' ? 'CLOSED' : 'CANCELLED', `${order.remark || ''}\n${body.reason}`.trim(), NOW(), orderId);
+    } else throw new HttpError(400, '无效订单动作');
+    result = { ok: true, id: orderId, action }; if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result); audit(db, actor.id, action.toUpperCase(), 'SALES_ORDER', orderId, String(body.reason || ''));
+  });
+  return send(res, 200, result);
+}

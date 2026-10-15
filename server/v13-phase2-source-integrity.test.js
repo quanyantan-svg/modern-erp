@@ -59,7 +59,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
 
   test('sales delivery refuses invalid provenance and confirms 60/100 then 40 exactly once', async () => {
     insertSo('draft', 'DRAFT'); insertSo('submitted', 'SUBMITTED'); insertSo('so');
-    const base = { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 60, unitPriceCents: 2500 }] };
+    const base = { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 60, unitPriceCents: 2500 }] };
     assert.equal((await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, salesOrderId: 'draft', items: [{ ...base.items[0], salesOrderItemId: 'draft-line' }] })).status, 409);
     assert.equal((await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, salesOrderId: 'submitted', items: [{ ...base.items[0], salesOrderItemId: 'submitted-line' }] })).status, 409);
     assert.equal((await request('/api/sales-deliveries', 'warehouse', 'POST', { ...base, customerId: 'cus2' })).status, 400);
@@ -104,7 +104,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
 
   test('sales and purchase returns require confirmed sources and cap cumulative reversal', async () => {
     insertSo('so', 'APPROVED', 10, 2500); insertPo('po', 'APPROVED', 10, 20000);
-    const sd = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 10, unitPriceCents: 2500 }] });
+    const sd = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 10, unitPriceCents: 2500 }] });
     const sdItem = db.prepare('SELECT id FROM sales_delivery_items WHERE delivery_id=?').get(sd.data.id).id;
     assert.equal((await request('/api/sales-returns', 'warehouse', 'POST', { deliveryId: sd.data.id, customerId: 'cus', warehouseId: 'wh', items: [{ deliveryItemId: sdItem, productId: 'p1', quantity: 1, unitPriceCents: 2500 }] })).status, 409);
     await passQuality('oqc', sd.data.id, 10);
@@ -128,7 +128,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
 
   test('source ids and commercial identities are immutable while operational quantity remains editable', async () => {
     insertSo('so');
-    const delivery = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 5, unitPriceCents: 2500 }] });
+    const delivery = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 5, unitPriceCents: 2500 }] });
     assert.equal((await request(`/api/sales-deliveries/${delivery.data.id}`, 'warehouse', 'PATCH', { salesOrderId: 'other', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 4, unitPriceCents: 2500 }] })).status, 409);
     assert.equal((await request(`/api/sales-deliveries/${delivery.data.id}`, 'warehouse', 'PATCH', { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-09-23', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 4, unitPriceCents: 2500 }] })).status, 200);
   });
@@ -165,7 +165,7 @@ describe('V1.3 Phase 2 authoritative source integrity', () => {
 
   test('role boundaries keep commercial creation and warehouse execution separate', async () => {
     insertSo('so'); insertPo('po');
-    const sdBody = { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 1 }] };
+    const sdBody = { salesOrderId: 'so', customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', items: [{ salesOrderItemId: 'so-line', productId: 'p1', quantity: 1 }] };
     const prBody = { purchaseOrderId: 'po', supplierId: 'sup', warehouseId: 'wh', items: [{ purchaseOrderItemId: 'po-line', productId: 'p1', quantity: 1 }] };
     assert.equal((await request('/api/sales-deliveries', 'sales', 'POST', sdBody)).status, 403);
     assert.equal((await request('/api/purchase-receipts', 'sales', 'POST', prBody)).status, 403);

@@ -51,6 +51,30 @@ describe('v1.0.1-rc.3 business document integrity', () => {
       db.prepare('INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at) VALUES(?,?,?,?,?,?,1,?)')
         .run(`user-${name}`, name, name, hash.hash, hash.salt, role, now);
     }
+    db.prepare("INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES('EA','EA',1,?,?)").run(now, now);
+    db.prepare("UPDATE products SET base_uom_code='EA' WHERE id IN ('p1','p2')").run();
+    db.prepare(`INSERT INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,customer_material_xref_enabled,
+      sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,order_change_mode,reservation_behavior,
+      active,created_at,updated_at,created_by,updated_by) VALUES('SYSTEM','SYSTEM',NULL,0,0,1,1,1,'BOTH','DISABLED',1,?,?,?,?)`)
+      .run(now, now, 'user-admin', 'user-admin');
+    db.prepare("INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES('integrity-group','INT','Integrity Sales',1,?,?)").run(now, now);
+    db.prepare("INSERT INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('integrity-person','INT-SP','Integrity Sales','user-sales',1,?,?)").run(now, now);
+    db.prepare(`INSERT INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+      VALUES('integrity-membership','integrity-person','integrity-group','2026-01-01',1,1,?,?,?,?)`).run(now, now, 'user-admin', 'user-admin');
+    db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,sales_uom_code,pricing_uom_code,
+      default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,service_classification,active,created_at,updated_at)
+      VALUES('integrity-class','p1',1,'EA','EA',0,0,0,1,?,?)`).run(now, now);
+    const integrityPriceListId = '44444444-4444-4444-8444-444444444444';
+    db.prepare(`INSERT INTO sales_price_lists(id,price_list_code,name,currency_code,priority,effective_from,status,activated_at,activated_by,created_at,created_by,updated_at,updated_by)
+      VALUES(?,'INT-PL','Integrity price','CNY',0,'2026-01-01','ACTIVE',?,'user-reviewer',?,'user-sales',?,'user-sales')`).run(integrityPriceListId, now, now, now);
+    db.prepare(`INSERT INTO sales_price_list_entries(id,price_list_id,material_id,customer_id,customer_scope_type,material_identity_key,customer_scope_key,
+      pricing_uom_code,pricing_identity_key,qty_break_min_micros,effective_from,created_at,created_by)
+      VALUES('integrity-entry',?,'p1',NULL,'ALL','M:7031','A','EA','U:4541|Q:0000000000000000|D:20260101',0,'2026-01-01',?,'user-sales')`).run(integrityPriceListId, now);
+    db.prepare("INSERT INTO sales_price_list_versions(id,entry_id,version,unit_price_cents,snapshot_json,created_at,created_by) VALUES('integrity-version','integrity-entry',1,12345,'{}',?,'user-sales')").run(now);
+    db.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,settlement_party_customer_id,payer_customer_id,
+      default_salesperson_id,default_sales_group_id,default_payment_terms_days,default_settlement_method,sellable_scope_mode,created_at,updated_at,
+      created_by,updated_by,default_pricing_list_id) VALUES('cus','2026-01-01','cus','cus','integrity-person','integrity-group',30,'MONTHLY','ALL_SALES_ENABLED',?,?,?,?,?)`)
+      .run(now, now, 'user-admin', 'user-admin', integrityPriceListId);
     db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('so-source','SO-SOURCE','cus','APPROVED',1234500,'','user-sales',?,?)").run(now, now);
     db.prepare("INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no) VALUES('soi-source','so-source','p1',100,12345,1234500,1)").run();
     db.prepare("INSERT INTO purchase_orders(id,order_no,supplier_id,status,total_cents,remark,creator_id,created_at,updated_at) VALUES('po-source','PO-SOURCE','sup','APPROVED',1234500,'','user-sales',?,?)").run(now, now);
@@ -76,7 +100,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
 
   const documents = [
     { name: 'purchase receipt', path: '/api/purchase-receipts', table: 'purchase_receipts', itemTable: 'purchase_receipt_items', fk: 'receipt_id', party: { purchaseOrderId: 'po-source', supplierId: 'sup' }, sourceItem: { purchaseOrderItemId: 'poi-source' }, date: { receiptDate: '2026-09-03' }, delta: 1, voucher: 'PURCHASE_RECEIPT', result: 'purchaseReceipt' },
-    { name: 'sales delivery', path: '/api/sales-deliveries', table: 'sales_deliveries', itemTable: 'sales_delivery_items', fk: 'delivery_id', party: { salesOrderId: 'so-source', customerId: 'cus' }, sourceItem: { salesOrderItemId: 'soi-source' }, date: { deliveryDate: '2026-09-03' }, delta: -1, voucher: 'SALES_DELIVERY', result: 'salesDelivery' },
+    { name: 'sales delivery', path: '/api/sales-deliveries', table: 'sales_deliveries', itemTable: 'sales_delivery_items', fk: 'delivery_id', party: { salesOrderId: 'so-source', customerId: 'cus', sourceMode: 'DIRECT_ORDER' }, sourceItem: { salesOrderItemId: 'soi-source' }, date: { deliveryDate: '2026-09-03' }, delta: -1, voucher: 'SALES_DELIVERY', result: 'salesDelivery' },
     { name: 'sales return', path: '/api/sales-returns', table: 'return_orders', itemTable: 'return_order_items', fk: 'return_id', party: { deliveryId: 'sd-source', customerId: 'cus' }, sourceItem: { deliveryItemId: 'sdi-source' }, date: { returnDate: '2026-09-03' }, delta: 1, voucher: 'SALES_RETURN', result: 'salesReturn' },
     { name: 'purchase return', path: '/api/purchase-returns', table: 'purchase_returns', itemTable: 'purchase_return_items', fk: 'return_id', party: { receiptId: 'pr-source', supplierId: 'sup' }, sourceItem: { receiptItemId: 'pri-source' }, date: { returnDate: '2026-09-03' }, delta: -1, voucher: 'PURCHASE_RETURN', result: 'purchaseReturn' },
   ];
@@ -164,7 +188,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     db.prepare("INSERT INTO period_closures(id,period,period_year,period_month,status,created_at) VALUES('closed','2026-08',2026,8,'CLOSED',datetime('now'))").run();
     for (const [path, body, table] of [
       ['/api/purchase-receipts', { purchaseOrderId: 'po-source', supplierId: 'sup', warehouseId: 'wh', receiptDate: '2026-08-15', items: [{ purchaseOrderItemId: 'poi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'purchase_receipts'],
-      ['/api/sales-deliveries', { salesOrderId: 'so-source', customerId: 'cus', warehouseId: 'wh', deliveryDate: '2026-08-15', items: [{ salesOrderItemId: 'soi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'sales_deliveries'],
+      ['/api/sales-deliveries', { salesOrderId: 'so-source', customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', deliveryDate: '2026-08-15', items: [{ salesOrderItemId: 'soi-source', productId: 'p1', quantity: 2, unitPriceCents: 12345 }] }, 'sales_deliveries'],
     ]) {
       const created = await (await request(path, 'warehouse', 'POST', body)).json();
       await passQuality(path.includes('purchase') ? 'PURCHASE_RECEIPT' : 'SALES_DELIVERY', created.id, 2);
@@ -271,7 +295,7 @@ describe('v1.0.1-rc.3 business document integrity', () => {
     assert.equal((await request(`/api/orders/${order.id}/approve`, 'reviewer', 'POST', {})).status, 200);
     assert.equal(db.prepare("SELECT count(*) count FROM accounting_vouchers WHERE source_type='SALES_ORDER' AND source_id=?").get(order.id).count, 0);
     const orderItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(order.id).id;
-    response = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: order.id, customerId: 'cus', warehouseId: 'wh', items: [{ salesOrderItemId: orderItemId, productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
+    response = await request('/api/sales-deliveries', 'warehouse', 'POST', { salesOrderId: order.id, customerId: 'cus', warehouseId: 'wh', sourceMode: 'DIRECT_ORDER', items: [{ salesOrderItemId: orderItemId, productId: 'p1', quantity: 2, unitPriceCents: 12345 }] });
     const delivery = await response.json();
     await passQuality('SALES_DELIVERY', delivery.id, 2);
     assert.equal((await request(`/api/sales-deliveries/${delivery.id}`, 'warehouse', 'POST', { action: 'confirm' })).status, 200);
