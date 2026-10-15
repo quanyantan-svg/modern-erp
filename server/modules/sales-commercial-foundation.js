@@ -429,15 +429,20 @@ export async function saveProductCommercialClassification(db, req, res, actor) {
   return send(res, 200, { classification: classificationRow(db.prepare(`${CLASSIFICATION_SELECT} WHERE c.id=?`).get(targetId)) });
 }
 
-export function assertSellableProduct(db, { customerId, salespersonId, productId, businessDate, documentType = 'SALES_ORDER' }) {
-  const date = normalizeBusinessDate(businessDate, '业务日期');
+export function assertSalesClassifiedProduct(db, productId) {
   const classification = db.prepare('SELECT * FROM product_commercial_classification WHERE product_id=? AND active=1 AND sales_enabled=1').get(productId);
   if (!classification) throw conflict('产品未完成有效可售分类或已禁售', 'PRODUCT_NOT_SALES_ENABLED');
+  return classificationRow(db.prepare(`${CLASSIFICATION_SELECT} WHERE c.id=?`).get(classification.id));
+}
+
+export function assertSellableProduct(db, { customerId, salespersonId, productId, businessDate, documentType = 'SALES_ORDER' }) {
+  const date = normalizeBusinessDate(businessDate, '业务日期');
+  const classification = assertSalesClassifiedProduct(db, productId);
   const parameters = resolveSalesParameters(db, documentType);
-  if (!parameters.sellableControlEnabled) return classificationRow(db.prepare(`${CLASSIFICATION_SELECT} WHERE c.id=?`).get(classification.id));
+  if (!parameters.sellableControlEnabled) return classification;
   const extension = db.prepare(`SELECT * FROM customer_commercial_extensions WHERE customer_id=? AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?) ORDER BY effective_from DESC`).get(customerId, date, date);
   if (!extension) throw conflict('客户缺少业务日期上的商业扩展', 'CUSTOMER_COMMERCIAL_EXTENSION_UNAVAILABLE');
-  if (extension.sellable_scope_mode !== 'RULE_CONTROLLED') return classificationRow(db.prepare(`${CLASSIFICATION_SELECT} WHERE c.id=?`).get(classification.id));
+  if (extension.sellable_scope_mode !== 'RULE_CONTROLLED') return classification;
   const rules = db.prepare(`SELECT * FROM sales_sellable_scope_rules WHERE active=1 AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
     AND ((scope_dimension='CUSTOMER_PRODUCT' AND customer_id=? AND product_id=?)
       OR (scope_dimension='SALESPERSON_PRODUCT' AND salesperson_id=? AND product_id=?)
@@ -446,5 +451,5 @@ export function assertSellableProduct(db, { customerId, salespersonId, productId
   for (const dimension of ['CUSTOMER_PRODUCT', 'SALESPERSON_PRODUCT', 'SALESPERSON_CUSTOMER']) {
     if (!rules.some((rule) => rule.scope_dimension === dimension && rule.effect === 'ALLOW')) throw conflict(`可销范围缺少 ${dimension} ALLOW`, 'SELLABLE_SCOPE_ALLOW_REQUIRED');
   }
-  return classificationRow(db.prepare(`${CLASSIFICATION_SELECT} WHERE c.id=?`).get(classification.id));
+  return classification;
 }

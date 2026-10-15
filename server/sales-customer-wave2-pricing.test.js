@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { createApp } from './app.js';
-import { createDatabase } from './db.js';
+import { createDatabase, readTransaction } from './db.js';
 import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
 
 let database; let server; let baseUrl; let tempDir; let baseUom;
@@ -26,6 +26,16 @@ before(async () => {
   baseUom = database.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const stamp = new Date().toISOString();
   database.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run(baseUom, baseUom, stamp, stamp);
+  database.prepare(`INSERT OR IGNORE INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,
+    customer_material_xref_enabled,sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,
+    order_change_mode,reservation_behavior,active,created_at,updated_at)
+    VALUES('SYSTEM','SYSTEM',NULL,0,0,0,0,0,'DISABLED','DISABLED',1,?,?)`).run(stamp, stamp);
+  for (const productId of ['product-001', 'product-002', 'product-005']) {
+    database.prepare(`INSERT INTO product_commercial_classification(
+      id,product_id,sales_enabled,default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,
+      service_classification,active,created_at,updated_at)
+      VALUES(?,?,1,0,0,0,1,?,?)`).run(`wave2-class-${productId}`, productId, stamp, stamp);
+  }
   server = createServer(createApp(database, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   tokens.admin = await login('admin', 'admin123'); tokens.sales = await login('sales', 'sales123');
@@ -56,6 +66,116 @@ test('exact three-permission role matrix is enforced by backend', async () => {
   const body = { priceListCode:'DENIED',name:'Denied',currencyCode:'CNY',priority:0,effectiveFrom:'2026-01-01' };
   assert.equal((await request('/api/sales-price-lists', { token: tokens.reviewer, method:'POST', body })).status, 403);
   assert.equal((await request('/api/sales-price-lists', { token: tokens.accounting, method:'POST', body })).status, 403);
+});
+
+test('MySQL read transaction acquires the canonical shared gate before resolver reads', () => {
+  const events = [];
+  const fakeDb = {
+    dialect: 'mysql',
+    isTransaction: true,
+    exec(sql) { events.push(sql); },
+    prepare(sql) {
+      events.push(sql);
+      return { get() { events.push('GATE_ACQUIRED'); return { gate_id: 1 }; } };
+    },
+  };
+  const result = readTransaction(fakeDb, () => { events.push('RESOLVER_READ'); return 7; });
+  assert.equal(result, 7);
+  assert.deepEqual(events, [
+    'BEGIN',
+    'SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 LOCK IN SHARE MODE',
+    'GATE_ACQUIRED',
+    'RESOLVER_READ',
+    'COMMIT',
+  ]);
+});
+
+test('price entry, activation, price resolver and discount resolver fail closed on Sales classification and scope', async () => {
+  const created = await request('/api/sales-price-lists', { token: tokens.sales, method: 'POST', body: {
+    priceListCode: 'PL-CLASS-GUARD', name: 'Classification guard', currencyCode: 'CNY', priority: 0, effectiveFrom: '2026-01-01',
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const listId = created.data.priceList.id;
+  const productId = 'product-003';
+  const productUom = database.prepare('SELECT base_uom_code FROM products WHERE id=?').get(productId).base_uom_code;
+  const stamp = new Date().toISOString();
+  database.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run(productUom, productUom, stamp, stamp);
+  const body = { materialId: productId, customerScopeType: 'ALL', pricingUomCode: productUom, qtyBreakMinMicros: 0, effectiveFrom: '2026-01-01', unitPriceCents: 100 };
+  const counts = () => ({
+    entries: database.prepare('SELECT COUNT(*) n FROM sales_price_list_entries WHERE price_list_id=?').get(listId).n,
+    versions: database.prepare(`SELECT COUNT(*) n FROM sales_price_list_versions v JOIN sales_price_list_entries e ON e.id=v.entry_id WHERE e.price_list_id=?`).get(listId).n,
+    audit: database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n,
+  });
+  const baseline = counts();
+  for (const state of ['missing', 'inactive', 'sales-disabled']) {
+    if (state === 'inactive') {
+      database.prepare(`INSERT INTO product_commercial_classification(
+        id,product_id,sales_enabled,default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,
+        service_classification,active,created_at,updated_at) VALUES(?,?,1,0,0,0,0,?,?)`)
+        .run('wave2-class-product-003', productId, stamp, stamp);
+    } else if (state === 'sales-disabled') {
+      database.prepare('UPDATE product_commercial_classification SET active=1,sales_enabled=0 WHERE product_id=?').run(productId);
+    }
+    const rejected = await request(`/api/sales-price-lists/${listId}/entries`, { token: tokens.sales, method: 'POST', body });
+    assert.equal(rejected.status, 409, `${state}: ${JSON.stringify(rejected.data)}`);
+    assert.equal(rejected.data.code, 'PRODUCT_NOT_SALES_ENABLED');
+    assert.deepEqual(counts(), baseline);
+  }
+  database.prepare('UPDATE product_commercial_classification SET active=1,sales_enabled=1 WHERE product_id=?').run(productId);
+  const added = await request(`/api/sales-price-lists/${listId}/entries`, { token: tokens.sales, method: 'POST', body });
+  assert.equal(added.status, 201, JSON.stringify(added.data));
+  database.prepare('UPDATE product_commercial_classification SET sales_enabled=0 WHERE product_id=?').run(productId);
+  const beforeActivation = counts();
+  const idemBefore = database.prepare('SELECT COUNT(*) n FROM idempotency_records').get().n;
+  const activation = await request(`/api/sales-price-lists/${listId}/activate`, { token: tokens.sales, method: 'POST', body: {}, key: 'classification-guard-activation' });
+  assert.equal(activation.status, 409);
+  assert.equal(activation.data.code, 'PRODUCT_NOT_SALES_ENABLED');
+  assert.equal(database.prepare('SELECT status FROM sales_price_lists WHERE id=?').get(listId).status, 'DRAFT');
+  assert.deepEqual(counts(), beforeActivation);
+  assert.equal(database.prepare('SELECT COUNT(*) n FROM idempotency_records').get().n, idemBefore);
+
+  const parameter = database.prepare("SELECT * FROM sales_parameters WHERE scope_key='SYSTEM'").get();
+  if (parameter) database.prepare("UPDATE sales_parameters SET sellable_control_enabled=1 WHERE scope_key='SYSTEM'").run();
+  else database.prepare(`INSERT INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,
+    customer_material_xref_enabled,sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,
+    order_change_mode,reservation_behavior,active,created_at,updated_at)
+    VALUES('SYSTEM','SYSTEM',NULL,1,0,0,0,0,'DISABLED','DISABLED',1,?,?)`).run(stamp, stamp);
+  database.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,default_payment_terms_days,
+    default_settlement_method,sellable_scope_mode,effective_to,created_at,updated_at)
+    VALUES('customer-001','2026-01-01',NULL,NULL,'RULE_CONTROLLED',NULL,?,?)`).run(stamp, stamp);
+  const persistentCounts = () => ({
+    audit: database.prepare('SELECT COUNT(*) n FROM audit_logs').get().n,
+    idempotency: database.prepare('SELECT COUNT(*) n FROM idempotency_records').get().n,
+    versions: database.prepare('SELECT COUNT(*) n FROM sales_price_list_versions').get().n,
+  });
+  const beforeScope = persistentCounts();
+  const scopeBody = { customerId: 'customer-001', salespersonId: 'no-salesperson', materialId: 'product-001', pricingUomCode: baseUom, quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [priceListId] };
+  const priceDenied = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: scopeBody });
+  assert.equal(priceDenied.status, 409);
+  assert.equal(priceDenied.data.code, 'SELLABLE_SCOPE_ALLOW_REQUIRED');
+  assert.deepEqual(persistentCounts(), beforeScope);
+  const guardScheme = await request('/api/sales-discount-schemes', { token: tokens.sales, method: 'POST', body: {
+    schemeCode: 'DS-CLASS-GUARD', name: 'Classification guard', currencyCode: 'CNY', priority: 0, version: 1, effectiveFrom: '2026-01-01',
+  } });
+  assert.equal(guardScheme.status, 201, JSON.stringify(guardScheme.data));
+  const guardSchemeId = guardScheme.data.scheme.id;
+  const guardRule = await request(`/api/sales-discount-schemes/${guardSchemeId}/rules`, { token: tokens.sales, method: 'POST', body: {
+    ruleKey: 'HEADER', lineScope: 'HEADER', applicationMode: 'AUTOMATIC', discountKind: 'PERCENT', discountBps: 0,
+    customerScopeType: 'ALL', qtyBreakMinMicros: 0, effectiveFrom: '2026-01-01',
+  } });
+  assert.equal(guardRule.status, 201, JSON.stringify(guardRule.data));
+  assert.equal((await request(`/api/sales-discount-schemes/${guardSchemeId}/activate`, { token: tokens.sales, method: 'POST', body: {}, key: 'class-guard-scheme' })).status, 200);
+  const beforeDiscount = persistentCounts();
+  const discountDenied = await request('/api/sales-discounts/resolve', { token: tokens.sales, method: 'POST', body: {
+    customerId: 'customer-001', salespersonId: 'no-salesperson', businessDate: '2026-10-14', explicitSchemeIds: [guardSchemeId],
+    lines: [{ lineId: 'L1', lineNo: 1, materialId: 'product-001', requestedUomCode: baseUom, quantityDecimal: '1', explicitPriceListIds: [priceListId] }], manualRuleSelections: [],
+  } });
+  assert.equal(discountDenied.status, 409);
+  assert.equal(discountDenied.data.code, 'SELLABLE_SCOPE_ALLOW_REQUIRED');
+  assert.deepEqual(persistentCounts(), beforeDiscount);
+  database.prepare("DELETE FROM customer_commercial_extensions WHERE customer_id='customer-001' AND effective_from='2026-01-01'").run();
+  if (parameter) database.prepare("UPDATE sales_parameters SET sellable_control_enabled=? WHERE scope_key='SYSTEM'").run(parameter.sellable_control_enabled);
+  else database.prepare("DELETE FROM sales_parameters WHERE scope_key='SYSTEM'").run();
 });
 
 let priceListId; let entryId; let pricingEvidence;
@@ -138,6 +258,44 @@ test('root precedence, customer specificity, fallback, duplicate and cycle handl
   } });
   assert.equal(fallback.status, 200, JSON.stringify(fallback.data));
   assert.equal(fallback.data.pricing.resolvedPriceCents, 111);
+
+  const sharedId = await makeList('PL-SHARED');
+  await addEntry(sharedId, 'product-001', 444);
+  await addEntry(sharedId, 'product-002', 445);
+  await activate(sharedId, 'activate-shared');
+  const sharedRootA = await makeList('PL-SHARED-A', sharedId);
+  const sharedRootB = await makeList('PL-SHARED-B', sharedId);
+  await addEntry(sharedRootA, 'product-002', 501);
+  await addEntry(sharedRootB, 'product-002', 502);
+  await activate(sharedRootA, 'activate-shared-a');
+  await activate(sharedRootB, 'activate-shared-b');
+  const productFiveUom = database.prepare("SELECT base_uom_code FROM products WHERE id='product-005'").get().base_uom_code;
+  const stamp = new Date().toISOString();
+  database.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)')
+    .run(productFiveUom, productFiveUom, stamp, stamp);
+  const sharedNoMatch = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: {
+    customerId: 'customer-001', materialId: 'product-005', pricingUomCode: productFiveUom,
+    quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [sharedRootA, sharedRootB],
+  } });
+  assert.equal(sharedNoMatch.status, 409);
+  assert.equal(sharedNoMatch.data.code, 'PRICE_NOT_CONFIGURED');
+  database.prepare('UPDATE sales_price_lists SET fallback_price_list_id=? WHERE id=?').run(sharedRootB, sharedRootA);
+  const threeLevel = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: {
+    customerId: 'customer-001', materialId: 'product-001', pricingUomCode: baseUom,
+    quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [sharedRootA],
+  } });
+  assert.equal(threeLevel.status, 200, JSON.stringify(threeLevel.data));
+  assert.equal(threeLevel.data.pricing.priceListId, sharedId);
+  database.prepare(`INSERT INTO customer_commercial_extensions(customer_id,effective_from,default_pricing_list_id,
+    default_payment_terms_days,default_settlement_method,sellable_scope_mode,effective_to,created_at,updated_at)
+    VALUES('customer-001','2026-01-01',?,NULL,NULL,'ALL_SALES_ENABLED',NULL,?,?)`).run(sharedId, stamp, stamp);
+  const defaultReachable = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: {
+    customerId: 'customer-001', materialId: 'product-005', pricingUomCode: productFiveUom,
+    quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [sharedRootA],
+  } });
+  assert.equal(defaultReachable.status, 409);
+  assert.equal(defaultReachable.data.code, 'PRICE_NOT_CONFIGURED');
+  database.prepare("DELETE FROM customer_commercial_extensions WHERE customer_id='customer-001' AND effective_from='2026-01-01'").run();
   const duplicate = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: {
     customerId: 'customer-001', materialId: 'product-001', pricingUomCode: baseUom,
     quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [rootId, rootId],
@@ -146,10 +304,6 @@ test('root precedence, customer specificity, fallback, duplicate and cycle handl
   assert.equal(duplicate.data.code, 'DUPLICATE_ROOT');
 
   database.prepare('UPDATE sales_price_lists SET fallback_price_list_id=? WHERE id=?').run(depthRootId, fallbackId);
-  const productFiveUom = database.prepare("SELECT base_uom_code FROM products WHERE id='product-005'").get().base_uom_code;
-  const stamp = new Date().toISOString();
-  database.prepare('INSERT OR IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)')
-    .run(productFiveUom, productFiveUom, stamp, stamp);
   const cycle = await request('/api/sales-pricing/resolve', { token: tokens.sales, method: 'POST', body: {
     customerId: 'customer-001', materialId: 'product-005', pricingUomCode: productFiveUom,
     quantityDecimal: '1', businessDate: '2026-10-14', explicitPriceListIds: [depthRootId],
@@ -227,6 +381,42 @@ test('LINE/HEADER constraints, current rule version and deterministic discount a
   const deniedManual=await request('/api/sales-discounts/resolve',{token:tokens.sales,method:'POST',body:{customerId:'customer-001',businessDate:'2026-10-14',explicitSchemeIds:[schemeId],lines:[{lineId:'M1',lineNo:1,materialId:'product-001',requestedUomCode:baseUom,quantityDecimal:'2',explicitPriceListIds:[priceListId]}],manualRuleSelections:[{lineId:'M1',ruleId:manualRuleId}],overrideReason:'sales cannot override'}});assert.equal(deniedManual.status,403);
   const missingReason=await request('/api/sales-discounts/resolve',{token:tokens.reviewer,method:'POST',body:{customerId:'customer-001',businessDate:'2026-10-14',explicitSchemeIds:[schemeId],lines:[{lineId:'M1',lineNo:1,materialId:'product-001',requestedUomCode:baseUom,quantityDecimal:'2',explicitPriceListIds:[priceListId]}],manualRuleSelections:[{lineId:'M1',ruleId:manualRuleId}]}});assert.equal(missingReason.status,422);
   const approvedManual=await request('/api/sales-discounts/resolve',{token:tokens.reviewer,method:'POST',body:{customerId:'customer-001',businessDate:'2026-10-14',explicitSchemeIds:[schemeId],lines:[{lineId:'M1',lineNo:1,materialId:'product-001',requestedUomCode:baseUom,quantityDecimal:'2',explicitPriceListIds:[priceListId]}],manualRuleSelections:[{lineId:'M1',ruleId:manualRuleId}],overrideReason:'review approved'}});assert.equal(approvedManual.status,200,JSON.stringify(approvedManual.data));assert.equal(approvedManual.data.discount.manualOverride.actorId,'user-reviewer');
+});
+
+test('discount fallback treats shared descendants as valid and only rejects path cycles or duplicate roots', async () => {
+  const makeScheme = async (code, fallbackSchemeId) => {
+    const made = await request('/api/sales-discount-schemes', { token: tokens.sales, method: 'POST', body: {
+      schemeCode: code, name: code, currencyCode: 'CNY', priority: 0, fallbackSchemeId, version: 1, effectiveFrom: '2026-01-01',
+    } });
+    assert.equal(made.status, 201, JSON.stringify(made.data));
+    const id = made.data.scheme.id;
+    const rule = await request(`/api/sales-discount-schemes/${id}/rules`, { token: tokens.sales, method: 'POST', body: {
+      ruleKey: 'ZERO', lineScope: 'HEADER', applicationMode: 'AUTOMATIC', discountKind: 'PERCENT', discountBps: 0,
+      customerScopeType: 'ALL', qtyBreakMinMicros: 0, effectiveFrom: '2026-01-01',
+    } });
+    assert.equal(rule.status, 201, JSON.stringify(rule.data));
+    const activated = await request(`/api/sales-discount-schemes/${id}/activate`, { token: tokens.sales, method: 'POST', body: {}, key: `activate-${code}` });
+    assert.equal(activated.status, 200, JSON.stringify(activated.data));
+    return id;
+  };
+  const rootA = await makeScheme('DS-SHARED-A', schemeId);
+  const rootB = await makeScheme('DS-SHARED-B', schemeId);
+  const body = { customerId: 'customer-001', businessDate: '2026-10-14', explicitSchemeIds: [rootA, rootB],
+    lines: [{ lineId: 'S1', lineNo: 1, materialId: 'product-001', requestedUomCode: baseUom, quantityDecimal: '1', explicitPriceListIds: [priceListId] }], manualRuleSelections: [] };
+  const shared = await request('/api/sales-discounts/resolve', { token: tokens.sales, method: 'POST', body });
+  assert.equal(shared.status, 200, JSON.stringify(shared.data));
+
+  database.prepare('UPDATE sales_discount_schemes SET fallback_scheme_id=? WHERE id=?').run(rootB, rootA);
+  const chain = await request('/api/sales-discounts/resolve', { token: tokens.sales, method: 'POST', body: { ...body, explicitSchemeIds: [rootA] } });
+  assert.equal(chain.status, 200, JSON.stringify(chain.data));
+  const duplicate = await request('/api/sales-discounts/resolve', { token: tokens.sales, method: 'POST', body: { ...body, explicitSchemeIds: [rootA, rootA] } });
+  assert.equal(duplicate.status, 422);
+  assert.equal(duplicate.data.code, 'DUPLICATE_ROOT');
+  database.prepare('UPDATE sales_discount_schemes SET fallback_scheme_id=? WHERE id=?').run(rootA, schemeId);
+  const cycle = await request('/api/sales-discounts/resolve', { token: tokens.sales, method: 'POST', body: { ...body, explicitSchemeIds: [rootA] } });
+  assert.equal(cycle.status, 409);
+  assert.equal(cycle.data.code, 'FALLBACK_CYCLE');
+  database.prepare('UPDATE sales_discount_schemes SET fallback_scheme_id=NULL WHERE id=?').run(schemeId);
 });
 
 test('commercial amount uses HALF_UP and rejects unsafe integer overflow', async () => {

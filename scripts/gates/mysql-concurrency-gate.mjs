@@ -170,6 +170,7 @@ async function runSuite(label, file) {
     { label: 'inventory-warehouse', file: 'server/mysql-inventory-domain-concurrency.integration.js' },
     { label: 'sales-customer-wave1', file: 'server/mysql-sales-customer-wave1-concurrency.integration.js' },
     { label: 'sales-customer-wave1-upgrade', file: 'server/mysql-sales-customer-wave1-upgrade.integration.js' },
+    { label: 'sales-customer-wave2', file: 'server/mysql-sales-customer-wave2-concurrency.integration.js' },
   ];
   const results = [];
   for (const suite of suites) {

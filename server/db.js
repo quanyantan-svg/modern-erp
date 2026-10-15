@@ -1895,6 +1895,14 @@ export function transaction(db, work) {
 export function readTransaction(db, work) {
   db.exec('BEGIN');
   try {
+    if (db?.dialect === 'mysql') {
+      // MySQL sessions run at READ COMMITTED. This shared lock is held on
+      // the same canonical gate acquired exclusively by every writer, so a
+      // resolver sees one coherent state without changing global isolation
+      // or performing a persistent write.
+      const gate = db.prepare('SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 LOCK IN SHARE MODE').get();
+      if (!gate) throw new Error('MySQL transaction gate is unavailable');
+    }
     const result = work();
     db.exec('COMMIT');
     return result;
