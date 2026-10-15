@@ -100,11 +100,12 @@ function executionFloorMicros(db, itemId) {
 function normalizedLines(db, order, operations, actor) {
   if (!Array.isArray(operations) || !operations.length) throw new HttpError(422, '至少需要一条订单变更明细');
   const seen = new Set();
+  const sharedConsumedAuthorizations = new Set();
   return operations.map((source, index) => {
     const op = String(source.op || 'MODIFY').toUpperCase();
     if (!['ADD', 'MODIFY', 'CANCEL'].includes(op)) throw new HttpError(422, '订单变更操作必须为 ADD、MODIFY 或 CANCEL');
     if (op === 'ADD') {
-      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id)[0];
+      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id, { consumedAuthorizationIds: sharedConsumedAuthorizations })[0];
       authoritative.lineNo = null;
       authoritative.effectiveCommercialEvidence = effectiveCommercialEvidence(db, order, null, authoritative);
       return { lineNo: index + 1, op, itemId: null, before: null, after: authoritative, beforeMicros: 0, floor: 0 };

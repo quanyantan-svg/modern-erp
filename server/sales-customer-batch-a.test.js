@@ -165,6 +165,124 @@ test('direct SO creation consumes a server-issued independent price override aut
   }
 });
 
+test('R3 P1 in-request duplicate override authorization is rejected and the legitimate chain remains successful', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorize = async (suffix, manualPriceCents) => {
+    const result = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+      customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+      quantityDecimal: '1', manualPriceCents, overrideReason: `R3 ${suffix} authorization` } });
+    assert.equal(result.status, 201, JSON.stringify(result.data));
+    return result.data.authorizationId;
+  };
+  const beforeRows = db.prepare("SELECT COUNT(*) n FROM sales_orders WHERE order_date='2026-10-15'").get().n;
+  const beforeAudit = db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CREATE'").get().n;
+  const beforeIdempotency = db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_ORDER_CREATE'").get().n;
+
+  const firstAuthId = await authorize('first', 1099);
+  const secondAuthId = await authorize('second', 1088);
+  const thirdAuthId = await authorize('third', 1077);
+  const patchAuthId = await authorize('patch', 1066);
+
+  // Scenario 1: two lines referencing the same authorization id → reject, zero side effects.
+  const rejected = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r3-duplicate-same-auth', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: firstAuthId },
+            { productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: firstAuthId }] } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
+  assert.equal(rejected.data.details?.code || rejected.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_DUPLICATE');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_orders WHERE order_date='2026-10-15'").get().n, beforeRows);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CREATE'").get().n, beforeAudit);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_ORDER_CREATE'").get().n, beforeIdempotency);
+
+  // Scenario 2: failed duplicate request followed by legitimate single use → accept.
+  const legitimate = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r3-legit-after-rejected', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: firstAuthId }] } });
+  assert.equal(legitimate.status, 201, JSON.stringify(legitimate.data));
+  const legitItem = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(legitimate.data.id);
+  const legitSnapshot = JSON.parse(legitItem.price_snapshot_json);
+  assert.equal(legitSnapshot.unitPriceCents, 1099);
+  assert.equal(legitSnapshot.catalogUnitPriceCents, 1250);
+  assert.equal(legitSnapshot.authorizationEvidence.authorizationId, firstAuthId);
+  assert.equal(legitSnapshot.authorizationEvidence.pricingEvidenceFingerprint, legitSnapshot.evidence.fingerprint);
+
+  // Scenario 3: two lines referencing distinct valid authorization ids → accept.
+  const distinct = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r3-distinct-auths', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: secondAuthId },
+            { productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: thirdAuthId }] } });
+  assert.equal(distinct.status, 201, JSON.stringify(distinct.data));
+  const distinctItems = db.prepare('SELECT id,price_snapshot_json FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(distinct.data.id);
+  assert.equal(distinctItems.length, 2);
+  const firstSnapshot = JSON.parse(distinctItems[0].price_snapshot_json);
+  const thirdSnapshot = JSON.parse(distinctItems[1].price_snapshot_json);
+  assert.equal(firstSnapshot.authorizationEvidence.authorizationId, secondAuthId);
+  assert.equal(thirdSnapshot.authorizationEvidence.authorizationId, thirdAuthId);
+  assert.notEqual(firstSnapshot.authorizationEvidence.authorizationId, thirdSnapshot.authorizationEvidence.authorizationId);
+
+  // Scenario 4: PATCH update with two new lines referencing the same authorization id → reject
+  // (another public mutation path). Must run while the order is still DRAFT.
+  const patchRejected = await request(`/api/sales-orders/${legitimate.data.id}`, { token: tokens.sales, method: 'PATCH', body: {
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: patchAuthId },
+            { productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: patchAuthId }] } });
+  assert.equal(patchRejected.status, 409, JSON.stringify(patchRejected.data));
+  assert.equal(patchRejected.data.details?.code || patchRejected.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_DUPLICATE');
+  const linesAfterPatch = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').all(legitimate.data.id);
+  assert.equal(linesAfterPatch.length, 1);
+
+  // Scenario 5: authorization reused in another order after successful consumption → reject.
+  const reused = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r3-reuse-after-original', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: firstAuthId }] } });
+  assert.equal(reused.status, 409);
+  assert.equal(reused.data.details?.code || reused.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_USED');
+
+  // Scenario 6: full authorize → create → submit → independent approve chain on both legitimate orders.
+  assert.equal((await request(`/api/sales-orders/${legitimate.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r3-legit-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${legitimate.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r3-legit-approve', body: {} })).status, 200);
+  assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(legitimate.data.id).status, 'APPROVED');
+  assert.equal((await request(`/api/sales-orders/${distinct.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r3-distinct-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${distinct.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r3-distinct-approve', body: {} })).status, 200);
+  assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(distinct.data.id).status, 'APPROVED');
+});
+
+test('R3 P1 controlled-change ADD with duplicate override authorization in one change request is rejected', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authResult = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R3 controlled-change ADD' } });
+  assert.equal(authResult.status, 201, JSON.stringify(authResult.data));
+  const authorizationId = authResult.data.authorizationId;
+
+  // Create + approve an order to enable controlled-change.
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r3-cc-base-order', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r3-cc-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r3-cc-approve', body: {} })).status, 200);
+
+  const beforeLines = db.prepare('SELECT COUNT(*) n FROM sales_order_items WHERE order_id=?').get(created.data.id).n;
+  const beforeChange = db.prepare('SELECT COUNT(*) n FROM sales_order_changes WHERE sales_order_id=?').get(created.data.id).n;
+
+  const rejected = await request(`/api/sales-orders/${created.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r3-cc-duplicate-add', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R3 cc duplicate',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authorizationId },
+            { op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authorizationId }] } });
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.data));
+  assert.equal(rejected.data.details?.code || rejected.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_DUPLICATE');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sales_order_items WHERE order_id=?').get(created.data.id).n, beforeLines);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sales_order_changes WHERE sales_order_id=?').get(created.data.id).n, beforeChange);
+
+  // Same authorization now legitimately used in a single ADD inside another change request → accept.
+  const accepted = await request(`/api/sales-orders/${created.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r3-cc-single-add', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R3 cc single',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authorizationId }] } });
+  assert.equal(accepted.status, 201, JSON.stringify(accepted.data));
+  const applied = await request(`/api/sales-order-changes/${accepted.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r3-cc-apply', body: {} });
+  assert.equal(applied.status, 200, JSON.stringify(applied.data));
+});
+
 test('submission restores V1.3 commercial completeness and normal-line amount gates', async () => {
   const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'submit-commercial-gates', body: {

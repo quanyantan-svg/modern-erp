@@ -19,9 +19,15 @@ const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(mi
 function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
 function effectiveExtension(db, customerId, businessDate) { return currentCommercialExtension(db, customerId, businessDate); }
 
-function authorizedOverrideEvidence(db, source, actor, expected) {
+function authorizedOverrideEvidence(db, source, actor, expected, { consumedAuthorizationIds = null } = {}) {
   const authorizationId = String(source.priceOverrideAuthorizationId || '').trim();
   if (!authorizationId) return null;
+  if (consumedAuthorizationIds) {
+    if (consumedAuthorizationIds.has(authorizationId)) {
+      throw new HttpError(409, '同一请求中同一价格覆盖授权只能被消费一次', { code: 'PRICE_OVERRIDE_AUTHORIZATION_DUPLICATE' });
+    }
+    consumedAuthorizationIds.add(authorizationId);
+  }
   const row = db.prepare(`SELECT * FROM audit_logs WHERE id=? AND entity_type='SALES_PRICE_OVERRIDE_AUTHORIZATION'
     AND action='AUTHORIZE'${lockSuffix(db)}`).get(authorizationId);
   if (!row) throw new HttpError(409, '价格覆盖授权不存在', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
@@ -160,15 +166,16 @@ function validateDiscountSnapshot(snapshot, expected) {
   return snapshot;
 }
 
-export function buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId, { enforceCreatorOverrideSod = true } = {}) {
+export function buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId, { enforceCreatorOverrideSod = true, consumedAuthorizationIds = null } = {}) {
   if (!Array.isArray(body.items) || !body.items.length) throw new HttpError(422, '销售订单至少需要一条明细');
+  const sharedConsumedAuthorizations = consumedAuthorizationIds ?? new Set();
   const lineInputs = body.items.map((source, index) => {
     const lineId = id();
     const quantityMicros = safe(source.quantityMicros ?? Math.round(Number(source.quantityDecimal ?? source.quantity) * 1_000_000), `第${index + 1}行数量`, 1);
     const materialId = String(source.productId || source.materialId || '').trim();
     const uomCode = String(source.uomCode || source.requestedUomCode || db.prepare('SELECT base_uom_code FROM products WHERE id=?').get(materialId)?.base_uom_code || '').trim();
     assertSellableProduct(db, { customerId, salespersonId, productId: materialId, businessDate, documentType: 'SALES_ORDER' });
-    const authorized = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros });
+    const authorized = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros }, { consumedAuthorizationIds: sharedConsumedAuthorizations });
     const evidence = authorized?.evidence || resolveSalesPrice(db, {
       customerId, salespersonId, materialId, pricingUomCode: uomCode, quantityDecimal: microsDecimal(quantityMicros), businessDate,
       explicitPriceListIds: source.explicitPriceListIds || body.explicitPriceListIds,
