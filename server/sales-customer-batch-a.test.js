@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { createApp } from './app.js';
-import { createDatabase } from './db.js';
+import { createDatabase, hashPassword } from './db.js';
 
 let db; let server; let baseUrl; let tempDir; let canonicalOrderId; let quotationId; let quotationLineId; const tokens = {};
 async function request(path, { token = tokens.admin, method = 'GET', body, key } = {}) {
@@ -623,6 +623,356 @@ test('R5 P1 owner-aware apply rejects cross-owner authorization without touching
   assert.equal(snapshot.authorizationEvidence.authorizationId, authA);
   assert.equal(snapshot.unitPriceCents, 1099);
   assert.equal(snapshot.catalogUnitPriceCents, 1250);
+});
+
+test('R6 P1-01 SUBMIT / REJECT / CANCEL enforce requester ownership and sales-group scope', async () => {
+  // R6 fixtures: second sales user with role-sales (has SALES_ORDER_CHANGE_DOCUMENT_MANAGE
+  // but not APPROVE), plus a reviewer without SALES_CROSS_GROUP in a separate group.
+  const stamp = new Date().toISOString();
+  const sales2Pwd = hashPassword('sales2123');
+  db.prepare(`INSERT OR IGNORE INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+    VALUES('user-sales2','sales2','Sales 2',?,?,'role-sales',1,?)`).run(sales2Pwd.hash, sales2Pwd.salt, stamp);
+  // Give user-sales2 a salesperson profile in batch-group so the scope predicate passes for
+  // batch-group orders. The ownership / requester check is what must reject the SUBMIT.
+  db.prepare(`INSERT OR IGNORE INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('r6-sp-sales2','R6-SP2','R6 SP2','user-sales2',1,?,?)`).run(stamp, stamp);
+  db.prepare(`INSERT OR IGNORE INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+    VALUES('r6-sp2-mem','r6-sp-sales2','batch-group','2026-01-01',1,1,?,?,?,?)`).run(stamp, stamp, 'user-admin', 'user-admin');
+  db.prepare(`INSERT OR IGNORE INTO roles(id,code,name,description,system_role,created_at) VALUES('role-r6-no-cross','REVIEWER_NO_CROSS','R6 No-Cross Reviewer','',0,?)`).run(stamp);
+  db.prepare(`INSERT OR IGNORE INTO role_permissions(role_id,permission_code) VALUES('role-r6-no-cross','SALES_ORDER_CHANGE_APPROVE')`).run();
+  const r2pwd = hashPassword('r6reviewer2123');
+  db.prepare(`INSERT OR IGNORE INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+    VALUES('user-r6-reviewer2','r6reviewer2','R6 Reviewer 2',?,?,'role-r6-no-cross',1,?)`).run(r2pwd.hash, r2pwd.salt, stamp);
+  db.prepare(`INSERT OR IGNORE INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES('r6-other-group','R6-OTHER','R6 Other Group',1,?,?)`).run(stamp, stamp);
+  db.prepare(`INSERT OR IGNORE INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES('r6-sp','R6-SP','R6 SP','user-r6-reviewer2',1,?,?)`).run(stamp, stamp);
+  db.prepare(`INSERT OR IGNORE INTO salesperson_group_memberships(id,salesperson_id,sales_group_id,effective_from,is_default,active,created_at,updated_at,created_by,updated_by)
+    VALUES('r6-sp-mem','r6-sp','r6-other-group','2026-01-01',1,1,?,?,?,?)`).run(stamp, stamp, 'user-admin', 'user-admin');
+  const sales2Token = await login('sales2', 'sales2123');
+  const r6Reviewer2Token = await login('r6reviewer2', 'r6reviewer2123');
+
+  // Base order as user-sales, then submitted + approved.
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r6-p1-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r6-p1-base-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r6-p1-base-approve', body: {} })).status, 200);
+
+  // Scenario 1: non-requester (sales2) cannot SUBMIT another user's DRAFT.
+  const baseItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(base.data.id).id;
+  const draftOther = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 submit ownership',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 2_000_000 }] } });
+  assert.equal(draftOther.status, 201, JSON.stringify(draftOther.data));
+  const beforeSubmit = { changeState: db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='SUBMIT'").get().n) };
+  const submitByOther = await request(`/api/sales-order-changes/${draftOther.data.id}/submit`, { token: sales2Token, method: 'POST', body: {} });
+  assert.equal(submitByOther.status, 403, JSON.stringify(submitByOther.data));
+  assert.equal(submitByOther.data.details?.code || submitByOther.data.code, 'SALES_ORDER_CHANGE_NOT_REQUESTER');
+  const afterSubmit = { changeState: db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='SUBMIT'").get().n) };
+  assert.deepEqual(afterSubmit, beforeSubmit, 'failed SUBMIT must leave change state and audit cardinality unchanged');
+
+  // Scenario 2: legitimate requester SUBMITs their own DRAFT.
+  const submitOk = await request(`/api/sales-order-changes/${draftOther.data.id}/submit`, { token: tokens.sales, method: 'POST', body: {} });
+  assert.equal(submitOk.status, 200, JSON.stringify(submitOk.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state, 'SUBMITTED');
+
+  // Scenario 3: SUBMIT cross-group denial. user-sales is in batch-group only; moving the SO
+  // to r6-other-group must block SUBMIT at the loadChangeWithScope gate.
+  db.prepare("UPDATE sales_orders SET sales_group_id='r6-other-group' WHERE id=?").run(base.data.id);
+  // Use a fresh DRAFT (the prior one is now SUBMITTED and not editable).
+  const draft3 = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 submit scope',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 3_000_000 }] } });
+  assert.equal(draft3.status, 403, JSON.stringify(draft3.data), 'sales cannot create a change in other-group');
+  assert.equal(['SALES_GROUP_SCOPE_DENIED', 'SALES_GROUP_ACTOR_UNMAPPED'].includes(draft3.data.details?.code || draft3.data.code), true, JSON.stringify(draft3.data));
+  db.prepare("UPDATE sales_orders SET sales_group_id='batch-group' WHERE id=?").run(base.data.id);
+
+  // Scenario 4: cross-group REJECT denial — user-r6-reviewer2 has APPROVE but is mapped to
+  // r6-other-group; the order stays in batch-group. The REJECT path goes through
+  // loadChangeWithScope and fails at assertGroupScope.
+  const beforeReject = {
+    changeState: db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state,
+    approvalStatus: db.prepare("SELECT status FROM approval_requests WHERE source_type='SALES_ORDER_CHANGE' AND source_id=?").get(draftOther.data.id)?.status,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='REJECT'").get().n),
+  };
+  // SO stays in batch-group; r6-reviewer2 is in r6-other-group.
+  const crossReject = await request(`/api/sales-order-changes/${draftOther.data.id}/reject`, { token: r6Reviewer2Token, method: 'POST', body: { reason: 'cross-group reject attempt' } });
+  assert.equal(crossReject.status, 403, JSON.stringify(crossReject.data));
+  assert.equal(['SALES_GROUP_SCOPE_DENIED', 'SALES_GROUP_ACTOR_UNMAPPED'].includes(crossReject.data.details?.code || crossReject.data.code), true, JSON.stringify(crossReject.data));
+  const afterReject = {
+    changeState: db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state,
+    approvalStatus: db.prepare("SELECT status FROM approval_requests WHERE source_type='SALES_ORDER_CHANGE' AND source_id=?").get(draftOther.data.id)?.status,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='REJECT'").get().n),
+  };
+  assert.deepEqual(afterReject, beforeReject, 'failed cross-group REJECT must leave change state, approval status and audit cardinality unchanged');
+
+  // Scenario 5: cross-group CANCEL denial — same scope predicate applies.
+  const crossCancel = await request(`/api/sales-order-changes/${draftOther.data.id}/cancel`, { token: r6Reviewer2Token, method: 'POST', body: { reason: 'cross-group cancel attempt' } });
+  assert.equal(crossCancel.status, 403, JSON.stringify(crossCancel.data));
+  assert.equal(['SALES_GROUP_SCOPE_DENIED', 'SALES_GROUP_ACTOR_UNMAPPED'].includes(crossCancel.data.details?.code || crossCancel.data.code), true, JSON.stringify(crossCancel.data));
+
+  // Scenario 6: legitimate cross-group reviewer (user-reviewer has SALES_CROSS_GROUP) REJECTs
+  // with reason; consumes the change and writes the audit row.
+  const rejectOk = await request(`/api/sales-order-changes/${draftOther.data.id}/reject`, { token: tokens.reviewer, method: 'POST', body: { reason: 'R6 legitimate reject' } });
+  assert.equal(rejectOk.status, 200, JSON.stringify(rejectOk.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftOther.data.id).state, 'REJECTED');
+  assert.equal(db.prepare("SELECT status FROM approval_requests WHERE source_type='SALES_ORDER_CHANGE' AND source_id=?").get(draftOther.data.id)?.status, 'REJECTED');
+  assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='REJECT'").get().n), beforeReject.audit + 1);
+
+  // Scenario 7: legitimate CANCEL on a fresh DRAFT releases nothing unrelated. The change is
+  // a plain MODIFY (no override auth), so there are no consumption records to release.
+  const draft7 = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 cancel happy path',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 4_000_000 }] } });
+  assert.equal(draft7.status, 201, JSON.stringify(draft7.data));
+  const cancelOk = await request(`/api/sales-order-changes/${draft7.data.id}/cancel`, { token: tokens.sales, method: 'POST', body: { reason: 'R6 cancel ok' } });
+  assert.equal(cancelOk.status, 200, JSON.stringify(cancelOk.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draft7.data.id).state, 'CANCELLED');
+});
+
+test('R6 P1-02 DRAFT PATCH rejects corrupt historic ADD evidence fail-closed', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  // Base order created + approved as user-sales.
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r6-p2-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r6-p2-base-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r6-p2-base-approve', body: {} })).status, 200);
+  const baseItemId = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(base.data.id).id;
+
+  // Authorize one auth so a non-trivial ADD record exists for case A.
+  const authorized = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R6 P1-02 corrupt history' } });
+  assert.equal(authorized.status, 201, JSON.stringify(authorized.data));
+  const authId = authorized.data.authorizationId;
+
+  // Create a DRAFT change with an ADD that consumes the authorization.
+  const draft = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 P1-02 initial',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authId }] } });
+  assert.equal(draft.status, 201, JSON.stringify(draft.data));
+  const draftId = draft.data.id;
+  const addLineId = db.prepare("SELECT id FROM sales_order_change_lines WHERE change_id=? AND op='ADD'").get(draftId).id;
+
+  const initialReservation = db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId);
+  assert.ok(initialReservation, 'ADD creation must reserve the authorization');
+
+  // Case A: corrupt historic after_values_json (invalid JSON syntax) — PATCH must fail closed
+  // with SALES_ORDER_CHANGE_EVIDENCE_CORRUPT and must not delete the original change_lines,
+  // must not release the consumption record, must not bump effective_version, and must not
+  // write any audit / SUBMIT / RELEASE entries.
+  // First corrupt the historic after_values_json, then capture the state at PATCH start.
+  db.prepare('UPDATE sales_order_change_lines SET after_values_json=? WHERE id=?').run('{not-json', addLineId);
+  const beforeCorrupt = {
+    addLines: db.prepare("SELECT id, after_values_json FROM sales_order_change_lines WHERE change_id=? AND op='ADD'").all(draftId),
+    changeLines: db.prepare('SELECT COUNT(*) n FROM sales_order_change_lines WHERE change_id=?').get(draftId).n,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='UPDATE'").get().n),
+    version: db.prepare('SELECT effective_version v FROM sales_orders WHERE id=?').get(base.data.id).v,
+    reservation: Boolean(initialReservation),
+    changeRow: db.prepare('SELECT * FROM sales_order_changes WHERE id=?').get(draftId),
+  };
+  const corruptPatch = await request(`/api/sales-order-changes/${draftId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 corrupt JSON',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 5_000_000 }] } });
+  assert.equal(corruptPatch.status, 409, JSON.stringify(corruptPatch.data));
+  assert.equal(corruptPatch.data.details?.code || corruptPatch.data.code, 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT');
+  const afterCorrupt = {
+    addLines: db.prepare("SELECT id, after_values_json FROM sales_order_change_lines WHERE change_id=? AND op='ADD'").all(draftId),
+    changeLines: db.prepare('SELECT COUNT(*) n FROM sales_order_change_lines WHERE change_id=?').get(draftId).n,
+    audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='UPDATE'").get().n),
+    version: db.prepare('SELECT effective_version v FROM sales_orders WHERE id=?').get(base.data.id).v,
+    reservation: Boolean(db.prepare(
+      `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+    ).get(authId)),
+    changeRow: db.prepare('SELECT * FROM sales_order_changes WHERE id=?').get(draftId),
+  };
+  assert.equal(afterCorrupt.changeLines, beforeCorrupt.changeLines, 'failed PATCH must not delete historic change_lines');
+  assert.deepEqual(afterCorrupt.addLines, beforeCorrupt.addLines, 'failed PATCH must not mutate the exact previous change_lines');
+  assert.equal(afterCorrupt.audit, beforeCorrupt.audit, 'failed PATCH must not write UPDATE audit');
+  assert.equal(afterCorrupt.version, beforeCorrupt.version, 'failed PATCH must not bump effective_version');
+  assert.equal(afterCorrupt.reservation, true, 'failed PATCH must not release the historic reservation');
+
+  // Case B: corrupt JSON structure (parses, but no priceSnapshot) — PATCH must also fail closed.
+  db.prepare('UPDATE sales_order_change_lines SET after_values_json=? WHERE id=?').run(JSON.stringify({ exists: false, op: 'ADD', documentUomCode: uom, documentQuantityNum: 1 }), addLineId);
+  const corruptStructPatch = await request(`/api/sales-order-changes/${draftId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 corrupt structure',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 5_000_000 }] } });
+  assert.equal(corruptStructPatch.status, 409, JSON.stringify(corruptStructPatch.data));
+  assert.equal(corruptStructPatch.data.details?.code || corruptStructPatch.data.code, 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT');
+  // Restore the valid JSON so subsequent cases can use the change.
+  // The easiest restore is to delete the corrupt ADD line and re-create the change.
+  db.prepare('DELETE FROM sales_order_change_lines WHERE id=?').run(addLineId);
+
+  // Case C: legitimate ADD without override auth must still PATCH successfully (no false-positive).
+  const authorizeC = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1088, overrideReason: 'R6 case C no-override' } });
+  assert.equal(authorizeC.status, 201, JSON.stringify(authorizeC.data));
+  // Create a separate DRAFT with a plain ADD (no override). Reuse base.data.id (already approved).
+  const draftC = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case C',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000 }] } });
+  assert.equal(draftC.status, 201, JSON.stringify(draftC.data));
+  const noOverrideAuth = db.prepare("SELECT id, after_values_json FROM sales_order_change_lines WHERE change_id=? AND op='ADD'").get(draftC.data.id);
+  const parsedNoOverride = JSON.parse(noOverrideAuth.after_values_json);
+  assert.equal(parsedNoOverride.priceSnapshot?.authorizationEvidence, undefined, 'precondition: ADD without override has no authorizationEvidence');
+  // PATCH replaces the ADD with a MODIFY on the base line; the resolver must release nothing
+  // (no auth consumed) and not corrupt the change.
+  const caseCPatch = await request(`/api/sales-order-changes/${draftC.data.id}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case C patch',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 5_000_000 }] } });
+  assert.equal(caseCPatch.status, 200, JSON.stringify(caseCPatch.data));
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_order_change_lines WHERE change_id=? AND op='ADD'").get(draftC.data.id).n, 0);
+
+  // Case D: R5 lifecycle regression — ADD A → retain → replace B → remove ADD → cancel.
+  const authDA = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1077, overrideReason: 'R6 case D A' } });
+  assert.equal(authDA.status, 201, JSON.stringify(authDA.data));
+  const authDAId = authDA.data.authorizationId;
+  const draftD = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case D',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authDAId }] } });
+  assert.equal(draftD.status, 201, JSON.stringify(draftD.data));
+  const draftDId = draftD.data.id;
+  // retain same auth
+  const retainResp = await request(`/api/sales-order-changes/${draftDId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case D retain',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authDAId }] } });
+  assert.equal(retainResp.status, 200, JSON.stringify(retainResp.data));
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authDAId), 'retain must keep the auth reservation');
+  // replace A with B
+  const authDB = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1066, overrideReason: 'R6 case D B' } });
+  assert.equal(authDB.status, 201, JSON.stringify(authDB.data));
+  const authDBId = authDB.data.authorizationId;
+  const replaceResp = await request(`/api/sales-order-changes/${draftDId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case D replace',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authDBId }] } });
+  assert.equal(replaceResp.status, 200, JSON.stringify(replaceResp.data));
+  assert.equal(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authDAId), undefined, 'A must be released');
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authDBId), 'B must be reserved');
+  // remove ADD entirely (replace with MODIFY on base line)
+  const removeResp = await request(`/api/sales-order-changes/${draftDId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 case D remove',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 6_000_000 }] } });
+  assert.equal(removeResp.status, 200, JSON.stringify(removeResp.data));
+  assert.equal(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authDBId), undefined, 'B must be released on remove');
+  // cancel the (now MODIFY-only) DRAFT
+  const cancelResp = await request(`/api/sales-order-changes/${draftDId}/cancel`, { token: tokens.sales, method: 'POST', body: { reason: 'R6 case D cancel' } });
+  assert.equal(cancelResp.status, 200, JSON.stringify(cancelResp.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(draftDId).state, 'CANCELLED');
+});
+
+test('R6 P2-01 release / assertReserved require expectedOwner and reject cross-owner', async () => {
+  const { PRICE_OVERRIDE_CONSUMPTION } = await import('./modules/sales-orders.js');
+  // Build a real reservation record via the Change ADD path so the record
+  // exists at the time we exercise the helper API.
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r6-p2-helper-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r6-p2-helper-base-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r6-p2-helper-base-approve', body: {} })).status, 200);
+  const authorized = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R6 P2-01 helper' } });
+  assert.equal(authorized.status, 201, JSON.stringify(authorized.data));
+  const authId = authorized.data.authorizationId;
+  const changeAdd = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r6-p2-helper-cc-add', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 P2-01 change add',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authId }] } });
+  assert.equal(changeAdd.status, 201, JSON.stringify(changeAdd.data));
+  const changeAddId = changeAdd.data.id;
+  const expectedOwner = `SALES_ORDER_CHANGE:${changeAddId}`;
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId), 'precondition: Change ADD must reserve the authorization');
+
+  // release without expectedOwner — must throw PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED.
+  let releaseNoOwner = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.release(db, authId, { id: 'user-sales', roleCode: 'SALES', permissions: [] }); }
+  catch (error) { releaseNoOwner = error; }
+  assert.ok(releaseNoOwner, 'release without expectedOwner must throw');
+  assert.equal(releaseNoOwner.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED');
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId), 'failed release without owner must not delete the record');
+
+  // assertReserved without expectedOwner — must throw same code.
+  let assertNoOwner = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, authId); }
+  catch (error) { assertNoOwner = error; }
+  assert.ok(assertNoOwner, 'assertReserved without expectedOwner must throw');
+  assert.equal(assertNoOwner.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED');
+
+  // Wrong expectedOwner — must throw PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH and not touch.
+  let wrongOwner = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.release(db, authId, { id: 'user-sales', roleCode: 'SALES', permissions: [] }, { expectedOwner: 'SALES_ORDER_CHANGE:fake-id' }); }
+  catch (error) { wrongOwner = error; }
+  assert.ok(wrongOwner, 'wrong expectedOwner must throw');
+  assert.equal(wrongOwner.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH');
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId), 'wrong-owner release must not delete the unrelated record');
+
+  // Cross-owner assertReserved: same record, wrong expectedOwner.
+  let crossOwnerAssert = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, authId, { expectedOwner: 'SALES_ORDER_CHANGE:fake-id' }); }
+  catch (error) { crossOwnerAssert = error; }
+  assert.ok(crossOwnerAssert, 'cross-owner assert must throw');
+  assert.equal(crossOwnerAssert.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH');
+
+  // Correct owner + cancel + applied-line guard: cancel the change so the reservation is
+  // released by the change handler. But before that, prove that release() with allowApplied
+  // removed cannot bypass the via-locked persistent applied-line check (R5 still applies).
+  // Apply the change first so a sales_order_items row carries the authorization, then
+  // release the reservation through owner helper with the correct owner — must throw
+  // PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS.
+  const applyResp = await request(`/api/sales-order-changes/${changeAddId}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r6-p2-helper-cc-apply', body: {} });
+  assert.equal(applyResp.status, 200, JSON.stringify(applyResp.data));
+  assert.ok(db.prepare('SELECT price_snapshot_json FROM sales_order_items WHERE order_id=?').get(base.data.id)?.price_snapshot_json, 'apply must add the new line');
+  let appliedRelease = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.release(db, authId, { id: 'user-sales', roleCode: 'SALES', permissions: [] }, { expectedOwner }); }
+  catch (error) { appliedRelease = error; }
+  assert.ok(appliedRelease, 'release of applied authorization must throw');
+  assert.equal(appliedRelease.code, 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS');
+  assert.ok(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId), 'applied-line release must not delete the persisted record');
+
+  // Final regression: a fresh Change ADD with a fresh authorization must still be cancellable
+  // by the change handler, releasing the reservation by owner.
+  const authSecond = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1055, overrideReason: 'R6 P2-01 second' } });
+  assert.equal(authSecond.status, 201, JSON.stringify(authSecond.data));
+  const authSecondId = authSecond.data.authorizationId;
+  const changeAdd2 = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r6-p2-helper-cc-add-2', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R6 P2-01 change add 2',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authSecondId }] } });
+  assert.equal(changeAdd2.status, 201, JSON.stringify(changeAdd2.data));
+  const changeAdd2Id = changeAdd2.data.id;
+  assert.equal((await request(`/api/sales-order-changes/${changeAdd2Id}/cancel`, { token: tokens.sales, method: 'POST', body: { reason: 'R6 P2-01 cancel' } })).status, 200);
+  assert.equal(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authSecondId), undefined, 'cancel must release the Change ADD reservation');
 });
 
 test('submission restores V1.3 commercial completeness and normal-line amount gates', async () => {

@@ -29,6 +29,22 @@ function orderForChange(db, orderId, actor, lock = false) {
   return order;
 }
 
+// R6-P1-01: shared change-loader used by every state-mutation action. Loads the
+// change row and its underlying SO, asserts the change exists, and enforces the
+// same sales-group scope used by the apply path. State-machine constraints
+// (DRAFT/SUBMITTED/APPLIED/...) are still owned by the caller so REJECT /
+// CANCEL can still target a SUBMITTED change after the SO is closed, while the
+// scope check still prevents cross-group actors from operating on a change
+// they have no business visibility for.
+function loadChangeWithScope(db, changeId, actor, lock = false) {
+  const change = db.prepare(`SELECT * FROM sales_order_changes WHERE id=?${lock ? lockSuffix(db) : ''}`).get(changeId);
+  if (!change) throw new HttpError(404, '销售订单变更单不存在');
+  const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(change.sales_order_id);
+  if (!order) throw new HttpError(404, '销售订单对应商业单据不存在');
+  assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date, documentType: 'SALES_ORDER' });
+  return { change, order };
+}
+
 function currentLine(db, orderId, itemId) {
   return db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(itemId, orderId);
 }
@@ -223,21 +239,31 @@ export async function updateSalesOrderChange(db, req, res, actor, changeId) {
     if (change.state !== 'DRAFT') throw new HttpError(409, '只有草稿变更单可以编辑'); if (change.requested_by !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能编辑自己创建的变更单');
     const order = orderForChange(db, change.sales_order_id, actor, true);
 
-    // R5 owner-aware reservation reconciliation: snapshot the current ADD-authorisation set
-    // owned by THIS change, project the new request's ADD-authorisation set, then resolve
-    // the new lines so that already-valid same-owner reservations are verified (not
-    // re-inserted) and removed reservations are released with owner verification. The
-    // entire reconciliation runs inside one transaction so a failed edit restores the
-    // exact previous change_lines and occupancy set.
+    // R5 / R6 owner-aware reservation reconciliation: snapshot the current ADD-authorisation
+    // set owned by THIS change, project the new request's ADD-authorisation set, then
+    // resolve the new lines so that already-valid same-owner reservations are verified
+    // (not re-inserted) and removed reservations are released with owner verification.
+    // The entire reconciliation runs inside one transaction so a failed edit restores
+    // the exact previous change_lines and occupancy set. Corrupt historic
+    // `after_values_json` is rejected with SALES_ORDER_CHANGE_EVIDENCE_CORRUPT — the
+    // empty `catch {}` previously treated corrupt JSON as "no auth" and silently
+    // dropped the reservation linkage, leaving orphan consumption records.
     const owner = `SALES_ORDER_CHANGE:${changeId}`;
     const oldAuthIds = new Set();
     for (const row of db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId)) {
       if (row.op !== 'ADD') continue;
-      try {
-        const after = JSON.parse(row.after_values_json);
-        const authId = after?.priceSnapshot?.authorizationEvidence?.authorizationId;
-        if (authId) oldAuthIds.add(authId);
-      } catch {}
+      let after;
+      try { after = JSON.parse(row.after_values_json); }
+      catch { throw new HttpError(409, '历史 ADD 行变更证据 JSON 损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' }); }
+      const snapshot = after?.priceSnapshot;
+      if (!snapshot || typeof snapshot !== 'object') {
+        throw new HttpError(409, '历史 ADD 行价格快照结构损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+      }
+      const authId = snapshot?.authorizationEvidence?.authorizationId;
+      if (authId !== undefined && authId !== null && authId !== '') {
+        if (typeof authId !== 'string') throw new HttpError(409, '历史 ADD 行授权 id 类型损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+        oldAuthIds.add(authId);
+      }
     }
     const newAuthIds = new Set();
     if (Array.isArray(body.lines)) {
@@ -371,8 +397,23 @@ export function validateEffectiveOrderCommercialEvidence(db, orderId, expectedVe
 export async function salesOrderChangeAction(db, req, res, actor, changeId, action) {
   const body = await readJson(req); let result;
   transaction(db, () => {
-    const change = db.prepare(`SELECT * FROM sales_order_changes WHERE id=?${lockSuffix(db)}`).get(changeId); if (!change) throw new HttpError(404, '销售订单变更单不存在');
-    if (action === 'submit') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE'); if (change.state !== 'DRAFT') throw new HttpError(409, '只有草稿变更单可以提交'); parameterSnapshot(db, change.change_path);
+    // R6-P1-01: every state-mutation action loads the change + underlying SO
+    // through the same helper and re-asserts sales-group scope. State-machine
+    // constraints (DRAFT/SUBMITTED/APPLIED) remain in the per-action branches
+    // so REJECT / CANCEL can still target a SUBMITTED change after the SO is
+    // closed, while the scope check still prevents cross-group actors from
+    // operating on a change they have no business visibility for.
+    const { change, order } = loadChangeWithScope(db, changeId, actor, true);
+    if (action === 'submit') {
+      requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE');
+      if (change.state !== 'DRAFT') throw new HttpError(409, '只有草稿变更单可以提交');
+      // SUBMIT must respect the requester / admin contract used by PATCH so a
+      // user with the permission cannot submit another user's DRAFT and
+      // silently push it past the SUBMIT gate.
+      if (change.requested_by !== actor.id && actor.roleCode !== 'ADMIN') {
+        throw new HttpError(403, '只能提交自己创建的变更单', { code: 'SALES_ORDER_CHANGE_NOT_REQUESTER' });
+      }
+      parameterSnapshot(db, change.change_path);
       const stamp = NOW(); db.prepare("UPDATE sales_order_changes SET state='SUBMITTED',updated_at=? WHERE id=?").run(stamp, changeId);
       db.prepare(`INSERT INTO approval_requests(id,source_type,source_id,source_no,status,requester_id,submitted_at,created_at) VALUES(?,'SALES_ORDER_CHANGE',?,?,'PENDING',?,?,?)`).run(id(), changeId, change.change_no, actor.id, stamp, stamp);
       audit(db, actor.id, 'SUBMIT', 'SALES_ORDER_CHANGE', changeId, ''); result = { id: changeId, state: 'SUBMITTED' };

@@ -47,28 +47,43 @@ function readPriceOverrideAuthorizationConsumption(db, authorizationId) {
   ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY) || null;
 }
 
-function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor, { expectedOwner = null, allowAppliedLine = false } = {}) {
+// R6-P2-01: `expectedOwner` is required so Change / direct-SO release and assert
+// paths can never be invoked without a verified ownership contract. The
+// previously defaulting `null` is removed and the call sites in
+// sales-order-changes.js + authorizedOverrideEvidence already pass
+// `expectedOwner` explicitly. The `allowAppliedLine` bypass is removed — no
+// caller ever uses it and the LIKE check on `sales_order_items` is always
+// enforced as a guard against releasing an already-applied authorization.
+function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor, options) {
+  if (!options || typeof options.expectedOwner !== 'string' || options.expectedOwner.length === 0) {
+    throw new HttpError(500, 'release() requires an explicit expectedOwner', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
+  }
+  const { expectedOwner } = options;
   const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
   if (!row) return false;
   let parsed;
   try { parsed = JSON.parse(row.result_json); } catch { throw new HttpError(409, '授权消费记录解析失败', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' }); }
-  if (expectedOwner && parsed.source !== expectedOwner) {
+  if (parsed.source !== expectedOwner) {
     throw new HttpError(409, '授权消费记录归属与请求方不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' });
   }
-  if (!allowAppliedLine && db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
+  if (db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
     throw new HttpError(409, '授权已被已审批订单行实际消费，禁止释放', { code: 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS' });
   }
   db.prepare(`DELETE FROM idempotency_records WHERE id=?`).run(row.id);
-  audit(db, actor.id, 'RELEASE', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, `released (source=${parsed.source}, expectedOwner=${expectedOwner || 'ANY'})`);
+  audit(db, actor.id, 'RELEASE', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, `released (source=${parsed.source}, expectedOwner=${expectedOwner})`);
   return true;
 }
 
-function assertPriceOverrideAuthorizationReserved(db, authorizationId, { expectedOwner = null } = {}) {
+function assertPriceOverrideAuthorizationReserved(db, authorizationId, options) {
+  if (!options || typeof options.expectedOwner !== 'string' || options.expectedOwner.length === 0) {
+    throw new HttpError(500, 'assertReserved() requires an explicit expectedOwner', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_REQUIRED' });
+  }
+  const { expectedOwner } = options;
   const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
   if (!row) throw new HttpError(409, '价格覆盖授权消费记录在审批时缺失', { code: 'PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED' });
   let parsed;
   try { parsed = JSON.parse(row.result_json); } catch { throw new HttpError(409, '授权消费记录解析失败', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' }); }
-  if (expectedOwner && parsed.source !== expectedOwner) {
+  if (parsed.source !== expectedOwner) {
     throw new HttpError(409, '授权消费记录归属与请求方不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' });
   }
   return row;
