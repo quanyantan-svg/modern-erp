@@ -5,7 +5,7 @@ import { HttpError, readJson, send } from '../lib/http.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { resolveSalesParameters } from './sales-parameters.js';
 import { assertGroupScope, lockSuffix, requireSalesPermission } from './sales-scope.js';
-import { buildAuthoritativeSalesLines, insertSalesOrderLines } from './sales-orders.js';
+import { buildAuthoritativeSalesLines, insertSalesOrderLines, PRICE_OVERRIDE_CONSUMPTION } from './sales-orders.js';
 
 const NOW = () => new Date().toISOString();
 const makeNo = () => `SOC-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
@@ -89,6 +89,20 @@ function validEffectiveEvidenceArithmetic(evidence) {
       - Number(evidence.effectiveHeaderAllocationCents) === Number(evidence.finalAmountCents);
 }
 
+function releaseChangeAuthorizationOccupancy(db, changeId, actor) {
+  // R4 release path for cancelled/rejected SUBMITTED or DRAFT Change ADD rows.
+  // Only ADD operations carry authorisations; MODIFY/CANCEL lines reuse the
+  // existing consumption record from the original SO line creation. The
+  // transaction wraps this so the release and the state flip commit atomically.
+  const changeLines = db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId);
+  for (const line of changeLines) {
+    if (line.op !== 'ADD') continue;
+    const after = parse(line.after_values_json);
+    const authorizationId = after?.priceSnapshot?.authorizationEvidence?.authorizationId;
+    if (authorizationId) PRICE_OVERRIDE_CONSUMPTION.release(db, authorizationId, actor);
+  }
+}
+
 function executionFloorMicros(db, itemId) {
   const delivered = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN d.status='CONFIRMED' THEN di.quantity ELSE 0 END),0) value
     FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id WHERE di.sales_order_item_id=?`).get(itemId).value || 0);
@@ -97,7 +111,7 @@ function executionFloorMicros(db, itemId) {
   return Math.max(Math.round(delivered * 1_000_000), notified);
 }
 
-function normalizedLines(db, order, operations, actor) {
+function normalizedLines(db, order, operations, actor, changeId = null) {
   if (!Array.isArray(operations) || !operations.length) throw new HttpError(422, '至少需要一条订单变更明细');
   const seen = new Set();
   const sharedConsumedAuthorizations = new Set();
@@ -105,7 +119,7 @@ function normalizedLines(db, order, operations, actor) {
     const op = String(source.op || 'MODIFY').toUpperCase();
     if (!['ADD', 'MODIFY', 'CANCEL'].includes(op)) throw new HttpError(422, '订单变更操作必须为 ADD、MODIFY 或 CANCEL');
     if (op === 'ADD') {
-      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id, { consumedAuthorizationIds: sharedConsumedAuthorizations })[0];
+      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id, { consumedAuthorizationIds: sharedConsumedAuthorizations, changeId })[0];
       authoritative.lineNo = null;
       authoritative.effectiveCommercialEvidence = effectiveCommercialEvidence(db, order, null, authoritative);
       return { lineNo: index + 1, op, itemId: null, before: null, after: authoritative, beforeMicros: 0, floor: 0 };
@@ -130,11 +144,12 @@ function snapshot(order, lines) {
 }
 
 function insertChange(db, { order, actor, path, body, initialState, requestKey }) {
-  const parameters = parameterSnapshot(db, path); const lines = normalizedLines(db, order, body.lines, actor);
+  const parameters = parameterSnapshot(db, path); const changeId = id();
+  const lines = normalizedLines(db, order, body.lines, actor, changeId);
   const before = snapshot(order, lines); const after = { ...before, effectiveVersion: before.effectiveVersion + 1,
     totalCents: before.totalCents + lines.reduce((sum, line) => sum + line.after.amountCents - Number(line.before?.amount_cents || 0), 0),
     lines: lines.map((line) => ({ itemId: line.itemId, ...line.after })) };
-  const changeId = id(); const changeNo = makeNo(); const stamp = NOW();
+  const changeNo = makeNo(); const stamp = NOW();
   const reasonCode = String(body.reasonCode || 'OTHER').trim(); const reasonText = String(body.reason || body.reasonText || '').trim();
   if (!reasonText) throw new HttpError(422, '变更原因必填');
   db.prepare(`INSERT INTO sales_order_changes(id,change_no,sales_order_id,change_path,state,reason_code,reason_text,
@@ -203,7 +218,7 @@ export async function updateSalesOrderChange(db, req, res, actor, changeId) {
     const change = db.prepare(`SELECT * FROM sales_order_changes WHERE id=?${lockSuffix(db)}`).get(changeId);
     if (!change || change.change_path !== 'CONTROLLED_DOCUMENT') throw new HttpError(404, '正式销售订单变更单不存在');
     if (change.state !== 'DRAFT') throw new HttpError(409, '只有草稿变更单可以编辑'); if (change.requested_by !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能编辑自己创建的变更单');
-    const order = orderForChange(db, change.sales_order_id, actor, true); const lines = normalizedLines(db, order, body.lines, actor);
+    const order = orderForChange(db, change.sales_order_id, actor, true); const lines = normalizedLines(db, order, body.lines, actor, changeId);
     db.prepare('DELETE FROM sales_order_change_lines WHERE change_id=?').run(changeId);
     const before = snapshot(order, lines); const after = { ...before, effectiveVersion: Number(order.effective_version) + 1, lines: lines.map((line) => ({ itemId: line.itemId, ...line.after })) };
     db.prepare('UPDATE sales_order_changes SET reason_code=?,reason_text=?,before_snapshot_hash=?,after_snapshot_hash=?,base_effective_version=?,target_effective_version=?,updated_at=? WHERE id=?')
@@ -239,6 +254,13 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
         || evidence.originalEvidenceHash !== hash([after.priceSnapshot, after.discountSnapshot])) {
         throw new HttpError(409, '新增行变更商业证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
       }
+      // R4 server-authoritative consumption re-check at apply time: trust neither the
+      // request-time snapshot nor the change-line JSON. The persistence record created
+      // at SUBMIT time must still exist; if it was released, the auth is no longer
+      // reserved and this apply must roll back. This catches tampered, manually-cancelled
+      // and externally-released authorisations inside the same transaction.
+      const addAuthorizationId = after.priceSnapshot?.authorizationEvidence?.authorizationId;
+      if (addAuthorizationId) PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, addAuthorizationId);
       const lineNo = Number(db.prepare('SELECT COALESCE(MAX(line_no),0)+1 value FROM sales_order_items WHERE order_id=?').get(order.id).value);
       insertSalesOrderLines(db, order.id, [{ ...after, lineNo }]);
       totalDelta += Number(after.amountCents);
@@ -314,8 +336,11 @@ export async function salesOrderChangeAction(db, req, res, actor, changeId, acti
       audit(db, actor.id, 'SUBMIT', 'SALES_ORDER_CHANGE', changeId, ''); result = { id: changeId, state: 'SUBMITTED' };
     } else if (action === 'approve') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, 'Idempotency-Key 必填'); result = applySalesOrderChange(db, changeId, Number(change.base_effective_version), key, actor);
     } else if (action === 'reject') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); if (change.state !== 'SUBMITTED' || change.requested_by === actor.id) throw new HttpError(409, '变更单不可驳回'); const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(422, '驳回原因必填');
+      releaseChangeAuthorizationOccupancy(db, changeId, actor);
       db.prepare("UPDATE sales_order_changes SET state='REJECTED',approver_id=?,approved_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), changeId); db.prepare("UPDATE approval_requests SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=? WHERE source_type='SALES_ORDER_CHANGE' AND source_id=? AND status='PENDING'").run(actor.id, NOW(), reason, changeId); audit(db, actor.id, 'REJECT', 'SALES_ORDER_CHANGE', changeId, reason); result = { id: changeId, state: 'REJECTED' };
-    } else if (action === 'cancel') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE'); if (!['DRAFT','SUBMITTED'].includes(change.state) || change.requested_by !== actor.id) throw new HttpError(409, '变更单不可取消'); db.prepare("UPDATE sales_order_changes SET state='CANCELLED',updated_at=? WHERE id=?").run(NOW(), changeId); audit(db, actor.id, 'CANCEL', 'SALES_ORDER_CHANGE', changeId, String(body.reason || '')); result = { id: changeId, state: 'CANCELLED' };
+    } else if (action === 'cancel') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE'); if (!['DRAFT','SUBMITTED'].includes(change.state) || change.requested_by !== actor.id) throw new HttpError(409, '变更单不可取消');
+      releaseChangeAuthorizationOccupancy(db, changeId, actor);
+      db.prepare("UPDATE sales_order_changes SET state='CANCELLED',updated_at=? WHERE id=?").run(NOW(), changeId); audit(db, actor.id, 'CANCEL', 'SALES_ORDER_CHANGE', changeId, String(body.reason || '')); result = { id: changeId, state: 'CANCELLED' };
     } else throw new HttpError(400, '无效变更单动作');
   }); return send(res, 200, result);
 }

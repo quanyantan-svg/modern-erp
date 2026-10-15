@@ -13,13 +13,66 @@ const NOW = () => new Date().toISOString();
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const json = (value) => JSON.stringify(value);
 const parse = (value, label) => { try { return JSON.parse(value); } catch { throw new HttpError(409, `${label}损坏`, { code: 'SALES_SNAPSHOT_CORRUPT' }); } };
+const PRICE_OVERRIDE_CONSUMPTION_OPERATION = 'SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION';
+const PRICE_OVERRIDE_CONSUMPTION_KEY = 'consume:v1';
+
+function isUniqueConstraintError(error) {
+  if (!error) return false;
+  if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.errno === 19) return true;
+  if (error.code === 'ER_DUP_ENTRY' || error.errno === 1062) return true;
+  if (/UNIQUE constraint failed|Duplicate entry/i.test(error.message || '')) return true;
+  return false;
+}
+
+function recordPriceOverrideAuthorizationConsumption(db, authorizationId, actor, context) {
+  try {
+    db.prepare(
+      `INSERT INTO idempotency_records(id, operation_type, document_id, idempotency_key, request_fingerprint, result_json, status, created_at)
+       VALUES(?, ?, ?, ?, ?, ?, 'SUCCEEDED', ?)`
+    ).run(id(), PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY,
+      hash({ authorizationId, context: context || {}, actorId: actor.id, at: NOW() }),
+      JSON.stringify({ authorizationId, actorId: actor.id, consumedAt: NOW(), ...(context || {}) }), NOW());
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      throw new HttpError(409, '价格覆盖授权已使用', { code: 'PRICE_OVERRIDE_AUTHORIZATION_USED' });
+    }
+    throw error;
+  }
+  audit(db, actor.id, 'CONSUME', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, JSON.stringify(context || {}));
+}
+
+function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor) {
+  const row = db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?`
+  ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY);
+  if (!row) return false;
+  db.prepare(`DELETE FROM idempotency_records WHERE id=?`).run(row.id);
+  audit(db, actor.id, 'RELEASE', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, 'released without applied line');
+  return true;
+}
+
+function assertPriceOverrideAuthorizationReserved(db, authorizationId) {
+  const row = db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?`
+  ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY);
+  if (!row) throw new HttpError(409, '价格覆盖授权消费记录在审批时缺失', { code: 'PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED' });
+  return row;
+}
+
+export const PRICE_OVERRIDE_CONSUMPTION = Object.freeze({
+  OPERATION: PRICE_OVERRIDE_CONSUMPTION_OPERATION,
+  KEY: PRICE_OVERRIDE_CONSUMPTION_KEY,
+  record: recordPriceOverrideAuthorizationConsumption,
+  release: releasePriceOverrideAuthorizationConsumption,
+  assertReserved: assertPriceOverrideAuthorizationReserved,
+});
 const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
 const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(micros % 1_000_000).padStart(6, '0')}`;
 
 function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
 function effectiveExtension(db, customerId, businessDate) { return currentCommercialExtension(db, customerId, businessDate); }
 
-function authorizedOverrideEvidence(db, source, actor, expected, { consumedAuthorizationIds = null } = {}) {
+function authorizedOverrideEvidence(db, source, actor, expected, { consumedAuthorizationIds = null, changeId = null } = {}) {
   const authorizationId = String(source.priceOverrideAuthorizationId || '').trim();
   if (!authorizationId) return null;
   if (consumedAuthorizationIds) {
@@ -36,9 +89,12 @@ function authorizedOverrideEvidence(db, source, actor, expected, { consumedAutho
   if (value.customerId !== expected.customerId || value.businessDate !== expected.businessDate
     || value.materialId !== expected.materialId || value.uomCode !== expected.uomCode
     || Number(value.quantityMicros) !== expected.quantityMicros) throw new HttpError(409, '价格覆盖授权与订单行不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_MISMATCH' });
-  if (db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
-    throw new HttpError(409, '价格覆盖授权已使用', { code: 'PRICE_OVERRIDE_AUTHORIZATION_USED' });
-  }
+  // R4 server-authoritative consumption record: the existing `idempotency_records`
+  // UNIQUE(operation_type, document_id, idempotency_key) constraint provides DB-level
+  // one-time protection that survives PATCH removal and is reused as occupancy during
+  // SUBMITTED Change ADD. The DB INSERT replaces the previous LIKE pattern search and
+  // rolls back automatically on any later validation failure in this transaction.
+  recordPriceOverrideAuthorizationConsumption(db, authorizationId, actor, { source: changeId ? `SALES_ORDER_CHANGE:${changeId}` : 'DIRECT_SALES_LINE' });
   const snapshot = validatePriceSnapshot(db, value.priceSnapshot, { businessDate: expected.businessDate, materialId: expected.materialId,
     uomCode: expected.uomCode, quantityMicros: expected.quantityMicros, unitPriceCents: value.priceSnapshot.unitPriceCents,
     grossCents: value.priceSnapshot.grossAmountCents });

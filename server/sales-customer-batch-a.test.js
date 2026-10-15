@@ -283,6 +283,145 @@ test('R3 P1 controlled-change ADD with duplicate override authorization in one c
   assert.equal(applied.status, 200, JSON.stringify(applied.data));
 });
 
+test('R4 P1 server-authoritative consumption record survives PATCH removal and reuse attempts', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorized = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R4 PATCH removal survival' } });
+  assert.equal(authorized.status, 201, JSON.stringify(authorized.data));
+  const authId = authorized.data.authorizationId;
+  const consumptionLookup = () => db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId);
+
+  // Original SO consumes the authorization.
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-patch-original', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authId }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  assert.ok(consumptionLookup(), 'consumption record must exist after SO creation');
+
+  // Draft PATCH replaces the consumed line with an unrelated, non-authorization line.
+  const patched = await request(`/api/sales-orders/${created.data.id}`, { token: tokens.sales, method: 'PATCH', body: {
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '2' }] } });
+  assert.equal(patched.status, 200, JSON.stringify(patched.data));
+  const linesAfterPatch = db.prepare('SELECT COUNT(*) n FROM sales_order_items WHERE order_id=?').get(created.data.id).n;
+  assert.equal(linesAfterPatch, 1, 'PATCH must have replaced the consumed line');
+  assert.ok(consumptionLookup(), 'PATCH removing a consumed line must NOT release the authorization');
+
+  // Same authorization reused in a new order after PATCH removal must fail.
+  const reuseAfterPatch = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-patch-reuse', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authId }] } });
+  assert.equal(reuseAfterPatch.status, 409);
+  assert.equal(reuseAfterPatch.data.details?.code || reuseAfterPatch.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_USED');
+
+  // PATCH attempting to consume the already-locked authorization in a new line must also fail closed.
+  const patchReuseConsumed = await request(`/api/sales-orders/${created.data.id}`, { token: tokens.sales, method: 'PATCH', body: {
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authId }] } });
+  assert.equal(patchReuseConsumed.status, 409);
+  assert.equal(patchReuseConsumed.data.details?.code || patchReuseConsumed.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_USED');
+});
+
+test('R4 P1 SUBMITTED Change ADD reserves the authorization against concurrent consumption and rejects release', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorized = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R4 SUBMITTED occupancy' } });
+  assert.equal(authorized.status, 201, JSON.stringify(authorized.data));
+  const authId = authorized.data.authorizationId;
+  const consumptionLookup = () => db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authId);
+
+  // Create + approve an unrelated base SO to enable controlled-change.
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-occ-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r4-occ-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r4-occ-approve', body: {} })).status, 200);
+
+  // SUBMITTED Change ADD reserves the authorization at create time.
+  const changeRequest = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r4-occ-add', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R4 occupancy reserve',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authId }] } });
+  assert.equal(changeRequest.status, 201, JSON.stringify(changeRequest.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeRequest.data.id).state, 'SUBMITTED');
+  assert.ok(consumptionLookup(), 'SUBMITTED Change ADD must occupy the authorization');
+
+  // Concurrent SO creation with the same authorization must fail closed.
+  const concurrent = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-occ-concurrent', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authId }] } });
+  assert.equal(concurrent.status, 409);
+  assert.equal(concurrent.data.details?.code || concurrent.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_USED');
+
+  // Reject the Change ADD → occupancy released; audit + DB-level record both reflect release.
+  const auditBeforeRelease = Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND action='RELEASE'").get().n);
+  const rejected = await request(`/api/sales-order-changes/${changeRequest.data.id}/reject`, { token: tokens.reviewer, method: 'POST', body: { reason: 'R4 occupancy release' } });
+  assert.equal(rejected.status, 200, JSON.stringify(rejected.data));
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeRequest.data.id).state, 'REJECTED');
+  assert.equal(consumptionLookup(), undefined, 'REJECTED Change ADD must release the reservation');
+  assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND action='RELEASE'").get().n), auditBeforeRelease + 1);
+
+  // After release the authorization can be re-consumed.
+  const reused = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-occ-after-release', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authId }] } });
+  assert.equal(reused.status, 201, JSON.stringify(reused.data));
+  assert.ok(consumptionLookup(), 're-consumed authorization must have a fresh consumption record');
+});
+
+test('R4 P1 Change ADD apply rolls back the entire transaction when the consumption record is missing', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorized = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+    customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+    quantityDecimal: '1', manualPriceCents: 1099, overrideReason: 'R4 apply rollback' } });
+  assert.equal(authorized.status, 201, JSON.stringify(authorized.data));
+  const authId = authorized.data.authorizationId;
+
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r4-rollback-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r4-rollback-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r4-rollback-approve', body: {} })).status, 200);
+
+  const changeRequest = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r4-rollback-add', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R4 apply rollback',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authId }] } });
+  assert.equal(changeRequest.status, 201, JSON.stringify(changeRequest.data));
+
+  const beforeLines = db.prepare('SELECT id,quantity,amount_cents FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(base.data.id);
+  const beforeOrder = db.prepare('SELECT effective_version,total_cents FROM sales_orders WHERE id=?').get(base.data.id);
+  const beforeApprovalState = db.prepare('SELECT status FROM approval_requests WHERE source_type=? AND source_id=?').get('SALES_ORDER_CHANGE', changeRequest.data.id)?.status;
+  const beforeAuditApprove = Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='APPROVE_AND_APPLY'").get().n);
+
+  // Externally release the consumption record to simulate tampering / cancellation outside the change lifecycle.
+  db.prepare(
+    `DELETE FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).run(authId);
+
+  const applyAttempt = await request(`/api/sales-order-changes/${changeRequest.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r4-rollback-apply', body: {} });
+  assert.equal(applyAttempt.status, 409, JSON.stringify(applyAttempt.data));
+  assert.equal(applyAttempt.data.details?.code || applyAttempt.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED');
+
+  // Full transaction rollback: no new line, no version bump, no applied state, no idempotency save, no APPROVE_AND_APPLY audit.
+  const afterLines = db.prepare('SELECT id,quantity,amount_cents FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(base.data.id);
+  const afterOrder = db.prepare('SELECT effective_version,total_cents FROM sales_orders WHERE id=?').get(base.data.id);
+  const afterApprovalState = db.prepare('SELECT status FROM approval_requests WHERE source_type=? AND source_id=?').get('SALES_ORDER_CHANGE', changeRequest.data.id)?.status;
+  const afterAuditApprove = Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='APPROVE_AND_APPLY'").get().n);
+  assert.deepEqual(afterLines, beforeLines, 'failed apply must not insert a SO line');
+  assert.deepEqual(afterOrder, beforeOrder, 'failed apply must not bump effective_version or total');
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeRequest.data.id).state, 'SUBMITTED', 'failed apply must leave the change in SUBMITTED state');
+  assert.equal(afterApprovalState, beforeApprovalState, 'failed apply must not flip approval status');
+  assert.equal(afterAuditApprove, beforeAuditApprove, 'failed apply must not write APPROVE_AND_APPLY audit');
+  assert.equal(db.prepare(
+    `SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_ORDER_CHANGE_APPLY' AND document_id=?`
+  ).get(changeRequest.data.id).n, 0, 'failed apply must not save apply idempotency');
+});
+
 test('submission restores V1.3 commercial completeness and normal-line amount gates', async () => {
   const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'submit-commercial-gates', body: {
