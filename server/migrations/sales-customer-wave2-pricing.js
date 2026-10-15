@@ -14,6 +14,73 @@ const DEFAULT_FKS = Object.freeze([
   ['fk_customer_commercial_default_discount_scheme', 'default_discount_scheme_id', 'sales_discount_schemes'],
 ]);
 
+const MYSQL_WAVE2_CONTRACTS = Object.freeze({
+  sales_price_lists: Object.freeze({
+    primaryKey: Object.freeze(['id']),
+    unique: Object.freeze([Object.freeze(['price_list_code'])]),
+    foreignKeys: Object.freeze([
+      Object.freeze(['activated_by', 'users', 'id']),
+      Object.freeze(['created_by', 'users', 'id']),
+      Object.freeze(['fallback_price_list_id', 'sales_price_lists', 'id']),
+      Object.freeze(['retired_by', 'users', 'id']),
+      Object.freeze(['updated_by', 'users', 'id']),
+    ]),
+    checkCount: 3,
+  }),
+  sales_price_list_entries: Object.freeze({
+    primaryKey: Object.freeze(['id']),
+    unique: Object.freeze([Object.freeze([
+      'price_list_id', 'material_identity_key', 'customer_scope_key', 'pricing_identity_key',
+    ])]),
+    foreignKeys: Object.freeze([
+      Object.freeze(['created_by', 'users', 'id']),
+      Object.freeze(['customer_id', 'customers', 'id']),
+      Object.freeze(['material_id', 'products', 'id']),
+      Object.freeze(['price_list_id', 'sales_price_lists', 'id']),
+      Object.freeze(['pricing_uom_code', 'uoms', 'code']),
+    ]),
+    checkCount: 8,
+  }),
+  sales_price_list_versions: Object.freeze({
+    primaryKey: Object.freeze(['id']),
+    unique: Object.freeze([Object.freeze(['entry_id', 'version'])]),
+    foreignKeys: Object.freeze([
+      Object.freeze(['created_by', 'users', 'id']),
+      Object.freeze(['entry_id', 'sales_price_list_entries', 'id']),
+    ]),
+    checkCount: 2,
+  }),
+  sales_discount_schemes: Object.freeze({
+    primaryKey: Object.freeze(['id']),
+    unique: Object.freeze([Object.freeze(['scheme_code'])]),
+    foreignKeys: Object.freeze([
+      Object.freeze(['activated_by', 'users', 'id']),
+      Object.freeze(['created_by', 'users', 'id']),
+      Object.freeze(['fallback_scheme_id', 'sales_discount_schemes', 'id']),
+      Object.freeze(['retired_by', 'users', 'id']),
+      Object.freeze(['updated_by', 'users', 'id']),
+    ]),
+    checkCount: 4,
+  }),
+  sales_discount_scheme_rules: Object.freeze({
+    primaryKey: Object.freeze(['id']),
+    unique: Object.freeze([Object.freeze(['scheme_id', 'rule_key', 'rule_version'])]),
+    foreignKeys: Object.freeze([
+      Object.freeze(['created_by', 'users', 'id']),
+      Object.freeze(['customer_id', 'customers', 'id']),
+      Object.freeze(['material_id', 'products', 'id']),
+      Object.freeze(['pricing_uom_code', 'uoms', 'code']),
+      Object.freeze(['scheme_id', 'sales_discount_schemes', 'id']),
+    ]),
+    checkCount: 11,
+  }),
+});
+
+function quoteMySqlIdentifier(value) {
+  if (!/^[A-Za-z0-9_$]+$/.test(value)) throw new Error(`Unsafe MySQL identifier: ${value}`);
+  return `\`${value}\``;
+}
+
 function sqliteColumns(db, table) {
   return new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
@@ -29,6 +96,9 @@ function ensureCustomerDefaults(db) {
     : sqliteColumns(db, 'customer_commercial_extensions');
   for (const [, column, target] of DEFAULT_FKS) {
     if (!columns.has(column)) {
+      if (db.dialect === 'mysql') {
+        throw new Error(`Wave 2 MySQL bootstrap incomplete; missing customer default column: ${column}`);
+      }
       db.exec(`ALTER TABLE customer_commercial_extensions ADD COLUMN ${column} TEXT REFERENCES ${target}(id)`);
     }
   }
@@ -39,19 +109,78 @@ function ensureCustomerDefaults(db) {
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'
         AND COLUMN_NAME=? AND REFERENCED_TABLE_NAME IS NOT NULL
       ORDER BY CONSTRAINT_NAME`).all(column);
-    if (metadata.length) {
-      if (metadata.length !== 1 || metadata[0].constraint_name !== name
-        || metadata[0].target_table !== target || metadata[0].target_column !== 'id') {
-        throw new Error(`Wave 2 customer default FK metadata mismatch for ${column}`);
-      }
-    } else {
+    if (!metadata.length) {
       db.exec(`ALTER TABLE customer_commercial_extensions ADD CONSTRAINT ${name}
         FOREIGN KEY (${column}) REFERENCES ${target}(id)`);
+    } else if (metadata.length === 1 && metadata[0].target_table === target
+      && metadata[0].target_column === 'id' && metadata[0].constraint_name !== name) {
+      // A fresh canonical bootstrap creates the SQLite-declared FK with a
+      // MySQL-generated name. Only that exact equivalent shape is safe to
+      // reconcile; any different or duplicate metadata fails closed below.
+      db.exec(`ALTER TABLE customer_commercial_extensions DROP FOREIGN KEY ${quoteMySqlIdentifier(metadata[0].constraint_name)}`);
+      db.exec(`ALTER TABLE customer_commercial_extensions ADD CONSTRAINT ${name}
+        FOREIGN KEY (${column}) REFERENCES ${target}(id)`);
+    } else if (metadata.length !== 1 || metadata[0].constraint_name !== name
+      || metadata[0].target_table !== target || metadata[0].target_column !== 'id') {
+      throw new Error(`Wave 2 customer default FK metadata mismatch for ${column}`);
     }
     const columnMetadata = db.prepare(`SELECT IS_NULLABLE is_nullable FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions' AND COLUMN_NAME=?`).get(column);
     if (columnMetadata?.is_nullable !== 'YES') {
       throw new Error(`Wave 2 customer default column must remain nullable: ${column}`);
+    }
+  }
+}
+
+function signature(rows, fields) {
+  return rows.map((row) => fields.map((field) => row[field]).join('|')).sort();
+}
+
+function assertMySqlWave2Tables(db) {
+  const placeholders = SALES_WAVE2_TABLES.map(() => '?').join(',');
+  const tables = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders}) ORDER BY TABLE_NAME`)
+    .all(...SALES_WAVE2_TABLES).map((row) => row.table_name);
+  const expectedTables = [...SALES_WAVE2_TABLES].sort();
+  if (JSON.stringify(tables) !== JSON.stringify(expectedTables)) {
+    throw new Error(`Wave 2 MySQL bootstrap incomplete; expected tables: ${expectedTables.join(', ')}`);
+  }
+}
+
+function assertMySqlWave2Bootstrap(db) {
+  assertMySqlWave2Tables(db);
+  for (const [table, contract] of Object.entries(MYSQL_WAVE2_CONTRACTS)) {
+    const primaryKey = db.prepare(`SELECT COLUMN_NAME column_name FROM information_schema.KEY_COLUMN_USAGE
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY'
+      ORDER BY ORDINAL_POSITION`).all(table).map((row) => row.column_name);
+    if (JSON.stringify(primaryKey) !== JSON.stringify(contract.primaryKey)) {
+      throw new Error(`Wave 2 MySQL primary-key metadata mismatch: ${table}`);
+    }
+
+    const foreignKeys = db.prepare(`SELECT COLUMN_NAME column_name,REFERENCED_TABLE_NAME target_table,
+      REFERENCED_COLUMN_NAME target_column FROM information_schema.KEY_COLUMN_USAGE
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND REFERENCED_TABLE_NAME IS NOT NULL
+      ORDER BY COLUMN_NAME,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME`).all(table);
+    if (JSON.stringify(signature(foreignKeys, ['column_name', 'target_table', 'target_column']))
+      !== JSON.stringify(contract.foreignKeys.map((row) => row.join('|')).sort())) {
+      throw new Error(`Wave 2 MySQL foreign-key metadata mismatch: ${table}`);
+    }
+
+    const uniqueRows = db.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name,SEQ_IN_INDEX sequence_no
+      FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=?
+        AND NON_UNIQUE=0 AND INDEX_NAME<>'PRIMARY' ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all(table);
+    const uniqueGroups = Map.groupBy(uniqueRows, (row) => row.index_name);
+    const actualUnique = [...uniqueGroups.values()]
+      .map((rows) => rows.map((row) => row.column_name).join('|')).sort();
+    const expectedUnique = contract.unique.map((columns) => columns.join('|')).sort();
+    if (JSON.stringify(actualUnique) !== JSON.stringify(expectedUnique)) {
+      throw new Error(`Wave 2 MySQL unique-key metadata mismatch: ${table}`);
+    }
+
+    const checks = db.prepare(`SELECT COUNT(*) count FROM information_schema.TABLE_CONSTRAINTS
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_TYPE='CHECK'`).get(table);
+    if (Number(checks?.count) !== contract.checkCount) {
+      throw new Error(`Wave 2 MySQL CHECK metadata mismatch: ${table}`);
     }
   }
 }
@@ -153,7 +282,7 @@ function ensureIdentityTriggers(db) {
 }
 
 export function migrateSalesCustomerWave2Pricing(db) {
-  db.exec(`
+  if (db.dialect !== 'mysql') db.exec(`
     CREATE TABLE IF NOT EXISTS sales_price_lists (
       id TEXT PRIMARY KEY CHECK(length(id)=36 AND id=lower(id)),
       price_list_code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -231,7 +360,9 @@ export function migrateSalesCustomerWave2Pricing(db) {
       FOREIGN KEY(created_by) REFERENCES users(id)
     );
   `);
+  if (db.dialect === 'mysql') assertMySqlWave2Tables(db);
   ensureCustomerDefaults(db);
+  if (db.dialect === 'mysql') assertMySqlWave2Bootstrap(db);
   ensureIdentityTriggers(db);
   if (db.dialect !== 'mysql') db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sales_price_entries_resolve ON sales_price_list_entries(price_list_id,material_id,customer_id);
