@@ -90,16 +90,19 @@ function validEffectiveEvidenceArithmetic(evidence) {
 }
 
 function releaseChangeAuthorizationOccupancy(db, changeId, actor) {
-  // R4 release path for cancelled/rejected SUBMITTED or DRAFT Change ADD rows.
-  // Only ADD operations carry authorisations; MODIFY/CANCEL lines reuse the
-  // existing consumption record from the original SO line creation. The
-  // transaction wraps this so the release and the state flip commit atomically.
+  // R5 owner-aware release path for cancelled/rejected SUBMITTED or DRAFT Change
+  // ADD rows. Only ADD operations carry authorisations; MODIFY/CANCEL lines reuse
+  // the existing consumption record from the original SO line creation. The
+  // expectedOwner filter rejects records owned by another change or a direct
+  // SO consumption and refuses to release them. The transaction wraps this so
+  // the release and the state flip commit atomically.
   const changeLines = db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId);
+  const owner = `SALES_ORDER_CHANGE:${changeId}`;
   for (const line of changeLines) {
     if (line.op !== 'ADD') continue;
     const after = parse(line.after_values_json);
     const authorizationId = after?.priceSnapshot?.authorizationEvidence?.authorizationId;
-    if (authorizationId) PRICE_OVERRIDE_CONSUMPTION.release(db, authorizationId, actor);
+    if (authorizationId) PRICE_OVERRIDE_CONSUMPTION.release(db, authorizationId, actor, { expectedOwner: owner });
   }
 }
 
@@ -111,7 +114,7 @@ function executionFloorMicros(db, itemId) {
   return Math.max(Math.round(delivered * 1_000_000), notified);
 }
 
-function normalizedLines(db, order, operations, actor, changeId = null) {
+function normalizedLines(db, order, operations, actor, changeId = null, { previouslyReservedAuthorizationIds = null } = {}) {
   if (!Array.isArray(operations) || !operations.length) throw new HttpError(422, '至少需要一条订单变更明细');
   const seen = new Set();
   const sharedConsumedAuthorizations = new Set();
@@ -119,7 +122,7 @@ function normalizedLines(db, order, operations, actor, changeId = null) {
     const op = String(source.op || 'MODIFY').toUpperCase();
     if (!['ADD', 'MODIFY', 'CANCEL'].includes(op)) throw new HttpError(422, '订单变更操作必须为 ADD、MODIFY 或 CANCEL');
     if (op === 'ADD') {
-      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id, { consumedAuthorizationIds: sharedConsumedAuthorizations, changeId })[0];
+      const authoritative = buildAuthoritativeSalesLines(db, { orderDate: order.order_date, requestedDeliveryDate: order.requested_delivery_date, items: [source] }, actor, order.order_date, order.customer_id, order.salesperson_id, { consumedAuthorizationIds: sharedConsumedAuthorizations, changeId, previouslyReservedAuthorizationIds })[0];
       authoritative.lineNo = null;
       authoritative.effectiveCommercialEvidence = effectiveCommercialEvidence(db, order, null, authoritative);
       return { lineNo: index + 1, op, itemId: null, before: null, after: authoritative, beforeMicros: 0, floor: 0 };
@@ -218,7 +221,45 @@ export async function updateSalesOrderChange(db, req, res, actor, changeId) {
     const change = db.prepare(`SELECT * FROM sales_order_changes WHERE id=?${lockSuffix(db)}`).get(changeId);
     if (!change || change.change_path !== 'CONTROLLED_DOCUMENT') throw new HttpError(404, '正式销售订单变更单不存在');
     if (change.state !== 'DRAFT') throw new HttpError(409, '只有草稿变更单可以编辑'); if (change.requested_by !== actor.id && actor.roleCode !== 'ADMIN') throw new HttpError(403, '只能编辑自己创建的变更单');
-    const order = orderForChange(db, change.sales_order_id, actor, true); const lines = normalizedLines(db, order, body.lines, actor, changeId);
+    const order = orderForChange(db, change.sales_order_id, actor, true);
+
+    // R5 owner-aware reservation reconciliation: snapshot the current ADD-authorisation set
+    // owned by THIS change, project the new request's ADD-authorisation set, then resolve
+    // the new lines so that already-valid same-owner reservations are verified (not
+    // re-inserted) and removed reservations are released with owner verification. The
+    // entire reconciliation runs inside one transaction so a failed edit restores the
+    // exact previous change_lines and occupancy set.
+    const owner = `SALES_ORDER_CHANGE:${changeId}`;
+    const oldAuthIds = new Set();
+    for (const row of db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId)) {
+      if (row.op !== 'ADD') continue;
+      try {
+        const after = JSON.parse(row.after_values_json);
+        const authId = after?.priceSnapshot?.authorizationEvidence?.authorizationId;
+        if (authId) oldAuthIds.add(authId);
+      } catch {}
+    }
+    const newAuthIds = new Set();
+    if (Array.isArray(body.lines)) {
+      for (const source of body.lines) {
+        if (String(source.op || 'MODIFY').toUpperCase() !== 'ADD') continue;
+        const authId = String(source.priceOverrideAuthorizationId || '').trim();
+        if (authId) newAuthIds.add(authId);
+      }
+    }
+    const previouslyReserved = new Set([...oldAuthIds].filter((id) => newAuthIds.has(id)));
+    const lines = normalizedLines(db, order, body.lines, actor, changeId, { previouslyReservedAuthorizationIds: previouslyReserved });
+
+    // Release ADD-authorisations removed from this change with the matching owner; this
+    // must run AFTER authorizedOverrideEvidence has computed the new set so the
+    // previouslyReserved pass has already verified retained ids. Owner verification
+    // prevents touching records owned by another change or a direct SO consumption.
+    for (const oldAuthId of oldAuthIds) {
+      if (!newAuthIds.has(oldAuthId)) {
+        PRICE_OVERRIDE_CONSUMPTION.release(db, oldAuthId, actor, { expectedOwner: owner });
+      }
+    }
+
     db.prepare('DELETE FROM sales_order_change_lines WHERE change_id=?').run(changeId);
     const before = snapshot(order, lines); const after = { ...before, effectiveVersion: Number(order.effective_version) + 1, lines: lines.map((line) => ({ itemId: line.itemId, ...line.after })) };
     db.prepare('UPDATE sales_order_changes SET reason_code=?,reason_text=?,before_snapshot_hash=?,after_snapshot_hash=?,base_effective_version=?,target_effective_version=?,updated_at=? WHERE id=?')
@@ -254,13 +295,14 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
         || evidence.originalEvidenceHash !== hash([after.priceSnapshot, after.discountSnapshot])) {
         throw new HttpError(409, '新增行变更商业证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
       }
-      // R4 server-authoritative consumption re-check at apply time: trust neither the
-      // request-time snapshot nor the change-line JSON. The persistence record created
-      // at SUBMIT time must still exist; if it was released, the auth is no longer
-      // reserved and this apply must roll back. This catches tampered, manually-cancelled
-      // and externally-released authorisations inside the same transaction.
+      // R5 server-authoritative owner-aware consumption re-check at apply time: trust
+      // neither the request-time snapshot nor the change-line JSON. The persistence
+      // record created at SUBMIT time must still exist and still be owned by THIS
+      // change. If the record is missing or owned by another change, the apply rolls
+      // back with PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED or
+      // PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH and zero side-effects.
       const addAuthorizationId = after.priceSnapshot?.authorizationEvidence?.authorizationId;
-      if (addAuthorizationId) PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, addAuthorizationId);
+      if (addAuthorizationId) PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, addAuthorizationId, { expectedOwner: `SALES_ORDER_CHANGE:${changeId}` });
       const lineNo = Number(db.prepare('SELECT COALESCE(MAX(line_no),0)+1 value FROM sales_order_items WHERE order_id=?').get(order.id).value);
       insertSalesOrderLines(db, order.id, [{ ...after, lineNo }]);
       totalDelta += Number(after.amountCents);

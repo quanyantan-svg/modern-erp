@@ -422,6 +422,209 @@ test('R4 P1 Change ADD apply rolls back the entire transaction when the consumpt
   ).get(changeRequest.data.id).n, 0, 'failed apply must not save apply idempotency');
 });
 
+test('R5 P1 DRAFT Change ADD PATCH reconciles owner-aware reservations across retain / replace / remove / cancel', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorize = async (suffix, manualPriceCents) => {
+    const r = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+      customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+      quantityDecimal: '1', manualPriceCents, overrideReason: `R5 PATCH ${suffix}` } });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    return r.data.authorizationId;
+  };
+  const sourceOf = (authorizationId) => {
+    const row = db.prepare(
+      `SELECT result_json FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+    ).get(authorizationId);
+    return row ? JSON.parse(row.result_json).source : null;
+  };
+  const reservationExists = (authorizationId) => Boolean(db.prepare(
+    `SELECT id FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authorizationId));
+
+  // Create + approve a base order so CONTROLLED_DOCUMENT changes are allowed.
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r5-patch-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r5-patch-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r5-patch-approve', body: {} })).status, 200);
+  const baseItem = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(base.data.id);
+
+  // Initial DRAFT Change ADD reservation.
+  const authA = await authorize('A', 1099);
+  const initial = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 initial draft',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authA }] } });
+  assert.equal(initial.status, 201, JSON.stringify(initial.data));
+  const changeId = initial.data.id;
+  assert.equal(sourceOf(authA), `SALES_ORDER_CHANGE:${changeId}`, 'DRAFT creation must reserve under change owner');
+
+  // Scenario 1: PATCH retaining the same auth A → success; A's record survives untouched.
+  const retainSnapshot = db.prepare(
+    `SELECT result_json FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authA).result_json;
+  const linesBeforeRetain = db.prepare('SELECT id, op, after_values_json FROM sales_order_change_lines WHERE change_id=? ORDER BY line_no').all(changeId);
+  const retain = await request(`/api/sales-order-changes/${changeId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 retain same auth',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authA }] } });
+  assert.equal(retain.status, 200, JSON.stringify(retain.data));
+  assert.equal(reservationExists(authA), true, 'retained auth must keep its consumption record');
+  assert.equal(sourceOf(authA), `SALES_ORDER_CHANGE:${changeId}`);
+  assert.equal(db.prepare(
+    `SELECT result_json FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authA).result_json, retainSnapshot, 'retained auth record must not be rewritten');
+
+  // Scenario 2: PATCH replacing A with B → A released, B reserved under the change owner.
+  const authB = await authorize('B', 1088);
+  const replace = await request(`/api/sales-order-changes/${changeId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 replace A with B',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authB }] } });
+  assert.equal(replace.status, 200, JSON.stringify(replace.data));
+  assert.equal(reservationExists(authA), false, 'replaced auth A must release its consumption record');
+  assert.equal(reservationExists(authB), true, 'new auth B must reserve its consumption record');
+  assert.equal(sourceOf(authB), `SALES_ORDER_CHANGE:${changeId}`);
+
+  // Scenario 3: PATCH removing the ADD entirely (replacing with a MODIFY on the base line) → B released.
+  const removeAdd = await request(`/api/sales-order-changes/${changeId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 remove ADD entirely',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItem.id, quantityMicros: 1_500_000 }] } });
+  assert.equal(removeAdd.status, 200, JSON.stringify(removeAdd.data));
+  assert.equal(reservationExists(authB), false, 'removed ADD must release its auth reservation');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM sales_order_change_lines WHERE change_id=? AND op=?').get(changeId, 'ADD').n, 0, 'PATCH must remove the prior ADD line');
+
+  // Scenario 4: Invalid PATCH (using an auth already consumed elsewhere) must leave the prior
+  // change lines and their reservations untouched. We re-attach authB which is now free.
+  await authorize('B-rebind', 1088);
+  const changeBeforeFail = db.prepare('SELECT id, op, after_values_json FROM sales_order_change_lines WHERE change_id=? ORDER BY line_no').all(changeId);
+  const consumedElsewhere = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r5-patch-busy', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authB }] } });
+  assert.equal(consumedElsewhere.status, 201, JSON.stringify(consumedElsewhere.data));
+  assert.equal(sourceOf(authB), 'DIRECT_SALES_LINE', 'auth B is now consumed by a direct SO');
+  const invalidPatch = await request(`/api/sales-order-changes/${changeId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 invalid reuse',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authB }] } });
+  assert.equal(invalidPatch.status, 409, JSON.stringify(invalidPatch.data));
+  assert.equal(invalidPatch.data.details?.code || invalidPatch.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_USED');
+  const linesAfterFail = db.prepare('SELECT id, op, after_values_json FROM sales_order_change_lines WHERE change_id=? ORDER BY line_no').all(changeId);
+  assert.deepEqual(linesAfterFail, changeBeforeFail, 'failed PATCH must restore the exact previous change lines');
+  assert.equal(reservationExists(authA), false);
+  assert.equal(reservationExists(authB), true, 'direct-SO consumption must remain');
+  assert.equal(sourceOf(authB), 'DIRECT_SALES_LINE', 'invalid PATCH must not flip the owner');
+
+  // Scenario 5: PATCH replacement followed by Cancel must not leave orphan reservations.
+  // First re-create a fresh DRAFT change with auth A again.
+  const authC = await authorize('C', 1077);
+  const draftTwo = await request('/api/sales-order-changes', { token: tokens.sales, method: 'POST', body: {
+    salesOrderId: base.data.id, reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 draft two',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authC }] } });
+  assert.equal(draftTwo.status, 201, JSON.stringify(draftTwo.data));
+  const changeTwoId = draftTwo.data.id;
+  const authD = await authorize('D', 1066);
+  const draftTwoReplace = await request(`/api/sales-order-changes/${changeTwoId}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 draft two replace',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authD }] } });
+  assert.equal(draftTwoReplace.status, 200, JSON.stringify(draftTwoReplace.data));
+  assert.equal(reservationExists(authC), false, 'replaced auth C must release');
+  assert.equal(reservationExists(authD), true);
+  assert.equal(sourceOf(authD), `SALES_ORDER_CHANGE:${changeTwoId}`);
+  const draftTwoCancel = await request(`/api/sales-order-changes/${changeTwoId}/cancel`, { token: tokens.sales, method: 'POST', body: { reason: 'R5 cancel after replace' } });
+  assert.equal(draftTwoCancel.status, 200, JSON.stringify(draftTwoCancel.data));
+  assert.equal(reservationExists(authC), false);
+  assert.equal(reservationExists(authD), false, 'cancel after replace must release only the currently reserved D');
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeTwoId).state, 'CANCELLED');
+});
+
+test('R5 P1 owner-aware apply rejects cross-owner authorization without touching the unrelated record', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const authorize = async (suffix, manualPriceCents) => {
+    const r = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: {
+      customerId: 'customer-001', businessDate: '2026-10-15', productId: 'product-001', uomCode: uom,
+      quantityDecimal: '1', manualPriceCents, overrideReason: `R5 owner ${suffix}` } });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    return r.data.authorizationId;
+  };
+
+  const base = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'r5-owner-base', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(base.status, 201, JSON.stringify(base.data));
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'r5-owner-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${base.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r5-owner-approve', body: {} })).status, 200);
+
+  const authA = await authorize('A', 1099);
+  const changeA = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r5-owner-changeA', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 owner change A',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authA }] } });
+  assert.equal(changeA.status, 201, JSON.stringify(changeA.data));
+  const changeAId = changeA.data.id;
+
+  const authB = await authorize('B', 1088);
+  const changeB = await request(`/api/sales-orders/${base.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'r5-owner-changeB', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'R5 owner change B',
+    lines: [{ op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000, priceOverrideAuthorizationId: authB }] } });
+  assert.equal(changeB.status, 201, JSON.stringify(changeB.data));
+  const changeBId = changeB.data.id;
+
+  // Cross-owner release attempt: the record's true source is changeB, but changeA attempts
+  // to release it with expectedOwner=changeA. The owner check must reject without
+  // deleting the unrelated record.
+  const { PRICE_OVERRIDE_CONSUMPTION } = await import('./modules/sales-orders.js');
+  const beforeChangeBRecord = db.prepare(
+    `SELECT result_json FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authB);
+  assert.equal(JSON.parse(beforeChangeBRecord.result_json).source, `SALES_ORDER_CHANGE:${changeBId}`, 'precondition: auth B is owned by changeB');
+  let mismatchThrown = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.release(db, authB, { id: 'user-sales', roleCode: 'SALES', permissions: [] }, { expectedOwner: `SALES_ORDER_CHANGE:${changeAId}` }); }
+  catch (error) { mismatchThrown = error; }
+  assert.ok(mismatchThrown, 'cross-owner release must throw');
+  assert.equal(mismatchThrown.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH');
+  const afterMismatchRecord = db.prepare(
+    `SELECT result_json FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`
+  ).get(authB);
+  assert.ok(afterMismatchRecord, 'cross-owner release must not delete the unrelated changeB record');
+  assert.equal(JSON.parse(afterMismatchRecord.result_json).source, `SALES_ORDER_CHANGE:${changeBId}`, 'record source must remain untouched');
+
+  // Cross-owner assert attempt: the record is owned by changeB; changeA asks assertReserved
+  // with expectedOwner=changeA. It must throw and not advance any business state.
+  let assertMismatch = null;
+  try { PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, authB, { expectedOwner: `SALES_ORDER_CHANGE:${changeAId}` }); }
+  catch (error) { assertMismatch = error; }
+  assert.ok(assertMismatch, 'cross-owner assert must throw');
+  assert.equal(assertMismatch.code, 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH');
+
+  // Missing-record apply on changeB fails closed with PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED,
+  // leaving changeA and its state, audit cardinality and effective_version untouched.
+  db.prepare(`DELETE FROM idempotency_records WHERE operation_type='SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION' AND document_id=?`).run(authB);
+  const beforeChangeAState = db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeAId).state;
+  const beforeAuditA = Number(db.prepare(
+    `SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='APPROVE_AND_APPLY' AND entity_id=?`
+  ).get(changeAId).n);
+  const applyB = await request(`/api/sales-order-changes/${changeBId}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r5-owner-applyB', body: {} });
+  assert.equal(applyB.status, 409);
+  assert.equal(applyB.data.details?.code || applyB.data.code, 'PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED');
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(changeAId).state, beforeChangeAState, 'changeA state must remain unchanged');
+  assert.equal(Number(db.prepare(
+    `SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='APPROVE_AND_APPLY' AND entity_id=?`
+  ).get(changeAId).n), beforeAuditA, 'changeA audit cardinality must remain unchanged');
+
+  // Valid owner flow: apply changeA successfully. Snapshot, effective_version and authorization
+  // binding are all preserved end-to-end.
+  const beforeVersion = db.prepare('SELECT effective_version v FROM sales_orders WHERE id=?').get(base.data.id).v;
+  const applyA = await request(`/api/sales-order-changes/${changeAId}/approve`, { token: tokens.reviewer, method: 'POST', key: 'r5-owner-applyA', body: {} });
+  assert.equal(applyA.status, 200, JSON.stringify(applyA.data));
+  assert.equal(db.prepare('SELECT effective_version v FROM sales_orders WHERE id=?').get(base.data.id).v, beforeVersion + 1, 'apply must bump effective_version');
+  const itemsAfter = db.prepare(`SELECT id, quantity, amount_cents, price_snapshot_json FROM sales_order_items WHERE order_id=? ORDER BY line_no`).all(base.data.id);
+  assert.equal(itemsAfter.length, 2, 'apply must append a new SO line');
+  const newLine = itemsAfter[1];
+  assert.equal(Number(newLine.quantity), 1, 'apply must persist the requested quantity');
+  assert.equal(Number(newLine.amount_cents), 1099, 'apply must persist the requested override unit as line amount');
+  const snapshot = JSON.parse(newLine.price_snapshot_json);
+  assert.equal(snapshot.authorizationEvidence.authorizationId, authA);
+  assert.equal(snapshot.unitPriceCents, 1099);
+  assert.equal(snapshot.catalogUnitPriceCents, 1250);
+});
+
 test('submission restores V1.3 commercial completeness and normal-line amount gates', async () => {
   const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'submit-commercial-gates', body: {

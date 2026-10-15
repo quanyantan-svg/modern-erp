@@ -41,21 +41,36 @@ function recordPriceOverrideAuthorizationConsumption(db, authorizationId, actor,
   audit(db, actor.id, 'CONSUME', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, JSON.stringify(context || {}));
 }
 
-function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor) {
-  const row = db.prepare(
-    `SELECT id FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?`
-  ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY);
+function readPriceOverrideAuthorizationConsumption(db, authorizationId) {
+  return db.prepare(
+    `SELECT id, result_json FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?`
+  ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY) || null;
+}
+
+function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor, { expectedOwner = null, allowAppliedLine = false } = {}) {
+  const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
   if (!row) return false;
+  let parsed;
+  try { parsed = JSON.parse(row.result_json); } catch { throw new HttpError(409, '授权消费记录解析失败', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' }); }
+  if (expectedOwner && parsed.source !== expectedOwner) {
+    throw new HttpError(409, '授权消费记录归属与请求方不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' });
+  }
+  if (!allowAppliedLine && db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
+    throw new HttpError(409, '授权已被已审批订单行实际消费，禁止释放', { code: 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS' });
+  }
   db.prepare(`DELETE FROM idempotency_records WHERE id=?`).run(row.id);
-  audit(db, actor.id, 'RELEASE', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, 'released without applied line');
+  audit(db, actor.id, 'RELEASE', PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, `released (source=${parsed.source}, expectedOwner=${expectedOwner || 'ANY'})`);
   return true;
 }
 
-function assertPriceOverrideAuthorizationReserved(db, authorizationId) {
-  const row = db.prepare(
-    `SELECT id FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?`
-  ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY);
+function assertPriceOverrideAuthorizationReserved(db, authorizationId, { expectedOwner = null } = {}) {
+  const row = readPriceOverrideAuthorizationConsumption(db, authorizationId);
   if (!row) throw new HttpError(409, '价格覆盖授权消费记录在审批时缺失', { code: 'PRICE_OVERRIDE_AUTHORIZATION_NOT_RESERVED' });
+  let parsed;
+  try { parsed = JSON.parse(row.result_json); } catch { throw new HttpError(409, '授权消费记录解析失败', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' }); }
+  if (expectedOwner && parsed.source !== expectedOwner) {
+    throw new HttpError(409, '授权消费记录归属与请求方不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' });
+  }
   return row;
 }
 
@@ -72,7 +87,7 @@ const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(mi
 function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
 function effectiveExtension(db, customerId, businessDate) { return currentCommercialExtension(db, customerId, businessDate); }
 
-function authorizedOverrideEvidence(db, source, actor, expected, { consumedAuthorizationIds = null, changeId = null } = {}) {
+function authorizedOverrideEvidence(db, source, actor, expected, { consumedAuthorizationIds = null, changeId = null, previouslyReservedAuthorizationIds = null } = {}) {
   const authorizationId = String(source.priceOverrideAuthorizationId || '').trim();
   if (!authorizationId) return null;
   if (consumedAuthorizationIds) {
@@ -89,12 +104,17 @@ function authorizedOverrideEvidence(db, source, actor, expected, { consumedAutho
   if (value.customerId !== expected.customerId || value.businessDate !== expected.businessDate
     || value.materialId !== expected.materialId || value.uomCode !== expected.uomCode
     || Number(value.quantityMicros) !== expected.quantityMicros) throw new HttpError(409, '价格覆盖授权与订单行不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_MISMATCH' });
-  // R4 server-authoritative consumption record: the existing `idempotency_records`
-  // UNIQUE(operation_type, document_id, idempotency_key) constraint provides DB-level
-  // one-time protection that survives PATCH removal and is reused as occupancy during
-  // SUBMITTED Change ADD. The DB INSERT replaces the previous LIKE pattern search and
-  // rolls back automatically on any later validation failure in this transaction.
-  recordPriceOverrideAuthorizationConsumption(db, authorizationId, actor, { source: changeId ? `SALES_ORDER_CHANGE:${changeId}` : 'DIRECT_SALES_LINE' });
+  // R5 owner-aware reservation: a previously-reserved authorization that this change still
+  // owns is verified and kept; otherwise a fresh INSERT establishes the DB UNIQUE-protected
+  // consumption record. The record's `source` carries the owner so apply/release/assert paths
+  // can later verify ownership. The DB constraint enforces uniqueness across requests,
+  // documents, dials and warehouses regardless of caller.
+  const owner = changeId ? `SALES_ORDER_CHANGE:${changeId}` : 'DIRECT_SALES_LINE';
+  if (previouslyReservedAuthorizationIds && previouslyReservedAuthorizationIds.has(authorizationId)) {
+    assertPriceOverrideAuthorizationReserved(db, authorizationId, { expectedOwner: owner });
+  } else {
+    recordPriceOverrideAuthorizationConsumption(db, authorizationId, actor, { source: owner });
+  }
   const snapshot = validatePriceSnapshot(db, value.priceSnapshot, { businessDate: expected.businessDate, materialId: expected.materialId,
     uomCode: expected.uomCode, quantityMicros: expected.quantityMicros, unitPriceCents: value.priceSnapshot.unitPriceCents,
     grossCents: value.priceSnapshot.grossAmountCents });
@@ -222,7 +242,7 @@ function validateDiscountSnapshot(snapshot, expected) {
   return snapshot;
 }
 
-export function buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId, { enforceCreatorOverrideSod = true, consumedAuthorizationIds = null } = {}) {
+export function buildAuthoritativeSalesLines(db, body, actor, businessDate, customerId, salespersonId, { enforceCreatorOverrideSod = true, consumedAuthorizationIds = null, changeId = null, previouslyReservedAuthorizationIds = null } = {}) {
   if (!Array.isArray(body.items) || !body.items.length) throw new HttpError(422, '销售订单至少需要一条明细');
   const sharedConsumedAuthorizations = consumedAuthorizationIds ?? new Set();
   const lineInputs = body.items.map((source, index) => {
@@ -231,7 +251,7 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
     const materialId = String(source.productId || source.materialId || '').trim();
     const uomCode = String(source.uomCode || source.requestedUomCode || db.prepare('SELECT base_uom_code FROM products WHERE id=?').get(materialId)?.base_uom_code || '').trim();
     assertSellableProduct(db, { customerId, salespersonId, productId: materialId, businessDate, documentType: 'SALES_ORDER' });
-    const authorized = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros }, { consumedAuthorizationIds: sharedConsumedAuthorizations });
+    const authorized = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros }, { consumedAuthorizationIds: sharedConsumedAuthorizations, changeId, previouslyReservedAuthorizationIds });
     const evidence = authorized?.evidence || resolveSalesPrice(db, {
       customerId, salespersonId, materialId, pricingUomCode: uomCode, quantityDecimal: microsDecimal(quantityMicros), businessDate,
       explicitPriceListIds: source.explicitPriceListIds || body.explicitPriceListIds,
