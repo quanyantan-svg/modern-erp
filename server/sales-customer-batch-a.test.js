@@ -135,8 +135,13 @@ test('direct SO creation consumes a server-issued independent price override aut
   const snapshot = JSON.parse(db.prepare('SELECT price_snapshot_json FROM sales_order_items WHERE order_id=?').get(created.data.id).price_snapshot_json);
   assert.equal(snapshot.unitPriceCents, 1099); assert.equal(snapshot.catalogUnitPriceCents, 1250);
   assert.equal(snapshot.evidence.overrideEvidence.actorId, 'user-reviewer');
-  assert.equal(snapshot.evidence.overrideEvidence.authorizationId, authorized.data.authorizationId);
+  assert.equal(snapshot.evidence.overrideEvidence.authorizationId, undefined);
+  assert.equal(snapshot.authorizationEvidence.authorizationId, authorized.data.authorizationId);
+  assert.equal(snapshot.authorizationEvidence.pricingEvidenceFingerprint, snapshot.evidence.fingerprint);
   assert.equal(snapshot.evidence.overrideEvidence.reason, authorizationBody.overrideReason);
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'direct-authorized-override-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'direct-authorized-override-approve', body: {} })).status, 200);
+  assert.equal(db.prepare('SELECT status FROM sales_orders WHERE id=?').get(created.data.id).status, 'APPROVED');
   const forged = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'direct-forged-override', body: {
     customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
     items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: 'forged-reviewer-id',
@@ -145,6 +150,19 @@ test('direct SO creation consumes a server-issued independent price override aut
   const reused = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'direct-authorized-override-reuse', body: {
     customerId: 'customer-001', orderDate: '2026-10-15', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', priceOverrideAuthorizationId: authorized.data.authorizationId }] } });
   assert.equal(reused.status, 409);
+
+  for (const [suffix, changed] of [
+    ['customer', { customerId: 'customer-002' }],
+    ['material', { productId: 'product-002' }],
+    ['quantity', { quantityDecimal: '2' }],
+  ]) {
+    const scoped = await request('/api/sales-price-overrides/authorize', { token: tokens.reviewer, method: 'POST', body: authorizationBody });
+    assert.equal(scoped.status, 201, JSON.stringify(scoped.data));
+    const attempted = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: `direct-authorized-override-${suffix}`, body: {
+      customerId: changed.customerId || 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+      items: [{ productId: changed.productId || 'product-001', uomCode: uom, quantityDecimal: changed.quantityDecimal || '1', priceOverrideAuthorizationId: scoped.data.authorizationId }] } });
+    assert.notEqual(attempted.status, 201, `${suffix}: ${JSON.stringify(attempted.data)}`);
+  }
 });
 
 test('submission restores V1.3 commercial completeness and normal-line amount gates', async () => {
@@ -230,6 +248,50 @@ test('approved-order ADD change creates a new authoritative snapshot line', asyn
   assert.equal(JSON.parse(row.price_snapshot_json).evidence.versionId, 'batch-version');
 });
 
+test('consecutive SO changes include the current target version and rollback corrupt evidence', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'consecutive-change-order', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'consecutive-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'consecutive-approve', body: {} })).status, 200);
+  const item = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id);
+  const originalSnapshots = { price_snapshot_json: item.price_snapshot_json, discount_snapshot_json: item.discount_snapshot_json };
+  const applyQuantity = async (quantityMicros, suffix) => {
+    const change = await request(`/api/sales-orders/${created.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: `consecutive-request-${suffix}`, body: {
+      reasonCode: 'CUSTOMER_REQUEST', reason: `consecutive ${suffix}`, lines: [{ op: 'MODIFY', salesOrderItemId: item.id, quantityMicros }] } });
+    assert.equal(change.status, 201, JSON.stringify(change.data));
+    const applied = await request(`/api/sales-order-changes/${change.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: `consecutive-apply-${suffix}`, body: {} });
+    assert.equal(applied.status, 200, JSON.stringify(applied.data));
+    return change.data.id;
+  };
+  await applyQuantity(2_000_000, 'v2');
+  const v3ChangeId = await applyQuantity(3_000_000, 'v3');
+  const order = db.prepare('SELECT effective_version,total_cents FROM sales_orders WHERE id=?').get(created.data.id);
+  const current = db.prepare('SELECT * FROM sales_order_items WHERE id=?').get(item.id);
+  const evidence = JSON.parse(db.prepare('SELECT after_values_json FROM sales_order_change_lines WHERE change_id=?').get(v3ChangeId).after_values_json).effectiveCommercialEvidence;
+  assert.equal(order.effective_version, 3); assert.equal(current.document_quantity_num, 3_000_000);
+  assert.equal(evidence.targetEffectiveVersion, 3); assert.equal(evidence.finalAmountCents, current.amount_cents);
+  assert.deepEqual({ price_snapshot_json: current.price_snapshot_json, discount_snapshot_json: current.discount_snapshot_json }, originalSnapshots);
+
+  const corrupt = await request(`/api/sales-orders/${created.data.id}/controlled-change`, { token: tokens.sales, method: 'POST', key: 'consecutive-corrupt-request', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'corrupt evidence rollback', lines: [{ op: 'MODIFY', salesOrderItemId: item.id, quantityMicros: 4_000_000 },
+      { op: 'ADD', productId: 'product-001', uomCode: uom, quantityMicros: 1_000_000 }] } });
+  assert.equal(corrupt.status, 201, JSON.stringify(corrupt.data));
+  const corruptRow = db.prepare('SELECT id,after_values_json FROM sales_order_change_lines WHERE change_id=? AND op=?').get(corrupt.data.id, 'MODIFY');
+  const corruptAfter = JSON.parse(corruptRow.after_values_json); corruptAfter.effectiveCommercialEvidence.finalAmountCents += 1;
+  db.prepare('UPDATE sales_order_change_lines SET after_values_json=? WHERE id=?').run(JSON.stringify(corruptAfter), corruptRow.id);
+  const beforeFailure = { order: db.prepare('SELECT effective_version,total_cents FROM sales_orders WHERE id=?').get(created.data.id),
+    lines: db.prepare('SELECT id,quantity,amount_cents FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(created.data.id) };
+  const rejected = await request(`/api/sales-order-changes/${corrupt.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'consecutive-corrupt-apply', body: {} });
+  assert.equal(rejected.status, 409);
+  assert.deepEqual(db.prepare('SELECT effective_version,total_cents FROM sales_orders WHERE id=?').get(created.data.id), beforeFailure.order);
+  assert.deepEqual(db.prepare('SELECT id,quantity,amount_cents FROM sales_order_items WHERE order_id=? ORDER BY line_no').all(created.data.id), beforeFailure.lines);
+  assert.equal(db.prepare('SELECT state FROM sales_order_changes WHERE id=?').get(corrupt.data.id).state, 'SUBMITTED');
+  assert.equal((await request(`/api/sales-order-changes/${v3ChangeId}/approve`, { token: tokens.reviewer, method: 'POST', key: 'consecutive-duplicate-apply', body: {} })).status, 409);
+});
+
 test('four order-change modes admit only their frozen authoring paths', async () => {
   const item = db.prepare('SELECT id,quantity FROM sales_order_items WHERE order_id=? ORDER BY line_no LIMIT 1').get(canonicalOrderId);
   const body = { salesOrderId: canonicalOrderId, reasonCode: 'CUSTOMER_REQUEST', reason: 'mode matrix', lines: [{ op: 'MODIFY', salesOrderItemId: item.id, quantityMicros: Math.round(Number(item.quantity) * 1_000_000) }] };
@@ -280,6 +342,39 @@ test('gift order keeps catalog price evidence with zero revenue', async () => {
   const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'gift-order-1', body: { customerId: 'customer-001', orderDate: '2026-10-15', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', isGiftLine: true }] } });
   assert.equal(created.status, 201, JSON.stringify(created.data)); const line = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id); const snapshot = JSON.parse(line.price_snapshot_json);
   assert.equal(line.unit_price_cents, 0); assert.equal(line.amount_cents, 0); assert.equal(snapshot.catalogUnitPriceCents, 1250); assert.equal(snapshot.giftLine, true);
+  assert.equal((await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'gift-order-submit', body: {} })).status, 200);
+});
+
+test('authoritative 100 percent discount permits zero revenue but forged zero evidence is rejected', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const scheme = await request('/api/sales-discount-schemes', { token: tokens.admin, method: 'POST', body: {
+    schemeCode: 'BATCH-ZERO', name: 'Batch zero revenue', currencyCode: 'CNY', priority: 0, version: 1, effectiveFrom: '2026-01-01' } });
+  assert.equal(scheme.status, 201, JSON.stringify(scheme.data)); const schemeId = scheme.data.scheme.id;
+  const rule = await request(`/api/sales-discount-schemes/${schemeId}/rules`, { token: tokens.admin, method: 'POST', body: {
+    ruleKey: 'LINE100', lineScope: 'LINE', applicationMode: 'AUTOMATIC', discountKind: 'PERCENT', discountBps: 10000,
+    materialId: 'product-001', pricingUomCode: uom, customerScopeType: 'ALL', qtyBreakMinMicros: 0, effectiveFrom: '2026-01-01' } });
+  assert.equal(rule.status, 201, JSON.stringify(rule.data));
+  assert.equal((await request(`/api/sales-discount-schemes/${schemeId}/activate`, { token: tokens.admin, method: 'POST', key: 'batch-zero-activate', body: {} })).status, 200);
+  const makeOrder = async (key) => request('/api/sales-orders', { token: tokens.sales, method: 'POST', key, body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20', discount: { explicitSchemeIds: [schemeId] },
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1' }] } });
+  const zero = await makeOrder('authoritative-zero-order'); assert.equal(zero.status, 201, JSON.stringify(zero.data));
+  const zeroLine = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(zero.data.id);
+  assert.equal(zeroLine.unit_price_cents, 1250); assert.equal(zeroLine.amount_cents, 0);
+  const zeroSubmitted = await request(`/api/sales-orders/${zero.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'authoritative-zero-submit', body: {} });
+  assert.equal(zeroSubmitted.status, 200, JSON.stringify(zeroSubmitted.data));
+
+  for (const [suffix, mutate] of [
+    ['missing', (line) => ({ price: line.price_snapshot_json, discount: null, amount: 0 })],
+    ['amount-mismatch', (line) => ({ price: line.price_snapshot_json, discount: line.discount_snapshot_json, amount: 1 })],
+    ['invalid-discount', (line) => { const discount = JSON.parse(line.discount_snapshot_json); discount.lineDiscountCents -= 1; return { price: line.price_snapshot_json, discount: JSON.stringify(discount), amount: 0 }; }],
+  ]) {
+    const forged = await makeOrder(`forged-zero-${suffix}`); assert.equal(forged.status, 201, JSON.stringify(forged.data));
+    const line = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(forged.data.id); const changed = mutate(line);
+    db.prepare('UPDATE sales_order_items SET price_snapshot_json=?,discount_snapshot_json=?,amount_cents=? WHERE id=?').run(changed.price, changed.discount, changed.amount, line.id);
+    db.prepare('UPDATE sales_orders SET total_cents=? WHERE id=?').run(changed.amount, forged.data.id);
+    assert.equal((await request(`/api/sales-orders/${forged.data.id}/submit`, { token: tokens.sales, method: 'POST', key: `forged-zero-submit-${suffix}`, body: {} })).status, 409);
+  }
 });
 
 test('Batch A frontend routes and responsive contract cover 320/390/430/680', () => {

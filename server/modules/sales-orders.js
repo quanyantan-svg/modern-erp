@@ -38,7 +38,13 @@ function authorizedOverrideEvidence(db, source, actor, expected) {
     grossCents: value.priceSnapshot.grossAmountCents });
   if (snapshot.evidence.overrideState !== 'OVERRIDDEN' || snapshot.evidence.overrideEvidence?.actorId !== row.user_id
     || snapshot.evidence.overrideEvidence?.authority !== 'SALES_PRICING_OVERRIDE') throw new HttpError(409, '价格覆盖授权证据无效', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
-  return { ...snapshot.evidence, overrideEvidence: { ...snapshot.evidence.overrideEvidence, authorizationId } };
+  const authorizationPayload = { contractVersion: 'SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION_V1', authorizationId,
+    authorizedByActorId: row.user_id, authority: 'SALES_PRICING_OVERRIDE', customerId: expected.customerId,
+    businessDate: expected.businessDate, materialId: expected.materialId, uomCode: expected.uomCode,
+    quantityMicros: expected.quantityMicros, pricingEvidenceFingerprint: snapshot.evidence.fingerprint,
+    authorizedPriceSnapshotHash: hash(snapshot) };
+  return { evidence: snapshot.evidence, authorizationEvidence: { ...authorizationPayload,
+    fingerprint: requestFingerprint(authorizationPayload) } };
 }
 
 function zeroDiscountEvidence(lineIds, pricing, grossByLine) {
@@ -58,7 +64,8 @@ function validatePriceSnapshot(db, snapshot, expected) {
   if (!snapshot || snapshot.contractVersion !== 'SALES_PRICE_SNAPSHOT_V1' || !snapshot.evidence) throw new HttpError(409, '价格快照缺失或版本无效', { code: 'PRICE_SNAPSHOT_REQUIRED' });
   const evidence = snapshot.evidence;
   const { fingerprint, ...fingerprintPayload } = evidence;
-  if (!fingerprint || snapshot.requestFingerprint !== fingerprint || requestFingerprint(fingerprintPayload) !== fingerprint
+  if (!fingerprint || snapshot.requestFingerprint !== fingerprint
+    || (requestFingerprint(fingerprintPayload) !== fingerprint && hash(fingerprintPayload) !== fingerprint)
     || evidence.contractVersion !== 'SALES_PRICE_V1') {
     throw new HttpError(409, '价格快照指纹或解析器版本不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
   }
@@ -91,13 +98,37 @@ function validatePriceSnapshot(db, snapshot, expected) {
   } else if (evidence.overrideState !== 'NONE' || evidence.overrideEvidence != null || safe(evidence.resolvedPriceCents, '解析单价') !== safe(evidence.catalogUnitPriceCents, '目录单价')) {
     throw new HttpError(409, '价格覆盖状态与版本原价不一致', { code: 'PRICE_SNAPSHOT_MISMATCH' });
   }
+  if (snapshot.authorizationEvidence) {
+    const authorization = snapshot.authorizationEvidence;
+    const { fingerprint: authorizationFingerprint, ...authorizationPayload } = authorization;
+    const row = db.prepare(`SELECT * FROM audit_logs WHERE id=? AND entity_type='SALES_PRICE_OVERRIDE_AUTHORIZATION'
+      AND action='AUTHORIZE'`).get(authorization.authorizationId);
+    const detail = row ? parse(row.detail, 'price override authorization') : null;
+    const { authorizationEvidence: ignoredAuthorization, ...originalSnapshot } = snapshot;
+    if (!row || authorization.contractVersion !== 'SALES_PRICE_OVERRIDE_AUTHORIZATION_CONSUMPTION_V1'
+      || !authorizationFingerprint || requestFingerprint(authorizationPayload) !== authorizationFingerprint
+      || authorization.authorizedByActorId !== row.user_id || authorization.authority !== 'SALES_PRICING_OVERRIDE'
+      || authorization.customerId !== expected.customerId || authorization.businessDate !== expected.businessDate
+      || authorization.materialId !== expected.materialId || authorization.uomCode !== expected.uomCode
+      || Number(authorization.quantityMicros) !== expected.quantityMicros
+      || authorization.pricingEvidenceFingerprint !== evidence.fingerprint
+      || authorization.authorizedPriceSnapshotHash !== hash(originalSnapshot)
+      || detail?.authorizationId !== authorization.authorizationId
+      || detail?.customerId !== authorization.customerId || detail?.businessDate !== authorization.businessDate
+      || detail?.materialId !== authorization.materialId || detail?.uomCode !== authorization.uomCode
+      || Number(detail?.quantityMicros) !== Number(authorization.quantityMicros)
+      || hash(detail?.priceSnapshot) !== authorization.authorizedPriceSnapshotHash) {
+      throw new HttpError(409, 'Price override authorization linkage is invalid', { code: 'PRICE_OVERRIDE_AUTHORIZATION_INVALID' });
+    }
+  }
   return snapshot;
 }
 
 function validateDiscountSnapshot(snapshot, expected) {
   if (!snapshot || snapshot.contractVersion !== 'ORDER_DISCOUNT_SNAPSHOT_V1' || !snapshot.evidence) throw new HttpError(409, '折扣快照缺失或版本无效', { code: 'DISCOUNT_SNAPSHOT_REQUIRED' });
   const { fingerprint, ...fingerprintPayload } = snapshot.evidence;
-  if (!fingerprint || snapshot.requestFingerprint !== fingerprint || requestFingerprint(fingerprintPayload) !== fingerprint
+  if (!fingerprint || snapshot.requestFingerprint !== fingerprint
+    || (requestFingerprint(fingerprintPayload) !== fingerprint && hash(fingerprintPayload) !== fingerprint)
     || snapshot.evidence.contractVersion !== 'ORDER_DISCOUNT_V1') {
     throw new HttpError(409, '折扣快照指纹或解析器版本不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
   }
@@ -105,6 +136,26 @@ function validateDiscountSnapshot(snapshot, expected) {
     || safe(snapshot.grossAmountCents, '折扣前金额') !== expected.grossCents
     || safe(snapshot.finalAmountCents, '折扣后金额') !== expected.finalCents) {
     throw new HttpError(409, '折扣快照与订单行不一致', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+  }
+  const gross = safe(snapshot.grossAmountCents, 'discount gross');
+  const lineDiscount = safe(snapshot.lineDiscountCents, 'line discount');
+  const headerAllocation = safe(snapshot.headerAllocationCents, 'header allocation');
+  const final = safe(snapshot.finalAmountCents, 'discount final');
+  if (lineDiscount > gross || headerAllocation > gross - lineDiscount || gross - lineDiscount - headerAllocation !== final) {
+    throw new HttpError(409, 'Discount snapshot arithmetic is inconsistent', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+  }
+  if (expected.giftLine) {
+    if (lineDiscount !== gross || headerAllocation !== 0 || final !== 0) {
+      throw new HttpError(409, 'Gift-line discount evidence is inconsistent', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
+    }
+  } else if (!expected.allowEvidenceProjection) {
+    const evidence = snapshot.evidence;
+    const candidateIds = Object.keys(evidence.finalLineCentsByLine || {});
+    const matched = candidateIds.some((lineId) => Number(evidence.lineDiscountCentsByLine?.[lineId]) === lineDiscount
+      && Number(evidence.headerAllocationCentsByLine?.[lineId]) === headerAllocation
+      && Number(evidence.finalLineCentsByLine?.[lineId]) === final
+      && (!expected.pricingEvidenceFingerprint || evidence.pricingEvidenceByLine?.[lineId]?.fingerprint === expected.pricingEvidenceFingerprint));
+    if (!matched) throw new HttpError(409, 'Discount snapshot does not match authoritative resolver evidence', { code: 'DISCOUNT_SNAPSHOT_MISMATCH' });
   }
   return snapshot;
 }
@@ -117,7 +168,8 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
     const materialId = String(source.productId || source.materialId || '').trim();
     const uomCode = String(source.uomCode || source.requestedUomCode || db.prepare('SELECT base_uom_code FROM products WHERE id=?').get(materialId)?.base_uom_code || '').trim();
     assertSellableProduct(db, { customerId, salespersonId, productId: materialId, businessDate, documentType: 'SALES_ORDER' });
-    const evidence = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros }) || resolveSalesPrice(db, {
+    const authorized = authorizedOverrideEvidence(db, source, actor, { customerId, businessDate, materialId, uomCode, quantityMicros });
+    const evidence = authorized?.evidence || resolveSalesPrice(db, {
       customerId, salespersonId, materialId, pricingUomCode: uomCode, quantityDecimal: microsDecimal(quantityMicros), businessDate,
       explicitPriceListIds: source.explicitPriceListIds || body.explicitPriceListIds,
       manualPriceCents: source.manualPriceCents, overrideReason: source.overrideReason || body.overrideReason,
@@ -127,7 +179,8 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
     }
     const gross = Math.floor((evidence.resolvedPriceCents * evidence.normalizedPricingQuantityMicros + 500000) / 1000000);
     if (!Number.isSafeInteger(gross)) throw new HttpError(422, '行金额超出安全范围');
-    return { source, lineId, lineNo: index + 1, quantityMicros, materialId, uomCode, evidence, gross };
+    return { source, lineId, lineNo: index + 1, quantityMicros, materialId, uomCode, evidence,
+      authorizationEvidence: authorized?.authorizationEvidence || null, gross };
   });
   const discountInput = body.discount || {};
   let discount;
@@ -153,7 +206,8 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
     const priceSnapshot = { contractVersion: 'SALES_PRICE_SNAPSHOT_V1', businessDate, requestFingerprint: line.evidence.fingerprint,
       materialId: line.materialId, requestedUomCode: line.uomCode, quantityMicros: line.quantityMicros,
       unitPriceCents: isGift ? 0 : line.evidence.resolvedPriceCents, catalogUnitPriceCents: line.evidence.catalogUnitPriceCents,
-      grossAmountCents: line.gross, giftLine: isGift, evidence: line.evidence };
+      grossAmountCents: line.gross, giftLine: isGift, evidence: line.evidence,
+      ...(line.authorizationEvidence ? { authorizationEvidence: line.authorizationEvidence } : {}) };
     const discountSnapshot = { contractVersion: 'ORDER_DISCOUNT_SNAPSHOT_V1', businessDate, requestFingerprint: discount.fingerprint,
       lineId: line.lineId, grossAmountCents: line.gross, finalAmountCents: finalCents,
       lineDiscountCents: isGift ? line.gross : safe(discount.lineDiscountCentsByLine[line.lineId], '行折扣'),
@@ -182,7 +236,9 @@ function validateFrozenLines(db, lines, businessDate, actor) {
       throw new HttpError(409, '订单创建人与价格覆盖人必须分离', { code: 'SALES_PRICE_OVERRIDE_SOD' });
     }
     validatePriceSnapshot(db, price, expected);
-    validateDiscountSnapshot(discount, { businessDate, lineId: line.sourceLineId || line.id, grossCents: expected.grossCents, finalCents: safe(line.amountCents, '最终金额') });
+    validateDiscountSnapshot(discount, { businessDate, lineId: line.sourceLineId || line.id, grossCents: expected.grossCents,
+      finalCents: safe(line.amountCents, '最终金额'), giftLine: Boolean(price.giftLine),
+      pricingEvidenceFingerprint: price.evidence?.fingerprint, allowEvidenceProjection: Boolean(line.sourceLineId) });
     const orderLineId = id();
     return { ...line, id: orderLineId, lineNo: index + 1, quantity: expected.quantityMicros / 1_000_000, quantityMicros: expected.quantityMicros,
       priceSnapshot: price, discountSnapshot: { ...discount, lineId: orderLineId } };
@@ -203,10 +259,11 @@ function validateStoredOrderSnapshots(db, order) {
     const price = parse(line.price_snapshot_json, '价格快照');
     const discount = parse(line.discount_snapshot_json, '折扣快照');
     const quantityMicros = safe(line.document_quantity_num ?? Math.round(Number(line.quantity) * 1_000_000), '订单行数量', 1);
-    validatePriceSnapshot(db, price, { businessDate: order.order_date, materialId: line.product_id, uomCode: line.document_uom_code,
+    validatePriceSnapshot(db, price, { customerId: order.customer_id, businessDate: order.order_date, materialId: line.product_id, uomCode: line.document_uom_code,
       quantityMicros, unitPriceCents: safe(line.unit_price_cents, '订单行单价'), grossCents: safe(price.grossAmountCents, '订单行原价金额') });
     validateDiscountSnapshot(discount, { businessDate: order.order_date, lineId: line.id,
-      grossCents: safe(price.grossAmountCents, '订单行原价金额'), finalCents: safe(line.amount_cents, '订单行商业金额') });
+      grossCents: safe(price.grossAmountCents, '订单行原价金额'), finalCents: safe(line.amount_cents, '订单行商业金额'),
+      giftLine: Boolean(line.is_gift_line), pricingEvidenceFingerprint: price.evidence?.fingerprint });
     total += Number(line.amount_cents);
   }
   if (!Number.isSafeInteger(total) || total !== Number(order.total_cents)) throw new HttpError(409, '订单行快照金额与订单总额不一致', { code: 'SALES_SNAPSHOT_MISMATCH' });
@@ -423,7 +480,7 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
       if (!String(order.ship_to_address || '').trim()) throw new HttpError(400, '提交前请填写收货地址');
       if (!String(order.payment_terms || '').trim()) throw new HttpError(400, '提交前请填写付款条件');
       const invalidLine = db.prepare(`SELECT 1 FROM sales_order_items WHERE order_id=? AND
-        (quantity<=0 OR amount_cents<0 OR (COALESCE(is_gift_line,0)=0 AND (unit_price_cents<=0 OR amount_cents<=0))
+        (quantity<=0 OR amount_cents<0 OR (COALESCE(is_gift_line,0)=0 AND unit_price_cents<=0)
          OR (COALESCE(is_gift_line,0)=1 AND amount_cents<>0)) LIMIT 1`).get(orderId);
       if (invalidLine) throw new HttpError(409, '订单明细金额或赠品商业属性无效', { code: 'SALES_ORDER_LINE_INVALID' });
       const missing = db.prepare("SELECT 1 FROM sales_order_items WHERE order_id=? AND (price_snapshot_json IS NULL OR discount_snapshot_json IS NULL) LIMIT 1").get(orderId); if (missing) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });

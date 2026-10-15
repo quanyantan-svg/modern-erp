@@ -263,9 +263,12 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
   const changed = db.prepare('UPDATE sales_orders SET total_cents=total_cents+?,effective_version=effective_version+1,updated_at=? WHERE id=? AND effective_version=?')
     .run(totalDelta, NOW(), order.id, expectedBaseVersion);
   if (Number(changed.changes ?? changed.affectedRows) !== 1) throw new HttpError(409, '订单版本 CAS 冲突', { code: 'SALES_ORDER_CHANGE_CAS_CONFLICT' });
-  validateEffectiveOrderCommercialEvidence(db, order.id, expectedBaseVersion + 1);
   const stamp = NOW(); db.prepare("UPDATE sales_order_changes SET state='APPLIED',approver_id=?,approved_at=?,applied_by=?,applied_at=?,application_idempotency_key=?,updated_at=? WHERE id=?")
     .run(actor.id, stamp, actor.id, stamp, key, stamp, changeId);
+  // The effective-version validator reads append-only APPLIED evidence. Mark
+  // this change inside the same transaction before validation so the current
+  // target version participates; any failure rolls the entire transaction back.
+  validateEffectiveOrderCommercialEvidence(db, order.id, expectedBaseVersion + 1);
   db.prepare("UPDATE approval_requests SET status='APPROVED',reviewer_id=?,reviewed_at=? WHERE source_type='SALES_ORDER_CHANGE' AND source_id=? AND status='PENDING'").run(actor.id, stamp, changeId);
   const result = { id: changeId, salesOrderId: order.id, effectiveVersion: expectedBaseVersion + 1, state: 'APPLIED' };
   saveIdempotency(db, 'SALES_ORDER_CHANGE_APPLY', changeId, key, fingerprint, result); audit(db, actor.id, 'APPROVE_AND_APPLY', 'SALES_ORDER_CHANGE', changeId, JSON.stringify(result));
