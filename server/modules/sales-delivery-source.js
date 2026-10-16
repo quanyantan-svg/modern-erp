@@ -1,6 +1,19 @@
 import { HttpError } from '../lib/http.js';
 import { lockSuffix } from './sales-scope.js';
 
+export function quantityToMicros(value, label = '数量') {
+  const micros = Math.round(Number(value) * 1_000_000);
+  if (!Number.isSafeInteger(micros) || micros < 0) throw new HttpError(409, `${label}无法按六位小数精确比较`);
+  return micros;
+}
+
+export function toleranceBoundsMicros(quantity, upperBps = 0, lowerBps = 0) {
+  const base = BigInt(quantityToMicros(quantity, '订单数量'));
+  const upper = Number((base * BigInt(10000 + Number(upperBps || 0))) / 10000n);
+  const lower = Number((base * BigInt(10000 - Number(lowerBps || 0)) + 9999n) / 10000n);
+  return { base: Number(base), upper, lower };
+}
+
 export function validateSalesDeliverySource(db, body, salesOrderId) {
   const sourceMode = String(body.sourceMode || '').toUpperCase();
   if (!['DIRECT_ORDER', 'DELIVERY_NOTICE'].includes(sourceMode)) throw new HttpError(422, '新销售出库必须明确选择 DIRECT_ORDER 或 DELIVERY_NOTICE');
@@ -44,14 +57,16 @@ export function lockAndConsumeSalesDeliveryCapacity(db, deliveryId) {
   for (const item of items) {
     const source = db.prepare(`SELECT * FROM sales_order_items WHERE id=? AND order_id=?${lockSuffix(db)}`).get(item.sales_order_item_id, order.id);
     if (!source) throw new HttpError(409, '销售出库订单行来源不存在');
-    const upper = Number(source.quantity) * (10000 + Number(source.upper_delivery_tolerance_bps || 0)) / 10000;
-    if (confirmedOrderQuantity(db, source.id, deliveryId) + Number(item.quantity) > upper) throw new HttpError(409, '累计销售出库数量超过订单行容差上限', { code: 'SALES_DELIVERY_CAPACITY_EXCEEDED' });
+    const { upper } = toleranceBoundsMicros(source.quantity, source.upper_delivery_tolerance_bps, source.lower_delivery_tolerance_bps);
+    const confirmedMicros = quantityToMicros(confirmedOrderQuantity(db, source.id, deliveryId), '已确认出库数量');
+    const itemMicros = quantityToMicros(item.quantity, '本次出库数量');
+    if (confirmedMicros + itemMicros > upper) throw new HttpError(409, '累计销售出库数量超过订单行容差上限', { code: 'SALES_DELIVERY_CAPACITY_EXCEEDED' });
     if (delivery.source_mode === 'DELIVERY_NOTICE') {
       const notice = db.prepare(`SELECT * FROM delivery_notices WHERE id=?${lockSuffix(db)}`).get(delivery.delivery_notice_id);
       const line = db.prepare(`SELECT * FROM delivery_notice_lines WHERE id=? AND delivery_notice_id=?${lockSuffix(db)}`).get(item.delivery_notice_line_id, delivery.delivery_notice_id);
       if (!notice || !['CONFIRMED','CLOSED'].includes(notice.state) || notice.sales_order_id !== order.id || !line || line.sales_order_item_id !== source.id) throw new HttpError(409, '销售出库与发货通知来源链不一致');
       const remaining = Number(line.scheduled_qty_micros) - Number(line.notified_qty_micros) - Number(line.cancelled_notified_qty_micros);
-      const quantityMicros = Math.round(Number(item.quantity) * 1_000_000);
+      const quantityMicros = itemMicros;
       if (quantityMicros > remaining) throw new HttpError(409, '销售出库数量超过发货通知剩余容量', { code: 'DELIVERY_NOTICE_REMAINING_EXCEEDED' });
       db.prepare('UPDATE delivery_notice_lines SET notified_qty_micros=notified_qty_micros+? WHERE id=?').run(quantityMicros, line.id);
     }

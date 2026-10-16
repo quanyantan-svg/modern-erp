@@ -82,7 +82,7 @@ export function listSalesOrderSourceLookup(db, res, actor, url) {
            c.id customerId, c.code customerCode, c.name customerName
     FROM sales_orders so
     JOIN customers c ON c.id = so.customer_id
-    WHERE so.status = 'APPROVED'
+    WHERE so.status = 'APPROVED' AND COALESCE(so.commercial_close_state,'OPEN') = 'OPEN'
       ${archiveFilter.clause ? `AND ${archiveFilter.clause}` : ''}
       AND (so.order_no LIKE ? OR c.code LIKE ? OR c.name LIKE ?)
     ORDER BY so.created_at DESC

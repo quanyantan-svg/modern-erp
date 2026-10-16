@@ -2037,7 +2037,8 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [salesOrders, setSalesOrders] = useState([]);
-  const [form, setForm] = useState({ salesOrderId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
+  const [deliveryNotices, setDeliveryNotices] = useState([]);
+  const [form, setForm] = useState({ sourceMode: "DIRECT_ORDER", salesOrderId: "", deliveryNoticeId: "", customerId: "", warehouseId: "", deliveryDate: new Date().toISOString().slice(0,10), billingMode: "SEPARATE", remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. customer lookup unavailable)
     // does not cascade-reject and silently disable the other selectors.
@@ -2045,12 +2046,15 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
     api("/api/lookup/sales-orders-source").then((r) => setSalesOrders(r.orders || [])).catch((e) => notify("来源销售订单加载失败，请重试。", "error"));
+    api("/api/delivery-notices?state=CONFIRMED").then((r) => setDeliveryNotices(r.notices || [])).catch((e) => notify("可用交货通知加载失败，请重试。", "error"));
     if (value.id) api("/api/sales-deliveries/" + value.id).then((r) => setDetail(r.salesDelivery)).catch((e) => notify(e.message, "error"));
   }, []);
   useEffect(() => {
     if (detail && !form.customerId) {
       setForm({
+        sourceMode: detail.source_mode || "LEGACY_UNCLASSIFIED",
         salesOrderId: detail.sales_order_id || "",
+        deliveryNoticeId: detail.delivery_notice_id || "",
         customerId: detail.customer_id || "",
         warehouseId: detail.warehouse_id || "",
         deliveryDate: detail.delivery_date || detail.receipt_date || "",
@@ -2084,10 +2088,30 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
   const removeItem = (i) => setItems(form.items.filter((_, idx) => idx !== i));
   const totalCents = form.items.reduce((s, i) => s + (i.quantity * i.unitPriceCents), 0);
   const chooseSalesOrder = (salesOrderId) => {
-    if (!salesOrderId) return setForm((current) => ({ ...current, salesOrderId: "" }));
+    if (!salesOrderId) return setForm((current) => ({ ...current, salesOrderId: "", deliveryNoticeId: "", customerId: "", items: [] }));
     const order = salesOrders.find((o) => o.id === salesOrderId);
     if (!order) return;
-    setForm((current) => ({ ...current, salesOrderId, customerId: order.customerId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ salesOrderItemId: item.salesOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, deliveredQuantity: item.deliveredQuantity, unitPriceCents: item.unitPriceCents })) }));
+    setForm((current) => ({ ...current, salesOrderId, deliveryNoticeId: "", customerId: order.customerId, items: order.items.filter((item) => item.quantity > 0).map((item) => ({ salesOrderItemId: item.salesOrderItemId, productId: item.productId, quantity: item.quantity, orderedQuantity: item.orderedQuantity, deliveredQuantity: item.deliveredQuantity, unitPriceCents: item.unitPriceCents })) }));
+  };
+  const chooseDeliveryNotice = async (deliveryNoticeId) => {
+    if (!deliveryNoticeId) return setForm((current) => ({ ...current, deliveryNoticeId: "", salesOrderId: "", customerId: "", items: [] }));
+    try {
+      const response = await api(`/api/delivery-notices/${deliveryNoticeId}`);
+      const notice = response.notice;
+      const order = salesOrders.find((candidate) => candidate.id === notice.sales_order_id);
+      if (!order) throw new Error('交货通知的销售订单当前不可用于出库');
+      const orderLines = new Map(order.items.map((item) => [item.salesOrderItemId, item]));
+      const items = notice.lines.filter((line) => Number(line.remaining_notified_qty_micros) > 0).map((line) => {
+        const source = orderLines.get(line.sales_order_item_id);
+        if (!source) throw new Error('交货通知明细与销售订单来源不一致');
+        return { salesOrderItemId: source.salesOrderItemId, deliveryNoticeLineId: line.id, productId: source.productId,
+          quantity: Number(line.remaining_notified_qty_micros) / 1_000_000, noticeRemainingQuantity: Number(line.remaining_notified_qty_micros) / 1_000_000,
+          orderedQuantity: source.orderedQuantity, deliveredQuantity: source.deliveredQuantity, unitPriceCents: source.unitPriceCents };
+      });
+      if (!items.length) throw new Error('该交货通知已无可出库数量');
+      setForm((current) => ({ ...current, deliveryNoticeId, salesOrderId: notice.sales_order_id, customerId: order.customerId,
+        warehouseId: notice.warehouse_id || current.warehouseId, items }));
+    } catch (error) { notify(error.message, 'error'); }
   };
   const changeState = async (action) => { try { await api("/api/sales-deliveries/" + value.id, { method: "POST", body: { action } }); notify(action === 'confirm' ? '出库单已确认' : '出库单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
   const navigation = useAppNavigation();
@@ -2113,10 +2137,12 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
     ? (can(user, 'OQC_VIEW') || can(user, 'OQC_MANAGE') ? goOqc : null)
     : (can(user, 'OQC_MANAGE') ? createQuality : null);
   const oqcLabel = qualityStateCode === 'FAIL' || qualityStateCode === 'STALE' ? '创建 OQC 复检' : qualityStateCode === 'INSPECTION_DRAFT' ? '前往 OQC' : '创建 OQC';
-  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
+  if (value.id && detail && (detail.status !== 'DRAFT' || detail.source_mode === 'LEGACY_UNCLASSIFIED')) return <Modal title="销售出货单详情" onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={detail.customerName} onClose={onClose}/></Modal>;
   return <Modal title={value.id ? "编辑销售出货单" : "新增销售出货单"} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
-    {!value.id && <label className="full">来源销售订单（必选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)} required><option value="">选择已审批销售订单</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>独立库存更正请使用库存调整、调拨、报废或盘点单。</small></label>}
+    <label className="full">出库来源<select value={form.sourceMode} disabled={Boolean(value.id)} onChange={(e) => setForm((current) => ({ ...current, sourceMode: e.target.value, salesOrderId: '', deliveryNoticeId: '', customerId: '', items: [] }))} required><option value="DIRECT_ORDER">直接按销售订单出库</option><option value="DELIVERY_NOTICE">按交货通知出库</option>{form.sourceMode === 'LEGACY_UNCLASSIFIED' && <option value="LEGACY_UNCLASSIFIED">历史未分类来源</option>}</select><small>来源在草稿创建后不可修改；不会自动推断或创建交货通知。</small></label>
+    {!value.id && form.sourceMode === 'DIRECT_ORDER' && <label className="full">来源销售订单（必选）<select value={form.salesOrderId} onChange={(e) => void chooseSalesOrder(e.target.value)} required><option value="">选择已审批销售订单</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.orderNo} · {order.customerName}</option>)}</select><small>独立库存更正请使用库存调整、调拨、报废或盘点单。</small></label>}
+    {!value.id && form.sourceMode === 'DELIVERY_NOTICE' && <label className="full">来源交货通知（必选）<select value={form.deliveryNoticeId} onChange={(e) => void chooseDeliveryNotice(e.target.value)} required><option value="">选择已确认且有剩余数量的交货通知</option>{deliveryNotices.map((notice) => <option key={notice.id} value={notice.id}>{notice.notice_no} · {notice.order_no} · {notice.customer_name}</option>)}</select></label>}
     <label>客户<select value={form.customerId} disabled required><option value="">由销售订单带入</option>{customers.map((c) => <option key={c.id} value={c.id}>{c.code} - {c.name}</option>)}</select></label>
     <label>仓库<select value={form.warehouseId} onChange={(e) => setForm({...form, warehouseId: e.target.value})} required><option value="">选择仓库</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>发货日期<input type="date" value={form.deliveryDate} onChange={(e) => setForm({...form, deliveryDate: e.target.value})} required/></label>
@@ -2126,7 +2152,7 @@ function SalesDeliveryModal({ user, value, onClose, notify, api }) {
       <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
           <td><select value={item.productId} disabled required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select>{item.orderedQuantity !== undefined && <small>订购 {quantity(item.orderedQuantity)} · 已发 {quantity(item.deliveredQuantity || 0)} · 剩余 {quantity(item.orderedQuantity-(item.deliveredQuantity || 0))}</small>}</td>
-          <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
+          <td><input type="number" value={item.quantity} min="0.000001" step="0.000001" max={item.noticeRemainingQuantity || undefined} onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/>{item.noticeRemainingQuantity !== undefined && <small>通知可用 {quantity(item.noticeRemainingQuantity)}</small>}</td>
           <td>{money(item.unitPriceCents)}</td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
           <td/>

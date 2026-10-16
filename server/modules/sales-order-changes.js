@@ -48,7 +48,7 @@ function parseStrictAddAfter(db, order, jsonString, lineLabel) {
   try {
     validatePriceSnapshot(db, snapshot, {
       customerId: order.customer_id,
-      businessDate: snapshot.businessDate,
+      businessDate: order.order_date,
       materialId,
       uomCode,
       quantityMicros,

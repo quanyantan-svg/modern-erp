@@ -67,7 +67,7 @@ function processRow(db, connectionId) {
   try { return db.prepare('SELECT ID,STATE,INFO FROM information_schema.PROCESSLIST WHERE ID=?').get(connectionId); } catch { return null; }
 }
 function waitAtGate(db, connectionIds) {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     const rows = connectionIds.map((id) => processRow(db, id));
     if (rows.every((row) => String(row?.INFO || '').toUpperCase().includes('MYSQL_TRANSACTION_GATES'))) return rows;
     pause(25);
@@ -91,6 +91,11 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     db.prepare('INSERT IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run('EA', 'Each', stamp, stamp);
     db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code)
       VALUES(?,?,?,'EA',0,0,1,?,?,'EA')`).run(PRODUCT, 'BA-P', 'Batch A Product', stamp, stamp);
+    db.prepare("UPDATE products SET valuation_method='MOVING_AVERAGE',inventory_classification='FINISHED_GOODS',valuation_activated_at='2026-01-01' WHERE id=?").run(PRODUCT);
+    db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)')
+      .run(randomUUID(), WAREHOUSE, PRODUCT, 100, stamp);
+    db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+      VALUES(?, 'MOVING_AVERAGE', ?, ?, NULL, NULL, 100, 50000, ?)`).run(`NONE:${WAREHOUSE}:${PRODUCT}`, PRODUCT, WAREHOUSE, stamp);
     db.prepare('INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(GROUP, 'BA-G', 'Batch A Group', stamp, stamp);
     db.prepare('INSERT INTO salesperson_profiles(id,salesperson_code,name,user_id,active,created_at,updated_at) VALUES(?,?,?,?,1,?,?)')
       .run(SALESPERSON, 'BA-SP', 'Batch A Salesperson', CREATOR, stamp, stamp);
@@ -128,10 +133,11 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     await control.run({ action: 'hold-gate' });
     const first = alpha.run(left); const second = beta.run(right);
     const observed = waitAtGate(db, [registrations[0].connectionId, registrations[1].connectionId]);
+    await control.run({ action: 'release-gate' });
+    const results = await Promise.all([first, second]);
     assert.ok(observed, `both workers must wait on mysql_transaction_gates: ${JSON.stringify(registrations)}`);
     console.log(`LOCK_WAIT_OBSERVED connections=${registrations[0].connectionId},${registrations[1].connectionId}`);
-    await control.run({ action: 'release-gate' });
-    return Promise.all([first, second]);
+    return results;
   }
   function makeOrder(quantityMicros = 1_000_000) {
     const value = transaction(db, () => createSalesOrderCanonical(db, { body: { customerId: CUSTOMER, orderDate: '2026-10-15',
@@ -155,9 +161,24 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
       remark,creator_id,created_at,updated_at,billing_mode,delivery_notice_id,source_mode) VALUES(?,?,?,?,?,?,'DRAFT',?,'2026-10-15','',?,?,?,'SEPARATE',?,?)`)
       .run(deliveryId, `SD-${randomUUID()}`, orderId, CUSTOMER, WAREHOUSE, CREATOR, Math.round(quantityMicros / 1000), CREATOR, stamp, stamp,
         notice?.noticeId || null, notice ? 'DELIVERY_NOTICE' : 'DIRECT_ORDER');
+    const deliveryItemId = randomUUID();
     db.prepare(`INSERT INTO sales_delivery_items(id,delivery_id,product_id,quantity,unit_price_cents,amount_cents,line_no,sales_order_item_id,delivery_notice_line_id)
-      VALUES(?,?,?, ?,1000,?,1,?,?)`).run(randomUUID(), deliveryId, PRODUCT, quantityMicros / 1_000_000, Math.round(quantityMicros / 1000), itemId, notice?.lineId || null);
+      VALUES(?,?,?, ?,1000,?,1,?,?)`).run(deliveryItemId, deliveryId, PRODUCT, quantityMicros / 1_000_000, Math.round(quantityMicros / 1000), itemId, notice?.lineId || null);
+    db.prepare(`INSERT INTO logistics_quality_policy_snapshots(id,source_type,source_id,source_item_id,product_id,qcp_id,qcp_version,
+      inspection_required,sampling_mode,sampling_value,waiver_reason,resolved_at) VALUES(?,'SALES_DELIVERY',?,?,?,NULL,NULL,0,'FULL',NULL,'CONCURRENCY_FIXTURE',?)`)
+      .run(randomUUID(), deliveryId, deliveryItemId, PRODUCT, stamp);
     return deliveryId;
+  }
+
+  function deliveryEconomicFacts(deliveryIds) {
+    const marks = deliveryIds.map(() => '?').join(',');
+    return {
+      confirmed: Number(db.prepare(`SELECT COUNT(*) n FROM sales_deliveries WHERE id IN (${marks}) AND status='CONFIRMED'`).get(...deliveryIds).n),
+      inventoryTransactions: Number(db.prepare(`SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='SALES_DELIVERY' AND source_id IN (${marks})`).get(...deliveryIds).n),
+      valuationMovements: Number(db.prepare(`SELECT COUNT(*) n FROM inventory_valuation_movements WHERE source_type='SALES_DELIVERY' AND source_id IN (${marks}) AND movement_type='SALES_DELIVERY_COGS'`).get(...deliveryIds).n),
+      cogsVouchers: Number(db.prepare(`SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY_COGS' AND source_id IN (${marks})`).get(...deliveryIds).n),
+      confirmAudits: Number(db.prepare(`SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_DELIVERY' AND action='CONFIRM' AND entity_id IN (${marks})`).get(...deliveryIds).n),
+    };
   }
 
   test('R7 native MySQL JSON applied-line guard is structural, owner-aware and NULL-safe', () => {
@@ -215,23 +236,41 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
       { action: 'apply-change', changeId: a, expectedBaseVersion: 1, key: `apply-a-${randomUUID()}` },
       { action: 'apply-change', changeId: b, expectedBaseVersion: 1, key: `apply-b-${randomUUID()}` },
     );
-    assert.deepEqual(results.map((item) => item.status).sort(), [200, 409]);
+    assert.deepEqual(results.map((item) => item.status).sort(), [200, 409], JSON.stringify(results));
     assert.equal(Number(db.prepare('SELECT effective_version n FROM sales_orders WHERE id=?').get(order.orderId).n), 2);
     assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM sales_order_changes WHERE sales_order_id=? AND state='APPLIED'").get(order.orderId).n), 1);
     assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER_CHANGE' AND action='APPROVE_AND_APPLY' AND entity_id IN (?,?)").get(a, b).n), 1);
   });
 
-  test('R-SAL-08 change versus direct delivery has one valid capacity/version serialization', async () => {
-    const order = makeOrder(2_000_000); const changeId = await makeChange(order.orderId, order.itemId, 1_000_000, `change-${randomUUID()}`);
-    const deliveryId = makeDelivery(order.orderId, order.itemId, 1_500_000);
+  test('R-SAL-01 competing full direct confirms consume order, stock, value and COGS exactly once', async () => {
+    const order = makeOrder(10_000_000);
+    const a = makeDelivery(order.orderId, order.itemId, 7_000_000);
+    const b = makeDelivery(order.orderId, order.itemId, 7_000_000);
+    const results = await race(
+      { action: 'confirm-delivery', deliveryId: a, key: `direct-a-${randomUUID()}` },
+      { action: 'confirm-delivery', deliveryId: b, key: `direct-b-${randomUUID()}` },
+    );
+    assert.deepEqual(results.map((item) => item.status).sort(), [200, 409], JSON.stringify(results));
+    assert.deepEqual(deliveryEconomicFacts([a, b]), { confirmed: 1, inventoryTransactions: 1, valuationMovements: 1, cogsVouchers: 1, confirmAudits: 1 });
+  });
+
+  test('R-SAL-08 change versus full direct delivery confirm has one valid version and economic serialization', async () => {
+    const order = makeOrder(20_000_000); const changeId = await makeChange(order.orderId, order.itemId, 10_000_000, `change-${randomUUID()}`);
+    const deliveryId = makeDelivery(order.orderId, order.itemId, 15_000_000);
     const results = await race(
       { action: 'apply-change', changeId, expectedBaseVersion: 1, key: `apply-${randomUUID()}` },
-      { action: 'consume-delivery-capacity', deliveryId },
+      { action: 'confirm-delivery', deliveryId, key: `confirm-${randomUUID()}` },
     );
     assert.deepEqual(results.map((item) => item.status).sort(), [200, 409]);
     const line = db.prepare('SELECT quantity FROM sales_order_items WHERE id=?').get(order.itemId);
     const delivery = db.prepare('SELECT status FROM sales_deliveries WHERE id=?').get(deliveryId);
-    assert.ok((Number(line.quantity) === 1 && delivery.status === 'DRAFT') || (Number(line.quantity) === 2 && delivery.status === 'CONFIRMED'));
+    assert.ok((Number(line.quantity) === 10 && delivery.status === 'DRAFT') || (Number(line.quantity) === 20 && delivery.status === 'CONFIRMED'));
+    const economic = deliveryEconomicFacts([deliveryId]);
+    assert.equal(economic.confirmed, delivery.status === 'CONFIRMED' ? 1 : 0);
+    assert.equal(economic.inventoryTransactions, economic.confirmed);
+    assert.equal(economic.valuationMovements, economic.confirmed);
+    assert.equal(economic.cogsVouchers, economic.confirmed);
+    assert.equal(economic.confirmAudits, economic.confirmed);
   });
 
   test('R-SAL-16 two DN confirmations cannot over-schedule one SO line', async () => {
@@ -245,14 +284,17 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='DELIVERY_NOTICE' AND action='CONFIRM' AND entity_id IN (?,?)").get(a.noticeId, b.noticeId).n), 1);
   });
 
-  test('R-SAL-17 two SD capacity consumers cannot exceed one DN remaining', async () => {
-    const order = makeOrder(2_000_000); const notice = await makeNotice(order.orderId, order.itemId, 1_000_000);
+  test('R-SAL-17 two full SD confirms cannot exceed one DN remaining or duplicate economic effects', async () => {
+    const order = makeOrder(20_000_000); const notice = await makeNotice(order.orderId, order.itemId, 10_000_000);
     await call((res) => deliveryNoticeAction(db, request({}, `dn-seed-${randomUUID()}`), res, ACTOR, notice.noticeId, 'confirm'));
-    const a = makeDelivery(order.orderId, order.itemId, 700_000, notice); const b = makeDelivery(order.orderId, order.itemId, 700_000, notice);
-    const results = await race({ action: 'consume-delivery-capacity', deliveryId: a }, { action: 'consume-delivery-capacity', deliveryId: b });
-    assert.deepEqual(results.map((item) => item.status).sort(), [200, 409]);
-    assert.equal(Number(db.prepare('SELECT notified_qty_micros n FROM delivery_notice_lines WHERE id=?').get(notice.lineId).n), 700_000);
-    assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_DELIVERY' AND action='CONFIRM_CAPACITY' AND entity_id IN (?,?)").get(a, b).n), 1);
+    const a = makeDelivery(order.orderId, order.itemId, 7_000_000, notice); const b = makeDelivery(order.orderId, order.itemId, 7_000_000, notice);
+    const results = await race(
+      { action: 'confirm-delivery', deliveryId: a, key: `confirm-a-${randomUUID()}` },
+      { action: 'confirm-delivery', deliveryId: b, key: `confirm-b-${randomUUID()}` },
+    );
+    assert.deepEqual(results.map((item) => item.status).sort(), [200, 409], JSON.stringify(results));
+    assert.equal(Number(db.prepare('SELECT notified_qty_micros n FROM delivery_notice_lines WHERE id=?').get(notice.lineId).n), 7_000_000);
+    assert.deepEqual(deliveryEconomicFacts([a, b]), { confirmed: 1, inventoryTransactions: 1, valuationMovements: 1, cogsVouchers: 1, confirmAudits: 1 });
   });
 
   test('R-SAL-18 SO Change versus DN confirmation preserves executed floor/capacity', async () => {
@@ -268,17 +310,21 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     assert.ok((quantity === 0.5 && state === 'DRAFT') || (quantity === 1 && state === 'CONFIRMED'));
   });
 
-  test('R-SAL-19 close versus SD confirmation never confirms after commercial close', async () => {
-    const order = makeOrder(); const deliveryId = makeDelivery(order.orderId, order.itemId, 500_000);
+  test('R-SAL-19 close versus full SD confirmation never confirms after commercial close', async () => {
+    const order = makeOrder(); const deliveryId = makeDelivery(order.orderId, order.itemId, 1_000_000);
     const results = await race(
       { action: 'close-order', orderId: order.orderId, key: `close-${randomUUID()}` },
-      { action: 'consume-delivery-capacity', deliveryId },
+      { action: 'confirm-delivery', deliveryId, key: `confirm-${randomUUID()}` },
     );
     assert.ok(results.every((item) => [200, 409].includes(item.status)), JSON.stringify(results));
-    assert.equal(db.prepare('SELECT commercial_close_state state FROM sales_orders WHERE id=?').get(order.orderId).state, 'CLOSED');
+    const closeState = db.prepare('SELECT commercial_close_state state FROM sales_orders WHERE id=?').get(order.orderId).state;
     const deliveryState = db.prepare('SELECT status FROM sales_deliveries WHERE id=?').get(deliveryId).status;
-    if (deliveryState === 'CONFIRMED') assert.equal(results[1].status, 200, 'confirmed delivery must be the serialization that acquired the order lock first');
-    else assert.equal(deliveryState, 'DRAFT');
-    assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CLOSE' AND entity_id=?").get(order.orderId).n), 1);
+    assert.equal(deliveryState, 'CONFIRMED', 'close cannot win before the lower tolerance is reached');
+    assert.ok(['OPEN', 'CLOSED'].includes(closeState));
+    const economic = deliveryEconomicFacts([deliveryId]);
+    assert.deepEqual(economic, deliveryState === 'CONFIRMED'
+      ? { confirmed: 1, inventoryTransactions: 1, valuationMovements: 1, cogsVouchers: 1, confirmAudits: 1 }
+      : { confirmed: 0, inventoryTransactions: 0, valuationMovements: 0, cogsVouchers: 0, confirmAudits: 0 });
+    assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CLOSE' AND entity_id=?").get(order.orderId).n), closeState === 'CLOSED' ? 1 : 0);
   });
 });

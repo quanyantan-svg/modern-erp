@@ -383,6 +383,8 @@ pnpm test:all
 
 测试分层与具体 suite 以 `scripts/testing/test-suites.js` 和 `docs/operations/testing.md` 为准，不在 README 硬编码会快速过期的测试数量。
 
+Sales & Customer Batch A 的独立浏览器验收脚本（需要本机 Edge、现有构建产物，使用一次性 SQLite 测试库）：`node scripts/acceptance/sales-customer-batch-a-acceptance.mjs`。脱敏证据写入 `docs/evidence/sales-customer-batch-a/`；该脚本不替代上述回归与 MySQL 门禁。
+
 ## 部署入口
 
 - `.env.example`

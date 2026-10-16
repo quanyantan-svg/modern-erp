@@ -73,7 +73,7 @@
 
 .v16-mobile-enterprise .v16-sales-order-segments .segmented-control {
   width: 100%;
-  height: 38px;
+  height: 50px;
   display: flex;
   align-items: stretch;
   border-radius: var(--v16-radius-input);
@@ -87,7 +87,7 @@
 .v16-mobile-enterprise .v16-sales-order-segments .segmented-control button {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 30px;
+  min-height: 44px;
   font-size: 12.5px;
   font-weight: 500;
   line-height: 1.2;
@@ -326,7 +326,7 @@
   text-align: left;
   color: var(--v16-text);
   cursor: pointer;
-  min-height: 36px;
+  min-height: 44px;
 }
 
 .v16-mobile-enterprise .v16-sales-order-row__overflow .canonical-action-menu button:hover {
@@ -360,7 +360,7 @@
 .v16-mobile-enterprise .v16-sales-order-list-state__action {
   appearance: none;
   -webkit-appearance: none;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 var(--v16-space-4);
   border-radius: var(--v16-radius-button);
   border: 1px solid var(--v16-border);

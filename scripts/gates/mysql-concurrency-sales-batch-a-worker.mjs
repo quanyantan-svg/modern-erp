@@ -8,11 +8,12 @@ import { applySalesOrderChange } from '../../server/modules/sales-order-changes.
 import { deliveryNoticeAction } from '../../server/modules/delivery-notices.js';
 import { lockAndConsumeSalesDeliveryCapacity } from '../../server/modules/sales-delivery-source.js';
 import { salesOrderAction } from '../../server/modules/sales-orders.js';
+import { confirmSalesDelivery } from '../../server/app.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
 const actor = { id: '00000000-0000-4000-8000-000000000001', roleCode: 'ADMIN', permissions: [
-  'ORDERS_CREATE', 'ORDERS_APPROVE', 'ORDERS_VIEW', 'SALES_MANAGE', 'SALES_ORDER_CHANGE_APPROVE',
+  'ORDERS_CREATE', 'ORDERS_APPROVE', 'ORDERS_VIEW', 'SALES_MANAGE', 'SALES_ORDER_CHANGE_APPROVE', 'SALES_DELIVERIES_MANAGE',
 ] };
 let gateHeld = false;
 
@@ -68,6 +69,8 @@ async function execute(command) {
     });
     res.statusCode = 200; res.body = { id: command.deliveryId, orderId: result.order.id };
   });
+  if (command.action === 'confirm-delivery') return invoke((res) => confirmSalesDelivery(db,
+    request({ action: 'confirm' }, command.key), res, actor, command.deliveryId));
   if (command.action === 'close-order') return invoke((res) => salesOrderAction(db,
     request({ reason: command.reason || 'race close' }, command.key), res, actor, command.orderId, 'close'));
   if (command.action === 'close') {

@@ -7,6 +7,7 @@ import { resolveOrderTimeDiscount, resolveSalesPrice } from './sales-pricing.js'
 import { assertSellableProduct } from './sales-commercial-foundation.js';
 import { assertGroupScope, currentCommercialExtension, lockSuffix, requireSalesPermission } from './sales-scope.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
+import { quantityToMicros, toleranceBoundsMicros } from './sales-delivery-source.js';
 
 const DAY = () => new Date().toISOString().slice(0, 10);
 const NOW = () => new Date().toISOString();
@@ -124,6 +125,12 @@ export const PRICE_OVERRIDE_CONSUMPTION = Object.freeze({
   findAppliedLine: findAppliedAuthorizationLine,
 });
 const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
+const taxInclusiveFlag = (value) => {
+  if (value == null) return null;
+  if (value === true || value === 1) return 1;
+  if (value === false || value === 0) return 0;
+  throw new HttpError(422, '商业税含价假设必须为布尔值', { code: 'SALES_TAX_ASSUMPTION_INVALID' });
+};
 const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(micros % 1_000_000).padStart(6, '0')}`;
 
 function makeNo(prefix) { return `${prefix}-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`; }
@@ -344,7 +351,7 @@ export function buildAuthoritativeSalesLines(db, body, actor, businessDate, cust
       baseQuantityNum: line.quantityMicros * line.evidence.requestedUomEvidence.numerator,
       baseQuantityDen: 1_000_000 * line.evidence.requestedUomEvidence.denominator,
       isGiftLine: isGift ? 1 : 0, taxBasis: line.source.commercialTaxBasis || null,
-      taxInclusive: line.source.taxInclusiveAssumption ?? null, pricingUom: line.evidence.pricingUomEvidence.uomCode,
+      taxInclusive: taxInclusiveFlag(line.source.taxInclusiveAssumption), pricingUom: line.evidence.pricingUomEvidence.uomCode,
       qtyMin: line.evidence.qtyBreakApplied.min, qtyMax: line.evidence.qtyBreakApplied.max,
       plannedDate: line.source.plannedDeliveryDate || body.requestedDeliveryDate,
       upperTolerance: classification.default_upper_delivery_tolerance_bps, lowerTolerance: classification.default_lower_delivery_tolerance_bps,
@@ -454,7 +461,7 @@ export function createSalesOrderCanonical(db, { body, actor, quotationLines = nu
       businessDate, normalizeBusinessDate(body.requestedDeliveryDate || businessDate, '要求交期'), String(body.paymentTerms || extension.default_settlement_method || ''),
       safe(body.paymentTermsDays ?? extension.default_payment_terms_days ?? 0, '付款账期'), body.shipToContactName || customer.contact || '', body.shipToPhone || customer.phone || '', body.shipToAddress || customer.address || '',
       salespersonId, salesGroupId, extension.settlement_party_customer_id || customer.id, extension.payer_customer_id || customer.id,
-      body.customerMaterialXrefId || null, body.commercialTaxCode || null, body.taxInclusive ?? null,
+      body.customerMaterialXrefId || null, body.commercialTaxCode || null, taxInclusiveFlag(body.taxInclusive),
       safe(body.requiredPrepaymentCents ?? 0, '预付款要求'), 'NONE', lines.filter((line) => line.isGiftLine).reduce((sum, line) => sum + line.priceSnapshot.grossAmountCents, 0), lines[0]?.pricingUom || null);
   insertSalesOrderLines(db, orderId, lines);
   audit(db, actor.id, 'CREATE', 'SALES_ORDER', orderId, json({ orderNo, evidenceHash: hash(lines.map((line) => [line.priceSnapshot, line.discountSnapshot])) }));
@@ -498,7 +505,7 @@ export async function updateSalesOrder(db, req, res, actor, orderId) {
         body.shipToContactName ?? current.ship_to_contact_name ?? customer.contact ?? '', body.shipToPhone ?? current.ship_to_phone ?? customer.phone ?? '',
         body.shipToAddress ?? current.ship_to_address ?? customer.address ?? '', salespersonId, salesGroupId,
         extension.settlement_party_customer_id || customerId, extension.payer_customer_id || customerId,
-        body.commercialTaxCode ?? current.commercial_tax_code, body.taxInclusive ?? current.tax_inclusive,
+        body.commercialTaxCode ?? current.commercial_tax_code, taxInclusiveFlag(body.taxInclusive ?? current.tax_inclusive),
         lines.filter((line) => line.isGiftLine).reduce((sum, line) => sum + line.priceSnapshot.grossAmountCents, 0), lines[0]?.pricingUom || null, orderId);
     audit(db, actor.id, 'UPDATE', 'SALES_ORDER', orderId, JSON.stringify({ evidenceHash: hash(lines.map((line) => [line.priceSnapshot, line.discountSnapshot])) }));
     result = { id: orderId, totalCents: total };
@@ -525,8 +532,23 @@ function projection(db, orderId) {
   const lines = db.prepare(`SELECT i.id,i.quantity,i.upper_delivery_tolerance_bps,i.lower_delivery_tolerance_bps,
     COALESCE((SELECT SUM(di.quantity) FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id WHERE di.sales_order_item_id=i.id AND d.status='CONFIRMED'),0) delivered
     FROM sales_order_items i WHERE i.order_id=? ORDER BY i.line_no`).all(orderId);
-  return lines.map((line) => ({ ...line, remainingQuantity: Math.max(0, Number(line.quantity) - Number(line.delivered)),
-    fulfillmentState: Number(line.delivered) >= Number(line.quantity) ? 'FULLY_DELIVERED' : Number(line.delivered) > 0 ? 'PARTIALLY_DELIVERED' : 'NOT_DELIVERED' }));
+  return lines.map((line) => {
+    const bounds = toleranceBoundsMicros(line.quantity, line.upper_delivery_tolerance_bps, line.lower_delivery_tolerance_bps);
+    const deliveredMicros = quantityToMicros(line.delivered, '已交付数量');
+    return { ...line, orderedMicros: bounds.base, deliveredMicros, lowerToleratedMicros: bounds.lower, upperToleratedMicros: bounds.upper,
+      remainingQuantity: Math.max(0, Number(line.quantity) - Number(line.delivered)),
+      fulfillmentState: deliveredMicros >= bounds.base ? 'FULLY_DELIVERED' : deliveredMicros > 0 ? 'PARTIALLY_DELIVERED' : 'NOT_DELIVERED',
+      controlledCloseEligible: deliveredMicros >= bounds.lower };
+  });
+}
+
+function assertNoPendingDeliveryNotice(db, orderId) {
+  const pending = db.prepare(`SELECT n.id,n.notice_no,n.state FROM delivery_notices n
+    WHERE n.sales_order_id=? AND n.state IN ('DRAFT','CONFIRMED')
+      AND EXISTS (SELECT 1 FROM delivery_notice_lines l WHERE l.delivery_notice_id=n.id
+        AND l.scheduled_qty_micros-l.notified_qty_micros-l.cancelled_notified_qty_micros>0)
+    ORDER BY n.created_at,n.id LIMIT 1`).get(orderId);
+  if (pending) throw new HttpError(409, `存在待处理发货通知 ${pending.notice_no || pending.id}，不能关闭订单`, { code: 'SALES_ORDER_PENDING_DELIVERY_NOTICE' });
 }
 
 export function listSalesOrders(db, res, actor, url) {
@@ -614,11 +636,16 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
     } else if (action === 'approve' || action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
       if (action === 'approve') { validateStoredOrderSnapshots(db, order); db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId); }
       else db.prepare("UPDATE sales_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?").run(actor.id, NOW(), String(body.reason || '').trim(), NOW(), orderId);
-    } else if (action === 'close' || action === 'cancel') { if (order.status !== 'APPROVED' || order.commercial_close_state !== 'OPEN') throw new HttpError(409, '订单不可关闭'); if (!String(body.reason || '').trim()) throw new HttpError(422, '关闭原因必填');
-      const facts = projection(db, orderId); if (action === 'cancel' && facts.some((line) => Number(line.delivered) > 0)) throw new HttpError(409, '已有交付事实的订单不能商业取消');
-      db.prepare('UPDATE sales_orders SET commercial_close_state=?,remark=?,updated_at=? WHERE id=?').run(action === 'close' ? 'CLOSED' : 'CANCELLED', `${order.remark || ''}\n${body.reason}`.trim(), NOW(), orderId);
+    } else if (action === 'close' || action === 'cancel') { if (order.status !== 'APPROVED' || order.commercial_close_state !== 'OPEN') throw new HttpError(409, '订单不可关闭'); const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(422, '关闭原因必填');
+      const facts = projection(db, orderId);
+      assertNoPendingDeliveryNotice(db, orderId);
+      if (action === 'cancel' && facts.some((line) => line.deliveredMicros > 0)) throw new HttpError(409, '已有交付事实的订单不能商业取消', { code: 'SALES_ORDER_EXECUTED_CANNOT_CANCEL' });
+      if (action === 'close' && facts.some((line) => !line.controlledCloseEligible)) throw new HttpError(409, '交付数量未达到订单行下容差，不能受控关闭', { code: 'SALES_ORDER_LOWER_TOLERANCE_NOT_REACHED' });
+      const nextState = action === 'close' ? 'CLOSED' : 'CANCELLED';
+      db.prepare('UPDATE sales_orders SET commercial_close_state=?,remark=?,updated_at=? WHERE id=?').run(nextState, `${order.remark || ''}\n${reason}`.trim(), NOW(), orderId);
+      body.__closeAudit = { reason, before: { commercialCloseState: order.commercial_close_state, lines: facts.map((line) => ({ id: line.id, orderedMicros: line.orderedMicros, deliveredMicros: line.deliveredMicros, lowerToleratedMicros: line.lowerToleratedMicros, upperToleratedMicros: line.upperToleratedMicros })) }, after: { commercialCloseState: nextState } };
     } else throw new HttpError(400, '无效订单动作');
-    result = { ok: true, id: orderId, action }; if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result); audit(db, actor.id, action.toUpperCase(), 'SALES_ORDER', orderId, String(body.reason || ''));
+    result = { ok: true, id: orderId, action }; if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result); audit(db, actor.id, action.toUpperCase(), 'SALES_ORDER', orderId, body.__closeAudit ? JSON.stringify(body.__closeAudit) : String(body.reason || ''));
   });
   return send(res, 200, result);
 }

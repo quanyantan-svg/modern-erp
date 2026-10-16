@@ -3,6 +3,7 @@ import { audit } from '../lib/audit.js';
 import { HttpError, normalizeBusinessDate, readJson, send } from '../lib/http.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { actorHas, assertGroupScope, lockSuffix, requireSalesPermission } from './sales-scope.js';
+import { toleranceBoundsMicros } from './sales-delivery-source.js';
 
 const NOW = () => new Date().toISOString();
 const DAY = () => NOW().slice(0, 10);
@@ -33,8 +34,8 @@ function normalizedLines(db, orderId, lines) {
   return lines.map((source, index) => {
     const itemId = String(source.salesOrderItemId || ''); if (!itemId || seen.has(itemId)) throw new HttpError(422, '订单明细身份缺失或重复'); seen.add(itemId);
     const item = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(itemId, orderId); if (!item) throw new HttpError(422, '销售订单明细不存在');
-    const quantity = safe(source.scheduledQtyMicros, '通知数量', 1); const base = Math.round(Number(item.quantity) * 1_000_000);
-    const upper = Math.floor(base * (10000 + Number(item.upper_delivery_tolerance_bps || 0)) / 10000);
+    const quantity = safe(source.scheduledQtyMicros, '通知数量', 1);
+    const { upper } = toleranceBoundsMicros(item.quantity, item.upper_delivery_tolerance_bps, item.lower_delivery_tolerance_bps);
     if (quantity > upper) throw new HttpError(409, '通知数量超过订单行上限'); return { item, quantity, upper, lineNo: index + 1 };
   });
 }
@@ -101,7 +102,7 @@ export async function deliveryNoticeAction(db, req, res, actor, noticeId, action
     const notice = db.prepare(`SELECT * FROM delivery_notices WHERE id=?${lockSuffix(db)}`).get(noticeId); if (!notice) throw new HttpError(404, '发货通知不存在'); scopedOrder(db, notice.sales_order_id, actor, true);
     if (action === 'confirm') {
       if (notice.state !== 'DRAFT') throw new HttpError(409, '只有草稿发货通知可以确认'); const raw = db.prepare('SELECT * FROM delivery_notice_lines WHERE delivery_notice_id=? ORDER BY sales_order_item_id').all(noticeId);
-      const lines = raw.map((line) => { const item = db.prepare('SELECT * FROM sales_order_items WHERE id=?').get(line.sales_order_item_id); const base = Math.round(Number(item.quantity) * 1_000_000); return { item, quantity: Number(line.scheduled_qty_micros), upper: Math.floor(base * (10000 + Number(item.upper_delivery_tolerance_bps || 0)) / 10000) }; });
+      const lines = raw.map((line) => { const item = db.prepare('SELECT * FROM sales_order_items WHERE id=?').get(line.sales_order_item_id); return { item, quantity: Number(line.scheduled_qty_micros), upper: toleranceBoundsMicros(item.quantity, item.upper_delivery_tolerance_bps, item.lower_delivery_tolerance_bps).upper }; });
       validateCapacity(db, noticeId, lines); db.prepare("UPDATE delivery_notices SET state='CONFIRMED',confirmed_at=?,confirmed_by=?,updated_at=? WHERE id=?").run(NOW(), actor.id, NOW(), noticeId);
       result = { id: noticeId, state: 'CONFIRMED' }; saveIdempotency(db, 'DELIVERY_NOTICE_CONFIRM', noticeId, key, fingerprint, result); audit(db, actor.id, 'CONFIRM', 'DELIVERY_NOTICE', noticeId, '');
     } else if (action === 'cancel') {

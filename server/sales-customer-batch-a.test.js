@@ -75,12 +75,63 @@ test('canonical order writer ignores forged client snapshots and persists server
   assert.equal(replay.status, 200); assert.equal(replay.data.id, created.data.id); assert.equal(replay.data.replayed, true);
 });
 
+test('commercial parties and tax assumptions persist on SO without creating statutory invoice truth', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const invoicesBefore = Number(db.prepare('SELECT COUNT(*) n FROM sales_invoices').get().n);
+  const body = {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    shipToContactName: 'Receiving', shipToPhone: '13000000001', shipToAddress: 'Destination', paymentTerms: 'MONTHLY', paymentTermsDays: 30,
+    commercialTaxCode: 'COMMERCIAL_ASSUMPTION_ONLY', taxInclusive: true, invoiceTaxAmountCents: 999999,
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', commercialTaxBasis: 'NET_ASSUMPTION', taxInclusiveAssumption: true }],
+  };
+  const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'commercial-tax-boundary', body });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(created.data.id);
+  const line = db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id);
+  assert.deepEqual([order.ship_to_contact_name, order.ship_to_phone, order.ship_to_address, order.payment_terms, Number(order.payment_terms_days)],
+    ['Receiving', '13000000001', 'Destination', 'MONTHLY', 30]);
+  assert.deepEqual([order.salesperson_id, order.sales_group_id, order.settlement_party_id, order.payer_id],
+    ['batch-salesperson', 'batch-group', 'customer-001', 'customer-001']);
+  assert.deepEqual([order.commercial_tax_code, Number(order.tax_inclusive), line.commercial_tax_basis, Number(line.tax_inclusive_assumption)],
+    ['COMMERCIAL_ASSUMPTION_ONLY', 1, 'NET_ASSUMPTION', 1]);
+  assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM sales_invoices').get().n), invoicesBefore);
+  assert.equal(order.invoice_tax_amount_cents, undefined);
+  const before = {
+    orders: Number(db.prepare('SELECT COUNT(*) n FROM sales_orders').get().n),
+    audits: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CREATE'").get().n),
+  };
+  for (const [label, invalidBody] of [
+    ['header', { ...body, taxInclusive: 'yes' }],
+    ['line', { ...body, items: [{ ...body.items[0], taxInclusiveAssumption: 'yes' }] }],
+  ]) {
+    const denied = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: `commercial-tax-invalid-${label}`, body: invalidBody });
+    assert.equal(denied.status, 422, JSON.stringify(denied.data));
+    assert.equal(denied.data.details?.code || denied.data.code, 'SALES_TAX_ASSUMPTION_INVALID');
+    assert.deepEqual({
+      orders: Number(db.prepare('SELECT COUNT(*) n FROM sales_orders').get().n),
+      audits: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND action='CREATE'").get().n),
+    }, before);
+  }
+});
+
 test('quotation converts multiple lines, rejects duplicates, and keeps request-level exact replay', async () => {
   const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const quote = await request('/api/sales-quotations', { token: tokens.sales, method: 'POST', body: { customerId: 'customer-001', validFrom: '2026-10-15', validTo: '2026-12-31', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '4' }, { productId: 'product-001', uomCode: uom, quantityDecimal: '3' }] } });
   assert.equal(quote.status, 201, JSON.stringify(quote.data)); quotationId = quote.data.quotation.id; quotationLineId = quote.data.quotation.lines[0].id;
   const secondLineId = quote.data.quotation.lines[1].id;
+  const sourceFacts = () => ({ orders: db.prepare('SELECT COUNT(*) n FROM sales_orders').get().n,
+    conversions: db.prepare('SELECT COUNT(*) n FROM sales_quotation_conversions WHERE quotation_id=?').get(quotationId).n,
+    audit: db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_QUOTATION' AND entity_id=? AND action='CONVERT_TO_SO'").get(quotationId).n });
+  const beforeInvalid = sourceFacts();
+  const unpublished = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-unpublished', body: {
+    businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 1_000_000 }],
+  } });
+  assert.equal(unpublished.status, 409); assert.deepEqual(sourceFacts(), beforeInvalid);
   assert.equal((await request(`/api/sales-quotations/${quotationId}/effective-publish`, { token: tokens.sales, method: 'POST', body: {} })).status, 200);
+  const expired = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-expired', body: {
+    businessDate: '2027-01-01', lineSelections: [{ quotationLineId, quantityMicros: 1_000_000 }],
+  } });
+  assert.equal(expired.status, 409); assert.deepEqual(sourceFacts(), beforeInvalid);
   const firstBody = { businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 2_000_000 }, { quotationLineId: secondLineId, quantityMicros: 1_000_000 }] };
   const duplicate = await request(`/api/sales-quotations/${quotationId}/convert-to-so`, { token: tokens.sales, method: 'POST', key: 'quote-duplicate', body: { businessDate: '2026-10-15', lineSelections: [{ quotationLineId, quantityMicros: 1 }, { quotationLineId, quantityMicros: 1 }] } });
   assert.equal(duplicate.status, 422); assert.equal(duplicate.data.details?.code || duplicate.data.code, 'DUPLICATE_QUOTATION_LINE');
@@ -950,6 +1001,17 @@ test('R7 P1-01 reconciles strict ADD evidence with persisted owner reservations 
   assert.equal(emptyPatch.data.details?.code || emptyPatch.data.code, 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT');
   assert.deepEqual(rollbackSnapshot(), beforeEmpty, 'empty snapshot PATCH must roll back every affected table');
 
+  const wrongBusinessDate = structuredClone(validAfter); wrongBusinessDate.priceSnapshot.businessDate = '2026-10-16';
+  db.prepare('UPDATE sales_order_change_lines SET after_values_json=? WHERE id=?').run(JSON.stringify(wrongBusinessDate), addRow.id);
+  const beforeWrongDate = rollbackSnapshot();
+  const wrongDatePatch = await request(`/api/sales-order-changes/${draft.data.id}`, { token: tokens.sales, method: 'PATCH', body: {
+    reasonCode: 'CUSTOMER_REQUEST', reason: 'must fail independent business-date binding',
+    lines: [{ op: 'MODIFY', salesOrderItemId: baseItemId, quantityMicros: 2_000_000 }],
+  } });
+  assert.equal(wrongDatePatch.status, 409, JSON.stringify(wrongDatePatch.data));
+  assert.equal(wrongDatePatch.data.details?.code || wrongDatePatch.data.code, 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT');
+  assert.deepEqual(rollbackSnapshot(), beforeWrongDate, 'business-date mismatch must roll back every affected table');
+
   const missingReference = structuredClone(validAfter); delete missingReference.priceSnapshot.authorizationEvidence;
   db.prepare('UPDATE sales_order_change_lines SET after_values_json=? WHERE id=?').run(JSON.stringify(missingReference), addRow.id);
   const beforeMissing = rollbackSnapshot();
@@ -1121,7 +1183,7 @@ test('R6 P2-01 release / assertReserved require expectedOwner and reject cross-o
   const compactAppliedJson = appliedRow.price_snapshot_json;
   const parsedApplied = JSON.parse(compactAppliedJson);
   const { authorizationEvidence, ...otherAppliedFields } = parsedApplied;
-  db.prepare('UPDATE sales_order_items SET price_snapshot_json=? WHERE id=?').run(JSON.stringify({ otherAppliedFields, authorizationEvidence }, null, 2), appliedRow.id);
+  db.prepare('UPDATE sales_order_items SET price_snapshot_json=? WHERE id=?').run(JSON.stringify({ authorizationEvidence, ...otherAppliedFields }, null, 2), appliedRow.id);
   let appliedRelease = null;
   try { PRICE_OVERRIDE_CONSUMPTION.release(db, authId, { id: 'user-sales', roleCode: 'SALES', permissions: [] }, { expectedOwner }); }
   catch (error) { appliedRelease = error; }
@@ -1334,6 +1396,60 @@ test('competing delivery notices cannot over-commit one order line tolerance', a
   assert.equal(db.prepare('SELECT state FROM delivery_notices WHERE id=?').get(second.data.notice.id).state, 'DRAFT');
 });
 
+test('controlled close enforces exact lower tolerance, pending notice and executed-cancel contracts', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const createApproved = async (suffix, quantity = '10') => {
+    const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: `close-order-${suffix}`, body: {
+      customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+      items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: quantity }],
+    } });
+    assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.equal((await request(`/api/sales-orders/${created.data.id}/submit`, { token: tokens.sales, method: 'POST', key: `close-submit-${suffix}`, body: {} })).status, 200);
+    assert.equal((await request(`/api/sales-orders/${created.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: `close-approve-${suffix}`, body: {} })).status, 200);
+    return { id: created.data.id, item: db.prepare('SELECT * FROM sales_order_items WHERE order_id=?').get(created.data.id) };
+  };
+  const seedDeliveredFact = async (order, quantity, suffix) => {
+    const created = await request('/api/sales-deliveries', { token: tokens.admin, method: 'POST', body: {
+      sourceMode: 'DIRECT_ORDER', salesOrderId: order.id, warehouseId: 'warehouse-001', billingMode: 'SEPARATE', deliveryDate: '2026-10-15',
+      items: [{ salesOrderItemId: order.item.id, productId: 'product-001', quantity }],
+    } });
+    assert.equal(created.status, 201, `${suffix}: ${JSON.stringify(created.data)}`);
+    db.prepare("UPDATE sales_deliveries SET status='CONFIRMED',confirmed_at=?,confirmed_by='user-admin' WHERE id=?").run(new Date().toISOString(), created.data.id);
+    return created.data.id;
+  };
+
+  const none = await createApproved('none');
+  const beforeNone = db.prepare('SELECT commercial_close_state,remark FROM sales_orders WHERE id=?').get(none.id);
+  const noDeliveryClose = await request(`/api/sales-orders/${none.id}/close`, { token: tokens.admin, method: 'POST', key: 'close-none', body: { reason: 'no delivery' } });
+  assert.equal(noDeliveryClose.status, 409); assert.equal(noDeliveryClose.data.details?.code || noDeliveryClose.data.code, 'SALES_ORDER_LOWER_TOLERANCE_NOT_REACHED');
+  assert.deepEqual(db.prepare('SELECT commercial_close_state,remark FROM sales_orders WHERE id=?').get(none.id), beforeNone);
+  assert.equal((await request(`/api/sales-orders/${none.id}/cancel`, { token: tokens.admin, method: 'POST', key: 'cancel-none', body: { reason: 'customer cancellation' } })).status, 200);
+
+  const partial = await createApproved('partial', '20');
+  await seedDeliveredFact(partial, 18, 'partial');
+  const below = await request(`/api/sales-orders/${partial.id}/close`, { token: tokens.admin, method: 'POST', key: 'close-below', body: { reason: 'below lower' } });
+  assert.equal(below.status, 409); assert.equal(below.data.details?.code || below.data.code, 'SALES_ORDER_LOWER_TOLERANCE_NOT_REACHED');
+  const cancelExecuted = await request(`/api/sales-orders/${partial.id}/cancel`, { token: tokens.admin, method: 'POST', key: 'cancel-executed', body: { reason: 'must fail' } });
+  assert.equal(cancelExecuted.status, 409); assert.equal(cancelExecuted.data.details?.code || cancelExecuted.data.code, 'SALES_ORDER_EXECUTED_CANNOT_CANCEL');
+
+  const lower = await createApproved('lower', '20');
+  await seedDeliveredFact(lower, 19, 'lower');
+  const closeLower = await request(`/api/sales-orders/${lower.id}/close`, { token: tokens.admin, method: 'POST', key: 'close-lower', body: { reason: 'accepted lower tolerance' } });
+  assert.equal(closeLower.status, 200, JSON.stringify(closeLower.data));
+  assert.equal(db.prepare('SELECT commercial_close_state FROM sales_orders WHERE id=?').get(lower.id).commercial_close_state, 'CLOSED');
+  const closeAudit = JSON.parse(db.prepare("SELECT detail FROM audit_logs WHERE entity_type='SALES_ORDER' AND entity_id=? AND action='CLOSE' ORDER BY created_at DESC LIMIT 1").get(lower.id).detail);
+  assert.equal(closeAudit.reason, 'accepted lower tolerance'); assert.equal(closeAudit.before.lines[0].deliveredMicros, 19_000_000); assert.equal(closeAudit.after.commercialCloseState, 'CLOSED');
+
+  const pending = await createApproved('pending');
+  const notice = await request('/api/delivery-notices', { token: tokens.sales, method: 'POST', body: { salesOrderId: pending.id, warehouseId: 'warehouse-001', businessDate: '2026-10-15', plannedDeliveryDate: '2026-10-20', lines: [{ salesOrderItemId: pending.item.id, scheduledQtyMicros: 10_000_000 }] } });
+  assert.equal(notice.status, 201, JSON.stringify(notice.data));
+  assert.equal((await request(`/api/delivery-notices/${notice.data.notice.id}/confirm`, { token: tokens.sales, method: 'POST', key: 'pending-dn-confirm', body: {} })).status, 200);
+  const pendingBefore = { order: db.prepare('SELECT commercial_close_state,remark FROM sales_orders WHERE id=?').get(pending.id), audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND entity_id=? AND action='CLOSE'").get(pending.id).n) };
+  const pendingClose = await request(`/api/sales-orders/${pending.id}/close`, { token: tokens.admin, method: 'POST', key: 'close-pending-dn', body: { reason: 'must fail pending DN' } });
+  assert.equal(pendingClose.status, 409); assert.equal(pendingClose.data.details?.code || pendingClose.data.code, 'SALES_ORDER_PENDING_DELIVERY_NOTICE');
+  assert.deepEqual({ order: db.prepare('SELECT commercial_close_state,remark FROM sales_orders WHERE id=?').get(pending.id), audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND entity_id=? AND action='CLOSE'").get(pending.id).n) }, pendingBefore);
+});
+
 test('gift order keeps catalog price evidence with zero revenue', async () => {
   const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
   const created = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'gift-order-1', body: { customerId: 'customer-001', orderDate: '2026-10-15', items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', isGiftLine: true }] } });
@@ -1372,6 +1488,90 @@ test('authoritative 100 percent discount permits zero revenue but forged zero ev
     db.prepare('UPDATE sales_orders SET total_cents=? WHERE id=?').run(changed.amount, forged.data.id);
     assert.equal((await request(`/api/sales-orders/${forged.data.id}/submit`, { token: tokens.sales, method: 'POST', key: `forged-zero-submit-${suffix}`, body: {} })).status, 409);
   }
+  assert.equal((await request(`/api/sales-orders/${zero.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'authoritative-zero-approve', body: {} })).status, 200);
+  const stamp = new Date().toISOString();
+  const inventory = db.prepare("SELECT id FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get();
+  if (inventory) db.prepare('UPDATE inventory SET quantity=100,updated_at=? WHERE id=?').run(stamp, inventory.id);
+  else db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('batch-a-discount-inventory','warehouse-001','product-001',100,?)").run(stamp);
+  db.prepare("UPDATE products SET valuation_method='MOVING_AVERAGE',inventory_classification='FINISHED_GOODS',valuation_activated_at='2026-01-01' WHERE id='product-001'").run();
+  db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+    VALUES('NONE:warehouse-001:product-001','MOVING_AVERAGE','product-001','warehouse-001',NULL,NULL,100,50000,?)
+    ON CONFLICT(balance_key) DO UPDATE SET quantity=100,value_cents=50000,updated_at=excluded.updated_at`).run(stamp);
+  const delivery = await request('/api/sales-deliveries', { token: tokens.admin, method: 'POST', body: {
+    sourceMode: 'DIRECT_ORDER', salesOrderId: zero.data.id, warehouseId: 'warehouse-001', billingMode: 'DIRECT_BILL', deliveryDate: '2026-10-15',
+    items: [{ salesOrderItemId: zeroLine.id, productId: 'product-001', quantity: 1 }],
+  } });
+  assert.equal(delivery.status, 201, JSON.stringify(delivery.data));
+  assert.equal(db.prepare('SELECT total_cents FROM sales_deliveries WHERE id=?').get(delivery.data.id).total_cents, 0);
+  const oqc = await request('/api/oqc', { token: tokens.admin, method: 'POST', body: { sales_delivery_id: delivery.data.id } });
+  assert.equal(oqc.status, 201, JSON.stringify(oqc.data));
+  assert.equal((await request(`/api/oqc/${oqc.data.id}/complete`, { token: tokens.admin, method: 'POST', body: {
+    result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0,
+  } })).status, 200);
+  const confirm = () => request(`/api/sales-deliveries/${delivery.data.id}`, { token: tokens.admin, method: 'POST', key: 'discount-economic-confirm', body: { action: 'confirm' } });
+  assert.equal((await confirm()).status, 200);
+  const facts = () => ({
+    stock: db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity,
+    value: db.prepare("SELECT value_cents FROM inventory_valuation_balances WHERE balance_key='NONE:warehouse-001:product-001'").get().value_cents,
+    out: db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    cogs: db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY_COGS' AND source_id=?").get(delivery.data.id).n,
+    revenue: db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    ar: db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    invoices: db.prepare('SELECT COUNT(DISTINCT invoice_id) n FROM sales_invoice_items WHERE delivery_id=?').get(delivery.data.id).n,
+  });
+  const expected = { stock: 99, value: 49500, out: 1, cogs: 1, revenue: 0, ar: 0, invoices: 0 };
+  assert.deepEqual(facts(), expected);
+  const replay = await confirm(); assert.equal(replay.status, 200); assert.equal(replay.data.replayed, true); assert.deepEqual(facts(), expected);
+});
+
+test('zero-revenue gift delivery still posts inventory, valuation and COGS exactly once after OQC PASS', async () => {
+  const uom = db.prepare("SELECT base_uom_code FROM products WHERE id='product-001'").get().base_uom_code;
+  const order = await request('/api/sales-orders', { token: tokens.sales, method: 'POST', key: 'gift-economic-order', body: {
+    customerId: 'customer-001', orderDate: '2026-10-15', requestedDeliveryDate: '2026-10-20',
+    items: [{ productId: 'product-001', uomCode: uom, quantityDecimal: '1', isGiftLine: true }],
+  } });
+  assert.equal(order.status, 201, JSON.stringify(order.data));
+  assert.equal((await request(`/api/sales-orders/${order.data.id}/submit`, { token: tokens.sales, method: 'POST', key: 'gift-economic-submit', body: {} })).status, 200);
+  assert.equal((await request(`/api/sales-orders/${order.data.id}/approve`, { token: tokens.reviewer, method: 'POST', key: 'gift-economic-approve', body: {} })).status, 200);
+  const orderItem = db.prepare('SELECT id FROM sales_order_items WHERE order_id=?').get(order.data.id);
+  const stamp = new Date().toISOString();
+  const inventory = db.prepare("SELECT id FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get();
+  if (inventory) db.prepare('UPDATE inventory SET quantity=100,updated_at=? WHERE id=?').run(stamp, inventory.id);
+  else db.prepare("INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('batch-a-gift-inventory','warehouse-001','product-001',100,?)").run(stamp);
+  db.prepare("UPDATE products SET valuation_method='MOVING_AVERAGE',inventory_classification='FINISHED_GOODS',valuation_activated_at='2026-01-01' WHERE id='product-001'").run();
+  db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
+    VALUES('NONE:warehouse-001:product-001','MOVING_AVERAGE','product-001','warehouse-001',NULL,NULL,100,50000,?)
+    ON CONFLICT(balance_key) DO UPDATE SET quantity=100,value_cents=50000,updated_at=excluded.updated_at`).run(stamp);
+  const delivery = await request('/api/sales-deliveries', { token: tokens.admin, method: 'POST', body: {
+    sourceMode: 'DIRECT_ORDER', salesOrderId: order.data.id, warehouseId: 'warehouse-001', billingMode: 'DIRECT_BILL', deliveryDate: '2026-10-15',
+    items: [{ salesOrderItemId: orderItem.id, productId: 'product-001', quantity: 1 }],
+  } });
+  assert.equal(delivery.status, 201, JSON.stringify(delivery.data));
+  assert.equal(db.prepare('SELECT total_cents FROM sales_deliveries WHERE id=?').get(delivery.data.id).total_cents, 0);
+  const oqc = await request('/api/oqc', { token: tokens.admin, method: 'POST', body: { sales_delivery_id: delivery.data.id } });
+  assert.equal(oqc.status, 201, JSON.stringify(oqc.data));
+  const completed = await request(`/api/oqc/${oqc.data.id}/complete`, { token: tokens.admin, method: 'POST', body: {
+    result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0,
+  } });
+  assert.equal(completed.status, 200, JSON.stringify(completed.data));
+  const confirmed = await request(`/api/sales-deliveries/${delivery.data.id}`, { token: tokens.admin, method: 'POST', key: 'gift-economic-confirm', body: { action: 'confirm' } });
+  assert.equal(confirmed.status, 200, JSON.stringify(confirmed.data));
+  const facts = () => ({
+    delivery: { ...db.prepare('SELECT status,total_cents FROM sales_deliveries WHERE id=?').get(delivery.data.id) },
+    stock: db.prepare("SELECT quantity FROM inventory WHERE warehouse_id='warehouse-001' AND product_id='product-001'").get().quantity,
+    valuation: { ...db.prepare("SELECT quantity,value_cents FROM inventory_valuation_balances WHERE balance_key='NONE:warehouse-001:product-001'").get() },
+    inventoryTransactions: db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    cogsVouchers: db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY_COGS' AND source_id=?").get(delivery.data.id).n,
+    revenueVouchers: db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    receivables: db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.data.id).n,
+    invoices: db.prepare('SELECT COUNT(DISTINCT invoice_id) n FROM sales_invoice_items WHERE delivery_id=?').get(delivery.data.id).n,
+    audits: db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_DELIVERY' AND entity_id=? AND action='CONFIRM'").get(delivery.data.id).n,
+  });
+  const expected = { delivery: { status: 'CONFIRMED', total_cents: 0 }, stock: 99, valuation: { quantity: 99, value_cents: 49500 },
+    inventoryTransactions: 1, cogsVouchers: 1, revenueVouchers: 0, receivables: 0, invoices: 0, audits: 1 };
+  assert.deepEqual(facts(), expected);
+  const replay = await request(`/api/sales-deliveries/${delivery.data.id}`, { token: tokens.admin, method: 'POST', key: 'gift-economic-confirm', body: { action: 'confirm' } });
+  assert.equal(replay.status, 200); assert.equal(replay.data.replayed, true); assert.deepEqual(facts(), expected);
 });
 
 test('Batch A frontend routes and responsive contract cover 320/390/430/680', () => {

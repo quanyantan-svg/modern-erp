@@ -1,0 +1,220 @@
+{
+  "ok": true,
+  "responsive": [
+    {
+      "width": 320,
+      "route": "quotations",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 320,
+      "route": "orders",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 320,
+      "route": "sales-order-changes",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 320,
+      "route": "delivery-notices",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 320,
+      "route": "sales-deliveries",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 320,
+      "route": "oqc",
+      "clientWidth": 320,
+      "scrollWidth": 320,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "quotations",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "orders",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "sales-order-changes",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "delivery-notices",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "sales-deliveries",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 390,
+      "route": "oqc",
+      "clientWidth": 390,
+      "scrollWidth": 390,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "quotations",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "orders",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "sales-order-changes",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "delivery-notices",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "sales-deliveries",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 430,
+      "route": "oqc",
+      "clientWidth": 430,
+      "scrollWidth": 430,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "quotations",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "orders",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "sales-order-changes",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "delivery-notices",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "sales-deliveries",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    },
+    {
+      "width": 680,
+      "route": "oqc",
+      "clientWidth": 680,
+      "scrollWidth": 680,
+      "minControlHeight": 44,
+      "smallControls": []
+    }
+  ],
+  "functional": {
+    "quotationId": "248476d3-6ad0-45bc-8909-19c3a59b643c",
+    "convertedMicros": 2000000,
+    "orderId": "33aa980d-1896-4064-a0cd-6b6a7aa2d216",
+    "orderStatus": "APPROVED",
+    "noticeId": "e2daa7ea-88ad-48a8-b67a-d34c21730e76",
+    "noticeState": "CONFIRMED",
+    "changeId": "0e749235-30d9-42b6-821d-813963ee3d87",
+    "changeState": "CANCELLED",
+    "appliedChangeId": "72255734-e5c3-4fbd-a1ee-e1c845035f7a",
+    "cancelledNoticeId": "142be8f2-6cf4-4fa8-a1bd-6031fac8c3e2",
+    "directId": "59ab52cd-4cf2-4739-a8de-216ebf0a9e2f",
+    "directStatus": "CONFIRMED",
+    "noticeStatus": "CONFIRMED",
+    "noticeConsumedMicros": 1000000
+  },
+  "browser": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "navigation": {
+    "direct": true,
+    "back": true,
+    "forward": true,
+    "refresh": true
+  }
+}

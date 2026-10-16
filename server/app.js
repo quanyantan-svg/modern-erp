@@ -230,7 +230,7 @@ import {
   createDeliveryNotice, deliveryNoticeAction, getDeliveryNotice, listDeliveryNotices, updateDeliveryNotice,
 } from './modules/delivery-notices.js';
 import {
-  lockAndConsumeSalesDeliveryCapacity, persistSalesDeliveryNoticeLineIds, validateSalesDeliverySource,
+  lockAndConsumeSalesDeliveryCapacity, persistSalesDeliveryNoticeLineIds, quantityToMicros, toleranceBoundsMicros, validateSalesDeliverySource,
 } from './modules/sales-delivery-source.js';
 import {
   createSupplier,
@@ -5502,6 +5502,7 @@ async function createSalesDelivery(db, req, res, actor) {
   const source = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(salesOrderId);
   if (!source) throw new HttpError(400, '销售订单不存在');
   if (source.status !== 'APPROVED') throw new HttpError(409, '只有已审批销售订单可以出货');
+  if (source.commercial_close_state !== 'OPEN') throw new HttpError(409, '已商业关闭或取消的销售订单不能新建出库');
   if (customerId !== undefined && customerId !== source.customer_id) throw new HttpError(400, '客户与销售订单不一致');
   const sourceContract = validateSalesDeliverySource(db, body, salesOrderId);
   requireActiveReference(db, 'warehouses', warehouseId, '仓库');
@@ -5509,8 +5510,8 @@ async function createSalesDelivery(db, req, res, actor) {
   for (const item of input.items) {
     const sourceLine = db.prepare('SELECT quantity,upper_delivery_tolerance_bps FROM sales_order_items WHERE id=?').get(item.sourceItemId);
     const delivered = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.sourceItemId);
-    const upperCapacity = Number(sourceLine.quantity) * (10000 + Number(sourceLine.upper_delivery_tolerance_bps || 0)) / 10000;
-    if (delivered + Number(item.quantity) > upperCapacity) throw new HttpError(409, '销售出库数量超过订单行剩余容差容量');
+    const upperCapacity = toleranceBoundsMicros(sourceLine.quantity, sourceLine.upper_delivery_tolerance_bps).upper;
+    if (quantityToMicros(delivered, '已确认出库数量') + quantityToMicros(item.quantity, '本次出库数量') > upperCapacity) throw new HttpError(409, '销售出库数量超过订单行剩余容差容量');
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
   }
@@ -5578,7 +5579,7 @@ async function updateSalesDelivery(db, req, res, actor, deliveryId) {
   return send(res, 200, { ok: true, id: deliveryId, deliveryNo: current.delivery_no, totalCents: input.totalCents });
 }
 
-async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
+export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
   allow(actor, 'SALES_DELIVERIES_MANAGE');
   const delivery = db.prepare('SELECT * FROM sales_deliveries WHERE id = ?').get(deliveryId);
   if (!delivery) throw new HttpError(404, '销售出库单不存在');
@@ -5624,16 +5625,18 @@ async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
       createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
-      const recognition = recognizeFinanceExposure(db, {
-        side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: delivery.delivery_no },
-        invoice: null, amountCents: authoritative.totalCents, businessDate: locked.delivery_date,
-        partyId: delivery.customer_id, paymentTermsDays: so.payment_terms_days,
-        actorId: actor.id, createdAt: delivery.created_at,
-      });
-      if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
-        const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-        createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
-      } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
+      if (authoritative.totalCents > 0) {
+        const recognition = recognizeFinanceExposure(db, {
+          side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: delivery.delivery_no },
+          invoice: null, amountCents: authoritative.totalCents, businessDate: locked.delivery_date,
+          partyId: delivery.customer_id, paymentTermsDays: so.payment_terms_days,
+          actorId: actor.id, createdAt: delivery.created_at,
+        });
+        if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
+          const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
+          createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+        } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
+      }
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
       audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
     });
