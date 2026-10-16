@@ -13963,3 +13963,92 @@ This is an implementation and verification record for the already frozen Batch A
 - MySQL: three independent sessions and `information_schema.PROCESSLIST` lock-wait observation remain the concurrency proof. R-SAL-01/08/17/19 now invoke the complete canonical SD confirm handler; R-SAL-06/07/16/18 retain their canonical capacity/version paths. The fixture uses integral base quantities and coherent valuation/OQC waiver evidence. Each winning confirmation is checked for exactly one inventory transaction, valuation movement, COGS voucher and CONFIRM audit; losing transactions leave none. Protected disposable MySQL fresh, upgrade, replay and concurrency gates passed on 2026-10-16.
 - Browser: `scripts/acceptance/sales-customer-batch-a-acceptance.mjs` starts the production build on disposable SQLite, logs in as explicit admin/reviewer roles and drives actual Edge UI requests. It covers Quotation create/publish/partial and remaining conversion, SO editor/submit/reviewer approval, DN create/edit/confirm/cancel, Change create/PATCH/submit/cancel and reviewer approval, both SD source modes and OQC/confirm, plus direct route/refresh/Back/Forward and 6 routes × 320/390/430/680 layout checks. The runner waits for the lazy route to leave its loading state before measuring or capturing, so the evidence represents the actual work surface. That check exposed 30px Sales Order filter targets; the existing scoped sales-order CSS now gives filter and menu actions a 44px target without changing route or business semantics. It stores sanitized screenshots and JSON under `docs/evidence/sales-customer-batch-a/`. Tests remain separately authoritative for negative cases, rollback and RBAC/SOD.
 - Evidence and boundary: `docs/evidence/sales-customer-batch-a/final-acceptance.md` maps the 15 direct UAT IDs and 9 Race IDs to canonical owners, API, assertions, dialect and browser applicability. Future Credit, Prepayment and Reservation capabilities retain their frozen deferred ownership and fail-closed current behavior. Final user Acceptance and Freeze remain pending.
+
+### 34.13 Sales & Customer Batch A — Formal User Acceptance & Freeze Record (2026-10-16)
+
+**Decision: ACCEPTANCE PASS / FROZEN**
+
+#### 1. User Approval
+
+On 2026-10-16, the project owner explicitly approved the final Acceptance and Freeze of Sales & Customer Batch A (Waves 3–5).
+
+This is an explicit user decision following the final independent remote review. It supersedes the earlier `AWAITING USER ACCEPTANCE` status for Batch A only.
+
+#### 2. Immutable Acceptance Baseline
+
+- Repository: `quanyantan-svg/modern-erp`
+- Accepted branch: `feature/sales-batch-a`
+- Frozen implementation SHA: `41857ce2740163868aef0687a7b0ed4536354fe1`
+- Package version: `1.6.2`
+- Existing release identity: `v1.6.2` (unchanged)
+- Scope: Sales & Customer Batch A, Waves 3–5 only
+
+Subsequent documentation-only acceptance records do not change the accepted implementation SHA.
+
+#### 3. Accepted Scope
+
+- Wave 3: Sales Quotation lifecycle and repeated/partial Sales Order conversion.
+- Wave 4: Canonical Sales Order, immutable commercial evidence, approval, controlled order changes, effective-version CAS and controlled close.
+- Wave 5: Delivery Notice, DIRECT_ORDER and DELIVERY_NOTICE source modes, Sales Delivery confirmation and capacity control.
+
+The accepted scope includes the associated authorization, audit, idempotency, economic consistency, concurrency and mobile browser contracts.
+
+#### 4. Acceptance Evidence
+
+Primary evidence index:
+
+`docs/evidence/sales-customer-batch-a/final-acceptance.md`
+
+Browser evidence:
+
+`docs/evidence/sales-customer-batch-a/browser-acceptance.json`
+
+Supporting evidence includes:
+
+- 15 direct Batch A UAT IDs with traceability records.
+- 9 associated Race IDs with execution evidence.
+- Focused: 31/31 PASS.
+- FAST: 380/380 PASS.
+- FULL: 2457/2457 PASS.
+- HEAVY: 67/67 PASS.
+- Protected MySQL functional gate: reported PASS.
+- MySQL concurrency: 78/78 PASS, including Batch A 9/9.
+- Browser: 24 responsive route-width checks and recorded end-to-end functional workflows.
+- Build and diff verification: reported PASS.
+
+These runtime results are recorded in the committed test evidence and development log. The final independent remote review verified the implementation and evidence paths without independently rerunning the runtime gates.
+
+#### 5. Freeze Boundary
+
+Only Sales & Customer Batch A (Waves 3–5) is frozen.
+
+The following remain outside this Acceptance:
+
+- Future Sales & Customer Waves 6–13.
+- Deferred Credit, Prepayment and Reservation capabilities.
+- Full Sales domain Acceptance.
+- Production deployment and release certification.
+
+`document.md §34` and approved Schema/Design remain authoritative. Any future change to an accepted Batch A business invariant must follow the project's controlled reopen and change-governance process.
+
+#### 6. Git Integration Decision
+
+The project owner authorized merging the accepted Batch A work into `master`.
+
+The authorized Git scope is:
+
+- Commit documentation-only Freeze records.
+- Integrate the accepted branch into `master`.
+- Prefer a fast-forward merge preserving the accepted commit history.
+
+Not authorized:
+
+- Creating or modifying Git tags.
+- Package-version or release changes.
+- Deployment.
+- Production database operations.
+- Starting Batch B automatically.
+
+The freeze-record commit and resulting `master` HEAD may differ from the frozen implementation SHA because they contain subsequent governance documentation.
+
+**Final governance status: BATCH_A_ACCEPTANCE_PASS / FROZEN — USER APPROVED.**
