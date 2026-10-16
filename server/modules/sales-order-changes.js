@@ -5,7 +5,12 @@ import { HttpError, readJson, send } from '../lib/http.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { resolveSalesParameters } from './sales-parameters.js';
 import { assertGroupScope, lockSuffix, requireSalesPermission } from './sales-scope.js';
-import { buildAuthoritativeSalesLines, insertSalesOrderLines, PRICE_OVERRIDE_CONSUMPTION } from './sales-orders.js';
+import {
+  buildAuthoritativeSalesLines,
+  insertSalesOrderLines,
+  PRICE_OVERRIDE_CONSUMPTION,
+  validatePriceSnapshot,
+} from './sales-orders.js';
 
 const NOW = () => new Date().toISOString();
 const makeNo = () => `SOC-${Date.now()}-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
@@ -13,6 +18,110 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 const parse = (value) => JSON.parse(value);
 const scaleHalfUp = (value, targetMicros, sourceMicros) => Number((BigInt(value) * BigInt(targetMicros) + BigInt(sourceMicros) / 2n) / BigInt(sourceMicros));
 const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
+const PRICE_OVERRIDE_AUTHORIZATION_ORPHAN = 'SALES_ORDER_CHANGE_AUTHORIZATION_ORPHAN';
+
+function corruptChangeEvidence(message) {
+  return new HttpError(409, message, { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+}
+
+function parseStrictAddAfter(db, order, jsonString, lineLabel) {
+  let after;
+  try { after = JSON.parse(jsonString); }
+  catch { throw corruptChangeEvidence(`${lineLabel}变更证据 JSON 损坏`); }
+  if (!after || typeof after !== 'object' || Array.isArray(after)) {
+    throw corruptChangeEvidence(`${lineLabel}变更证据结构损坏`);
+  }
+  const snapshot = after.priceSnapshot;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || Object.keys(snapshot).length === 0) {
+    throw corruptChangeEvidence(`${lineLabel}价格快照为空或结构损坏`);
+  }
+  const materialId = String(after.productId || '');
+  const uomCode = String(after.documentUomCode || '');
+  const quantityMicros = Number(after.quantityMicros);
+  const unitPriceCents = Number(after.unitPriceCents);
+  const grossCents = Number(snapshot.grossAmountCents);
+  if (!materialId || !uomCode || !Number.isSafeInteger(quantityMicros) || quantityMicros <= 0
+    || !Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0
+    || !Number.isSafeInteger(grossCents) || grossCents < 0) {
+    throw corruptChangeEvidence(`${lineLabel}价格快照核心字段损坏`);
+  }
+  try {
+    validatePriceSnapshot(db, snapshot, {
+      customerId: order.customer_id,
+      businessDate: snapshot.businessDate,
+      materialId,
+      uomCode,
+      quantityMicros,
+      unitPriceCents,
+      grossCents,
+    });
+  } catch (error) {
+    if (error?.code === 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT') throw error;
+    throw corruptChangeEvidence(`${lineLabel}价格快照未通过权威校验`);
+  }
+  return after;
+}
+
+function ownedAuthorizationRows(db, owner) {
+  const ownerExpression = db.dialect === 'mysql'
+    ? "JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.source')) = ?"
+    : "json_extract(result_json, '$.source') = ?";
+  try {
+    return db.prepare(`SELECT document_id, result_json FROM idempotency_records
+      WHERE operation_type=? AND idempotency_key=? AND ${ownerExpression}`)
+      .all(PRICE_OVERRIDE_CONSUMPTION.OPERATION, PRICE_OVERRIDE_CONSUMPTION.KEY, owner);
+  } catch {
+    throw new HttpError(409, '无法读取销售订单变更授权占用，需要人工数据修复', {
+      code: PRICE_OVERRIDE_AUTHORIZATION_ORPHAN,
+    });
+  }
+}
+
+function reconcileChangeAuthorizations(db, order, changeId, { assertClaims = false } = {}) {
+  const owner = `SALES_ORDER_CHANGE:${changeId}`;
+  const claimed = new Set();
+  for (const row of db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId)) {
+    if (row.op !== 'ADD') continue;
+    const after = parseStrictAddAfter(db, order, row.after_values_json, '历史 ADD 行');
+    const authId = after.priceSnapshot.authorizationEvidence?.authorizationId;
+    if (authId === undefined || authId === null || authId === '') continue;
+    if (typeof authId !== 'string' || claimed.has(authId)) {
+      throw new HttpError(409, '历史 ADD 行授权引用损坏或重复，需要人工数据修复', {
+        code: PRICE_OVERRIDE_AUTHORIZATION_ORPHAN,
+      });
+    }
+    claimed.add(authId);
+  }
+
+  if (assertClaims) {
+    for (const authorizationId of claimed) {
+      PRICE_OVERRIDE_CONSUMPTION.assertReserved(db, authorizationId, { expectedOwner: owner });
+    }
+  }
+
+  const persisted = new Set();
+  for (const row of ownedAuthorizationRows(db, owner)) {
+    let value;
+    try { value = JSON.parse(row.result_json); }
+    catch {
+      throw new HttpError(409, '授权占用记录损坏，需要人工数据修复', {
+        code: PRICE_OVERRIDE_AUTHORIZATION_ORPHAN,
+      });
+    }
+    if (value?.source !== owner || value?.authorizationId !== row.document_id || persisted.has(row.document_id)) {
+      throw new HttpError(409, '授权占用记录归属或身份损坏，需要人工数据修复', {
+        code: PRICE_OVERRIDE_AUTHORIZATION_ORPHAN,
+      });
+    }
+    persisted.add(row.document_id);
+  }
+  if (claimed.size !== persisted.size || ![...claimed].every((authorizationId) => persisted.has(authorizationId))) {
+    throw new HttpError(409, '历史 ADD 行授权引用与持久化占用不一致，需要人工数据修复', {
+      code: PRICE_OVERRIDE_AUTHORIZATION_ORPHAN,
+    });
+  }
+  return { claimed, persisted };
+}
 
 function parameterSnapshot(db, path) {
   const parameter = resolveSalesParameters(db, 'SALES_ORDER');
@@ -105,20 +214,18 @@ function validEffectiveEvidenceArithmetic(evidence) {
       - Number(evidence.effectiveHeaderAllocationCents) === Number(evidence.finalAmountCents);
 }
 
-function releaseChangeAuthorizationOccupancy(db, changeId, actor) {
+function releaseChangeAuthorizationOccupancy(db, order, changeId, actor) {
   // R5 owner-aware release path for cancelled/rejected SUBMITTED or DRAFT Change
   // ADD rows. Only ADD operations carry authorisations; MODIFY/CANCEL lines reuse
   // the existing consumption record from the original SO line creation. The
   // expectedOwner filter rejects records owned by another change or a direct
-  // SO consumption and refuses to release them. The transaction wraps this so
-  // the release and the state flip commit atomically.
-  const changeLines = db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId);
+  // SO consumption and refuses to release them. R7-P1-01 strict historic
+  // validation + reconciliation ensures a corrupt ADD snapshot cannot silently
+  // skip release and orphan the persisted consumption record.
   const owner = `SALES_ORDER_CHANGE:${changeId}`;
-  for (const line of changeLines) {
-    if (line.op !== 'ADD') continue;
-    const after = parse(line.after_values_json);
-    const authorizationId = after?.priceSnapshot?.authorizationEvidence?.authorizationId;
-    if (authorizationId) PRICE_OVERRIDE_CONSUMPTION.release(db, authorizationId, actor, { expectedOwner: owner });
+  const { claimed } = reconcileChangeAuthorizations(db, order, changeId);
+  for (const authorizationId of claimed) {
+    PRICE_OVERRIDE_CONSUMPTION.release(db, authorizationId, actor, { expectedOwner: owner });
   }
 }
 
@@ -249,22 +356,7 @@ export async function updateSalesOrderChange(db, req, res, actor, changeId) {
     // empty `catch {}` previously treated corrupt JSON as "no auth" and silently
     // dropped the reservation linkage, leaving orphan consumption records.
     const owner = `SALES_ORDER_CHANGE:${changeId}`;
-    const oldAuthIds = new Set();
-    for (const row of db.prepare('SELECT op, after_values_json FROM sales_order_change_lines WHERE change_id=?').all(changeId)) {
-      if (row.op !== 'ADD') continue;
-      let after;
-      try { after = JSON.parse(row.after_values_json); }
-      catch { throw new HttpError(409, '历史 ADD 行变更证据 JSON 损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' }); }
-      const snapshot = after?.priceSnapshot;
-      if (!snapshot || typeof snapshot !== 'object') {
-        throw new HttpError(409, '历史 ADD 行价格快照结构损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
-      }
-      const authId = snapshot?.authorizationEvidence?.authorizationId;
-      if (authId !== undefined && authId !== null && authId !== '') {
-        if (typeof authId !== 'string') throw new HttpError(409, '历史 ADD 行授权 id 类型损坏，无法执行 PATCH', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
-        oldAuthIds.add(authId);
-      }
-    }
+    const { claimed: oldAuthIds } = reconcileChangeAuthorizations(db, order, changeId);
     const newAuthIds = new Set();
     if (Array.isArray(body.lines)) {
       for (const source of body.lines) {
@@ -307,12 +399,19 @@ export function applySalesOrderChange(db, changeId, expectedBaseVersion, key, ac
   const order = orderForChange(db, change.sales_order_id, actor, true);
   if (Number(change.base_effective_version) !== Number(expectedBaseVersion) || Number(order.effective_version) !== Number(expectedBaseVersion)) throw new HttpError(409, '订单版本已变化，变更申请已过期', { code: 'SALES_ORDER_CHANGE_STALE_VERSION' });
   parameterSnapshot(db, change.change_path);
+  // R7-P1-01: the historic ADD evidence must reconcile against the persisted
+  // consumption records before any line is applied. If reconciliation throws,
+  // the whole apply rolls back inside the same transaction.
+  reconcileChangeAuthorizations(db, order, changeId, { assertClaims: true });
   const lines = db.prepare('SELECT * FROM sales_order_change_lines WHERE change_id=? ORDER BY sales_order_item_id').all(changeId);
   let totalDelta = 0;
   for (const line of lines) {
     const before = parse(line.before_values_json); const after = parse(line.after_values_json);
     if (line.op === 'ADD') {
       if (line.sales_order_item_id !== null || before?.exists !== false || before?.op !== 'ADD') throw new HttpError(409, '新增行变更证据损坏', { code: 'SALES_ORDER_CHANGE_EVIDENCE_CORRUPT' });
+      // R7-P1-01: same strict validation as PATCH / REJECT / CANCEL paths so a corrupt
+      // historic ADD snapshot can never pass apply.
+      parseStrictAddAfter(db, order, line.after_values_json, '新增 ADD 行');
       const evidence = after.effectiveCommercialEvidence;
       if (!evidence || evidence.contractVersion !== 'SO_CHANGE_COMMERCIAL_EVIDENCE_V1'
         || Number(evidence.baseEffectiveVersion) !== expectedBaseVersion || Number(evidence.targetEffectiveVersion) !== expectedBaseVersion + 1
@@ -419,10 +518,10 @@ export async function salesOrderChangeAction(db, req, res, actor, changeId, acti
       audit(db, actor.id, 'SUBMIT', 'SALES_ORDER_CHANGE', changeId, ''); result = { id: changeId, state: 'SUBMITTED' };
     } else if (action === 'approve') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); const key = String(req.headers['idempotency-key'] || '').trim(); if (!key) throw new HttpError(422, 'Idempotency-Key 必填'); result = applySalesOrderChange(db, changeId, Number(change.base_effective_version), key, actor);
     } else if (action === 'reject') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_APPROVE'); if (change.state !== 'SUBMITTED' || change.requested_by === actor.id) throw new HttpError(409, '变更单不可驳回'); const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(422, '驳回原因必填');
-      releaseChangeAuthorizationOccupancy(db, changeId, actor);
+      releaseChangeAuthorizationOccupancy(db, order, changeId, actor);
       db.prepare("UPDATE sales_order_changes SET state='REJECTED',approver_id=?,approved_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), changeId); db.prepare("UPDATE approval_requests SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=? WHERE source_type='SALES_ORDER_CHANGE' AND source_id=? AND status='PENDING'").run(actor.id, NOW(), reason, changeId); audit(db, actor.id, 'REJECT', 'SALES_ORDER_CHANGE', changeId, reason); result = { id: changeId, state: 'REJECTED' };
     } else if (action === 'cancel') { requireSalesPermission(actor, 'SALES_ORDER_CHANGE_DOCUMENT_MANAGE'); if (!['DRAFT','SUBMITTED'].includes(change.state) || change.requested_by !== actor.id) throw new HttpError(409, '变更单不可取消');
-      releaseChangeAuthorizationOccupancy(db, changeId, actor);
+      releaseChangeAuthorizationOccupancy(db, order, changeId, actor);
       db.prepare("UPDATE sales_order_changes SET state='CANCELLED',updated_at=? WHERE id=?").run(NOW(), changeId); audit(db, actor.id, 'CANCEL', 'SALES_ORDER_CHANGE', changeId, String(body.reason || '')); result = { id: changeId, state: 'CANCELLED' };
     } else throw new HttpError(400, '无效变更单动作');
   }); return send(res, 200, result);

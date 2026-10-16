@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
-import { createSalesOrderCanonical } from './modules/sales-orders.js';
+import { createSalesOrderCanonical, PRICE_OVERRIDE_CONSUMPTION } from './modules/sales-orders.js';
 import { createSalesQuotation, salesQuotationAction } from './modules/sales-quotations.js';
 import { createDirectSalesOrderChange } from './modules/sales-order-changes.js';
 import { createDeliveryNotice, deliveryNoticeAction } from './modules/delivery-notices.js';
@@ -88,7 +88,7 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     db.prepare('INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,30,1,?,?)')
       .run(CUSTOMER, 'BA-C', 'Batch A Customer', 'Receiver', '13000000000', 'Test Address', stamp, stamp);
     db.prepare('INSERT INTO warehouses(id,code,name,active,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(WAREHOUSE, 'BA-W', 'Batch A Warehouse', stamp, stamp);
-    db.prepare('INSERT INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run('EA', 'Each', stamp, stamp);
+    db.prepare('INSERT IGNORE INTO uoms(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)').run('EA', 'Each', stamp, stamp);
     db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code)
       VALUES(?,?,?,'EA',0,0,1,?,?,'EA')`).run(PRODUCT, 'BA-P', 'Batch A Product', stamp, stamp);
     db.prepare('INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(GROUP, 'BA-G', 'Batch A Group', stamp, stamp);
@@ -159,6 +159,38 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
       VALUES(?,?,?, ?,1000,?,1,?,?)`).run(randomUUID(), deliveryId, PRODUCT, quantityMicros / 1_000_000, Math.round(quantityMicros / 1000), itemId, notice?.lineId || null);
     return deliveryId;
   }
+
+  test('R7 native MySQL JSON applied-line guard is structural, owner-aware and NULL-safe', () => {
+    const order = makeOrder();
+    const owner = `SALES_ORDER_CHANGE:${randomUUID()}`;
+    const appliedAuthorization = randomUUID();
+    PRICE_OVERRIDE_CONSUMPTION.record(db, appliedAuthorization, ACTOR, { source: owner });
+    db.prepare(`UPDATE sales_order_items SET price_snapshot_json=JSON_OBJECT(
+      'zLast','formatted-by-mysql',
+      'authorizationEvidence',JSON_OBJECT('fingerprint','native-json','authorizationId',?),
+      'aFirst','field-order-independent') WHERE id=?`).run(appliedAuthorization, order.itemId);
+    let appliedError = null;
+    try { PRICE_OVERRIDE_CONSUMPTION.release(db, appliedAuthorization, ACTOR, { expectedOwner: owner }); }
+    catch (error) { appliedError = error; }
+    assert.equal(appliedError?.code, 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS');
+    assert.ok(db.prepare("SELECT id FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?")
+      .get(PRICE_OVERRIDE_CONSUMPTION.OPERATION, appliedAuthorization, PRICE_OVERRIDE_CONSUMPTION.KEY));
+
+    const unrelatedAuthorization = randomUUID();
+    PRICE_OVERRIDE_CONSUMPTION.record(db, unrelatedAuthorization, ACTOR, { source: owner });
+    db.prepare(`UPDATE sales_order_items SET price_snapshot_json=JSON_OBJECT(
+      'note',?,
+      'authorizationEvidence',JSON_OBJECT('authorizationId',?)) WHERE id=?`)
+      .run(unrelatedAuthorization, appliedAuthorization, order.itemId);
+    assert.equal(PRICE_OVERRIDE_CONSUMPTION.release(db, unrelatedAuthorization, ACTOR, { expectedOwner: owner }), true,
+      'same text in an unrelated JSON field must not count as an applied authorization');
+
+    const nullSnapshotAuthorization = randomUUID();
+    PRICE_OVERRIDE_CONSUMPTION.record(db, nullSnapshotAuthorization, ACTOR, { source: owner });
+    db.prepare('UPDATE sales_order_items SET price_snapshot_json=NULL WHERE id=?').run(order.itemId);
+    assert.equal(PRICE_OVERRIDE_CONSUMPTION.release(db, nullSnapshotAuthorization, ACTOR, { expectedOwner: owner }), true,
+      'historical NULL snapshots must not fabricate applied authorization evidence');
+  });
 
   test('R-SAL-06 quotation conversion serializes source capacity and rolls back the loser', async () => {
     const created = await call((res) => createSalesQuotation(db, request({ customerId: CUSTOMER, validFrom: '2026-10-15', validTo: '2026-12-31',

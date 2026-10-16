@@ -47,6 +47,32 @@ function readPriceOverrideAuthorizationConsumption(db, authorizationId) {
   ).get(PRICE_OVERRIDE_CONSUMPTION_OPERATION, authorizationId, PRICE_OVERRIDE_CONSUMPTION_KEY) || null;
 }
 
+// R7-P1-02: dialect-aware applied-line guard. The previous LIKE-based pattern
+// relied on the textual rendering of the JSON snapshot and was unreliable under
+// MySQL native JSON (which normalises whitespace, key order, and quoting).
+// SQLite JSON1 and MySQL JSON_EXTRACT both read `$.authorizationEvidence.authorizationId`
+// as a canonical text value independent of JSON representation. Historical NULL
+// snapshot rows are excluded because json_extract returns NULL for them and
+// `NULL = ?` is falsy in WHERE.
+function findAppliedAuthorizationLine(db, authorizationId) {
+  const sql = db.dialect === 'mysql'
+    ? `SELECT 1 FROM sales_order_items
+         WHERE price_snapshot_json IS NOT NULL
+           AND JSON_UNQUOTE(JSON_EXTRACT(price_snapshot_json, '$.authorizationEvidence.authorizationId')) = ?
+         LIMIT 1`
+    : `SELECT 1 FROM sales_order_items
+         WHERE price_snapshot_json IS NOT NULL
+           AND json_extract(price_snapshot_json, '$.authorizationEvidence.authorizationId') = ?
+         LIMIT 1`;
+  try {
+    return db.prepare(sql).get(authorizationId) || null;
+  } catch {
+    throw new HttpError(409, '无法验证授权是否已用于订单行，禁止释放', {
+      code: 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_CHECK_FAILED',
+    });
+  }
+}
+
 // R6-P2-01: `expectedOwner` is required so Change / direct-SO release and assert
 // paths can never be invoked without a verified ownership contract. The
 // previously defaulting `null` is removed and the call sites in
@@ -66,7 +92,7 @@ function releasePriceOverrideAuthorizationConsumption(db, authorizationId, actor
   if (parsed.source !== expectedOwner) {
     throw new HttpError(409, '授权消费记录归属与请求方不匹配', { code: 'PRICE_OVERRIDE_AUTHORIZATION_OWNER_MISMATCH' });
   }
-  if (db.prepare("SELECT 1 FROM sales_order_items WHERE price_snapshot_json LIKE ? LIMIT 1").get(`%\"authorizationId\":\"${authorizationId}\"%`)) {
+  if (findAppliedAuthorizationLine(db, authorizationId)) {
     throw new HttpError(409, '授权已被已审批订单行实际消费，禁止释放', { code: 'PRICE_OVERRIDE_AUTHORIZATION_APPLIED_LINE_EXISTS' });
   }
   db.prepare(`DELETE FROM idempotency_records WHERE id=?`).run(row.id);
@@ -95,6 +121,7 @@ export const PRICE_OVERRIDE_CONSUMPTION = Object.freeze({
   record: recordPriceOverrideAuthorizationConsumption,
   release: releasePriceOverrideAuthorizationConsumption,
   assertReserved: assertPriceOverrideAuthorizationReserved,
+  findAppliedLine: findAppliedAuthorizationLine,
 });
 const safe = (value, label, min = 0) => { const n = Number(value); if (!Number.isSafeInteger(n) || n < min) throw new HttpError(422, `${label}不正确`); return n; };
 const microsDecimal = (micros) => `${Math.trunc(micros / 1_000_000)}.${String(micros % 1_000_000).padStart(6, '0')}`;
@@ -157,7 +184,7 @@ function zeroDiscountEvidence(lineIds, pricing, grossByLine) {
   return result;
 }
 
-function validatePriceSnapshot(db, snapshot, expected) {
+export function validatePriceSnapshot(db, snapshot, expected) {
   if (!snapshot || snapshot.contractVersion !== 'SALES_PRICE_SNAPSHOT_V1' || !snapshot.evidence) throw new HttpError(409, '价格快照缺失或版本无效', { code: 'PRICE_SNAPSHOT_REQUIRED' });
   const evidence = snapshot.evidence;
   const { fingerprint, ...fingerprintPayload } = evidence;
