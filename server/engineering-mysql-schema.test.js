@@ -95,6 +95,23 @@ test('MySQL reconciliation restores ordinary engineering indexes', () => {
   for (const [, index] of ENGINEERING_INDEXES) assert.ok(plan.some((sql) => sql.includes(index)), `${index} must be restored`);
 });
 
+test('MySQL snapshot renders the Wave 6 LOT frontier index within the InnoDB utf8mb4 key limit', () => {
+  const snapshot = captureSqliteSnapshot((path) => createDatabase(path), false);
+  const targetTable = snapshot.tables.find((table) => table.name === 'inventory_valuation_movements');
+  const targetName = 'idx_valuation_movements_identity_status_created';
+  assert.ok(targetTable?.indexes.some((index) => index.name === targetName), 'LOT frontier index missing from canonical snapshot');
+
+  const indexes = new Map(snapshot.tables.map((table) => [table.name, new Set(table.indexes.map((index) => index.name))]));
+  indexes.get(targetTable.name).delete(targetName);
+  const plan = planMySqlIndexReconciliation(snapshot, indexes);
+  const statement = plan.find((sql) => sql.includes(targetName));
+  assert.equal(statement,
+    'CREATE INDEX `idx_valuation_movements_identity_status_created` ON `inventory_valuation_movements` (`product_id`,`warehouse_id`,`lot_id`,`serial_id`,`status`(16),`created_at`(64),`id`)');
+  const maximumKeyBytes = (4 * 128 + 16 + 64 + 128) * 4;
+  assert.equal(maximumKeyBytes, 2880);
+  assert.ok(maximumKeyBytes < 3072);
+});
+
 test('MySQL metadata inspection aliases driver-native uppercase keys to canonical names', () => {
   const calls = [];
   const adapter = {

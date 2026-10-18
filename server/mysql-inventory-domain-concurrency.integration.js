@@ -134,7 +134,7 @@ describe('V21 Inventory/Warehouse real MySQL concurrency matrix (14 races)', () 
 
   beforeEach(() => {
     for (const table of [
-      'inventory_mutation_log', 'inventory_transactions', 'tracked_inventory_movements',
+      'inventory_mutation_log', 'tracked_inventory_movements', 'inventory_transactions',
       'inventory_locks', 'planning_reservations', 'inventory_step_transfer_in_transit',
       'inventory_period_closures', 'inventory_initialization', 'inventory',
     ]) db.prepare(`DELETE FROM ${table}`).run();

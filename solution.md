@@ -8804,6 +8804,12 @@ Source-identity 保持 : Quotation → SO → Delivery Notice → Sales Delivery
 
 Correction decisions below supersede these contradictory physical allocations and the later remote-review defects recorded in `document.md §34` (SC01 / SC08 / SC30 semantics and acceptance). SC / Invariant / UAT / Race counts remain unchanged.
 
+#### 29.2.0.1 Wave 6 bounded Design reopen — missing Sales Return source-line identity
+
+The original Design used the not-yet-implemented term `ORDER_BACKED`, while the frozen Requirement §34.3.10 and UAT-S-20 use `SO_BACKED`. This bounded correction standardizes the target Design, API and database enum on `SO_BACKED`; it does not add a fourth mode or change the approved business meaning.
+
+The original physical inventory also omitted the line-level carrier required by §29.30. Add one nullable logical field, `return_order_items.sales_order_item_id`, with a real FK to `sales_order_items.id`. It persists the authoritative source line for `SO_BACKED` returns, without creating a Sales Delivery, rewriting executed Sales Order history, or introducing Inventory / Finance truth owned by Sales. Existing rows remain NULL and are never inferred or backfilled from product, customer or date.
+
 ```text
 Classification dimensions:
   TABLES:
@@ -8836,7 +8842,7 @@ A physical TABLE = a single SQL relation; columns are NOT counted as tables.
 | A-04 | `sales_deliveries` | EXISTING_CONVERGE | db.js:1175 | Sales & Customer |
 | A-05 | `sales_delivery_items` | EXISTING_CONVERGE | db.js:1198 | Sales & Customer |
 | A-06 | `return_orders` | EXISTING_CONVERGE | db.js:1208 (additive col: commercial_source_marker) | Sales & Customer / Procurement & Outsourcing (shared) |
-| A-07 | `return_order_items` | EXISTING_CONVERGE | db.js:1232 | Sales & Customer / Procurement & Outsourcing (shared) |
+| A-07 | `return_order_items` | EXISTING_CONVERGE | db.js:1232 (additive col: sales_order_item_id) | Sales & Customer / Procurement & Outsourcing (shared) |
 | A-08 | `sales_discounts` | EXISTING_CONVERGE | discounts-schema.js:28 | Sales & Customer (route-table owned) — M14 post-delivery finance adjustment |
 | A-09 | `sales_invoices` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:70 | Finance Operations |
 | A-10 | `sales_invoice_items` | EXISTING_CONVERGE | v13-phase6e-commercial-golive.js:78 | Finance Operations |
@@ -8899,13 +8905,14 @@ A physical TABLE = a single SQL relation; columns are NOT counted as tables.
 | A-67 | `account_payables` | EXISTING_CONVERGE (frozen) | v22 migrations | Finance Operations |
 | A-68 | `sales_replacement_fulfillments` | NEW | §29.14.1 — confirmed replacement-delivery line evidence | Sales & Customer |
 | A-69 | `sales_sellable_scope_rules` | NEW | §29.4.3 — customer/material, salesperson/material, salesperson/customer allow/deny | Sales & Customer |
+| A-70 | `sales_return_valuation_provenance` | NEW (bounded superseding correction) | §30.31.2 — immutable Return valuation allocation → eligible original outbound evidence; not a general layer ledger | Sales & Customer evidence consuming Inventory canonical facts |
 
 Counts:
 
 ```text
-Physical tables total                                  = 69
+Physical tables total                                  = 70
   EXISTING_CONVERGE  (incl. frozen)                   = 25  (A-01..A-24 + A-67)
-  NEW (physical tables in §29 Domain closure)         = 44  (A-25..A-66 + A-68..A-69)
+  NEW (physical tables in §29 Domain closure/design)  = 45  (A-25..A-66 + A-68..A-70)
   DEPRECATED_NO_NEW_WRITES (tables)                   =  0
 ```
 
@@ -8917,15 +8924,16 @@ Physical tables total                                  = 69
 | A-03 `sales_order_items` | `is_gift_line`, `commercial_tax_basis`, `tax_inclusive_assumption`, `pricing_uom_code_applied`, `qty_break_applied_min`, `qty_break_applied_max`, `planned_delivery_date`, `upper_delivery_tolerance_bps`, `lower_delivery_tolerance_bps`, `price_snapshot_json`, `discount_snapshot_json` | Line-level commercial snapshot; authoritative price/version/UoM and discount-stage evidence; gift line marker; bounded one-schedule-per-line delivery plan/tolerance snapshot | Sales & Customer | both JSON columns remain nullable for legacy rows and display `(legacy)`; every Batch A canonical new line requires valid non-empty server-generated evidence; legacy tolerance does not get reinterpreted from later defaults |
 | A-04 `sales_deliveries` | `delivery_notice_id`, `source_mode`, `billing_mode` (existing) | truthful DIRECT_ORDER / DELIVERY_NOTICE source discriminator; preserved billing mode | Sales & Customer | legacy rows: `source_mode=LEGACY_UNCLASSIFIED`; no fabricated DN |
 | A-05 `sales_delivery_items` | `delivery_notice_line_id` | DN line capacity anchor (§29.11 / §29.17) | Sales & Customer | legacy rows: NULL `delivery_notice_line_id` allowed (legacy path) |
-| A-06 `return_orders` | `commercial_source_marker` (CHECK: DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE) | Three-mode explicit | Sales & Customer | legacy rows: NULL → treat as DELIVERY_BACKED |
+| A-06 `return_orders` | `commercial_source_marker` (CHECK: DELIVERY_BACKED / SO_BACKED / NO_SOURCE) | Three-mode explicit | Sales & Customer | legacy NULL remains readable/displayable as unclassified legacy; Confirm/Reverse or other economic mutation returns 409 and never infers DELIVERY_BACKED |
+| A-07 `return_order_items` | `sales_order_item_id` (nullable FK to `sales_order_items.id`) | Real SO source-line identity for SO_BACKED trace, capacity and locking | Sales & Customer | legacy rows remain NULL; no inferred or fabricated backfill |
 | A-39 `customer_commercial_extensions` | `default_pricing_list_id`, `default_discount_scheme_id` | Wave 2 adds FKs only after A-28 `sales_price_lists` and A-31 `sales_discount_schemes` exist; B3102 customer default semantics retained without dangling Wave 1 pseudo-FKs | Sales & Customer | Wave 1 rows remain valid with fields absent; Wave 2 adds nullable FKs without fabricating defaults |
 | A-19 `account_receivables` | (none this closure) | AR canonical owner = Finance; Sales reads only | Finance Operations | n/a |
 
 Counts:
 
 ```text
-Existing-table extensions                                  = 6  (five pre-existing tables + A-39 extended in Wave 2)
-New logical fields across extensions                       = 31
+Existing-table extensions                                  = 7  (six pre-existing tables + A-39 extended in Wave 2)
+New logical fields across extensions                       = 32
 (no new physical tables created from this sub-class)
 ```
 
@@ -8955,7 +8963,7 @@ C-06 removed: `idempotency_records` is already counted as physical table A-21; r
 |---|---|---|---|---|
 | D-01 | Legacy Sales Delivery without source discriminator (`source_mode = LEGACY_UNCLASSIFIED`) | NO for new writes; legacy rows retained | YES (read) | new writes explicitly choose DIRECT_ORDER or DELIVERY_NOTICE; no historical reinterpretation |
 | D-02 | Legacy Sales Order without commercial parties / tax-basis / prepayment / reservation_intent columns | NO for new normal flow | YES (display `(legacy)`) | legacy rows remain valid; no fabrication |
-| D-03 | Legacy Sales Return without `commercial_source_marker` | NO (must set marker on new entry) | YES (treat NULL as DELIVERY_BACKED) | full backward compatible read |
+| D-03 | Legacy Sales Return without `commercial_source_marker` and without `sales_order_item_id` | NO (new writes must set an explicit marker and valid mode/source pair) | YES for display/read only; every economic mutation returns 409 for NULL/unknown marker | no source inference, DELIVERY_BACKED fall-through or fabricated backfill |
 | D-04 | Legacy Customer without commercial extensions | NO (new entries must record extension) | YES (display `(none)`) | backward compatible |
 | D-05 | Legacy Credit Profile missing | policy-dependent; §29.27 + §29.12 fail-closed rule | YES (display `(none)`) | missing required profile must trigger config BLOCK, NOT silent PASS |
 | D-06 | Legacy Product without A-61 commercial classification | NO for any new commercial write | YES (display `(unclassified legacy)`) | missing/inactive row never implies `sales_enabled=TRUE` or non-service |
@@ -9007,14 +9015,14 @@ Per §29.19 corrected design (rebuild in this §29 of the corrected micro-closur
 #### 29.2.1 Recalculated counts (Micro-Closure)
 
 ```text
-A  Physical tables total                     = 69
+A  Physical tables total                     = 70
      EXISTING_CONVERGE                       = 25  (A-01..A-24 + A-67)
-     NEW                                     = 44  (A-25..A-66 + A-68..A-69)
+     NEW                                     = 45  (A-25..A-66 + A-68..A-70)
      DEPRECATED_NO_NEW_WRITES (tables)      =  0
 
-B  Existing-table extensions                = 6  covered tables across the wave sequence
-                                                 (6 extensions, 31 logical fields;
-                                                  30 ADD + 1 existing reused field)
+B  Existing-table extensions                = 7  covered tables across the wave sequence
+                                                 (7 extensions, 32 logical fields;
+                                                  31 ADD + 1 existing reused field)
 
 C  Derived views / projections               = 5  logical objects
      persisted? YES                         = 0
@@ -9043,8 +9051,10 @@ Sum check:
 | Delivery Notice | Sales `delivery_notice_canonical_writer` | YES | n/a | one transaction | audit_logs |
 | Sales Delivery | Sales `sales_delivery_canonical_writer` (Phase 6E) | YES (commercial) | invokes Inventory V21 `applyInventoryMutation` + OQC + Finance recognition | one transaction: SO inventory + AR recognition + COGS | audit_logs |
 | Sales Return (DELIVERY_BACKED) | Sales `sales_return_canonical_writer` | YES | invokes Inventory V21 restoreSourceValue + Finance credit adjustment | one transaction | audit_logs |
-| Sales Return (ORDER_BACKED / NO_SOURCE) | Sales `sales_return_canonical_writer` (new mode) | YES (commercial only) | Finance credit 边界 by source availability | one transaction with explicit source marker | audit_logs |
-| Replacement obligation | Sales `replacement_canonical_writer` | YES | no inventory/finance bypass; via replacement_delivery_link | one transaction | audit_logs |
+| Sales Return (SO_BACKED / NO_SOURCE) | Sales `sales_return_canonical_writer` (new mode; owns commercial state only) | YES (commercial only) | Inventory canonical acceptance/mutation + strict `receivePositiveSourceValue()` Option-A adapter + Accounting canonical voucher writer; optional Finance AR credit is a separate authoritative-basis branch | one protected transaction with explicit source marker, source-capacity locks, valuation-plan locks, physical/valuation/voucher/audit/idempotency effects; missing basis is 409/zero-side-effect | Sales audit + Inventory/Accounting canonical evidence |
+| Sales Return Reversal (DELIVERY_BACKED) | Sales `sales_return_canonical_writer.reversal_branch` (existing `reverseOperationalReturn` at `server/modules/financial-controls.js:323-382`) | YES | existing reverse handler unchanged; reuses credit gate + voucher direction swap + inventory OUT + return_reversal evidence; canonical Finance/Inventory primitives | one transaction; idempotency under SALES_RETURN_REVERSAL | audit_logs |
+| Sales Return Reversal (SO_BACKED / NO_SOURCE) | Sales `sales_return_canonical_writer.option_c_branch` (new bounded adapter per §29.13.11) | YES (commercial only) | canonical Inventory valuation reverse via `consumeOriginalInboundValue` (gated by strict MOVING_AVERAGE / LOT / SERIAL downstream-consumption proof) + canonical Accounting voucher reverse via `createSystemVoucher(reversalOfId)` + optional canonical Finance Credit reverse via `reverseCreditAdjustment`; never writes Inventory truth or Finance valuation truth directly | one protected transaction with mode resolver, Gate-A Replacement dependency, Gate-B downstream consumption proof, Gate-C valuation reverse, Gate-D voucher reverse, Gate-E optional credit; full-only reversal; idempotency under SALES_RETURN_REVERSAL_OPTION_C | Sales audit + Inventory/Accounting canonical evidence |
+| Replacement obligation | Sales `replacement_canonical_writer` | YES | no inventory/finance bypass; fulfillment only through `sales_replacement_fulfillments` | one transaction | audit_logs |
 | Reservation Intent | Sales `reservation_intent_writer` | YES (intent only) | Planning reservation canonical reader | one transaction intent-state write | audit_logs |
 | Prepayment Gate evaluation | Sales `prepayment_gate_evaluator` (uses Finance canon) | YES (rule only) | reads Finance `settlement_unapplied_balances` / advance receipts | one transaction (gate decision) | audit_logs |
 | Consignment commercial doc | Sales `consignment_commercial_writer` | YES (commercial layer only) | requests Inventory ENTERPRISE-owned position at customer/consignment location; writes Finance settlement ref | one transaction per layer | audit_logs |
@@ -9917,18 +9927,32 @@ new SD after cutover:
 
 ```text
 return_orders.commercial_source_marker  -- NEW
-  CHECK IN ('DELIVERY_BACKED', 'ORDER_BACKED', 'NO_SOURCE')
+  CHECK IN ('DELIVERY_BACKED', 'SO_BACKED', 'NO_SOURCE')
+
+return_order_items.sales_order_item_id  -- NEW, NULLABLE
+  FK → sales_order_items.id
+  purpose = authoritative SO source-line identity for SO_BACKED only
 ```
 
 (DESIGN alternative): 新建 `return_modes` 表；本 Design 选 column-additive 保持最小 invasive.
+
+The line source-pair contract is exclusive for every new Sales Return write:
+
+| Mode | `delivery_item_id` | `sales_order_item_id` |
+|---|---|---|
+| `DELIVERY_BACKED` | required | NULL |
+| `SO_BACKED` | NULL | required |
+| `NO_SOURCE` | NULL | NULL |
+
+The canonical writer and confirm transaction validate the header marker and every line source pair before any inventory, valuation, Finance, success-audit or idempotency side effect. Mixed modes within one header, both identities populated, or a missing required identity fail closed with zero side effects.
 
 #### 29.13.2 三种 mode
 
 | Mode | Required source | Inventory effect | Finance effect | Audit |
 |---|---|---|---|---|
 | DELIVERY_BACKED (SC54) | `sales_delivery_items.id` | IN (applyInventoryMutation) | applyCreditAdjustment (DR AR / CR Sales Revenue voucher) | full audit |
-| ORDER_BACKED (SC55) | `sales_order_items.id` + `sales_deliveries.delivery_id IS NULL for that item`（NO delivery was done）| based on §29.19 / source evidence availability | applyCreditAdjustment bounded by source evidence | full audit + explicit source marker |
-| NO_SOURCE (SC56) | no source sales row | IN (inventory receipts) | 仅 当 Finance-side 具备有效 basis 时才生成 credit; 否则 only inventory + audit | full audit + explicit `NO_SOURCE` marker |
+| SO_BACKED (SC55) | `sales_order_items.id` persisted in `return_order_items.sales_order_item_id`; the line belongs to the referenced real SO, its SO customer equals the Return customer, its product equals the Return-line product, and no executed Sales Delivery exists for that SO line | real accepted IN through Inventory canonical writer; strict positive valuation plan only; no delivery-cost history may be fabricated from the SO line | canonical voucher DR inventory / CR `INVENTORY_GAIN_LOSS`; `applyCreditAdjustment` only when a separate authoritative Finance-side AR basis exists | full audit + explicit source marker and SO-line identity |
+| NO_SOURCE (SC56) | no source sales row | real accepted IN through Inventory canonical writer; strict positive valuation plan only | canonical voucher DR inventory / CR `INVENTORY_GAIN_LOSS`; credit only with separate authoritative Finance-side AR basis, otherwise no credit | full audit + explicit `NO_SOURCE` marker |
 
 #### 29.13.3 容量 invariant
 
@@ -9937,9 +9961,11 @@ return_qty ≤ source_line_remaining_qty
 R-SAL-03 source-line remaining holds
 ```
 
-#### 29.13.4 ORDER_BACKED guardrail
+For `SO_BACKED`, capacity is keyed and locked by the real `sales_order_items.id`; it is never grouped by product/customer/date. Remaining capacity is the SO-line quantity less authoritative effective confirmed Return evidence for that same ID. DRAFT and CANCELLED Return headers do not consume capacity. Existing canonical `return_reversals` / `return_reversal_items` evidence reduces the effective confirmed quantity; this correction does not invent a `REVERSED` Return-header state or redefine the frozen reversal lifecycle.
 
-A `ORDER_BACKED` return must NOT automatically imply:
+#### 29.13.4 SO_BACKED guardrail
+
+A `SO_BACKED` return must NOT automatically imply:
 
 ```text
 - a fake Delivery
@@ -9947,7 +9973,7 @@ A `ORDER_BACKED` return must NOT automatically imply:
 - a fake AR row
 ```
 
-It may record the document; any Inventory IN effect is conditional on actual warehouse movement (manual acceptance); any Finance credit is conditional on Finance-side basis.
+It may record the commercial document. Any Inventory IN is executed only through the Inventory canonical writer and cannot derive nonexistent historical carrying cost or COGS from the SO price. Any Finance credit is conditional on an authoritative Finance-side basis and uses the Finance canonical adjustment primitive. Absence of either basis cannot be repaired by creating a fake Delivery, AR row, voucher, valuation source or shadow ledger.
 
 #### 29.13.5 NO_SOURCE guardrail
 
@@ -9955,10 +9981,592 @@ It may record the document; any Inventory IN effect is conditional on actual war
 return_orders.commercial_source_marker = 'NO_SOURCE'
 + mandatory fields: customer_id, material_id, quantity, warehouse_id,
   reason_code, business_date, authorization_role.
-+ NO automatic Finance credit; only inventory receipt + audit.
++ NO automatic Finance credit; lawful inventory receipt + Option-A valuation
+  voucher + audit remain independent from AR.
 + visible in Sales UI as "无来源销售退货" separate from DELIVERY_BACKED and
-  ORDER_BACKED; not mergeable.
+  SO_BACKED; not mergeable.
 ```
+
+#### 29.13.6 Additive migration, compatibility and rollback
+
+Future Wave 6 Implementation must add `return_order_items.sales_order_item_id` through the new Wave 6 migration only; no historical migration is edited.
+
+```text
+SQLite:
+  additive nullable column + real FK metadata to sales_order_items.id;
+  verify PRAGMA table_info / foreign_key_list.
+
+MySQL 8:
+  dialect-correct nullable column + named real FK constraint;
+  verify information_schema.COLUMNS / KEY_COLUMN_USAGE /
+  REFERENTIAL_CONSTRAINTS.
+
+Required paths:
+  fresh bootstrap;
+  upgrade from the exact pre-Wave-6 schema;
+  repeated migration / replay;
+  row preservation and legacy NULL compatibility;
+  fail closed on unexpected type, nullability, FK target or constraint conflict.
+```
+
+No migration may infer or backfill `sales_order_item_id` for historical rows, and no existing Return row may be rewritten merely to populate the new field. Rollback is compatibility-first: older application code may ignore the nullable column, while the column and any already-written source evidence remain in place. Dropping the column/FK or rewriting populated evidence is a separate destructive migration requiring dependency proof and explicit approval; it is not part of Wave 6 rollback.
+
+#### 29.13.7 Option A valuation primitive contract — approved bounded correction
+
+DR-SAL-04 approves the accounting policy that was left open by the second clarification. The three existing Finance valuation primitives remain non-interchangeable:
+
+| Primitive / path | Authoritative value source | Sales Return use | Strict guardrails | Accounting / AR |
+|---|---|---|---|---|
+| `restoreSourceValue()` | exact POSTED outbound valuation movements of the referenced Delivery item | `DELIVERY_BACKED` only; unchanged | preserves existing original LOT/SERIAL cost matching and Batch-A legacy compatibility | existing Inventory debit / COGS credit and independently lawful Delivery-backed credit path remain unchanged |
+| `receiveSourceValue()` | caller-owned explicit total value allocated across authoritative posted identities | not an HTTP/client value source; may be used only internally to apply an already locked and verified Option-A valuation plan | plan identity, quantity and cents must be revalidated; it cannot select a cost basis itself | no AR implication and no counterpart selection |
+| strict Option-A adaptation of `receivePositiveSourceValue()` | `MOVING_AVERAGE` 使用 exact positive pool；`LOT` 使用 exact positive same-identity carrying pool；`SERIAL` 使用 §30.31 唯一 eligible original outbound valuation provenance；仅在 Requirement 明确允许且存在独立 approved/frozen/effective authority 时才可考虑 standard cost | `SO_BACKED` / `NO_SOURCE` only | `LEGACY_UNVALUED`, zero/default, client/manual, SO/Quotation price, fake Delivery cost、cross-identity pool 与 positive same-serial pool 均为 impossible branches | Inventory debit / existing `INVENTORY_GAIN_LOSS` credit; AR remains a separate Finance-owned decision |
+
+The existing implementation is not yet strict enough for this path: it reads `products.standard_manufacturing_cost_cents` without approval/freeze evidence and may emit `LEGACY_UNVALUED` when valuation has not been activated. The `product_costs` table has only `ACTIVE/HISTORICAL`, creator and effective date; it has no approver/freeze evidence. Therefore neither carrier currently proves the DR-SAL-04 standard-cost condition. Wave 6 must keep the standard-cost fallback unavailable and return HTTP 409 after an exact positive pool miss. It must not infer approval from `ACTIVE`, a positive field, an audit CREATE row, or a product value. Enabling that fallback requires a pre-existing authoritative Master/Finance approval-and-freeze contract; if none is available, a separately approved cross-domain Requirement/Design change is required. Wave 6 adds no approval field, status or shadow evidence.
+
+The strict adaptation is additive and caller-scoped so existing inventory-adjustment/count behavior is not silently changed:
+
+```text
+resolvePositiveSourceValuePlan(db, input, policy = SALES_RETURN_OPTION_A)
+  -> read/lock every exact valuation identity before any Return write
+  -> return immutable in-transaction line/allocation plan with basis + cents
+
+receivePositiveSourceValue(db, input, resolvedPlan,
+                           policy = SALES_RETURN_OPTION_A)
+  -> revalidate plan identity/quantity/positive cents under the same locks
+  -> apply only the resolved plan through receiveValue()
+  -> never enter LEGACY_UNVALUED or raw product-standard-cost fallback
+```
+
+The names describe responsibilities rather than a second ledger or new persistence object. Implementation may factor the resolver inside `financial-inventory.js`, but the public Sales handler cannot accept a cost, basis, unit cost or valuation plan from the client.
+
+Valuation validation is exact and performed for the complete Return before physical mutation；本段由 §30.31 对 LOT/SERIAL/NO_SOURCE provenance 作有界 supersede：
+
+- `MOVING_AVERAGE`: lock/read the balance keyed by the same `warehouse_id + product_id`; both quantity and value must be positive and the allocated inbound cents must remain positive.
+- `LOT_SPECIFIC_POOL`: every accepted Return allocation must name the same real LOT identity and use only that exact warehouse/product/LOT positive carrying pool；Reverse 不再要求 aggregate pool 等于本次 Return movement，而使用 §30.31 conservative movement fence。
+- `SPECIFIC_SERIAL`: every accepted serial must be unique for the request, match the Return product/warehouse identity, have no active in-stock duplicate, and resolve exactly one eligible original `SALES_DELIVERY_COGS` outbound valuation movement plus its tracked OUT evidence；current positive same-serial pool is never valuation authority.
+- `NO_SOURCE` commercial identity remains independent from valuation provenance. It may bind the bounded immutable provenance carrier in §30.31 without acquiring SO/Delivery commercial source identity；missing or ambiguous provenance fails 409.
+- A required pool/provenance with zero/negative quantity, zero/non-positive value, incompatible valuation method, missing tracking allocation or mismatched identity is not eligible. It cannot fall through to `LEGACY_UNVALUED` or standard cost.
+- All lines are planned against the transaction-start locked authority snapshot. Value written by an earlier line in the same Return cannot become the authority for a later line.
+
+#### 29.13.8 Warehouse acceptance and atomic confirm flow
+
+`sales_return_canonical_writer` owns the Return mode, source and state; it delegates physical truth to the existing Inventory canonical mutation boundary. “Warehouse acceptance” is the successful mode-aware Inventory validation and posting inside confirm, not a Sales-side stock update and not a pre-confirmed external fact.
+
+```text
+POST /api/sales-returns/:id/confirm + Idempotency-Key
+  1. authorize RETURNS_MANAGE; open canonical transaction; acquire idempotency scope
+  2. lock DRAFT return header and all lines in stable id order
+  3. validate one header mode + exclusive line source pairs
+  4. SO_BACKED: lock real sales_order_items.id anchors; recheck SO/customer/product,
+     no executed Delivery condition, and effective confirmed-return capacity
+  5. validate warehouse/product/tracking policy and the proposed LOT/SERIAL
+     acceptance allocations without posting them
+  6. assert Inventory and Accounting periods open on return_date
+  7. for every SO_BACKED/NO_SOURCE line, lock and freeze one complete strict
+     positive valuation plan; if any line lacks a legal basis -> HTTP 409
+  8. invoke Inventory canonical tracking + quantity mutation using source identity
+     SALES_RETURN, then apply the frozen valuation plan and bind movements to the
+     resulting inventory_transaction_id / Return line
+  9. build and post one balanced canonical inventory-value voucher for the Return
+ 10. independently resolve/apply an eligible Finance AR credit, if and only if a
+     real matching authoritative Finance basis and existing contract permit it
+ 11. transition Return to CONFIRMED; write success audit and idempotency result
+ 12. commit
+```
+
+Steps 3–7 are mandatory preflight under the same transaction and locks as steps 8–11. The writer may call Inventory validation helpers before mutation, but cannot mark tracking allocations posted, adjust inventory, create an inventory transaction or valuation movement until every line and voucher prerequisite has passed. A failure at any later step rolls back all earlier writes. Existing independent failure/security logging may remain outside the business-success facts.
+
+`DELIVERY_BACKED` takes a separate unchanged branch after the common mode/source validation: it locks the real Delivery line, posts the accepted physical return, calls `restoreSourceValue()` against exact outbound evidence, posts the existing COGS reversal, and applies credit only under its existing authoritative Finance contract. It never enters Option-A pool/standard-cost selection.
+
+#### 29.13.9 Option A voucher and Finance AR boundary
+
+The Option-A inventory-value voucher is a canonical Accounting artifact whose business source remains `SALES_RETURN`; it is not an Inventory Adjustment or historical Delivery reversal.
+
+```text
+per valued allocation/line:
+  DEBIT  inventoryAccountRole(product_id)  = positive inbound value cents
+
+per Return voucher:
+  CREDIT INVENTORY_GAIN_LOSS               = sum of all positive inbound value cents
+```
+
+The writer resolves every inventory role through `inventoryAccountRole(product_id)` and the existing account-role mapping; it never hardcodes a subject id. Lines are deterministically grouped by resolved inventory role (and may carry line summaries), so multiple products and valuation methods produce the exact sum of their canonical movements. The single `INVENTORY_GAIN_LOSS` credit equals the total debit; all amounts are safe positive integer cents. Missing role mapping, an empty/zero entry set, unsafe cents, mismatch with valuation movements or debit/credit imbalance is HTTP 409 and rolls back confirmation.
+
+The voucher is emitted exactly once through `createSystemVoucher()` (or the same canonical Accounting writer after factoring) with `sourceType='SALES_RETURN'` and `sourceId=returnId`. It must not collide with, overwrite or masquerade as `SALES_RETURN_COGS`, Sales Revenue reversal, Delivery or Inventory Adjustment. If the current writer's `(source_type, source_id)` uniqueness cannot represent both this Return inventory event and a separately lawful Finance credit event, the credit branch must use its existing Finance-owned event identity or fail closed; it must not rename the Return business source or overwrite the inventory voucher.
+
+Inventory valuation and Finance AR are resolved independently. The Return handler does not call `ensureReceivableSource()`, create an Invoice/Open Item/Revenue/Delivery, or synthesize a COGS reversal for Option A. It may call `applyCreditAdjustment()` only after locking and revalidating a real matching Finance-owned AR/Open Item basis for the same customer and permitted amount under the existing contract. “No AR basis” means skip the optional credit branch and still commit the lawful inventory receipt. “Basis exists but Finance validation/writer fails” means the transaction fails and all Option-A effects roll back.
+
+#### 29.13.10 Idempotency, lock order and failure contract
+
+The confirm endpoint uses the existing `idempotency_records` contract with operation namespace `SALES_RETURN_CONFIRM`, document id = Return id, and a fingerprint covering action plus authoritative request fields. Same key/same payload replays the committed result; same key/different payload is 409; no success record is saved before all effects succeed. The Return status lock also prevents a second key from confirming the same document twice.
+
+Canonical lock order is deterministic:
+
+```text
+idempotency scope -> return header -> return lines (ascending id)
+-> mode source lines (ascending real SD/SO line id)
+-> tracking identities / Inventory positions (canonical key order)
+-> valuation balances (balance_key order)
+-> optional Finance AR/Open Item locks (canonical Finance order)
+-> voucher source identity
+```
+
+SQLite uses the encompassing write transaction; MySQL uses independent-session row-lock evidence. Every capacity and valuation aggregate is re-read under its anchor lock. Failure leaves Return state, Inventory quantity, tracking, valuation movements/balances, voucher/GL, AR/Credit Adjustment, success audit and success idempotency evidence unchanged. This is also required for period closure, missing account role, duplicate serial, stale capacity, writer error and deadlock/loser retry.
+
+#### 29.13.11 Sales Return Reversal — Option C Restricted Economic Reversal (`SO_BACKED` / `NO_SOURCE`)
+
+DR-SAL-04 (Option A) governs confirm-time valuation + accounting; DR-SAL-05 (Option C) governs the bounded post-confirm reversal of `SO_BACKED` and `NO_SOURCE` confirmed Returns. This sub-section is the technical contract for Option C; it does NOT touch DELIVERY_BACKED, existing `reverseOperationalReturn()`, Batch A, Option A confirm-time valuation, or Replacement immutable fulfillment evidence.
+
+##### 29.13.11.1 Mode-aware dispatch (one endpoint, two branches)
+
+`POST /api/sales-returns/:id/reverse` resolves once at handler entry to one of two branches; mixing modes inside a single transaction is impossible by design.
+
+```text
+1. authorize RETURNS_MANAGE; parse body; open the mode-dispatch transaction/read boundary
+2. SELECT commercial_source_marker FROM return_orders WHERE id=? FOR UPDATE
+   (SQLite: implicit write-tx serialization)
+3. switch (header.commercial_source_marker):
+   case DELIVERY_BACKED:
+     -> delegate to existing reverseOperationalReturn()  unchanged
+   case SO_BACKED:
+   case NO_SOURCE:
+     -> require explicit non-empty Idempotency-Key header; missing -> HTTP 400
+     -> acquire SALES_RETURN_REVERSAL_OPTION_C scope; continue §29.13.11.2..8
+   default (UNKNOWN / NULL / unexpected):
+     -> HTTP 409 (拒绝冲销: 未识别或缺失 mode marker)
+```
+
+`reverseOperationalReturn()` (in `server/modules/financial-controls.js`) is preserved verbatim, including its existing idempotency contract; Option-C's mandatory header is enforced only after the locked marker selects `SO_BACKED` / `NO_SOURCE`. A future bounded adapter may factor out side effects, but DELIVERY_BACKED must not gain or lose any current observable behavior. A mixed-mode or unknown-marker Return cannot be reversed: HTTP 409 with explicit reason; there is no silent fall-through to a default branch.
+
+##### 29.13.11.2 Gate-A — Replacement Dependency (canonical fulfillment evidence only)
+
+```text
+per return_line_id:
+  # 1. 必须先以真实 fulfillment evidence 为权威
+  SELECT rf.* FROM sales_replacement_fulfillments rf
+  JOIN sales_order_replacement_lines rl ON rl.id = rf.replacement_line_id
+  WHERE rl.source_return_item_id = return_line.id
+
+  if any row -> A.3 HTTP 409 整体回滚
+    (不得删除 fulfillment; 不得改写已确认 Delivery;
+     不得伪造 Delivery reversal; 不得将已履行数量改写为零;
+     不得静默恢复原 SO executed history;
+     这里 fulfillment evidence 是 canonical truth, 不得
+     因 header.cancellation_state='FULFILLED' / 'CANCELLED' 而绕过)
+
+  # 2. 没有 fulfillment evidence 时,才检查 header 取消状态
+  #    任何 partial 或 fully-fulfilled 状态都已被上面 A.3 捕获,
+  #    所以此分支 effective_fulfilled = 0 恒真。
+  if no fulfillment row:
+    SELECT rl.id, rl.replacement_quantity, sr.cancellation_state
+    FROM sales_order_replacement_lines rl
+    JOIN sales_order_replacements sr ON sr.id = rl.replacement_id
+    WHERE rl.source_return_item_id = return_line.id
+    # LEFT JOIN rf has no rows here by definition of the outer guard
+    GROUP BY rl.id, rl.replacement_quantity, sr.cancellation_state
+
+    for each rl row:
+      if sr.cancellation_state = 'ACTIVE':
+        -> A.2 HTTP 409 (ACTIVE + effective_fulfilled (==0) < replacement_quantity;
+                          必须先经正规业务流程取消剩余补货义务)
+      if sr.cancellation_state = 'CANCELLED':
+        -> A.4 通过; continue Gate-B
+      else:
+        -> HTTP 409 (header state 未知)
+
+  # 3. 完全没有 Replacement obligation
+  if no rows at all:
+    -> A.1 通过; continue Gate-B
+```
+
+判断必须基于 `sales_replacement_fulfillments` 真实 join 的 row-level evidence, **不得**仅依赖 `sales_order_replacements.state` / `cancellation_state` 等可编辑 lifecycle 字段;任何 partial / fully-fulfilled 状态都已被 A.3 捕获 (在 Step 1 提前 409),不会到达本步 effective_fulfilled 求值,故不再需要 "fully fulfilled → 通过" 的兜底条款 (DR-SAL-05 明确禁止这种绕过). R-SAL-10 既有 canonical lock identity (`return_order_items.id` + `sales_order_replacement_lines.id` + `sales_delivery_items.id`) 继续负责 Replacement ↔ Return 序列化.
+
+##### 29.13.11.3 Gate-B — Downstream Consumption Proof (canonical evidence, strict fail-closed)
+
+Goal: prove that the original Option A inbound quantities + value cents can still be EXACTLY reversed without recomputing sale price / current standard cost / current average cost. `current_inventory_quantity >= return_quantity` is **not** sufficient evidence; shared valuation pool's current balance alone is also not sufficient for MOVING_AVERAGE.
+
+Per Return line, locked canonical reads in order:
+
+```text
+M0 identity anchors
+   - product_id, warehouse_id, lot_id (or NULL), serial allocation set (or NULL)
+   - business_date (must be inside open Inventory + Accounting periods)
+
+M1 locate original POSTED positive valuation movements
+   SELECT * FROM inventory_valuation_movements
+   WHERE source_type='SALES_RETURN' AND source_id=? AND source_item_id=?
+         AND quantity_delta > 0 AND status='POSTED'
+   ORDER BY created_at, id
+   if empty -> HTTP 409 (原入库缺少权威估值事件)
+
+M2 identity/method exact-reverse feasibility proof
+   for each m in originals:
+     if lot_id IS NULL AND serial_id IS NULL AND product valuation method='MOVING_AVERAGE':
+       lot_id IS NULL AND serial_id IS NULL
+       -> MOVING_AVERAGE_GUARD (strict)
+     elif lot_id IS NOT NULL AND serial_id IS NULL AND product valuation method='LOT_SPECIFIC_POOL':
+       lot_id IS NOT NULL
+       -> LOT_GUARD
+     elif serial_id IS NOT NULL AND product valuation method='SPECIFIC_SERIAL'
+          AND exactly one §30.31 provenance row exists:
+       serial_id IS NOT NULL
+       -> SERIAL_GUARD
+     else:
+       -> HTTP 409 (method/identity/provenance marker 未知或不一致,不得推断)
+
+M3 duplicate-reverse guard
+   for each m in originals:
+     SELECT COUNT(*) FROM inventory_valuation_movements
+     WHERE reversal_of_id=m.id AND status='POSTED'
+     if > 0 -> HTTP 409 (已被冲销)
+```
+
+**MOVING_AVERAGE_GUARD (strict fail-closed)**
+
+```text
+the SHARED pool's value may have been partially consumed by subsequent issuances
+or losses; exact-value reverse requires proof that no downstream valuation
+movement has reduced this specific pool since the original Return's inbound.
+
+strict_negative_post = SELECT COALESCE(SUM(quantity_delta),0)
+   FROM inventory_valuation_movements
+   WHERE product_id = m.product_id
+     AND warehouse_id = m.warehouse_id
+     AND lot_id IS NULL AND serial_id IS NULL
+     AND quantity_delta < 0                                    -- 任意下游净消耗
+     AND status IN ('POSTED')
+     AND created_at > m.created_at                             -- 严格晚于原始 Return 入库
+     AND inventory_transaction_id <> m.inventory_transaction_id -- 排除原始自身 transaction
+  # 注意: 不依赖 movement_type LIKE 通配, 因 LIKE 容易漏掉
+  # INVENTORY_ADJUSTMENT_LOSS / INVENTORY_COUNT_SHORTAGE / INVENTORY_SCRAP /
+  # SALES_DELIVERY_COGS 等真实存在的负 quantity_delta movement_type;
+  # canonical 谓词是 quantity_delta < 0 同一 (product, warehouse, lot NULL, serial NULL),
+  # 这是 MOVING_AVERAGE 实际减少池容量的唯一充分判据.
+
+if strict_negative_post < 0:
+  -> HTTP 409 (downstream consumption breaks exact-value reverse)
+  不得仅凭 current_pool.quantity >= m.quantity_delta 与
+  current_pool.value_cents >= m.value_delta_cents 通过:
+  MOVING_AVERAGE cannot strictly prove the original value block is intact
+  without recomputing the average or back-tracking per-inbound provenance,
+  both forbidden by DR-SAL-05.
+
+# 排除原始 Return 自身 transaction 引发的连带 valuation 借方 (例如同一 RETURN
+# 的 COGS_REVERSAL 镜像, 如果 Option A confirm 时同 transaction 已发出)
+# 上面 inventory_transaction_id <> m.inventory_transaction_id 已保证。
+
+additional duplicate-reverse check:
+  SELECT COALESCE(SUM(-value_delta_cents),0) FROM inventory_valuation_movements
+  WHERE reversal_of_id=m.id AND status='POSTED'
+  if > 0 -> HTTP 409 (已被冲销)
+```
+
+**LOT_GUARD (strict)**
+
+```text
+identity = exact (product_id, warehouse_id, lot_id); NULL/wrong identity -> 409.
+original Return authority = the exact POSTED positive SALES_RETURN movement m,
+its real inventory_transaction_id, and its unreversed quantity/value.
+
+current sufficiency (necessary, never sufficient by itself):
+  balance = locked inventory_valuation_balances row for identity
+  lot_balance = locked inventory_lot_balances row for identity
+  require valuation_method='LOT_SPECIFIC_POOL'
+  require balance.quantity >= unreversed_return_quantity
+  require balance.value_cents >= unreversed_return_value_cents
+  require lot_balance.quantity >= unreversed_return_quantity
+
+negative-movement frontier:
+  reject if any POSTED inventory_valuation_movements row for the exact identity
+  has quantity_delta < 0, differs from m.inventory_transaction_id, and:
+    created_at > m.created_at, OR created_at = m.created_at.
+  The equality branch is deliberately conservative: timestamp ties are treated
+  as ambiguous/post-frontier and reject; UUID/id ordering is never used as a
+  causal clock. The same rule applies to tracked_inventory_movements OUT rows.
+
+dependency proof under the same locks:
+  - active inventory_locks on the exact position_key -> 409;
+  - active ON_HAND planning_reservations for product/warehouse cannot identify
+    LOT, therefore any such row is an unresolved dependency -> 409;
+  - any post-Return INVENTORY_TRANSFER OUT/MOVE or other tracked OUT -> 409;
+  - HOLD is allowed only when it is the unchanged Return-created HOLD state;
+    any later tracked_identity_hold_history action is a dependency -> 409;
+  - unknown source/status, missing canonical position, or disagreement among
+    physical position, lot balance, tracking and valuation -> 409.
+
+aggregate balance equality is forbidden as a gate. OUT then replenishment still
+rejects because the negative frontier is append-only even when current quantity
+and value again appear sufficient. No general inventory layer allocation is added.
+```
+
+**SERIAL_GUARD (strict)**
+
+```text
+Confirm-time authority is the unique eligible original outbound pair, never the
+current positive same-serial pool:
+  outbound valuation: POSTED, quantity_delta=-1, value_delta_cents<0,
+    movement_type='SALES_DELIVERY_COGS', source_type='SALES_DELIVERY',
+    exact product/warehouse/serial and real inventory_transaction_id.
+  outbound tracking: exactly one unreversed tracked_inventory_movements OUT row
+    with the same transaction/product/warehouse/serial and quantity=1.
+  serial lifecycle before Confirm: DELIVERED, current_warehouse_id IS NULL;
+    no AVAILABLE/HOLD row or other active in-stock duplicate for the identity.
+  reversal/restoration history: outbound has not already supplied an active
+    restoration; the selected evidence is unique after all filters, else 409.
+
+Confirm restores exactly one unit and exactly -outbound.value_delta_cents through
+one positive SALES_RETURN valuation movement. §30.31 provenance freezes the
+selected outbound valuation/tracking identities and quantity/value in the same
+transaction. SO_BACKED/NO_SOURCE commercial fields do not alter this authority.
+
+Reverse requires the same provenance row, the one positive Return movement still
+unreversed, serial still exactly once at original product/warehouse in
+AVAILABLE/HOLD, quantity=1, and no later tracked OUT/MOVE, transfer, reservation,
+lock, HOLD/RELEASE action or other dependency. It removes exactly that restored
+unit and negates the Return movement/value. Missing, multiple, stale or conflicting
+outbound candidates, already-restored/consumed evidence, lifecycle disagreement,
+or legacy rows without deterministic provenance -> HTTP 409 with zero effects.
+```
+
+`reverseValuationSource()` (in `server/modules/financial-inventory.js`) reads by `(originalSourceType, originalSourceId)` and would also work as the actual movement step, but **does not** perform the per-basis strict MOVING_AVERAGE / LOT / SERIAL downstream-consumption proof required by Gate-B. The strict proof is added by this section as a precheck before any canonical reverse primitive is called.
+
+##### 29.13.11.4 Gate-C — Exact Original Valuation Reverse (canonical primitive)
+
+After Gate-A and Gate-B pass, one reverse per line uses the canonical primitive:
+
+```text
+result = consumeOriginalInboundValue(db, {
+  productId, warehouseId, lotId, serialId,
+  businessDate,
+  quantity: original.quantity_delta,        // full reverse only
+  originalSourceType: 'SALES_RETURN',
+  originalSourceId: returnId,
+  originalSourceItemId: return_line.id,
+  sourceType: 'SALES_RETURN_REVERSAL',
+  sourceId: reversalId,
+  sourceItemId: return_line.id,
+  movementType: 'INVENTORY_VALUATION_REVERSAL',
+  createdAt,
+})
+# result: array of one or more paired reversal movements
+#   - reversal_of_id   = original.id (per original)
+#   - quantity_delta   = -original.quantity_delta      (full)
+#   - value_delta_cents = -original.value_delta_cents (full)
+#   - basis / lot_id / serial_id preserved verbatim
+#   - inventory_transaction_id = same as original
+# 任何 primitive 抛出的 409 都使整体 Option C transaction 回滚。
+# Gate-B 是 contract, 保证该 primitive 在本上下文中安全调用。
+```
+
+Forbidden in this gate:
+- LEGACY_UNVALUED / 任意零值 / 客户端手工值 / SO 或 Quotation 售价 / 假 Delivery COGS / 跨身份 pool allocation
+- 按销售单价、当前平均成本或当前标准成本 recompute 历史金额
+- 将同一商业金额重复分配到多条原始凭证分录
+- 把一个原始 movement 拆给多个 reversal
+- 多次部分冲销后再 "full reverse" (cumulative 已被 reverse > 0 即 409)
+
+##### 29.13.11.5 Gate-D — Exact Original Voucher Reverse
+
+The Option A confirm path wrote exactly one `accounting_vouchers` row keyed `(voucher_origin='SYSTEM', source_type='SALES_RETURN', source_id=returnId)`. Its entries debit `inventoryAccountRole(product_id)` per valued allocation and credit `INVENTORY_GAIN_LOSS`, every amount safe integer cents. Option C reverses that voucher without recomputation:
+
+```text
+1. original = SELECT * FROM accounting_vouchers
+              WHERE voucher_origin='SYSTEM' AND source_type='SALES_RETURN'
+                    AND source_id=? AND status='POSTED'
+   if none                                  -> HTTP 409 (缺少原始凭证)
+2. if any posted reversal voucher with reversal_of_id = original.id -> HTTP 409 (duplicate)
+3. original_entries = SELECT * FROM accounting_entries WHERE voucher_id = original.id
+                       ORDER BY line_no, id
+4. reversal_entries = for each entry:
+     subject_id   = entry.subject_id                       (verbatim)
+     direction    = entry.direction == 'DEBIT' ? 'CREDIT' : 'DEBIT'
+     amount_cents = entry.amount_cents                     (verbatim, safe integer)
+     summary      = `冲销:${entry.summary || original.voucher_no}`
+     line_no      = entry.line_no
+5. reversal_voucher_id = createSystemVoucher(db, {
+     sourceType:    'SALES_RETURN_REVERSAL',
+     sourceId:      reversalId,
+     reversalOfId:  original.id,
+     remark, actorId, businessDate,
+     entries:       reversal_entries,
+   })
+6. assert new voucher.status='POSTED' AND new voucher.period = original.period
+```
+
+Debit/Credit mirroring preserves exact original cents; voucher balance is verified inside `createSystemVoucher()` (canonical Accounting writer in `server/modules/financial-inventory.js:172`). No new account role, no new voucher type, no manual amount.
+
+Forbidden:
+- `return_quantity * sales_unit_price` as the reverse amount
+- distributed commercial amount across multiple original lines / entries
+- duplicating one original entry as multiple reversal entries
+- changing `subject_id` of any entry
+- posting outside an open Accounting period
+- multiple reversal vouchers against the same original
+
+DELIVERY_BACKED existing reverse path in `server/modules/financial-controls.js:371-373` continues to flip its DELIVERY_BACKED voucher separately; Option C writer does not touch that path.
+
+##### 29.13.11.6 Gate-E — Optional Finance Credit Reverse
+
+Independent branch on the existence of the `financial_credit_adjustments` row:
+
+A. **No confirmed Credit exists**:
+
+```text
+SELECT * FROM financial_credit_adjustments
+WHERE source_type='SALES_RETURN' AND source_id=returnId AND status='CONFIRMED'
+if empty:
+  - 不引用虚构 Credit
+  - 不写 credit_reversal_components 行
+  - 不访问不存在 target Open Item
+  - 不调用虚假 AR refresh
+  - 继续已合法的 Gate-A..D
+```
+
+B. **Confirmed Credit exists**:
+
+```text
+balance = SELECT id FROM settlement_unapplied_balances
+          WHERE balance_type='CREDIT' AND source_id=credit.id
+
+if balance is not null:
+  already_consumed = COALESCE(SUM(amount_cents),0) over balance_applications
+                     WHERE status='CONFIRMED'
+                   + COALESCE(SUM(amount_cents),0) over financial_refunds
+                     WHERE status='CONFIRMED'
+  if already_consumed > 0:
+    -> HTTP 409 (Credit 已被后续 application/refund 消费; 不得部分冲销)
+
+reverseCreditAdjustment(db, 'AR', 'SALES_RETURN', returnId,
+                        actor.id, businessDate, reason)
+# canonical primitive (server/modules/settlement-core.js:165)
+# flips status to 'REVERSED' and refreshes open item amount.
+```
+
+C. **Credit reversal fails** for any reason (writer error, period closed, status race, etc.): the entire Option C transaction rolls back; original Return and its evidence remain unchanged.
+
+DELIVERY_BACKED existing reverse path uses its own credit gate at `server/modules/financial-controls.js:332-339`; Option C writer does not modify it.
+
+##### 29.13.11.6.b Commercial Amount & NO_SOURCE Schema Constraint
+
+`return_reversals.amount_cents INTEGER NOT NULL CHECK(amount_cents > 0)` 与
+`return_reversal_items.amount_cents INTEGER NOT NULL CHECK(amount_cents > 0)`
+在 `server/migrations/v13-phase6a-financial-controls.js:106-119` 中硬编码为严格正数,
+这是 DELIVERY_BACKED 既有 reverse 路径在 `financial-controls.js:346` 写入的形状
+(`quantity * original.unit_price_cents`, 总是 > 0).
+
+Option C 对 NO_SOURCE 模式产生约束冲突: NO_SOURCE Return 没有 canonical 销售单价
+(按 DR-SAL-04 + §29.13 / §29.13.5 / §30.29 的 "no fake source sale" 约束),
+`return_order_items.unit_price_cents` 在 confirm 阶段即为 0/空, 反向冲销时
+`quantity * 0 = 0`, 违反 CHECK(amount_cents > 0), 普通 INSERT 会被数据库拒绝.
+
+DR-SAL-05 + Option C 商业合同的最小可行解:
+
+```text
+A. SO_BACKED: canonical 销售单价存在 (sales_order_items.unit_price_cents > 0),
+   amount_cents = quantity * unit_price_cents, 与 DELIVERY_BACKED 既有行为一致,
+   不需要额外 schema 修改, CHECK(amount_cents > 0) 自动满足.
+
+B. NO_SOURCE: canonical 销售单价不存在 / 为 0,
+   不得伪造 commercial amount,
+   不得通过 (sales_order_items.unit_price_cents, SO price, Quotation price,
+            average cost, current standard cost) 反推金额,
+   唯一合规的做法是接受 NO_SOURCE reverse 写入 amount_cents = 0,
+   需要把以下两个 CHECK 从 "严格正数" 放宽为 "非负整数分":
+
+   ALTER TABLE return_reversals
+     DROP CONSTRAINT (SQLite reproduction) / DROP CHECK chk_xxx (MySQL)
+     AND re-ADD CONSTRAINT ... CHECK (amount_cents >= 0);
+     # 同时 UNIQUE(reversal_no) 等不变.
+
+   ALTER TABLE return_reversal_items
+     SAME relaxation, CHECK(amount_cents >= 0);
+     # return_reversal_items.quantity CHECK(quantity > 0) 保持不变,
+     # 因为 quantity 始终是原 return_order_items.quantity (> 0), 与 amount_cents 解耦.
+
+C. 回退兼容: DELIVERY_BACKED 既有 reverseOperationalReturn 写 amount_cents > 0,
+   >= 0 的放宽对其保持 no-op, 不会引入回归.
+```
+
+如果该 CHECK 放宽被推迟 / 被拒绝, 那么 NO_SOURCE Option C reverse 实施就需要
+引入第二套 evidence 表 (第二套 reversal 记录), 这等同于在仓库内增加新的库存 / 估值
+/ 凭证之外的额外平行表, 与 Frozen Domain Integrity 冲突, 不得绕过治理新增.
+因此本节把 CHECK 放宽登记为 Wave 6 Implementation 阶段必需的有界 migration delta,
+并把精确差异 (金额语义两条记录分离、商业金额为 0 / 估值金额为正向 / 不伪造) 写入
+§30.30 的 Implementation 证据清单.
+
+##### 29.13.11.7 Atomicity, lock order, idempotency
+
+All Gates run inside ONE `transaction(db, () => { ... })` bound to one `SALES_RETURN_REVERSAL_OPTION_C` idempotency record. After the locked mode resolver selects `SO_BACKED` / `NO_SOURCE`, the client must provide a non-empty `Idempotency-Key`; validation occurs before any business mutation and the server must not synthesize a random fallback. The lock order is canonical across SQLite and MySQL and is superseded/expanded by §30.31 where provenance/dependency locks are named:
+
+```text
+ 1. acquire idempotency scope
+      (operation_type='SALES_RETURN_REVERSAL_OPTION_C', document_id=returnId,
+       idempotency_key=clientKey) + canonical payload fingerprint
+ 2. SELECT * FROM return_orders WHERE id=? FOR UPDATE
+ 3. SELECT * FROM return_order_items WHERE return_id=? ORDER BY id FOR UPDATE
+ 4. for each line:
+    SELECT replacement evidence from sales_order_replacement_lines +
+           sales_replacement_fulfillments WHERE source_return_item_id=line.id FOR UPDATE
+ 5. for each line (ascending line id, then movement id):
+    SELECT originals FROM inventory_valuation_movements
+       WHERE source_type='SALES_RETURN' AND source_id=? AND source_item_id=?
+       FOR UPDATE
+ 6. SELECT provenance + original outbound evidence (when required), exact Inventory
+    positions/tracking identities, valuation/LOT balances, active locks/reservations,
+    hold history and post-frontier movement rows in §30.31 canonical key order FOR UPDATE
+ 7. SELECT original FROM accounting_vouchers
+       WHERE source_type='SALES_RETURN' AND source_id=? FOR UPDATE
+ 8. SELECT credit FROM financial_credit_adjustments WHERE source_type='SALES_RETURN' AND source_id=?
+    (only when Step 8 found a row; otherwise step skipped to avoid unused-lock contention)
+ 9. canonical reverses:
+    consumeOriginalInboundValue(...) per line (Gate-C) -> creates reversal movements
+    createSystemVoucher(...)                once       (Gate-D) -> creates reversal voucher
+    reverseCreditAdjustment(...)            once       (Gate-E)
+10. INSERT INTO return_reversals; INSERT INTO return_reversal_items;
+    INSERT INTO credit_reversal_components (Gate-E only)
+11. INSERT INTO audit_logs
+12. saveIdempotency(SALES_RETURN_REVERSAL_OPTION_C, returnId, key, fingerprint, result)
+13. COMMIT
+```
+
+SQLite: the whole sequence runs in `BEGIN IMMEDIATE` write transaction. MySQL: every SELECT … FOR UPDATE acquires the row lock under the same caller transaction; range/absence locks use the §30.31 anchor rows and indexed predicates so missing-row checks cannot admit phantoms. Independent-session evidence is required in the Wave 6 acceptance gate; a single shared connection is not concurrency evidence.
+
+Idempotency contract:
+
+```text
+scope = (SALES_RETURN_REVERSAL_OPTION_C, returnId, clientKey)
+fingerprint = canonical { action='reverse', normalized businessDate, normalized reason,
+                          every authoritative request field changing economic effect }
+transport noise and body idempotency aliases are excluded.
+same scope/key + equivalent fingerprint -> replay the committed result (HTTP 200),
+  without duplicate Inventory, traceability, valuation, voucher, Credit, audit or idem effects
+same scope/key + different fingerprint -> HTTP 409 with zero new effects
+missing/blank Idempotency-Key header -> HTTP 400 before mutation/success audit/success idem
+server-generated random or deterministic replacement key -> forbidden
+```
+
+Concurrent races (Option C spec adds no new Race ID; reuses R-SAL-09 / R-SAL-10):
+
+```text
+- Two Option C reverses of same Return id: serialized on return_orders FOR UPDATE;
+  the duplicate-reverse guards + idempotency record produce replay / 409.
+- Option C reverse vs Sales Delivery confirm of same product / warehouse position:
+  serialized on inventory_valuation_balances FOR UPDATE; exactly-once net effect or 409.
+- Option C reverse vs Replacement fulfillment evidence insert:
+  serialized on sales_replacement_fulfillments FOR UPDATE;
+  Replacement cannot fulfill during a Return Reverse; second writer sees post-reverse state.
+- Option C reverse vs Finance Credit application / refund:
+  serialized on financial_credit_adjustments + settlement_unapplied_balances
+  (reverseCreditAdjustment already locks them).
+```
+
+Failure roll back entire Option C transaction; original Return status, Return items, `inventory_valuation_movements`, `inventory_valuation_balances`, `accounting_vouchers`, AR, `return_reversals`, audit, idempotency — all unchanged.
+
+##### 29.13.11.8 DELIVERY_BACKED Compatibility
+
+`reverseOperationalReturn()` in `server/modules/financial-controls.js:323-382` remains the DELIVERY_BACKED path. The mode resolver (§29.13.11.1) routes DELIVERY_BACKED to that function unchanged. No Option C primitive touches DELIVERY_BACKED's voucher, credit adjustment, `credit_reversal_components`, inventory OUT or `return_reversal_items` row. Batch A frozen semantics are not extended.
+
+A separate future bounded Design task may propose Option-C-style evidence for DELIVERY_BACKED reverse; that work cannot start under this DR and must not modify `reverseOperationalReturn` without its own approved Requirement delta.
 
 ### 29.14 Replacement / Replenishment Technical Design
 
@@ -9978,13 +10586,16 @@ Source return line = return_order_items.id  (preferred; matches source-capacity 
 sales_order_replacements:
   id, replacement_no (UNIQUE),
   source_return_id (FK return_orders.id, NOT NULL),
-  state ('OPEN','IN_PROGRESS','FULFILLED','CANCELLED'),
+  cancellation_state ('ACTIVE','CANCELLED'),
+  fulfillment_state (PURE_DERIVED API/read projection:
+                     'OPEN','PARTIAL','FULFILLED','CANCELLED'),
   replacement_quantity (header roll-up; computed from lines),
   fulfilled_quantity   (header roll-up; computed from lines),
   remaining_quantity   (header roll-up; computed from lines),
-  delivery_link_id (FK sales_deliveries.id nullable),
   created_at, creator_id, closed_at, closed_by
 ```
+
+There is no persisted header `delivery_link_id`. `sales_replacement_fulfillments` is the only authoritative Replacement-to-Delivery relationship and preserves all deliveries without first/last-row overwrite or lossy projection.
 
 `sales_order_replacement_lines` (NEW A-38 line):
 
@@ -9995,8 +10606,8 @@ sales_order_replacement_lines:
   source_return_item_id (FK return_order_items.id, NOT NULL),
   replacement_material_id (FK products.id),
   replacement_quantity (REAL),
-  fulfilled_quantity (REAL, GENERATED = SUM(sales_replacement_fulfillments where confirmed))
-  remaining_quantity (REAL, GENERATED = replacement_quantity - fulfilled_quantity)
+  fulfilled_quantity (PURE_DERIVED SQL projection; not a physical generated column)
+  remaining_quantity (PURE_DERIVED = replacement_quantity - effective fulfilled quantity)
   replacement_uom_code
   business_date
   created_at
@@ -10012,17 +10623,40 @@ sales_replacement_fulfillments:
   fulfilled_qty, business_date
 ```
 
+The link table has no independent mutable lifecycle state and no cached aggregate. A row is immutable confirmed-fulfillment evidence and may be inserted only in the same transaction that verifies the referenced Delivery item belongs to the referenced Delivery, has the same product as the Replacement line, and the Delivery is effectively `CONFIRMED`. DRAFT/CANCELLED Delivery rows cannot create fulfillment evidence.
+
+Effective fulfillment is a pure SQL projection from the same facts for header, line, API and UI:
+
+```text
+effective_fulfilled(line)
+  = SUM(link.fulfilled_qty
+        WHERE link.replacement_line_id = line.id
+          AND linked Sales Delivery execution remains canonically effective)
+
+line.remaining = MAX(0, line.replacement_quantity - effective_fulfilled(line))
+header quantities = SUM(the corresponding line projections)
+header fulfillment_state = OPEN when fulfilled=0;
+               PARTIAL when 0 < fulfilled < replacement;
+               FULFILLED when fulfilled=replacement;
+               CANCELLED only when cancellation_state=CANCELLED, while the
+               already-fulfilled quantity remains visible and immutable.
+```
+
+Current Sales Delivery lifecycle has no canonical reversal of an already confirmed Delivery. Wave 6 must not simulate one by deleting/updating a fulfillment link. A future Delivery reversal may reduce this projection only when its own canonical, atomic reversal evidence exists; adding such a reversal contract requires its own approved Requirement/Design change. Replacement cancellation closes only the unfulfilled remainder and never erases confirmed Delivery execution. Thus all currently valid cancel paths remain truthful, while an unsupported confirmed-Delivery reversal fails closed instead of creating Sales-only counter-evidence.
+
 #### 29.14.2 Constraints
 
 ```text
-- replacement_quantity (header) = SUM(sales_order_replacement_lines.replacement_quantity)
-- fulfilled_quantity (header)   = SUM(sales_order_replacement_lines.fulfilled_quantity)
-- remaining_quantity            = SUM(remaining across lines)
+- replacement_quantity (header) = derived SUM(sales_order_replacement_lines.replacement_quantity)
+- fulfilled_quantity (line/header) = one pure SQL projection over effective sales_replacement_fulfillments; no cross-table Generated Column
+- remaining_quantity            = derived SUM(line replacement_quantity - effective line fulfilled quantity)
 - replacement_quantity per line ≤ source_return_item.quantity (R-SAL-10 lock anchor)
 - 不 reopen 原 SO 的 executed history；replacement 是一个新商业 obligation
 - inventory effect 仅 when replacement_delivery confirm (canonical Inventory V21)
 - finance effect 仅 when replacement delivery confirm + canonical AR adapter
 - no second inventory ledger; no second AR ledger
+- no persisted header delivery shortcut; every linked Delivery is queried through the fulfillment evidence table
+- no mutable quantity cache unless a later approved Design supplies strict invalidation/reconciliation proof
 ```
 
 #### 29.14.3 与 Quotation / SO / Delivery / Prepayment 互动
@@ -11673,9 +12307,9 @@ For non-quantity edges: `capacity = N/A`.
 | 2 | Sales Order line | Delivery Notice line | sales_order_items.id | sales_order_items.id | sales_order_items.quantity | SUM(delivery_notice_lines.scheduled_qty) | delivery_notice_lines.cancelled_notified_qty | SO quantity − SUM(scheduled) | sales_order_items.id (R-SAL-16) |
 | 3 | Delivery Notice line | Sales Delivery line | delivery_notice_lines.id | sales_delivery_items.delivery_notice_line_id (= DN line id) | scheduled_qty − notified_qty | sales_delivery_items.delivery_notice_line → SD item qty | (none) | scheduled − confirmed − claimed | delivery_notice_lines.id (R-SAL-17) |
 | 4 | Sales Delivery line | Delivery-backed Return line | sales_delivery_items.id (with `commercial_source_marker = 'DELIVERY_BACKED'`) | return_order_items.delivery_item_id | sales_delivery_items.quantity | SUM(return_order_items.qty where delivery_item_id = this SD item) | (per return reversal) | SD item qty − returned qty | sales_delivery_items.id (R-SAL-03) |
-| 5 | Sales Order line | Order-backed Return line | sales_order_items.id (with `commercial_source_marker = 'ORDER_BACKED'` and NO corresponding SD for that line) | return_order_items.sales_order_item_id | sales_order_items.quantity | SUM(return_order_items.qty where so_item_id = this line) | (per return reversal) | SO line qty − returned qty | sales_order_items.id (R-SAL-18 / Capacity edge) |
+| 5 | Sales Order line | SO-backed Return line | `sales_order_items.id` (with `commercial_source_marker = 'SO_BACKED'`; the line must belong to the referenced real SO/customer/product and have no executed SD evidence) | `return_order_items.sales_order_item_id` | `sales_order_items.quantity` | effective confirmed Return quantity grouped by the exact `sales_order_item_id` | canonical `return_reversal_items` quantity | SO line qty − effective confirmed returned qty | `sales_order_items.id` (real line identity; capacity/concurrency anchor) |
 | 6 | No-source Return | (explicit NO_SOURCE capacity policy) | n/a | return_order_items.id where `commercial_source_marker='NO_SOURCE'` | capacity = N/A (consignment-inventory economics not derived from any SO/SD/return aggregate) | n/a | n/a | n/a | n/a |
-| 7 | Return line | Replacement obligation | return_order_items.id | sales_order_replacement_lines.source_return_item_id | return_order_items.qty (return_qty) | sales_order_replacement_lines.replacement_quantity + sales_replacement_fulfillments.fulfilled_qty | (per cancel/return) | replacement quantity − fulfilled | return_order_items.id (R-SAL-10) + sales_order_replacement_lines.id |
+| 7 | Return line | Replacement obligation / fulfillment | return_order_items.id | sales_order_replacement_lines.source_return_item_id; fulfillment evidence then points to each real confirmed Sales Delivery item | return_order_items.qty (return_qty) for obligation creation; replacement line qty for fulfillment | effective replacement obligation quantity for source capacity; effective fulfilled quantity is the pure projection over immutable fulfillment links whose Delivery execution remains canonical | explicit Replacement cancellation removes only unfulfilled obligation; a confirmed Delivery reversal may reduce fulfillment only through a separately approved canonical Delivery-reversal fact | source remaining = return qty − non-cancelled replacement obligation qty; fulfillment remaining = replacement line qty − effective fulfilled qty | return_order_items.id (obligation creation) → sales_order_replacement_lines.id (fulfillment), R-SAL-10 |
 | 8 | Sales Order / line | Sales Order Change | sales_orders.id + sales_order_items.id | sales_order_changes.id + sales_order_change_lines.id | capacity = N/A (not a quantity edge; evidence exists for both direct/document paths) | canonical apply uses line op ∈ {ADD,MODIFY,CANCEL} on remaining obligation | REJECTED/CANCELLED evidence | remaining-not-yet-executed after APPLIED version | sales_order_changes.id + sales_order_items.id (R-SAL-07 / 08 / 18) |
 | 9 | Sales Order line | Reservation Intent | sales_order_items.id | sales_reservation_intent.id | sales_order_items.quantity | requested_qty (intent) + Planning canonical consumed | released / canceled | qty − Planning consumed (canonical in Planning) | sales_order_items.id (consume-side) + sales_reservation_intent.id (intent-side) |
 | 10 | Sales Order | Prepayment Gate evaluation | sales_orders.id | sales_prepayment_requirements.id | required_prepayment_cents | eligible_prepayment_cents (per gate evaluation; from Finance adapter) | (none) | required − applied (cumulative gate-eligible) | **V22 Finance parent balance lock**: `settlement_unapplied_balances.id` (balance_type='PREPAYMENT') FOR UPDATE inside SAME connection/transaction via financeAdapter (R-SAL-15 primary lock; per §29.16.3.1); sales_prepayment_requirements.id + sales_prepayment_gate_results.snapshot_key as Sales-owned record/audit identity |
@@ -11684,6 +12318,7 @@ For non-quantity edges: `capacity = N/A`.
 | 13 | Consignment line | Consignment Return | consignment_commercial_lines.id | (return row in finance canonical refund) | consigned_quantity | returned qty | (per return reversal) | consigned − settled − returned | consignment_commercial_lines.id (R-SAL-21) |
 | 14 | Sales / Finance canonical facts | Credit Exposure (DERIVED) | sales_orders / sales_deliveries / Finance canonical rows | sales_orders / sales_deliveries / account_receivables etc. | proposed_exposure_delta (input) | credit_check_result.decision consumed | (none; DERIVED) | E = computed per §29.23 (PURE_DERIVED) | **credit_control_anchor.id** (NEW A-62; PRIMARY long-lived lock); secondary: credit_profile effective row + credit_policy_snapshots (R-SAL-12 / 24, see §29.25.2-3) |
 | 15 | Credit Check Result | Credit Special Approval | credit_check_result.id (where decision = 'SPECIAL_APPROVAL_REQUIRED') | credit_special_approval.source_credit_check_result_id | capacity = N/A (not a quantity edge; approval is a bounded exception request) | approved_override_cents (per decision) | REJECTED approval | n/a (bounded authority check, not running total) | credit_special_approval.id (UNIQUE on source_credit_check_result_id) + credit_policy_snapshots.id (R-SAL-13) |
+| 16 | Confirmed Sales Return (`SO_BACKED` / `NO_SOURCE`, status='CONFIRMED') | Option C Reversal Evidence (`return_reversals` + `return_reversal_items` + paired `inventory_valuation_movements` REVERSAL + reversing `accounting_vouchers` SALES_RETURN_REVERSAL + optional `credit_reversal_components`) | `return_orders.id` (mode-resolved per §29.13.11.1); per-line: `return_order_items.id`; per-line original movement: `inventory_valuation_movements.id` (status='POSTED', quantity_delta>0, source_type='SALES_RETURN'); per-line original voucher: `accounting_vouchers.id` (status='POSTED', source_type='SALES_RETURN'); per-line optional credit: `financial_credit_adjustments.id` (status='CONFIRMED'); per-line replacement canonical: `sales_replacement_fulfillments` ↔ `return_order_items.id` join (Gate-A evidence) | full Return qty only (no partial); cumulative prior reversals must equal 0 to enable fresh full reverse | n/a (Reversal mirrors original Return quantity exactly per Gate-B Gate-C) | the exact paired `inventory_valuation_movements` rows with `reversal_of_id = originals.id` and negated cents, plus the unique `SALES_RETURN_REVERSAL` voucher, plus optional REVERSED credit | one SALES_RETURN_REVERSAL row per reverse; original Return header / lines / metadata remain immutable | remaining = 0 once a full reversal is committed; partial / cumulative non-zero is HTTP 409 | `return_orders.id` (mode-resolved header row) FOR UPDATE -> `return_order_items.id` FOR UPDATE (ascending) -> `inventory_valuation_movements.id` (per-line original) FOR UPDATE -> `inventory_valuation_balances` (per product/warehouse/lot/serial) FOR UPDATE -> `accounting_vouchers.id` (per-line original) FOR UPDATE -> optional `financial_credit_adjustments.id` FOR UPDATE; R-SAL-09 / R-SAL-10 reuse — no new Race ID |
 
 #### 29.30.1 Direction audit (sources of edge)
 
@@ -11692,7 +12327,7 @@ Quotation → SO  ✓  source: quotation line; target: SO line
 SO → Delivery Notice  ✓  source: SO line; target: DN line
 Delivery Notice → SD  ✓  source: DN line; target: SD line
 SD → Return (DELIVERY_BACKED)  ✓  source: SD line; target: delivery_item_id on return line
-SO → Return (ORDER_BACKED)  ✓  source: SO line; target: so_item_id on return line
+SO → Return (SO_BACKED)  ✓  source: SO line; target: sales_order_item_id on return line
 NO_SOURCE Return  ✓  source: explicit NO_SOURCE marker; no upstream capacity edge
 Return → Replacement  ✓  source: return line; target: replacement line
 SO → SO Change  ✓  source: SO; target: append-only change evidence for direct/document path (NOT vice-versa)
@@ -11702,6 +12337,7 @@ SO service line → Service Fulfillment  ✓  source: SO line; target: fulfillme
 Consignment line → Settlement / Return  ✓  source: commercial line; target: settlement/return financial row
 Sales / Finance facts → Credit Exposure  ✓  source: canonical facts; target: DERIVED
 Credit Check Result → Credit Special Approval  ✓  source: check result; target: approval
+Confirmed SO_BACKED / NO_SOURCE Return → Option C Reversal Evidence  ✓  source: confirmed Return header + lines + canonical valuation movement / voucher / credit identity; target: independent append-only SALES_RETURN_REVERSAL evidence; reverses Inventory IN + valuation IN + voucher + optional credit; existing confirmed Return and its history remain immutable (see §29.13.11 + §29.30 row 16)
 ```
 
 No edge direction is reversed in this table.
@@ -11834,18 +12470,44 @@ POST   /api/sales-deliveries/:id/confirm    (existing) — extended: also locks
 GET    /api/sales-returns                   (existing)
 POST   /api/sales-returns                   (existing; must specify
                                               commercialSourceMarker ∈
-                                              {DELIVERY_BACKED, ORDER_BACKED, NO_SOURCE})
+                                              {DELIVERY_BACKED, SO_BACKED, NO_SOURCE};
+                                              SO_BACKED lines require salesOrderItemId)
 PATCH  /api/sales-returns/:id               (existing)
-POST   /api/sales-returns/:id/confirm       (existing; with mode-specific behavior)
+POST   /api/sales-returns/:id/confirm       (existing; Idempotency-Key required;
+                                              mode-specific atomic behavior)
+POST   /api/sales-returns/:id/reverse       (Option C; Idempotency-Key required;
+                                              mode-aware dispatch per §29.13.11.1;
+                                              body: {businessDate, reason};
+                                              DELIVERY_BACKED -> existing reverse
+                                                handler (unchanged);
+                                              SO_BACKED / NO_SOURCE -> new §29.13.11
+                                                Option C Reverse handler;
+                                              full Return qty only; HTTP 409 on
+                                                Gate-A / Gate-B / Gate-C / Gate-D /
+                                                Gate-E failure; response carries
+                                                reversalNo, reversalId, mode,
+                                                SALES_RETURN_REVERSAL inventory
+                                                transaction id, paired valuation
+                                                reversal movement ids, reversal
+                                                voucher id, optional credit
+                                                reversal id, idempotent result)
 ```
+
+Confirm accepts no client cost, valuation basis, account id, voucher entry, AR id or fabricated source evidence. `SO_BACKED` / `NO_SOURCE` returns HTTP 409 with the §29.13.10 zero-side-effect contract when any line lacks an eligible positive valuation plan. A successful response exposes the true `SALES_RETURN` identity, commercial mode, inventory transaction/value evidence and inventory voucher reference; an optional credit-adjustment reference appears only when Finance independently resolves and accepts an authoritative basis. Absence of AR basis is not represented as an error or a fake credit. `DELIVERY_BACKED` response compatibility remains unchanged.
 
 #### 29.31.9 Replacement API surface
 
 ```text
 GET    /api/sales-order-replacements
 POST   /api/sales-order-replacements         create from return
-PATCH  /api/sales-order-replacements/:id    update state
-POST   /api/sales-order-replacements/:id/fulfill  create replacement_delivery_link
+PATCH  /api/sales-order-replacements/:id    cancel active unfulfilled remainder;
+                                             fulfillment state is not client-writable
+POST   /api/sales-order-replacements/:id/fulfill  atomically validate confirmed
+                                                 Sales Delivery item(s) and append
+                                                 line-level fulfillment evidence;
+                                                 one request may link lines from the
+                                                 same Delivery, and repeated requests
+                                                 may link later Deliveries
 ```
 
 #### 29.31.10 Prepayment Gate API surface
@@ -11967,7 +12629,8 @@ credit:special-approve            (SC111; bounded authority)
 | Delivery Notice (§29.11.1) | DRAFT → CONFIRMED → CANCELLED / CLOSED (by exhaustion) |
 | Sales Delivery (frozen) | DRAFT → CONFIRMED → CANCELLED |
 | Sales Return (frozen + commercial_marker) | DRAFT → CONFIRMED → CANCELLED with marker |
-| Replacement (§29.14.1) | OPEN → IN_PROGRESS → FULFILLED / CANCELLED |
+| Sales Return Reversal Evidence (Option C; append-only; independent of `return_orders.status`) | per-Reverse header row in `return_reversals`: `SALES_RETURN_REVERSAL`; reversed return status does NOT change; one row per reverse; idempotency row records the committed result. Reversal is NOT a `return_orders` state transition. |
+| Replacement (§29.14.1) | derived `OPEN → PARTIAL → FULFILLED`; explicit cancellation of unfulfilled remainder exposes `CANCELLED` without erasing fulfilled evidence |
 | Service Fulfillment (§29.18.1) | PENDING → CONFIRMED → CANCELLED |
 | Consignment Commercial (§29.19.2) | DRAFT → INSTRUCTION → PARTIAL_SETTLED → SETTLED ∨ RETURNED ∨ CANCELLED |
 | Prepayment Gate (§29.16.2) | PASS / WARN / BLOCK / OVERRIDE_REQUIRED (per stage) |
@@ -12254,7 +12917,7 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | Legacy SO without `effective_version` | Wave 4 migration backfills `1` as a forward-only compatibility baseline | YES; existing APPROVED/history remains read-only | only canonical SO Change may advance `1 → 2...`; no reconstructed history | NO; create initializes `1`, normal edit cannot write version |
 | Legacy SD without source discriminator | source_mode absent / LEGACY_UNCLASSIFIED | YES (read) | bounded (Policy §29.45; no auto-classification) | NO; new writes require DIRECT_ORDER or DELIVERY_NOTICE (§29.12.0) |
 | Legacy Order without commercial parties | NULL salesperson / sales_group / settlement_party / payer | YES (display `(legacy)`) | bounded | NO |
-| Legacy Returns without `commercial_source_marker` | NULL → treat as DELIVERY_BACKED | YES | bounded | NO (new entries must set marker) |
+| Legacy Returns without `commercial_source_marker` | NULL remains visibly unclassified on read; mutation/reverse → HTTP 409 | YES (read only) | bounded fail-closed | NO (new entries must set marker; no DELIVERY_BACKED inference) |
 | Legacy Customers without commercial extensions | NULL | YES (display `(none)`) | bounded | NO |
 | Legacy Credit Profile missing | NULL credit_profile row | YES (display `(none)`) | per §29.22.1 rule (FAIL CLOSED if Credit Management enabled + mandatory rule) | per §29.22.1; no new write allows "no profile" exception to silent PASS |
 | Legacy tax basis | NULL | YES (treat as no commercial tax snapshot) | bounded | NO |
@@ -12304,6 +12967,11 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | `sales_delivery_items.delivery_notice_line_id` FK (NEW nullable) | R-SAL-17 anchor; legacy NULL allowed |
 | `return_orders.source_type CHECK` (existing) | source-type invariant |
 | `return_orders.commercial_source_marker CHECK` (NEW) | 3-modes invariant |
+| `return_order_items.sales_order_item_id` nullable FK → `sales_order_items.id` (NEW) | real SO_BACKED source-line identity; legacy/other-mode NULL; writer enforces exclusive mode/source pair |
+| no new Return valuation/standard-cost column | Option A consumes locked canonical valuation facts only; client/manual cost and shadow approval evidence cannot persist |
+| strict Option-A `receivePositiveSourceValue()` policy | requires an exact positive locked pool or independently proven approved/frozen effective standard-cost evidence; current repository has no sufficient standard-cost approval evidence, so that fallback stays disabled; `LEGACY_UNVALUED` is forbidden |
+| one canonical Option-A voucher per Return inventory event | source remains SALES_RETURN; debit lines reconcile exactly to valuation movements and credit existing `INVENTORY_GAIN_LOSS`; canonical writer uniqueness prevents duplicate GL effect |
+| no new Option-C Sales Return Reverse table | reuse existing `return_reversals` / `return_reversal_items` / `credit_reversal_components`; §30.31 adds only the bounded `sales_return_valuation_provenance` carrier and supporting indexes required by R2/R3, not a second reversal table; DELIVERY_BACKED-existing reverse path continues unchanged |
 | `sales_quotation_lines PK (quotation_id, line_no)` | canonical line |
 | `sales_quotation_conversions PK (quotation_id, sales_order_line_id)` | source-line conversion uniqueness |
 | `delivery_notices.notice_no UNIQUE` | identity |
@@ -12311,6 +12979,10 @@ No shadow ledger for Sales cost: gross profit consumes canonical cost from Inven
 | `sales_order_changes.change_no UNIQUE` | identity |
 | `sales_order_replacements.replacement_no UNIQUE` | identity |
 | `sales_order_replacements.source_return_id FK` | replacement ↔ return |
+| `sales_order_replacements.cancellation_state CHECK ('ACTIVE','CANCELLED')` | only persisted Replacement lifecycle command; fulfillment state is derived and not client-writable |
+| no `sales_order_replacements.delivery_link_id` | multi-Delivery truth is exclusively line-level in `sales_replacement_fulfillments`; no lossy header shortcut |
+| `sales_replacement_fulfillments.sales_delivery_item_id UNIQUE` | one confirmed Delivery item cannot fulfill more than one Replacement evidence row |
+| Replacement fulfilled/remaining quantities are PURE_DERIVED | SQLite/MySQL generated columns must not contain cross-table aggregate; every reader uses the same link + effective Delivery predicate |
 | `credit_parameters PK (code, effective_from)` | effective-dated uniqueness |
 | `credit_check_rules.rule_code UNIQUE per effective_from` | effective-dated uniqueness |
 | `credit_profile PK (customer_id, salesperson_id, credit_object_type, credit_object_id, effective_from)` | effective-dated uniqueness |
@@ -12374,6 +13046,14 @@ Hardening surface checklist (anticipated hazards):
     canonical/forged-key/identity-update probes still fail, exactly two guards
     remain, table/row/index counts are unchanged, and no generated __partial_*
     column/index exists.
+- Wave-6 parity: SQLite PRAGMA and MySQL information_schema must prove the real
+  Return SO-line FK, the three-mode CHECK, `cancellation_state` two-value CHECK,
+  fulfillment FKs/UNIQUE and the absence of provisional `state`, header
+  `delivery_link_id`, persisted fulfillment aggregates and generated SUMs.
+- Option-A behavior must execute on both dialects with identical strict basis
+  selection, integer-cent allocation, source identity, voucher aggregation,
+  HTTP 409 and rollback semantics. A mock MySQL adapter test is not a substitute
+  for the protected real-MySQL functional and independent-session race gates.
 
 Tests:
   SQLite parity = node --test that runs both engines on the same SQL.
@@ -12383,6 +13063,8 @@ Tests:
 ### 29.43 Transaction Model
 
 The canonical SO writer re-runs Pricing and Discount resolution after acquiring its transaction gate and before inserting any SO row. It serializes only the resulting server envelopes into `price_snapshot_json` / `discount_snapshot_json`, verifies unit price, gross/final line cents, UoM evidence, header allocation and order total, and commits the two snapshots with the line/header/audit/idempotency facts. A supplied client snapshot is only an optimistic assertion and any mismatch rolls back with zero side effects. Ordinary PATCH never accepts either snapshot for an approved SO.
+
+The Wave-6 Return writer follows the specialized all-or-nothing sequence in §29.13.8–10. Its valuation preflight is part of the write transaction, not a stale preview: source capacity, tracking identity, period state, exact pool balances, account-role mappings and optional Finance basis are re-read under the canonical locks before any physical or economic fact commits. Replacement readers and writers use the one §29.14 pure-derived projection; no transaction updates a cached fulfillment state or quantity.
 
 #### 29.43.1 SQLite strategy
 
@@ -12476,8 +13158,8 @@ rely on timeouts/sleeps.
 | R-SAL-06 | Quotation convert × 2 vs same Q line | — | sales_quotation_lines.id | quotation line → SO item → conversions insert | combined ≤ line qty | over-conversion | S04, S06 | quotation line FOR UPDATE; remaining compute | FOR UPDATE | R-SAL-06 test |
 | R-SAL-07 | SO approve/application vs another SO change | direct + document | approval request + sales_orders.id effective_version + sales_order_changes.id | approval → SO header → change → affected lines | one application wins; loser is stale; version monotonic | silent rewrite or two changes applying same base version | S05 | conditional base-version update + application idempotency | same order for both paths | R-SAL-07 test |
 | R-SAL-08 | SO change application vs direct/notice-backed Delivery create/confirm | direct + document | sales_orders.id + affected sales_order_items.id + SD source-line identity | SO header → affected SO lines → DN line when present → SD item | change sees executed quantity or delivery sees new version; only one valid serialization | change reduces/reassigns already shipping line | S05, S06 | both paths share apply service; delivery re-reads effective version/capacity | same source lock order | R-SAL-08 test |
-| R-SAL-09 | Delivery vs Return/Reopen | — | delivery_items → return_items → AR update | both FOR UPDATE | one wins; reopen explicit | silent relive of cleared | S05, S10 | idempotent return + reopen | FOR UPDATE both | R-SAL-09 test |
-| R-SAL-10 | Return vs Replacement fulfillment | — | return_order_items.id (line) + sales_order_replacement_lines.id (line) | return-line FOR UPDATE → replacement-line FOR UPDATE | state machine consistent; combined fulfilled ≤ return_qty | inconsistent state | S10, S61 | replacement fulfillment rejects if remaining < qty; line-level anchor | FOR UPDATE both | R-SAL-10 test |
+| R-SAL-09 | Delivery vs Return/Reopen | — | delivery_items → return_items → AR update | both FOR UPDATE | one wins; reopen explicit | silent relive of cleared | S05, S10 | idempotent return + reopen; Option C reversal does NOT touch Sales Delivery or Return Reopen paths | FOR UPDATE both | R-SAL-09 test + Option C R-SAL-09 negative (Option C does not reopen Delivery / SO) |
+| R-SAL-10 | Return vs Replacement fulfillment | — | return_order_items.id (line) + sales_order_replacement_lines.id (line) + referenced sales_delivery_items.id | obligation create: return-line FOR UPDATE → replacement-line insert; fulfill: replacement-line FOR UPDATE in ascending id → Delivery item/effective lifecycle lock in ascending id → re-read one canonical aggregate. Option C reverse: same replacement lock combination per Gate-A; confirmed fulfillment rows block reverse; ACTIVE not-fully-fulfilled Replacement requires prior cancellation; CANCELLED or fulfilled passes Gate-A. | multiple partial fulfillments and multiple Deliveries serialize; combined effective fulfilled ≤ replacement line qty; all header/line states derive from the same evidence. Option C reverse must not delete or modify fulfillment rows and must not rewrite confirmed Delivery; second concurrent reverse reproduces Gate-A evidence view and hits Gate-A idempotent / 409 behavior | over-fulfilled line, lossy first/last Delivery projection, or state disagrees with quantity; Option C silent rewrite of confirmed fulfillment; deletion of fulfillment row; rewrite of confirmed Delivery; fabrication of Delivery reversal | S10, S61 | fulfillment appends immutable evidence only after locked confirmed-Delivery validation; cancellation closes remaining only; unsupported confirmed-Delivery reversal fails closed; Option C reverse reuses this contract and Gate-A rules per §29.13.11.2 | same lock order; aggregate re-read under locks; Option C Gate-A is the controlled serialization boundary | R-SAL-10 multi-Delivery + same-line concurrent fulfill test + Option C reverse confirmed-fulfillment Block test (HTTP 409) + Option C reverse ACTIVE not-fulfilled Block test (HTTP 409) + Option C reverse concurrent vs Replacement fulfillment test |
 | R-SAL-11 | Pricing update vs Order approval | — | Wave-2 list/version identity + immutable identity properties inside Wave-4 `sales_order_items.price_snapshot_json` | Wave 2 freezes ACTIVE pricing versions; Wave 4 locks SO item on create/approve and persists the server-generated evidence | resolver evidence is immutable by version; future approved SO snapshot remains unchanged | price change rewrites approved SO price | S20 | Wave-2 structural/version test now; Wave-4 snapshot write-once + concurrent approval test later | same two-wave boundary; no Wave-2 SO schema | Wave-2 partial evidence + Wave-4 final R-SAL-11 test |
 | R-SAL-12 | Credit Check × 2 vs same credit object (PURE_DERIVED exposure) | — | **credit_lock_anchors.id** (REFINED A-62; anchor_type='CREDIT_OBJECT'; UNIQUE on anchor_key) | 1) POLICY_SCOPE anchor FOR SHARE; 2) CREDIT_OBJECT anchor FOR UPDATE; 3) credit_profile effective row FOR UPDATE; 4) credit_policy_snapshots create-or-select FOR UPDATE; 5) credit_check_rules effective rows FOR UPDATE | one wins; the loser re-reads and re-evaluates against updated state; multiple concurrent Credit Checks may share the same policy read (FOR SHARE) but serialize per credit object; combined committing commitments ≤ available credit | combined committing commitments > available credit; or check reads from stale eligible balance while concurrent Finance mutation has already consumed/refunded it | S14, S15 | PRIMARY long-lived lock identity = CREDIT_OBJECT anchor; Prepayment Gate acquires same Finance canonical locks via financeAdapter (see R-SAL-15); risk-releasing Finance events do not need to acquire Sales anchor; visibility lag → conservative temporary BLOCK acceptable, never over-credit approval | FOR UPDATE anchor (CREDIT_OBJECT) → profile → snapshot → rules; FOR SHARE on POLICY_SCOPE | R-SAL-12 test |
 | R-SAL-13 | Credit Special Approval vs Order approval | — | credit_special_approval.source_credit_check_result_id (PK) + credit_policy_snapshots.id + sales_orders.id (effective_version) | approval FOR UPDATE → snapshot FOR UPDATE → SO FOR UPDATE | either special-approve or standard approval wins; never both silently | both silently | S16 | approval + SO tx; check + approval PK link | FOR UPDATE all three | R-SAL-13 test |
@@ -12520,7 +13202,7 @@ Command idempotency required for (at minimum):
 - POST /api/credit-evaluation/scoring-sheets/:id/apply-to-profile
 ```
 
-Idempotency key: client-provided `Idempotency-Key` HTTP header OR deterministic body key.
+Idempotency key: follow each operation's frozen contract. A client-provided `Idempotency-Key` HTTP header is required where the API row says so; legacy operations may retain an already-frozen deterministic body key. **Wave 6 `SO_BACKED` / `NO_SOURCE` Option C Reverse is header-only per §30.31.6 and may not use a body, random or server-derived fallback.**
 
 ```text
 same key + same payload  → replay (return existing result)
@@ -12549,7 +13231,7 @@ Wave B  Sales Order Enrichment / Change / Lifecycle
 
 Wave C  Delivery Notice / Return / Replacement
   - Delivery Notice doc + capacity invariants
-  - Sales Return 3-mode (DELIVERY_BACKED / ORDER_BACKED / NO_SOURCE)
+  - Sales Return 3-mode (DELIVERY_BACKED / SO_BACKED / NO_SOURCE)
   - Replacement obligation + state machine
   - Sales Delivery convergence (DN ref + delivery_notice_id column)
 
@@ -12695,17 +13377,17 @@ Sales & Customer Domain Design contains:
   - 1 acceptance architecture (§29.49)
 
 Physical model counts (post-remote-review rebuild):
-  A tables total                  = 69
+  A tables total                  = 70
     EXISTING_CONVERGE              = 25
-    NEW                            = 44   (A-25..A-66 + A-68..A-69)
+    NEW                            = 45   (A-25..A-66 + A-68..A-70)
     DEPRECATED_NO_NEW_WRITES (tbl) =  0
-  B existing-table extensions      =  6 (31 logical fields; 30 ADD + 1 reused)
+  B existing-table extensions      =  7 (32 logical fields; 31 ADD + 1 reused)
   C derived views / projections   =  5 (4 pure-no + 1 controlled-hybrid; C-06 removed)
   D compatibility behaviors        =  6 (legacy read=YES; new write through bypass=NO)
   E deprecated-no-new-write fields =  1 (products.price_cents; single classification)
 
 Sum check:
-  A tables: 25 + 44 + 0 = 69 ✓
+  A tables: 25 + 45 + 0 = 70 ✓
   Sub-categories are disjoint (every table belongs to exactly one of A classifications)
   Columns are NEVER counted as tables (see B for column extensions)
 
@@ -12880,7 +13562,7 @@ Each wave is small enough that one engineer / coding agent can implement, test, 
 | 3 | Quotation + Quotation conversion | 6 (SC09..SC14) | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | server/modules/quotation.js (new); src/pages/quotations.jsx (new route); conversion API with idempotency |
 | 4 | Sales Order enrichment + lifecycle + two-path Change + line schedule snapshot | 20 (SC24..SC29, SC31..SC44) | 2 (sales_order_changes, sales_order_change_lines) | shared canonical change application service; direct/document request handlers; additive SO/line snapshots; approval/version/audit concurrency contract |
 | 5 | Delivery Notice + direct/notice-backed Sales Delivery convergence + tolerance execution | 11 (SC08, SC30, SC45..SC53) | 2 (delivery_notices, delivery_notice_lines) | truthful DIRECT_ORDER / DELIVERY_NOTICE source identity; shared SO capacity/gates plus DN capacity where applicable |
-| 6 | Returns + Replacement | 8 (SC54..SC61) | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | server/app.js SR handlers extended; return_orders.commercial_source_marker additive col; src/pages/returns.jsx extended with replacement tab |
+| 6 | Returns + Replacement | 8 (SC54..SC61) | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | SR canonical writer extended with three truthful modes, strict Option-A Inventory/valuation/voucher adapter and independent Finance-credit branch; Replacement uses line-level multi-Delivery evidence; return_orders.commercial_source_marker and return_order_items.sales_order_item_id are additive; src/pages/returns.jsx extended with replacement tab |
 | 7 | Finance V22 R-SAL-15 bounded extension + Prepayment Gate + Reservation Intent | 8 (SC01, SC62..SC68) | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | final SC01 execution via reservation behavior after order-change and delivery parameter controls; Finance locked-read extension |
 | 8 | Service Fulfillment + Consignment commercial | 8 (SC70..SC77) | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | server/modules/service-fulfillment.js; server/modules/consignment.js; src/pages/consignment.jsx; SD confirm gate |
 | 9 | Credit stable anchor + Credit Policy + Profile foundation | 7 (SC83..SC89) | 6 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile, credit_profile_ratings) | server/modules/credit-anchor.js (new; ensureCreditLockAnchor + first-use provisioning); server/modules/credit-policy.js; legacy credit_profile backfill in migration |
@@ -13067,11 +13749,20 @@ If implementation later proposes a persisted Credit Exposure cache, STOP + REQUI
 
 ```text
 new physical tables total = 44
-corrected existing-table extension inventory = 6 tables / 31 logical fields
-actual NEW extension fields requiring schema migration = 30
+corrected existing-table extension inventory = 7 tables / 32 logical fields
+actual NEW extension fields requiring schema migration = 31
 existing reused extension fields requiring NO ADD COLUMN = 1
   sales_deliveries.billing_mode
 duplicate ADD attempts = 0
+```
+
+Wave 6 arithmetic after this bounded correction:
+
+```text
+new tables                         = 3  (unchanged)
+extended existing tables          = 2  (return_orders, return_order_items)
+Wave 6 new logical extension fields = 2  (commercial_source_marker,
+                                           sales_order_item_id)
 ```
 
 The corrected §29 inventory is the logical Design inventory. Wave 1 adds eight Sales-owned tables and zero fields to existing tables. Wave 2 adds nullable `default_pricing_list_id` / `default_discount_scheme_id` only after A-28/A-31 exist.
@@ -13109,10 +13800,11 @@ The corrected §29 inventory is the logical Design inventory. Wave 1 adds eight 
 | `sales_deliveries` | `billing_mode` | `EXISTING_REUSED_FIELD` | `EXISTS` (`v13-phase6e-commercial-golive`) | 5 | `REUSE_EXISTING` |
 | `sales_delivery_items` | `delivery_notice_line_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 5 | `ADD` |
 | `return_orders` | `commercial_source_marker` | `NEW_LOGICAL_FIELD` | `ABSENT` | 6 | `ADD` |
+| `return_order_items` | `sales_order_item_id` | `NEW_LOGICAL_FIELD` | `ABSENT` | 6 | `ADD`; nullable real FK to `sales_order_items.id`; no historical inference/backfill; SO_BACKED only |
 
 ```text
-logical extension fields = 31 / 31
-new schema fields to add = 30
+logical extension fields = 32 / 32
+new schema fields to add = 31
 existing extension fields reused = 1
 duplicate ADD attempts = 0
 ```
@@ -13125,7 +13817,7 @@ duplicate ADD attempts = 0
 | 3 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | new migration file; UNIQUE on (quotation_id, line_no); PR UNIQUE on (quotation_id, sales_order_line_id); idempotency_key column |
 | 4 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols: salesperson_id, sales_group_id, settlement_party_id, payer_id, customer_material_xref_id, commercial_tax_code, tax_inclusive, required_prepayment_cents, reservation_intent_state, commercial_close_state, gift_summary_cents, commercial_pricing_uom_code, effective_version), sales_order_items (+ 11 cols: is_gift_line, commercial_tax_basis, tax_inclusive_assumption, pricing_uom_code_applied, qty_break_applied_min, qty_break_applied_max, planned_delivery_date, upper_delivery_tolerance_bps, lower_delivery_tolerance_bps, price_snapshot_json, discount_snapshot_json) | additive snapshot columns; JSON columns and other commercial fields remain nullable for legacy rows but are mandatory in the canonical new writer; `effective_version` alone is NOT NULL, initializes/backfills to compatibility baseline `1`, then advances only through locked canonical change application + CAS |
 | 5 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse existing `billing_mode`), sales_delivery_items (+ `delivery_notice_line_id`) | source_mode truthfully distinguishes direct/notice/legacy; no fake DN; common SO line lock/tolerance/gates, plus DN lock only for notice-backed path; billing_mode reused, no duplicate ADD |
-| 6 | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | return_orders (+ commercial_source_marker) | new migration file; explicit replacement fulfillment evidence; legacy return rows NULL marker → treat as DELIVERY_BACKED |
+| 6 | 4 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments, sales_return_valuation_provenance) | return_orders (+ commercial_source_marker), return_order_items (+ nullable sales_order_item_id FK); existing Inventory/Planning tables gain only §30.31 supporting indexes | existing Wave-6 migration file only; Replacement and F5/F6 contracts unchanged; bounded provenance is immutable allocation evidence, not a general layer ledger or commercial source. SQLite/MySQL real FK/CHECK/index metadata; fresh/upgrade/replay and row preservation; no legacy provenance backfill or cost inference; unexpected shape fails closed. Option C still reuses `return_reversals`, `return_reversal_items`, `credit_reversal_components`, valuation/voucher/Credit evidence and `idempotency_records(operation_type='SALES_RETURN_REVERSAL_OPTION_C')`; no second reversal table or migration file. |
 | 7 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | new migration file; PK on (sales_order_id, line_no); snapshot_key idempotency; Finance R-SAL-15 extension plus Planning EXPECTED-supply bounded contract extension before enabling that mode |
 | 8 | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | 0 | new migration file; consignment FK; consignment_commodity_locations is the commercial location identity (≠ physical warehouse_id) |
 | 9 | 5 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile) + credit_profile_ratings (A-52, 1 more) | 0 | new migration file; UNIQUE (anchor_key) NOT NULL on credit_lock_anchors; PK on credit_parameters (code, effective_from); PK on credit_profile (customer_id, salesperson_id, credit_object_type, credit_object_id, effective_from); legacy bootstrap migration for credit_profile + credit_lock_anchors over existing credit_profile tuples |
@@ -13135,6 +13827,10 @@ duplicate ADD attempts = 0
 | 13 | 0 | 0 | no schema changes; tests only |
 
 Sum check: 8+5+3+2+2+3+3+4+6+2+6 = 44 ✓ (matches corrected Design)
+
+Wave 6 draft-migration delta recorded for the next Implementation gate (this Design task does not edit the migration): the current uncommitted draft still persists `sales_order_replacements.state` with `OPEN/IN_PROGRESS/FULFILLED/CANCELLED` in both SQLite and MySQL and indexes that column. Implementation must replace that provisional shape—not add a second lifecycle column—with `cancellation_state NOT NULL DEFAULT 'ACTIVE' CHECK ('ACTIVE','CANCELLED')`, update the index/metadata assertions, and keep fulfillment state and all header/line quantities out of physical columns. Because the draft is not an applied historical migration, synchronization occurs in that new Wave 6 file before execution; no historical migration is rewritten. If any database already contains the provisional shape, migration must fail closed rather than guess a conversion, and that database requires separately controlled remediation.
+
+The same migration gate must prove SQLite and MySQL fresh bootstrap, exact pre-Wave-6 additive upgrade, repeated replay, row preservation, legacy NULL compatibility, named/real FK and CHECK metadata, and absence of `delivery_link_id`, physical fulfillment-state columns or cross-table generated sums. Rollback remains compatibility-first: leave nullable source evidence and created tables in place but disable new writers; destructive DROP/rename after data exists requires separate approval and dependency proof.
 
 Wave 1 proof: NEW tables = 8; existing-table extension tables = 0; existing-table extension fields = 0; dangling FK targets = 0; undefined physical FK identities = 0; Wave-2 early business tables = 0; Master/Platform schema changes = 0.
 
@@ -13298,7 +13994,7 @@ R-SAL-23 acceptance form is a structural assertion under the PURE_DERIVED baseli
 | 3 | quotation convert × 2; capacity; idempotency | HIGH | R-SAL-06 is the first user-visible source-capacity race |
 | 4 | SO Change effective_version; commercial_close_state; historical immutability | HIGH | S05 (R-SAL-07 / R-SAL-08) |
 | 5 | Direct/notice-backed delivery source integrity; legacy coexistence | HIGH | SO/DN capacity locks, common gates, R-SAL-16..19; S09; no fake DN |
-| 6 | 3-mode return; replacement; order-backed without fake delivery | HIGH | R-SAL-09 / R-SAL-10; S10 / S11 |
+| 6 | 3-mode return; strict positive valuation/accounting; replacement; SO-backed without fake delivery; DR-SAL-05 Option C Restricted Economic Reversal | **CRITICAL** | atomic Inventory/valuation/voucher/optional-AR boundary; current standard-cost approval evidence unavailable; R-SAL-09 / R-SAL-10 (Option C clauses appended); S01/S02/S03/S05/S10/S11. Option C adds five Gate components plus §30.31 corrected LOT/SERIAL provenance/dependency proof; full independent-session MySQL race evidence is mandatory before Wave 6 Acceptance, not deferred to a later wave |
 | 7 | Finance V22 + Planning expected-supply bounded extensions | **CRITICAL** | S12/S13; R-SAL-02/R-SAL-15; finite expected capacity and canonical adjust/consume required |
 | 8 | Service Fulfillment; Consignment ownership (Enterprise not Customer) | **HIGH** | S08 / S18; three-layer separation (commercial / inventory / settlement); R-SAL-20 / R-SAL-21; cross-domain lock on canonical V22 settlement; no second Finance balance |
 | 9 | credit_lock_anchors + ensureCreditLockAnchor provisioning | **CRITICAL** | anchor infrastructure precedes any Credit runtime; legacy backfill on real MySQL |
@@ -13441,7 +14137,7 @@ Commit boundary (one primary local commit after external review; no push)
 | 3 | Wave 2 | 3 (sales_quotations, sales_quotation_lines, sales_quotation_conversions) | 0 | quotation handlers with group-scope backend predicate from first route | quotations LIST / DETAIL / EDITOR / CONVERT | unit + R-SAL-06 + fail-closed group access | new migration file; PK + PR UNIQUE | n/a | n/a | UAT-S-01..03; R-SAL-06 evidence; UAT-S-28 partial | one local commit |
 | 4 | Waves 1, 2, 3 | 2 (sales_order_changes, sales_order_change_lines) | sales_orders (+ 13 cols, including `effective_version`); sales_order_items (+ 11 cols, including `price_snapshot_json` / `discount_snapshot_json`) | shared canonical writer/change application service; direct/document handlers; group-scope + authoritative line snapshots; locked-read + version CAS | SO direct-change action + change-document workflow | UAT-S-10..16 including four-mode UAT-S-15; R-SAL-07/08/11; UAT-S-28 partial | additive migration; snapshot JSON nullable for legacy but required for new canonical lines; version initializes/backfills to baseline `1` and is not client-writable | later parameters/defaults never rewrite APPLIED history; approved snapshots/evidence remain append-only | n/a | SC37..SC40/UAT-S-15 final owner Wave 4; SC30 final W5 | one local commit |
 | 5 | Wave 4 | 2 (delivery_notices, delivery_notice_lines) | sales_deliveries (+ `delivery_notice_id`, `source_mode`; reuse `billing_mode`); sales_delivery_items (+ `delivery_notice_line_id`) | direct/notice source capacity + tolerance enforcement | delivery-notices route | upper BLOCK + lower controlled-close + direct/notice races | explicit source_mode; no fake DN; no duplicate billing_mode | LEGACY_UNCLASSIFIED read-only | n/a | UAT-S-17/S-18; SC08+SC30 final completion; S09 | one local commit |
-| 6 | Wave 5 | 3 (sales_order_replacements, sales_order_replacement_lines, sales_replacement_fulfillments) | return_orders (+ commercial_source_marker) | SR handlers; returns replacement tab | returns route extended | unit + R-SAL-09 / R-SAL-10 tests | additive migration | legacy returns without marker → DELIVERY_BACKED | n/a | UAT-S-19..22; S10/S11 | one local commit |
+| 6 | Wave 5 | 4 (Replacement three tables + `sales_return_valuation_provenance`) | return_orders (+ commercial_source_marker); return_order_items (+ nullable sales_order_item_id FK); supporting indexes only on valuation/tracking/reservation evidence | SR canonical writer + method-specific Option-A authority; bounded provenance resolver; corrected LOT/SERIAL Gate-B; canonical voucher/optional Credit; Replacement pure projection; mandatory explicit-key Option C per §29.13.11 + §30.31 | existing returns surface/API only; optional outbound movement identity input and mandatory reverse header; no redesign | six-combination positive/negative matrix; LOT no-consumption/OUT/replenishment; SERIAL success/duplicate/provenance; legacy/unknown marker; 400/replay/409; rollback/audit/period/RBAC; five real independent-session MySQL races | additive SQLite/MySQL fresh/upgrade/replay; exact FKs/CHECKs/indexes; no historical migration edit/backfill; no new reversal table | legacy missing/ambiguous provenance 409; DELIVERY_BACKED, MOVING_AVERAGE validated behavior, Replacement and Batch A unchanged | Inventory/Accounting canonical adapters; Finance Credit only with authority; bounded Sales Return provenance consumes Inventory facts without second ledger | UAT-S-19..22; S01/S02/S03/S05/S10/S11; §30.31 matrix | one local commit only after separate Implementation approval and full gate |
 | 7 | Waves 5, 6 | 3 (sales_prepayment_requirements, sales_prepayment_gate_results, sales_reservation_intent) | 0 | finance locked-read; reservation intent adapters; Finance V22 bounded extension | prepayment/reservation sub-pages | R-SAL-02/R-SAL-15; MySQL locked-read; reservation mode matrix | new migration file; idempotency snapshot_key | n/a | Finance extension + Planning EXPECTED finite-capacity bounded extension | UAT-S-23/S-24/S-28/S-40 final; S12/S13 | one local commit + cross-domain change reports |
 | 8 | Wave 7 | 4 (service_fulfillments, consignment_commercial_documents, consignment_commercial_lines, consignment_commodity_locations) | 0 | new service-fulfillment module; new consignment module; SD confirm gate (service items require confirmation) | src/pages/consignment.jsx; service sub-page inside SO | unit + R-SAL-20 / R-SAL-21 / R-SAL-22 tests | new migration file | n/a | n/a | UAT-S-25..27 + UAT-S-41; S08 / S18 invariant proof | one local commit |
 | 9 | Wave 1 (foundation) | 5 (credit_lock_anchors, credit_policy_snapshots, credit_parameters, credit_check_rules, credit_profile) + credit_profile_ratings (1 more) = 6 | 0 | new credit-anchor module; ensureCreditLockAnchor provisioning; new credit-policy module; new credit-profile module; legacy backfill on real MySQL | credit-anchor admin / setup only; legacy bootstrap on real MySQL | unit + R-SAL-12 anchor lock test + R-SAL-24 anchor lock test; legacy bootstrap on real MySQL | new migration file; UNIQUE (anchor_key) NOT NULL; PK on credit_parameters (code, effective_from); legacy backfill on existing credit_profile tuples | n/a | n/a (no Finance) | UAT-S-29 + S-30; first anchor infrastructure in place; no fail-open | one local commit |
@@ -13577,8 +14273,8 @@ Materialized executable MySQL races: 23
 Conditional structural races: 1 (R-SAL-23)
 Physical tables: 69 = 25 EXISTING_CONVERGE + 44 NEW + 0 deprecated tables
 Physical NEW tables: 44
-Corrected existing-table extension inventory: 6 tables / 31 logical fields
-Actual extension migration work: 28 NEW fields
+Corrected existing-table extension inventory: 7 tables / 32 logical fields
+Actual extension migration work: 31 NEW fields
 Existing extension fields reused: 1 (sales_deliveries.billing_mode)
 Wave 1 physical allocation: 8 NEW tables / 0 existing-table extensions / 0 existing-table fields
 Wave 2 dependency correction: creates sales_price_lists / sales_discount_schemes before adding A-39 default FKs
@@ -13618,6 +14314,468 @@ then Sales Wave 1 implementation.
 ```
 
 The future freeze-record commit SHA is record metadata and must not be confused with the frozen content baseline above. This task does not begin the `APPLY_GUIDE.md` correction or Wave 1 implementation and does not stage, commit or push.
+
+### 30.27 Wave 6 bounded Design correction record — 2026-10-16
+
+This Design-only correction closes one confirmed physical-inventory omission without changing `document.md §34`:
+
+```text
+Requirement term preserved       = SO_BACKED
+superseded unimplemented term    = ORDER_BACKED (Design-only historical wording)
+new line identity carrier        = return_order_items.sales_order_item_id
+FK target                        = sales_order_items.id
+nullable / legacy backfill       = YES / NONE
+Wave 6 new tables                = 4 after §30.31 bounded provenance correction
+Wave 6 extended existing tables  = 2
+SC / UAT / Race counts           = unchanged
+Implementation started           = NO
+```
+
+The correction is limited to the source-line carrier, naming consistency, schema arithmetic, migration/FK/compatibility design, and the already-approved source/capacity guardrails. It creates no new commercial mode, does not reinterpret historical Returns, and does not authorize Wave 6 Implementation. Implementation remains paused until explicit user approval of this corrected Design.
+
+### 30.28 Wave 6 second bounded clarification — Replacement cardinality and superseded valuation blocker
+
+Repository evidence establishes two different outcomes.
+
+Replacement is a Design-only correction within SC59–SC61:
+
+```text
+authoritative Delivery relation = sales_replacement_fulfillments only
+header delivery_link_id         = removed from not-yet-landed target model
+persisted header lifecycle      = cancellation_state only (ACTIVE/CANCELLED)
+fulfillment lifecycle           = derived OPEN/PARTIAL/FULFILLED/CANCELLED
+deliveries per Replacement      = many
+fulfillments per line           = many partial rows
+line/header aggregates          = PURE_DERIVED SQL projection
+cross-table generated columns   = forbidden / not used
+new physical tables             = 3 (unchanged)
+new existing-table extensions   = 2 (unchanged from §30.27)
+SC / UAT / Race IDs             = unchanged
+```
+
+The link is immutable confirmed-execution evidence and carries no second lifecycle truth. Header cancellation closes only unfulfilled remaining obligation. The current frozen Sales Delivery lifecycle has no reversal of an already confirmed Delivery; therefore Wave 6 cannot manufacture a Sales-only reversal or delete a link. Any future canonical Delivery reversal must contribute its own authoritative reversal fact before it can reduce the pure-derived aggregate.
+
+The valuation blocker recorded by this clarification was valid at the time: `receivePositiveSourceValue()` selected a basis but SC54–SC58 did not then select the accounting counterpart. It is superseded only by the accepted DR-SAL-04 delta recorded in §30.29 below. The repository evidence discovered here remains material: the primitive's raw standard-cost and `LEGACY_UNVALUED` branches are not legal for the new Return modes, and valuation success never establishes AR authority.
+
+### 30.29 Wave 6 Option A Design correction record — 2026-10-16
+
+User Requirement Acceptance froze DR-SAL-04 for this bounded scope. The corrected Design is:
+
+```text
+applicable modes                 = SO_BACKED / NO_SOURCE
+warehouse acceptance            = Inventory canonical validation + mutation
+valuation priority              = MOVING_AVERAGE exact eligible positive pool;
+                                  LOT exact same-identity carrying pool;
+                                  SERIAL unique eligible original outbound provenance;
+                                  NO_SOURCE may use §30.31 bounded outbound provenance;
+                                  otherwise HTTP 409
+current standard-cost evidence  = INSUFFICIENT; fallback disabled
+forbidden                       = LEGACY_UNVALUED / zero / manual / SO price /
+                                  Quotation price / fake Delivery cost /
+                                  cross-identity pool / fabricated evidence
+voucher debit                   = inventoryAccountRole(product_id)
+voucher credit                  = existing INVENTORY_GAIN_LOSS
+voucher amount                  = Finance canonical positive-inbound value
+business source identity        = SALES_RETURN
+AR credit                       = independent authoritative Finance basis only
+transaction                     = source + acceptance + tracking + valuation +
+                                  voucher + optional credit + state + audit + idem
+DELIVERY_BACKED                 = unchanged restoreSourceValue / COGS path
+```
+
+No new table, field, account role, commercial mode, Requirement ID or cross-domain owner is introduced. In particular, the Design does not treat `products.standard_manufacturing_cost_cents` or `product_costs.status='ACTIVE'` as approval/freeze evidence; the standard-cost branch remains unavailable until an already-authoritative contract can prove approval, freeze and business-date effectiveness. This is a fail-closed implementation constraint, not a new business decision.
+
+The protected uncommitted migration was inspected but not modified by this Design task. Its Return marker and SO-line FK match the approved source model. Its Replacement header still uses the rejected provisional four-value `state`; Implementation must synchronize it to the sole two-value `cancellation_state`, update SQLite/MySQL CHECK/index metadata and tests, and retain `sales_replacement_fulfillments` as the only Delivery relation. See §30.8 and §30.17.
+
+#### 30.29.1 Required implementation evidence
+
+Wave 6 cannot pass its internal gate without all of the following evidence:
+
+1. SQLite and MySQL migration tests: fresh, exact legacy upgrade, replay, row preservation, legacy NULLs, real FK/CHECK/UNIQUE metadata, conflict fail-closed, and proof that only `cancellation_state` is persisted.
+2. Return positive cases: exact MOVING_AVERAGE pool, exact LOT carrying pool and exact SERIAL original-outbound provenance; multi-line/multi-product/mixed-method voucher aggregation; authoritative role mapping; balanced cents; true `SALES_RETURN` source identity; no AR basis yields no credit.
+3. Standard-cost cases: raw `products.standard_manufacturing_cost_cents` and `product_costs.ACTIVE` are rejected as insufficient evidence; a legal approved/frozen effective-cost case may pass only if an existing authoritative contract is identified without schema or Requirement invention. Until then the positive fallback case is explicitly unavailable and tested as HTTP 409.
+4. Negative/rollback cases: no pool, zero pool, `LEGACY_UNVALUED`, client/manual cost, SO/Quotation price, cross-warehouse/product/LOT/SERIAL pool, missing/mismatched tracking, closed period, missing role, unbalanced voucher, writer failure, invalid mode/source and unauthorized/SOD all leave the §29.13.10 zero-side-effect state.
+5. Idempotency/concurrency: same-key replay, changed-payload conflict, different-key duplicate confirm, two Returns against one SD/SO capacity, and two Return confirmations contending for the same valuation pool must use real independent MySQL sessions and verify exact-once quantity, valuation, voucher, credit, audit and idempotency effects.
+6. Replacement: zero/partial/multiple-Delivery/full/cancelled derived states, more than one fulfillment row per line, one Delivery item used at most once, competing same-line fulfillment, cancellation preserving prior evidence, and unsupported Delivery reversal fail-closed. Every API/read path must agree with the same PURE_DERIVED projection.
+7. Regression: DELIVERY_BACKED restores original value and retains its existing COGS/credit behavior; Batch A source history remains immutable; no fake Delivery, Revenue, AR/Open Item, COGS reversal or Inventory Adjustment is produced for Option A.
+
+Implementation remains paused after this record. Approval of DR-SAL-04 Requirement does not itself approve this corrected Design or authorize Wave 6 code changes.
+
+### 30.30 Wave 6 Option C Restricted Economic Reversal — Design Correction Record — 2026-10-17
+
+User Requirement Acceptance froze DR-SAL-05 for this bounded scope. The corrected Design is the §29.13.11 sub-section added above. Summary:
+
+```text
+modes                            = SO_BACKED / NO_SOURCE only
+reversal coverage                = Full Return Reversal only (no partial)
+mode-aware dispatch              = §29.13.11.1 (existing reverseOperationalReturn unchanged for DELIVERY_BACKED)
+Gate-A Replacement Dependency   = canonical sales_replacement_fulfillments;
+                                  A.3 confirmed-fulfillment rows -> 409; A.2 ACTIVE not-fully-fulfilled -> 409;
+                                  A.1 / A.4 -> continue Gate-B
+Gate-B Downstream Consumption   = strict MOVING_AVERAGE / corrected LOT / SERIAL proof;
+                                  pool balance alone is never downstream proof;
+                                  strict negative movement after frontier -> 409;
+                                  LOT sufficiency + no-negative/dependency fence;
+                                  SERIAL provenance/lifecycle/dependency deviation -> 409
+Gate-C Original Valuation       = reuse consumeOriginalInboundValue per line;
+                                  basis / lot / serial preserved verbatim
+Gate-D Exact Original Voucher   = reuse createSystemVoucher(reversalOfId);
+                                  direction-swap with exact original cents
+Gate-E Optional Finance Credit  = reuse reverseCreditAdjustment;
+                                  dependent application/refund consumption -> 409
+canonical primitives reused     = consumeOriginalInboundValue, createSystemVoucher(reversalOfId),
+                                  reverseCreditAdjustment, applyInventoryMutation, postTrackedMovement,
+                                  inventory_valuation_movements (reversal_of_id chain),
+                                  idempotency_records
+schema delta                     = §30.31 one bounded provenance table + supporting indexes;
+                                  zero new reversal tables and zero commercial-source fields
+evidence tables reused           = return_reversals, return_reversal_items, credit_reversal_components
+idempotency namespace            = SALES_RETURN_REVERSAL_OPTION_C
+concurrent races covered         = R-SAL-09 (negative) / R-SAL-10 (Option C clauses appended) /
+                                  Option C concurrent reverse × N / Option C vs Replacement /
+                                  Option C vs Inventory OUT / Option C vs Credit application-refund
+DELIVERY_BACKED contract         = unchanged; reverseOperationalReturn() not modified
+Batch A contract                 = unchanged; Option C writes only sales_reversals / return_reversal_items /
+                                  credit_reversal_components as separate evidence rows
+Purchase Return contract         = unchanged; reverseOperationalReturn(side='PURCHASE') not modified
+```
+
+Key Design alignments recorded for traceability:
+
+1. §29.3 canonical writer inventory adds two new rows: `Sales Return Reversal (DELIVERY_BACKED)` (existing handler unchanged) and `Sales Return Reversal (SO_BACKED / NO_SOURCE)` (new bounded adapter per §29.13.11).
+2. §29.13.11.1 .. 8 introduces the complete Option C Reverse contract — mode resolver, Gate-A, Gate-B, Gate-C, Gate-D, Gate-E, atomicity/lock-order/idempotency, DELIVERY_BACKED compatibility. No new canonical primitive is invented.
+3. §29.14, §29.30 row 7, §29.31.8 API surface, §29.32 lifecycle and §29.41 schema constraints now note the reuse of existing evidence tables and the absence of new schema.
+4. §29.30 row 16 explicitly lists the Option C Reversal Evidence edge with all canonical lock identities (return_orders / return_order_items / inventory_valuation_movements / inventory_valuation_balances / accounting_vouchers / financial_credit_adjustments / sales_replacement_fulfillments ↔ return_order_items.id).
+5. §29.30.1 direction audit adds the new edge and notes that Option C reversal is itself a new append-only business fact, not a mutation of the source Return.
+6. §29.31.8 lists `POST /api/sales-returns/:id/reverse` with mode-aware dispatch body / permission / idempotency contract.
+7. §29.32 lifecycle table adds the `Sales Return Reversal Evidence (Option C; append-only; independent of return_orders.status)` row to make explicit that reversal is NOT a state transition of the Return itself.
+8. §29.41 schema constraints retains `no new Option-C Sales Return Reverse table`; §30.31 supersedes only the former zero-schema statement with one bounded provenance carrier and supporting indexes.
+9. §29.44 R-SAL matrix modifies R-SAL-09 (negative Option C reach check) and R-SAL-10 (Option C clauses + Gate-A controlled serialization). No new Race ID is introduced.
+10. §30.8 migration allocation remains historical for the original DR-SAL-05 delta; §30.31 reuses the Wave 6 additive migration file for one bounded provenance table and supporting indexes. Idempotency namespace `SALES_RETURN_REVERSAL_OPTION_C` reuses `idempotency_records`.
+11. §30.14 risk matrix Wave 6 row records the Option C Gates' residual risk; §30.31 supersedes the former deferral and requires full independent-session MySQL race evidence before Wave 6 Acceptance.
+12. §30.17 Wave contract table Wave 6 row records backend files (new `option_c_branch` adapter inside `sales_return_canonical_writer`, reusing `server/modules/financial-inventory.js` / `server/modules/settlement-core.js` primitives), frontend (returns route reverse endpoint), tests (Gate-A / Gate-B / Gate-C / Gate-D / Gate-E / concurrent / negative scenarios), and acceptance gate (real independent-session MySQL race evidence).
+
+Required Implementation Evidence for DR-SAL-05 (per Wave 6 Implementation gate):
+
+```text
+1. SQLite + MySQL parity: same Gate-A/B/C/D/E semantics on both dialects.
+
+2. Wave 6 additive migration MUST synchronize from current draft to the
+   approved contract BEFORE apply:
+   - current draft `server/migrations/sales-customer-wave6-returns.js:96, 149, 154`
+     still declares `state TEXT/VARCHAR NOT NULL DEFAULT 'OPEN' CHECK(state IN
+     ('OPEN','IN_PROGRESS','FULFILLED','CANCELLED'))` plus the 4-named CHECK
+     `chk_sales_order_replacements_state`.
+   - approved contract (§29.14 + §30.8 + §30.29 + §30.30) requires the sole two-value
+     header `cancellation_state CHECK ('ACTIVE','CANCELLED')` and a pure read
+     projection of OPEN/PARTIAL/FULFILLED/CANCELLED. Implementation must:
+       a) recreate or alter `sales_order_replacements` to replace the 4-value
+          state column with 2-value `cancellation_state`;
+       b) drop any index that targets `state` and create equivalent on
+          `cancellation_state` (idx_sales_replacement_return);
+       c) refresh SQLite metadata tests (sqlite_master + PRAGMA) and
+          MySQL information_schema / KEY_COLUMN_USAGE / CHECK_CONSTRAINTS;
+       d) if any database already contains the provisional shape, fail closed
+          rather than guess conversion; requires separately controlled
+          remediation.
+
+3. Wave 6 additive migration MUST relax two CHECKs for NO_SOURCE Option C
+   (§29.13.11.6.b):
+   - `return_reversals.amount_cents` from CHECK(amount_cents > 0) to
+     CHECK(amount_cents >= 0). DELIVERY_BACKED path writes amount_cents > 0
+     (unit_price_cents > 0), so relaxation is no-op for DELIVERY_BACKED.
+   - `return_reversal_items.amount_cents` same relaxation. The
+     `quantity CHECK(quantity > 0)` constraint is unchanged (Option C full
+     reverse quantity is the original Return quantity, always > 0).
+   - SQLite needs table recreation (or RENAME + re-CREATE) to alter CHECKs.
+   - MySQL uses DROP CHECK + ADD CONSTRAINT.
+   - UNIQUE(reversal_no), UNIQUE(reversal_id, original_return_item_id), foreign
+     keys, defaults and NOT NULL are unchanged.
+
+4. Positive cases:
+   - SO_BACKED full reverse with exact MOVING_AVERAGE pool (no subsequent issuance) -> 200 + paired reversal movement + reversal voucher
+   - SO_BACKED full reverse with LOT_SPECIFIC_POOL (current quantity/value sufficient, no negative movement/dependency after frontier; aggregate equality not required) -> 200
+   - SO_BACKED full reverse with SPECIFIC_SERIAL (unique frozen outbound provenance; restored unit intact) -> 200
+   - NO_SOURCE full reverse with exact MOVING_AVERAGE pool (no subsequent issuance) -> 200 + reversal voucher + return_reversal_items.amount_cents = 0 (canonical zero, accepted by relaxed CHECK)
+   - SO_BACKED / NO_SOURCE reverse with no Credit Adjustment -> 200, no Credit Reversal Component written
+   - SO_BACKED / NO_SOURCE reverse with real confirmed Credit and zero downstream consumption -> 200 + REVERSED credit
+   - DELIVERY_BACKED reverse (regression) -> unchanged behavior, amount_cents > 0 path unaffected
+5. Negative cases (HTTP 409, zero side effect, original Return unchanged):
+   - Active ACTIVE not-fully-fulfilled Replacement -> 409 (Gate-A.2)
+   - Confirmed sales_replacement_fulfillments row exists EVEN if header.cancellation_state = 'CANCELLED' -> 409 (Gate-A.3, locked evidence untouched; A.3 fires before any state-branch logic)
+   - Replacement obligation absent (no rows at all) -> proceed to Gate-B
+   - Replacement with cancellation_state = 'CANCELLED' AND zero fulfillment rows -> proceed to Gate-B (Gate-A.4 strict)
+   - MOVING_AVERAGE with strict_negative_post < 0 -> 409 (Gate-B; canonical quantity_delta < 0 check, not LIKE-based)
+   - MOVING_AVERAGE with pool.value_cents / pool.quantity preserved exactly but strict_negative_post = 0 -> pass Gate-B (proceed to canonical primitive)
+   - LOT_SPECIFIC_POOL with insufficient balance, any post-frontier negative movement, or dependency conflict -> 409 (Gate-B); OUT then replenishment remains 409
+   - SERIAL with any non-(AVAILABLE|HOLD) -> 409 (Gate-B)
+   - SERIAL with missing/ambiguous outbound provenance, duplicate active identity, or restored-unit/balance mismatch -> 409 (Gate-B)
+   - Already partially reversed (cumulative > 0) -> 409 (Gate-B+M3)
+   - Duplicate-reverse guard hit (reversal_of_id already populated) -> 409
+   - Credit Adjustment exists but downstream application/refund consumed -> 409 (Gate-E)
+   - Marked DELIVERY_BACKED -> routed to existing handler (no Option C branch)
+   - Marked UNKNOWN / NULL -> 409 (mode-resolver default)
+   - return_orders.status != CONFIRMED -> 409
+6. Atomicity: 任一 Gate 失败, 整体回滚; original Return 状态, Inventory, LOT/SERIAL, valuation movement/balance, voucher, AR, Credit Adjustment, success audit, idempotency 零变化.
+7. Idempotency: same-key replay returns committed result; same-key different-payload -> 409; no key -> 400 (for Option C).
+8. Concurrency (real MySQL, real independent sessions):
+   - Two concurrent Option C reverses of same Return id: one wins, second sees prior reversal evidence and hits Gate-B/M3 or idempotency 409
+   - Option C reverse vs Sales Delivery confirm of same product/warehouse position: serialized on inventory_valuation_balances FOR UPDATE; exactly-once net effect or 409
+   - Option C reverse vs Replacement fulfillment evidence insert: serialized on sales_replacement_fulfillments FOR UPDATE; post-reverse state visible to second writer
+   - Option C reverse vs Finance Credit application/refund: serialized on financial_credit_adjustments + parent settlement_unapplied_balances
+9. Regression:
+   - DELIVERY_BACKED reverse behavior unchanged (Batch A unchanged)
+   - Purchase Return reverse behavior unchanged
+   - Quotation / SO / SO Change / DN / SD confirm lifecycles unaffected
+   - Replacement immutable fulfillment evidence unaffected
+   - Option A confirm path unaffected
+```
+
+Required code changes scope (Implementation-only; not Phase D design scope):
+
+```text
+server/modules/
+  sales_return_canonical_writer.js
+    -> add option_c_branch() handler (mode resolver + Gates)
+       reuse: applyInventoryMutation (server/lib/inventory-mutation.js)
+              postTrackedMovement (server/modules/traceability-quality.js)
+              consumeOriginalInboundValue (server/modules/financial-inventory.js)
+              createSystemVoucher (server/modules/financial-inventory.js)
+              reverseCreditAdjustment (server/modules/settlement-core.js)
+              reverseOperationalReturn EXISTING unchanged for DELIVERY_BACKED
+  sales-returns.js (or app.js)
+    -> extend POST /api/sales-returns/:id/reverse route to dispatch by commercial_source_marker
+tests/
+  server/sales-customer-wave6-option-c-reversal.test.js    NEW focused unit + contract tests
+  server/sales-customer-wave6-mysql-option-c-reversal.integration.js  NEW real protected MySQL gate
+Frontend
+  src/pages/returns.jsx
+    -> extend returns route LIST / DETAIL with mode-aware reverse action and 409 reason surfacing
+  scripts/testing/test-suites.js
+    -> register the new Wave 6 Option C suites under FAST + FULL + HEAVY + protected MySQL
+```
+
+Implementation remains paused after this record. Approval of DR-SAL-05 Requirement by the user does not itself approve this corrected Design or authorize Wave 6 code changes; the Design Gate await explicit user approval, after which Wave 6 Implementation may resume.
+
+### 30.31 Wave 6 LOT/SERIAL R1–R4 + Option C Idempotency — bounded superseding Design — 2026-10-17
+
+This section is the active Design for the bounded Requirement correction in `document.md §34.3.10 / §34.5.1 / §34.15`. Where it conflicts with the earlier Option-A/Option-C text in §29.13.7, §29.13.11, §30.29 or §30.30, **this section supersedes only LOT/SERIAL valuation provenance, LOT Gate-B, NO_SOURCE provenance, legacy fail-closed, Option-C idempotency and the directly required schema/test/concurrency statements**. MOVING_AVERAGE's already-valid strict negative-movement rule, DELIVERY_BACKED, Replacement, F5/F6, Batch A and Wave 7+ remain unchanged. The prior LOT aggregate-equality, current positive same-serial-pool authority, `schema delta = 0`, and corresponding positive-test statements are historical and are not active Design.
+
+#### 30.31.1 Requirement-to-Design traceability and decisions
+
+| Requirement | Active Design decision | Acceptance owner |
+|---|---|---|
+| R1 LOT | Exact Return movement + sufficient current quantity/value + conservative no-negative-movement frontier + explicit dependency proof; aggregate `pool == Return` is forbidden | UAT-S-20/21 LOT cases |
+| R2 SERIAL | Unique eligible original outbound valuation/tracking evidence is Confirm authority; exactly one unit/value is restored; Reverse consumes only that restored unit | UAT-S-20/21 SERIAL cases |
+| R3 NO_SOURCE | Commercial marker remains `NO_SOURCE`; valuation provenance is an independent Inventory reference and cannot create SO/Delivery commercial evidence | SC56 / SC58 + six-combination matrix |
+| R4 Legacy | Only deterministic canonical evidence is eligible; no balance/cost reconstruction, synthetic outbound or migration-time guessing | legacy fail-closed cases |
+| Option-C idempotency addendum | Explicit non-empty header, exact scope/fingerprint, replay/409, one atomic result; no random fallback | UAT-S-20/21 Case 21/21a |
+| SC57 unknown marker | NULL/unknown marker returns 409 before business mutation; never routes to DELIVERY_BACKED or Option C | legacy marker regression |
+
+No additional Requirement-owner decision is needed by this Design. Implementation remains separately gated.
+
+#### 30.31.2 Existing-link evaluation and bounded provenance carrier
+
+Existing evidence is necessary but not sufficient:
+
+- `tracked_source_allocations` identifies the Return's LOT/SERIAL allocation but has no immutable link to the original outbound valuation movement;
+- `tracked_inventory_movements.transaction_id` can pair tracking with an Inventory transaction, and `inventory_valuation_movements.inventory_transaction_id` can pair valuation with it, but neither freezes which outbound was selected for this Return;
+- `inventory_serials.created_source_*` describes identity creation, not the later outbound that supplied return value;
+- `inventory_valuation_movements.reversal_of_id` means economic reversal and must not be overloaded as Return provenance;
+- timestamp/id scans can find candidates, but cannot preserve a unique selection for later Reverse or distinguish an ambiguous legacy history.
+
+Two bounded options were evaluated:
+
+| Option | Shape | Benefit | Limitation / consequence |
+|---|---|---|---|
+| Nullable immutable reference on one existing row | add `original_outbound_valuation_movement_id` to a Return item or Return valuation movement | smallest column count; simple SERIAL full-unit case | a Return item may contain multiple serial/LOT allocations; partial MA/LOT restoration needs cumulative quantity/value allocation; a single FK cannot represent both without implicit layer logic or lossy JSON |
+| Bounded allocation/provenance object | one immutable row per Return valuation allocation, linking the Return movement to original outbound valuation/tracking evidence | represents multiple serials, partial MA/LOT allocations, exact cents and later Reverse without changing commercial source | one new Wave-6 table and indexed cumulative-allocation checks are required |
+
+**Selected:** the bounded object, because it is the smallest carrier that is correct for all six combinations and does not turn a commercial source field into valuation provenance. It is Sales-Return-specific evidence, not a general inventory layer engine.
+
+```text
+sales_return_valuation_provenance
+  id                                      PK
+  return_order_id                         NOT NULL FK return_orders(id)
+  return_order_item_id                    NOT NULL FK return_order_items(id)
+  return_valuation_movement_id            NOT NULL FK inventory_valuation_movements(id), UNIQUE
+  original_outbound_valuation_movement_id NOT NULL FK inventory_valuation_movements(id)
+  original_outbound_tracking_movement_id  NULL FK tracked_inventory_movements(id)
+  product_id                              NOT NULL FK products(id)
+  warehouse_id                            NOT NULL FK warehouses(id)
+  lot_id                                  NULL FK inventory_lots(id)
+  serial_id                               NULL FK inventory_serials(id)
+  quantity                                NOT NULL CHECK(quantity > 0)
+  value_cents                             NOT NULL CHECK(value_cents > 0)
+  created_at                              NOT NULL
+
+UNIQUE(return_order_item_id, return_valuation_movement_id)
+INDEX(original_outbound_valuation_movement_id, id)
+INDEX(return_order_id, return_order_item_id, id)
+INDEX(product_id, warehouse_id, lot_id, serial_id, id)
+```
+
+The row is insert-only: no application UPDATE/DELETE path. Its identity, quantity and cents must equal the referenced positive `SALES_RETURN` movement. For SERIAL, tracking reference is mandatory, `quantity=1`, both outbound movements must identify the same transaction/serial, and locked cumulative active restoration for that outbound must be zero. For NO_SOURCE MA/LOT provenance, tracking is nullable for MA and mandatory for LOT; cumulative provenance quantity/value against the locked outbound cannot exceed its absolute quantity/value. Proportional cents use the existing deterministic allocator; the final eligible allocation receives the exact residual. This bounded allocation is used only when the six-combination matrix permits outbound provenance. It never becomes general issue-layer selection.
+
+Eligible original outbound valuation evidence is deliberately narrow: `status='POSTED'`, `quantity_delta<0`, `value_delta_cents<0`, `source_type='SALES_DELIVERY'`, `movement_type='SALES_DELIVERY_COGS'`, real `inventory_transaction_id`, exact product/warehouse and applicable LOT/SERIAL. SERIAL additionally requires exactly one matching unreversed tracked OUT row with quantity one. Adjustment loss, count shortage, transfer, scrap, production issue, purchase return, `LEGACY_UNVALUED`, standard/current cost and sale price are ineligible. A future outbound type requires a separate Requirement/Design change.
+
+The client may provide only a candidate outbound movement identity, never quantity/value/cost authority. The server resolves and locks canonical evidence. SERIAL may auto-resolve only when exactly one eligible candidate exists; MA/LOT without a unique candidate requires an explicit candidate identity. Zero or multiple candidates return 409.
+
+#### 30.31.3 LOT Confirm and conservative Reverse dependency gate
+
+Confirm locks the exact product/warehouse/LOT position, LOT identity, tracking allocation and valuation balance, then freezes one legal positive-pool plan (or the explicitly allowed NO_SOURCE outbound-provenance plan). It posts physical/tracking IN, a distinct positive Return valuation movement and, when provenance is used, its immutable provenance row. The Return movement identity is therefore `(source_type='SALES_RETURN', source_id=returnId, source_item_id=returnItemId, lot_id, inventory_transaction_id)`.
+
+Reverse calculates unreversed Return quantity/value from the exact movement minus POSTED `reversal_of_id` rows. It requires locked physical position, `inventory_lot_balances` and `inventory_valuation_balances` to each be sufficient, but sufficiency never proves no consumption. The movement frontier rejects every exact-identity negative valuation movement or tracked OUT/MOVE with `created_at > returnMovement.created_at`; a same-timestamp row from another transaction is ambiguous and also rejects. Thus ordering is stable without treating a UUID as time, and OUT-then-replenishment remains rejected.
+
+The dependency set is fail-closed:
+
+- any active exact-position `inventory_locks` row blocks;
+- `planning_reservations` has no LOT dimension, so any ACTIVE on-hand reservation for the product/warehouse blocks unless a future canonical fact proves it excludes this LOT;
+- any transfer OUT/MOVE, issuance, scrap, adjustment loss or other negative canonical movement after the frontier blocks;
+- Return-created HOLD is permitted, but any later `tracked_identity_hold_history` action blocks because ownership of that decision cannot be silently erased;
+- missing/mismatched position, tracking, LOT balance, valuation balance, marker, status or unknown movement semantics blocks.
+
+After all reads are revalidated under locks, Reverse posts one exact physical/tracked OUT and exact negative valuation movement per original Return movement, then the exact voucher/Credit/audit effects. No general layer table or aggregate-equality test is introduced.
+
+#### 30.31.4 SERIAL original-value restoration and Reverse
+
+Confirm requires each serial allocation to satisfy all of the following under one transaction:
+
+1. exact serial/product identity, requested quantity exactly one, lifecycle `DELIVERED`, `current_warehouse_id IS NULL`, no active AVAILABLE/HOLD duplicate, and no positive same-serial valuation balance (a stale positive balance is 409, never authority);
+2. exactly one eligible original outbound valuation movement and exactly one paired tracked OUT row as defined in §30.31.2;
+3. no prior POSTED reversal or active Return restoration consuming that outbound evidence;
+4. exact restoration value `-original.value_delta_cents`, never current pool value;
+5. one physical/tracked IN, one positive Return valuation movement and one immutable provenance row; post-state is exactly one unit at the Return warehouse (AVAILABLE or the existing Return HOLD policy), with a matching one-unit valuation balance.
+
+Reverse re-locks provenance, outbound evidence, Return movement, serial identity, position/balance and dependencies. It requires the restored unit to be the only active in-stock instance, at the same warehouse/product, quantity one, with no later OUT/MOVE/transfer/hold-history/reservation/lock/reversal evidence. It then removes exactly one unit and exactly the Return movement cents. Current positive same-serial stock, current/standard cost, sale price or a different outbound can never substitute. Ambiguous legacy rows remain readable but non-reversible and return 409.
+
+#### 30.31.5 NO_SOURCE separation and migration/rollback plan
+
+`return_orders.commercial_source_marker='NO_SOURCE'`, NULL SO/Delivery source pairs and the existing zero-or-authoritative commercial amount remain unchanged. `sales_return_valuation_provenance` is Inventory valuation evidence only; API/read models expose it separately and must not synthesize `sales_order_item_id`, `delivery_item_id`, AR, Credit or revenue evidence.
+
+Migration is additive in the existing Wave-6 migration:
+
+- SQLite creates the table, FKs, CHECKs and indexes idempotently; MySQL creates the equivalent InnoDB table with `VARCHAR(128)`, `DECIMAL(24,6)` and `BIGINT` cents plus named constraints;
+- add composite read/lock indexes on `inventory_valuation_movements(product_id,warehouse_id,lot_id,serial_id,status,created_at,id)` and `tracked_inventory_movements(product_id,warehouse_id,lot_id,serial_id,direction,created_at,id)`; add the bounded reservation-gate index `(product_id,warehouse_id,status,supply_source_type,id)`;
+- fresh, existing-upgrade and replay paths verify exact metadata on both databases; unexpected table/constraint shape fails closed;
+- existing rows are not backfilled. Legacy rows without unique deterministic evidence remain 409. No migration scans balances/costs to invent provenance;
+- compatibility rollback is application-first: older code ignores the additive table/indexes; populated evidence remains. Dropping it is destructive and requires a future dependency proof and explicit authorization.
+
+F5/F6 remain unchanged. No `STANDARD_COST`, `LEGACY_UNVALUED`, second Return-reversal table or general valuation-layer object is added.
+
+#### 30.31.6 Option C flow, NULL marker and idempotency
+
+After the locked marker selects `SO_BACKED` / `NO_SOURCE` but before any business mutation, the route requires a non-empty `Idempotency-Key` header; missing/blank is HTTP 400 and no random/deterministic fallback is generated. This sequencing preserves DELIVERY_BACKED's unrelated frozen contract while making Option C fail before side effects. Scope is exactly `(operation_type='SALES_RETURN_REVERSAL_OPTION_C', document_id=returnId, idempotency_key=clientKey)`. The canonical fingerprint contains action, normalized business date, normalized reason and every authoritative request field that changes economic effect, excluding transport noise.
+
+Inside one transaction: idempotency conflict/replay check → locked marker/status read → Gate-A → corrected Gate-B → period/RBAC recheck → physical/tracking OUT → exact valuation reversal → exact voucher reversal → optional lawful Credit reversal → append-only reversal/provenance evidence → exactly one success audit → success idempotency record. Same key/equivalent payload replays the stored response with no duplicate effect; same key/conflicting payload returns 409. NULL/unknown marker returns 409 before Gate-A and never falls through to DELIVERY_BACKED. Any rejection or writer error rolls back every listed fact.
+
+#### 30.31.7 Canonical lock order and independent-session concurrency
+
+All participating writers follow §27.18's global order; lists are deduplicated and lexically sorted within each class:
+
+```text
+idempotency scope / Return document anchors
+-> source/provenance business rows (return lines, replacement evidence)
+-> product/reference rows
+-> inventory positions (position_key)
+-> LOT/SERIAL identities
+-> inventory locks + reservation aggregate/range rows + hold history
+-> tracked movement exact-identity frontier ranges
+-> valuation balances + original/Return valuation movements + provenance rows
+-> original voucher
+-> optional Credit/settlement rows
+-> reversal evidence / audit / idempotency result
+```
+
+SQLite uses one encompassing `BEGIN IMMEDIATE` transaction. MySQL uses InnoDB `SELECT ... FOR UPDATE` on existing anchors and indexed exact-identity ranges; absence checks lock the relevant next-key range under the repository transaction isolation so a negative movement/provenance/fulfillment phantom cannot be inserted between proof and commit. Deadlock/lock-timeout uses the existing bounded adapter retry only for the complete transaction; no partial writer-level retry. Exhaustion returns the existing deterministic conflict/service error with rollback.
+
+| Race | Required serialization and legal outcomes |
+|---|---|
+| Same identity, simultaneous Confirm | same position → LOT/SERIAL identity → balance/outbound evidence locks; both LOT confirms may serialize if each revalidation remains legal; same SERIAL permits exactly one, loser 409 |
+| Reverse vs Inventory OUT | same position/identity/frontier/balance locks; Reverse first removes its unit then OUT revalidates remaining stock, or OUT first leaves negative evidence and Reverse 409 |
+| Confirm / Reverse / OUT, three sessions | same global order; only a serializable ordering is permitted; no test may share one DB connection |
+| Concurrent Reverse of same Return | Return/idempotency anchors serialize; same key replays, different key loser sees committed reversal/provenance and returns 409 |
+| Simultaneous SERIAL operations | unique serial identity plus outbound/provenance locks prevent duplicate restoration; exactly one active in-stock unit and one value restoration |
+
+#### 30.31.8 Six-combination design-to-test matrix
+
+| Combination | Positive Confirm / Reverse | Mandatory negative coverage |
+|---|---|---|
+| SO_BACKED × MOVING_AVERAGE | approved SO commercial evidence; positive MA pool; no later negative movement; exact Return/voucher reverse | capacity/source mismatch, downstream OUT, period/RBAC, rollback |
+| SO_BACKED × LOT | exact LOT positive pool; no-consumption Reverse succeeds without aggregate equality | downstream OUT; OUT then replenishment still 409; lock/reservation/transfer/HOLD-history conflict |
+| SO_BACKED × SERIAL | unique eligible original outbound; exactly one-unit original-value restore and successful Reverse | duplicate in-stock identity, missing/ambiguous outbound, consumed/transferred serial |
+| NO_SOURCE × MOVING_AVERAGE | marker remains NO_SOURCE; positive MA pool or unique explicit bounded outbound provenance; exact Reverse | no provenance/basis, fabricated commercial source, standard/legacy fallback |
+| NO_SOURCE × LOT | marker remains NO_SOURCE; exact LOT pool or eligible same-LOT bounded provenance; fence-protected Reverse | wrong/ambiguous provenance, downstream OUT/replenishment, dependencies |
+| NO_SOURCE × SERIAL | marker remains NO_SOURCE; unique eligible outbound/tracked pair; one-unit restore/Reverse | missing/ambiguous evidence, duplicate serial, sale-price/current-pool substitution |
+
+Every row additionally tests missing key 400, same-key replay, payload conflict 409, NULL/unknown marker 409, original/reversal audit cardinality, period, permission/SOD, injected writer rollback, exact inventory/traceability/valuation/voucher/optional-Credit effects and zero partial effects. Real MySQL tests use independent connections for all five races; SQLite tests prove equivalent outcomes under its encompassing writer serialization.
+
+#### 30.31.9 Exact implementation impact inventory and regression boundary
+
+Implementation authorization, if later granted, is limited to:
+
+- `server/modules/sales-return-canonical-writer.js`: provenance resolver/freeze, corrected LOT/SERIAL Confirm and Gate-B, explicit-key/unknown-marker enforcement and common lock order;
+- `server/modules/financial-inventory.js`: bounded exact-outbound resolver/apply helper and exact Return reversal validation; existing general primitives retain contracts;
+- `server/modules/traceability-quality.js` and `server/lib/inventory-mutation.js`: only bounded authoritative preflight/lock helpers needed to preserve canonical physical/tracking writes; no second mutation engine;
+- `server/migrations/sales-customer-wave6-returns.js`: one provenance table plus the three supporting indexes and SQLite/MySQL metadata verification;
+- existing Wave-6 functional/final-functional/migration tests, a focused Option-C/provenance suite if separation is clearer, MySQL independent-session concurrency registration, and `scripts/testing/test-suites.js` classification;
+- the existing Return UI/API request model only to carry an optional outbound movement identity and mandatory Option-C header; no UI redesign.
+
+Regression preserves DELIVERY_BACKED confirm/reverse, Purchase Return, MOVING_AVERAGE validated behavior, Replacement lifecycle/evidence, F5/F6, Quotation/SO/Change/Delivery, Batch A, Inventory generic valuation consumers and all Wave 7+ files/contracts. Required gates after future implementation are focused Wave-6 tests, FAST/FULL, build, diff check, HEAVY, protected MySQL migration/integration and protected independent-session MySQL concurrency. This Design performs none of them.
+
+#### 30.31.10 Remaining risks and Design stop
+
+- Existing legacy rows may remain permanently non-reversible without separately authorized remediation; this is intentional fail-closed behavior.
+- Conservative same-timestamp and dimensionless-reservation rules can reject a technically safe reversal; false rejection is preferred to unsupported consumption proof.
+- MySQL next-key locking depends on the specified composite indexes and repository isolation; acceptance must prove phantoms are blocked using independent sessions.
+- A new eligible customer-outbound type, LOT-specific reservation authority or legacy backfill would reopen Requirement/Design and is not implied here.
+
+This bounded Design is complete for review. No source, schema, migration, test, frontend or database change is authorized by this record. Wave 6 implementation and final acceptance remain unapproved.
+
+#### 30.31.11 Implementation evidence — 2026-10-18 SERIAL valuation pre-state correction
+
+This sub-section records implementation-level corrections aligned with the frozen §30.31.4 items 1 + 4 + 5 contract. The Design itself is unchanged.
+
+**A. SERIAL valuation authority is the eligible original outbound.**
+`server/modules/sales-return-canonical-writer.js` `resolveOptionALinePlan` no longer reads `pool.value_cents` for SERIAL allocations. It now:
+1. Rejects pre-Confirm SPECIFIC_SERIAL pool with positive quantity or value (item 1 fail-closed).
+2. Resolves the authoritative original outbound via `resolveOriginalOutboundEvidence` (narrow `SALES_DELIVERY_COGS` predicate).
+3. Sets `valueCents = Math.abs(originalOutbound.value_delta_cents)` (item 4 — never current pool value).
+4. Caches `originalOutbound` on the allocation so `freezeProvenance` does not re-resolve.
+
+**B. SERIAL post-Confirm pool state.**
+Pre-Confirm pool MUST be 0/absent (rejected above). `receiveValue` adds `+1/+outbound_value` to the absent pool via `writeMovement` → `INSERT … ON CONFLICT(balance_key) DO UPDATE SET quantity=excluded.quantity, value_cents=excluded.value_cents`. Post-state pool becomes `quantity=1, value_cents=Math.abs(originalOutbound.value_delta_cents)`. This satisfies item 5 (exactly one unit at the Return warehouse with matching one-unit valuation balance) without unconditional UPSERT that overwrites a conflicting positive legacy balance — the precondition check rejects such states.
+
+**C. LOT frontier FOR UPDATE locking.**
+`server/modules/sales-return-canonical-writer.js` `lotGuard` now appends `FOR UPDATE` (MySQL only) to:
+- `inventory_valuation_movements` negative-movement frontier query (line 67-73 in current revision).
+- `tracked_identity_hold_history` LOT identity temporal check (line 89).
+
+`serialGuard` Reverse-time `tracked_inventory_movements` post-OUT and `tracked_identity_hold_history` post-HOLD checks are also FOR UPDATE-locked. SQLite `BEGIN IMMEDIATE` already serializes the entire transaction so the clause is a no-op hint on SQLite.
+
+**D. Composite frontier index for MySQL InnoDB next-key locking.**
+The Wave-6 migration adds `idx_valuation_movements_identity_status_created` on `inventory_valuation_movements(product_id, warehouse_id, lot_id, serial_id, status, created_at, id)` for both SQLite and MySQL paths, conditional on the table existing (so minimal F5-only fixtures do not error). The index supports MySQL InnoDB next-key locking at the `(product_id, warehouse_id, lot_id, serial_id, status, created_at, id)` range so a phantom negative LOT movement cannot be inserted between the Reverse-time frontier read and transaction commit.
+
+**E. Implementation-grade guarantees.**
+- Pre-Confirm positive SPECIFIC_SERIAL pool → 409 with zero partial side effects (no `inventory_valuation_movements` SALES_RETURN row, no `inventory_transactions` SALES_RETURN row, no `sales_return_valuation_provenance` row, `return_orders.status` remains DRAFT).
+- Pre-Confirm absent SPECIFIC_SERIAL pool → Confirm succeeds, post-state pool is exactly 1 unit at the outbound value, `sales_return_valuation_provenance` immutable row inserted with `value_cents = Math.abs(originalOutbound.value_delta_cents)`.
+- LOT Reverse succeeds when no downstream negative movement exists at the exact LOT identity (conservative fence per §30.31.3).
+- LOT Reverse fails 409 when any downstream POSTED negative valuation movement exists at the exact LOT identity whose `created_at >= original.created_at` AND from a different transaction; OUT-then-replenishment remains 409.
+- All four post-conditions (pre-Confirm / Confirm / Reverse / Negative) are exercised by the Wave 6 focused test suites (`server/sales-customer-wave6-functional.test.js`, `server/sales-customer-wave6-bounded-superseding.test.js`, `server/sales-customer-wave6-final-functional.test.js`, `server/sales-customer-wave6-migration.test.js`).
+
+**F. MySQL independent-session race evidence.**
+Real MySQL execution requires `ERP_DB_HOST / ERP_DB_PORT / ERP_DB_NAME / ERP_DB_USER / ERP_DB_PASSWORD` plus `ERP_MYSQL_TEST_ALLOW_RESET=true` and remains `TEST_EVIDENCE_PENDING`. The five race classes from §30.31.7 are exercised by `server/mysql-sales-customer-wave6-concurrency.integration.js` via `scripts/gates/mysql-concurrency-sales-wave6-worker.mjs` once the disposable MySQL target is provisioned.
+
+**G. Frozen contracts preserved.**
+DELIVERY_BACKED `reverseOperationalReturn` (`server/modules/financial-controls.js:323-382`), DELIVERY_BACKED `confirmSalesReturn`, Purchase Return `side='PURCHASE'` branch, Batch A frozen contracts, MOVING_AVERAGE strict negative-movement rule (`strictNegativePostCheck`), Replacement lifecycle + immutable fulfillment evidence, F5 `CHECK(amount_cents >= 0)` relaxation, F6 `cancellation_state` migration synchronization, Wave 7+ schema and contracts all remain unchanged.
+
+#### 30.31.12 Implementation evidence — MySQL LOT frontier physical index realization
+
+The logical §30.31.5 index remains `(product_id, warehouse_id, lot_id, serial_id, status, created_at, id)` on both databases. SQLite creates the seven full columns. MySQL retains full persisted `VARCHAR(128)` values and the same logical column order, but its nonunique BTREE uses `status(16)` and `created_at(64)` prefixes while keeping all four identity columns and final `id` full-width. The maximum utf8mb4 key payload is `(4 × 128 + 16 + 64 + 128) × 4 = 2880` bytes, below InnoDB's 3072-byte limit; no stored value, identity dimension, uniqueness rule or query predicate is truncated or removed.
+
+This is a physical compatibility realization, not a Design-semantic change. `status` is constrained to `POSTED / LEGACY_UNVALUED`, and canonical timestamps are ISO strings shorter than the 64-character prefix. Even for an unexpected longer stored value, MySQL evaluates the full row predicate after index lookup; a prefix collision can only conservatively widen the scanned/locked range. The LOT frontier keeps exact product/warehouse/LOT filtering, rejects same-timestamp ambiguity through the full `created_at >= ?` predicate, and retains the full `id` as the final BTREE discriminator. Acceptance still requires a real MySQL `EXPLAIN`/metadata check and the five §30.31.7 independent-session races; static DDL feasibility is not treated as phantom-safety proof.
+
+`server/database/mysql-schema.js` owns the single name-scoped SQLite-snapshot-to-MySQL prefix override so fresh bootstrap and additive index reconciliation emit identical DDL. `server/migrations/sales-customer-wave6-returns.js` reuses that renderer, creates missing Wave-6 indexes idempotently, verifies `NON_UNIQUE / COLUMN_NAME / SEQ_IN_INDEX / SUB_PART`, and fails closed on any same-name conflicting shape. No existing data is rewritten or inferred.
 
 ---
 
@@ -14052,3 +15210,108 @@ Not authorized:
 The freeze-record commit and resulting `master` HEAD may differ from the frozen implementation SHA because they contain subsequent governance documentation.
 
 **Final governance status: BATCH_A_ACCEPTANCE_PASS / FROZEN — USER APPROVED.**
+
+### 34.14 Sales & Customer Wave 6 — Final User Acceptance & Freeze Record (2026-10-18)
+
+**Decision: ACCEPTANCE PASS / FROZEN — `WAVE6_FINAL_ACCEPTANCE_PASS — FROZEN`**
+
+#### 1. User Approval
+
+On 2026-10-18, the project owner explicitly approved Wave 6 Final Acceptance and Freeze and attested to a manual regression pass on the current dirty working tree:
+
+- `USER_ATTESTED_MANUAL_REGRESSION_PASS` recorded in `log/2026-10-18.md` Final Acceptance Record. Detailed pass counts and exit codes were intentionally not archived in this audit transcript; the user attestation is retained and the gap is non-blocking under AGENTS.md §10/§11 because the same working tree was previously covered by the protected MySQL gate (see §3 below).
+- File-organization decision formally accepted: `applicationRegistry.js → src/pages/logistics-finance.jsx → Returns` is the canonical Returns UI implementation location for Wave 6. No separate `src/pages/returns.jsx` will be created.
+
+#### 2. Immutable Acceptance Baseline
+
+- Repository: `quanyantan-svg/modern-erp`
+- Accepted branch: `feature/sales-waves6-13`
+- Accepted working-tree HEAD: `aee1e0c13d26dd840ae4b596340212eef03479c0` (unchanged from prior gates)
+- Package version: `1.6.2` (unchanged)
+- Existing release identity: `v1.6.2` (unchanged)
+- Scope: Sales & Customer Wave 6 (Returns + Replacement) only
+- Pre-existing DR-SAL-04 (Option A Confirm) and DR-SAL-05 (Option C Restricted Economic Reversal) decisions are independently frozen at `document.md §34.15` and remain authoritative.
+
+The working tree at this acceptance is unstaged and uncommitted per AGENTS.md §11 and §5 (Git & Database Protection); the user explicitly did not authorize any commit, push, merge, tag, release, or production DDL in this Freeze record.
+
+#### 3. Accepted Scope
+
+- Sales Return Confirmation (DR-SAL-04 Option A) for `SO_BACKED` and `NO_SOURCE` modes.
+- Sales Return Restricted Economic Reversal (DR-SAL-05 Option C) for confirmed `SO_BACKED` and `NO_SOURCE` Returns, full-return only.
+- LOT conservative no-subsequent-negative-movement fence (R1).
+- SERIAL outbound provenance authority (R2) + immutable provenance carrier `sales_return_valuation_provenance` (R3) + legacy fail-closed (R4).
+- Mandatory explicit client-supplied `Idempotency-Key` for Option C reverse (no body / random / server fallback; missing → 400).
+- Replacement lifecycle: Create / List / Detail / Partial / Multi-Delivery / Cancel / Fulfill with immutable fulfillment evidence and pure-derived OPEN/PARTIAL/FULFILLED/CANCELLED state.
+- Three-mode commercial source distinction (DELIVERY_BACKED / SO_BACKED / NO_SOURCE) with NULL / unknown marker returning 409 `SALES_RETURN_MARKER_UNKNOWN` and never falling through to the legacy DELIVERY_BACKED reversal path.
+- F5 schema relaxation: `return_reversals.amount_cents` and `return_reversal_items.amount_cents` `CHECK(amount_cents > 0)` → `CHECK(amount_cents >= 0)` for NO_SOURCE Option C compatibility.
+- F6 `sales_order_replacements.state` (4-value) synchronised to `sales_order_replacements.cancellation_state` (2-value ACTIVE/CANCELLED).
+- Wave 6 additive migration additive carrier `sales_return_valuation_provenance` with FK / CHECK / UNIQUE / supporting indexes on `inventory_valuation_movements`, `sales_return_valuation_provenance`, `sales_order_replacements`, `sales_order_replacement_lines`, `sales_replacement_fulfillments`.
+- DELIVERY_BACKED `reverseOperationalReturn` and `confirmSalesReturn` frozen; Batch A contracts unchanged; MOVING_AVERAGE strict negative-movement rule preserved.
+
+The accepted scope includes the associated authorization, audit, idempotency, economic consistency, concurrency and mobile browser contracts.
+
+#### 4. Acceptance Evidence
+
+Focused evidence:
+
+- `server/sales-customer-wave6-functional.test.js`: 9 functional cases covering MA/LOT/SERIAL positive matrix, pool/stale-pool 409, LOT conservative fence pass/fail, SO_BACKED remaining capacity, standard-cost reject, Option C full reverse + replay + payload conflict 409, Replacement partial/multi-delivery/cancel/reverse-block, RBAC 403.
+- `server/sales-customer-wave6-bounded-superseding.test.js`: 18 cases covering six-combination SO_BACKED/NO_SOURCE × MA/LOT/SERIAL positive matrix, LOT/SERIAL negative cases (subsequent OUT, replenishment, duplicate, ambiguous provenance), legacy ambiguity fail-closed, Option C mandatory idempotency-key (400/409/200), NULL/unknown marker 409, stale Confirm/Reverse, period/RBAC/dependency failures, zero partial side effects.
+- `server/sales-customer-wave6-final-functional.test.js`: 5 functional closure cases.
+- `server/sales-customer-wave6-migration.test.js`: 8 cases including the Wave 6 composite-index `inventory_valuation_movements(product_id, warehouse_id, lot_id, serial_id, status, created_at, id)` fresh/upgrade/replay and minimal-fixture skip paths.
+- `server/mysql-sales-customer-wave6-concurrency.integration.js`: 5 race-class harness (same-identity Confirm, Reverse vs LOT OUT, three-session Confirm/Reverse/OUT, concurrent Reverse, concurrent SERIAL restoration) registered as the 8th suite in `scripts/gates/mysql-concurrency-gate.mjs`.
+- `scripts/acceptance/sales-customer-wave6-responsive.mjs`: Browser / responsive UAT at 320 / 390 / 430 / 680 CSS px covering mode picker, Option C reverse, replacement creation and FULFILLED state.
+- Browser evidence: `docs/evidence/sales-customer-wave6/return-create-320.png`, `return-create-390.png`, `return-create-430.png`, `return-create-680.png`, `replacement-fulfilled-390.png`.
+
+Protected disposable MySQL evidence (recorded in `log/2026-10-18.md` §Wave 6 real MySQL acceptance gate, on the same HEAD `aee1e0c`):
+
+- Protected preflight: `127.0.0.1:3306 / modern_erp_domain_test`, MySQL 8.0.37, InnoDB 16 KiB pages, Dynamic row format, application `READ COMMITTED`.
+- `pnpm.cmd test:mysql` PASS: fresh bootstrap Waves 1–6, compatible upgrade, replay, legacy-row preservation, FK / UNIQUE / CHECK metadata, provenance schema, exact Wave 6 composite-index metadata, zero skipped tests.
+- `pnpm.cmd test:mysql:concurrency` PASS across 8 suites, 84/84 tests, zero failures / skips / cancellations / todos; Wave 6 5/5 PASS via independent sessions with observed overlap at `mysql_transaction_gates.gate_id=1`.
+- Optimizer evidence: the unforced LOT query selected `lot_id`; the bounded query forced `idx_valuation_movements_identity_status_created` with EXPLAIN-confirmed `ref` access, key length 1543; under `READ COMMITTED`, phantom safety is supplied by canonical `mysql_transaction_gates` writer serialization.
+
+#### 5. Implementation Location & Final Technical Mapping
+
+The Wave 6 Returns + Replacement UI is implemented inside the existing Returns component of `src/pages/logistics-finance.jsx`, registered in `src/navigation/applicationRegistry.js` as the route `returns`:
+
+| Concern | File | Authoritative scope |
+|---|---|---|
+| Returns route registration | `src/navigation/applicationRegistry.js` line 164 | `returns: named('../pages/logistics-finance.jsx','Returns')` |
+| Returns UI + Wave 6 mode picker + Option C reverse + Replacement lifecycle | `src/pages/logistics-finance.jsx` `Returns` component (lines ~2169+) | Three modes DELIVERY_BACKED / SO_BACKED / NO_SOURCE; surface toggle `returns / replacements`; `ReplacementModal` for create / fulfill / cancel; inline error surfaces for 409 |
+| Returns UI styles | `src/styles.css` | `.wave6-mode-picker`, `.wave6-return-detail`, `.wave6-object-head`, `.wave6-line-list`, `.wave6-inline-error`, `.wave6-workflows`, `.wave6-inline-workflow`, `.wave6-replacement-line`, `.wave6-progress` and ≤520px mobile fallback |
+| Sales Return canonical writer (Option A Confirm + Option C Reverse + Replacement CRUD) | `server/modules/sales-return-canonical-writer.js` | All §29.13.11 / §30.31 / §30.31.11 primitives; LOT/SERIAL guards; provenance freeze; idempotency-key handling |
+| Sales Return + Replacement HTTP dispatch | `server/app.js` lines 2575–2614 (returns) and 2614–2621 (replacements) | Mode-aware route table; NULL / unknown marker → 409 `SALES_RETURN_MARKER_UNKNOWN` before any business mutation |
+| Sales Return additive migration (F5 + F6 + provenance carrier) | `server/migrations/sales-customer-wave6-returns.js` | SQLite + MySQL; idempotent fresh / upgrade / replay |
+| Sales Return value-bounded adapter (MA / LOT / SERIAL fail-closed) | `server/modules/financial-inventory.js` `applyWave6SalesReturnPoolValue` | NO `standard-cost` fallback; NO `LEGACY_UNVALUED`; positive pool required |
+| Tracking / inventory mutation source-type | `server/lib/inventory-mutation.js` and `server/modules/traceability-quality.js` | Wave 6 source-type set + tracking write integration |
+| MySQL plan rendering | `server/database/mysql-schema.js` `MYSQL_INDEX_PREFIX_LENGTHS` and `mysqlIndexColumnList` | `status(16)`, `created_at(64)` prefix realisation for the Wave 6 composite index under InnoDB 3072-byte key limit |
+| Functional / regression tests | `server/sales-customer-wave6-*.test.js` (4 files) + `server/mysql-sales-customer-wave6-concurrency.integration.js` | Registered in `scripts/testing/test-suites.js` lines 84–87 and `scripts/gates/mysql-concurrency-gate.mjs` 8th suite entry |
+| Mobile / responsive UAT | `scripts/acceptance/sales-customer-wave6-responsive.mjs` + `docs/evidence/sales-customer-wave6/*.png` | 320 / 390 / 430 / 680 CSS px; 44 px minimum control height; no horizontal overflow |
+
+A future developer who searches for `src/pages/returns.jsx` should consult this section and `applicationRegistry.js`; no separate Returns screen file is created, by user acceptance on 2026-10-18. This is a technical implementation convergence, not a business Requirement change.
+
+#### 6. Remaining Non-blocking Backlog
+
+The following items are non-blocking for Wave 6 Freeze and are tracked as future work (each is independent of the accepted Wave 6 contract):
+
+- Real MySQL independent-session concurrency re-run on the current dirty working tree is **not required** because `log/2026-10-18.md` §Wave 6 real MySQL acceptance gate already executed the gate on the same HEAD `aee1e0c` and covered every Wave 6 + Wave 0–2 + Batch A + generic + procurement + inventory schema / migration / DDL change. The §5 final regression was executed manually by the user and attested as PASS; detailed counts were not archived.
+- Deferred Sales capabilities: Credit (Chapter 32), Prepayment (Chapter 32), Reservation (Chapter 33), Waves 7–13 — remain outside this Freeze.
+- Wave 9 documentation cleanup: stale `credit_control_anchor` singular references in `solution.md §29.20 / §29.22 / §29.25 / §29.30 row 14 / §29.44 R-SAL-12/24` (per `log/2026-10-17.md` Phase 4 audit). Future documentation pass; non-blocking.
+- Subsequent Drift Triages A–E from `document.md §34.15` R1–R4 record remain authoritative historical notes; none is a Freeze blocker.
+
+#### 7. Freeze Boundary
+
+Only Sales & Customer Wave 6 (Returns + Replacement, including DR-SAL-04 Option A and DR-SAL-05 Option C) is frozen by this record.
+
+The following remain outside this Acceptance:
+
+- Future Sales & Customer Waves 7–13.
+- Deferred Credit, Prepayment and Reservation capabilities.
+- Production deployment, release certification, and any tag / release / publish / push action.
+
+`document.md §34.15 DR-SAL-04 / DR-SAL-05 / R1–R4` records, approved schema, and the `solution.md §30.31` bounded superseding Design remain authoritative. Any future change to an accepted Wave 6 business invariant must follow the project's controlled reopen and change-governance process.
+
+#### 8. Git & Database Operations
+
+No `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git reset`, `git clean`, `git stash`, `git tag`, `git push --tags`, `release`, `deploy`, or `package.json` change was authorized by this record. No production / non-disposable database reset, DDL, DML, query, or schema mutation was authorized by this record. The accepted working tree at HEAD `aee1e0c` remains unstaged and uncommitted, awaiting the user's separate manual Git handling. `APPLY_GUIDE.md` is preserved verbatim.
+
+**Final governance status: WAVE6_FINAL_ACCEPTANCE_PASS — FROZEN — USER APPROVED.**

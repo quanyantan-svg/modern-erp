@@ -12,6 +12,7 @@ import {
 } from './migrations/sales-customer-domain.js';
 import { SALES_WAVE1_TABLES } from './migrations/sales-customer-wave1-foundation.js';
 import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js';
+import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js';
 import { createTempDir } from './test-utils/temp-db.js';
 
 const BATCH_A_TABLES = [
@@ -24,9 +25,7 @@ const BATCH_A_TABLES = [
   'delivery_notice_lines',
 ];
 
-const WAVE6_PLUS_SALES_TABLES = [
-  'sales_order_replacements',
-  'sales_order_replacement_lines',
+const WAVE7_PLUS_SALES_TABLES = [
   'sales_prepayment_requirements',
   'sales_prepayment_gate_results',
   'sales_reservation_intent',
@@ -67,7 +66,7 @@ const BATCH_A_COLUMNS = {
   sales_delivery_items: ['delivery_notice_line_id'],
 };
 
-function assertBatchAProductionSchema(db) {
+function assertWave6ProductionSchema(db) {
   const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
   const wave1 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave1Placeholders}) ORDER BY name`).all(...SALES_WAVE1_TABLES);
   assert.deepEqual(wave1.map((row) => row.name), [...SALES_WAVE1_TABLES].sort());
@@ -77,9 +76,12 @@ function assertBatchAProductionSchema(db) {
   const placeholders = BATCH_A_TABLES.map(() => '?').join(',');
   const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${placeholders}) ORDER BY name`).all(...BATCH_A_TABLES);
   assert.deepEqual(tables.map((row) => row.name), [...BATCH_A_TABLES].sort());
-  const futurePlaceholders = WAVE6_PLUS_SALES_TABLES.map(() => '?').join(',');
-  const future = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${futurePlaceholders}) ORDER BY name`).all(...WAVE6_PLUS_SALES_TABLES);
-  assert.deepEqual(future, [], 'Batch A must not create any Wave 6+ Sales table');
+  const wave6Placeholders = SALES_WAVE6_TABLES.map(() => '?').join(',');
+  const wave6 = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${wave6Placeholders}) ORDER BY name`).all(...SALES_WAVE6_TABLES);
+  assert.deepEqual(wave6.map((row) => row.name), [...SALES_WAVE6_TABLES].sort());
+  const futurePlaceholders = WAVE7_PLUS_SALES_TABLES.map(() => '?').join(',');
+  const future = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${futurePlaceholders}) ORDER BY name`).all(...WAVE7_PLUS_SALES_TABLES);
+  assert.deepEqual(future, [], 'Wave 6 must not create any Wave 7+ Sales table');
   const extensionColumns = new Set(db.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
   assert.equal(extensionColumns.has('default_pricing_list_id'), true);
   assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
@@ -88,16 +90,20 @@ function assertBatchAProductionSchema(db) {
     const actual = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
     for (const column of expectedColumns) assert.equal(actual.has(column), true, `Batch A must add ${table}.${column}`);
   }
-  assert.equal(new Set(db.prepare('PRAGMA table_info(return_orders)').all().map((row) => row.name)).has('commercial_source_marker'), false);
+  assert.equal(new Set(db.prepare('PRAGMA table_info(return_orders)').all().map((row) => row.name)).has('commercial_source_marker'), true);
+  assert.equal(new Set(db.prepare('PRAGMA table_info(return_order_items)').all().map((row) => row.name)).has('sales_order_item_id'), true);
+  const sourceFk = db.prepare('PRAGMA foreign_key_list(return_order_items)').all().find((row) => row.from === 'sales_order_item_id');
+  assert.equal(sourceFk?.table, 'sales_order_items');
+  assert.equal(sourceFk?.to, 'id');
 }
 
-test('canonical production registry contains approved Wave 1 through Wave 5 steps', () => {
+test('canonical production registry contains approved Wave 1 through Wave 6 steps', () => {
   assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 5);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 6);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
-  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice']);
+  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement']);
   const db = new DatabaseSync(':memory:');
   try {
     assert.deepEqual(runSalesCustomerMigrations(db, []), [], 'explicit empty fixture preserves historical Wave 0 semantics');
@@ -165,13 +171,13 @@ test('migration errors propagate and stop later steps', () => {
   assert.deepEqual(calls, ['before']);
 });
 
-test('fresh SQLite and existing SQLite reopen execute Batch A idempotently without Wave 6+ schema', () => {
+test('fresh SQLite and existing SQLite reopen execute through Wave 6 idempotently without Wave 7+ schema', () => {
   const dir = createTempDir('sales-wave0');
   const dbPath = join(dir, 'wave0.db');
   try {
     const fresh = createDatabase(dbPath);
     try {
-      assertBatchAProductionSchema(fresh);
+      assertWave6ProductionSchema(fresh);
       assert.ok(fresh.prepare("SELECT 1 FROM pragma_table_info('sales_deliveries') WHERE name='billing_mode'").get(), 'existing billing_mode remains intact');
     } finally {
       fresh.close();
@@ -179,7 +185,7 @@ test('fresh SQLite and existing SQLite reopen execute Batch A idempotently witho
 
     const reopened = createDatabase(dbPath);
     try {
-      assertBatchAProductionSchema(reopened);
+      assertWave6ProductionSchema(reopened);
       assert.equal(reopened.prepare('SELECT 1 value').get().value, 1);
     } finally {
       reopened.close();

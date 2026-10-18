@@ -11,6 +11,7 @@ import { createSalesQuotation, salesQuotationAction } from './modules/sales-quot
 import { createDirectSalesOrderChange } from './modules/sales-order-changes.js';
 import { createDeliveryNotice, deliveryNoticeAction } from './modules/delivery-notices.js';
 import { transaction } from './db.js';
+import { upsertCanonicalInventory } from './test-support/inventory-canonical-fixture.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPath = join(repoRoot, 'scripts', 'gates', 'mysql-concurrency-sales-batch-a-worker.mjs');
@@ -92,8 +93,9 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code)
       VALUES(?,?,?,'EA',0,0,1,?,?,'EA')`).run(PRODUCT, 'BA-P', 'Batch A Product', stamp, stamp);
     db.prepare("UPDATE products SET valuation_method='MOVING_AVERAGE',inventory_classification='FINISHED_GOODS',valuation_activated_at='2026-01-01' WHERE id=?").run(PRODUCT);
-    db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)')
-      .run(randomUUID(), WAREHOUSE, PRODUCT, 100, stamp);
+    upsertCanonicalInventory(db, {
+      rowId: randomUUID(), warehouseId: WAREHOUSE, productId: PRODUCT, quantity: 100,
+    });
     db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
       VALUES(?, 'MOVING_AVERAGE', ?, ?, NULL, NULL, 100, 50000, ?)`).run(`NONE:${WAREHOUSE}:${PRODUCT}`, PRODUCT, WAREHOUSE, stamp);
     db.prepare('INSERT INTO sales_groups(id,group_code,name,active,created_at,updated_at) VALUES(?,?,?,1,?,?)').run(GROUP, 'BA-G', 'Batch A Group', stamp, stamp);
@@ -288,6 +290,8 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
     const order = makeOrder(20_000_000); const notice = await makeNotice(order.orderId, order.itemId, 10_000_000);
     await call((res) => deliveryNoticeAction(db, request({}, `dn-seed-${randomUUID()}`), res, ACTOR, notice.noticeId, 'confirm'));
     const a = makeDelivery(order.orderId, order.itemId, 7_000_000, notice); const b = makeDelivery(order.orderId, order.itemId, 7_000_000, notice);
+    const inventoryBefore = Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(WAREHOUSE, PRODUCT)?.quantity || 0);
+    assert.ok(inventoryBefore >= 7, `R-SAL-17 fixture inventory must cover one winner; actual=${inventoryBefore}`);
     const results = await race(
       { action: 'confirm-delivery', deliveryId: a, key: `confirm-a-${randomUUID()}` },
       { action: 'confirm-delivery', deliveryId: b, key: `confirm-b-${randomUUID()}` },
@@ -312,6 +316,8 @@ describe('Sales & Customer Batch A real MySQL independent-session races', () => 
 
   test('R-SAL-19 close versus full SD confirmation never confirms after commercial close', async () => {
     const order = makeOrder(); const deliveryId = makeDelivery(order.orderId, order.itemId, 1_000_000);
+    const inventoryBefore = Number(db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(WAREHOUSE, PRODUCT)?.quantity || 0);
+    assert.ok(inventoryBefore >= 1, `R-SAL-19 fixture inventory must cover confirmation; actual=${inventoryBefore}`);
     const results = await race(
       { action: 'close-order', orderId: order.orderId, key: `close-${randomUUID()}` },
       { action: 'confirm-delivery', deliveryId, key: `confirm-${randomUUID()}` },

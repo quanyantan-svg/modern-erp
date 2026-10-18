@@ -7,6 +7,7 @@ import { SALES_WAVE2_TABLES } from './migrations/sales-customer-wave2-pricing.js
 import { SALES_WAVE3_TABLES } from './migrations/sales-customer-wave3-quotation.js';
 import { SALES_WAVE4_TABLES } from './migrations/sales-customer-wave4-orders.js';
 import { SALES_WAVE5_TABLES } from './migrations/sales-customer-wave5-delivery.js';
+import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js';
 import { createTempDb } from './test-utils/temp-db.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
@@ -18,8 +19,7 @@ if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
 }
 
 const BATCH_A_TABLES = [...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_WAVE5_TABLES];
-const WAVE6_PLUS_SALES_TABLES = [
-  'sales_order_replacements', 'sales_order_replacement_lines',
+const WAVE7_PLUS_SALES_TABLES = [
   'sales_prepayment_requirements', 'sales_prepayment_gate_results',
   'sales_reservation_intent', 'service_fulfillments',
   'consignment_commercial_documents', 'consignment_commercial_lines',
@@ -80,7 +80,7 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.equal(db.prepare('SELECT 1 AS value').get().value, 1);
   });
 
-  test('fresh MySQL materialises exactly Batch A Waves 1-5 and no Wave 6+ schema', () => {
+  test('fresh MySQL materialises Waves 1-6 and no Wave 7+ schema', () => {
     assert.equal(BATCH_A_TABLES.length, 7);
     assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
     const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
@@ -93,13 +93,35 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     const batchRows = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${batchPlaceholders}) ORDER BY TABLE_NAME`).all(...BATCH_A_TABLES);
     assert.deepEqual(batchRows.map((row) => row.table_name), [...BATCH_A_TABLES].sort());
-    const placeholders = WAVE6_PLUS_SALES_TABLES.map(() => '?').join(',');
+    const wave6Placeholders = SALES_WAVE6_TABLES.map(() => '?').join(',');
+    const wave6Rows = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${wave6Placeholders}) ORDER BY TABLE_NAME`).all(...SALES_WAVE6_TABLES);
+    assert.deepEqual(wave6Rows.map((row) => row.table_name), [...SALES_WAVE6_TABLES].sort());
+    const lotFrontierIndex = db.prepare(`SELECT COLUMN_NAME column_name,SEQ_IN_INDEX sequence_no,
+        SUB_PART sub_part,NON_UNIQUE non_unique,INDEX_TYPE index_type
+      FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='inventory_valuation_movements'
+        AND INDEX_NAME='idx_valuation_movements_identity_status_created'
+      ORDER BY SEQ_IN_INDEX`).all();
+    assert.deepEqual(lotFrontierIndex.map((row) => [
+      row.column_name, Number(row.sequence_no), row.sub_part == null ? null : Number(row.sub_part),
+      Number(row.non_unique), row.index_type,
+    ]), [
+      ['product_id', 1, null, 1, 'BTREE'],
+      ['warehouse_id', 2, null, 1, 'BTREE'],
+      ['lot_id', 3, null, 1, 'BTREE'],
+      ['serial_id', 4, null, 1, 'BTREE'],
+      ['status', 5, 16, 1, 'BTREE'],
+      ['created_at', 6, 64, 1, 'BTREE'],
+      ['id', 7, null, 1, 'BTREE'],
+    ]);
+    const placeholders = WAVE7_PLUS_SALES_TABLES.map(() => '?').join(',');
     const rows = db.prepare(
       `SELECT TABLE_NAME table_name
          FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})
         ORDER BY TABLE_NAME`,
-    ).all(...WAVE6_PLUS_SALES_TABLES);
+    ).all(...WAVE7_PLUS_SALES_TABLES);
     assert.deepEqual(rows, []);
 
     const defaults = db.prepare(`SELECT COLUMN_NAME column_name,IS_NULLABLE is_nullable FROM information_schema.COLUMNS
@@ -149,7 +171,8 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.deepEqual(snapshotTypes.map((row) => [row.column_name,row.data_type,row.is_nullable]), [
       ['discount_snapshot_json','json','YES'], ['price_snapshot_json','json','YES'],
     ]);
-    assert.equal(db.prepare("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='return_orders' AND COLUMN_NAME='commercial_source_marker'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='return_orders' AND COLUMN_NAME='commercial_source_marker'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='return_order_items' AND COLUMN_NAME='sales_order_item_id'").get().n, 1);
 
     assert.equal(db.prepare(
       "SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='sales_deliveries' AND COLUMN_NAME='billing_mode'",

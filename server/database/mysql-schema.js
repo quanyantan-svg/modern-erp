@@ -5,6 +5,26 @@ import { randomUUID } from 'node:crypto';
 
 const quote = (name) => `\`${String(name).replaceAll('`', '``')}\``;
 
+// MySQL physical realization for the Wave-6 LOT frontier index. The logical
+// dimensions and their order remain identical to SQLite / solution.md §30.31.5.
+// Only the two bounded discriminator/time columns use prefixes: all identity
+// columns and the final row id remain full-width. With utf8mb4 this is at most
+// (4 * 128 + 16 + 64 + 128) * 4 = 2880 bytes, below InnoDB's 3072-byte limit.
+const MYSQL_INDEX_PREFIX_LENGTHS = Object.freeze({
+  'inventory_valuation_movements.idx_valuation_movements_identity_status_created': Object.freeze({
+    status: 16,
+    created_at: 64,
+  }),
+});
+
+export function mysqlIndexColumnList(tableName, index) {
+  const prefixes = MYSQL_INDEX_PREFIX_LENGTHS[`${tableName}.${index.name}`] || {};
+  return index.columns.map((column) => {
+    const prefixLength = prefixes[column];
+    return `${quote(column)}${prefixLength ? `(${prefixLength})` : ''}`;
+  }).join(',');
+}
+
 function extractChecks(sql) {
   const checks = [];
   const upper = sql.toUpperCase();
@@ -143,7 +163,7 @@ export function planMySqlIndexReconciliation(snapshot, currentIndexes) {
     const indexes = currentIndexes.get(table.name) || new Set();
     for (const index of table.indexes) {
       if (index.origin === 'u' || !index.columns.length || index.where || indexes.has(index.name)) continue;
-      statements.push(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${index.columns.map(quote).join(',')})`);
+      statements.push(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${mysqlIndexColumnList(table.name, index)})`);
     }
   }
   return statements;
@@ -247,7 +267,7 @@ export function bootstrapMySql(adapter, snapshot) {
           const useDigest = index.unique && (Boolean(index.where) || index.columns.length > 4);
           const statements = useDigest
             ? generatedPartialIndex(table.name, { ...index, where: index.where || '1=1' })
-            : [`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${index.columns.map(quote).join(',')})`];
+            : [`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${mysqlIndexColumnList(table.name, index)})`];
           for (const sql of statements) adapter.exec(sql);
         }
       }

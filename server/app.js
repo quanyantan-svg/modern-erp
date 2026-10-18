@@ -146,6 +146,11 @@ import {
   listUnappliedBalances, reverseBalanceApplication, reverseRefund, reverseWriteOff,
   requireSettlementAccount, reverseOperationalReturn, settlementAccountReconciliation,
 } from './modules/financial-controls.js';
+import {
+  confirmOptionAReturn, reverseOptionCReturn,
+  createSalesOrderReplacement, cancelSalesOrderReplacement, fulfillSalesOrderReplacement,
+  listSalesReplacements, getSalesReplacement,
+} from './modules/sales-return-canonical-writer.js';
 import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
 import { handleFinanceRoute } from './modules/finance-routes.js';
 import { recognizeFinanceExposure } from './modules/finance-recognition.js';
@@ -2570,15 +2575,53 @@ async function handleApi(db, req, res, url) {
   if (sdMatch && req.method === "PATCH") return updateSalesDelivery(db, req, res, actor, sdMatch[1]);
   if (sdMatch && req.method === "POST") return confirmSalesDelivery(db, req, res, actor, sdMatch[1]);
 
-  // Sales Returns
+  // Sales Returns (mode-aware dispatch for SO_BACKED/NO_SOURCE)
   if (pathname === "/api/sales-returns" && req.method === "GET") return listSalesReturns(db, res, actor, url);
   if (pathname === "/api/sales-returns" && req.method === "POST") return createSalesReturn(db, req, res, actor);
   const srReverseMatch = pathname.match(/^\/api\/sales-returns\/([^/]+)\/reverse$/);
-  if (srReverseMatch && req.method === 'POST') return reverseOperationalReturn(db, req, res, actor, 'SALES', srReverseMatch[1], generateVoucher);
+  if (srReverseMatch && req.method === 'POST') {
+    const marker = db.prepare(`SELECT commercial_source_marker FROM return_orders WHERE id=?`).get(srReverseMatch[1])?.commercial_source_marker;
+    if (marker === 'SO_BACKED' || marker === 'NO_SOURCE') {
+      return reverseOptionCReturn(db, req, res, actor, srReverseMatch[1]);
+    }
+    // §30.31.6 SC57 unknown marker: NULL/unknown marker returns 409 before business mutation;
+    // never fall through to DELIVERY_BACKED or any legacy reversal.
+    if (marker === null || marker === undefined || marker === '' || (marker !== 'DELIVERY_BACKED')) {
+      return send(res, 409, {
+        error: '未识别或缺失 commercial_source_marker，禁止冲销',
+        code: 'SALES_RETURN_MARKER_UNKNOWN',
+      });
+    }
+    return reverseOperationalReturn(db, req, res, actor, 'SALES', srReverseMatch[1], generateVoucher);
+  }
   const srMatch = pathname.match(/^\/api\/sales-returns\/([^\/]+)$/);
   if (srMatch && req.method === "GET") return getSalesReturn(db, res, actor, srMatch[1]);
   if (srMatch && req.method === "PATCH") return updateSalesReturn(db, req, res, actor, srMatch[1]);
-  if (srMatch && req.method === "POST") return confirmSalesReturn(db, req, res, actor, srMatch[1]);
+  if (srMatch && req.method === "POST") {
+    const marker = db.prepare(`SELECT commercial_source_marker FROM return_orders WHERE id=?`).get(srMatch[1])?.commercial_source_marker;
+    if (marker === 'SO_BACKED' || marker === 'NO_SOURCE') {
+      return confirmOptionAReturn(db, req, res, actor, srMatch[1]);
+    }
+    // §30.31.6 SC57 unknown marker: NULL/unknown marker returns 409 before business mutation.
+    if (marker === null || marker === undefined || marker === '' || (marker !== 'DELIVERY_BACKED')) {
+      return send(res, 409, {
+        error: '未识别或缺失 commercial_source_marker，禁止确认',
+        code: 'SALES_RETURN_MARKER_UNKNOWN',
+      });
+    }
+    return confirmSalesReturn(db, req, res, actor, srMatch[1]);
+  }
+
+  // Sales Order Replacements (Wave 6)
+  if (pathname === "/api/sales-order-replacements" && req.method === "GET") return listSalesReplacements(db, res, actor, url);
+  if (pathname === "/api/sales-order-replacements" && req.method === "POST") return createSalesOrderReplacement(db, req, res, actor);
+  const replacementMatch = pathname.match(/^\/api\/sales-order-replacements\/([^/]+)$/);
+  if (replacementMatch && req.method === 'GET') return getSalesReplacement(db, res, actor, replacementMatch[1]);
+  if (replacementMatch && req.method === 'PATCH') return cancelSalesOrderReplacement(db, req, res, actor, replacementMatch[1]);
+  const srFulfillMatch = pathname.match(/^\/api\/sales-order-replacements\/([^/]+)\/fulfill$/);
+  if (srFulfillMatch && req.method === 'POST') return fulfillSalesOrderReplacement(db, req, res, actor, srFulfillMatch[1]);
+  const srCancelMatch = pathname.match(/^\/api\/sales-order-replacements\/([^/]+)\/cancel$/);
+  if (srCancelMatch && req.method === 'POST') return cancelSalesOrderReplacement(db, req, res, actor, srCancelMatch[1]);
 
   // Purchase Returns
   if (pathname === "/api/purchase-returns" && req.method === "GET") return listPurchaseReturns(db, res, actor, url);
@@ -5667,6 +5710,10 @@ function listSalesReturns(db, res, actor, url) {
 async function createSalesReturn(db, req, res, actor) {
   allow(actor, 'RETURNS_MANAGE');
   const body = await readJson(req);
+  const marker = String(body.commercialSourceMarker || body.sourceTypeMarker || '');
+  if (marker === 'SO_BACKED' || marker === 'NO_SOURCE') {
+    return createOptionAReturnDraft(db, req, res, actor, body, marker);
+  }
   const { deliveryId, customerId, warehouseId, remark, items } = body;
   const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
   if (!deliveryId) throw new HttpError(400, '正常销售退货必须选择已确认销售出货单');
@@ -5682,12 +5729,55 @@ async function createSalesReturn(db, req, res, actor) {
   const now = new Date().toISOString();
   const returnNo = 'SRET' + Date.now().toString().slice(-10);
   transaction(db, () => {
-    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?)').run(returnId, returnNo, deliveryId, deliveryId, source.customer_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now);
+    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at,commercial_source_marker) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(returnId, returnNo, deliveryId, deliveryId, source.customer_id, source.warehouse_id, input.totalCents, returnDate, optionalText(remark, 500), actor.id, now, now, 'DELIVERY_BACKED');
     replaceLogisticsItems(db, 'return_order_items', 'return_id', returnId, input.items, 'delivery_item_id');
     configureTrackedDocumentLines(db, { sourceType: 'SALES_RETURN', sourceId: returnId, itemTable: 'return_order_items', foreignKey: 'return_id', rawItems: items });
     audit(db, actor.id, 'CREATE', 'SALES_RETURN', returnId, '创建销售退货单 ' + returnNo);
   });
   return send(res, 201, { id: returnId, returnNo });
+}
+
+async function createOptionAReturnDraft(db, req, res, actor, body, marker) {
+  const { customerId, warehouseId, remark, items, salesOrderId } = body;
+  if (!customerId) throw new HttpError(400, '客户必填');
+  if (!warehouseId) throw new HttpError(400, '仓库必填');
+  if (!Array.isArray(items) || !items.length) throw new HttpError(400, '至少一条明细');
+  requireActiveReference(db, 'warehouses', warehouseId, '仓库');
+  const returnDate = normalizeDocumentDate(body?.returnDate || new Date().toISOString().slice(0, 10), '退货日期');
+  const returnId = id();
+  const returnNo = 'SRET' + Date.now().toString().slice(-10);
+  const now = new Date().toISOString();
+  let totalCents = 0;
+  transaction(db, () => {
+    db.prepare('INSERT INTO return_orders(id,return_no,source_type,source_id,delivery_id,customer_id,warehouse_id,status,total_cents,return_date,remark,creator_id,created_at,updated_at,commercial_source_marker) VALUES(?,?,\'SALES\',?,?,?,?,\'DRAFT\',?,?,?,?,?,?,?)').run(
+      returnId, returnNo, salesOrderId || null, null, customerId, warehouseId, 0, returnDate, optionalText(remark, 500), actor.id, now, now, marker
+    );
+    let lineNo = 1;
+    for (const raw of items) {
+      const productId = String(raw.productId);
+      const quantity = Number(raw.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new HttpError(400, 'quantity 必须大于 0');
+      const salesOrderItemId = marker === 'SO_BACKED' ? String(raw.salesOrderItemId || '') : null;
+      let unitPriceCents = 0;
+      if (marker === 'SO_BACKED') {
+        if (!salesOrderItemId) throw new HttpError(400, 'SO_BACKED 必须提供 salesOrderItemId');
+        const soi = db.prepare(`SELECT soi.product_id, soi.unit_price_cents FROM sales_order_items soi WHERE soi.id=?`).get(salesOrderItemId);
+        if (!soi || soi.product_id !== productId) throw new HttpError(400, 'SO 行 product 不匹配');
+        unitPriceCents = Number(soi.unit_price_cents);
+      } else {
+        unitPriceCents = 0; // NO_SOURCE commercial mirror deferred to canonical Option A valuation writer
+      }
+      const itemAmount = Math.round(quantity * unitPriceCents);
+      totalCents += itemAmount;
+      db.prepare(`INSERT INTO return_order_items(id, return_id, line_no, product_id, quantity, unit_price_cents, amount_cents, sales_order_item_id) VALUES(?,?,?,?,?,?,?,?)`).run(
+        id(), returnId, lineNo++, productId, quantity, unitPriceCents, itemAmount, salesOrderItemId
+      );
+    }
+    configureTrackedDocumentLines(db, { sourceType: 'SALES_RETURN', sourceId: returnId, itemTable: 'return_order_items', foreignKey: 'return_id', rawItems: items });
+    db.prepare(`UPDATE return_orders SET total_cents=? WHERE id=?`).run(totalCents, returnId);
+    audit(db, actor.id, 'CREATE', 'SALES_RETURN', returnId, `创建销售退货草稿 ${returnNo} ${marker}`);
+  });
+  return send(res, 201, { id: returnId, returnNo, commercialSourceMarker: marker, totalCents });
 }
 
 function getSalesReturn(db, res, actor, returnId) {

@@ -2169,13 +2169,18 @@ export function Returns({ user, notify }) {
   const { target, navigateToPage } = useAppNavigation();
   const targetTab = target?.documentType === 'PURCHASE_RETURN' ? 'purchase' : 'sales';
   const [tab, setTab] = useState(target?.page === 'returns' ? targetTab : "sales");
+  const [surface, setSurface] = useState('returns');
   const [items, setItems] = useState([]);
+  const [replacements, setReplacements] = useState([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [view, setView] = useState(target?.page === 'returns' && target.documentId ? { id: target.documentId, tab: targetTab } : null);
+  const [replacementView, setReplacementView] = useState(null);
   const load = () => {
     const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
-    api(apiPath + "?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(tab === "sales" ? r.salesReturns : r.purchaseReturns)).catch((e) => notify(e.message, "error"));
+    const requests = [api(apiPath + "?search=" + encodeURIComponent(search) + "&status=" + status).then((r) => setItems(tab === "sales" ? r.salesReturns : r.purchaseReturns))];
+    if (tab === 'sales') requests.push(api('/api/sales-order-replacements').then((r) => setReplacements(r.replacements || [])));
+    return Promise.all(requests).catch((e) => notify(e.message, "error"));
   };
   useEffect(() => { void load(); }, [tab, status]);
   useEffect(() => {
@@ -2185,14 +2190,18 @@ export function Returns({ user, notify }) {
   }, [target?.page, target?.documentId, target?.documentType]);
   function switchTab(nextTab) {
     setTab(nextTab);
+    setSurface('returns');
     setView(null);
     navigateToPage('returns', { documentType: nextTab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }, { replace: true });
   }
   const cols = ["单号", tab === "sales" ? "客户" : "供应商", "仓库", "金额", "状态", "制单人", ""];
+  // Product contract: 销售退货引用已确认销售出货；Wave 6 additionally
+  // supports SO_BACKED and NO_SOURCE without fabricating a Delivery.
   return <BusinessPageShell className="returns-v15" width="rail">
-    <BusinessPageHeader title="退货管理" context={tab === 'sales' ? '销售退货' : '采购退货'} primaryAction={can(user, "RETURNS_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({ tab })}>新建{tab === 'sales' ? '销售' : '采购'}退货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售退货引用已确认销售出货；采购退货引用已确认采购入库。两类退货保持各自来源和库存方向。</p></HelpDisclosure>}/>
+    <BusinessPageHeader title="退货管理" context={tab === 'sales' ? (surface === 'returns' ? '销售退货' : '换货义务') : '采购退货'} primaryAction={surface === 'returns' && can(user, "RETURNS_MANAGE") && <BusinessAction hierarchy="primary" onClick={() => setView({ tab })}>新建{tab === 'sales' ? '销售' : '采购'}退货</BusinessAction>} help={<HelpDisclosure summary="业务说明"><p>销售退货支持出货来源、订单来源与无来源三种模式；换货履行仅关联真实已确认销售出货。采购退货保持既有来源流程。</p></HelpDisclosure>}/>
     <div className="segment-wrap"><div className="segment"><button className={tab === "sales" ? "active" : ""} onClick={() => switchTab("sales")}>销售退货</button><button className={tab === "purchase" ? "active" : ""} onClick={() => switchTab("purchase")}>采购退货</button></div></div>
-    <Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
+    {tab === 'sales' && <SegmentedControl value={surface} onChange={setSurface} options={[{ value: 'returns', label: '退货单' }, { value: 'replacements', label: `换货义务 ${replacements.length}` }]}/>}
+    {surface === 'returns' && <><Toolbar search={search} setSearch={setSearch} onSearch={load} placeholder="搜索单号" extra={<select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">全部状态</option><option value="DRAFT">草稿</option><option value="CONFIRMED">已确认</option><option value="CANCELLED">已取消</option></select>}/>
     <div className="table-wrap"><table><thead><tr>{cols.map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>
       {items.map((item) => <tr key={item.id} onClick={() => { setView({ id: item.id, tab }); navigateToPage('returns', { documentId: item.id, documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }); }} style={{cursor:"pointer"}}>
         <td className="mono">{item.return_no}</td>
@@ -2203,8 +2212,10 @@ export function Returns({ user, notify }) {
         <td>{item.creatorName}</td>
         <td onClick={(e) => e.stopPropagation()}>{can(user, "RETURNS_MANAGE") && item.status === "DRAFT" && <button className="row-action" onClick={() => { setView({ id: item.id, tab }); navigateToPage('returns', { documentId: item.id, documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }); }}>编辑</button>}</td>
       </tr>)}
-    </tbody></table>{!items.length && <Empty text="没有退货记录"/>}</div>
+    </tbody></table>{!items.length && <Empty text="没有退货记录"/>}</div></>}
+    {tab === 'sales' && surface === 'replacements' && <CompactRecordList>{replacements.map((item) => <CompactRecord key={item.id} title={item.replacement_no} subtitle={`${item.customer_name} · 来源 ${item.source_return_no}`} status={<StatusChip status={item.fulfillmentState}>{item.fulfillmentState}</StatusChip>} metrics={[{ label: '义务', value: quantity(item.replacementQuantity) }, { label: '已履行', value: quantity(item.fulfilledQuantity) }, { label: '剩余', value: quantity(item.remainingQuantity) }]} onOpen={() => setReplacementView(item.id)}/>)}{!replacements.length && <EmptyState title="没有换货义务" description="从已确认销售退货单创建换货义务。"/>}</CompactRecordList>}
     {view && <ReturnModal user={user} value={view} onClose={() => { setView(null); navigateToPage('returns', { documentType: tab === 'sales' ? 'SALES_RETURN' : 'PURCHASE_RETURN' }, { replace: true }); void load(); }} notify={notify} api={api}/>}
+    {replacementView && <ReplacementModal id={replacementView} user={user} notify={notify} onClose={() => { setReplacementView(null); void load(); }}/>}
   </BusinessPageShell>;
 }
 
@@ -2216,7 +2227,12 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   const [warehouses, setWarehouses] = useState([]);
   const [products, setProducts] = useState([]);
   const [sources, setSources] = useState([]);
-  const [form, setForm] = useState({ sourceId: "", partyId: "", warehouseId: "", returnDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
+  const [salesOrders, setSalesOrders] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reverseForm, setReverseForm] = useState({ open: false, reason: '', businessDate: new Date().toISOString().slice(0,10) });
+  const [replacementForm, setReplacementForm] = useState({ open: false, quantities: {} });
+  const [form, setForm] = useState({ mode: tab === 'sales' ? 'DELIVERY_BACKED' : '', sourceId: "", partyId: "", warehouseId: "", returnDate: new Date().toISOString().slice(0,10), remark: "", items: [] });
   useEffect(() => {
     // Per-fetch .catch so a single 403 (e.g. supplier lookup unavailable)
     // does not cascade-reject and disable the other selectors.
@@ -2225,14 +2241,16 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     api("/api/warehouses").then((r) => setWarehouses(r.warehouses || [])).catch((e) => notify(e.message, "error"));
     api("/api/products").then((r) => setProducts(r.products || [])).catch((e) => notify(e.message, "error"));
     api(tab === 'sales' ? '/api/sales-deliveries?status=CONFIRMED' : '/api/purchase-receipts?status=CONFIRMED').then((r) => setSources(tab === 'sales' ? (r.salesDeliveries || []) : (r.purchaseReceipts || []))).catch((e) => notify("来源单据加载失败，请重试。", "error"));
+    if (tab === 'sales') api('/api/sales-orders?status=APPROVED').then((r) => setSalesOrders(r.orders || [])).catch(() => setSalesOrders([]));
     if (value.id) {
       const apiPath = tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns";
       api(apiPath + "/" + value.id).then((r) => setDetail(tab === "sales" ? r.salesReturn : r.purchaseReturn)).catch((e) => notify(e.message, "error"));
     }
   }, []);
   useEffect(() => {
-    if (detail && !form.partyId) {
+    if (detail && value.id && !form.partyId) {
       setForm({
+        mode: tab === 'sales' ? (detail.commercial_source_marker || 'DELIVERY_BACKED') : '',
         sourceId: (tab === 'sales' ? detail.delivery_id : detail.receipt_id) || "",
         partyId: (tab === "sales" ? detail.customer_id : detail.supplier_id) || "",
         warehouseId: detail.warehouse_id || "",
@@ -2245,8 +2263,9 @@ function ReturnModal({ user, value, onClose, notify, api }) {
   }, [detail]);
   const setItems = (items) => setForm((f) => ({ ...f, items }));
   const save = async () => {
+    setError(''); setBusy(true);
     try {
-      const body = tab === "sales" ? { deliveryId: form.sourceId || null, customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { receiptId: form.sourceId || null, supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
+      const body = tab === "sales" ? { commercialSourceMarker: form.mode, deliveryId: form.mode === 'DELIVERY_BACKED' ? (form.sourceId || null) : null, salesOrderId: form.mode === 'SO_BACKED' ? form.sourceId : null, customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { receiptId: form.sourceId || null, supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items };
       if (value.id) {
         await api((tab === "sales" ? "/api/sales-returns" : "/api/purchase-returns") + "/" + value.id, { method: "PATCH", body });
         notify("退货单更改已保存");
@@ -2255,7 +2274,7 @@ function ReturnModal({ user, value, onClose, notify, api }) {
         notify("退货单已创建");
       }
       onClose();
-    } catch (e) { notify(e.message, "error"); }
+    } catch (e) { setError(e.status === 409 ? `业务条件未满足：${e.message}` : e.message); notify(e.message, "error"); } finally { setBusy(false); }
   };
   const addItem = () => setItems([...form.items, { productId: "", quantity: 1, unitPriceCents: 1 }]);
   const updateItem = (i, field, val) => setItems(form.items.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
@@ -2271,30 +2290,53 @@ function ReturnModal({ user, value, onClose, notify, api }) {
     if (!sourceId) return setForm((current) => ({ ...current, sourceId: '' }));
     try { const response = await api((tab === 'sales' ? '/api/sales-deliveries/' : '/api/purchase-receipts/') + sourceId); const source = tab === 'sales' ? response.salesDelivery : response.purchaseReceipt; setForm((current) => ({ ...current, sourceId, partyId: tab === 'sales' ? source.customer_id : source.supplier_id, warehouseId: source.warehouse_id, items: source.items.map((item) => { const sourceAllocations = copySourceAllocations(item.trackingAllocations); return { [tab === 'sales' ? 'deliveryItemId' : 'receiptItemId']: item.id, productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents, sourceAllocations, trackingAllocations: sourceAllocations }; }) })); } catch (e) { notify(e.message, 'error'); }
   };
-  const changeState = async (action) => { try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm') { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { notify(e.message, 'error'); } };
-  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><ReadOnlyDocument detail={detail} partyName={tab === 'sales' ? detail.customerName : detail.supplierName} onClose={onClose}/></Modal>;
+  const chooseSalesOrder = async (sourceId) => {
+    if (!sourceId) return setForm((current) => ({ ...current, sourceId: '', partyId: '', items: [] }));
+    try {
+      const response = await api('/api/sales-orders/' + sourceId);
+      const order = response.order;
+      setForm((current) => ({ ...current, sourceId, partyId: order.customerId, items: (order.items || []).map((item) => ({ salesOrderItemId: item.id, productId: item.productId, quantity: item.quantity, unitPriceCents: item.unitPriceCents })) }));
+    } catch (e) { setError(e.message); }
+  };
+  const changeState = async (action) => { setError(''); setBusy(true); try { const path = tab === 'sales' ? '/api/sales-returns/' : '/api/purchase-returns/'; if (action === 'confirm' && (tab !== 'sales' || form.mode === 'DELIVERY_BACKED')) { const body = tab === 'sales' ? { customerId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items } : { supplierId: form.partyId, warehouseId: form.warehouseId, returnDate: form.returnDate, remark: form.remark, items: form.items }; await api(path + value.id, { method: 'PATCH', body }); } await api(path + value.id, { method: 'POST', headers: { 'Idempotency-Key': `return-${action}-${value.id}` }, body: { action } }); notify(action === 'confirm' ? '退货单已确认' : '退货单已取消'); onClose(); } catch (e) { setError(e.status === 409 ? `业务条件未满足：${e.message}` : e.message); notify(e.message, 'error'); } finally { setBusy(false); } };
+  const reverse = async () => { setError(''); setBusy(true); try { await api(`/api/sales-returns/${value.id}/reverse`, { method: 'POST', headers: { 'Idempotency-Key': `return-reverse-${value.id}-${reverseForm.businessDate}` }, body: { businessDate: reverseForm.businessDate, reason: reverseForm.reason } }); notify('销售退货已整单冲销'); onClose(); } catch (e) { setError(e.status === 409 ? `冲销被拒绝：${e.message}` : e.message); } finally { setBusy(false); } };
+  const createReplacement = async () => { const lines = (detail.items || []).map((item) => ({ returnItemId: item.id, qty: Number(replacementForm.quantities[item.id] || 0), materialId: item.productId, uomCode: item.unit || 'EA' })).filter((line) => line.qty > 0); setError(''); setBusy(true); try { await api('/api/sales-order-replacements', { method: 'POST', headers: { 'Idempotency-Key': `replacement-${value.id}-${Date.now()}` }, body: { sourceReturnId: value.id, lines } }); notify('换货义务已创建'); onClose(); } catch (e) { setError(e.status === 409 ? `换货义务未创建：${e.message}` : e.message); } finally { setBusy(false); } };
+  if (value.id && detail && detail.status !== 'DRAFT') return <Modal title={(tab === 'sales' ? '销售' : '采购') + '退货单详情'} onClose={onClose} wide><div className="wave6-return-detail"><div className="wave6-object-head"><div><strong className="mono">{detail.return_no}</strong><small>{tab === 'sales' ? detail.customerName : detail.supplierName} · {detail.warehouseName}</small></div><Status status={detail.status} label={detail.statusLabel}/></div>{tab === 'sales' && <div className="wave6-mode-note">来源模式：{detail.commercial_source_marker || 'DELIVERY_BACKED'}</div>}<div className="wave6-line-list">{(detail.items || []).map((item) => <div key={item.id}><span>{item.productCode} · {item.productName}</span><strong>{quantity(item.quantity)} {item.unit}</strong></div>)}</div>{error && <div className="wave6-inline-error" role="alert">{error}</div>}{tab === 'sales' && can(user, 'RETURNS_MANAGE') && <div className="wave6-workflows"><button type="button" className="secondary" onClick={() => setReplacementForm({ ...replacementForm, open: !replacementForm.open })}>创建换货义务</button><button type="button" className="danger" onClick={() => setReverseForm({ ...reverseForm, open: !reverseForm.open })}>整单冲销</button>{replacementForm.open && <div className="wave6-inline-workflow"><h3>换货数量</h3>{detail.items.map((item) => <label key={item.id}>{item.productName}<input type="number" min="0" max={item.quantity} step="0.000001" value={replacementForm.quantities[item.id] || ''} onChange={(e) => setReplacementForm({ ...replacementForm, quantities: { ...replacementForm.quantities, [item.id]: e.target.value } })}/></label>)}<button type="button" disabled={busy} onClick={() => void createReplacement()}>确认创建</button></div>}{reverseForm.open && <div className="wave6-inline-workflow"><h3>整单冲销</h3><label>业务日期<input type="date" value={reverseForm.businessDate} onChange={(e) => setReverseForm({ ...reverseForm, businessDate: e.target.value })}/></label><label>冲销原因<textarea value={reverseForm.reason} onChange={(e) => setReverseForm({ ...reverseForm, reason: e.target.value })}/></label><button type="button" className="danger" disabled={busy || !reverseForm.reason.trim()} onClick={() => void reverse()}>确认整单冲销</button></div>}</div>}<FormActions><button type="button" className="secondary" onClick={onClose}>关闭</button></FormActions></div></Modal>;
   return <Modal title={(value.id ? "编辑" : "新增") + (tab === "sales" ? "销售退货单" : "采购退货单")} onClose={onClose} wide><form className="form-grid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
     {value.id && detail && <div className="full"><RelationshipSections detail={detail}/></div>}
-    {!value.id && <label className="full">来源{tab === 'sales' ? '销售出货' : '采购入库'}（必选）<select value={form.sourceId} onChange={(e) => void chooseReturnSource(e.target.value)} required><option value="">选择已确认来源单</option>{sources.map((source) => <option key={source.id} value={source.id}>{tab === 'sales' ? source.delivery_no : source.receipt_no} · {tab === 'sales' ? source.customerName : source.supplierName}</option>)}</select></label>}
-    <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} disabled required><option value="">由来源单带入</option>{partyOptions}</select></label>
-    <label>仓库<select value={form.warehouseId} disabled required><option value="">由来源单带入</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
+    {!value.id && tab === 'sales' && <fieldset className="full wave6-mode-picker"><legend>退货来源模式</legend>{[['DELIVERY_BACKED','销售出货来源'],['SO_BACKED','销售订单来源'],['NO_SOURCE','无原始销售来源']].map(([mode,label]) => <label key={mode}><input type="radio" name="return-mode" checked={form.mode === mode} onChange={() => setForm({ ...form, mode, sourceId: '', partyId: '', warehouseId: '', items: [] })}/><span>{label}<small>{mode}</small></span></label>)}</fieldset>}
+    {!value.id && (tab !== 'sales' || form.mode === 'DELIVERY_BACKED') && <label className="full">来源{tab === 'sales' ? '销售出货' : '采购入库'}（必选）<select value={form.sourceId} onChange={(e) => void chooseReturnSource(e.target.value)} required><option value="">选择已确认来源单</option>{sources.map((source) => <option key={source.id} value={source.id}>{tab === 'sales' ? source.delivery_no : source.receipt_no} · {tab === 'sales' ? source.customerName : source.supplierName}</option>)}</select></label>}
+    {!value.id && tab === 'sales' && form.mode === 'SO_BACKED' && <label className="full">原始销售订单<select value={form.sourceId} onChange={(e) => void chooseSalesOrder(e.target.value)} required><option value="">选择已审批且未出货的订单</option>{salesOrders.map((order) => <option key={order.id} value={order.id}>{order.order_no} · {order.customer_name}</option>)}</select></label>}
+    <label>{tab === "sales" ? "客户" : "供应商"}<select value={form.partyId} disabled={tab !== 'sales' || form.mode !== 'NO_SOURCE'} onChange={(e) => setForm({ ...form, partyId: e.target.value })} required><option value="">{form.mode === 'NO_SOURCE' ? '选择客户' : '由来源单带入'}</option>{partyOptions}</select></label>
+    <label>仓库<select value={form.warehouseId} disabled={tab !== 'sales' || form.mode === 'DELIVERY_BACKED'} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required><option value="">{tab === 'sales' && form.mode !== 'DELIVERY_BACKED' ? '选择接收仓库' : '由来源单带入'}</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} - {w.name}</option>)}</select></label>
     <label>退货日期<input type="date" value={form.returnDate} onChange={(e) => setForm({...form, returnDate: e.target.value})} required/></label>
     <label className="full">备注<input value={form.remark} onChange={(e) => setForm({...form, remark: e.target.value})}/></label>
-    <div className="full"><div className="form-section-head"><span>来源明细（产品与价格只读）</span></div>
+    <div className="full"><div className="form-section-head"><span>{form.mode === 'NO_SOURCE' ? '退回明细' : '来源明细（产品与价格只读）'}</span>{tab === 'sales' && form.mode === 'NO_SOURCE' && <button type="button" className="secondary" onClick={addItem}>添加明细</button>}</div>
       <table className="line-table"><thead><tr><th>货品</th><th className="number">数量</th><th className="number">单价（元）</th><th className="number">金额</th><th/></tr></thead><tbody>
         {form.items.map((item, i) => <tr key={i}>
-          <td><select value={item.productId} disabled required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
+          <td><select value={item.productId} disabled={form.mode !== 'NO_SOURCE'} onChange={(e) => updateItem(i, 'productId', e.target.value)} required><option value="">选择货品</option>{products.map((p) => <option key={p.id} value={p.id}>{p.code} - {p.name}</option>)}</select></td>
           <td><input type="number" value={item.quantity} min="1" onChange={(e) => updateItem(i, "quantity", Number(e.target.value))} required/></td>
           <td>{money(item.unitPriceCents)}</td>
           <td className="number">{money(item.quantity * item.unitPriceCents)}</td>
-          <td/>
+          <td>{form.mode === 'NO_SOURCE' && <button type="button" className="row-action" onClick={() => removeItem(i)}>删除</button>}</td>
         </tr>)}
       </tbody></table>
       {form.items.map((item, i) => <TrackingAllocationEditor key={`return-tracking-${item.deliveryItemId || item.receiptItemId || i}`} product={products.find((product) => product.id === item.productId)} warehouseId={form.warehouseId} quantity={item.quantity} businessDate={form.returnDate} direction={tab === 'sales' ? 'RETURN_IN' : 'OUT'} value={item.trackingAllocations || []} sourceAllocations={item.sourceAllocations || []} onChange={(trackingAllocations) => updateItem(i, 'trackingAllocations', trackingAllocations)} notify={notify}/>)}
       <div className="line-total">合计：<strong>{money(totalCents)}</strong></div>
     </div>
-    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>
+    {error && <div className="full wave6-inline-error" role="alert">{error}</div>}
+    <LogisticsActions existing={Boolean(value.id)} onClose={onClose} onAction={changeState}/>{!value.id && busy && <small className="full">正在保存…</small>}
   </form></Modal>;
+}
+
+function ReplacementModal({ id, user, notify, onClose }) {
+  const [item, setItem] = useState(null); const [deliveries, setDeliveries] = useState([]); const [selection, setSelection] = useState({ lineId: '', deliveryItemId: '', qty: '' }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
+  const load = () => Promise.all([api(`/api/sales-order-replacements/${id}`).then((r) => setItem(r.replacement)), api('/api/sales-deliveries?status=CONFIRMED').then(async (r) => { const details = await Promise.all((r.salesDeliveries || []).map((d) => api(`/api/sales-deliveries/${d.id}`).then((x) => x.salesDelivery).catch(() => null))); setDeliveries(details.filter(Boolean)); })]).catch((e) => setError(e.message));
+  useEffect(() => { void load(); }, [id]);
+  const fulfill = async () => { setBusy(true); setError(''); try { await api(`/api/sales-order-replacements/${id}/fulfill`, { method: 'POST', body: { lines: [{ replacementLineId: selection.lineId, salesDeliveryItemId: selection.deliveryItemId, qty: Number(selection.qty) }] } }); notify('换货履行已登记'); await load(); } catch (e) { setError(e.status === 409 ? `履行被拒绝：${e.message}` : e.message); } finally { setBusy(false); } };
+  const cancel = async () => { setBusy(true); setError(''); try { await api(`/api/sales-order-replacements/${id}`, { method: 'PATCH', body: {} }); notify('剩余换货义务已关闭，历史履行已保留'); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); } };
+  const line = item?.lines?.find((row) => row.id === selection.lineId); const deliveryItems = deliveries.flatMap((delivery) => (delivery.items || []).filter((row) => !line || row.productId === line.replacement_material_id).map((row) => ({ ...row, deliveryNo: delivery.delivery_no })));
+  return <Modal title="换货义务详情" onClose={onClose} wide>{!item ? <Loading/> : <div className="wave6-return-detail"><div className="wave6-object-head"><div><strong className="mono">{item.replacement_no}</strong><small>{item.customer_name} · 来源 {item.source_return_no}</small></div><StatusChip status={item.fulfillmentState}>{item.fulfillmentState}</StatusChip></div><div className="wave6-progress"><span style={{ width: `${item.replacementQuantity ? Math.min(100, item.fulfilledQuantity / item.replacementQuantity * 100) : 0}%` }}/></div><p>已履行 {quantity(item.fulfilledQuantity)} / {quantity(item.replacementQuantity)}，剩余 {quantity(item.remainingQuantity)}</p>{item.lines.map((row) => <section className="wave6-replacement-line" key={row.id}><header><b>{row.product_code} · {row.product_name}</b><span>{quantity(row.fulfilled_quantity)} / {quantity(row.replacement_quantity)}</span></header>{row.fulfillments.map((f) => <small key={f.id}>{f.delivery_no} · {quantity(f.fulfilled_qty)}</small>)}</section>)}{error && <div className="wave6-inline-error" role="alert">{error}</div>}{can(user, 'RETURNS_MANAGE') && item.cancellation_state === 'ACTIVE' && item.remainingQuantity > 0 && <div className="wave6-inline-workflow"><h3>关联已确认销售出货</h3><label>换货行<select value={selection.lineId} onChange={(e) => setSelection({ lineId: e.target.value, deliveryItemId: '', qty: '' })}><option value="">选择换货行</option>{item.lines.filter((row) => row.remainingQuantity > 0).map((row) => <option value={row.id} key={row.id}>{row.product_code} · 剩余 {quantity(row.remainingQuantity)}</option>)}</select></label><label>销售出货明细<select value={selection.deliveryItemId} onChange={(e) => setSelection({ ...selection, deliveryItemId: e.target.value })}><option value="">选择同客户、同货品的已确认出货</option>{deliveryItems.map((row) => <option value={row.id} key={row.id}>{row.deliveryNo} · {quantity(row.quantity)}</option>)}</select></label><label>本次履行数量<input type="number" min="0.000001" max={line?.remainingQuantity} step="0.000001" value={selection.qty} onChange={(e) => setSelection({ ...selection, qty: e.target.value })}/></label><button type="button" disabled={busy || !selection.lineId || !selection.deliveryItemId || !(Number(selection.qty) > 0)} onClick={() => void fulfill()}>登记履行</button><button type="button" className="danger" disabled={busy} onClick={() => void cancel()}>关闭剩余义务</button></div>}<FormActions><button type="button" className="secondary" onClick={onClose}>关闭</button></FormActions></div>}</Modal>;
 }
 // InventoryTransactions
 export function InventoryTransactions({ user, notify }) {

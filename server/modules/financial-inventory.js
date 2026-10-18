@@ -183,6 +183,59 @@ export function createSystemVoucher(db, input) {
   const stmt=db.prepare('INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary,line_no) VALUES(?,?,?,?,?,?,?)'); normalized.forEach((e,i)=>stmt.run(id(),voucherId,e.subjectId,e.direction,e.amountCents,e.summary||'',i+1)); return voucherId;
 }
 
+// Wave 6 — Bounded Option A pool-only valuation adapter for Sales Return confirm.
+// Per DR-SAL-04 Option A contract: only positive authoritative pool is allowed.
+// STANDARD_COST / LEGACY_UNVALUED / synthetic-zero / client-supplied fallbacks are forbidden.
+// Falls closed (HTTP 409) when no positive pool exists at the same identity.
+export function applyWave6SalesReturnPoolValue(db, input) {
+  assertFinancialPeriodsOpen(db, input.businessDate);
+  if (!input.productId || !input.warehouseId || !input.businessDate) {
+    throw new HttpError(409, 'Wave6 Option A: missing product/warehouse/businessDate');
+  }
+  if (!Number.isFinite(Number(input.quantity)) || Number(input.quantity) <= 0) {
+    throw new HttpError(409, 'Wave6 Option A: quantity must be positive');
+  }
+  // Pool identity must be MOVING_AVERAGE / LOT / SERIAL — strict, no lot for MOVING_AVERAGE
+  const method = valuationMethod(db, input.productId);
+  const lotId = input.lotId || null;
+  const serialId = input.serialId || null;
+  const requireCheck = db.prepare('SELECT valuation_activated_at FROM products WHERE id=?').get(input.productId);
+  if (!requireCheck || !requireCheck.valuation_activated_at) {
+    throw new HttpError(409, 'Wave6 Option A Gate: 估值未启用，禁止入库');
+  }
+  // Look up existing positive pool at the same identity
+  const key = method === 'LOT_SPECIFIC_POOL'
+    ? `LOT:${input.warehouseId}:${input.productId}:${lotId}`
+    : method === 'SPECIFIC_SERIAL'
+      ? `SERIAL:${serialId}`
+      : `NONE:${input.warehouseId}:${input.productId}`;
+  const row = db.prepare('SELECT * FROM inventory_valuation_balances WHERE balance_key=?').get(key);
+  if (!row || Number(row.quantity) <= 0 || Number(row.value_cents) <= 0) {
+    throw new HttpError(409, 'Wave6 Option A Gate: 同一身份无合法正数估值池，禁止入库');
+  }
+  if (lotId && lotId !== row.lot_id) throw new HttpError(409, 'Wave6 Option A Gate: LOT 身份不匹配');
+  const existing = Math.abs(Number(row.quantity) - Number(input.quantity)) <= 1e-9;
+  const newQty = Number(input.quantity);
+  const newValue = existing ? Number(row.value_cents) : allocateProportionalCents(Number(row.value_cents), newQty, Number(row.quantity));
+  if (!Number.isSafeInteger(newValue)) throw new HttpError(409, 'Wave6 Option A Gate: 分摊价值溢出 safe integer');
+  const basis = method === 'LOT_SPECIFIC_POOL' ? 'LOT_CARRYING' : method === 'SPECIFIC_SERIAL' ? 'SERIAL_EXISTING' : 'MOVING_AVERAGE';
+  return receiveValue(db, {
+    businessDate: input.businessDate,
+    productId: input.productId,
+    warehouseId: input.warehouseId,
+    lotId,
+    serialId,
+    quantity: newQty,
+    valueCents: newValue,
+    valuationBasis: basis,
+    movementType: input.movementType || 'WAVE6_SALES_RETURN_POOL_VALUE',
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    sourceItemId: input.sourceItemId,
+    inventoryTransactionId: input.inventoryTransactionId,
+  });
+}
+
 export function reverseValuationSource(db, input) {
   assertFinancialPeriodsOpen(db, input.businessDate);
   const originals = db.prepare(`SELECT * FROM inventory_valuation_movements

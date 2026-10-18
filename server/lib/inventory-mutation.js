@@ -54,6 +54,7 @@ const SOURCE_TYPES = new Set([
   'OUTSOURCING_ISSUE', 'OUTSOURCING_RETURN', 'OUTSOURCING_RECEIPT',
   'ENTRUSTED_RECEIPT', 'ENTRUSTED_ISSUE',
   'BARCODE_SCAN_CONFIRM', 'OPENING_INVENTORY',
+  'SALES_RETURN', 'SALES_RETURN_REVERSAL',
 ]);
 
 function buildIdentity({ productId, warehouseId, binId, ownerType, ownerId, stockStatus, lotId, serialId }) {
@@ -145,7 +146,7 @@ function writeInventoryTransaction(db, input, identity, direction, balanceAfter,
   return txId;
 }
 
-function writeTrackedMovement(db, input, identity, direction, businessDate, movementKind) {
+function writeTrackedMovement(db, input, identity, direction, businessDate, movementKind, transactionId) {
   const tmId = genId();
   db.prepare(`
     INSERT INTO tracked_inventory_movements
@@ -154,7 +155,7 @@ function writeTrackedMovement(db, input, identity, direction, businessDate, move
        reversed, created_at)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
   `).run(
-    tmId, null, input.sourceType, input.sourceId, input.sourceItemId || null,
+    tmId, transactionId, input.sourceType, input.sourceId, input.sourceItemId || null,
     identity.productId, identity.warehouseId, direction, Math.abs(input.quantity),
     identity.lotId, identity.serialId, businessDate, new Date().toISOString(),
   );
@@ -246,27 +247,33 @@ export function applyInventoryMutation(input) {
     // Single-direction (IN / OUT / ADJUSTMENT) record a single inventory_transactions + tracked row.
     // Paired kinds record both.
     for (const m of movements) {
-      writeInventoryTransaction(db, input, m.position, m.direction, m.balanceAfter, businessDate);
-      writeTrackedMovement(db, input, m.position, m.direction, businessDate, input.movementKind);
+      m.transactionId = writeInventoryTransaction(db, input, m.position, m.direction, m.balanceAfter, businessDate);
+      if (input.trackingMode !== 'EXTERNAL') {
+        writeTrackedMovement(db, input, m.position, m.direction, businessDate, input.movementKind, m.transactionId);
+      }
     }
 
     // Valuation integration (cents-based INTEGER safe) — fires on every quantity-delta.
-    try {
-      for (const m of movements) {
-        issueSourceValue(db, {
-          businessDate,
-          productId: m.position.productId,
-          warehouseId: m.position.warehouseId,
-          quantity: Number(input.quantity),
-          movementType: input.sourceType,
-          sourceType: input.sourceType,
-          sourceId: input.sourceId,
-          sourceItemId: input.sourceItemId,
-          inventoryTransactionId: null,
-        });
+    if (input.valuationMode !== 'EXTERNAL') {
+      try {
+        for (const m of movements) {
+          issueSourceValue(db, {
+            businessDate,
+            productId: m.position.productId,
+            warehouseId: m.position.warehouseId,
+            quantity: Number(input.quantity),
+            movementType: input.sourceType,
+            sourceType: input.sourceType,
+            sourceId: input.sourceId,
+            sourceItemId: input.sourceItemId,
+            inventoryTransactionId: m.transactionId,
+          });
+        }
+      } catch (e) {
+        // Legacy callers retain their historical best-effort valuation behavior.
+        // Callers using valuationMode=EXTERNAL own a strict valuation step in the
+        // same outer transaction and never enter this compatibility branch.
       }
-    } catch (e) {
-      // Do not break mutation on valuation exception; finance integration runs separately.
     }
 
     // Mutation log (idempotency replay key).
@@ -282,7 +289,18 @@ export function applyInventoryMutation(input) {
     audit(db, input.actor?.id || null, input.movementKind, input.sourceType, input.sourceId,
       `${input.movementKind} ${input.quantity} ${input.sourceType}/${input.sourceId} movement_group=${movementGroupId}`);
 
-    result = { replayed: false, movementGroupId, balanceAfterFrom, balanceAfterTo };
+    result = {
+      replayed: false,
+      movementGroupId,
+      balanceAfterFrom,
+      balanceAfterTo,
+      movements: movements.map((movement) => ({
+        direction: movement.direction,
+        transactionId: movement.transactionId,
+        positionKey: movement.position.positionKey,
+        balanceAfter: movement.balanceAfter,
+      })),
+    };
   };
 
   // INV-32 sec 27.41: canonical inventory period gate. Rejects BEFORE mutation

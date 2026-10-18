@@ -3697,6 +3697,39 @@ input:focus, select:focus, textarea:focus { border-color:var(--accent); backgrou
   line-height: 1.2;
 }
 
+.returns-v15 > .segmented-control { margin: 0 0 12px; }
+.wave6-mode-picker { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; border:0; padding:0; margin:0; }
+.wave6-mode-picker legend { margin-bottom:8px; font-weight:600; }
+.wave6-mode-picker label { display:flex; align-items:flex-start; gap:8px; min-height:64px; padding:12px; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--bg-card); cursor:pointer; }
+.wave6-mode-picker label:has(input:checked) { border-color:var(--primary); background:var(--primary-soft); }
+.wave6-mode-picker input { width:auto; margin-top:3px; }
+.wave6-mode-picker span { display:grid; gap:3px; }
+.wave6-mode-picker small { color:var(--text-secondary); font:500 11px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.wave6-return-detail { display:grid; gap:16px; }
+.wave6-object-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding-bottom:14px; border-bottom:1px solid var(--separator); }
+.wave6-object-head > div { display:grid; gap:4px; min-width:0; }
+.wave6-object-head strong { font-size:18px; }
+.wave6-object-head small,.wave6-mode-note { color:var(--text-secondary); }
+.wave6-line-list { display:grid; gap:0; border-block:1px solid var(--separator); }
+.wave6-line-list > div,.wave6-replacement-line header { display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--separator); }
+.wave6-line-list > div:last-child { border-bottom:0; }
+.wave6-inline-error { padding:12px 14px; border-left:3px solid var(--danger); background:var(--danger-soft); color:var(--danger); line-height:1.45; }
+.wave6-workflows { display:flex; flex-wrap:wrap; gap:8px; }
+.wave6-inline-workflow { flex:1 0 100%; display:grid; gap:12px; padding:16px; background:var(--bg-subtle); border-radius:var(--radius-md); }
+.wave6-inline-workflow h3 { margin:0; font-size:15px; }
+.wave6-inline-workflow label { display:grid; gap:6px; }
+.wave6-replacement-line { display:grid; gap:4px; padding:0 0 10px; }
+.wave6-replacement-line small { color:var(--text-secondary); }
+.wave6-progress { height:6px; overflow:hidden; border-radius:3px; background:var(--bg-muted); }
+.wave6-progress span { display:block; height:100%; background:var(--primary); transition:width 180ms ease; }
+
+@media (max-width: 520px) {
+  .wave6-mode-picker { grid-template-columns:minmax(0,1fr); }
+  .wave6-mode-picker label { min-height:52px; }
+  .wave6-workflows > button { flex:1 1 calc(50% - 4px); min-height:44px; }
+  .wave6-object-head { align-items:center; }
+}
+
 /* V1.5 D5 — planning and production share one compact operating rail. */
 .mobile-shell:has(.forecasts-v15),
 .mobile-shell:has(.mrp-runs-v15),

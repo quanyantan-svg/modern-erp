@@ -193,6 +193,14 @@ function assertAvailableLot(lot, onDate) {
 
 function assertReturnProvenance(db, sourceType, sourceId, allocations) {
   if (!['SALES_RETURN','PURCHASE_RETURN'].includes(sourceType)) return;
+  if (sourceType === 'SALES_RETURN') {
+    const marker = db.prepare('SELECT commercial_source_marker FROM return_orders WHERE id=?').get(sourceId)?.commercial_source_marker;
+    // SO_BACKED / NO_SOURCE are the approved Option-A acceptance modes. They
+    // intentionally have no Delivery identity to prove here; their exact
+    // warehouse/product/LOT/SERIAL valuation-pool identity is proven by the
+    // Wave-6 canonical writer before this posting step.
+    if (marker === 'SO_BACKED' || marker === 'NO_SOURCE') return;
+  }
   const upstream = sourceType === 'SALES_RETURN'
     ? db.prepare('SELECT COALESCE(delivery_id,source_id) id FROM return_orders WHERE id=?').get(sourceId)?.id
     : db.prepare('SELECT receipt_id id FROM purchase_returns WHERE id=?').get(sourceId)?.id;

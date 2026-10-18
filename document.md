@@ -4187,7 +4187,7 @@ Cross-domain dependency 是 acceptance dependency metadata，**不是** capabili
 
 ## 34. Sales & Customer Domain Closure Requirement
 
-> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷已闭合。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；本节 Requirement 现为 `PASS / FROZEN`，冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。
+> 本节原固化 Sales & Customer Domain Closure 的 Requirement 阶段成果；2026-10-13 因远端外部评审发现 SC01 / SC08 / SC30 及后续业务语义缺口而进行**有限 Requirement reopen**。本次只精化既有 B3102 范围，不增加 SC / Invariant / UAT / Race ID；DR-SAL-01 已由用户批准 Option A，文档层缺陷已闭合。2026-10-14 外部独立评审对 Requirement / Technical Design / Implementation Wave Plan 均返回 PASS，用户已明确批准正式 Freeze；冻结内容基线为 `5469891b78acb5b03940944698e5c51a38cf5491`。2026-10-16 DR-SAL-04 Option A 与 2026-10-17 DR-SAL-05 Option C 均已由用户接受；同日发现的 LOT/SERIAL 组合矛盾现按 R1–R4 完成有界 superseding Requirement correction，仅重开 SC55 / SC56 / SC58、UAT-S-20 / UAT-S-21 及 DR-SAL-04/05 对应条款。Option C Reverse 的最终幂等 addendum 进一步明确 client-supplied `Idempotency-Key` 为必填并关闭 Requirement owner clarification。§34 其余已冻结合同不变，本增量只进入下一独立 Design Gate，不授权 Implementation 或 Wave 6 Acceptance/Freeze。
 > Manual Evidence Baseline：B3102 销售管理 + B3103 信用管理（同时遵守已 frozen 的 B3104 库存 / B3106 存货核算 / B3108–B3113 应收/应付/发票/出纳 / B3114–B3117 总账/报表/经营会计 / B3119-B3120 生产/计划 / B3121 委外 等其它 domain 的边界）。
 > 本节 Coverage 以 Sales & Customer Domain Audit 在 2026-10-12 经过 Final Arithmetic & Mapping Closure 后发布的 audit 为准：
 >
@@ -4467,15 +4467,35 @@ SC53 SD Source-Line Capacity Enforcement (remaining-not-over-execution invariant
 ```text
 SC54 Return against Confirmed Sales Delivery (DELIVERY_BACKED;
      preserve existing behavior)                                                   [EXISTING_REUSE]
-SC55 Return against Original Sales Order (SO_BACKED; without requiring Delivery)    [DOMAIN_OWNED]
-SC56 No-Source Return (NO_SOURCE; bounded commercial document)                       [DOMAIN_OWNED]
+SC55 Return against Original Sales Order (SO_BACKED; without requiring Delivery;
+     real warehouse acceptance + eligible positive valuation basis required)         [DOMAIN_OWNED]
+SC56 No-Source Return (NO_SOURCE; bounded commercial document;
+     real warehouse acceptance + eligible positive valuation basis required)         [DOMAIN_OWNED]
 SC57 Return Commercial Source Distinction (DELIVERY_BACKED / SO_BACKED /
-     NO_SOURCE explicit)                                                          [DOMAIN_OWNED]
-SC58 Return Capacity + Inventory IN + Value Restore + Finance Credit Adjustment
-     via Finance canonical                                                         [INTEGRATION_BACKED]
+     NO_SOURCE explicit, truthful and mutually exclusive)                            [DOMAIN_OWNED]
+SC58 Return Capacity + Inventory IN + canonical Value Basis + Voucher Counterpart;
+     Finance Credit Adjustment only with an independent authoritative AR basis       [INTEGRATION_BACKED]
 ```
 
-> 三种 return 商业源显式区分；NO_SOURCE 不得伪造源销售；Finance 借贷记除非 Finance-side 具备有效 basis，否则不自动生成。
+> 三种 Return 商业源必须显式、真实且互斥。`DELIVERY_BACKED` 保持既有 `restoreSourceValue()`、历史 COGS reversal 与合法 Finance Credit Adjustment 行为不变。`SO_BACKED` / `NO_SOURCE` 在没有可恢复的原始 Sales Delivery outbound valuation evidence 时，只有实际收货已合法验收、物料/仓库/LOT/SERIAL 身份匹配，且全部既有期间、权限、审核与业务日期控制满足，才可确认经济效果。
+>
+> `SO_BACKED` / `NO_SOURCE` 的确定性估值必须按 valuation/tracking method 分开解析。`MOVING_AVERAGE` 沿用已验证的同物料/仓库正数权威池分配语义；`LOT` Confirm 可使用与实际收货物料、仓库、LOT 精确匹配的正数 carrying-value pool，并把本次 Return 的数量、价值作为独立、可追溯的正向 movement 加入该共享 LOT 池；`SERIAL` 不得再要求或使用“同 serial 仍为正数的在库池”作为 Return 估值来源，而必须确定性引用该 serial 的权威原始 outbound valuation evidence。SERIAL 原 outbound 必须与本次 eligible Return 的产品、身份、数量 1、价值及 reversal history 一致，serial Confirm 前处于合法 returned-from-outbound lifecycle 且不得已作为 active in-stock unit 存在；缺失、歧义、过期、冲突、已消费或已反向的证据固定 HTTP 409，零业务成功副作用。
+>
+> 原 DR-SAL-04 的已批准/冻结正数标准成本候选只在既有权威合同能够证明批准、冻结及业务日期有效时成立；当前仓库仍无该证据。`NO_SOURCE` 不允许自动标准成本或 `LEGACY_UNVALUED` fallback；`SERIAL` 无论 `SO_BACKED` / `NO_SOURCE` 均只能使用上述原始 outbound valuation evidence。`NO_SOURCE` 的商业来源继续表示不存在权威 SO/Delivery 商业来源，但允许独立引用权威 Inventory outbound valuation provenance；该引用不得把商业模式静默改写为 `SO_BACKED` / `DELIVERY_BACKED`，商业金额继续按 NO_SOURCE 既有合同处理。其它情况下以 HTTP 409 拒绝确认。
+>
+> 明确禁止 `LEGACY_UNVALUED`、默认零成本、将零值池视为正值、客户端任意手工成本、Sales Order/Quotation 价格、不存在 Delivery 的假定历史成本、跨物料/仓库/LOT/SERIAL 取成本、新增未批准的 deferred valuation 状态或虚构 Finance 估值记录；不得以“尚未启用 valuation”为由绕过。
+>
+> 合法正向入库价值必须由 Finance canonical valuation 计算，并通过既有 Finance/Accounting canonical voucher writer 借记 `inventoryAccountRole(product_id)` 所解析的实际物料分类存货资产科目、贷记现有 `INVENTORY_GAIN_LOSS` 角色，金额为同一权威正向入库估值且借贷平衡；不得新建角色、硬编码科目、建立第二套凭证账或标记为历史 Delivery COGS reversal。库存估值依据与 Finance AR basis 相互独立：仅当存在真实、有效、匹配且现有合同允许的 Finance-owned authoritative AR/Open Item basis 时，才可执行 Credit Adjustment；否则不生成 Credit Adjustment、Invoice、AR Open Item、Sales Revenue、历史 COGS reversal 或虚假 Delivery，但合法库存入库处理仍保持有效。具体 Credit 场景若缺少已批准语义，只对该 Credit 操作 fail closed。
+>
+> 确认必须在受保护的 canonical transaction contract 内一致完成业务前置条件、真实收货、来源容量、LOT/SERIAL、估值依据、期间、凭证、审计与幂等。任一校验或 canonical writer 失败均不得留下业务确认成功状态、库存数量/追踪/估值、Voucher/GL、AR/Credit Adjustment、成功审计或成功幂等证据；缺少合法正数估值依据固定返回 HTTP 409。失败事实仍可由既有独立安全审计记录。重试不得重复经济效果，并发必须保持来源容量与库存估值一致。采用 `INVENTORY_GAIN_LOSS` 对方角色不改变 Sales Return 的商业单据、审计、来源或报表身份，亦不得将其伪装成库存盘盈单据。
+>
+> **Option C — Restricted Economic Reversal (`SO_BACKED` / `NO_SOURCE` Sales Return).** DR-SAL-05 在 SC55 / SC56 / SC58 与既已批准 Option A Confirm 之上引入受限整单冲销:Wave 6 阶段**仅允许 Full Return Reversal**,不支持部分冲销;冲销 ≠ 删除 / 取消 / 改写历史;原始 Return 与其历史入库估值、凭证事实全部保留;新产生独立、可审计的 `SALES_RETURN_REVERSAL` Reversal Evidence。冲销必须顺序通过 (i) Replacement Dependency Gate, (ii) Downstream Consumption Gate, (iii) Original Valuation + Voucher Reverse, (iv) Optional Finance Credit Independence,全部在同一受保护 canonical transaction 内执行;任一 Gate 失败整体回滚,原始 Return 与其物理 / 估值 / 凭证 / AR / 成功审计 / 成功幂等证据零副作用。不得仅以 `current_inventory_quantity ≥ return_quantity` 作为精确反转安全证据;不得按销售价格 / 标准成本 / 平均成本重新计算原始入库金额;不得引入 LEGACY_UNVALUED / 任意零值 / 客户手工值 / SO 或 Quotation 售价 / 假 Delivery COGS / 跨身份 pool;不得在已确认 Replacement Fulfillment 时强行冲销。DELIVERY_BACKED 既有 Confirm 与反向行为保持受保护,Batch A 不变。完整 contract 见 §34.15 DR-SAL-05 与 §34.5 Option C 验收矩阵。
+>
+> **Option C Reverse Idempotency Requirement Addendum (2026-10-17, owner approved).** 仅对 `SO_BACKED` / `NO_SOURCE` 的 Wave 6 canonical Option C Reverse，client 必须显式提供非空 `Idempotency-Key`；缺失时在任何业务 mutation、成功 audit 或成功 idempotency record 前返回 HTTP 400，server 不得生成随机 key 或以随机/隐式值替代。幂等 scope 固定为 canonical tuple `(operation_type='SALES_RETURN_REVERSAL_OPTION_C', document_id=returnId, idempotency_key=clientKey)`；payload fingerprint 使用规范化后的 Option C Reverse 业务 payload（包含 action、business date、reason 及任何会改变经济效果的权威请求字段，不包含无关 transport noise）。同 scope、同 key、等价 canonical payload 必须 replay 已记录结果且不得重复 Inventory、traceability、valuation、Accounting voucher、Finance Credit、audit 或其它经济效果；同 scope、同 key、冲突 canonical payload 返回 HTTP 409 且零新增业务副作用。幂等检查、全部 Gates、物理/追踪/估值/会计/可选 Credit、单一 success audit、结果保存必须属于一个 atomic business transaction；失败不得留下成功记录。本 addendum 不改变 Option A Confirm、DELIVERY_BACKED reverse、Replacement 或任何其它 operation 的幂等合同。
+>
+> **2026-10-17 LOT/SERIAL bounded superseding correction.** 上述 Option A / C 中“LOT/SERIAL 均依赖同身份正数在库池，且 Option C 当前池必须等于本次 Return movement”的组合条款不再作为 active requirement。LOT Gate-B 改为 conservative no-subsequent-negative-movement fence：锁定精确原始 Return valuation movement，证明原 quantity/value 未反向、当前 quantity/value 足以执行原值冲销，并证明该 Return movement 之后在同 product/warehouse/LOT authoritative consumption domain 内没有任何负 movement；同时检查 reservation、hold、transfer 及其它 downstream dependency。池余额充足本身不是未消费证明，不引入通用 inventory layer allocation。SERIAL Confirm/Reverse 改用原始 outbound valuation provenance：Confirm 只恢复一个合法 serial unit，Reverse 仅在该恢复单位仍完整、未被下游消费且全部 identity/lifecycle/dependency 证据成立时移除。所有检查必须在同一受保护 transaction 内锁定并权威重读；并发 Confirm/Reverse/OUT 只能产生一个合法序列化结果或 HTTP 409。
+>
+> **Legacy evidence rule.** 既有 Return 仅在 canonical 历史 provenance 可被唯一、确定性识别时适用上述合同；不得合成历史 outbound movement，不得从当前 pool balance 反推来源，不得用当前成本重建历史价值。歧义或不完整证据 fail closed；任何人工 remediation / backfill workflow 均需未来单独授权。
 
 #### 34.3.11 Replacement / Replenishment（SC59–SC61）
 
@@ -4706,6 +4726,10 @@ S20  Same base currency baseline for Sales Pricing; multi-currency explicitly OU
 
 后续 Design / Implementation 不得破坏以上 invariant；如需新增 invariant，必须重开 Requirement。
 
+本次 Wave 6 Option A 只细化既有 invariant 的适用方式，不新增 invariant：S01 要求 Sales 只拥有真实 Return 商业身份，Inventory 继续拥有物理移动；S02 要求库存估值成立不推导 AR/Open Item 或 Credit Adjustment；S03 要求估值与平衡凭证由 Finance/Accounting canonical truth 产生；S10 禁止用假 Delivery、假销售或盘盈单据替代 `SO_BACKED` / `NO_SOURCE` Return；S11 要求 `NO_SOURCE` 在使用合法估值及 `INVENTORY_GAIN_LOSS` 时仍保持可见且不可改写模式。
+
+本次 Wave 6 Option C 同样不新增 invariant，沿用上述既有约束的可逆形态：S05 "已确认历史不得被静默改写" 在 Option C 下体现为反向操作仅以独立、可审计的 `SALES_RETURN_REVERSAL` Reversal Evidence 进行，原始 Return 状态与历史事实不被覆写；S10 "Return ≠ Delete" 不禁止受限整单冲销，即 Option C 下 `SO_BACKED` / `NO_SOURCE` 已确认 Return 可经独立 Reversal Evidence 做反向库存 / 估值 / 凭证，但不得视为 Delete 或 Cancel；S02 / S03 同样约束反向操作不得产生虚假 AR / Open Item / Credit Adjustment / Voucher，不得借冲销名义引入新角色或第二套凭证账；Option C Gate-A 继续约束 Replacement 关系（不得伪造 Replacement fulfillment reversal）；S01 维持 Sales 商业身份与 Inventory 物理身份分离，反向时亦不允许 Sales 直接写 Finance valuation truth。
+
 ### 34.5 Frozen Functional Sales UAT（UAT-S-01..UAT-S-44）
 
 每条 SC capability 至少一条 acceptance reference（Functional UAT / Race / Structural-RBAC assertion）。Coverage validation 见 §34.13 trace + 每条 UAT 末尾的 `[SCxx]` 标注。
@@ -4805,6 +4829,66 @@ UAT-S-44  Permission / RBAC / SOD (P1-P5):
             Sales-group data scope is enforced in backend for Quotation / Sales Order /
             Reports once they carry sales_group_id; other-group data is not exposed   (SC06 + SC108..SC114)
 ```
+
+UAT-S-19～UAT-S-22 的 Wave 6 Option A 验收矩阵如下；这是既有 UAT 的细化，不新增 UAT ID。UAT-S-22 仍只验收 Replacement obligation/state，不作为 Return 估值依据或跨越本次边界：
+
+| # | Existing UAT | Acceptance case | Required result |
+|---|---|---|---|
+| 1 | UAT-S-20 / 21 | MOVING_AVERAGE 同物料/仓库正数权威池；LOT 同物料/仓库/LOT 正数 carrying-value pool | 真实收货成功入库；形成独立原始 Return valuation movement；LOT 加入共享池但保留 movement provenance |
+| 2 | UAT-S-20 | SO_BACKED 的非 SERIAL 项无适用正数池，但存在业务日期有效、已批准且冻结的正数标准成本证据 | 成功入库；不得只凭正数字段推定已批准/冻结；当前仓库不能证明时仍 HTTP 409 |
+| 2a | UAT-S-20 / 21 | SERIAL 存在唯一、匹配、未消费/未反向的权威原 outbound valuation evidence，且 lifecycle 为合法 returned-from-outbound、当前无 active in-stock unit | 精确恢复原 outbound 数量 1、价值和 serial identity；不得读取同 serial 正数在库池作为 valuation source |
+| 2b | UAT-S-21 | NO_SOURCE 引用独立权威 Inventory outbound valuation provenance | 仍显示并保持 NO_SOURCE；商业金额不从 provenance、SO、Delivery 或库存价值推导；不得自动使用 standard cost / LEGACY_UNVALUED |
+| 3 | UAT-S-20 / 21 | 两类合法估值依据均不存在或批准/冻结证据不可证明 | HTTP 409；零业务成功副作用 |
+| 4 | UAT-S-20 / 21 | 仅可取得 `LEGACY_UNVALUED` | 拒绝确认，不得作为合法 basis |
+| 5 | UAT-S-20 / 21 | 仅存在默认零成本或零值估值池 | 拒绝确认，不得将零值视为正数 |
+| 6 | UAT-S-20 / 21 | 请求以 SO/Quotation 售价、客户端手工值或假 Delivery 成本估值 | 拒绝该 basis，不得写入经济事实 |
+| 7 | UAT-S-20 / 21 | 合法正向估值确认 | 借记实际 `inventoryAccountRole(product_id)`、贷记既有 `INVENTORY_GAIN_LOSS`，金额一致且借贷平衡 |
+| 8 | UAT-S-20 / 21 | 合法库存 basis 存在但无独立 Finance AR/Open Item basis | 库存处理有效；不产生 Credit Adjustment、虚假 AR/Invoice/Revenue |
+| 9 | UAT-S-20 / 21 | 期间、科目映射、平衡、权限/SOD、追踪、容量或 writer 任一失败 | 整体回滚；确认状态、物理与估值、GL、AR、成功审计/幂等证据均不变 |
+| 10 | UAT-S-20 / 21 | 同一合法请求重试或并发竞争 | 不重复入库、凭证或信用冲减；来源容量与库存估值保持一致 |
+| 11 | UAT-S-20 / 21 / 22 | 分别处理 DELIVERY_BACKED / SO_BACKED / NO_SOURCE，并保留关联 Replacement | 每个 Return 的来源身份保持真实互斥；SO_BACKED 无假 Delivery；NO_SOURCE 可见；Return 不伪装盘盈；Replacement 不成为估值 basis |
+| 12 | UAT-S-19 | DELIVERY_BACKED 回归 | 既有 source value restore、历史 COGS reversal 与合法 Finance Credit Adjustment 行为不变 |
+
+UAT-S-19～UAT-S-22 的 Wave 6 Option C Restricted Economic Reversal 验收矩阵如下；这是既有 UAT 的细化，不新增 UAT ID。UAT-S-22 仍只验收 Replacement obligation / state；本 Option C 仅通过 Gate-A 增加受控反向约束，不改变 Replacement 既有 contract：
+
+| # | Existing UAT | Acceptance case | Required result |
+|---|---|---|---|
+| 13 | UAT-S-20 / 21 | 无关联 Replacement obligation | 通过 Gate-A；继续 Gate-B / C / D |
+| 14 | UAT-S-20 / 21 | 存在 ACTIVE 但尚未履行的 Replacement（`sales_order_replacements.cancellation_state='ACTIVE'` 且 effective fulfilled qty < replacement_quantity） | 必须经正规业务流程取消剩余补货义务；未处理时冲销返回 HTTP 409；零业务副作用 |
+| 15 | UAT-S-20 / 21 | 存在已确认的 Replacement Fulfillment（`sales_replacement_fulfillments` 行确认） | HTTP 409 整体回滚；不删除 fulfillment link；不改写已确认 Delivery；不伪造 Delivery reversal；不将已履行数量改写为零；不静默恢复原 SO executed history |
+| 16 | UAT-S-19 / 20 / 21 | 合法库存可证明精确反转（product / warehouse / bin identity；原始 POSTED Return valuation movement 完整、未反向；当前 quantity/value 足够；无下游 issuance / transfer / consumption / reservation / hold 破坏） | 完整零副作用整单冲销：Inventory OUT + `inventory_valuation_movements` 精确反向 + `SALES_RETURN` voucher 精确 entry 反向 + (可选) Credit 真实反向 + Reversal Evidence + idempotency + audit |
+| 16a | UAT-S-20 / 21 | LOT 原始 Return movement 之后，同 product/warehouse/LOT authoritative consumption domain 无任何负 movement；当前 quantity/value 足够；其它 dependency 全部通过 | 通过 conservative fence；从共享 LOT 池精确冲销原 Return quantity/value；不得要求当前池聚合余额等于本次 Return movement |
+| 16b | UAT-S-20 / 21 | LOT 当前池仍足够，但原始 Return movement 后存在任一负 movement，或 reservation/hold/transfer 依赖无法排除 | HTTP 409；池余额充足不得替代未消费 provenance；零部分副作用 |
+| 16c | UAT-S-20 / 21 | SERIAL 原 outbound provenance 与 Return restore movement 均唯一完整，serial 仍是本次恢复的一单位且未被后续消费/转移/反向 | 精确移除该 restored serial unit，并精确反向其 Return valuation/voucher；保持 serial 唯一数量 |
+| 16d | UAT-S-20 / 21 | SERIAL outbound/restore provenance 缺失、歧义、冲突、已消费、已反向，或 serial 已有另一 active in-stock unit | HTTP 409；不得以同 serial 正池、销售价格、当前成本或合成历史替代；零部分副作用 |
+| 17 | UAT-S-19 / 20 / 21 | 估值或库存下游 consumption 无法以 canonical evidence 严格证明精确反转安全 | HTTP 409；原始 Return 与其物理 / 估值 / 凭证 / AR / 成功审计 / 成功幂等证据零变化 |
+| 18 | UAT-S-19 / 20 / 21 | 仅以 `current_inventory_quantity ≥ return_quantity` 或估算平均成本 / 标准成本作为依据 | 拒绝；不得作为精确反转安全证据 |
+| 19 | UAT-S-19 / 20 / 21 | Finance Credit Adjustment 不存在的合法 Option A Return | 不得引用伪造 Credit；不访问不存在 target Open Item；仅执行合法 Inventory / Valuation / Voucher reverse |
+| 20 | UAT-S-19 / 20 / 21 | Finance Credit Adjustment 存在但下游 application / refund 已消费 | HTTP 409；整体回滚；保留 Credit 现状 |
+| 21 | UAT-S-20 / 21 | Option C Reverse 显式携带 `Idempotency-Key`；同 scope + 同 key + 等价 canonical payload retry；同 key + 冲突 payload；并发竞争 / 二次 reversal / vs Inventory OUT / vs Replacement fulfillment | 等价 retry replay 已记录结果且不重复 Inventory/traceability/valuation/voucher/Credit/audit；冲突 payload 或非法竞争返回 409；零重复经济效果、零负库存、零部分冲销、零孤儿 audit |
+| 21a | UAT-S-20 / 21 | Option C Reverse 缺失显式 `Idempotency-Key` | HTTP 400；server 不生成随机 key；Inventory、traceability、valuation、voucher/GL、Credit、Return/Reversal Evidence、成功 audit、成功 idempotency record 均零新增 |
+| 22 | UAT-S-19 | DELIVERY_BACKED 既有反向行为回归 | 既有 `reverseOperationalReturn()` 行为保持不变；Batch A 不变 |
+| 23 | 上游 R-SAL-10 / UAT-S-37 | Purchase Return 既有反向回归 | Purchase 侧 `reverseOperationalReturn` 行为不因 Option C 改动 |
+
+> Case 13–21 即承担 Option C 三个 Gate + Original Valuation + Voucher + Finance Credit Independence 的反向验收；不新增 UAT ID。
+> Case 22 验证 DELIVERY_BACKED 既有 reverse 不被 Option C 改写。
+> Case 23 确认 Purchase Return 既有 reverse 行为不受 Option C 改动影响。
+> UAT-S-22 在 Option C 下仍仅承担 Replacement obligation / state 验收；Gate-A 仅对其执行 A.2 / A.3 失败语义，不引入 Replacement 自身的反向 contract。
+
+#### 34.5.1 Wave 6 SO_BACKED / NO_SOURCE × valuation method 六组合 Requirement Matrix（2026-10-17 bounded correction）
+
+本矩阵仅细化 SC55 / SC56 / SC58 与 UAT-S-20 / UAT-S-21，不新增 UAT ID；DELIVERY_BACKED 保持 §34.3.10 / UAT-S-19 既有合同，不进入本次修订。
+
+| Commercial mode × valuation | Commercial amount authority | Inventory valuation authority | Confirm eligibility / effects | Reverse eligibility / effects | Failure / downstream dependency contract |
+|---|---|---|---|---|---|
+| SO_BACKED × MOVING_AVERAGE | 真实 approved SO line 的不可变商业价格证据；不得作为库存成本 | 同 product/warehouse 正数权威 MA pool；无池时仅可使用既有合同能够证明 approved/frozen/effective 的标准成本，当前不能证明则 409 | 校验 SO/customer/product/capacity、period、RBAC；真实 Inventory IN，写独立 Return valuation movement 与平衡 voucher | 沿用已验证语义：原 movement/voucher 未反向、当前池足够、Return 后同池无 canonical 负 movement、Replacement/Credit/dependency 均通过后精确反向 | 任一容量、期间、权限、下游负 movement、依赖或证据失败均 409/相应授权错误并整体回滚；不改变既有 MA 语义 |
+| SO_BACKED × LOT | 真实 approved SO line 商业证据；与 LOT carrying value 独立 | 同 product/warehouse/LOT 正数 authoritative carrying-value pool；允许形成独立 Return movement 后加入共享池 | 精确 LOT identity、tracking、pool 与依赖校验；Inventory/LOT IN + 原值正 movement + voucher | 不再要求 aggregate pool == Return movement；要求原 movement 未反向、当前 quantity/value 足够、Return 后同 LOT authoritative domain 无任何负 movement，并通过 reservation/hold/transfer 等依赖后精确反向 | 仅余额 `>=` 不足；任一后续负 movement、依赖不明或证据缺失均 409、零副作用；不引入通用 layer allocation |
+| SO_BACKED × SERIAL | 真实 approved SO line 商业证据；不得作为 serial 库存价值 | 唯一匹配的权威原 outbound valuation movement；禁止既有正 same-serial in-stock pool、标准成本或销售价替代 | serial 为合法 returned-from-outbound lifecycle、当前无 active in-stock unit、原 outbound 数量 1/价值/identity/reversal history 完整；精确恢复一单位与原值 | restored serial unit 仍唯一完整且无 downstream consumption/transfer/hold conflict；精确移除该单位并反向 Return valuation/voucher | 缺失、歧义、stale、冲突、已消费/反向或重复在库均 409，物理/估值/凭证/audit/idempotency 零成功副作用 |
+| NO_SOURCE × MOVING_AVERAGE | 固定沿用 NO_SOURCE 商业合同；不得从 SO/Delivery/provenance/库存价值推导商业金额 | 同 product/warehouse 正数权威 MA pool，或独立且确定的 Inventory outbound valuation provenance；禁止自动 standard-cost/LEGACY_UNVALUED fallback | 保持 NO_SOURCE 可见且无 SO/Delivery source pair；真实 Inventory IN、Return valuation movement、voucher；无权威 basis 则 409 | 沿用 MA strict negative-movement proof；精确反向原 Return movement/voucher，不虚构 Credit/AR | 商业/估值来源混淆、下游负 movement、period/RBAC/dependency 或 provenance 失败均整体回滚 |
+| NO_SOURCE × LOT | NO_SOURCE 商业金额合同保持不变 | 同 product/warehouse/LOT 正数 carrying-value pool，或独立、确定且同 LOT 的 authoritative Inventory outbound valuation provenance；无自动成本 fallback | 保持 NO_SOURCE，不伪造 SO/Delivery；精确 LOT IN、独立 Return movement 与 voucher | 使用与 SO_BACKED LOT 相同的 no-subsequent-negative-movement fence；足额当前池 + 无后续负 movement + 全 dependency 通过后精确反向 | 余额充足不能单独通过；任何负 movement、reservation/hold/transfer 冲突或 provenance 不完整均 409、零副作用 |
+| NO_SOURCE × SERIAL | NO_SOURCE 商业金额合同保持不变且不得从 serial outbound value 推导 | 唯一匹配的权威原 serial outbound valuation evidence；商业 mode 仍为 NO_SOURCE | 合法 returned-from-outbound lifecycle、无 active in-stock duplicate、数量 1、原值及 reversal history 全部确定；精确恢复一单位 | 只反向本次 restored unit；要求 restore/outbound provenance 未反向且无 downstream dependency | 无 eligible provenance 固定 409；不得转成 SO_BACKED/DELIVERY_BACKED，不得使用 positive same-serial pool、销售价、当前成本或合成历史 |
+
+六组合共同合同：Confirm 与 Reverse 均须后端授权、期间开放、完整 preflight、稳定锁序、transaction 内权威重读、成功 audit 与 idempotency；任一失败不留下 Return 成功状态、Inventory/LOT/SERIAL、valuation、voucher/GL、AR/Credit、成功 audit 或成功 idempotency 的部分事实。SQLite 必须以 encompassing write transaction 保持同义；MySQL 必须以真实独立 session 证明 Confirm/Reverse/OUT 竞争只有合法序列化结果。历史数据只接受唯一确定的 canonical provenance，不作 balance/cost 推断或 migration-time synthetic backfill。
 
 ### 34.6 Sales MySQL Race Requirement（R-SAL-01..R-SAL-24）
 
@@ -4910,6 +4994,8 @@ Total               → 24 (5 REAL + 17 DORMANT + 1 CONDITIONAL on R-SAL-23 + 1 
 No subsumed Race ID (former "Credit Profile mutation → R-SAL-12 subsumed" clause removed).
 ```
 
+> **Wave 6 Option C Restricted Economic Reversal 与 R-SAL-09 / R-SAL-10 的澄清（不新增 Race ID）。** DR-SAL-05 Option C 受限整单冲销沿用 R-SAL-10（Sales Return vs Replacement fulfillment）既有的 canonical lock identity 组合（`return_order_items.id` + `sales_order_replacement_lines.id` + `sales_replacement_fulfillments` 行），并以 Gate-A 作为受控序列化条件：已有 Replacement Fulfillment Evidence → 竞争结果 = HTTP 409 整体回滚，与 R-SAL-10 既有的 "replacement state machine consistent with source return" 一致，无 race ID 修订。R-SAL-09（Sales Delivery vs Return / Reopen）不被 Option C 触碰：Option C 仅对 Sales Return 自身做受限反向，不重开 Sales Delivery，不重开已 close 的 SO，不 silent relive 已确认历史。Option C 反向操作与 Replacement fulfillment 之间的并发由 R-SAL-10 承担；Option C 反向操作与确认时并发由 R-SAL-05 / R-SAL-03 既有 contract 承担。
+
 ### 34.7 Permission / RBAC / SOD
 
 - 业务 capability 意图（不冻结 permission code 名字）：SC108–SC114；
@@ -4935,7 +5021,7 @@ P5  AUDIT trail 不得被任何其它 capability 跳过
 | # | Capability Family | Sales owner (SC IDs) | Frozen-domain dependency | Read / Write direction | Forbidden duplicate truth |
 |---|---|---|---|---|---|
 | 1 | Customer commercial extensions | SC02..SC07, SC26, SC36 | Master & Engineering (Customer identity) | R/W: Sales extends Customer; reads identity | 不得 second Customer identity |
-| 2 | Quotation / Sales Order / Sales Order Change / Sales Delivery / Sales Return / Replacement / Delivery Notice | SC09..SC14, SC24..SC44, SC45..SC48, SC49..SC53, SC54..SC58, SC59..SC61 | Master & Engineering (Customer / Product / UoM); Inventory & Warehouse (physical); Manufacturing & Quality (OQC); Finance Operations (AR / settlement recognition) | R/W: Sales owns commercial field; consume frozen canonical; never write physical truth | 不得 second physical / second AR ledger |
+| 2 | Quotation / Sales Order / Sales Order Change / Sales Delivery / Sales Return / Replacement / Delivery Notice | SC09..SC14, SC24..SC44, SC45..SC48, SC49..SC53, SC54..SC58, SC59..SC61 | Master & Engineering (Customer / Product / UoM / approved-frozen standard-cost evidence); Inventory & Warehouse (physical movement and tracking); Manufacturing & Quality (OQC); Finance Operations (AR / Open Item / Credit Adjustment); Accounting & Analytics (canonical valuation / voucher) | R/W: Sales owns commercial Return and truthful mode/source identity; Inventory owns physical movement; Finance/Accounting owns valuation/voucher; Finance owns AR/Open Item/Credit Adjustment. Sales consumes canonical contracts and never writes duplicate truth | 不得 second physical / valuation / voucher / AR ledger；不得由库存 basis 推导 AR basis；不得把 Sales Return 伪装成盘盈 |
 | 3 | Sales Pricing | SC15..SC20 | Master & Engineering (Product reference / UoM) | R/W: Sales owns price list + snapshot | 不得 second pricing engine behind frozen domain |
 | 4 | Order-Time Discount | SC21..SC23 | Finance Operations (customer settlement / credit-adjustment balance constraint — Finance-owned, NOT B3103 Credit) | R/W: Sales 拥有 order-time discount; consumes Finance constraint at confirm | 不得 second settlement ledger; 不得把 discount 静默注入 Finance voucher |
 | 5 | Prepayment Gate | SC62..SC65 | Finance Operations (Advance Receipt / Unapplied Balance / Refund) | R/W: Sales 决定 gate rule; Finance 拥有 money truth | 不得 second advance ledger |
@@ -5135,7 +5221,7 @@ SC37..SC40    → UAT-S-15 (SO Change) + R-SAL-07..R-SAL-08..R-SAL-18..R-SAL-19
 SC41..SC44    → UAT-S-16 (Fulfillment / partial / close / cancel)
 SC45..SC48    → UAT-S-17 (Delivery Notice capacity) + R-SAL-16..R-SAL-19
 SC49..SC53    → UAT-S-18 (Sales Delivery Confirm) + R-SAL-01, R-SAL-05, R-SAL-17
-SC54..SC58    → UAT-S-19..21 (3-Return modes) + R-SAL-03, R-SAL-09, R-SAL-10
+SC54..SC58    → UAT-S-19..21 (3-Return modes + Option A positive valuation/accounting matrix + Option C Restricted Economic Reversal matrix) + R-SAL-03, R-SAL-09, R-SAL-10
 SC59..SC61    → UAT-S-22 (Replacement) + R-SAL-10
 SC62..SC65    → UAT-S-23 (Prepayment Gate) + R-SAL-15
 SC66..SC68    → UAT-S-24 (Reservation Intent) + UAT-S-40 + R-SAL-02 (consume only)
@@ -5276,8 +5362,55 @@ then Sales Wave 1 implementation.
 
 Requirement 固定为 `DISABLED / INVENTORY_LOCK / MANUAL_RESERVATION / ON_HAND_RESERVATION / EXPECTED_SUPPLY_RESERVATION` 五种行为；DOCUMENT_TYPE 可完整覆盖 SYSTEM row。Inventory lock 使用 Inventory canonical truth；后三种 reservation 使用 Planning canonical truth。现有 Planning `EXPECTED` 没有有限容量权威来源，登记 `BOUNDED INTEGRATION CONTRACT EXTENSION REQUIRED`，未完成扩展前该模式 backend fail closed。
 
-所有已知 Requirement 决策缺口已闭合；外部评审已 PASS，用户 Freeze approval 已确认，Requirement 正式 `PASS / FROZEN`。
+#### DR-SAL-04 — Wave 6 SO_BACKED / NO_SOURCE valuation and accounting (`OPTION A APPROVED`, REQUIREMENT REOPEN)
+
+- Approval Date：2026-10-16；Scope：Wave 6 SC55 / SC56 / SC58 相关估值与会计处理；Approved Option：A；User Decision：`CONFIRMED`。
+- Accounting Counterpart：现有 `INVENTORY_GAIN_LOSS`；借方为 `inventoryAccountRole(product_id)` 解析的实际存货资产科目；使用既有 canonical voucher writer 并保持借贷平衡。
+- Valuation Priority（由 2026-10-17 bounded correction 有界覆盖）：MOVING_AVERAGE 使用同 product/warehouse 正数权威池；LOT 使用同 product/warehouse/LOT 正数 carrying-value pool；SERIAL 必须使用唯一匹配的 authoritative original outbound valuation evidence，不得要求 positive same-serial in-stock pool。原 approved/frozen/effective standard-cost 候选仅保留于 SO_BACKED 非 SERIAL 且既有权威合同可证明的场景；NO_SOURCE 禁止自动 standard-cost fallback；证据不能证明时 HTTP 409。
+- Forbidden Basis：`LEGACY_UNVALUED`、zero/default zero、manual/client cost、SO/Quotation price、fake Delivery cost、跨身份 pool、未批准 deferred valuation 或虚构 Finance evidence。
+- Finance AR Basis Independence：库存估值不推导 AR；Credit Adjustment 仅在独立、真实、匹配且合同允许的 Finance-owned authoritative AR/Open Item basis 存在时执行。
+- Transaction Rollback：前置、收货、容量、追踪、估值、期间、凭证、审计与幂等处于同一受保护合同；任一失败零业务成功副作用，重试不得重复经济效果。
+- Governance：不新增 SC / Invariant / UAT / Race ID，不改变跨域 owner，不改变 DELIVERY_BACKED、Batch A 或 Replacement；后续 Design 与 Implementation 均等待独立 gate。
+
+2026-10-14 的全域 Freeze Record 与 2026-10-16 DR-SAL-04 继续作为历史基线;DR-SAL-04 已于 2026-10-16 接收并冻结，不重复开启;DR-SAL-05 是当前唯一有界 Requirement 增量，§34 其余合同保持冻结。
+
+#### DR-SAL-05 — Wave 6 SO_BACKED / NO_SOURCE Restricted Economic Reversal (`OPTION C APPROVED`, REQUIREMENT REOPEN)
+
+- Approval Date：2026-10-17；Scope：Wave 6 SC55 / SC56 / SC58 已确认 Sales Return 在 Option A Confirm 之上的受限整单反向经济操作;Approved Option：C；User Decision：`CONFIRMED`。
+- Reversal Availability：仅允许 Full Return Reversal;本阶段不支持部分冲销。冲销 ≠ 删除 / 取消 / 改写历史;原始 Return 与其历史入库估值、凭证事实全部保留;新产生独立、可审计的 `SALES_RETURN_REVERSAL` Reversal Evidence。
+- Replacement Dependency Gate (Gate-A):
+  - A.1 无关联 Replacement obligation → 通过 Gate-A。
+  - A.2 存在 ACTIVE 且尚未履行的 Replacement(`sales_order_replacements.cancellation_state='ACTIVE'` 且 effective fulfilled qty < replacement_quantity) → 用户必须先通过正规业务流程取消剩余补货义务;未处理时冲销返回 HTTP 409。
+  - A.3 存在已确认的 Replacement Fulfillment Evidence(`sales_replacement_fulfillments` 行) → HTTP 409，整体回滚;不得删除 fulfillment link;不得改写已确认 Delivery;不得伪造 Delivery reversal;不得将已履行数量改写为零;不得静默恢复原 SO executed history。
+  - 判断必须基于 canonical fulfillment evidence(`sales_replacement_fulfillments` ↔ `return_order_items.id` 真实 join)，不得仅使用 header 可编辑 lifecycle 字段。
+- Downstream Consumption Gate (Gate-B)：仅以 `current_inventory_quantity ≥ return_quantity` 不构成通过依据。必须以 canonical evidence 严格证明 product / warehouse / bin 及适用 LOT/SERIAL identity、原始 Return POSTED 正数 valuation movement 完整且未反向、当前 quantity/value 足够，并且 issuance / transfer / consumption / reservation / hold 等 downstream dependency 未破坏精确反转。MOVING_AVERAGE 沿用 shared-pool strict negative-movement proof。LOT 使用 conservative no-subsequent-negative-movement fence：不得再要求 aggregate LOT balance quantity/value 等于原始 Return movement；必须证明原 Return movement 之后同 product/warehouse/LOT authoritative consumption domain 没有任何负 movement，并在 transaction 锁内重读足额 balance 与所有 dependency。SERIAL 使用 authoritative original outbound + Return restore provenance，要求本次 restored unit 仍唯一完整且未被消费/转移/反向。禁止推断标准成本、当前/历史平均成本或仅按余额推测原值；无法严格证明则 HTTP 409、整体回滚。
+- Original Valuation + Voucher Reverse (Gate-C):
+  - 锁定并精确反向 `inventory_valuation_movements`(实 movement identity + 实 inventory_transaction_id + 原始 basis);不得引入 LEGACY_UNVALUED / 任意零值 / 客户手工值 / SO 或 Quotation 售价 / 假 Delivery 历史 COGS / 跨身份 pool。
+  - 精确反向 `SALES_RETURN` 系统凭证(实 voucher identity + 实 entry direction swap + 实 original entry amount cents + 实 original subjects + 借贷严格平衡)。
+  - 禁止 `return_quantity × sales_unit_price` 作为 Inventory Valuation Reversal 金额。禁止将同一商业金额重复分配到多个原始 entry。
+  - 全部通过 Finance / Accounting canonical writer，并强制带 reversal source link、idempotency、period gate。
+- Finance Credit Independence (Gate-D):无 Credit Adjustment 的合法 Option A Return 不再被永久阻断;不要求虚构 Credit;不写 Credit Reversal Component;不访问不存在 target Open Item;不调用虚假 AR refresh;仅执行合法 Inventory / Valuation / Voucher reverse。若真实 Credit 存在:必须识别真实 `financial_credit_adjustments` 行;必须检查下游 application / refund consumption;必须使用 Finance canonical reversal;必须与本次 Return Reversal 共享同一受保护 transaction;不允许仅删除 Credit 行;无法合法反向 → HTTP 409，整体回滚。
+- Atomicity:同一受保护 canonical transaction contract 内一致执行 Mode/Status 校验 → Original source 验证 → Replacement Dependency 验证 → Downstream Consumption 验证 → Inventory / LOT-SERIAL 锁 → Original valuation movement 锁 → 可选 Finance Credit 锁 → Reversal Evidence 写 → Inventory OUT → Valuation reverse → Voucher reverse → 可选 Credit reverse → Idempotency → Audit success。任一 gate / lock / writer / validation 失败整体回滚，原始 Return 状态、物理、估值、AR、凭证、AR Credit、成功审计、成功幂等证据不变;并发竞争在持有必要锁后重新校验，只能产生合法序列化结果。
+- Idempotency Addendum：Option C Reverse 的 client-supplied `Idempotency-Key` 必填，缺失 HTTP 400，server 禁止随机生成。scope 为 `(SALES_RETURN_REVERSAL_OPTION_C, returnId, clientKey)`；同 key + 等价 canonical payload replay 已记录结果且不重复任何业务/经济/audit 效果；同 key + 冲突 payload HTTP 409。幂等 record 与 Inventory、traceability、valuation、voucher、可选 Credit、单一 success audit 同 transaction 原子提交或整体回滚。本条只适用于 `SO_BACKED` / `NO_SOURCE` Option C Reverse。
+- DELIVERY_BACKED Compatibility:DELIVERY_BACKED 既有 Confirm 与既有 `reverseOperationalReturn()` 行为受保护，不在本 Option C 范围内被改写;Batch A 已验收语义不变。如现有 DELIVERY_BACKED reverse 与冻结 Inventory / Finance 安全不变量存在既有问题，应在后续各自受控任务中记录证据与影响并提出受控处理建议;未经批准不得改写冻结实现。
+- Governance:不新增 SC / Invariant / UAT / Race / Audit Capability ID;UAT-S-19..22 既有 matrix 即承担 Option C 验收(§34.5 新增 Case 13–23);R-SAL-09 / R-SAL-10 既有 race 即承担相关约束(§34.6 澄清);不改变跨域 owner;不改变 Option A 已批准 contract(§29.13 / §30.29);不改变 Replacement immutable fulfillment evidence(§29.14);不改变 SC54 DELIVERY_BACKED 既有 reverse 路径。SC 114 / Invariant 20 / UAT 44 / Race 24 / Audit CAP 36 计数维持不变。
+
+DR-SAL-05 已由用户于 2026-10-17 接受并作为历史 Option C baseline。随后发现的 Option A–Option C LOT/SERIAL 组合矛盾由下述同日 bounded superseding correction 处理；§34 其余合同保持冻结，不能据此宣称 Wave 6 已完成或自动恢复 Implementation。
+
+#### DR-SAL-04 / DR-SAL-05 — LOT/SERIAL bounded superseding correction (`R1–R4 APPROVED`, REQUIREMENT REOPEN)
+
+- Approval Date：2026-10-17；Scope：仅 SC55 / SC56 / SC58、UAT-S-20 / UAT-S-21 及 DR-SAL-04/05 中 LOT/SERIAL valuation provenance 与 Gate-B；User Decisions：R1–R4 `CONFIRMED`。
+- Original Contradiction：Option A 要求 LOT/SERIAL 使用同身份既有正池并把 Return `+q/+v` 加入该池；原 Option C 对 LOT/SERIAL 又要求确认后 aggregate pool `== q/v`。LOT 在 `Q0>0,V0>0` 下必有 `Q1=Q0+q>q,V1=V0+v>v`；SERIAL 还会把 q=1 的 restored unit 加到 positive same-serial pool，违反 serial 唯一数量。上述 aggregate-equality / positive-same-serial 组合条款被本记录明确 supersede，不再是 active requirement。
+- R1 LOT：采用 conservative no-subsequent-negative-movement fence。要求精确原 Return valuation movement、未反向 quantity/value、足额当前 balance、Return 后同 LOT authoritative consumption domain 零负 movement、reservation/hold/transfer/其它依赖显式通过、transaction 内锁定重读与并发安全；余额本身不能证明未消费；本次不引入通用 inventory layer allocation。
+- R2 SERIAL：valuation authority 固定为唯一匹配的 original outbound valuation evidence。Confirm 前 serial 必须处于合法 returned-from-outbound lifecycle 且没有 active in-stock duplicate；验证 quantity=1、value、identity、outbound/restore reversal history；Confirm 精确恢复一单位，Reverse 仅在该 restored unit 仍完整且全部 dependency 通过时移除。positive same-serial pool、销售收入、标准成本与当前成本均不得替代。
+- R3 NO_SOURCE：商业来源与 valuation provenance 分离。NO_SOURCE 可引用独立 authoritative Inventory outbound valuation evidence，但始终保持 NO_SOURCE 商业身份和既有商业金额合同，不得转成 SO_BACKED/DELIVERY_BACKED；无 eligible evidence 则 fail closed；禁止自动 standard-cost / LEGACY_UNVALUED fallback。
+- R4 Legacy：仅允许唯一确定的 canonical historical provenance；禁止 synthetic outbound、从 current pool balance 推断、current-cost reconstruction 或 migration-time 猜测。歧义/不完整历史 HTTP 409；任何 remediation/backfill workflow 需未来单独授权。
+- Cross-cutting：Confirm eligibility、physical/tracking mutation、valuation mutation、Reverse evidence、downstream proof、period、RBAC、audit、idempotency、rollback 与 concurrency 必须保持单一受保护 transaction contract。SQLite/MySQL 行为同义；真实 MySQL 独立 session 必须覆盖 Confirm/Reverse/OUT 竞争。DELIVERY_BACKED、MOVING_AVERAGE 已验证语义、F5/F6、Replacement immutable fulfillment evidence、Batch A 与 Wave 7+ 均不在本 correction 中改变。
+- Adjacent Drift Triage：A) `Idempotency-Key` owner clarification 已由 2026-10-17 final addendum 关闭：Option C Reverse 必须 client-supplied key，缺失 HTTP 400，随机 fallback 属 implementation compliance gap；B) NULL/unknown marker 已由 SC57“explicit, truthful and mutually exclusive”及 fail-closed contract 明确，进入 legacy reverse 属 implementation compliance gap，预期 HTTP 409 且零副作用；C) 本记录修正 DR-SAL-05 acceptance/footer 状态；D) successful SERIAL reversal acceptance evidence 必须在后续 Implementation Gate 补齐；E) Wave 6-specific MySQL independent-session concurrency evidence 必须在后续 Acceptance Gate 补齐。
+- Governance：不新增 SC / Invariant / UAT / Race / Audit Capability ID，不修改 `solution.md`，不授权 source/schema/migration/test 改动。Requirement correction 完成后仅可进入独立 Design Gate；Wave 6 仍不得 PASS / Freeze。
 
 ---
 
-**SALES & CUSTOMER DOMAIN REQUIREMENT — PASS / FROZEN @ `5469891b78acb5b03940944698e5c51a38cf5491`**
+**SALES & CUSTOMER DOMAIN REQUIREMENT — HISTORICAL BASELINE FROZEN @ `5469891b78acb5b03940944698e5c51a38cf5491`; DR-SAL-04 ACCEPTED (2026-10-16); DR-SAL-05 ACCEPTED (2026-10-17); LOT/SERIAL R1–R4 + OPTION C EXPLICIT IDEMPOTENCY-KEY REQUIREMENT FULLY CLOSED (2026-10-17), AWAITING DESIGN AUTHORIZATION**
+
+**WAVE 6 IMPLEMENTATION ACCEPTANCE & FREEZE STATUS (2026-10-18) — USER APPROVED:** Wave 6 implementation (Sales Return Confirmation DR-SAL-04 Option A for SO_BACKED / NO_SOURCE, Sales Return Restricted Economic Reversal DR-SAL-05 Option C, LOT conservative fence R1, SERIAL outbound provenance R2, immutable provenance carrier R3, legacy fail-closed R4, mandatory explicit Idempotency-Key for Option C, Replacement lifecycle, three-mode commercial source distinction, NULL/unknown marker 409 SALES_RETURN_MARKER_UNKNOWN, F5 schema CHECK(amount_cents >= 0) relaxation, F6 cancellation_state 2-value migration, Wave 6 additive migration `sales_return_valuation_provenance` + supporting indexes) is `WAVE6_FINAL_ACCEPTANCE_PASS — FROZEN` on `feature/sales-waves6-13@aee1e0c13d26dd840ae4b596340212eef03479c0`, package `1.6.2`. The accepted working tree is unstaged and uncommitted; this is a Freeze record only, not a commit / push / tag / release. Detailed user final acceptance sign-off, matrix coverage and implementation location mapping are recorded in `solution.md §34.14` and `log/2026-10-18.md` Final Acceptance Record. No business Requirement in §34 was modified by this Freeze record; SC 114 / Invariant 20 / UAT 44 / Race 24 / Audit CAP 36 counts remain unchanged.
