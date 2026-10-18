@@ -17,9 +17,40 @@ const MYSQL_INDEX_PREFIX_LENGTHS = Object.freeze({
   }),
 });
 
+function isValidColumnName(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
+// SQLite's PRAGMA index_info returns `name = null` for any index column that
+// is actually an expression (e.g. Wave 7 `COALESCE(sales_order_item_id,'')`).
+// MySQL 8 has no equivalent column reference for that position, so expression-
+// bearing indexes MUST be generated via `generatedPartialIndex`. Detect this
+// from the snapshot up front so callers can route to the digest path.
+export function hasExpressionColumns(index) {
+  if (!index || !Array.isArray(index.columns)) return false;
+  const expressions = Array.isArray(index.expressions) ? index.expressions : [];
+  for (let i = 0; i < index.columns.length; i += 1) {
+    const column = index.columns[i];
+    const expr = expressions[i];
+    if (!isValidColumnName(column)) return true;
+    if (typeof expr === 'string' && expr.length > 0 && expr !== column) return true;
+  }
+  return false;
+}
+
 export function mysqlIndexColumnList(tableName, index) {
+  if (!index || !Array.isArray(index.columns)) {
+    throw new Error(`MySQL index ${tableName}.${index?.name ?? '<unnamed>'} is missing its column list`);
+  }
   const prefixes = MYSQL_INDEX_PREFIX_LENGTHS[`${tableName}.${index.name}`] || {};
-  return index.columns.map((column) => {
+  return index.columns.map((column, position) => {
+    if (!isValidColumnName(column)) {
+      throw new Error(
+        `MySQL index column at position ${position} of ${tableName}.${index.name} `
+        + `is not a valid column reference (value=${JSON.stringify(column)}). `
+        + `Expression-column indexes must be generated via generatedPartialIndex so the digest path is used.`,
+      );
+    }
     const prefixLength = prefixes[column];
     return `${quote(column)}${prefixLength ? `(${prefixLength})` : ''}`;
   }).join(',');
@@ -76,14 +107,24 @@ function mysqlDefault(value, type) {
   return ` DEFAULT ${expression}`;
 }
 
-function generatedPartialIndex(tableName, index) {
+export function generatedPartialIndex(tableName, index) {
   const suffix = Buffer.from(index.name).toString('hex').slice(-16);
   const generated = `__partial_${suffix}`;
   const parts = index.columns.map((column, position) => {
-    const expression = column ? quote(column) : (index.expressions?.[position] || 'NULL');
-    return `COALESCE(CAST(${expression} AS CHAR),CHAR(30))`;
+    if (isValidColumnName(column)) {
+      return `COALESCE(CAST(${quote(column)} AS CHAR),CHAR(30))`;
+    }
+    const expr = index.expressions?.[position];
+    if (typeof expr !== 'string' || expr.length === 0) {
+      throw new Error(
+        `MySQL index digest at position ${position} of ${tableName}.${index.name} `
+        + `is missing both a column reference and an expression (value=${JSON.stringify(column)}).`,
+      );
+    }
+    return `COALESCE(CAST(${expr} AS CHAR),CHAR(30))`;
   }).join(',');
-  const predicate = index.where.replace(/\bIS\s+NOT\s+NULL\b/gi, 'IS NOT NULL');
+  const where = typeof index.where === 'string' && index.where.length > 0 ? index.where : '1=1';
+  const predicate = where.replace(/\bIS\s+NOT\s+NULL\b/gi, 'IS NOT NULL');
   return [
     `ALTER TABLE ${quote(tableName)} ADD COLUMN ${quote(generated)} CHAR(64) GENERATED ALWAYS AS (CASE WHEN ${predicate} THEN SHA2(CONCAT_WS(CHAR(31),${parts}),256) ELSE NULL END) STORED`,
     `CREATE UNIQUE INDEX ${quote(index.name)} ON ${quote(tableName)} (${quote(generated)})`,
@@ -113,7 +154,7 @@ function indexExpressions(sql) {
 
 function tableDefinition(table) {
   const indexed = new Set([
-    ...table.indexes.flatMap((index) => index.columns),
+    ...table.indexes.flatMap((index) => index.columns.filter(isValidColumnName)),
     ...table.foreignKeys.map((foreignKey) => foreignKey.from),
   ]);
   const autoIncrement = /AUTOINCREMENT/i.test(table.sql);
@@ -121,6 +162,12 @@ function tableDefinition(table) {
   const definitions = table.columns.map((column) => columnDefinition(table, column, indexed, primary, autoIncrement));
   if (primary.length) definitions.push(`PRIMARY KEY (${primary.map((column) => quote(column.name)).join(',')})`);
   for (const index of table.indexes.filter((candidate) => candidate.origin === 'u' && candidate.columns.length && candidate.columns.length <= 4)) {
+    if (hasExpressionColumns(index)) {
+      throw new Error(
+        `MySQL inline UNIQUE on ${table.name}.${index.name} has expression-bearing columns `
+        + `(${JSON.stringify(index.columns)}). MySQL has no inline expression UNIQUE; the index must be created via generatedPartialIndex.`,
+      );
+    }
     definitions.push(`UNIQUE (${index.columns.map(quote).join(',')})`);
   }
   for (const fk of table.foreignKeys) {
@@ -163,6 +210,12 @@ export function planMySqlIndexReconciliation(snapshot, currentIndexes) {
     const indexes = currentIndexes.get(table.name) || new Set();
     for (const index of table.indexes) {
       if (index.origin === 'u' || !index.columns.length || index.where || indexes.has(index.name)) continue;
+      if (hasExpressionColumns(index)) {
+        throw new Error(
+          `MySQL index reconciliation refuses expression-column index ${table.name}.${index.name}. `
+          + `Reconciliation is for additive plain-column indexes only; expression indexes must be declared by the canonical migration that owns them.`,
+        );
+      }
       statements.push(`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${mysqlIndexColumnList(table.name, index)})`);
     }
   }
@@ -264,7 +317,13 @@ export function bootstrapMySql(adapter, snapshot) {
         for (const index of table.indexes) {
           if (!index.columns.length) continue;
           if (index.name.startsWith('sqlite_autoindex_') && index.columns.length <= 4) continue;
-          const useDigest = index.unique && (Boolean(index.where) || index.columns.length > 4);
+          // Expression-column indexes (SQLite PRAGMA index_info returns `name=null`
+          // for any expression column, e.g. Wave 7 `COALESCE(sales_order_item_id,'')`)
+          // must take the digest path because MySQL has no column reference for an
+          // expression position. The plain CREATE INDEX path would otherwise emit
+          // `` `null` `` as a literal column name and MySQL would reject it with
+          // ER_KEY_COLUMN_DOES_NOT_EXITS.
+          const useDigest = hasExpressionColumns(index) || (index.unique && (Boolean(index.where) || index.columns.length > 4));
           const statements = useDigest
             ? generatedPartialIndex(table.name, { ...index, where: index.where || '1=1' })
             : [`CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${quote(index.name)} ON ${quote(table.name)} (${mysqlIndexColumnList(table.name, index)})`];

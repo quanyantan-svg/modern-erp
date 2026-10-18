@@ -527,51 +527,122 @@ export function listReservations(db, res, actor, url) {
   return send(res, 200, { reservations: rows });
 }
 
-export async function createReservation(db, req, res, actor) {
-  allow(actor, 'PLANNING_RESERVATION_MANAGE');
+// Canonical Planning service used by domain adapters that already own an open
+// transaction. It preserves Planning ownership of planning_reservations and
+// serializes finite-source capacity on the concrete supply document before it
+// re-reads ACTIVE reservations.
+export function createPlanningReservationCanonical(db, actor, args) {
   const parameters = db.prepare("SELECT reservation_enabled FROM planning_parameters WHERE id='DEFAULT'").get();
   if (!parameters?.reservation_enabled) throw new HttpError(409, '计划预留当前未启用');
-  const body = await readJson(req);
-  const type = String(body.reservationType ?? body.reservation_type ?? 'STRONG').toUpperCase();
+  const type = String(args.reservationType ?? args.reservation_type ?? 'STRONG').toUpperCase();
   if (!RESERVATION_TYPES.has(type)) throw new HttpError(400, '预留类型无效');
-  const productId = requiredText(body.productId ?? body.product_id, '产品', 100);
-  const demandType = requiredText(body.demandSourceType ?? body.demand_source_type, '需求来源类型', 50).toUpperCase();
-  const demandId = requiredText(body.demandSourceId ?? body.demand_source_id, '需求来源', 100);
-  const supplyType = requiredText(body.supplySourceType ?? body.supply_source_type, '供应来源类型', 50).toUpperCase();
-  if (!['ON_HAND', 'PLANNED_ORDER', 'PURCHASE_ORDER', 'PRODUCTION_ORDER', 'EXPECTED'].includes(supplyType)) throw new HttpError(400, '供应来源类型无效');
-  const supplyId = body.supplySourceId ?? body.supply_source_id ?? null;
-  if (supplyType !== 'ON_HAND' && supplyType !== 'EXPECTED' && !supplyId) throw new HttpError(400, '请选择供应来源');
-  const quantity = finitePositive(body.quantity, '预留数量');
-  const reservationId = id(); const number = makeNumber(db, 'planning_reservations', 'RSV'); const now = nowIso();
-  transaction(db, () => {
-    if (supplyId) {
-      const table = { PLANNED_ORDER: 'planned_orders', PURCHASE_ORDER: 'purchase_orders', PRODUCTION_ORDER: 'production_orders' }[supplyType];
-      if (table) lockRow(db, table, supplyId);
+  const productId = requiredText(args.productId ?? args.product_id, '产品', 100);
+  const demandType = requiredText(args.demandSourceType ?? args.demand_source_type, '需求来源类型', 50).toUpperCase();
+  const demandId = requiredText(args.demandSourceId ?? args.demand_source_id, '需求来源', 100);
+  const supplyType = requiredText(args.supplySourceType ?? args.supply_source_type, '供应来源类型', 50).toUpperCase();
+  if (!['ON_HAND', 'PLANNED_ORDER', 'PURCHASE_ORDER', 'PRODUCTION_ORDER', 'EXPECTED'].includes(supplyType)) {
+    throw new HttpError(400, '供应来源类型无效', { code: 'PLANNING_RESERVATION_SOURCE_UNSUPPORTED' });
+  }
+  const supplyId = args.supplySourceId ?? args.supply_source_id ?? null;
+  if (supplyType === 'EXPECTED') {
+    throw new HttpError(409, 'EXPECTED 缺少权威有限供给来源', { code: 'PLANNING_EXPECTED_FINITE_SOURCE_REQUIRED' });
+  }
+  if (supplyType !== 'ON_HAND' && !supplyId) {
+    throw new HttpError(400, '请选择供应来源', { code: 'PLANNING_RESERVATION_SOURCE_REQUIRED' });
+  }
+  const quantity = finitePositive(args.quantity, '预留数量');
+  const warehouseId = args.warehouseId ?? args.warehouse_id ?? null;
+
+  // Concrete source row = canonical serialization identity. lockRow is the
+  // existing Planning cross-dialect protocol (UPDATE id=id): it obtains a row
+  // write lock in MySQL and participates in SQLite's enclosing write tx.
+  let sourceRow = null;
+  if (supplyId) {
+    const table = { PLANNED_ORDER: 'planned_orders', PURCHASE_ORDER: 'purchase_orders', PRODUCTION_ORDER: 'production_orders' }[supplyType];
+    lockRow(db, table, supplyId);
+    if (supplyType === 'PLANNED_ORDER') {
+      sourceRow = db.prepare('SELECT id,product_id,status,quantity,released_quantity,need_date,planned_supply_date FROM planned_orders WHERE id=?').get(supplyId);
+      if (!sourceRow) throw new HttpError(409, '计划供给来源不存在', { code: 'PLANNING_RESERVATION_SOURCE_MISSING' });
+      if (sourceRow.product_id !== productId || sourceRow.status !== 'CONFIRMED') {
+        throw new HttpError(409, '计划供给来源产品或状态无效', { code: 'PLANNING_RESERVATION_SOURCE_INVALID' });
+      }
+    } else if (supplyType === 'PURCHASE_ORDER') {
+      sourceRow = db.prepare("SELECT id,status FROM purchase_orders WHERE id=? AND status='APPROVED'").get(supplyId);
+      if (!sourceRow) throw new HttpError(409, '采购供给来源不存在或未批准', { code: 'PLANNING_RESERVATION_SOURCE_INVALID' });
+    } else if (supplyType === 'PRODUCTION_ORDER') {
+      sourceRow = db.prepare("SELECT id,status,product_id FROM production_orders WHERE id=? AND status IN ('RELEASED','IN_PROGRESS')").get(supplyId);
+      if (!sourceRow || sourceRow.product_id !== productId) throw new HttpError(409, '生产供给来源不存在或状态无效', { code: 'PLANNING_RESERVATION_SOURCE_INVALID' });
     }
-    const available = physicalSupplyQuantity(db, supplyType, supplyId, productId, body.warehouseId ?? body.warehouse_id ?? null);
-    const reserved = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) quantity FROM planning_reservations
-      WHERE product_id=? AND supply_source_type=? AND COALESCE(supply_source_id,'')=COALESCE(?,'') AND COALESCE(warehouse_id,'')=COALESCE(?,'') AND status='ACTIVE'`)
-      .get(productId, supplyType, supplyId, body.warehouseId ?? body.warehouse_id ?? null).quantity);
-    if (Number.isFinite(available) && reserved + quantity > available + EPS) throw new HttpError(409, `可预留供应仅剩 ${Math.max(0, available - reserved)}`);
-    db.prepare(`INSERT INTO planning_reservations(id,reservation_no,reservation_type,demand_source_type,demand_source_id,demand_source_line_id,supply_source_type,supply_source_id,supply_source_line_id,product_id,warehouse_id,quantity,priority,release_date,status,mrp_run_id,scheme_id,notes,created_by,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`).run(reservationId, number, type, demandType, demandId, body.demandSourceLineId ?? null,
-      supplyType, supplyId, body.supplySourceLineId ?? null, productId, body.warehouseId ?? null, quantity, Number(body.priority ?? 100),
-      dateOrNull(body.releaseDate ?? body.release_date, '释放日期'), body.mrpRunId ?? null, body.schemeId ?? null, String(body.notes || '').slice(0, 500), actor.id, now, now);
-    audit(db, actor.id, 'CREATE', 'PLANNING_RESERVATION', reservationId, `${number} ${type} ${quantity}`);
+  }
+
+  const available = physicalSupplyQuantity(db, supplyType, supplyId, productId, warehouseId);
+  if (!Number.isFinite(available) || available <= EPS) {
+    throw new HttpError(409, '权威供给没有可预留容量', { code: 'PLANNING_RESERVATION_CAPACITY_EXHAUSTED' });
+  }
+  const reserved = Number(db.prepare(`SELECT COALESCE(SUM(quantity),0) quantity FROM planning_reservations
+    WHERE product_id=? AND supply_source_type=? AND COALESCE(supply_source_id,'')=COALESCE(?,'')
+      AND COALESCE(warehouse_id,'')=COALESCE(?,'') AND status='ACTIVE'`)
+    .get(productId, supplyType, supplyId, warehouseId).quantity);
+  const remaining = Math.max(0, available - reserved);
+  if (quantity > remaining + EPS) {
+    throw new HttpError(409, `可预留供应仅剩 ${remaining}`, {
+      code: 'PLANNING_RESERVATION_CAPACITY_EXCEEDED',
+      available, reserved, remaining, requested: quantity,
+    });
+  }
+
+  const reservationId = args.id || id();
+  const number = args.reservationNo || makeNumber(db, 'planning_reservations', 'RSV');
+  const stamp = nowIso();
+  db.prepare(`INSERT INTO planning_reservations(id,reservation_no,reservation_type,demand_source_type,demand_source_id,demand_source_line_id,supply_source_type,supply_source_id,supply_source_line_id,product_id,warehouse_id,quantity,priority,release_date,status,mrp_run_id,scheme_id,notes,created_by,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?)`).run(
+    reservationId, number, type, demandType, demandId, args.demandSourceLineId ?? args.demand_source_line_id ?? null,
+    supplyType, supplyId, args.supplySourceLineId ?? args.supply_source_line_id ?? null,
+    productId, warehouseId, quantity, Number(args.priority ?? 100),
+    dateOrNull(args.releaseDate ?? args.release_date, '释放日期'), args.mrpRunId ?? null, args.schemeId ?? null,
+    String(args.notes || '').slice(0, 500), actor.id, stamp, stamp,
+  );
+  audit(db, actor.id, 'CREATE', 'PLANNING_RESERVATION', reservationId, `${number} ${type} ${quantity} source=${supplyType}:${supplyId || ''} remaining=${remaining}`);
+  return { id: reservationId, reservationNo: number, available, reserved, remainingBefore: remaining, remainingAfter: remaining - quantity };
+}
+
+export function releasePlanningReservationCanonical(db, actor, reservationId) {
+  lockRow(db, 'planning_reservations', reservationId);
+  const row = db.prepare('SELECT * FROM planning_reservations WHERE id=?').get(reservationId);
+  if (!row) throw new HttpError(404, '预留不存在');
+  if (row.status !== 'ACTIVE') return { id: reservationId, status: row.status, changed: false };
+  const stamp = nowIso();
+  db.prepare("UPDATE planning_reservations SET status='RELEASED',version=version+1,updated_at=? WHERE id=?").run(stamp, reservationId);
+  audit(db, actor.id, 'RELEASE', 'PLANNING_RESERVATION', reservationId, row.reservation_no);
+  return { id: reservationId, status: 'RELEASED', changed: true };
+}
+
+export function recordPlanningReservationConsumption(db, actor, reservationId, qty) {
+  lockRow(db, 'planning_reservations', reservationId);
+  const row = db.prepare('SELECT * FROM planning_reservations WHERE id=?').get(reservationId);
+  if (!row) throw new HttpError(404, '预留不存在');
+  if (row.status !== 'ACTIVE') throw new HttpError(409, '只有有效预留可以消费');
+  const stamp = nowIso();
+  db.prepare('UPDATE planning_reservations SET updated_at=?,version=version+1,notes=? WHERE id=?')
+    .run(stamp, `${row.notes || ''}\nconsumed=${qty} at ${stamp}`, reservationId);
+  audit(db, actor.id, 'CONSUME', 'PLANNING_RESERVATION', reservationId, `${row.reservation_no} ${qty}`);
+  return { id: reservationId, status: 'ACTIVE', consumed: Number(qty) };
+}
+
+export async function createReservation(db, req, res, actor) {
+  allow(actor, 'PLANNING_RESERVATION_MANAGE');
+  const body = await readJson(req);
+  let result;
+  transaction(db, () => {
+    result = createPlanningReservationCanonical(db, actor, body);
   });
-  return send(res, 201, { id: reservationId, reservationNo: number });
+  return send(res, 201, { id: result.id, reservationNo: result.reservationNo });
 }
 
 export function releaseReservation(db, res, actor, reservationId) {
   allow(actor, 'PLANNING_RESERVATION_MANAGE');
   transaction(db, () => {
-    lockRow(db, 'planning_reservations', reservationId);
-    const row = db.prepare('SELECT * FROM planning_reservations WHERE id=?').get(reservationId);
-    if (!row) throw new HttpError(404, '预留不存在');
-    if (row.status !== 'ACTIVE') return;
-    const now = nowIso();
-    db.prepare("UPDATE planning_reservations SET status='RELEASED',version=version+1,updated_at=? WHERE id=?").run(now, reservationId);
-    audit(db, actor.id, 'RELEASE', 'PLANNING_RESERVATION', reservationId, row.reservation_no);
+    releasePlanningReservationCanonical(db, actor, reservationId);
   });
   return send(res, 200, { ok: true, status: 'RELEASED' });
 }

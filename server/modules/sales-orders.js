@@ -8,6 +8,7 @@ import { assertSellableProduct } from './sales-commercial-foundation.js';
 import { assertGroupScope, currentCommercialExtension, lockSuffix, requireSalesPermission } from './sales-scope.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { quantityToMicros, toleranceBoundsMicros } from './sales-delivery-source.js';
+import { authorizeSalesPrepaymentGateForMutation } from './sales-prepayment-gate.js';
 
 const DAY = () => new Date().toISOString().slice(0, 10);
 const NOW = () => new Date().toISOString();
@@ -632,6 +633,16 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
       if (invalidLine) throw new HttpError(409, '订单明细金额或赠品商业属性无效', { code: 'SALES_ORDER_LINE_INVALID' });
       const missing = db.prepare("SELECT 1 FROM sales_order_items WHERE order_id=? AND (price_snapshot_json IS NULL OR discount_snapshot_json IS NULL) LIMIT 1").get(orderId); if (missing) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
       validateStoredOrderSnapshots(db, order);
+      // §29.16 / Wave 7: bind Sales Order submit to the PLANNING_RELEASE stage
+      // prepayment gate decision. The Sales-side gate row must be PASS, WARN or
+      // OVERRIDE_REQUIRED with reason. BLOCK or missing evaluation refuses.
+      authorizeSalesPrepaymentGateForMutation(db, {
+        salesOrderId: orderId,
+        stage: 'PLANNING_RELEASE',
+        businessDate: order.order_date || DAY(),
+        actorId: actor.id,
+        mutationKey: `ACTION|PLANNING_RELEASE|SUBMIT|${orderId}|${key || fingerprint}`,
+      });
       db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,updated_at=? WHERE id=?").run(NOW(), NOW(), orderId);
     } else if (action === 'approve' || action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
       if (action === 'approve') { validateStoredOrderSnapshots(db, order); db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId); }

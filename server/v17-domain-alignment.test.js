@@ -11,13 +11,14 @@ import { BUSINESS_DOMAIN_KEYS, CANONICAL_DOMAIN_KEYS, PLATFORM_DOMAIN } from '..
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
-test('Domain Alignment keeps 65 active and 5 disabled routes after Sales Batch A', () => {
+test('Domain Alignment keeps 67 active and 5 disabled routes after Wave 7', () => {
   // Finance Operations adds two canonical hub routes while retaining the
   // existing invoice and settlement deep links as contextual surfaces.
   // inventory routes are merged into the canonical inventory hub per
   // solution.md §27.43 mobile route architecture (≤ 8 inventory routes
-  // / ≤ 6 launcher tiles).
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 65);
+  // / ≤ 6 launcher tiles). Wave 7 adds two contextual sales-customer routes
+  // (sales-prepayment-gates / sales-reservation-intents).
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 67);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);

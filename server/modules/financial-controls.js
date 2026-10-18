@@ -6,6 +6,7 @@ import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './s
 import { setInventoryQuantity } from '../lib/stock.js';
 import { applyTreasuryMovement } from './finance-treasury-movement.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
 
 const now = () => new Date().toISOString();
 const today = () => now().slice(0, 10);
@@ -154,6 +155,9 @@ export async function applyUnappliedBalance(db, req, res, actor) {
   const id = randomUUID(); const at = now(); const applicationNo = number(side === 'AR' ? 'ARAPP' : 'APAPP');
   transaction(db, () => {
     assertFinanceBusinessDateOpen(db, side, date(body.businessDate));
+    // R-SAL-15 bounded extension: serialize on the canonical V22 PREPAYMENT parent
+    // balance lock when this application reduces a PREPAYMENT-eligible balance.
+    acquireParentBalanceLock(db, balance.id);
     const current = openItemSnapshot(db, side, body.openItemId);
     if (!current || current.row.item_class !== 'SOURCE' || current.row.item_kind !== 'FINAL' || current.row.conversion_state !== 'OPEN') throw new HttpError(409, '目标应收/应付已不可用于余额应用');
     const currentAvailable = unappliedBalanceSnapshot(db, balance.id).remainingCents;
@@ -196,6 +200,9 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
   const replay = idempotencyReplay(db, 'REFUND_CONFIRM', idempotencyScope, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
     assertFinanceBusinessDateOpen(db, side === 'CUSTOMER' ? 'AR' : 'AP', businessDate);
+    // R-SAL-15 bounded extension: serialize on the canonical V22 PREPAYMENT parent
+    // balance lock when this refund reduces a PREPAYMENT-eligible balance.
+    acquireParentBalanceLock(db, balance.id);
     const controlCode = side === 'CUSTOMER' ? '1122' : '2202';
     const subjects = db.prepare('SELECT id,code FROM accounting_subjects WHERE active=1 AND code IN (?,?)').all(account.subjectCode, controlCode);
     const map = Object.fromEntries(subjects.map((s) => [s.code, s.id]));
@@ -356,6 +363,12 @@ export async function reverseOperationalReturn(db, req, res, actor, side, return
   const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `return-reversal-${requestFingerprint(body)}`); const fingerprint = requestFingerprint(body);
   const replay = idempotencyReplay(db, `${side}_RETURN_REVERSAL`, returnId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
   transaction(db, () => {
+    // Note: `reverseOperationalReturn` mutates `credit_reversal_components` for
+    // the CREDIT balance_type returned by the original SALES_RETURN. The V22
+    // canonical PREPAYMENT parent lock is acquired by the companion
+    // `reverseSettlementDocument` path for UNAPPLIED component reversals, per
+    // `solution.md §29.16.3.5`. This path does not reduce PREPAYMENT-eligible
+    // balance directly, so no PREPAYMENT parent lock is required here.
     for (const item of items) {
       const current = db.prepare('SELECT COALESCE(SUM(quantity),0) q FROM inventory WHERE warehouse_id=? AND product_id=? AND active=1').get(header.warehouse_id, item.original.product_id);
       const delta = sales ? -item.quantity : item.quantity; const after = Number(current?.q || 0) + delta;

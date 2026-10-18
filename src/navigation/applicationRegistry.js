@@ -20,6 +20,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('quotations','销售报价','sales-customer','FLOW_PRIMARY','LIST','primary','销售与客户','orders',{any:['ORDERS_VIEW','SALES_QUOTATION_MANAGE']}),
   route('delivery-notices','交货通知','sales-customer','FLOW_INTERNAL_STEP','LIST','contextual','销售与客户','salesDeliveries',{any:['ORDERS_VIEW','SALES_DELIVERIES_VIEW','SALES_MANAGE']},{parentRoute:'sales-deliveries',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('sales-order-changes','销售订单变更','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','orders',{any:['ORDERS_VIEW','SALES_ORDER_CHANGE_DOCUMENT_MANAGE','SALES_ORDER_CHANGE_DIRECT_REQUEST','SALES_ORDER_CHANGE_APPROVE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-prepayment-gates','预付款门','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['SALES_VIEW','SALES_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('sales-reservation-intents','预留意图','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','reservation',{any:['SALES_VIEW','SALES_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('approvals','业务审批','platform','FLOW_SUPPORTING','WORKFLOW','primary','系统设置','approvals',{permission:'ORDERS_APPROVE'},{mobileExposure:'approval-tab',desktopExposure:'global',approvalFamilies:APPROVAL_FAMILIES}),
   route('purchase-orders','采购订单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseOrders',{any:['PURCHASE_ORDERS_VIEW','PURCHASE_ORDERS_CREATE']}),
   route('suppliers','供应商资料','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','suppliers',{any:['SUPPLIERS_VIEW','SUPPLIERS_MANAGE']}),
@@ -104,6 +106,7 @@ const loadScreenModule = (path) => {
     case '../pages/platform-workflows.jsx': return import('../pages/platform-workflows.jsx');
     case '../pages/accounting.jsx': return import('../pages/accounting.jsx');
     case '../pages/commercial-go-live.jsx': return import('../pages/commercial-go-live.jsx');
+    case '../pages/sales-wave7.jsx': return import('../pages/sales-wave7.jsx');
     case '../pages/settlement.jsx': return import('../pages/settlement.jsx');
     case '../pages/decision-reports.jsx': return import('../pages/decision-reports.jsx');
     case '../pages/logistics-finance.jsx': return import('../pages/logistics-finance.jsx');
@@ -143,6 +146,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   quotations: named('../pages/sales-batch-a.jsx','Quotations'),
   'delivery-notices': named('../pages/sales-batch-a.jsx','DeliveryNotices'),
   'sales-order-changes': named('../pages/sales-batch-a.jsx','SalesOrderChanges'),
+  'sales-prepayment-gates': named('../pages/sales-wave7.jsx','PrepaymentGates'),
+  'sales-reservation-intents': named('../pages/sales-wave7.jsx','ReservationIntents'),
   'business-overview': defaultScreen('../pages/business-overview.jsx'), dashboard: named('../pages/master-data.jsx','Dashboard'),
   orders: named('../pages/master-data.jsx','Orders'), approvals: defaultScreen('../components/MobileApprovalCenter.jsx'),
   customers: named('../pages/master-data.jsx','Customers'), suppliers: named('../pages/master-data.jsx','Suppliers'),
@@ -201,6 +206,7 @@ const ROUTE_QUERY_KEYS = Object.freeze({
   iqc: ['documentType','sourcePage','sourceDocumentId'], oqc: ['documentType','sourcePage','sourceDocumentId'],
   'decision-reports': ['reportKey'],
   'planned-orders': [], 'planning-reservations': [], 'planning-configuration': [],
+  'sales-prepayment-gates': ['salesOrderId'], 'sales-reservation-intents': ['salesOrderId'],
 });
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
@@ -209,6 +215,7 @@ const CONTEXTUAL_ROUTES = new Set([
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
   'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
   'notifications','planning-reservations','planning-configuration',
+  'sales-prepayment-gates','sales-reservation-intents',
 ]);
 const classificationFor = (routeKey) => INTERNAL_ROUTES.has(routeKey) ? 'INTERNAL' : (CONTEXTUAL_ROUTES.has(routeKey) ? 'CONTEXTUAL' : 'CORE');
 const targetContractFor = (routeKey) => Object.freeze({

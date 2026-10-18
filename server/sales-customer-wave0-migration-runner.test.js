@@ -26,9 +26,6 @@ const BATCH_A_TABLES = [
 ];
 
 const WAVE7_PLUS_SALES_TABLES = [
-  'sales_prepayment_requirements',
-  'sales_prepayment_gate_results',
-  'sales_reservation_intent',
   'service_fulfillments',
   'consignment_commercial_documents',
   'consignment_commercial_lines',
@@ -81,7 +78,7 @@ function assertWave6ProductionSchema(db) {
   assert.deepEqual(wave6.map((row) => row.name), [...SALES_WAVE6_TABLES].sort());
   const futurePlaceholders = WAVE7_PLUS_SALES_TABLES.map(() => '?').join(',');
   const future = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN (${futurePlaceholders}) ORDER BY name`).all(...WAVE7_PLUS_SALES_TABLES);
-  assert.deepEqual(future, [], 'Wave 6 must not create any Wave 7+ Sales table');
+  assert.deepEqual(future, [], 'Wave 7 must not create any Wave 8+ Sales table');
   const extensionColumns = new Set(db.prepare('PRAGMA table_info(customer_commercial_extensions)').all().map((row) => row.name));
   assert.equal(extensionColumns.has('default_pricing_list_id'), true);
   assert.equal(extensionColumns.has('default_discount_scheme_id'), true);
@@ -97,13 +94,13 @@ function assertWave6ProductionSchema(db) {
   assert.equal(sourceFk?.to, 'id');
 }
 
-test('canonical production registry contains approved Wave 1 through Wave 6 steps', () => {
+test('canonical production registry contains approved Wave 1 through Wave 7 steps', () => {
   assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 6);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 7);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
-  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement']);
+  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement','wave-7-prepayment-reservation']);
   const db = new DatabaseSync(':memory:');
   try {
     assert.deepEqual(runSalesCustomerMigrations(db, []), [], 'explicit empty fixture preserves historical Wave 0 semantics');
@@ -171,7 +168,7 @@ test('migration errors propagate and stop later steps', () => {
   assert.deepEqual(calls, ['before']);
 });
 
-test('fresh SQLite and existing SQLite reopen execute through Wave 6 idempotently without Wave 7+ schema', () => {
+test('fresh SQLite and existing SQLite reopen execute through Wave 7 idempotently', () => {
   const dir = createTempDir('sales-wave0');
   const dbPath = join(dir, 'wave0.db');
   try {

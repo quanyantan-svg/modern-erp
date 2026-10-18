@@ -41,6 +41,7 @@ const childEnv = {
 
 const files = [
   'server/mysql-sales-customer-wave0.integration.js',
+  'server/mysql-sales-customer-wave7.integration.js',
   'server/mysql-v15-d1-purchase-receipt-archive.integration.js',
   'server/mysql-v14-1-hotfix-upgrade-path.integration.js',
   'server/mysql-v14-e6.integration.js',

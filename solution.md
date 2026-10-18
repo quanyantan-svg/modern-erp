@@ -1949,6 +1949,20 @@ API：
 - Fresh / second start：fresh bootstrap 的应用表集合与 canonical SQLite snapshot 精确相等，另仅有 2 张 MySQL infrastructure 表；第二次初始化无 duplicate table/column/index 且无数据变更。
 - Schema count：当前 snapshot / migration 计算结果为 15 张新表、28 个 additive 列、7 个显式普通索引；不再沿用旧的 174/172 hard-coded table count，MySQL gate 改为与实时权威 snapshot/source 精确比对。
 
+#### Expression-column UNIQUE bootstrap fix (2026-10-18)
+
+- Trigger：在真实 MySQL gate 执行 `pnpm test:mysql` 时，Wave 0 套件的 fresh bootstrap 在 `bootstrapMySql`（`server/database/mysql-schema.js:271`）抛 `ER_KEY_COLUMN_DOES_NOT_EXITS: Key column 'null' doesn't exist in table`，所有 14 个真实 MySQL functional suite 都无法启动。
+- 根因：`captureSqliteSnapshot` 使用 `PRAGMA index_info(<index>)` 读取索引列；SQLite 对表达式列返回 `{ seqno, cid: -2, name: null }`。Wave 7 唯一索引 `uq_sales_reservation_intent_order_line_mode` 在 SQLite 端定义为 `CREATE UNIQUE INDEX ... ON sales_reservation_intent(sales_order_id, COALESCE(sales_order_item_id, ''), reservation_mode)`，snapshot 的 `columns` 因此是 `['sales_order_id', null, 'reservation_mode']`。`bootstrapMySql` 旧决策 `useDigest = unique && (where || columns.length > 4)` 对 3 列表达式唯一索引返回 `false`，落到 `mysqlIndexColumnList` 路径，`quote(null)` 输出字面 `` `null` ``，MySQL 抛 errno 1072。
+- Fix：
+  - `hasExpressionColumns(index)`：在 snapshot 数组中检测任意 position 的 column 是非字符串、或 expressions[position] 与 column 不同。导出用于 bootstrap / reconciliation / tableDefinition 三处统一路由。
+  - `mysqlIndexColumnList`：对每个 column 做严格校验，非法时抛出引用 table + index + position 的明确错误；不再默默把 `null` 渲染为 `` `null` ``。
+  - `generatedPartialIndex`：已支持 null column + expression 替换路径；补充缺 column 且缺 expression 的失败校验；where 缺失时安全 fallback 为 `1=1`。
+  - `bootstrapMySql` fresh 路径：`useDigest = hasExpressionColumns(index) || (unique && (where || columns.length > 4))`，把表达式唯一索引强制路由到 digest 路径，保留 unique/where/>4 列原有触发条件不变。
+  - `planMySqlIndexReconciliation`：表达式列索引拒绝 reconciliation，明确要求其属于 canonical migration（与 Wave 7 `ensureMySqlReservationIntentUniqueness` 的角色一致）；不静默忽略、不放宽 fail-closed。
+  - `tableDefinition`：inline UNIQUE 检测到表达式列时直接抛错并引用 table + index + 列数组，避免 inline 维度上悄悄产出 `` UNIQUE (...,`null`,...) ``。
+- 兼容性：SQLite 路径、PRAGMA 读取逻辑、`MYSQL_INDEX_PREFIX_LENGTHS`（Wave 6 LOT frontier 前缀）均未改动。Wave 7 migration 的 `MYSQL_WAVE7_INDEXES` 不含表达式列，digest 行为对其透明。
+- Focused tests：`server/database/mysql-schema-bug-fix.test.js` 25/25 PASS；`node --check` 通过；未运行 `pnpm test:mysql*` / `pnpm test:fast` / `pnpm test` / `pnpm test:heavy` / `pnpm build`。
+
 ### 23.16 Canonical Gates
 
 按 AGENTS.md §10：
@@ -11156,6 +11170,102 @@ Sales decision + gated Sales mutation
 
 where the gated operation requires atomic protection.
 
+#### 29.16.6 Implementation Evidence — Wave 7 (2026-10-18) R-SAL-15 bounded extension
+
+The R-SAL-15 bounded integration contract extension is implemented in
+`server/modules/sales-prepayment-finance-adapter.js`. The adapter exposes
+`resolveEligiblePrepaymentForSalesGate(...)` with the same evidence contract as
+the Design (§29.16.3.4) and acquires the canonical V22 PREPAYMENT parent
+balance lock (`settlement_unapplied_balances.id` WHERE
+`balance_type='PREPAYMENT'`) FOR UPDATE inside the caller's transaction.
+Child facts (`balance_applications`, `financial_refunds`, applicable reversal
+effects via `settlement_reversal_items.component_type='UNAPPLIED'`) are re-read
+beneath the parent locks. A separate exported helper
+`acquireParentBalanceLock(balanceId)` is invoked at the very start of the
+`transaction(db, ...)` block in:
+  * `applyUnappliedBalance`     (server/modules/financial-controls.js)
+  * `createRefund`              (server/modules/financial-controls.js)
+  * `reverseSettlementDocument` (server/modules/settlement.js) — for every
+    UNAPPLIED component in the reversal request
+so Sales gate and Finance mutations serialize on the same canonical balance
+identity. `reverseOperationalReturn` (sales-return reversal path) does not
+acquire this lock because it reduces CREDIT balances (credit_reversal_components
+under `financial_credit_adjustments`), not PREPAYMENT-eligible balances — its
+eligible-unapplied source, when present, remains CREDIT and is not in the
+R-SAL-15 critical set. Finance business semantics and Finance canonical
+balance are unchanged.
+
+The Prepayment Gate canonical writer (`server/modules/sales-prepayment-gate.js`)
+emits the full 4-way decision matrix from §29.16.1 / §29.16.2 step 5:
+  * `PASS`              eligible ≥ required    (full coverage, proceed)
+  * `WARN`              0 < eligible < required (partial coverage, proceed with audit)
+  * `BLOCK`             eligible == 0       (no eligible balance, refuse)
+  * `OVERRIDE_REQUIRED` prior override carries forward until eligibility rises
+                                              to PASS, or explicit override is re-applied
+The writer persists the result in `sales_prepayment_gate_results` atomically
+with the locked-READ. Override endpoint requires a non-empty reason and
+refuses to override PASS. snapshot_key UNIQUE enables idempotent replay.
+
+Stage-gate enforcement at business entry points (`assertSalesPrepaymentGateAtStage`)
+binds the gate decision to the actual mutations:
+  * `salesOrderAction('submit')`              → PLANNING_RELEASE gate must PASS
+  * `requestReservationIntent`               → RESERVATION gate must PASS
+  * `confirmSalesDelivery` (in app.js)       → DELIVERY gate must PASS
+BLOCK or missing evaluation refuses with explicit
+`SALES_PREPAYMENT_GATE_*` codes so the UI surfaces the failure reason.
+
+#### 29.16.7 Wave 7-R1 correctness remediation evidence (2026-10-18)
+
+The business-entry contract is implemented by
+`authorizeSalesPrepaymentGateForMutation(...)`, not by trusting the last
+persisted Gate Result. `salesOrderAction('submit')`,
+`requestReservationIntent` and `confirmSalesDelivery` call it from their
+existing mutation transaction. A prior stage result proves only that the
+stage was explicitly evaluated (and carries approved override reason/actor);
+the mutation-time authorization locks the effective requirement and the
+canonical PREPAYMENT parents, re-reads Finance child effects, emits fresh Gate
+evidence, enforces PASS/WARN/BLOCK/OVERRIDE_REQUIRED, and then allows the
+caller to continue before the same commit. NOT_REQUIRED remains a no-op and a
+configured stage with no prior evaluation remains NOT_EVALUATED. Existing
+command idempotency checks run before the transaction, so an already-completed
+same-key command replays, while a new command can never reuse an old monetary
+decision.
+
+Failure rolls back the mutation-time Gate row/audit together with all Sales,
+Planning and success-idempotency effects. The focused SQLite acceptance suite
+proves stale PASS rejection after the canonical balance is exhausted and
+proves the sufficient-balance commit path through the real Reservation entry.
+The registered real-MySQL Wave 7 concurrency suite invokes the real Gate,
+`applyUnappliedBalance`, `createRefund` and `reverseSettlementDocument`
+(UNAPPLIED) paths on independent connections; execution remains subject to
+the separately authorized disposable-MySQL gate.
+
+#### 29.16.8 Wave 7-R1 final P1 coverage closure evidence (2026-10-18)
+
+The registered Wave 7 acceptance suite now exercises the production Sales
+Order submit and Sales Delivery confirm entries, not only the Gate helper.
+Both stage matrices cover current PASS, WARN, BLOCK, authorized and malformed
+OVERRIDE_REQUIRED, effective-date before/within/after behavior, NOT_REQUIRED,
+NOT_EVALUATED, stale prior PASS after Finance balance reduction, command
+replay, conflicting command payload/action, and rollback of Gate/audit/
+idempotency plus protected business effects. Delivery success additionally
+asserts exact-once Inventory, valuation, COGS, revenue, AR and audit results;
+denial asserts that none of those effects commits.
+
+The canonical real-MySQL Wave 7 concurrency suite and its existing worker are
+extended rather than replaced. In addition to the preserved Reservation
+scenarios, the worker invokes `salesOrderAction(..., 'submit')` and
+`confirmSalesDelivery(...)` on independent MySQL sessions. Each of
+PLANNING_RELEASE and DELIVERY is registered against the real
+`applyUnappliedBalance`, `createRefund`, and
+`reverseSettlementDocument` UNAPPLIED mutation. The suite proves transaction
+overlap through the canonical transaction gate, then asserts the serialized
+business result: either the Sales action commits once with fresh Gate evidence
+and its complete business effects, or the Finance mutation wins and the Sales
+action re-reads zero eligible balance, returns
+`SALES_PREPAYMENT_GATE_BLOCKED`, and leaves zero partial success effects.
+Runtime MySQL evidence remains pending explicit disposable-database approval.
+
 ### 29.17 Reservation Intent Design
 
 #### 29.17.1 物理对象
@@ -11360,6 +11470,56 @@ R-SAL-20 / R-SAL-21: Layer 1 + Layer 3 must serialize on Layer 1
    Layer 2 owner always = ENTERPRISE during consignment; settlement → ownership
    transfer event.
 ```
+
+#### 29.17.5 Implementation Evidence — Wave 7 (2026-10-18) Reservation Intent
+
+The Sales Reservation Intent canonical writer lives in
+`server/modules/sales-reservation-intent.js`. The four reservation modes are
+implemented as bounded adapter delegations to canonical owner tables:
+  * `INVENTORY_LOCK`            → `inventory_locks`        (Inventory V21 canonical)
+  * `MANUAL_RESERVATION`        → `planning_reservations`  type MANUAL  (Planning V19)
+  * `ON_HAND_RESERVATION`       → `planning_reservations`  type STRONG + supply ON_HAND
+  * `EXPECTED_SUPPLY_RESERVATION` → `planning_reservations` supply EXPECTED
+EXPECTED mode fails closed with code
+`SALES_RESERVATION_EXPECTED_BOUNDED_EXTENSION_REQUIRED` because the frozen
+`physicalSupplyQuantity(EXPECTED)` returns POSITIVE_INFINITY. Client-supplied
+`expected_supply_capacity` is NOT used as authority (per task instruction §4)
+— capacity is derived exclusively from the canonical Planning/Purchase/
+Production source record identified by `expected_supply_source_type` +
+`expected_supply_source_id`. If the source is pure `EXPECTED` with no concrete
+canonical document, the writer refuses.
+
+The writer persists only intent evidence (`sales_reservation_intent`); it does
+NOT maintain a Sales-owned shadow reserved-qty balance. Concurrent over-
+reservation is rejected by re-reading the canonical supply minus ACTIVE
+reservations of the same supply identity inside the transaction. React-to-
+event helpers (`adjustReservationIntentOnChange`,
+`releaseReservationIntentsForOrder`) cover SO Change / Cancel / Close /
+Delivery / Return / Replacement per §29.17.2.
+
+#### 29.17.6 Wave 7-R1 canonical Planning and schema-parity remediation evidence (2026-10-18)
+
+Planning now exposes transaction-inheriting canonical services for create,
+release and consumption evidence. Sales Reservation Intent delegates to those
+services and no longer inserts or updates `planning_reservations` directly.
+For a concrete PLANNED_ORDER/PURCHASE_ORDER/PRODUCTION_ORDER source, Planning
+locks the canonical source row before validating identity/status, computing
+finite physical capacity, and subtracting ACTIVE reservations. Pure EXPECTED,
+missing, unsupported, terminal/invalid and exhausted sources fail closed;
+client capacity is never authority. The Sales intent, Planning reservation,
+mutation-time Gate evidence and audits share one transaction.
+
+Reservation Intent logical uniqueness is
+`(sales_order_id, COALESCE(sales_order_item_id,''), reservation_mode)` in both
+dialects. SQLite retains its expression index; MySQL 8 uses the equivalent
+functional unique key part, without adding a column or business identifier.
+MySQL migration reconciliation now verifies every approved Wave 7 FK, CHECK,
+index and column type/null/default/precision contract, and refuses an
+incompatible existing structure or duplicate normalized identity. The
+registered `mysql-sales-customer-wave7.integration.js` covers live fresh,
+replay and information_schema metadata; the registered concurrency suite
+covers independent-session finite PLANNED_ORDER competition. Neither suite is
+executed without explicit disposable-database/reset authorization.
 
 #### 29.19.4 Frozen-domain integration contract status
 

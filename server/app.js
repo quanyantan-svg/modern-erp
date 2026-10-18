@@ -235,6 +235,16 @@ import {
   createDeliveryNotice, deliveryNoticeAction, getDeliveryNotice, listDeliveryNotices, updateDeliveryNotice,
 } from './modules/delivery-notices.js';
 import {
+  createPrepaymentRequirement, evaluateSalesPrepaymentGate, getPrepaymentGateResult,
+  getPrepaymentRequirement, listPrepaymentGateResults, listPrepaymentRequirements, overridePrepaymentGateResult,
+  updatePrepaymentRequirement,
+  authorizeSalesPrepaymentGateForMutation,
+} from './modules/sales-prepayment-gate.js';
+import {
+  consumeReservationIntent, getReservationIntent, grantReservationIntent, listReservationIntents,
+  releaseReservationIntent, requestReservationIntent,
+} from './modules/sales-reservation-intent.js';
+import {
   lockAndConsumeSalesDeliveryCapacity, persistSalesDeliveryNoticeLineIds, quantityToMicros, toleranceBoundsMicros, validateSalesDeliverySource,
 } from './modules/sales-delivery-source.js';
 import {
@@ -616,6 +626,24 @@ ownedRouteTable.register({ method: 'GET', path: '/api/sales-order-changes', hand
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-order-changes\/([^/]+)\/(submit|approve|reject|cancel)$/, handler: ({ db,req,res,actor,params }) => salesOrderChangeAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-order-changes.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-order-changes\/([^/]+)$/, handler: ({ db,res,actor,params }) => getSalesOrderChange(db,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-order-changes\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateSalesOrderChange(db,req,res,actor,params[0]), owner: 'server/modules/sales-order-changes.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-prepayment-requirements', handler: ({ db,res,actor,url }) => listPrepaymentRequirements(db,res,actor,url), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-prepayment-requirements', handler: ({ db,req,res,actor }) => createPrepaymentRequirement(db,req,res,actor), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-prepayment-requirements\/([^/]+)$/, handler: ({ db,res,actor,params }) => getPrepaymentRequirement(db,res,actor,params[0]), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales-prepayment-requirements\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updatePrepaymentRequirement(db,req,res,actor,params[0]), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-prepayment-gate-results', handler: ({ db,res,actor,url }) => listPrepaymentGateResults(db,res,actor,url), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-prepayment-gate-results\/([^/]+)$/, handler: ({ db,res,actor,params }) => getPrepaymentGateResult(db,res,actor,params[0]), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-orders\/([^/]+)\/prepayment-gate\/(PLANNING_RELEASE|RESERVATION|DELIVERY)$/, handler: ({ db,req,res,actor,params }) => evaluateSalesPrepaymentGate(db,req,res,actor,params[0],params[1]), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-prepayment-gate-results\/([^/]+)\/override$/, handler: ({ db,req,res,actor,params }) => overridePrepaymentGateResult(db,req,res,actor,params[0]), owner: 'server/modules/sales-prepayment-gate.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/sales-reservation-intents', handler: ({ db,res,actor,url }) => listReservationIntents(db,res,actor,url), owner: 'server/modules/sales-reservation-intent.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/sales-reservation-intents', handler: ({ db,req,res,actor }) => requestReservationIntent(db,req,res,actor), owner: 'server/modules/sales-reservation-intent.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/sales-reservation-intents\/([^/]+)$/, handler: ({ db,res,actor,params }) => getReservationIntent(db,res,actor,params[0]), owner: 'server/modules/sales-reservation-intent.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-reservation-intents\/([^/]+)\/(grant|consume|release)$/, handler: ({ db,req,res,actor,params }) => {
+  const action = params[1];
+  if (action === 'grant') return grantReservationIntent(db,req,res,actor,params[0]);
+  if (action === 'consume') return consumeReservationIntent(db,req,res,actor,params[0]);
+  if (action === 'release') return releaseReservationIntent(db,req,res,actor,params[0]);
+  throw new HttpError(400, `action 不支持: ${action}`);
+}, owner: 'server/modules/sales-reservation-intent.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/delivery-notices', handler: ({ db,res,actor,url }) => listDeliveryNotices(db,res,actor,url), owner: 'server/modules/delivery-notices.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/delivery-notices', handler: ({ db,req,res,actor }) => createDeliveryNotice(db,req,res,actor), owner: 'server/modules/delivery-notices.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/delivery-notices\/([^/]+)\/(confirm|cancel)$/, handler: ({ db,req,res,actor,params }) => deliveryNoticeAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/delivery-notices.js' });
@@ -5642,6 +5670,17 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       assertQualityGate(db, 'OQC', deliveryId);
       assertFinancialPeriodsOpen(db, locked.delivery_date);
+      // §29.16 / Wave 7: bound Sales Delivery confirm to the DELIVERY stage
+      // prepayment gate decision (PASS / WARN / OVERRIDE_REQUIRED). BLOCK
+      // or missing evaluation refuses with 409 + SALES_PREPAYMENT_GATE_*
+      // code so the UI can show the block reason.
+      authorizeSalesPrepaymentGateForMutation(db, {
+        salesOrderId: locked.sales_order_id,
+        stage: 'DELIVERY',
+        businessDate: locked.delivery_date,
+        actorId: actor.id,
+        mutationKey: `ACTION|DELIVERY|CONFIRM|${deliveryId}|${key}`,
+      });
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId, { preserveAmount: true });
       let cogsCents=0; const cogsInventoryEntries=[];
       for (const item of authoritative.items) {

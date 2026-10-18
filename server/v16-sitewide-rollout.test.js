@@ -28,9 +28,9 @@ function enabledMatrixRows() {
 describe('V1.6 site-wide rollout source contract', () => {
   test('matrix represents every enabled canonical route exactly once', () => {
     const rows = enabledMatrixRows();
-    // The V1.6 matrix is frozen historical evidence. Sales Wave 2 and Batch A
-    // own their acceptance evidence separately and must not rewrite it.
-    const laterSalesRoutes = ['sales-pricing', 'quotations', 'delivery-notices', 'sales-order-changes'];
+    // The V1.6 matrix is frozen historical evidence. Sales Wave 2, Batch A
+    // and Wave 7 own their acceptance evidence separately and must not rewrite it.
+    const laterSalesRoutes = ['sales-pricing', 'quotations', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents'];
     assert.equal(rows.length, ROUTE_PRESENTATIONS.length - laterSalesRoutes.length);
     assert.equal(new Set(rows.map((row) => row.route)).size, rows.length);
     assert.deepEqual([...rows.map((row) => row.route), ...laterSalesRoutes].sort(), ROUTE_PRESENTATIONS.map((route) => route.route).sort());
@@ -38,7 +38,7 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('enabled route metadata remains unique', () => {
     const keys = ROUTE_PRESENTATIONS.map((route) => route.route);
-    assert.equal(keys.length, 65);
+    assert.equal(keys.length, 67);
     assert.equal(new Set(keys).size, keys.length);
   });
 
@@ -68,9 +68,10 @@ describe('V1.6 site-wide rollout source contract', () => {
 
   test('contextual parent relationships all resolve to enabled routes', () => {
     const enabled = new Set(ROUTE_PRESENTATIONS.map((route) => route.route));
+    const matrixWhitelist = new Set(['sales-pricing', 'delivery-notices', 'sales-order-changes', 'sales-prepayment-gates', 'sales-reservation-intents']);
     for (const route of ROUTE_PRESENTATIONS.filter((item) => item.parentRoute)) {
       assert.ok(enabled.has(route.parentRoute), `${route.route} parent must remain enabled`);
-      if (!['sales-pricing', 'delivery-notices', 'sales-order-changes'].includes(route.route)) assert.match(matrix, new RegExp(`\\| ${route.route} \\|[^\\n]+\\| ${route.parentRoute} \\|`));
+      if (!matrixWhitelist.has(route.route)) assert.match(matrix, new RegExp(`\\| ${route.route} \\|[^\\n]+\\| ${route.parentRoute} \\|`));
     }
   });
 

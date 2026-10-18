@@ -6,6 +6,7 @@ import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { checkSettlementInvariants, openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
 import { idempotencyReplay, recordPrepayment, recordSettlementMovement, requestFingerprint, requireSettlementAccount, saveIdempotency } from './financial-controls.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
+import { acquireParentBalanceLock } from './sales-prepayment-finance-adapter.js';
 
 const STATUS_OUT = { PENDING: 'OPEN', PARTIAL: 'PARTIALLY_SETTLED', COMPLETED: 'SETTLED', WRITTEN_OFF: 'SETTLED' };
 const STATUS_LABEL = { OPEN: '未结清', PARTIALLY_SETTLED: '部分收款', SETTLED: '已结清' };
@@ -333,6 +334,12 @@ export async function reverseSettlementDocument(db, req, res, actor, kind, docum
         ].filter((x) => x.id && x.amountCents > 0);
     const reversalAmount = requested.reduce((sum, x) => sum + x.amountCents, 0);
     if (!reversalAmount || reversalAmount > remainingTotal) throw new HttpError(409, '冲销金额超过剩余可冲销金额');
+    // R-SAL-15 bounded extension: acquire the canonical V22 PREPAYMENT parent
+    // balance lock for every UNAPPLIED component before re-reading capacity.
+    // Sales Prepayment Gate locked-READ shares this lock identity.
+    for (const component of requested) {
+      if (component.type === 'UNAPPLIED') acquireParentBalanceLock(db, component.id);
+    }
     for (const component of requested) {
       if (component.type === 'ALLOCATION') { const item = allocations.find((x) => x.id === component.id); if (!item || component.amountCents > item.amount_cents - item.reversed_cents) throw new HttpError(409, '核销明细冲销金额超过可冲销余额'); }
       else if (component.type === 'UNAPPLIED') { const balance = db.prepare("SELECT * FROM settlement_unapplied_balances WHERE id=? AND source_type=? AND source_id=?").get(component.id, cfg.voucherSource, documentId); const available = balance ? Number(balance.original_amount_cents) - Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'").get(balance.id).n) - Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'").get(balance.id).n) - Number(db.prepare("SELECT COALESCE(SUM(sri.amount_cents),0) n FROM settlement_reversal_items sri WHERE sri.component_type='UNAPPLIED' AND sri.original_component_id=?").get(balance.id).n) : 0; if (component.amountCents > available) throw new HttpError(409, '未核销余额已被应用或退款，必须先冲销依赖'); }
