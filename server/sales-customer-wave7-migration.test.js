@@ -666,6 +666,31 @@ test('Wave 7 MySQL default normalization accepts every recognized MySQL represen
   }
 });
 
+test('Wave 7 default normalization accepts the MySQL 8.0.37 production stored form (charset prefix + literal backslash escapes)', () => {
+  // MySQL 8.0.37 stores a parenthesized LONGTEXT default with the column's
+  // character set prefixed and inner quotes backslash-escaped. information_
+  // schema.COLUMNS.COLUMN_DEFAULT then exposes the literal text form rather
+  // than the original SQL syntax. For `source_balance_identities LONGTEXT
+  // NOT NULL DEFAULT ('[]')` on a UTF8MB4 column the stored value is
+  // exactly 14 bytes with HEX `5F 75 74 66 38 6D 62 34 5C 27 5B 5D 5C 27`
+  // (= `_utf8mb4\'[]\'`). The previous regex strip-class did not include
+  // literal backslash, so normalize collapsed this stored value to
+  // `\[\]` (4 chars) and the strict default assertion failed at the
+  // production MySQL 8.0.37 gate. The migration's normalizeDefault now
+  // strips backslashes alongside parens / single quotes / double quotes /
+  // whitespace; the production path must accept the form below without
+  // emitting any MODIFY COLUMN and without throwing the "Wave 7 MySQL
+  // column conflict: ... default" error.
+  const fixture = buildBootstrapWave7Fixture();
+  fixture.columnTypes.get('sales_prepayment_gate_results').set('source_balance_identities', {
+    data_type: 'longtext', character_maximum_length: 4294967295, is_nullable: 'NO',
+    column_default: "_utf8mb4\\'[]\\'",
+  });
+  assert.doesNotThrow(() => migrateSalesCustomerWave7PrepaymentReservation(fixture));
+  const identityBalanceAlters = fixture.execSql.filter((sql) => /MODIFY COLUMN\s+`?source_balance_identities`?/i.test(sql));
+  assert.equal(identityBalanceAlters.length, 0, `source_balance_identities must NOT be re-shaped under the production MySQL 8 stored form; got: ${JSON.stringify(fixture.execSql)}`);
+});
+
 test('Wave 7 MySQL default assertion accepts the Bootstrap-emitted MySQL representation without DDL', () => {
   // The Bootstrap path (mysqlDefault() in server/database/mysql-schema.js)
   // emits ` DEFAULT ('[]')` for a LONGTEXT column whose SQLite literal is

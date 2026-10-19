@@ -20,8 +20,7 @@ if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
 
 const BATCH_A_TABLES = [...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_WAVE5_TABLES];
 const WAVE7_PLUS_SALES_TABLES = [
-  'sales_prepayment_requirements', 'sales_prepayment_gate_results',
-  'sales_reservation_intent', 'service_fulfillments',
+  'service_fulfillments',
   'consignment_commercial_documents', 'consignment_commercial_lines',
   'consignment_commodity_locations', 'credit_parameters', 'credit_check_rules',
   'credit_policy_snapshots', 'credit_profile', 'credit_profile_ratings',
@@ -80,7 +79,7 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.equal(db.prepare('SELECT 1 AS value').get().value, 1);
   });
 
-  test('fresh MySQL materialises Waves 1-6 and no Wave 7+ schema', () => {
+  test('fresh MySQL materialises Waves 1-7 and no Wave 8+ schema', () => {
     assert.equal(BATCH_A_TABLES.length, 7);
     assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
     const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');

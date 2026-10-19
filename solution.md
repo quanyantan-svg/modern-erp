@@ -11521,6 +11521,177 @@ replay and information_schema metadata; the registered concurrency suite
 covers independent-session finite PLANNED_ORDER competition. Neither suite is
 executed without explicit disposable-database/reset authorization.
 
+#### 29.17.7 Wave 7 Final Acceptance Design Closure (2026-10-18)
+
+Approval/Closure basis: user explicitly approved `document.md` DR-SAL-06 (including the A.2 four-clause authorization-boundary clarification) and authorized Stage 2 (Design Closure). This sub-section records the centralized design closure that maps each DR-SAL-06 Acceptance sub-clause to existing design coverage + Stage 3 (集中实施) minimal-fix scope. It does NOT modify any preceding §29.x or §30.x content; it documents the convergence between the frozen Requirement (document.md §34.3.12 / §34.3.13 + DR-SAL-04 / 05 / 04·05 superseding + the new DR-SAL-06) and the existing implementation referenced by §29.16.1–8 and §29.17.1–6.
+
+##### 29.17.7.1 Stage-2 / Stage-3 boundary
+
+Stage 2 (this Design Closure): append-only this sub-section + append-only the matching `log/2026-10-18.md` entry. No source / migration / test / gate / config / DB change. No execution of `pnpm.cmd test:mysql` / `pnpm.cmd test:mysql:concurrency` / `pnpm test:*` / `pnpm build` / direct DB connection. Stage 3 (集中实施) is authorized only after the user explicitly approves this Design Closure Report; Stage 3 may execute ONLY the two real MySQL gates authorized under DR-SAL-06 §A.2.1 and apply minimal fixes gated by §29.17.7.7 failure-dispatch and §29.17.7.9 stop conditions.
+
+##### 29.17.7.2 DR-SAL-06 ↔ existing design coverage mapping
+
+The table below records — at design level only — where each DR-SAL-06 sub-clause is already covered by existing §29.16 / §29.17 sub-sections, and where Stage 3 minimal-fix scope is allowed (left column). It is NOT a re-statement of business semantics; the §34 contract remains frozen.
+
+| DR-SAL-06 子条款 | Existing design coverage (non-modifying reference) | Stage 3 minimal-fix scope (only if real MySQL gate reproduces concrete failure) |
+|---|---|---|
+| §A.1 已冻结商业语义不得重写 | §34.3.12 / §34.3.13 / DR-SAL-04·05 / S12 / S13 / R-SAL-02 / R-SAL-15 / §29.16.3.1–8 | 无；本轮不修改上述合同 |
+| §A.2.1 仅两道真实 MySQL gate 获准执行 | DR-SAL-06 Acceptance Contract 文本自身 | 无 |
+| §A.2.2 / §A.2.3 / §A.2.4 SQLite focused 保留 / 不可替代 / 不可删 assertion | — | 无 |
+| §A.3.C1 迁移契约（fresh / upgrade / idempotent rerun + 三表 PK / FK / CHECK / UNIQUE / default / precision；`source_balance_identities` / `intent_state` default 在 MySQL 8 真实 `COLUMN_DEFAULT` 文本下通过 `assertMySqlColumnContracts` + `normalizeDefault` 等价匹配） | §29.16.1 (§29.16.1 物理对象) + `server/migrations/sales-customer-wave7-prepayment-reservation.js:65-91` `MYSQL_COLUMN_CONTRACTS` + line 108-142 `assertMySqlColumnContracts` + line 99-108 `normalizeDefault`；§29.17.1 物理对象 + 同一迁移 line 80-91（`sales_reservation_intent` contract） | 仅当真实 MySQL gate 复现契约冲突时，按 §29.17.7.7 分流表处置；最小修复优先级 (a) 扩展 `normalizeDefault` 正则以覆盖新增表示、(b) 在 §29.16.1 / §29.17.1 中明确 DDL 形式、`(c)` 调整 `assertMySqlColumnContracts` 等价匹配规则；任意一种修复必须保留 SQLite / MySQL parity 完整性，并新增单测覆盖新表示 |
+| §A.3.C2 业务唯一性 + 完整性（`uq_sales_reservation_intent_order_line_mode` 在 fresh 与 existing 幂等存在；normalized duplicate fail-closed；reservation 走 canonical adapter 无 Sales 影子余额） | §29.17.1 物理对象 + `sales-customer-wave7-prepayment-reservation.js:291-316` `ensureMySqlReservationIntentUniqueness` + line 384-406 SQLite functional UNIQUE；§29.17.5 Implementation Evidence 描述四模式 bounded adapter；§29.17.6 Wave 7-R1 描述 Planning canonical transaction-inheriting services | 唯一允许：(a) `ensureMySqlReservationIntentUniqueness` duplicate 探测对真实 normalized 历史数据返回精确错误文本；(b) 调整时锁序；(c) Adapter 错误码与 §29.16.3.4 对齐 |
+| §A.3.C3 并发不变量（独立 session、PLANNING_RELEASE / RESERVATION / DELIVERY 不超额放行；reservation/lock 合并消耗 ≤ 授权量；R-SAL-15 mutation/lock chain；回滚零副作用） | §29.16.3.5–3.6 Finance mutation 顶部 parent balance lock；§29.16.6 Implementation Evidence 描述 mutation-time gate 重新加锁并 re-read；§29.16.8 Wave 7-R1 final P1 描述并发套件扩展 `salesOrderAction('submit')` / `confirmSalesDelivery` 在独立 MySQL 连接之上 | 唯一允许：(a) 调整 `mysql-concurrency-sales-wave7-worker.mjs` 与 `mysql-sales-customer-wave7-concurrency.integration.js` 以覆盖 Stage 3 真实失败后回归；(b) 调整 lock-mode 探测；(c) 为新发现 race class 增设 worker command |
+| §A.4 Failure Branching（四类失败、最小修复、`REQUIREMENT_REOPEN_REQUIRED` 路径、`TEST_EVIDENCE_PENDING` 路径、SQLite/真实 MySQL 语义差异单独记录） | — | Stage 3 不重写 §A.4；按 §29.17.7.7 失败分流执行 |
+| §A.5 Stop Conditions（HEAD drift / unauthorized tracked diff / unauthorized meta edit / assertion 删降 / SQLite PASS 替代 / 异常→成功） | — | Stage 3 不重写 §A.5；按 §29.17.7.9 stop conditions 执行 |
+
+##### 29.17.7.3 Migration behavior (fresh / existing / idempotent rerun)
+
+For the three Wave 7 carriers (`sales_prepayment_requirements`, `sales_prepayment_gate_results`, `sales_reservation_intent`) under real MySQL execution:
+
+- **Fresh database bootstrap**：先由 §29.16 / §29.17 underlying migration registry 的 `bootstrapMySql` 走 SQLite snapshot → MySQL DDL 转换并写入；新增列若被 snapshot renderer 归类为 LONGTEXT，则其后由 `sales-customer-wave7-prepayment-reservation.js` `migrateMysql` 的 `reconcileMySqlColumnContracts → assertMySqlColumnContracts` 收紧为 canonical 契约（`ratio_basis` VARCHAR(16), `stage` VARCHAR(32), `gate_decision` VARCHAR(32), `reservation_mode` VARCHAR(32), `intent_state` VARCHAR(16), `expected_supply_source_type` VARCHAR(64), `expected_supply_source_id` VARCHAR(128), `consumer_event` VARCHAR(64)），并在存储值长度不超过目标宽度时安全 alter。
+- **Existing database upgrade**：(i) 三表若不存在 → 走 Fresh CREATE TABLE；(ii) 已有表 → 走 `ensureMySqlForeignKey` 按 FK 缺失补、`ensureMySqlCheck` 按 named CHECK 缺失 / 不一致补、`ensureMySqlIndex` 按 7 个普通索引幂等补、`ensureMySqlReservationIntentUniqueness` 按 MySQL 8 functional keypart `COALESCE(sales_order_item_id,'')` 重建 unique；(iii) 长度收紧前先 `MAX(CHAR_LENGTH(\`${column}\`))` 字符宽度探针，避免按字节截断；预存字符数 `> target n` → fail-closed（拒绝静默重写 / 不丢弃 / 不迁移原值）；
+  - **目标宽度契约澄清**：MySQL 8 中 `VARCHAR(n)` / `VARCHAR(n) CHARACTER SET utf8mb4` 的容量按字符数 `n` 计量，不按字节计量；本 sub-section 第 (iii) 项的探针必须使用 `CHAR_LENGTH(column)` 而非 `LENGTH(column)`。`LENGTH(column)` 返回字符串的字节长度；在 `CHARACTER SET utf8mb4` / `COLLATE utf8mb4_0900_ai_ci` 下，任何字符最多占 4 字节；若以 `LENGTH()` 替代 `CHAR_LENGTH()` 作探针，字符数 `≤ n`、但多字节编码后字节数 `> n` 的合法多字节字符串会被误判为"超宽"并 fail-closed，从而拒绝一次本应允许的 reconcile ALTER，违反 §29.17.7.9 "不静默重写 / 不丢弃 / 不迁移原值" 契约。
+  - **字节宽度独立约束**：本 Wave 7 收紧的 VARCHAR 目标列均为字符宽度语义（`ratio_basis VARCHAR(16)` / `stage VARCHAR(32)` / `gate_decision VARCHAR(32)` / `reservation_mode VARCHAR(32)` / `intent_state VARCHAR(16)` / `expected_supply_source_type VARCHAR(64)` / `expected_supply_source_id VARCHAR(128)` / `consumer_event VARCHAR(64)`），不引入任何显式 `BYTE` modifier 或非字符宽度的字段级字节约束。InnoDB key prefix 字节约束（如 Wave 6 `idx_valuation_movements_identity_status_created` 的 prefix 长度）属于 index-level prefix 字节约束，独立于本表 `VARCHAR(n)` 列宽契约；本 sub-section 不再讨论 index prefix 字节行为，避免与 `VARCHAR(n)` 字符宽契约混淆。
+  - **回归场景**：上述修正必须在已授权的真实 MySQL 集成套件 `server/mysql-sales-customer-wave7.integration.js` 内增加回归场景，**不得**新建独立 gate 或独立 worker（与 §29.17.7.6 的"既已注册 worker / suite 内扩展"原则保持一致）：
+    - 多字节值在目标字符宽 `n` 之内（即 `CHAR_LENGTH(value) <= n`）→ 不应仅因编码后字节长度 `> n` 而被拒绝；migration 必须可成功 ALTER COLUMN 至目标 `VARCHAR(n)`；
+    - 单值字符数 `> n` → migration 仍 fail-closed 并抛以 `Wave 7 MySQL narrowing conflict: ... has stored values up to M chars, cannot narrow to VARCHAR(n) without truncation` 为模式的消息，不静默重写、截断或丢弃原值。
+- **Idempotent rerun**：所有 DDL 使用 `IF NOT EXISTS` / information_schema 探针 / 命名索引已存在则 skip；`sales-customer-wave0-migration-runner.test.js` 已升级认定 registry 长度 7 + `Wave 7 must not create any Wave 8+ Sales table`，与本节兼容。
+
+##### 29.17.7.4 Schema-parity and default value comparison rules (MySQL ↔ SQLite)
+
+MySQL 8 表达 default（如 `DEFAULT ('[]')` / `DEFAULT _utf8mb4'[]'`) 在 `information_schema.COLUMNS.COLUMN_DEFAULT` 返回带括号 / 带 charset prefix / 带 padding 等不同表示。`server/migrations/sales-customer-wave7-prepayment-reservation.js` `assertMySqlColumnContracts` 的 `normalizeDefault` 通过剥离 `_(utf8mb4|utf8mb3|utf8|latin1)` 与 `()'"` 与空白后等价比较，应支持 `'[]'` / `('[]')` / `_utf8mb4'[]'` / `_utf8mb4('[]')` 等表示。SQLite migration 直接 `TEXT NOT NULL DEFAULT '[]'`，并在运行时通过 `JSON.parse` 安全反序列化（详见 `sales-prepayment-gate.js` `summarizeGateResult`）。本节固化：MySQL 侧 `assertMySqlColumnContracts` 是唯一权威 default 契约断言点；SQLite 侧仅检查 `sqlite_master.sql` 中的 CHECK / NOT NULL，不参与 default 表示差异比较。
+
+##### 29.17.7.5 Prepayment balance lock & reservation transaction boundary
+
+- **Prepayment Gate author-time**：`sales-prepayment-gate.js` `authorizeSalesPrepaymentGateForMutation` 在 caller transaction 内部调用 `resolveEligiblePrepaymentForSalesGate`（lockMode='FOR_UPDATE'）→ `lockParentBalances` 按 id 排序逐行 `SELECT ... FOR UPDATE`（MySQL）或 `BEGIN IMMEDIATE`（SQLite）→ 重新读 canonical `balance_applications` / `financial_refunds` / `settlement_reversal_items` → 通过四-way decision matrix → INSERT 新 gate_result → audit。caller 同 transaction 内继续 Sales mutation；commit 一次性提交或回滚（gate evidence + Finance 二次读 + Sales mutation + audit + idempotency）。
+- **Sales mutation R-SAL-15 parent lock acquisition**：Finance mutation paths（`applyUnappliedBalance` / `createRefund` / `reverseSettlementDocument UNAPPLIED`）在 `transaction(db, ...)` 顶部调用 `acquireParentBalanceLock`（来自 `sales-prepayment-finance-adapter.js`），对 canonical `settlement_unapplied_balances.id`（`balance_type='PREPAYMENT'`）做 FOR UPDATE；锁顺序：先 finance parent balance lock，再 re-read child effects，最后 Sales locked-read 与 Sales mutation 在同一连接内共享该 lock chain；不得旁路。
+- **Reservation Intent transaction boundary**：`sales-reservation-intent.js` requestReservationIntent 在 caller `transaction` 内依序：Sales Gate (PLANNING_RELEASE/RESERVATION/DELIVERY) 重新加锁 + re-read → canonical adapter (Inventory V21 `inventory_locks` 或 Planning V19 `planning_reservations`) FOR UPDATE → 重新验证 capacity 减去 ACTIVE reservations → INSERT `sales_reservation_intent` (REQUESTED) → audit。Consume / Release 同样在 caller transaction 内部按 canonical owner adapter 写入 + audit；任何失败整体回滚。
+- **Cross-domain lock chain order**：(1) gate mutation-time Finance parent balance lock（lockParentBalances / acquireParentBalanceLock），(2) Sales mutation-time canonical adapter lock（Inventory `inventory_locks.position_key` / Planning `planning_reservations` identity），(3) Sales intent row INSERT / UPDATE。死锁规避：多 eligible balance row 按 canonical id 升序；多 canonical record 按 created_at / id 升序。
+
+##### 29.17.7.6 Concurrency test architecture (real MySQL, independent sessions)
+
+real MySQL 并发套件基于 `scripts/gates/mysql-concurrency-gate.mjs` 的第 9 个 suite：`server/mysql-sales-customer-wave7-concurrency.integration.js` + `scripts/gates/mysql-concurrency-sales-wave7-worker.mjs`。
+
+- **Independent session**：每个 worker 通过 `node:child_process` `spawn` 启动独立的 `MySqlSyncAdapter`；每个 worker 的第一条 SQL 是 `SELECT CONNECTION_ID()` 收集自身的连接身份，最终在主进程断言所有 connectionId 互不相同。
+- **Sync anchor**：所有 worker 先 `register` → `hold-gate` 在 canonical `mysql_transaction_gates.gate_id=1` 上 `FOR UPDATE`；主进程在所有 worker 都已 waitAtGate 之后才 `release-gate`，确保真实 cross-session interleaving（同一进程内 fake race 不算独立 session 证据）。
+- **Competing operations**：当前注册覆盖 (`applyUnappliedBalance`, `createRefund`, `reverseSettlementDocument UNAPPLIED`) × (`requestReservationIntent`, `salesOrderAction('submit')`, `confirmSalesDelivery(...)`)。Round 4 注释的 planned-but-not-executed race classes（同一 `sales_order_id` 多 Prepayment Gate 同 snapshot_key 重放；多个独立 `salesOrderAction('submit')` 同一 SO 上并发；OQC 完成前 delivery confirm 并发）在 real MySQL 仍未跑过；Stage 3 仅允许在 `mysql-sales-customer-wave7-concurrency.integration.js` 内沿既有架构扩展 worker，不得新启独立 gate 文件或新 worker 文件。
+- **Business invariants asserted**：同一 `sales_order_id` PLANNING_RELEASE / RESERVATION / DELIVERY 顺序放行；同一 `planning_reservation` 双消费合并 ≤ grant；R-SAL-15 Finance mutation 与 Sales locked-read 在 `settlement_unapplied_balances.id` 上 lock 串行；失败后 gate_result / intent / planning_reservation / inventory_lock / audit / idempotency_record 同时保持初始或同时回滚；stage gate 状态与 SO status / DN status / delivery status 不出现 partial side effects。
+- **Failure stop**：若该 suite 在 real MySQL 上 fail，Stage 3 必须保留完整 stderr / stdout / 失败断言文本，最小修复仅限上述架构内的同步扩展或 worker command 增加，不得新启独立 gate 文件。
+
+##### 29.17.7.7 Failure-dispatch table (real MySQL gate failure triage)
+
+| 失败类型 | Stage 3 disposition |
+|---|---|
+| `ER_KEY_COLUMN_DOES_NOT_EXITS`（errno 1072）或索引 DDL `` `null` `` literal | 重审 `mysql-schema.js` `useDigest` / `hasExpressionColumns` / `mysqlIndexColumnList` 是否仍漏表达式列；优先扩展 `useDigest` 判定而非新增 case |
+| `Wave 7 MySQL column conflict: ... default`（含 `source_balance_identities` / `intent_state` / `ratio_basis` 等 default） | (a) 优先扩展 `normalizeDefault` 正则覆盖新观察到表示 / charset prefix；不得放宽 `assertMySqlColumnContracts`；(b) 仅当 (a) 无法匹配且观察到具体 `[information_schema.COLUMNS.COLUMN_DEFAULT]` 文本时退回 DDL 改写（如 `DEFAULT '[]'` 取代 `DEFAULT ('[]')`），并在新 DDL 上重建测试 fixture |
+| `Wave 7 MySQL column type mismatch: ... ratio_basis is longtext, expected varchar(16)` | 检查 `MAX(CHAR_LENGTH(...))` 探针（与 §29.17.7.3 第 (iii) 项对齐，字符宽度语义）；预存字符数超宽 → 拒绝修改，必须由用户单独批准 canonical 契约宽度 |
+| `Wave 7 MySQL narrowing conflict: ... stored values up to N chars` | 同上：失败即停，记 `REQUIREMENT_REOPEN_REQUIRED` |
+| `Wave 7 MySQL uniqueness conflict: duplicate normalized reservation intent identity` | fail-closed by design；记录 duplicate 来自何处（历史导入 / fixture / 真实场景）；若是历史数据请 `REQUIREMENT_REOPEN_REQUIRED`，若是 fixture 错误请修正 fixture |
+| `Wave 7 MySQL CHECK conflict: <name>` | 检查 `CHECK_CLAUSE` 文本归一化是否覆盖；扩展 `normalizeMySqlExpression`；或若 V22 canonical 表达式与迁移表达式因 whitespace / 大小写分歧，调整迁移或 [CHECK_CONSTRAINTS] 的归一化 |
+| Concurrency 类（reservation overbooking / gate re-evaluation race / R-SAL-15 lock 串行化失败） | 重审 §29.17.7.6 架构；最小扩展 worker 或 waitAtGate 同步；不得新启独立 gate 文件 |
+| Gate `MYSQL TEST ENVIRONMENT = UNAVAILABLE` 或 gate-level reset 失败 | `TEST_EVIDENCE_PENDING`；不宣称 PASS；记录并向用户申请 disposable DB 授权 |
+| Test harness / fixture 缺陷（不属于实现 / 迁移 / 契约缺陷） | 仅当失败信号明显指向测试期望错误（如新信息揭示原有期望即违反新约束）时修正 fixture；任何对 assertion 的删除 / 合并 / 放宽都不允许 |
+| 实在与既有 §34 商业语义冲突的新发现 | 立即停；记 `REQUIREMENT_REOPEN_REQUIRED`；不回滚已 PASS；只允许记录 |
+
+##### 29.17.7.8 Files explicitly NOT touched in this Stage 2 / not to be touched by Stage 3 without separate authorization
+
+`document.md` §34.3.12 / §34.3.13 / DR-SAL-01..05 / 04·05 superseding / Wave 6 frozen footer / historical baseline footer / any frozen SC / UAT / Race / Audit CAP identifiers / counts (114/20/44/24/36) — **NOT touched** by Stage 2/3 unless the user reopens under `REQUIREMENT_REOPEN_REQUIRED`.
+
+`solution.md` §29.16.1–8 / §29.17.1–6 / any preceding §29 / §30 content — **NOT modified**; Stage 3 may APPEND new §29.17.x sub-sections for additional implementation evidence after each fix, but never alter prior paragraphs.
+
+`server/database/mysql-schema.js` core reconciliation logic (lines around `useDigest` / `hasExpressionColumns` / `mysqlIndexColumnList` / `generatedPartialIndex`) — currently green; Stage 3 may extend but not regress behavior in a way that re-introduces the `null`-column literal bug.
+
+`server/database/mysql-schema-bug-fix.test.js` — currently 25/25; Stage 3 must preserve all 25 assertions.
+
+`server/sales-customer-wave7-migration.test.js` / `server/sales-customer-wave7-functional.test.js` / `server/sales-customer-wave7-acceptance.test.js` — must be preserved verbatim; Stage 3 may ADD test cases only, never delete.
+
+`server/mysql-sales-customer-wave7.integration.js` / `server/mysql-sales-customer-wave7-concurrency.integration.js` / `scripts/gates/mysql-concurrency-sales-wave7-worker.mjs` — extend only along §29.17.7.6 architecture; do not replace.
+
+`scripts/gates/mysql-gate.mjs` / `scripts/gates/mysql-concurrency-gate.mjs` gate-level reset / fail-closed checks — preserve verbatim.
+
+`src/pages/sales-wave7.jsx` / `src/navigation/applicationRegistry.js` (Wave 7 routes) — Stage 3 不动。
+
+`scripts/testing/test-suites.js` registry — Stage 3 不动。
+
+`APPLY_GUIDE.md` / `README.md` / `AGENTS.md` / `CLAUDE.md` / `package.json` / release tags / prior log entries — Stage 3 不动。
+
+##### 29.17.7.9 Stop conditions for Stage 3 (mirrors DR-SAL-06 §A.5 + Wave 7-specific)
+
+- HEAD drift from `0d4e4b8a0b71d43551072349b55f494d9a439b53`;
+- Non-authorized tracked-file diff at any time;
+- Non-authorized edits to `APPLY_GUIDE.md` / `README.md` / `AGENTS.md` / `CLAUDE.md` / `package.json` / release tag;
+- Deletion, merging, skipping or relaxation of any already-PASS SQLite focused assertion;
+- SQLite PASS being cited as real-MySQL gate PASS;
+- Exception rewritten into a success response;
+- Any unilateral declaration of Wave 7 Acceptance PASS or FROZEN before the §A.3 C1 / C2 / C3 are simultaneously satisfied by real MySQL evidence and the user has given a separate explicit acceptance;
+- Any modification to Wave 6 frozen contract or §34 frozen business text;
+- Any DML/DDL on a non-`modern_erp_domain_test` database.
+
+##### 29.17.7.10 Rollback / data preservation
+
+- 每条 Stage 3 修复 commit 之前由 gate 自行 fail-closed reset / `SHOW TABLES = 0` 验证 DB 干净；commit 后追加 `log/2026-10-18.md` append-only 说明。
+- 真实 MySQL `modern_erp_domain_test` 是 disposable 数据库；任何中途失败均由 gate-level reset 重新清理，下一次 gate 跑前 `SHOW TABLES = 0`。
+- 不允许任何 ALTER / DROP 触及既有 Wave 1–6 表与 §34.3.12 / §34.3.13 之前的 canonical 表，包括 `settlement_unapplied_balances`、`planning_reservations`、`inventory_locks`、`sales_orders`、`sales_order_items` 等。
+- 任何最小修复如果影响 `DEFAULT` / `CHECK` / `UNIQUE` / `FOREIGN KEY` 语义，必须先在 `mysql-schema-bug-fix.test.js` 与 `sales-customer-wave7-migration.test.js` 中加入新 fixture；不允许在真实 DB 上做 trial-and-error。
+
+##### 29.17.7.11 Approval gate
+
+This Design Closure is not Stage-3-authorizing until the user explicitly approves this sub-section + the corresponding `log/2026-10-18.md` Design Closure entry. After user approval and during Stage 3:
+
+- Stage 3 may apply minimal fixes per §29.17.7.2 table + §29.17.7.7 failure-dispatch.
+- Stage 3 may execute ONLY `pnpm.cmd test:mysql` and `pnpm.cmd test:mysql:concurrency` per DR-SAL-06 §A.2.1.
+- Stage 3 must preserve all files in §29.17.7.8 verbatim unless §A.5 stop conditions force a `REQUIREMENT_REOPEN_REQUIRED` return.
+
+##### 29.17.7.12 Wave 7 Implementation Acceptance & Freeze Record (USER APPROVED 2026-10-19)
+
+**Decision: ACCEPTANCE PASS / FROZEN — `WAVE7_FINAL_ACCEPTANCE_PASS — FROZEN`**
+
+This record is a documentation-only append that re-states the Wave 7 acceptance outcome and points to the supporting evidence. It does NOT modify any §29.17.7.x sub-section, §34 frozen design, or §29.x frozen Design in this file; it does NOT introduce a new technical design, new module / function / API / schema / migration / test / gate / package / release tag.
+
+**Acceptance Contract satisfaction** (per DR-SAL-06 §A.3 + §29.17.7.11, both preserved verbatim):
+
+| §A.3 condition | Status (real MySQL evidence) |
+|---|---|
+| §A.3.C1 migration contract (fresh / upgrade / idempotent rerun, three carrier PK / FK / CHECK / UNIQUE / default / precision) | **SATISFIED** — `pnpm.cmd test:mysql` 56/56 PASS on the disposable `modern_erp_domain_test` MySQL 8 instance; Wave 7 migration / metadata suite 4/4 + Wave 0 migration runner smoke 2/2 + V1.3 Phase 7A SQLite-to-MySQL conversion rehearsal 1/1 verified at real MySQL; `normalizeDefault` regex extension (`[()'"\s\\]`) added to accept MySQL 8.0.37's `_utf8mb4\'[]\'` literal-backslash default form for `sales_prepayment_gate_results.source_balance_identities`. The previously-reported table total of "58" reconciles to a sum of 56 visible per-suite counts with the remaining 2 tests mapped to the unlisted suite inside the "16 suites" framing; the closure report and the corresponding log entry record this disclosure explicitly. |
+| §A.3.C2 business uniqueness + completeness | **SATISFIED** — `pnpm.cmd test:mysql` Wave 7 metadata 4/4 verifies FK + UNIQUE + CHECK + default / precision for all three Wave 7 carriers; `V1.4.1 hotfix` additive upgrade suite PASS; V21 inventory position-key uniqueness exercised in V21 14 race suite. |
+| §A.3.C3 concurrency invariants (independent MySQL sessions, transaction overlap, R-SAL-15 lock chain) | **SATISFIED** — `pnpm.cmd test:mysql:concurrency` 87/87 PASS across 9 / 9 suites including Wave 7 concurrency suite 3 / 3 subtests with real spawned-worker independent MySQL session evidence: (a) PLANNED_ORDER finite-supply competition — 3 workers on distinct `MySqlSyncAdapter` connections, sync anchored on `mysql_transaction_gates.gate_id=1` FOR UPDATE; (b) Gate competes with `apply-unapplied` / `create-refund` / `reverse-settlement` Finance mutations on canonical PREPAYMENT parents — 3 scenarios × real cross-session interleaving, with canonical 13-column inventory fixture seeded via `computePositionKey` from `server/lib/inventory-position.js`; (c) `PLANNING_RELEASE` submit + `DELIVERY` confirm compete with all three Finance mutations — 6 scenarios × real cross-session interleaving. |
+
+**Manual regression attestation** (project owner, 2026-10-19, current dirty working tree at HEAD `0d4e4b8`):
+
+- `pnpm.cmd test:fast` → PASS
+- `pnpm.cmd test` → PASS
+- `pnpm.cmd test:heavy` → PASS
+- `pnpm.cmd build` → PASS
+
+**Disclosed TAP raw-log archive limitation** (non-blocking, non-failure per DR-SAL-06 §A.4.3): the complete TAP-style raw terminal output for the two real-MySQL gates in this round was not archived into `.tmp/` (the directory's MySQL logs are dated `2026-10-10` and pre-date Wave 7 implementation). This limitation is recorded here as a transparent evidence-handling disclosure. Per DR-SAL-06 §A.4.3 + the user's explicit 2026-10-19 approval, this disclosure does not constitute a §A.3 evidence failure and does not block Wave 7 Acceptance PASS / FROZEN; future rounds should archive `.tmp/*.log` for each real-MySQL gate invocation as a process improvement.
+
+**Implementation location mapping** (additive only; no §34 contract change):
+
+- `server/migrations/sales-customer-wave7-prepayment-reservation.js` — additive migration with MySQL 8 `assertMySqlColumnContracts` + `normalizeDefault` charset-prefix-with-escaped-quotes regex extension.
+- `server/sales-customer-wave7-migration.test.js` — focused migration tests; new test case added for the MySQL 8.0.37 production-stored default form.
+- `server/mysql-sales-customer-wave7.integration.js` — registered in `scripts/gates/mysql-gate.mjs`; real-MySQL Wave 7 migration / metadata suite.
+- `server/mysql-sales-customer-wave7-concurrency.integration.js` — registered in `scripts/gates/mysql-concurrency-gate.mjs`; Wave 7 independent-session concurrency suite (3 subtests).
+- `scripts/gates/mysql-concurrency-sales-wave7-worker.mjs` — Wave 7 worker driving real `applyUnappliedBalance` / `createRefund` / `reverseSettlementDocument` / `request-reservation` entries on independent connections.
+- `server/mysql-sales-customer-wave0.integration.js` / `server/mysql-sales-customer-wave1-upgrade.integration.js` — minimal fixture-drift repair removing the three Wave 7 carriers from `WAVE7_PLUS_SALES_TABLES` and adding `'wave-7-prepayment-reservation'` to the Wave 1 upgrade expected migrations array.
+- `src/navigation/applicationRegistry.js` — `sales-prepayment-gates` + `sales-reservation-intents` contextual routes.
+- `src/pages/sales-wave7.jsx` — PrepaymentGates + ReservationIntents mobile-first surfaces; uses `api` direct call replacing the prior `formatError` shim.
+- `scripts/acceptance/sales-customer-wave7-responsive.mjs` — browser UAT at 320 / 390 / 430 / 680 CSS px; screenshots in `docs/evidence/sales-customer-wave7/`.
+
+**Boundaries** (preserved verbatim, not modified by this record):
+
+- HEAD = `0d4e4b8a0b71d43551072349b55f494d9a439b53` / branch = `feature/sales-waves6-13` / package = `1.6.2`.
+- 8 accepted working-tree modifications: `document.md` / `solution.md` / `log/2026-10-18.md` / `server/migrations/sales-customer-wave7-prepayment-reservation.js` / `server/sales-customer-wave7-migration.test.js` / `server/mysql-sales-customer-wave0.integration.js` / `server/mysql-sales-customer-wave1-upgrade.integration.js` / `server/mysql-sales-customer-wave7-concurrency.integration.js`. All remain unstaged and uncommitted at the moment of this Freeze record.
+- No `git add` / `git commit` / `git push` / `git merge` / `git rebase` / `git reset` / `git clean` / `git stash` / `git tag` / `git push --tags` / `release` / `deploy` is authorized by this record; the accepted working tree awaits the user's separate manual Git handling.
+- No `APPLY_GUIDE.md` / `README.md` / `AGENTS.md` / `CLAUDE.md` / `package.json` / release tag modification.
+- No new SC / Invariant / UAT / Race / Audit Capability ID; SC 114 / Invariant 20 / UAT 44 / Race 24 / Audit CAP 36 counts unchanged.
+- Wave 6 (`WAVE6_FINAL_ACCEPTANCE_PASS — FROZEN`, HEAD `aee1e0c`) remains unchanged.
+- Wave 8–13 remain `OUT_OF_SCOPE` and are not authorized to start by this record.
+- No new test or database operation was performed in this bounded documentation closure.
+
+**Final governance status: WAVE7_FINAL_ACCEPTANCE_PASS — FROZEN — USER APPROVED (2026-10-19).**
+
+
+
 #### 29.19.4 Frozen-domain integration contract status
 
 ```text

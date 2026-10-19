@@ -104,8 +104,7 @@ import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js
 const IMPLEMENTED_SALES_TABLES = [...SALES_WAVE1_TABLES, ...SALES_WAVE2_TABLES, ...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_WAVE5_TABLES, ...SALES_WAVE6_TABLES];
 
 const WAVE7_PLUS_TABLES = [
-  'sales_prepayment_requirements', 'sales_prepayment_gate_results',
-  'sales_reservation_intent', 'service_fulfillments',
+  'service_fulfillments',
   'consignment_commercial_documents', 'consignment_commercial_lines',
   'consignment_commodity_locations',
   'credit_parameters', 'credit_check_rules', 'credit_policy_snapshots',
@@ -656,6 +655,7 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
       assert.deepEqual(executed, [
         'wave-1-commercial-foundation', 'wave-2-pricing-discount', 'wave-3-quotation',
         'wave-4-canonical-sales-order', 'wave-5-delivery-notice', 'wave-6-return-replacement',
+        'wave-7-prepayment-reservation',
       ]);
 
       // Row counts must still match the post-upgrade values.

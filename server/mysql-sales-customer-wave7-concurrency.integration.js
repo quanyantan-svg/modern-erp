@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, test } from 'node:test';
 import { createTempDb } from './test-utils/temp-db.js';
 import { createApp } from './app.js';
+import { hashPassword } from './db.js';
+import { computePositionKey } from './lib/inventory-position.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPath = join(repoRoot, 'scripts', 'gates', 'mysql-concurrency-sales-wave7-worker.mjs');
@@ -68,12 +70,56 @@ describe('Sales & Customer Wave 7 — real MySQL concurrency', () => {
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
       VALUES('wave7-race-actor','wave7-race-actor','Wave7 Race','x','x','role-admin',1,?)`).run(now);
+    // The real HTTP API auth path used by the PLANNING_RELEASE / RESERVATION
+    // / DELIVERY production-mode entry helpers below requires a canonical
+    // admin user. The production-mode branch of `createTempDb` deliberately
+    // suppresses `seedDemoData`, so the canonical `admin/admin123` row is
+    // not automatically present. Seed it here from the canonical hash so
+    // `/api/auth/login` succeeds end-to-end. This is a bounded fixture for
+    // this integration suite only; it does not touch `temp-db.js`,
+    // `seedDemoData`, or any other concurrency suite's setup.
+    const adminHash = hashPassword('admin123');
+    db.prepare(`INSERT INTO users(id,username,display_name,password_hash,password_salt,role_id,active,created_at)
+      VALUES('user-admin','admin','系统管理员',?,?,'role-admin',1,?)`)
+      .run(adminHash.hash, adminHash.salt, now);
+    // Same production-mode suppression applies to sales_parameters:
+    // /api/sales-orders requires the SYSTEM scope to be active with the
+    // relevant feature flags set. The acceptance suite ships its own
+    // minimal seed in `buildRealEntryHarness`; mirror exactly that shape
+    // here so HTTP API entry points can serve PLANNING_RELEASE submit and
+    // DELIVERY confirm requests end-to-end.
+    db.prepare(`INSERT OR IGNORE INTO sales_parameters(scope_key,scope_type,document_type,sellable_control_enabled,customer_material_xref_enabled,
+      sales_group_data_scope_enabled,delivery_schedule_enabled,delivery_quantity_control_enabled,order_change_mode,reservation_behavior,
+      active,created_at,updated_at,created_by,updated_by) VALUES('SYSTEM','SYSTEM',NULL,0,0,0,1,1,'BOTH','DISABLED',1,?,?,?,?)`)
+      .run(now, now, 'user-admin', 'user-admin');
+    db.prepare("UPDATE sales_parameters SET sales_group_data_scope_enabled=1 WHERE scope_type='SYSTEM' AND scope_key='SYSTEM'").run();
     db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at)
       VALUES('wave7-race-customer','W7-RACE-C','Wave7 Race Customer','','','',1,?,?)`).run(now, now);
     db.prepare(`INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at)
       VALUES('wave7-race-warehouse','W7-RACE-W','Wave7 Race Warehouse','','',1,?,?)`).run(now, now);
     db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at)
       VALUES('wave7-race-product','W7-RACE-P','Wave7 Race Product','EA',0,0,1,?,?)`).run(now, now);
+    // Inventory canonical 13-column insert mirroring production
+    // `applyInventoryMutation` (server/lib/inventory-mutation.js:123-124).
+    // Wave 7 production schema (post-V21) requires position_key +
+    // bin_id / owner_type / owner_id / stock_status / lot_id / serial_id
+    // / active in addition to the 5 base columns. The 5-column form
+    // silently fails because `position_key TEXT NOT NULL` has no DEFAULT;
+    // this fix mirrors the canonical INSERT verbatim so both
+    // `createInventoryLockAdapter` (sales-reservation-intent.js:134) and
+    // `confirmSalesDelivery` (server/app.js:5700) read the row correctly.
+    const wave7Product = 'wave7-race-product';
+    const wave7Warehouse = 'wave7-race-warehouse';
+    const wave7PositionKey = computePositionKey({
+      productId: wave7Product, warehouseId: wave7Warehouse,
+      binId: null, ownerType: 'ENTERPRISE', ownerId: null,
+      stockStatus: 'AVAILABLE', lotId: null, serialId: null,
+    });
+    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at,
+      position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active)
+      VALUES('wave7-race-entry-inventory',?,?,100,?,?,NULL,'ENTERPRISE',NULL,'AVAILABLE',NULL,NULL,1)
+      ON DUPLICATE KEY UPDATE quantity=100,updated_at=VALUES(updated_at)`)
+      .run(wave7Warehouse, wave7Product, now, wave7PositionKey);
     for (const n of [1, 2]) {
       db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at)
         VALUES(?,?,?,'APPROVED',0,'wave7-race-actor',?,?)`)
@@ -86,8 +132,8 @@ describe('Sales & Customer Wave 7 — real MySQL concurrency', () => {
       .run(DAY, now, now, 'wave7-race-actor', 'wave7-race-actor');
     db.prepare("UPDATE planning_parameters SET reservation_enabled=1 WHERE id='DEFAULT'").run();
     for (const code of ['1002', '1122']) {
-      db.prepare(`INSERT IGNORE INTO accounting_subjects(id,code,name,active,created_at,updated_at)
-        VALUES(?,?,?,1,?,?)`).run(`wave7-subject-${code}`, code, `Wave7 ${code}`, now, now);
+      db.prepare(`INSERT IGNORE INTO accounting_subjects(id,code,name,active)
+        VALUES(?,?,?,1)`).run(`wave7-subject-${code}`, code, `Wave7 ${code}`);
     }
     const bankAccountingSubjectId = db.prepare("SELECT id FROM accounting_subjects WHERE code='1002' AND active=1").get().id;
     db.prepare(`INSERT INTO bank_accounts(id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at,code,opening_balance_cents,accounting_role,accounting_subject_id)
@@ -249,8 +295,15 @@ describe('Sales & Customer Wave 7 — real MySQL concurrency', () => {
       pricing_uom_code,pricing_identity_key,qty_break_min_micros,effective_from,created_at,created_by)
       VALUES('wave7-race-price',?,'wave7-race-product',NULL,'ALL',?,'A','EA',?,0,'2026-01-01',?,'wave7-race-actor')`).run(priceListId, materialKey, pricingKey, now);
     db.prepare("INSERT INTO sales_price_list_versions(id,entry_id,version,unit_price_cents,snapshot_json,created_at,created_by) VALUES('wave7-race-price-v1','wave7-race-price',1,10000,'{}',?,'wave7-race-actor')").run(now);
-    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES('wave7-race-entry-inventory','wave7-race-warehouse','wave7-race-product',100,?)
-      ON DUPLICATE KEY UPDATE quantity=100,updated_at=VALUES(updated_at)`).run(now);
+    const wave7EntryPositionKey = computePositionKey({
+      productId: 'wave7-race-product', warehouseId: 'wave7-race-warehouse',
+      binId: null, ownerType: 'ENTERPRISE', ownerId: null,
+      stockStatus: 'AVAILABLE', lotId: null, serialId: null,
+    });
+    db.prepare(`INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at,
+      position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active)
+      VALUES('wave7-race-entry-inventory','wave7-race-warehouse','wave7-race-product',100,?,?,NULL,'ENTERPRISE',NULL,'AVAILABLE',NULL,NULL,1)
+      ON DUPLICATE KEY UPDATE quantity=100,updated_at=VALUES(updated_at)`).run(now, wave7EntryPositionKey);
     db.prepare(`INSERT INTO inventory_valuation_balances(balance_key,valuation_method,product_id,warehouse_id,lot_id,serial_id,quantity,value_cents,updated_at)
       VALUES('NONE:wave7-race-warehouse:wave7-race-product','MOVING_AVERAGE','wave7-race-product','wave7-race-warehouse',NULL,NULL,100,50000,?)
       ON DUPLICATE KEY UPDATE quantity=100,value_cents=50000,updated_at=VALUES(updated_at)`).run(now);

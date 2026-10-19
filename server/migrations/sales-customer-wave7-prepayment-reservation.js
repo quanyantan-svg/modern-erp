@@ -107,7 +107,7 @@ function assertMySqlColumnContracts(db) {
   // contract value is semantically equivalent and must not trigger DDL.
   const normalizeDefault = (value) => String(value ?? '')
     .replace(/_(?:utf8mb4|utf8mb3|utf8|latin1)/gi, '')
-    .replace(/[()'"\s]/g, '');
+    .replace(/[()'"\s\\]/g, '');
   for (const [table, expectedColumns] of Object.entries(MYSQL_COLUMN_CONTRACTS)) {
     const rows = db.prepare(`SELECT COLUMN_NAME name,DATA_TYPE data_type,IS_NULLABLE is_nullable,
         COLUMN_DEFAULT column_default,CHARACTER_MAXIMUM_LENGTH character_maximum_length,
