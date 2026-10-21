@@ -17,6 +17,9 @@ export async function upsertInvoiceSourceLink(db, req, res, actor) {
   const invoiceId = requiredText(body.invoiceId, 'invoiceId', 64);
   const invoiceSide = requiredText(body.invoiceSide, 'invoiceSide', 32);
   const sourceType = requiredText(body.sourceType, 'sourceType', 32);
+  if (sourceType === 'SERVICE_FULFILLMENT') {
+    throw new HttpError(409, 'Service fulfillment links are created only by invoice POST', { code: 'SERVICE_FULFILLMENT_LINK_REQUIRES_INVOICE_POST' });
+  }
   const sourceId = requiredText(body.sourceId, 'sourceId', 64);
   const sourceLineId = requiredText(body.sourceLineId, 'sourceLineId', 64);
   const invoicedQty = Number(body.invoicedQuantity);

@@ -32,6 +32,11 @@ export const OWNER_TYPES = Object.freeze({
 
 const NULL_TOKEN = 'NULL';
 const PIPE = '|';
+export const POSITION_EVIDENCE_SCHEMA_VERSION = 1;
+const POSITION_SNAPSHOT_KEYS = Object.freeze([
+  'schemaVersion', 'productId', 'warehouseId', 'binId', 'ownerType',
+  'ownerId', 'stockStatus', 'lotId', 'serialId', 'positionKey',
+]);
 
 function normalizeIdComponent(value, label) {
   if (value === null || value === undefined) return NULL_TOKEN;
@@ -170,4 +175,62 @@ export function buildCanonicalPosition(db, input) {
       serialId: input.serialId ?? null,
     }),
   };
+}
+
+function evidenceString(value, label, { nullable = false } = {}) {
+  if (value === null && nullable) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new HttpError(409, `Invalid historical position evidence: ${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  if (value.length > 128 || value !== value.trim()) {
+    throw new HttpError(409, `Invalid historical position evidence: ${label}`, { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  return value;
+}
+
+export function canonicalPositionSnapshot(position) {
+  const snapshot = {
+    schemaVersion: POSITION_EVIDENCE_SCHEMA_VERSION,
+    productId: evidenceString(position.productId, 'productId'),
+    warehouseId: evidenceString(position.warehouseId, 'warehouseId'),
+    binId: position.binId == null ? null : evidenceString(position.binId, 'binId'),
+    ownerType: normalizeOwnerType(position.ownerType),
+    ownerId: position.ownerId == null ? null : evidenceString(position.ownerId, 'ownerId'),
+    stockStatus: evidenceString(position.stockStatus, 'stockStatus').toUpperCase(),
+    lotId: position.lotId == null ? null : evidenceString(position.lotId, 'lotId'),
+    serialId: position.serialId == null ? null : evidenceString(position.serialId, 'serialId'),
+    positionKey: evidenceString(position.positionKey, 'positionKey'),
+  };
+  if (!/^[0-9a-f]{64}$/.test(snapshot.positionKey)
+      || (snapshot.ownerType === OWNER_TYPES.ENTERPRISE && snapshot.ownerId !== null)
+      || (snapshot.ownerType !== OWNER_TYPES.ENTERPRISE && snapshot.ownerId === null)) {
+    throw new HttpError(409, 'Historical position evidence identity mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  const expected = computePositionKey(snapshot);
+  if (snapshot.positionKey !== expected) {
+    throw new HttpError(409, 'Historical position evidence hash mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  return JSON.stringify(snapshot);
+}
+
+export function parseCanonicalPositionSnapshot(value) {
+  let snapshot;
+  try { snapshot = JSON.parse(String(value)); }
+  catch { throw new HttpError(409, 'Malformed historical position evidence JSON', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' }); }
+  if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new HttpError(409, 'Historical position evidence must be an object', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  const keys = Object.keys(snapshot);
+  if (keys.length !== POSITION_SNAPSHOT_KEYS.length
+      || keys.some((key, index) => key !== POSITION_SNAPSHOT_KEYS[index])) {
+    throw new HttpError(409, 'Historical position evidence shape mismatch', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  if (snapshot.schemaVersion !== POSITION_EVIDENCE_SCHEMA_VERSION) {
+    throw new HttpError(409, 'Unsupported historical position evidence version', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  const canonical = canonicalPositionSnapshot(snapshot);
+  if (canonical !== String(value)) {
+    throw new HttpError(409, 'Historical position evidence is not canonical', { code: 'CONSIGNMENT_POSITION_EVIDENCE_INVALID' });
+  }
+  return JSON.parse(canonical);
 }

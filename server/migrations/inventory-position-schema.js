@@ -151,6 +151,49 @@ export function migrateInventoryPositionSchema(db) {
     );
   `);
   safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_source ON inventory_mutation_log(source_type, source_id)');
+  safeAddColumn(db, 'inventory_mutation_log', 'source_item_id', 'source_item_id TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'from_position_key', 'from_position_key TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'to_position_key', 'to_position_key TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'from_position_identity_json', 'from_position_identity_json TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'to_position_identity_json', 'to_position_identity_json TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'out_inventory_transaction_id', 'out_inventory_transaction_id TEXT REFERENCES inventory_transactions(id)');
+  safeAddColumn(db, 'inventory_mutation_log', 'in_inventory_transaction_id', 'in_inventory_transaction_id TEXT REFERENCES inventory_transactions(id)');
+  safeAddColumn(db, 'inventory_mutation_log', 'request_fingerprint', 'request_fingerprint TEXT');
+  safeAddColumn(db, 'inventory_mutation_log', 'evidence_schema_version', 'evidence_schema_version INTEGER');
+  safeCreateIndex(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_mutation_log_out_tx ON inventory_mutation_log(out_inventory_transaction_id)');
+  safeCreateIndex(db, 'CREATE UNIQUE INDEX IF NOT EXISTS uq_inventory_mutation_log_in_tx ON inventory_mutation_log(in_inventory_transaction_id)');
+  safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_group_item ON inventory_mutation_log(movement_group_id, source_type, source_id, source_item_id, id)');
+  safeCreateIndex(db, 'CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_consumption ON inventory_mutation_log(source_type, source_item_id, from_position_key, business_date, id)');
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_inventory_mutation_log_consignment_insert
+    BEFORE INSERT ON inventory_mutation_log
+    WHEN NEW.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN')
+    BEGIN
+      SELECT CASE WHEN NEW.quantity<=0 OR NEW.source_item_id IS NULL OR NEW.source_item_id=''
+        OR NEW.request_fingerprint IS NULL OR length(NEW.request_fingerprint)<>67 OR substr(NEW.request_fingerprint,1,3)<>'V1:'
+        OR substr(NEW.request_fingerprint,4) GLOB '*[^0-9a-f]*'
+        OR NEW.evidence_schema_version<>1
+        OR (NEW.movement_kind='MOVE' AND (NEW.from_position_key IS NULL OR NEW.to_position_key IS NULL
+          OR NEW.from_position_identity_json IS NULL OR NEW.to_position_identity_json IS NULL
+          OR NEW.out_inventory_transaction_id IS NULL OR NEW.in_inventory_transaction_id IS NULL))
+        OR (NEW.movement_kind='OUT' AND (NEW.from_position_key IS NULL OR NEW.from_position_identity_json IS NULL
+          OR NEW.out_inventory_transaction_id IS NULL OR NEW.to_position_key IS NOT NULL
+          OR NEW.to_position_identity_json IS NOT NULL OR NEW.in_inventory_transaction_id IS NOT NULL))
+        OR (NEW.from_position_identity_json IS NOT NULL AND (json_valid(NEW.from_position_identity_json)=0
+          OR json_extract(NEW.from_position_identity_json,'$.positionKey')<>NEW.from_position_key))
+        OR (NEW.to_position_identity_json IS NOT NULL AND (json_valid(NEW.to_position_identity_json)=0
+          OR json_extract(NEW.to_position_identity_json,'$.positionKey')<>NEW.to_position_key))
+        THEN RAISE(ABORT,'CONSIGNMENT_MUTATION_EVIDENCE_INCOMPLETE') END;
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_inventory_mutation_log_consignment_update
+    BEFORE UPDATE ON inventory_mutation_log
+    WHEN OLD.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN')
+    BEGIN SELECT RAISE(ABORT,'CONSIGNMENT_MUTATION_EVIDENCE_IMMUTABLE'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_inventory_mutation_log_consignment_delete
+    BEFORE DELETE ON inventory_mutation_log
+    WHEN OLD.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN')
+    BEGIN SELECT RAISE(ABORT,'CONSIGNMENT_MUTATION_EVIDENCE_IMMUTABLE'); END;
+  `);
 
   // ---- inventory_step_transfer_in_transit (derived execution facts) ----
   db.exec(`

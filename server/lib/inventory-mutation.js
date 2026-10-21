@@ -31,11 +31,13 @@
 //   - audit
 //   - commit
 
+import { createHash } from 'node:crypto';
 import { transaction, id as genId } from '../db.js';
 import { audit } from './audit.js';
 import { HttpError } from './http.js';
-import { computePositionKey, normalizeOwnerType, validateOwner, validateStockStatus, validateBin, warehouseAllowsBin } from './inventory-position.js';
+import { canonicalPositionSnapshot, computePositionKey, normalizeOwnerType, parseCanonicalPositionSnapshot, validateOwner, validateStockStatus, validateBin } from './inventory-position.js';
 import { issueSourceValue, assertFinancialPeriodsOpen } from '../modules/financial-inventory.js';
+import { postCanonicalTrackedLeg } from '../modules/traceability-quality.js';
 
 const MOVEMENT_KINDS = new Set([
   'IN', 'OUT', 'MOVE', 'OWNER_CHANGE', 'STATUS_CHANGE',
@@ -55,7 +57,72 @@ const SOURCE_TYPES = new Set([
   'ENTRUSTED_RECEIPT', 'ENTRUSTED_ISSUE',
   'BARCODE_SCAN_CONFIRM', 'OPENING_INVENTORY',
   'SALES_RETURN', 'SALES_RETURN_REVERSAL',
+  'CONSIGNMENT_HANDOFF', 'CONSIGNMENT_SETTLEMENT', 'CONSIGNMENT_RETURN',
 ]);
+const CONSIGNMENT_SOURCE_TYPES = new Set(['CONSIGNMENT_HANDOFF', 'CONSIGNMENT_SETTLEMENT', 'CONSIGNMENT_RETURN']);
+const CONSIGNMENT_POLICIES = Object.freeze({
+  CONSIGNMENT_HANDOFF: 'HANDOFF_VALUE_NEUTRAL_V1',
+  CONSIGNMENT_SETTLEMENT: 'SETTLEMENT_COGS_V1',
+  CONSIGNMENT_RETURN: 'RETURN_VALUE_NEUTRAL_V1',
+});
+const MAX_SAFE_MICROS = Number.MAX_SAFE_INTEGER;
+
+function mutationConflict(message, code = 'INVENTORY_MUTATION_IDEMPOTENCY_CONFLICT') {
+  return new HttpError(409, message, { code });
+}
+
+function consignmentMicros(input) {
+  if (!Number.isSafeInteger(input.quantityMicros) || input.quantityMicros <= 0 || input.quantityMicros > MAX_SAFE_MICROS) {
+    throw new HttpError(400, 'Consignment quantityMicros must be a positive safe integer');
+  }
+  if (Number(input.quantity) * 1_000_000 !== input.quantityMicros) {
+    throw new HttpError(400, 'Consignment quantity does not round-trip to quantityMicros');
+  }
+  return String(input.quantityMicros);
+}
+
+function canonicalFingerprint(input, businessDate, movementGroupId, fromJson, toJson) {
+  const amount = input.commercialAmountCents;
+  if (amount !== null && amount !== undefined && !Number.isSafeInteger(amount)) {
+    throw new HttpError(400, 'commercialAmountCents must be a safe integer or null');
+  }
+  const expectedPolicy = CONSIGNMENT_POLICIES[input.sourceType];
+  if (input.trackingMode !== 'CANONICAL_STRICT' || input.valuationMode !== 'EXTERNAL'
+      || input.valuationPolicy !== expectedPolicy) {
+    throw new HttpError(400, 'Consignment strict tracking/valuation policy mismatch');
+  }
+  const payload = {
+    fingerprintVersion: 1,
+    sourceType: input.sourceType,
+    sourceId: String(input.sourceId),
+    sourceItemId: String(input.sourceItemId),
+    movementGroupId,
+    movementKind: input.movementKind,
+    quantityMicros: consignmentMicros(input),
+    businessDate,
+    fromPosition: fromJson == null ? null : JSON.parse(fromJson),
+    toPosition: toJson == null ? null : JSON.parse(toJson),
+    trackingMode: 'CANONICAL_STRICT',
+    valuationMode: 'EXTERNAL_STRICT',
+    valuationPolicy: expectedPolicy,
+    commercialAmountCents: amount == null ? null : String(amount),
+  };
+  return `V1:${createHash('sha256').update(JSON.stringify(payload)).digest('hex')}`;
+}
+
+function readConsignmentEvidence(db, row) {
+  if (Number(row.evidence_schema_version) !== 1 || !row.source_item_id || !row.request_fingerprint) {
+    throw mutationConflict('Legacy Consignment evidence is unavailable', 'CONSIGNMENT_LEGACY_EVIDENCE_UNAVAILABLE');
+  }
+  const from = row.from_position_identity_json == null ? null : parseCanonicalPositionSnapshot(row.from_position_identity_json);
+  const to = row.to_position_identity_json == null ? null : parseCanonicalPositionSnapshot(row.to_position_identity_json);
+  const movements = [];
+  if (row.out_inventory_transaction_id) movements.push({ direction: 'OUT', transactionId: row.out_inventory_transaction_id, positionKey: from?.positionKey });
+  if (row.in_inventory_transaction_id) movements.push({ direction: 'IN', transactionId: row.in_inventory_transaction_id, positionKey: to?.positionKey });
+  const tracked = movements.flatMap((movement) => db.prepare('SELECT * FROM tracked_inventory_movements WHERE transaction_id=? ORDER BY id').all(movement.transactionId));
+  const valuation = movements.flatMap((movement) => db.prepare('SELECT * FROM inventory_valuation_movements WHERE inventory_transaction_id=? ORDER BY id').all(movement.transactionId));
+  return { from, to, movements, tracked, valuation };
+}
 
 function buildIdentity({ productId, warehouseId, binId, ownerType, ownerId, stockStatus, lotId, serialId }) {
   const ot = normalizeOwnerType(ownerType);
@@ -172,6 +239,10 @@ export function applyInventoryMutation(input) {
   if (!input.fromPosition && !input.toPosition) throw new HttpError(400, '必须提供 fromPosition 或 toPosition');
   const businessDate = input.businessDate || new Date().toISOString().slice(0, 10);
   const movementGroupId = input.movementGroupId || genId();
+  const isConsignment = CONSIGNMENT_SOURCE_TYPES.has(input.sourceType);
+  if (isConsignment && (!input.sourceItemId || !input.movementGroupId)) {
+    throw new HttpError(400, 'Consignment sourceItemId and stable movementGroupId are required');
+  }
 
   // Movement-kind pairing: paired kinds must have both from and to.
   const pairedKinds = new Set(['MOVE', 'BIN_MOVE', 'OWNER_CHANGE', 'STATUS_CHANGE', 'LOT_RECLASS']);
@@ -182,9 +253,9 @@ export function applyInventoryMutation(input) {
   // Idempotency replay
   let result = null;
   const runMutation = (db) => {
-    const replaySql = `SELECT movement_group_id FROM inventory_mutation_log WHERE idempotency_key=?${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`;
+    const replaySql = `SELECT * FROM inventory_mutation_log WHERE idempotency_key=?${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`;
     const replay = db.prepare(replaySql).get(input.idempotencyKey);
-    if (replay) {
+    if (replay && !isConsignment) {
       result = { replayed: true, movementGroupId: replay.movement_group_id };
       return;
     }
@@ -192,6 +263,36 @@ export function applyInventoryMutation(input) {
     const toPos   = input.toPosition   ? buildIdentity(input.toPosition)   : null;
     if (fromPos) validateInventoryMaster(db, fromPos);
     if (toPos)   validateInventoryMaster(db, toPos);
+    const fromPositionIdentityJson = isConsignment && fromPos ? canonicalPositionSnapshot(fromPos) : null;
+    const toPositionIdentityJson = isConsignment && toPos ? canonicalPositionSnapshot(toPos) : null;
+    const requestFingerprint = isConsignment
+      ? canonicalFingerprint(input, businessDate, movementGroupId, fromPositionIdentityJson, toPositionIdentityJson)
+      : null;
+    if (replay) {
+      const stored = readConsignmentEvidence(db, replay);
+      const readableMismatch = replay.source_type !== input.sourceType
+        || replay.source_id !== String(input.sourceId)
+        || replay.source_item_id !== String(input.sourceItemId)
+        || replay.movement_group_id !== movementGroupId
+        || replay.movement_kind !== input.movementKind
+        || replay.business_date !== businessDate
+        || Math.round(Number(replay.quantity) * 1_000_000) !== input.quantityMicros
+        || replay.from_position_identity_json !== fromPositionIdentityJson
+        || replay.to_position_identity_json !== toPositionIdentityJson
+        || replay.request_fingerprint !== requestFingerprint;
+      if (readableMismatch) throw mutationConflict('Inventory mutation idempotency conflict');
+      result = {
+        replayed: true,
+        mutationId: replay.id,
+        movementGroupId: replay.movement_group_id,
+        fromPosition: stored.from,
+        toPosition: stored.to,
+        movements: stored.movements,
+        trackedMovements: stored.tracked,
+        valuationMovements: stored.valuation,
+      };
+      return;
+    }
 
     // Lock target positions (canonical order ASC) via SELECT … FOR UPDATE equivalent.
     const positions = [...new Set([fromPos, toPos].filter(Boolean).map((p) => p.positionKey))].sort();
@@ -248,8 +349,16 @@ export function applyInventoryMutation(input) {
     // Paired kinds record both.
     for (const m of movements) {
       m.transactionId = writeInventoryTransaction(db, input, m.position, m.direction, m.balanceAfter, businessDate);
-      if (input.trackingMode !== 'EXTERNAL') {
-        writeTrackedMovement(db, input, m.position, m.direction, businessDate, input.movementKind, m.transactionId);
+      if (isConsignment) {
+        m.trackedMovement = postCanonicalTrackedLeg(db, {
+          transactionId: m.transactionId, sourceType: input.sourceType,
+          sourceId: input.sourceId, sourceItemId: input.sourceItemId,
+          productId: m.position.productId, warehouseId: m.position.warehouseId,
+          lotId: m.position.lotId, serialId: m.position.serialId,
+          quantity: input.quantity, direction: m.direction, businessDate,
+        });
+      } else if (input.trackingMode !== 'EXTERNAL') {
+        m.trackedMovementId = writeTrackedMovement(db, input, m.position, m.direction, businessDate, input.movementKind, m.transactionId);
       }
     }
 
@@ -277,12 +386,27 @@ export function applyInventoryMutation(input) {
     }
 
     // Mutation log (idempotency replay key).
+    const mutationId = genId();
+    const outMovement = movements.find((movement) => movement.direction === 'OUT');
+    const inMovement = movements.find((movement) => movement.direction === 'IN');
     db.prepare(`
-      INSERT INTO inventory_mutation_log(id, idempotency_key, movement_group_id, source_type, source_id, movement_kind, quantity, business_date, actor_id, created_at)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO inventory_mutation_log(
+        id, idempotency_key, movement_group_id, source_type, source_id, movement_kind,
+        quantity, business_date, actor_id, created_at, source_item_id,
+        from_position_key, to_position_key, from_position_identity_json,
+        to_position_identity_json, out_inventory_transaction_id,
+        in_inventory_transaction_id, request_fingerprint, evidence_schema_version)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      genId(), input.idempotencyKey, movementGroupId, input.sourceType, input.sourceId,
+      mutationId, input.idempotencyKey, movementGroupId, input.sourceType, input.sourceId,
       input.movementKind, input.quantity, businessDate, input.actor?.id || null, new Date().toISOString(),
+      isConsignment ? input.sourceItemId : null,
+      isConsignment ? fromPos?.positionKey ?? null : null,
+      isConsignment ? toPos?.positionKey ?? null : null,
+      fromPositionIdentityJson, toPositionIdentityJson,
+      isConsignment ? outMovement?.transactionId ?? null : null,
+      isConsignment ? inMovement?.transactionId ?? null : null,
+      requestFingerprint, isConsignment ? 1 : null,
     );
 
     // Audit
@@ -291,6 +415,7 @@ export function applyInventoryMutation(input) {
 
     result = {
       replayed: false,
+      mutationId,
       movementGroupId,
       balanceAfterFrom,
       balanceAfterTo,
@@ -299,6 +424,7 @@ export function applyInventoryMutation(input) {
         transactionId: movement.transactionId,
         positionKey: movement.position.positionKey,
         balanceAfter: movement.balanceAfter,
+        trackedMovement: movement.trackedMovement || null,
       })),
     };
   };
@@ -322,26 +448,6 @@ export function applyInventoryMutation(input) {
     }
   };
 
-  // Ensure mutation_log table exists (idempotent minimal migration in dispatcher).
-  const ensureLogTable = (db) => {
-    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inventory_mutation_log'").get();
-    if (exists) return;
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS inventory_mutation_log (
-        id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        movement_group_id TEXT NOT NULL,
-        source_type TEXT NOT NULL,
-        source_id TEXT NOT NULL,
-        movement_kind TEXT NOT NULL,
-        quantity REAL NOT NULL,
-        business_date TEXT NOT NULL,
-        actor_id TEXT,
-        created_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_inventory_mutation_log_source ON inventory_mutation_log(source_type, source_id);
-    `);
-  };
   // Detect an already-open transaction so nested callers (e.g. VMI/transfer
   // owners) can rely on a single outer commit. SQLite's BEGIN IMMEDIATE in a
   // nested transaction is rejected as "cannot start a transaction within a
@@ -352,7 +458,6 @@ export function applyInventoryMutation(input) {
     catch { return false; }
   };
   const execute = () => {
-    ensureLogTable(input.db);
     assertInventoryPeriodOpen(input.db, businessDate);
     assertFinancialPeriodsOpen(input.db, businessDate);
     runMutation(input.db);

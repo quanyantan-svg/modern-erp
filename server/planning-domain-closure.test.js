@@ -92,13 +92,21 @@ describe('B3120 Planning Domain Closure', () => {
     assert.equal(workbench.status, 200, workbench.data.error);
     assert.ok(Array.isArray(workbench.data.workbench.rows));
 
+    const reserveSupply = await request('/api/planning/planned-orders', { method: 'POST', body: {
+      productId: product.id, quantity: 5, supplyType: 'BUY', needDate: '2026-10-21',
+    } });
+    assert.equal(reserveSupply.status, 201, reserveSupply.data.error);
+    assert.equal((await request(`/api/planning/planned-orders/${reserveSupply.data.id}/confirm`, { method: 'POST' })).status, 200);
+
     const warehouse = db.prepare('SELECT id FROM warehouses WHERE active=1 LIMIT 1').get();
     const reservation = await request('/api/planning/reservations', { method: 'POST', body: {
       reservationType: 'WEAK', demandSourceType: 'SALES_ORDER', demandSourceId: 'SO-HTTP',
-      supplySourceType: 'EXPECTED', productId: product.id, warehouseId: warehouse.id, quantity: 2,
+      supplySourceType: 'PLANNED_ORDER', supplySourceId: reserveSupply.data.id,
+      productId: product.id, warehouseId: warehouse.id, quantity: 2,
     } });
     assert.equal(reservation.status, 201, reservation.data.error);
     assert.equal((await request(`/api/planning/reservations/${reservation.data.id}/release`, { method: 'POST' })).status, 200);
+    assert.equal((await request(`/api/planning/planned-orders/${reserveSupply.data.id}/release`, { method: 'POST' })).status, 201);
   });
 
   test('legacy /api/mrp/bom-explode is 410 Gone and canonical MRP engine count is 1', async () => {

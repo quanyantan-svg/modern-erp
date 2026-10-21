@@ -234,7 +234,9 @@ function executionFloorMicros(db, itemId) {
     FROM sales_delivery_items di JOIN sales_deliveries d ON d.id=di.delivery_id WHERE di.sales_order_item_id=?`).get(itemId).value || 0);
   const notified = Number(db.prepare(`SELECT COALESCE(SUM(CASE WHEN n.state IN ('CONFIRMED','CLOSED') THEN l.scheduled_qty_micros ELSE 0 END),0) value
     FROM delivery_notice_lines l JOIN delivery_notices n ON n.id=l.delivery_notice_id WHERE l.sales_order_item_id=?`).get(itemId).value || 0);
-  return Math.max(Math.round(delivered * 1_000_000), notified);
+  const serviceCommitted = Number(db.prepare(`SELECT COALESCE(SUM(confirmation_qty_micros),0) value
+    FROM service_fulfillments WHERE sales_order_item_id=? AND confirmation_state IN ('PENDING','CONFIRMED')`).get(itemId).value || 0);
+  return Math.max(Math.round(delivered * 1_000_000), notified, serviceCommitted);
 }
 
 function normalizedLines(db, order, operations, actor, changeId = null, { previouslyReservedAuthorizationIds = null } = {}) {

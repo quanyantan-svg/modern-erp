@@ -16,6 +16,7 @@ import { migrateSalesCustomerWave4Orders } from './sales-customer-wave4-orders.j
 import { migrateSalesCustomerWave5Delivery } from './sales-customer-wave5-delivery.js';
 import { migrateSalesCustomerWave6Returns } from './sales-customer-wave6-returns.js';
 import { migrateSalesCustomerWave7PrepaymentReservation } from './sales-customer-wave7-prepayment-reservation.js';
+import { migrateSalesCustomerWave8ServiceConsignment } from './sales-customer-wave8-service-consignment.js';
 
 export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
   Object.freeze({
@@ -33,6 +34,7 @@ export const SALES_CUSTOMER_MIGRATIONS = Object.freeze([
   Object.freeze({ id: 'wave-5-delivery-notice', wave: 5, migrate: migrateSalesCustomerWave5Delivery }),
   Object.freeze({ id: 'wave-6-return-replacement', wave: 6, migrate: migrateSalesCustomerWave6Returns }),
   Object.freeze({ id: 'wave-7-prepayment-reservation', wave: 7, migrate: migrateSalesCustomerWave7PrepaymentReservation }),
+  Object.freeze({ id: 'wave-8-service-consignment', wave: 8, migrate: migrateSalesCustomerWave8ServiceConsignment }),
 ]);
 
 function compareSteps(left, right) {

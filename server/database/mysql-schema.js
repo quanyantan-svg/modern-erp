@@ -86,9 +86,13 @@ function extractChecks(sql) {
 function mysqlType(column, indexed) {
   const declared = String(column.type || '').toUpperCase();
   const name = String(column.name).toLowerCase();
+  if (name === 'evidence_schema_version') return 'TINYINT UNSIGNED';
   if (declared.includes('INT')) return 'BIGINT';
   if (declared.includes('REAL') || declared.includes('FLOA') || declared.includes('DOUB') || declared.includes('NUM')) return 'DECIMAL(24,6)';
   if (declared.includes('BLOB')) return 'LONGBLOB';
+  if (name === 'from_position_identity_json' || name === 'to_position_identity_json') return 'LONGTEXT';
+  if (name === 'from_position_key' || name === 'to_position_key') return 'CHAR(64)';
+  if (name === 'request_fingerprint') return 'CHAR(67)';
   if (name.endsWith('_json') || name === 'json_payload') return 'JSON';
   // 128 keeps UUIDs/document keys lossless while allowing the V1.3 compound
   // unique keys to remain below InnoDB's 3072-byte utf8mb4 key limit.
@@ -185,8 +189,98 @@ function columnDefinition(table, column, indexed = null, primary = null, autoInc
   const primaryColumns = primary || table.columns.filter((item) => item.pk).sort((a, b) => a.pk - b.pk);
   const hasAutoIncrement = autoIncrement ?? /AUTOINCREMENT/i.test(table.sql);
   const type = mysqlType(column, indexedColumns.has(column.name));
+  const name = String(column.name).toLowerCase();
+  const charset = ['from_position_key', 'to_position_key', 'request_fingerprint'].includes(name)
+    ? ' CHARACTER SET ascii COLLATE ascii_bin'
+    : ['from_position_identity_json', 'to_position_identity_json'].includes(name)
+      ? ' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin'
+      // Byte-identity business key. NO PAD matches SQLite `COLLATE BINARY`; utf8mb4_bin
+      // is PAD SPACE and would wrongly treat trailing spaces as equal.
+      : name === 'lot_code_key'
+        ? ' CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin'
+        : '';
   const inlinePrimary = primaryColumns.length === 1 && primaryColumns[0].name === column.name;
-  return `${quote(column.name)} ${type}${column.notnull || inlinePrimary ? ' NOT NULL' : ''}${mysqlDefault(column.dflt_value, type)}${hasAutoIncrement && inlinePrimary ? ' AUTO_INCREMENT' : ''}`;
+  return `${quote(column.name)} ${type}${charset}${column.notnull || inlinePrimary ? ' NOT NULL' : ''}${mysqlDefault(column.dflt_value, type)}${hasAutoIncrement && inlinePrimary ? ' AUTO_INCREMENT' : ''}`;
+}
+
+function ensureInventoryEvidenceMySql(adapter) {
+  const foreignKeyStatement = adapter.prepare(`SELECT CONSTRAINT_NAME constraint_name
+    FROM information_schema.KEY_COLUMN_USAGE
+    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='inventory_mutation_log'
+      AND COLUMN_NAME=? AND REFERENCED_TABLE_NAME='inventory_transactions'`);
+  for (const [column, name] of [
+    ['out_inventory_transaction_id', 'fk_inventory_mutation_log_out_tx'],
+    ['in_inventory_transaction_id', 'fk_inventory_mutation_log_in_tx'],
+  ]) {
+    if (!foreignKeyStatement.all(column).length) adapter.exec(`ALTER TABLE inventory_mutation_log ADD CONSTRAINT ${quote(name)} FOREIGN KEY (${quote(column)}) REFERENCES inventory_transactions(id)`);
+  }
+  const triggerNames = new Set(adapter.prepare(`SELECT TRIGGER_NAME trigger_name FROM information_schema.TRIGGERS
+    WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='inventory_mutation_log'`).all().map((row) => row.trigger_name));
+  if (!triggerNames.has('trg_inventory_mutation_log_consignment_insert')) adapter.exec(`
+    CREATE TRIGGER trg_inventory_mutation_log_consignment_insert BEFORE INSERT ON inventory_mutation_log FOR EACH ROW
+    BEGIN
+      IF NEW.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN') AND (
+        NEW.quantity<=0 OR NEW.source_item_id IS NULL OR NEW.source_item_id='' OR NEW.request_fingerprint IS NULL
+        OR NEW.request_fingerprint NOT REGEXP '^V1:[0-9a-f]{64}$' OR NEW.evidence_schema_version<>1
+        OR (NEW.movement_kind='MOVE' AND (NEW.from_position_key IS NULL OR NEW.to_position_key IS NULL OR NEW.from_position_identity_json IS NULL OR NEW.to_position_identity_json IS NULL OR NEW.out_inventory_transaction_id IS NULL OR NEW.in_inventory_transaction_id IS NULL))
+        OR (NEW.movement_kind='OUT' AND (NEW.from_position_key IS NULL OR NEW.from_position_identity_json IS NULL OR NEW.out_inventory_transaction_id IS NULL OR NEW.to_position_key IS NOT NULL OR NEW.to_position_identity_json IS NOT NULL OR NEW.in_inventory_transaction_id IS NOT NULL))
+        OR (NEW.from_position_identity_json IS NOT NULL AND (JSON_VALID(NEW.from_position_identity_json)=0 OR JSON_UNQUOTE(JSON_EXTRACT(NEW.from_position_identity_json,'$.positionKey'))<>NEW.from_position_key))
+        OR (NEW.to_position_identity_json IS NOT NULL AND (JSON_VALID(NEW.to_position_identity_json)=0 OR JSON_UNQUOTE(JSON_EXTRACT(NEW.to_position_identity_json,'$.positionKey'))<>NEW.to_position_key))
+      ) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='CONSIGNMENT_MUTATION_EVIDENCE_INCOMPLETE'; END IF;
+    END`);
+  if (!triggerNames.has('trg_inventory_mutation_log_consignment_update')) adapter.exec(`
+    CREATE TRIGGER trg_inventory_mutation_log_consignment_update BEFORE UPDATE ON inventory_mutation_log FOR EACH ROW
+    BEGIN IF OLD.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='CONSIGNMENT_MUTATION_EVIDENCE_IMMUTABLE'; END IF; END`);
+  if (!triggerNames.has('trg_inventory_mutation_log_consignment_delete')) adapter.exec(`
+    CREATE TRIGGER trg_inventory_mutation_log_consignment_delete BEFORE DELETE ON inventory_mutation_log FOR EACH ROW
+    BEGIN IF OLD.source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN') THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='CONSIGNMENT_MUTATION_EVIDENCE_IMMUTABLE'; END IF; END`);
+}
+
+function assertInventoryEvidenceMySql(adapter) {
+  const expected = [
+    ['source_item_id', 'varchar', 128, 'utf8mb4_0900_ai_ci'],
+    ['from_position_key', 'char', 64, 'ascii_bin'],
+    ['to_position_key', 'char', 64, 'ascii_bin'],
+    ['from_position_identity_json', 'longtext', null, 'utf8mb4_bin'],
+    ['to_position_identity_json', 'longtext', null, 'utf8mb4_bin'],
+    ['out_inventory_transaction_id', 'varchar', 128, 'utf8mb4_0900_ai_ci'],
+    ['in_inventory_transaction_id', 'varchar', 128, 'utf8mb4_0900_ai_ci'],
+    ['request_fingerprint', 'char', 67, 'ascii_bin'],
+    ['evidence_schema_version', 'tinyint', null, null],
+  ];
+  const rows = adapter.prepare(`SELECT COLUMN_NAME column_name,DATA_TYPE data_type,
+      CHARACTER_MAXIMUM_LENGTH character_maximum_length,COLLATION_NAME collation_name,
+      IS_NULLABLE is_nullable,ORDINAL_POSITION ordinal_position
+    FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='inventory_mutation_log'
+      AND COLUMN_NAME IN (?,?,?,?,?,?,?,?,?) ORDER BY ORDINAL_POSITION`).all(...expected.map(([name]) => name));
+  if (rows.length !== expected.length) throw new Error('MySQL inventory mutation evidence columns are incomplete');
+  expected.forEach(([name, type, length, collation], index) => {
+    const row = rows[index];
+    if (row.column_name !== name || String(row.data_type).toLowerCase() !== type || row.is_nullable !== 'YES'
+        || (length !== null && Number(row.character_maximum_length) !== length)
+        || (collation !== null && row.collation_name !== collation)) {
+      throw new Error(`MySQL inventory mutation evidence column mismatch: ${name}`);
+    }
+  });
+  const expectedIndexes = new Map([
+    ['uq_inventory_mutation_log_out_tx', ['out_inventory_transaction_id']],
+    ['uq_inventory_mutation_log_in_tx', ['in_inventory_transaction_id']],
+    ['idx_inventory_mutation_log_group_item', ['movement_group_id','source_type','source_id','source_item_id','id']],
+    ['idx_inventory_mutation_log_consumption', ['source_type','source_item_id','from_position_key','business_date','id']],
+  ]);
+  const indexes = adapter.prepare(`SELECT INDEX_NAME index_name,COLUMN_NAME column_name,SEQ_IN_INDEX seq_in_index,NON_UNIQUE non_unique
+    FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='inventory_mutation_log'
+    ORDER BY INDEX_NAME,SEQ_IN_INDEX`).all();
+  for (const [name, columns] of expectedIndexes) {
+    const actual = indexes.filter((row) => row.index_name === name);
+    if (actual.length !== columns.length || actual.some((row, index) => row.column_name !== columns[index])
+        || (name.startsWith('uq_') && actual.some((row) => Number(row.non_unique) !== 0))) throw new Error(`MySQL inventory mutation evidence index mismatch: ${name}`);
+  }
+  const triggers = new Set(adapter.prepare(`SELECT TRIGGER_NAME trigger_name FROM information_schema.TRIGGERS
+    WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='inventory_mutation_log'`).all().map((row) => row.trigger_name));
+  for (const name of ['trg_inventory_mutation_log_consignment_insert','trg_inventory_mutation_log_consignment_update','trg_inventory_mutation_log_consignment_delete']) {
+    if (!triggers.has(name)) throw new Error(`MySQL inventory mutation evidence trigger missing: ${name}`);
+  }
 }
 
 export function planMySqlAdditiveReconciliation(snapshot, current) {
@@ -335,6 +429,8 @@ export function bootstrapMySql(adapter, snapshot) {
     } else {
       adapter.prepare('UPDATE mysql_backend_metadata SET version=?, completed_at=?').run('v1.7-engineering', new Date().toISOString());
     }
+    ensureInventoryEvidenceMySql(adapter);
+    assertInventoryEvidenceMySql(adapter);
     // Phase 7B correctness gate. All application write transactions lock this
     // singleton row before touching business rows, so independent Node
     // processes cannot race an invariant that spans several tables. This is a

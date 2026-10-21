@@ -1,0 +1,21 @@
+.wave8-page{display:grid;gap:1rem;min-width:0}.wave8-hero{display:flex;align-items:end;justify-content:space-between;gap:1rem}.wave8-hero span{font-size:.72rem;letter-spacing:.14em;color:var(--text-secondary)}.wave8-hero h2{margin:.2rem 0 0}.wave8-hero p{max-width:42rem;margin:0;color:var(--text-secondary)}.wave8-editor{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(13rem,100%),1fr));gap:.75rem;padding:1rem;border:1px solid var(--border-color);border-radius:1rem;background:var(--surface)}.wave8-editor h3{grid-column:1/-1;margin:0}.wave8-editor label{display:grid;gap:.35rem;min-width:0}.wave8-editor input,.wave8-editor select{width:100%;min-width:0}.wave8-editor button{align-self:end}.wave8-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(18rem,100%),1fr));gap:.75rem}.wave8-card{min-width:0;padding:1rem;border:1px solid var(--border-color);border-radius:1rem;background:var(--surface);text-align:left}.wave8-card--button{display:grid;gap:.45rem;width:100%;color:inherit}.wave8-card__head{display:flex;align-items:center;justify-content:space-between;gap:.75rem}.wave8-card dl{display:grid;grid-template-columns:1fr 1fr;gap:.55rem;margin:.8rem 0 0}.wave8-card dl div{min-width:0}.wave8-card dt{font-size:.75rem;color:var(--text-secondary)}.wave8-card dd{margin:.1rem 0;overflow-wrap:anywhere}.wave8-actions{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.8rem}.wave8-compose{border:1px solid var(--border-color);border-radius:1rem;padding:.85rem}.wave8-compose summary{cursor:pointer;font-weight:700}.wave8-compose__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(20rem,100%),1fr));gap:1rem;margin-top:1rem}.wave8-detail,.wave8-report{display:grid;gap:.75rem;padding:1rem;border-radius:1rem;background:var(--surface-subtle)}.wave8-line,.wave8-report article{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(9rem,100%),1fr));align-items:center;gap:.6rem;padding:.8rem;border-radius:.75rem;background:var(--surface)}.wave8-report h3{margin:0}.mono{overflow-wrap:anywhere}@media(max-width:680px){.wave8-hero{align-items:start;flex-direction:column}.wave8-card dl{grid-template-columns:1fr}.wave8-actions>*{flex:1 1 8rem}.wave8-editor{grid-template-columns:1fr}.wave8-compose__grid{grid-template-columns:1fr}}
+
+/* R4 — real business forms replace the raw prompt dialogs. */
+.wave8-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wave8-field > span { font-size: 12px; color: var(--text-muted, #64748b); }
+.wave8-field > small { font-size: 11px; color: var(--text-muted, #64748b); }
+.wave8-field select,
+.wave8-field input { min-height: 44px; width: 100%; box-sizing: border-box; }
+.wave8-handoff { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.wave8-handoff__row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.wave8-handoff__row select,
+.wave8-handoff__row input { min-height: 44px; }
+.wave8-report article span { word-break: break-word; }
+@media (min-width: 680px) {
+  .wave8-handoff__row { grid-template-columns: 1.2fr 1fr 1fr 1fr; align-items: center; }
+  .wave8-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .wave8-editor > h3,
+  .wave8-editor > h4,
+  .wave8-editor > button,
+  .wave8-editor > .wave8-actions { grid-column: 1 / -1; }
+}

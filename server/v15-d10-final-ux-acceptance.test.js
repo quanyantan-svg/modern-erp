@@ -13,12 +13,12 @@ import { ACTIVE_APPLICATION_ROUTES, DISABLED_APPLICATION_ROUTES } from '../src/n
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('D10 baseline plus Sales Batch A enumerates 67 active user-facing routes', () => {
+test('D10 baseline plus Wave 8 enumerates 69 active user-facing routes', () => {
   // Finance Operations Domain Closure added finance-invoices + finance-treasury
   // as dedicated primary routes on top of the Core Scope Cleanup +
   // Planning + Procurement & Outsourcing state.
-  assert.equal(ROUTE_PRESENTATIONS.length, 67, 'ROUTE_PRESENTATIONS must contain 67 entries');
-  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 67, 'All 67 routes must be unique');
+  assert.equal(ROUTE_PRESENTATIONS.length, 69, 'ROUTE_PRESENTATIONS must contain 69 entries');
+  assert.equal(new Set(ROUTE_PRESENTATIONS.map((item) => item.route)).size, 69, 'All 69 routes must be unique');
 });
 
 test('D10 excludes 5 disabled routes and the mrp technical alias from the active set', () => {
@@ -38,7 +38,7 @@ test('D10 excludes 5 disabled routes and the mrp technical alias from the active
 test('D10 active routes reconcile exactly with canonical application registry', () => {
   const active = new Set(ACTIVE_APPLICATION_ROUTES.map((entry) => entry.key));
   const disabled = new Set(DISABLED_APPLICATION_ROUTES.map((entry) => entry.key));
-  assert.equal(active.size, 67, 'application registry must contain 67 active routes');
+  assert.equal(active.size, 69, 'application registry must contain 69 active routes');
   assert.deepEqual(active, new Set(ROUTE_PRESENTATIONS.map((item) => item.route)), 'active routes must match presentation projection');
   assert.deepEqual(disabled, new Set(DISABLED_ROUTE_PRESENTATIONS.map((item) => item.route)), 'disabled routes must match presentation projection');
 });
@@ -178,8 +178,8 @@ test('D10 routes visit manifest: 67 records, each ending in PASS', () => {
   // Closure added finance-invoices + finance-treasury as primary routes.
   // Planning Domain Closure added 2 contextual routes: planning-reservations,
   // planning-configuration.
-  assert.equal(manifest.length, 67, 'manifest contains 67 records');
-  assert.equal(manifest.filter((entry) => entry.finalResult === "PASS").length, 67, 'all 67 records PASS');
+  assert.equal(manifest.length, 69, 'manifest contains 69 records');
+  assert.equal(manifest.filter((entry) => entry.finalResult === "PASS").length, 69, 'all 69 records PASS');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'FIXED_DURING_D10').length, 0, 'no routes required D10 fix');
   assert.equal(manifest.filter((entry) => entry.finalResult === 'UNRESOLVED').length, 0, 'no unresolved routes');
 });

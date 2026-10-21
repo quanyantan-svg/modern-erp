@@ -79,7 +79,7 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.equal(db.prepare('SELECT 1 AS value').get().value, 1);
   });
 
-  test('fresh MySQL materialises Waves 1-7 and no Wave 8+ schema', () => {
+  test('fresh MySQL materialises Waves 1-8 and no later credit schema', () => {
     assert.equal(BATCH_A_TABLES.length, 7);
     assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
     const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
@@ -121,7 +121,10 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})
         ORDER BY TABLE_NAME`,
     ).all(...WAVE7_PLUS_SALES_TABLES);
-    assert.deepEqual(rows, []);
+    assert.deepEqual(rows.map((row) => row.table_name), [
+      'consignment_commercial_documents', 'consignment_commercial_lines',
+      'consignment_commodity_locations', 'service_fulfillments',
+    ]);
 
     const defaults = db.prepare(`SELECT COLUMN_NAME column_name,IS_NULLABLE is_nullable FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'

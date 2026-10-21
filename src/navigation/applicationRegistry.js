@@ -22,6 +22,8 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('sales-order-changes','销售订单变更','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','orders',{any:['ORDERS_VIEW','SALES_ORDER_CHANGE_DOCUMENT_MANAGE','SALES_ORDER_CHANGE_DIRECT_REQUEST','SALES_ORDER_CHANGE_APPROVE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('sales-prepayment-gates','预付款门','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['SALES_VIEW','SALES_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('sales-reservation-intents','预留意图','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','reservation',{any:['SALES_VIEW','SALES_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('service-fulfillments','服务履约','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','orders',{any:['SERVICE_SALES_VIEW','SERVICE_SALES_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('consignment-commercial','寄售业务','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDeliveries',{any:['CONSIGNMENT_VIEW','CONSIGNMENT_MANAGE']},{parentRoute:'orders',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('approvals','业务审批','platform','FLOW_SUPPORTING','WORKFLOW','primary','系统设置','approvals',{permission:'ORDERS_APPROVE'},{mobileExposure:'approval-tab',desktopExposure:'global',approvalFamilies:APPROVAL_FAMILIES}),
   route('purchase-orders','采购订单','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','purchaseOrders',{any:['PURCHASE_ORDERS_VIEW','PURCHASE_ORDERS_CREATE']}),
   route('suppliers','供应商资料','procurement-outsourcing','FLOW_PRIMARY','LIST','primary','采购与委外','suppliers',{any:['SUPPLIERS_VIEW','SUPPLIERS_MANAGE']}),
@@ -130,6 +132,7 @@ const loadScreenModule = (path) => {
     case '../pages/finance-operations.jsx': return import('../pages/finance-operations.jsx');
     case '../pages/sales-pricing.jsx': return import('../pages/sales-pricing.jsx');
     case '../pages/sales-batch-a.jsx': return import('../pages/sales-batch-a.jsx');
+    case '../pages/wave8-sales.jsx': return import('../pages/wave8-sales.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
   }
 };
@@ -179,6 +182,8 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'planned-orders': defaultScreen('../pages/planning-workbench.jsx'), 'planner-workbench': defaultScreen('../pages/planning-workbench.jsx'),
   'planning-reservations': defaultScreen('../pages/planning-reservations.jsx'),
   'planning-configuration': defaultScreen('../pages/planning-configuration.jsx'),
+  'service-fulfillments': named('../pages/wave8-sales.jsx','ServiceFulfillments'),
+  'consignment-commercial': named('../pages/wave8-sales.jsx','ConsignmentCommercial'),
   'production-instructions': defaultScreen('../pages/planning-documents.jsx'), 'purchase-instructions': defaultScreen('../pages/planning-documents.jsx'),
   'purchase-requisitions': defaultScreen('../pages/planning-documents.jsx'), 'data-cleanup': defaultScreen('../pages/data-cleanup.jsx'),
   'engineering-reference': defaultScreen('../pages/engineering-reference.jsx'),
@@ -207,6 +212,7 @@ const ROUTE_QUERY_KEYS = Object.freeze({
   'decision-reports': ['reportKey'],
   'planned-orders': [], 'planning-reservations': [], 'planning-configuration': [],
   'sales-prepayment-gates': ['salesOrderId'], 'sales-reservation-intents': ['salesOrderId'],
+  'service-fulfillments': ['salesOrderId'], 'consignment-commercial': ['customerId'],
 });
 const INTERNAL_ROUTES = new Set(['material-requirements-plan','manufacturing-analytics']);
 const CONTEXTUAL_ROUTES = new Set([
@@ -216,6 +222,7 @@ const CONTEXTUAL_ROUTES = new Set([
   'bank-accounts','product-costs','cost-rates','iqc','oqc','quality-control-points',
   'notifications','planning-reservations','planning-configuration',
   'sales-prepayment-gates','sales-reservation-intents',
+  'service-fulfillments','consignment-commercial',
 ]);
 const classificationFor = (routeKey) => INTERNAL_ROUTES.has(routeKey) ? 'INTERNAL' : (CONTEXTUAL_ROUTES.has(routeKey) ? 'CONTEXTUAL' : 'CORE');
 const targetContractFor = (routeKey) => Object.freeze({

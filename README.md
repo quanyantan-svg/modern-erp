@@ -460,3 +460,26 @@ AUDIT
 - 破坏性数据库操作必须单独批准。
 
 私有项目，禁止外传。
+
+## Wave 8 销售履约扩展（已验收并冻结）
+
+当前工作树已实现 Service Fulfillment 与 Consignment 的上下文工作面，并保留全局 Launcher 不新增主入口：
+
+- 销售订单可进入 Service Fulfillment，执行 `PENDING / CONFIRMED / CANCELLED` 流程；
+- Consignment 支持商业地点、指令、Handoff、Settlement、Return 与三层查询；
+- Consignment 的物理库存变化仍由 Inventory V21 canonical writer 负责，Finance 暴露仍由既有 Finance writer 负责；
+- `inventory_mutation_log` 仅增加经批准的九个 nullable 历史位置证据字段，没有第五张 Wave 8 业务表或影子库存/AR；
+- SQLite 与 MySQL 8 迁移均走 canonical migration lifecycle，旧行保持可读且不做猜测式 backfill；
+- Wave 8 四张业务表在 MySQL 上由共享 snapshot reconciliation 先行创建；migration 追加只读的 `information_schema` 物理合同断言（列/默认值/NULL/CHECK/FK/UNIQUE/index 顺序/collation），结构不兼容时 fail closed 且不做修复性 DDL；`lot_code_key` 已按最终设计收敛为 MySQL binary collation，并保留升级前歧义检测。
+- `SALES_VIEW` 是本轮新增权限且有 §35.18.8 批准依据，不是 HEAD 既有权限；Wave 8 读取判定为 `SALES_MANAGE OR SALES_VIEW` 再叠加对应窄权限，写入判定为 `SALES_MANAGE` + 窄权限。
+
+Wave 8 测试入口：
+
+- `server/sales-customer-wave8-functional.test.js`：Stage D 功能与证据回归；
+- `server/sales-customer-wave8-remediation.test.js`：P0/P1 反例复现与闭环（P0-1 零金额、P0-2 SO 商业权威、partition entitlement、handoff 仓库、三层报告、RBAC、C1 锁序证据）；
+- `server/sales-customer-wave8-mysql-metadata.test.js`：四表 MySQL 既有结构 fail-closed 证明；
+- `server/sales-customer-wave8-mixed-delivery.test.js`：混合/纯服务 Delivery 与 RBAC 负向矩阵（真实 HTTP 面）；
+- `server/mysql-sales-customer-wave8-concurrency.integration.js`：真实 MySQL 独立会话 R-SAL-20/21/22 与 A3 竞态。
+- 浏览器响应式与 direct/refresh/back/forward 入口为 `node scripts/acceptance/sales-customer-wave8-acceptance.mjs`（本机 Edge，320/390/430/680 CSS px）。
+
+用户已于 2026-10-21 明确确认 `WAVE8_FINAL_ACCEPTANCE_PASS`。上述 Wave 8 批准范围现作为冻结基线；冻结仅适用于 Wave 8，不冻结整个 ERP 项目，也不授权 Wave 9–13、发布、部署或版本变更。

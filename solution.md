@@ -15646,3 +15646,2797 @@ The following remain outside this Acceptance:
 No `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git reset`, `git clean`, `git stash`, `git tag`, `git push --tags`, `release`, `deploy`, or `package.json` change was authorized by this record. No production / non-disposable database reset, DDL, DML, query, or schema mutation was authorized by this record. The accepted working tree at HEAD `aee1e0c` remains unstaged and uncommitted, awaiting the user's separate manual Git handling. `APPLY_GUIDE.md` is preserved verbatim.
 
 **Final governance status: WAVE6_FINAL_ACCEPTANCE_PASS — FROZEN — USER APPROVED.**
+
+---
+
+## 35. Sales & Customer Wave 8 — Stage C Design Closure (2026-10-19)
+
+> Status: `WAVE8_STAGE_C_DESIGN_DELIVERED — AWAITING USER APPROVAL`.
+>
+> This section is an additive, bounded Design closure for the user-approved Wave 8 Stage B Requirement Closure. It does not rewrite frozen §29.18 / §29.19 / §29.31 / §29.41 / §29.43 / §29.44 / §30.17 / §30.18 text, does not authorize Implementation, and does not modify Wave 6 / Wave 7. The authoritative business scope remains `document.md` Wave 8 Stage B §A–§M.
+
+### 35.1 Baseline, provenance reconciliation and scope
+
+- Baseline: `feature/sales-waves6-13@25e28b4103367d39c1573485ac05be04f3337924`, package `1.6.2`; Wave 6 and Wave 7 remain FROZEN; Waves 9–13 remain OUT_OF_SCOPE.
+- The Stage B §J correction register contains **12 numbered rows**. The current `document.md` and `log/2026-10-19.md` both display all 12. Therefore the task premise “12 corrections versus 11 displayed rows” does not describe the current repository state; no provenance fact error exists and no `document.md` clarification is appended.
+- Register rows 1–12 are corrections to the earlier Audit claims. UD-1..UD-5 are later user constraints. DDN-SVC-1/2, DDN-CON-1/2/3 and DDN-MIG-1 are Stage C design questions. These three classes are not merged.
+- Files designed for a later Implementation: one Wave 8 migration, `server/modules/service-fulfillment.js`, `server/modules/consignment.js`, a bounded `confirmSalesDelivery()` integration, owned-route registration, exact permissions, two contextual frontend surfaces, focused/acceptance/MySQL suites and gate registration.
+- This Design introduces exactly four new tables and zero alteration of existing tables.
+
+### 35.2 Design decisions and blockers
+
+| Decision | Stage C outcome | Authority / effect |
+|---|---|---|
+| DDN-SVC-1 | `REQUIREMENT_DECISION_REQUIRED` for cancellation after economic recognition. PENDING may be cancelled; CONFIRMED may not transition to CANCELLED until the owner approves the reversal policy. | Existing Finance adapter can create/replay exposure but no frozen service-specific reversal contract exists. Implementation must return 409 `SERVICE_FULFILLMENT_REVERSAL_POLICY_REQUIRED` for post-recognition cancel. |
+| DDN-SVC-2 | Explicit non-empty HTTP `Idempotency-Key` is required for CREATE / CONFIRM / CANCEL. | Technical consistency choice under §29.45; existing `idempotency_records` remains the canonical store. Missing key → 400 before mutation/audit. |
+| DDN-CON-1 | Layer 1 + Layer 2 are re-read under one transaction; Layer 3 is called and re-read through the Finance canonical adapter in the same transaction. | Commercial capacity alone cannot prove physical availability. Finance remains authoritative for economic effect; Sales does not aggregate a second Finance ledger. |
+| DDN-CON-2 | Commercial location must be active on create and on every handoff/settle/return mutation; its explicit warehouse/bin mapping must also be active and coherent. | Validate-on-write plus validate-on-mutation; historical rows remain readable after later deactivation. |
+| DDN-CON-3 | `REQUIREMENT_DECISION_REQUIRED`. Stage C does not invent partial cancel/split semantics. DRAFT header may be cancelled only before physical handoff; instructed lines are immutable except settlement/return commands. | Quantity adjustment or partial cancel would create a new commercial policy not frozen in Stage B. |
+| DDN-MIG-1 | One additive step: `wave-8-service-fulfillment-and-consignment`, ordered after Wave 7. | One migration owns the four mutually dependent tables; fresh/upgrade/replay share the same entrypoint. |
+| Physical consignment writer | `BOUNDED_INTEGRATION_CONTRACT_EXTENSION_REQUIRED`. | Current V21 position can legally represent ENTERPRISE stock at an explicitly mapped warehouse/bin, but `applyInventoryMutation()` has no CONSIGNMENT source type and no commercial-location argument. Implementation is blocked until the bounded Inventory writer contract is separately approved. No shadow inventory is allowed. |
+
+### 35.3 Shared scalar and identity rules
+
+- IDs are application-generated opaque text (`TEXT` SQLite / `VARCHAR(128)` MySQL); timestamps are UTC ISO-8601 text (`TEXT` / `VARCHAR(32)`); business dates are `YYYY-MM-DD` (`TEXT` / `DATE`).
+- All money is safe integer cents (`INTEGER` / `BIGINT`) with `>= 0` checks.
+- New-table quantities use integer micro-units (`*_qty_micros`, scale 10^6; `INTEGER` / `BIGINT`) and never REAL/DOUBLE/DECIMAL. Conversion from existing `sales_order_items.quantity` uses the existing `quantityToMicros()` contract; API responses may expose display quantity plus authoritative micros.
+- `version` starts at 1 and advances by compare-and-swap on mutable lifecycle commands. A stale expected version returns 409.
+- Command identity is `(operation_type, entity_id, Idempotency-Key)` in existing `idempotency_records`; fingerprint includes every normalized field affecting business/economic effect and excludes transport noise. Same key/same fingerprint replays; same key/different fingerprint returns 409.
+- Audit and idempotency success evidence is written inside the same business transaction. A rollback leaves neither success audit nor committed idempotency result.
+
+### 35.4 `service_fulfillments` physical schema
+
+| Column | SQLite / MySQL | Contract |
+|---|---|---|
+| `id` | TEXT PK / VARCHAR(128) PK | immutable fulfillment identity |
+| `fulfillment_no` | TEXT / VARCHAR(64), UNIQUE NOT NULL | user-visible identity |
+| `sales_order_id` | TEXT / VARCHAR(128), FK NOT NULL | authoritative SO header |
+| `sales_order_item_id` | TEXT / VARCHAR(128), FK NOT NULL | R-SAL-22 capacity anchor |
+| `product_id` | TEXT / VARCHAR(128), FK NOT NULL | immutable source snapshot equality check |
+| `customer_id` | TEXT / VARCHAR(128), FK NOT NULL | immutable source/customer scope |
+| `sales_group_id` | TEXT / VARCHAR(128), FK NULL | backend data-scope anchor |
+| `confirmation_qty_micros` | INTEGER / BIGINT NOT NULL | `> 0`; service quantity |
+| `unit_price_cents` | INTEGER / BIGINT NOT NULL | `>= 0`; source SO snapshot |
+| `recognition_amount_cents` | INTEGER / BIGINT NOT NULL | exact allocated service amount; `>= 0` |
+| `business_date` | TEXT / DATE NOT NULL | Finance/period authority |
+| `confirmation_state` | TEXT / VARCHAR(16) NOT NULL | `PENDING / CONFIRMED / CANCELLED` |
+| `finance_recognition_mode` | TEXT / VARCHAR(40) NULL | frozen Finance result snapshot |
+| `finance_open_item_id` | TEXT / VARCHAR(128) NULL | Finance-owned result reference; no Sales FK ownership claim |
+| `finance_source_type` | TEXT / VARCHAR(40) NULL | `SERVICE_FULFILLMENT` when recognized |
+| `finance_source_id` | TEXT / VARCHAR(128) NULL | equals this row id when recognized |
+| `confirmed_at/by`, `cancelled_at/by` | timestamp/user FK NULL | transition evidence |
+| `version` | INTEGER NOT NULL DEFAULT 1 | optimistic command version |
+| `created_at/by`, `updated_at/by` | timestamp/user FK | audit-support metadata |
+
+Constraints and indexes:
+
+```text
+UNIQUE (fulfillment_no)
+UNIQUE (sales_order_item_id, id)
+CHECK (confirmation_qty_micros > 0)
+CHECK (unit_price_cents >= 0 AND recognition_amount_cents >= 0)
+CHECK (confirmation_state IN ('PENDING','CONFIRMED','CANCELLED'))
+CHECK ((confirmation_state='PENDING' AND confirmed_at IS NULL AND confirmed_by IS NULL
+        AND cancelled_at IS NULL AND cancelled_by IS NULL)
+    OR (confirmation_state='CONFIRMED' AND confirmed_at IS NOT NULL AND confirmed_by IS NOT NULL
+        AND cancelled_at IS NULL AND cancelled_by IS NULL)
+    OR (confirmation_state='CANCELLED' AND cancelled_at IS NOT NULL AND cancelled_by IS NOT NULL
+        AND ((confirmed_at IS NULL AND confirmed_by IS NULL)
+          OR (confirmed_at IS NOT NULL AND confirmed_by IS NOT NULL))))
+CHECK ((finance_source_id IS NULL AND finance_source_type IS NULL)
+    OR (finance_source_id=id AND finance_source_type='SERVICE_FULFILLMENT'))
+INDEX idx_service_fulfillment_so_item_state (sales_order_item_id, confirmation_state, id)
+INDEX idx_service_fulfillment_order (sales_order_id, id)
+INDEX idx_service_fulfillment_group_date (sales_group_id, business_date, id)
+```
+
+The writer additionally proves under lock that the SO item belongs to the header/customer/product snapshot, the SO is eligible, A-61 is active/sales-enabled/service-classified, and confirmed capacity plus this command does not exceed `quantityToMicros(sales_order_items.quantity)`.
+
+### 35.5 Consignment physical schema
+
+#### 35.5.1 `consignment_commodity_locations`
+
+| Column | Contract |
+|---|---|
+| `id` PK, `location_code` UNIQUE | commercial identity only; never a warehouse/bin identifier |
+| `customer_id` FK NOT NULL | customer custody context |
+| `name`, `address_text` NOT NULL | display/snapshot source |
+| `physical_warehouse_id` FK NOT NULL | explicit mapping to existing active Inventory/Master warehouse |
+| `physical_bin_id` FK NULL | explicit mapped bin; must belong to mapped warehouse |
+| `active` boolean, `effective_from`, `effective_to` | validation window |
+| `version`, created/updated actor/timestamp | CAS and evidence |
+
+`UNIQUE(customer_id, location_code)`; date order and active checks are equivalent in both dialects. Mapping is explicit and validated; IDs are never inferred/equated. Deactivation does not rewrite historical mappings.
+
+#### 35.5.2 `consignment_commercial_documents`
+
+| Column | Contract |
+|---|---|
+| `id` PK, `document_no` UNIQUE | instruction identity |
+| `customer_id`, `sales_group_id`, `source_warehouse_id` FKs | commercial/data-scope/source facts |
+| `instruction_date`, `business_date` | business dates |
+| `status` | `DRAFT / INSTRUCTED / PARTIAL_SETTLED / SETTLED / RETURNED / CANCELLED` |
+| `currency_code` | frozen base-currency code only |
+| `version`, created/updated/confirmed actor/timestamp | CAS/lifecycle evidence |
+
+The header state is derived/advanced only after all lines are locked and recomputed. `CANCELLED` is permitted only from DRAFT while no physical mutation exists. `PARTIAL_SETTLED`, `SETTLED`, and `RETURNED` are consequences of line totals, not client-writable labels.
+
+#### 35.5.3 `consignment_commercial_lines`
+
+| Column | Contract |
+|---|---|
+| `id` PK, `document_id` FK, `line_no` | stable line identity; UNIQUE(document_id,line_no) |
+| `sales_order_item_id` FK NULL | optional truthful Sales source; NULL never implies fabricated source |
+| `product_id`, `consignment_commodity_location_id` FKs | item and commercial location |
+| `lot_code` NULL, `lot_code_key` NOT NULL DEFAULT '' | display value plus normalized uniqueness key |
+| `consigned_qty_micros` | positive commercial/instructed capacity |
+| `settled_qty_micros`, `returned_qty_micros` | non-negative cumulative commercial effects |
+| `unit_price_cents`, `settled_amount_cents`, `returned_amount_cents` | integer cents only |
+| `handoff_movement_group_id` NULL | canonical V21 movement reference, not a stock balance |
+| `last_finance_reference_id` NULL | convenience reference only; Finance rows remain authority |
+| `version`, created/updated actor/timestamp | CAS/evidence |
+
+Constraints:
+
+```text
+UNIQUE (document_id, line_no)
+UNIQUE (document_id, product_id, consignment_commodity_location_id, lot_code_key)
+CHECK (consigned_qty_micros > 0)
+CHECK (settled_qty_micros >= 0 AND returned_qty_micros >= 0)
+CHECK (settled_qty_micros + returned_qty_micros <= consigned_qty_micros)
+CHECK (unit_price_cents >= 0 AND settled_amount_cents >= 0 AND returned_amount_cents >= 0)
+CHECK ((lot_code IS NULL AND lot_code_key='') OR
+       (lot_code IS NOT NULL AND length(trim(lot_code))>0 AND lot_code_key=lower(trim(lot_code))))
+INDEX idx_consignment_line_doc (document_id, id)
+INDEX idx_consignment_line_location_product (consignment_commodity_location_id, product_id, id)
+INDEX idx_consignment_line_source (sales_order_item_id, id)
+```
+
+`lot_code_key` solves cross-dialect nullable uniqueness explicitly: NULL normalizes to the non-null empty key; non-null values normalize through the same application function and DB CHECK. The migration metadata tests must prove ordered UNIQUE columns and duplicate rejection on both SQLite and MySQL; ordinary nullable UNIQUE semantics are not relied upon.
+
+### 35.6 SQLite/MySQL DDL and migration convergence
+
+The migration module exports `SALES_WAVE8_TABLES` and `migrateSalesCustomerWave8ServiceConsignment(db)`. SQLite uses `CREATE TABLE IF NOT EXISTS` plus `CREATE INDEX IF NOT EXISTS`; MySQL uses InnoDB/utf8mb4, named FK/CHECK/UNIQUE/index objects and strict `information_schema` assertions. The logical schema above is exact; dialect types follow §35.3.
+
+Migration order:
+
+```text
+1. consignment_commodity_locations
+2. consignment_commercial_documents
+3. consignment_commercial_lines
+4. service_fulfillments
+5. indexes and named constraints
+6. assert table/column/type/null/default/PK/FK/UNIQUE/CHECK/index parity
+```
+
+Registry entry:
+
+```text
+{ id: 'wave-8-service-fulfillment-and-consignment', wave: 8,
+  migrate: migrateSalesCustomerWave8ServiceConsignment }
+```
+
+Fresh bootstrap, existing upgrade and second replay must converge without row rewrite. A pre-existing same-name object is accepted only when metadata is compatible; otherwise startup fails closed with the exact object/column mismatch. No DROP/rename/destructive rollback is authorized. Operational rollback disables Wave 8 routes/writers while preserving populated additive evidence; physical removal requires a separate migration/data-retention approval.
+
+#### 35.6.1 Authoritative cross-dialect DDL realization
+
+The tables in §35.4–§35.5 are not illustrative. The migration must emit every listed column and constraint. SQLite uses the following physical scalar realization:
+
+```text
+id/reference/text/code/timestamp/business-date  → TEXT
+money/quantity/version/boolean                   → INTEGER
+PRIMARY KEY                                      → TEXT PRIMARY KEY
+foreign key                                      → FOREIGN KEY(column) REFERENCES owner(id)
+```
+
+MySQL 8 uses the equivalent realization:
+
+```text
+id/reference              → VARCHAR(128)
+document/code             → VARCHAR(64)
+state                     → VARCHAR(24)
+timestamp                 → VARCHAR(32)
+business-date             → DATE
+money/quantity            → BIGINT
+version                   → INT
+boolean                   → TINYINT(1)
+engine/collation          → ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+```
+
+For MySQL, every FK/CHECK/UNIQUE is named (`fk_w8_*`, `ck_w8_*`, `uq_w8_*`) and verified through `information_schema.REFERENTIAL_CONSTRAINTS`, `CHECK_CONSTRAINTS`, `KEY_COLUMN_USAGE` and `STATISTICS`. For SQLite, the same logical objects are verified through `PRAGMA table_info`, `foreign_key_list`, `index_list`, `index_info` and normalized `sqlite_master.sql`. Boolean CHECKs restrict values to 0/1. Business-date validation is performed at the API boundary and by dialect date parsing; timestamps remain portable ISO text.
+
+The complete required column sets are:
+
+```text
+service_fulfillments(
+  id, fulfillment_no, sales_order_id, sales_order_item_id, product_id,
+  customer_id, sales_group_id, confirmation_qty_micros, unit_price_cents,
+  recognition_amount_cents, business_date, confirmation_state,
+  finance_recognition_mode, finance_open_item_id, finance_source_type,
+  finance_source_id, confirmed_at, confirmed_by, cancelled_at, cancelled_by,
+  version, created_at, created_by, updated_at, updated_by
+)
+
+consignment_commodity_locations(
+  id, location_code, customer_id, name, address_text, physical_warehouse_id,
+  physical_bin_id, active, effective_from, effective_to, version,
+  created_at, created_by, updated_at, updated_by
+)
+
+consignment_commercial_documents(
+  id, document_no, customer_id, sales_group_id, source_warehouse_id,
+  instruction_date, business_date, status, currency_code, version,
+  confirmed_at, confirmed_by, created_at, created_by, updated_at, updated_by
+)
+
+consignment_commercial_lines(
+  id, document_id, line_no, sales_order_item_id, product_id,
+  consignment_commodity_location_id, lot_code, lot_code_key,
+  consigned_qty_micros, settled_qty_micros, returned_qty_micros,
+  unit_price_cents, settled_amount_cents, returned_amount_cents,
+  handoff_movement_group_id, last_finance_reference_id, version,
+  created_at, created_by, updated_at, updated_by
+)
+```
+
+All non-null/default/FK/CHECK/UNIQUE/index requirements are those enumerated in §35.4–§35.5; the migration metadata test treats any omitted item as failure. This explicit mapping avoids copying SQLite DDL verbatim into MySQL and avoids dialect-specific NULL uniqueness assumptions.
+
+### 35.7 Service Fulfillment canonical writer and state machine
+
+`server/modules/service-fulfillment.js` owns list/detail/create/confirm/cancel and exports a read-only `resolveConfirmedServiceEvidenceForDelivery()` adapter.
+
+```text
+CREATE:  none → PENDING
+  lock SO header → SO line → active product_commercial_classification
+  validate group/customer/product/source and remaining capacity
+  insert row + audit + idempotency result
+
+CONFIRM: PENDING → CONFIRMED
+  lock SO header → SO line → all confirmed/pending fulfillment rows (id ASC)
+  re-read service classification and aggregate confirmed micros
+  calculate recognition_amount_cents from the immutable SO line snapshot using
+  cumulative integer allocation:
+    amount(this) = floor(line_amount_cents * cumulative_confirmed_micros / ordered_micros)
+                 - floor(line_amount_cents * prior_confirmed_micros / ordered_micros)
+  the final legal fulfillment therefore receives the exact rounding remainder
+  invoke Wave 7 authorizeSalesPrepaymentGateForMutation at DELIVERY stage
+  using current authoritative SO amount, received prepayment and business date
+  call recognizeFinanceExposure(SERVICE_FULFILLMENT, fulfillment.id) exactly once
+  persist returned Finance reference → state/version → audit → idempotency result
+
+CANCEL: PENDING → CANCELLED
+  allowed before recognition only; no Finance/Inventory effect
+  CONFIRMED cancellation → 409 SERVICE_FULFILLMENT_REVERSAL_POLICY_REQUIRED
+  until REQUIREMENT_DECISION_REQUIRED is resolved
+```
+
+Finance recognition has one source identity per fulfillment. `recognizeFinanceExposure()` remains Finance-owned. Wave 8 must add/verify the policy resolution for `source_type='SERVICE_FULFILLMENT'`; fallback DIRECT must not be silently accepted as policy configuration. No service COGS or Inventory mutation is created.
+
+The fulfillment CONFIRM prepayment call is a reuse of the frozen Wave 7 gate, not a second policy engine. Later Sales Delivery CONFIRM still re-reads current authority and runs the gate again; the earlier pass does not authorize a later delivery. This ensures service Finance Recognition is never earlier than prepayment authorization, while the fulfillment Finance source identity prevents a second economic effect at delivery.
+
+### 35.8 Sales Delivery mixed-line integration
+
+The bounded modification stays inside `confirmSalesDelivery()` after the existing Delivery-stage prepayment authorization and before physical mutation. It builds two immutable plans from locked authoritative lines:
+
+```text
+physicalPlan = lines whose active A-61 service_classification = FALSE
+servicePlan  = lines whose active A-61 service_classification = TRUE
+missing/inactive A-61 = 409 SALES_CLASSIFICATION_REQUIRED (all rows rollback)
+```
+
+- Physical plan: existing reservation, OQC, Inventory OUT, tracked movement, valuation, COGS and physical-line Finance recognition remain unchanged.
+- Service plan: lock SO line, prior confirmed Sales Delivery lines and confirmed fulfillments; require cumulative confirmed-delivery service micros including this delivery to be `<=` cumulative confirmed-fulfillment micros and `<=` SO capacity. Call `resolveConfirmedServiceEvidenceForDelivery()` to verify the existing Finance recognition references. It writes no Inventory, valuation, COGS or new AR/Revenue, so the same fulfillment cannot be reused beyond its quantity by later deliveries.
+- `authoritativeLogisticsTotal()` is partitioned. `physicalRevenueCents` is recognized under `SALES_DELIVERY`; `serviceRevenueCents` must equal already-recognized fulfillment allocations and is excluded from Sales Delivery recognition. This is the single-recognition rule.
+- Pure service delivery: no Inventory/valuation/COGS rows; service evidence is verified; delivery becomes CONFIRMED; Sales Delivery revenue/AR effect is zero because the service fulfillment owns it.
+- Pure physical delivery: frozen current path.
+- Mixed delivery: physical side effects only for physical lines; service references only for service lines; one transaction and one final delivery state.
+- Partial/multiple service fulfillment: confirmed aggregate may satisfy a delivery line across multiple fulfillment rows; rows are consumed in `(business_date,id)` order only for evidence allocation and are not rewritten. Delivery quantity may not exceed confirmed service evidence or SO capacity.
+- Prepayment Gate always runs first for the whole Delivery and is never bypassed. A failure rolls back both service verification and physical effects.
+- Replay uses the existing Delivery command key; same delivery cannot duplicate either physical or service economic effect.
+
+SVC-1 design proposal is therefore: recognition occurs at Service Fulfillment CONFIRM, not again at Delivery CONFIRM. If the owner instead wants recognition at Delivery, Stage B Requirement must be reopened because the current contract explicitly describes fulfillment confirmation as triggering Finance recognition.
+
+### 35.9 Consignment three-truth lifecycle and adapters
+
+Layer owners:
+
+```text
+Layer 1 Sales: consignment documents/lines/locations; instruction and commercial capacity
+Layer 2 Inventory V21: physical position/movement, ENTERPRISE ownership until settlement
+Layer 3 Finance V22: AR, settlement, credit/refund and economic reversal
+```
+
+Flow:
+
+1. Create DRAFT instruction and lines; validate active A-61, customer/group scope, active commercial location and explicit warehouse/bin mapping.
+2. Confirm instruction (`DRAFT → INSTRUCTED`): lock document/lines, validate mapped source and destination positions, invoke the bounded Inventory adapter to MOVE from `source_warehouse_id` to mapped site position with `owner_type='ENTERPRISE'`; save movement-group reference. No AR/revenue.
+3. Settle quantity: lock line, mapped ENTERPRISE position and Finance source identity; remaining = consigned − settled − returned. OUT the settled quantity from enterprise inventory at the site (ownership leaves the ERP inventory ledger), then create/replay Finance AR/revenue. Each partial-settlement command uses immutable event identity `CONSIGNMENT_SETTLEMENT:<lineId>:<Idempotency-Key>` as the Finance source id; the existing `idempotency_records` result stores that event id and Finance reference. This avoids attempting to enlarge an existing Finance open item whose canonical adapter requires immutable source amount. Update cumulative line totals and header derived status; Finance event rows, not `last_finance_reference_id`, are historical economic authority.
+4. Commercial return: the frozen Stage B text is ambiguous about whether return only restores commercial capacity at the consignment site or physically moves stock back to an internal warehouse. Stage C does not invent a destination. The endpoint remains 409 `CONSIGNMENT_RETURN_DESTINATION_POLICY_REQUIRED` until `REQUIREMENT_DECISION_REQUIRED` resolves this point. It must never fabricate a return warehouse or CUSTOMER ownership.
+5. Reporting joins Layer 1 with V21 movement/position references and Finance source rows. Differences are reported; GET never repairs them.
+
+Inventory adapter extension required before implementation:
+
+```text
+source types: CONSIGNMENT_HANDOFF, CONSIGNMENT_SETTLEMENT, CONSIGNMENT_RETURN
+input: commercialLocationId as audit/source context only (NOT a position-key dimension)
+position: explicit mapped warehouse/bin + ENTERPRISE owner
+semantics: HANDOFF=MOVE, SETTLEMENT=OUT, RETURN=bounded MOVE after owner decision
+valuation: HANDOFF is a value-preserving location transfer using valuationMode=EXTERNAL
+           plus the existing canonical transfer-value adapter; it must not issue value
+           twice through the current best-effort per-movement loop
+same outer transaction, period/tracking/valuation/audit/idempotency contracts retained
+```
+
+This is a bounded extension to the canonical writer, not a new table or shadow stock ledger.
+
+### 35.10 Concurrency and unified lock order
+
+All Wave 8 writes use one caller-owned transaction. SQLite uses `BEGIN IMMEDIATE`. MySQL uses indexed `FOR UPDATE` reads in this global order:
+
+```text
+1. Sales document header (SO or consignment document), ascending id
+2. Sales capacity line (sales_order_items or consignment_commercial_lines), ascending id
+3. Wave 8 child rows (service fulfillments / consignment lines), ascending id
+4. Inventory V21 positions by position_key ASC, then LOT/SERIAL identities and locks
+5. Finance canonical source/open-item/settlement identity in the Finance adapter's order
+6. idempotency result, then append-only audit
+```
+
+- R-SAL-22: two confirmations lock the same SO line before aggregate; combined confirmed micros cannot exceed order micros. One/both may succeed only within remaining capacity.
+- R-SAL-20: two settlements lock the same consignment line, then the same position and Finance identity; combined settled+returned cannot exceed consigned or physical ENTERPRISE quantity.
+- R-SAL-21: settlement and return use the same line lock and order. Until return destination policy is approved, return fails closed before Inventory/Finance mutation; after approval, exactly one legal serialized result is allowed.
+- No path checks only Layer 1. Inventory and Finance failures roll the entire caller transaction back.
+- Real MySQL evidence uses independent worker processes/connections and `mysql_transaction_gates.gate_id=1` only as a synchronization observer, never as the business lock.
+
+### 35.11 API, RBAC, data scope, audit and idempotency matrix
+
+| API | Permission | Data scope / locked authority | Audit | Idempotency |
+|---|---|---|---|---|
+| `GET /api/service-fulfillments` / `:id` | `SERVICE_SALES_VIEW` | actor sales-group scope; ADMIN explicit bypass | read access log only, no business audit | n/a |
+| `POST /api/service-fulfillments` | `SERVICE_SALES_MANAGE` | SO/customer/group/line/A-61 | CREATE | required header |
+| `POST /api/service-fulfillments/:id/confirm` | `SERVICE_SALES_MANAGE` | SO line + fulfillment aggregate + Finance source | CONFIRM | required header |
+| `POST /api/service-fulfillments/:id/cancel` | `SERVICE_SALES_MANAGE` | fulfillment row/version | CANCEL; confirmed path blocked | required header |
+| `GET /api/consignment-commercial-documents` / `:id` / `:id/remaining` | `CONSIGNMENT_VIEW` | customer + sales-group scope | no business mutation audit | n/a |
+| `GET /api/consignment-commercial-report` | `CONSIGNMENT_VIEW` | scoped filters + authoritative three-layer projection | REPORT_QUERY with filter digest/result count; no sensitive result detail | n/a |
+| `GET/POST/PATCH /api/consignment-commodity-locations` | VIEW / `CONSIGNMENT_MANAGE` | customer scope + warehouse/bin reference validation | CREATE/UPDATE/DEACTIVATE | write header required |
+| `POST /api/consignment-commercial-documents` | `CONSIGNMENT_MANAGE` | customer/group/location/source refs | CREATE | required header |
+| `PATCH /api/consignment-commercial-documents/:id` | `CONSIGNMENT_MANAGE` | DRAFT + expected version only | UPDATE | required header |
+| `POST /api/consignment-commercial-documents/:id/instruct` | `CONSIGNMENT_MANAGE` | doc/lines + mapped V21 positions | INSTRUCT | required header |
+| `POST /api/consignment-commercial-lines/:id/settle` | `CONSIGNMENT_MANAGE` | line + V21 + Finance | SETTLE | required header |
+| `POST /api/consignment-commercial-lines/:id/return` | `CONSIGNMENT_MANAGE` | blocked pending return policy; later line+V21+Finance | RETURN | required header |
+| `POST /api/consignment-commercial-documents/:id/cancel` | `CONSIGNMENT_MANAGE` | DRAFT/no movement only | CANCEL | required header |
+
+Exact uppercase permissions are registered in Platform and mapped without widening the five-role baseline: ADMIN receives all; SALES receives VIEW+MANAGE; REVIEWER receives VIEW only; WAREHOUSE/ACCOUNTING receive no Wave 8 write authority. Wave 8 permissions narrow rather than replace the frozen Sales permissions: every write requires both `SALES_MANAGE` and the matching Wave 8 `*_MANAGE`; every read requires (`SALES_VIEW` or `SALES_MANAGE`) and the matching Wave 8 (`*_VIEW` or `*_MANAGE`). Frontend route visibility consumes VIEW/MANAGE, but every handler independently enforces backend permission and group scope. Denial is 403 and produces no success audit/idempotency record. The consignment report is the Stage B exception to ordinary read-only audit behavior: each success or failure writes one `REPORT_QUERY` audit row through the common audit writer, without storing sensitive result rows.
+
+### 35.12 Frontend and route design
+
+- `consignment` is a contextual route under existing `orders`, not a launcher primary entry. Screen owner: `src/pages/consignment.jsx`.
+- `service-fulfillments` is a contextual Sales Order sub-page under `orders`, opened with whitelisted `salesOrderId` and optional `salesOrderItemId`; screen may live in the same Wave 8 page module or a dedicated bounded component, but only one active route/screen exists.
+- Registry permissions are `CONSIGNMENT_VIEW/MANAGE` and `SERVICE_SALES_VIEW/MANAGE`; direct URL, refresh, Back and Forward use RouteLocation.
+- LIST → DETAIL → WORKFLOW; 320/390/430/680 CSS px; no permanent horizontal scroll; status/source/remaining/primary action precede secondary metadata. No global IA redesign and no new launcher entry.
+
+### 35.13 Acceptance and test architecture
+
+| Trace | Required evidence |
+|---|---|
+| SC70/71, S08, UAT-S-25 | pure service, physical, mixed delivery; partial/multiple fulfillment; insufficient evidence; missing A-61; prepayment gate pass/block; single AR/revenue; zero service Inventory/COGS; rollback/replay |
+| SC72–77, S18, UAT-S-26/27/41 | instruction, explicit location mapping, ENTERPRISE handoff, settlement, physical/Finance failure rollback, reporting trace; return remains blocked until owner policy + V21 extension approval |
+| service/prepayment relation | fulfillment CONFIRM passes Wave 7 DELIVERY gate before Finance; later delivery rechecks current authority without duplicate economics |
+| reporting audit | every consignment report query writes one scoped REPORT_QUERY audit row without persisting sensitive result detail |
+| R-SAL-22 | two independent sessions against one service line; combined micros ≤ capacity; no duplicate Finance effect |
+| R-SAL-20 | two settlement sessions; combined settled ≤ commercial and physical remaining; one Finance effect per command |
+| R-SAL-21 | settle-vs-return independent sessions after policy approval; before approval return deterministically fails closed |
+| CAP-25/26 | only transition MISSING→COVERED at final Freeze after all evidence passes |
+
+Planned files:
+
+```text
+server/sales-customer-wave8-migration.test.js
+server/sales-customer-wave8-functional.test.js
+server/sales-customer-wave8-acceptance.test.js
+server/mysql-sales-customer-wave8.integration.js
+server/mysql-sales-customer-wave8-concurrency.integration.js
+scripts/gates/mysql-concurrency-sales-wave8-worker.mjs
+scripts/acceptance/sales-customer-wave8-responsive.mjs
+```
+
+Register focused suites in `scripts/testing/test-suites.js` preserving `FAST ⊆ FULL`, `FULL ∩ HEAVY = ∅`. Register MySQL metadata and concurrency suites in the existing gates. Archive complete raw TAP for both real-MySQL gates under dated `.tmp/` artifacts before Final Acceptance. Wave 8's first real independent-session proof cannot be replaced by Wave 13.
+
+No test/build/database command is executed in Stage C.
+
+### 35.14 Implementation file plan and bounded gates
+
+1. `server/migrations/sales-customer-wave8-service-consignment.js` — four-table SQLite/MySQL additive migration and strict metadata assertions.
+2. `server/migrations/sales-customer-domain.js` — append the one Wave 8 step.
+3. `server/modules/service-fulfillment.js` — canonical writer/read adapter.
+4. `server/modules/consignment.js` — commercial writer; physical commands remain blocked until V21 extension approval.
+5. `server/lib/inventory-mutation.js` — only after separate bounded integration approval, add the three source types/context without changing position identity.
+6. `server/app.js` — owned-route imports/registration plus bounded mixed-line `confirmSalesDelivery()` integration.
+7. Platform permission seed/reconciliation owner — add exact four permissions and role mappings.
+8. `src/api.js`, `src/navigation/applicationRegistry.js`, `src/pages/consignment.jsx`, contextual Service Fulfillment surface — no launcher expansion.
+9. Focused/acceptance/MySQL/worker/responsive files from §35.13 and exact suite/gate registration.
+
+Implementation may not start until the user approves this Design and separately resolves/authorizes:
+
+- `REQUIREMENT_DECISION_REQUIRED`: confirmed Service Fulfillment reversal/cancellation policy;
+- `REQUIREMENT_DECISION_REQUIRED`: consignment partial cancel/split policy;
+- `REQUIREMENT_DECISION_REQUIRED`: physical destination/economic semantics of consignment commercial return;
+- `BOUNDED_INTEGRATION_CONTRACT_EXTENSION_REQUIRED`: Inventory V21 consignment writer source contract.
+
+### 35.15 Dependency reconciliation
+
+| Dependency class | Wave 8 dependency |
+|---|---|
+| Schema | Wave 1 A-61 product classification; Wave 3–5 SO/Delivery source rows; four new Wave 8 tables; no Wave 7 FK |
+| Business | approved SO/service line; Wave 7 prepayment policy remains applicable at Delivery; Inventory ownership and Finance recognition contracts |
+| Runtime | `confirmSalesDelivery()` already invokes `authorizeSalesPrepaymentGateForMutation()`; Wave 8 must preserve it and then perform mixed-line planning |
+| Execution order | Wave 7 is a satisfied prerequisite of Wave 8 because the runtime path is already installed; Wave 6 remains an earlier frozen prerequisite |
+
+Recommended future clarification (not a historical rewrite): §30.17 Wave 8 dependency stays “Wave 7”; §30.18's DAG should show `Wave 5 → Wave 6 → Wave 7 → Wave 8` for project execution, while schema edges remain independently documented. This new §35 is the active reconciliation; frozen §30.17/§30.18 text is untouched.
+
+### 35.16 Conflicts, remaining blockers and hard stop
+
+1. Stage B provenance is internally 12/12; no document correction required.
+2. Frozen §29.18 is under-specified for quantity precision, versioning, full API/RBAC and single-recognition integration; this §35 supplies the technical design without rewriting it.
+3. Frozen §29.19 text suggests a commercial location can be used as an Inventory location, but the real V21 position key has no such dimension. The explicit warehouse/bin mapping plus bounded writer extension is the only legal path found. No CUSTOMER-owned proxy and no shadow stock ledger are allowed.
+4. Current `confirmSalesDelivery()` recognizes the whole Delivery after performing Inventory/COGS for every line. Implementation must apply the partitioned plan in §35.8 atomically; a cosmetic pre-check is insufficient.
+5. Post-recognition service cancellation, consignment partial cancel/split, and physical consignment return destination are unresolved business semantics. They are not silently approved by this Design.
+
+**Final status: `WAVE8_STAGE_C_DESIGN_DELIVERED — AWAITING USER APPROVAL`. Hard Stop: no Implementation, test, build, migration execution, database action, or Git write is authorized.**
+
+### 35.17 Wave 8 Stage C bounded design correction (2026-10-19)
+
+> This sub-section is the active correction layer for §35.2–§35.16. Where a rule below conflicts with an earlier §35 rule, this sub-section supersedes that earlier Wave 8 rule only. Frozen §28–§30 and the Stage B Requirement record are not changed. No runtime claim is made and no Implementation is authorized.
+
+#### 35.17.1 Correction disposition
+
+| Blocker | Corrected sections | Disposition | Evidence boundary |
+|---|---|---|---|
+| P1-1 | §35.7–§35.10, §35.13–§35.16 | `EXTERNAL_CONTRACT_REQUIRED` | Frozen §29.17.7.5 requires Finance PREPAYMENT parent locks before Sales canonical locks. Current `authorizeSalesPrepaymentGateForMutation()` locks/reads Sales gate facts before its Finance adapter, while current Delivery also locks Delivery/capacity/SO facts before calling it. Wave 8 cannot rewrite this frozen Wave 7 contract. |
+| P1-2 | §35.7–§35.10, §35.13 | `RESOLVED_WITH_DESIGN_EVIDENCE` for fail-closed protection; historical legacy ambiguity remains explicitly unknown | A-61 is one mutable current row; `audit_logs` is not a reconstructable classification snapshot. `applySalesOrderChange()` currently protects delivered/notified quantity but not Service Fulfillment. The correction adds shared anchors and forbids reinterpretation. |
+| P1-3 | §35.4, §35.7–§35.8, §35.13–§35.16 | `REQUIREMENT_REOPEN_REQUIRED` | Stage B requires Finance recognition but does not choose DIRECT, INVOICE_DRIVEN or PROVISIONAL for `SERVICE_FULFILLMENT`; the Finance resolver currently falls back to DIRECT when policy is absent. Zero-amount service and invoice association are also undecided. |
+| P1-4 | §35.4, §35.6 | `RESOLVED_WITH_DESIGN_EVIDENCE` for static state combinations, conditional on P1-3 | The corrected CHECK contract excludes confirmed evidence from CANCELLED and distinguishes DB-static constraints from transactional invariants. A legal CONFIRMED Finance evidence shape cannot be finalized until the recognition mode decision exists. |
+| P1-5 | §35.5, §35.9–§35.10, §35.13–§35.16 | mapping protection `RESOLVED_WITH_DESIGN_EVIDENCE`; deactivation behavior `REQUIREMENT_REOPEN_REQUIRED` | A line stores only the commercial-location FK, not a warehouse/bin snapshot. Therefore mapped warehouse/bin is immutable while any handed-off quantity remains unsettled/unreturned. Stage B does not decide whether deactivation blocks settlement of historical stock. |
+| P1-6 | §35.5–§35.6, §35.9, §35.11, §35.13–§35.16 | parity/audit distinction `RESOLVED_WITH_DESIGN_EVIDENCE`; amount and lot identity `REQUIREMENT_REOPEN_REQUIRED` | The four-table line has unit price and cumulative amount but no immutable net line-amount/version source. The repository has no canonical lot-code normalization algorithm; V21 keys by opaque `lot_id`, not normalized display code. |
+
+#### 35.17.2 P1-1 — cross-domain transaction and lock contract
+
+The earlier §35.7 statement “lock SO, line and fulfillment, then invoke the Gate” and the generic §35.10 order “Sales → Inventory → Finance” are withdrawn. They conflict with the frozen Wave 7 order and must not be implemented.
+
+Required external closure:
+
+```text
+EXTERNAL CONTRACT: W8-W7-LOCK-ORCHESTRATOR
+
+provide one transaction-inheriting orchestration contract which:
+1. identifies eligible PREPAYMENT parent ids using non-authoritative read-only discovery;
+2. acquires settlement_unapplied_balances.id FOR UPDATE in id ASC order first;
+3. re-reads requirement, child effects and gate authority beneath those locks;
+4. then acquires Sales/Inventory/Finance-recognition locks in the path order below;
+5. never treats the discovery read as authorization;
+6. uses one connection and one commit/rollback boundary;
+7. documents the internal locks taken by recognizeFinanceExposure().
+```
+
+Until Finance/Wave 7 owns and approves that composable contract, Service Fulfillment CONFIRM and the Wave 8 mixed-Delivery modification are blocked. Calling the existing Gate after Sales locks, or adding an unlocked precheck before the transaction, does not close P1-1.
+
+Path lock plans after that external contract is available:
+
+| Path | Read-only checks before locks | Deterministic lock acquisition | Same transaction/connection and atomic boundary |
+|---|---|---|---|
+| Service Fulfillment CONFIRM | parse/auth/key/fingerprint; discover SO/customer/requirement and candidate PREPAYMENT ids only | PREPAYMENT parents id ASC → effective Gate requirement/result → SO header → SO line id → fulfillments id ASC → A-61 row → Finance recognition source/open-item locks in Finance-owned order → idempotency/audit | Gate evidence, fulfillment state, Finance result, success audit and idempotency commit or roll back together |
+| Sales Delivery CONFIRM | parse/auth/replay; discover source SO and PREPAYMENT candidates only | PREPAYMENT parents id ASC → Gate facts → Delivery header/source-capacity anchors in frozen Wave 5 order → SO header/lines id ASC → fulfillments id ASC for service evidence → Inventory positions position_key ASC and tracking locks → Finance recognition locks → idempotency/audit | pure/mixed plan, all physical and economic effects, Gate evidence and Delivery state are one atomic unit |
+| Consignment Handoff | parse/auth/key; validate identifiers without accepting them as authority | commercial document → lines id ASC → location rows id ASC → mapped warehouse/bin references id ASC → Inventory source/destination position_key ASC → tracking/valuation locks → idempotency/audit | Layer 1 instruction and V21 handoff either both commit or both remain absent; canonical Inventory adapter inherits caller transaction |
+| Consignment Settlement | parse/auth/key; discover Finance policy/source only | document → commercial line → location → mapped position_key ASC → tracking/valuation locks → Finance recognition source/open-item locks in Finance-owned order → idempotency/audit | physical OUT, cumulative commercial settlement, Finance effect and audit are one atomic unit |
+| Consignment Return | fail with `CONSIGNMENT_RETURN_DESTINATION_POLICY_REQUIRED` before mutation while policy is unresolved | no business locks beyond the minimal authoritative read needed to establish the block | zero Inventory/Finance/commercial success effects |
+| Location mapping update/deactivation | parse/auth/version; read candidate dependent line ids without deciding from the unlocked read | affected commercial documents id ASC → lines id ASC → location row → current and proposed warehouse/bin references → any outstanding V21 position_key ASC | mapping/version/audit commit together; mapping change fails if handed-off outstanding quantity exists |
+| A-61 classification update | parse/auth; discover affected non-terminal SO ids only | affected SO headers id ASC → SO lines id ASC → fulfillments id ASC → A-61 row/product reference | classification change and audit commit together; any protected obligation/fact blocks the change |
+| SO Change application | existing change evidence checks | existing change/order order → affected SO lines id ASC → fulfillments id ASC → existing downstream anchors | change/version/evidence/audit remain one atomic unit; Service floors are re-read under lock |
+
+Known cycle analysis:
+
+- Gate versus PREPAYMENT consumption is closed only by W8-W7-LOCK-ORCHESTRATOR; without it P1-1 remains external.
+- Service CONFIRM versus SO Change shares `sales_order_items.id`, then locks fulfillment rows id ASC; one sees the other's committed capacity or waits.
+- Service CONFIRM versus mixed Delivery shares SO line then fulfillment rows; Delivery consumes evidence only after the same ordered locks.
+- Settlement versus Return shares commercial line then the same mapped Inventory positions; Return remains fail-closed before mutation pending its Requirement decision.
+- Mapping update versus handoff/settlement shares document/line/location before Inventory positions. Mapping updater may not lock location first and later seek a line lock.
+- `recognizeFinanceExposure()` is transaction-inheriting, but its current source/open-item reads do not expose a complete public FOR UPDATE order. Consignment Settlement therefore also requires a Finance-owned composable recognition-lock contract before Implementation: `EXTERNAL_CONTRACT_REQUIRED`.
+
+#### 35.17.3 P1-2 — A-61 meaning and Service capacity
+
+A-61 is current configuration, not historical truth. The active rules are:
+
+1. Missing/inactive/ambiguous A-61 always fails closed for new Service Fulfillment, Handoff and Delivery confirmation. Absence is never physical classification.
+2. A change of `service_classification`, `sales_enabled` or `active` is rejected while the product appears on any SUBMITTED/APPROVED commercially open SO line, PENDING/CONFIRMED Service Fulfillment, DRAFT/INSTRUCTED/partially settled consignment line, or unconsumed Delivery evidence. This is a writer guard, not an assumption about current code.
+3. Previously executed facts are classified by their immutable effects: Service Fulfillment evidence identifies service execution; Inventory/tracked/valuation evidence identifies physical execution. Reports must not reclassify those facts by joining the current A-61 value.
+4. Legacy history without either authoritative effect set is displayed as unknown and cannot be newly confirmed or converted. `audit_logs` is not used to fabricate a former A-61 value.
+5. Service CONFIRM and mixed Delivery re-read A-61 only after locking the source line; classification update locks the same affected lines before A-61. This prevents a concurrent flip from changing the meaning mid-command.
+
+SO Change correction:
+
+- `applySalesOrderChange(...)` remains the only approved application entry.
+- Under the affected SO-line lock it also locks all Service Fulfillment rows by id and computes PENDING, CONFIRMED and remaining separately.
+- New quantity may not be below confirmed + pending micros. A PENDING row may be explicitly cancelled first; the SO Change does not cancel it implicitly.
+- Once any CONFIRMED Service Fulfillment exists, quantity, price, discount and amount changes for that line fail closed with `SERVICE_FULFILLMENT_IMMUTABLE_COMMERCIAL_BASIS`. Existing recognized amount/history is never recalculated. ADD of unrelated lines remains governed by the frozen SO Change contract.
+- With PENDING-only rows, quantity may change only above their aggregate and the pending rows retain quantities but no recognized amount. A classification flip is still prohibited.
+
+This conservative boundary closes capacity/history protection without adding a snapshot column. A future desire to reprice or resize a partially confirmed service obligation is a new business policy and requires Requirement reopen.
+
+#### 35.17.4 P1-3 — Service Finance contract remains Requirement-blocked
+
+The following facts are established:
+
+- canonical identity is `source_type='SERVICE_FULFILLMENT'`, `source_id=service_fulfillments.id`, with one immutable source per fulfillment;
+- Sales may call only `recognizeFinanceExposure()` and may not resolve policy itself or write Finance tables;
+- missing `SERVICE_FULFILLMENT` policy must fail with `SERVICE_FINANCE_RECOGNITION_POLICY_REQUIRED`; the resolver's current `scope='FALLBACK'` DIRECT result is forbidden for this source;
+- the amount basis is the SO line's current approved effective commercial evidence (`amount_cents` plus validated price/discount evidence), read under its version/line lock before the first confirmed fulfillment; after first confirmation §35.17.3 freezes that commercial basis;
+- quantity uses micros and amount allocation uses BigInt intermediate arithmetic:
+  `floor(line_amount_cents*cumulative_micros/ordered_micros) - floor(line_amount_cents*prior_micros/ordered_micros)`;
+- operands must be non-negative safe integers at API/DB boundaries, denominator > 0, cumulative ≤ ordered, and the BigInt result must fit the project's safe-integer cents boundary before adapter invocation;
+- each CONFIRMED row stores its immutable allocated cents; later confirmations never rewrite earlier rows; final legal confirmation receives the exact remainder;
+- Delivery only locks, validates and consumes aggregate confirmed service evidence in deterministic order. It creates no second Finance exposure.
+
+Stage B does not authorize the one legal recognition mode, the zero-amount gift/free-service treatment, or how a later Sales Invoice links/converts the Service source. DIRECT, INVOICE_DRIVEN and PROVISIONAL have materially different open-item and invoice behavior in §28.2.3. Therefore no mode is selected here and Service CONFIRM remains blocked by `REQUIREMENT_REOPEN_REQUIRED`. The owner must decide:
+
+1. the permitted recognition mode(s) for `SERVICE_FULFILLMENT` and effective-policy governance;
+2. whether zero-amount service may CONFIRM without an open item and what constitutes its Finance evidence;
+3. the canonical invoice-source/link and provisional-conversion behavior;
+4. confirmed cancellation/reversal policy already identified by DDN-SVC-1.
+
+#### 35.17.5 P1-4 — corrected Service Fulfillment constraint model
+
+The earlier §35.4 state CHECK allowing a CANCELLED row to retain confirmation fields is superseded. The physical contract is:
+
+```text
+id TEXT PRIMARY KEY NOT NULL (SQLite explicit) / VARCHAR(128) NOT NULL PRIMARY KEY (MySQL)
+all other required IDs explicitly NOT NULL; version >= 1
+confirmation_qty_micros > 0
+unit_price_cents >= 0
+recognition_amount_cents >= 0
+
+PENDING:
+  confirmed_at/by, cancelled_at/by and all finance_* fields are NULL
+  recognition_amount_cents = 0
+
+CONFIRMED:
+  confirmed_at/by NOT NULL; cancelled_at/by NULL
+  finance_recognition_mode, finance_source_type, finance_source_id NOT NULL
+  finance_source_type='SERVICE_FULFILLMENT' AND finance_source_id=id
+  recognition_amount_cents follows the approved P1-3 zero/non-zero policy
+  finance_open_item_id nullability follows the approved recognition mode
+
+CANCELLED:
+  cancelled_at/by NOT NULL; confirmed_at/by NULL
+  all finance_* fields NULL
+  recognition_amount_cents = 0
+```
+
+DB CHECK can guarantee these static field combinations, state enumeration, numeric ranges and self source identity. FK/UNIQUE can guarantee source references and identities. DB CHECK cannot guarantee legal transition direction, aggregate capacity, current A-61 meaning, Finance row existence across polymorphic source types, policy effectiveness, idempotent adapter execution or lock order. Those are transaction-writer invariants. `PENDING → CONFIRMED` and `PENDING → CANCELLED` are the only current transitions; CONFIRMED cancellation stays blocked.
+
+SQLite `TEXT PRIMARY KEY` is not treated as sufficient nullability evidence: every primary and required reference declares `NOT NULL` explicitly. MySQL uses named CHECK/FK/UNIQUE objects with equivalent predicates.
+
+#### 35.17.6 P1-5 — Consignment Location lifecycle
+
+- New document creation and Handoff require an active/effective commercial location and active/coherent mapped warehouse/bin.
+- Physical mapping may change only when no line referencing that location has a non-null handoff movement with `consigned_qty_micros - settled_qty_micros - returned_qty_micros > 0`. The guard is re-read under the lock plan in §35.17.2.
+- A mapping change never relocates stock and never changes the meaning of a prior movement. If physical stock remains, the change is 409 `CONSIGNMENT_LOCATION_MAPPING_IN_USE`.
+- DRAFT lines without handoff may resolve the new mapping when later instructed. Historical movement queries use `handoff_movement_group_id` and V21 movement/position evidence, never the location's current mapping.
+- Deactivation always blocks new documents and new Handoff. Stage B does not decide whether historical outstanding stock may still settle after location deactivation. Settlement/deactivation behavior is therefore `REQUIREMENT_REOPEN_REQUIRED`; neither “block all” nor “allow all” is approved here.
+- Return remains blocked by `CONSIGNMENT_RETURN_DESTINATION_POLICY_REQUIRED`; no current mapping is used to fabricate a destination.
+
+#### 35.17.7 P1-6 — amount, parity, lot identity and audit
+
+Consignment amount:
+
+- quantity authority is the locked commercial line plus the matching ENTERPRISE-owned V21 position; `remaining = consigned - settled - returned`;
+- each command has identity `CONSIGNMENT_SETTLEMENT:<lineId>:<Idempotency-Key>` and replays its persisted canonical result; a different fingerprint conflicts;
+- no prior settled amount is rewritten to absorb rounding;
+- the intended cumulative formula mirrors Service allocation, but the current four-table line has no immutable net commercial line amount/version and `unit_price_cents` alone cannot prove discounts, tax assumptions or gift semantics. Therefore partial-settlement Finance amount remains `REQUIREMENT_REOPEN_REQUIRED`. No fifth table or hidden balance is introduced.
+
+Cross-dialect constraint correction:
+
+- every PK and required ID is explicitly `NOT NULL`; booleans are 0/1; versions are `>=1`; quantities/amounts use BIGINT-range integer contracts and application safe-integer checks;
+- all status enums are complete CHECK lists; all FK/UNIQUE/index column orders are named and asserted;
+- nullable composite uniqueness is not delegated to engine NULL behavior;
+- defaults are compared by normalized metadata representation, following the frozen Wave 7 charset-prefix/parentheses rules; MySQL columns use project `utf8mb4_0900_ai_ci`, while business keys that require byte identity must use an explicit binary/case contract rather than inheriting collation accidentally;
+- migration creates parent tables before child FKs and validates fresh/upgrade/replay without destructive repair.
+
+Lot identity correction:
+
+The earlier `lower(trim(lot_code))` rule and DB CHECK are withdrawn. The repository provides no authoritative business normalization for lot display codes; V21 uses opaque `lot_id`. Until the business owner chooses case/Unicode/whitespace identity, `lot_code_key` cannot be generated safely. This is `REQUIREMENT_REOPEN_REQUIRED`; Handoff/Settlement using a free-text lot code remains blocked. An approved solution should preferably reference the canonical V21 lot identity through the existing allowed column set only if that interpretation is explicitly accepted; Stage C does not rename or repurpose the column itself.
+
+Audit correction:
+
+- successful state transitions and REPORT_QUERY audit rows are written in the business transaction and commit with it;
+- a business failure rolls back its transactional audit and success idempotency record, preserving zero partial side effects;
+- current `audit()` only inserts through the supplied transaction. It cannot guarantee an independently durable failure-attempt record after rollback;
+- authentication/authorization/request logging may provide operational security logs, but is not claimed as `audit_logs` business evidence. A requirement for durable rejected-attempt audit needs an approved Platform audit contract (`EXTERNAL_CONTRACT_REQUIRED`), not a second Wave 8 audit table.
+
+#### 35.17.8 Mixed Delivery correction
+
+§35.8 remains valid only after P1-1 and P1-3 close. The active invariants remain: Delivery-stage Gate is preserved; missing A-61 fails closed; physical lines keep frozen Inventory/OQC/valuation/COGS/Finance behavior; service lines consume locked CONFIRMED fulfillment evidence without Inventory/COGS or repeated Finance recognition; one Delivery idempotency key covers the whole command; one transaction rolls back every business side effect. Confirmed fulfillment quantity may be consumed by multiple Deliveries only up to its aggregate micros; Delivery acquires the same SO-line/fulfillment locks as Service CONFIRM. No current §35 statement authorizes implementation before the external Gate orchestration and Service Finance policy decisions exist.
+
+#### 35.17.9 Future acceptance contract — not executed
+
+| Scenario / existing mechanism | Competing operations and shared authority | Required lock order | Expected result, invariant and idempotency |
+|---|---|---|---|
+| 1. R-SAL-22 / UAT-S-25 | Service CONFIRM ×2; SO line + fulfillment aggregate | external Gate locks → SO → line → fulfillments id ASC → Finance | combined confirmed ≤ ordered; at most legal commands commit; same key replays; different fingerprint 409 |
+| 2. R-SAL-15 + R-SAL-22 | Service CONFIRM vs PREPAYMENT application/refund | PREPAYMENT parent id ASC first, then Sales anchors | either fresh Gate authorizes full atomic confirm or Finance wins and confirm blocks with zero effects |
+| 3. R-SAL-22 + frozen SO Change acceptance | Service CONFIRM vs `applySalesOrderChange` | SO → affected line → fulfillments | change sees confirmed/pending floor or confirm sees new version; confirmed commercial basis immutable |
+| 4. UAT-S-25 / CAP-26 | A-61 change vs open Service SO | affected SOs/lines → fulfillments → A-61 | classification flip blocks while protected obligation/fact exists; no history reinterpretation |
+| 5. UAT-S-25 / R-SAL-22 | Service CONFIRM vs mixed Delivery | external Gate → SO → lines → fulfillments | Delivery cannot consume uncommitted evidence; confirmed micros consumed once; no service Inventory/COGS |
+| 6. R-SAL-20 / UAT-S-26 | Settlement ×2 | document → line → location → position → Finance | combined settled ≤ commercial and physical remaining; each command event exact once |
+| 7. R-SAL-21 / UAT-S-27 | Settlement vs Return | document → line → location → position → Finance | Return currently fails closed; after Requirement approval only one serialized legal result |
+| 8. R-SAL-20 / UAT-S-26 | Mapping update vs Handoff/Settlement | documents/lines → location → position | outstanding handed-off stock blocks mapping change; no movement reinterpretation |
+| 9. UAT-S-26/27/41 | deactivation vs outstanding stock | documents/lines → location | new instruction blocked; historical settlement expected result remains Requirement-blocked |
+| 10. UAT-S-25 | multiple partial Service confirmations | external Gate → line → fulfillments → Finance | BigInt cumulative cents conserve approved amount; previous rows immutable; exact final remainder |
+| 11. UAT-S-26 | multiple partial Consignment settlements | line → position → Finance | quantity serialized; amount test remains blocked until immutable amount authority is approved |
+| 12. UAT-S-25 / CAP-26 | missing/illegal Finance policy, duplicate source | source policy/source identity | no fallback DIRECT; controlled policy error; same source/same amount replay, mismatch conflict; zero duplicate economics |
+| 13. existing migration/parity gates | SQLite vs MySQL four-table metadata and idempotency | migration registry order only | equivalent NOT NULL/FK/UNIQUE/CHECK/index/default semantics; no nullable-unique or collation accident |
+| 14. CAP-25/26 | any Inventory/Finance/audit failure | path-specific order above | full transaction rollback; no success audit/idempotency; durable failure audit is not claimed without Platform contract |
+
+Each race must use the existing R-SAL-20/21/22 or related frozen acceptance identity and real independent MySQL sessions where already required. No new SC, Invariant, UAT, Race or Audit Capability ID is created. These are future contracts, not executed results.
+
+#### 35.17.10 Unresolved decision register and implementation prohibition
+
+| ID | Status | Decision/contract owner needed | Prohibited until closure |
+|---|---|---|---|
+| P1-1 | `EXTERNAL_CONTRACT_REQUIRED` | Wave 7/Finance approve composable PREPAYMENT-first Gate orchestration; Finance documents recognition lock order | Service CONFIRM, mixed Delivery integration, and settlement Finance implementation |
+| P1-3a | `REQUIREMENT_REOPEN_REQUIRED` | Sales + Finance choose Service recognition mode and policy fallback behavior | CONFIRMED Service state and Finance invocation |
+| P1-3b | `REQUIREMENT_REOPEN_REQUIRED` | Sales + Finance decide zero-amount service, invoice linking/conversion and confirmed reversal | zero/free service confirm, invoice integration, confirmed cancellation |
+| P1-5 | `REQUIREMENT_REOPEN_REQUIRED` | Sales owner decides settlement/return treatment after location deactivation | settlement through inactive location and any return |
+| P1-6a | `REQUIREMENT_REOPEN_REQUIRED` | Sales + Finance approve immutable consignment net amount authority within four-table limit | partial settlement Finance recognition |
+| P1-6b | `REQUIREMENT_REOPEN_REQUIRED` | Inventory/Sales owner defines lot-code identity or approves canonical lot reference interpretation | lot-tracked Handoff/Settlement/Return |
+| Inventory writer | `EXTERNAL_CONTRACT_REQUIRED` | Inventory V21 approves bounded consignment source/context and strict value-preserving transfer adapter | every physical Consignment mutation |
+| durable failure audit | `EXTERNAL_CONTRACT_REQUIRED` only if required | Platform Audit owner defines an independently durable rejection mechanism | claiming failed attempts persist in `audit_logs` |
+| DDN-CON-3 / Return destination | `REQUIREMENT_REOPEN_REQUIRED` | Sales owner decides partial cancel/split and return destination/economics | partial cancel/split and Consignment Return |
+
+The earlier §35.14 statement listing a small set of decisions before Implementation is superseded by this complete register. The earlier §35.16 status is historical within the same active draft and is superseded below.
+
+**Final status: `WAVE8_STAGE_C_BLOCKED_PENDING_REQUIREMENT_DECISION`. Hard Stop: Stage D, source/test/migration/frontend changes, test/build execution, database access and Git operations are not authorized.**
+
+### 35.18 Wave 8 Stage C final design reconciliation (2026-10-19)
+
+> Active status: `WAVE8_STAGE_C_DESIGN_RECONCILED — AWAITING USER ACCEPTANCE`.
+>
+> The user approved A1–A5, B1–B5 and C1–C2 and accepted C3 in the 2026-10-19 Stage C Final Design Reconciliation authorization. This subsection is the sole active reconciliation layer for Wave 8. It supersedes every conflicting statement in §35.2–§35.17, including all former `REQUIREMENT_DECISION_REQUIRED`, `EXTERNAL_CONTRACT_REQUIRED` and implementation-prohibition rows that referred to those now-approved decisions. Historical text remains evidence. Frozen §28–§30 business semantics are not rewritten, and Stage D remains unauthorized.
+
+#### 35.18.1 Decision register — 12/12 plus C3
+
+| Decision | Active Design disposition |
+|---|---|
+| A1 | APPROVED — non-zero Service Fulfillment CONFIRM uses explicit `DIRECT_BUSINESS_OPEN_ITEM`; `SERVICE_FULFILLMENT` may never accept `scope='FALLBACK'`. |
+| A2 | APPROVED — a zero-value fulfillment may become CONFIRMED with complete operational evidence, no Finance adapter call and no zero AR. |
+| A3 | APPROVED BOUNDED EXTENSION — existing `finance_invoice_source_links` carries partial/multiple links; the source AR row is the locked amount-capacity anchor. |
+| A4 | APPROVED — only `PENDING → CANCELLED`; CONFIRMED has no cancel/reversal endpoint in Wave 8. |
+| A5 | APPROVED SUBJECT TO C1 — every Service CONFIRM is a new entry for the existing DELIVERY-stage Gate policy; later Delivery evaluates the Gate again. |
+| B1 | APPROVED — inactive location blocks new instruction/handoff but historical unsettled stock may settle/return from verified V21 evidence; outstanding mapping is immutable. |
+| B2 | APPROVED — tax-exclusive, post-discount integer-cent net unit price; representability boundary and BigInt cumulative allocation. |
+| B3 | APPROVED — `lot_code_key` is canonical V21 `lot_id`; no Sales normalization identity. |
+| B4 | APPROVED — whole DRAFT cancellation before handoff only; no partial cancellation/split. |
+| B5 | APPROVED — unsettled return requires explicit enterprise warehouse/bin, strict V21 MOVE and no AR/refund. |
+| C1 | APPROVED DESIGN SCOPE — composable PREPAYMENT-parent-first orchestration, stale-plan rollback and independent-session proof. |
+| C2 | APPROVED DESIGN SCOPE — three V21 source types, strict valuation/COGS and caller-owned atomicity. |
+| C3 | ACCEPTED — successful committed transitions are audited in-transaction; rollback does not leave a business audit row and no failure-audit subsystem is added. |
+
+Resolved former blockers:
+
+| Former §35.17 item | Resolution in this subsection |
+|---|---|
+| P1-1 Gate/Finance composition | §35.18.6 defines the approved parent-first planning and locking contract and adapts both Service CONFIRM and current Sales Delivery CONFIRM. |
+| P1-3 service Finance policy | §35.18.4 fixes DIRECT, zero evidence, invoice capacity and PENDING-only cancellation. |
+| P1-5 inactive location/return | §35.18.5 and §35.18.7 fix historical continuity and explicit enterprise return destination. |
+| P1-6 amount/LOT | §35.18.3 and §35.18.5 fix the representability boundary, cumulative cents formula and V21 lot identity. |
+| Inventory writer | §35.18.7 defines the approved bounded V21 extension without schema change. |
+| durable failure audit | C3 closes it: not required. |
+
+#### 35.18.2 Authoritative four-table schema and dialect parity
+
+Exactly four new tables remain authorized. No existing table gains a column, constraint or replacement schema in Wave 8.
+
+##### `service_fulfillments`
+
+| Field group | Active physical contract |
+|---|---|
+| Identity/source | `id` PK NOT NULL; `fulfillment_no` UNIQUE NOT NULL; `sales_order_id`, `sales_order_item_id`, `product_id`, `customer_id` NOT NULL FKs; `sales_group_id` nullable FK. |
+| Quantity/amount | `confirmation_qty_micros` BIGINT-range integer `>0`; `unit_price_cents >=0`; `recognition_amount_cents >=0`; `business_date` required. |
+| State | `confirmation_state` exactly `PENDING/CONFIRMED/CANCELLED`; `confirmed_at/by`, `cancelled_at/by`; `version >=1`; actor/timestamp metadata. |
+| Finance result | nullable `finance_recognition_mode`, `finance_open_item_id`, `finance_source_type`, `finance_source_id`. |
+
+Static state CHECK:
+
+```text
+PENDING:
+  confirmation/cancellation evidence NULL
+  recognition_amount_cents=0 and all finance_* NULL
+
+CANCELLED:
+  cancelled_at/by NOT NULL; confirmed_at/by NULL
+  recognition_amount_cents=0 and all finance_* NULL
+
+CONFIRMED ZERO:
+  confirmed_at/by NOT NULL; cancelled_at/by NULL
+  recognition_amount_cents=0 and all finance_* NULL
+
+CONFIRMED NON-ZERO:
+  confirmed_at/by NOT NULL; cancelled_at/by NULL
+  recognition_amount_cents>0
+  finance_recognition_mode='DIRECT_BUSINESS_OPEN_ITEM'
+  finance_open_item_id NOT NULL
+  finance_source_type='SERVICE_FULFILLMENT'
+  finance_source_id=id
+```
+
+This distinguishes a lawful zero economic result from a missing non-zero Finance result without adding a column. Legal transitions, aggregate capacity, Finance-row existence and policy scope remain writer invariants. Indexes remain `sales_order_item_id,confirmation_state,id`; `sales_order_id,id`; and `sales_group_id,business_date,id`.
+
+##### `consignment_commodity_locations`
+
+`id` PK NOT NULL; `location_code` and `customer_id` form the customer-scoped commercial identity; `name/address_text`; explicit `physical_warehouse_id` and nullable `physical_bin_id`; `active` 0/1; effective dates; `version >=1`; actor/timestamps. The mapped bin must belong to the mapped active warehouse. A commercial id is never a V21 position dimension.
+
+##### `consignment_commercial_documents`
+
+`id` PK NOT NULL; `document_no` UNIQUE; `customer_id`, nullable `sales_group_id`, `source_warehouse_id`; instruction/business dates; frozen base `currency_code`; `status` exactly `DRAFT/INSTRUCTED/PARTIAL_SETTLED/SETTLED/RETURNED/CANCELLED`; `version >=1`; confirmation and actor/timestamp evidence. `CANCELLED` is reachable only from DRAFT with no handoff movement. Derived post-handoff states are writer-controlled.
+
+##### `consignment_commercial_lines`
+
+`id` PK NOT NULL; `document_id`, `line_no`; optional truthful `sales_order_item_id`; `product_id`; `consignment_commodity_location_id`; nullable display `lot_code`; required `lot_code_key`; `consigned_qty_micros >0`; non-negative cumulative settled/returned quantities and amounts; `unit_price_cents >=0`; nullable `handoff_movement_group_id` and `last_finance_reference_id`; `version >=1`; actor/timestamps.
+
+```text
+UNIQUE(document_id,line_no)
+UNIQUE(document_id,product_id,consignment_commodity_location_id,lot_code_key)
+settled_qty_micros + returned_qty_micros <= consigned_qty_micros
+
+no LOT: lot_code IS NULL AND lot_code_key=''
+with LOT: lot_code IS NOT NULL AND lot_code_key is a validated existing
+          inventory_lots.id for the same product
+```
+
+`lot_code_key` has SQLite `COLLATE BINARY` and MySQL `VARCHAR(128) COLLATE utf8mb4_0900_bin`; its value is copied exactly from V21 `inventory_lots.id`. The application validates the product relationship under lock. It is intentionally not a nullable FK because the approved empty no-LOT sentinel must remain portable. `lot_code` is the resolved display value only; whitespace, case and Unicode do not define identity.
+
+SQLite uses explicit `TEXT PRIMARY KEY NOT NULL`, INTEGER quantities/money/versions/booleans and BINARY key comparison. MySQL uses explicit `VARCHAR` PK NOT NULL, BIGINT quantities/money, INT version, TINYINT(1) boolean, named CHECK/FK/UNIQUE/index objects and binary collation only on byte-identity keys. Metadata assertions cover column order/type/null/default/PK/FK/CHECK/UNIQUE/index/collation. Migration order and id remain those in §35.6; fresh, upgrade and replay must converge without data repair or destructive DDL.
+
+#### 35.18.3 Quantity, UOM and cents contracts
+
+All arithmetic uses BigInt intermediate values and converts to JavaScript Number only after safe-integer bounds are proven.
+
+Service amount allocation remains:
+
+```text
+allocatedAfter  = floor(approved_so_line_amount_cents * confirmedAfterMicros / orderedMicros)
+allocatedBefore = floor(approved_so_line_amount_cents * confirmedBeforeMicros / orderedMicros)
+thisRecognition = allocatedAfter - allocatedBefore
+```
+
+Earlier confirmed rows never change; a full final confirmation receives the remaining cent. The first CONFIRM locks and verifies current approved SO commercial evidence; after any CONFIRMED fulfillment, §35.17.3's SO Change/A-61 immutability guards remain active.
+
+Consignment's approved four-table carrier has no UOM snapshot column. Therefore its supported representability boundary is deliberately narrow:
+
+1. `consigned_qty_micros`, settled quantity and returned quantity are canonical base-UOM micros.
+2. `unit_price_cents` is also the tax-exclusive, post-discount net price per one base UOM; Wave 8 accepts it as “sales UOM price” only when the authoritative Sales UOM equals the product base UOM with exact 1:1 conversion.
+3. An SO-backed line must prove its approved document UOM is the base UOM and:
+   `sales_order_item.amount_cents == floor(unit_price_cents * ordered_micros / 1_000_000)`.
+4. A no-SO line requires explicit `unitPriceCents`, `currencyCode` equal to the system base currency, `SALES_MANAGE` plus the Wave 8 manage permission, and the same base-UOM restriction.
+5. Non-1:1 Sales UOM, tax-inclusive amount, header discount allocation, fractional-cent price, multi-currency, or any source whose approved net amount fails the equality is rejected as `CONSIGNMENT_COMMERCIAL_BASIS_UNREPRESENTABLE`; no amount is rounded away or silently reinterpreted.
+
+For each settlement command:
+
+```text
+targetSettledCents = floor(unit_price_cents * settledAfterMicros / 1_000_000)
+eventCents         = targetSettledCents - settled_amount_cents_before
+```
+
+The event must be positive for a Finance posting; a settlement command whose calculated delta is zero fails closed with `CONSIGNMENT_SETTLEMENT_AMOUNT_NOT_POSITIVE` and changes no quantity. It may be retried only with a legal quantity whose cumulative delta is positive. The final settlement of the full consigned quantity receives the exact full-line remainder. `returned_amount_cents` is non-financial reporting evidence calculated by the analogous cumulative formula over returned micros; it never creates AR/refund. When settlement plus return closes a mixed line, no unearned remainder is posted. The full instruction amount is not itself a booked receivable.
+
+#### 35.18.4 Service Fulfillment, Gate, Finance and invoice contract
+
+State machine and writer:
+
+```text
+CREATE  none → PENDING
+CANCEL  PENDING → CANCELLED
+CONFIRM PENDING → CONFIRMED
+CONFIRMED → any cancel/reverse/edit is not a Wave 8 command
+```
+
+Every command requires a non-empty header `Idempotency-Key`; fingerprint covers entity/version, quantity, date and all economic inputs. Same key/fingerprint replays; mismatch is 409. CREATE/CANCEL audit in the same transaction. CONFIRM executes:
+
+1. C1 parent-first Gate plan and DELIVERY-stage authorization;
+2. locked SO/service capacity, A-61 and immutable amount evidence checks;
+3. amount allocation;
+4. if zero, persist the `CONFIRMED ZERO` shape and skip Finance;
+5. if non-zero, require an explicit effective Finance policy row resolving to DIRECT with scope `SOURCE` or `SITE`, never `FALLBACK`; call `recognizeFinanceExposure` once with `source_type='SERVICE_FULFILLMENT'`, `source_id=fulfillment.id`; verify FINAL open item, amount, customer and source identity;
+6. persist state/result, audit and idempotency result in the same transaction.
+
+Gate PASS/WARN/BLOCK/OVERRIDE_REQUIRED meanings and override authority are unchanged. It never consumes PREPAYMENT. Each partial confirmation evaluates current balance. A later Delivery runs its own current Gate evaluation; a later BLOCK preserves the already-confirmed fulfillment/AR and returns an explainable Delivery block—it never rewrites history.
+
+Sales Delivery uses the §35.8 physical/service partition, as corrected here: C1 Gate parent locks occur before Delivery/SO/capacity locks. Physical lines retain frozen Inventory/OQC/valuation/COGS and `SALES_DELIVERY` recognition. Service lines lock and consume confirmed fulfillment quantity evidence, write no Inventory/valuation/COGS, and are excluded from Delivery Finance recognition. Pure and mixed deliveries commit atomically.
+
+A3 invoice linkage:
+
+> A3 primary-key, replay, writer reachability, `source_line_id`, POST/VOID/Credit and concurrent capacity details are corrected by §35.18.11. Where the bullets below conflict with §35.18.11, §35.18.11 is authoritative.
+
+- Capacity identity is the FINAL `account_receivables` row with `(source_type='SERVICE_FULFILLMENT', source_id=fulfillment.id)` and amount capacity `amount_cents`, not its current unpaid balance.
+- Before posting an invoice, Finance locks every referenced source open item in `(source_type,source_id,id)` order, locks the invoice header, and sums `finance_invoice_source_links.invoiced_amount_cents` joined to non-reversed POSTED invoices for each source. The current invoice amount plus the posted cumulative amount must be `<=` source capacity.
+- A service link stores `source_type='SERVICE_FULFILLMENT'`, `source_id=fulfillment.id`, `source_line_id=sales_invoice_items.id`, `invoiced_quantity` as service micros and its exact allocated invoice cents. The existing source index supports the locked sum; no new table is needed.
+- Link insert, capacity recheck, invoice POST and audit share the Finance-owned transaction. Same invoice/source/line replays through the existing UNIQUE; a different allocation conflicts. Invoice posting never calls recognition for the service amount and never creates another service AR/revenue voucher.
+- A service invoice line is still represented by an existing confirmed service Sales Delivery item because current `sales_invoice_items.delivery_id/delivery_item_id` are NOT NULL. Finance links allocate that invoice line across locked confirmed fulfillment sources. Invoice quantity remains bounded by both confirmed service Delivery quantity and unlinked fulfillment quantity.
+- One invoice can contain physical and service lines when all recognition sources resolve to DIRECT. `finance_invoice_source_links` represents both and the invoice header may leave `open_item_id` null for multiple source open items, as the current DIRECT adapter already permits.
+- A heterogeneous-mode mixed invoice cannot be represented faithfully because the existing invoice header has one `recognition_mode` and current `resolveRecognitionModeForSources()` requires one mode. Such an invoice fails with `MIXED_INVOICE_RECOGNITION_MODE_UNSUPPORTED`; physical sources must be invoiced separately or their policy must already be DIRECT. Supporting heterogeneous modes would require a separately approved Finance contract/schema change and is not claimed COVERED.
+
+Draft invoice cancellation creates no service link because links are written at POST. Posted invoice reversal preserves trace: capacity calculations exclude the reversed invoice only after the canonical reversal commits; links are not deleted. Direct editing of posted links is prohibited.
+
+#### 35.18.5 Consignment business lifecycle
+
+1. CREATE produces DRAFT header/lines after A-61, customer/group, base-UOM representability and commercial-location validation. No physical or Finance effect.
+2. CANCEL is whole-document `DRAFT → CANCELLED` only when every line has null `handoff_movement_group_id` and V21 has no matching movement evidence. No partial cancel/split API exists.
+3. HANDOFF locks the document/lines/location, requires location active/effective and its warehouse/bin coherent, resolves LOT/SERIAL through V21, then executes strict C2 MOVE. Success sets the immutable movement-group reference and derives INSTRUCTED. No AR/revenue.
+4. SETTLE may proceed through an inactive location only for an already handed-off outstanding line. It resolves the historical source position from the stored handoff movement group and current unreversed V21 evidence, never from current location mapping. It locks line capacity and physical positions, performs strict OUT/COGS, creates one Finance event for `eventCents`, updates cumulative quantities/amounts and header state.
+5. RETURN of unsettled quantity likewise resolves the historical source position, requires an explicit active destination enterprise warehouse/bin, locks both positions, performs strict MOVE, updates returned quantity/reporting amount and creates no AR/refund.
+6. A customer return after settlement is rejected from this API and must use the frozen Sales Return/Finance Reverse chain.
+7. Location deactivation and effective-date closure block new documents and handoff. Historical reads always work. Mapping update/deactivation, handoff, settlement and return lock in the common order. Physical mapping update is 409 while any handed-off line has `consigned-settled-returned > 0`; mapping update never relocates stock.
+
+LOT/SERIAL:
+
+- LOT lines use `lot_code_key=inventory_lots.id`; every physical command revalidates product, status and V21 position evidence. The display code is never used for identity comparison.
+- The four tables intentionally contain no Sales serial carrier. For `SPECIFIC_SERIAL`, the command supplies canonical V21 serial ids; each serial is locked and mutated as its own canonical position under the same movement group and commercial line source item. `tracked_inventory_movements` and valuation rows persist the exact source identity. Later settlement/return may select only outstanding serials proven by unreversed Handoff minus later Settlement/Return evidence.
+- A serial-tracked command without an exact canonical allocation, with quantity other than the sum of legal serial units, or with ambiguous legacy movement evidence fails `CONSIGNMENT_SERIAL_EVIDENCE_REQUIRED`. No planned/free-text serial is fabricated.
+
+#### 35.18.6 C1 composable PREPAYMENT/Finance lock contract
+
+Current-code fact: `authorizeSalesPrepaymentGateForMutation()` currently locks Sales requirement/result facts before `resolveEligiblePrepaymentForSalesGate()` locks PREPAYMENT parents, and `confirmSalesDelivery()` currently holds Delivery/capacity facts before calling it. Those calls are not the target contract and must not be reused unchanged.
+
+The bounded implementation introduces a composable two-phase plan in the existing Wave 7/Finance adapters; names below are responsibilities, not claims that code already exists:
+
+```text
+discoverSalesPrepaymentGatePlan(db, salesOrderId, date)
+  unlocked read only → customer, effective requirement id/version/fingerprint,
+  prior DELIVERY override evidence id, candidate OPEN PREPAYMENT parent ids ASC
+
+authorizeSalesPrepaymentGateWithPlan(db, plan, mutationContext)
+  caller already opened the one transaction but holds no Sales business row lock
+  → lock candidate PREPAYMENT parent ids ASC
+  → current-read the eligible PREPAYMENT set again
+  → if identity set/fingerprint shrank, changed, or contains a missed pre-existing
+    candidate: throw retryable SALES_PREPAYMENT_LOCK_PLAN_STALE; outer rollback
+  → re-read child application/refund/reversal effects under parent locks
+  → lock/re-read Gate requirement, latest result/override and SO authority
+  → verify customer/date/policy/requirement fingerprint still matches
+  → calculate and persist the ordinary Wave 7 Gate result
+  → caller continues to Sales capacity locks
+```
+
+An eligible PREPAYMENT row inserted only after the locked current-read can increase, not reduce, eligible value; omission is conservative. It cannot justify an unsafe PASS. All reductions of an existing eligible parent remain serialized because the inspected application/refund/UNAPPLIED-reversal paths acquire that parent first. Any detected candidate or policy change rolls back to the transaction boundary; retry begins from discovery and is bounded by the common retry policy. A retry never acquires an additional Finance parent after a Sales lock.
+
+Global MySQL order for affected paths:
+
+```text
+0. unlocked identity discovery only; no decision and no mutation
+1. PREPAYMENT parent rows by id ASC
+2. Gate requirement + latest result/override + SO header by stable id
+3. Service Fulfillment or Delivery header, SO lines/capacity rows by id ASC
+4. fulfillment rows by id ASC / consignment document and lines by id ASC
+5. V21 position_key ASC, then LOT/SERIAL canonical identities
+6. Finance recognition/open-item source rows by (source_type,source_id,id)
+7. invoice/settlement event rows, then idempotency result and audit
+```
+
+Service CONFIRM uses all relevant steps. Existing Delivery CONFIRM is compatibly reordered: an unlocked Delivery lookup discovers its SO, C1 locks parents, then Delivery/SO/capacity are locked and the source relationship is revalidated before any OQC/Inventory/Finance effect. Frozen Gate decisions and Delivery business results do not change. Finance PREPAYMENT application/refund/reversal already begins with the parent lock and never calls back into a later Sales lock. Finance recognition owns no PREPAYMENT mutation; its source/open-item locks occur only after Sales capacity. No opposite edge remains in the designed Wave 8 paths.
+
+SQLite uses one outer `BEGIN IMMEDIATE` but follows the same logical order. MySQL acceptance uses at least two genuinely independent connections/workers, barriers only as observers, bounded timeout/deadlock diagnostics, and proves Service CONFIRM vs PREPAYMENT application/refund, Delivery CONFIRM vs PREPAYMENT mutation, Service CONFIRM ×2, and Service CONFIRM vs Delivery/SO Change. Deadlock retry is tested as recovery behavior but is not the correctness proof.
+
+#### 35.18.7 C2 Inventory V21 bounded writer and value conservation
+
+The implementation may add only these values to `server/lib/inventory-mutation.js`'s source allowlist:
+
+| Source type | `sourceId` / `sourceItemId` / idempotency | Physical and valuation contract |
+|---|---|---|
+| `CONSIGNMENT_HANDOFF` | sourceId=document id; sourceItemId=line id; key `CONSIGNMENT_HANDOFF:<lineId>:<client-key>` | MOVE from explicit source warehouse/bin to the mapped destination; ENTERPRISE/null-owner both sides. |
+| `CONSIGNMENT_SETTLEMENT` | sourceId=immutable `CS:<lineId>:<sha256(client-key)>`; sourceItemId=line id; same event identity in Finance/idempotency | OUT from verified historical consignment position; strict issue value and applicable COGS voucher. |
+| `CONSIGNMENT_RETURN` | sourceId=immutable `CR:<lineId>:<sha256(client-key)>`; sourceItemId=line id | MOVE from verified historical position to explicit active enterprise destination. |
+
+Every call uses canonical product/warehouse/bin/`owner_type='ENTERPRISE'`/null owner/AVAILABLE/lot/serial position keys and locks deduplicated keys ascending. The commercial location id is source/audit context only. The outer consignment writer owns the transaction; `applyInventoryMutation` inherits it and is called with `valuationMode='EXTERNAL'` so its legacy swallowed best-effort branch is never the economic authority.
+
+Strict value sequences:
+
+```text
+HANDOFF or RETURN:
+  physical MOVE writes OUT+IN inventory transactions
+  issueValue(source identity) returns exact negative cents
+  receiveValue(destination identity, abs(exact cents))
+  sum valuation quantity = 0; sum valuation cents = 0; no COGS voucher
+
+SETTLEMENT:
+  physical OUT
+  issueValue(historical identity) must succeed for the exact quantity
+  create balanced voucher: DR COGS / CR inventory role for exact issued cents
+  then Finance DIRECT commercial event for eventCents
+```
+
+For LOT/SERIAL, the operation is partitioned by canonical identity; all partitions share one movement group and outer transaction. Quantity moved/issued, tracked evidence quantity and valuation quantity must be equal. A missing pool, LEGACY_UNVALUED ambiguity after valuation activation, serial mismatch, period close, V21 failure, voucher failure, Finance failure or audit failure rolls back Sales cumulative values, inventory, tracking, valuation, voucher, Finance, idempotency and audit together. No best-effort success is legal.
+
+No V21 schema, position-key definition, shadow stock table or Sales inventory balance changes. Existing exported `issueValue`, `receiveValue`, `createSystemVoucher`, position/tracking evidence and caller-owned transaction behavior are sufficient primitives; implementation still must add the three allowlisted source types and the consignment orchestration. If focused implementation proves a required primitive cannot accept the caller transaction or preserve exact value, Stage D must stop with `EXTERNAL_CONTRACT_REQUIRED` rather than bypass V21.
+
+#### 35.18.8 API, RBAC, idempotency, compatibility and file plan
+
+The §35.11 API set remains, with these corrections:
+
+- Service/consignment handlers enforce the existing `SALES_VIEW`/`SALES_MANAGE` gate plus the approved narrow Wave 8 VIEW/MANAGE permission where registered; backend and sales-group scope both fail closed. Finance invoice posting continues to require Finance invoice authority. Existing settled Sales Return continues to require its frozen Return permissions.
+- `POST .../service-fulfillments/:id/cancel` accepts only PENDING. CONFIRMED returns `SERVICE_FULFILLMENT_CONFIRMED_IMMUTABLE`; no reversal-policy placeholder remains.
+- `POST .../consignment-commercial-lines/:id/return` requires `destinationWarehouseId` and bin when the warehouse is bin-enabled; it is no longer policy-blocked.
+- `POST .../instruct` means physical Handoff and is allowed only from DRAFT. Location deactivation does not disable settle/return for historical handoff evidence.
+- Every mutation requires header `Idempotency-Key`; body fallback and generated document keys are not accepted for new Wave 8 commands. Fingerprints include normalized destination, identity allocations, quantity, business date, expected version and economic basis.
+- Reports join commercial rows to V21 and Finance evidence and expose discrepancies; GET never repairs. `REPORT_QUERY` audit is written only for the committed report-audit transaction and no durable failed-query audit is promised.
+- Legacy Wave 8 rows do not yet exist. If later partial/deployed data has unknown lot, UOM, mapping, Finance source or movement evidence, reads label it `UNKNOWN/UNRESOLVED`; every economic mutation fails closed. No GET backfill or inferred history is permitted.
+- `upsertInvoiceSourceLink()` is not a registered HTTP route in the current runtime. After Stage D authorization, its module boundary must reject `sourceType='SERVICE_FULFILLMENT'` with `SERVICE_FULFILLMENT_LINK_REQUIRES_INVOICE_POST`; it may not become an independent Service-link API. All Service links are created only by the canonical invoice POST transaction described in §35.18.11.
+
+Implementation file impact after separate Stage D approval:
+
+```text
+server/migrations/sales-customer-wave8-service-consignment.js  four new tables only
+server/migrations/sales-customer-domain.js                     one ordered Wave 8 entry
+server/modules/service-fulfillment.js                          canonical writer/read adapter
+server/modules/consignment.js                                  commercial + C2 orchestration
+server/modules/sales-prepayment-finance-adapter.js             C1 discovery/parent-lock plan
+server/modules/sales-prepayment-gate.js                        planned authorization entry
+server/modules/finance-recognition.js                          explicit policy/source locks + A3 cap
+server/modules/finance-invoice-cardinality.js                  locked cumulative service linkage
+server/lib/inventory-mutation.js                               three source allowlist values only
+server/modules/sales-order-changes.js                          fulfillment capacity/history guard
+server/modules/sales-commercial-foundation.js                  A-61 protected-obligation guard
+server/app.js                                                  owned routes + reordered mixed Delivery
+src/api.js / applicationRegistry.js / contextual Wave 8 pages  approved surfaces, no launcher expansion
+focused, migration, acceptance, MySQL worker and responsive tests plus suite registration
+```
+
+`financial-inventory.js`, position identity and traceability modules are reused unless implementation evidence proves a narrowly missing caller-owned primitive; they are not pre-authorized for unrelated rewrite. No existing schema/table extension is in the file plan.
+
+#### 35.18.9 Acceptance matrix and value/atomicity proofs
+
+| Existing trace | Required future proof after Stage D authorization |
+|---|---|
+| SC70–71 / S08 / UAT-S-25 | non-zero DIRECT exactly once; zero CONFIRMED without AR; PENDING cancel and CONFIRMED immutable; partial confirmations; Gate recheck; pure service/physical/mixed Delivery; no service Inventory/COGS; invoice partial/multiple cap; same-mode mixed invoice positive and heterogeneous-mode fail-closed. |
+| SC72–77 / S18 / UAT-S-26 | four-table instruction, 1:1/base-UOM and amount representability; active mapped handoff; ENTERPRISE ownership; strict value-neutral MOVE; partial/multiple settlement with exact cumulative cents; three-layer report. |
+| UAT-S-27 | inactive-location historical settlement/return; explicit destination; no AR/refund for unsettled return; settled return rejected to frozen Sales Return path; LOT and SERIAL V21 evidence. |
+| UAT-S-41 | 320/390/430/680 contextual workflows, route/permission parity, clear Gate/inactive-location/unsupported-commercial-basis errors and no launcher expansion. |
+| R-SAL-22 | independent Service CONFIRM ×2 and CONFIRM vs SO Change/Delivery; locked aggregate never exceeds order; Finance effect exactly once. |
+| R-SAL-20 | two independent settlements share line/position/Finance source order; commercial/physical/amount capacities never exceed authority. |
+| R-SAL-21 | one legal settlement and one legal return race through the same line and V21 positions; one/both may commit only within capacity; an always-409 return cannot pass. |
+| Wave 7 R-SAL-15 reuse | Service and Delivery versus PREPAYMENT application/refund/reversal with Finance parent first, stale-plan rollback and no circular wait. |
+| CAP-25 / CAP-26 | committed service/consignment transitions and report queries are traceable; rollback has zero business side effects and does not claim durable failure audit. |
+| SQLite/MySQL parity | all four tables, state/zero/LOT binary constraints, ordered indexes and migration replay; MySQL races use independent sessions. |
+
+A3 acceptance additionally requires: two fulfillment sources allocated to one service invoice item without physical-PK collision; exact five-tuple replay; same tuple with quantity or amount mismatch returning 409; cross-invoice amount and quantity over-cap races under one stable source lock; direct-writer SERVICE bypass rejection; POST-versus-POST and POST-versus-VOID/Credit independent-session proofs; immutable historical links after VOID/Credit; and zero-value fulfillment producing no Finance link. See §35.18.11.8.
+
+Value-conservation acceptance for every successful Handoff/Return requires source valuation delta plus destination valuation delta = 0 cents and 0 net quantity, identity by identity. Settlement requires V21 quantity delta equal commercial settled delta, inventory valuation credit equal COGS debit, and Finance AR amount equal the cumulative event formula. Fault injection at each boundary must leave every layer unchanged.
+
+No new SC, Invariant, UAT, Race or Audit Capability identifier is created; counts remain SC 114, Invariant 20, UAT 44, Race 24 and Audit CAP 36.
+
+#### 35.18.10 Remaining explicit coverage limits and final hard stop
+
+There is no unresolved contradiction inside the approved Wave 8 core design. These scenarios remain intentionally fail-closed rather than falsely COVERED:
+
+1. a single invoice mixing DIRECT service sources with non-DIRECT physical sources (`MIXED_INVOICE_RECOGNITION_MODE_UNSUPPORTED`), because one current invoice header cannot carry heterogeneous recognition modes;
+2. consignment pricing requiring non-1:1 Sales UOM, independent tax allocation, non-representable discount/amount, multi-currency or an additional pricing carrier (`CONSIGNMENT_COMMERCIAL_BASIS_UNREPRESENTABLE`);
+3. ambiguous legacy LOT/SERIAL/movement/valuation history (`CONSIGNMENT_*_EVIDENCE_REQUIRED`);
+4. zero-price or sub-cent-zero consignment settlement (`CONSIGNMENT_SETTLEMENT_AMOUNT_NOT_POSITIVE`); Wave 8 does not infer a giveaway/economic-disposal policy from B2;
+5. any future CONFIRMED Service Fulfillment reversal, partial consignment cancel/split, or durable failed-attempt audit, each requiring a new Requirement/Design cycle.
+
+These are declared compatibility/scope boundaries requested by the approved decisions, not permission to add columns, a fifth table or a new ledger. Stage D must stop if implementation discovers a different carrier conflict.
+
+No Implementation, source/migration/test/frontend/config change, test/build/format/migration execution, database connection or Git operation is authorized by this Design reconciliation. User acceptance of this section is the next gate.
+
+**Final status: `WAVE8_STAGE_C_DESIGN_RECONCILED — AWAITING USER ACCEPTANCE`. Hard Stop.**
+
+#### 35.18.11 A3 Finance Invoice Link bounded correction (2026-10-19)
+
+> This is the active A3 correction record. It is Design-only, does not reopen A3-CUMULATIVE, does not change frozen §28.10.3 source-cardinality semantics, and does not authorize Stage D.
+
+##### 35.18.11.1 Confirmed source defects and production reachability
+
+| Writer/entry | Actual reachability and authority | Current safety finding | Active A3 rule |
+|---|---|---|---|
+| private `recordInvoiceLinks()` in `finance-recognition.js` | Called only by `recognizeFinanceExposure()` when `input.invoice` exists. Sales Invoice POST and Supplier Bill POST call that adapter inside their `atomic()` transaction; HTTP caller has `FINANCE_INVOICE_MANAGE`. | Physical id is `${invoice.id}:${source.sourceLineId || source.sourceId}`. Distinct sources sharing one supplied source-line value collide. Existing five-tuple replay reads only `id` and silently skips without comparing quantity/amount. It has no cumulative lock/cap. | Replace the physical-id and replay behavior through the canonical validated writer below. The five-tuple business UNIQUE remains unchanged. |
+| exported `upsertInvoiceSourceLink()` in `finance-invoice-cardinality.js` | No import in `server/app.js`, `server/index.js` or another production module; no HTTP route is registered. Current direct callers are tests only. The function itself checks `FINANCE_INVOICE_MANAGE`. | It accepts arbitrary source types and invoice ids, inserts an opaque id, but does not validate invoice existence/status, source/open item, stable locks, cumulative quantity/amount, or POST atomicity. If registered unchanged it would be a bypass. | At the function boundary, `SERVICE_FULFILLMENT` always fails `409 SERVICE_FULFILLMENT_LINK_REQUIRES_INVOICE_POST`. It is not registered as a Service-link API. Frozen non-Service behavior is otherwise not redesigned by Wave 8. |
+| Sales Invoice CREATE | Registered `POST /api/sales-invoices`, `FINANCE_INVOICE_MANAGE`; creates DRAFT header/items only. | Does not write source links. | Remains link-free. Service allocation intent is recomputed and validated at POST from authoritative invoice/source facts. |
+| Sales Invoice POST | Registered `POST /api/sales-invoices/:id/post`, `FINANCE_INVOICE_MANAGE`; current production path is `postSalesInvoice()` → `recognizeFinanceExposure()` → `recordInvoiceLinks()`. | This is the only reachable production link writer but lacks A3 validations. | Becomes the sole canonical `SERVICE_FULFILLMENT` link mutation path. All link validation, inserts, invoice state change and audit share its one caller-owned transaction. |
+| Sales Invoice CANCEL | Registered on DRAFT only. | Does not write/delete links. | DRAFT must have no Service link. CANCEL never frees or changes a posted link. |
+| Sales Invoice VOID | Registered for POSTED; changes header to REVERSED, does not delete links. | Current path does not lock Service sources/links; it can race a capacity user. | For an invoice having Service links, use the same source lock plan as POST before locking/re-reading the invoice. Links remain immutable; REVERSED status removes their amounts/quantities from effective consumed capacity only after the VOID transaction commits. |
+| Commercial Credit | Registered `POST /api/commercial-credit-notes`, `FINANCE_INVOICE_MANAGE`; POSTED invoice only; finds linked open items when header `open_item_id` is absent. | Does not write links. It can race VOID because current invoice/source locks are incomplete. | Lock the same Service source set, then the invoice header. Credit never releases invoice-link quantity or amount capacity; link rows remain counted while the invoice is POSTED. VOID remains prohibited while `credit_state!='NONE'`. |
+| Test/gate direct SQL inserts | Only test/integration/worker fixtures; not application APIs. | Some use `INSERT IGNORE`, which cannot prove business replay semantics. | They may seed non-Service fixture state, but Wave 8 Service acceptance must call the canonical POST path. `INSERT IGNORE` is forbidden as evidence for A3 idempotency/capacity. |
+
+Repository-wide inspection found no production `UPDATE` or `DELETE` writer for `finance_invoice_source_links`. A3 preserves append-only link history.
+
+##### 35.18.11.2 Physical primary key and five-tuple business identity
+
+The frozen business identity remains exactly:
+
+```text
+(invoice_id, invoice_side, source_type, source_id, source_line_id)
+```
+
+The physical `id` is not that business identity. For every new link the canonical writer generates one opaque application UUID through the existing `id()` primitive only after proving that the five-tuple does not already exist. The UUID includes neither invoice-item nor source-line concatenation and therefore has no systematic collision when two source rows share an invoice item. A rare physical PK collision is a hard database error that rolls back the transaction; it is never handled by ignore/overwrite. Existing historical link ids are neither recomputed nor updated.
+
+SQLite and MySQL both enforce the physical PK and the existing five-column UNIQUE. Every A3 Service link supplies a non-null, non-empty `source_line_id`, so MySQL/SQLite nullable-UNIQUE differences cannot weaken the Service identity. Stage D adds no table, field, replacement key or migration rewrite.
+
+##### 35.18.11.3 Exact idempotent replay contract
+
+Under the source locks and inside Invoice POST, the canonical writer queries the complete existing row by the five-tuple:
+
+```text
+existing quantity == normalized requested quantity
+AND existing invoiced_amount_cents == normalized requested cents
+  → return existing id with replayed=true; no INSERT/UPDATE/audit duplication
+
+either value differs
+  → 409 FINANCE_INVOICE_SOURCE_LINK_CONFLICT; whole POST rolls back
+
+no row
+  → generate opaque id and INSERT exact normalized values
+```
+
+Quantity and amount must already be safe integers and must satisfy the source-specific positive/zero rules; the writer never converts an invalid value to zero. It never overwrites a link and never uses `INSERT OR IGNORE`, `INSERT IGNORE`, upsert-update or duplicate-key swallowing as business idempotency. The link checks, Finance recognition/link audit and transition `DRAFT → POSTED` are one transaction. Replaying an already POSTED invoice returns the existing invoice only after verifying that all expected five-tuples and values still match; unexplained missing or mismatched link evidence is `409 FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH`, not silent success.
+
+##### 35.18.11.4 Canonical `source_line_id` semantics
+
+Frozen §28.10.3 semantics are preserved: `source_line_id` identifies the upstream source document's line/capacity unit, not the invoice item. Current Sales behavior proves this by passing `sales_delivery_items.id` while `source_type='SALES_DELIVERY'` and `source_id=sales_deliveries.id`.
+
+The Wave 8 mapping is:
+
+| Identity | Service meaning |
+|---|---|
+| invoice document | `sales_invoices.id` |
+| invoice item | `sales_invoice_items.id`; retains mandatory confirmed service `delivery_item_id` |
+| physical/source document | one `service_fulfillments` row, addressed by `source_type='SERVICE_FULFILLMENT'`, `source_id=service_fulfillments.id` |
+| source line | the atomic fulfillment has no child table, so its singleton canonical source-line identity is also `service_fulfillments.id`; this is stored in `source_line_id` |
+| commercial capacity parent | `service_fulfillments.sales_order_item_id`, locked before fulfillment/open-item rows |
+
+One service invoice item may allocate across multiple fulfillments: it produces one five-tuple/link per fulfillment, each with a different `source_id/source_line_id` and physical UUID. One fulfillment may allocate across multiple invoices because `invoice_id` differs. The link table remains invoice-header-to-source-line cardinality; it does not pretend that `source_line_id` is an invoice-item FK.
+
+Because the existing table has no `invoice_item_id`, exact reconstruction uses a bounded writer invariant: within one invoice there may be at most one service invoice item for each `sales_order_item_id`. The invoice item resolves through its confirmed service Delivery item to that SO line; every allocated fulfillment must reference the same SO line. Multiple service invoice items for one SO line fail `409 SERVICE_INVOICE_ITEM_SOURCE_AMBIGUOUS`. This makes `invoice → unique service item per SO line → fulfillment links` reconstructable without changing frozen source-line meaning or adding a column.
+
+##### 35.18.11.5 Canonical POST allocation and shared capacity locks
+
+The Service subset of Invoice POST performs this deterministic plan in one transaction:
+
+```text
+unlocked discovery: invoice items → confirmed service Delivery items → SO line ids
+lock/re-read SO lines id ASC
+lock/re-read CONFIRMED fulfillment rows by (sales_order_item_id,business_date,id)
+lock/re-read FINAL SERVICE_FULFILLMENT AR rows by id ASC
+lock/re-read invoice header and items; abort if discovery fingerprint changed
+lock/read existing link rows for the selected source identities
+allocate each invoice item's base quantity micros FIFO by fulfillment
+validate quantity and cents; replay/insert links
+complete recognizeFinanceExposure DIRECT linkage and POST/audit
+```
+
+This order matches Service CONFIRM (`SO line → fulfillment → Finance source`) and prevents POST from holding a Finance source while waiting for Sales capacity. For each fulfillment `F`:
+
+```text
+quantityCapacity(F) = F.confirmation_qty_micros
+amountCapacity(F)   = FINAL account_receivables.amount_cents
+
+effectiveLinkedQty(F) = SUM(link.invoiced_quantity)
+effectiveLinkedAmt(F) = SUM(link.invoiced_amount_cents)
+  for links joined to sales_invoices.status='POSTED'
+  plus the exact candidate/replay rows of the current DRAFT invoice being posted
+
+effectiveLinkedQty(F) <= quantityCapacity(F)
+effectiveLinkedAmt(F) <= amountCapacity(F)
+```
+
+Both dimensions are checked beneath the same SO-line/fulfillment/open-item locks. Allocation uses the invoice item's base-UOM micros and distributes its net source amount with BigInt cumulative difference so each link receives the cents corresponding to its allocated micros; the last allocation receives that item's exact remainder. For A3, Service Invoice posting is bounded to `tax_mode='NO_TAX'`, where invoice item net=gross and the linked total can equal the already-recognized DIRECT AR capacity. A taxed Service invoice cannot be reconciled with the pre-invoice DIRECT AR and current single-mode invoice/voucher carrier without a separate Finance policy; it fails `SERVICE_INVOICE_TAX_MODE_UNSUPPORTED` and is listed as a remaining coverage limit.
+
+The current invoice's links are included once even though its header remains DRAFT until the final update. Other DRAFT/CANCELLED invoices do not consume capacity because they have no canonical links. No amount check uses `open_amount_cents`; collection, write-off or credit does not redefine the original confirmed invoiceable amount.
+
+##### 35.18.11.6 POST, VOID, Credit and reversal history
+
+| Lifecycle event | Link rows | Effective capacity | Required serialization |
+|---|---|---|---|
+| DRAFT create/cancel | none | none | no Service source capacity mutation |
+| POST | append/replay exact links, then header POSTED | consumes exact linked quantity and amount at commit | SO line → fulfillments → FINAL AR → invoice |
+| Credit note | unchanged and still counted | does not make the fulfilled quantity or original invoice allocation invoiceable again | same Service source locks → invoice; then existing credit/open-item mutations |
+| Credit reversal | link unchanged and counted; frozen credit history controls economic reversal | no A3 capacity change | existing Finance reversal contract; no link writer |
+| VOID/REVERSED | rows preserved; never delete/update | links cease to count only when invoice status becomes REVERSED in the same committed transaction | discover source set → SO line → fulfillments → FINAL AR → invoice; re-read set/status before commit |
+
+VOID versus a new POST therefore serializes on the same fulfillment/open-item capacity anchors. Before VOID commits, the old POSTED links remain counted; after it commits, a later POST may reuse released invoice capacity while the original fulfillment AR and immutable VOID/link history remain traceable. Credit and VOID continue to obey the frozen rule that an invoice with active credit state cannot be voided.
+
+Zero-value Service Fulfillment has no FINAL AR and is not a Finance invoice source. It may support Delivery operational evidence, but the canonical A3 writer creates no `finance_invoice_source_links` row for it. It is never represented by a fake zero-capacity open item.
+
+##### 35.18.11.7 Canonical writer boundary and file impact
+
+There is exactly one Service link mutation responsibility: a private validated link writer invoked by Sales Invoice POST through `recognizeFinanceExposure()` on the caller-owned transaction. Whether Stage D locates the private helper in `finance-recognition.js` or delegates its implementation to `finance-invoice-cardinality.js`, it must have one active call path and the complete contract above; two independently callable implementations are prohibited.
+
+Bounded future file impact remains:
+
+```text
+server/modules/finance-recognition.js
+  replace concatenated physical id; compare replay values; call canonical cap writer
+
+server/modules/finance-invoice-cardinality.js
+  host shared private validation only if called exclusively by invoice POST;
+  exported independent handler rejects SERVICE_FULFILLMENT
+
+server/modules/commercial-golive.js
+  prepare/re-read Service allocation; POST/VOID/Credit source-lock composition
+
+server/modules/service-fulfillment.js
+  read-only source quantity/SO-line evidence for the Finance posting plan
+```
+
+No route is added for direct Service link mutation. No existing historical id changes. No table/column/index migration is approved by this correction.
+
+##### 35.18.11.8 A3 acceptance and concurrency matrix
+
+| Case | Required proof |
+|---|---|
+| Multi-source one item | one service invoice item allocated to two CONFIRMED fulfillments creates two rows with distinct opaque PKs and distinct source tuples; totals equal the item. |
+| Partial/multiple invoice | one fulfillment links across two POSTED invoices; cumulative quantity/amount equals but never exceeds source capacities. |
+| Exact replay | same five-tuple/quantity/amount returns the original row id and does not add audit/economic effect. |
+| Replay mismatch | same five-tuple with changed quantity or cents returns `FINANCE_INVOICE_SOURCE_LINK_CONFLICT`; no row/header/audit change. |
+| Physical PK regression | historical concatenated ids remain readable; new opaque ids do not rewrite them; SQLite/MySQL PK and five-tuple UNIQUE both reject actual duplicates. |
+| Writer bypass | direct `upsertInvoiceSourceLink()` with `SERVICE_FULFILLMENT` fails before insert even for a Finance-authorized actor; no HTTP route exists. |
+| Amount race | two independent POST sessions target the last AR cents; source locks allow only cumulative legal commits. |
+| Quantity race | two independent POST sessions target the last fulfillment micros; the same locks prevent over-invoice even when cents remain. |
+| POST vs VOID | old POSTED capacity is counted until VOID commits; afterward exactly the released capacity is reusable; links/history remain. |
+| POST vs Credit | credit does not release A3 capacity; concurrent operations serialize and preserve credit/VOID eligibility. |
+| Source-line semantics | physical Delivery continues using `sales_delivery_items.id`; Service uses singleton fulfillment id; no invoice-item id is stored as `source_line_id`. |
+| Zero service | no AR and no source link; Delivery evidence remains valid and no zero Finance row is fabricated. |
+| Tax boundary | NO_TAX Service invoice succeeds under exact AR cap; taxed Service invoice fails `SERVICE_INVOICE_TAX_MODE_UNSUPPORTED` with zero effects. |
+
+Use focused SQLite contracts plus real MySQL independent sessions for the two cap races and POST-versus-VOID/Credit. Test-only direct SQL and `INSERT IGNORE` cannot satisfy these cases. Existing SC70–71, S08, UAT-S-25, R-SAL-22 and CAP-25/26 identifiers are reused; no new global identifier/count is created.
+
+##### 35.18.11.9 Remaining blocker and hard stop
+
+Blockers A–D are closed at Design level for the approved NO_TAX, same-recognition-mode A3 scope. The remaining explicit Finance coverage gap is taxed Service invoicing and the already-recorded heterogeneous-recognition-mode mixed invoice; both fail closed and require a separate Finance Requirement/Design if later requested. They do not authorize a fifth table, an existing-table extension or a change to frozen non-Service source-line semantics.
+
+**A3 correction status: `WAVE8_STAGE_C_A3_CORRECTION_DELIVERED — AWAITING FINAL USER ACCEPTANCE`. Hard Stop: no Implementation, test/build/migration/database/Git operation is authorized.**
+
+#### 35.18.12 Final A3 conservation verification (2026-10-19)
+
+> This active Design-only addendum closes the two conservation proofs left after §35.18.11. It does not reopen A3-CUMULATIVE, change A1–C2, alter frozen §28 Finance semantics, or authorize Stage D. Where §35.18.4 or §35.18.11 is less explicit, this subsection supplies the required commit-time equality and Credit source-allocation contract.
+
+##### 35.18.12.1 Per-invoice-item allocation conservation
+
+The §35.18.11.4 bounded invariant first identifies exactly one Service invoice item `I` for each `(invoice_id, sales_order_item_id)`. More than one Service invoice item for the same SO line remains `409 SERVICE_INVOICE_ITEM_SOURCE_AMBIGUOUS`; no allocation is attempted. The canonical POST working set retains `invoice_item_id` while it resolves that item to one or more locked CONFIRMED fulfillment sources, even though the persisted Finance link deliberately retains frozen source-line identity and has no `invoice_item_id` column.
+
+For every positive Service invoice item `I`, before any link insert or invoice state transition the writer must prove all of these exact integer equalities:
+
+```text
+L(I) = complete candidate/replay link allocation for I
+
+SUM(link.invoiced_quantity_micros for link in L(I))
+  = normalizedBaseQuantityMicros(I)
+
+SUM(link.invoiced_amount_cents for link in L(I))
+  = I.net_cents
+
+tax_mode = NO_TAX
+  => I.net_cents = I.gross_cents
+  => SUM(link.invoiced_amount_cents for link in L(I)) = I.gross_cents
+```
+
+`L(I)` must be non-empty, must contain each selected fulfillment at most once, and every member must belong to the same customer/SO line and pass the §35.18.11 per-fulfillment quantity and FINAL-AR amount capacities. Both directions are mandatory: per-source capacity prevents over-allocation, while the equalities above prevent an invoice item from being partially, multiply or silently unallocated. A remaining quantity, remaining cent, duplicate source, excess sum, invalid replay or extra candidate link returns `409 SERVICE_INVOICE_ALLOCATION_NOT_CONSERVED` and leaves zero effects.
+
+Quantity is allocated FIFO over the stable fulfillment order. Amount uses BigInt cumulative-difference allocation against the same item quantity; the final member receives the exact item remainder. Therefore many fulfillments may sum to one invoice item, and one fulfillment may contribute to many invoices, but every individual invoice-item allocation still closes to its own quantity and cents. The complete allocation calculation, both item-level equalities, all source-capacity checks, exact replay/insert, Finance link audit and `DRAFT → POSTED` transition execute in the same caller-owned transaction described in §35.18.11.5. No committed prefix of `L(I)` is possible.
+
+##### 35.18.12.2 Multi-source Credit evidence and current-code defect
+
+Current `createCommercialCreditNote()` is not a valid multi-source A3 allocator. When `header.open_item_id` is null it discovers source open items through `finance_invoice_source_links`, orders them by open-item id, then repeatedly applies `min(unapplied, snapshot.openCents)`. That proves only current open-balance availability. It does not prove how much this invoice actually linked to each source, does not subtract prior invoice-specific Credit allocation per source, and can assign a Credit economic effect to the wrong FINAL AR. §35.18.11.6 already requires common source locking and immutable links, but it did not fully specify this per-source Credit conservation calculation.
+
+The existing frozen carriers are sufficient without schema change:
+
+```text
+commercial_credit_notes
+  = invoice-level Credit source document and total
+
+financial_credit_adjustments
+  = canonical per-open-item economic effects through applyCreditAdjustment()
+  = target_open_item_id + amount_cents + status + SALES_CREDIT_NOTE source identity
+
+finance_invoice_source_links
+  = immutable proof of this invoice's amount allocated to each FINAL source
+```
+
+This preserves the §28.3.0.2 single-path rule and §28.10.1 invoice-level Credit projection. It does not create a fifth economic category, shadow AR, link mutation or second Finance writer.
+
+##### 35.18.12.3 Canonical Service multi-source Credit allocation
+
+For a POSTED Sales Invoice containing `SERVICE_FULFILLMENT` links, Credit creation performs unlocked identity discovery and then acquires the same §35.18.11 Service locks in canonical order: SO lines, fulfillments and FINAL AR rows by stable id, followed by invoice header, immutable invoice links, related POSTED Credit-note rows and their `financial_credit_adjustments`. It re-reads the complete source set after locking; drift or unrecognized evidence is `409 SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH`. Two Credit transactions and Credit versus POST/VOID therefore serialize on the same source anchors.
+
+For each linked FINAL AR source `S`:
+
+```text
+invoiceSourceAmount(S)
+  = SUM(finance_invoice_source_links.invoiced_amount_cents
+        WHERE invoice_id=current invoice
+          AND invoice_side='SALES_INVOICE'
+          AND source identity resolves to S)
+
+confirmedRelatedCredit(S)
+  = SUM(financial_credit_adjustments.amount_cents
+        WHERE side='AR'
+          AND source_type='SALES_CREDIT_NOTE'
+          AND adjustment belongs to a POSTED commercial_credit_note
+              whose source_id=current invoice
+          AND target_open_item_id=S
+          AND adjustment.status='CONFIRMED')
+
+remainingInvoiceCreditCapacity(S)
+  = invoiceSourceAmount(S) - confirmedRelatedCredit(S)
+  >= 0
+```
+
+Association uses the existing Credit-note identity already carried by each adjustment: one-target Credit uses `source_id=creditNote.id`; multi-target Credit uses the existing deterministic `creditNote.id:<ordinal>` identities and `target_open_item_id`. The writer must resolve these identities exactly, reject duplicate/unknown/orphan adjustments, and never infer allocation from document number or open-item ordering. Reversed adjustments do not count as confirmed related Credit; a header/adjustment reversal-state mismatch fails closed rather than creating new capacity.
+
+The requested Credit gross cents are allocated deterministically over the locked positive `remainingInvoiceCreditCapacity(S)` values using BigInt cumulative-difference proportional allocation; the last source receives the exact remainder. Commit requires:
+
+```text
+SUM(candidateCreditAmount(S)) = requested commercial_credit_note.gross_cents
+
+0 <= candidateCreditAmount(S) <= remainingInvoiceCreditCapacity(S)
+
+confirmedRelatedCredit(S) + candidateCreditAmount(S)
+  <= invoiceSourceAmount(S)
+```
+
+The allocation basis is invoice-specific linked amount, never `open_amount_cents`. `applyCreditAdjustment()` remains the sole economic writer for every non-zero source allocation. Its existing applied/unapplied split may reflect collections or other open-item effects, but that split cannot change the invoice/source entitlement above. Credit-note insert, voucher, every `applyCreditAdjustment()`, invoice credit projection and audit commit in one transaction; any shortage or mismatch rolls all of them back.
+
+Legacy single-source and non-Service Credit behavior is not redesigned. A Service-linked invoice whose historical/mixed links or prior Credit adjustments cannot produce the complete exact mapping above fails `409 SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH`; it must not fall back to the current open-balance greedy loop. Links are never updated or deleted, Credit does not release A3 invoice quantity/amount capacity, and VOID remains prohibited while active Credit exists.
+
+##### 35.18.12.4 Executable acceptance proof and final boundary
+
+| Proof | Required future assertion after separate Stage D authorization |
+|---|---|
+| Item quantity conservation | two or more fulfillment allocations sum exactly to each Service invoice item's normalized micros; under/over/extra allocation is 409 with zero effects. |
+| Item amount conservation | allocations sum exactly to item net cents and, under NO_TAX, gross cents; BigInt remainder is exact on SQLite/MySQL. |
+| Cross-invoice conservation | one fulfillment across multiple invoices satisfies every item equality and the shared fulfillment quantity/FINAL-AR amount caps. |
+| SO-line ambiguity | two Service invoice items for one SO line fail before link/audit/header mutation. |
+| Credit source cap | each adjustment is no greater than this invoice's linked cents for its target FINAL AR minus prior confirmed related Credit. |
+| Credit total conservation | per-source adjustment cents sum exactly to the Credit-note gross cents without using open balance as allocation authority. |
+| Credit concurrency | independent multi-source Credit sessions and Credit versus POST/VOID serialize on the common Service source locks; losers roll back without partial note/voucher/adjustment/projection/audit effects. |
+| Evidence failure | orphan, duplicate, unknown or non-reconstructable historical source allocation fails closed; no greedy fallback and no link mutation. |
+
+The existing §35.18.11 primary-key, five-tuple, replay, canonical-writer and source-capacity contracts remain unchanged. No frozen Finance Credit business rule is replaced: this addendum preserves `commercial_credit_notes → applyCreditAdjustment() → financial_credit_adjustments`, invoice-level credit-state conservation, and the prohibition on orphan effects. The current carriers can represent the bounded Service allocation, so `EXTERNAL_CONTRACT_REQUIRED` is not raised. If Stage D evidence later proves that exact Credit-note-to-adjustment association or the common lock cannot be implemented on both SQLite and MySQL without schema or frozen-semantic change, implementation must stop and return `EXTERNAL_CONTRACT_REQUIRED` rather than weaken these equations.
+
+**Final conservation status: `WAVE8_STAGE_C_FINAL_ACCEPTANCE_READY`. Hard Stop: no Implementation, test/build/migration/database/Git operation is authorized.**
+
+---
+
+### 35.19 Wave 8 V21 Historical Position Evidence Carrier Design
+
+> Authorization: the user's `WAVE8_STAGE_C_V21_EVIDENCE_CARRIER_DESIGN` instruction dated 2026-10-19, following acceptance of `document.md`'s bounded V21 Historical Position Evidence Amendment. This subsection is Design-only. It does not authorize Implementation, migration execution, tests, builds, database access or Git writes.
+>
+> Supersession boundary: this subsection supersedes only the conflicting statements in §35.18.2, §35.18.7, §35.18.8 and §35.18.10 that prohibit every existing-table extension or say that no V21 schema extension is required. Exactly four Wave 8 business tables remain. The sole existing-table exception is the additive `inventory_mutation_log` evidence extension defined here. Frozen §27 position identity, V21 writer ownership, Wave 6/7 semantics and all other §35.18 decisions remain active.
+
+#### 35.19.1 Confirmed defect and carrier decision
+
+The V21 mutation-time authority has the complete normalized position tuple, but the committed carriers currently split and lose critical facts:
+
+- `inventory` is current balance, not immutable history;
+- `inventory_transactions` proves physical direction and quantity but the active writer does not persist bin/owner/status/position key/source item;
+- `tracked_inventory_movements` proves transaction-linked warehouse/LOT/SERIAL tracking but not bin/owner/status or movement group;
+- valuation movements prove cost by inventory transaction but valuation pools are warehouse/product and optional LOT/SERIAL, never bin history;
+- the current `inventory_mutation_log` owns the unique idempotency key and movement-group correlation but lacks source item, position snapshots, exact transaction references and semantic replay comparison.
+
+`position_key` is a one-way SHA-256 digest. It is suitable for lookup and verification but cannot reconstruct its source tuple. Therefore neither the key alone nor any join over current rows can meet B1/B5. Audit summary, remark and current commercial-location mapping remain non-authoritative.
+
+The final carrier is the existing Inventory-owned `inventory_mutation_log`. It remains one row per `applyInventoryMutation()` call. It is not a stock ledger and carries no independent quantity balance. `movement_group_id` remains a non-unique correlation id; `inventory_mutation_log.id` remains the unique mutation-row identity.
+
+#### 35.19.2 Final additive physical schema
+
+The following nine nullable columns are added to `inventory_mutation_log`; no other existing table receives a Wave 8 evidence column:
+
+| Column | SQLite | MySQL 8 | Meaning |
+|---|---|---|---|
+| `source_item_id` | `TEXT NULL` | `VARCHAR(128) NULL` | Canonical business source item; for all three Consignment sources this is `consignment_commercial_lines.id`. |
+| `from_position_key` | `TEXT NULL` | `CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL` | Recomputed key of the validated source snapshot. |
+| `to_position_key` | `TEXT NULL` | `CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL` | Recomputed key of the validated destination snapshot. |
+| `from_position_identity_json` | `TEXT NULL` | `LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL` | Canonical UTF-8 V1 source snapshot text. |
+| `to_position_identity_json` | `TEXT NULL` | `LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL` | Canonical UTF-8 V1 destination snapshot text. |
+| `out_inventory_transaction_id` | `TEXT NULL REFERENCES inventory_transactions(id)` | `VARCHAR(128) NULL`, FK | Exact physical OUT row generated by this mutation. |
+| `in_inventory_transaction_id` | `TEXT NULL REFERENCES inventory_transactions(id)` | `VARCHAR(128) NULL`, FK | Exact physical IN row generated by this mutation. |
+| `request_fingerprint` | `TEXT NULL` | `CHAR(67) CHARACTER SET ascii COLLATE ascii_bin NULL` | `V1:` followed by 64 lowercase SHA-256 hex characters. |
+| `evidence_schema_version` | `INTEGER NULL` | `TINYINT UNSIGNED NULL` | `1` for complete evidence; NULL only for legacy/non-evidence rows. |
+
+Why both keys and JSON are retained: the explicit keys provide bounded indexed resolution/current-position locking; the JSON is the minimum reversible carrier for the complete eight-dimension tuple. Why both transaction ids are retained: timestamp/source joins cannot distinguish multiple calls in one movement group, while the two ids directly identify the physical legs and, through existing `tracked_inventory_movements.transaction_id` and `inventory_valuation_movements.inventory_transaction_id`, their tracking and value evidence.
+
+For a new Consignment row, the evidence shape is all-or-nothing:
+
+```text
+common:
+  source_item_id, request_fingerprint, evidence_schema_version=1 NOT NULL
+
+HANDOFF / RETURN (MOVE):
+  from snapshot/key/out transaction NOT NULL
+  to snapshot/key/in transaction NOT NULL
+
+SETTLEMENT (OUT):
+  from snapshot/key/out transaction NOT NULL
+  to snapshot/key/in transaction NULL
+```
+
+New nullable foreign keys use the database default `ON DELETE RESTRICT` behavior. The following additive indexes are exact:
+
+```text
+UNIQUE uq_inventory_mutation_log_out_tx(out_inventory_transaction_id)
+UNIQUE uq_inventory_mutation_log_in_tx(in_inventory_transaction_id)
+
+INDEX idx_inventory_mutation_log_group_item(
+  movement_group_id, source_type, source_id, source_item_id, id
+)
+
+INDEX idx_inventory_mutation_log_consumption(
+  source_type, source_item_id, from_position_key, business_date, id
+)
+```
+
+Both engines permit multiple NULL values in the two unique transaction indexes; every non-null transaction id can belong to exactly one mutation row. No uniqueness is placed on `movement_group_id`, source item or position key.
+
+Additive validation/immutability triggers apply only when `source_type IN ('CONSIGNMENT_HANDOFF','CONSIGNMENT_SETTLEMENT','CONSIGNMENT_RETURN')`:
+
+1. BEFORE INSERT enforces the complete shape above, positive quantity, V1 evidence version, valid canonical JSON, key/JSON equality and fingerprint format.
+2. BEFORE UPDATE and BEFORE DELETE reject the operation. Consignment evidence is insert-once; there is no ordinary repair route.
+3. Application validation additionally parses and canonicalizes the snapshot, recomputes its position key with the frozen §27 algorithm, verifies transaction direction/source/quantity, and rejects unknown JSON fields or versions. DB JSON functions validate structure; SHA-256 recomputation remains in the single V21 application implementation so SQLite/MySQL do not acquire divergent hash logic.
+
+Other historical/current V21 callers may leave all nine fields NULL and retain their existing replay behavior. A partial mixture of evidence fields is never legal for a Consignment row.
+
+#### 35.19.3 Position Snapshot V1 and canonical serialization
+
+Snapshot V1 is an object with exactly these keys in exactly this order:
+
+```json
+{"schemaVersion":1,"productId":"P","warehouseId":"W","binId":null,"ownerType":"ENTERPRISE","ownerId":null,"stockStatus":"AVAILABLE","lotId":null,"serialId":null,"positionKey":"64-lowercase-hex"}
+```
+
+Canonicalization rules:
+
+1. The writer first resolves and validates product, warehouse, bin, owner, stock status, LOT and SERIAL through V21. Snapshot values come from those authoritative resolved rows, never directly from client JSON.
+2. Required IDs are non-empty strings no longer than 128 characters. Nullable dimensions are present with JSON `null`; a missing key, empty-string null substitute or extra key is malformed.
+3. `ownerType` and `stockStatus` use their canonical uppercase codes. ENTERPRISE always has `ownerId:null`.
+4. Product/warehouse/bin/owner/LOT/SERIAL IDs retain the authoritative database identifier text. The frozen §27 normalizer is applied when recomputing `positionKey`; this subsection does not change its lowercase/sentinel/hash rules.
+5. Serialization is UTF-8 `JSON.stringify` over a freshly constructed ordered object, with no insignificant whitespace. Readers never trust database-native JSON rendering: they parse, validate, rebuild the ordered object and reserialize.
+6. `positionKey` must equal `computePositionKey()` over the other eight fields. Unknown version, invalid JSON, unknown/extra/missing field, invalid null placement or hash mismatch returns `409 CONSIGNMENT_POSITION_EVIDENCE_INVALID`.
+7. Snapshot JSON contains no quantity or money. For the replay payload, base-UOM quantity is represented as a decimal string of safe integer micros; cents are decimal strings of safe integers. No float or localized decimal text enters the fingerprint.
+
+The selected storage is TEXT, not native MySQL JSON. This preserves the canonical bytes written by the application, avoids MySQL JSON key reordering/number rendering differences and gives SQLite/MySQL the same read contract. SQLite uses `json_valid()` and MySQL uses `JSON_VALID()` in the additive insert validation trigger; comparison and hashing always use application-level recanonicalization rather than database text equality.
+
+#### 35.19.4 Versioned request fingerprint and replay
+
+For each Consignment partition the Inventory writer constructs, in this exact order, a V1 canonical payload:
+
+```text
+fingerprintVersion
+sourceType
+sourceId
+sourceItemId
+movementGroupId
+movementKind
+quantityMicros                 -- canonical base-UOM integer string
+businessDate                   -- YYYY-MM-DD
+fromPosition                   -- canonical V1 object or null
+toPosition                     -- canonical V1 object or null
+trackingMode                   -- CANONICAL_STRICT
+valuationMode                  -- EXTERNAL_STRICT
+valuationPolicy                -- HANDOFF_VALUE_NEUTRAL_V1 /
+                                  SETTLEMENT_COGS_V1 /
+                                  RETURN_VALUE_NEUTRAL_V1
+commercialAmountCents          -- settlement/return canonical integer string;
+                                  null when no commercial amount exists
+```
+
+The ordered object is serialized by the same UTF-8/no-whitespace rule and hashed as lowercase SHA-256; persisted form is `V1:<hex>`. `idempotency_key` is not inside the payload because it scopes the lookup; actor, remark, source number, request transport and timestamps are excluded because they do not alter inventory/economic effect. The outer Consignment writer derives micros/cents from locked authoritative commercial facts and passes a typed internal context; arbitrary client context is never fingerprint authority.
+
+Replay sequence occurs inside the caller-owned transaction:
+
+1. lock the row by existing unique `idempotency_key` (`FOR UPDATE` on MySQL; SQLite transaction serialization);
+2. if absent, execute once and insert physical/tracking/valuation/evidence atomically;
+3. if present and it is a complete Consignment V1 row, recanonicalize stored snapshots, compare every readable source/kind/quantity/date/group/key/transaction invariant, and compare the recomputed request fingerprint;
+4. exact equality returns the original mutation id, movement group, snapshots, transaction ids, tracked rows and valuation rows; it writes nothing;
+5. any semantic mismatch returns HTTP 409 `INVENTORY_MUTATION_IDEMPOTENCY_CONFLICT`; stored evidence is never overwritten and no second movement is generated.
+
+SHA-256 collision is not treated as permission to replay: any readable-field disagreement with an equal digest is the same 409. A malformed stored payload or a digest that cannot be recomputed is `CONSIGNMENT_MUTATION_EVIDENCE_INVALID`, not a new insert.
+
+Legacy compatibility is intentionally asymmetric:
+
+- a pre-extension row with NULL fingerprint/evidence keeps the historical replay contract for non-Consignment callers;
+- a Consignment request that finds a same-key legacy/partial row fails `409 CONSIGNMENT_LEGACY_EVIDENCE_UNAVAILABLE`;
+- no fingerprint, snapshot or transaction association is backfilled or guessed;
+- existing `idempotency_key` values and uniqueness are unchanged.
+
+#### 35.19.5 Mutation, group, source, physical, tracking and valuation graph
+
+The authoritative graph is:
+
+```text
+consignment_commercial_lines.id
+  └─ source_item_id
+     + consignment line.handoff_movement_group_id
+       └─ inventory_mutation_log.id (one row per partition call; many per group)
+          ├─ from_position_key + V1 snapshot
+          ├─ to_position_key   + V1 snapshot
+          ├─ out_inventory_transaction_id
+          │   ├─ inventory_transactions(direction='OUT')
+          │   ├─ tracked_inventory_movements(transaction_id=OUT id)
+          │   └─ inventory_valuation_movements(inventory_transaction_id=OUT id)
+          └─ in_inventory_transaction_id
+              ├─ inventory_transactions(direction='IN')
+              ├─ tracked_inventory_movements(transaction_id=IN id)
+              └─ inventory_valuation_movements(inventory_transaction_id=IN id)
+```
+
+Every joined physical/tracking/value row must match source type/id/item, product, warehouse, LOT/SERIAL, direction and quantity appropriate to its snapshot. Handoff/Return use distinct OUT and IN valuation movement types so each leg is independently identifiable. The mutation log remains the bin/owner/status history authority; valuation balance must never be interpreted as bin history.
+
+V21's strict Consignment branch must call a transaction-inheriting tracking primitive for each physical leg. That primitive updates canonical LOT balance/SERIAL lifecycle and writes the `tracked_inventory_movements` row carrying the exact inventory transaction id. The current generic `writeTrackedMovement()` evidence-only insert is insufficient by itself because it does not update LOT balance or SERIAL current state. Stage D must converge this branch inside the canonical Inventory writer; Sales must not write tracking tables directly.
+
+#### 35.19.6 Complete multi-partition Handoff example
+
+Example line `CL-10` contains four base units of one SERIAL-tracked product `P-S`. Its serials also carry canonical LOT identity. The commercial line uses its approved SERIAL path; V21 evidence, not a Sales serial table, owns the serial/LOT partitions. Source warehouse `MAIN` is bin-enabled; destination consignment warehouse is `CON-WH`, bin `C-01`.
+
+| Mutation row | Stable key | Source position | Destination position | Qty micros | Physical txs | Tracking/value evidence |
+|---|---|---|---|---:|---|---|
+| `M1` | `CONSIGNMENT_HANDOFF:CL-10:<client>:001` | MAIN/B-A, LOT-L1, SER-001 | CON-WH/C-01, LOT-L1, SER-001 | 1000000 | `T1-OUT`, `T1-IN` | two transaction-linked tracking rows; strict issue/receive value pair |
+| `M2` | `...:002` | MAIN/B-A, LOT-L1, SER-002 | CON-WH/C-01, LOT-L1, SER-002 | 1000000 | `T2-OUT`, `T2-IN` | same pattern, distinct serial/position keys |
+| `M3` | `...:003` | MAIN/B-B, LOT-L2, SER-003 | CON-WH/C-01, LOT-L2, SER-003 | 1000000 | `T3-OUT`, `T3-IN` | same pattern |
+| `M4` | `...:004` | MAIN/B-B, LOT-L2, SER-004 | CON-WH/C-01, LOT-L2, SER-004 | 1000000 | `T4-OUT`, `T4-IN` | same pattern |
+
+All four rows use `source_type=CONSIGNMENT_HANDOFF`, `source_id=<document-id>`, `source_item_id=CL-10`, the same `movement_group_id=G-HO-10`, `movement_kind=MOVE`, ENTERPRISE/null owner and AVAILABLE status. Each serial is quantity one and has a distinct from/to position key. The line stores only `G-HO-10`; resolution loads all four mutation rows by group/source/item and recovers every destination without reading the current location mapping.
+
+For a LOT product, multiple calls may also share one LOT while differing by source bin. Such calls remain separate mutation rows and transaction pairs. LOT tracking may aggregate at its existing warehouse/LOT balance dimension, but the mutation rows preserve each physical bin leg. Partitions may be merged for entitlement calculation only when `(source_item_id,to_position_key)` is identical; different bin, owner, status, LOT or SERIAL means a different position key and can never merge.
+
+#### 35.19.7 `resolveConsignmentHandoffEvidence` and partition entitlement
+
+`server/modules/consignment.js` owns the Sales orchestration and calls an Inventory-owned read/validation helper; it does not parse arbitrary JSON itself. Responsibility name:
+
+```text
+resolveConsignmentHandoffEvidence(db, {
+  documentId, lineId, handoffMovementGroupId, requestedMicros,
+  selectedLotIds, selectedSerialIds, operation
+})
+```
+
+Resolution, under the locked commercial line, is:
+
+1. Load all complete `CONSIGNMENT_HANDOFF` mutation rows matching group, document and line, ordered by `(business_date,created_at,id)`; reject none, partial evidence, duplicate transaction references, wrong kind, wrong ownership/status/product or inconsistent snapshots.
+2. Verify both transaction legs and their tracking/valuation corroboration. The Handoff destination snapshot is the historical candidate; no commercial-location warehouse/bin field is consulted.
+3. Build entitlement buckets keyed by `(lineId,to_position_key)`. Multiple Handoff rows with an identical key may sum; different keys remain separate. SERIAL buckets are necessarily one serial identity and one unit per Handoff mutation.
+4. Load committed `CONSIGNMENT_SETTLEMENT` and `CONSIGNMENT_RETURN` mutation rows with the same `source_item_id=lineId`; validate their V1 evidence and group them by `from_position_key`.
+5. For each bucket:
+
+```text
+handoffMicros(position)
+  = SUM(complete Handoff row quantityMicros whose to_position_key=position)
+
+consumedMicros(position)
+  = SUM(complete Settlement/Return row quantityMicros
+        whose from_position_key=position)
+
+entitlementRemainingMicros(position)
+  = handoffMicros(position) - consumedMicros(position)
+```
+
+Negative, orphan or over-consumed evidence is `409 CONSIGNMENT_PARTITION_EVIDENCE_MISMATCH`. Commercial remaining quantity is checked independently from the sum of bucket entitlement. Current V21 balance is a third, independent check.
+
+Different Consignment lines that share one physical V21 position never share entitlement: `source_item_id` separates their histories. They still contend on and consume the same current inventory row, so the V21 position lock prevents physical overspend. Other lawful V21 operations may move stock out of that shared position; entitlement is therefore neither reservation nor proof of current availability.
+
+Deterministic allocation:
+
+- explicit SERIAL requests must name exact outstanding serial ids; no serial FIFO substitution is allowed;
+- explicit LOT requests are restricted to matching outstanding LOT buckets;
+- otherwise eligible buckets sort by `(handoff business_date, handoff created_at, handoff mutation id, to_position_key)` and consume FIFO;
+- within one identical-position bucket, immutable Handoff rows use the same order for reconstructed attribution;
+- a partial consumption creates one new Settlement/Return mutation row for each selected position portion; its from key identifies the consumed bucket exactly;
+- replay returns those same rows through their deterministic partition idempotency keys.
+
+No fifth allocation table is necessary because the immutable Handoff additions and immutable per-position Settlement/Return subtractions reconstruct the entitlement exactly. If Stage D finds any legal command that cannot be mapped to exactly one `from_position_key` per physical mutation, it must stop; it may not fall back to line total or current inventory total.
+
+#### 35.19.8 Current-position revalidation, locks and concurrency
+
+Historical snapshots identify candidates only. Before any new physical mutation the resolver reconstructs and validates every V1 snapshot, then the outer transaction locks/re-reads in this order:
+
+```text
+1. consignment document id
+2. consignment line ids ASC
+3. referenced commercial-location rows ASC (mapping is not history authority)
+4. selected inventory_mutation_log rows by (movement_group_id,id) ASC
+5. current inventory positions by deduplicated position_key ASC
+6. LOT ids / SERIAL ids ASC and tracking balance/lifecycle evidence
+7. inventory_locks / reservation and stock-status dependencies
+8. valuation balance keys ASC and prior valuation evidence
+9. Finance source/open-item locks in the existing Finance-owned order (Settlement only)
+10. business state, audit and command-idempotency result
+```
+
+Every current source position must exist and be active; match product/bin/owner/status/LOT/SERIAL and the recomputed key; remain ENTERPRISE/null owner and AVAILABLE/issuable/transferable as applicable; have sufficient unlocked physical quantity; pass inventory and accounting period gates; and have complete tracking plus authoritative POSTED valuation balance. SERIAL must be AVAILABLE at the exact warehouse with quantity one and the exact lot when present. LOT must exist, match product, be AVAILABLE/not expired and have sufficient warehouse/LOT balance. Failure is closed before any committed effect.
+
+R-SAL-20 settlement-versus-settlement and R-SAL-21 settlement-versus-return first serialize on the line entitlement, then on identical current position keys. Different lines sharing a position serialize at the position. A generic V21 movement that wins first changes current authority and causes the Consignment operation to re-read or fail; historical entitlement is not consumed unless the new mutation commits. MySQL proof requires real independent connections; SQLite uses the repository's single `BEGIN IMMEDIATE` writer serialization.
+
+#### 35.19.9 Strict tracking, valuation and atomicity
+
+All Consignment partition calls inherit the single outer transaction and database connection. Runtime DDL is forbidden. The existing `ensureLogTable()` path inside `applyInventoryMutation()` must be removed; schema creation/upgrade occurs only in the canonical migration lifecycle.
+
+Handoff and Return, per partition:
+
+```text
+physical MOVE: exact OUT tx + exact IN tx
+tracking:       transaction-linked OUT + IN; LOT/SERIAL state conserved
+valuation OUT: issueValue(source pool, OUT tx) -> exact issued cents
+valuation IN:  receiveValue(destination pool, IN tx, same exact cents)
+proof:          net physical quantity = 0; net valuation quantity = 0;
+                net value cents = 0; owner remains ENTERPRISE
+```
+
+Settlement, per partition:
+
+```text
+physical OUT + transaction-linked tracking OUT
+issueValue(exact historical/current identity, OUT tx)
+reject LEGACY_UNVALUED or missing/insufficient pool
+balanced voucher DR COGS / CR inventory for exact issued cents
+Finance DIRECT event for locked commercial event cents
+```
+
+`inventory_valuation_balances` is verified as warehouse/product plus LOT or SERIAL according to the frozen valuation method; it has no bin dimension. For a same-warehouse bin MOVE, OUT and IN use the same valuation pool and exact cents, leaving the pool unchanged after the pair. This is valid value conservation, not evidence of physical bin history. The V1 snapshots and physical transaction ids remain the bin history authority.
+
+The canonical writer must return strict tracking and valuation row ids with its mutation result. The caller verifies every leg before updating commercial cumulative values. Best-effort swallowed valuation is prohibited: Consignment always uses `valuationMode=EXTERNAL_STRICT`; any `LEGACY_UNVALUED`, tracking, valuation, voucher, Finance, audit or evidence failure throws and rolls back physical rows, evidence and all business effects together.
+
+#### 35.19.10 Migration and cross-engine parity
+
+Migration is additive and ordered with Inventory V21 schema reconciliation before Wave 8 business migration use:
+
+1. fresh bootstrap creates the extended table, FKs, indexes and triggers directly;
+2. existing databases add each nullable column only when absent, then create missing indexes/triggers and verify exact metadata;
+3. repeated execution observes an equivalent object and performs no write; a same-named incompatible column/index/trigger/FK fails closed rather than dropping or replacing it;
+4. existing rows remain byte-for-byte unchanged with NULL evidence columns;
+5. no table rebuild, DROP, guessed backfill, startup repair or historical economic rewrite is allowed.
+
+SQLite uses TEXT/INTEGER plus `json_valid`, explicit indexes and `RAISE(ABORT,...)` triggers. MySQL uses the types/collations in §35.19.2, InnoDB FKs, `JSON_VALID`, named indexes and `SIGNAL SQLSTATE '45000'` triggers. Metadata assertions cover column type/nullability/collation/order, FK targets, unique/non-unique index order and trigger presence. JSON semantics are proven by application recanonicalization, not engine rendering.
+
+Replay concurrency is protected by the existing unique idempotency key plus the locked lookup. Two first-use sessions may both initially see absence; only one can insert the unique key. The losing transaction must catch the duplicate inside the canonical command boundary, roll back its uncommitted physical work, begin/re-enter the safe replay read as the repository adapter permits, and return the committed row only after exact fingerprint validation. It may never translate a duplicate-key race into a second movement or a generic success.
+
+#### 35.19.11 Acceptance mapping and exact Stage D impact
+
+No new global SC, Invariant, UAT, Race or Audit CAP id is created. Future Stage D must extend the existing R-SAL-20, R-SAL-21, R-SAL-22, UAT-S-26/27, S18 and V21 acceptance evidence with:
+
+| Existing identity | Required proof |
+|---|---|
+| UAT-S-26 / S18 | single-position Handoff; multi-position/two-bin Handoff; multi-LOT; multi-SERIAL; one group/many mutation rows; historical destination resolution after location change; exact transaction/tracking/value graph. |
+| UAT-S-27 / S18 | inactive-location historical settlement/return; explicit return destination; legacy/malformed/hash-mismatch fail closed; no mapping inference; no AR/refund for unsettled return. |
+| R-SAL-20 | same line settlement ×2; different lines sharing one V21 position; commercial capacity sufficient but partition entitlement insufficient; current physical balance insufficient. |
+| R-SAL-21 | Settlement vs Return consumes one entitlement at most once; deterministic partial/FIFO and explicit SERIAL behavior; all losing paths have zero effects. |
+| V21 idempotency | same-key/equal semantic replay returns identical mutation/evidence ids; changed position/quantity/date/mode/policy/amount returns 409; concurrent first use commits once. |
+| V21 tracking/value | LOT/SERIAL lifecycle and balances; same-warehouse different-bin value-neutral MOVE; cross-warehouse exact cents; valuation failure rolls back every layer. |
+| SQLite/MySQL | fresh, existing additive upgrade, repeated migration, metadata parity, trigger enforcement and protected independent-session concurrency. |
+| R-SAL-22 | unchanged Service Fulfillment/Gate/Finance regression within the combined Wave 8 gate. |
+
+Wave 6/7 and all non-Consignment V21 callers require regression proving that nullable evidence columns and the scoped replay branch do not alter their legal behavior. No skipped assertion or test reclassification is permitted.
+
+Exact future file scope after separate Stage D authorization:
+
+```text
+server/migrations/inventory-position-schema.js
+  additive SQLite columns/FKs/indexes/triggers; remove no history
+
+server/database/mysql-schema.js
+  MySQL physical mapping/reconciliation/metadata assertions
+
+server/lib/inventory-position.js
+  canonical V1 snapshot build/parse/recanonicalize/key verification
+
+server/lib/inventory-mutation.js
+  strict Consignment fingerprint/replay, exact transaction references,
+  complete replay result, no transaction-time DDL
+
+server/modules/traceability-quality.js
+  transaction-inheriting strict LOT/SERIAL leg primitive used by V21
+
+server/modules/financial-inventory.js
+  strict caller-owned issue/receive result and LEGACY_UNVALUED rejection;
+  no valuation-method redesign
+
+server/modules/consignment.js
+  Handoff orchestration, resolveConsignmentHandoffEvidence,
+  partition entitlement/allocation, Settlement/Return atomic workflows
+
+server/migrations/sales-customer-wave8-service-consignment.js
+  four business tables remain; only integration assertions if required,
+  no fifth table and no evidence columns here
+
+server/migrations/sales-customer-domain.js
+server/sales-customer-wave0-migration-runner.test.js
+  ordered migration/replay proof
+
+focused Wave 8/V21 migration, functional, rollback and replay tests
+protected MySQL integration/concurrency workers and suite registration
+```
+
+The existing Stage D worktree is preserved but incomplete against this design. In particular, the current source allowlist is only a partial C2 step; the current mutation-log row/replay result, transaction-time DDL, evidence-only tracking insert and swallowed valuation branch do not satisfy this contract. They must be amended, not treated as PASS.
+
+#### 35.19.12 Remaining limits, rollback and resume gate
+
+The selected carrier accurately expresses every required historical position, transaction, replay and per-position entitlement responsibility. No new schema blocker remains for the approved Wave 8 core.
+
+Declared fail-closed limits remain:
+
+- legacy/partial Consignment evidence;
+- unknown snapshot/fingerprint version or noncanonical JSON;
+- missing/ambiguous transaction/tracking/valuation joins;
+- an operation that cannot identify an exact historical `from_position_key`;
+- current stock/tracking/valuation no longer available despite remaining commercial entitlement;
+- tax/UOM/economic scenarios already excluded by §35.18.
+
+Schema rollback means application rollback while retaining nullable additive columns/indexes/triggers and any committed evidence; destructive down-migration or deletion is not authorized. No historical fact is rewritten.
+
+Stage D may resume only after explicit user acceptance of this §35.19 Design and a separate Implementation authorization. This Design does not execute or validate the implementation and does not alter the current Hard Stop.
+
+**Final status: `WAVE8_STAGE_C_V21_EVIDENCE_DESIGN_DELIVERED — AWAITING_USER_ACCEPTANCE`. Hard Stop.**
+
+---
+
+## 35.20 Wave 8 Stage D — Actual Implementation Evidence
+
+This section records the implementation of the already approved §35.18/§35.19 design. It does not supersede those contracts or authorize Wave 9–13.
+
+### 35.20.1 Landed modules and call flow
+
+- `server/modules/service-fulfillment.js` owns Service Fulfillment commands, scope, lifecycle, SO capacity, C1 Gate invocation, DIRECT Finance recognition, audit and idempotency.
+- `server/modules/consignment.js` owns commercial location/document/line state, immutable Handoff evidence resolution, entitlement FIFO/explicit SERIAL allocation, Settlement OUT, Return MOVE, reporting and API dispatch.
+- `server/lib/inventory-position.js` owns Position Snapshot V1 build/parse/recanonicalize/hash verification.
+- `server/lib/inventory-mutation.js` owns the Consignment-only evidence/fingerprint/replay branch while preserving legacy V21 caller behavior; runtime DDL is absent.
+- `server/modules/traceability-quality.js` supplies transaction-linked strict tracking legs inside the caller transaction.
+- `server/modules/finance-recognition.js`, `finance-invoice-cardinality.js` and `commercial-golive.js` implement A3 locks, immutable invoice links, capacity conservation and multi-source Service Credit allocation through the existing Finance writers.
+- `server/app.js` remains the HTTP composition point for the contextual routes and mixed Delivery orchestration.
+
+### 35.20.2 Schema and migration realization
+
+`inventory_mutation_log` has exactly the nine nullable §35.19 columns. SQLite and MySQL define the bounded indexes and Consignment completeness/immutability triggers. Fresh install, existing additive upgrade and repeated migration use the canonical Inventory/Wave 8 migration registries. Legacy rows remain nullable; no historical backfill, table rebuild, fifth Wave 8 table, shadow inventory or shadow AR is introduced.
+
+The four Wave 8 business tables remain `service_fulfillments`, `consignment_commercial_locations`, `consignment_commercial_documents` and `consignment_commercial_lines`.
+
+### 35.20.3 Transaction and lock realization
+
+Handoff, Settlement and Return use one caller-owned transaction. Historical snapshots select exact positions; execution re-locks current line capacity and V21 position/tracking/valuation authority. Each partition has a stable mutation idempotency key and exact transaction references. Any tracking, valuation, period, Finance, audit or evidence failure rolls back all layers.
+
+Service CONFIRM and Delivery CONFIRM invoke the parent-first C1 Gate before their business transaction, then re-read their protected authority in the business transaction. A3 invoice/credit operations lock immutable fulfillment/open-item capacity and conserve quantity and cents with BigInt cumulative allocation.
+
+### 35.20.4 Verification realization
+
+- `server/sales-customer-wave8-functional.test.js` covers snapshot tamper detection, evidence replay/conflict, Handoff/Settlement/Return and multi-source Service Credit.
+- `server/mysql-sales-customer-wave8-concurrency.integration.js` uses separate MySQL connections plus a control-session overlap gate for R-SAL-20, R-SAL-21, R-SAL-22 and the four A3 races.
+- `scripts/testing/test-suites.js` registers Wave 8 in FULL; `scripts/gates/mysql-concurrency-gate.mjs` registers Wave 8 in the protected concurrency gate.
+- Existing V21, Wave 6/7, migration, navigation, permission and MySQL suites remain regression gates. Exact final command evidence is append-only in `log/2026-10-20.md`.
+- `scripts/acceptance/sales-customer-wave8-acceptance.mjs` mounts both contextual routes in a real headless Edge instance at 320/390/430/680 CSS px and verifies no horizontal overflow, 44px controls and direct/refresh/back/forward navigation.
+
+This is implementation evidence only. Final Acceptance and Freeze remain user-owned.
+
+### 35.21 Wave 8 P0/P1 remediation and acceptance-evidence closure (2026-10-20)
+
+This records the bounded remediation of the independent Wave 8 audit. It implements the already
+approved §35.18/§35.19 contracts; it does not reopen them, does not change Wave 6/7 or frozen
+Finance/V21 semantics, and does not declare Final Acceptance or Freeze.
+
+#### 35.21.1 P0-1 — positive-amount consignment settlement
+
+§35.18.10.4 makes a zero-price or sub-cent-zero settlement fail-closed. `settleConsignmentLineCommand`
+now computes the cumulative BigInt event amount and refuses with `CONSIGNMENT_SETTLEMENT_AMOUNT_NOT_POSITIVE`
+before any commercial, inventory, tracking, valuation, Finance or audit effect. The Finance recognition
+and settlement voucher become unconditional because the amount is now provably positive. The zero-amount
+Service Fulfillment contract is untouched.
+
+§35.18.7 additionally requires the Finance source to carry the same immutable event identity as the V21
+mutation. The settlement previously passed the consignment `document_no` as `sourceNo`, and
+`ensureSubledger` derives `account_receivables.voucher_no` as `AR-<sourceNo>`, so every settlement after
+the first on a document collided on that unique column. The source now carries `CS:<lineId>:<sha256(key)>`.
+
+#### 35.21.2 P0-2 — SO-backed commercial authority
+
+`assertSoBackedConsignmentBasis()` locks and reads the approved SO line and derives the authoritative
+net unit price as `amount_cents × 1e6 / orderedBaseMicros`. It refuses with
+`CONSIGNMENT_SALES_ORDER_BASIS_MISMATCH` when the submitted price differs, and with
+`CONSIGNMENT_COMMERCIAL_BASIS_UNREPRESENTABLE` (carrying a `reason`) when the basis cannot be carried by
+the four-table contract: non-1:1 Sales UOM (`SALES_UOM_NOT_ONE_TO_ONE`), a net price that is not an exact
+integer number of cents per base unit (`NET_UNIT_PRICE_NOT_INTEGER_CENTS`), or a stored discount snapshot
+that disagrees with the source amount. Remaining approved source capacity is enforced separately
+(`CONSIGNMENT_SOURCE_CAPACITY_EXCEEDED`). No pricing policy, tax model or currency model is introduced.
+
+#### 35.21.3 Consignment partition entitlement and handoff identity
+
+Entitlement is now aggregated per `(lineId, to_position_key)` bucket rather than per handoff mutation.
+Several source bins may hand off into one destination Position; the bucket's consumption is deducted once,
+each contributing mutation stays individually inspectable via `mutationIds`, and LOT/SERIAL/bin identity
+stays separated because the bucket key is the full canonical position key. Distinct commercial lines on a
+shared Position remain independent because consumption is scoped by `source_item_id`.
+
+Handoff now verifies `fromPosition.warehouseId === document.source_warehouse_id`, that a supplied bin
+really belongs to that warehouse, and that a bin-enabled source warehouse supplies one, all before V21 runs.
+
+Because V21 identifies a valuation movement by `(source_type, source_id, source_item_id, lot, serial,
+movement_type)`, the partitions of one document collided on `idx_valuation_source_identity`. The canonical
+source position now travels in the Wave 8 caller-supplied `movementType`; V21's schema, index and writers
+are unchanged.
+
+#### 35.21.4 C1 parent-first lock order
+
+§35.18.6 requires the Finance PREPAYMENT parents to be locked before any Gate requirement/result or Sales
+business row. `authorizeSalesPrepaymentGateWithPlan()` and `authorizeSalesPrepaymentGateForMutation()` now
+perform unlocked identity discovery, then `lockEligiblePrepaymentParents()` (ids ASC), then the Gate rows,
+then the Sales capacity rows. The adapter's global transaction gate serializes MySQL work, so a timing
+race cannot evidence lock ORDER; the order is asserted on the literal `FOR UPDATE` statements emitted.
+
+Caller audit: Service CONFIRM (`service-fulfillment.js:149-157`) and Delivery CONFIRM (`app.js:5689-5697`)
+both discover unlocked before the transaction and invoke the Gate before taking any Sales row lock, so no
+Sales lock is ever held before a Finance parent. `salesOrderAction` submit and Reservation Intent are
+frozen Wave 7 callers that hold the SO header before the gate; Finance mutation paths never lock
+`sales_orders`, so they form no deadlock cycle. Their business semantics are unchanged.
+
+#### 35.21.5 Four-table MySQL existing-schema fail closed
+
+These four tables are always created by the shared snapshot reconciliation before this migration runs, so
+the migration's own MySQL DDL block is a no-op on any real database. A read-only assertion layer now
+verifies the live physical contract through `information_schema`: table and column collation, exact column
+set and order, data type, nullability, default, length, primary key, every foreign-key target, the exact
+CHECK clause set, and each declared UNIQUE/non-unique index with its column identity and order. Constraint
+identity is asserted by meaning rather than by name because MySQL auto-names CHECK and FOREIGN KEY
+constraints. Drift fails closed with `Wave 8 MySQL schema conflict: ...`; the layer issues no DDL and never
+drops, rebuilds, cleans or fabricates history.
+
+`lot_code_key` is a declared byte-identity key that MySQL currently carries with `utf8mb4_0900_ai_ci`
+instead of the designed `utf8mb4_0900_bin`. Closing that SQLite/MySQL parity gap is a schema migration and
+needs its own Requirement/Design authorization, so it is exported as
+`WAVE8_KNOWN_MYSQL_PARITY_GAPS` with status `EXTERNAL_CONTRACT_REQUIRED` rather than asserted as correct.
+
+#### 35.21.6 Mixed Delivery
+
+`createSalesDelivery` demanded physical stock for every line, which made the §35.18.4 service line — which
+carries no inventory and consumes confirmed Service Fulfillment evidence — impossible to create. Service
+lines are now excluded from the draft stock check; their capacity is enforced by the existing confirm-time
+check under the confirm lock. Physical lines keep the canonical OUT, valuation and COGS path unchanged.
+
+#### 35.21.7 RBAC
+
+Read is `SALES_MANAGE OR SALES_VIEW` plus the narrow Wave 8 VIEW permission; write is `SALES_MANAGE` plus
+the narrow MANAGE permission. `SALES_VIEW` is new in this wave with approved basis and the total permission
+count is unchanged. Scope, permission and the absence of any residue on a refused mutation are proven over
+the real HTTP surface.
+
+#### 35.21.8 Items left open
+
+Two audit items are not remediated here and are reported rather than closed:
+
+1. **Credit Note reversal.** `financial_credit_adjustments` has an atomic reversal primitive, but
+   `commercial_credit_notes.status='REVERSED'` is unreachable: the only writer is `createCommercialCreditNote`,
+   which hard-codes `POSTED`, the only credit route is `POST /api/commercial-credit-notes`, and
+   `reverseCreditAdjustment` is never called with `SALES_CREDIT_NOTE`. Building the business transition and
+   its policy would invent a reversal contract that the approved Requirement/Design does not contain.
+   Status: `EXTERNAL_CONTRACT_REQUIRED`.
+2. **A3 invoice lock order.** `postSalesInvoice` never locks the SO line stage that §35.18.11.5 lists first,
+   `recordInvoiceLinks` reads the existing link before taking the fulfillment and FINAL AR locks, and
+   `voidPostedInvoice` performs no SO-line/fulfillment/FINAL-AR locking at all. Reordering these touches the
+   frozen Finance writer, which this remediation is not authorized to rewrite. Status: audited, not
+   remediated, not PASS.
+
+This section records implementation and verification evidence only. Final Acceptance and Freeze remain
+user-owned.
+## 35.22 Wave 8 Residual Stage C Technical Design (2026-10-21)
+
+> This section is the executable Technical Design for the accepted `document.md` Wave 8 Residual
+> Requirement Amendment R1/R2/R3 (2026-10-21). It implements that amendment; it does not reopen it and
+> does not change any approved §35.18/§35.19/§35.21 contract, any frozen §28–§30 Finance/Inventory
+> semantic, or the Wave 6/7 freeze baseline. **Zero new tables and zero new columns** are introduced.
+> R3 does include the bounded collation DDL that R3.2 authorized. This section authorizes no source,
+> migration, test, frontend, configuration or database change and no Git operation; Stage D is not
+> resumed.
+
+### 35.22.1 Design inputs verified against the current code
+
+| Fact | Location | Design consequence |
+|---|---|---|
+| `reverseCreditAdjustment()` exists and already fails closed on dependent applications/refunds | `server/modules/settlement-core.js:165-181` | R1 reuses it as the **only** monetary reversal primitive. No new reversal logic. |
+| It resolves one credit by exact `(side, source_type, source_id)` and throws a plain `Error`, not `HttpError` | `settlement-core.js:166-168` | R1 must discover the adjustment ids first and pre-validate state to emit the correct `HttpError` codes. |
+| A multi-target Service credit writes adjustment `source_id` as `noteId` or `noteId:<n>` | `commercial-golive.js` `applyCreditAdjustment(... sourceId: targets.length === 1 ? id : \`${id}:${index + 1}\`)`; the matching read pattern already exists at `commercial-golive.js:325` | R1 uses the same `source_id = ? OR source_id LIKE ?` convention. No new identity scheme. |
+| `reverseSystemVoucher()` reverses by `(originalSourceType, originalSourceId)` and is a no-op when absent | `server/modules/financial-inventory.js:275-288` | R1 reverses `SALES_CREDIT_NOTE` / `SUPPLIER_CREDIT_NOTE` by note id. |
+| Invoice credit capacity lives on `credited_amount_cents` / `remaining_creditable_amount_cents`, `credit_state ∈ {NONE,PARTIAL,FULL}` | `server/migrations/v22-finance-wave-c-invoice.js:49-51`; write at `commercial-golive.js` end of `createCommercialCreditNote` | R1 recomputes all three; no new capacity carrier. |
+| `voidPostedInvoice` refuses while `credit_state !== 'NONE'` | `commercial-golive.js:430` | R1 must drive `credit_state` back to `NONE` when the last credit is reversed, otherwise invoices become permanently un-voidable. |
+| `postSalesInvoice` never locks the SO-line stage; `recordInvoiceLinks` reads the link at `finance-recognition.js:97` before the fulfillment (`:106`) and FINAL AR (`:107`) locks | `server/modules/commercial-golive.js`, `server/modules/finance-recognition.js` | R2 closes the gap with one composable plan, not local reordering. |
+| `voidPostedInvoice` performs no SO-line / Fulfillment / FINAL-AR locking | `commercial-golive.js:424-460` | R2 composes the same plan into VOID. |
+| MySQL column emission has a per-column charset/collation allowlist keyed by lowercase column name | `server/database/mysql-schema.js:183-196` (`columnDefinition`) | R3's fresh-install fix is a single-line allowlist entry. |
+| The four Wave 8 tables are materialized by the shared snapshot reconciliation **before** the Wave 8 migration runs | observed in real MySQL; see `solution.md §35.21.5` | R3 needs a generator fix **and** an additive upgrade, not one or the other. |
+
+### 35.22.2 R1 — Commercial Credit Note Reversal
+
+#### 35.22.2.1 File plan
+
+```text
+server/modules/commercial-golive.js   reverseCommercialCreditNote()   new export
+server/modules/commercial-golive.js   commercialApiHandler()          one new route branch
+server/modules/commercial-golive.js   postSalesInvoice / voidPostedInvoice / createCommercialCreditNote
+                                                            R2 plan parameter threading only
+server/finance / migration / schema    untouched — no new table, no new column
+```
+
+`reverseCommercialCreditNote` reuses only existing exports: `reverseCreditAdjustment`, `reverseSystemVoucher`,
+`openItemSnapshot`, `atomic`, `assertFinanceBusinessDateOpen`, `assertFinancialPeriodsOpen`, `idempotencyReplay`,
+`saveIdempotency`, `requestFingerprint`, `audit`. It introduces no new Finance primitive.
+
+#### 35.22.2.2 State transition
+
+```text
+function reverseCommercialCreditNote(db, input)   // input: { id, reversalDate, reason, actorId }
+```
+
+1. Validate `reversalDate` (`YYYY-MM-DD`, on or after the note's `credit_date`) and a non-empty `reason`.
+2. Reject a duplicate `idempotency_key` on `commercial_credit_notes` — a reversal is a distinct command
+   and must not collide with the note's own creation key.
+3. Read the note. Missing → `404 COMMERCIAL_CREDIT_NOTE_NOT_FOUND`.
+   `status !== 'POSTED'` → `409 COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE`.
+4. Discover every adjustment of the note using the established identity convention:
+   `source_type = 'SALES_CREDIT_NOTE'|'SUPPLIER_CREDIT_NOTE' AND (source_id = ? OR source_id LIKE ?)`
+   with the note's exact `${id}:%` suffix.
+5. Require the adjustment set to be non-empty and to sum to `note.gross_cents`
+   (the same conservation `serviceCreditTargets` already asserts). Otherwise
+   `409 COMMERCIAL_CREDIT_REVERSAL_EVIDENCE_MISMATCH`.
+6. Require every adjustment to be `CONFIRMED`. A `REVERSED` adjustment is
+   `409 COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE`, never a silent success.
+
+#### 35.22.2.3 Dependency pre-validation
+
+Before any state is written, and beneath the stage-1/2 locks, verify each blocking condition from R1.3 and
+report it as `409 COMMERCIAL_CREDIT_REVERSAL_BLOCKED` with a `reason`:
+
+| Reason | Probe |
+|---|---|
+| `BALANCE_APPLICATION_OR_REFUND` | For the derived `CREDIT` balance of each adjustment, any `balance_applications` or `financial_refunds` row with `status='CONFIRMED'`. `reverseCreditAdjustment` re-checks this itself; R1 surfaces it first with the right code. |
+| `RETURN_REVERSAL_CONSUMED` | Any `credit_reversal_components` row for the adjustment with `applied_cents > 0` or `unapplied_cents > 0`. |
+| `OPEN_ITEM_WOULD_GO_NEGATIVE` | After the reversal, `openItemSnapshot(side, target_open_item_id).openCents` must be `>= 0`. |
+| `PERIOD_CLOSED` | `assertFinanceBusinessDateOpen` + `assertFinancialPeriodsOpen` for both `credit_date` and `reversalDate`. |
+
+#### 35.22.2.4 Lock order and transaction shape
+
+The caller owns one transaction. `reverseCommercialCreditNote` uses `atomic(db, ...)` so it composes both
+as a standalone command and as an inner step.
+
+```text
+0. plan = discoverCreditReversalPlan(db, input.id)      // unlocked, no decision, no mutation
+1. SELECT id FROM account_receivables|account_payables WHERE id IN (...) ORDER BY id FOR UPDATE
+2. SELECT * FROM financial_credit_adjustments WHERE ... ORDER BY id FOR UPDATE
+   SELECT * FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id IN (...) ORDER BY id FOR UPDATE
+3. SELECT * FROM commercial_credit_notes WHERE id=? FOR UPDATE
+   SELECT * FROM sales_invoices|supplier_bills WHERE id=? FOR UPDATE
+4. reverseSystemVoucher -> adjustments -> invoice recompute -> idempotency -> audit
+```
+
+`discoverCreditReversalPlan` mirrors the existing `discoverSalesPrepaymentGatePlan` shape and returns
+`{ noteId, side, sourceId, invoiceId, grossCents, openItemIds, adjustmentIds, balanceIds }`. It is a pure
+read; it decides nothing.
+
+Ordering rationale against §35.18.6: the Finance-owned open-item and settlement-balance rows are taken
+before the Sales-owned invoice and the Finance credit document, matching the frozen "Finance parents first"
+direction. `reverseCreditAdjustment` internally calls `refreshOpenItem` on the target open item, which the
+stage-1 lock already owns, so the primitive never acquires an unlocked row.
+
+#### 35.22.2.5 Mutation sequence
+
+Inside the transaction, after the locks and after the dependency probe passes:
+
+1. `reverseSystemVoucher({ originalSourceType: 'SALES_CREDIT_NOTE'|'SUPPLIER_CREDIT_NOTE', originalSourceId: note.id, reversalSourceType: 'SALES_CREDIT_NOTE_REVERSAL'|'SUPPLIER_CREDIT_NOTE_REVERSAL', reversalSourceId: note.id, businessDate: reversalDate, actorId, reason })`.
+2. For each discovered adjustment, in id ASC order:
+   `reverseCreditAdjustment(db, side, 'SALES_CREDIT_NOTE'|'SUPPLIER_CREDIT_NOTE', adjustment.source_id, actorId, reversalDate, reason)`.
+   The derived `CREDIT` balance and `refreshOpenItem` follow inside the primitive.
+3. `UPDATE commercial_credit_notes SET status='REVERSED' WHERE id=? AND status='POSTED'`. The status guard
+   makes the transition a compare-and-set; a concurrent second reversal affects zero rows and is detected.
+4. Recompute the source document:
+   `credited = current − note.gross_cents`, `remaining_creditable = gross_cents − credited`,
+   `credit_state = credited === 0 ? 'NONE' : (credited === gross_cents ? 'FULL' : 'PARTIAL')`.
+   Both amounts must stay `>= 0`, else `409 COMMERCIAL_CREDIT_REVERSAL_BLOCKED` reason
+   `INVOICE_CAPACITY_UNDERFLOW`. Recomputing from the *current* stored value rather than from a running
+   total keeps the result correct under any prior credit/reversal combination.
+5. `saveIdempotency(db, 'COMMERCIAL_CREDIT_REVERSAL', note.id, key, fingerprint, result)` then
+   `audit(db, actorId, 'REVERSE', 'COMMERCIAL_CREDIT_NOTE', note.id, reason)`.
+
+Nothing in step 2–5 touches `finance_invoice_source_links`. Historical links stay immutable; they stop
+counting only through the credit-status predicate.
+
+Atomicity: any throw rolls back voucher, adjustments, balances, open items, credit note, invoice and audit
+together. A durable failed-attempt audit is not promised.
+
+#### 35.22.2.6 API surface
+
+```js
+if ((match = path.match(/^\/api\/commercial-credit-notes\/([^/]+)\/reverse$/)) && req.method === 'POST') {
+  allow(actor, 'FINANCE_INVOICE_MANAGE');
+  return send(res, 200, reverseCommercialCreditNote(db, {
+    id: match[1], reversalDate: body.reversalDate ?? body.reversal_date,
+    reason: body.reason, actorId: actor.id, idempotencyKey: String(req.headers['idempotency-key'] || '').trim(),
+  }));
+}
+```
+
+Permission is identical to credit creation; **no new permission and no permission-count change**.
+`Idempotency-Key` is mandatory — an absent key is `422`.
+
+Error codes: `COMMERCIAL_CREDIT_NOTE_NOT_FOUND`, `COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE`,
+`COMMERCIAL_CREDIT_REVERSAL_EVIDENCE_MISMATCH`, `COMMERCIAL_CREDIT_REVERSAL_BLOCKED` (+`reason`),
+`COMMERCIAL_CREDIT_REVERSAL_IDEMPOTENCY_CONFLICT`.
+
+#### 35.22.2.7 Idempotency semantics
+
+`idempotencyReplay(db, 'COMMERCIAL_CREDIT_REVERSAL', noteId, key, fingerprint)` runs before the
+transaction, exactly as the Wave 8 consignment commands do. An exact replay returns the stored result with
+`replayed: true` and performs no mutation. The fingerprint covers `{ reversalDate, reason }`, so the same key
+with different content is rejected. Because replay is checked before the state read, a repeated reversal with
+a *new* key falls through to step 3 and fails closed as `COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE` — it is never
+reported as a fresh reversal.
+
+### 35.22.3 R2 — A3 Invoice Lock Order
+
+#### 35.22.3.1 File plan
+
+```text
+server/modules/finance-recognition.js   discoverInvoiceSourcePlan()   new export, unlocked
+server/modules/finance-recognition.js   lockInvoiceSourcePlan()       new export, locked, first statement
+server/modules/commercial-golive.js     postSalesInvoice / voidPostedInvoice / createCommercialCreditNote
+                                                            discover before atomic(), lock as the first inner step
+```
+
+`finance-recognition.js` is the canonical A3 linkage owner (`recordInvoiceLinks` already lives there), so
+both new functions live beside it. No Finance Engine rewrite; only two additive functions plus three
+call-site insertions.
+
+#### 35.22.3.2 Plan shape and discovery
+
+```js
+discoverInvoiceSourcePlan(db, invoiceId) => ({
+  invoiceId,
+  salesOrderItemIds: string[],   // distinct sales_order_items.sales_order_item_id of service-classified invoice items
+  fulfillmentIds:    string[],   // distinct CONFIRMED service_fulfillments.id for those SO lines
+  finalArIds:        string[],   // distinct FINAL account_receivables.id for those fulfillments
+  existingLinkKeys:  string[],   // existing finance_invoice_source_links five-tuples for replay
+})
+```
+
+Discovery is a pure unlocked read. It runs **before** `atomic(...)` in each entry point and decides nothing:
+the plan is used only to decide *what to lock*, never to compute capacity.
+
+#### 35.22.3.3 Lock function
+
+`lockInvoiceSourcePlan(db, invoiceId, plan)` is the first inner statement of the caller-owned transaction,
+before any other row is touched:
+
+```text
+1. SELECT * FROM sales_order_items       WHERE id IN (plan.salesOrderItemIds) ORDER BY id FOR UPDATE
+2. SELECT * FROM service_fulfillments    WHERE id IN (plan.fulfillmentIds)    ORDER BY id FOR UPDATE
+3. SELECT * FROM account_receivables     WHERE id IN (plan.finalArIds)        ORDER BY id FOR UPDATE
+```
+
+Empty sets issue no SQL, so a non-Service invoice pays nothing and behaves exactly as before.
+
+Then re-read the current candidate set with the same unlocked query used for discovery and compare:
+
+| Relation | Meaning | Action |
+|---|---|---|
+| current ⊋ planned | a new SO line / CONFIRMED fulfillment / FINAL AR appeared after discovery | throw retryable `409 A3_INVOICE_SOURCE_PLAN_STALE`; the caller rolls back and retries from discovery. The un-locked new candidate is never allowed to proceed. |
+| current ⊊ planned | a planned row no longer qualifies | proceed. Capacity is recomputed by the existing unlocked-then-locked `SUM` joins, never from the plan, so under-locking here cannot over-allocate. |
+| equal | — | proceed. |
+
+Growth is the practically expected direction because `confirmServiceFulfillmentCommand` takes the same
+Fulfillment lock and can commit between discovery and lock.
+
+#### 35.22.3.4 Composition into POST / VOID / Credit
+
+```js
+export function postSalesInvoice(db, invoiceId, actorId) {
+  const plan = discoverInvoiceSourcePlan(db, invoiceId);          // unlocked
+  return atomic(db, () => {
+    lockInvoiceSourcePlan(db, invoiceId, plan);                   // FIRST lock
+    ... existing body unchanged ...
+  });
+}
+```
+
+Identical threading for `voidPostedInvoice` and `createCommercialCreditNote`. `recordInvoiceLinks` keeps
+its current body; because the fulfillment and FINAL AR locks are already held by the caller, its inner
+`FOR UPDATE` statements become no-ops rather than a new edge, and its link read at `:97` is now performed
+under the invoice lock taken at stage 4 of the plan.
+
+Retry discipline: the caller retries from discovery only. A retry never adds a Finance lock that was absent
+from the plan, never acquires an invoice/link lock before the Sales-stage locks, and is bounded by the
+existing `mysqlTransactionRetryLimit`.
+
+#### 35.22.3.5 C1 compatibility proof
+
+| Path | Order | Edge? |
+|---|---|---|
+| Service CONFIRM | C1 parents (§35.18.6 step 1) → Fulfillment → SO line → FINAL AR | Fulfillment before SO line. R2's plan also locks SO line before Fulfillment — see below. |
+| Invoice POST | SO line → Fulfillment → FINAL AR → Invoice/Link | no Finance-parent edge; §35.18.6 step 1 is untouched. |
+| Credit | SO line → Fulfillment → FINAL AR → credit adjustments → notes → invoice | nested inside the same order. |
+| Credit reversal (R1) | FINAL AR → adjustments/balance → credit note → invoice | never re-enters the SO-line or Fulfillment stages, so it cannot invert POST. |
+| Finance PREPAYMENT apply/refund/reversal | PREPAYMENT parent → own children | never locks `sales_order_items`/`service_fulfillments`. No cycle. |
+
+**Conflict to resolve.** `confirmServiceFulfillmentCommand` (`service-fulfillment.js:157-160`) currently
+takes the Fulfillment lock and *then* the SO-line lock, which is the reverse of R2's stage 1→2. Both orders
+are internally consistent, but two paths locking the same pair in opposite orders is a genuine deadlock
+risk. §35.18.11.5 and §35.18.4 both name the SO line as the first capacity lock, so the bounded correction
+is to move Service CONFIRM's `sourceRow(db, ..., true)` (SO line) ahead of
+`getServiceFulfillmentRow(db, actor, id, { forUpdate: true })`. The business assertions, capacity
+arithmetic and Finance recognition in that function are untouched.
+
+#### 35.22.3.6 Concurrency acceptance
+
+Real MySQL, ≥2 independent connections, with a control-session barrier used only as an observer:
+
+- POST vs POST on one invoice — one POSTED result, one immutable link set;
+- POST vs VOID — exactly one legal terminal state, links immutable either way;
+- POST vs Credit — invoice capacity never exceeded, links immutable;
+- Credit vs Credit — §35.18.12 allocation conserved, never over-linked;
+- Service CONFIRM ×2, and Service CONFIRM vs Invoice POST — one source lock serializes both;
+- the C1 regression R-SAL-15 (Service/Delivery vs PREPAYMENT apply/refund/reversal) must stay green.
+
+Explicitly forbidden as proof: the adapter's global transaction gate, and an assertion that only checks that
+one request returned 200. Each race must additionally assert commercial remaining, physical balance, audit
+and idempotency for the losing side.
+
+### 35.22.4 R3 — MySQL `lot_code_key` binary collation
+
+#### 35.22.4.1 File plan
+
+```text
+server/database/mysql-schema.js                              columnDefinition() allowlist entry
+server/migrations/sales-customer-wave8-service-consignment.js  ambiguity probe + idempotent ALTER + contract update
+server/sales-customer-wave8-mysql-metadata.test.js          fixture + drift coverage
+```
+
+Zero new tables, zero new columns. The only DDL is `MODIFY COLUMN ... COLLATE`, which R3.2 authorized.
+
+#### 35.22.4.2 Fresh-install entry point
+
+`columnDefinition()` already emits a per-column suffix for byte-identity keys. Add `lot_code_key` to the
+existing `CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin` branch so a fresh MySQL database is created
+directly at the target collation and the snapshot reconciliation needs no follow-up DDL.
+
+`utf8mb4_0900_bin` is `NO PAD`, which is the correct MySQL match for SQLite `COLLATE BINARY` byte-exact
+comparison — `utf8mb4_bin` is `PAD SPACE` and would treat trailing spaces as equal.
+
+#### 35.22.4.3 Existing-database additive upgrade
+
+Because the table already exists on every real database, `migrateSalesCustomerWave8ServiceConsignment`
+must reconcile it before asserting the contract:
+
+```text
+0. read information_schema.COLUMNS.COLLATION_NAME for consignment_commercial_lines.lot_code_key
+   already utf8mb4_0900_bin  -> no-op (idempotent, repeated startup safe)
+   otherwise                 -> ambiguity probe, then MODIFY COLUMN
+```
+
+```sql
+-- ambiguity probe: values that the current ai_ci collation folds together but binary separates
+SELECT document_id, product_id, consignment_commodity_location_id,
+       COUNT(DISTINCT lot_code_key)         AS ai_distinct,
+       COUNT(DISTINCT BINARY lot_code_key)  AS binary_distinct
+FROM consignment_commercial_lines
+GROUP BY document_id, product_id, consignment_commodity_location_id
+HAVING ai_distinct <> binary_distinct
+```
+
+A non-empty result throws `WAVE8_LOT_KEY_COLLATION_AMBIGUOUS` listing the offending identity groups, and
+**no DDL runs**. The probe is read-only and safe on any database. If it passes:
+
+```sql
+ALTER TABLE consignment_commercial_lines
+  MODIFY COLUMN lot_code_key VARCHAR(128)
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL DEFAULT ''
+```
+
+MySQL rebuilds `uq_consignment_lines_identity` automatically. The probe has already proven no group becomes
+duplicated, so the rebuild cannot fail on data. No merge, coalesce, delete, case-folding or LOT
+re-identification is ever performed; ambiguity is always an operator decision.
+
+#### 35.22.4.4 Contract and parity updates
+
+- `MYSQL_TABLE_CONTRACTS.consignment_commercial_lines.columnCollations.lot_code_key` becomes
+  `utf8mb4_0900_bin`, and the assertion stops accepting the recorded deviation.
+- `WAVE8_KNOWN_MYSQL_PARITY_GAPS` no longer lists R3. The export is retained only if other gaps remain;
+  otherwise it is removed rather than left as an empty lie.
+- SQLite is unchanged: it already declares `lot_code_key TEXT COLLATE BINARY`.
+- LOT business semantics are untouched: `chk_consignment_line_lot` pairing, FIFO entitlement, SERIAL exact
+  identity and immutable handoff evidence all keep their current behavior.
+
+#### 35.22.4.5 Acceptance obligations
+
+1. Fresh MySQL install asserts `lot_code_key` at `utf8mb4_0900_bin` directly from the generator.
+2. Existing-database upgrade converges to `utf8mb4_0900_bin` with no data repair and no destructive DDL.
+3. Repeated startup is a verified no-op.
+4. Ambiguity detection fails closed on seeded case-differing LOT keys and leaves the column unchanged.
+5. SQLite/MySQL parity: the same case-differing `lot_code_key` inputs resolve identically on both backends.
+6. `pnpm test:mysql` and `pnpm test:mysql:concurrency` stay green; the Wave 8 metadata fixture gains the
+   binary-collation drift case.
+
+### 35.22.5 Cross-domain compatibility
+
+| Domain | Effect |
+|---|---|
+| Frozen §28 Finance | R1 adds a reversal command using only the existing adjustment/balance/voucher primitives. `commercial_credit_notes` gains no column; Finance semantics are unchanged. |
+| Frozen §30 Accounting | R1 reverses through `reverseSystemVoucher`, so the reversal voucher is a canonical system voucher with `reversal_of_id`, not a hand-built balancing entry. |
+| C1 / §35.18.6 PREPAYMENT | Unaffected. R1 and R2 never take a PREPAYMENT parent, and Finance PREPAYMENT paths never take a Sales or invoice lock. |
+| Inventory V21 / §35.19 | Untouched. R3 changes only MySQL comparison semantics of one column; no position key, movement log or evidence column changes. |
+| Wave 6/7 frozen contracts | Untouched. R1 creates a new Credit reversal command; it does not alter Settlement, Payment, Write-off or Reservation semantics. |
+| Sales Delivery / §35.18.4 | Unaffected except for the Service CONFIRM lock reorder in §35.22.3.5, which changes only lock acquisition order, not business semantics. |
+
+### 35.22.6 Remaining blockers
+
+None inside the approved Requirement. Implementing R1/R2/R3 requires Stage D authorization, which this
+section does not grant. R4 (Mobile workflow) remains an unfinished Stage D implementation item and is not
+re-designed here.
+
+This section records design only. Stage D is not resumed and no Final Acceptance or Freeze is declared.
+
+## 35.23 Wave 8 SALES Warehouse/Bin Reference Access — Bounded Stage C Design (2026-10-21)
+
+> Requirement authority: `document.md` “Wave 8 Final Closure — SALES Warehouse/Bin Reference Access
+> Requirement Amendment”, explicitly accepted by the user as
+> `WAVE8_SALES_REFERENCE_REQUIREMENT_ACCEPTED`. This section designs only that bounded amendment. It does
+> not authorize implementation, add a permission/table/column, change Inventory V21 identity or ownership,
+> or reopen any frozen Wave 6/7 or approved Wave 8 economic semantic.
+
+### 35.23.1 Verified inputs and carrier decision
+
+The current generic master endpoints are not reusable as the browser contract:
+
+| Existing endpoint | Guard | Excess/defect for this use |
+|---|---|---|
+| `GET /api/warehouses` | `WAREHOUSES_VIEW OR WAREHOUSES_MANAGE` | exposes address, manager and timestamps; standard SALES receives 403 |
+| `GET /api/warehouse-bins` | `WAREHOUSE_BIN_VIEW OR WAREHOUSE_BIN_MANAGE` | exposes the generic bin-master lifecycle and is not Consignment-context scoped |
+
+Their handlers, payloads and permission contracts remain unchanged. SALES receives neither warehouse
+permission. A dedicated read-only pair owned by `server/modules/consignment.js` is the minimal safe design.
+Both routes are bound to an already-addressed business object, return one authoritative warehouse rather
+than a warehouse directory, and use only the existing Consignment/Sales authorization model.
+
+No schema carrier is required. `consignment_commercial_documents.source_warehouse_id` is already the
+immutable source authority, a line already belongs to one document, `warehouses` already carries active and
+bin-enabled state, and `warehouse_bins` already carries active parent-child identity.
+
+### 35.23.2 Exact API surface
+
+Two explicit `GET` routes are added to `ownedRouteTable`:
+
+```text
+GET /api/consignment-commercial-documents/:documentId/handoff-position-references
+GET /api/consignment-commercial-documents/:documentId/lines/:lineId/return-position-references
+```
+
+There is deliberately no `warehouseId` query parameter and no free-standing SALES warehouse search. The
+server derives the sole warehouse from the authorized document. The nested Return route prevents a line id
+from being silently rebound to a different document.
+
+Handoff response:
+
+```json
+{
+  "purpose": "HANDOFF",
+  "context": {
+    "documentId": "...",
+    "documentVersion": 1,
+    "documentStatus": "DRAFT"
+  },
+  "warehouse": {
+    "id": "...",
+    "code": "...",
+    "name": "...",
+    "binEnabled": true
+  },
+  "bins": [
+    { "id": "...", "warehouseId": "...", "code": "...", "name": "..." }
+  ]
+}
+```
+
+Return response has the same warehouse/bin shape and this context:
+
+```json
+{
+  "purpose": "RETURN",
+  "context": {
+    "documentId": "...",
+    "documentVersion": 3,
+    "documentStatus": "INSTRUCTED",
+    "lineId": "...",
+    "lineVersion": 2
+  },
+  "warehouse": { "id": "...", "code": "...", "name": "...", "binEnabled": false },
+  "bins": []
+}
+```
+
+Only active bins are returned, ordered by `code,id`. `bins=[]` is valid when `binEnabled=false`. A
+bin-enabled warehouse with no active bin is not an empty successful choice: it returns 409
+`CONSIGNMENT_REFERENCE_BINS_UNAVAILABLE`. Neither response includes address, manager, timestamps, stock,
+availability, owner/status administration, LOT/SERIAL balance, valuation, cost or configuration fields.
+The platform's existing `Cache-Control: no-store` API behavior applies. A reference read writes no business
+audit row; the eventual Handoff/Return mutation retains its existing in-transaction audit.
+
+Settlement has no reference endpoint. It continues to resolve `inventory_mutation_log` Position Snapshot
+V1 through `resolveConsignmentHandoffEvidence()` and never consults either reference response or a current
+commercial-location mapping.
+
+### 35.23.3 Permission and non-enumeration sequence
+
+Both endpoints serve executable mutation forms, so they use the same narrow write authority as those
+mutations, not warehouse permissions and not the broader Consignment read permission:
+
+```text
+SALES_MANAGE AND CONSIGNMENT_MANAGE
+```
+
+`requireWrite(actor)` remains the single expression for this check. `ADMIN` retains the existing
+`actorHas` compatibility. `SALES_VIEW`, `CONSIGNMENT_VIEW`, `WAREHOUSES_VIEW` or `WAREHOUSE_BIN_VIEW` alone
+does not authorize these routes.
+
+The handler sequence is fixed:
+
+1. platform authentication;
+2. `requireWrite(actor)` before any Consignment/warehouse query;
+3. load the addressed document; apply `scope(db, actor, document, true)` using the document's saved
+   `sales_group_id` and `business_date`;
+4. for Return, load the line by both `line.id` and `line.document_id=documentId`;
+5. validate workflow state and derive the authoritative warehouse;
+6. return only the minimal projection.
+
+No list query is executed before steps 1–4, so cross-group callers cannot enumerate warehouse rows or lines.
+The HTTP/error contract is:
+
+| Status | Meaning |
+|---|---|
+| 401 | missing/expired authentication, using the platform's existing authentication response |
+| 403 | missing Sales/Consignment manage permission, unmapped salesperson, disabled group scope or document Sales Group outside the actor's live scope; response contains no warehouse/bin data |
+| 404 | document id does not exist after permission validation, or the nested line does not exist on the already-addressed document; generic `CONSIGNMENT_REFERENCE_CONTEXT_NOT_FOUND` |
+| 409 | accessible context exists but cannot currently execute the purpose: wrong document state, no remaining line capacity/evidence, inactive warehouse, required active bins unavailable, or inconsistent warehouse/bin master state |
+
+403 bodies remain generic and must not echo the foreign group, customer, warehouse or document identity.
+404 never falls back to a global line lookup. The endpoints accept no body and create no idempotency record.
+
+### 35.23.4 Authoritative candidate rules
+
+#### Handoff
+
+The document must be `DRAFT`. The only returned warehouse is the document's saved
+`source_warehouse_id`. It must currently exist and be active. If `bin_enabled=1`, only active bins whose
+`warehouse_id` equals that source warehouse are returned; at least one must exist. If `bin_enabled=0`, no
+bin is returned or accepted.
+
+The response does not promise stock availability. Product, LOT/SERIAL, owner `ENTERPRISE`, owner id NULL,
+stock status `AVAILABLE`, locks, quantity and valuation remain V21 mutation-time authority.
+
+#### Return
+
+The document must be `INSTRUCTED` or `PARTIAL_SETTLED`; the addressed line must have positive commercial
+remaining quantity and complete Handoff evidence. The only legal Return target warehouse is the same
+document's saved `source_warehouse_id`.
+
+This is the authoritative bounded filter: it returns consigned inventory to the enterprise origin recorded
+on the business document. Merely selecting every `warehouses.active=1` row, or excluding only
+`is_supplier_wip`, would invent a warehouse-purpose model that the current schema does not carry. Supporting
+an alternate enterprise return destination would therefore require a future Requirement/schema authority
+and is not inferred here.
+
+The source warehouse must still be active. Its bin rules are identical to Handoff. The eventual V21 MOVE
+keeps the historical partition's product/LOT/SERIAL, forces `ownerType='ENTERPRISE'`, `ownerId=null` and
+`stockStatus='AVAILABLE'`, and replaces only warehouse/bin with this authoritative destination. The
+reference route exposes neither the historical source Position nor current physical quantity.
+
+### 35.23.5 Backend functions and mutation-time revalidation
+
+`server/modules/consignment.js` gains two HTTP handlers and bounded private helpers:
+
+```text
+getConsignmentHandoffPositionReferences(db,res,actor,documentId)
+getConsignmentReturnPositionReferences(db,res,actor,documentId,lineId)
+loadConsignmentReferenceContext(...)
+projectConsignmentWarehouseReference(...)
+lockAndValidateConsignmentPositionReferences(...)
+```
+
+The GET helper uses explicit projections only; it must not reuse `listWarehouses` or `listWarehouseBins`
+and then trim their response. The same predicate builder is reused by reference reads and mutation
+validation so candidate and command semantics cannot drift.
+
+Reference responses are hints, never capabilities. Handoff and Return retain their caller-owned
+transactions and revalidate after authoritative rows are locked:
+
+```text
+Handoff:
+  requireWrite(actor) again inside transaction
+  document FOR UPDATE -> scope(write=true) -> state/version
+  lines by id ASC FOR UPDATE -> effective commercial locations
+  discover authoritative source/destination warehouse+bin ids
+  warehouses by id ASC FOR UPDATE -> bins by id ASC FOR UPDATE
+  re-check active/bin-enabled/parent membership and request source equality
+  V21 mutation/evidence/tracking/valuation -> document/line state -> idempotency/audit
+
+Return:
+  requireWrite(actor) again inside transaction
+  line+document FOR UPDATE -> scope(write=true) -> state/version/remaining
+  authoritative document source warehouse FOR UPDATE -> submitted bin FOR UPDATE
+  re-check active/bin-enabled/parent membership and exact target equality
+  resolve immutable Handoff evidence -> lock/revalidate current V21 positions
+  V21 MOVE/evidence/tracking/valuation -> commercial state -> idempotency/audit
+```
+
+`requireWrite(actor)` reasserts the authenticated request authority; `scope(..., true)` re-reads live
+salesperson/group membership within the transaction. This bounded work does not create a second global auth
+or session-revocation model. Warehouse and bin locks are ordered by id so Handoff partitions cannot reverse
+their order. Every value is re-read under those locks; the GET response, `documentVersion` and `lineVersion`
+are not trusted as warehouse authority.
+
+The mutation error codes are made explicit without changing success semantics:
+
+```text
+CONSIGNMENT_SOURCE_WAREHOUSE_INVALID
+CONSIGNMENT_SOURCE_WAREHOUSE_MISMATCH
+CONSIGNMENT_SOURCE_BIN_REQUIRED
+CONSIGNMENT_SOURCE_BIN_INVALID
+CONSIGNMENT_RETURN_DESTINATION_INVALID
+CONSIGNMENT_RETURN_DESTINATION_MISMATCH
+CONSIGNMENT_RETURN_DESTINATION_BIN_REQUIRED
+CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID
+```
+
+Any authorization, state, active-flag, parent-membership, evidence, capacity or V21 failure rolls back the
+business mutation, evidence, tracking, valuation, Finance, audit and idempotency result together. A GET that
+succeeded immediately before such a failure does not weaken the failure.
+
+### 35.23.6 Frontend integration
+
+`src/pages/wave8-sales.jsx` stops requesting `/api/warehouses` for Consignment and removes both remaining
+raw bin-id fields.
+
+- Opening a DRAFT document requests its Handoff reference route. The sole warehouse is rendered as a
+  labelled fixed choice; a bin select is required only when `binEnabled=true`.
+- Opening Return for a line requests the nested Return reference route. The sole origin warehouse is shown
+  and the active-bin select follows the same rule.
+- Settlement performs no warehouse/bin request and keeps the historical-evidence flow unchanged.
+- Context reference state is separate from document list state: loading, empty/impossible 409, 403, stale
+  conflict and retry are rendered explicitly. References are cleared whenever document/line/version changes
+  and reloaded after every successful mutation.
+- The mutation payload remains the current minimal shape. The browser submits the selected ids, but the
+  backend derives and verifies their meaning again.
+
+There is no fallback to the generic warehouse APIs, no hidden raw-id input and no client-side expansion to
+all warehouses when a reference call fails.
+
+### 35.23.7 Exact implementation file plan
+
+| File | Bounded Stage D change |
+|---|---|
+| `server/modules/consignment.js` | two reference handlers, minimal projection helper, shared candidate predicate, transaction-time warehouse/bin locks and exact Return-to-origin validation |
+| `server/app.js` | import the two handlers and register the two GET routes in `ownedRouteTable` |
+| `src/pages/wave8-sales.jsx` | replace generic warehouse loading/raw bin ids with context reference loading and selects |
+| `server/sales-customer-wave8-residual.test.js` | focused API/RBAC/field/state/mutation revalidation contracts using real HTTP actors |
+| `server/mysql-sales-customer-wave8-concurrency.integration.js` and `scripts/gates/mysql-concurrency-sales-wave8-worker.mjs` | independent-connection stale-reference/state-change race and zero-side-effect assertions |
+| `scripts/acceptance/sales-customer-wave8-acceptance.mjs` | real standard SALES Handoff/Settlement/Return browser flow and denied-user flow at four widths |
+
+No migration, schema mapper, permission seed, `server/modules/warehouses.js`,
+`server/modules/warehouse-bin.js`, application registry, package or release file changes are designed.
+Existing test files are extended, so `scripts/testing/test-suites.js` needs no new suite registration.
+
+### 35.23.8 Minimum acceptance matrix
+
+Focused SQLite/HTTP coverage:
+
+1. real standard `role-sales` with `SALES_MANAGE` + `CONSIGNMENT_MANAGE` receives exactly the documented
+   fields; `/api/warehouses`, `/api/warehouse-bins` and their mutations remain 403;
+2. view-only, unauthenticated, cross-group, unknown document and mismatched nested line cases produce the
+   specified 401/403/404 results with no reference-data leakage;
+3. Handoff returns only the document source warehouse and its active bins; inactive/cross-warehouse/raw ids
+   fail closed;
+4. Return returns only that same origin warehouse, requires valid active bins where applicable, and refuses
+   DRAFT/terminal/no-capacity/missing-evidence contexts with 409;
+5. response key-set assertions prove address, manager, timestamps, stock, LOT/SERIAL balance, valuation and
+   cost are absent;
+6. after a successful reference read, warehouse/bin or document/line state change before POST is re-read by
+   the mutation and produces zero physical/commercial/Finance/evidence/audit/idempotency side effects;
+7. Settlement succeeds without calling either reference endpoint and still resolves only historical V21
+   Handoff evidence.
+
+Protected MySQL coverage uses independent connections and an observer barrier that does not replace the
+production transaction adapter: Return versus origin-warehouse deactivation/state change and Return versus
+competing line mutation must serialize or reject one participant. The losing participant has zero changes
+across line/document versions and quantities, inventory positions/transactions, tracked movements,
+valuation, vouchers/AR, audit and idempotency. SQLite/MySQL response projections and status rules must match.
+
+Real-browser acceptance logs in as the standard SALES role and completes Handoff, Settlement and Return at
+320 / 390 / 430 / 680 CSS px. Return must be completed through visible warehouse/bin controls with no raw id,
+no horizontal overflow and no warehouse master permission. A separate actor lacking manage permission must
+observe the 403 state. Direct URL, refresh, Back and Forward remain part of the existing Wave 8 browser gate.
+
+After focused checks, the authorized future Stage D gate remains: full regression, build,
+`git diff --check`, protected `pnpm test:mysql`, protected independent-connection
+`pnpm test:mysql:concurrency`, and the Wave 8 browser acceptance. This Design stage executes none of them.
+
+### 35.23.9 Compatibility, rollback and Hard Stop
+
+- SQLite/MySQL use the same SELECT predicates, stable ordering and response projection; there is no DDL.
+- Existing generic warehouse/bin APIs, role grants and Inventory ownership are byte-for-byte behavioral
+  contracts outside this addition.
+- Existing Consignment ids, states, economic facts, historical V21 evidence, idempotency identities and
+  settlement logic are unchanged.
+- Code rollback is removal of the two route registrations/handlers and frontend calls. No data rollback or
+  repair exists because the feature writes no new storage.
+- Alternate Return warehouses, warehouse-purpose classification, new permissions and reference caching are
+  outside scope and require a future Requirement before Design.
+
+No unresolved Design blocker remains inside the accepted bounded Requirement. Per `AGENTS.md §4.3`, Stage D
+remains stopped until the user explicitly accepts this Design and separately authorizes implementation.
+
+**Status: `WAVE8_SALES_REFERENCE_DESIGN_DELIVERED — AWAITING_USER_ACCEPTANCE`. Hard Stop.**
+
+## 35.24 Wave 8 B5 Return Reference Conflict — Bounded Stage C Correction (2026-10-21)
+
+> User decision: preserve the previously approved `B5-EXPLICIT-DESTINATION`; do not adopt
+> Return-to-origin. This subsection is the active correction layer for §35.23. It supersedes only the
+> clauses in §35.23 that made `consignment_commercial_documents.source_warehouse_id` the sole Return
+> destination. Every other §35.23 API, permission, Sales Group, disclosure, revalidation, frontend and test
+> rule remains active. This is Design-only and does not authorize Stage D.
+
+### 35.24.1 Requirement consistency finding
+
+No `document.md` correction is required. The accepted SALES Reference Amendment says that Return candidates
+are active, legally selectable enterprise warehouses and explicitly reserves the exact destination-scope
+rule for Stage C. It neither requires Return-to-origin nor contradicts B5.
+
+The conflict was confined to §35.23.4: its single-source-warehouse rule contradicted all three older active
+authorities:
+
+- `document.md` selected `B5-EXPLICIT-DESTINATION` over header-source inference;
+- §35.18.5 requires an explicit active destination enterprise warehouse/bin;
+- §35.18.8 keeps caller-supplied `destinationWarehouseId` and the required bin.
+
+Accordingly, §35.23's Handoff source rule remains valid, while its Return-to-origin rule is withdrawn.
+
+### 35.24.2 Existing authority for an enterprise warehouse
+
+The correction does not invent a warehouse-purpose policy. It composes existing Inventory V21 facts:
+
+1. §27.2 explicitly distinguishes `Enterprise-owned @ Enterprise warehouse` from
+   `Enterprise-owned @ Supplier-WIP warehouse`.
+2. §27.9 persists that distinction as `warehouses.is_supplier_wip`; §27.22 reserves
+   `is_supplier_wip=1` for the outsourcing Supplier-WIP location flow.
+3. V21 already requires `warehouses.active=1` and, for a bin-enabled warehouse, an active bin belonging to
+   that warehouse.
+4. B5 fixes the destination ownership/status as `ENTERPRISE` / null owner / `AVAILABLE`; product and
+   LOT/SERIAL remain copied from the historical Handoff partition and revalidated by V21.
+
+Therefore the complete Return warehouse eligibility predicate is exactly:
+
+```sql
+w.active = 1
+AND COALESCE(w.is_supplier_wip, 0) = 0
+```
+
+For `bin_enabled=0`, the only legal bin value is NULL. For `bin_enabled=1`, the candidate contains only
+`warehouse_bins.active=1 AND warehouse_bins.warehouse_id=w.id`; a bin-enabled warehouse with no active bin
+does not produce a legal selectable destination.
+
+No filter is added for `mrp_participation`, `negative_stock_policy` or `inventory_lock_enabled`: none of
+those fields classifies an enterprise Return destination. No inference is made from current
+`consignment_commodity_locations`, because S18 says commercial location is distinct from physical warehouse
+and ownership. No inventory quantity, availability, valuation or cost predicate is used to populate the
+reference list; those remain mutation-time V21 checks.
+
+This predicate intentionally allows the saved Handoff source warehouse when it qualifies, but does not
+privilege it and permits any other qualifying enterprise warehouse/bin. A Supplier-WIP warehouse is not a
+B5 enterprise destination even though V21 can legally represent ENTERPRISE-owned stock there for the
+separate outsourcing flow.
+
+### 35.24.3 Corrected Return Reference API response
+
+The route remains:
+
+```text
+GET /api/consignment-commercial-documents/:documentId/lines/:lineId/return-position-references
+```
+
+Authentication, `SALES_MANAGE AND CONSIGNMENT_MANAGE`, document Sales Group scope, nested line identity,
+`INSTRUCTED/PARTIAL_SETTLED` state, positive remaining quantity and complete Handoff evidence checks remain
+as designed in §35.23. The response changes from one `warehouse` to a bounded array:
+
+```json
+{
+  "purpose": "RETURN",
+  "context": {
+    "documentId": "...",
+    "documentVersion": 3,
+    "documentStatus": "INSTRUCTED",
+    "lineId": "...",
+    "lineVersion": 2
+  },
+  "warehouses": [
+    {
+      "id": "...",
+      "code": "...",
+      "name": "...",
+      "binEnabled": true,
+      "bins": [
+        { "id": "...", "warehouseId": "...", "code": "...", "name": "..." }
+      ]
+    }
+  ]
+}
+```
+
+Warehouses are ordered by `code,id`; nested bins by `code,id`. The projection remains limited to the exact
+fields shown. No address, manager, timestamp, purpose flag, stock, LOT/SERIAL balance, valuation, cost or
+configuration data crosses the API boundary. Returning `is_supplier_wip` is unnecessary because the server
+uses it only as an internal eligibility predicate.
+
+If the accessible line is otherwise Return-eligible but the candidate set is empty, the route returns 409
+`CONSIGNMENT_RETURN_DESTINATION_UNAVAILABLE`. The §35.23 401/403/404 rules and generic cross-group response
+remain unchanged. The route has no body, no warehouse search input and no pagination because it returns the
+already-filtered legal set, not warehouse master access.
+
+### 35.24.4 Corrected mutation-time authority and locks
+
+The browser's array and selected ids remain hints only. Inside `returnConsignmentLineCommand()`'s existing
+caller-owned transaction, after line/document scope/state/version/capacity are locked and re-read:
+
+```text
+1. require destinationWarehouseId explicitly; no header fallback
+2. lock the submitted warehouse row
+3. require active=1 AND is_supplier_wip=0
+4. if bin_enabled=0, require destinationBinId=NULL
+5. if bin_enabled=1, lock the submitted bin and require active=1 + same warehouse
+6. resolve immutable historical Handoff evidence and lock/revalidate current V21 source positions
+7. V21 MOVE to the explicit destination with ENTERPRISE/null/AVAILABLE and preserved product/LOT/SERIAL
+```
+
+The destination warehouse/bin locks participate in the existing canonical position-key ordering before
+physical mutation. A selected warehouse deactivated or reclassified as Supplier-WIP after the GET, an
+inactive/moved bin, a missing required bin, a bin supplied to a non-bin warehouse, or a destination not in
+the qualifying set fails 409 before any V21/commercial/Finance/audit/idempotency effect.
+
+Corrected error mapping:
+
+```text
+CONSIGNMENT_RETURN_DESTINATION_REQUIRED
+CONSIGNMENT_RETURN_DESTINATION_INVALID
+CONSIGNMENT_RETURN_DESTINATION_BIN_REQUIRED
+CONSIGNMENT_RETURN_DESTINATION_BIN_INVALID
+CONSIGNMENT_RETURN_DESTINATION_UNAVAILABLE       // GET candidate set empty
+```
+
+`CONSIGNMENT_RETURN_DESTINATION_MISMATCH` from §35.23 is removed because cross-enterprise-warehouse Return
+is legal and there is no header warehouse equality rule.
+
+Handoff remains unchanged: its reference response contains only the document's `source_warehouse_id`, and
+the Handoff mutation requires exact equality. Settlement remains unchanged and reads only historical V21
+Handoff evidence.
+
+### 35.24.5 Frontend, file plan and acceptance correction
+
+The §35.23 file list remains exact. Only its Return behavior is corrected:
+
+- `src/pages/wave8-sales.jsx` renders the returned `warehouses[]` as an explicit enterprise destination
+  select and renders bins from the selected warehouse; it never defaults the target from the header and
+  never calls generic warehouse/bin APIs.
+- `server/modules/consignment.js` owns the shared `active && !is_supplier_wip` candidate predicate and uses
+  the same predicate in the GET and transaction-time command validation.
+- No change is made to `server/modules/warehouses.js`, `server/modules/warehouse-bin.js`, permission seeds,
+  schema, migrations or V21.
+
+Focused acceptance must additionally prove:
+
+1. two qualifying active non-WIP warehouses are both returned and Return can legally target the one that
+   differs from `source_warehouse_id`;
+2. inactive and `is_supplier_wip=1` warehouses are absent; bin-disabled and bin-enabled shapes follow §27.9;
+3. direct submission of inactive/Supplier-WIP/cross-warehouse-bin/stale candidates is 409 with zero effects;
+4. Handoff still exposes and accepts only `source_warehouse_id`;
+5. response key-set tests prove the internal `is_supplier_wip` classifier and all other forbidden fields are
+   not disclosed;
+6. independent-connection MySQL tests cover candidate GET followed by warehouse deactivation or
+   Supplier-WIP reclassification before Return, plus Return racing another line mutation; one legal result
+   commits and every loser has zero side effects;
+7. real SALES browser acceptance chooses a non-source qualifying warehouse and its bin for Return at
+   320/390/430/680 CSS px.
+
+### 35.24.6 Resolution and Hard Stop
+
+The B5 reference conflict is resolved at Design level with no Requirement, schema, permission or frozen
+semantic change. No unresolved blocker remains inside this correction.
+
+Per `AGENTS.md §4.3`, implementation remains stopped until the user explicitly accepts this corrected
+Design and separately authorizes Stage D resumption. The prior Stage D authorization cannot be reused across
+this conflict correction.
+
+**Status: `WAVE8_B5_REFERENCE_DESIGN_CORRECTED — AWAITING_USER_ACCEPTANCE`. Hard Stop.**
+
+## 35.25 Wave 8 Final Bounded Stage D implementation verification record
+
+This section records implementation conformance after the user accepted §35.24 and authorized the final
+bounded Stage D. It does not amend the Requirement or Design and does not declare Final Acceptance or
+Freeze.
+
+### 35.25.1 SALES reference access implementation
+
+- `server/app.js` dispatches the approved Handoff and Return context-only GET routes to the Consignment
+  owner; no generic warehouse-management permission or route was granted to SALES.
+- `server/modules/consignment.js` applies the existing joint `SALES_MANAGE` + `CONSIGNMENT_MANAGE` gate,
+  Sales Group scope, nested document/line identity, state/capacity checks and bounded response projections.
+- Handoff exposes only the authoritative `source_warehouse_id` and its active bins. Return exposes only
+  active non-Supplier-WIP enterprise warehouses; a bin-enabled warehouse is omitted when it has no active
+  bin. Internal classification and warehouse-management fields are not returned.
+- Handoff/Return commands re-read permission, scoped document/line version and status, and lock/revalidate
+  submitted warehouse/bin rows inside the caller-owned transaction. Handoff also locks the effective
+  commercial-location warehouse/bin mapping. Stale, inactive, Supplier-WIP or mismatched-bin selections
+  fail before inventory, commercial, audit or idempotency effects.
+- Settlement remains independent of the reference routes and derives its source only from immutable
+  historical V21 Handoff evidence.
+
+### 35.25.2 UI and acceptance integration
+
+`src/pages/wave8-sales.jsx` uses the context routes for Handoff and Return selectors. The two workflows no
+longer accept raw warehouse/bin ids and a normal SALES actor does not call `/api/warehouses`. Return retains
+an explicit destination and supports a qualifying warehouse different from the Handoff source.
+
+The real Edge acceptance driver uses a real `role-sales` session for Handoff, Settlement and Return, checks
+the generic warehouse API and Consignment reference denial boundaries, and exercises 320/390/430/680 CSS
+px layouts. Admin use is limited to fixture preparation.
+
+### 35.25.3 Credit reversal, lock order and idempotency evidence
+
+- Independent MySQL sessions cover Reversal × Reversal, Reversal × Credit Creation and Reversal × Invoice
+  VOID, plus exact replay and changed-payload conflict. Assertions reconcile Credit, Adjustment, Voucher,
+  AR and Invoice states/amounts and prove loser zero effects.
+- The production lock paths remain composable: Invoice POST/VOID/Credit first acquire the shared
+  `SO Line → Fulfillment → FINAL AR` plan; Service CONFIRM uses the same SO Line → Fulfillment order before
+  Finance recognition. Credit Reversal uses its separate `Finance open item → adjustment/balance → credit
+  note → invoice` order. No reverse acquisition chain was found.
+- A real HTTP same-key/different-payload request returns 409. The frozen control layer reports
+  `BUSINESS_RULE_BLOCKED`; this is the approved non-blocking compatibility difference and is not rewritten.
+
+### 35.25.4 Final verification evidence
+
+The completed final-state gates are:
+
+- focused Consignment functional 5/5 and Wave 8 residual 11/11;
+- `test:fast` 380/380, `test` 2623/2623, `test:heavy` 67/67 and Vite build PASS;
+- real Edge acceptance: 36 responsive checks and 16 workflow flows PASS;
+- MySQL integration 56/56 PASS;
+- MySQL concurrency 102/102 PASS, including Wave 8 15/15 and independent-connection stale Return
+  destination deactivation/Supplier-WIP reclassification checks.
+- `git diff --check` PASS (exit 0; line-ending notices only, no whitespace error).
+
+No schema/table/permission was added by the SALES reference correction. No production migration,
+deployment, release, version change or Git write is part of this record. Final user acceptance and Freeze
+remain outside Stage D authority.
+
+**Implementation status: `WAVE8_FINAL_CLOSURE_COMPLETE — READY_FOR_INDEPENDENT_REAUDIT`.**
+
+## 35.26 Wave 8 Two-P1 bounded remediation implementation record
+
+This section records the implementation evidence for the two P1 findings accepted for bounded remediation.
+It does not change the approved Requirement, schema, V21 authority, or frozen non-Service Finance behavior,
+and it does not declare Final Acceptance or Freeze.
+
+### 35.26.1 A3 Invoice/Link lock-chain closure
+
+`server/modules/finance-recognition.js` now discovers the complete Service invoice source plan outside the
+transaction and locks it inside the transaction in the fixed order:
+
+`SO Line -> Fulfillment -> FINAL AR -> Invoice -> Existing Links`.
+
+All sets are ordered by stable ids and the MySQL path issues real `FOR UPDATE` reads for each non-empty
+stage. The Invoice row is the serialization authority for both lifecycle state and a not-yet-existing Link;
+an empty Link result is not treated as a gap lock. Existing Links are locked after the Invoice, and the
+persisted unique tuple remains the insert-time collision guard. After the five stages, the plan is
+authoritatively re-read; candidate, Invoice snapshot, or persisted-Link drift raises
+`A3_INVOICE_SOURCE_PLAN_STALE` before any effect.
+
+`server/modules/commercial-golive.js` composes the same prefix for Sales Invoice POST, VOID, Credit creation,
+and Credit Reversal. When an independently discovered plan becomes stale while waiting for the prefix, the
+owner rolls back the complete attempt and performs one bounded rediscovery in a new transaction. It never
+retries inside a caller-owned transaction, never retries another business error, and a second drift remains
+a controlled 409. This preserves exact POST replay and the legal Reversal x Credit composition without
+weakening locked authoritative re-reads. Service CONFIRM retains its approved parent-first prefix and never
+acquires Invoice/Link or Credit-child rows in reverse order.
+
+Focused probes prove that all five MySQL lock statements execute in order, that Invoice/Link snapshot drift
+fails closed, that a newly appearing upstream candidate is rejected as stale, and that an empty Link set is
+protected by the Invoice authority rather than an empty-row-lock assumption. Independent-connection MySQL
+races separately prove the resulting economic outcomes; the adapter's global transaction gate is not used
+as proof of the five-stage row-lock order.
+
+### 35.26.2 Reference API HTTP negative matrix closure
+
+`server/sales-customer-wave8-mixed-delivery.test.js` calls both registered HTTP routes through the real app,
+login, authentication, RBAC, and Sales Group scope chain:
+
+- Handoff and Return without authentication return 401;
+- an authenticated actor without the joint business permissions returns 403;
+- a SALES actor outside the document Sales Group returns 403;
+- an unknown document returns 404;
+- a Return line not belonging to the document returns 404.
+
+Every refusal body is checked against document, warehouse, bin, commercial-location, source-warehouse, and
+cross-group sentinel values. Existing route behavior already satisfied the contract, so no Reference API
+production code change was required for this finding.
+
+### 35.26.3 Final verification and compatibility
+
+- Wave 8 focused: 64/64 PASS; fast: 380/380 PASS; full: 2626/2626 PASS; heavy: 67/67 PASS.
+- Vite production build: PASS, 1963 modules transformed.
+- MySQL integration: 56/56 PASS and `MYSQL TESTS = PASS`.
+- MySQL concurrency: 102/102 PASS, including Wave 8 15/15 for POST/POST, POST/VOID, Credit/Credit,
+  Credit/VOID, Reversal/Reversal, Reversal/Credit Creation, Reversal/Invoice VOID, exact replay and conflict.
+- Real Edge acceptance: 36 responsive checks and 16 workflows PASS at 320/390/430/680 CSS px, including a
+  real SALES Handoff, Settlement, cross-warehouse Return, conflict, denial, and navigation lifecycle.
+
+No table, column, migration, permission, route, release version, or deployment contract changed. README and
+`document.md` require no edit because project structure/commands/release identity and approved Requirements
+did not change. Final user acceptance and Freeze remain outside this remediation authority.
+
+**Remediation status: `WAVE8_FINAL_TWO_P1_REMEDIATED — READY_FOR_TARGETED_REAUDIT`.**
+
+## 35.27 Wave 8 final accepted technical baseline and freeze
+
+The user accepted the targeted independent re-audit and explicitly declared
+`WAVE8_FINAL_ACCEPTANCE_PASS`. Sections §35.18–§35.26, including their explicit supersession rules, now form
+the frozen Wave 8 technical baseline. This section records that acceptance; it introduces no implementation,
+schema, API, permission, migration or test change.
+
+### 35.27.1 Canonical implementation baseline
+
+- Inventory V21 remains the sole physical mutation owner. `inventory_mutation_log` carries the approved nine
+  nullable evidence fields, populated atomically from mutation-time normalized Position identities. Legacy
+  rows remain nullable and are never guessed or startup-backfilled.
+- Consignment retains exactly four Wave 8 business tables. Handoff is a V21 MOVE from the document's
+  authoritative source warehouse; Settlement is a strict OUT resolved only from immutable Handoff evidence;
+  Return is a strict MOVE to an explicit eligible enterprise destination. Every command re-locks and
+  revalidates current V21 balance, tracking, valuation, state, version and warehouse/bin authority.
+- Service Fulfillment keeps `PENDING / CONFIRMED / CANCELLED`, DIRECT Finance recognition and the approved
+  Service-aware Delivery behavior. Mixed physical/Service Delivery remains one atomic business operation.
+- Finance A3 preserves exact invoice-item conservation and immutable five-tuple source links. POST, VOID,
+  Credit creation and Credit Reversal use the common stable lock prefix
+  `SO Line -> Fulfillment -> FINAL AR -> Invoice -> Existing Links`. The Invoice row serializes creation of a
+  previously absent Link, the database unique tuple guards insert collisions, and locked authoritative
+  re-read rejects drift. A stale plan rolls back the complete attempt and may be rediscovered only once in a
+  new transaction; caller-owned transactions are never internally retried.
+- Service CONFIRM retains Finance PREPAYMENT parent-first composition followed by SO Line, Fulfillment and
+  FINAL AR. No accepted path introduces a reverse edge against the A3 prefix. The MySQL transaction gate is
+  not part of the row-lock correctness proof.
+- The two Consignment reference GET routes remain contextual and read-only. They require
+  `SALES_MANAGE AND CONSIGNMENT_MANAGE`, enforce Sales Group/document/line scope and expose only approved
+  label fields. Handoff returns the source warehouse only; B5 Return permits all and only active,
+  non-Supplier-WIP enterprise warehouses, omitting a bin-enabled warehouse with no active bin. Mutation-time
+  checks, not selector responses, remain authoritative.
+
+### 35.27.2 Schema, migration and compatibility baseline
+
+- SQLite and MySQL 8 use the canonical migration lifecycle for fresh installation, additive upgrade and
+  repeated startup. No destructive DDL or speculative data repair belongs to Wave 8.
+- MySQL snapshot reconciliation and the Wave 8 physical-contract assertion cover columns, defaults,
+  nullability, checks, foreign keys, unique/index order and collation. `lot_code_key` is byte-identical under
+  binary collation; pre-change ambiguous identities fail closed before DDL.
+- Existing V21 idempotency identity, historical economic facts, Wave 6/7 semantics, Inventory ownership and
+  non-Service Finance behavior remain unchanged.
+
+### 35.27.3 Accepted verification evidence
+
+The final completed Stage D gates were: Wave 8 focused 64/64, fast 380/380, full 2626/2626, heavy 67/67,
+Vite build PASS with 1963 modules, MySQL integration 56/56, MySQL concurrency 102/102 with Wave 8 15/15,
+and Edge acceptance with 36 responsive checks and 16 workflows at 320/390/430/680 CSS px.
+
+The final targeted independent re-audit did not repeat every broad gate. It re-ran the residual/reference
+pair at 20/20 and the five-file Wave 8 focused gate at 64/64, inspected the registered HTTP/auth/RBAC/scope
+chain and production lock call graph, and confirmed no remaining P0/P1. The broader figures above remain
+the actual same-day Stage D results recorded in §35.26 and the development log.
+
+### 35.27.4 Freeze and change control
+
+Wave 8 Design and implementation are accepted and frozen. Any future change to its business behavior,
+schema, API scope, permissions, lock graph, canonical-writer ownership or compatibility contract must restart
+the repository's AUDIT -> REQUIREMENT -> DESIGN -> IMPLEMENTATION -> ACCEPTANCE sequence. The freeze is
+limited to Wave 8; it neither freezes the whole ERP project nor authorizes Wave 9–13.
+
+This documentation closure is pending the user's manual Git commit. It is not itself a commit, tag, release,
+deployment, production migration or version change.
+
+**Status: `WAVE8_FINAL_ACCEPTANCE_PASS — FREEZE_DOCUMENTED_PENDING_COMMIT`.**

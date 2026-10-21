@@ -44,7 +44,9 @@ function ensureProduct(id, code, name, priceCents) {
 function seedApprovedRequisition(lines) {
   const n = ++sequence;
   const requisitionId = `r6-batch-req-${n}`;
-  db.prepare("INSERT INTO purchase_requisitions(id,requisition_no,status,request_date,required_date,notes,creator_id,reviewer_id,created_at,updated_at) VALUES(?,?,'APPROVED','2026-10-02','2026-10-20','UAT-005','user-sales','user-reviewer',?,?)")
+  // required_date must stay ahead of the wall clock: PO submit validates the requested
+  // delivery date against it, so a hardcoded date silently expires once that day passes.
+  db.prepare("INSERT INTO purchase_requisitions(id,requisition_no,status,request_date,required_date,notes,creator_id,reviewer_id,created_at,updated_at) VALUES(?,?,'APPROVED','2026-10-02','2027-06-30','UAT-005','user-sales','user-reviewer',?,?)")
     .run(requisitionId, `PREQ-R6-${n}`, at, at);
   const result = [];
   lines.forEach((line, index) => {

@@ -241,6 +241,39 @@ export function transitionSerialForInventoryMovement(db, {
   return { lifecycleState, currentWarehouseId: null };
 }
 
+// Transaction-inheriting V21 primitive for callers that already resolved one
+// canonical position partition. It deliberately accepts no client allocation
+// list: LOT/SERIAL identity comes from the validated V21 position itself.
+export function postCanonicalTrackedLeg(db, {
+  transactionId, sourceType, sourceId, sourceItemId, productId, warehouseId,
+  lotId = null, serialId = null, quantity, direction, businessDate,
+}) {
+  const product = productTracking(db, productId);
+  const qty = num(quantity, 'quantity', true);
+  const at = nowIso();
+  if (product.tracking_policy === 'LOT') {
+    if (!lotId || serialId) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'LOT position evidence is incomplete', 'Select an exact LOT partition');
+    const lot = db.prepare('SELECT * FROM inventory_lots WHERE id=?').get(lotId);
+    if (!lot || lot.product_id !== productId) throw trackingError(409, 'LOT_NOT_AVAILABLE', 'LOT does not match product', 'Refresh LOT availability');
+    if (direction === 'OUT') assertAvailableLot(lot, businessDate);
+    changeLotBalance(db, warehouseId, productId, lotId, direction === 'IN' ? qty : -qty, at);
+  } else if (product.tracking_policy === 'SERIAL') {
+    if (!serialId || lotId || qty !== 1) throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'SERIAL position must identify exactly one serial', 'Use one mutation per serial');
+    transitionSerialForInventoryMovement(db, { serialId, productId, warehouseId, direction, sourceType, at });
+  } else if (lotId || serialId) {
+    throw trackingError(409, 'TRACKING_POLICY_MISMATCH', 'Untracked product cannot carry LOT/SERIAL identity', 'Remove tracking identity');
+  }
+  const movementId = id();
+  db.prepare(`INSERT INTO tracked_inventory_movements(
+    id,transaction_id,source_type,source_id,source_item_id,product_id,warehouse_id,
+    direction,quantity,lot_id,serial_id,business_date,reversed,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)`).run(
+    movementId, transactionId, sourceType, sourceId, sourceItemId, productId,
+    warehouseId, direction, qty, lotId, serialId, businessDate, at,
+  );
+  return db.prepare('SELECT * FROM tracked_inventory_movements WHERE id=?').get(movementId);
+}
+
 export function postTrackedMovement(db, { sourceType, sourceId, sourceItemId, productId, warehouseId, quantity, direction, businessDate, returnToHold = false }) {
   const product = productTracking(db, productId);
   if (product.tracking_policy === 'NONE') return [];

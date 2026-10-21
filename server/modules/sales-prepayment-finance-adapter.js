@@ -64,6 +64,37 @@ function readEligibleBalances(db, { customerId, businessDate }) {
   return rows;
 }
 
+export function discoverEligiblePrepaymentParents(db, { customerId, businessDate }) {
+  return readEligibleBalances(db, { customerId, businessDate }).map((row) => row.id).sort();
+}
+
+// §35.18.6 phase 1/2 split. `lockEligiblePrepaymentParents` must be the FIRST
+// row lock any Sales gate path takes: Finance PREPAYMENT parents are locked
+// before any Gate requirement/result or Sales business row. `resolveEligiblePrepaymentWithParentPlan`
+// then re-reads the eligible set beneath those locks and refuses a stale plan
+// instead of silently locking a parent that appeared after discovery.
+export function lockEligiblePrepaymentParents(db, plannedParentIds) {
+  const planned = [...new Set(plannedParentIds || [])].sort();
+  lockParentBalances(db, planned);
+  return planned;
+}
+
+export function assertPrepaymentParentPlanCurrent(db, input, planned) {
+  const currentIds = readEligibleBalances(db, input).map((row) => row.id).sort();
+  if (JSON.stringify(planned) !== JSON.stringify(currentIds)) {
+    throw new HttpError(409, '预付款父级锁计划已过期，请在新事务重试', {
+      code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE', plannedParentIds: planned, currentParentIds: currentIds,
+    });
+  }
+  return planned;
+}
+
+export function resolveEligiblePrepaymentWithParentPlan(db, input, plannedParentIds) {
+  const planned = lockEligiblePrepaymentParents(db, plannedParentIds);
+  assertPrepaymentParentPlanCurrent(db, input, planned);
+  return resolveEligiblePrepaymentForSalesGate(db, { ...input, lockMode: 'NONE' });
+}
+
 function readAppliedCents(db, balanceId) {
   return Number(db.prepare(`SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'`).get(balanceId).n);
 }

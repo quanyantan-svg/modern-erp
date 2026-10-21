@@ -88,6 +88,11 @@ const FULL = [
   'server/sales-customer-wave7-migration.test.js',
   'server/sales-customer-wave7-functional.test.js',
   'server/sales-customer-wave7-acceptance.test.js',
+  'server/sales-customer-wave8-functional.test.js',
+  'server/sales-customer-wave8-remediation.test.js',
+  'server/sales-customer-wave8-mysql-metadata.test.js',
+  'server/sales-customer-wave8-mixed-delivery.test.js',
+  'server/sales-customer-wave8-residual.test.js',
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----

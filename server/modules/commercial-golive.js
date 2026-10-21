@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
-import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
+import { HttpError, allow, allowAny, normalizeBusinessDate, readJson, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
-import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource, openItemSnapshot } from './settlement-core.js';
+import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource, openItemSnapshot, reverseCreditAdjustment } from './settlement-core.js';
+import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, receiveValue, reverseSystemVoucher, systemHealth } from './financial-inventory.js';
 import { setInventoryQuantity } from '../lib/stock.js';
-import { recognizeFinanceExposure } from './finance-recognition.js';
+import { discoverInvoiceSourcePlan, lockInvoiceSourcePlan, recognizeFinanceExposure } from './finance-recognition.js';
 import { RECOGNITION_MODES } from './finance-recognition-policy.js';
 import { assertFinanceBusinessDateOpen } from './finance-business-close.js';
 
@@ -128,21 +129,113 @@ export function createSalesInvoice(db, input) {
 }
 
 function salesInvoiceRecognitionSources(db, invoiceId) {
-  const lines = db.prepare(`SELECT i.delivery_id source_id,i.delivery_item_id source_line_id,i.base_quantity_num,i.base_quantity_den,i.gross_cents,d.delivery_no source_no
-    FROM sales_invoice_items i JOIN sales_deliveries d ON d.id=i.delivery_id WHERE i.invoice_id=? ORDER BY i.line_no`).all(invoiceId);
-  return lines.map((line) => {
+  const lines = db.prepare(`SELECT i.id invoice_item_id,i.delivery_id source_id,i.delivery_item_id source_line_id,
+      i.base_quantity_num,i.base_quantity_den,i.gross_cents,d.delivery_no source_no,
+      di.sales_order_item_id,c.service_classification,c.active classification_active
+    FROM sales_invoice_items i JOIN sales_deliveries d ON d.id=i.delivery_id
+    JOIN sales_delivery_items di ON di.id=i.delivery_item_id
+    LEFT JOIN product_commercial_classification c ON c.product_id=i.product_id
+    WHERE i.invoice_id=? ORDER BY i.line_no,i.id`).all(invoiceId);
+  const serviceOrderItems = lines.filter((line) => Number(line.service_classification) === 1 && Number(line.classification_active) === 1)
+    .map((line) => line.sales_order_item_id);
+  if (new Set(serviceOrderItems).size !== serviceOrderItems.length) {
+    throw new HttpError(409, 'An invoice may contain only one service item per sales-order line', { code: 'SERVICE_INVOICE_ITEM_SOURCE_AMBIGUOUS' });
+  }
+  return lines.flatMap((line) => {
+    if (Number(line.service_classification) === 1 && Number(line.classification_active) === 1) {
+      if (!line.sales_order_item_id || Number(line.base_quantity_den) <= 0) throw new HttpError(409, 'Service invoice source is incomplete', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
+      const numerator = BigInt(line.base_quantity_num) * 1_000_000n;
+      const denominator = BigInt(line.base_quantity_den);
+      if (numerator % denominator !== 0n) throw new HttpError(409, 'Service invoice quantity is not representable in micros', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+      const requiredMicrosBig = numerator / denominator;
+      if (requiredMicrosBig <= 0n || requiredMicrosBig > BigInt(Number.MAX_SAFE_INTEGER)) throw new HttpError(409, 'Service invoice quantity is unsafe', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+      const requiredMicros = Number(requiredMicrosBig);
+      const fulfillments = db.prepare(`SELECT f.*,a.amount_cents open_amount_authority
+        FROM service_fulfillments f LEFT JOIN account_receivables a
+          ON a.source_type='SERVICE_FULFILLMENT' AND a.source_id=f.id AND a.item_kind='FINAL'
+        WHERE f.sales_order_item_id=? AND f.confirmation_state='CONFIRMED'
+        ORDER BY f.business_date,f.created_at,f.id${db.dialect === 'mysql' ? ' FOR UPDATE' : ''}`).all(line.sales_order_item_id);
+      let remaining = requiredMicros;
+      let allocatedMicros = 0;
+      let allocatedCents = 0;
+      const allocations = [];
+      for (const fulfillment of fulfillments) {
+        if (remaining <= 0) break;
+        if (Number(fulfillment.recognition_amount_cents) === 0) continue;
+        if (fulfillment.open_amount_authority == null) throw new HttpError(409, 'Service fulfillment FINAL AR is missing', { code: 'SERVICE_INVOICE_SOURCE_UNAVAILABLE' });
+        const used = db.prepare(`SELECT COALESCE(SUM(l.invoiced_quantity),0) quantity
+          FROM finance_invoice_source_links l JOIN sales_invoices i ON i.id=l.invoice_id
+          WHERE l.source_type='SERVICE_FULFILLMENT' AND l.source_id=? AND i.status='POSTED' AND i.id<>?`).get(fulfillment.id, invoiceId);
+        const available = Number(fulfillment.confirmation_qty_micros) - Number(used.quantity);
+        if (available <= 0) continue;
+        const quantity = Math.min(remaining, available);
+        const nextMicros = allocatedMicros + quantity;
+        const nextCents = Number(BigInt(line.gross_cents) * BigInt(nextMicros) / BigInt(requiredMicros));
+        const cents = nextCents - allocatedCents;
+        allocations.push({ sourceType: 'SERVICE_FULFILLMENT', sourceId: fulfillment.id,
+          sourceNo: fulfillment.fulfillment_no, sourceLineId: fulfillment.id,
+          salesOrderItemId: line.sales_order_item_id, invoiceItemId: line.invoice_item_id,
+          invoicedQuantity: quantity, invoicedAmountCents: cents, fullyInvoiced: true });
+        remaining -= quantity; allocatedMicros = nextMicros; allocatedCents = nextCents;
+      }
+      if (remaining !== 0 || allocatedMicros !== requiredMicros || allocatedCents !== Number(line.gross_cents)) {
+        throw new HttpError(409, 'Service invoice allocation is not conserved', { code: 'SERVICE_INVOICE_ALLOCATION_NOT_CONSERVED' });
+      }
+      return allocations;
+    }
     const delivered = Number(db.prepare('SELECT quantity FROM sales_delivery_items WHERE id=?').get(line.source_line_id)?.quantity || 0);
     const invoiced = Number(db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices h ON h.id=i.invoice_id WHERE i.delivery_item_id=? AND (h.status='POSTED' OR h.id=?)`).get(line.source_line_id, invoiceId).n);
     const quantity = Number(line.base_quantity_num) / Number(line.base_quantity_den || 1);
-    return { sourceType: 'SALES_DELIVERY', sourceId: line.source_id, sourceNo: line.source_no, sourceLineId: line.source_line_id,
-      invoicedQuantity: Number.isSafeInteger(quantity) ? quantity : 0, invoicedAmountCents: Number(line.gross_cents), fullyInvoiced: invoiced + 1e-9 >= delivered };
+    return [{ sourceType: 'SALES_DELIVERY', sourceId: line.source_id, sourceNo: line.source_no, sourceLineId: line.source_line_id,
+      invoicedQuantity: Number.isSafeInteger(quantity) ? quantity : 0, invoicedAmountCents: Number(line.gross_cents), fullyInvoiced: invoiced + 1e-9 >= delivered }];
   });
 }
 
+function assertPostedServiceLinkEvidence(db, invoiceId) {
+  const expected = salesInvoiceRecognitionSources(db, invoiceId).filter((source) => source.sourceType === 'SERVICE_FULFILLMENT' && source.invoicedAmountCents > 0);
+  const actual = db.prepare(`SELECT * FROM finance_invoice_source_links
+    WHERE invoice_id=? AND invoice_side='SALES_INVOICE' AND source_type='SERVICE_FULFILLMENT'
+    ORDER BY source_id,source_line_id`).all(invoiceId);
+  if (actual.length !== expected.length) throw new HttpError(409, 'Posted invoice service-link evidence is incomplete', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
+  for (const source of expected) {
+    const row = actual.find((candidate) => candidate.source_id === source.sourceId && candidate.source_line_id === source.sourceLineId);
+    if (!row || Number(row.invoiced_quantity) !== source.invoicedQuantity || Number(row.invoiced_amount_cents) !== source.invoicedAmountCents) {
+      throw new HttpError(409, 'Posted invoice service-link evidence does not match', { code: 'FINANCE_INVOICE_SOURCE_LINK_EVIDENCE_MISMATCH' });
+    }
+  }
+}
+
+function withInvoiceSourcePlanRetry(db, invoiceId, work) {
+  const mayRetry = !db.isTransaction;
+  for (let attempt = 0; ; attempt += 1) {
+    const sourcePlan = discoverInvoiceSourcePlan(db, invoiceId);
+    try {
+      return atomic(db, () => {
+        lockInvoiceSourcePlan(db, sourcePlan);
+        return work();
+      });
+    } catch (error) {
+      // Discovery is intentionally outside the transaction. If another A3
+      // writer commits before this transaction obtains the canonical prefix,
+      // roll back the whole attempt and rediscover once in a new transaction.
+      // A caller-owned transaction cannot be retried safely here.
+      if (!mayRetry || attempt >= 1 || error?.code !== 'A3_INVOICE_SOURCE_PLAN_STALE') throw error;
+    }
+  }
+}
+
 export function postSalesInvoice(db, invoiceId, actorId) {
-  return atomic(db, () => {
+  return withInvoiceSourcePlanRetry(db, invoiceId, () => {
+    const replayInvoice = db.prepare('SELECT * FROM sales_invoices WHERE id=?').get(invoiceId);
+    if (replayInvoice?.status === 'POSTED') {
+      assertPostedServiceLinkEvidence(db, invoiceId);
+      return replayInvoice;
+    }
     const invoice = db.prepare('SELECT * FROM sales_invoices WHERE id=?').get(invoiceId); if (!invoice) throw new HttpError(404, '销售发票不存在'); if (invoice.status === 'POSTED') return invoice; if (invoice.status !== 'DRAFT') throw new HttpError(409, '只能过账草稿发票');
     assertFinanceBusinessDateOpen(db, 'AR', invoice.invoice_date); assertFinancialPeriodsOpen(db, invoice.invoice_date); const lines = db.prepare('SELECT * FROM sales_invoice_items WHERE invoice_id=?').all(invoiceId);
+    const containsService = db.prepare(`SELECT 1 FROM sales_invoice_items i JOIN product_commercial_classification c ON c.product_id=i.product_id
+      WHERE i.invoice_id=? AND c.service_classification=1 AND c.active=1 LIMIT 1`).get(invoiceId);
+    if (containsService && invoice.tax_mode !== 'NO_TAX') throw new HttpError(409, 'Taxed service invoices are not supported', { code: 'SERVICE_INVOICE_TAX_MODE_UNSUPPORTED' });
     for (const line of lines) {
       const delivered = db.prepare('SELECT quantity FROM sales_delivery_items WHERE id=?').get(line.delivery_item_id)?.quantity;
       const posted = db.prepare(`SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0) n FROM sales_invoice_items i JOIN sales_invoices h ON h.id=i.invoice_id WHERE i.delivery_item_id=? AND h.status='POSTED' AND h.id<>?`).get(line.delivery_item_id, invoiceId).n;
@@ -230,8 +323,59 @@ export function postSupplierBill(db, billId, actorId) {
 
 export function matchSupplierBill(db,billId,input){return atomic(db,()=>{const bill=db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);if(!bill||!['WAITING_MATCH','DRAFT'].includes(bill.status))throw new HttpError(409,'账单状态不允许匹配');for(const match of input.items||[]){const line=db.prepare('SELECT * FROM supplier_bill_items WHERE id=? AND bill_id=?').get(match.billItemId,billId);const receipt=db.prepare(`SELECT i.*,h.supplier_id,h.status receipt_status FROM purchase_receipt_items i JOIN purchase_receipts h ON h.id=i.receipt_id WHERE i.id=?`).get(match.receiptItemId);if(!line||!receipt||receipt.receipt_status!=='CONFIRMED'||receipt.supplier_id!==bill.supplier_id||receipt.product_id!==line.product_id)throw new HttpError(409,'三单匹配来源不一致');const billed=Number(db.prepare("SELECT COALESCE(SUM(i.base_quantity_num*1.0/i.base_quantity_den),0)n FROM supplier_bill_items i JOIN supplier_bills h ON h.id=i.bill_id WHERE i.receipt_item_id=? AND h.status IN ('DRAFT','WAITING_MATCH','POSTED') AND h.id<>?").get(receipt.id,billId).n);const qty=line.base_quantity_num/line.base_quantity_den;if(billed+qty>Number(receipt.quantity)+1e-9)throw new HttpError(409,'匹配数量超过已收货数量');db.prepare('UPDATE supplier_bill_items SET receipt_id=?,receipt_item_id=?,purchase_order_item_id=?,matched_unit_price_cents=? WHERE id=?').run(receipt.receipt_id,receipt.id,receipt.purchase_order_item_id,receipt.unit_price_cents,line.id);}const unmatched=Number(db.prepare('SELECT COUNT(*)n FROM supplier_bill_items WHERE bill_id=? AND receipt_item_id IS NULL').get(billId).n);const grni=Number(db.prepare('SELECT COALESCE(SUM(matched_unit_price_cents*base_quantity_num/base_quantity_den),0)n FROM supplier_bill_items WHERE bill_id=?').get(billId).n);db.prepare('UPDATE supplier_bills SET status=?,grni_cents=?,variance_cents=net_cents-? WHERE id=?').run(unmatched?'WAITING_MATCH':'DRAFT',grni,grni,billId);return db.prepare('SELECT * FROM supplier_bills WHERE id=?').get(billId);});}
 
+function serviceCreditTargets(db, invoiceId, requestedCents, currentCreditId) {
+  const links = db.prepare(`SELECT source_id,SUM(invoiced_amount_cents) linked_cents FROM finance_invoice_source_links
+    WHERE invoice_id=? AND invoice_side='SALES_INVOICE' AND source_type='SERVICE_FULFILLMENT'
+    GROUP BY source_id ORDER BY source_id`).all(invoiceId);
+  if (!links.length) return null;
+  const lockRows = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+  const capacities = [];
+  for (const link of links) {
+    const fulfillment = db.prepare(`SELECT id FROM service_fulfillments WHERE id=? AND confirmation_state='CONFIRMED'${lockRows}`).get(link.source_id);
+    const open = db.prepare(`SELECT * FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=? AND item_kind='FINAL'${lockRows}`).get(link.source_id);
+    const linkedCents = Number(link.linked_cents);
+    if (!fulfillment || !open || !Number.isSafeInteger(linkedCents) || linkedCents <= 0) {
+      throw new HttpError(409, 'Service Credit allocation evidence is incomplete', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+    }
+    capacities.push({ id: open.id, linkedCents, creditedCents: 0 });
+  }
+  const byOpen = new Map(capacities.map((entry) => [entry.id, entry]));
+  const priorNotes = db.prepare(`SELECT id,gross_cents FROM commercial_credit_notes WHERE side='AR' AND source_type='SALES_INVOICE' AND source_id=? AND id<>? AND status='POSTED' ORDER BY id${lockRows}`).all(invoiceId, currentCreditId);
+  for (const note of priorNotes) {
+    const adjustments = db.prepare(`SELECT * FROM financial_credit_adjustments WHERE side='AR' AND source_type='SALES_CREDIT_NOTE' AND (source_id=? OR source_id LIKE ?) ORDER BY source_id${lockRows}`).all(note.id, `${note.id}:%`);
+    const seen = new Set(); let confirmedTotal = 0;
+    for (const adjustment of adjustments) {
+      if (seen.has(adjustment.source_id) || !byOpen.has(adjustment.target_open_item_id)) {
+        throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+      }
+      seen.add(adjustment.source_id);
+      if (adjustment.status === 'CONFIRMED') {
+        const amount = Number(adjustment.amount_cents);
+        if (!Number.isSafeInteger(amount) || amount <= 0) throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+        byOpen.get(adjustment.target_open_item_id).creditedCents += amount; confirmedTotal += amount;
+      }
+    }
+    if (confirmedTotal !== Number(note.gross_cents)) throw new HttpError(409, 'Service Credit allocation evidence is inconsistent', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+  }
+  const remaining = capacities.map((entry) => ({ ...entry, available: entry.linkedCents - entry.creditedCents }));
+  const basis = remaining.reduce((sum, entry) => sum + entry.available, 0);
+  if (remaining.some((entry) => !Number.isSafeInteger(entry.available) || entry.available < 0) || basis < requestedCents) {
+    throw new HttpError(409, 'Service Credit allocation exceeds invoice source capacity', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+  }
+  let priorBasis = 0; let allocated = 0;
+  const targets = remaining.map((entry, index) => {
+    priorBasis += entry.available;
+    const cumulative = index === remaining.length - 1 ? requestedCents : Number(BigInt(requestedCents) * BigInt(priorBasis) / BigInt(basis));
+    const amount = cumulative - allocated; allocated = cumulative;
+    if (amount < 0 || amount > entry.available) throw new HttpError(409, 'Service Credit allocation is not conserved', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+    return { id: entry.id, amount };
+  }).filter((entry) => entry.amount > 0);
+  if (allocated !== requestedCents) throw new HttpError(409, 'Service Credit allocation is not conserved', { code: 'SERVICE_CREDIT_ALLOCATION_EVIDENCE_MISMATCH' });
+  return targets;
+}
+
 export function createCommercialCreditNote(db, input) {
-  return atomic(db, () => {
+  const execute = () => {
     assertFinanceBusinessDateOpen(db, input.side, input.creditDate); assertFinancialPeriodsOpen(db, input.creditDate);
     const sales = input.side === 'AR'; const header = db.prepare(`SELECT * FROM ${sales ? 'sales_invoices' : 'supplier_bills'} WHERE id=? AND status='POSTED'`).get(input.sourceId); if (!header) throw new HttpError(409, '只能对已过账发票/账单开具贷项');
     const gross = int(input.grossCents ?? header.gross_cents, '贷项总额', { min: 1 }); if (gross > header.gross_cents) throw new HttpError(409, '贷项不能超过原单');
@@ -257,14 +401,15 @@ export function createCommercialCreditNote(db, input) {
       { role: 'SALES_REVENUE', direction: 'DEBIT', amountCents: net, summary: no }, ...(tax ? [{ role: 'OUTPUT_TAX_PAYABLE', direction: 'DEBIT', amountCents: tax, summary: no }] : []), { role: 'ACCOUNTS_RECEIVABLE', direction: 'CREDIT', amountCents: gross, summary: no },
     ] : supplierEntries });
     const openItemTable = sales ? 'account_receivables' : 'account_payables';
-    let targets = header.open_item_id ? [{ id: header.open_item_id }] : db.prepare(`SELECT id FROM ${openItemTable} WHERE source_type=? AND source_id=?`).all(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id);
+    const serviceTargets = sales ? serviceCreditTargets(db, header.id, gross, id) : null;
+    let targets = serviceTargets || (header.open_item_id ? [{ id: header.open_item_id }] : db.prepare(`SELECT id FROM ${openItemTable} WHERE source_type=? AND source_id=?`).all(sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL', header.id));
     if (!targets.length) targets = db.prepare(`SELECT DISTINCT o.id FROM finance_invoice_source_links l JOIN ${openItemTable} o ON o.source_type=l.source_type AND o.source_id=l.source_id WHERE l.invoice_id=? AND l.invoice_side=? ORDER BY o.id`).all(header.id, sales ? 'SALES_INVOICE' : 'SUPPLIER_BILL');
     if (!targets.length) throw new HttpError(409, '发票未关联可贷记的最终 open item');
     let unapplied = gross;
     for (let index = 0; index < targets.length && unapplied > 0; index += 1) {
       const snapshot = openItemSnapshot(db, input.side, targets[index].id);
       if (!snapshot || snapshot.row.item_kind !== 'FINAL') continue;
-      const amount = Math.min(unapplied, snapshot.openCents);
+      const amount = serviceTargets ? targets[index].amount : Math.min(unapplied, snapshot.openCents);
       if (amount <= 0) continue;
       applyCreditAdjustment(db, { side: input.side, adjustmentType, sourceType: sales ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE', sourceId: targets.length === 1 ? id : `${id}:${index + 1}`, sourceNo: no, targetOpenItemId: targets[index].id, partyId: sales ? header.customer_id : header.supplier_id, businessDate: input.creditDate, amountCents: amount, actorId: input.actorId, createdAt: now });
       unapplied -= amount;
@@ -274,13 +419,145 @@ export function createCommercialCreditNote(db, input) {
     db.prepare(`UPDATE ${sales ? 'sales_invoices' : 'supplier_bills'} SET credited_amount_cents=?,remaining_creditable_amount_cents=?,credit_state=? WHERE id=?`)
       .run(credited, Number(header.gross_cents) - credited, credited === Number(header.gross_cents) ? 'FULL' : 'PARTIAL', header.id);
     return db.prepare('SELECT * FROM commercial_credit_notes WHERE id=?').get(id);
-  });
+  };
+  return input.side === 'AR'
+    ? withInvoiceSourcePlanRetry(db, input.sourceId, execute)
+    : atomic(db, execute);
 }
 
 function invoiceSpec(side) {
   return side === 'AR'
     ? { table: 'sales_invoices', date: 'invoice_date', sourceType: 'SALES_INVOICE', ledger: 'account_receivables', party: 'customer_id' }
     : { table: 'supplier_bills', date: 'bill_date', sourceType: 'SUPPLIER_BILL', ledger: 'account_payables', party: 'supplier_id' };
+}
+
+// ---------------------------------------------------------------------------
+// solution.md §35.22.2 — Commercial Credit Note reversal.
+//
+// `POSTED -> REVERSED` only, terminal, full reversal only. Reuses the frozen Finance primitives
+// (`reverseCreditAdjustment`, `reverseSystemVoucher`) and the existing invoice credit capacity
+// carriers. No new table, no new column, no shadow Finance writer.
+// ---------------------------------------------------------------------------
+
+const CREDIT_LOCK = (db) => (db.dialect === 'mysql' ? ' FOR UPDATE' : '');
+
+// Unlocked identity discovery. Decides nothing and mutates nothing; it only tells the
+// transaction which Finance-owned rows it must take before the credit document and the
+// source invoice, matching the §35.18.6 "parents first" direction.
+export function discoverCreditReversalPlan(db, noteId) {
+  const note = db.prepare('SELECT * FROM commercial_credit_notes WHERE id=?').get(noteId);
+  if (!note) return null;
+  const adjustmentSourceType = note.side === 'AR' ? 'SALES_CREDIT_NOTE' : 'SUPPLIER_CREDIT_NOTE';
+  const adjustments = db.prepare(`SELECT id,target_open_item_id,amount_cents,status,source_id
+    FROM financial_credit_adjustments WHERE side=? AND source_type=? AND (source_id=? OR source_id LIKE ?)
+    ORDER BY id`).all(note.side, adjustmentSourceType, note.id, `${note.id}:%`);
+  const openItemIds = [...new Set(adjustments.map((row) => row.target_open_item_id))].sort();
+  return {
+    noteId: note.id, side: note.side, adjustmentSourceType, invoiceId: note.source_id,
+    grossCents: Number(note.gross_cents), adjustmentIds: adjustments.map((row) => row.id), openItemIds,
+  };
+}
+
+export function reverseCommercialCreditNote(db, input) {
+  const key = String(input.idempotencyKey || '').trim();
+  if (!key) throw new HttpError(422, 'Idempotency-Key 必填');
+  const reason = String(input.reason || '').trim();
+  if (!reason) throw new HttpError(400, '撤销原因必填');
+  const reversalDate = normalizeBusinessDate(input.reversalDate, '撤销日期');
+
+  const plan = discoverCreditReversalPlan(db, input.id);
+  if (!plan) throw new HttpError(404, '贷项单不存在', { code: 'COMMERCIAL_CREDIT_NOTE_NOT_FOUND' });
+  if (reversalDate < db.prepare('SELECT credit_date FROM commercial_credit_notes WHERE id=?').get(input.id).credit_date) {
+    throw new HttpError(409, '撤销日期不能早于原贷项日期', { code: 'COMMERCIAL_CREDIT_REVERSAL_BLOCKED', reason: 'REVERSAL_DATE_BEFORE_CREDIT_DATE' });
+  }
+  const fingerprint = requestFingerprint({ reversalDate, reason });
+  const replay = idempotencyReplay(db, 'COMMERCIAL_CREDIT_REVERSAL', input.id, key, fingerprint);
+  if (replay) return { ...replay, replayed: true };
+
+  const execute = () => {
+    // Reversal composes the same A3 Sales/Finance source prefix as
+    // POST/VOID/Credit before it enters its own credit-child lock stages.
+    // Stage 1 — the Finance-owned open items, before any document row.
+    for (const openItemId of plan.openItemIds) {
+      db.prepare(`SELECT id FROM ${plan.side === 'AR' ? 'account_receivables' : 'account_payables'} WHERE id=?${CREDIT_LOCK(db)}`).get(openItemId);
+    }
+    // Stage 2 — the credit adjustments, then their derived CREDIT settlement balances.
+    const adjustments = plan.adjustmentIds.length
+      ? db.prepare(`SELECT * FROM financial_credit_adjustments WHERE id IN (${plan.adjustmentIds.map(() => '?').join(',')}) ORDER BY id${CREDIT_LOCK(db)}`).all(...plan.adjustmentIds)
+      : [];
+    for (const adjustment of adjustments) {
+      db.prepare(`SELECT id,status FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id=?${CREDIT_LOCK(db)}`).get(adjustment.id);
+    }
+    // Stage 3 — the credit document, then its source invoice/bill.
+    const note = db.prepare(`SELECT * FROM commercial_credit_notes WHERE id=?${CREDIT_LOCK(db)}`).get(input.id);
+    const spec = invoiceSpec(plan.side);
+    const header = db.prepare(`SELECT * FROM ${spec.table} WHERE id=?${CREDIT_LOCK(db)}`).get(plan.invoiceId);
+
+    if (note.status !== 'POSTED') {
+      throw new HttpError(409, '只有已过账贷项可以撤销', { code: 'COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE', status: note.status });
+    }
+    if (db.prepare('SELECT 1 FROM commercial_credit_notes WHERE idempotency_key=?').get(key)) {
+      throw new HttpError(409, '撤销幂等键与既有贷项冲突', { code: 'COMMERCIAL_CREDIT_REVERSAL_IDEMPOTENCY_CONFLICT' });
+    }
+    if (!adjustments.length || adjustments.length !== db.prepare(`SELECT COUNT(*) n FROM financial_credit_adjustments
+      WHERE side=? AND source_type=? AND (source_id=? OR source_id LIKE ?)`).get(plan.side, plan.adjustmentSourceType, input.id, `${input.id}:%`).n) {
+      throw new HttpError(409, '贷项调整证据缺失', { code: 'COMMERCIAL_CREDIT_REVERSAL_EVIDENCE_MISMATCH' });
+    }
+    const confirmedTotal = adjustments.filter((row) => row.status === 'CONFIRMED')
+      .reduce((sum, row) => sum + Number(row.amount_cents), 0);
+    const adjustmentTotal = adjustments.reduce((sum, row) => sum + Number(row.amount_cents), 0);
+    if (adjustmentTotal !== plan.grossCents || confirmedTotal !== plan.grossCents) {
+      throw new HttpError(409, '贷项调整金额与贷项单不一致', { code: 'COMMERCIAL_CREDIT_REVERSAL_EVIDENCE_MISMATCH' });
+    }
+
+    assertFinanceBusinessDateOpen(db, plan.side, note.credit_date);
+    assertFinanceBusinessDateOpen(db, plan.side, reversalDate);
+    assertFinancialPeriodsOpen(db, note.credit_date);
+    assertFinancialPeriodsOpen(db, reversalDate);
+
+    for (const adjustment of adjustments) {
+      const consumed = db.prepare(`SELECT 1 FROM balance_applications WHERE balance_id IN
+          (SELECT id FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id=?) AND status='CONFIRMED' LIMIT 1`).get(adjustment.id)
+        || db.prepare(`SELECT 1 FROM financial_refunds WHERE balance_id IN
+          (SELECT id FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id=?) AND status='CONFIRMED' LIMIT 1`).get(adjustment.id);
+      if (consumed) throw new HttpError(409, '贷项已被结算或退款使用，请先冲销下游单据', { code: 'COMMERCIAL_CREDIT_REVERSAL_BLOCKED', reason: 'BALANCE_APPLICATION_OR_REFUND' });
+      const returnLink = db.prepare('SELECT 1 FROM credit_reversal_components WHERE credit_id=? AND (applied_cents>0 OR unapplied_cents>0) LIMIT 1').get(adjustment.id);
+      if (returnLink) throw new HttpError(409, '贷项已被退货冲销占用，请先处理下游单据', { code: 'COMMERCIAL_CREDIT_REVERSAL_BLOCKED', reason: 'RETURN_REVERSAL_CONSUMED' });
+    }
+
+    reverseSystemVoucher(db, {
+      originalSourceType: plan.adjustmentSourceType, originalSourceId: note.id,
+      reversalSourceType: `${plan.adjustmentSourceType}_REVERSAL`, reversalSourceId: note.id,
+      businessDate: reversalDate, actorId: input.actorId, reason,
+    });
+    for (const adjustment of adjustments) {
+      reverseCreditAdjustment(db, plan.side, plan.adjustmentSourceType, adjustment.source_id, input.actorId, reversalDate, reason);
+    }
+    const transitioned = db.prepare("UPDATE commercial_credit_notes SET status='REVERSED' WHERE id=? AND status='POSTED'").run(input.id);
+    if (Number(transitioned.changes) !== 1) {
+      throw new HttpError(409, '只有已过账贷项可以撤销', { code: 'COMMERCIAL_CREDIT_NOTE_NOT_REVERSIBLE' });
+    }
+
+    // Recompute from the stored value, not from a running total, so any prior
+    // credit/reversal combination stays correct. voidPostedInvoice refuses while
+    // credit_state !== 'NONE', so this must return to NONE when the last credit goes.
+    const credited = Number(header.credited_amount_cents || 0) - plan.grossCents;
+    const remainingCreditable = Number(header.gross_cents) - credited;
+    if (credited < 0 || remainingCreditable < 0) {
+      throw new HttpError(409, '撤销后发票可贷记金额不为零', { code: 'COMMERCIAL_CREDIT_REVERSAL_BLOCKED', reason: 'INVOICE_CAPACITY_UNDERFLOW' });
+    }
+    const creditState = credited === 0 ? 'NONE' : (credited === Number(header.gross_cents) ? 'FULL' : 'PARTIAL');
+    db.prepare(`UPDATE ${spec.table} SET credited_amount_cents=?,remaining_creditable_amount_cents=?,credit_state=? WHERE id=?`)
+      .run(credited, remainingCreditable, creditState, header.id);
+
+    const result = { ...db.prepare('SELECT * FROM commercial_credit_notes WHERE id=?').get(input.id), creditedAmountCents: credited, remainingCreditableAmountCents: remainingCreditable, creditState, invoiceId: header.id };
+    saveIdempotency(db, 'COMMERCIAL_CREDIT_REVERSAL', input.id, key, fingerprint, result);
+    audit(db, input.actorId, 'REVERSE', 'COMMERCIAL_CREDIT_NOTE', input.id, reason);
+    return result;
+  };
+  return plan.side === 'AR'
+    ? withInvoiceSourcePlanRetry(db, plan.invoiceId, execute)
+    : atomic(db, execute);
 }
 
 export function cancelDraftInvoice(db, side, invoiceId, actorId) {
@@ -297,7 +574,7 @@ export function cancelDraftInvoice(db, side, invoiceId, actorId) {
 }
 
 export function voidPostedInvoice(db, side, invoiceId, actorId, reason = '') {
-  return atomic(db, () => {
+  const execute = () => {
     const spec = invoiceSpec(side); const row = db.prepare(`SELECT * FROM ${spec.table} WHERE id=?`).get(invoiceId);
     if (!row) throw new HttpError(404, '发票不存在');
     if (row.status === 'REVERSED') return row;
@@ -331,7 +608,10 @@ export function voidPostedInvoice(db, side, invoiceId, actorId, reason = '') {
     db.prepare(`UPDATE ${spec.table} SET status='REVERSED' WHERE id=?`).run(invoiceId);
     audit(db, actorId, 'VOID', spec.sourceType, invoiceId, reason || '作废已过账发票');
     return { ...db.prepare(`SELECT * FROM ${spec.table} WHERE id=?`).get(invoiceId), voided: true };
-  });
+  };
+  return side === 'AR'
+    ? withInvoiceSourcePlanRetry(db, invoiceId, execute)
+    : atomic(db, execute);
 }
 
 export function transitionSupplierBillVerification(db, billId, action, actorId, reason = '') {
@@ -441,6 +721,7 @@ export async function commercialApiHandler(db, req, res, actor, url) {
   if((match=path.match(/^\/api\/supplier-bills\/([^/]+)\/match$/))&&req.method==='POST'){allow(actor,'FINANCE_INVOICE_MANAGE');return send(res,200,matchSupplierBill(db,match[1],await readJson(req)));}
   if((match=path.match(/^\/api\/supplier-bills\/([^/]+)\/(verify|certify|reject)$/))&&req.method==='POST'){allow(actor,'FINANCE_INVOICE_MANAGE');const body=await readJson(req);return send(res,200,transitionSupplierBillVerification(db,match[1],match[2],actor.id,body.reason));}
   if(path==='/api/commercial-credit-notes'&&req.method==='POST'){allow(actor,'FINANCE_INVOICE_MANAGE');return send(res,201,createCommercialCreditNote(db,{...(await readJson(req)),actorId:actor.id}));}
+  if((match=path.match(/^\/api\/commercial-credit-notes\/([^/]+)\/reverse$/))&&req.method==='POST'){allow(actor,'FINANCE_INVOICE_MANAGE');const body=await readJson(req);return send(res,200,reverseCommercialCreditNote(db,{id:match[1],reversalDate:body.reversalDate??body.reversal_date,reason:body.reason,actorId:actor.id,idempotencyKey:String(req.headers['idempotency-key']||'').trim()}));}
   if(path==='/api/commercial-reconciliation'&&req.method==='GET')return send(res,200,commercialReconciliation(db));
   if(path==='/api/opening-batches'&&req.method==='POST')return send(res,201,createOpeningBatch(db,{...(await readJson(req)),actorId:actor.id}));
   if(path==='/api/opening-batches'&&req.method==='GET')return send(res,200,{openingBatches:db.prepare('SELECT * FROM opening_batches ORDER BY created_at DESC').all(),goLive:db.prepare('SELECT * FROM go_live_control WHERE singleton_id=1').get()});

@@ -22,7 +22,12 @@ import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
-import { resolveEligiblePrepaymentForSalesGate } from './sales-prepayment-finance-adapter.js';
+import {
+  discoverEligiblePrepaymentParents,
+  lockEligiblePrepaymentParents,
+  resolveEligiblePrepaymentForSalesGate,
+  resolveEligiblePrepaymentWithParentPlan,
+} from './sales-prepayment-finance-adapter.js';
 import { assertFinancialPeriodsOpen } from './financial-inventory.js';
 
 function now() { return new Date().toISOString(); }
@@ -184,6 +189,15 @@ export function authorizeSalesPrepaymentGateForMutation(db, {
   const requirement = lookupRequirementForOrder(db, { salesOrderId, asOf });
   if (!requirement) return { state: 'NOT_REQUIRED', stage, salesOrderId };
 
+  // solution.md §35.18.6 step 0/1 — unlocked identity discovery only, then the
+  // canonical Finance PREPAYMENT parent locks by id ASC. This must precede every
+  // Gate requirement/result and Sales business row lock, or Finance mutation paths
+  // (which always lock the parent first) can invert the order and deadlock.
+  const discoveredOrder = loadOrder(db, salesOrderId);
+  lockEligiblePrepaymentParents(db, discoverEligiblePrepaymentParents(db, {
+    customerId: discoveredOrder.customer_id, businessDate: asOf,
+  }));
+
   const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
   const previous = db.prepare(`SELECT * FROM sales_prepayment_gate_results
     WHERE sales_order_id=? AND stage=?
@@ -229,6 +243,60 @@ export function authorizeSalesPrepaymentGateForMutation(db, {
   return assertPermittedGateRow(db.prepare('SELECT * FROM sales_prepayment_gate_results WHERE id=?').get(resultId), {
     stage, salesOrderId, requiredCents: required,
   });
+}
+
+export function discoverSalesPrepaymentGatePlan(db, salesOrderId, businessDate = null) {
+  const asOf = businessDate || now().slice(0, 10);
+  const order = loadOrder(db, salesOrderId);
+  const requirement = lookupRequirementForOrder(db, { salesOrderId, asOf });
+  return {
+    salesOrderId, businessDate: asOf, customerId: order.customer_id,
+    orderFingerprint: `${order.id}|${order.customer_id}|${order.status}|${order.total_cents}|${order.sales_group_id || ''}`,
+    requirementId: requirement?.id || null,
+    requirementFingerprint: requirement ? `${requirement.id}|${requirement.required_amount_cents}|${requirement.effective_from || ''}|${requirement.effective_to || ''}` : 'NONE',
+    parentBalanceIds: requirement ? discoverEligiblePrepaymentParents(db, { customerId: order.customer_id, businessDate: asOf }) : [],
+  };
+}
+
+export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
+  stage = 'DELIVERY', actorId, mutationKey,
+} = {}) {
+  if (!plan?.salesOrderId || !actorId || !mutationKey) throw new HttpError(400, '预付款门计划上下文不完整');
+  if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 无效');
+  const currentOrder = loadOrder(db, plan.salesOrderId);
+  const orderFingerprint = `${currentOrder.id}|${currentOrder.customer_id}|${currentOrder.status}|${currentOrder.total_cents}|${currentOrder.sales_group_id || ''}`;
+  const currentRequirement = lookupRequirementForOrder(db, { salesOrderId: plan.salesOrderId, asOf: plan.businessDate });
+  const requirementFingerprint = currentRequirement ? `${currentRequirement.id}|${currentRequirement.required_amount_cents}|${currentRequirement.effective_from || ''}|${currentRequirement.effective_to || ''}` : 'NONE';
+  if (orderFingerprint !== plan.orderFingerprint || requirementFingerprint !== plan.requirementFingerprint) {
+    throw new HttpError(409, '预付款门计划已过期，请在新事务重试', { code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE' });
+  }
+  if (!currentRequirement) return { state: 'NOT_REQUIRED', stage, salesOrderId: plan.salesOrderId };
+  // §35.18.6 step 1 — Finance PREPAYMENT parents by id ASC, before the Gate
+  // requirement/result rows below. A stale candidate set rolls the caller back.
+  lockEligiblePrepaymentParents(db, plan.parentBalanceIds);
+  const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+  const previous = db.prepare(`SELECT * FROM sales_prepayment_gate_results WHERE sales_order_id=? AND stage=? ORDER BY evaluated_at DESC,id DESC LIMIT 1${lock}`).get(plan.salesOrderId, stage);
+  if (!previous) return assertPermittedGateRow(null, { stage, salesOrderId: plan.salesOrderId, requiredCents: currentRequirement.required_amount_cents });
+  const lockedRequirement = db.prepare(`SELECT * FROM sales_prepayment_requirements WHERE id=?${lock}`).get(currentRequirement.id);
+  if (!lockedRequirement || !effectiveAtNow(lockedRequirement.effective_from, lockedRequirement.effective_to, plan.businessDate)) {
+    throw new HttpError(409, '预付款门要求在锁定后发生变化', { code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE' });
+  }
+  const required = Number(lockedRequirement.required_amount_cents);
+  const evidence = resolveEligiblePrepaymentWithParentPlan(db, {
+    customerId: currentOrder.customer_id, businessDate: plan.businessDate, gateStage: stage,
+    salesOrderId: plan.salesOrderId, remainingRequiredCents: required, snapshotKey: mutationKey,
+  }, plan.parentBalanceIds);
+  const decision = decideGate({ eligible: evidence.eligibleAmountCents, required, previousResult: previous });
+  const resultId = randomUUID();
+  db.prepare(`INSERT INTO sales_prepayment_gate_results(id,sales_order_id,stage,gate_decision,required_remaining_cents,eligible_advance_cents,refunded_amount_cents,applied_amount_cents,override_reason,overridden_by,source_balance_identities,snapshot_key,evaluated_at,evaluated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    resultId, plan.salesOrderId, stage, decision, required, evidence.eligibleAmountCents,
+    evidence.refundedAmountCents, evidence.appliedAmountCents,
+    decision === 'OVERRIDE_REQUIRED' ? previous.override_reason : null,
+    decision === 'OVERRIDE_REQUIRED' ? previous.overridden_by : null,
+    JSON.stringify(evidence.sourceBalanceIdentities), mutationKey, now(), actorId,
+  );
+  audit(db, actorId, 'AUTHORIZE_MUTATION', 'SALES_PREPAYMENT_GATE', resultId, `${currentOrder.order_no} ${stage} ${decision}`);
+  return assertPermittedGateRow(db.prepare('SELECT * FROM sales_prepayment_gate_results WHERE id=?').get(resultId), { stage, salesOrderId: plan.salesOrderId, requiredCents: required });
 }
 
 // ---------- public API ----------

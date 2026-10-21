@@ -472,11 +472,14 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
       assert.deepEqual(rows.map((row) => row.name), expected);
     });
 
-    test('B-2 no Wave-7+ Sales table is materialised by the canonical upgrade', () => {
+    test('B-2 canonical upgrade materialises exactly the approved Wave 8 tables from the future-table probe', () => {
       const placeholders = WAVE7_PLUS_TABLES.map(() => '?').join(',');
       const rows = upgraded.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})`).all(...WAVE7_PLUS_TABLES);
-      assert.deepEqual(rows, [], 'Wave-7+ tables must not appear after the canonical upgrade');
+      assert.deepEqual(rows.map((row) => row.name).sort(), [
+        'consignment_commercial_documents', 'consignment_commercial_lines',
+        'consignment_commodity_locations', 'service_fulfillments',
+      ]);
     });
 
     test('B-3 representative pre-Wave-1 table row counts are preserved (no data loss)', () => {
@@ -655,7 +658,7 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
       assert.deepEqual(executed, [
         'wave-1-commercial-foundation', 'wave-2-pricing-discount', 'wave-3-quotation',
         'wave-4-canonical-sales-order', 'wave-5-delivery-notice', 'wave-6-return-replacement',
-        'wave-7-prepayment-reservation',
+        'wave-7-prepayment-reservation', 'wave-8-service-consignment',
       ]);
 
       // Row counts must still match the post-upgrade values.

@@ -238,12 +238,23 @@ import {
   createPrepaymentRequirement, evaluateSalesPrepaymentGate, getPrepaymentGateResult,
   getPrepaymentRequirement, listPrepaymentGateResults, listPrepaymentRequirements, overridePrepaymentGateResult,
   updatePrepaymentRequirement,
-  authorizeSalesPrepaymentGateForMutation,
+  authorizeSalesPrepaymentGateForMutation, discoverSalesPrepaymentGatePlan,
+  authorizeSalesPrepaymentGateWithPlan,
 } from './modules/sales-prepayment-gate.js';
 import {
   consumeReservationIntent, getReservationIntent, grantReservationIntent, listReservationIntents,
   releaseReservationIntent, requestReservationIntent,
 } from './modules/sales-reservation-intent.js';
+import {
+  createServiceFulfillment, getServiceFulfillment, listServiceFulfillments, serviceFulfillmentAction,
+} from './modules/service-fulfillment.js';
+import {
+  consignmentDocumentAction, consignmentLineAction, consignmentReport,
+  createConsignmentDocument, createConsignmentLocation, getConsignmentDocument,
+  getConsignmentHandoffPositionReferences, getConsignmentRemaining, getConsignmentReturnPositionReferences,
+  listConsignmentDocuments, listConsignmentLocations,
+  updateConsignmentDocument, updateConsignmentLocation,
+} from './modules/consignment.js';
 import {
   lockAndConsumeSalesDeliveryCapacity, persistSalesDeliveryNoticeLineIds, quantityToMicros, toleranceBoundsMicros, validateSalesDeliverySource,
 } from './modules/sales-delivery-source.js';
@@ -644,6 +655,23 @@ ownedRouteTable.register({ method: 'POST', path: /^\/api\/sales-reservation-inte
   if (action === 'release') return releaseReservationIntent(db,req,res,actor,params[0]);
   throw new HttpError(400, `action 不支持: ${action}`);
 }, owner: 'server/modules/sales-reservation-intent.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/service-fulfillments', handler: ({ db,res,actor,url }) => listServiceFulfillments(db,res,actor,url), owner: 'server/modules/service-fulfillment.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/service-fulfillments', handler: ({ db,req,res,actor }) => createServiceFulfillment(db,req,res,actor), owner: 'server/modules/service-fulfillment.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/service-fulfillments\/([^/]+)$/, handler: ({ db,res,actor,params }) => getServiceFulfillment(db,res,actor,params[0]), owner: 'server/modules/service-fulfillment.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/service-fulfillments\/([^/]+)\/(confirm|cancel)$/, handler: ({ db,req,res,actor,params }) => serviceFulfillmentAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/service-fulfillment.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/consignment-commodity-locations', handler: ({ db,res,actor }) => listConsignmentLocations(db,res,actor), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/consignment-commodity-locations', handler: ({ db,req,res,actor }) => createConsignmentLocation(db,req,res,actor), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/consignment-commodity-locations\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateConsignmentLocation(db,req,res,actor,params[0]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/consignment-commercial-documents', handler: ({ db,res,actor }) => listConsignmentDocuments(db,res,actor), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/consignment-commercial-documents', handler: ({ db,req,res,actor }) => createConsignmentDocument(db,req,res,actor), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/consignment-commercial-documents\/([^/]+)$/, handler: ({ db,req,res,actor,params }) => updateConsignmentDocument(db,req,res,actor,params[0]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/consignment-commercial-documents\/([^/]+)\/remaining$/, handler: ({ db,res,actor,params }) => getConsignmentRemaining(db,res,actor,params[0]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/consignment-commercial-documents\/([^/]+)\/handoff-position-references$/, handler: ({ db,res,actor,params }) => getConsignmentHandoffPositionReferences(db,res,actor,params[0]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/consignment-commercial-documents\/([^/]+)\/lines\/([^/]+)\/return-position-references$/, handler: ({ db,res,actor,params }) => getConsignmentReturnPositionReferences(db,res,actor,params[0],params[1]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/consignment-commercial-documents\/([^/]+)$/, handler: ({ db,res,actor,params }) => getConsignmentDocument(db,res,actor,params[0]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/consignment-commercial-documents\/([^/]+)\/(instruct|cancel)$/, handler: ({ db,req,res,actor,params }) => consignmentDocumentAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/consignment-commercial-lines\/([^/]+)\/(settle|return)$/, handler: ({ db,req,res,actor,params }) => consignmentLineAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/consignment.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/consignment-commercial-report', handler: ({ db,res,actor }) => consignmentReport(db,res,actor), owner: 'server/modules/consignment.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/delivery-notices', handler: ({ db,res,actor,url }) => listDeliveryNotices(db,res,actor,url), owner: 'server/modules/delivery-notices.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/delivery-notices', handler: ({ db,req,res,actor }) => createDeliveryNotice(db,req,res,actor), owner: 'server/modules/delivery-notices.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/delivery-notices\/([^/]+)\/(confirm|cancel)$/, handler: ({ db,req,res,actor,params }) => deliveryNoticeAction(db,req,res,actor,params[0],params[1]), owner: 'server/modules/delivery-notices.js' });
@@ -5583,6 +5611,11 @@ async function createSalesDelivery(db, req, res, actor) {
     const delivered = confirmedQuantity(db, { itemTable: 'sales_delivery_items', sourceColumn: 'sales_order_item_id', headerTable: 'sales_deliveries', headerForeignKey: 'delivery_id' }, item.sourceItemId);
     const upperCapacity = toleranceBoundsMicros(sourceLine.quantity, sourceLine.upper_delivery_tolerance_bps).upper;
     if (quantityToMicros(delivered, '已确认出库数量') + quantityToMicros(item.quantity, '本次出库数量') > upperCapacity) throw new HttpError(409, '销售出库数量超过订单行剩余容差容量');
+    // §35.18.4 — a service-classified line carries no physical stock; it consumes
+    // confirmed Service Fulfillment evidence, which `confirmSalesDelivery` checks
+    // under its own lock. Demanding inventory here would block every service delivery.
+    const classification = db.prepare('SELECT service_classification,active FROM product_commercial_classification WHERE product_id=?').get(item.productId);
+    if (Number(classification?.service_classification) === 1 && Number(classification?.active) === 1) continue;
     const inv = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id = ? AND product_id = ?').get(warehouseId, item.productId);
     if (!inv || inv.quantity < Number(item.quantity)) { const product = db.prepare('SELECT code FROM products WHERE id = ?').get(item.productId); throw new HttpError(400, (product?.code || item.productId) + ' 库存不足'); }
   }
@@ -5660,11 +5693,16 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
   if (action === 'confirm') {
     const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${deliveryId}`); const fingerprint = requestFingerprint({ action });
     const replay = idempotencyReplay(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
+    if (!delivery.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
+    const gatePlan = discoverSalesPrepaymentGatePlan(db, delivery.sales_order_id, delivery.delivery_date);
     transaction(db, () => {
+      authorizeSalesPrepaymentGateWithPlan(db, gatePlan, {
+        stage: 'DELIVERY', actorId: actor.id,
+        mutationKey: `ACTION|DELIVERY|CONFIRM|${deliveryId}|${key}`,
+      });
       const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
       if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
       lockAndConsumeSalesDeliveryCapacity(db, deliveryId);
-      if (!locked.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
       const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
       if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
       if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
@@ -5674,15 +5712,8 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
       // prepayment gate decision (PASS / WARN / OVERRIDE_REQUIRED). BLOCK
       // or missing evaluation refuses with 409 + SALES_PREPAYMENT_GATE_*
       // code so the UI can show the block reason.
-      authorizeSalesPrepaymentGateForMutation(db, {
-        salesOrderId: locked.sales_order_id,
-        stage: 'DELIVERY',
-        businessDate: locked.delivery_date,
-        actorId: actor.id,
-        mutationKey: `ACTION|DELIVERY|CONFIRM|${deliveryId}|${key}`,
-      });
       const authoritative = authoritativeLogisticsTotal(db, 'sales_delivery_items', 'delivery_id', deliveryId, { preserveAmount: true });
-      let cogsCents=0; const cogsInventoryEntries=[];
+      let cogsCents=0; let serviceAmountCents=0; const cogsInventoryEntries=[];
       for (const item of authoritative.items) {
         const sourceItem = db.prepare('SELECT * FROM sales_order_items WHERE id=? AND order_id=?').get(item.sales_order_item_id, so.id);
         if (!sourceItem || item.product_id !== sourceItem.product_id || item.unit_price_cents !== sourceItem.unit_price_cents) throw new HttpError(409, '出货明细与销售订单来源不一致');
@@ -5695,6 +5726,17 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         const baseQuantity = (item.base_quantity_num != null && Number(item.base_quantity_num) > 0)
           ? Number(item.base_quantity_num) / Number(item.base_quantity_den || 1)
           : Number(item.quantity);
+        const classification = db.prepare('SELECT service_classification,active FROM product_commercial_classification WHERE product_id=?').get(item.product_id);
+        if (Number(classification?.service_classification) === 1 && Number(classification?.active) === 1) {
+          if (!Number.isSafeInteger(baseQuantity * 1_000_000)) throw new HttpError(409, '服务交付数量不能精确表示为 micros', { code: 'SERVICE_QUANTITY_NOT_REPRESENTABLE' });
+          const confirmedMicros = Number(db.prepare("SELECT COALESCE(SUM(confirmation_qty_micros),0) n FROM service_fulfillments WHERE sales_order_item_id=? AND confirmation_state='CONFIRMED'").get(sourceItem.id).n);
+          const deliveredBefore = Number(db.prepare(`SELECT COALESCE(SUM(COALESCE(di.base_quantity_num,di.quantity)*1000000/COALESCE(di.base_quantity_den,1)),0) n
+            FROM sales_delivery_items di JOIN sales_deliveries dh ON dh.id=di.delivery_id
+            WHERE di.sales_order_item_id=? AND dh.status='CONFIRMED' AND dh.id<>?`).get(sourceItem.id, deliveryId).n);
+          if (deliveredBefore + baseQuantity * 1_000_000 > confirmedMicros) throw new HttpError(409, '服务交付数量超过已确认履约数量', { code: 'SERVICE_DELIVERY_CAPACITY_EXCEEDED' });
+          serviceAmountCents += Number(item.amount_cents);
+          continue;
+        }
         assertStrongReservationAvailability(db, { productId: item.product_id, warehouseId: locked.warehouse_id,
           quantity: baseQuantity, demandSourceType: 'SALES_ORDER', demandSourceId: so.id });
         const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
@@ -5706,17 +5748,18 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
-      createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
-      if (authoritative.totalCents > 0) {
+      if (cogsCents > 0) createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
+      const physicalAmountCents = authoritative.totalCents - serviceAmountCents;
+      if (physicalAmountCents > 0) {
         const recognition = recognizeFinanceExposure(db, {
           side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: delivery.delivery_no },
-          invoice: null, amountCents: authoritative.totalCents, businessDate: locked.delivery_date,
+          invoice: null, amountCents: physicalAmountCents, businessDate: locked.delivery_date,
           partyId: delivery.customer_id, paymentTermsDays: so.payment_terms_days,
           actorId: actor.id, createdAt: delivery.created_at,
         });
         if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
           const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-          createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:authoritative.totalCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+          createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:physicalAmountCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:physicalAmountCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
         } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
       }
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
