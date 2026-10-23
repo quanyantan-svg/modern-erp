@@ -227,7 +227,7 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     // Finance Operations Domain Closure added finance-invoices + finance-treasury,
     // raising the canonical active count from 59 to 61. Wave 7 added
     // sales-prepayment-gates + sales-reservation-intents, raising it to 67.
-    assert.equal(ROUTE_PRESENTATIONS.length, 69, 'canonical routes plus Wave 8 must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 70, 'canonical routes plus Wave 9 must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');

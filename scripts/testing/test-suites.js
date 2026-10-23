@@ -93,6 +93,7 @@ const FULL = [
   'server/sales-customer-wave8-mysql-metadata.test.js',
   'server/sales-customer-wave8-mixed-delivery.test.js',
   'server/sales-customer-wave8-residual.test.js',
+  'server/sales-customer-wave9-credit-foundation.test.js',
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----

@@ -55,9 +55,9 @@ test('P8 route inventory: 69 enabled + 5 disabled = 74 entries', () => {
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
   // Finance Operations Domain Closure adds finance-invoices + finance-treasury
   // as dedicated primary routes, raising the count from 59 to 61.
-  assert.equal(ROUTE_PRESENTATIONS.length, 69, 'ROUTE_PRESENTATIONS must include the Wave 8 routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 70, 'ROUTE_PRESENTATIONS must include the Wave 9 route');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 74);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 75);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -183,7 +183,7 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // Sales Wave 2 adds sales-pricing as a contextual child of customers.
   // Wave 7 adds sales-prepayment-gates + sales-reservation-intents as contextual
   // children of orders, bringing the total to 17.
-  assert.equal(contextualCount, 19, 'contextual routes with parentRoute must total 19 after Wave 8');
+  assert.equal(contextualCount, 20, 'contextual routes with parentRoute must total 20 after Wave 9');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {

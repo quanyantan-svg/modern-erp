@@ -229,7 +229,7 @@ describe('V1.6 P4 purchase receipt presentation contract', () => {
     //   - IQC still has parentRoute = purchase-receipts (contextual classification
     //     contract preserved)
     //   - the MobileShell header back handler chain still wires setHeaderBackAction
-    assert.equal(ROUTE_PRESENTATIONS.length, 69, 'canonical routes plus Wave 8 must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 70, 'canonical routes plus Wave 9 must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const receiptRoute = enabledByRoute.get('purchase-receipts');

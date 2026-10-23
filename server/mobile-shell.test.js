@@ -301,7 +301,9 @@ describe('Permissions — canonical registry count', () => {
     // active permission codes (CRM_VIEW, CRM_MANAGE,
     // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
     // remain.
-    assert.equal(perms.length, 222, `PERMISSIONS array must include the approved Wave 8 family (got ${perms.length})`);
+    assert.equal(perms.length, 224, `PERMISSIONS array must include the approved Wave 9 family (got ${perms.length})`);
+    assert.equal(perms.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_VIEW').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_PARAMETERS_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_MANAGE').length, 1);
@@ -320,12 +322,12 @@ describe('Permissions — canonical registry count', () => {
     assert.equal(perms.filter(([code]) => code === 'PROJECT_MANAGE').length, 0);
   });
 
-  test('role-accounting has 40 permissions after Finance Operations bounded grants', () => {
+  test('role-accounting has 41 permissions after the bounded Wave 9 credit view grant', () => {
     const dbSrc = readRoot('server/db.js');
     const accountingMatch = dbSrc.match(/'role-accounting':\s*\[([^\]]+)\]/);
     assert.ok(accountingMatch, 'role-accounting must exist in db.js');
     const count = (accountingMatch[1].match(/'/g) || []).length;
-    assert.equal(count / 2, 40, `role-accounting must have 40 permissions (got ${count / 2})`);
+    assert.equal(count / 2, 41, `role-accounting must have 41 permissions (got ${count / 2})`);
   });
 });
 

@@ -8,6 +8,7 @@ import { SALES_WAVE3_TABLES } from './migrations/sales-customer-wave3-quotation.
 import { SALES_WAVE4_TABLES } from './migrations/sales-customer-wave4-orders.js';
 import { SALES_WAVE5_TABLES } from './migrations/sales-customer-wave5-delivery.js';
 import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js';
+import { SALES_WAVE9_TABLES } from './migrations/sales-customer-wave9-credit-foundation.js';
 import { createTempDb } from './test-utils/temp-db.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
@@ -22,13 +23,14 @@ const BATCH_A_TABLES = [...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_W
 const WAVE7_PLUS_SALES_TABLES = [
   'service_fulfillments',
   'consignment_commercial_documents', 'consignment_commercial_lines',
-  'consignment_commodity_locations', 'credit_parameters', 'credit_check_rules',
-  'credit_policy_snapshots', 'credit_profile', 'credit_profile_ratings',
+  'consignment_commodity_locations', ...SALES_WAVE9_TABLES,
+];
+
+const WAVE10_PLUS_SALES_TABLES = [
   'credit_special_approval', 'credit_check_results',
   'credit_evaluation_indicator', 'credit_evaluation_scheme',
   'credit_evaluation_model', 'credit_evaluation_scoring_sheet',
   'credit_evaluation_result', 'credit_recalculation_history',
-  'credit_lock_anchors',
 ];
 
 const BATCH_A_COLUMNS = {
@@ -79,7 +81,7 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
     assert.equal(db.prepare('SELECT 1 AS value').get().value, 1);
   });
 
-  test('fresh MySQL materialises Waves 1-8 and no later credit schema', () => {
+  test('fresh MySQL materialises Waves 1-9 and no later credit schema', () => {
     assert.equal(BATCH_A_TABLES.length, 7);
     assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
     const wave1Placeholders = SALES_WAVE1_TABLES.map(() => '?').join(',');
@@ -121,10 +123,11 @@ describe('Sales & Customer Wave 0 — real MySQL migration runner smoke', () => 
         WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})
         ORDER BY TABLE_NAME`,
     ).all(...WAVE7_PLUS_SALES_TABLES);
-    assert.deepEqual(rows.map((row) => row.table_name), [
-      'consignment_commercial_documents', 'consignment_commercial_lines',
-      'consignment_commodity_locations', 'service_fulfillments',
-    ]);
+    assert.deepEqual(rows.map((row) => row.table_name), [...WAVE7_PLUS_SALES_TABLES].sort());
+    const futurePlaceholders = WAVE10_PLUS_SALES_TABLES.map(() => '?').join(',');
+    const future = db.prepare(`SELECT TABLE_NAME table_name FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${futurePlaceholders}) ORDER BY TABLE_NAME`).all(...WAVE10_PLUS_SALES_TABLES);
+    assert.deepEqual(future, []);
 
     const defaults = db.prepare(`SELECT COLUMN_NAME column_name,IS_NULLABLE is_nullable FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customer_commercial_extensions'

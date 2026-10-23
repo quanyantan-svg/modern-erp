@@ -94,6 +94,10 @@ function mysqlType(column, indexed) {
   if (name === 'from_position_key' || name === 'to_position_key') return 'CHAR(64)';
   if (name === 'request_fingerprint') return 'CHAR(67)';
   if (name.endsWith('_json') || name === 'json_payload') return 'JSON';
+  // Wave 9 credit-object identities concatenate several independently
+  // bounded business IDs. Keep the canonical string lossless while the
+  // single-column unique index remains below InnoDB's 3072-byte limit.
+  if (name === 'anchor_key') return 'VARCHAR(512)';
   // 128 keeps UUIDs/document keys lossless while allowing the V1.3 compound
   // unique keys to remain below InnoDB's 3072-byte utf8mb4 key limit.
   if (indexed || column.pk || name === 'id' || name.endsWith('_id')) return 'VARCHAR(128)';

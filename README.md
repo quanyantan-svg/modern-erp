@@ -331,6 +331,8 @@ log/
 - `server/modules/sales-pricing.js`：Sales Wave 2 价目表、价格版本、折扣规则、生命周期及两个纯读 resolver 的 canonical owner；
 - `server/modules/sales-quotations.js` / `sales-orders.js` / `sales-order-changes.js`：Sales Wave 3–4 报价、权威订单写入与受控变更 owner；
 - `server/modules/delivery-notices.js` / `sales-delivery-source.js`：Sales Wave 5 发货通知和销售出库来源/容量控制 owner；
+- `server/modules/credit-policy.js` / `credit-profile.js` / `credit-anchor.js`：Sales Wave 9 信用参数与规则、信用档案、信用锁锚点 owner；
+- `server/modules/credit-scope.js`：Credit 授权 canonical owner —— 信用档案五档读取数据范围（ALL / DENY / CROSS_GROUP / AGGREGATE_PLUS_SELF / AGGREGATE_ONLY）、集中管理写入权威、全局配置读取权威；纯内部 Credit 解析器不在此文件，保持 actor-free；
 - `server/migrations/sales-customer-wave2-pricing.js`：Wave 2 五表、客户商业扩展两个可空 FK、四列业务 UNIQUE 与双数据库身份触发器；
 - `server/migrations/sales-customer-wave3-quotation.js` / `sales-customer-wave4-orders.js` / `sales-customer-wave5-delivery.js`：Batch A 七张新表及既有订单/出库表 additive schema；
 - `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；

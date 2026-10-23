@@ -203,6 +203,9 @@ import {
   updateCustomer,
 } from './modules/customers.js';
 import { listSalesParameters, upsertSalesParameters } from './modules/sales-parameters.js';
+import { listCreditAnchors, provisionCreditAnchor } from './modules/credit-anchor.js';
+import { createCreditParameter, createCreditRule, listCreditParameters, listCreditRules } from './modules/credit-policy.js';
+import { createCreditProfile, getCreditProfile, listCreditProfiles } from './modules/credit-profile.js';
 import {
   listSalesGroups, listSalespersonMemberships, listSalespersons,
   saveSalesGroup, saveSalesperson, saveSalespersonMembership,
@@ -575,6 +578,15 @@ ownedRouteTable.register({
   handler: ({ db, req, res, actor }) => upsertSalesParameters(db, req, res, actor),
   owner: 'server/modules/sales-parameters.js',
 });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/policy/parameters', handler: ({ db,res,actor,url }) => listCreditParameters(db,res,actor,url), owner: 'server/modules/credit-policy.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/policy/parameters', handler: ({ db,req,res,actor }) => createCreditParameter(db,req,res,actor), owner: 'server/modules/credit-policy.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/policy/rules', handler: ({ db,res,actor,url }) => listCreditRules(db,res,actor,url), owner: 'server/modules/credit-policy.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/policy/rules', handler: ({ db,req,res,actor }) => createCreditRule(db,req,res,actor), owner: 'server/modules/credit-policy.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/anchors', handler: ({ db,res,actor,url }) => listCreditAnchors(db,res,actor,url), owner: 'server/modules/credit-anchor.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/anchors/provision', handler: ({ db,req,res,actor }) => provisionCreditAnchor(db,req,res,actor), owner: 'server/modules/credit-anchor.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/profiles', handler: ({ db,res,actor,url }) => listCreditProfiles(db,res,actor,url), owner: 'server/modules/credit-profile.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/profiles', handler: ({ db,req,res,actor }) => createCreditProfile(db,req,res,actor), owner: 'server/modules/credit-profile.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/profiles\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditProfile(db,res,actor,params[0]), owner: 'server/modules/credit-profile.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales/groups', handler: ({ db, res, actor }) => listSalesGroups(db, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales/groups', handler: ({ db, req, res, actor }) => saveSalesGroup(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/groups\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesGroup(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });

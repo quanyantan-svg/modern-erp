@@ -100,6 +100,7 @@ import { SALES_WAVE3_TABLES } from './migrations/sales-customer-wave3-quotation.
 import { SALES_WAVE4_TABLES } from './migrations/sales-customer-wave4-orders.js';
 import { SALES_WAVE5_TABLES } from './migrations/sales-customer-wave5-delivery.js';
 import { SALES_WAVE6_TABLES } from './migrations/sales-customer-wave6-returns.js';
+import { SALES_WAVE9_TABLES } from './migrations/sales-customer-wave9-credit-foundation.js';
 
 const IMPLEMENTED_SALES_TABLES = [...SALES_WAVE1_TABLES, ...SALES_WAVE2_TABLES, ...SALES_WAVE3_TABLES, ...SALES_WAVE4_TABLES, ...SALES_WAVE5_TABLES, ...SALES_WAVE6_TABLES];
 
@@ -114,6 +115,26 @@ const WAVE7_PLUS_TABLES = [
   'credit_evaluation_model', 'credit_evaluation_scoring_sheet',
   'credit_evaluation_result', 'credit_recalculation_history',
   'credit_lock_anchors',
+];
+
+// Wave 8 materialises exactly these on top of Waves 1-7.
+const WAVE8_TABLES = [
+  'service_fulfillments',
+  'consignment_commercial_documents', 'consignment_commercial_lines',
+  'consignment_commodity_locations',
+];
+
+// Wave 9 materialises exactly these on top of Wave 8. Derived from the
+// migration itself so the expectation cannot drift from the registry again.
+const WAVE9_TABLES = [...SALES_WAVE9_TABLES];
+
+// Wave 10/11 are not implemented in this baseline. The canonical upgrade must
+// never materialise them, so they are probed separately and must stay absent.
+const WAVE10_PLUS_TABLES = [
+  'credit_special_approval', 'credit_check_results',
+  'credit_evaluation_indicator', 'credit_evaluation_scheme',
+  'credit_evaluation_model', 'credit_evaluation_scoring_sheet',
+  'credit_evaluation_result', 'credit_recalculation_history',
 ];
 
 // Tables the test snapshots + asserts are NON-empty in the pre-Wave-1
@@ -472,14 +493,17 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
       assert.deepEqual(rows.map((row) => row.name), expected);
     });
 
-    test('B-2 canonical upgrade materialises exactly the approved Wave 8 tables from the future-table probe', () => {
-      const placeholders = WAVE7_PLUS_TABLES.map(() => '?').join(',');
+    test('B-2 canonical upgrade materialises exactly the approved Wave 8 and Wave 9 tables from the future-table probe', () => {
+      const expected = [...WAVE8_TABLES, ...WAVE9_TABLES].sort();
+      const placeholders = expected.map(() => '?').join(',');
       const rows = upgraded.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders})`).all(...WAVE7_PLUS_TABLES);
-      assert.deepEqual(rows.map((row) => row.name).sort(), [
-        'consignment_commercial_documents', 'consignment_commercial_lines',
-        'consignment_commodity_locations', 'service_fulfillments',
-      ]);
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${placeholders}) ORDER BY TABLE_NAME`).all(...expected);
+      assert.deepEqual(rows.map((row) => row.name), expected);
+      // Wave 10/11 stay unimplemented: the upgrade must not create them.
+      const futurePlaceholders = WAVE10_PLUS_TABLES.map(() => '?').join(',');
+      const future = upgraded.prepare(`SELECT TABLE_NAME name FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${futurePlaceholders})`).all(...WAVE10_PLUS_TABLES);
+      assert.deepEqual(future, []);
     });
 
     test('B-3 representative pre-Wave-1 table row counts are preserved (no data loss)', () => {
@@ -659,6 +683,7 @@ describe('Sales & Customer Wave 1 — real existing-MySQL additive upgrade (Phas
         'wave-1-commercial-foundation', 'wave-2-pricing-discount', 'wave-3-quotation',
         'wave-4-canonical-sales-order', 'wave-5-delivery-notice', 'wave-6-return-replacement',
         'wave-7-prepayment-reservation', 'wave-8-service-consignment',
+        'wave-9-credit-foundation',
       ]);
 
       // Row counts must still match the post-upgrade values.
