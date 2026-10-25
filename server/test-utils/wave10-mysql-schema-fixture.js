@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mysqlTypeFamily } from '../database/mysql-schema.js';
 import { SALES_WAVE9_TABLES } from '../migrations/sales-customer-wave9-credit-foundation.js';
 import { SALES_WAVE10_TABLES } from '../migrations/sales-customer-wave10-credit-check.js';
 
@@ -34,16 +35,255 @@ export function normalizeDefault(value) {
   return (unquoted ? unquoted[1] : text).trim();
 }
 
-// §37.39.8.2 — the normalized CHECK clause. MySQL adds backticks and charset
-// introducers to a clause that SQLite carries verbatim, so those are removed
-// before the two sides are compared.
+// §37.39.8.2 — the normalized CHECK clause.
+//
+// SQLite carries the migration DDL verbatim. MySQL re-renders the same
+// constraint: it wraps the whole clause in parentheses, parenthesises every
+// AND/OR operand, re-spaces the binary operators and adds a charset introducer
+// to a literal. Those are representation differences, so the clause is parsed
+// into its expression tree and re-rendered in one canonical form. The operator
+// structure and the value set are preserved exactly, so a genuinely different
+// constraint (a different operator, a different operand, a different value
+// set) keeps a different canonical form and never compares equal.
+//
+// String literals are compared case-insensitively because every Wave 9/10
+// column on the MySQL target uses the case-insensitive `utf8mb4_0900_ai_ci`
+// collation, under which 'PASS' and 'pass' are the same value. A clause that
+// cannot be parsed keeps a distinct `raw:` form, so an unparsed clause never
+// silently compares equal to a parsed one.
+class CheckClauseSyntaxError extends Error {}
+
+function tokenizeCheckClause(text) {
+  const tokens = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index];
+    if (/\s/.test(char)) { index += 1; continue; }
+    if (char === "'") {
+      let cursor = index + 1;
+      let value = '';
+      while (cursor < text.length) {
+        if (text[cursor] === "'" && text[cursor + 1] === "'") { value += "'"; cursor += 2; continue; }
+        if (text[cursor] === "'") { cursor += 1; break; }
+        value += text[cursor]; cursor += 1;
+      }
+      tokens.push({ kind: 'literal', value });
+      index = cursor;
+      continue;
+    }
+    if (char === '"' || char === '`') {
+      const closing = char;
+      let cursor = index + 1;
+      let value = '';
+      while (cursor < text.length) {
+        if (text[cursor] === closing && text[cursor + 1] === closing) { value += closing; cursor += 2; continue; }
+        if (text[cursor] === closing) { cursor += 1; break; }
+        value += text[cursor]; cursor += 1;
+      }
+      tokens.push({ kind: 'word', value });
+      index = cursor;
+      continue;
+    }
+    if (/[0-9]/.test(char)) {
+      let cursor = index;
+      while (cursor < text.length && /[0-9.]/.test(text[cursor])) cursor += 1;
+      tokens.push({ kind: 'literal', value: text.slice(index, cursor) });
+      index = cursor;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      let cursor = index;
+      while (cursor < text.length && /[A-Za-z0-9_$]/.test(text[cursor])) cursor += 1;
+      tokens.push({ kind: 'word', value: text.slice(index, cursor) });
+      index = cursor;
+      continue;
+    }
+    if ('<>=!'.includes(char)) {
+      let value = char;
+      let cursor = index + 1;
+      if (text[cursor] === '=') { value += '='; cursor += 1; }
+      else if (char === '<' && text[cursor] === '>') { value = '<>'; cursor += 1; }
+      tokens.push({ kind: 'operator', value });
+      index = cursor;
+      continue;
+    }
+    if ('(),'.includes(char)) { tokens.push({ kind: 'punctuation', value: char }); index += 1; continue; }
+    throw new CheckClauseSyntaxError(`unsupported token ${char}`);
+  }
+  return tokens;
+}
+
+class CheckClauseParser {
+  constructor(tokens) { this.tokens = tokens; this.index = 0; }
+
+  peek(offset = 0) { return this.tokens[this.index + offset] || null; }
+
+  take() {
+    const token = this.peek();
+    if (token) this.index += 1;
+    return token;
+  }
+
+  expect(value) {
+    const token = this.take();
+    if (!token || String(token.value).toLowerCase() !== value) throw new CheckClauseSyntaxError(`expected ${value}`);
+    return token;
+  }
+
+  isKeyword(value, offset = 0) {
+    const token = this.peek(offset);
+    return Boolean(token) && token.kind === 'word' && String(token.value).toLowerCase() === value;
+  }
+
+  parseExpression() { return this.parseOr(); }
+
+  parseOr() {
+    let left = this.parseAnd();
+    while (this.isKeyword('or')) {
+      this.take();
+      left = { kind: 'or', left, right: this.parseAnd() };
+    }
+    return left;
+  }
+
+  parseAnd() {
+    let left = this.parseUnary();
+    while (this.isKeyword('and')) {
+      this.take();
+      left = { kind: 'and', left, right: this.parseUnary() };
+    }
+    return left;
+  }
+
+  parseUnary() {
+    if (this.isKeyword('not') && !this.isKeyword('in', 1)) {
+      this.take();
+      return { kind: 'not', operand: this.parseUnary() };
+    }
+    return this.parsePrimary();
+  }
+
+  parsePrimary() {
+    const token = this.peek();
+    if (!token) throw new CheckClauseSyntaxError('unexpected end of clause');
+    if (token.kind === 'punctuation' && token.value === '(') {
+      this.take();
+      const expression = this.parseExpression();
+      this.expect(')');
+      // The grouping is already encoded in the tree, so the redundant
+      // parentheses are dropped here and re-created by the canonical renderer
+      // only where the operator precedence requires them.
+      return expression;
+    }
+    const operand = this.parseOperand();
+    if (this.peek()?.kind === 'operator') {
+      const operator = this.take().value;
+      return {
+        kind: 'comparison',
+        operator: operator === '!=' ? '<>' : operator,
+        left: operand,
+        right: this.parseOperand(),
+      };
+    }
+    if (this.isKeyword('is')) {
+      this.take();
+      const negated = this.isKeyword('not');
+      if (negated) this.take();
+      this.expect('null');
+      return { kind: negated ? 'isNotNull' : 'isNull', operand };
+    }
+    if (this.isKeyword('in')) {
+      this.take();
+      return { kind: 'in', operand, values: this.parseValueList(), negated: false };
+    }
+    if (this.isKeyword('not') && this.isKeyword('in', 1)) {
+      this.take();
+      this.take();
+      return { kind: 'in', operand, values: this.parseValueList(), negated: true };
+    }
+    return operand;
+  }
+
+  parseValueList() {
+    this.expect('(');
+    const values = [];
+    for (;;) {
+      const value = this.take();
+      if (!value || (value.kind !== 'literal' && value.kind !== 'word')) throw new CheckClauseSyntaxError('invalid IN list');
+      values.push(value);
+      const separator = this.take();
+      if (!separator) throw new CheckClauseSyntaxError('unterminated IN list');
+      if (separator.value === ',') continue;
+      if (separator.value === ')') break;
+      throw new CheckClauseSyntaxError('invalid IN list separator');
+    }
+    return values;
+  }
+
+  parseOperand() {
+    const token = this.take();
+    if (!token) throw new CheckClauseSyntaxError('missing operand');
+    if (token.kind === 'literal') return { kind: 'literal', value: token.value };
+    if (token.kind !== 'word') throw new CheckClauseSyntaxError('invalid operand');
+    if (this.peek()?.kind === 'punctuation' && this.peek().value === '(') {
+      this.take();
+      let depth = 1;
+      let args = '';
+      while (depth > 0) {
+        const part = this.take();
+        if (!part) throw new CheckClauseSyntaxError('unterminated function call');
+        if (part.kind === 'punctuation' && part.value === '(') depth += 1;
+        if (part.kind === 'punctuation' && part.value === ')') {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+        args += part.value;
+      }
+      return { kind: 'call', name: String(token.value).toLowerCase(), args };
+    }
+    return { kind: 'identifier', value: String(token.value).toLowerCase() };
+  }
+}
+
+function renderCheckOperand(node, parent) {
+  if (node.kind === 'or' && parent !== 'or') return `(${renderCheckClause(node)})`;
+  if (node.kind === 'and' && parent !== 'and') return `(${renderCheckClause(node)})`;
+  return renderCheckClause(node);
+}
+
+function renderCheckClause(node) {
+  switch (node.kind) {
+    case 'or': return `${renderCheckOperand(node.left, 'or')} or ${renderCheckOperand(node.right, 'or')}`;
+    case 'and': return `${renderCheckOperand(node.left, 'and')} and ${renderCheckOperand(node.right, 'and')}`;
+    case 'not': return `not ${renderCheckOperand(node.operand, 'not')}`;
+    case 'comparison': return `${renderCheckOperand(node.left, 'comparison')} ${node.operator} ${renderCheckOperand(node.right, 'comparison')}`;
+    case 'isNull': return `${renderCheckOperand(node.operand, 'comparison')} is null`;
+    case 'isNotNull': return `${renderCheckOperand(node.operand, 'comparison')} is not null`;
+    case 'in': return `${renderCheckOperand(node.operand, 'comparison')} ${node.negated ? 'not in' : 'in'} (${node.values.map((value) => `'${String(value.value).toLowerCase()}'`).join(', ')})`;
+    case 'identifier': return node.value;
+    case 'literal': return `'${String(node.value).toLowerCase()}'`;
+    case 'call': return `${node.name}(${node.args})`;
+    default: throw new CheckClauseSyntaxError(`unsupported node ${node.kind}`);
+  }
+}
+
 export function normalizeCheckClause(value) {
-  return String(value || '')
+  const text = String(value || '')
     .replace(/`/g, '')
     .replace(/_utf8mb4|_utf8|_binary/gi, '')
     .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+    .trim();
+  if (!text) return '';
+  try {
+    const tokens = tokenizeCheckClause(text);
+    const parser = new CheckClauseParser(tokens);
+    const expression = parser.parseExpression();
+    if (parser.index !== tokens.length) throw new CheckClauseSyntaxError('trailing tokens');
+    return renderCheckClause(expression);
+  } catch (error) {
+    if (!(error instanceof CheckClauseSyntaxError)) throw error;
+    return `raw: ${text.toLowerCase()}`;
+  }
 }
 
 export function extractCheckClauses(ddl) {
@@ -74,15 +314,12 @@ export function extractCheckClauses(ddl) {
   return checks.map(normalizeCheckClause).sort();
 }
 
-export function sqliteColumnToMySqlFamily(column, indexed = false) {
-  const declared = String(column.type || '').toUpperCase();
-  const name = String(column.name).toLowerCase();
-  if (declared.includes('INT')) return 'bigint';
-  if (/REAL|FLOA|DOUB|NUM/.test(declared)) return 'decimal';
-  if (declared.includes('BLOB')) return 'longblob';
-  if (name.endsWith('_json') || name === 'json_payload') return 'json';
-  if (name === 'anchor_key' || indexed || column.pk || name === 'id' || name.endsWith('_id')) return 'varchar';
-  return 'longtext';
+// The physical type family is decided by the canonical MySQL generator, not by
+// a second mapper in this fixture. A second mapper silently disagrees with
+// the generator and turns a real schema difference into a parity failure (or,
+// worse, hides one).
+export function sqliteColumnToMySqlFamily(column, indexed = false, tableName = '') {
+  return mysqlTypeFamily(column, indexed, tableName);
 }
 
 export function normalizedSqliteTable(table) {
@@ -91,7 +328,7 @@ export function normalizedSqliteTable(table) {
     name: table.name,
     columns: table.columns.map((column) => Object.freeze({
       name: column.name,
-      type: sqliteColumnToMySqlFamily(column, indexed.has(column.name)),
+      type: sqliteColumnToMySqlFamily(column, indexed.has(column.name), table.name),
       nullable: !Boolean(column.notnull) && !Boolean(column.pk),
       default: normalizeDefault(column.dflt_value),
       primaryOrdinal: Number(column.pk || 0),
@@ -160,8 +397,75 @@ export function compareWave9SourceTarget(snapshot, db) {
     assert.deepEqual(actual.columns, expected.columns, `${tableName}: complete column parity`);
     assert.deepEqual(actual.foreignKeys, expected.foreignKeys, `${tableName}: foreign-key parity`);
     assert.deepEqual(actual.checks, expected.checks, `${tableName}: check-constraint parity`);
-    const actualByName = new Map(actual.indexes.map((index) => [index.name, index]));
-    for (const index of expected.indexes) assert.deepEqual(actualByName.get(index.name), index, `${tableName}.${index.name}: index parity`);
+    assertIndexParity(expected, actual, `${tableName}: index parity`);
+  }
+}
+
+// A MySQL index whose name is generated by the server is not part of the
+// cross-backend contract: an unnamed UNIQUE key is named after its first
+// column, and a foreign key gets a supporting index named after the child
+// column. The contract is the uniqueness flag and the ordered column set, so
+// two engines that agree on those agree on the constraint.
+//
+// A foreign key's supporting index is additionally derived from the
+// foreign-key set, which is compared separately, so whether MySQL materializes
+// a dedicated index for it is InnoDB's index-reuse decision and not a schema
+// difference.
+export function isBackendGeneratedIndexName(name, columns) {
+  if (!Array.isArray(columns) || !columns.length) return false;
+  const first = String(columns[0]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${first}(_\\d+)?$`, 'i').test(String(name));
+}
+
+function comparableIndexes(table, indexes) {
+  const foreignKeyColumns = new Set((table.foreignKeys || []).map((fk) => String(fk.column).toLowerCase()));
+  return indexes.filter((index) => {
+    if (!isBackendGeneratedIndexName(index.name, index.columns)) return true;
+    return !foreignKeyColumns.has(String(index.columns[0] || '').toLowerCase());
+  });
+}
+
+function indexShape(index) {
+  return `${index.unique ? 'unique' : 'index'}:${index.columns.join(',')}`;
+}
+
+// The index contract. Every index shape must exist on both sides with the
+// same uniqueness and the same ordered column set, and an explicitly named
+// index must keep its name. A missing index, a different column order, a
+// different uniqueness or a renamed explicit index all fail here.
+export function assertIndexParity(expected, actual, label) {
+  const expectedIndexes = comparableIndexes(expected, expected.indexes);
+  const actualIndexes = comparableIndexes(actual, actual.indexes);
+  assert.deepEqual(actualIndexes.map(indexShape).sort(), expectedIndexes.map(indexShape).sort(),
+    `${label}: index shape parity`);
+  const actualByShape = new Map();
+  for (const index of actualIndexes) {
+    const key = indexShape(index);
+    if (!actualByShape.has(key)) actualByShape.set(key, []);
+    actualByShape.get(key).push(index);
+  }
+  for (const index of expectedIndexes) {
+    const match = actualByShape.get(indexShape(index)).shift();
+    const explicit = !isBackendGeneratedIndexName(index.name, index.columns)
+      && !isBackendGeneratedIndexName(match.name, match.columns);
+    if (explicit) assert.equal(match.name, index.name, `${label}: explicitly named index ${index.name} must keep its name`);
+  }
+}
+
+// The fresh bootstrap and the formal upgrade must materialize the same
+// physical schema for the same logical table. Every column, foreign key and
+// check constraint is compared strictly; the index comparison follows the
+// approved cross-backend contract above.
+export function assertEquivalentCreditMetadata(actual, expected, label = 'credit metadata') {
+  assert.deepEqual([...Object.keys(actual)].sort(), [...Object.keys(expected)].sort(), `${label}: table set`);
+  for (const tableName of Object.keys(expected)) {
+    const actualTable = actual[tableName];
+    const expectedTable = expected[tableName];
+    assert.equal(actualTable.name, expectedTable.name, `${label}.${tableName}: table identity`);
+    assert.deepEqual(actualTable.columns, expectedTable.columns, `${label}.${tableName}: complete column parity`);
+    assert.deepEqual(actualTable.foreignKeys, expectedTable.foreignKeys, `${label}.${tableName}: foreign-key parity`);
+    assert.deepEqual(actualTable.checks, expectedTable.checks, `${label}.${tableName}: check-constraint parity`);
+    assertIndexParity(expectedTable, actualTable, `${label}.${tableName}: index parity`);
   }
 }
 

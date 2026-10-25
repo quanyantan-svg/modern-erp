@@ -375,11 +375,23 @@ test('M-R07 — aggregate-scope authority cannot release a mandatory salesperson
   await withWave10Race('w10-r7', { aggregateLimit: 500000, salespersonLimit: 50000 }, async (db, workers, registrations) => {
     seedSubmittedOrder(db, { id: 'w10-r7-order', cents: 100000 });
     // The two scopes must be distinct authoritative rows before the release.
-    const scopes = db.prepare(`SELECT id,scope_type,credit_limit_cents FROM credit_profile WHERE customer_id='w10-race-customer'
+    // `credit_profile` has no `scope_type` column: the Wave 9 scope contract
+    // is the `salesperson_scope_key` / `salesperson_id` pair, where the
+    // aggregate scope is the wildcard key with no salesperson and the
+    // sub-limit scope is the salesperson's own key with that salesperson.
+    const scopes = db.prepare(`SELECT id,salesperson_scope_key,salesperson_id,credit_limit_cents,status
+      FROM credit_profile WHERE customer_id='w10-race-customer'
       ORDER BY salesperson_scope_key`).all();
     assert.equal(scopes.length, 2, 'the aggregate and the salesperson scope must both exist');
     assert.equal(new Set(scopes.map((row) => row.id)).size, 2, 'the two scopes must be distinct rows');
     assert.notEqual(Number(scopes[0].credit_limit_cents), Number(scopes[1].credit_limit_cents));
+    const aggregate = scopes.filter((row) => row.salesperson_scope_key === '*' && row.salesperson_id === null);
+    const subLimit = scopes.filter((row) => row.salesperson_scope_key === 'w10-race-sp-a' && row.salesperson_id === 'w10-race-sp-a');
+    assert.equal(aggregate.length, 1, 'exactly one aggregate Profile must exist');
+    assert.equal(subLimit.length, 1, 'exactly one salesperson sub-limit Profile must exist');
+    assert.notEqual(aggregate[0].id, subLimit[0].id, 'the aggregate and the sub-limit are different authoritative scopes');
+    assert.equal(aggregate[0].status, 'ACTIVE');
+    assert.equal(subLimit[0].status, 'ACTIVE');
     const before = captureWave10PersistenceProjection(db);
     const { outcomes, waits } = await runCoordinatedWave10Race(workers, registrations, [evaluateEndpoint('w10-r7-order'), approve('w10-r7-order', 'w10-r7-approve')]);
     assert.ok(waits.length >= 2, 'both contenders must be observably pending at the L0 coordination boundary');
@@ -392,6 +404,10 @@ test('M-R07 — aggregate-scope authority cannot release a mandatory salesperson
     assert.equal(db.prepare("SELECT status FROM sales_orders WHERE id='w10-r7-order'").get().status, 'SUBMITTED');
     const after = captureWave10PersistenceProjection(db);
     assert.deepEqual(after.sales_orders, before.sales_orders);
+    // The aggregate scope must not have produced an approval that releases the
+    // mandatory salesperson sub-limit refusal (P3 / P13 / N8).
+    assert.deepEqual(after.credit_special_approval || [], [],
+      'no Special Approval may release the mandatory salesperson refusal');
     assertNoDuplicateEffects(db);
   });
 });

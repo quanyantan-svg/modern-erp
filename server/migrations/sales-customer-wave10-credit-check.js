@@ -213,6 +213,62 @@ const PHYSICAL_TYPES = Object.freeze([
   ['credit_special_approval','scope_mode','varchar',128],
 ]);
 
+// The complete approved Wave 10 MySQL physical column contract. It is the
+// single authority for the physical type of every Wave 10 column, so the live
+// migration DDL above and the snapshot bootstrap that materializes the same
+// two tables on a fresh MySQL database cannot drift apart. The snapshot
+// bootstrap consumes this table instead of its generic TEXT heuristic; a
+// generic fallback would produce LONGTEXT for the unbounded-looking columns
+// and VARCHAR(128) for the indexed ones, which is a different physical schema
+// for the same logical table.
+export const WAVE10_MYSQL_COLUMN_TYPES = Object.freeze({
+  credit_check_results: Object.freeze({
+    id: 'VARCHAR(128)',
+    check_group_id: 'VARCHAR(128)',
+    scope_type: 'VARCHAR(128)',
+    credit_lock_anchor_id: 'VARCHAR(128)',
+    credit_profile_id: 'VARCHAR(128)',
+    credit_policy_snapshot_id: 'VARCHAR(128)',
+    policy_snapshot_fingerprint: 'VARCHAR(128)',
+    profile_effective_state_hash: 'VARCHAR(64)',
+    sales_order_id: 'VARCHAR(128)',
+    sales_delivery_id: 'VARCHAR(128)',
+    stage: 'VARCHAR(128)',
+    business_date: 'VARCHAR(128)',
+    proposed_delta_cents: 'BIGINT',
+    recognition_mode: 'VARCHAR(128)',
+    decision: 'VARCHAR(128)',
+    reason_codes_json: 'JSON',
+    component_breakdown_json: 'JSON',
+    eligible_prepayment_source_identity: 'TEXT',
+    evaluated_at: 'LONGTEXT',
+    evaluated_by: 'VARCHAR(128)',
+  }),
+  credit_special_approval: Object.freeze({
+    id: 'VARCHAR(128)',
+    source_credit_check_result_id: 'VARCHAR(128)',
+    source_check_group_id: 'VARCHAR(128)',
+    scope_type: 'VARCHAR(128)',
+    source_credit_policy_snapshot_id: 'VARCHAR(128)',
+    source_policy_snapshot_fingerprint: 'VARCHAR(128)',
+    source_profile_effective_state_hash: 'VARCHAR(64)',
+    source_sales_order_id: 'VARCHAR(128)',
+    reason: 'LONGTEXT',
+    requested_override_cents: 'BIGINT',
+    requested_expiry_business_date: 'VARCHAR(128)',
+    requested_ceiling_cents: 'BIGINT',
+    authority_ceiling_cents: 'BIGINT',
+    decision: 'VARCHAR(128)',
+    approved_override_cents: 'BIGINT',
+    approved_ceiling_cents: 'BIGINT',
+    approved_expiry_business_date: 'VARCHAR(128)',
+    scope_mode: 'VARCHAR(128)',
+    approver_id: 'VARCHAR(128)',
+    decided_at: 'LONGTEXT',
+    audit_id: 'VARCHAR(128)',
+  }),
+});
+
 function same(actual, expected) { return JSON.stringify(actual) === JSON.stringify(expected); }
 function conflict(message) { throw new Error(`Wave 10 schema conflict: ${message}`); }
 

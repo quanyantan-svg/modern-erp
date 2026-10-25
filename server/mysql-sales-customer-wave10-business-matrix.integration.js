@@ -68,7 +68,7 @@ async function withMatrix(label, options, body) {
   const handle = createTempDb(wave10MysqlTempOptions(label));
   try {
     assert.equal(handle.db.dialect, 'mysql');
-    seedWave10AcceptanceBase(handle.db, options);
+    await seedWave10AcceptanceBase(handle.db, options);
     return await body(handle.db, createApp(handle.db));
   } finally { handle.cleanup(); }
 }

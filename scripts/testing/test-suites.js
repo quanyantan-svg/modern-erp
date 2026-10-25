@@ -103,6 +103,10 @@ const FULL = [
   'server/sales-customer-wave8-residual.test.js',
   'server/sales-customer-wave9-credit-foundation.test.js',
   'server/sales-customer-wave10-credit-check.test.js',
+  // Wave 10 cross-dialect MySQL parity helpers: the canonical CHECK
+  // normalization and the index / physical-type comparison contracts. Pure
+  // parsing and comparison; no database connection.
+  'server/sales-customer-wave10-mysql-parity.test.js',
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
@@ -564,6 +568,8 @@ const FAST = [
   'server/sales-gate-retry-admission.test.js',
   'server/mysql-disposable-target-guard.test.js',
   'scripts/mysql-sales-wave7-gate-a-runner.test.js',
+  // Wave 10 cross-dialect parity helpers — pure DDL parsing and comparison.
+  'server/sales-customer-wave10-mysql-parity.test.js',
   // Transaction Lifecycle Safety — pure fault injection, no real MySQL.
   'server/db-transaction-start-safety.test.js',
 

@@ -2,6 +2,7 @@ import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { WAVE10_MYSQL_COLUMN_TYPES } from '../migrations/sales-customer-wave10-credit-check.js';
 
 const quote = (name) => `\`${String(name).replaceAll('`', '``')}\``;
 
@@ -83,9 +84,14 @@ function extractChecks(sql) {
   return checks;
 }
 
-function mysqlType(column, indexed) {
+function mysqlType(column, indexed, tableName) {
   const declared = String(column.type || '').toUpperCase();
   const name = String(column.name).toLowerCase();
+  // The Wave 10 tables are the only ones with a hand-written canonical MySQL
+  // DDL, so their physical type is fixed by that DDL and not by the generic
+  // heuristic below. Both paths must materialize the same physical schema.
+  const wave10 = WAVE10_MYSQL_COLUMN_TYPES[tableName]?.[name];
+  if (wave10) return wave10;
   if (name === 'evidence_schema_version') return 'TINYINT UNSIGNED';
   if (declared.includes('INT')) return 'BIGINT';
   if (declared.includes('REAL') || declared.includes('FLOA') || declared.includes('DOUB') || declared.includes('NUM')) return 'DECIMAL(24,6)';
@@ -107,6 +113,15 @@ function mysqlType(column, indexed) {
   // unique keys to remain below InnoDB's 3072-byte utf8mb4 key limit.
   if (indexed || column.pk || name === 'id' || name.endsWith('_id')) return 'VARCHAR(128)';
   return 'LONGTEXT';
+}
+
+// The physical type family (`varchar`, `longtext`, `json`, `bigint`, ...) that
+// `information_schema.COLUMNS.DATA_TYPE` reports for the same column. The
+// cross-dialect parity assertions compare families, not the exact length.
+export function mysqlTypeFamily(column, indexed, tableName) {
+  const type = mysqlType(column, indexed, tableName);
+  const family = String(type).split('(')[0].trim().toUpperCase().split(' ')[0];
+  return family.toLowerCase();
 }
 
 function mysqlDefault(value, type) {
@@ -197,7 +212,7 @@ function columnDefinition(table, column, indexed = null, primary = null, autoInc
   ]);
   const primaryColumns = primary || table.columns.filter((item) => item.pk).sort((a, b) => a.pk - b.pk);
   const hasAutoIncrement = autoIncrement ?? /AUTOINCREMENT/i.test(table.sql);
-  const type = mysqlType(column, indexedColumns.has(column.name));
+  const type = mysqlType(column, indexedColumns.has(column.name), table.name);
   const name = String(column.name).toLowerCase();
   const charset = ['from_position_key', 'to_position_key', 'request_fingerprint'].includes(name)
     ? ' CHARACTER SET ascii COLLATE ascii_bin'

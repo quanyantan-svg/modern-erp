@@ -27163,3 +27163,175 @@ Wave 11 and Wave 12 were not started, and no Git write, release or deployment oc
 **Stop state: `GATE_A_FROZEN`; `GATE_B_FAILED`; `WAVE10_PARITY_FAILED`;
 `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE10_NOT_FROZEN`; `WAVE11_NOT_STARTED`;
 `WAVE12_NOT_STARTED`; `NO_GIT_WRITE`.**
+
+## 37.43 Wave 10 MySQL Acceptance blocker local remediation (2026-10-25)
+
+### 37.43.0 Authorization and boundary
+
+The user authorized a local, source-level remediation of the failure classes recorded in §37.40.9,
+a full local regression and the documentation synchronization. No real MySQL campaign, Gate A,
+Gate B or Wave 10 Acceptance execution was authorized, and no DDL/DML, migration, reset, DROP,
+cleanup, account or grant change was authorized. The protected contracts are unchanged: the frozen
+Gate A contract and runner, the Wave 9 business semantics and frozen Schema, the L0 transaction
+gate and the L1–L8 lock order, the Finance monetary authority, the Credit Profile status fence,
+the idempotency contract, the MySQL `READ COMMITTED` session isolation, the SQLite behavior, the
+seven Gate B cases with their owners, typed markers and evidence levels, and the Wave 11 / Wave 12
+scope boundaries. No Wave 11 or Wave 12 work was started, and no Git write operation occurred.
+
+### 37.43.1 Audit — the five failure classes and their root causes
+
+**A. One root cause behind seven of the eight Gate B failures.** The Wave 10 acceptance fixture
+never installed the Wave 1 SC01 `sales_parameters` SYSTEM row. `resolveSalesParameters()`
+(`server/modules/sales-parameters.js:97`) is fail-closed by the approved Requirement
+(document.md §29.4.5, SC01): with no active SYSTEM row it throws
+`HttpError(409, 'Sales 系统参数缺失或未启用', { code: 'SALES_PARAMETER_UNAVAILABLE' })`.
+
+- `createSalesOrderCanonical` reaches it through `server/modules/sales-commercial-foundation.js:258`,
+  which is why M-R03 and M-R09 failed with the 409 directly.
+- `discoverSalesOrderApprovePlan()` (`server/modules/sales-orders.js:766`) resolves the Sales Group
+  scope through `assertGroupScope()` → `resolveSalesParameters()` at line 773. That is the
+  read-only approve discovery which runs **before** `transaction()`. The approve contender
+  therefore never reached the L0 gate and never became pending on it, so
+  `waitForWave10Waiters()` could not observe any wait. The bounded timeout then reported
+  `WAVE10_WAIT_EVIDENCE_UNAVAILABLE` and masked the real 409 for M-R01, M-R02, M-R05, M-R06 and
+  M-R11. The missing wait evidence was therefore **not** a lock-order defect, and the L0 gate and
+  the L1–L8 order are unchanged.
+
+The Recognition Mode was **not** the source of the 409. `resolveRecognitionPolicy()`
+(`server/modules/finance-recognition-policy.js:23`) is the single canonical resolver and it never
+fails closed: it resolves the source-level override, then the legacy document `billing_mode` of the
+delivery, then the site-wide row and finally the `DIRECT_BUSINESS_OPEN_ITEM` fallback. The
+`SALES_PARAMETER_UNAVAILABLE` contract belongs to the separate Sales Parameters namespace.
+
+**B. M-R07** queried `credit_profile.scope_type`, a column that does not exist on the frozen Wave 9
+table. The real scope discriminator is the `salesperson_scope_key` / `salesperson_id` pair with its
+bidirectional CHECK: the aggregate scope is `salesperson_scope_key = '*'` with a NULL salesperson,
+and the sub-limit scope is the salesperson's own key with that salesperson.
+
+**C. M-MIG-01 / M-MIG-02.** `normalizeCheckClause()` removed backticks, charset introducers and
+whitespace but kept the redundant parentheses MySQL adds around a CHECK expression and its AND/OR
+operands, and it did not re-space the binary operators. MySQL renders `CHECK (a AND b)` as
+`CHECK ((a) AND (b))` and `a='x'` as `a = 'x'`, so the two sides of the same constraint never
+compared equal.
+
+**D. M-MIG-06.** The fresh bootstrap materialized the two Wave 10 tables from the canonical SQLite
+snapshot through the generic `mysqlType()` heuristic, while the formal upgrade materialized them
+from the hand-written Wave 10 MySQL DDL. The generic heuristic produced `LONGTEXT` for the
+non-indexed columns and the live migration produced `VARCHAR(128)` / `VARCHAR(64)` / `TEXT` for
+the same columns, so thirteen columns of the two Wave 10 tables had a different physical type on
+the two paths, and the two table-level UNIQUE constraints had a different index name, because the
+Wave 10 migration declares them inline while — unlike the Wave 9 migration — it never creates them
+as named indexes.
+
+### 37.43.2 The delivered fixes
+
+**37.43.2.1 The missing Wave 1 Sales Parameter.** `seedWave10AcceptanceBase()` now installs the
+SYSTEM row through the canonical writer `upsertSalesParameters()`
+(`server/modules/sales-parameters.js:68`) with an actor that holds `SALES_PARAMETERS_MANAGE`. The
+fail-closed resolver and its approved error contract are untouched; the fixture no longer reaches a
+production handler without a legal effective configuration. The seeded SYSTEM row is a declared
+setup fact, not a business result.
+
+**37.43.2.2 The Credit Profile scope discriminator.** M-R07 now reads
+`salesperson_scope_key`, `salesperson_id`, `credit_limit_cents` and `status`, and asserts that
+exactly one aggregate row (`'*'` with a NULL salesperson) and exactly one salesperson sub-limit
+row exist, that they are different authoritative rows, that both are `ACTIVE`, and that no Special
+Approval is created. The mandatory salesperson refusal can therefore not be released by an
+aggregate-scoped result (P3 / P13 / N8).
+
+**37.43.2.3 The canonical CHECK normalization.** `normalizeCheckClause()` now parses the clause
+into its expression tree and re-renders it in one canonical form: the redundant parentheses
+disappear, the operator structure and the value set are preserved exactly, and the binary operator
+spacing is uniform. String literals are compared case-insensitively because every Wave 9/10 column
+on the MySQL target uses the case-insensitive `utf8mb4_0900_ai_ci` collation. A clause that cannot
+be parsed keeps a distinct `raw:` form, so it never silently compares equal to a parsed one. The
+comparison still decides on the whole constraint set, so a missing or a genuinely different
+constraint fails.
+
+**37.43.2.4 The Wave 10 physical column contract.** The canonical live MySQL DDL is the single
+authority for the physical type of every Wave 10 column. `WAVE10_MYSQL_COLUMN_TYPES` is exported
+by `server/migrations/sales-customer-wave10-credit-check.js` next to the approved `PHYSICAL_TYPES`
+list, and the snapshot bootstrap consumes it instead of its generic TEXT heuristic
+(`server/database/mysql-schema.js`). Both paths now materialize the same physical schema for the
+same logical table. The Wave 9 migration, the Wave 9 frozen Schema and every other table are
+untouched; the change is scoped to the two Wave 10 tables.
+
+**37.43.2.5 The index cross-backend contract.** The index comparison follows the contract the Wave
+10 migration already declares: a backend-generated index name — an unnamed UNIQUE key is named
+after its first column, and a foreign key gets a supporting index named after the child column —
+is not part of the contract, so the contract is the uniqueness flag and the ordered column set.
+An explicitly named index keeps its name and its definition. A missing index, a changed column
+order, a changed uniqueness or a renamed explicit index all fail. A foreign key's supporting index
+is derived from the foreign-key set, which is compared separately, so InnoDB's index-reuse choice
+is not a schema difference.
+
+**37.43.2.6 The wait-evidence diagnostic path.** `runCoordinatedWave10Race()` releases the
+coordinator gate on every path, awaits every contender, and reports the real status, code and
+message of each contender when the wait evidence is unavailable. A contender that the production
+handler refuses before the gate can therefore no longer be reported as a lock-order fact. The
+diagnostic path produces no PASS marker, every exit stays bounded, and the cleanup never runs
+concurrently with a live worker.
+
+### 37.43.3 Local verification evidence
+
+The changed files are `server/migrations/sales-customer-wave10-credit-check.js`,
+`server/database/mysql-schema.js`, `server/test-utils/wave10-mysql-schema-fixture.js`,
+`server/test-utils/wave10-mysql-acceptance-fixture.js`,
+`server/mysql-sales-customer-wave10-concurrency.integration.js`,
+`server/mysql-sales-customer-wave10.integration.js`,
+`server/mysql-sales-customer-wave10-business-matrix.integration.js`,
+`server/sales-customer-wave10-mysql-parity.test.js` and `scripts/testing/test-suites.js`.
+
+The new local suite `server/sales-customer-wave10-mysql-parity.test.js` is MySQL-free: it proves
+that the canonical SQLite DDL and the canonical live MySQL DDL of all eight Wave 9/10 tables
+normalize to one CHECK form, that a genuinely different constraint stays different, that the
+Wave 10 physical column contract equals the live MySQL DDL, that the canonical generator produces
+the approved physical families, and that the index parity rejects a missing index, a changed
+column order, a changed uniqueness and a renamed explicit index.
+
+Every local command was executed with `ERP_DB_*`, `ERP_MYSQL_*`,
+`ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`, `ERP_MYSQL_TEST_*`, `ERP_TEST_DB_BACKEND` and `ERP_SEED_DEMO`
+removed from the child environment, so no local command could open a MySQL connection or a
+destructive gate. The execution graph was inspected first: no real-MySQL suite is registered in
+FAST, FULL or HEAVY, and the HEAVY manifest was proven free of a real MySQL path — the only
+MySQL-named HEAVY suite drives an in-process fake worker.
+
+```text
+node --check (every changed file)                          PASS
+server/sales-customer-wave10-mysql-parity.test.js            9/9 PASS
+Wave 10 credit check + Wave 9 foundation + new parity       80/80 PASS
+Wave 8 functional/remediation/mysql-metadata/mixed/residual
+  + Wave 10 runners                                          117/117 PASS
+Finance invoice lifecycle / recognition / Wave C invoice     14/14 PASS
+pnpm.cmd test:fast                                           436/436 PASS
+pnpm.cmd test                                                 2862/2862 PASS
+pnpm.cmd test:heavy                                           67/67 PASS
+pnpm.cmd build                                                PASS
+git diff --check                                             PASS
+```
+
+### 37.43.4 Not executed and still pending
+
+```text
+MySQL connection, query, reset, DDL, DML, migration, cleanup   NOT_RUN
+Gate A                                                           FROZEN, NOT_RERUN
+Gate B                                                           NOT_RUN
+Wave 10 Acceptance campaign                                     NOT_RUN
+M-R01..M-R12 real-session results                               TEST_EVIDENCE_PENDING
+M-MIG-01..M-MIG-08 real-server metadata evidence                TEST_EVIDENCE_PENDING
+M-BIZ-01..M-BIZ-20                                              NOT_RUN
+Gate B seven typed markers and the M-board                      NOT_GENERATED
+LEGACY_DATA_EVIDENCE_PENDING                                    OPEN
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN             OPEN
+Wave 10 user Acceptance and Freeze                              OPEN
+Wave 11 / Wave 12                                               NOT_STARTED
+Git write                                                        NO_GIT_WRITE
+```
+
+The local repair proves the comparator logic, the schema construction and the deterministic
+helpers. It does not substitute for the real MySQL evidence, and no Wave 10 Acceptance, Gate B
+result or M-board is claimed.
+
+**Remediation status: `WAVE10_MYSQL_ACCEPTANCE_BLOCKER_LOCAL_REMEDIATION_PASS`.**
+**Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`.**

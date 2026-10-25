@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { hashPassword } from '../db.js';
 import { computeCreditExposure } from '../modules/credit-check.js';
 import { resolveEffectiveCreditProfile } from '../modules/credit-profile.js';
+import { upsertSalesParameters } from '../modules/sales-parameters.js';
 import { createWave10MysqlLifecycle } from './mysql-wave10-campaign-target.js';
 import { createTempDb } from './temp-db.js';
 
@@ -170,7 +171,7 @@ export async function withWave10Race(label, options, body, { workerCount = 3 } =
   let primaryError = null;
   try {
     assert.equal(handle.db.dialect, 'mysql');
-    seedWave10AcceptanceBase(handle.db, options);
+    await seedWave10AcceptanceBase(handle.db, options);
     const registrations = await Promise.all(workers.map((worker) => worker.run({ action: 'register' })));
     assert.ok(registrations.every((row) => row.dialect === 'mysql'));
     assert.equal(new Set(registrations.map((row) => row.connectionId)).size, workers.length, `${label}: independent sessions required`);
@@ -191,22 +192,32 @@ export async function withWave10Race(label, options, body, { workerCount = 3 } =
 }
 
 export async function waitForWave10Waiters(observer, {
-  waiterIds, holderId, objectName = 'mysql_transaction_gates', attempts = 100,
+  waiterIds, holderId, objectName = 'mysql_transaction_gates', timeoutMs = 30_000, intervalMs = 25,
 } = {}) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  const deadline = Date.now() + timeoutMs;
+  let lastObserved = [];
+  while (Date.now() < deadline) {
     const observed = await observer.run({ action: 'observe-waits' });
-    const matching = observed.waits.filter((row) => waiterIds.includes(Number(row.waiter_connection_id))
+    lastObserved = observed.waits || [];
+    const matching = lastObserved.filter((row) => waiterIds.includes(Number(row.waiter_connection_id))
       && Number(row.holder_connection_id) === Number(holderId) && row.object_name === objectName);
     if (new Set(matching.map((row) => Number(row.waiter_connection_id))).size === waiterIds.length) return matching;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, intervalMs);
   }
-  throw new Error(`WAVE10_WAIT_EVIDENCE_UNAVAILABLE: ${objectName}`);
+  throw new Error(`WAVE10_WAIT_EVIDENCE_UNAVAILABLE: ${objectName}; observed=${JSON.stringify(lastObserved)}`);
 }
 
 // §37.39.6.1 — the coordinator holds the production L0 gate row and every
 // contender must be observably pending on that boundary before the release.
 // `Promise.all` alone is never the barrier. The last worker is the
 // coordinator; every other worker is a contender.
+//
+// A contender that is refused by the production handler before it reaches the
+// gate never becomes pending, so the wait evidence is unobservable. That is a
+// setup or business failure, not a lock-order fact, and it must be reported as
+// such: the coordinator is released first, every contender is awaited, and
+// the real outcome of each contender is carried in the failure. The
+// diagnostic path never produces a PASS marker.
 export async function runCoordinatedWave10Race(workers, registrations, commands) {
   assert.ok(Array.isArray(commands) && commands.length >= 2, 'a coordinated race needs at least two contenders');
   assert.ok(workers.length > commands.length, 'a coordinated race needs a dedicated coordinator session');
@@ -219,15 +230,74 @@ export async function runCoordinatedWave10Race(workers, registrations, commands)
     assert.equal((await contender.run({ action: 'prepare', command: commands[index] })).ready, true, `contender ${index} must be ready`);
   }
   const pending = contenders.map((contender) => contender.run({ action: 'go' }));
-  const waits = await waitForWave10Waiters(coordinator, {
-    waiterIds: contenderRegistrations.map((row) => row.connectionId),
-    holderId: coordinatorRegistration.connectionId,
-  });
-  await coordinator.run({ action: 'release' });
-  return Object.freeze({ outcomes: await Promise.all(pending), waits });
+  let waits = null;
+  let waitError = null;
+  try {
+    waits = await waitForWave10Waiters(coordinator, {
+      waiterIds: contenderRegistrations.map((row) => row.connectionId),
+      holderId: coordinatorRegistration.connectionId,
+    });
+  } catch (error) {
+    waitError = error;
+  }
+  // The gate is released on every path, so a contender that is blocked on it
+  // can finish and report its real outcome instead of hanging until the
+  // adapter request timeout.
+  let releaseError = null;
+  try { await coordinator.run({ action: 'release' }); } catch (error) { releaseError = error; }
+  const settled = await Promise.allSettled(pending);
+  const outcomes = settled.map((result) => (result.status === 'fulfilled'
+    ? result.value
+    : { status: 0, statusCode: 0, code: result.reason?.code ?? null, message: String(result.reason?.message ?? result.reason) }));
+  if (waitError) {
+    const detail = JSON.stringify(outcomes.map((row) => ({
+      status: row.statusCode ?? row.status ?? null,
+      code: row.code ?? null,
+      message: String(row.message ?? '').slice(0, 240),
+    })));
+    const release = releaseError ? ` | coordinator release failed: ${releaseError.message}` : '';
+    throw new Error(`${waitError.message} | contender outcomes=${detail}${release}`);
+  }
+  if (releaseError) throw releaseError;
+  return Object.freeze({ outcomes, waits });
 }
 
-export function seedWave10AcceptanceBase(db, {
+// The Wave 1 SC01 Sales Parameter is a fail-closed production prerequisite
+// (document.md §29.4.5, §5.4.1): with no active SYSTEM row, every Sales Order
+// creation is refused with `SALES_PARAMETER_UNAVAILABLE` and every Sales Group
+// scope resolution — including the read-only approve discovery that runs
+// before the L0 gate — is refused with the same contract. The acceptance
+// fixture therefore installs the row through the canonical parameter writer,
+// so the production resolver reads a legal effective configuration instead of
+// the fixture inventing one behind the writer.
+const W10_PARAMETER_ACTOR = Object.freeze({
+  id: 'w10-race-approver', roleCode: 'ADMIN',
+  permissions: ['SALES_PARAMETERS_MANAGE', 'SALES_FOUNDATION_VIEW'],
+});
+
+export async function seedWave10SalesParameters(db) {
+  const req = Readable.from([Buffer.from(JSON.stringify({
+    scopeType: 'SYSTEM',
+    sellableControlEnabled: true,
+    customerMaterialXrefEnabled: true,
+    salesGroupDataScopeEnabled: true,
+    deliveryScheduleEnabled: true,
+    deliveryQuantityControlEnabled: true,
+    orderChangeMode: 'BOTH',
+    reservationBehavior: 'DISABLED',
+    active: true,
+  }), 'utf8')]);
+  req.headers = { 'content-type': 'application/json' };
+  const res = wave10HttpResponse();
+  await upsertSalesParameters(db, req, res, W10_PARAMETER_ACTOR);
+  const body = res.json();
+  assert.equal(res.statusCode, 200, `the canonical Sales Parameter writer must accept the SYSTEM row: ${res.bodyText}`);
+  assert.equal(body?.parameter?.scopeKey, 'SYSTEM', 'the canonical writer must install the SYSTEM scope row');
+  assert.equal(body?.parameter?.active, true, 'the installed Sales Parameter must be active');
+  return body.parameter;
+}
+
+export async function seedWave10AcceptanceBase(db, {
   aggregateLimit = 300000, salespersonLimit = null, secondSalespersonLimit = null,
   stage = 'SO_APPROVE', scenario = 'BLOCK', controlStrength = 'BLOCK',
   aggregateProfileStatus = 'ACTIVE', salespersonProfileStatus = 'ACTIVE', secondSalespersonProfileStatus = 'ACTIVE',
@@ -297,6 +367,7 @@ export function seedWave10AcceptanceBase(db, {
   if (secondSalespersonLimit != null) seedProfile(db, { id: 'w10-profile-b', anchorId: 'w10-anchor-b', salespersonId: 'w10-race-sp-b', limit: secondSalespersonLimit, status: secondSalespersonProfileStatus, now });
   seedWave10Inventory(db);
   seedWave10SettlementAccount(db);
+  await seedWave10SalesParameters(db);
 }
 
 // Reference data only. Initial on-hand stock and the cash settlement account

@@ -12,8 +12,8 @@ import { SALES_WAVE10_TABLES } from './migrations/sales-customer-wave10-credit-c
 import { createTempDb } from './test-utils/temp-db.js';
 import { createWave10MysqlLifecycle } from './test-utils/mysql-wave10-campaign-target.js';
 import {
-  compareWave9SourceTarget, createWave9BoundedSnapshot, normalizedCreditMetadata,
-  normalizedSqliteTable, readNormalizedMySqlTable, rowsById,
+  assertEquivalentCreditMetadata, compareWave9SourceTarget, createWave9BoundedSnapshot,
+  normalizedCreditMetadata, normalizedSqliteTable, readNormalizedMySqlTable, rowsById,
 } from './test-utils/wave10-mysql-schema-fixture.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD', 'ERP_MYSQL_WAVE10_CAMPAIGN_LEASE'];
@@ -147,7 +147,7 @@ test('M-MIG-06 fresh and formal-upgrade Credit metadata are equivalent', () => {
   freshHandle.cleanup(); handles.delete(freshHandle);
   const upgraded = wave9Upgrade('wave10-equivalence-upgrade');
   runThroughWave10(upgraded.db);
-  assert.deepEqual(normalizedCreditMetadata(upgraded.db), expected);
+  assertEquivalentCreditMetadata(normalizedCreditMetadata(upgraded.db), expected, 'M-MIG-06');
 });
 
 test('M-MIG-07 I-4 preserves the complete non-empty connected Wave 9 row graph', () => {
