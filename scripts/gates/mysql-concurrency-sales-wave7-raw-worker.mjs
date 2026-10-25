@@ -61,4 +61,3 @@ lines.on('line', (line) => {
   }
 });
 lines.on('close', () => { try { if (inTransaction) db.exec('ROLLBACK'); db.close(); } catch {} });
-

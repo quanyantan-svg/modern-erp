@@ -182,4 +182,3 @@ describe('Gate A A-RAW — Wave 7 independent InnoDB row-lock order', () => {
     await proveCorrectedOrder('M14', ['result', 'requirement', 'order']);
   });
 });
-

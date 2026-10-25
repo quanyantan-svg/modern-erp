@@ -65,4 +65,3 @@ export function resetAuthorizedDisposableMySqlSchema(db, config, env = process.e
   }
   return Object.freeze({ ...authorization, dropped: objects.length });
 }
-

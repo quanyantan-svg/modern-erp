@@ -93,4 +93,3 @@ test('Gate A schema reset refuses a connected database mismatch before destructi
   assert.throws(() => resetAuthorizedDisposableMySqlSchema(db, config, authorized), /SELECT DATABASE/);
   assert.equal(executed, false);
 });
-
