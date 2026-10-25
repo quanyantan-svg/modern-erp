@@ -23,14 +23,53 @@ import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 import {
+  assertPrepaymentParentPlanCurrent,
   discoverEligiblePrepaymentParents,
   lockEligiblePrepaymentParents,
   resolveEligiblePrepaymentForSalesGate,
-  resolveEligiblePrepaymentWithParentPlan,
 } from './sales-prepayment-finance-adapter.js';
 import { assertFinancialPeriodsOpen } from './financial-inventory.js';
+import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
 
 function now() { return new Date().toISOString(); }
+
+// solution.md §37.8 / §37.24 — bounded OUTER fresh-discovery retry.
+//
+// The inner retry already lives in transaction() (ERP_DB_TX_RETRY_MAX, a configurable
+// safe integer 0..10) and always re-runs work() against the SAME captured plan, so it
+// cannot recover a stale plan. This outer loop is the only mechanism that re-discovers.
+//
+// No nested transaction is created: transaction() is invoked exactly once per outer
+// attempt, and a failed attempt has already rolled back before the catch block runs
+// (db.js rolls back before rethrowing), so there is never partial state to inherit.
+//
+// Only two error classes re-enter discovery: a structured parent/requirement plan drift,
+// and an exhausted inner concurrency retry. An ordinary business 409 is never retried.
+const GATE_REDISCOVERY_CODES = new Set([
+  'SALES_PREPAYMENT_LOCK_PLAN_STALE',
+  'SALES_PREPAYMENT_PARENT_MISSING',
+  'SALES_PREPAYMENT_PARENT_CLOSED',
+  'SALES_PREPAYMENT_PARENT_TYPE_UNSUPPORTED',
+]);
+
+function gateOuterAttempts() {
+  const configured = Number(process.env.ERP_GATE_ATTEMPTS_MAX ?? 3);
+  return Number.isSafeInteger(configured) && configured >= 1 && configured <= 3 ? configured : 3;
+}
+
+function isGateRediscoveryEligible(error) {
+  if (!error) return false;
+  if (error.transactionRetryExhausted) return true;
+  return GATE_REDISCOVERY_CODES.has(error.code) || GATE_REDISCOVERY_CODES.has(error?.details?.code);
+}
+
+// Short synchronous pause between outer attempts. This mirrors waitForTransactionRetry
+// in db.js; it is an admission delay, not an execution deadline — no wall-clock
+// completion bound is claimed (§37.24).
+function waitForGateRediscovery(attempt) {
+  const delayMs = Math.min(100, 20 * (2 ** (attempt - 1)));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
 
 const GATE_STAGES = Object.freeze(['PLANNING_RELEASE', 'RESERVATION', 'DELIVERY']);
 const GATE_DECISIONS = Object.freeze(['PASS', 'WARN', 'BLOCK', 'OVERRIDE_REQUIRED']);
@@ -259,7 +298,7 @@ export function discoverSalesPrepaymentGatePlan(db, salesOrderId, businessDate =
 }
 
 export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
-  stage = 'DELIVERY', actorId, mutationKey,
+  stage = 'DELIVERY', actorId, mutationKey, afterParentLock = null,
 } = {}) {
   if (!plan?.salesOrderId || !actorId || !mutationKey) throw new HttpError(400, '预付款门计划上下文不完整');
   if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 无效');
@@ -270,10 +309,25 @@ export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
   if (orderFingerprint !== plan.orderFingerprint || requirementFingerprint !== plan.requirementFingerprint) {
     throw new HttpError(409, '预付款门计划已过期，请在新事务重试', { code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE' });
   }
-  if (!currentRequirement) return { state: 'NOT_REQUIRED', stage, salesOrderId: plan.salesOrderId };
+  if (!currentRequirement) {
+    // No requirement means an empty parent set, so L1 is skipped entirely.
+    // The Credit Check still runs and still fails closed when a mandatory
+    // profile is missing: the absence of a prepayment requirement never
+    // weakens the Credit gate (§36.14.5 M19).
+    if (afterParentLock) afterParentLock({ parentBalanceIds: [] });
+    return { state: 'NOT_REQUIRED', stage, salesOrderId: plan.salesOrderId };
+  }
   // §35.18.6 step 1 — Finance PREPAYMENT parents by id ASC, before the Gate
   // requirement/result rows below. A stale candidate set rolls the caller back.
   lockEligiblePrepaymentParents(db, plan.parentBalanceIds);
+  assertPrepaymentParentPlanCurrent(db, {
+    customerId: plan.customerId,
+    businessDate: plan.businessDate,
+  }, plan.parentBalanceIds);
+  // §36.14.3 / §37.3 — the Credit Check composes strictly between L1 and L6.
+  // It takes no Sales business-row lock and no Finance business-row lock
+  // beyond the parent balances already held here.
+  if (afterParentLock) afterParentLock({ parentBalanceIds: plan.parentBalanceIds });
   const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
   const previous = db.prepare(`SELECT * FROM sales_prepayment_gate_results WHERE sales_order_id=? AND stage=? ORDER BY evaluated_at DESC,id DESC LIMIT 1${lock}`).get(plan.salesOrderId, stage);
   if (!previous) return assertPermittedGateRow(null, { stage, salesOrderId: plan.salesOrderId, requiredCents: currentRequirement.required_amount_cents });
@@ -282,10 +336,18 @@ export function authorizeSalesPrepaymentGateWithPlan(db, plan, {
     throw new HttpError(409, '预付款门要求在锁定后发生变化', { code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE' });
   }
   const required = Number(lockedRequirement.required_amount_cents);
-  const evidence = resolveEligiblePrepaymentWithParentPlan(db, {
-    customerId: currentOrder.customer_id, businessDate: plan.businessDate, gateStage: stage,
-    salesOrderId: plan.salesOrderId, remainingRequiredCents: required, snapshotKey: mutationKey,
+  // Defence in depth after the Gate locks: compare identities again, but never
+  // re-enter the Parent FOR UPDATE phase. Finance evidence is a non-locking read
+  // beneath the L1 locks already held by this caller-owned transaction.
+  assertPrepaymentParentPlanCurrent(db, {
+    customerId: plan.customerId,
+    businessDate: plan.businessDate,
   }, plan.parentBalanceIds);
+  const evidence = resolveEligiblePrepaymentForSalesGate(db, {
+    customerId: currentOrder.customer_id, businessDate: plan.businessDate, gateStage: stage,
+    salesOrderId: plan.salesOrderId, remainingRequiredCents: required,
+    snapshotKey: mutationKey, lockMode: 'NONE',
+  });
   const decision = decideGate({ eligible: evidence.eligibleAmountCents, required, previousResult: previous });
   const resultId = randomUUID();
   db.prepare(`INSERT INTO sales_prepayment_gate_results(id,sales_order_id,stage,gate_decision,required_remaining_cents,eligible_advance_cents,refunded_amount_cents,applied_amount_cents,override_reason,overridden_by,source_balance_identities,snapshot_key,evaluated_at,evaluated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
@@ -371,9 +433,13 @@ export async function evaluateSalesPrepaymentGate(db, req, res, actor, salesOrde
   if (!salesOrderId) throw new HttpError(400, 'salesOrderId 必填');
   if (!GATE_STAGES.includes(stage)) throw new HttpError(400, 'stage 仅支持 PLANNING_RELEASE / RESERVATION / DELIVERY');
   const body = await readJson(req);
+  // solution.md §37.2 phase 0 — unlocked discovery, no business-object lock. `asOf`
+  // is bound ONCE so the period check, requirement lookup, parent discovery and the
+  // Finance evidence all read one business date for this evaluation.
+  const asOf = body.businessDate || now().slice(0, 10);
   const order = loadOrder(db, salesOrderId);
-  requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: body.businessDate || now().slice(0, 10) });
-  const requirement = lookupRequirementForOrder(db, { salesOrderId });
+  requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: asOf });
+  const requirement = lookupRequirementForOrder(db, { salesOrderId, asOf });
   if (!requirement) throw new HttpError(409, '请先维护预付要求', { code: 'SALES_PREPAYMENT_REQUIREMENT_MISSING' });
   const appliedSnapshotKey = String(body.snapshotKey || body.snapshot_key || snapshotKeyOf({
     stage,
@@ -383,56 +449,137 @@ export async function evaluateSalesPrepaymentGate(db, req, res, actor, salesOrde
   }));
   const overrideReason = body.overrideReason || null;
 
+  // Preserve exact replay before starting the request-scoped admission clock.
+  // The transaction-local probe below remains authoritative for a concurrent
+  // request that commits after this read-only probe.
+  const committedReplay = db.prepare(`SELECT * FROM sales_prepayment_gate_results
+    WHERE snapshot_key=? AND sales_order_id=? AND stage=?`).get(appliedSnapshotKey, salesOrderId, stage);
+  if (committedReplay) {
+    return send(res, 200, { ...summarizeGateResult(committedReplay), replayed: true });
+  }
+
   let result;
-  transaction(db, () => {
-    const replay = db.prepare(`SELECT * FROM sales_prepayment_gate_results
-      WHERE sales_order_id=? AND stage=? AND snapshot_key=?`).get(salesOrderId, stage, appliedSnapshotKey);
-    if (replay) {
-      result = summarizeGateResult(replay);
-      result.replayed = true;
-      send(res, 200, result);
-      return;
-    }
-    assertFinancialPeriodsOpen(db, body.businessDate || now().slice(0, 10));
-    // Acquire FOR UPDATE on the Sales-side requirement row.
-    const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
-    db.prepare(`SELECT id FROM sales_prepayment_requirements WHERE id=?${lock}`).get(requirement.id);
-    const previous = db.prepare(`SELECT * FROM sales_prepayment_gate_results
-      WHERE sales_order_id=? AND stage=? ORDER BY evaluated_at DESC, id DESC LIMIT 1${lock}`).get(salesOrderId, stage);
-    // Call the R-SAL-15 finance adapter (with FOR UPDATE). The adapter acquires the
-    // canonical V22 PREPAYMENT parent balance locks in this same transaction.
-    const evidence = resolveEligiblePrepaymentForSalesGate(db, {
-      customerId: order.customer_id,
-      businessDate: body.businessDate || now().slice(0, 10),
-      gateStage: stage,
-      salesOrderId,
-      remainingRequiredCents: Number(requirement.required_amount_cents),
-      lockMode: 'FOR_UPDATE',
-      snapshotKey: appliedSnapshotKey,
-    });
-    const required = Number(requirement.required_amount_cents);
-    let decision = decideGate({
-      eligible: evidence.eligibleAmountCents,
-      required,
-      previousResult: previous,
-    });
-    if (overrideReason && previous?.gate_decision === 'OVERRIDE_REQUIRED' && decision !== 'PASS') {
-      decision = 'OVERRIDE_REQUIRED';
-    }
-    const newRowId = randomUUID();
-    db.prepare(`INSERT INTO sales_prepayment_gate_results(id, sales_order_id, stage, gate_decision,
-      required_remaining_cents, eligible_advance_cents, refunded_amount_cents, applied_amount_cents,
-      override_reason, overridden_by, source_balance_identities, snapshot_key, evaluated_at, evaluated_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      newRowId, salesOrderId, stage, decision,
-      required, evidence.eligibleAmountCents, evidence.refundedAmountCents, evidence.appliedAmountCents,
-      overrideReason, overrideReason ? actor.id : null, JSON.stringify(evidence.sourceBalanceIdentities), appliedSnapshotKey, now(), actor.id,
-    );
-    audit(db, actor.id, 'EVALUATE', 'SALES_PREPAYMENT_GATE', newRowId, `${order.order_no} ${stage} ${decision}`);
-    result = summarizeGateResult(db.prepare('SELECT * FROM sales_prepayment_gate_results WHERE id=?').get(newRowId));
-    send(res, 201, result);
+  const maxAttempts = gateOuterAttempts();
+  const admission = startGateRetryAdmission(process.env.ERP_GATE_ATTEMPTS_BUDGET_MS);
+  let attemptsStarted = 0;
+  const deadlineExhausted = () => new HttpError(503, '预付款门评估重试次数已耗尽，请稍后重试', {
+    code: 'SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED',
+    retryable: true,
+    attempts: attemptsStarted,
+    cause: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
   });
-  return undefined;
+  for (;;) {
+    if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+    attemptsStarted += 1;
+    const attempt = attemptsStarted;
+    // Fresh authoritative discovery on EVERY outer attempt. A plan is never reused
+    // across attempts even though transaction() may have retried internally.
+    const plan = discoverSalesPrepaymentGatePlan(db, salesOrderId, asOf);
+    try {
+      transaction(db, () => {
+        const replay = db.prepare(`SELECT * FROM sales_prepayment_gate_results
+          WHERE sales_order_id=? AND stage=? AND snapshot_key=?`).get(salesOrderId, stage, appliedSnapshotKey);
+        if (replay) {
+          result = summarizeGateResult(replay);
+          result.replayed = true;
+          return;
+        }
+        assertFinancialPeriodsOpen(db, asOf);
+        const lock = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+        // L1 — canonical Finance PREPAYMENT parents by id ASC, before any Gate row lock.
+        lockEligiblePrepaymentParents(db, plan.parentBalanceIds);
+        // Candidate-set freshness, checked immediately after the parent locks: a parent
+        // that appeared, disappeared or closed since discovery fails closed instead of
+        // being silently absorbed.
+        assertPrepaymentParentPlanCurrent(db, { customerId: plan.customerId, businessDate: asOf }, plan.parentBalanceIds);
+        // L6 — Gate Result, then L7 — Gate Requirement, matching the Path B/B' order.
+        const previous = db.prepare(`SELECT * FROM sales_prepayment_gate_results
+          WHERE sales_order_id=? AND stage=? ORDER BY evaluated_at DESC, id DESC LIMIT 1${lock}`).get(salesOrderId, stage);
+        const currentRequirementId = lookupRequirementForOrder(db, { salesOrderId, asOf })?.id || null;
+        const lockedRequirement = currentRequirementId
+          ? db.prepare(`SELECT * FROM sales_prepayment_requirements WHERE id=?${lock}`).get(currentRequirementId)
+          : null;
+        // Requirement identity, amount and effective window must still match the plan
+        // this attempt locked against, otherwise the Gate decision would be computed
+        // against a requirement that changed mid-attempt.
+        const lockedFingerprint = lockedRequirement
+          ? `${lockedRequirement.id}|${lockedRequirement.required_amount_cents}|${lockedRequirement.effective_from || ''}|${lockedRequirement.effective_to || ''}`
+          : 'NONE';
+        if (!lockedRequirement || !effectiveAtNow(lockedRequirement.effective_from, lockedRequirement.effective_to, asOf)
+          || lockedFingerprint !== plan.requirementFingerprint) {
+          throw new HttpError(409, '预付款门要求在锁定后发生变化', { code: 'SALES_PREPAYMENT_LOCK_PLAN_STALE' });
+        }
+        // Finance child effects read beneath the parent locks. lockMode NONE on purpose:
+        // the parents are already held, so this must not re-enter the parent-lock phase
+        // after the Gate locks (§37.2 step D8).
+        const required = Number(lockedRequirement.required_amount_cents);
+        const evidence = resolveEligiblePrepaymentForSalesGate(db, {
+          customerId: plan.customerId,
+          businessDate: asOf,
+          gateStage: stage,
+          salesOrderId,
+          remainingRequiredCents: required,
+          lockMode: 'NONE',
+          snapshotKey: appliedSnapshotKey,
+        });
+        let decision = decideGate({
+          eligible: evidence.eligibleAmountCents,
+          required,
+          previousResult: previous,
+        });
+        if (overrideReason && previous?.gate_decision === 'OVERRIDE_REQUIRED' && decision !== 'PASS') {
+          decision = 'OVERRIDE_REQUIRED';
+        }
+        const newRowId = randomUUID();
+        db.prepare(`INSERT INTO sales_prepayment_gate_results(id, sales_order_id, stage, gate_decision,
+          required_remaining_cents, eligible_advance_cents, refunded_amount_cents, applied_amount_cents,
+          override_reason, overridden_by, source_balance_identities, snapshot_key, evaluated_at, evaluated_by)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          newRowId, salesOrderId, stage, decision,
+          required, evidence.eligibleAmountCents, evidence.refundedAmountCents, evidence.appliedAmountCents,
+          overrideReason, overrideReason ? actor.id : null, JSON.stringify(evidence.sourceBalanceIdentities), appliedSnapshotKey, now(), actor.id,
+        );
+        audit(db, actor.id, 'EVALUATE', 'SALES_PREPAYMENT_GATE', newRowId, `${order.order_no} ${stage} ${decision}`);
+        result = summarizeGateResult(db.prepare('SELECT * FROM sales_prepayment_gate_results WHERE id=?').get(newRowId));
+      });
+      break;
+    } catch (error) {
+      // A business rejection (missing requirement, group scope, bad stage, ...) is a
+      // final answer and is never retried. Only plan drift and exhausted concurrency
+      // re-enter discovery, and only within the bounded attempt count.
+      const rawCause = error?.details?.code || error?.code;
+      // An unsupported Parent type is a persistent business rejection, not a plan
+      // that can converge through rediscovery. Preserve its original 409 contract.
+      if (rawCause === 'SALES_PREPAYMENT_PARENT_TYPE_UNSUPPORTED') throw error;
+      if (!isGateRediscoveryEligible(error)) throw error;
+      if (attempt >= maxAttempts) {
+        let cause = [
+          'SALES_PREPAYMENT_LOCK_PLAN_STALE',
+          'SALES_PREPAYMENT_PARENT_MISSING',
+          'SALES_PREPAYMENT_PARENT_CLOSED',
+          'ER_LOCK_DEADLOCK',
+          'ER_LOCK_WAIT_TIMEOUT',
+        ].includes(rawCause) ? rawCause : null;
+        if (!cause && error?.errno === 1213) cause = 'ER_LOCK_DEADLOCK';
+        if (!cause && error?.errno === 1205) cause = 'ER_LOCK_WAIT_TIMEOUT';
+        if (!cause && error?.sqlState === '40001') cause = '40001';
+        // Every approved retryable source has a stable structured code. Refuse to
+        // expose exception text or internal SQL if a malformed error lacks one.
+        if (!cause) throw error;
+        throw new HttpError(503, '预付款门评估重试次数已耗尽，请稍后重试', {
+          code: 'SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED',
+          retryable: true,
+          attempts: attempt,
+          cause,
+        });
+      }
+      if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+      waitForGateRediscovery(attempt);
+    }
+  }
+  // The success response is emitted only after the transaction has durably committed,
+  // so a rollback or retry can never deliver a 2xx for work that did not happen.
+  return send(res, result.replayed ? 200 : 201, result);
 }
 
 export function listPrepaymentGateResults(db, res, actor, url) {

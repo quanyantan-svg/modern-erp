@@ -30,8 +30,11 @@ const NO_CREDIT = Object.freeze({ id: 'user-warehouse', roleCode: 'WAREHOUSE', p
 const UNMAPPED_SALES = Object.freeze({ id: 'user-warehouse', roleCode: 'WAREHOUSE', permissions: ['CREDIT_VIEW'] });
 const OTHER_SALES = Object.freeze({ id: 'user-other-sales', roleCode: 'SALES', permissions: ['CREDIT_VIEW'] });
 
+// The Wave 10 tables are no longer out of scope: they are created by the
+// Wave 10 migration, which the canonical registry now runs after Wave 9. The
+// Wave 11 tables remain out of scope for every wave up to and including 10.
 const OUT_OF_SCOPE_TABLES = Object.freeze([
-  'credit_special_approval', 'credit_check_results', 'credit_evaluation_indicator',
+  'credit_evaluation_indicator',
   'credit_evaluation_scheme', 'credit_evaluation_model', 'credit_evaluation_scoring_sheet',
   'credit_evaluation_result', 'credit_recalculation_history',
 ]);
@@ -277,7 +280,9 @@ test('Wave 9 exposes one contextual route and only foundation APIs', async () =>
     '/api/credit/policy/parameters', '/api/credit/policy/rules', '/api/credit/anchors',
     '/api/credit/anchors/provision', '/api/credit/profiles',
   ]) assert.match(appSource, new RegExp(path.replaceAll('/', '\\/')));
-  assert.doesNotMatch(appSource, /\/api\/credit\/(?:checks|special-approvals|evaluations)/);
+  // The Wave 10 Credit Check and Credit Special Approval surfaces now exist.
+  // The Wave 11 evaluation surface does not.
+  assert.doesNotMatch(appSource, /\/api\/credit\/evaluations/);
 });
 
 // --- Profile authorization: five read modes (document.md §14 AP1-AP4.1) ---

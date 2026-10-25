@@ -438,4 +438,292 @@ describe('Sales & Customer Wave 7 — real MySQL concurrency', () => {
       }
     }
   });
+
+  test('Gate A A-PROD: Manual and Service compete with apply, refund and UNAPPLIED reversal through production entries', async () => {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT IGNORE INTO finance_recognition_policy(id,side,source_type,source_id,recognition_mode,effective_date,active,created_by,created_at)
+      VALUES('wave7-gate-a-service-policy','AR','SERVICE_FULFILLMENT',NULL,'DIRECT_BUSINESS_OPEN_ITEM','2020-01-01',1,'wave7-race-actor',?)`).run(now);
+
+    const seed = (entry, mutation, suffix) => {
+      const customerId = `gate-a-customer-${suffix}`;
+      const productId = entry === 'service' ? `gate-a-service-product-${suffix}` : 'wave7-race-product';
+      const orderId = `gate-a-order-${suffix}`;
+      const lineId = `gate-a-line-${suffix}`;
+      db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at)
+        VALUES(?,?,?,'','','',1,?,?)`).run(customerId, `GA-${suffix}`, `Gate A ${suffix}`, now, now);
+      if (entry === 'service') {
+        db.prepare(`INSERT INTO products(id,code,name,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code,tracking_policy)
+          VALUES(?,?,?,'EA',10000,0,1,?,?,'EA','NONE')`).run(productId, `GA-P-${suffix}`, `Gate A Service ${suffix}`, now, now);
+        db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,service_classification,service_kind,active,created_at,updated_at,created_by,updated_by)
+          VALUES(?,?,1,1,'STANDARD',1,?,?, 'wave7-race-actor','wave7-race-actor')`)
+          .run(`gate-a-class-${suffix}`, productId, now, now);
+      }
+      db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at,order_date,payment_terms_days)
+        VALUES(?,?,?,'APPROVED',10000,'wave7-race-actor',?,?,?,0)`).run(orderId, `GA-SO-${suffix}`, customerId, now, now, DAY);
+      db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,document_quantity_num,document_quantity_den)
+        VALUES(?,?,?,1,10000,10000,1,1000000,1000000)`).run(lineId, orderId, productId);
+      db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+        VALUES(?,?,0,10000,'ORDER_VALUE',?,'wave7-race-actor')`).run(`gate-a-req-${suffix}`, orderId, now);
+
+      const balanceId = `gate-a-balance-${suffix}`;
+      let sourceType = 'GATE_A'; let sourceId = balanceId;
+      if (mutation === 'reverse-settlement') {
+        sourceType = 'PAYMENT_COLLECTION'; sourceId = `gate-a-collection-${suffix}`;
+        db.prepare(`INSERT INTO payment_collections(id,collection_no,customer_id,receivable_id,amount_cents,payment_method,collection_date,remark,creator_id,created_at,status,
+          bank_account,confirmed_by,confirmed_at,updated_at,external_reference,reversed_amount_cents,reversal_status,settlement_account_id,unapplied_amount_cents,explicit_unapplied)
+          VALUES(?,?,?,NULL,10000,'BANK',?,'','wave7-race-actor',?,'CONFIRMED','wave7-race-bank','wave7-race-actor',?,?,'',0,'NONE','wave7-race-bank',10000,1)`)
+          .run(sourceId, `GA-COL-${suffix}`, customerId, DAY, now, now, now);
+      }
+      db.prepare(`INSERT INTO settlement_unapplied_balances(id,side,balance_type,party_id,source_type,source_id,source_no,original_amount_cents,business_date,settlement_account_id,status,created_by,created_at)
+        VALUES(?,'CUSTOMER','PREPAYMENT',?,?,?,?,10000,?,'wave7-race-bank','OPEN','wave7-race-actor',?)`)
+        .run(balanceId, customerId, sourceType, sourceId, `GA-BAL-${suffix}`, DAY, now);
+
+      let finance;
+      if (mutation === 'apply-unapplied') {
+        const arId = `gate-a-ar-${suffix}`;
+        db.prepare(`INSERT INTO account_receivables(id,voucher_no,customer_id,source_type,source_id,source_no,amount_cents,paid_cents,write_off_cents,status,due_date,business_date,
+          recognition_mode,item_kind,conversion_state,item_class,settlement_account_id,creator_id,created_at,updated_at)
+          VALUES(?,?,?,'GATE_A',?,?,10000,0,0,'PENDING',?,?,'INVOICE_DRIVEN_OPEN_ITEM','FINAL','OPEN','SOURCE','wave7-race-bank','wave7-race-actor',?,?)`)
+          .run(arId, `GA-AR-${suffix}`, customerId, arId, `GA-AR-${suffix}`, DAY, DAY, now, now);
+        finance = { action: mutation, body: { side: 'AR', balanceId, openItemId: arId, amountCents: 10000, businessDate: DAY } };
+      } else if (mutation === 'create-refund') {
+        finance = { action: mutation, key: `gate-a-refund-${suffix}`, body: { side: 'CUSTOMER', balanceId, partyId: customerId,
+          amountCents: 10000, businessDate: DAY, paymentMethod: 'BANK', settlementAccountId: 'wave7-race-bank', reason: 'Gate A production race' } };
+      } else {
+        const voucherId = `gate-a-voucher-${suffix}`;
+        db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at)
+          VALUES(?,?,'PAYMENT_COLLECTION',?,?,'','wave7-race-actor',?)`).run(voucherId, `GA-V-${suffix}`, sourceId, DAY, now);
+        const bankSubjectId = db.prepare("SELECT id FROM accounting_subjects WHERE code='1002' AND active=1").get().id;
+        const arSubjectId = db.prepare("SELECT id FROM accounting_subjects WHERE code='1122' AND active=1").get().id;
+        db.prepare(`INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,10000,'GA'),(?,?,?,?,10000,'GA')`)
+          .run(`gate-a-debit-${suffix}`, voucherId, bankSubjectId, 'DEBIT', `gate-a-credit-${suffix}`, voucherId, arSubjectId, 'CREDIT');
+        db.prepare(`INSERT INTO settlement_account_movements(id,settlement_account_id,source_type,source_id,direction,amount_cents,business_date,voucher_id,created_at)
+          VALUES(?,'wave7-race-bank','PAYMENT_COLLECTION',?,'IN',10000,?,?,?)`).run(`gate-a-move-${suffix}`, sourceId, DAY, voucherId, now);
+        finance = { action: mutation, key: `gate-a-reverse-${suffix}`, documentId: sourceId,
+          body: { businessDate: DAY, reason: 'Gate A production race', components: [{ type: 'UNAPPLIED', id: balanceId, amountCents: 10000 }] } };
+      }
+
+      let business;
+      let fulfillmentId = null;
+      if (entry === 'manual') {
+        business = { action: 'evaluate-gate', orderId, stage: 'PLANNING_RELEASE',
+          body: { businessDate: DAY, snapshotKey: `gate-a-manual-${suffix}` } };
+      } else {
+        fulfillmentId = `gate-a-fulfillment-${suffix}`;
+        db.prepare(`INSERT INTO service_fulfillments(id,fulfillment_no,sales_order_id,sales_order_item_id,product_id,customer_id,
+          confirmation_qty_micros,unit_price_cents,recognition_amount_cents,business_date,confirmation_state,version,created_at,updated_at,created_by,updated_by)
+          VALUES(?,?,?,?,?,?,1000000,10000,0,?,'PENDING',1,?,?, 'wave7-race-actor','wave7-race-actor')`)
+          .run(fulfillmentId, `GA-SF-${suffix}`, orderId, lineId, productId, customerId, DAY, now, now);
+        business = { action: 'confirm-service', fulfillmentId, expectedVersion: 1, key: `gate-a-service-${suffix}` };
+      }
+      return { entry, mutation, suffix, orderId, balanceId, fulfillmentId, business, finance };
+    };
+
+    const scenarios = [];
+    for (const entry of ['manual', 'service']) {
+      for (const mutation of ['apply-unapplied', 'create-refund', 'reverse-settlement']) {
+        scenarios.push(seed(entry, mutation, `${entry}-${mutation}`));
+      }
+    }
+    for (const scenario of scenarios) {
+      const business = new Worker(`gate-a-${scenario.suffix}-business`);
+      const finance = new Worker(`gate-a-${scenario.suffix}-finance`);
+      const control = new Worker(`gate-a-${scenario.suffix}-control`);
+      let held = false;
+      try {
+        const [b, f] = await Promise.all([business.run({ action: 'register' }), finance.run({ action: 'register' })]);
+        assert.notEqual(b.connectionId, f.connectionId);
+        await control.run({ action: 'hold-gate' }); held = true;
+        const pendingBusiness = business.run(scenario.business);
+        const pendingFinance = finance.run(scenario.finance);
+        assert.equal(waitAtTransactionGate(db, [b.connectionId, f.connectionId]), true, `${scenario.suffix}: production transactions overlap at L0`);
+        await control.run({ action: 'release-gate' }); held = false;
+        const [businessResult, financeResult] = await Promise.all([pendingBusiness, pendingFinance]);
+        assert.equal(financeResult.status, 201, JSON.stringify({ scenario: scenario.suffix, financeResult }));
+        if (scenario.entry === 'manual') {
+          assert.equal(businessResult.status, 201, JSON.stringify(businessResult));
+          assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=? AND snapshot_key=?').get(
+            scenario.orderId, `gate-a-manual-${scenario.suffix}`).n), 1);
+        } else {
+          assert.ok([200, 409].includes(businessResult.status), JSON.stringify(businessResult));
+          const confirmed = businessResult.status === 200 ? 1 : 0;
+          assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM service_fulfillments WHERE id=? AND confirmation_state='CONFIRMED'").get(scenario.fulfillmentId).n), confirmed);
+          assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(scenario.fulfillmentId).n), confirmed);
+          assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(scenario.fulfillmentId).n), confirmed);
+          assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SERVICE_FULFILLMENT' AND entity_id=? AND action='CONFIRM'").get(scenario.fulfillmentId).n), confirmed);
+          assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SERVICE_FULFILLMENT_CONFIRM' AND document_id=?").get(scenario.fulfillmentId).n), confirmed);
+        }
+      } finally {
+        if (held) { try { await control.run({ action: 'release-gate' }); } catch {} }
+        await Promise.all([business.close(), finance.close(), control.close()]);
+      }
+    }
+  });
+
+  test('Gate A A-REFUND M21-M24: Refund×Refund, Refund×Apply and Refund×Reversal conserve one parent and replay exactly', async () => {
+    const now = new Date().toISOString();
+    const seedParent = (suffix, mode) => {
+      const customerId = `gate-a-ref-customer-${suffix}`;
+      const balanceId = `gate-a-ref-balance-${suffix}`;
+      db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,'','','',1,?,?)`)
+        .run(customerId, `GAR-${suffix}`, `Gate A Refund ${suffix}`, now, now);
+      let sourceType = 'GATE_A'; let sourceId = balanceId;
+      if (mode === 'reversal') {
+        sourceType = 'PAYMENT_COLLECTION'; sourceId = `gate-a-ref-collection-${suffix}`;
+        db.prepare(`INSERT INTO payment_collections(id,collection_no,customer_id,receivable_id,amount_cents,payment_method,collection_date,remark,creator_id,created_at,status,
+          bank_account,confirmed_by,confirmed_at,updated_at,external_reference,reversed_amount_cents,reversal_status,settlement_account_id,unapplied_amount_cents,explicit_unapplied)
+          VALUES(?,?,?,NULL,10000,'BANK',?,'','wave7-race-actor',?,'CONFIRMED','wave7-race-bank','wave7-race-actor',?,?,'',0,'NONE','wave7-race-bank',10000,1)`)
+          .run(sourceId, `GAR-COL-${suffix}`, customerId, DAY, now, now, now);
+      }
+      db.prepare(`INSERT INTO settlement_unapplied_balances(id,side,balance_type,party_id,source_type,source_id,source_no,original_amount_cents,business_date,settlement_account_id,status,created_by,created_at)
+        VALUES(?,'CUSTOMER','PREPAYMENT',?,?,?,?,10000,?,'wave7-race-bank','OPEN','wave7-race-actor',?)`)
+        .run(balanceId, customerId, sourceType, sourceId, `GAR-BAL-${suffix}`, DAY, now);
+      let other;
+      if (mode === 'apply') {
+        const arId = `gate-a-ref-ar-${suffix}`;
+        db.prepare(`INSERT INTO account_receivables(id,voucher_no,customer_id,source_type,source_id,source_no,amount_cents,paid_cents,write_off_cents,status,due_date,business_date,
+          recognition_mode,item_kind,conversion_state,item_class,settlement_account_id,creator_id,created_at,updated_at)
+          VALUES(?,?,?,'GATE_A',?,?,10000,0,0,'PENDING',?,?,'INVOICE_DRIVEN_OPEN_ITEM','FINAL','OPEN','SOURCE','wave7-race-bank','wave7-race-actor',?,?)`)
+          .run(arId, `GAR-AR-${suffix}`, customerId, arId, `GAR-AR-${suffix}`, DAY, DAY, now, now);
+        other = { action: 'apply-unapplied', body: { side: 'AR', balanceId, openItemId: arId, amountCents: 10000, businessDate: DAY } };
+      } else if (mode === 'reversal') {
+        const voucherId = `gate-a-ref-voucher-${suffix}`;
+        db.prepare(`INSERT INTO accounting_vouchers(id,voucher_no,source_type,source_id,voucher_date,remark,creator_id,created_at) VALUES(?,?,'PAYMENT_COLLECTION',?,?,'','wave7-race-actor',?)`)
+          .run(voucherId, `GAR-V-${suffix}`, sourceId, DAY, now);
+        const bankSubjectId = db.prepare("SELECT id FROM accounting_subjects WHERE code='1002' AND active=1").get().id;
+        const arSubjectId = db.prepare("SELECT id FROM accounting_subjects WHERE code='1122' AND active=1").get().id;
+        db.prepare(`INSERT INTO accounting_entries(id,voucher_id,subject_id,direction,amount_cents,summary) VALUES(?,?,?,?,10000,'GAR'),(?,?,?,?,10000,'GAR')`)
+          .run(`gate-a-ref-debit-${suffix}`, voucherId, bankSubjectId, 'DEBIT', `gate-a-ref-credit-${suffix}`, voucherId, arSubjectId, 'CREDIT');
+        db.prepare(`INSERT INTO settlement_account_movements(id,settlement_account_id,source_type,source_id,direction,amount_cents,business_date,voucher_id,created_at)
+          VALUES(?,'wave7-race-bank','PAYMENT_COLLECTION',?,'IN',10000,?,?,?)`).run(`gate-a-ref-move-${suffix}`, sourceId, DAY, voucherId, now);
+        other = { action: 'reverse-settlement', key: `gate-a-ref-reverse-${suffix}`, documentId: sourceId,
+          body: { businessDate: DAY, reason: 'Gate A refund race', components: [{ type: 'UNAPPLIED', id: balanceId, amountCents: 10000 }] } };
+      }
+      const refund = (key) => ({ action: 'create-refund', key, body: { side: 'CUSTOMER', balanceId, partyId: customerId,
+        amountCents: 10000, businessDate: DAY, paymentMethod: 'BANK', settlementAccountId: 'wave7-race-bank', reason: 'Gate A refund race' } });
+      return { customerId, balanceId, refund, other };
+    };
+
+    const race = async (label, leftCommand, rightCommand) => {
+      const left = new Worker(`${label}-left`); const right = new Worker(`${label}-right`); const control = new Worker(`${label}-control`);
+      let held = false;
+      try {
+        const [l, r] = await Promise.all([left.run({ action: 'register' }), right.run({ action: 'register' })]);
+        await control.run({ action: 'hold-gate' }); held = true;
+        const pending = [left.run(leftCommand), right.run(rightCommand)];
+        assert.equal(waitAtTransactionGate(db, [l.connectionId, r.connectionId]), true, `${label}: both production transactions overlap at L0`);
+        await control.run({ action: 'release-gate' }); held = false;
+        return Promise.all(pending);
+      } finally {
+        if (held) { try { await control.run({ action: 'release-gate' }); } catch {} }
+        await Promise.all([left.close(), right.close(), control.close()]);
+      }
+    };
+
+    const rr = seedParent('m21', 'refund');
+    const rrResults = await race('M21-refund-refund', rr.refund('gate-a-m21-left'), rr.refund('gate-a-m21-right'));
+    assert.equal(rrResults.filter((row) => row.status === 201).length, 1, JSON.stringify(rrResults));
+    assert.equal(rrResults.filter((row) => row.status === 409).length, 1, JSON.stringify(rrResults));
+
+    const ra = seedParent('m22', 'apply');
+    const raResults = await race('M22-refund-apply', ra.refund('gate-a-m22-refund'), ra.other);
+    assert.equal(raResults.filter((row) => row.status === 201).length, 1, JSON.stringify(raResults));
+    assert.equal(raResults.filter((row) => row.status === 409).length, 1, JSON.stringify(raResults));
+
+    const rv = seedParent('m23', 'reversal');
+    const rvResults = await race('M23-refund-reversal', rv.refund('gate-a-m23-refund'), rv.other);
+    assert.equal(rvResults.filter((row) => row.status === 201).length, 1, JSON.stringify(rvResults));
+    assert.equal(rvResults.filter((row) => row.status === 409).length, 1, JSON.stringify(rvResults));
+
+    for (const fixture of [rr, ra, rv]) {
+      const consumed = Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'").get(fixture.balanceId).n)
+        + Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM balance_applications WHERE balance_id=? AND status='CONFIRMED'").get(fixture.balanceId).n)
+        + Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM settlement_reversal_items WHERE component_type='UNAPPLIED' AND original_component_id=?").get(fixture.balanceId).n);
+      assert.equal(consumed, 10000, `${fixture.balanceId}: exactly one full-capacity effect commits`);
+    }
+
+    const replayFixture = seedParent('m24', 'refund');
+    const replayWorker = new Worker('M24-replay');
+    try {
+      const command = replayFixture.refund('gate-a-m24-exact');
+      const first = await replayWorker.run(command); const replay = await replayWorker.run(command);
+      assert.equal(first.status, 201); assert.equal(replay.status, 200);
+      assert.equal(replay.body.id, first.body.id);
+      assert.equal(replay.body.replayed, true);
+      const durableCounts = () => ({
+        refunds: Number(db.prepare('SELECT COUNT(*) n FROM financial_refunds WHERE balance_id=?').get(replayFixture.balanceId).n),
+        vouchers: Number(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(first.body.id).n),
+        entries: Number(db.prepare("SELECT COUNT(*) n FROM accounting_entries ae JOIN accounting_vouchers av ON av.id=ae.voucher_id WHERE av.source_type='FINANCIAL_REFUND' AND av.source_id=?").get(first.body.id).n),
+        movements: Number(db.prepare("SELECT COUNT(*) n FROM settlement_account_movements WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(first.body.id).n),
+        audits: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='FINANCIAL_REFUND' AND entity_id=? AND action='CONFIRM'").get(first.body.id).n),
+        idempotency: Number(db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='REFUND_CONFIRM' AND document_id=?").get(`CUSTOMER:${replayFixture.balanceId}`).n),
+      });
+      const afterReplay = durableCounts();
+      assert.deepEqual(afterReplay, { refunds: 1, vouchers: 1, entries: 2, movements: 1, audits: 1, idempotency: 1 });
+      const conflict = await replayWorker.run({ ...command, body: { ...command.body, amountCents: 9999 } });
+      assert.equal(conflict.status, 409);
+      assert.deepEqual(durableCounts(), afterReplay, 'same-key conflict must create zero duplicate durable effects');
+      const depleted = await replayWorker.run(replayFixture.refund('gate-a-m24-fresh'));
+      assert.equal(depleted.status, 409);
+      assert.deepEqual(durableCounts(), afterReplay, 'fresh key after depletion must create zero durable effects');
+    } finally { await replayWorker.close(); }
+  });
+
+  test('Gate A M25: production Manual Gate exhausts bounded lock retries as 503 with zero durable side effects', async () => {
+    const now = new Date().toISOString();
+    const customerId = 'gate-a-m25-customer'; const orderId = 'gate-a-m25-order';
+    const balanceId = 'gate-a-m25-balance'; const snapshotKey = 'gate-a-m25-snapshot';
+    db.prepare("INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,'','','',1,?,?)")
+      .run(customerId, 'GA-M25', 'Gate A M25', now, now);
+    db.prepare("INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at,order_date) VALUES(?,?,?,'APPROVED',10000,'wave7-race-actor',?,?,?)")
+      .run(orderId, 'GA-SO-M25', customerId, now, now, DAY);
+    db.prepare("INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by) VALUES('gate-a-m25-req',?,0,10000,'ORDER_VALUE',?,'wave7-race-actor')")
+      .run(orderId, now);
+    db.prepare("INSERT INTO settlement_unapplied_balances(id,side,balance_type,party_id,source_type,source_id,source_no,original_amount_cents,business_date,status,created_by,created_at) VALUES(?,'CUSTOMER','PREPAYMENT',?,'GATE_A_M25',?,'GA-M25',10000,?,'OPEN','wave7-race-actor',?)")
+      .run(balanceId, customerId, balanceId, DAY, now);
+    const creditTableCount = Number(db.prepare(`SELECT COUNT(*) n FROM information_schema.tables
+      WHERE table_schema=DATABASE() AND table_name='credit_check_results'`).get().n);
+    assert.equal(creditTableCount, 0, 'pre-Wave10 Gate A must not require the Gate B credit_check_results table');
+    const sideEffectTables = [
+      'sales_prepayment_gate_results', 'financial_refunds', 'financial_refund_reversals',
+      'accounting_vouchers', 'accounting_entries', 'settlement_account_movements', 'balance_applications',
+      'settlement_reversal_items', 'service_fulfillments', 'sales_deliveries', 'inventory_transactions',
+      'inventory_mutation_log', 'inventory_locks', 'planning_reservations', 'sales_reservation_intent',
+      'account_receivables', 'sales_orders', 'sales_order_items', 'idempotency_records', 'audit_logs',
+    ];
+    const beforeCounts = Object.fromEntries(sideEffectTables.map((table) => [
+      table, Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n),
+    ]));
+
+    const savedTxRetries = process.env.ERP_DB_TX_RETRY_MAX;
+    const savedGateAttempts = process.env.ERP_GATE_ATTEMPTS_MAX;
+    process.env.ERP_DB_TX_RETRY_MAX = '0';
+    process.env.ERP_GATE_ATTEMPTS_MAX = '1';
+    const holder = new Worker('M25-parent-holder');
+    let held = false;
+    try {
+      const h = await holder.run({ action: 'register' });
+      const productionConnectionId = Number(db.prepare('SELECT CONNECTION_ID() id').get().id);
+      assert.notEqual(h.connectionId, productionConnectionId);
+      await holder.run({ action: 'hold-parent', balanceId }); held = true;
+      const result = await call(`/api/sales-orders/${orderId}/prepayment-gate/PLANNING_RELEASE`, {
+        method: 'POST', body: { businessDate: DAY, snapshotKey },
+      });
+      assert.equal(result.status, 503, JSON.stringify(result));
+      assert.equal(result.data.code, 'SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED');
+      assert.equal(result.data.error, '预付款门评估重试次数已耗尽，请稍后重试');
+      assert.equal(result.data.message, '预付款门评估重试次数已耗尽，请稍后重试');
+      assert.deepEqual(result.data.details, {
+        code: 'SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED', retryable: true, attempts: 1, cause: 'ER_LOCK_WAIT_TIMEOUT',
+      });
+      for (const table of sideEffectTables) {
+        assert.equal(Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n), beforeCounts[table], `${table}: retry exhaustion must commit no durable side effect`);
+      }
+    } finally {
+      if (held) { try { await holder.run({ action: 'release-parent' }); } catch {} }
+      await holder.close();
+      if (savedTxRetries == null) delete process.env.ERP_DB_TX_RETRY_MAX; else process.env.ERP_DB_TX_RETRY_MAX = savedTxRetries;
+      if (savedGateAttempts == null) delete process.env.ERP_GATE_ATTEMPTS_MAX; else process.env.ERP_GATE_ATTEMPTS_MAX = savedGateAttempts;
+    }
+  });
 });

@@ -71,7 +71,7 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 ### Sales & Customer
 
-- Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval
+- Credit Profile / Credit Limit / Occupancy / Credit Check / Special Approval（Wave 9 基础与 Wave 10 运行时已实现；Wave 11 的信用评估、复核与查询未开始）
 - 更完整的 replacement / replenishment obligation
 
 ### Planning
@@ -251,6 +251,10 @@ ERP_DB_PASSWORD=<provided-securely>
 禁止把真实密码、Token、连接串写入仓库、日志、fixture、截图或命令示例。
 
 MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且显式启用 reset guard 的数据库。
+执行 destructive MySQL gate 前还必须同时提供 `ERP_MYSQL_TEST_ALLOW_RESET=true`、与实际配置完全一致且不含密码的
+`ERP_MYSQL_TEST_DISPOSABLE_TARGET=mysql://<user>@<host>:<port>/<database>`，以及
+`ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS=DROP_ALL_TABLES,RECREATE_SCHEMA,DROP_ALL_TABLES_ON_CLEANUP`。
+数据库名称含有 `test` 仅作为附加防护，不能单独证明 disposable ownership。
 
 ## 常用命令
 
@@ -264,8 +268,12 @@ MySQL destructive/reset 测试只能运行于明确标识为 disposable/test 且
 | `pnpm test:heavy` | backup / deployment / production bootstrap 等 heavy gate |
 | `pnpm test:all` | FULL + HEAVY |
 | `pnpm test:list` | 列出 FULL suite 文件 |
-| `pnpm test:mysql` | MySQL 兼容 gate |
+| `pnpm test:mysql` | Wave 7 Gate A-only MySQL A-PARITY/A-PROD/A-RAW/A-TXLIFE 整合门禁 |
+| `pnpm test:mysql:legacy` | 旧通用 MySQL 兼容 gate（不属于 Gate A） |
 | `pnpm test:mysql:concurrency` | MySQL 并发 gate |
+| `pnpm test:mysql:gate-a` | 与 `test:mysql` 相同的 Gate A-only 入口：A-PARITY/A-PROD/A-RAW/A-TXLIFE |
+| `pnpm test:mysql:wave10` | 受保护的 Wave 10 MySQL parity/upgrade + W10-R1..R12 独立会话验收 + M-BIZ-01..20 业务矩阵 Runner；必须单独授权 |
+| `pnpm test:mysql:gate-b` | 独立 Gate B Runner：七个固定案例与实际执行派生 M-board；必须单独授权 |
 | `pnpm test:mysql:finance-concurrency` | Finance Operations 域 15 路 MySQL 真并发回归（RACE-01..15） |
 | `pnpm test:mysql:performance` | MySQL 性能测试 |
 | `pnpm test:finance:responsive` | Finance 六入口 × 320/390/430/680 真实浏览器验收 |
@@ -332,10 +340,13 @@ log/
 - `server/modules/sales-quotations.js` / `sales-orders.js` / `sales-order-changes.js`：Sales Wave 3–4 报价、权威订单写入与受控变更 owner；
 - `server/modules/delivery-notices.js` / `sales-delivery-source.js`：Sales Wave 5 发货通知和销售出库来源/容量控制 owner；
 - `server/modules/credit-policy.js` / `credit-profile.js` / `credit-anchor.js`：Sales Wave 9 信用参数与规则、信用档案、信用锁锚点 owner；
-- `server/modules/credit-scope.js`：Credit 授权 canonical owner —— 信用档案五档读取数据范围（ALL / DENY / CROSS_GROUP / AGGREGATE_PLUS_SELF / AGGREGATE_ONLY）、集中管理写入权威、全局配置读取权威；纯内部 Credit 解析器不在此文件，保持 actor-free；
+- `server/modules/credit-scope.js`：Credit 授权 canonical owner —— 信用档案五档读取数据范围（ALL / DENY / CROSS_GROUP / AGGREGATE_PLUS_SELF / AGGREGATE_ONLY）、集中管理写入权威、全局配置读取权威、信用评估 / 特别审批申请 / 特别审批决策三项能力权威；纯内部 Credit 解析器不在此文件，保持 actor-free；
+- `server/modules/credit-check.js`：Sales Wave 10 信用检查 canonical owner —— `evaluateCredit()` 运行时序列（§36.6.3 步骤 1–10）、适用信用范围解析、PURE_DERIVED 敞口投影、L2–L5 锁链、策略快照绑定与特别审批消费；
+- `server/modules/credit-special-approval.js`：Sales Wave 10 信用特别审批 canonical owner —— 申请、决策、权限上限、失效业务日期、范围模式、申请审批分离与幂等；
+- `server/migrations/sales-customer-wave10-credit-check.js`：Wave 10 两张新表 `credit_check_results` / `credit_special_approval` 的双数据库结构与幂等升级；
 - `server/migrations/sales-customer-wave2-pricing.js`：Wave 2 五表、客户商业扩展两个可空 FK、四列业务 UNIQUE 与双数据库身份触发器；
 - `server/migrations/sales-customer-wave3-quotation.js` / `sales-customer-wave4-orders.js` / `sales-customer-wave5-delivery.js`：Batch A 七张新表及既有订单/出库表 additive schema；
-- `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建；
+- `server/db.js`：SQLite 基础 schema、seed、transaction 和数据库创建，以及 MySQL 事务生命周期安全（pre-BEGIN 准入守卫、回滚结算门、命名锁已验证释放）；
 - `server/migrations/sales-customer-domain.js`：Sales & Customer 按 Wave/id 确定排序的 canonical migration entrypoint；SQLite 初始化与 MySQL live-upgrade 共用，所有未来步骤必须幂等；
 - `server/database/`：MySQL adapter / worker / protocol / schema bootstrap 与 additive reconciliation；
 - `server/migrations/`：增量 schema migration；
@@ -373,8 +384,12 @@ pnpm test:heavy
 
 ```bash
 pnpm test:mysql
+pnpm test:mysql:gate-a # 与 test:mysql 相同的 Gate A-only 入口
+pnpm test:mysql:legacy # 旧通用门禁，仅在单独授权时运行
 pnpm test:mysql:concurrency
 pnpm test:mysql:finance-concurrency
+pnpm test:mysql:wave10 # Wave 10 protected campaign；仅在精确目标授权后运行
+pnpm test:mysql:gate-b # 独立 Gate B campaign；仅在精确目标授权后运行
 ```
 
 release candidate / migration release / 生产认证可运行：
@@ -485,3 +500,59 @@ Wave 8 测试入口：
 - 浏览器响应式与 direct/refresh/back/forward 入口为 `node scripts/acceptance/sales-customer-wave8-acceptance.mjs`（本机 Edge，320/390/430/680 CSS px）。
 
 用户已于 2026-10-21 明确确认 `WAVE8_FINAL_ACCEPTANCE_PASS`。上述 Wave 8 批准范围现作为冻结基线；冻结仅适用于 Wave 8，不冻结整个 ERP 项目，也不授权 Wave 9–13、发布、部署或版本变更。
+
+## Gate A 销售 Wave 7 MySQL 门禁（已验收并冻结）
+
+`pnpm test:mysql` 与 `pnpm test:mysql:gate-a` 指向同一个受保护的 bounded Gate A runner，只运行
+A-PARITY / A-PROD / A-RAW / A-TXLIFE 四个套件。旧通用 MySQL gate 保留在独立的
+`pnpm test:mysql:legacy` 与 `pnpm test:mysql:concurrency`，不属于 Gate A。
+
+用户已于 2026-10-24 明确接受 `GATE_A_MYSQL_CAMPAIGN_PASS`。一次授权的真实 MySQL 执行
+（`mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`，MySQL 8.0.37）四套件全部 PASS：
+
+| 套件 | 用例文件 | 结果 |
+|---|---|---|
+| A-PARITY | `server/mysql-sales-customer-wave7.integration.js` | 4 / 4 PASS |
+| A-PROD | `server/mysql-sales-customer-wave7-concurrency.integration.js` | 6 / 6 PASS |
+| A-RAW | `server/mysql-sales-customer-wave7-raw-locks.integration.js` | 4 / 4 PASS |
+| A-TXLIFE | `server/mysql-transaction-start-safety.integration.js` | 8 / 8 PASS |
+
+- 冻结仅适用于 Gate A 验收边界，不冻结整个 ERP 项目；
+- Gate B 继续保持 `BLOCKED_BY_WAVE10`（`B-COMPOSE` / `B-M9` / `B-M10` / `B-M11` / `B-M12` / `B-M15` / `B-M19C`），
+  Wave 10 已实现但尚未验收，Wave 11 未启动，W7-C1 / W7-C2′ 的其余后续工作未完成；
+- 该冻结不是 Git commit、tag、发布、部署、migration 或版本变更。
+
+## Wave 10 信用检查与特别审批（已实现，待验收）
+
+Wave 10 在 Wave 9 信用基础上实现首个可执行信用运行时：
+
+| 交付物 | 文件 |
+|---|---|
+| 两张新表与双数据库迁移 | `server/migrations/sales-customer-wave10-credit-check.js` |
+| 信用检查引擎 | `server/modules/credit-check.js` |
+| 信用特别审批工作流 | `server/modules/credit-special-approval.js` |
+| 销售订单提交 / 审批与销售出库确认集成 | `server/modules/sales-orders.js`、`server/app.js` |
+| 信用检查评估与信用特别审批页面 | `src/pages/credit-check.jsx` |
+| 集中测试 | `server/sales-customer-wave10-credit-check.test.js` |
+
+API：`POST /api/credit/check`、`GET /api/credit/check-results`、`POST /api/credit/special-approvals`、
+`GET /api/credit/special-approvals`、`GET /api/credit/special-approvals/:id`、
+`POST /api/credit/special-approvals/:id/decide`。
+
+- 信用敞口完全由销售与财务权威事实派生，不存在第二套信用余额或物理敞口缓存；
+- 信用检查在销售订单提交、销售订单审批、销售出库确认三个阶段执行，缺失强制档案时后端 fail closed；
+- 信用管理默认关闭（`CREDIT_MANAGEMENT_ENABLED` 缺省 false），未启用时既有业务流程行为完全不变；
+- 特别审批只对产生该结论的一个信用范围有效，受权限上限、失效业务日期与申请审批分离约束；
+- Wave 10 尚未验收，Gate B 仍为 `BLOCKED_BY_WAVE10`，Wave 11 未开始。
+
+### Wave 10 MySQL readiness
+
+- The live MySQL initialization path now recreates the canonical
+  `finance_open_item_effects` derived View after its dependency tables are bootstrapped, matching
+  SQLite fresh, repeated and upgrade initialization behavior.
+- The protected Wave 10 Guard requires the exact dedicated-account contract: the eleven approved
+  target-schema privileges, three table-scoped Performance Schema reads, global `USAGE` only, no
+  roles and no grant delegation. The trusted normalized grant SHA-256 remains an explicit
+  preflight input.
+- The prepared account is `modern_erp_wave10@127.0.0.1`; its credential is intentionally not
+  stored in this repository. Real Wave 10 MySQL Acceptance remains separately authorized.

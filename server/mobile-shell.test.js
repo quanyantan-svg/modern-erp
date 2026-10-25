@@ -301,9 +301,11 @@ describe('Permissions — canonical registry count', () => {
     // active permission codes (CRM_VIEW, CRM_MANAGE,
     // PROJECT_VIEW, PROJECT_MANAGE). PROJECTS_* / WORKFLOW_*
     // remain.
-    assert.equal(perms.length, 224, `PERMISSIONS array must include the approved Wave 9 family (got ${perms.length})`);
+    assert.equal(perms.length, 226, `PERMISSIONS array must include the approved Wave 10 family (got ${perms.length})`);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(perms.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);
+    assert.equal(perms.filter(([code]) => code === 'CREDIT_SPECIAL_APPROVE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_VIEW').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_PARAMETERS_MANAGE').length, 1);
     assert.equal(perms.filter(([code]) => code === 'SALES_FOUNDATION_MANAGE').length, 1);

@@ -8,7 +8,10 @@ import { assertSellableProduct } from './sales-commercial-foundation.js';
 import { assertGroupScope, currentCommercialExtension, lockSuffix, requireSalesPermission } from './sales-scope.js';
 import { lifecycleArchiveFilter } from './lifecycle-engine.js';
 import { quantityToMicros, toleranceBoundsMicros } from './sales-delivery-source.js';
-import { authorizeSalesPrepaymentGateForMutation } from './sales-prepayment-gate.js';
+import { authorizeSalesPrepaymentGateWithPlan, discoverSalesPrepaymentGatePlan } from './sales-prepayment-gate.js';
+import { assertCreditAllowsBusinessAction, lockCreditPrepaymentParents } from './credit-check.js';
+import { resolveRecognitionPolicy } from './finance-recognition-policy.js';
+import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
 
 const DAY = () => new Date().toISOString().slice(0, 10);
 const NOW = () => new Date().toISOString();
@@ -378,8 +381,8 @@ function validateFrozenLines(db, lines, businessDate, actor) {
   });
 }
 
-function validateStoredOrderSnapshots(db, order) {
-  const lines = db.prepare(`SELECT * FROM sales_order_items WHERE order_id=? ORDER BY id${lockSuffix(db)}`).all(order.id);
+function validateStoredOrderSnapshots(db, order, authoritativeLines = null) {
+  const lines = authoritativeLines || db.prepare(`SELECT * FROM sales_order_items WHERE order_id=? ORDER BY id${lockSuffix(db)}`).all(order.id);
   if (!lines.length) throw new HttpError(409, '销售订单必须至少包含一条明细', { code: 'SALES_SNAPSHOT_REQUIRED' });
   // Physical snapshot columns are nullable by the approved reopen contract.
   // A wholly NULL set is a pre-Batch-A submitted document and remains
@@ -606,6 +609,271 @@ export function getSalesOrderFulfillment(db, res, actor, orderId) {
   return send(res, 200, { lines: projection(db, orderId) });
 }
 
+const SALES_ORDER_SUBMIT_REDISCOVERY_CODES = new Set([
+  'SALES_PREPAYMENT_LOCK_PLAN_STALE',
+  'SALES_PREPAYMENT_PARENT_MISSING',
+  'SALES_PREPAYMENT_PARENT_CLOSED',
+  'SALES_ORDER_SUBMIT_PLAN_STALE',
+  'SALES_ORDER_APPROVE_PLAN_STALE',
+]);
+
+function salesOrderSubmitOuterAttempts() {
+  const configured = Number(process.env.ERP_GATE_ATTEMPTS_MAX ?? 3);
+  return Number.isSafeInteger(configured) && configured >= 1 && configured <= 3 ? configured : 3;
+}
+
+function isSalesOrderSubmitRediscoveryEligible(error) {
+  if (!error) return false;
+  if (error.transactionRetryExhausted) return true;
+  return SALES_ORDER_SUBMIT_REDISCOVERY_CODES.has(error.code)
+    || SALES_ORDER_SUBMIT_REDISCOVERY_CODES.has(error?.details?.code);
+}
+
+function waitForSalesOrderSubmitRediscovery(attempt) {
+  const delayMs = Math.min(100, 20 * (2 ** (attempt - 1)));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+
+function readSalesOrderSubmitRows(db, orderId, { locked = false } = {}) {
+  const suffix = locked ? lockSuffix(db) : '';
+  const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${suffix}`).get(orderId);
+  if (!order) throw new HttpError(404, '销售订单不存在');
+  const lines = db.prepare(`SELECT * FROM sales_order_items WHERE order_id=? ORDER BY id${suffix}`).all(orderId);
+  return { order, lines };
+}
+
+function salesOrderSubmitFingerprint(order, lines) {
+  return requestFingerprint({ order, lines });
+}
+
+function validateSalesOrderSubmit(db, actor, order, lines) {
+  if (order.sales_group_id) {
+    assertGroupScope(db, actor, {
+      salesGroupId: order.sales_group_id,
+      businessDate: order.order_date || DAY(),
+      documentType: 'SALES_ORDER',
+      write: true,
+    });
+  }
+  if (!['DRAFT', 'REJECTED'].includes(order.status)) throw new HttpError(409, '订单状态不可提交');
+  if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
+  if (!order.requested_delivery_date) throw new HttpError(400, '提交前请填写要求交期');
+  if (order.requested_delivery_date < order.order_date) throw new HttpError(400, '要求交期不能早于订单日期');
+  if (!String(order.ship_to_contact_name || '').trim()) throw new HttpError(400, '提交前请填写收货联系人');
+  if (!String(order.ship_to_phone || '').trim()) throw new HttpError(400, '提交前请填写收货电话');
+  if (!String(order.ship_to_address || '').trim()) throw new HttpError(400, '提交前请填写收货地址');
+  if (!String(order.payment_terms || '').trim()) throw new HttpError(400, '提交前请填写付款条件');
+  const invalidLine = lines.some((line) => Number(line.quantity) <= 0
+    || Number(line.amount_cents) < 0
+    || (!Number(line.is_gift_line || 0) && Number(line.unit_price_cents) <= 0)
+    || (Number(line.is_gift_line || 0) === 1 && Number(line.amount_cents) !== 0));
+  if (invalidLine) throw new HttpError(409, '订单明细金额或赠品商业属性无效', { code: 'SALES_ORDER_LINE_INVALID' });
+  if (lines.some((line) => line.price_snapshot_json == null || line.discount_snapshot_json == null)) {
+    throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
+  }
+  validateStoredOrderSnapshots(db, order, lines);
+}
+
+function discoverSalesOrderSubmitPlan(db, actor, orderId) {
+  const { order, lines } = readSalesOrderSubmitRows(db, orderId);
+  validateSalesOrderSubmit(db, actor, order, lines);
+  const businessDate = order.order_date || DAY();
+  const gatePlan = discoverSalesPrepaymentGatePlan(db, orderId, businessDate);
+  return Object.freeze({
+    orderId,
+    businessDate,
+    salesFingerprint: salesOrderSubmitFingerprint(order, lines),
+    gatePlan: Object.freeze({ ...gatePlan, parentBalanceIds: Object.freeze([...gatePlan.parentBalanceIds]) }),
+  });
+}
+
+function submitSalesOrder(db, res, actor, orderId, body, key, operation, fingerprint) {
+  const maxAttempts = salesOrderSubmitOuterAttempts();
+  const admission = startGateRetryAdmission(process.env.ERP_GATE_ATTEMPTS_BUDGET_MS);
+  let attemptsStarted = 0;
+  const deadlineExhausted = () => new HttpError(503, '销售订单提交重试已耗尽', {
+    code: 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED',
+    retryable: true,
+    attempts: attemptsStarted,
+    causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+  });
+  while (attemptsStarted < maxAttempts) {
+    if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+    attemptsStarted += 1;
+    const attempt = attemptsStarted;
+    const plan = discoverSalesOrderSubmitPlan(db, actor, orderId);
+    let result;
+    try {
+      transaction(db, () => {
+        // L1 -> reserved L2..L5 -> L6 -> L7. The shared helper owns the
+        // Finance/Gate sequence and performs no Sales business-row lock.
+        // The Credit Check is composed into the reserved L2..L5 window
+        // (§36.14.3): it runs after the Finance PREPAYMENT parent lock and
+        // before the Gate result / requirement locks.
+        authorizeSalesPrepaymentGateWithPlan(db, plan.gatePlan, {
+          stage: 'PLANNING_RELEASE',
+          actorId: actor.id,
+          mutationKey: `ACTION|PLANNING_RELEASE|SUBMIT|${orderId}|${key || fingerprint}`,
+          afterParentLock: ({ parentBalanceIds }) => {
+            const subject = db.prepare('SELECT customer_id, salesperson_id, total_cents, order_date FROM sales_orders WHERE id=?').get(orderId);
+            assertCreditAllowsBusinessAction(db, {
+              customerId: subject.customer_id,
+              salespersonId: subject.salesperson_id,
+              stage: 'SO_SUBMIT',
+              businessDate: subject.order_date || plan.businessDate,
+              proposedDeltaCents: Number(subject.total_cents),
+              recognitionMode: resolveRecognitionPolicy(db, 'AR', 'SALES_DELIVERY', null, subject.order_date || plan.businessDate).mode,
+              sourceRef: { sourceType: 'SALES_ORDER', sourceId: orderId },
+              actorId: actor.id,
+              authorizationContext: actor.id,
+              prepaymentParentsLocked: parentBalanceIds.length > 0,
+            });
+          },
+        });
+
+        // L8 is unconditionally last: lock the Sales Order, then its items in
+        // stable id order, and derive mutation authority only from these rows.
+        const { order, lines } = readSalesOrderSubmitRows(db, orderId, { locked: true });
+        if (salesOrderSubmitFingerprint(order, lines) !== plan.salesFingerprint) {
+          throw new HttpError(409, '销售订单提交计划已过期，请重试', {
+            code: 'SALES_ORDER_SUBMIT_PLAN_STALE',
+          });
+        }
+        validateSalesOrderSubmit(db, actor, order, lines);
+        db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,updated_at=? WHERE id=?").run(NOW(), NOW(), orderId);
+        result = { ok: true, id: orderId, action: 'submit' };
+        if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result);
+        audit(db, actor.id, 'SUBMIT', 'SALES_ORDER', orderId, String(body.reason || ''));
+      });
+      return send(res, 200, result);
+    } catch (error) {
+      if (!isSalesOrderSubmitRediscoveryEligible(error)) throw error;
+      if (attempt >= maxAttempts) {
+        throw new HttpError(503, '销售订单提交重试已耗尽', {
+          code: 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED',
+          retryable: true,
+          attempts: attempt,
+          causeCode: error?.details?.code || error?.code || null,
+        });
+      }
+      if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+      waitForSalesOrderSubmitRediscovery(attempt);
+    }
+  }
+  throw new HttpError(503, '销售订单提交重试已耗尽', { code: 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED', retryable: true });
+}
+
+function discoverSalesOrderApprovePlan(db, actor, orderId) {
+  // Read-only discovery. No business row is locked here; the authoritative
+  // decision is taken under the L8 lock and revalidated against this snapshot.
+  const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(orderId);
+  if (!order) throw new HttpError(404, '销售订单不存在');
+  if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理');
+  if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
+  if (order.sales_group_id) {
+    assertGroupScope(db, actor, {
+      salesGroupId: order.sales_group_id,
+      businessDate: order.order_date || DAY(),
+      documentType: 'SALES_ORDER',
+      write: true,
+    });
+  }
+  return Object.freeze({
+    orderId,
+    customerId: order.customer_id,
+    salespersonId: order.salesperson_id,
+    businessDate: order.order_date || DAY(),
+    totalCents: Number(order.total_cents),
+    orderFingerprint: requestFingerprint({
+      status: order.status, customerId: order.customer_id, salespersonId: order.salesperson_id,
+      totalCents: Number(order.total_cents), salesGroupId: order.sales_group_id || null,
+      orderDate: order.order_date || null, creatorId: order.creator_id,
+    }),
+  });
+}
+
+// §37.19.1 — Wave 10 makes `approve` credit-controlled and its sequence
+// becomes L1? -> L2..L5 -> L8. The Sales Order row lock moves to the last
+// position; every authority decision is still taken under that lock and
+// revalidated against the discovery snapshot.
+function approveSalesOrder(db, res, actor, orderId, body, key, operation, fingerprint) {
+  const maxAttempts = salesOrderSubmitOuterAttempts();
+  const admission = startGateRetryAdmission(process.env.ERP_GATE_ATTEMPTS_BUDGET_MS);
+  let attemptsStarted = 0;
+  const deadlineExhausted = () => new HttpError(503, '销售订单审批重试已耗尽', {
+    code: 'SALES_ORDER_APPROVE_RETRY_EXHAUSTED',
+    retryable: true,
+    attempts: attemptsStarted,
+    causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+  });
+  while (attemptsStarted < maxAttempts) {
+    if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+    attemptsStarted += 1;
+    const attempt = attemptsStarted;
+    const plan = discoverSalesOrderApprovePlan(db, actor, orderId);
+    let result;
+    try {
+      transaction(db, () => {
+        // L1 — the Finance PREPAYMENT parent lock. The approve path invokes no
+        // Gate phase, so the Credit Check owns the L1 lock here.
+        lockCreditPrepaymentParents(db, { customerId: plan.customerId, businessDate: plan.businessDate });
+        // L2..L5 — the Credit Check.
+        assertCreditAllowsBusinessAction(db, {
+          customerId: plan.customerId,
+          salespersonId: plan.salespersonId,
+          stage: 'SO_APPROVE',
+          businessDate: plan.businessDate,
+          proposedDeltaCents: plan.totalCents,
+          recognitionMode: resolveRecognitionPolicy(db, 'AR', 'SALES_DELIVERY', null, plan.businessDate).mode,
+          sourceRef: { sourceType: 'SALES_ORDER', sourceId: orderId },
+          actorId: actor.id,
+          authorizationContext: actor.id,
+          prepaymentParentsLocked: true,
+        });
+        // L8 — the Sales Order row, unconditionally last.
+        const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId);
+        if (!order) throw new HttpError(404, '销售订单不存在');
+        if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理');
+        if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
+        if (order.sales_group_id) {
+          assertGroupScope(db, actor, {
+            salesGroupId: order.sales_group_id,
+            businessDate: order.order_date || DAY(),
+            documentType: 'SALES_ORDER',
+            write: true,
+          });
+        }
+        if (requestFingerprint({
+          status: order.status, customerId: order.customer_id, salespersonId: order.salesperson_id,
+          totalCents: Number(order.total_cents), salesGroupId: order.sales_group_id || null,
+          orderDate: order.order_date || null, creatorId: order.creator_id,
+        }) !== plan.orderFingerprint) {
+          throw new HttpError(409, '销售订单审批计划已过期，请重试', { code: 'SALES_ORDER_APPROVE_PLAN_STALE' });
+        }
+        validateStoredOrderSnapshots(db, order);
+        db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId);
+        result = { ok: true, id: orderId, action: 'approve' };
+        if (key) saveIdempotency(db, operation, orderId, key, fingerprint, result);
+        audit(db, actor.id, 'APPROVE', 'SALES_ORDER', orderId, String(body.reason || ''));
+      });
+      return send(res, 200, result);
+    } catch (error) {
+      if (!isSalesOrderSubmitRediscoveryEligible(error)) throw error;
+      if (attempt >= maxAttempts) {
+        throw new HttpError(503, '销售订单审批重试已耗尽', {
+          code: 'SALES_ORDER_APPROVE_RETRY_EXHAUSTED',
+          retryable: true,
+          attempts: attempt,
+          causeCode: error?.details?.code || error?.code || null,
+        });
+      }
+      if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+      waitForSalesOrderSubmitRediscovery(attempt);
+    }
+  }
+  throw new HttpError(503, '销售订单审批重试已耗尽', { code: 'SALES_ORDER_APPROVE_RETRY_EXHAUSTED', retryable: true });
+}
+
 export async function salesOrderAction(db, req, res, actor, orderId, action, { requireIdempotencyKey = true } = {}) {
   if (action === 'submit') requireSalesPermission(actor, 'ORDERS_SUBMIT');
   else if (action === 'approve') requireSalesPermission(actor, 'ORDERS_APPROVE');
@@ -615,38 +883,14 @@ export async function salesOrderAction(db, req, res, actor, orderId, action, { r
   const body = await readJson(req); const key = String(req.headers['idempotency-key'] || '').trim(); if (requireIdempotencyKey && !key) throw new HttpError(422, 'Idempotency-Key 必填');
   const operation = `SALES_ORDER_${action.toUpperCase()}`; const fingerprint = requestFingerprint({ action, body });
   const replay = key ? idempotencyReplay(db, operation, orderId, key, fingerprint) : null; if (replay) return send(res, 200, { ...replay, replayed: true });
+  if (action === 'submit') return submitSalesOrder(db, res, actor, orderId, body, key, operation, fingerprint);
+  if (action === 'approve') return approveSalesOrder(db, res, actor, orderId, body, key, operation, fingerprint);
   let result;
   transaction(db, () => {
     const order = db.prepare(`SELECT * FROM sales_orders WHERE id=?${lockSuffix(db)}`).get(orderId); if (!order) throw new HttpError(404, '销售订单不存在');
     if (order.sales_group_id) assertGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: order.order_date || DAY(), documentType: 'SALES_ORDER', write: true });
-    if (action === 'submit') { if (!['DRAFT','REJECTED'].includes(order.status)) throw new HttpError(409, '订单状态不可提交');
-      if (!order.order_date) throw new HttpError(400, '提交前请填写订单日期');
-      if (!order.requested_delivery_date) throw new HttpError(400, '提交前请填写要求交期');
-      if (order.requested_delivery_date < order.order_date) throw new HttpError(400, '要求交期不能早于订单日期');
-      if (!String(order.ship_to_contact_name || '').trim()) throw new HttpError(400, '提交前请填写收货联系人');
-      if (!String(order.ship_to_phone || '').trim()) throw new HttpError(400, '提交前请填写收货电话');
-      if (!String(order.ship_to_address || '').trim()) throw new HttpError(400, '提交前请填写收货地址');
-      if (!String(order.payment_terms || '').trim()) throw new HttpError(400, '提交前请填写付款条件');
-      const invalidLine = db.prepare(`SELECT 1 FROM sales_order_items WHERE order_id=? AND
-        (quantity<=0 OR amount_cents<0 OR (COALESCE(is_gift_line,0)=0 AND unit_price_cents<=0)
-         OR (COALESCE(is_gift_line,0)=1 AND amount_cents<>0)) LIMIT 1`).get(orderId);
-      if (invalidLine) throw new HttpError(409, '订单明细金额或赠品商业属性无效', { code: 'SALES_ORDER_LINE_INVALID' });
-      const missing = db.prepare("SELECT 1 FROM sales_order_items WHERE order_id=? AND (price_snapshot_json IS NULL OR discount_snapshot_json IS NULL) LIMIT 1").get(orderId); if (missing) throw new HttpError(409, '新订单行缺少权威商业快照', { code: 'SALES_SNAPSHOT_REQUIRED' });
-      validateStoredOrderSnapshots(db, order);
-      // §29.16 / Wave 7: bind Sales Order submit to the PLANNING_RELEASE stage
-      // prepayment gate decision. The Sales-side gate row must be PASS, WARN or
-      // OVERRIDE_REQUIRED with reason. BLOCK or missing evaluation refuses.
-      authorizeSalesPrepaymentGateForMutation(db, {
-        salesOrderId: orderId,
-        stage: 'PLANNING_RELEASE',
-        businessDate: order.order_date || DAY(),
-        actorId: actor.id,
-        mutationKey: `ACTION|PLANNING_RELEASE|SUBMIT|${orderId}|${key || fingerprint}`,
-      });
-      db.prepare("UPDATE sales_orders SET status='SUBMITTED',submitted_at=?,updated_at=? WHERE id=?").run(NOW(), NOW(), orderId);
-    } else if (action === 'approve' || action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
-      if (action === 'approve') { validateStoredOrderSnapshots(db, order); db.prepare("UPDATE sales_orders SET status='APPROVED',reviewer_id=?,reviewed_at=?,updated_at=? WHERE id=?").run(actor.id, NOW(), NOW(), orderId); }
-      else db.prepare("UPDATE sales_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?").run(actor.id, NOW(), String(body.reason || '').trim(), NOW(), orderId);
+    if (action === 'reject') { if (order.status !== 'SUBMITTED') throw new HttpError(409, '只有待审批订单可以处理'); if (order.creator_id === actor.id) throw new HttpError(409, '创建人不能审批自己的订单');
+      db.prepare("UPDATE sales_orders SET status='REJECTED',reviewer_id=?,reviewed_at=?,rejection_reason=?,updated_at=? WHERE id=?").run(actor.id, NOW(), String(body.reason || '').trim(), NOW(), orderId);
     } else if (action === 'close' || action === 'cancel') { if (order.status !== 'APPROVED' || order.commercial_close_state !== 'OPEN') throw new HttpError(409, '订单不可关闭'); const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(422, '关闭原因必填');
       const facts = projection(db, orderId);
       assertNoPendingDeliveryNotice(db, orderId);

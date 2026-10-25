@@ -160,6 +160,25 @@
 
 `AUDIT → COVERAGE/GAP → REQUIREMENT → DESIGN → IMPLEMENTATION → ACCEPTANCE/FREEZE`
 
+### 4.0 连续阶段授权（Consecutive Stage Authorization）
+
+AUDIT、REQUIREMENT、DESIGN、IMPLEMENTATION、ACCEPTANCE/FREEZE 始终是不同的治理阶段。各阶段的证据范围、文件修改边界和验收标准不得合并，也不得互相替代。
+
+当用户在同一次指令中**一次性明确授权多个连续阶段**时（例如同时授权 Requirement 与 Design），可以在一次工作会话内连续执行这些阶段，不要求每个阶段结束后都暂停对话等待再次确认。
+
+连续执行时必须满足：
+
+- 每个阶段分别记录：授权来源、范围、输入依据、实际修改的文件、结论、未解决问题、下一阶段边界；
+- 各阶段证据独立留存，不得合并为单一“已完成”声明；
+- Requirement 阶段仍然**只修改 `document.md` 中与本次需求相关的章节**并追加当天日志，**不得提前修改 `solution.md`**；
+- Design 阶段仍然**只修改 `solution.md` 中与本次功能相关的设计**并追加当天日志；
+- 不得跨阶段边界修改文件：Requirement 不写实现代码，Design 不写实现代码；
+- **DESIGN 完成后必须 HARD STOP。** 不得自动进入 IMPLEMENTATION，必须等待用户明确批准 Implementation；
+- Acceptance / Freeze 仍按 §4.5 执行，仍须用户最终验收；
+- 用户的连续阶段授权**只覆盖被明确授权的阶段**。它不代表自动授权其他阶段，也不代表授权 Git 写操作、数据库操作、migration 执行、发布、部署或任何外部写入；这些仍按 §11、§13、§16 单独取得用户批准。
+
+未获连续阶段授权时，§4.1–§4.5 的逐阶段停顿与确认要求全部有效。
+
 ### 4.1 AUDIT / COVERAGE
 
 先检查真实仓库：
@@ -199,11 +218,11 @@ Coverage 只允许：
 - 不修改无关需求；
 - 不写实现代码；
 - 不提前改 `solution.md`；
-- 完成后停止，等待用户明确确认。
+- 完成后停止，等待用户明确确认；如果用户已按 §4.0 一次性授权连续执行 Requirement 与 Design，则不因本步骤停顿而中断，直接进入 §4.3，并在本阶段记录中写明该授权来源。
 
 ### 4.3 DESIGN
 
-Requirement 获批后：
+Requirement 获批后（或用户已按 §4.0 一次性授权连续执行 Requirement 与 Design 时）：
 
 - **只修改 `solution.md` 与本次功能相关的设计**；
 - 说明实现过程，不粘贴大段实现代码；
@@ -220,7 +239,7 @@ Requirement 获批后：
   - tests；
   - rollback（当适用）。
 
-完成后停止，等待用户明确确认。
+**完成后必须 HARD STOP**，等待用户明确确认 Implementation。不得自动进入 §4.4。
 
 ### 4.4 IMPLEMENTATION
 

@@ -27,12 +27,14 @@
 // POSITIVE_INFINITY, so we never delegate to it directly — Sales must compute
 // capacity from `expected_supply_capacity` itself.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { HttpError, allow, allowAny, readJson, send } from '../lib/http.js';
 import { computePositionKey } from '../lib/inventory-position.js';
-import { authorizeSalesPrepaymentGateForMutation } from './sales-prepayment-gate.js';
+import { authorizeSalesPrepaymentGateWithPlan, discoverSalesPrepaymentGatePlan } from './sales-prepayment-gate.js';
+import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './sales-gate-retry-admission.js';
+import { lockSuffix } from './sales-scope.js';
 import {
   createPlanningReservationCanonical,
   recordPlanningReservationConsumption,
@@ -60,17 +62,19 @@ function isNonNegativeNumber(value) {
   return Number.isFinite(n) && n >= 0;
 }
 
-function loadOrder(db, orderId) {
+function loadOrder(db, orderId, { locked = false } = {}) {
+  const suffix = locked ? lockSuffix(db) : '';
   const row = db.prepare(`SELECT id, order_no, customer_id, status, sales_group_id, salesperson_id,
       commercial_close_state
-    FROM sales_orders WHERE id=?`).get(orderId);
+    FROM sales_orders WHERE id=?${suffix}`).get(orderId);
   if (!row) throw new HttpError(404, '销售订单不存在');
   return row;
 }
 
-function loadOrderItem(db, itemId) {
+function loadOrderItem(db, itemId, { locked = false } = {}) {
+  const suffix = locked ? lockSuffix(db) : '';
   const row = db.prepare(`SELECT id, order_id, product_id, line_no, quantity
-    FROM sales_order_items WHERE id=?`).get(itemId);
+    FROM sales_order_items WHERE id=?${suffix}`).get(itemId);
   if (!row) throw new HttpError(404, '订单明细不存在');
   return row;
 }
@@ -88,10 +92,11 @@ function requireSalesGroupScope(db, actor, { salesGroupId, businessDate }) {
   throw new HttpError(403, `不在销售组 ${group?.group_code || salesGroupId} 范围内`, { code: 'SALES_GROUP_SCOPE_DENIED' });
 }
 
-function findActiveIntent(db, { salesOrderId, salesOrderItemId, mode }) {
+function findActiveIntent(db, { salesOrderId, salesOrderItemId, mode, locked = false }) {
+  const suffix = locked ? lockSuffix(db) : '';
   const row = db.prepare(`SELECT * FROM sales_reservation_intent
     WHERE sales_order_id=? AND COALESCE(sales_order_item_id,'')=COALESCE(?,'') AND reservation_mode=?
-    ORDER BY created_at DESC LIMIT 1`).get(salesOrderId, salesOrderItemId || '', mode);
+    ORDER BY created_at DESC LIMIT 1${suffix}`).get(salesOrderId, salesOrderItemId || '', mode);
   return row || null;
 }
 
@@ -204,6 +209,68 @@ function consumePlanningReservationAdapter(db, actor, reservationId, qty) {
   recordPlanningReservationConsumption(db, actor, reservationId, qty);
 }
 
+const RESERVATION_REDISCOVERY_CODES = new Set([
+  'SALES_PREPAYMENT_LOCK_PLAN_STALE',
+  'SALES_PREPAYMENT_PARENT_MISSING',
+  'SALES_PREPAYMENT_PARENT_CLOSED',
+  'SALES_RESERVATION_INTENT_PLAN_STALE',
+]);
+
+function reservationOuterAttempts() {
+  const configured = Number(process.env.ERP_GATE_ATTEMPTS_MAX ?? 3);
+  return Number.isSafeInteger(configured) && configured >= 1 && configured <= 3 ? configured : 3;
+}
+
+function isReservationRediscoveryEligible(error) {
+  if (!error) return false;
+  if (error.transactionRetryExhausted) return true;
+  return RESERVATION_REDISCOVERY_CODES.has(error.code)
+    || RESERVATION_REDISCOVERY_CODES.has(error?.details?.code);
+}
+
+function waitForReservationRediscovery(attempt) {
+  const delayMs = Math.min(100, 20 * (2 ** (attempt - 1)));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+}
+
+function readReservationSalesRows(db, { salesOrderId, salesOrderItemId, locked = false }) {
+  const order = loadOrder(db, salesOrderId, { locked });
+  const item = salesOrderItemId ? loadOrderItem(db, salesOrderItemId, { locked }) : null;
+  if (item && item.order_id !== order.id) {
+    throw new HttpError(409, '订单行不属于该订单', { code: 'SALES_RESERVATION_INTENT_ITEM_MISMATCH' });
+  }
+  return { order, item };
+}
+
+function reservationSalesFingerprint(order, item) {
+  return createHash('sha256').update(JSON.stringify({ order, item })).digest('hex');
+}
+
+function assertNoDuplicateRequestedIntent(db, input, { locked = false } = {}) {
+  const existing = findActiveIntent(db, { ...input, locked });
+  if (existing && existing.intent_state === 'REQUESTED') {
+    throw new HttpError(409, '该订单行已存在 REQUESTED 意图，请先释放或消费', { code: 'SALES_RESERVATION_INTENT_DUPLICATE' });
+  }
+  return existing;
+}
+
+function discoverReservationIntentPlan(db, actor, input) {
+  const { order, item } = readReservationSalesRows(db, input);
+  requireSalesGroupScope(db, actor, {
+    salesGroupId: order.sales_group_id,
+    businessDate: input.businessDate,
+  });
+  assertNoDuplicateRequestedIntent(db, input);
+  const gatePlan = discoverSalesPrepaymentGatePlan(db, input.salesOrderId, input.businessDate);
+  return Object.freeze({
+    salesFingerprint: reservationSalesFingerprint(order, item),
+    gatePlan: Object.freeze({
+      ...gatePlan,
+      parentBalanceIds: Object.freeze([...gatePlan.parentBalanceIds]),
+    }),
+  });
+}
+
 // ---------- public API ----------
 
 export function listReservationIntents(db, res, actor, url) {
@@ -233,6 +300,7 @@ export async function requestReservationIntent(db, req, res, actor) {
   const mode = String(body.reservationMode || body.reservation_mode || '').toUpperCase();
   if (!RESERVATION_MODES.includes(mode)) throw new HttpError(400, `reservationMode 仅支持 ${RESERVATION_MODES.join(' / ')}`);
   const salesOrderItemId = body.salesOrderItemId || body.sales_order_item_id || null;
+  const businessDate = body.businessDate || now().slice(0, 10);
   const order = loadOrder(db, salesOrderId);
   if (salesOrderItemId) {
     const item = loadOrderItem(db, salesOrderItemId);
@@ -240,7 +308,7 @@ export async function requestReservationIntent(db, req, res, actor) {
       throw new HttpError(409, '订单行不属于该订单', { code: 'SALES_RESERVATION_INTENT_ITEM_MISMATCH' });
     }
   }
-  requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate: body.businessDate || now().slice(0, 10) });
+  requireSalesGroupScope(db, actor, { salesGroupId: order.sales_group_id, businessDate });
 
   const productId = body.productId || body.product_id;
   const warehouseId = body.warehouseId || body.warehouse_id || null;
@@ -265,67 +333,105 @@ export async function requestReservationIntent(db, req, res, actor) {
     }
   }
 
-  const existing = findActiveIntent(db, { salesOrderId, salesOrderItemId, mode });
-  if (existing && existing.intent_state === 'REQUESTED') {
-    throw new HttpError(409, '该订单行已存在 REQUESTED 意图，请先释放或消费', { code: 'SALES_RESERVATION_INTENT_DUPLICATE' });
-  }
+  assertNoDuplicateRequestedIntent(db, { salesOrderId, salesOrderItemId, mode });
 
   const stamp = now();
   const intentId = randomUUID();
-  let result;
-  transaction(db, () => {
-    // §29.16 / Wave 7: bound the reservation intent request to the RESERVATION
-    // stage gate decision. The Sales-side gate row must be PASS, WARN or
-    // OVERRIDE_REQUIRED (with reason). BLOCK or missing evaluation refuses.
-    // The gate decision is recorded under the same transaction so the Sales
-    // mutation and the Finance locked-READ remain atomic.
-    authorizeSalesPrepaymentGateForMutation(db, {
-      salesOrderId,
-      stage: 'RESERVATION',
-      businessDate: body.businessDate || now().slice(0, 10),
-      actorId: actor.id,
-      mutationKey: `ACTION|RESERVATION|REQUEST|${intentId}`,
-    });
-    let inventoryLockId = null;
-    let planningReservationId = null;
-    if (mode === 'INVENTORY_LOCK') {
-      inventoryLockId = createInventoryLockAdapter(db, actor, { salesOrderId, productId, warehouseId, quantity });
-    } else if (mode === 'MANUAL_RESERVATION') {
-      planningReservationId = createPlanningReservationAdapter(db, actor, {
-        salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
-        reservationType: 'MANUAL', supplySourceType: body.supplySourceType || body.supply_source_type || 'ON_HAND',
-        supplySourceId: body.supplySourceId || body.supply_source_id || null,
-      });
-    } else if (mode === 'ON_HAND_RESERVATION') {
-      planningReservationId = createPlanningReservationAdapter(db, actor, {
-        salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
-        reservationType: 'STRONG', supplySourceType: 'ON_HAND', supplySourceId: null,
-      });
-    } else if (mode === 'EXPECTED_SUPPLY_RESERVATION') {
-      planningReservationId = createPlanningReservationAdapter(db, actor, {
-        salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
-        reservationType: 'STRONG',
-        supplySourceType: expectedSupplySourceType,
-        supplySourceId: expectedSupplySourceId,
-      });
-    } else {
-      throw new HttpError(400, 'reservationMode 不支持');
-    }
-    db.prepare(`INSERT INTO sales_reservation_intent(id, sales_order_id, sales_order_item_id, product_id,
-      warehouse_id, reservation_mode, intent_state, requested_qty, granted_qty, consumed_qty, released_qty,
-      planning_reservation_id, inventory_lock_id, expected_supply_source_type, expected_supply_source_id,
-      expected_supply_capacity, consumer_event, requested_at, granted_at, released_at, created_at, created_by)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-      intentId, salesOrderId, salesOrderItemId, productId, warehouseId, mode, 'REQUESTED', quantity, 0, 0, 0,
-      planningReservationId, inventoryLockId,
-      expectedSupplySourceType,
-      expectedSupplySourceId,
-      null, null, stamp, null, null, stamp, actor.id,
-    );
-    audit(db, actor.id, 'REQUEST', 'SALES_RESERVATION_INTENT', intentId, `${salesOrderId} ${mode} ${quantity}`);
-    result = summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId));
+  const input = Object.freeze({ salesOrderId, salesOrderItemId, mode, businessDate });
+  const maxAttempts = reservationOuterAttempts();
+  const admission = startGateRetryAdmission(process.env.ERP_GATE_ATTEMPTS_BUDGET_MS);
+  let attemptsStarted = 0;
+  const deadlineExhausted = () => new HttpError(503, '预留意图请求重试已耗尽', {
+    code: 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED',
+    retryable: true,
+    attempts: attemptsStarted,
+    causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
   });
-  return send(res, 201, result);
+  while (attemptsStarted < maxAttempts) {
+    if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+    attemptsStarted += 1;
+    const attempt = attemptsStarted;
+    const plan = discoverReservationIntentPlan(db, actor, input);
+    let result;
+    try {
+      transaction(db, () => {
+        // L1 -> L6 -> L7. The shared helper owns the Finance/Gate prefix.
+        authorizeSalesPrepaymentGateWithPlan(db, plan.gatePlan, {
+          stage: 'RESERVATION',
+          actorId: actor.id,
+          mutationKey: `ACTION|RESERVATION|REQUEST|${intentId}`,
+        });
+
+        // Sales business rows follow the Gate prefix. Only these locked rows,
+        // never the unlocked discovery snapshot, authorize the mutation.
+        const { order: lockedOrder, item: lockedItem } = readReservationSalesRows(db, {
+          salesOrderId, salesOrderItemId, locked: true,
+        });
+        if (reservationSalesFingerprint(lockedOrder, lockedItem) !== plan.salesFingerprint) {
+          throw new HttpError(409, '预留意图计划已过期，请重试', {
+            code: 'SALES_RESERVATION_INTENT_PLAN_STALE',
+          });
+        }
+        requireSalesGroupScope(db, actor, { salesGroupId: lockedOrder.sales_group_id, businessDate });
+        assertNoDuplicateRequestedIntent(db, input, { locked: true });
+
+        let inventoryLockId = null;
+        let planningReservationId = null;
+        if (mode === 'INVENTORY_LOCK') {
+          inventoryLockId = createInventoryLockAdapter(db, actor, { salesOrderId, productId, warehouseId, quantity });
+        } else if (mode === 'MANUAL_RESERVATION') {
+          planningReservationId = createPlanningReservationAdapter(db, actor, {
+            salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
+            reservationType: 'MANUAL', supplySourceType: body.supplySourceType || body.supply_source_type || 'ON_HAND',
+            supplySourceId: body.supplySourceId || body.supply_source_id || null,
+          });
+        } else if (mode === 'ON_HAND_RESERVATION') {
+          planningReservationId = createPlanningReservationAdapter(db, actor, {
+            salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
+            reservationType: 'STRONG', supplySourceType: 'ON_HAND', supplySourceId: null,
+          });
+        } else if (mode === 'EXPECTED_SUPPLY_RESERVATION') {
+          planningReservationId = createPlanningReservationAdapter(db, actor, {
+            salesOrderId, salesOrderItemId, productId, warehouseId, quantity,
+            reservationType: 'STRONG',
+            supplySourceType: expectedSupplySourceType,
+            supplySourceId: expectedSupplySourceId,
+          });
+        } else {
+          throw new HttpError(400, 'reservationMode 不支持');
+        }
+        db.prepare(`INSERT INTO sales_reservation_intent(id, sales_order_id, sales_order_item_id, product_id,
+          warehouse_id, reservation_mode, intent_state, requested_qty, granted_qty, consumed_qty, released_qty,
+          planning_reservation_id, inventory_lock_id, expected_supply_source_type, expected_supply_source_id,
+          expected_supply_capacity, consumer_event, requested_at, granted_at, released_at, created_at, created_by)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          intentId, salesOrderId, salesOrderItemId, productId, warehouseId, mode, 'REQUESTED', quantity, 0, 0, 0,
+          planningReservationId, inventoryLockId,
+          expectedSupplySourceType,
+          expectedSupplySourceId,
+          null, null, stamp, null, null, stamp, actor.id,
+        );
+        audit(db, actor.id, 'REQUEST', 'SALES_RESERVATION_INTENT', intentId, `${salesOrderId} ${mode} ${quantity}`);
+        result = summarizeIntent(db.prepare('SELECT * FROM sales_reservation_intent WHERE id=?').get(intentId));
+      });
+      return send(res, 201, result);
+    } catch (error) {
+      if (!isReservationRediscoveryEligible(error)) throw error;
+      if (attempt >= maxAttempts) {
+        throw new HttpError(503, '预留意图请求重试已耗尽', {
+          code: 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED',
+          retryable: true,
+          attempts: attempt,
+          causeCode: error?.details?.code || error?.code || null,
+        });
+      }
+      if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+      waitForReservationRediscovery(attempt);
+    }
+  }
+  throw new HttpError(503, '预留意图请求重试已耗尽', {
+    code: 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED', retryable: true,
+  });
 }
 
 export async function grantReservationIntent(db, req, res, actor, intentId) {

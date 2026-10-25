@@ -86,6 +86,14 @@ const FULL = [
   'server/sales-customer-wave6-final-functional.test.js',
   'server/sales-customer-wave6-bounded-superseding.test.js',
   'server/sales-customer-wave7-migration.test.js',
+  'server/sales-gate-retry-admission.test.js',
+  'server/mysql-disposable-target-guard.test.js',
+  'scripts/mysql-sales-wave7-gate-a-runner.test.js',
+  'scripts/mysql-sales-wave10-runners.test.js',
+  // Transaction Lifecycle Safety — pure fault injection, no real MySQL.
+  // The real-session fixture (server/mysql-transaction-start-safety.integration.js)
+  // is registered only through the protected Gate A runner, never here.
+  'server/db-transaction-start-safety.test.js',
   'server/sales-customer-wave7-functional.test.js',
   'server/sales-customer-wave7-acceptance.test.js',
   'server/sales-customer-wave8-functional.test.js',
@@ -94,6 +102,7 @@ const FULL = [
   'server/sales-customer-wave8-mixed-delivery.test.js',
   'server/sales-customer-wave8-residual.test.js',
   'server/sales-customer-wave9-credit-foundation.test.js',
+  'server/sales-customer-wave10-credit-check.test.js',
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
@@ -551,6 +560,13 @@ const FULL = [
 //
 // Invariant: every file in FAST must also be present in FULL.
 const FAST = [
+  // W7 F2 pure retry-admission parser and injected monotonic-clock contract.
+  'server/sales-gate-retry-admission.test.js',
+  'server/mysql-disposable-target-guard.test.js',
+  'scripts/mysql-sales-wave7-gate-a-runner.test.js',
+  // Transaction Lifecycle Safety — pure fault injection, no real MySQL.
+  'server/db-transaction-start-safety.test.js',
+
   // Canonical 8 Domains + Platform source-contract; no DB or Vite SSR.
   'server/v17-domain-alignment.test.js',
 

@@ -24,6 +24,29 @@ const captureResponse = () => ({
   end(value) { this.body = value ? JSON.parse(value) : null; },
 });
 
+function transactionProbeDb(db, { beforeBegin = null } = {}) {
+  const state = { begins: 0, statements: [] };
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') return (sql) => { state.statements.push(String(sql)); return target.prepare(sql); };
+      if (prop === 'exec') return (sql) => {
+        const text = String(sql); state.statements.push(text);
+        if (/^BEGIN\b/i.test(text)) { state.begins += 1; beforeBegin?.(target, state.begins); }
+        return target.exec(sql);
+      };
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { db: proxy, state };
+}
+
+function installMonotonicClock(t, readings) {
+  let index = 0;
+  const last = readings[readings.length - 1];
+  return t.mock.method(process.hrtime, 'bigint', () => readings[index++] ?? last);
+}
+
 describe('Wave 8 V21 evidence and Consignment closure', () => {
   let dir; let db;
   beforeEach(() => {
@@ -47,6 +70,31 @@ describe('Wave 8 V21 evidence and Consignment closure', () => {
       VALUES('NONE:w8-source:w8-p','MOVING_AVERAGE','w8-p','w8-source',10,1000,?)`).run(stamp);
   });
   afterEach(() => { try { db?.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
+
+  function seedImplementationEService(label) {
+    const stamp = new Date().toISOString();
+    const productId = `w8-e-service-${label}`; const orderId = `w8-e-so-${label}`; const itemId = `w8-e-soi-${label}`;
+    db.prepare(`INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at,base_uom_code,tracking_policy)
+      VALUES(?,?,?,'','EA',151,0,1,?,?,'EA','NONE')`).run(productId, `W8-E-${label}`, `Wave 8 E ${label}`, stamp, stamp);
+    db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,service_classification,service_kind,active,created_at,updated_at,created_by,updated_by)
+      VALUES(?,?,1,1,'STANDARD',1,?,?,?,?)`).run(`w8-e-class-${label}`, productId, stamp, stamp, actor.id, actor.id);
+    db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at,order_date,payment_terms_days,commercial_close_state)
+      VALUES(?,?,'w8-c','APPROVED',302,?,?,?,?,30,'OPEN')`).run(orderId, `W8-E-SO-${label}`, actor.id, stamp, stamp, DAY);
+    db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,document_quantity_num,document_quantity_den)
+      VALUES(?,?,?,2,151,302,1,2000000,1)`).run(itemId, orderId, productId);
+    db.prepare(`INSERT INTO finance_recognition_policy(id,side,source_type,source_id,recognition_mode,effective_date,active,created_by,created_at)
+      VALUES(?,'AR','SERVICE_FULFILLMENT',NULL,'DIRECT_BUSINESS_OPEN_ITEM','2020-01-01',1,?,?)`).run(`w8-e-policy-${label}`, actor.id, stamp);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES(?,?,0,100,'ORDER_VALUE',?,?)`).run(`w8-e-req-${label}`, orderId, stamp, actor.id);
+    db.prepare(`INSERT INTO sales_prepayment_gate_results(id,sales_order_id,stage,gate_decision,required_remaining_cents,eligible_advance_cents,
+      refunded_amount_cents,applied_amount_cents,override_reason,overridden_by,source_balance_identities,snapshot_key,evaluated_at,evaluated_by)
+      VALUES(?,?,'DELIVERY','OVERRIDE_REQUIRED',100,0,0,0,'Implementation E approved override',?,'[]',?,?,?)`)
+      .run(`w8-e-gate-${label}`, orderId, actor.id, `w8-e-eval-${label}`, stamp, actor.id);
+    const fulfillment = createServiceFulfillmentCommand(db, {
+      salesOrderItemId: itemId, confirmationQtyMicros: 1_000_000, businessDate: DAY,
+    }, actor, `w8-e-create-${label}`);
+    return { fulfillment, orderId, itemId };
+  }
 
   test('Position Snapshot V1 is byte-canonical and rejects tampering', () => {
     const position = buildCanonicalPosition(db, { productId: 'w8-p', warehouseId: 'w8-source', ownerType: 'ENTERPRISE', ownerId: null, stockStatus: 'AVAILABLE' });
@@ -177,5 +225,108 @@ describe('Wave 8 V21 evidence and Consignment closure', () => {
     assert.equal(allocations.length, 2); assert.equal(allocations.reduce((sum, row) => sum + Number(row.amount), 0), 302);
     assert.ok(allocations.every((row) => Number(row.amount) === 151));
     assert.equal(db.prepare("SELECT COUNT(*) n FROM finance_invoice_source_links WHERE invoice_id='w8-si'").get().n, 2);
+  });
+
+  test('Implementation E: Service locks Order Item before Fulfillment, rediscovers stale authority and preserves replay', () => {
+    const fixture = seedImplementationEService('retry');
+    const probe = transactionProbeDb(db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) target.prepare('UPDATE sales_order_items SET amount_cents=amount_cents+1 WHERE id=?').run(fixture.itemId);
+      },
+    });
+    const result = confirmServiceFulfillmentCommand(probe.db, fixture.fulfillment.id, 1, actor, 'w8-e-confirm-retry');
+    assert.equal(result.state, 'CONFIRMED'); assert.equal(probe.state.begins, 2);
+    const secondBegin = probe.state.statements.findIndex((sql, index) => index > probe.state.statements.findIndex((value) => /^BEGIN\b/i.test(value)) && /^BEGIN\b/i.test(sql));
+    const gateResult = probe.state.statements.findIndex((sql, index) => index > secondBegin && sql.includes('sales_prepayment_gate_results') && sql.includes('ORDER BY evaluated_at DESC'));
+    const requirement = probe.state.statements.findIndex((sql, index) => index > gateResult && sql.includes('sales_prepayment_requirements WHERE id='));
+    const sourceLock = probe.state.statements.findIndex((sql, index) => index > requirement && sql.includes('FROM sales_order_items i JOIN sales_orders'));
+    const fulfillmentLock = probe.state.statements.findIndex((sql, index) => index > sourceLock && sql.includes('FROM service_fulfillments f JOIN sales_orders'));
+    const mutation = probe.state.statements.findIndex((sql, index) => index > fulfillmentLock && sql.includes("UPDATE service_fulfillments SET confirmation_state='CONFIRMED'"));
+    assert.ok(gateResult >= 0 && gateResult < requirement && requirement < sourceLock && sourceLock < fulfillmentLock && fulfillmentLock < mutation,
+      'Gate -> Requirement -> Sales Order Item -> Fulfillment -> mutation');
+    const footprint = () => ({
+      state: db.prepare('SELECT confirmation_state FROM service_fulfillments WHERE id=?').get(fixture.fulfillment.id).confirmation_state,
+      ar: Number(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n),
+      voucher: Number(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n),
+      audit: Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='CONFIRM' AND entity_type='SERVICE_FULFILLMENT' AND entity_id=?").get(fixture.fulfillment.id).n),
+      idempotency: Number(db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SERVICE_FULFILLMENT_CONFIRM' AND document_id=?").get(fixture.fulfillment.id).n),
+      gate: Number(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=? AND snapshot_key LIKE 'SERVICE:%'").get(fixture.orderId).n),
+    });
+    const committed = footprint();
+    assert.deepEqual(committed, { state: 'CONFIRMED', ar: 1, voucher: 1, audit: 1, idempotency: 1, gate: 1 });
+    const replay = confirmServiceFulfillmentCommand(db, fixture.fulfillment.id, 1, actor, 'w8-e-confirm-retry');
+    assert.equal(replay.replayed, true); assert.deepEqual(footprint(), committed);
+  });
+
+  test('Implementation E: Service retry exhaustion leaves zero Gate, AR, voucher, fulfillment or success evidence', () => {
+    const previous = process.env.ERP_GATE_ATTEMPTS_MAX; process.env.ERP_GATE_ATTEMPTS_MAX = '3';
+    try {
+      const fixture = seedImplementationEService('exhaust');
+      const baselineGate = Number(db.prepare('SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=?').get(fixture.orderId).n);
+      const probe = transactionProbeDb(db, {
+        beforeBegin(target, attempt) {
+          target.prepare('UPDATE sales_order_items SET amount_cents=? WHERE id=?').run(302 + attempt, fixture.itemId);
+        },
+      });
+      assert.throws(
+        () => confirmServiceFulfillmentCommand(probe.db, fixture.fulfillment.id, 1, actor, 'w8-e-confirm-exhaust'),
+        (error) => error.status === 503 && error.code === 'SERVICE_FULFILLMENT_CONFIRM_RETRY_EXHAUSTED'
+          && error.details?.attempts === 3,
+      );
+      assert.equal(probe.state.begins, 3);
+      const row = db.prepare('SELECT confirmation_state,version,recognition_amount_cents FROM service_fulfillments WHERE id=?').get(fixture.fulfillment.id);
+      assert.deepEqual({ state: row.confirmation_state, version: Number(row.version), amount: Number(row.recognition_amount_cents) },
+        { state: 'PENDING', version: 1, amount: 0 });
+      assert.equal(Number(db.prepare('SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=?').get(fixture.orderId).n), baselineGate);
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n), 0);
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n), 0);
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='CONFIRM' AND entity_type='SERVICE_FULFILLMENT' AND entity_id=?").get(fixture.fulfillment.id).n), 0);
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SERVICE_FULFILLMENT_CONFIRM' AND document_id=?").get(fixture.fulfillment.id).n), 0);
+    } finally {
+      if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_MAX; else process.env.ERP_GATE_ATTEMPTS_MAX = previous;
+    }
+  });
+
+  test('Implementation E: Service version conflict is an ordinary 409 and does not enter the retry loop', () => {
+    const fixture = seedImplementationEService('version');
+    db.prepare('UPDATE service_fulfillments SET version=2 WHERE id=?').run(fixture.fulfillment.id);
+    const probe = transactionProbeDb(db);
+    assert.throws(
+      () => confirmServiceFulfillmentCommand(probe.db, fixture.fulfillment.id, 1, actor, 'w8-e-confirm-version'),
+      (error) => error.status === 409 && error.code === 'SERVICE_FULFILLMENT_VERSION_CONFLICT',
+    );
+    assert.equal(probe.state.begins, 0);
+    assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n), 0);
+  });
+
+  test('F2-09/F2-16/F2-17: Service deadline before attempt 1 preserves its exact causeCode contract', (t) => {
+    const fixture = seedImplementationEService('f2-deadline');
+    const probe = transactionProbeDb(db);
+    const previous = process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+    process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = '1000';
+    try {
+      installMonotonicClock(t, [0n, 1_000_000_000n]);
+      assert.throws(
+        () => confirmServiceFulfillmentCommand(probe.db, fixture.fulfillment.id, 1, actor, 'w8-f2-deadline'),
+        (error) => {
+          assert.equal(error.status, 503);
+          assert.equal(error.code, 'SERVICE_FULFILLMENT_CONFIRM_RETRY_EXHAUSTED');
+          assert.equal(error.message, '服务履约确认重试已耗尽');
+          assert.deepEqual(error.details, {
+            code: 'SERVICE_FULFILLMENT_CONFIRM_RETRY_EXHAUSTED', retryable: true, attempts: 0,
+            causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+          });
+          return true;
+        },
+      );
+      assert.equal(probe.state.begins, 0);
+      const row = db.prepare('SELECT confirmation_state,version FROM service_fulfillments WHERE id=?').get(fixture.fulfillment.id);
+      assert.deepEqual({ state: row.confirmation_state, version: Number(row.version) }, { state: 'PENDING', version: 1 });
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n), 0);
+      assert.equal(Number(db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SERVICE_FULFILLMENT' AND source_id=?").get(fixture.fulfillment.id).n), 0);
+    } finally {
+      if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+      else process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = previous;
+    }
   });
 });

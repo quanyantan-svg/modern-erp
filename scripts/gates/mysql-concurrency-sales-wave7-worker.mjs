@@ -10,6 +10,8 @@ import { salesOrderAction } from '../../server/modules/sales-orders.js';
 import { confirmSalesDelivery } from '../../server/app.js';
 import { applyUnappliedBalance, createRefund } from '../../server/modules/financial-controls.js';
 import { reverseSettlementDocument } from '../../server/modules/settlement.js';
+import { evaluateSalesPrepaymentGate } from '../../server/modules/sales-prepayment-gate.js';
+import { confirmServiceFulfillmentCommand } from '../../server/modules/service-fulfillment.js';
 
 const { backend: _backend, ...mysqlConfig } = resolveDatabaseConfig({ backend: 'mysql' });
 const db = new MySqlSyncAdapter(mysqlConfig);
@@ -18,6 +20,7 @@ const actor = {
   permissions: ['SALES_MANAGE', 'SALES_VIEW', 'ORDERS_SUBMIT', 'SALES_DELIVERIES_MANAGE', 'COLLECTION_MANAGE', 'AR_VIEW'],
 };
 let gateHeld = false;
+let parentHeld = false;
 
 function connectionId() { return Number(db.prepare('SELECT CONNECTION_ID() id').get().id); }
 function request(body, key = null) {
@@ -62,8 +65,25 @@ async function execute(command) {
     gateHeld = false;
     return { released: true, connectionId: connectionId() };
   }
+  if (command.action === 'hold-parent') {
+    db.exec('START TRANSACTION');
+    const row = db.prepare('SELECT id FROM settlement_unapplied_balances WHERE id=? FOR UPDATE').get(command.balanceId);
+    if (!row) throw new Error(`Missing parent balance: ${command.balanceId}`);
+    parentHeld = true;
+    return { held: true, connectionId: connectionId(), balanceId: row.id };
+  }
+  if (command.action === 'release-parent') {
+    if (parentHeld) db.exec('ROLLBACK');
+    parentHeld = false;
+    return { released: true, connectionId: connectionId() };
+  }
   if (command.action === 'request-reservation') {
     return invoke((res) => requestReservationIntent(db, request(command.body), res, actor));
+  }
+  if (command.action === 'evaluate-gate') {
+    return invoke((res) => evaluateSalesPrepaymentGate(
+      db, request(command.body || {}), res, actor, command.orderId, command.stage,
+    ));
   }
   if (command.action === 'submit-order') {
     return invoke((res) => salesOrderAction(db, request(command.body || {}, command.key), res, actor, command.orderId, 'submit'));
@@ -80,8 +100,18 @@ async function execute(command) {
   if (command.action === 'reverse-settlement') {
     return invoke((res) => reverseSettlementDocument(db, request(command.body, command.key), res, actor, 'COLLECTION', command.documentId, generateVoucher));
   }
+  if (command.action === 'confirm-service') {
+    try {
+      const body = confirmServiceFulfillmentCommand(db, command.fulfillmentId, command.expectedVersion, actor, command.key);
+      return { status: 200, body, connectionId: connectionId() };
+    } catch (error) {
+      return { status: error.status || 500, code: error.code || error.details?.code,
+        message: error.message, details: error.details, connectionId: connectionId() };
+    }
+  }
   if (command.action === 'close') {
-    if (gateHeld) { try { db.exec('ROLLBACK'); } catch {} }
+    if (gateHeld || parentHeld) { try { db.exec('ROLLBACK'); } catch {} }
+    gateHeld = false; parentHeld = false;
     db.close();
     return { closed: true };
   }
@@ -99,4 +129,4 @@ lines.on('line', async (line) => {
     process.stdout.write(`${JSON.stringify({ id: envelope?.id, ok: false, error: { message: error.message, code: error.code } })}\n`);
   }
 });
-lines.on('close', () => { try { if (gateHeld) db.exec('ROLLBACK'); db.close(); } catch {} });
+lines.on('close', () => { try { if (gateHeld || parentHeld) db.exec('ROLLBACK'); db.close(); } catch {} });

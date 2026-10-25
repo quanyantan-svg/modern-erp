@@ -70,10 +70,19 @@ test('exact three-permission role matrix is enforced by backend', async () => {
 
 test('MySQL read transaction acquires the canonical shared gate before resolver reads', () => {
   const events = [];
+  // The fake models the MySQL adapter contract: a trusted idle session that
+  // transitions on the acknowledged transaction statements.
   const fakeDb = {
     dialect: 'mysql',
-    isTransaction: true,
-    exec(sql) { events.push(sql); },
+    isTransaction: false,
+    sessionState: 'IDLE_TRUSTED',
+    sessionEpoch: 1,
+    exec(sql) {
+      events.push(sql);
+      const head = String(sql).trim().toUpperCase();
+      if (head.startsWith('BEGIN')) { fakeDb.isTransaction = true; fakeDb.sessionState = 'ACTIVE'; }
+      else if (head.startsWith('COMMIT') || head.startsWith('ROLLBACK')) { fakeDb.isTransaction = false; fakeDb.sessionState = 'IDLE_TRUSTED'; }
+    },
     prepare(sql) {
       events.push(sql);
       return { get() { events.push('GATE_ACQUIRED'); return { gate_id: 1 }; } };

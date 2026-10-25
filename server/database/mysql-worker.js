@@ -73,6 +73,12 @@ function serializableError(error) {
     sqlState: error?.sqlState,
     sqlMessage: error?.sqlMessage,
     sql: error?.sql,
+    // Transaction lifecycle safety (§37.31 R6): the Worker owns the canonical
+    // exec classification and the canonical recoverable-connection decision,
+    // so both are reported instead of being re-derived by the parent.
+    classification: error?.classification,
+    sessionLost: error?.sessionLost === true ? true : undefined,
+    sessionEpoch,
   };
 }
 
@@ -80,6 +86,11 @@ let connection;
 let connectionConfig;
 let inTransaction = false;
 let closed = false;
+// Monotonic identity of the current MySQL session. It is incremented by the
+// Worker that owns the connection lifecycle, so a parent can prove whether a
+// response came from the session that acquired a named lock or from a
+// replacement session.
+let sessionEpoch = 0;
 
 function isConnectionAlive(conn) {
   if (!conn) return false;
@@ -117,10 +128,15 @@ async function openConnection(config) {
     }
   });
   await applySession(conn);
+  sessionEpoch += 1;
   return conn;
 }
 
-function discardStaleConnection(reason) {
+function discardStaleConnection(reason, error) {
+  // The owning session is gone. The parent must be able to tell that a named
+  // lock held by this session can no longer be released by a replacement
+  // session, so the marker travels with the error.
+  if (error) error.sessionLost = true;
   if (!connection) return;
   const stale = connection;
   connection = undefined;
@@ -187,12 +203,12 @@ if (parentPort) {
           // Re-using a live connection is safe but we re-apply session settings
           // defensively so a manual reconfigure never leaves stale state.
           await applySession(connection);
-          encodeWorkerResponse(shared, requestId, { connected: true });
+          encodeWorkerResponse(shared, requestId, { connected: true, sessionEpoch });
           return;
         }
         connectionConfig = payload;
         connection = await openConnection(payload);
-        encodeWorkerResponse(shared, requestId, { connected: true });
+        encodeWorkerResponse(shared, requestId, { connected: true, sessionEpoch });
         return;
       }
 
@@ -203,7 +219,7 @@ if (parentPort) {
           connection = undefined;
         }
         inTransaction = false;
-        encodeWorkerResponse(shared, requestId, { closed: true });
+        encodeWorkerResponse(shared, requestId, { closed: true, sessionEpoch });
         return;
       }
 
@@ -212,17 +228,17 @@ if (parentPort) {
         const readOnly = isReadOnlySql(sql);
         try {
           const result = await runQuery(sql, params);
-          encodeWorkerResponse(shared, requestId, result);
+          encodeWorkerResponse(shared, requestId, { ...result, sessionEpoch });
           return;
         } catch (error) {
           if (!isRecoverableConnectionError(error) || inTransaction || !readOnly) {
-            if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code);
+            if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code, error);
             throw error;
           }
           discardStaleConnection(error?.code);
           // Single recovery/retry decision for this failed request.
           const result = await runQuery(sql, params);
-          encodeWorkerResponse(shared, requestId, result);
+          encodeWorkerResponse(shared, requestId, { ...result, sessionEpoch });
           return;
         }
       }
@@ -232,10 +248,10 @@ if (parentPort) {
         // KEY UPDATE may have already executed and incremented next_value.
         try {
           const result = await runAllocateSequence(payload.documentType, payload.periodKey);
-          encodeWorkerResponse(shared, requestId, result);
+          encodeWorkerResponse(shared, requestId, { ...result, sessionEpoch });
           return;
         } catch (error) {
-          if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code);
+          if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code, error);
           throw error;
         }
       }
@@ -245,12 +261,15 @@ if (parentPort) {
         try {
           await runExec(payload.sql);
         } catch (error) {
-          if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code);
+          // The classification is reported with the failure so the parent can
+          // settle the session state without re-deriving it.
+          error.classification = classification;
+          if (isRecoverableConnectionError(error)) discardStaleConnection(error?.code, error);
           throw error;
         }
         if (classification === 'BEGIN') inTransaction = true;
         if (classification === 'COMMIT' || classification === 'ROLLBACK') inTransaction = false;
-        encodeWorkerResponse(shared, requestId, { ok: true, inTransaction });
+        encodeWorkerResponse(shared, requestId, { ok: true, inTransaction, classification, sessionEpoch });
         return;
       }
 

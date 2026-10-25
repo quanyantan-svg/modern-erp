@@ -19715,7 +19715,7 @@ Introducing any persisted Credit Exposure cache remains a REQUIREMENT_REOPEN / D
 
 ### 36.8 C7 — Real MySQL race acceptance fixtures
 
-All fixtures use **independent MySQL connections**, default engine isolation (REPEATABLE READ), explicit transaction control, and no shared session state. No race is reported PASS on the basis of an intra-session simulation. Wave 13 remains the final cross-wave replay.
+All fixtures use **independent MySQL connections**, the production session isolation (READ COMMITTED, §37.17 — the former "default engine isolation (REPEATABLE READ)" wording was corrected on 2026-10-25), explicit transaction control, and no shared session state. No race is reported PASS on the basis of an intra-session simulation. Wave 13 remains the final cross-wave replay.
 
 #### 36.8.1 Capacity precondition fixture — mandatory for every over-limit race
 
@@ -19752,7 +19752,7 @@ R-SAL-24 is **infrastructure-level only** at Wave 9. No Wave 9 fixture may claim
 
 | Fixture | Race | Locks | Expected |
 |---|---|---|---|
-| W10-R1 R-SAL-12 full | Credit Check vs Credit Check, same customer | AGGREGATE anchor | `BOTH_FIT` → both commit; `ONLY_ONE_FITS` → one commits, one 409; combined committed ≤ limit |
+| W10-R1 R-SAL-12 full | `salesOrderAction(approve)` on two distinct SUBMITTED SOs, same customer (§37.39.6.3, corrected 2026-10-25) | AGGREGATE anchor | `BOTH_FIT` → both commit; `ONLY_ONE_FITS` → one commits, one 409; combined committed ≤ limit |
 | W10-R2 R-SAL-13 full | Special Approval vs Order Approval | check-result row + approval row (UNIQUE source) | exactly one of approval/standard approval wins; never both silently |
 | W10-R3 R-SAL-14 full | Credit release vs Finance canonical state | AGGREGATE anchor + Finance adapter lock | release uses the transition rule; exposure never double-counted |
 | W10-R4 **R-SAL-24 full** | Policy/Profile mutation vs real Credit Check | POLICY_SCOPE FOR UPDATE vs check's POLICY_SCOPE FOR SHARE | exactly one coherent OLD or NEW snapshot; never mixed-version |
@@ -20872,7 +20872,7 @@ Fixtures M1–M12 from §36.12.8 stand. These additions target the parent-empty 
 | **M16** | **Non-empty parent set: manual evaluation vs SO Submit, same order** | T1 at L1, T2 at L1 | serialised on L1 | no deadlock; one commit |
 | **M17** | **Stale discovered parent set** | balance appears/closes between discovery and lock | 409 `SALES_PREPAYMENT_LOCK_PLAN_STALE` | whole tx rolls back; zero Credit rows, gate rows, audit rows |
 | **M18** | **Concurrent newly created eligible prepayment** | balance inserted after discovery | `assertPrepaymentParentPlanCurrent` rejects; never silently locks a parent that appeared | no partial state |
-| **M19** | **No-prepayment-required Credit Check** | no parent, no requirement | Credit still evaluates at L2..L5 and still fails closed per §29.22.1 when a mandatory profile is missing | gate returns `NOT_REQUIRED` (`gate.js:190`); Credit gate NOT weakened |
+| **M19** | **No-prepayment-required Credit Check** | no parent, no requirement | Credit reaches mandatory Profile resolution; a missing Profile fails closed at the pre-lock guard per §29.22.1, while an applicable Profile continues through the unchanged L2..L5 path | gate returns `NOT_REQUIRED` (`gate.js:190`); Credit gate NOT weakened |
 | **M20** | **SO state revalidation fails after Credit/Gate calculation** | mutate SO between discovery and L8 | 409 STALE | **no committed Credit or Gate evidence**; no status change; no audit row |
 
 Preconditions that make a reproduction impossible are stated rather than fabricated:
@@ -21618,3 +21618,5548 @@ This documentation closure is not a Git add, commit, push, merge, tag, release, 
 or package-version change. Git closure remains pending separate user authorization.
 
 **Status: `WAVE9_FINAL_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PENDING`.**
+
+---
+
+## 37. W7-C1 / W7-C2′ Bounded Design Amendment (2026-10-23)
+
+### 37.0 Authorization, scope and supersession map
+
+Authorized stage: **DESIGN AMENDMENT ONLY** (AGENTS.md §4.3), under
+`W7_C1_C2_BOUNDED_DESIGN_AMENDMENT`. This section reconciles and completes the
+technical Design for the already-approved business Requirement. It changes **no**
+approved business semantics, no table, no permission, no state machine, no
+monetary unit and no frozen Wave 9 contract.
+
+Explicitly not authorized and not performed here: Requirement changes,
+Implementation, test or source code, migration or schema, database access, MySQL
+execution, Git write, Wave 9 change, Wave 10/11 implementation.
+
+Supersession map (history is preserved, never rewritten):
+
+| Prior text | Status after this amendment |
+|---|---|
+| §36.13.3 partial-order proof (steps 3–4) | already invalidated in place by §36.14; remains invalid |
+| §36.13.4 W7-C1 change contract | **superseded by §37.2** (same direction, completed and corrected) |
+| §36.13.5 / §36.13.6 SO sequences | already marked superseded by §36.14; **replaced by §37.3 / §37.4** |
+| §36.14.3 L1–L8 contract | **retained and completed by §37.3** |
+| §36.14.5 W7-C2′ boundary | **completed by §37.11** (file-level detail) |
+| §36.12.8 M1–M12, §36.14.6 M13–M20 | **retained; evidence design added by §37.10** |
+| §36.16 Wave 9 freeze | unchanged and untouched |
+
+### 37.1 Verified baseline facts
+
+Every line reference below was re-verified against the working tree at
+`feature/sales-waves6-13@2037cb6`. §36.13/§36.14 were written from analysis; the
+following are **code-verified facts** and three of them correct the prior Design.
+
+```text
+F1  Gate call sites are exactly two per style.
+    authorizeSalesPrepaymentGateForMutation  -> sales-orders.js:639 (SO submit),
+                                               sales-reservation-intent.js:282
+    discoverSalesPrepaymentGatePlan +
+    authorizeSalesPrepaymentGateWithPlan     -> app.js:5709/5711 (SD Confirm),
+                                               service-fulfillment.js:149/156
+    Therefore Delivery Confirm and Service Confirm ALREADY use the two-phase
+    §35.18.6 protocol. W7-C1 and W7-C2′ must not introduce a parallel gate.
+
+F2  *** CORRECTS §36.13.5/§36.14.3 ***
+    `salesOrderAction` 'approve' does NOT invoke the prepayment gate.
+    Only the submit branch (sales-orders.js:639) does. 'approve' shares the
+    :647-649 branch with 'reject' and takes no gate and no Credit check today.
+    §36.13.5:20511 ("both are credit-controlled ... and both can reach the gate")
+    is inaccurate about today's code. It is accurate about the Wave 10 target
+    state. W7-C2′ is therefore specified for the *post-Wave-10* Approve shape,
+    and today-only behaviour is preserved (see §37.4).
+
+F3  evaluateSalesPrepaymentGate locks REQUIREMENT before RESULT
+    (gate.js:399 before :401), inverting edge E3 as well as E5.
+    Both inversions are corrected together in §37.2.
+
+F4  evaluateSalesPrepaymentGate computes the business date TWICE inside the
+    transaction — gate.js:396 and gate.js:405-406 each call now() when
+    body.businessDate is absent. A midnight rollover between the two produces
+    two different business dates for one transaction. Must be bound once.
+
+F5  CONFIRMED MONETARY DEFECT (server/modules/financial-controls.js:194-195):
+    createRefund reads `unappliedBalanceSnapshot(...).remainingCents` and
+    rejects BEFORE the transaction (:194-195), acquires the canonical parent
+    lock at :205, and NEVER re-reads capacity under that lock.
+    Contrast applyUnappliedBalance, which DOES re-read at :163-164, and
+    reverseSettlementDocument (settlement.js:341 then :345), which also
+    re-reads. createRefund is the only PREPAYMENT-reducing Finance path with
+    no post-lock authority check. Corrected by §37.6.
+
+F6  The global MySQL transaction gate (db.js:1893,
+    `SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE`)
+    is taken by `transaction()` BEFORE any business row on every MySQL
+    transaction. Consequence for acceptance evidence: production MySQL business
+    transactions are serialized at the gate row, so no two production
+    transactions can concurrently hold business row locks. Existing Wave 7
+    concurrency evidence proves SERIALIZED PRODUCTION OUTCOMES, not row-level
+    lock order. See §37.10(F).
+
+F7  transaction(db, work) is db.js:1883-1913. It retries ONLY the work callback,
+    bounded by ERP_DB_TX_RETRY_MAX (default 3 -> 4 attempts), matching
+    ER_LOCK_DEADLOCK / ER_LOCK_WAIT_TIMEOUT / errno 1213 / 1205 / sqlState
+    40001, backoff min(250, 20*2^n). It has NO options parameter, NO
+    caller-supplied outer retry and NO nesting guard. Re-executed attempts reuse
+    the closure's captured plan. See §37.8.
+
+F8  SD Confirm re-reads rows that the canonical capacity helper already locked.
+    app.js:5715 and :5718 use plain SELECT, while
+    sales-delivery-source.js:52 and :54 already hold FOR UPDATE on those exact
+    rows. Under REPEATABLE READ a plain SELECT returns the transaction snapshot,
+    not the latest committed row, so :5716/:5719/:5720 may validate against a
+    stale image. The helper already returns the locked rows
+    (sales-delivery-source.js:79). Corrected by §37.7.
+```
+
+### 37.2 W7-C1 final transaction sequence — `evaluateSalesPrepaymentGate()`
+
+Target: `server/modules/sales-prepayment-gate.js`, `evaluateSalesPrepaymentGate`,
+transaction body `:387-434`. Single canonical transaction, twelve ordered stages:
+
+```text
+D0  UNLOCKED DISCOVERY (outside the transaction)
+    - order already loaded at :374; requirement already looked up at :376
+    - bind `asOf` ONCE (fixes F4) and reuse it for every later use
+    - plan = discoverSalesPrepaymentGatePlan(db, salesOrderId, asOf)
+      -> parentBalanceIds [], because a missing requirement means an empty,
+         valid, conservative candidate set (adapter.js:44)
+D1  caller-owned transaction(db, work) opens; MySQL gate row L0 acquired
+    automatically (db.js:1893). Not modified.
+D2  replay probe gate.js:388 — unchanged, no lock, runs before any lock
+D3  assertFinancialPeriodsOpen — unchanged, read-only
+D4  L1  lockEligiblePrepaymentParents(db, plan.parentBalanceIds)
+      SKIPPED ENTIRELY when the set is empty; never an error, never a
+      late acquisition
+D5  assertPrepaymentParentPlanCurrent(db, {customerId, businessDate: asOf},
+      plan.parentBalanceIds)  -> 409 SALES_PREPAYMENT_LOCK_PLAN_STALE
+D6  L6  GATE_RESULT  FOR UPDATE   (previous/latest result, gate.js:400-401)
+D7  L7  GATE_REQUIREMENT FOR UPDATE (re-read of the requirement, gate.js:213)
+      -> also re-validates effective window under the lock
+D8  re-read canonical Finance child effects beneath the parent locks via
+    resolveEligiblePrepaymentWithParentPlan(..., plan.parentBalanceIds)
+    which internally uses lockMode 'NONE' (adapter.js:92-96). MUST NOT call
+    resolveEligiblePrepaymentForSalesGate with lockMode 'FOR_UPDATE' here —
+    that is the late parent acquisition being removed.
+D9  decideGate(...) — byte-identical decision logic, unchanged
+D10 INSERT sales_prepayment_gate_results (snapshotKey = appliedSnapshotKey)
+D11 audit AUTHORIZE/EVALUATE + override reason/actor handling :419-421 unchanged
+D12 COMMIT; on any throw the whole transaction rolls back to zero partial
+    effects (no gate row, no audit row, no snapshot).
+```
+
+Mandatory edge restored: `PARENT → GATE_RESULT → GATE_REQUIREMENT`, identical to
+Path B/B′ (`gate.js:276→278→280`) and satisfying E1, E2, E3 and E5. No newly
+discovered parent may be locked after D6/D7; D5 converts that situation into a
+409 rather than a late lock.
+
+Required behaviour for every named scenario:
+
+| Scenario | Detection point | Outcome |
+|---|---|---|
+| Empty parent set | D4 skipped; D5 compares `[]` | normal `NOT_REQUIRED`/PASS/WARN/BLOCK path, no error |
+| New parent appears after D0 | D5 set mismatch | 409 `SALES_PREPAYMENT_LOCK_PLAN_STALE`, full rollback |
+| Parent disappears | D5 set mismatch | same 409; adapter.js:50 would also raise if already locked |
+| Parent closing (`status!='OPEN'`) | adapter.js:51 under the lock | 409 `结算余额已关闭`, full rollback |
+| Requirement amount/period changed | D7 re-read vs D0 fingerprint | 409 stale, full rollback |
+| Previous Gate Result changed | D6 locking read | read latest committed row; `decideGate` override carry-forward unchanged |
+| Concurrent refund | serialized on L1; refund post-lock authority (§37.6) | no lost update, no negative capacity |
+| Concurrent application | serialized on L1 (`applyUnappliedBalance:160`) | same |
+| Concurrent UNAPPLIED reversal | serialized on L1 (`settlement.js:341`) | same |
+
+`PASS / WARN / BLOCK / OVERRIDE_REQUIRED` semantics, snapshot-key idempotency,
+replay, HTTP status codes, override handling and audit payload are unchanged. This
+is lock *acquisition order* only. No second monetary authority is introduced: the
+Gate continues to read Finance through the single canonical adapter.
+
+### 37.3 W7-C2′ parent-independent total lock order (L1–L8)
+
+L1 is **optional** and skipped entirely when the discovered parent set is empty.
+L2–L8 are **total**. L8 last is the load-bearing correction.
+
+| Stage | Row set | Lock | Owner | Condition |
+|---|---|---|---|---|
+| L0 | `mysql_transaction_gates` gate_id=1 | U | `transaction()` db.js:1893 | MySQL only; unchanged |
+| L1 | `settlement_unapplied_balances` PREPAYMENT parents | U, id ASC | Finance adapter `lockEligiblePrepaymentParents` | only when the discovered eligible set is non-empty |
+| L2 | Credit `POLICY_SCOPE` anchor | S, anchor_key ASC | Credit (Wave 10) | Credit-controlled action only |
+| L3 | Credit `CREDIT_OBJECT_AGGREGATE` anchor | U | Credit (Wave 10) | Credit-controlled action only |
+| L4 | Credit `CREDIT_OBJECT_SALESPERSON` anchor | U | Credit (Wave 10) | at most one |
+| L5 | `credit_profile` / `credit_check_rules` | U, id ASC | Credit (Wave 10) | Credit-controlled action only |
+| L6 | `sales_prepayment_gate_results` latest for stage | U | Gate | always |
+| L7 | `sales_prepayment_requirements` effective row | U | Gate | only when a requirement is in effect |
+| L8 | `sales_orders`, then `sales_order_items`, delivery/fulfillment/capacity rows | U, stable ascending id | Sales | always, LAST |
+
+**Empty parent set.** L1 is skipped. Crucially, skipping L1 does **not** permit L8
+to be reached before L2–L7: the ordering is enforced by *position*, not by the
+existence of a physical L1 row lock. A missing parent therefore never authorizes
+Sales Order locking ahead of Credit and Gate stages. This is the defect §36.14
+identified against the §36.13.5 ordering and it is structurally impossible under
+§37.3 because L8 is unconditionally last.
+
+**Wave 10 Credit composition (described, not implemented).** Wave 9 already ships
+`ensureCreditLockAnchor` (credit-anchor.js:72-90), which takes exactly one row —
+the anchor row for a given `anchor_key` — FOR UPDATE, and takes no other Credit
+lock. Wave 10's Credit Check is the first caller that needs L2→L3→L4→L5 in that
+order. Composition rule for Wave 10: the Credit Check executes strictly between L1
+and L6, acquires anchors in L2/L3/L4 order and profiles/rules at L5, and performs
+no Sales or Finance business-row lock. Finance keeps sole ownership of L1;
+Sales keeps sole ownership of L8. Wave 9's frozen Credit Foundation is not
+modified by this amendment, and no Wave 10 code is introduced here.
+
+### 37.4 Caller-by-caller lock-order graph
+
+```text
+MANUAL EVALUATION (evaluateSalesPrepaymentGate)     post W7-C1
+  L1? -> L6 -> L7                                        (no Sales row lock)
+
+SALES ORDER SUBMIT                                     post W7-C2'
+  L1? -> L6 -> L7 -> L8                                 (Credit L2..L5 inserted by Wave 10
+                                                         at the same point)
+
+SALES ORDER APPROVE
+  today (F2)   : L8 only, no gate, no Credit
+  post Wave 10 : L1? -> L2..L5 -> L6 -> L7 -> L8
+                 Approve today invokes no gate, so post-W7-C2' its *current*
+                 sequence is unchanged; the future sequence only becomes
+                 reachable once Wave 10 inserts Credit. The Design does not
+                 introduce a gate call into Approve.
+
+SALES ORDER REJECT / CLOSE / CANCEL                    UNCHANGED
+  L8 only. No gate, no Credit, no parent lock.
+  close/cancel calls assertNoPendingDeliveryNotice (sales-orders.js:546-553),
+  a PLAIN SELECT over delivery_notices. It takes no delivery lock, so the
+  SO-then-delivery shape does not invert SD Confirm's delivery-then-SO shape.
+
+SERVICE FULFILLMENT CONFIRM                            unchanged order, tightened validation
+  L1? -> L6 -> L7 -> L8(sales_order_items) -> service_fulfillments ->
+        Finance recognition/open-item
+
+SALES DELIVERY CONFIRM                                 unchanged order, tightened validation
+  L1? -> L6 -> L7 -> L8(sales_deliveries -> sales_orders -> sales_order_items
+        -> delivery_notices -> delivery_notice_lines)
+        then OQC -> Inventory/valuation/COGS -> AR/vouchers
+
+RESERVATION INTENT REQUEST                             post convergence (§37.5)
+  L1? -> L6 -> L7 -> Planning/Inventory rows
+
+FINANCE applyUnappliedBalance                           already conforms
+  L1 -> re-read capacity (:163) -> movement
+
+FINANCE createRefund                                   corrected (§37.6)
+  L1 -> re-read capacity -> voucher/settlement/refund/idempotency/audit
+
+FINANCE reverseSettlementDocument (UNAPPLIED)          already conforms
+  L1 (settlement.js:341) -> re-read capacity (:345)
+
+CREDIT POLICY / PROFILE MUTATION                       unchanged
+  L2/L3/L5, no L1, no gate, no L8
+```
+
+Reverse-edge check: the only caller that locks a Sales row before an earlier
+stage was SO Submit/Approve/Reject/Close/Cancel at `sales-orders.js:620`, where
+the Sales Order is locked immediately after the transaction opens. After
+W7-C2′, submit/approve lock it at L8; reject/close/cancel legitimately own L8
+alone and take no earlier-stage row. `delivery-notices.js:27`,
+`sales-order-changes.js:134`, `sales-delivery-source.js:54`,
+`sales-orders.js:487` and `sales-orders.js:521` lock `sales_orders` and never call
+the gate or Credit, so none can participate in an L1/L6/L7 cycle. **No reverse
+business-row edge remains in the proposed graph.**
+
+### 37.5 Reservation Intent parent-plan convergence
+
+Current shape (`sales-reservation-intent.js:276-288`): the transaction opens, then
+`authorizeSalesPrepaymentGateForMutation` performs identity discovery **inside**
+the transaction (gate.js:189, :196) and locks parents immediately after
+(gate.js:197). It therefore locks PARENT before RESULT and REQUIREMENT — already
+correct on E1/E2/E3 — but it never validates the candidate set
+(`assertPrepaymentParentPlanCurrent` is not on this path), so a parent appearing
+between the in-transaction discovery read and the lock is silently absorbed
+instead of failing closed.
+
+**Helper reuse decision: reuse, with a bounded ordering refinement. No parallel
+gate is created.** `discoverSalesPrepaymentGatePlan` + `authorizeSalesPrepaymentGateWithPlan`
+are the already-canonical two-phase helpers, already used by Delivery Confirm and
+Service Confirm (F1). The reservation path converges onto them:
+
+```text
+OUTSIDE the transaction (after :268-271 duplicate check, before transaction())
+  plan = discoverSalesPrepaymentGatePlan(db, salesOrderId, asOf)
+
+INSIDE the transaction, replacing the :282 call
+  authorizeSalesPrepaymentGateWithPlan(db, plan, { stage: 'RESERVATION',
+    actorId, mutationKey: `ACTION|RESERVATION|REQUEST|${intentId}` })
+```
+
+Requirements satisfied:
+
+- No late Finance parent acquisition after Gate locks — the parent lock is inside
+  the two-phase helper at gate.js:276, before RESULT (:278) and REQUIREMENT (:280).
+- Parent IDs are acquired ascending — adapter.js:77 sorts.
+- Current parent-set validation — adapter.js:82-90, raising
+  `SALES_PREPAYMENT_LOCK_PLAN_STALE`.
+- Stale plan fails closed, whole transaction rolls back.
+- Planning / Inventory mutation contract preserved — the `INVENTORY_LOCK`,
+  `MANUAL_RESERVATION`, `ON_HAND_RESERVATION` and `EXPECTED_SUPPLY_RESERVATION`
+  adapters are untouched; because the gate call happens first in the transaction
+  and the adapters run after, a gate rejection leaves no `inventory_locks` row, no
+  `planning_reservations` row and no `sales_reservation_intent` row.
+- Audit and idempotency unchanged — the gate's own audit and the intent audit are
+  as today; `mutationKey` is passed through byte-identically.
+- SQLite compatible — `lockSuffix(db)` yields an empty suffix on SQLite, so the
+  helper degrades to plain reads exactly as the current path does.
+
+**Declared behavioral difference (deliberate, concurrency-only).** When a
+requirement is in effect at discovery but leaves its effective window before the
+lock, `authorizeSalesPrepaymentGateForMutation` returns `NOT_REQUIRED`
+(gate.js:215) while `authorizeSalesPrepaymentGateWithPlan` throws 409 stale
+(gate.js:282). This is reachable **only** under a concurrent requirement change.
+For every non-concurrent case the outcomes are identical, because
+`discoverSalesPrepaymentGatePlan` filters by `effectiveAtNow` at discovery and
+therefore returns `requirementId: null` / fingerprint `NONE` for an out-of-range
+requirement, which the helper maps back to `NOT_REQUIRED` at gate.js:273. The
+concurrent case is a fail-closed narrowing already mandated by §36.14.6 M17/M18
+and by the approved stale-plan contract. If Acceptance judges this narrowing a
+business-rule change, it must return to Requirement; it is called out here rather
+than absorbed silently.
+
+**Bounded ordering refinement shared with Delivery/Service.** In
+`authorizeSalesPrepaymentGateWithPlan` the parent-plan assertion currently runs
+via `resolveEligiblePrepaymentWithParentPlan` at gate.js:285, i.e. after the
+RESULT and REQUIREMENT locks. The Design moves one assertion earlier — call
+`assertPrepaymentParentPlanCurrent` immediately after the parent lock at gate.js:276
+— so every gate path shares the identical `PARENT -> assert -> RESULT ->
+REQUIREMENT` shape required by §37.2. The later re-assert inside
+`resolveEligiblePrepaymentWithParentPlan` is retained unchanged as defence in
+depth; it is idempotent and cheap.
+
+### 37.6 Finance Refund post-lock monetary authority
+
+Defect F5 confirmed. The correction is confined to `createRefund`
+(`financial-controls.js:188-220`).
+
+```text
+UNLOCKED PRECHECK (retained, fast rejection only)
+  :192 loadBalance          -> identity only, not capacity authority
+  :194-195 amount > available -> 409 fast rejection
+  :200 idempotencyReplay    -> unchanged
+INSIDE transaction (:201)
+  :205 acquireParentBalanceLock(db, balance.id)   <-- canonical lock, L1
+  NEW  re-read the locked balance row and re-assert side / party_id
+       (the row is already locked; a re-SELECT under the held lock is free)
+  NEW  currentAvailable = unappliedBalanceSnapshot(db, balance.id).remainingCents
+       -- the SAME canonical formula as the precheck; this post-lock value is
+          the ONLY monetary authority for confirmation
+  NEW  amount > currentAvailable -> 409, full rollback, zero side effects
+  NEW  currentAvailable < 0      -> 409 distinct code, full rollback.
+       A negative remaining balance is an existing over-refund defect and must be
+       SURFACED, never self-healed (AGENTS.md §6: GET/CHECK must not silently
+       repair history).
+  :212 voucher, :213 refund row, :215 settlement movement, :216 idempotency
+  record, :217 audit -> all unchanged and atomic with the above
+```
+
+Authoritative remaining capacity is unchanged and comes from the single canonical
+Finance formula (`settlement-core.js:200-210`):
+
+```text
+remaining = original_amount_cents
+          - SUM(balance_applications.amount_cents   WHERE status='CONFIRMED')
+          - SUM(financial_refunds.amount_cents      WHERE status='CONFIRMED')
+          - (PREPAYMENT: SUM(settlement_reversal_items.amount_cents
+                             WHERE component_type='UNAPPLIED')
+                           AND original_component_id = balance.id)
+            (CREDIT:    SUM(credit_reversal_components.unapplied_cents
+                             WHERE credit_id = balance.source_id))
+```
+
+Race outcomes:
+
+1. **Refund vs Refund (different keys).** Both pass the precheck. Both enter the
+   transaction and serialize on L1. The second one re-reads under the lock,
+   observes the first refund's CONFIRMED row, and rejects if capacity is
+   exhausted. Before the fix both would commit and drive remaining negative.
+2. **Refund vs Apply.** Both take L1; `applyUnappliedBalance` already re-reads at
+   :163. Serialized; one may reject with 409; no over-application.
+3. **Refund vs UNAPPLIED reversal.** `reverseSettlementDocument` already locks at
+   settlement.js:341 and re-reads at :345. Serialized on the same balance row.
+4. **Successful exact replay.** `idempotencyReplay` at :200 returns the stored
+   result before the transaction; unchanged. No second voucher, movement, refund
+   row or audit row.
+5. **Same key, conflicting request.** `idempotencyReplay` raises 409 at
+   `financial-controls.js:55`; unchanged.
+6. **Rollback and retry exhaustion.** Any throw rolls back voucher, movement,
+   refund row, idempotency record and audit together. `transaction()` rethrows a
+   deadlocked attempt with `transactionRetryExhausted` after the bounded budget
+   (F7); no partial effect survives.
+
+**Non-PREPAYMENT refunds are not silently changed.** `acquireParentBalanceLock`
+already takes FOR UPDATE on every balance type (adapter.js:215) and returns null
+only as a type test, so the post-lock re-read is correct for CREDIT balances too.
+The added checks use the same `unappliedBalanceSnapshot` formula already used by
+the precheck, and add no new business condition beyond "re-read under the lock".
+
+**Observed divergence, reported not fixed (§37.13 D1).** For a PREPAYMENT balance,
+`unappliedBalanceSnapshot` (settlement-core.js:206) sums UNAPPLIED reversal items
+**without** joining `settlement_reversals.status='CONFIRMED'`, while the Gate
+adapter's `readReversalCents` (adapter.js:113-118) **does** filter on
+`'CONFIRMED'`. A POSTED-but-not-CONFIRMED reversal therefore reduces refund/apply
+capacity while not reducing Gate eligibility. Both formulas are frozen and both
+are currently in use. Changing either is a Finance-semantics change outside this
+Design's authorization, so it is reported as an open item for a separate
+Requirement/Design decision, not corrected here.
+
+### 37.7 Delivery Confirm and Service Confirm final fingerprint contract
+
+Both paths already perform unlocked discovery and use the two-phase gate
+(F1). The gap is the **final** revalidation: neither path re-verifies its
+discovery facts under the Sales row lock it ultimately holds.
+
+Two fingerprints are defined. Both are derived from the existing
+`discoverSalesPrepaymentGatePlan` shape; no new table or column is introduced.
+
+```text
+DISCOVERY FINGERPRINT (immutable, captured outside the transaction)
+  order        : id | customer_id | status | total_cents | sales_group_id
+  requirement  : id | required_amount_cents | effective_from | effective_to | NONE
+  parents      : ascending eligible PREPAYMENT parent id list
+  source-specific additions:
+    Delivery   : sales_deliveries.id | customer_id | status | delivery_date |
+                 warehouse_id | total_cents
+    Service    : service_fulfillments.id | sales_order_id | sales_order_item_id |
+                 customer_id | business_date | confirmation_state | version
+
+FINAL-LOCK FINGERPRINT (recomputed under the L8 Sales lock, inside the transaction)
+  - the same fields, read with a LOCKING read
+  - plus the source-identity set:
+    Delivery : every sales_delivery_items.sales_order_item_id must still belong to
+               the same order, with identical product_id and unit_price_cents;
+               delivery_notice_lines still bound to the same notice and item
+    Service  : sales_order_items row unchanged (product, quantity, amount_cents,
+               payment_terms_days) and the fulfillment row still PENDING at the
+               expected version
+```
+
+Required sequence and rules:
+
+1. Initial discovery before the transaction — already satisfied (app.js:5700,
+   :5709; service-fulfillment.js:147, :149).
+2. Parent-first canonical locking — already satisfied (gate.js:276).
+3. Gate Result and Requirement validation — already satisfied (gate.js:278, :280),
+   plus the §37.5 ordering refinement.
+4. Final Sales/business row locking in the approved order — already satisfied
+   (sales-delivery-source.js:52→54→58→65→66; service-fulfillment.js:163→164).
+5. **Final authoritative comparison after acquiring the relevant Sales lock** —
+   NEW. For Delivery, the comparison must consume the rows already returned by
+   `lockAndConsumeSalesDeliveryCapacity` (`{delivery, order}`,
+   sales-delivery-source.js:79) instead of the plain re-SELECTs at app.js:5715
+   and :5718-5720, which under REPEATABLE READ return the transaction snapshot
+   rather than the latest committed image (F8). For Service, the comparison is
+   taken from the `sales_order_items` row locked at :163 and the fulfillment row
+   locked at :164, replacing reliance on the unlocked `unlocked` snapshot at :160.
+6. Customer, status, totals, group, requirement identity and approved source
+   identities verified — any mismatch raises 409
+   `SALES_PREPAYMENT_LOCK_PLAN_STALE` (or the caller's existing specific code
+   where one already exists) and rolls the whole transaction back.
+7. Stale or newly appearing parent/source candidates are handled without any late
+   inverse lock: the plan assertion converts candidate drift into a 409; no
+   additional parent row is ever locked after L6/L7.
+8. No downstream posting on a stale plan — OQC, Inventory, valuation, COGS, AR,
+   vouchers, capacity writes, audit and idempotency all sit after the final
+   comparison and roll back together with it.
+
+Preserved unchanged: OQC gating, Inventory/valuation ownership, COGS, AR
+recognition, voucher generation, delivery-capacity tolerance, audit payloads and
+idempotency semantics. `SERVICE_FULFILLMENT_VERSION_CONFLICT`,
+`SERVICE_FULFILLMENT_STATE_CONFLICT`, `SERVICE_DELIVERY_CAPACITY_EXCEEDED`,
+`SALES_PREPAYMENT_GATE_*` and the existing 409 shapes are reused as-is; **no new
+business state or status code is introduced**. Stale discovery maps to 409 and is
+retryable only through §37.8.
+
+### 37.8 Outer discovery retry model
+
+`transaction(db, work)` retries the callback only, against a captured plan (F7).
+Stale-plan recovery therefore requires a **caller-owned outer attempt model**,
+with no nesting and no unbounded retries.
+
+```text
+OUTER ATTEMPT MODEL (per gate-participating entry point)
+  budget = ERP_GATE_ATTEMPTS_MAX, default 3 -> at most 3 OUTER attempts
+  for attempt in 1..budget:
+      plan = discover...(db, ...)                 # fresh, unlocked, authoritative
+      try:
+          transaction(db, () => { L1?..L8; validate; mutate; audit; idempotency })
+          return success
+      catch e:
+          if e is business 409 (stale / capacity / state / SOD / gate block):
+              RETRY IS NOT PERMITTED unless the error is one of the two
+              explicitly re-discoverable classes below
+          if e is SALES_PREPAYMENT_LOCK_PLAN_STALE or the §37.7 final-fingerprint
+              mismatch:  backoff and re-discover, next outer attempt
+          if e is deadlock/lock-wait (1213/1205/ER_LOCK_*): transaction() has
+              already retried internally; on exhaustion the OUTER loop may
+              re-discover once more, bounded by the same budget
+          if budget exhausted: fail closed, HTTP 503 retryable, zero side effects
+```
+
+Strict differentiation:
+
+| Class | Inside `transaction()` | Outer loop | Effect |
+|---|---|---|---|
+| Deadlock / lock-wait | retried up to `ERP_DB_TX_RETRY_MAX` on the same captured plan | may re-discover after exhaustion | ordinary contention |
+| Stale plan / final fingerprint | not retried; raised as a 409 | re-discover, then retry | the only re-discovery class besides exhaustion |
+| Business 409 (BLOCK, capacity, SOD, state) | not retried | **never retried** | fail closed |
+| Idempotent replay | not an error | never re-executed | stored result returned, no duplicate effect |
+
+Guarantees:
+
+- No nested `transaction()` — the outer loop owns discovery, the inner owns one
+  attempt; `transaction()` is called exactly once per outer attempt.
+- Every failed attempt leaves zero audit row, voucher, Gate Result, Finance
+  movement, inventory mutation or idempotency record, because the entire attempt
+  body is one transaction.
+- Counting: outer attempts are counted per request; inner `transaction()`
+  attempts are counted per outer attempt and are reported separately
+  (`transactionAttempts`). Exhaustion of either surfaces as 503 retryable.
+- Connection lifetime: a deadlock victim connection is rolled back by
+  `transaction()` (db.js:1901) and reused; the worker's bounded cleanup contract
+  is unchanged. Rediscovered plans do not carry state across connections.
+- Final HTTP behaviour: 409 for stale-plan rejection while budget remains, 503
+  retryable on exhaustion, original business code otherwise.
+
+`server/db.js` and `mysql_transaction_gates` are **not** modified by this Design.
+
+### 37.9 Deadlock / retry / error matrix
+
+| Condition | Stage | Error | Rollback | Retry |
+|---|---|---|---|---|
+| Parent set changed | D5 / gate.js:276 | 409 `SALES_PREPAYMENT_LOCK_PLAN_STALE` | whole tx | outer re-discovery |
+| Parent closed | adapter.js:51 | 409 `结算余额已关闭` | whole tx | outer re-discovery |
+| Requirement out of window under lock | D7 / gate.js:282 | 409 stale | whole tx | outer re-discovery |
+| Final fingerprint mismatch | L8 revalidation | 409 stale (or caller code) | whole tx | outer re-discovery |
+| Gate BLOCK | decideGate | 409 `SALES_PREPAYMENT_GATE_BLOCKED` | whole tx | never |
+| Gate OVERRIDE without reason | assertPermittedGateRow | 409 `..._OVERRIDE_MISSING_REASON` | whole tx | never |
+| Refund capacity exhausted post-lock | §37.6 | 409 refund capacity | whole tx | never |
+| Negative remaining balance post-lock | §37.6 | 409 distinct code | whole tx | never |
+| SOD violation (creator = approver) | L8 revalidation | 409 | whole tx | never |
+| Deadlock victim | any | 1213 | whole tx | inner ≤3, then outer re-discovery |
+| Lock wait timeout | any | 1205 | whole tx | inner ≤3, then outer re-discovery |
+| Retry exhausted | — | 503 retryable | zero effects | no |
+
+Invariant: **retry must never be used to mask an ordering defect.** A cycle that
+survives W7-C1/W7-C2′ is a design defect to be fixed, not retried away.
+
+### 37.10 Acceptance evidence design
+
+The approved plan cannot rest on global-gate serialization alone (F6). Evidence
+is stratified so that each claim is made only by the layer that can actually
+prove it.
+
+```text
+A  STATIC SQL / CALL-ORDER ASSERTIONS
+   Focused tests asserting, from source, that:
+     - evaluateSalesPrepaymentGate acquires parent before RESULT before
+       REQUIREMENT and never calls the FOR_UPDATE resolve path
+     - no gate-participating path locks sales_orders before its Gate locks
+     - createRefund re-reads capacity after acquireParentBalanceLock
+     - no lockEligiblePrepaymentParents call appears after a RESULT/REQUIREMENT
+       lock in any gate path
+   These prove INTENDED ORDER ONLY. They prove nothing about runtime behaviour.
+
+B  REAL PRODUCTION API REGRESSION
+   The existing Wave 7 focused/functional/acceptance suites, unchanged in intent,
+   re-run after the correction. Proves business outcomes and preserved
+   semantics; no deadlock expectation is attached.
+
+C  REAL INDEPENDENT MySQL SESSIONS
+   Existing pattern: >=3 distinct CONNECTION_ID()s, real createApp + HTTP login,
+   real production entry points (worker actions), control worker holding the gate
+   row, overlap proven via information_schema.PROCESSLIST.
+
+D  PROTECTED RAW ROW-LEVEL LOCK CONTENTION  (justified, bounded, separate)
+   Because production `transaction()` serialises every MySQL transaction at the
+   L0 gate row (F6), C CANNOT observe two sessions contending for a business row.
+   Row-level lock-order evidence therefore requires RAW sessions that open their
+   own BEGIN and issue explicit SELECT ... FOR UPDATE in the exact L1..L8 order,
+   WITHOUT the canonical gate row. Rules:
+     - disposable MySQL only, explicit reset guard, never a non-disposable schema
+     - raw sessions may assert LOCK ACQUISITION / WAIT ORDER and lock-wait
+       behaviour ONLY
+     - raw sessions may NOT assert any business outcome, and may NOT be reported
+       as production behaviour
+     - the production gate is never disabled, bypassed or reconfigured; the raw
+       probe simply does not use `transaction()`
+
+E  STRICT SEPARATION
+   Reports must label every result as one of: PRODUCTION_SERIALIZED_OUTCOME,
+   RAW_ROW_LEVEL_LOCK_ORDER, or STATIC_INTENT. Never merge the three.
+
+F  PRE- vs POST-CORRECTION
+   M1/M7-style fixtures must FIRST be shown to deadlock against the pre-fix
+   ordering in environment D. A fixture that only passes after the fix has not
+   demonstrated that the defect existed, and cannot be reported as a reproducer.
+
+G  FAILURE-SIDE-EFFECT ASSERTIONS
+   Every rejection path must assert zero rows in: sales_prepayment_gate_results,
+   credit_check_results, financial_refunds, financial_refund_reversals,
+   accounting_vouchers, accounting_entries, settlement_account_movements,
+   balance_applications, settlement_reversal_items, service_fulfillments,
+   sales_deliveries, inventory_transactions, inventory_mutation_log,
+   idempotency_records, and no audit row for the rejected decision.
+
+H  SCHEMA PARITY AND SQLite COMPATIBILITY
+   No schema change is introduced, so parity is asserted by regression: the
+   focused suite passes on SQLite (lockSuffix collapses to a plain read) and the
+   same assertions hold on MySQL.
+```
+
+M1–M20 mapping, with the evidence layer that can actually prove each:
+
+| # | Case | Layer | Notes |
+|---|---|---|---|
+| M1 | Manual Eval vs SO Submit, same order | D + F | the W7-C1 reproducer; must deadlock pre-fix |
+| M2 | Manual Eval vs Gate Authorization, same order | D | |
+| M3 | Manual Eval vs Gate Auth, different orders, same customer | C | parent present |
+| M4 | SO Submit vs `applyUnappliedBalance` | D | |
+| M5 | SO Submit vs `createRefund` | D + G | post-lock capacity now authoritative |
+| M6 | SO Submit vs UNAPPLIED reversal | D | |
+| M7 | SO Submit vs SD Confirm, same order | D + F | the W7-C2′ reproducer; must deadlock pre-fix |
+| M8 | Reservation Intent vs Prepayment Gate | C + D | convergence target |
+| M9 | Credit Check vs SO Submit | D | **Wave 10 only**; not runnable pre-Wave-10, must be reported as blocked, not passed |
+| M10 | Two salespersons, one aggregate | D | Wave 10 only; assert §36.8.1 preconditions or the fixture is declared unconstructible |
+| M11 | Credit Profile mutation vs active check | D | Wave 10 only |
+| M12 | Special Approval vs policy mutation | D | Wave 10 only |
+| M13 | **Empty parent: SO Approve vs SD Confirm** | D + F | the §36.14.2 concealed cycle; with an empty parent set L1 is skipped and L8-last still holds |
+| M14 | **Empty parent: SO Submit vs SD Confirm** | D + F | |
+| M15 | Empty parent, two salespersons, one aggregate | D | Wave 10 only |
+| M16 | Non-empty parent: manual eval vs SO Submit | D | must be reported as the parent-locked path, distinct from M13/M14 |
+| M17 | Stale discovered parent set | C + G | 409 + zero side effects |
+| M18 | Newly created eligible prepayment appears | C + G | must never be silently locked late |
+| M19 | No-prepayment Credit Check still fails closed | C | Wave 10 only for the Credit half; the `NOT_REQUIRED` half is testable now |
+| M20 | SO state revalidation fails after Gate calculation | C + G | no committed Credit or Gate evidence |
+| **M21** | **Refund vs Refund, different keys** | C + D + G | §37.6 scenario 1; asserts remaining never negative |
+| **M22** | **Refund vs Apply** | C + D + G | §37.6 scenario 2 |
+| **M23** | **Refund vs UNAPPLIED reversal** | C + D + G | §37.6 scenario 3 |
+| **M24** | **Exact replay / same-key conflict** | C + G | no duplicate monetary effect |
+| **M25** | **Retry exhaustion and deadlock-victim rollback** | C + G | outer budget exhausted → 503, zero effects |
+
+M9–M12, M15 and M19(Credit) require Wave 10 code that does not exist. They are
+specified now and **must be reported as BLOCKED, never as PASS**, until Wave 10
+exists. Existing Wave 9 concurrency evidence (106/106, per §36.16.3) proves
+serialized Credit-anchor outcomes; it does not and cannot prove L2–L5 ordering.
+
+### 37.11 Future implementation file manifest (design only — nothing implemented)
+
+```text
+1  server/modules/sales-prepayment-gate.js
+   why        : W7-C1 inversion (F3) and the L1->assert->L6->L7 shape
+   function   : evaluateSalesPrepaymentGate (:369-436)
+   reuse      : discoverSalesPrepaymentGatePlan, lockEligiblePrepaymentParents,
+                assertPrepaymentParentPlanCurrent,
+                resolveEligiblePrepaymentWithParentPlan, decideGate
+   change     : bind asOf once; D0 plan outside; D4/D5 before the RESULT lock;
+                reorder RESULT before REQUIREMENT; resolve with lockMode NONE
+   preserved  : decision logic, override, snapshot key, audit, HTTP codes, replay
+   tests      : static order assertion + M1/M2/M16 stale-plan + replay regression
+   compat     : SQLite unaffected (lockSuffix collapses); no schema change
+   risk/rollbk: reverting restores the pre-existing E3/E5 inversion only; no
+                persisted state changes, so rollback is a pure code revert
+
+2  server/modules/sales-prepayment-gate.js
+   why        : §37.5 ordering refinement shared by all gate paths
+   function   : authorizeSalesPrepaymentGateWithPlan (:261-300)
+   change     : call assertPrepaymentParentPlanCurrent immediately after the
+                parent lock at :276; keep the later re-assert unchanged
+   preserved  : NOT_REQUIRED outcomes, decision, audit, snapshot key
+   risk       : fail-closed earlier; a concurrent requirement change now 409s
+                earlier. Behaviour-preserving for all non-concurrent cases.
+
+3  server/modules/sales-orders.js
+   why        : W7-C2′ E6 inversion at :620
+   function   : salesOrderAction (:609-662)
+   reuse      : assertGroupScope, requestFingerprint, idempotencyReplay,
+                saveIdempotency
+   change     : discovery + fast validation above :619 for submit/approve only;
+                L1? parent plan + assertion; L6/L7 gate; move the
+                SELECT ... FOR UPDATE to the L8 position; full revalidation of
+                status, customer, salesperson, total, group, business date and
+                plan identities under L8; re-run :622-638 checks under L8
+   preserved  : RBAC (ORDERS_SUBMIT / ORDERS_APPROVE), SOD at :647-649, HTTP
+                contracts, idempotency, audit payloads
+   unchanged : reject / close / cancel keep the L8-only shape (F2, and the
+                approve/reject shared branch must be split so reject is not
+                dragged through the Credit/Gate stages)
+   tests      : static order assertion + M7/M13/M14/M20 + submit/approve
+                functional regression + reject/close/cancel regression
+   risk       : status read moves after validations; SOD must be re-verified
+                under the L8 re-read
+
+4  server/modules/sales-reservation-intent.js
+   why        : in-transaction discovery with no plan-currency assertion
+   function   : requestReservationIntent (:228-...)
+   reuse      : discoverSalesPrepaymentGatePlan,
+                authorizeSalesPrepaymentGateWithPlan (existing canonical pair)
+   change     : discover the plan outside the transaction; replace the :282
+                authorizeSalesPrepaymentGateForMutation call
+   preserved  : all four reservation adapters, duplicate check, audit,
+                idempotency, Planning/Inventory ownership, SQLite behavior
+   tests      : M8 + M17/M18 on the reservation path; assert no orphan
+                inventory_locks / planning_reservations / intent row on failure
+   compat     : no schema change; mutationKey byte-identical
+   risk       : the declared concurrency-only difference in §37.5
+
+5  server/modules/financial-controls.js
+   why        : F5 confirmed monetary defect
+   function   : createRefund (:188-220)
+   reuse      : acquireParentBalanceLock, unappliedBalanceSnapshot,
+                idempotencyReplay, saveIdempotency, recordSettlementMovement
+   change     : re-read the locked balance row and post-lock remaining under the
+                L1 lock; reject amount > currentAvailable and negative remaining
+   preserved  : fast precheck, voucher, movement, refund row, idempotency, audit,
+                non-PREPAYMENT semantics, HTTP contracts
+   tests      : M21/M22/M23/M24 + static assertion that the re-read follows
+                acquireParentBalanceLock + failure-side-effect assertions
+   risk       : a previously accepted over-refund would now surface as 409; this
+                is the intended fail-closed behaviour, not a regression
+   roll back   : code revert only; no persisted state changes
+
+6  server/app.js
+   why        : F8 stale plain re-read after the canonical capacity lock
+   function   : confirmSalesDelivery (:5698-...)
+   change     : consume the rows returned by lockAndConsumeSalesDeliveryCapacity
+                instead of the plain re-SELECTs at :5715 and :5718-5720; add the
+                final-lock fingerprint comparison
+   preserved  : OQC, capacity tolerance, Inventory/valuation/COGS, AR, vouchers,
+                idempotency, audit, HTTP contracts
+   tests      : Delivery/Service regression + M13/M14 + stale-source 409 + G
+
+7  server/modules/service-fulfillment.js
+   why        : final revalidation must use the locked SO item and fulfillment rows
+   function   : confirmServiceFulfillmentCommand (:144-205)
+   change     : build the final fingerprint from the rows locked at :163/:164
+                rather than the unlocked snapshot at :160
+   preserved  : §35.18.11.5 lock order, recognition policy, AR/voucher, capacity
+                ceiling, idempotency fingerprint, audit
+
+8  tests (Wave 7 focused + concurrency)
+   why        : §37.10 strata A-D and G must become executable evidence
+   scope      : server/sales-customer-wave7-*.test.js static order assertions;
+                server/mysql-sales-customer-wave7-concurrency.integration.js
+                production-outcome cases (M21-M25);
+                a NEW protected raw row-level probe file for M1/M7/M13/M14
+   boundary   : harness-only; no production code change; registered in
+                scripts/testing/test-suites.js and the MySQL concurrency gate
+   no change  : server/db.js, server/database/, migrations, Wave 9 Credit modules
+
+Explicitly OUT of the manifest: server/db.js, mysql_transaction_gates, schema or
+migration files, Wave 9 Credit modules, Wave 10 Credit code, permissions,
+frontend, package.json. Nothing in this manifest is implemented by this Design.
+```
+
+### 37.12 Compatibility, rollback and idempotency invariants
+
+```text
+Preserved:  Wave 9 frozen Credit Foundation (six tables, keys, indexes, anchor
+            identity, rating provenance, policy snapshots); Finance canonical
+            money truth; Wave 7 gate decisions; permission/RBAC/SOD contracts;
+            source identity rules; integer-cent monetary units and rounding;
+            Finance period controls; Inventory/Planning ownership; AR, voucher,
+            COGS and valuation semantics; historical replay contracts;
+            legacy-data compatibility; append-only audit history.
+Not added:  physical business tables; shadow PREPAYMENT balances; a second
+            Finance ledger; permissions; Wave 10 features; a replacement global
+            transaction gate; migrations.
+Idempotency: unchanged keys and scopes. Gate snapshot_key semantics unchanged.
+            Refund REFUND_CONFIRM / REFUND_REVERSAL scopes unchanged.
+            Credit idempotency identities encode no actor and are untouched.
+Rollback:   every change above is code-only, additive and reversible by revert.
+            No persisted state, no schema, no data migration, so rollback has no
+            data step and cannot orphan a reservation, inventory lock, gate
+            result, voucher or audit row.
+```
+
+### 37.13 Open items — no silent absorption
+
+| # | Item | Disposition |
+|---|---|---|
+| D1 | PREPAYMENT reversal capacity formula divergence: `settlement-core.js:206` omits `settlement_reversals.status='CONFIRMED'`; adapter.js:113-118 includes it. Affects refund/apply capacity vs Gate eligibility. | **Not corrected.** Finance semantics outside this authorization. Separate Requirement/Design decision required. |
+| D2 | §36.13.5:20511 and §36.14.3 describe SO Approve as gate-participating; code (F2) shows it invokes no gate today. | Design records the accurate current state (§37.4). If Wave 10 must make Approve gate-participating, that is a Wave 10 Requirement. |
+| D3 | `reverseRefund` (financial-controls.js:222-243) does not take the parent balance lock. It increases rather than reduces remaining capacity, so no cycle arises, but the Gate may read a snapshot that predates the reversal. | Pre-existing read-consistency observation. Out of W7-C1/C2′ scope. |
+| D4 | Reservation convergence changes the concurrent out-of-effective-window outcome from `NOT_REQUIRED` to 409 (§37.5). | Declared fail-closed narrowing. If judged a business-rule change, return to Requirement. |
+| D5 | M9–M12, M15, M19(Credit) cannot be executed before Wave 10. | Report as BLOCKED, never PASS. |
+
+### 37.14 Boundary
+
+No `document.md`, `README.md`, `AGENTS.md`, `CLAUDE.md`, production source, test,
+migration, schema, frontend or `package.json` change. No database connection,
+migration, reset or test execution. No MySQL gate run. No Git add, commit, push,
+merge, tag, release or deploy. Wave 9 frozen contracts are untouched. Wave 10 and
+Wave 11 are not started. No new SC, Invariant, UAT, Race or Audit Capability
+identifier is created. Historical stage-status text remains valid as history.
+`WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` and `LEGACY_DATA_EVIDENCE_PENDING`
+are unchanged.
+
+**Status: `W7_C1_C2_BOUNDED_DESIGN_AMENDMENT_COMPLETE — AWAITING_EXTERNAL_DESIGN_REVIEW`.**
+
+---
+
+## 37.15 Design Evidence Correction (2026-10-23)
+
+### 37.15.0 Authorization and scope of this correction
+
+Authorized as one bounded, documentation-only correction under
+`W7_C1_C2_FINAL_DESIGN_EVIDENCE_CORRECTION`. **§37.0–§37.14 are preserved
+verbatim and remain in force except where this section explicitly supersedes a
+named statement.** Nothing in §37.0–§37.14 is rewritten or deleted.
+
+Superseded by this section:
+
+| Superseded statement | Correction |
+|---|---|
+| §37.1 **F8**, first half — "Under REPEATABLE READ a plain SELECT returns the transaction snapshot, not the latest committed image" | **Wrong.** Production MySQL runs at READ COMMITTED (§37.17). A plain SELECT returns the latest committed row at statement start. |
+| §37.7 rationale for consuming the locked rows — "may validate against a stale image" | Corrected rationale in §37.17.4. The *requirement* is retained; the *reason* changes. |
+| §37.13 **D1** — classified as a live Finance-semantics divergence needing a separate Requirement/Design decision | **Overstated.** Corrected in §37.16: no reachable valid-data difference. Closed as an observation, not a defect. |
+| §37.6's cross-reference to D1 as an open Finance item | Closed by §37.16. |
+| §37.10's treatment of M9–M12, M15 and M19 as undifferentiated "Wave 10 only" | Reorganized into independent Gate A / Gate B (§37.18). |
+
+Retained unchanged: §37.2 (W7-C1 sequence), §37.3 (L1–L8), §37.4 (caller graph),
+§37.5 (Reservation convergence), §37.6 (Refund post-lock authority, minus the D1
+cross-reference), §37.8/§37.9 (retry and error matrix, refined by §37.20), and the
+§37.1 F1–F7 facts — **including F6**, which re-verified as correct.
+
+### 37.15.1 Baseline
+
+Re-verified at `feature/sales-waves6-13@2037cb6`, package `1.6.2`, on the
+uncommitted working tree already carrying §37 (+784) and `log/2026-10-23.md`
+(+101). Both modifications preserved.
+
+### 37.16 D1 — corrected classification: NOT a reachable defect
+
+**Evidence A — the constraint exists and is enforced on both backends.**
+
+```text
+SQLite DDL   server/migrations/v13-phase5-settlement-integrity.js:66-78
+               status TEXT NOT NULL DEFAULT 'CONFIRMED' CHECK(status='CONFIRMED')
+             server/migrations/v13-phase6a-financial-controls.js:21-30
+               the partial-reversal rebuild RETAINED
+               status TEXT NOT NULL DEFAULT 'CONFIRMED' CHECK(status='CONFIRMED')
+               and preserved phase5 rows via INSERT ... SELECT *, so no
+               non-conformant row can be introduced by the migration itself.
+
+MySQL DDL    server/database/mysql-schema.js:186
+               for (const check of extractChecks(table.sql))
+                 definitions.push(`CHECK (${check})`);
+             MySQL InnoDB DDL is derived from the SQLite schema, so the
+             CHECK is carried across and re-emitted verbatim, under
+             ENGINE=InnoDB. MySQL 8.0.16+ enforces CHECK constraints.
+             (Recorded server version in §36.16 evidence: 8.0.37.)
+
+SQLite       CHECK constraints are part of the table definition and are enforced
+             by node:sqlite on every INSERT/UPDATE.
+```
+
+**Evidence B — no application path can produce a non-CONFIRMED row.**
+
+```text
+server/modules/finance-settlement-reversal.js:39-41  inserts literal 'CONFIRMED'
+server/modules/settlement.js:353-354                 omits status -> DEFAULT
+                                                    'CONFIRMED' applies
+No UPDATE ... SET status exists against settlement_reversals in server/modules/.
+```
+
+**Evidence C — SQL predicate difference vs business-result difference.**
+
+```text
+sales-prepayment-finance-adapter.js:113-118  JOINs settlement_reversals and
+    filters sr.status='CONFIRMED'.
+settlement-core.js:206                       omits the join and the filter.
+
+Because status is constrained to exactly one value and every writer supplies it,
+these two queries return IDENTICAL result sets for every reachable row. The
+predicate in the adapter is therefore REDUNDANT DEFENCE IN DEPTH, not a
+different calculation.
+```
+
+**Corrected classification.** D1 is a **SQL predicate difference with no
+reachable valid-data business-result difference.** It is *not* a Finance defect,
+*not* a monetary divergence, and *not* a Requirement or Design blocker. The
+original §37.13 D1 wording overstated it and is superseded.
+
+**Residual scope, precisely bounded.** A divergence would require a
+`settlement_reversals` row whose `status <> 'CONFIRMED'`. Reachable only through a
+schema that lacks the CHECK, which in turn requires either a hand-created or
+pre-v13-phase5 SQLite table that `CREATE TABLE IF NOT EXISTS` did not reconcile
+*and* that also lacks the phase5 `UNIQUE(settlement_type, settlement_id)` so that
+phase6a's rebuild branch does not fire — or external DBA/file-level tampering.
+No such path exists in the canonical migration lifecycle, and even in such a
+table no application writer could produce such a row (Evidence B).
+
+**Existing failure policy for such data.** If a malformed row ever existed, the
+existing behaviour is *not* silent corruption in the Gate: the Gate adapter
+(adapter.js:117) would simply exclude it from eligible prepayment, which is the
+conservative direction — a reversal that reduces capacity is ignored rather than
+over-credited. Finance apply/refund capacity (settlement-core.js:206) would
+continue to count it, which is the conservative direction for a *refundable*
+balance. Both outcomes understate available capacity rather than overstate it,
+so the failure mode is fail-closed, not unsafe. No corrective action is
+authorized here, and none is needed. `LEGACY_DATA_EVIDENCE_PENDING` remains open
+and unchanged and remains the correct register for genuinely unknown historical
+data.
+
+### 37.17 MySQL isolation correction
+
+**Verified fact.** `server/database/mysql-worker.js:26-31`:
+
+```text
+// Application-required session state. Every newly created connection must
+// apply these before being published as usable; otherwise a reconnect could
+// silently downgrade isolation, lock waits or time zone semantics.
+const SESSION_TIMEZONE = '+00:00';
+const SESSION_ISOLATION_LEVEL = 'READ COMMITTED';
+const SESSION_INNODB_LOCK_WAIT_TIMEOUT = 2;
+```
+
+applied by `applySession()` at `:95-98` on **every** connection including
+reconnects. `server/database/mysql-adapter.js:38` maps `BEGIN IMMEDIATE` to
+`START TRANSACTION`; `server/db.js:1887` issues the former. Therefore **every
+production MySQL transaction runs at READ COMMITTED.**
+
+**Consequence.** There is no REPEATABLE READ snapshot anywhere in production
+MySQL. Any Design text asserting otherwise is incorrect and is superseded here.
+The isolation level is **not** changed by this Design, and `server/db.js` is not
+modified.
+
+#### 37.17.1 The five read categories
+
+The corrected basis for final validation, which §37.7 requires:
+
+| # | Category | Semantics at READ COMMITTED | Authority for final validation? |
+|---|---|---|---|
+| 1 | **Unlocked discovery** | Latest committed value at statement start; no lock; no protection | **No.** Candidate input only. |
+| 2 | **Locking read** (`SELECT ... FOR UPDATE`) | Latest committed value, plus an exclusive lock held to COMMIT/ROLLBACK | **Yes**, for the rows it covers. |
+| 3 | **Ordinary consistent read** | Latest committed value at statement start; no lock | **No.** |
+| 4 | **Current locked source identity** | The row as it exists while the transaction holds its lock | **Yes.** |
+| 5 | **Final mutation authority** | The same locked rows the transaction subsequently mutates | **Yes — and it must be the same rows.** |
+
+#### 37.17.2 Why a consistent read is not final authority under READ COMMITTED
+
+The reason is **not** staleness. A plain SELECT under READ COMMITTED always sees a
+recent committed image. The reason is **absence of protection**: a non-locking
+read takes no lock, so another transaction may commit a change to that row
+*after* the validation and *before* the mutation this transaction performs. The
+validation is then no longer backed by anything.
+
+`app.js:5715-5716` is the concrete instance:
+
+```text
+:5715  SELECT * FROM sales_deliveries WHERE id=?            (plain, NO lock)
+:5716  if (locked.status !== 'DRAFT') throw 409             (unprotected check)
+:5717  lockAndConsumeSalesDeliveryCapacity(...)             -> takes FOR UPDATE at
+        sales-delivery-source.js:52 and validates ONLY source_mode (:53) and the
+        ORDER's status/close state (:55). It does NOT re-assert delivery.status.
+```
+
+So between :5716 and the lock at :52, a concurrent transaction could confirm the
+same delivery; the locked read would then observe `status='CONFIRMED'` and no
+later statement re-checks it. Under READ COMMITTED this window is real, not
+hypothetical. (Not executed as a race in this stage — no test was run — so this is
+a Design-level requirement, not an accepted defect claim.)
+
+#### 37.17.3 Corrected requirement (unchanged conclusion)
+
+§37.7's requirement stands and is now correctly founded: **the final
+authoritative comparison must be made against the same locked rows the
+transaction subsequently mutates** (categories 4/5), never against an ordinary
+consistent read (categories 1/3). Concretely:
+
+- Delivery Confirm must consume the `{delivery, order}` pair returned by
+  `lockAndConsumeSalesDeliveryCapacity` (sales-delivery-source.js:79) for the
+  `status`, customer and source-identity comparison, instead of the plain
+  re-SELECTs at `app.js:5715` and `:5718-5720`.
+- Service Confirm must build its final fingerprint from the `sales_order_items`
+  row locked at `:163` and the `service_fulfillments` row locked at `:164`,
+  not from the unlocked `unlocked` snapshot at `:160`.
+- Unlocked discovery remains a fast rejection and a plan input only.
+
+Discovery and final validation are separated by the L1–L8 lock sequence, which is
+what makes revalidation meaningful: the discovery fingerprint is re-checked
+against rows that are now locked, so any concurrent change between the two is
+detected rather than tolerated.
+
+#### 37.17.4 Lock-wait timeout
+
+`SESSION_INNODB_LOCK_WAIT_TIMEOUT = 2` means a contended business row fails fast
+with `1205` rather than blocking for the MySQL default. This shortens the
+worst-case wait per attempt and is an input to the combined budget in §37.20.
+
+### 37.18 Acceptance split — Gate A (independent) and Gate B (Wave 10)
+
+The prior design left Credit-dependent fixtures undifferentiated from
+Wave 7-verifiable ones, which made the Wave 10 blocker read as circular. They
+are now separated. **Gate A does not depend on Gate B; Gate B is a downstream
+obligation of Wave 10 itself and is never a prerequisite for Gate A.**
+
+#### 37.18.1 Gate A — W7-C1 / W7-C2′ independent acceptance
+
+Executable on today's pre-Wave-10 production code plus the separately authorized
+W7 remediation. **No Wave 10 Credit code is required, referenced or simulated.**
+
+```text
+A-STATIC   Lock-order intent assertions (§37.10 stratum A), now including the
+           post-lock capacity re-read in createRefund.
+A-BASE     Full Wave 7 prepayment functional / acceptance / migration regression
+           unchanged in intent.
+A-MONEY    §37.6 refund authority: post-lock re-read, amount<=available,
+           negative remaining refused, voucher/settlement/refund/idempotency/
+           audit atomic.
+A-STALE    M3, M8, M16, M17, M18, M20 — stale-plan and candidate-drift 409 with
+           zero side effects.
+A-ORDER    M1, M7, M13, M14 — the W7-C1 and W7-C2' structural reproducers,
+           including both empty-parent cases, with pre-fix deadlock proof and
+           post-fix no-deadlock proof (§37.10 F).
+A-FIN      M4, M5, M6 — SO Submit vs apply / createRefund / UNAPPLIED reversal.
+A-REFUND   M21, M22, M23, M24, M25 — refund vs refund / apply / reversal, exact
+           replay, same-key conflict, retry exhaustion.
+A-GATE     M2 — Manual Eval vs Gate Authorization.
+A-GRNR     The non-Credit half of M19: with no prepayment requirement the gate
+           returns NOT_REQUIRED and the absence of a parent does not weaken or
+           reorder anything. The Credit half is Gate B.
+A-PROD     Production MySQL API regression across independent sessions (§37.10 C).
+A-RAW      Protected raw row-level lock-order probes for M1/M7/M13/M14 in a
+           disposable MySQL, asserting lock/wait ORDER only (§37.10 D/E).
+A-SIDE     Failure-side-effect assertions across every rejection path
+           (§37.10 G).
+A-PARITY   SQLite + MySQL schema/behavior parity (§37.10 H).
+```
+
+Gate A passing, plus **explicit user Final Acceptance**, is what satisfies
+`WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS`. Until that Final Acceptance the
+canonical Wave 10 blocker remains in force exactly as written.
+
+#### 37.18.2 Gate B — Wave 10 Credit integration acceptance
+
+Performed only after Wave 10 is separately authorized and implemented. Until then
+every case below is **`BLOCKED_BY_WAVE10`** and must be reported as blocked —
+never as PASS, never as skipped-and-green, never as "verified by inspection".
+
+```text
+B-COMPOSE  Credit / Gate / Sales lock-order composition — that L2->L3->L4->L5 sits
+           between L1 and L6, and that Credit takes no Sales or Finance
+           business-row lock.
+B-M9       Credit Check vs SO Submit, same order.
+B-M10      Two salespersons, one customer aggregate; exactly one commits under
+           ONLY_ONE_FITS, with §36.8.1 preconditions asserted or the fixture
+           declared unconstructible.
+B-M11      Credit Profile mutation vs active Credit Check.
+B-M12      Credit Special Approval vs policy mutation.
+B-M15      Empty parent set, two salespersons, one customer aggregate.
+B-M19C     The Credit half of M19: a genuinely missing mandatory Profile fails
+           closed at the pre-lock guard with zero prohibited side effects; §37.39.7 governs.
+```
+
+Gate B is **not** weakened, deferred or discharged by Gate A. It remains the
+ultimate Credit integration acceptance obligation for Wave 10 and may only be
+discharged by executing these fixtures against real Wave 10 code.
+
+### 37.19 D2 / D3 / D4 dispositions
+
+#### 37.19.1 D2 — Sales Order Approve: **resolved, current state recorded**
+
+Re-verified against `server/modules/sales-orders.js:609-662`: `approve` takes
+`SALES_ORDER FOR UPDATE` at `:620`, validates at `:647` (status, SOD
+`creator_id !== actor.id`) and mutates at `:648`. **It invokes neither the
+prepayment gate nor any Credit check.** Only the `submit` branch calls the gate
+(`:639`). `approve` shares the `:647-649` branch with `reject`, which likewise
+invokes no gate.
+
+Current-state implementation and future Wave 10 participation are therefore kept
+strictly separate:
+
+- **Current state (Gate A scope):** `approve` conforms to L8-only and is
+  unchanged. W7-C2′ does not add a gate call to `approve`.
+- **Wave 10 (Gate B scope):** if Wave 10 makes `approve` credit-controlled, its
+  sequence becomes `L1? → L2..L5 → L6 → L7 → L8`. That is a Wave 10 Requirement
+  decision, not a W7-C1/W7-C2′ decision.
+
+Implementation note carried forward from §37.11 item 3: the `approve`/`reject`
+shared branch must be split during W7-C2′ so `reject` is not dragged through the
+Credit and Gate stages. This is a mechanical consequence of the L8 move and
+requires no business change.
+
+**No Requirement blocker.** D2 is a documentation-accuracy resolution.
+
+#### 37.19.2 D3 — Reverse Refund: **resolved, no safety contradiction; no scope extension**
+
+Re-verified against `server/modules/financial-controls.js:222-243`:
+`reverseRefund` locks **no** settlement parent balance row and re-reads **no**
+capacity. It validates `refund.status === 'CONFIRMED'` at `:225`, generates the
+reversal voucher at `:235`, inserts `financial_refund_reversals` at `:236`, then
+sets `financial_refunds.status='REVERSED'` at `:237`.
+
+Actual lock and state behaviour:
+
+- It takes an exclusive lock only on the refund row it updates, plus whatever
+  `generateVoucher` and `recordSettlementMovement` lock internally.
+- It **increases** remaining capacity: flipping the refund from CONFIRMED to
+  REVERSED removes that row from the `financial_refunds WHERE status='CONFIRMED'`
+  sum used by `unappliedBalanceSnapshot` (settlement-core.js:204).
+- It never reads or writes a PREPAYMENT-eligible value.
+
+Cycle analysis against the L1–L8 contract: the Gate holds L1 and reads
+`financial_refunds` with a non-locking read (category 3), so it never waits on
+`reverseRefund`; and `reverseRefund` never requests L1, L6 or L7. **There is no
+wait-for cycle in either direction.** The consequence of the missing L1 lock is
+read consistency, not lock safety: a Gate evaluation may read a `financial_refunds`
+snapshot that predates a concurrent `reverseRefund` commit, under-stating
+eligible prepayment and therefore biasing toward WARN/BLOCK — the conservative
+direction.
+
+**Disposition:** no present-day safety contradiction within the approved W7
+scope; no production change is authorized or proposed; no scope extension. If the
+future requires a reversal lock for read-consistency rather than deadlock
+avoidance, that is a new business/Design question and would need its own
+Requirement. **No Requirement blocker is raised today.**
+
+#### 37.19.3 D4 — Reservation stale-plan: **resolved as an implementation of the existing fail-closed requirement**
+
+The four situations named for distinction:
+
+| # | Situation | Current helper output | After convergence |
+|---|---|---|---|
+| a | **No requirement at discovery** | `NOT_REQUIRED` — operation proceeds | `NOT_REQUIRED` — identical (plan carries `requirementId: null`, fingerprint `NONE`, empty parent set; helper returns NOT_REQUIRED at gate.js:273) |
+| b | **Requirement disappears/changes after discovery** | `NOT_REQUIRED` if it left its effective window (gate.js:215) | **409 retryable stale** |
+| c | **Genuine NOT_REQUIRED business behaviour** (never had a requirement) | `NOT_REQUIRED` | `NOT_REQUIRED` — unchanged |
+| d | **Retryable stale-plan 409** | not produced on this path | produced; whole transaction rolls back; outer re-discovery |
+
+Rows (a) and (c) are the same condition and are unaffected. The **only** difference
+is row (b), and it exists only when a requirement that was in effect at discovery
+is no longer in effect when the lock is taken.
+
+Why refusing (b) is an implementation of the existing approved requirement rather
+than a new business rule:
+
+1. The approved stale-plan contract already exists and is already enforced on the
+   Delivery and Service paths — `assertPrepaymentParentPlanCurrent` raises
+   `SALES_PREPAYMENT_LOCK_PLAN_STALE` (adapter.js:82-90), and
+   `authorizeSalesPrepaymentGateWithPlan` raises the same code when the requirement
+   changes under the lock (gate.js:282). Both are pre-existing, accepted behavior.
+2. `document.md §34.3.12` SC64 makes the Gate decision a function of the effective
+   requirement at the moment of evaluation. Evaluating against a requirement that
+   is no longer effective is not "the gate is not configured"; it is an
+   undecidable state.
+3. Refusing is **conservative and reversible**: the outer model (§37.20) re-discovers
+   and re-evaluates. On the retry, `discoverSalesPrepaymentGatePlan` re-applies
+   `effectiveAtNow`, and an out-of-range requirement yields `requirementId: null`,
+   producing genuine `NOT_REQUIRED` (row c). No legal business outcome is lost —
+   only deferred to the next attempt.
+4. The alternative — silently proceeding on the strength of a stale requirement —
+   would let a withdrawn requirement authorize a mutation, which contradicts the
+   fail-closed posture that SC62–SC65 and §36.14.6 M17/M18 already establish.
+
+**Disposition:** convergence is an implementation of the existing fail-closed
+requirement. **No Requirement amendment is needed and none is proposed.** If
+Acceptance nonetheless judges the (b) narrowing a business-rule change, the exact
+and only amendment that would be required is a single clarifying clause in
+`document.md §34.3.12` SC64 stating that a requirement changing between discovery
+and authorization is refused as stale and retried, rather than treated as
+`NOT_REQUIRED`. That clause is **not** written here.
+
+### 37.20 Combined retry budget and atomicity
+
+Two independent retry mechanisms compose; this section makes their interaction
+finite and explicit.
+
+```text
+INNER   transaction(db, work) — db.js:1882-1912, UNCHANGED by this Design.
+        attempts <= ERP_DB_TX_RETRY_MAX + 1  (default 3 + 1 = 4)
+        retriable only: ER_LOCK_DEADLOCK / ER_LOCK_WAIT_TIMEOUT /
+                        errno 1213 / 1205 / sqlState 40001
+        backoff min(250, 20 * 2^attempt) ms
+        on exhaustion: error.transactionRetryExhausted = true,
+                       error.transactionAttempts = attempt + 1, then rethrow
+
+OUTER   caller-owned discovery loop — SPECIFIED BY THIS DESIGN, NOT IMPLEMENTED.
+        outer attempts <= ERP_GATE_ATTEMPTS_MAX (default 3)
+        re-discovers from authoritative current data on every attempt
+        re-enters ONLY on: SALES_PREPAYMENT_LOCK_PLAN_STALE, a §37.17 final
+        fingerprint mismatch, or inner retry exhaustion on a retriable error
+        NEVER re-enters on: a business 409 (gate BLOCK, capacity exhausted,
+        SOD violation, state conflict) or an idempotent replay
+
+COMBINED HARD BOUND
+        worst case transaction attempts = 3 * 4 = 12
+        worst case lock wait          = 12 * innodb_lock_wait_timeout (2 s)
+        plus inner + outer backoff
+        A cumulative wall-clock budget (ERP_GATE_ATTEMPTS_BUDGET_MS, default
+        15000 ms) aborts the outer loop and surfaces 503 retryable. This makes
+        the bound finite in wall time, not only in attempt count.
+```
+
+Atomicity and duplicate-effect guarantees:
+
+```text
+- The ENTIRE body of one outer attempt is exactly one transaction(). Every write
+  — gate result, voucher, settlement movement, refund row, inventory mutation,
+  idempotency record, audit row — commits with it or rolls back with it.
+- An inner retry re-executes work() only AFTER db.exec('ROLLBACK') (db.js:1901),
+  so a successful callback can never duplicate a monetary or audit effect: a
+  failed attempt leaves nothing behind to duplicate.
+- An outer retry re-discovers, then opens a fresh transaction on the same
+  connection. The prior attempt is already committed or rolled back; there is no
+  partial state to inherit.
+- Named idempotency locks are released on BOTH the commit path and the throw path
+  (db.js:1896-1908, releaseMySqlIdempotencyLocks), so no GET_LOCK is leaked
+  across attempts or across outer retries. The set is cleared each time.
+- Idempotency keys and scopes are unchanged by this Design. A retry carrying the
+  same key hits idempotencyReplay and returns the stored result with no second
+  effect; a retry whose earlier attempt already committed is therefore a replay,
+  not a duplicate.
+- A successful callback produces exactly one committed gate result and one audit
+  row per committed decision, on both the first attempt and any retry.
+```
+
+Not implemented by this section; the algorithm above is Design only.
+
+### 37.21 Boundary of this correction
+
+No `document.md`, `README.md`, `AGENTS.md`, `CLAUDE.md`, production source, test,
+migration, schema, permission, frontend or `package.json` change. No production
+Finance correction is authorized. No database connection, migration, reset or test
+execution; no MySQL gate run. No isolation-level change; no `server/db.js` change.
+No Wave 9 Credit change; no global transaction-gate change. No Git add, commit,
+push, merge, tag, release or deploy. §37.0–§37.14 preserved except as explicitly
+superseded in §37.15.0. No business semantics changed and no new business
+requirement introduced. `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` and
+`LEGACY_DATA_EVIDENCE_PENDING` are unchanged, and Gate B remains obligatory.
+
+**Status: `W7_C1_C2_FINAL_DESIGN_EVIDENCE_CORRECTION_COMPLETE — AWAITING_EXTERNAL_DESIGN_REVIEW`.**
+
+---
+
+## 37.22 Design Precision Closure (2026-10-23)
+
+### 37.22.0 Scope and supersession
+
+Authorized as one final, strictly bounded documentation-only clarification.
+**§37.0–§37.21 are preserved verbatim** and remain in force except as named below.
+Nothing prior is deleted or rewritten.
+
+| Superseded statement | Correction |
+|---|---|
+| §37.17.2 — "A plain SELECT under READ COMMITTED always sees a recent committed image" and "The reason is **not** staleness" | Overstated as an unconditional guarantee. Corrected in §37.23. |
+| §37.20 — "worst case transaction attempts = 3 * 4 = 12" and the 15000 ms "hard bound" | Incomplete and overstated. Corrected in §37.24. |
+| §37.19.2 — "**There is no wait-for cycle in either direction**" | Overstated as universal. Bounded to audited paths in §37.25. |
+
+Retained unchanged: §37.16 (D1 corrected classification), §37.17.1 and §37.17.3
+(READ COMMITTED fact and the final-lock requirement), §37.17.4, §37.18 (Gate A /
+Gate B separation), §37.19.1 (D2), §37.19.3 (D4), and all of §37.2–§37.15.
+
+### 37.23 READ COMMITTED read semantics — corrected
+
+Production MySQL runs at READ COMMITTED (`mysql-worker.js:30`, applied on every
+connection at `:95-98`; `mysql-adapter.js:38` maps `BEGIN IMMEDIATE` to
+`START TRANSACTION`). Isolation configuration is unchanged by this Design.
+
+The corrected distinction, stated without unconditional guarantees:
+
+```text
+1. Each consistent read uses a FRESH STATEMENT-LEVEL snapshot — not a
+   transaction-level snapshot, and not necessarily the value current at the moment
+   the surrounding transaction began.
+2. An ordinary SELECT does NOT lock the business rows it reads. It therefore
+   establishes no exclusion against any concurrent writer.
+3. Another transaction may commit a relevant change AFTER a consistent read has
+   completed. A consistent read offers no protection against that.
+4. Therefore an unlocked discovery read is CANDIDATE INPUT ONLY. It is never
+   mutation authority, and it is not a statement that no change can occur.
+5. Final validation must use the AUTHORITATIVE rows obtained under the approved
+   lock order (L1..L8), i.e. the same rows the transaction subsequently mutates.
+6. Candidate identity and fingerprint must be revalidated immediately before
+   mutation, while those authoritative rows are held.
+```
+
+What is **not** claimed: that a consistent read is guaranteed fresh at commit
+time, that no change can land between a read and a later mutation, or that any
+non-locking read is safe as validation. §37.17.3's requirement — consume the
+locked `{delivery, order}` pair returned by `lockAndConsumeSalesDeliveryCapacity`
+(sales-delivery-source.js:79), and build the Service fingerprint from the rows
+locked at `service-fulfillment.js:163/:164` rather than the unlocked snapshot at
+`:160` — is unchanged and remains the governing design.
+
+The §37.17.2 observation at `app.js:5715-5716` (an unprotected `DRAFT` precheck
+followed by a locking read that does not re-assert `delivery.status`) is retained
+as a Design-level requirement. It remains an unexecuted race observation, not an
+accepted defect claim.
+
+### 37.24 Retry budget — corrected and honestly bounded
+
+Verified against `server/db.js:1855-1912` and `server/database/mysql-worker.js`.
+`server/db.js` and the global transaction gate are **not** modified.
+
+```text
+A. INNER CONFIGURED RETRY LIMIT
+   mysqlTransactionRetryLimit()  db.js:1865-1868
+     = ERP_DB_TX_RETRY_MAX, default 3, accepted only as a safe integer in [0,10];
+       any other value falls back to 3.
+   This is CONFIGURABLE. It is not fixed at 3.
+
+B. TOTAL INNER ATTEMPTS = A + 1
+   transaction() runs `for (let attempt = 0; ; attempt += 1)` (db.js:1885).
+   Default environment: 3 + 1 = 4 attempts.
+   Configured maximum environment: 10 + 1 = 11 attempts.
+   The Design therefore does NOT assume "<= 4". Any figure below is stated for a
+   named configuration.
+
+C. OUTER REDISCOVERY ATTEMPTS: maximum 3
+   Specified by this Design; not implemented.
+
+D. MAXIMUM COMBINED CALLBACK EXECUTIONS = C x B
+   default environment          : 3 x 4  = 12
+   configured maximum environment: 3 x 11 = 33
+   Every execution is preceded by a fresh authoritative discovery. Inner re-executions
+   within one outer attempt reuse that attempt's already-discovered plan.
+
+E. ELAPSED-TIME RETRY ADMISSION DEADLINE — ADMISSION CONTROL, NOT A HARD BOUND
+   An elapsed-time deadline (ERP_GATE_ATTEMPTS_BUDGET_MS) is evaluated ONLY at the
+   start of each outer attempt and immediately after an inner retry exhaustion.
+   If the deadline has passed, the loop stops and surfaces 503 retryable with zero
+   side effects. It gates ADMISSION to further attempts; it does not bound one
+   already in flight. The previous "15000 ms hard upper bound" wording is withdrawn:
+   the current implementation cannot safely enforce it.
+
+F. LIMITS OF INTERRUPTING A SYNCHRONOUS IN-FLIGHT OPERATION
+   - work() is synchronous; db.exec, db.prepare().get/.run and the adapter's
+     synchronous request/response bridge all block the Node event loop.
+   - waitForTransactionRetry() (db.js:1870-1872) sleeps via
+     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs) —
+     a synchronous main-thread block. It cannot be interrupted or shortened.
+   - The inner retry loop in transaction() contains NO elapsed check at all; it
+     retries purely on error classification until the limit is consumed.
+   - The worker sets only SESSION_INNODB_LOCK_WAIT_TIMEOUT = 2
+     (mysql-worker.js:31, applied :97). There is NO connectTimeout, queryTimeout
+     or acquireTimeout on the mysql2 connection.
+   - Consequence: ONE outer attempt is not bounded by 2 seconds. 2 s applies per
+     individual lock wait, and a callback may perform many statements and many
+     lock waits.
+   - THE ONLY ENFORCEABLE BOUND IS THE ATTEMPT-COUNT BOUND (B, C, D).
+     Elapsed time is bounded only in the sense that each attempt is finite.
+```
+
+Preserved unchanged: rollback precedes every retry (`db.js:1901`); named
+idempotency locks are released on both the commit and throw paths
+(`db.js:1896-1908`); stale-plan retry restarts discovery from authoritative
+current data; an ordinary business 409 is never retried; retry exhaustion is
+explicit and surfaces as 503 retryable with zero side effects; a successful
+callback cannot duplicate a monetary or audit effect. Retriable classification is
+unchanged and read from `isRetryableMySqlTransactionError()` (`db.js:1856-1863`):
+`ER_LOCK_DEADLOCK`, `ER_LOCK_WAIT_TIMEOUT`, errno 1213 / 1205, sqlState 40001.
+
+This is Design only; the algorithm is not implemented.
+
+### 37.25 D3 Reverse Refund — bounded conclusion
+
+Reverse Refund stays **outside** the W7-C1 / W7-C2′ implementation scope. No
+established contradiction requires otherwise.
+
+Evidence-scoped conclusion, replacing the universal §37.19.2 wording:
+
+```text
+AUDITED PATHS (the conclusion is limited to exactly these)
+  - reverseRefund        server/modules/financial-controls.js:222-243
+  - the Gate's read of financial_refunds through
+    sales-prepayment-finance-adapter.js readAppliedCents / readRefundedCents
+    (adapter.js:98-104) and the capacity read in settlement-core.js:200-210
+  - the L1..L8 order specified in §37.3
+
+FINDING, SCOPED
+  Within these audited current canonical paths, reverseRefund takes no
+  settlement parent lock and no Gate/Credit row lock, while the Gate reads
+  financial_refunds with a non-locking consistent read. No wait-for cycle is
+  identified between them under the specified order. reverseRefund increases
+  remaining capacity (it moves the refund from CONFIRMED to REVERSED, removing it
+  from the status='CONFIRMED' sum) and never requests L1, L6 or L7.
+
+NOT CLAIMED
+  - Not claimed for hypothetical or future writers that take additional locks.
+  - Not claimed for a different lock architecture, a modified adapter, or any
+    change to the global transaction gate.
+  - Not claimed as a general proof that the Finance settlement graph is acyclic.
+  - Read consistency is a separate matter: a Gate evaluation may read a snapshot
+    predating a concurrent reversal commit, biasing toward the conservative
+    WARN/BLOCK direction. This is recorded, not corrected.
+
+DISPOSITION
+  No production change authorized or proposed. No scope extension. No Requirement
+  blocker. Any future need for a reversal lock for read-consistency rather than
+  deadlock avoidance would be a new Design question requiring its own Requirement.
+```
+
+### 37.26 Gate A / Gate B — preserved unchanged
+
+§37.18 is confirmed and unchanged. **Gate A** is W7-C1 / W7-C2′ independent
+acceptance executable on the available pre-Wave-10 implementation plus the
+separately authorized W7 remediation. **Gate B** holds the Credit integration
+tests that depend on Wave 10 implementation and remain `BLOCKED_BY_WAVE10`.
+
+Neither gate may fabricate unavailable evidence: a fixture whose preconditions
+cannot be constructed asserts that fact rather than passing, and a Gate B case is
+reported as blocked — never as PASS, never as skip-and-green, never as verified by
+inspection. Gate B is not a prerequisite for Gate A, and Gate A does not discharge
+Gate B. `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` is unchanged and is
+satisfied only by Gate A plus explicit user Final Acceptance.
+
+### 37.27 Boundary of this closure
+
+No `document.md`, `README.md`, `AGENTS.md`, `CLAUDE.md`, production source, test,
+migration, schema, permission, frontend or `package.json` change. No MySQL
+isolation configuration change. No `server/db.js` change. No global
+transaction-gate change. No Wave 9 Credit change. No database connection,
+migration, reset or test execution; no MySQL gate run. No Git add, commit, push,
+merge, tag, release or deploy. §37.0–§37.21 preserved except as explicitly
+superseded in §37.22.0. No new business requirement introduced and no business
+semantics changed. Wave 10 is not unblocked and no acceptance is declared.
+
+**Status: `W7_C1_C2_DESIGN_PRECISION_CLOSURE_COMPLETE — AWAITING_EXTERNAL_DESIGN_APPROVAL`.**
+
+---
+
+## 37.28 F1 Manual Gate retry-exhaustion API contract precision (2026-10-23)
+
+### 37.28.0 Authorization and scope
+
+This append-only Design Precision Amendment resolves only the previously missing
+public API code and message for `evaluateSalesPrepaymentGate()` outer retry
+exhaustion. It does not introduce a new business rule, Gate decision, retry
+algorithm, schema, migration, permission, Credit behavior or Finance monetary
+semantic. Sections 37.0–37.27 remain intact and continue to govern all other
+behavior.
+
+This section is Design only. Production source and tests are not changed in this
+stage. In particular, the elapsed-time admission budget remains F2 work and this
+contract creates no hard wall-clock execution guarantee.
+
+### 37.28.1 Exact public response
+
+When the final configured outer attempt of `evaluateSalesPrepaymentGate()` ends
+with an error already approved as rediscovery-eligible—either a structured
+retryable stale-plan condition or exhausted inner transaction concurrency—the
+public error contract is exactly:
+
+```text
+HTTP status    = 503
+code           = SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED
+error/message  = 预付款门评估重试次数已耗尽，请稍后重试
+details.code   = SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED
+details.retryable = true
+details.attempts  = actual number of completed outer attempts
+details.cause     = stable approved code identifying the final retryable cause
+```
+
+The existing `HttpError` and structured serializer remain authoritative: the
+same exact message is exposed through both top-level `error` and `message`, and
+the exact approved code is exposed through top-level `code` and `details.code`.
+`details.cause` must contain only a stable approved error code. It must never
+contain raw SQL, an internal stack trace, credentials or unstructured exception
+text.
+
+### 37.28.2 Classification and preservation
+
+- Conversion to this 503 is permitted only after the final completed outer
+  attempt fails with an already approved rediscovery-eligible error.
+- While an outer attempt remains, the existing bounded loop performs fresh
+  authoritative discovery and retries according to sections 37.8, 37.20 and
+  37.24.
+- Ordinary business 409 errors are not retried or converted. Permission,
+  validation, Gate BLOCK, genuine missing Requirement and unsupported Parent
+  business rejection retain their approved status, code and message.
+- The maximum outer attempt count remains three and may be lower through the
+  already approved configuration. `details.attempts` reports completed outer
+  attempts rather than the configured maximum.
+- Request business date, snapshot identity and actor remain stable across
+  retries. Every rejected transaction rolls back before rediscovery, and no
+  success response is emitted before the successful transaction commits.
+- Retry exhaustion leaves zero new Gate Result, audit or idempotency success
+  facts. Exact replay and fresh evaluation status semantics remain unchanged.
+
+### 37.28.3 Boundary and status
+
+No `document.md`, `README.md`, production source, test, schema, migration,
+permission, package version or database state is changed by this amendment. No
+MySQL connection or destructive operation is authorized. F1 production
+correction, B-R5 correction, F2, A-RAW, A-PROD and MySQL safety-guard work remain
+pending separate approval. Gate A is not passed and Wave 10 is not unblocked.
+
+**Status: `F1_API_CONTRACT_DESIGN_PRECISION_READY_FOR_APPROVAL`.**
+
+---
+
+## 37.29 F2 retry-admission budget Design Precision (2026-10-24)
+
+### 37.29.0 Authorization, scope and relationship to prior Design
+
+This append-only Design Precision Amendment resolves the implementation details
+that §37.24 left open for `ERP_GATE_ATTEMPTS_BUDGET_MS`. Sections 37.0–37.28 are
+preserved verbatim. In particular, §37.24 remains authoritative that elapsed time
+is an **outer-attempt admission control**, not a hard request-duration bound, and
+§37.28 remains authoritative for Manual Gate final-attempt exhaustion.
+
+This section is Design only. It changes no production source, test, Requirement,
+schema, migration, permission, Gate decision, Finance monetary semantic, Credit
+behavior, MySQL isolation setting, global transaction gate or lock order. F2
+implementation requires a separate approval.
+
+### 37.29.1 Exact configuration contract
+
+`ERP_GATE_ATTEMPTS_BUDGET_MS` has this complete contract:
+
+```text
+default                         15000 milliseconds
+minimum                         1000 milliseconds
+maximum                         60000 milliseconds
+accepted lexical form           ASCII decimal digits only, after trimming
+accepted numeric form           canonical positive decimal safe integer
+fallback                        15000 milliseconds
+```
+
+The lexical form is `^[1-9][0-9]*$`. A leading sign, leading zero, decimal point,
+exponent, non-ASCII digit or other character is invalid. Missing, empty,
+malformed, unsafe, zero, negative, below-minimum and above-maximum values all
+fall back to `15000`.
+
+Configuration is resolved exactly once per logical request, after authorization,
+request parsing, required validation and stable request-identity binding, and is
+then immutable across every outer attempt. No retry, discovery, rollback or
+backoff may re-read the environment. `ERP_GATE_ATTEMPTS_MAX` retains its existing
+default-three, safe-integer 1–3 contract. `ERP_DB_TX_RETRY_MAX` retains its
+existing default-three, safe-integer 0–10 contract and remains owned by
+`transaction()`.
+
+### 37.29.2 Monotonic clock, start point and exact comparison
+
+The elapsed-time source is exactly `process.hrtime.bigint()`. The coordinator
+captures one `startedAtNs` immediately before the first outer-attempt discovery
+loop, after the entrypoint has completed authorization, request parsing, required
+validation, stable business-date/snapshot/fingerprint/idempotency identity
+binding and any approved transaction-free exact-replay probe.
+
+The same start value and resolved budget apply for the complete logical request.
+They are not reset by outer discovery, transaction rollback, inner MySQL retry,
+retry backoff, Requirement or Parent rediscovery, or Order/Delivery/Service
+rediscovery. Comparison remains in integer nanoseconds:
+
+```text
+elapsedNs = process.hrtime.bigint() - startedAtNs
+expired   = elapsedNs >= BigInt(configuredBudgetMs) * 1_000_000n
+```
+
+Equality is expired. Admission is checked before attempt 1, before every later
+outer attempt, and after a completed failed inner transaction when its error is
+rediscovery-eligible and another outer attempt remains available. No discovery
+or transaction for a new outer attempt may start after expiration.
+
+An admitted transaction is allowed to finish normally. No asynchronous timer,
+forced cancellation, interruption or retrospective rollback is introduced. A
+committed success returns its normal success response even when the admission
+budget expired while that attempt was in flight. Nothing here promises that an
+HTTP request completes within 15000 milliseconds.
+
+### 37.29.3 Attempt counting and deterministic precedence
+
+`details.attempts` is the number of outer attempts actually **started**, excluding
+all inner `transaction()` executions. It is an integer from zero through the
+configured `ERP_GATE_ATTEMPTS_MAX`:
+
+- deadline refusal before attempt 1: `attempts=0`;
+- attempts 1 and 2 ran, deadline refuses attempt 3: `attempts=2`;
+- final permitted attempt fails retryably: count exhaustion wins, reports the
+  started-attempt count, and retains that attempt's approved retryable cause.
+
+The complete precedence is:
+
+1. A committed attempt returns normal success, including exact replay, even if
+   the budget expires while the admitted attempt runs.
+2. A non-retryable failure retains its original status, code and message,
+   irrespective of elapsed time. This includes ordinary business 409, permission,
+   validation, Gate BLOCK, genuine missing Requirement and unsupported Parent.
+3. A retryable failure on the final configured outer attempt returns the existing
+   endpoint-specific retry-exhaustion response with the final approved retryable
+   cause. A later clock reading cannot replace it with the deadline cause.
+4. When another outer attempt is count-permitted, rollback has completed and the
+   admission deadline has expired, the next attempt is not admitted. The existing
+   endpoint-specific 503 retry-exhaustion response is returned with the exact
+   deadline cause specified below.
+5. Backoff never grants admission: the deadline is checked again at the next
+   attempt boundary, and an expired request stops before fresh discovery.
+
+### 37.29.4 Exact deadline cause and endpoint public contracts
+
+The stable deadline cause is exactly:
+
+```text
+SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED
+```
+
+It is a cause only, never a replacement for an endpoint's top-level exhaustion
+code. It may be emitted only when elapsed time prevents an otherwise
+count-permitted outer attempt. Raw SQL, driver text, stack traces, credentials and
+unstructured exception messages are forbidden in every public cause field.
+
+The following strings and field conventions were copied from the current local
+implementation and are frozen for F2:
+
+| Entrypoint | HTTP | Top-level code and `details.code` | Exact `error` / `message` | Cause field on deadline |
+|---|---:|---|---|---|
+| Manual Gate Evaluation | 503 | `SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED` | `预付款门评估重试次数已耗尽，请稍后重试` | `details.cause = SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED` |
+| Sales Order Submit | 503 | `SALES_ORDER_SUBMIT_RETRY_EXHAUSTED` | `销售订单提交重试已耗尽` | `details.causeCode = SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED` |
+| Reservation Intent Request | 503 | `SALES_RESERVATION_INTENT_RETRY_EXHAUSTED` | `预留意图请求重试已耗尽` | `details.causeCode = SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED` |
+| Sales Delivery Confirm | 503 | `SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED` | `销售出库确认重试已耗尽` | `details.causeCode = SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED` |
+| Service Fulfillment Confirm | 503 | `SERVICE_FULFILLMENT_CONFIRM_RETRY_EXHAUSTED` | `服务履约确认重试已耗尽` | `details.causeCode = SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED` |
+
+Every response also contains `details.retryable=true` and the started outer
+attempt count. The existing structured `HttpError` serializer remains
+authoritative, so the same code appears at top level and in `details.code`, and
+the exact message appears as both `error` and `message`. The four `causeCode`
+fields are not renamed. §37.28's Manual Gate cause whitelist is extended only by
+the exact deadline cause and only under the admission condition above.
+
+### 37.29.5 Replay, identity, rollback and inner-retry interaction
+
+Existing transaction-free exact-replay probes remain before the admission clock
+for Sales Submit, Delivery Confirm and Service Fulfillment Confirm. They return a
+previous committed result without entering the attempt loop. Reservation Intent
+Request has no exact-replay contract; its existing duplicate-intent business
+validation remains unchanged and is never converted to a deadline 503.
+
+Manual Gate currently performs its `snapshot_key` replay probe inside the
+transaction. F2 implementation must add a safe, read-only probe for the same
+`sales_order_id + stage + snapshot_key` identity before starting the admission
+clock, so a previously committed exact replay is not refused by the deadline.
+The existing in-transaction replay probe is retained to close the race between
+the read-only probe and the admitted transaction. Neither probe mutates business
+state or moves a mutation outside the canonical transaction.
+
+The request's actor, business date, snapshot/fingerprint, idempotency key and
+generated in-flight identity remain stable across retries. Every rejected
+transaction rolls back before admission is reconsidered. Deadline exhaustion
+creates no Gate Result, Reservation Intent, Inventory Lock, Planning Reservation,
+Sales transition, Delivery/Service confirmation, AR, voucher, audit or
+idempotency success record.
+
+The synchronous canonical `transaction()` remains unchanged. The admission
+budget does not cancel an inner retry, interrupt `FOR UPDATE`, replace
+`innodb_lock_wait_timeout`, alter `ERP_DB_TX_RETRY_MAX`, or count an inner retry
+as an outer attempt. After inner retries exhaust and rollback completes, the
+outer coordinator checks the count first: if count is exhausted, final-cause
+precedence applies; otherwise it checks elapsed time before another attempt.
+
+### 37.29.6 Future helper design and bounded implementation manifest
+
+For a separately approved F2 implementation, add one small domain helper:
+
+```text
+new file: server/modules/sales-gate-retry-admission.js
+
+responsibilities:
+  parseGateAttemptsBudgetMs(rawValue)
+    - trim and validate the exact lexical/range contract
+    - return 15000 for every invalid or absent value
+
+  startGateRetryAdmission(rawValue, readMonotonicNs = process.hrtime.bigint)
+    - resolve configuration once
+    - capture one monotonic startedAtNs
+    - retain the injected clock function for deterministic checks
+
+  isGateRetryAdmissionExpired(admission)
+    - compare integer nanoseconds using elapsed >= configured budget
+    - perform no database access and construct no HTTP error
+```
+
+The helper is deterministic under clock injection, owns no database transaction,
+lock, retry classification, idempotency identity or HTTP serialization, and does
+not read the environment after its one request-scoped construction. Endpoint
+owners continue to construct their exact 503 responses.
+
+The complete future production manifest is limited to:
+
+1. New `server/modules/sales-gate-retry-admission.js` — pure parsing, monotonic
+   state and expiration evaluation.
+2. `server/modules/sales-prepayment-gate.js` — Manual Evaluation only, including
+   the safe pre-clock replay probe and Manual `cause` response.
+3. `server/modules/sales-orders.js` — Submit branch only; preserve the existing
+   pre-clock idempotency replay and `causeCode` response.
+4. `server/modules/sales-reservation-intent.js` — `requestReservationIntent()`
+   only; preserve duplicate-intent behavior and `causeCode` response.
+5. `server/app.js` — `confirmSalesDelivery()` confirm branch only; preserve its
+   pre-clock replay and `causeCode` response.
+6. `server/modules/service-fulfillment.js` —
+   `confirmServiceFulfillmentCommand()` only; preserve its pre-clock replay and
+   `causeCode` response.
+7. Existing focused Wave 7/Wave 8/Delivery/Finance test files only as required
+   for deterministic F2 coverage; any new test file must be separately listed
+   and registered under `scripts/testing/test-suites.js` before creation.
+
+Explicitly excluded: the Finance Adapter, Gate lock helper sequence,
+`server/db.js`, `server/database/`, `mysql_transaction_gates`, schema, migrations,
+permissions, frontend, Wave 9 Credit, Wave 10 Credit and package version.
+
+### 37.29.7 Deterministic future acceptance contract
+
+F2 tests use the injected monotonic clock seam, never timing sleeps or leaked
+global clock monkey-patches. They must cover:
+
+1. default `15000`, minimum `1000`, maximum `60000`;
+2. whitespace trimming and every missing/empty/malformed/unsafe/out-of-range
+   fallback, including signs, leading zeros, decimal and exponent forms;
+3. exact `elapsed == budget` expiration and the non-expired value immediately
+   below it;
+4. first-attempt refusal with `attempts=0`, and admission/refusal of attempts 2/3;
+5. one request-wide clock across rollback, discovery, backoff and inner retry;
+6. count-exhaustion precedence with the final retryable cause;
+7. deadline precedence only while another outer attempt remains;
+8. committed success after deadline and non-retryable error preservation;
+9. exact five-endpoint HTTP status/code/message/details matrix, including Manual
+   `cause` versus the other four endpoints' `causeCode`;
+10. stable business date, snapshot, fingerprint, idempotency key and replay;
+11. zero duplicate or partial durable effects on every exhaustion path;
+12. no post-L7 Parent lock and the unchanged L1–L8/business-row lock graph;
+13. all Implementation A–E and F1 regressions.
+
+SQLite/fault-injection tests prove deterministic admission, public contracts and
+rollback behavior only. They do not prove independent-session MySQL contention
+or a hard wall-clock timeout.
+
+### 37.29.8 Boundary and status
+
+No production source, test, `document.md`, `README.md`, existing §37 text,
+schema, migration, permission, package version or database state is changed by
+this amendment. No MySQL connection or gate execution, and no Git write,
+destructive operation, release or deployment is authorized. F2 implementation,
+A-RAW, A-PROD, MySQL Guard and Gate A remain pending. No acceptance or freeze is
+declared, and Wave 10 remains blocked.
+
+**Status: `F2_DESIGN_PRECISION_READY_FOR_APPROVAL`.**
+
+---
+
+## 37.30 Transaction-Start Named-Lock Safety Hotfix Design (2026-10-24)
+
+### 37.30.0 Authorization, scope and supersession
+
+- The user approved `document.md §5.4.1 — Transaction-Start Named-Lock Safety
+  Requirement` with status
+  `TRANSACTION_BEGIN_HOTFIX_REQUIREMENT_PASS`, and authorized **DESIGN ONLY**
+  under AGENTS.md §4.3.
+- This section is the Design deliverable for that Requirement. It introduces no
+  new business rule, no new money semantics, no new lock order, no new retry
+  rule and no new schema.
+- This section **does not modify §37.0–§37.29** and does not modify
+  `document.md §5.4.1`. It is additive.
+- Boundary of this Design: no production source, test, schema, migration,
+  `README.md`, `package.json` version, database state or Git history is changed
+  by this section. No MySQL connection, Gate execution, reset or destructive
+  operation is authorized by it.
+- Everything below is **design**. The proposed functions, files and tests do not
+  exist yet. Gate A remains blocked, retest #2 remains unexecuted, and Wave 10
+  remains blocked.
+
+### 37.30.1 Verified baseline facts (read from the local working tree, 2026-10-24)
+
+Baseline identity: `feature/sales-waves6-13@2037cb632e2464477fe9752dc3113dac3c0eacf3`,
+package version `1.6.2`, 2 remotes, 2 stashes. All local modifications listed in
+§37.0–§37.29 (Implementation A–E, F1/F2, M24/M25 remediation, Gate A
+integration infrastructure) are present and preserved.
+
+| # | Fact | Evidence |
+|---|---|---|
+| B1 | `transaction()` executes `db.exec('BEGIN IMMEDIATE')` **outside** its `try` block | `server/db.js:1883-1913`; the statement is at `:1887`, the `try` opens at `:1888` |
+| B2 | The only two `releaseMySqlIdempotencyLocks(db)` call sites are reachable **only after BEGIN succeeded**: one after `COMMIT` (`:1898`), one in the post-BEGIN catch (`:1907`) | `server/db.js:1897-1907` |
+| B3 | `releaseMySqlIdempotencyLocks()` swallows every `RELEASE_LOCK` error (`catch {}`), never inspects the returned value, and clears the whole registry unconditionally | `server/db.js:1875-1881` |
+| B4 | `idempotencyReplay()` acquires `GET_LOCK(?,10)` and registers the lock in `db._idempotencyLocks`; on a **replay miss** it returns `null` **without** releasing, deliberately, so the transaction lifecycle owns the release | `server/modules/financial-controls.js:32-57` (acquire `:37`, register `:39-40`, miss-return `:51`) |
+| B5 | `createRefund` calls `idempotencyReplay()` at `:199` and `transaction()` at `:200` with **no intervening throw** (M24 remediation removed the pre-replay capacity rejection) | `server/modules/financial-controls.js:199-200`; `log/2026-10-24.md` M24 correction |
+| B6 | The adapter's `isTransaction` mirror is updated **only** from a successful worker response; a failed or timed-out `exec()` leaves it unchanged | `server/database/mysql-adapter.js:159-175` (`:167-168`) |
+| B7 | On request timeout `_request()` abandons the request generation and throws a bare `Error('MySQL <action> timed out after N seconds')` with **no** `code`, `errno` or `sqlState` | `server/database/mysql-adapter.js:117-137` (`:124-127`) |
+| B8 | The Worker response slot is **generation-scoped**: a late response for an abandoned generation returns `false` at the first CAS and never writes bytes or metadata | `server/database/mysql-worker-protocol.js:36-59` (`:38`, `:55`) |
+| B9 | The Worker's own `inTransaction` flag is **not** generation-scoped: the 'exec' handler sets it after `runExec` resolves and **before** `encodeWorkerResponse` | `server/database/mysql-worker.js:243-255` (`:251`, `:253`) |
+| B10 | A recoverable connection error makes the Worker discard the session (socket destroyed) before rethrowing | `server/database/mysql-worker.js:123-138`, `:243-250` |
+| B11 | `adapter.close()` performs a blocking `'close'` round-trip bounded by `requestTimeoutMs` (default 60 s) and then calls `void this.worker.terminate()` — **fire-and-forget**, completion not observable | `server/database/mysql-adapter.js:177-183`; `:89`, `:96` |
+| B12 | `readTransaction()` has the identical "BEGIN outside try" shape and registers no named lock | `server/db.js:1915-1933` (`:1916`) |
+| B13 | `db.isTransaction` is the canonical **nesting guard** in ≥15 production modules; those guards call the body directly instead of `transaction()`, so `transaction()` is never legitimately entered with an open transaction | `commercial-golive.js:50`, `finance-recognition.js:16`, `traceability-quality.js:122`, `finance-ap-open-item.js:94`, `finance-ar-open-item.js:112`, `finance-business-close.js:100`, `finance-counterparty-transfer.js:110`, `finance-due-schedule.js:98`, `finance-parameters.js:65`, `finance-refresh-open-amount.js:71`, `finance-settlement-reversal.js:74`, `finance-settlement-scheme.js:52`, `finance-terms.js:58`, `finance-treasury-movement.js:34`, `finance-unapplied-balance.js:91`, `lib/inventory-mutation.js:456-469` |
+
+### 37.30.2 The exact defect and its reachable trigger
+
+The reachable defect is a **connection-lifecycle leak**, not a business-logic
+defect:
+
+```text
+createRefund / reverseRefund / actOnWriteOff / reverseOperationalReturn
+  : idempotencyReplay(...)   -> GET_LOCK acquired, registered in db._idempotencyLocks
+     (replay MISS: lock intentionally retained for the transaction to release)
+  : transaction(db, work)
+       db.exec('BEGIN IMMEDIATE')     <-- server/db.js:1887, OUTSIDE the try
+         ^ THROWS (lock wait timeout on the L0 gate, transport loss, adapter
+           request timeout, ...)
+       -> the try at :1888 never opens
+       -> neither release site (:1898, :1907) is reachable
+       -> the MySQL session keeps the named lock
+       -> the session is the process-wide adapter and stays REUSABLE
+       -> the next process that requests the same idempotency scope blocks on
+          GET_LOCK(?,10) until its own 10 s timeout, forever, for that scope
+```
+
+Three independent facts make the trigger reachable in production, not
+theoretical:
+
+1. M24 remediation (2026-10-24) deliberately removed the application rejection
+   that previously stood between `idempotencyReplay()` and `transaction()`, so a
+   replay miss now reaches BEGIN immediately (B5).
+2. The L0 transaction gate (`SELECT gate_id FROM mysql_transaction_gates WHERE
+   gate_id=1 FOR UPDATE`) is acquired by **every** writer, so BEGIN is the exact
+   point at which a heavily contended MySQL instance fails (M25 reproduces the
+   contention with `ERP_DB_TX_RETRY_MAX=0`).
+3. `idempotencyReplay()` acquires the named lock **before** the transaction, so
+   the lock is already owned when BEGIN fails (B4).
+
+The objective of this hotfix is therefore stated as:
+
+> **No owned MySQL named idempotency lock may remain on a connection that
+> remains reusable after a transaction-start failure.**
+
+### 37.30.3 Transaction ownership model and evidence
+
+Five distinct ownership states are defined. `db.isTransaction` alone is
+**never** accepted as proof that the current attempt owns the transaction.
+
+| # | State | Definition | Proof required | Rollback by this attempt |
+|---|---|---|---|---|
+| O1 | `OWNED_STARTED` | This attempt's BEGIN was acknowledged by the Worker on this session | The successful `exec()` return carrying `inTransaction === true` (B6) — the Worker sets that flag only after the server acknowledged `START TRANSACTION` | **Yes** — but only on the post-BEGIN failure path, exactly as today |
+| O2 | `FOREIGN_PREEXISTING` | A transaction was already open on this connection **before** this attempt | The pre-attempt snapshot `db.isTransaction === true` (B13) | **No** — never |
+| O3 | `START_FAILED_KNOWN` | BEGIN was rejected by the server on a live session, so no transaction was created by this attempt | The Worker returned a definite error (`status === 2`) and did **not** report `sessionLost` | Not applicable — this attempt owns nothing |
+| O4 | `START_FAILED_UNCERTAIN` | The outcome of `START TRANSACTION` on the server is unknown because the synchronous adapter request timed out | The adapter reported a request timeout (B7) | **No** — blind rollback is forbidden |
+| O5 | `SESSION_REPLACED` | The original session was abandoned and the adapter will reconnect to a new one | The Worker reported `sessionLost` (B10) | Not applicable — the original session is unreachable |
+
+Two rules follow and are binding:
+
+- **R-O1 — pre-attempt snapshot.** `transaction()` reads
+  `db.isTransaction` **before** BEGIN and records it. Because a failed `exec()`
+  never updates the mirror (B6), the post-failure value of `db.isTransaction` is
+  evidence about the **pre-attempt** state and never about ownership by this
+  attempt. After a failed BEGIN, `db.isTransaction === true` therefore proves
+  O2, not O1.
+- **R-O2 — no blind commit, no blind rollback on the startup-failure path.** The
+  startup-failure cleanup path issues **neither** `COMMIT` **nor** `ROLLBACK`.
+  It owns no transaction (O3/O4) and must not touch a transaction it cannot
+  prove it owns (O2). This satisfies `document.md §5.4.1` bullet 3 without
+  changing the nesting contract of B13.
+
+The existing post-BEGIN catch path (`try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}`,
+`server/db.js:1901`) is **unchanged**: there, `db.isTransaction === true` was set
+by this attempt's own successful BEGIN (O1), so the rollback is correct.
+
+### 37.30.4 Startup-failure state machine
+
+`BEGIN` is attempted once per retry attempt. On failure the attempt enters the
+cleanup boundary below and then rethrows the original exception. The retry
+budget is **not** consumed and **not** extended (see §37.30.8).
+
+| Case | Failure | Owning transaction provable? | Rollback permitted? | Named-lock release verifiable? | Connection reusable? | Worker terminated / quarantined? | Error propagated | Proof test |
+|---|---|---|---|---|---|---|---|---|
+| **A** | BEGIN rejected by the server before any transaction was established, connection healthy | No — nothing was created (O3) | No | **Yes** — `RELEASE_LOCK` on the same live session | **Yes**, after a confirmed release | No | Original BEGIN error | T1, T3, T4 |
+| **B** | BEGIN fails because the connection is broken (transport error) | No (O5) | No | Not needed — the Worker already destroyed the session; the server released its locks and rolled back its transaction (B10) | **Yes** — the adapter reconnects to a **new** session that carries no lock | No — the Worker already discarded the session; no second teardown is issued | Original BEGIN error, with `sessionLost` | T1, T2 |
+| **C** | BEGIN fails because the synchronous adapter request timed out | **No — unknown (O4)** | **No** | **No** — the Worker may still be executing `START TRANSACTION`; issuing further SQL would be queued behind it on the same session and its result would be ambiguous | **No** | **Yes** — quarantine + `worker.terminate()` | Original timeout error | T15, T16, T17, T18 |
+| **D** | BEGIN fails while a transaction may already be active (O2, pre-attempt snapshot `isTransaction === true`) | No — the pre-existing transaction is not ours | **No** — R-O2 | Only the named lock is ours; release is attempted and verified like case A | **No** — the session carries a transaction whose ownership cannot be established; a later `BEGIN` would make MySQL implicitly commit it | **Yes** — quarantine + terminate | Original BEGIN error | T5 |
+| **E** | BEGIN fails after the Worker may have executed `START TRANSACTION` but before the caller received confirmation | **No — unknown (O4)** | **No** | **No** — same reasoning as case C | **No** | **Yes** — quarantine + terminate | Original error | T15, T18, T19 |
+| **F** | `RELEASE_LOCK` fails with a transport error during cleanup | No | No | **No** | **No** | **Yes** | Original BEGIN error (cleanup failure is diagnostic only) | T6, T7 |
+| **G** | `RELEASE_LOCK` returns `1` | No | No | **Yes — proved release on the original session** | **Yes** | No | Original BEGIN error | T3 |
+| **H** | `RELEASE_LOCK` returns `0` (lock exists, held by another session) | No | No | **No** — not a confirmed release of *our* lock | **No** | **Yes** | Original BEGIN error | T6, T7 |
+| **I** | `RELEASE_LOCK` returns `NULL` (lock does not exist) | No | No | **No** — not a confirmed release of *our* lock | **No** | **Yes** | Original BEGIN error | T6, T7 |
+| **J** | Connection quarantine or closure itself fails | No | No | **No** | **No** | Attempted; the failure is recorded, and the adapter stays unusable | Original BEGIN error | T7, T18 |
+
+Classification rules that produce the table:
+
+- **R-F1.** The failure is classified from machine-readable signals only:
+  - `sessionLost === true` (Worker-reported) → case B.
+  - the adapter's request-timeout marker → case C / E.
+  - any other definite Worker error → case A (or D, when the pre-attempt
+    snapshot shows O2).
+  Message-text pattern matching is **forbidden**.
+- **R-F2.** Only `RELEASE_LOCK(...) = 1` is a confirmed release (case G). `0`,
+  `NULL`, an unexpected value and a thrown error are all **not confirmed**
+  (cases F/H/I) and force quarantine. This is deliberately stricter than the raw
+  MySQL return semantics: the Requirement forbids treating a release failure as
+  success, and only a `1` proves that *this* session held and released *this*
+  lock.
+- **R-F3.** In case B the cleanup issues **no** SQL at all. The Worker already
+  destroyed the session, so the server released every named lock the session
+  held and rolled back any open transaction. This is the Requirement's explicit
+  escape clause ("能够确认连接已经失效或锁已经由服务器释放").
+- **R-F4.** In cases C and E the cleanup issues **no** SQL at all. The only safe
+  action is to destroy the session.
+- **R-F5.** Unknown connection state always fails closed. If the cleanup cannot
+  prove that the session is free of our named locks, the session is destroyed
+  and the adapter is not reused.
+
+### 37.30.5 Verified named-lock release contract
+
+One canonical helper replaces the current void helper. Its contract:
+
+```text
+releaseMySqlIdempotencyLocks(db) -> {
+  attempted:  number,            // locks examined
+  confirmed:  string[],          // locks whose RELEASE_LOCK returned exactly 1
+  unconfirmed: [{ outcome, code }] // NOT the lock names
+}
+```
+
+Rules:
+
+1. **Confirmation.** A lock is confirmed released only when
+   `SELECT RELEASE_LOCK(?)` yields exactly `1`. Outcomes `0`, `NULL`,
+   unexpected values and thrown errors are recorded as unconfirmed with a
+   machine-readable `outcome`
+   (`NOT_OWNER` / `LOCK_ABSENT` / `UNEXPECTED_VALUE` / `ERROR`).
+2. **Registry retention.** A lock is removed from `db._idempotencyLocks` **only**
+   when it is confirmed. Unconfirmed locks stay registered, so the local
+   ownership-tracking state is never erased while the release status is unknown
+   (`document.md §5.4.1` bullet 4). The registry is cleared only in the
+   `sessionLost` case, where the server-side release is independently proven.
+3. **Same-session discipline.** A confirmed `1` is only meaningful when it was
+   produced by the session that acquired the lock. The cleanup therefore issues
+   no SQL at all in cases B, C and E, and in case A/D the session is provably
+   the same one (the Worker did not discard it, so no reconnect happened).
+4. **Deterministic ordering.** Locks are released in a stable order (the
+   registration order of the `Set`) so the diagnostic is reproducible.
+5. **Diagnostics contain no sensitive data.** The recorded diagnostic contains
+   the lock **count** and per-lock `outcome`/`code` only. Full lock names, SQL
+   text, bind parameters, credentials and the idempotency key are never
+   recorded. The lock name itself is a hash of the operation/document/key and
+   is still treated as sensitive-by-derivation.
+6. **The normal path uses the same primitive.** The existing post-`COMMIT`
+   (`:1898`) and post-catch (`:1907`) call sites call the same helper. This is
+   the bounded correction required by §37.30.12.2.
+
+### 37.30.6 Quarantine and connection teardown semantics
+
+Three teardown outcomes are distinguished, exactly as the Requirement demands.
+Quarantine **prevents reuse**; it is never described as proof that the
+server-side lock was released.
+
+| Category | Meaning | How it is reached | Connection reusable? |
+|---|---|---|---|
+| **A — Proved release on the original session** | `RELEASE_LOCK` returned `1` on the session that acquired the lock | Case G | **Yes** |
+| **B — Provably destroyed original session** | The Worker destroyed the session (`sessionLost`), or the teardown completed and the Worker thread exited, closing the socket and ending the MySQL session | Case B; case C/E after termination is confirmed | The **new** session is usable; the original is gone |
+| **C — Quarantined but not yet provably destroyed** | Reuse is blocked immediately, but the Worker thread has not yet confirmed its exit | Case C/E/D/F/H/I, and case J | **No** |
+
+Mechanism:
+
+1. **Quarantine is immediate and synchronous.** The adapter is marked unusable
+   before any other application operation can run. Every subsequent business SQL
+   on that adapter is rejected.
+2. **The teardown is bounded and does not wait on the Worker.** The teardown is
+   `worker.terminate()`, not `adapter.close()`. `adapter.close()` performs a
+   blocking `'close'` round-trip bounded by `requestTimeoutMs` (60 s by
+   default) — precisely the wrong mechanism when the Worker is stuck executing
+   the very statement that timed out (case C/E), and it would burn the request
+   thread for up to a minute.
+3. **Termination completion is verifiable.** `worker.terminate()` returns a
+   promise. The adapter records the teardown state so the outcome is
+   *reportable* rather than assumed:
+
+   ```text
+   adapter.quarantineState = {
+     reason, at,
+     state: 'TERMINATION_PENDING' | 'TERMINATION_CONFIRMED' | 'TERMINATION_FAILED',
+     termination: Promise
+   }
+   ```
+
+   `TERMINATION_CONFIRMED` proves the Worker thread exited; its TCP socket was
+   therefore closed and the MySQL session was ended by the server, which
+   releases the session's named locks and rolls back its open transaction.
+   `TERMINATION_FAILED` is recorded as a diagnostic and the adapter remains
+   unusable (fail closed).
+4. **Automatic reconnect cannot conceal the abandoned session.** After
+   quarantine the parent sends no further messages to the Worker, so
+   `ensureConnection()` is never reached and the Worker cannot reconnect. The
+   Worker thread is additionally terminated, so no late `START TRANSACTION`
+   completion can act on a session the adapter still believes it owns.
+5. **The original BEGIN exception is the primary failure.** The cleanup never
+   replaces, wraps or re-throws a different error. Cleanup outcome is attached
+   as a **non-primary** diagnostic property on the original error object and is
+   logged structurally. Because `serializeError()` (`server/lib/http.js:35-51`)
+   copies only `message`/`code`/`details` for `HttpError` and only `code` for a
+   generic error, an extra property cannot leak into an HTTP response.
+6. **Reuse prohibition.** A quarantined adapter is terminal for that adapter
+   instance. No automatic re-establishment is introduced by this hotfix; the
+   re-establishment policy is an open item (§37.30.13, O5). The operational
+   consequence is stated plainly: a quarantined adapter requires a process-level
+   MySQL re-establishment before further business SQL.
+
+### 37.30.7 Worker timeout and late-completion handling
+
+The nine questions raised by the Requirement are answered against the local
+implementation:
+
+1. **What happens when `START TRANSACTION` finishes after the caller times
+   out?** The Worker completes the statement, sets its own `inTransaction` flag
+   to `true` (B9) and calls `encodeWorkerResponse()`. The parent had already
+   called `abandonWorkerRequest()`, so the request generation is no longer
+   active and `encodeWorkerResponse()` returns `false` at its first CAS
+   (B8). **The response is discarded and never published.**
+2. **Can a later response change transaction state unexpectedly?** Not through
+   the response slot — it is generation-scoped. **But the Worker's internal
+   `inTransaction` flag is not generation-scoped** (B9): it is set before the
+   CAS and would be observed by the *next* successful `exec` response. In this
+   hotfix this is harmless because the timeout path quarantines and terminates
+   the Worker immediately, so no later request can observe it. The residual
+   hazard is reported as an open item (§37.30.13, O3) rather than silently
+   patched.
+3. **How is further SQL prohibited on an uncertain adapter?** Quarantine sets
+   the adapter's unusable flag before any other application operation can run;
+   every subsequent request is rejected. In addition, the cleanup path issues
+   **no** SQL in cases C and E.
+4. **How are pending Worker operations prevented from racing with cleanup?**
+   They are not raced — they are terminated. The cleanup path issues no SQL in
+   cases C/E, so the only concurrent action is `worker.terminate()`, which stops
+   the thread.
+5. **How is the original MySQL session retired safely?** By destroying it.
+   `worker.terminate()` ends the thread; the thread's TCP socket is closed; the
+   server ends the session, releasing its named locks and rolling back its open
+   transaction. This is the only mechanism that resolves case E without
+   guessing.
+6. **Is `worker.terminate()`, connection destruction, `adapter.close()` or
+   another bounded mechanism required?** `worker.terminate()` is required.
+   `adapter.close()` is insufficient and harmful here (blocking round-trip on a
+   stuck Worker; unobservable termination). In-Worker connection destruction
+   (`discardStaleConnection`) is not reachable from the parent while the Worker
+   is busy with the timed-out statement.
+7. **Can termination completion be verified?** Yes — `worker.terminate()`
+   resolves to the exit code, and the adapter exposes the promise and a
+   state machine (`TERMINATION_PENDING` / `CONFIRMED` / `FAILED`).
+8. **How is automatic reconnect prevented from hiding a pending operation on
+   the previous session?** Quarantine prevents the parent from sending any
+   further message, so the Worker's `ensureConnection()` reconnect path is never
+   reached; and the Worker thread is terminated, so an in-flight
+   `START TRANSACTION` cannot complete on a session the adapter still tracks.
+9. **Assumptions explicitly rejected.** Cancelling a `SharedArrayBuffer`
+   response does **not** cancel the underlying MySQL statement; a request
+   timeout does **not** prove the database operation failed; and no automatic
+   retry of an uncertain mutation or transaction start is introduced.
+
+### 37.30.8 Error precedence and retry compatibility
+
+- **Primary error.** The original BEGIN exception object is rethrown unchanged.
+  Its `message`, `code`, `errno`, `sqlState`, `sqlMessage` and stack are
+  untouched. The cleanup outcome is attached as a non-primary diagnostic.
+- **No misleading classification.** A startup failure is never rewritten as a
+  business success, an idempotent replay, a business `409`, or a generic
+  retryable `503`. A non-`HttpError` failure serializes through the existing
+  generic path (`server/lib/http.js:46-49`, `server/app.js:2272-2276`) as HTTP
+  500 with the original `code` — the same shape any other unexpected MySQL
+  failure already produces today.
+- **No new BEGIN retry.** BEGIN remains outside the retry budget. A BEGIN
+  failure does not consume, extend or inflate the attempt counter.
+- **No transaction-count inflation.** `error.transactionRetryExhausted` and
+  `error.transactionAttempts` are set only by the existing post-BEGIN catch
+  path for retryable MySQL errors (`ER_LOCK_DEADLOCK`, `ER_LOCK_WAIT_TIMEOUT`,
+  errno 1213/1205, sqlState 40001). A BEGIN failure never reaches that path,
+  so those properties remain absent for startup failures — exactly as today.
+- **Retry classification preserved.** `isRetryableMySqlTransactionError()` and
+  `mysqlTransactionRetryLimit()` are unchanged. The inner retry loop, the
+  backoff, the retry-exhaustion classification and the F2 retry-admission budget
+  (§37.29) are untouched.
+- **Successful-path behaviour preserved.** `COMMIT`, `ROLLBACK`, the L0
+  transaction gate, the Parent/business lock order, `READ COMMITTED`
+  isolation, the idempotency scope/fingerprint/replay contract, the Finance
+  monetary authority and the SQLite `BEGIN IMMEDIATE` semantics are all
+  unchanged. The only behavioural delta on the success path is the bounded
+  correction in §37.30.12.2.
+
+### 37.30.9 Proposed function-level production changes
+
+#### 37.30.9.1 `server/db.js` (the primary change)
+
+| Function | Change | Responsibility |
+|---|---|---|
+| `releaseMySqlIdempotencyLocks(db)` | **Signature change**: void → result object | Verify each `RELEASE_LOCK`; confirm only on `1`; retain unconfirmed locks in `db._idempotencyLocks`; return `{ attempted, confirmed, unconfirmed }` without lock names, SQL or parameters |
+| `mysqlNamedLockReleaseOutcome(value)` | New, module-private | Map a raw `RELEASE_LOCK` result to `RELEASED_CONFIRMED` / `NOT_OWNER` / `LOCK_ABSENT` / `UNEXPECTED_VALUE` |
+| `classifyTransactionStartFailure(error)` | New, module-private | Map the failure to `SESSION_LOST` / `UNCERTAIN_TIMEOUT` / `KNOWN_SERVER_ERROR` using machine-readable signals only |
+| `quarantineMySqlAdapter(db, reason)` | New, module-private | Invoke the adapter's quarantine entry point; record the outcome; never swallow a failure silently |
+| `cleanupAfterFailedTransactionStart(db, error, preAttempt)` | New, module-private | The cleanup boundary: `SESSION_LOST` → no SQL, registry cleared with proof; `UNCERTAIN_TIMEOUT` → no SQL, quarantine; `KNOWN_SERVER_ERROR` → verified release, and quarantine unless every lock is confirmed and the pre-attempt snapshot shows no foreign transaction |
+| `transaction(db, work)` | **Restructured, MySQL branch only** | Capture the pre-attempt snapshot; wrap BEGIN in a startup boundary that catches, cleans up and rethrows the original error; the SQLite branch keeps the literal `db.exec('BEGIN IMMEDIATE')` statement outside any new `try` so its behaviour is byte-identical |
+
+The SQLite branch is deliberately left as a literal statement rather than being
+folded into the shared `try`, so that `document.md §5.4.1`'s "SQLite
+`BEGIN IMMEDIATE` semantics unchanged" is provable by inspection.
+
+#### 37.30.9.2 Why `server/db.js` alone is insufficient
+
+`server/db.js` can implement the verified release, the ownership snapshot and
+the error precedence. It **cannot** implement quarantine or a bounded,
+observable teardown, because the required capability does not exist in the
+adapter today:
+
+- **R1 — no quarantine entry point.** `db.closed = true` is the only reuse
+  block the adapter offers (`server/database/mysql-adapter.js:118`, `:178`).
+  It prevents further requests from the parent but leaves the Worker thread and
+  its MySQL session alive, so the named lock would stay held **server-side
+  indefinitely** — the cross-process stall this hotfix exists to remove.
+- **R2 — no bounded teardown.** `adapter.close()` performs a blocking `'close'`
+  round-trip bounded by `requestTimeoutMs` and then fires
+  `void this.worker.terminate()` (B11). In the timeout case the Worker is busy
+  with the statement that timed out, so the round-trip can consume the full
+  request timeout on the request thread; and the termination is unobservable.
+- **R3 — no machine-readable timeout marker.** `_request()` throws a bare
+  `Error` whose message carries the only timeout signal (B7). `db.js` would
+  have to pattern-match an English message to distinguish "the Worker may still
+  be executing" from "the server returned a definite error". That is not an
+  acceptable contract and would duplicate knowledge across two modules.
+- **R4 — no provable session-loss signal.** Whether the original session was
+  destroyed is decided in the Worker by the canonical
+  `isRecoverableConnectionError()` / `discardStaleConnection()` pair (B10).
+  That decision is not communicated to the parent, and re-deriving it in
+  `db.js` would create a second canonical classification — forbidden by
+  AGENTS.md §6.
+- **R5 — no verifiable teardown outcome.** `worker.terminate()` returns a
+  promise, but `close()` discards it, so "session destroyed" cannot be
+  distinguished from "destroy pending". The Requirement explicitly requires
+  distinguishing those three categories.
+
+#### 37.30.9.3 `server/database/mysql-adapter.js` (narrowly bounded, proposed — not authorized)
+
+| Addition | Why it is necessary | Exact responsibility | Regression proof |
+|---|---|---|---|
+| `MySqlSyncAdapter.quarantine(reason)` | R1, R2, R5 | Synchronously mark the adapter unusable; start `worker.terminate()`; record `quarantineState` with `TERMINATION_PENDING` → `TERMINATION_CONFIRMED` / `TERMINATION_FAILED`; never perform a blocking Worker round-trip | T7, T17, T18 |
+| `_request()` timeout marker | R3 | Attach a machine-readable marker to the timeout error so the caller can classify it without message matching; the HTTP contract is unchanged (the marker is not `code`) | T15, T16 |
+| `_request()` unusable-adapter error text | diagnosability | Distinguish "closed" from "quarantined" in the rejection message, and name the reason | T17 |
+| `close()` | **no change required** | `quarantine()` sets the same unusable flag that `close()` already tests (`if (this.closed) return;`), so a quarantined adapter is never asked to perform the blocking `'close'` round-trip, and the Worker is already terminated | T17, T18 |
+
+**No normal business connection behaviour changes.** `quarantine()` is reachable
+only from the new startup-failure cleanup boundary and from a future explicit
+operator action. The timeout marker only adds a property to an error that is
+already being thrown. `close()` is untouched. The `_request()` success path, the
+`exec()` transaction-mirror update, the `translateSqliteSql` translation layer
+and the Worker protocol are all untouched.
+
+#### 37.30.9.4 `server/database/mysql-worker.js` (narrowly bounded, proposed — not authorized)
+
+| Addition | Why it is necessary | Exact responsibility | Regression proof |
+|---|---|---|---|
+| Session-loss marker on the discarded-session path | R4 | When the Worker discards the session because of a recoverable connection error, mark the error so the parent can prove the original session is gone; the Worker stays the single canonical owner of the recoverable-connection classification | T1, T2, T18, T19 |
+| Marker propagation in `serializableError()` | R4 | Carry the marker from the Worker error into the response payload, without SQL text, parameters or credentials | T1, T2 |
+
+The Worker already computes the discard decision in one place
+(`discardStaleConnection`), so the marker is set at the discard sites rather
+than by re-classifying the error in a second module.
+
+#### 37.30.9.5 `server/database/mysql-worker-protocol.js` — **no change**
+
+The generation-scoped late-response discard (B8) already provides the
+guarantee the Requirement asks for: an abandoned request's late response can
+never be published as trusted state. The residual hazard is the Worker's
+non-generation-scoped `inTransaction` flag (B9), which this hotfix neutralises
+by terminating the Worker on the timeout path and which is reported as an open
+item (O3) rather than patched here. No protocol change is proposed.
+
+### 37.30.10 Implementation file manifest
+
+Nothing below exists yet. This is the complete future manifest.
+
+**Production files (4):**
+
+| File | Change | Approval needed |
+|---|---|---|
+| `server/db.js` | Startup-failure boundary, verified release helper, ownership snapshot, cleanup boundary, quarantine invocation | Core — covered by §5.4.1 |
+| `server/database/mysql-adapter.js` | `quarantine()` + teardown state, timeout marker, unusable-adapter message | **Proposed — requires explicit approval** |
+| `server/database/mysql-worker.js` | Session-loss marker on the discard path | **Proposed — requires explicit approval** |
+| `server/database/mysql-worker-protocol.js` | **No change** | — |
+
+**Test files (3 new + 1 modified):**
+
+| File | Kind | Contents |
+|---|---|---|
+| `server/db-transaction-start-safety.test.js` | New, pure (no DB, no HTTP) → registered in **FAST** and **FULL** | T1–T10, T15, T16, T17, T18 (adapter-side), T20 |
+| `server/mysql-transaction-start-safety.integration.js` | New, real MySQL → registered in **HEAVY** | T18 (server-side lock state after teardown), T19 |
+| `server/database/test-fixtures/delayed-exec-mysql-worker.js` | New, Worker fixture (not a `*.test.js`, so no registry entry) | Controllable Worker that completes `exec` after a delay, for T15/T16 |
+| `scripts/testing/test-suites.js` | Modified — registry only | Add the two new `*.test.js` files to the correct suites |
+
+**Explicitly excluded:** no `document.md` change, no `README.md` change, no
+`package.json` version change, no schema or migration, no Finance calculation
+change, no Gate lock-order change, no Wave 10 code, no change to
+`server/modules/financial-controls.js` (see §37.30.13, O1), no change to
+`server/modules/sales-prepayment-finance-adapter.js`.
+
+### 37.30.11 Deterministic test contract T1–T20
+
+All tests use deterministic injected failures and a controllable Worker. **No
+real MySQL execution is authorized by this Design**; the HEAVY file requires a
+separately authorized disposable MySQL environment, exactly like the existing
+Gate A integration suites.
+
+| # | Case | Assertion | Mechanism | File |
+|---|---|---|---|---|
+| T1 | BEGIN fails before transaction establishment | The original BEGIN error is thrown; no `COMMIT` and no `ROLLBACK` is issued; no named lock remains registered | Fake MySQL db whose `exec('BEGIN IMMEDIATE')` throws | pure |
+| T2 | BEGIN failure with an owned `GET_LOCK` | The registered lock is released and confirmed (or the adapter is quarantined); the lock is not left registered when the release is unconfirmed | Fake MySQL db with `db._idempotencyLocks` seeded | pure |
+| T3 | Verified `RELEASE_LOCK` result `1` | The lock is confirmed and removed from `db._idempotencyLocks`; the adapter is **not** quarantined; the connection stays reusable | Fake db answering `released: 1` | pure |
+| T4 | Original startup exception preserved | The thrown object is the **same instance** as the injected BEGIN error (identity, not just message); `transactionRetryExhausted` and `transactionAttempts` are absent | Fake db | pure |
+| T5 | A pre-existing transaction is not rolled back | With `db.isTransaction === true` before the attempt and a failing BEGIN, **no** `ROLLBACK` is issued and the adapter is quarantined | Fake db | pure |
+| T6 | `RELEASE_LOCK` returns `0` / `NULL` / throws | Each of the three is classified as unconfirmed; the adapter is quarantined; the registry entry is retained | Fake db answering `0`, `null`, or throwing | pure |
+| T7 | Adapter becomes non-reusable when cleanup cannot be verified | After an unverified cleanup the adapter rejects every further business SQL; `quarantineState` is present | Fake db + adapter quarantine | pure |
+| T8 | Existing successful `COMMIT` behaviour | The emitted sequence is `BEGIN` → L0 gate → work → `COMMIT`; the result is returned; the lock is released and confirmed | Fake MySQL db | pure |
+| T9 | Existing `ROLLBACK` behaviour | When `work()` throws, `ROLLBACK` is issued and the original error is rethrown; the lock is released | Fake MySQL db | pure |
+| T10 | Existing transaction retry behaviour | A retryable MySQL error in `work()` retries up to the existing limit, then sets `transactionRetryExhausted` and `transactionAttempts`; a **BEGIN** failure does not consume or inflate the budget | Fake MySQL db, `ERP_DB_TX_RETRY_MAX` controlled | pure |
+| T11 | Refund exact replay remains HTTP 200 | Existing coverage retained: exact replay returns `200` with `replayed === true` and the original refund id | **Existing** `server/v13-phase6a-financial-controls.test.js` (M24 durable-state coverage) — re-run, no new file | existing |
+| T12 | Refund fingerprint conflict remains HTTP 409 | Existing coverage retained: same key with a different fingerprint returns `409` | **Existing** `server/v13-phase6a-financial-controls.test.js` — re-run | existing |
+| T13 | Zero duplicate Finance side effects | Existing coverage retained: no duplicate refund, voucher, entry, movement, audit or idempotency rows | **Existing** `server/v13-phase6a-financial-controls.test.js` — re-run | existing |
+| T14 | SQLite behaviour unchanged | A `dialect: 'sqlite'` db takes no new code path: no `RELEASE_LOCK`, no quarantine, no `ROLLBACK` on a BEGIN failure, and the raw BEGIN error propagates; plus the entire unchanged FULL suite stays green on SQLite | Fake SQLite db + existing FULL regression | pure + existing |
+| T15 | Worker `START TRANSACTION` completes after the adapter timeout | The adapter throws the timeout error; the Worker later completes the statement; the late response is discarded; the adapter is quarantined | Controllable Worker fixture | pure |
+| T16 | A timed-out request cannot publish trusted transaction state | The abandoned generation's late response is not published (the response-slot CAS rejects it) and the adapter's `isTransaction` mirror is not flipped to `true` by the late completion | Controllable Worker fixture | pure |
+| T17 | A quarantined adapter rejects further business SQL | Every subsequent `prepare()`/`exec()` on the adapter throws the quarantine error; no SQL reaches the Worker | Fake Worker | pure |
+| T18 | Worker/session teardown outcome is accurately reported | `quarantineState.state` reaches `TERMINATION_CONFIRMED` after the Worker exits, and — against real MySQL — the named lock is no longer held (`IS_FREE_LOCK`/`IS_USED_LOCK` on an independent session) and the abandoned session is gone | Fake Worker (adapter-side) + real MySQL (server-side) | pure + HEAVY |
+| T19 | An automatic reconnect does not silently reuse or validate the abandoned transaction context | After a quarantine the adapter never reconnects; the new session (if any) carries no transaction and no named lock, and the abandoned context is never reported as validated | Real MySQL | HEAVY |
+| T20 | L0 and all existing production lock-order contracts remain unchanged | The L0 gate statement and its position (first inside the transaction, before business rows) are unchanged; the Wave 7 functional/acceptance suites and the M24/M25 fixtures stay green | Static assertion + existing suites | pure + existing |
+
+Additionally, the existing source-contract assertion that `createRefund` calls
+`idempotencyReplay()` immediately before `transaction()` with no intervening
+throw (`server/v13-phase6a-financial-controls.test.js:432-460`) is re-run
+unchanged, so the M24 replay-ordering contract cannot silently regress.
+
+### 37.30.12 Compatibility, rollback and failure handling
+
+**37.30.12.1 Compatibility.** The public HTTP contracts, the Finance monetary
+facts, the idempotency scope/fingerprint/replay contract, the lock order, the
+isolation level, the retry semantics and the SQLite semantics are unchanged.
+The only observable behavioural deltas are:
+
+1. On a transaction-start failure, the connection is now either verifiably
+   cleaned (case A/G) or destroyed and unusable (cases B–F, H–J) — instead of
+   silently retaining the named lock.
+2. On the normal path, an **unconfirmed** `RELEASE_LOCK` no longer results in a
+   silent registry clear (§37.30.12.2).
+
+**37.30.12.2 The bounded correction to the normal-path release (flagged for
+explicit approval).** The Design has confirmed that the *existing* normal-path
+release cannot make safe reuse impossible when the release fails: today
+`releaseMySqlIdempotencyLocks()` swallows the error and clears the registry, so
+the connection continues to be reused while the server-side named lock may
+still be held — the same leak, on the success path, after `COMMIT` or after a
+post-BEGIN rollback. The exact necessary correction is:
+
+> The two existing normal-path call sites (`server/db.js:1898` and `:1907`) must
+> apply the **same** verified-release primitive and must quarantine the adapter
+> when a release is unconfirmed.
+
+Implementation scope: two call sites, one shared helper, **no new API, no new
+file, no new SQL, no change to the success path** (a confirmed `1` behaves
+exactly as today). The change is not applied to
+`server/modules/financial-controls.js` (see O1). This correction is **not**
+auto-authorized by §5.4.1's scoping sentence and is presented for a separate
+explicit decision.
+
+**37.30.12.3 Rollback of the hotfix itself.** The hotfix is a pure code change
+with no schema, no migration and no data change. Reverting the four production
+files restores the pre-hotfix behaviour exactly; there is no persistent state to
+unwind. A quarantined adapter is not recoverable by reverting the code — it
+requires the documented process-level MySQL re-establishment (O5).
+
+**37.30.12.4 Failure handling.** Every cleanup branch is total: no branch may
+throw a cleanup error in place of the original startup error, and no branch may
+leave the adapter reusable after an unverified cleanup.
+
+### 37.30.13 Open items — reported, not silently absorbed
+
+| # | Item | Status |
+|---|---|---|
+| **O1** | `server/modules/financial-controls.js:47` and `:53` release the named lock on the pre-transaction paths (replay-found and read-failure) **without verifying** the result and delete the registry entry in a `finally`. The same leak therefore exists outside the transaction-start path. | Out of the §5.4.1 scope (the Requirement covers the startup-failure path). Recommend the same verified-release helper be applied there in a separate, explicitly authorized bounded change. |
+| **O2** | A failed `ROLLBACK` or a lost `COMMIT` response leaves `db.isTransaction === true`. The next `transaction()` call then issues `BEGIN` while a transaction is open, which makes MySQL **implicitly commit** the previous, unresolved transaction. | Pre-existing, reachable, and a data-integrity hazard that this hotfix does **not** change (it is on the success path). Recommended as a separate Requirement: detect an unresolved transaction at attempt entry and fail closed instead of implicitly committing it. The startup-failure path already treats this state as non-reusable (case D). |
+| **O3** | The Worker's internal `inTransaction` flag is not generation-scoped (B9): a late completion mutates it even though the response is discarded. | Neutralised on the timeout path by quarantine + terminate. Reported for a future protocol-level improvement; no protocol change is proposed here. |
+| **O4** | `readTransaction()` has the identical "BEGIN outside the try" shape (`server/db.js:1916`) and therefore the identical uncertain-session exposure, although it registers no named lock. | Out of the §5.4.1 scope. Recommended as a separate bounded Requirement so the connection lifecycle is consistent across both transaction helpers. |
+| **O5** | A quarantined adapter is terminal for that instance; no automatic re-establishment is designed here. | Deliberate fail-closed choice. An explicit, audited adapter re-establishment policy is a separate Requirement. |
+| **O6** | The teardown's server-side effect (the server ending the session and releasing its locks) is proven asynchronously, after the Worker thread exits. The window between thread exit and the server's session teardown is not observable from the parent. | Accepted. It does not affect the safety invariant, which is stated over *reusable* connections. The HEAVY test asserts the server-side end state. |
+
+### 37.30.14 Acceptance criteria
+
+The hotfix is acceptable only when all of the following hold:
+
+1. T1–T14 and T15–T20 all pass, with T11–T13 and T14 satisfied through the
+   retained existing coverage and the unchanged FULL suite.
+2. `pnpm test:fast`, `pnpm test`, `pnpm build` and `git diff --check` are clean,
+   and the HEAVY suite passes against an authorized disposable MySQL target.
+3. `document.md §5.4.1` is satisfied literally: no owned MySQL named idempotency
+   lock remains on a reusable connection after a transaction-start failure; the
+   original startup exception and its classification are preserved; no new BEGIN
+   retry; no commit or rollback of a transaction not proven to belong to the
+   attempt; an unverifiable release does not leave the connection reusable.
+4. The preserved set is intact: Implementation A–E, F1/F2, M24/M25 remediation,
+   the Gate A integration infrastructure, `solution.md §37.0–§37.29`, all
+   existing logs and all local modifications.
+5. No schema, migration, Finance calculation, Gate lock-order, Wave 10,
+   permission or package-version change.
+6. The user has explicitly confirmed this Design before any implementation
+   begins, and has separately decided §37.30.12.2 (the normal-path correction)
+   and O1–O5.
+
+### 37.30.15 Boundary and status
+
+This section is a Design deliverable only. No production source, test, schema,
+migration, `document.md`, `README.md`, `package.json`, database state or Git
+history is changed by it. No MySQL connection, Gate execution, reset, DROP,
+schema recreation, destructive operation, release or deployment is authorized.
+Gate A remains blocked, retest #2 remains unexecuted, and Wave 10 remains
+blocked. No acceptance or freeze is declared.
+
+**Status: `TRANSACTION_BEGIN_HOTFIX_DESIGN_READY_FOR_APPROVAL`.**
+
+---
+
+## 37.31 Transaction Lifecycle Safety Final Design Amendment (2026-10-24)
+
+### 37.31.0 Authorization, scope and governing constraints
+
+- The user approved `document.md §5.4.2 — Transaction Lifecycle Safety
+  Requirement Addendum` with status
+  `TRANSACTION_LIFECYCLE_REQUIREMENT_ADDENDUM_PASS`, and authorized **DESIGN
+  ONLY** under AGENTS.md §4.3.
+- `solution.md §37.30` remains approved in technical direction but
+  **conditional**, because it does not yet cover all of R1–R7. This section is
+  the single final bounded amendment that closes R1–R7 for the Transaction
+  Lifecycle Safety work. R1–R7 are **not** split into separate projects or
+  development waves.
+- This section is additive. `§37.0–§37.30` are preserved byte-identically.
+  `document.md §5.4.1–§5.4.2` are not modified by this section.
+- This is a Design deliverable only. No production source, test, schema,
+  migration, `README.md`, `package.json`, database state or Git history is
+  changed by it. No MySQL connection, Gate execution, reset or destructive
+  operation is authorized by it.
+- The following previously recorded constraints govern this amendment and are
+  honoured verbatim:
+
+| # | Constraint | Source |
+|---|---|---|
+| C1 | No unverified MySQL server-variable probe (`@@session.in_transaction`, `@@autocommit`, Performance Schema). No local boolean is claimed as independent proof of server state. The admissible evidence chain is the adapter-local Worker-emitted `inTransaction` flag, acknowledged `ROLLBACK`, session-epoch continuity, and one complete canonical `transaction()`. | `log/2026-10-23.md` L58-61, L85-96, L110-111 |
+| C2 | No hard wall-clock execution bound is claimed. Only attempt counts are enforceable: inner attempts = `ERP_DB_TX_RETRY_MAX` + 1 (4 default, 11 maximum), outer ≤ 3. The withdrawn "15000 ms hard upper bound" is **not** restated. | `log/2026-10-23.md` L473-484 |
+| C3 | Registered named idempotency locks are released on **both** the commit path and the throw path. | `log/2026-10-23.md` L395-396, L484-485 |
+| C4 | A pre-BEGIN guard must not re-serialize the raw A-RAW sessions and must not disturb the `mysql_transaction_gates` bypass semantics. | `log/2026-10-22.md` L1800-1803 |
+| C5 | `db.isTransaction` must be false after every denial/rollback. Any new adapter flag is **additive** and must not displace `db.isTransaction`. | `log/2026-10-22.md` L1788-1789 |
+| C6 | A protected real-MySQL suite fails closed at module load (non-zero exit, UNAVAILABLE diagnostic) and never skips to PASS. All three disposable-target flags are required. A pre-existing environment flag is not authorization. | `log/2026-10-22.md` L1616-1631, L1805-1811; `README.md` L253-257 |
+| C7 | Worker teardown is explicit termination with an awaited outcome and a final no-leaked-connection proof via `information_schema.PROCESSLIST`. | `log/2026-10-22.md` L1797-1798 |
+| C8 | A recovery path classifies only the expected transient failure, preserves it as failure evidence, recovers each victim **exactly once**, and treats anything unexpected as a hard failure. | `log/2026-10-22.md` L2171-2177 |
+| C9 | Canonical write order is authorization → fingerprint → BEGIN → idempotency replay → lock → mutate → audit → save idempotency → COMMIT; the response is emitted only after a durable COMMIT. | `log/2026-10-22.md` L1357-1366; `log/2026-10-23.md` L705-707 |
+| C10 | `*.integration.js` files are outside the FAST/FULL/HEAVY manifest by existing rule; `README.md` must not gain hardcoded suite lists or test counts. | `scripts/testing/test-suites.js:617-618`; `README.md` L394 |
+| C11 | F2 elapsed-time admission control is **not implemented**; A-RAW / A-PROD / MySQL safety guards remain recorded as pending and are not discharged by this amendment. | `log/2026-10-23.md` L1216, L1255, L1296 |
+| C12 | §37.10's statement that the global gate serialises every MySQL transaction before any business row must be reconciled with the new pre-BEGIN guard; row-level lock-order proof is never claimed from gated paths. | `log/2026-10-23.md` L288-293 |
+
+### 37.31.1 Verified baseline facts (read from the local working tree, 2026-10-24)
+
+Baseline identity: `feature/sales-waves6-13@2037cb632e2464477fe9752dc3113dac3c0eacf3`,
+package version `1.6.2`, 2 remotes, 2 stashes, 602 protected SQLite artifacts.
+All uncommitted work, Implementation A–E, F1/F2, M24/M25 remediation, the Gate A
+A-PARITY / A-PROD / A-RAW fixtures and every append-only log are preserved.
+
+| # | Fact | Evidence |
+|---|---|---|
+| F1 | `transaction()` executes `db.exec('BEGIN IMMEDIATE')` outside its `try` | `server/db.js:1883-1913` (`:1887` vs `:1888`) |
+| F2 | The rollback in the catch path is `try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}` — **the rollback failure is swallowed** | `server/db.js:1901` |
+| F3 | The retry loop then issues a fresh BEGIN on the next iteration | `server/db.js:1886-1887`, `:1910` |
+| F4 | MySQL `START TRANSACTION` inside an open transaction **commits** that transaction. Therefore F2+F3 can turn a failed attempt's partial writes into a durable commit | MySQL semantics; combined with `server/db.js:1887`, `:1901`, `:1910` |
+| F5 | §37.20 already asserts "an inner retry re-executes `work()` only AFTER `db.exec('ROLLBACK')` … so a successful callback can never duplicate a monetary or audit effect". F2+F3 **violate** that already-approved atomicity guarantee | `solution.md` §37.20, added-line block at `:22805-22808` |
+| F6 | `releaseMySqlIdempotencyLocks()` swallows every error, never inspects the result and clears the registry unconditionally | `server/db.js:1875-1881` |
+| F7 | `idempotencyReplay()` registers a `GET_LOCK` and, on a replay **miss**, deliberately retains it for the transaction lifecycle to release | `server/modules/financial-controls.js:32-57` |
+| F8 | `createRefund` calls `idempotencyReplay()` at `:199` and `transaction()` at `:200` with no intervening throw | `server/modules/financial-controls.js:199-200` |
+| F9 | `readTransaction()` has the same BEGIN-outside-`try` shape and registers no named lock | `server/db.js:1915-1933` (`:1916`) |
+| F10 | The adapter's `isTransaction` is updated only from a successful Worker response | `server/database/mysql-adapter.js:159-175` (`:167-168`) |
+| F11 | `_request()` abandons the request generation on timeout and throws a bare `Error` with no machine-readable marker | `server/database/mysql-adapter.js:117-137` (`:124-127`) |
+| F12 | The Worker response slot is generation-scoped; a late response for an abandoned generation is discarded | `server/database/mysql-worker-protocol.js:36-59` (`:38`, `:55`) |
+| F13 | The Worker's `inTransaction` flag is **not** generation-scoped; it is set before the response CAS | `server/database/mysql-worker.js:243-255` (`:251`, `:253`) |
+| F14 | The Worker owns the canonical recoverable-connection classification and discards the session on a recoverable error | `server/database/mysql-worker.js:12-24`, `:33-45`, `:123-138` |
+| F15 | The Worker already owns a canonical exec classifier (`BEGIN` / `COMMIT` / `ROLLBACK` / `OTHER`) that the parent does not use | `server/database/mysql-worker.js:59-65` |
+| F16 | `adapter.close()` performs a blocking `'close'` round-trip bounded by `requestTimeoutMs` and then fires `void this.worker.terminate()` — unobserved | `server/database/mysql-adapter.js:177-183` |
+| F17 | `db.isTransaction` is the canonical nesting guard in ≥15 production modules; those guards call the body directly and never re-enter `transaction()` | `commercial-golive.js:50`, `finance-recognition.js:16`, `traceability-quality.js:122`, `lib/inventory-mutation.js:456-469`, and 12 further modules |
+| F18 | The Gate A runner resets before every suite, fails closed on the disposable-target guard, enforces a strict TAP summary, and exits on the first failure | `scripts/gates/mysql-sales-wave7-gate-a.mjs:31-33`, `:49-60`, `:67-93` |
+| F19 | The Gate A runner's manifest assertion in `scripts/mysql-sales-wave7-gate-a-runner.test.js:17-25` asserts the suite list contains **exactly** the three approved files | `scripts/mysql-sales-wave7-gate-a-runner.test.js:17-25` |
+| F20 | The suite registry auto-discovers only `*.test.js`; `*.integration.js` is outside FAST/FULL/HEAVY by existing rule | `scripts/testing/test-suites.js:617-618`, `:648-672` |
+| F21 | `/api/health/ready` already reports `503 not_ready` when a database statement fails | `server/app.js:2285-2290` |
+| F22 | A non-`HttpError` serializes through the existing generic contract: status 500, generic message, and `code` copied verbatim when present | `server/lib/http.js:46-49`, `server/app.js:2272-2276` |
+
+### 37.31.2 Supersession map — exactly what §37.31 replaces in §37.30
+
+This section is the **single authoritative** Transaction Lifecycle Safety design.
+Where it differs from §37.30, §37.31 wins. Where it is silent, §37.30 remains in
+force. No competing manifest survives.
+
+| §37.30 provision | Disposition in §37.31 |
+|---|---|
+| §37.30.1 baseline facts | **Superseded** by §37.31.1 (additional facts F1-F22; the §37.30 facts remain true) |
+| §37.30.2 the exact defect | **Retained and extended** — F4/F5 add the rollback-failure implicit-commit defect (R2) |
+| §37.30.3 ownership states O1-O5 | **Retained**, and R1 adds a session-level admission state machine (§37.31.3) |
+| §37.30.4 A-J failure matrix | **Superseded** by §37.31.3-§37.31.5, which extend the matrix with the R2 rollback cases A-E and the R3 release taxonomy |
+| §37.30.5 verified release contract | **Retained and extended** by §37.31.5 (session-epoch proof, `SESSION_REPLACED` outcome, one authoritative helper) |
+| §37.30.6 quarantine and teardown | **Retained and extended** by §37.31.8 (machine-readable timeout and session-loss classification, `SESSION_FRESH/ACTIVE/UNCERTAIN` states) |
+| §37.30.7 Worker timeout and late completion | **Retained**, restated as §37.31.8 under R6 |
+| §37.30.8 error precedence and retry compatibility | **Retained and extended** by §37.31.4 (rollback failure is a terminal retry boundary) |
+| §37.30.9.1 `server/db.js` changes | **Superseded** by §37.31.10 and §§37.31.3-37.31.5 |
+| §37.30.9.3-§37.30.9.5 adapter/worker/protocol changes | **Superseded** by §37.31.8; `mysql-worker-protocol.js` remains **unchanged** |
+| §37.30.10 implementation file manifest | **Superseded** by §37.31.10. **In particular, §37.30.10's proposal to register `server/mysql-transaction-start-safety.integration.js` in the HEAVY suite is withdrawn**: HEAVY is executed by the unconditional `pnpm test:heavy`, which R7 forbids for real-MySQL integration tests. The file is registered only through the protected Gate A runner (§37.31.9). |
+| §37.30.11 T1-T20 contract | **Superseded** by §37.31.11 and §37.31.12 |
+| §37.30.12.2 normal-path correction | **Approved in principle by the user** and now **incorporated** into the single cleanup contract (§37.31.5) — no longer a separate decision |
+| §37.30.13 open items O1-O6 | **O1 and O4 are now closed by R4 and R5.** O2 is closed by R1. O3 remains open (§37.31.14). O5 and O6 remain open with unchanged disposition (§37.31.14) |
+| §37.30.14 acceptance criteria | **Superseded** by §37.31.11-§37.31.13 |
+| §37.30.15 boundary and status | **Superseded** by §37.31.15 |
+
+### 37.31.3 R1 — Transaction admission state machine
+
+#### 37.31.3.1 The two-layer state model
+
+Ownership truth is split into two layers so that neither layer has to prove
+server state:
+
+```text
+LAYER 1 — SESSION STATE (owned by the MySQL adapter, session-scoped)
+  IDLE_TRUSTED    the current session has no open transaction, and every
+                  transaction-affecting operation on it received a definitive
+                  acknowledgement.
+  ACTIVE          a transaction is open on the current session.
+  UNCERTAIN       an operation left the transaction presence indeterminate.
+  FRESH           a connection was established and no transaction-affecting
+                  operation has run on it yet.
+  QUARANTINED     the adapter is quarantined; no further SQL is permitted.
+  TERMINATED      the Worker thread exited; the adapter is permanently unusable.
+
+LAYER 2 — ATTEMPT OWNERSHIP (owned by server/db.js, attempt-scoped)
+  NOT_OWNED       this attempt has no acknowledged transaction of its own.
+  OWNED           this attempt received a successful acknowledgement for its
+                  own BEGIN.
+  ENDED           this attempt's transaction was closed by an acknowledged
+                  COMMIT or ROLLBACK.
+```
+
+**The session state is a conservative permit, not a probe and not a proof.**
+It is derived only from acknowledged Worker responses and from the adapter's own
+request-outcome classification. It never asserts what the server is doing; it
+only asserts what this adapter has *observed and can account for*. It errs
+toward refusal. This honours C1 (no server-variable probe, no local boolean
+claimed as independent proof of server state) and C5 (`db.isTransaction` stays
+the canonical transaction-state mirror and is **not** displaced).
+
+**R1-6 — a stale `db.isTransaction === false` never overrides an uncertain
+session.** The session state transitions on the **request outcome**, not on the
+boolean. A request timeout moves the session to `UNCERTAIN` even though
+`db.isTransaction` may still read `false`.
+
+#### 37.31.3.2 Session-state transitions
+
+Only the adapter can classify the outcome, because only the adapter observes
+the timeout and the Worker response.
+
+| Request outcome | Worker classification | Session-loss | New session state |
+|---|---|---|---|
+| acknowledged | `BEGIN` | — | `ACTIVE` |
+| acknowledged | `COMMIT` | — | `IDLE_TRUSTED` |
+| acknowledged | `ROLLBACK` | — | `IDLE_TRUSTED` |
+| acknowledged | `OTHER` | — | unchanged |
+| definite error (Worker answered) | `BEGIN` | no | unchanged (`IDLE_TRUSTED` stays `IDLE_TRUSTED`: the server rejected the statement, so no transaction was created) |
+| definite error | `COMMIT` | no | `ACTIVE` (the COMMIT was rejected, so the transaction is still open) |
+| definite error | `ROLLBACK` | no | `ACTIVE` (the ROLLBACK was rejected, so the transaction is still open) |
+| definite error | `OTHER` | no | unchanged |
+| definite error | any | **yes** | `UNCERTAIN` (the session was abandoned; the old session's state is unrecoverable and its locks are released only when the server reaps it) |
+| **request timeout** | — | — | `UNCERTAIN` (the Worker may still be executing the statement; its outcome is indeterminate) |
+| quarantine | — | — | `QUARANTINED` (terminal) |
+
+The `BEGIN` / `COMMIT` / `ROLLBACK` classification is the Worker's **existing
+canonical** `classifyExecStatement()` (F15). The Worker reports it in its
+response; the parent never re-derives it. The parent's current ad-hoc
+`normalized === 'START TRANSACTION'` comparison in `exec()` is therefore
+**replaced** by the Worker-reported classification, which removes the duplicate
+classifier rather than adding one.
+
+#### 37.31.3.3 The admission gate
+
+`transaction()` and `readTransaction()` both apply this gate **before** issuing
+BEGIN.
+
+```text
+ADMISSION GATE (MySQL only)
+
+  state = adapter.sessionState
+
+  IDLE_TRUSTED | FRESH
+      -> ADMIT. The attempt may issue BEGIN.
+
+  ACTIVE
+      -> REFUSE. A transaction is open on this session and this attempt did not
+         start it. Issuing START TRANSACTION would make MySQL implicitly commit
+         that transaction (F4), which is forbidden by R1.
+         The attempt must NOT roll it back: it cannot prove it owns it.
+      -> QUARANTINE the adapter and start bounded teardown, because the session
+         carries an unresolved transaction that must never be reused.
+
+  UNCERTAIN
+      -> REFUSE. The session state is indeterminate.
+      -> QUARANTINE the adapter and start bounded teardown.
+
+  QUARANTINED
+      -> REFUSE. The adapter is already unusable. No second teardown.
+
+  TERMINATED
+      -> REFUSE. The Worker is gone. The adapter is permanently unusable.
+```
+
+**R1-1 / R1-2 / R1-3 satisfied.** BEGIN is refused on a confirmed
+pre-existing transaction and on an uncertain adapter; `START TRANSACTION` is
+never issued in a state that may implicitly commit prior work.
+
+**R1-4 — existing nested-operation guards are preserved.** The gate is applied
+*inside* `transaction()` and *inside* `readTransaction()`. The ≥15 production
+nesting guards (F17) call the business body directly when `db.isTransaction`
+is true and therefore never enter the gate at all. Their behaviour, their
+messages and their semantics are untouched.
+
+**R1-5 satisfied.** The gate never rolls anything back.
+
+**Detection of a latent nested `transaction()` call.** If any production path
+were to call `transaction()` while a transaction is open, the gate now refuses
+it loudly instead of letting MySQL implicitly commit the outer transaction. This
+is the intended fail-closed outcome and it is a *detector*: the refusal raises
+an error, so the existing suites surface it immediately rather than silently
+committing partial work. The implementation must also expose an
+`admissionRefusalCount` on the adapter so the acceptance suite can assert it
+is **zero** across all covered production paths.
+
+**C4 / C12-4 reconciliation.** The gate is a **local state inspection**. It
+issues no SQL, takes no lock, adds no round trip and therefore does not
+change the `mysql_transaction_gates` serialization point (§37.10) or the
+L1-L8 lock graph. The A-RAW raw workers open their own `BEGIN` and never call
+`transaction()`, so their bypass semantics and their observable contention are
+untouched. §37.10's statement that the global gate serializes every MySQL
+transaction before any business row remains true, and this amendment claims no
+row-level lock-order proof from any gated path.
+
+**SQLite.** The gate is **MySQL-only**. `node:sqlite`'s `DatabaseSync`
+`isTransaction` is authoritative, a nested `BEGIN` is rejected natively with a
+clean local error, and SQLite has no session-level named lock and no Worker
+session to protect. Adding a SQLite admission gate would change SQLite
+behaviour, which `document.md §5.4.1`, `§5.4.2` and §3 of this Design all
+require to be preserved. The SQLite path of `transaction()` and
+`readTransaction()` therefore keeps its literal `db.exec(...)` statement with
+no new wrapper.
+
+#### 37.31.3.4 The exception contract
+
+A refused admission raises a **non-`HttpError`** with a stable machine-readable
+code, delivered through the **existing** generic 500 contract (F22):
+
+```text
+error.code    = 'MYSQL_TRANSACTION_ADMISSION_REFUSED'
+error.message = 'MySQL transaction admission refused: <reason>'   (server-side only)
+HTTP status   = 500 (existing generic path)
+HTTP body     = { error: '服务器内部错误', code: 'MYSQL_TRANSACTION_ADMISSION_REFUSED',
+                   message: '服务器内部错误', requestId }
+```
+
+Reasons: `SESSION_TRANSACTION_ACTIVE`, `SESSION_STATE_UNCERTAIN`,
+`ADAPTER_QUARANTINED`, `ADAPTER_TERMINATED`.
+
+This is deliberately **not** a business `409` and **not** a retryable `503`:
+the condition is an infrastructure fault, it is not a business rule, and no
+retry is permitted. It introduces a new stable **code value** inside the
+existing generic-error contract — no new status, no new body shape, no new
+fields. See §37.31.14 for the approval item.
+
+### 37.31.4 R2 — Rollback failure is a terminal retry boundary
+
+#### 37.31.4.1 The defect this closes
+
+Today the catch path is `try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}`
+(`server/db.js:1901`). The rollback failure is swallowed, the retry predicate
+is evaluated against the **business** error, and on a retryable business error
+the loop issues a fresh BEGIN (`server/db.js:1887`, `:1910`). MySQL commits an
+open transaction when `START TRANSACTION` is issued inside one (F4). The failed
+attempt's partial writes can therefore become durable — directly violating the
+already-approved §37.20 atomicity guarantee (F5) and §37.28's "retry exhaustion
+leaves zero new Gate Result, audit or idempotency success facts".
+
+#### 37.31.4.2 The rollback settlement gate
+
+The rollback is no longer a best-effort side effect. It becomes a **gate** that
+every retry must pass.
+
+| Case | Rollback outcome | Session state after | Further BEGIN permitted? | Adapter | Primary error |
+|---|---|---|---|---|---|
+| **A** | acknowledged | `IDLE_TRUSTED` | **Yes**, if and only if the business error is retryable and the attempt budget allows | reusable | business error |
+| **B** | definite database error | `ACTIVE` | **No** | **quarantine + bounded teardown** | business error |
+| **C** | request timeout | `UNCERTAIN` | **No** | **quarantine + bounded teardown** | business error |
+| **D** | connection disappeared during the rollback | `UNCERTAIN` | **No** | **quarantine + bounded teardown** | business error |
+| **E** | Worker reports an indeterminate transaction state | `UNCERTAIN` | **No** | **quarantine + bounded teardown** | business error |
+
+Rules:
+
+- **R2-1.** An eligible transaction retry is allowed **only** after an
+  acknowledged rollback (case A) **and** a safe session state.
+- **R2-2.** A failed or uncertain rollback (cases B-E) prohibits **any**
+  subsequent BEGIN. The retry predicate is evaluated **after** the rollback
+  gate; a `true` retry predicate cannot override a `false` rollback gate.
+- **R2-3.** No silent retry follows an uncertain rollback. The retry loop exits
+  immediately and the original error propagates.
+- **R2-4.** Cases B-E quarantine the adapter immediately and start the bounded
+  teardown (§37.31.8).
+- **R2-5.** The primary business/transaction exception is always the propagated
+  error. The rollback cleanup failure is recorded **separately** as a
+  non-primary diagnostic and a structured log event. The primary error's
+  `message`, `code`, `errno`, `sqlState` and stack are untouched.
+- **R2-6.** Rollback success is never reported without proof. The proof is the
+  acknowledged `ROLLBACK` response plus the resulting `IDLE_TRUSTED` session
+  state.
+- **R2-7.** Case D (session disappeared) is classified `UNCERTAIN` rather than
+  "rolled back". The server ends the session and rolls back with it, but the
+  application has no acknowledgement, and R2-1 demands a *confirmed* rollback.
+  The classification is therefore uniform and fail-closed. The consequence is
+  that a transport failure during a rollback retires the adapter instead of
+  silently retrying on a fresh session.
+
+**Effect on the existing retry contract.** The retryable set
+(`ER_LOCK_DEADLOCK` / `ER_LOCK_WAIT_TIMEOUT` / errno 1213 / 1205 / sqlState
+40001), `ERP_DB_TX_RETRY_MAX`, the backoff, `transactionRetryExhausted` and
+`transactionAttempts` are all **unchanged**. The only change is that a retry now
+requires a proven-safe connection state in addition to a retryable business
+error. Case A is the ordinary path and is byte-for-byte the current behaviour.
+
+**Explicit START TRANSACTION implicit-commit address.** The implicit-commit
+risk is closed at three points: (i) the admission gate refuses BEGIN when a
+transaction is already open; (ii) the rollback settlement gate forbids BEGIN
+after a failed or uncertain rollback; (iii) the adapter's session state
+distinguishes `ACTIVE` from `IDLE_TRUSTED`, so a swallowed rollback failure
+can no longer be mistaken for a clean connection.
+
+### 37.31.5 R3 — The one authoritative cleanup contract
+
+#### 37.31.5.1 Two layers, one implementation
+
+```text
+LAYER 1 — TRANSACTION SETTLEMENT GATE (§37.31.4)
+  Proves that the connection may safely start another transaction, or retires it.
+
+LAYER 2 — NAMED-LOCK RELEASE VERIFICATION (§37.31.5.2)
+  Proves that each registered MySQL named idempotency lock is no longer owned
+  by a session this adapter will reuse.
+```
+
+Both layers are implemented **once** in `server/db.js` and are reached from
+every context that needs them. There is exactly one implementation of the
+release-verification truth; `server/modules/financial-controls.js` calls it
+rather than re-implementing it (§37.31.6).
+
+#### 37.31.5.2 Release outcome taxonomy
+
+| Release outcome | Meaning | Session epoch | Classification | Adapter |
+|---|---|---|---|---|
+| `RELEASE_LOCK` returned `1` | this session held the lock and released it | unchanged | **`VERIFIED_RELEASED`** | reusable |
+| `RELEASE_LOCK` returned `0` | the lock exists but is held by another session | unchanged | **`NOT_VERIFIED`** | **quarantine + teardown** |
+| `RELEASE_LOCK` returned `NULL` | the named lock does not exist | unchanged | **`NOT_VERIFIED`** | **quarantine + teardown** |
+| `RELEASE_LOCK` raised a driver exception (not a session loss) | release status unknown | unchanged | **`NOT_VERIFIED`** | **quarantine + teardown** |
+| `RELEASE_LOCK` timed out | release status unknown | unchanged | **`NOT_VERIFIED`** | **quarantine + teardown** |
+| the release statement reported a **session loss** | the original session was abandoned; the server reclaims its locks when it reaps the session | changed | **`SESSION_REPLACED`** | reusable (a new session carries no lock) |
+
+**Why only `1` verifies.** `RELEASE_LOCK` returns `1` only when the *executing*
+session owned the lock. Because only one session can own a MySQL named lock,
+a `1` proves that the executing session **is** the original owner — which is
+exactly the "belongs to the current trusted original MySQL session"
+requirement, established without any server-variable probe (C1). `0` and
+`NULL` prove only that the *current* session does not own the lock; they cannot
+distinguish "our lock was released elsewhere" from "we are now talking to a
+different session". Those are treated as unverified, as `document.md §5.4.1`
+requires.
+
+**Session-epoch proof (R4 bullet 3).** The adapter tracks a monotonic
+`sessionEpoch`, incremented by the Worker on every new MySQL connection and
+reported in every response. The release helper records the epoch at
+acquisition and compares it at release time. If the epoch changed, the original
+session no longer exists and the result of a release attempt against the
+current session describes the **wrong** session — the helper therefore never
+treats a `0`/`NULL` observed on a replacement session as evidence about the
+original. This is the concrete mechanism that prevents "reconnect and treat a
+new session as the original owner".
+
+#### 37.31.5.3 The helper contract
+
+```text
+releaseMySqlIdempotencyLocks(db, { lockNames = null, mode = 'VERIFY' }) -> {
+  attempted:   number,
+  verified:    string[],     // lock names confirmed released
+  unverified:  [{ outcome, code }],   // outcomes only; no lock names, no SQL
+  sessionReplaced: boolean,
+  quarantined: boolean,
+}
+```
+
+- A lock is removed from `db._idempotencyLocks` **only** when its outcome is
+  `VERIFIED_RELEASED`, or when the outcome is `SESSION_REPLACED` (in which case
+  the removal is recorded together with the proof that the owning session is
+  gone).
+- Unverified locks **stay registered**. The local ownership-tracking state is
+  never erased while the release status is unknown.
+- The helper performs the quarantine itself, so every caller gets identical
+  behaviour by construction and no caller can diverge.
+- Diagnostics contain the lock **count** and per-lock `outcome` / `code` only.
+  Full lock names, SQL text, bind parameters, the idempotency key and
+  credentials are never recorded.
+- `mode = 'SESSION_DESTROYED'` performs no SQL at all and is used when the
+  session is already provably gone.
+
+#### 37.31.5.4 The four cleanup contexts
+
+| Context | Settlement gate | Release layer | Result |
+|---|---|---|---|
+| 1. Transaction-start failure | n/a (no transaction was started) | `VERIFY` on a live session; `SESSION_DESTROYED` when the session is provably lost; **no SQL at all** when the outcome is uncertain | verified release → reusable; otherwise quarantine + teardown |
+| 2. Successful COMMIT | the transaction is closed by an acknowledged COMMIT | `VERIFY` | verified → reusable; otherwise quarantine + teardown, **committed success still returned** (§37.31.5.5) |
+| 3. Final transaction failure after ROLLBACK | the rollback gate has passed or failed | `VERIFY` | verified → reusable; otherwise quarantine + teardown |
+| 4. Recovery before a permitted inner transaction retry | **the rollback settlement gate only** | **no release** — the registered named locks are deliberately retained across an inner retry, because they protect the idempotency scope for the whole operation | the retry proceeds only if the gate passed |
+
+Context 4 is the reason the contract has two layers: a retry needs a safe
+connection, but it must **not** drop the operation's named lock mid-flight.
+
+#### 37.31.5.5 Successful COMMIT followed by a failed release
+
+This is the case where the business outcome and the infrastructure outcome
+diverge, and it is specified explicitly.
+
+```text
+BUSINESS OUTCOME
+  The transaction is DURABLY COMMITTED. The mutation, the voucher, the
+  movement, the refund row, the audit row and the idempotency record are all
+  committed atomically. That fact is final and is never undone, re-run or
+  re-stated as failed.
+
+HTTP OUTCOME
+  The existing success contract is returned unchanged (201 for a first
+  confirmation, 200 with replayed:true for an exact replay). No new status, no
+  new body field, no new error contract is introduced. This is required by
+  document.md §5.4.2 R3 and by the "no new public error contract" constraint.
+
+WHY NOT AN INFRASTRUCTURE ERROR
+  Reporting a failure for a durable commit is a lie about durable state, and it
+  invites a client retry of an already-applied mutation. The idempotency key
+  makes such a retry a replay rather than a duplicate, but the truthful answer
+  is still: the operation succeeded.
+
+HOW COMMITTED IDEMPOTENCY FACTS REMAIN AUTHORITATIVE
+  The idempotency record was written inside the committed transaction. It is
+  durable. A later exact replay reads it and returns the stored result with
+  HTTP 200 and replayed:true, exactly as today. Nothing in the cleanup path
+  writes to or invalidates it.
+
+WHY THE COMMITTED ACTION IS NEVER AUTOMATICALLY RE-RUN
+  This amendment introduces no retry of a committed mutation anywhere. The
+  inner retry is gated on a rollback settlement (§37.31.4); after a COMMIT
+  there is no rollback and no retry. The named-lock release failure is handled
+  by retiring the connection, not by re-running the operation.
+
+HOW THE CONNECTION IS RETIRED SAFELY
+  The adapter is quarantined synchronously, the Worker termination is started,
+  and the session is destroyed by the server when the socket closes. The
+  release of the named lock is delivered by that session teardown, not by a
+  release statement.
+
+HOW THE CALLER LEARNS ABOUT THE CLEANUP UNCERTAINTY
+  Without any new public contract:
+    1. A structured server log event (mysql_session_quarantined) records the
+       reason, the outcome taxonomy and the counts.
+    2. The adapter exposes quarantineState with the PENDING / CONFIRMED /
+       FAILED teardown status, observable in-process and by the integration
+       test.
+    3. The EXISTING readiness contract already surfaces it: /api/health/ready
+       executes a database statement, which fails on a quarantined adapter, so
+       the endpoint returns its existing 503 not_ready body (F21).
+  No new endpoint, header, status or body field is introduced.
+```
+
+### 37.31.6 R4 — Finance idempotency replay cleanup
+
+#### 37.31.6.1 Scope
+
+Only the release handling associated with `idempotencyReplay()` in
+`server/modules/financial-controls.js` is in scope. No Finance monetary
+calculation, no canonical Parent lock logic
+(`server/modules/sales-prepayment-finance-adapter.js` is **not** modified), no
+fingerprint algorithm, no scope string and no canonical write order is touched.
+C9's ordering is preserved exactly.
+
+#### 37.31.6.2 The replay-path matrix
+
+| Path | Current behaviour | Required behaviour |
+|---|---|---|
+| Replay **hit** (`row` found, fingerprint matches) | `RELEASE_LOCK` executed, result ignored, registry entry deleted in a `finally` | `releaseMySqlIdempotencyLocks(db, { lockNames: [lockName] })`. Verified → registry entry removed, adapter reusable. Unverified → adapter quarantined, **the 200 replay is still returned**. |
+| Replay **miss** (`!row`) | returns `null`, lock deliberately retained for `transaction()` | **Unchanged.** The lock is retained; `transaction()` owns its release. |
+| **Fingerprint conflict** | lock released at the hit path, then `HttpError(409)` thrown | Same verified release as the hit path; the **409 remains the primary error** and its status, code and message are unchanged. A cleanup failure never rewrites the 409. |
+| **Idempotency lookup exception** | `RELEASE_LOCK` executed, result ignored, original error rethrown | Same verified release; the **original lookup exception** is rethrown unchanged. A cleanup failure is recorded separately. |
+| `RELEASE_LOCK` = `1` | ignored | `VERIFIED_RELEASED`; registry entry removed; adapter reusable |
+| `RELEASE_LOCK` = `0` | ignored | `NOT_VERIFIED` → quarantine + bounded teardown; registry entry retained |
+| `RELEASE_LOCK` = `NULL` | ignored | `NOT_VERIFIED` → quarantine + bounded teardown; registry entry retained |
+| `RELEASE_LOCK` throws / times out | ignored | `NOT_VERIFIED` → quarantine + bounded teardown; registry entry retained |
+
+#### 37.31.6.3 No duplicated ownership truth
+
+`idempotencyReplay()` calls the **single** helper exported from
+`server/db.js` — the same helper `transaction()` uses — with an explicit
+`lockNames` list. The helper performs the quarantine itself. Finance therefore
+cannot diverge from the transaction path on what "verified" means, and Finance
+never learns the session-epoch or teardown rules. `financial-controls.js`
+gains **no** new state machine, only a call.
+
+#### 37.31.6.4 Preservation
+
+| Contract | Status |
+|---|---|
+| Exact replay → HTTP 200 with `replayed: true` and the original id | preserved |
+| First successful refund → HTTP 201 | preserved |
+| Fingerprint conflict → HTTP 409 | preserved |
+| Canonical idempotency scope `REFUND_CONFIRM` / `${side}:${balance.id}` | preserved |
+| Fingerprint algorithm | preserved |
+| No duplicate Voucher / Refund / Movement / Audit / Idempotency facts | preserved; the release path writes nothing |
+| No pre-authority monetary mutation | preserved; the release path runs before any monetary write, as today |
+| No new replay of uncertain transactions | preserved; the helper never re-runs an operation |
+
+### 37.31.7 R5 — readTransaction() startup safety
+
+#### 37.31.7.1 Why readTransaction() needs a narrower entry point
+
+`readTransaction()` registers no named lock and must not gain any. It needs
+the **admission gate** and the **startup-failure settlement**, but not the
+named-lock release layer. Two narrow, purpose-built entry points are therefore
+defined rather than one wide helper:
+
+```text
+assertMySqlTransactionAdmission(db)         -> void (throws MYSQL_TRANSACTION_ADMISSION_REFUSED)
+settleFailedTransactionStart(db, error)      -> result   (no named-lock release)
+releaseMySqlIdempotencyLocks(db, options)   -> result   (§37.31.5.3)
+```
+
+`settleFailedTransactionStart()` performs **no** named-lock release: any lock
+already registered belongs to an enclosing operation and must not be released
+by a read helper. If a read-transaction startup failure leaves the session
+uncertain, the adapter is quarantined, and the enclosing operation's later
+`transaction()` then fails at the admission gate — which is the correct
+fail-closed outcome.
+
+#### 37.31.7.2 The read-transaction safety boundary
+
+| Requirement | Contract |
+|---|---|
+| Known pre-BEGIN ownership | The same admission gate (§37.31.3.3). A read transaction may not start while a transaction is open. |
+| Safe startup-failure handling | `db.exec('BEGIN')` is wrapped in the startup boundary. On failure: no COMMIT, no ROLLBACK of anything (this attempt owns nothing), and the session is settled per §37.31.3.2. |
+| No rollback of a foreign transaction | The startup-failure path never issues ROLLBACK at all. |
+| Quarantine when the session outcome is unknown | A definite server-side rejection leaves the session `IDLE_TRUSTED` and reusable. A timeout or a session loss leaves it `UNCERTAIN` → quarantine + bounded teardown. |
+| No further reads through a quarantined adapter | The quarantine blocks every subsequent request, including reads. |
+| L0 shared-lock behaviour preserved | `SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 LOCK IN SHARE MODE` is unchanged and still taken inside the read transaction. |
+| READ COMMITTED assumptions preserved | No isolation configuration is touched; `SESSION_ISOLATION_LEVEL = 'READ COMMITTED'` is unchanged. |
+| `readTransaction()` return semantics preserved | The work's return value is returned unchanged; `COMMIT` still precedes the response. |
+| SQLite preserved | The SQLite path keeps its literal `db.exec('BEGIN')`. |
+| No new nested transaction support | The gate refuses a nested read transaction; it does not enable one. |
+
+**Read isolation is not redesigned.** The only change is that the BEGIN sits
+inside a startup boundary and is preceded by the admission gate.
+
+### 37.31.8 R6 — Adapter / Worker quarantine and teardown contract
+
+`server/database/mysql-worker-protocol.js` is **not** modified. No unavoidable
+contract gap exists: the generation-scoped late-response discard (F12) already
+prevents an abandoned request from publishing trusted state, and the residual
+Worker's non-generation-scoped `inTransaction` flag (F13) is neutralised by
+terminating the Worker on the timeout path. The O3 residual is recorded in
+§37.31.14.
+
+#### 37.31.8.1 `server/database/mysql-worker.js` — the response contract
+
+The Worker is the authoritative owner of the connection, so it is the
+authoritative source of the classification signals. Three additions to the
+response payload:
+
+| Addition | Value | Why |
+|---|---|---|
+| `classification` | `'BEGIN' \| 'COMMIT' \| 'ROLLBACK' \| 'OTHER'` | The existing canonical `classifyExecStatement()` (F15) becomes the single classifier for both processes. It is reported on **both** the success payload and the error payload for an `exec` action, so the parent can classify a failure. |
+| `sessionLost` | `true` when the Worker discarded the session | The canonical recoverable-connection decision (F14) is communicated rather than re-derived. C1 forbids a second classifier. |
+| `sessionEpoch` | monotonic counter, incremented on every new connection | Proves session identity for the release verification (§37.31.5.2). It is a **local** counter incremented by the Worker that owns the connection — no server-variable probe (C1). |
+
+`serializableError()` is extended to carry `classification` and `sessionLost`.
+No SQL text, parameter, credential or stack is added.
+
+#### 37.31.8.2 `server/database/mysql-adapter.js` — the minimum technical changes
+
+| Addition | Responsibility |
+|---|---|
+| `sessionState` | The Layer-1 session state of §37.31.3.1. **Additive**: `db.isTransaction` remains the canonical mirror (C5) and is not replaced. |
+| `sessionEpoch` | The last epoch observed in a Worker response. |
+| `quarantine(reason)` | Synchronous: marks the adapter unusable, starts `worker.terminate()`, records `quarantineState`. Never performs a blocking Worker round-trip. |
+| `quarantineState` | `{ reason, at, state: 'TERMINATION_PENDING' \| 'TERMINATION_CONFIRMED' \| 'TERMINATION_FAILED', termination: Promise }`. |
+| Timeout marker | The timeout error carries a machine-readable marker so the caller classifies "the Worker may still be executing" without matching an English message. The marker is **not** the error's `code`, so the HTTP contract is unchanged. |
+| Unusable-adapter rejection | Every request on a quarantined adapter is rejected with the stable code `MYSQL_SESSION_QUARANTINED`. |
+| `exec()` state application | Applies the §37.31.3.2 transitions using the Worker-reported classification. The parent's ad-hoc `normalized === ...` comparison is **removed**, so there is exactly one classifier. |
+| `admissionRefusalCount` | A counter of refused admissions, asserted to be zero by the acceptance suite. |
+| `close()` | **Unchanged.** `quarantine()` sets the same unusable flag `close()` already tests, so a quarantined adapter never attempts the blocking `'close'` round-trip, and the Worker is already terminated. |
+
+#### 37.31.8.3 The ten R6 behaviours
+
+1. **Machine-readable request-timeout classification.** The timeout error
+   carries a dedicated marker. It is distinct from a definite Worker error and
+   from a session loss.
+2. **Machine-readable recoverable session-loss classification.** The Worker
+   reports `sessionLost` on the error it sends after discarding the session.
+3. **Immediate synchronous quarantine state.** `quarantine()` marks the adapter
+   unusable before it returns, so no application operation can interleave.
+4. **Guaranteed rejection of further SQL.** Every subsequent request on the
+   adapter throws `MYSQL_SESSION_QUARANTINED`; the Worker receives no further
+   message, so `ensureConnection()` is never reached and no reconnect occurs.
+5. **Suppression of unsafe reconnect/retry paths.** The quarantine blocks the
+   Worker's lazy reconnect. The `readOnly`-retry path in the Worker's `query`
+   handler (which replays a read once after a recoverable error) is not
+   reachable after a quarantine because no request is dispatched. The adapter's
+   `exec()` path never auto-retries.
+6. **Bounded Worker teardown initiation.** `worker.terminate()` is initiated
+   synchronously and does not wait on a Worker round-trip.
+7. **PENDING / CONFIRMED / FAILED teardown status.** `worker.terminate()`
+   resolves with the exit code; the adapter records
+   `TERMINATION_CONFIRMED`. A rejection records `TERMINATION_FAILED`. While
+   pending, `quarantineState.state === 'TERMINATION_PENDING'`.
+8. **Late Worker results.** A late `exec` completion for an abandoned
+   generation is discarded by the protocol's CAS (F12). The Worker's internal
+   `inTransaction` flag is set before that CAS (F13), but the Worker is being
+   terminated, so it can neither be observed by a later request nor act on the
+   session. The design does **not** assume that discarding a response cancels
+   the underlying MySQL statement — the statement may still complete on a
+   session that is about to be destroyed, which is exactly why the session is
+   destroyed rather than reused.
+9. **When termination does not prove server-side session destruction.** The
+   adapter reports the truth: `TERMINATION_CONFIRMED` proves the Worker thread
+   exited and its socket was closed; it does **not** prove the server has
+   already reaped the session and released the named lock. The safety
+   invariant is stated over **reusable** connections, so an abandoned session
+   that the server has not yet reaped does not violate it. The design never
+   describes quarantine or termination as proof of server-side lock release.
+10. **Safe non-sensitive diagnostics.** Structured log events carry the
+    reason, the outcome taxonomy, the lock count and the teardown state. They
+    never carry SQL text, bind parameters, credentials, the idempotency key or
+    the full lock names.
+
+**No uncertain operation is silently converted into a retried write.** An
+uncertain COMMIT (timeout) yields `UNCERTAIN` → quarantine; the business
+result is *not* re-executed, and the caller receives the original error.
+
+### 37.31.9 R7 — Protected real-MySQL test registration
+
+#### 37.31.9.1 The conflict this resolves
+
+§37.30.10 proposed registering `server/mysql-transaction-start-safety.integration.js`
+in the **HEAVY** suite. HEAVY is executed by `pnpm test:heavy` =
+`node scripts/testing/run-tests.js heavy`, an **unconditional** command
+(F20). `document.md §5.4.2` R7 forbids exactly that for a real-MySQL
+integration test. **That proposal is withdrawn.** This section is the only
+authoritative registration plan; §37.30.10's HEAVY entry must not be
+implemented.
+
+#### 37.31.9.2 The two registrations
+
+```text
+PURE / FAKE-DATABASE
+  server/db-transaction-start-safety.test.js
+    -> scripts/testing/test-suites.js  FAST  and  FULL
+    -> no real MySQL, no temp SQLite, no HTTP boot -> FAST-eligible
+    -> follows the existing pure-suite precedent
+       (server/sales-gate-retry-admission.test.js)
+
+REAL MySQL
+  server/mysql-transaction-start-safety.integration.js
+    -> scripts/gates/mysql-sales-wave7-gate-a.mjs   as suite label 'A-TXLIFE'
+    -> NOT registered in FAST, FULL or HEAVY
+    -> NOT reachable from `pnpm test:heavy`
+    -> .integration.js is outside the ordinary classification manifest by
+       existing rule (F20), so no bookkeeping entry is added
+```
+
+#### 37.31.9.3 The Gate A runner changes
+
+`scripts/gates/mysql-sales-wave7-gate-a.mjs` gains exactly one suite entry and
+nothing else changes:
+
+```text
+suites = [
+  { label: 'A-PARITY', file: 'server/mysql-sales-customer-wave7.integration.js' },
+  { label: 'A-PROD',  file: 'server/mysql-sales-customer-wave7-concurrency.integration.js' },
+  { label: 'A-RAW',   file: 'server/mysql-sales-customer-wave7-raw-locks.integration.js' },
+  { label: 'A-TXLIFE', file: 'server/mysql-transaction-start-safety.integration.js' },
+]
+```
+
+The three approved suites' entries, their business coverage, their order and
+their reset behaviour are **unchanged**.
+
+| Requirement | How the existing runner already satisfies it | Change needed |
+|---|---|---|
+| Exact disposable-target guard | `assertAuthorizedDisposableMySqlTarget(resetConfig)` runs before any connection is opened (`:31-33`) | none |
+| Explicit authorization | The guard requires all three flags; a pre-existing environment flag is not authorization (C6) | none |
+| Accurate suite naming | Each suite carries a distinct label | new label `A-TXLIFE` |
+| Strict TAP PASS/FAIL enforcement | `parseTapSummary` + `assertTapSummaryStrict` per suite (`:86-87`) | none |
+| Failure propagation | Non-zero exit aborts the campaign immediately; no later suite runs (`:82-85`) | none |
+| Authorized reset / cleanup | `resetMySql(label)` runs before each suite and asserts zero remaining tables (`:49-60`) | none |
+| No automatic rerun | The runner executes each suite exactly once and exits on the first failure | none |
+| Gate B `BLOCKED_BY_WAVE10` preservation | The M1-M25 status board is untouched (`:95-102`) | none |
+
+#### 37.31.9.4 Execution order
+
+**`A-TXLIFE` runs LAST**, after A-PARITY, A-PROD and A-RAW.
+
+Rationale: the runner is fail-fast. If `A-TXLIFE` ran first and failed, the
+three approved business-coverage suites would never run and their evidence
+would be lost. Running the new safety suite last means the approved coverage
+evidence is produced first and is never contingent on the new suite, while the
+new suite still runs against a freshly reset target (the runner resets before
+every suite). The new suite is independent of the other three's state.
+
+#### 37.31.9.5 The fail-closed module-load contract (C6)
+
+`server/mysql-transaction-start-safety.integration.js` must **throw at module
+load** — producing a non-zero exit with an UNAVAILABLE diagnostic — when the
+MySQL environment is incomplete or the disposable-target guard is not armed.
+It must never skip to a PASS. It must assert `db.dialect === 'mysql'` in its
+setup, exactly like the established Wave 7 and Wave 9 protected-suite pattern.
+
+#### 37.31.9.6 The bounded runner-contract test change
+
+`scripts/mysql-sales-wave7-gate-a-runner.test.js:17-25` currently asserts the
+manifest contains **exactly** the three approved files (F19). Adding
+`A-TXLIFE` would fail that assertion. The test must be updated — narrowly:
+
+- the assertion keeps requiring that A-PARITY, A-PROD and A-RAW are present
+  with their **exact existing file paths**, in that relative order;
+- it additionally requires the exact `A-TXLIFE` entry with its exact file
+  path, and requires it to be **last**;
+- it continues to assert that the runner does not reference the legacy
+  `mysql-gate.mjs` / `mysql-concurrency-gate.mjs`;
+- it continues to assert the guard-before-reset-before-connection ordering and
+  the strict TAP assertion;
+- it continues to assert the `BLOCKED_BY_WAVE10` entries.
+
+This is a **registration-contract** change only. It changes no business
+coverage and no suite behaviour.
+
+#### 37.31.9.7 A pre-existing runner weakness, recorded not fixed
+
+The Gate A runner's M1-M25 status board (`:95-102`) is a **static array**: it
+prints `PASS` for every listed case regardless of the actual suite results.
+That is a pre-existing property of the approved runner and is **not** changed
+by this amendment, because changing it would alter the approved Gate A
+evidence contract. It is recorded as an open item in §37.31.14.
+
+### 37.31.10 Final implementation manifest
+
+**ONE** authoritative production manifest. No competing manifest survives
+(§37.31.2).
+
+**Production files (4):**
+
+| # | File | Change | Requirement |
+|---|---|---|---|
+| P1 | `server/db.js` | Admission gate; rollback settlement gate; the one authoritative release-verification helper; quarantine invocation; restructuring of `transaction()` and `readTransaction()`; export of the helper for Finance | R1, R2, R3, R5 |
+| P2 | `server/database/mysql-adapter.js` | `sessionState`, `sessionEpoch`, `quarantine()`, `quarantineState`, timeout marker, unusable-adapter rejection, `exec()` state application, `admissionRefusalCount` | R6 |
+| P3 | `server/database/mysql-worker.js` | Response contract: `classification`, `sessionLost`, `sessionEpoch` | R6 |
+| P4 | `server/modules/financial-controls.js` | **Only** the `idempotencyReplay()` release handling, routed through the shared helper | R4 |
+
+**Unchanged by explicit decision:**
+
+- `server/database/mysql-worker-protocol.js` — no unavoidable contract gap is
+  proven (F12). Recorded as an open residual in §37.31.14.
+- `server/modules/sales-prepayment-finance-adapter.js` — no Finance monetary
+  or Parent-lock change (R4 scope limit).
+- `server/app.js`, `server/lib/http.js`, `server/lib/audit.js` — no public
+  contract change.
+- No schema, no migration, no permission, no package-version change.
+
+**Test, fixture and runner files (6):**
+
+| # | File | Kind | Registration |
+|---|---|---|---|
+| T1 | `server/db-transaction-start-safety.test.js` | new, pure fault injection | `scripts/testing/test-suites.js` → **FAST** and **FULL** |
+| T2 | `server/mysql-transaction-start-safety.integration.js` | new, real MySQL | `scripts/gates/mysql-sales-wave7-gate-a.mjs` → `A-TXLIFE` only. **Not** in FAST/FULL/HEAVY |
+| T3 | `server/database/test-fixtures/delayed-exec-mysql-worker.js` | new Worker fixture (not a `*.test.js`, so no registry entry) | used by T1 |
+| T4 | `scripts/testing/test-suites.js` | modified — registry only | registers T1 |
+| T5 | `scripts/gates/mysql-sales-wave7-gate-a.mjs` | modified — one suite entry | registers T2 |
+| T6 | `scripts/mysql-sales-wave7-gate-a-runner.test.js` | modified — manifest assertion only | already in FAST + FULL |
+
+**Existing files that are regression-protected and NOT modified:**
+`server/v13-phase6a-financial-controls.test.js` (the M24 durable-state
+coverage for replay 200 / conflict 409 / zero duplicate effects),
+`server/sales-customer-wave7-functional.test.js`,
+`server/sales-customer-wave7-acceptance.test.js`,
+`server/sales-customer-wave8-*.test.js`,
+`server/mysql-adapter-timeout.test.js`,
+`server/mysql-disposable-target-guard.test.js`, and the A-PARITY / A-PROD /
+A-RAW fixtures.
+
+**Conditional documentation follow-up (not a code file, requires separate
+authorization):** `README.md:344` currently describes `server/db.js` as
+"SQLite 基础 schema、seed、transaction 和数据库创建". After P1, `server/db.js`
+also owns the MySQL transaction admission gate and the named-lock release
+verification. A one-line owner correction would keep the 仓库地图 accurate.
+`README.md` must **not** gain a suite list or a test count (C10), and no new
+`pnpm` script is introduced, so no 常用命令 row is needed.
+
+**No additional production files are required.** The design deliberately avoids
+a new shared module: the Worker already owns the canonical exec classifier and
+the canonical recoverable-connection classifier, and the release-verification
+truth lives in `server/db.js` where the transaction lifecycle already lives.
+Adding a new module file would also require a README owner entry (C11) and
+would create a second place where transaction-state truth could diverge.
+
+### 37.31.11 Acceptance contract — pure fault injection (T1)
+
+T1 is registered in **FAST** and **FULL** and uses only fake databases and the
+controllable Worker fixture T3. It proves **logic and control flow**. It does
+**not** prove InnoDB behaviour, server-side lock release or real contention.
+
+| # | Case | Assertion | Mechanism |
+|---|---|---|---|
+| A1 | Normal BEGIN | `BEGIN` is issued; the L0 gate follows; the work runs; `COMMIT` follows | fake MySQL db |
+| A2 | Foreign / pre-existing transaction admission refusal | with session state `ACTIVE`, **no** `BEGIN` is issued, the adapter is quarantined, and the raised error carries `MYSQL_TRANSACTION_ADMISSION_REFUSED` | fake db + adapter state |
+| A3 | BEGIN known failure | the original BEGIN error propagates unchanged; no COMMIT and no ROLLBACK are issued | fake db throwing on BEGIN |
+| A4 | BEGIN timeout | the timeout error propagates unchanged; **no SQL is issued on the adapter after the timeout**; the adapter is quarantined | controllable Worker |
+| A5 | Owned `GET_LOCK` at startup failure | the registered lock is released and confirmed, or the adapter is quarantined with the registry entry retained | fake db with a seeded registry |
+| A6 | Verified release result `1` | outcome `VERIFIED_RELEASED`; the registry entry is removed; the adapter is **not** quarantined | fake db answering `released: 1` |
+| A7 | Unverified release `0` / `NULL` | outcome `NOT_VERIFIED`; the adapter is quarantined; the registry entry is retained | fake db answering `0` and `null` |
+| A8 | `RELEASE_LOCK` exception | outcome `NOT_VERIFIED`; quarantine; registry retained | fake db throwing |
+| A9 | Normal COMMIT and verified release | the emitted sequence is `BEGIN` → L0 gate → work → `COMMIT` → verified release; the result is returned | fake db |
+| A10 | COMMIT success followed by cleanup failure | the **committed success is returned** (201 / 200 shape preserved); the adapter is quarantined; no retry of the operation occurs | fake db |
+| A11 | Normal rollback and valid retry | a retryable business error triggers exactly one ROLLBACK; on an acknowledged rollback the retry proceeds and BEGIN is issued again; the attempt budget is respected | fake db |
+| A12 | Rollback failure with **zero** further BEGIN attempts | the rollback fails; **no further `BEGIN` is issued**; the adapter is quarantined; the primary business error propagates unchanged; `transactionRetryExhausted` is **not** set | fake db |
+| A13 | Read-transaction startup failure | `readTransaction()`'s BEGIN failure propagates unchanged; no ROLLBACK of a foreign transaction; the adapter is quarantined when the outcome is unknown; no named lock is released by the read path | fake db |
+| A14 | Replay hit / lookup exception / fingerprint conflict | the shared helper is used; verified → the registry entry is removed; unverified → quarantine; the 200 / original exception / 409 are each preserved unchanged | fake db + `idempotencyReplay` |
+| A15 | Worker late completion | the late completion is discarded; the adapter's `isTransaction` is not flipped by the abandoned generation | controllable Worker |
+| A16 | Quarantined adapter rejects SQL | every subsequent request throws `MYSQL_SESSION_QUARANTINED`; no SQL reaches the Worker | controllable Worker |
+| A17 | Bounded teardown states | `TERMINATION_PENDING` → `TERMINATION_CONFIRMED` (or `FAILED`), and the termination promise resolves | controllable Worker |
+| A18 | No unintended reconnect | after a quarantine the Worker receives no further message and the adapter never reconnects | controllable Worker |
+| A19 | Stable original error identity | the propagated error is the **same object instance** as the injected failure, for BEGIN failure, rollback failure, and the replay paths | fake db |
+| A20 | Session-epoch proof | a release attempted after the session epoch changed is classified `SESSION_REPLACED`, never `VERIFIED_RELEASED` | fake db with a forced epoch change |
+| A21 | Admission-refusal counter | `admissionRefusalCount === 0` across every covered production path | all existing suites |
+| A22 | Unchanged L0 and L1-L8 order | the L0 gate statement and its position are unchanged; the lock graph is unchanged | static source assertion |
+| A23 | Unchanged SQLite semantics | the SQLite path issues no release, no quarantine and no ROLLBACK on a BEGIN failure, and propagates the raw error | fake SQLite db |
+| A24 | A-E / F1 / F2 / M24 / M25 regression | the existing Wave 7 functional, acceptance, Finance and M24/M25 suites stay green | existing suites, unchanged |
+
+### 37.31.12 Acceptance contract — protected real MySQL (A-TXLIFE)
+
+T2 runs **only** through the protected Gate A runner, under a fresh explicit
+exact-target authorization. It proves **real-session** behaviour that pure
+fault injection cannot. It is not reachable from `pnpm test:heavy`.
+
+| # | Case | Assertion | Evidence class |
+|---|---|---|---|
+| M1 | A real named lock is acquired and verified released | `GET_LOCK` returns `1`; after the cleanup, an independent session observes `IS_FREE_LOCK` / `IS_USED_LOCK` showing the lock is no longer held | real InnoDB / server lock state |
+| M2 | Session destruction releases the server-side lock | after a quarantine and a confirmed termination, an independent session observes the lock released and the abandoned session gone from `information_schema.PROCESSLIST` | real server state (C7) |
+| M3 | A quarantined adapter rejects further SQL | a business statement on the quarantined adapter fails and no new session appears in `PROCESSLIST` | real session list |
+| M4 | No leaked Worker connection | the suite ends with a `PROCESSLIST` proof that no adapter connection remains | real session list (C7) |
+| M5 | Rollback failure under real contention | a real lock-wait contention that fails the rollback leaves no further transaction attempt and no open transaction on the reused session | real InnoDB |
+| M6 | The L0 gate and L1-L8 order are unchanged under real MySQL | the existing A-PARITY / A-PROD / A-RAW fixtures are unchanged and still pass; the new suite does not alter the gate behaviour | real InnoDB |
+| M7 | No duplicate monetary facts after the cleanup paths | the refund / voucher / movement / audit / idempotency counts are unchanged by every failure path | real durable state |
+| M8 | Exact replay `200` and fingerprint conflict `409` against real MySQL | the real HTTP entry returns `200` with `replayed:true` for an exact replay and `409` for a conflicting fingerprint | real HTTP + real MySQL |
+
+**Every real-MySQL test requires a fresh explicit exact-target authorization.**
+No real-MySQL execution is authorized by this Design.
+
+**Evidence stratification.** Pure fault-injection results (T1) and real
+InnoDB results (A-TXLIFE) must be reported separately and never merged, in
+the same discipline as §37.10's layers A-H. A pure result never proves a
+server-side fact, and a real result never substitutes for the pure control-flow
+coverage.
+
+### 37.31.13 Compatibility with §37.30 and the frozen contracts
+
+| Frozen contract | Disposition |
+|---|---|
+| MySQL L0 transaction gate | unchanged; the admission gate takes no lock and adds no round trip |
+| L1-L8 business lock order | unchanged |
+| Existing Finance monetary authority | unchanged; no Finance calculation is touched |
+| Existing valid retry semantics | unchanged, except that a retry now additionally requires a proven-safe connection state (§37.31.4) |
+| Existing idempotency behaviour | unchanged; scope, fingerprint and replay semantics are identical |
+| SQLite behaviour | unchanged; the admission gate is MySQL-only by design |
+| MySQL READ COMMITTED isolation | unchanged; no isolation configuration is touched |
+| Existing Wave 7 Gate A cases | unchanged; A-PARITY / A-PROD / A-RAW entries, coverage and order are untouched |
+| Gate B / Wave 10 boundary | unchanged; the M1-M25 board is untouched and Gate B stays `BLOCKED_BY_WAVE10` |
+| Existing schema and migrations | unchanged |
+| §37.20 combined retry budget | preserved, except that its "inner retry re-executes `work()` only AFTER `db.exec('ROLLBACK')`" guarantee is now **enforced** rather than assumed (§37.31.4.1, F5) |
+| §37.24 retry budget | preserved; no hard wall-clock bound is restated (C2) |
+| §37.28 F1 public exhaustion contract | preserved; `503 SALES_PREPAYMENT_GATE_RETRY_EXHAUSTED` and its details are unchanged. A refused admission and a failed rollback are **not** converted into that contract, because that contract is reserved for the outer rediscovery budget |
+| §37.29 F2 admission budget | unchanged and still **not implemented** (C11) |
+| §37.30 | superseded only as listed in §37.31.2; everything else remains in force |
+| Business HTTP contracts | unchanged. No new status, body field, header or endpoint. The two new stable code values ride the existing generic 500 contract |
+| C9 canonical write order | unchanged |
+
+### 37.31.14 Items requiring external approval before implementation
+
+These are the only points where this Design makes a judgement that the user has
+not already approved. Each is narrow and explicitly flagged; none is silently
+resolved.
+
+| # | Item | Why it needs approval |
+|---|---|---|
+| **AP1** | Two new stable **code values** — `MYSQL_TRANSACTION_ADMISSION_REFUSED` and `MYSQL_SESSION_QUARANTINED` — become client-visible through the **existing** generic 500 contract (`safe.code = String(error.code)`). No new status, body shape, field or endpoint is introduced. | A new client-visible code value is a small public-contract addition. `document.md §5.4.2` R3 says not to introduce a new public error contract without explicit design approval. The alternative — reusing `INTERNAL_ERROR` — would leave operators unable to distinguish an infrastructure refusal from any other 500. |
+| **AP2** | The **admission refusal** is a hard failure. If any production path were found to call `transaction()` while a transaction is open, it would now fail loudly instead of implicitly committing the outer transaction. | The refusal is the correct fail-closed behaviour, but it converts a latent silent-corruption defect into a visible error. The detection mechanism (the existing suites plus `admissionRefusalCount === 0`) is specified, but the user should accept the possibility of a surfaced latent defect during implementation. |
+| **AP3** | The **normal-path release correction** (§37.30.12.2) is now folded into the single cleanup contract and therefore changes the post-COMMIT behaviour when a release cannot be verified: the adapter is quarantined while the committed success is still returned. | The user approved this correction "in principle". This amendment specifies its exact behaviour for the first time. |
+| **AP4** | A **quarantined adapter is terminal** for that instance; there is no automatic re-establishment. A process-level MySQL re-establishment policy is not designed here (the §37.30 O5 residual). | The operational consequence — the process cannot serve further MySQL business SQL until it is re-established — is a deliberate fail-closed choice. |
+| **AP5** | A one-line **`README.md:344`** owner correction for `server/db.js` is a documentation follow-up. `README.md` is not modified in this stage. | `README.md` is listed as protected in this stage's scope. |
+| **AP6** | The Gate A runner's **static M1-M25 status board** remains a static array and is not corrected. | Correcting it would alter the approved Gate A evidence contract, which this amendment is forbidden to change. It is recorded, not fixed. |
+
+### 37.31.15 Residual open items (recorded, not silently absorbed)
+
+| # | Item | Status |
+|---|---|---|
+| R1 | The Worker's internal `inTransaction` flag is not generation-scoped (F13). | Neutralised on the timeout path by quarantine plus termination. `mysql-worker-protocol.js` remains unchanged. A future protocol-level improvement may be raised as a separate Requirement. |
+| R2 | The server-side session teardown window between Worker exit and the server's session reap is not observable from the parent. | Accepted. The safety invariant is stated over reusable connections. The A-TXLIFE M2 case asserts the end state. |
+| R3 | The Gate A runner's static M1-M25 board (AP6). | Recorded, not fixed. |
+| R4 | The quarantined adapter's re-establishment policy (AP4). | Deferred to a separate Requirement. |
+
+### 37.31.16 Boundary and status
+
+This section is a Design deliverable only. No production source, test, schema,
+migration, `document.md`, `README.md`, `package.json`, database state or Git
+history is changed by it. No MySQL connection, Gate execution, reset, DROP,
+schema recreation, destructive operation, release or deployment is authorized.
+Gate A remains blocked, retest #2 remains unexecuted, Gate A is not declared
+PASS, Wave 7 is not frozen, and Wave 10 remains blocked. No acceptance or
+freeze is declared.
+
+**Status: `TRANSACTION_LIFECYCLE_FINAL_DESIGN_READY_FOR_APPROVAL`.**
+
+---
+
+## 37.32 F2 Implementation-Status Factual Clarification (2026-10-24)
+
+### 37.32.0 Scope
+
+This is a **factual correction only**. It does not modify `§37.0–§37.31`, does
+not reopen, redesign or reimplement F2, and changes no Requirement, Design,
+implementation, test or acceptance contract.
+
+### 37.32.1 The correction
+
+`§37.31.0` constraint **C11** and `§37.31.13` state that F2 elapsed-time
+admission control is "not implemented", citing `log/2026-10-23.md` L1216,
+L1255 and L1296. **That statement is factually incorrect as of 2026-10-24.**
+
+F2 **is** implemented. Verified against the local working tree:
+
+- `server/modules/sales-gate-retry-admission.js` exists and exports
+  `parseGateAttemptsBudgetMs()` (the configuration parser: a canonical
+  positive decimal, accepted range 1000–60000 ms, default otherwise),
+  `startGateRetryAdmission()` (the monotonic `process.hrtime.bigint()` clock)
+  and `isGateRetryAdmissionExpired()` (the deadline comparison).
+- The default budget is `DEFAULT_GATE_ATTEMPTS_BUDGET_MS = 15_000`.
+- All five approved endpoints integrate it:
+
+  | Endpoint | Integration site | Deadline cause |
+  |---|---|---|
+  | Manual Gate | `server/app.js:5767` | `causeCode` |
+  | Sales Order Submit | `server/modules/sales-orders.js:689` | `causeCode` |
+  | Manual Prepayment Evaluation | `server/modules/sales-prepayment-gate.js:452` | `cause` |
+  | Reservation Intent | `server/modules/sales-reservation-intent.js:342` | `causeCode` |
+  | Service Confirm | `server/modules/service-fulfillment.js:210` | `causeCode` |
+
+- `server/sales-gate-retry-admission.test.js` provides the deterministic
+  coverage and is registered in both FULL and FAST.
+- `log/2026-10-24.md` (the "F2 retry-admission budget bounded implementation"
+  entry) records the bounded F2 implementation.
+
+The cited 2026-10-23 lines were accurate **on 2026-10-23**, when F2 was still
+designed but not implemented. The F2 implementation landed later and was
+recorded in the 2026-10-24 log. The §37.31 statement inherited the older,
+already-stale wording without re-verifying it against the current source.
+
+### 37.32.2 Effect on the Transaction Lifecycle Safety work
+
+- This Hotfix **does not reopen, redesign, reimplement or re-test F2**. No F2
+  file, constant, endpoint integration or test is modified.
+- The correction changes **no behaviour**. No §37.31 design decision depended
+  on F2 being absent; the only F2-dependent statements in §37.31 are the two
+  factual ones corrected here.
+- `§37.31.13`'s "§37.29/F2 unchanged and still not implemented (C11)" must be
+  read as "§37.29/F2 unchanged (C11)". The implementation-status clause was
+  wrong; the "unchanged" clause was and remains right.
+- The remaining C11 obligations are unaffected and still binding: A-RAW,
+  A-PROD and the MySQL safety guards remain recorded as **pending**; F2 must
+  not be presented as discharging them; and no hard wall-clock execution
+  bound is claimed anywhere in this design.
+
+### 37.32.3 Boundary and status
+
+No production source, test, schema, migration, `document.md`, `README.md`,
+`package.json`, database state or Git history is changed by this clarification.
+No MySQL connection, Gate execution, reset or destructive operation is
+authorized by it.
+
+**Status: `F2_IMPLEMENTATION_STATUS_CLARIFIED`.**
+
+---
+
+## 37.33 Gate A Final Acceptance and Freeze Record (2026-10-24)
+
+### 37.33.0 Scope
+
+This is an Acceptance/Freeze record only. It does not modify `§37.0–§37.32`, does not
+reopen, redesign or reimplement any Design element, and changes no Requirement, production
+source, test, schema, migration, `package.json`, database state or Git history. No MySQL
+connection, Gate execution, reset or destructive operation was performed in this stage.
+
+### 37.33.1 Accepted evidence
+
+The user accepted `GATE_A_MYSQL_CAMPAIGN_PASS` on the basis of the single authorized
+execution of `pnpm test:mysql` against
+`mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`
+(server UUID `5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`, MySQL 8.0.37):
+
+```text
+A-PARITY   server/mysql-sales-customer-wave7.integration.js                 4 / 4 PASS
+A-PROD     server/mysql-sales-customer-wave7-concurrency.integration.js     6 / 6 PASS
+A-RAW      server/mysql-sales-customer-wave7-raw-locks.integration.js       4 / 4 PASS
+A-TXLIFE   server/mysql-transaction-start-safety.integration.js             8 / 8 PASS
+TAP fail / skipped / cancelled / todo                                     0 / 0 / 0 / 0
+GATE A MYSQL CAMPAIGN                                                            PASS
+```
+
+The runner's own M1–M25 board reports `PASS` for M1–M8, M13, M14, M16–M18, M19-GRNR and
+M20–M25, and `BLOCKED_BY_WAVE10` for M9, M10, M11, M12, M15 and M19-CREDIT. The bounded
+runner, its suite order (A-PARITY → A-PROD → A-RAW → A-TXLIFE), the strict TAP assertion,
+the fail-fast behavior, the per-suite reset and the final cleanup check are unchanged.
+
+### 37.33.2 The A-TXLIFE acceptance contract is discharged
+
+`§37.31.12` defined the A-TXLIFE acceptance contract as pending real-MySQL evidence. That
+evidence now exists:
+
+| Case | Accepted real-server evidence |
+|---|---|
+| M1 | A named lock acquired on the primary session is released server-side; an independent observer confirms no owner remains and the verified release contract reports one confirmed and zero unverified releases. |
+| M2 | Session destruction releases the server-side lock and retires the session; the observer confirms the lock is free and the session is gone from `information_schema.PROCESSLIST`. |
+| M3 | A quarantined adapter rejects further SQL with `MYSQL_SESSION_QUARANTINED`, and the post-teardown session-identity set equals the original set minus exactly the quarantined victim. |
+| M4 | No adapter connection is left behind beyond the intentionally live primary and the observer. |
+| M5 | A contended transaction leaves no open transaction and no further attempt. |
+| M6 | The L0 transaction gate row and the production transaction path are unchanged. |
+| M7 | The cleanup paths leave zero duplicate durable facts. |
+| M8 | The production `transaction()` lifecycle releases the replay-miss named lock, and both the exact-replay and fingerprint-conflict reacquired locks are released; each release is proved by an independent observer. |
+
+`§37.31.15` R2 is accepted as stated: the server-side session teardown window is not
+observable from the parent, and the M2 case asserts the end state.
+
+### 37.33.3 Preserved open dependencies
+
+- Gate B remains `BLOCKED_BY_WAVE10` (`B-COMPOSE`, `B-M9`, `B-M10`, `B-M11`, `B-M12`,
+  `B-M15`, `B-M19C`) and is not discharged, weakened or deferred. Wave 10 and Wave 11 are
+  not started.
+- `§37.31.15` R1–R4 remain open and unchanged.
+- The remaining W7-C1 / W7-C2′ follow-up work is not declared complete. Gate B acceptance
+  must still be completed and separately authorized.
+- The broad global administrative grant on the disposable test account remains a disclosed
+  operational risk.
+
+### 37.33.4 Boundary and status
+
+The freeze is limited to the accepted Gate A campaign boundary described in `document.md`
+"Gate A Final Acceptance and Freeze Record (2026-10-24)". It is not a Git commit, tag,
+release, deployment, migration or version change; Git closure remains pending separate user
+authorization. Wave 10 remains blocked.
+
+**Status: `GATE_A_FINAL_ACCEPTANCE_PASS — FROZEN`.**
+
+---
+
+## 37.34 Wave 10 Precondition, Gate B Downstream Contract and §1–#15 Design Status (2026-10-24)
+
+### 37.34.0 Scope and authorization
+
+This is a **bounded status, dependency and acceptance design**. It does not rewrite `§36`, does not
+restate or re-decide the Credit Check business specification, does not introduce a new Credit
+business rule, and does not modify `§37.0–§37.33`, the frozen Gate A record, the Wave 9 freeze
+record, the Stage B closure or any `log/` entry.
+
+Authorization: one Requirement stage followed by this Design stage, under the amended
+`AGENTS.md §4.0` consecutive-stage authorization. The Requirement deliverable is
+`document.md` "Wave 10 Precondition Requirement Reconciliation (2026-10-24)". **This Design ends in
+a HARD STOP before Implementation** (`AGENTS.md §4.0`, `§4.3`).
+
+Nothing in this section is an implementation. No production source, test, schema, migration,
+permission, frontend file or `package.json` is changed by it.
+
+### 37.34.1 Canonical state and dependency direction
+
+The Wave 10 → Gate B → Wave 11 sequence is a **one-way state machine**. Each transition has exactly
+one predecessor, and no state may be entered by skipping a predecessor.
+
+```text
+  [Gate A Final Acceptance + Freeze]      DONE  (2026-10-24, GATE_A_FINAL_ACCEPTANCE_PASS — FROZEN)
+            |
+            v
+  WAVE10_NOT_STARTED                      current
+            |  (explicit user Implementation authorization)
+            v
+  WAVE10_IMPLEMENTATION_AUTHORIZED
+            |  (production implementation + its own acceptance)
+            v
+  WAVE10_IMPLEMENTED_PENDING_ACCEPTANCE
+            |  (explicit user Wave 10 Final Acceptance)
+            v
+  WAVE10_FINAL_ACCEPTANCE_PASS — FROZEN
+            |
+            v
+  GATE_B_BLOCKED_BY_WAVE10                (released only by the state above)
+            |  (Gate B runner executed against real Wave 10 code)
+            v
+  GATE_B_EXECUTED_PENDING_USER_ACCEPTANCE
+            |  (explicit user Gate B Final Acceptance)
+            v
+  GATE_B_FINAL_ACCEPTANCE_PASS — FROZEN
+            |
+            v
+  WAVE11_ELIGIBLE
+```
+
+Four invariants bind this machine:
+
+- **I-A — Gate A is frozen and unchanged.** `§37.33` and `document.md` "Gate A Final Acceptance and
+  Freeze Record (2026-10-24)" §1–§5 remain in force. This section does not reopen Gate A, does not
+  alter its runner, its suite manifest, its suite order, its strict TAP / fail-fast / per-suite
+  cleanup rules, its target-identity guard, the canonical named-lock release contract, the MySQL
+  `READ COMMITTED` session isolation, the L0 / L1–L8 lock order or its M1–M25 board.
+- **I-B — Gate B is never a prerequisite for Wave 10.** `§37.18`, `§37.26` and the Gate A Freeze
+  Record §4 already establish this. `WAVE10_NOT_STARTED → WAVE10_IMPLEMENTATION_AUTHORIZED`
+  requires **only** an explicit user Implementation authorization. No further technical gate is
+  inserted between them.
+- **I-C — Gate B is discharged only by real Wave 10 code.** A Gate B case may be reported `PASS`
+  only when it executed against the Wave 10 production implementation. `BLOCKED_BY_WAVE10` is not
+  `PASS`; a skipped case is not `PASS`; a case verified by inspection is not `PASS`; `NOT_RUN` is
+  not `PASS`.
+- **I-D — No Gate B-0.** No preparatory, dry-run, stub, simulated or "credit-free" Gate B variant
+  may be created to bypass the sequence, and no gate may be renamed or split to pre-empt Wave 10.
+  Gate B is a single downstream gate over one fixed case set (§37.34.4).
+
+`WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` is, per `§37.18.1` and `§37.26`, satisfied only by
+Gate A passing **plus** explicit user Final Acceptance. Both occurred on 2026-10-24. The label is
+therefore **a satisfied historical entry condition, not an active block**. It is retained as the
+identifier of the Wave 10 entry gate. Its appearance as "active and unchanged" in dated stage
+records is preserved history and is superseded for current status only by this section and by the
+Requirement record.
+
+### 37.34.2 Wave 10 entry gate and the boundaries it inherits
+
+**Entry gate.** Wave 10 Implementation may begin when, and only when, the user grants explicit
+Implementation authorization under `AGENTS.md §4.4`. At that point the following are in force and
+may not be renegotiated by the implementation:
+
+| Frozen input | Source |
+|---|---|
+| Wave 9 Credit Foundation (six tables, AP1–AP5, SC83–SC89, UAT-S-29/30) | `§36.16`, `document.md` Wave 9 Freeze Record |
+| Wave 7 Sales & Customer contracts and the W7-C1 / W7-C2′ boundaries | `§37.0`, `§37.29`, `§37.30`, `§37.31` |
+| MySQL L0 transaction gate | `§37.3` L0 row |
+| L1–L8 business lock order | `§37.3`, `§36.14.3` |
+| Canonical named-lock lifecycle and its single verified release contract | `§37.31.5` |
+| Finance monetary authority and post-lock re-read | `§37.6` |
+| Effective retry semantics and the retry-admission budget | `§37.8`, `§37.24`, `§37.29` |
+| Idempotency and replay contract | `§37.6`, `§37.12` |
+| SQLite compatibility behaviour | `§37.10` H, `§36.5` |
+| MySQL `READ COMMITTED` session isolation | `§37.17`, `§37.23` |
+| The frozen Gate A boundary | `§37.33` |
+
+**Prohibitions that bind the Wave 10 implementation.**
+
+- **P-1 — No engine pre-emption.** The Credit Check engine, `credit_check_results`,
+  `credit_special_approval` and the Credit Special Approval workflow belong to Wave 10. They must
+  not be implemented earlier under another wave name, and no partial engine may be introduced under
+  another wave's label to pre-satisfy Wave 10 scope.
+- **P-2 — No fixture-computed exposure.** The exposure used by the Credit Check must be the
+  production `evaluateCredit()` computation over authoritative Finance / Planning / Inventory
+  sources (`§36.3.2`, PURE_DERIVED). A test fixture that computes its own exposure to make a case
+  pass substitutes a fixture truth for the production truth and is not acceptable evidence for any
+  Wave 10 or Gate B claim. Fixtures may *seed* facts; they may not *decide* the business outcome.
+- **P-3 — No second anchor protocol, no second rating writer, no second effective-profile
+  resolver.** Wave 10 consumes `§36.4` anchor provisioning, `§36.7.1` rating ownership and
+  `§36.2.2` / `credit-profile.js` effective-date resolution as they exist.
+- **P-4 — No lock-order inversion.** The Credit Check takes no row lock on any Sales business row
+  (`§36.3.4.1` C-2) and no lock that would place Sales rows ahead of L2–L5 (`§36.14.3`).
+
+### 37.34.3 Wave 10 design traceability
+
+This section **reuses** the approved Credit design. It restates no business rule and introduces no
+new one.
+
+| Concern | Authoritative source (unchanged) |
+|---|---|
+| Wave 10 delivery scope | `§30.17` Wave 10 row — dependencies Wave 9; exactly 2 new tables; `evaluateCredit()` service; credit-special-approval workflow; credit-check evaluate surface; credit-special-approvals new route; new migration file; `UNIQUE (source_credit_check_result_id)`; UAT-S-31…33 and S14/S15/S16 |
+| The two Wave 10 tables | `§36.2.7` `credit_check_results` (A-54, plural canonical) and `§36.2.8` `credit_special_approval` (A-53); the deliberate absence of `special_approval_id` on the result row; `UNIQUE (source_credit_check_result_id)` as the structural P13 guarantee |
+| Credit Check lock order and calculation flow | `§36.3.4` steps 0–10 (anchor discovery → Finance PREPAYMENT parent `FOR UPDATE` first → POLICY_SCOPE `FOR SHARE` → AGGREGATE → SALESPERSON → profile rows → snapshot insert-only → rule rows → result insert → approval row → commit), and `§36.3.4.1` C-1 / C-2 / C-3 |
+| Special Approval contract | `§36.6.6` (and `§36.6.3` runtime sequence, `§36.6.4` decision semantics, `§36.6.5` error and conflict semantics) |
+| Capacity preconditions and Wave 10 races | `§36.8.1` (BOTH_FIT / ONLY_ONE_FITS / NEITHER_FITS) and `§36.8.3` W10-R1…W10-R12; `§36.8.5` common side-effect assertions |
+| Parent-independent acyclic order | `§36.14.3` L1…L8 with the acyclicity proof |
+| L1–L8 lock order and Wave 10 composition | `§37.3` — "the Credit Check executes strictly between L1 and L6, acquires anchors in L2/L3/L4 order and profiles/rules at L5, and performs no Sales or Finance business-row lock" |
+| Evidence classification | `§37.10` A–H, and the strict separation rule §37.10 E |
+| Gate B downstream contract | `§37.18` and `§37.18.2` |
+
+**Future Wave 10 implementation scope, by reference.** Wave 10 implements, under its own
+authorization and acceptance:
+
+- the two tables of `§36.2.7` and `§36.2.8` and their migration, with the `§36.5.5` read-only
+  `information_schema` contract assertions appended unconditionally after creation (I-1…I-5, I-7)
+  and with `§36.5.4` upgrade-path equivalence proven;
+- the `evaluateCredit()` production execution path of `§36.6.3`, including the runtime sequence
+  steps 1–10, the fail-closed behaviour at step 1, the idempotent `check_group` resolution at
+  step 2, the scope resolution of `§36.3.1`, the anchor provisioning of `§36.4` at step 4, the
+  lock chain of `§36.3.4` at step 5, the per-scope effective-profile resolution and exposure
+  computation at step 6, the snapshot write at step 7, the one-row-per-scope result write at
+  step 8, the audit rows at step 9, and the all-or-nothing commit at step 10;
+- PURE_DERIVED exposure computed from authoritative Finance / Planning / Inventory sources
+  (`§36.3.2`), with the `UNPROVEN_ATTRIBUTION` rule of W10-R10 honoured;
+- the Credit Special Approval workflow (`§36.6.6`) and its per-scope isolation guarantee;
+- the authorization integration into Sales Order Submit / Approve and Delivery Confirm, subject to
+  `§36.14.3` and `§36.3.4.1` C-2/C-3;
+- the corresponding API, UI surface, migration, audit rows, idempotency and replay behaviour,
+  transaction boundaries and concurrency tests, classified exactly as `§37.10` requires.
+
+No item above is designed here, and none is implemented by this section.
+
+### 37.34.4 Gate B independent acceptance design
+
+#### 37.34.4.1 Runner independence
+
+Gate B uses **its own** acceptance runner. It must not be carried by the Gate A runner file, and the
+Gate A runner, its manifest, its suite order, its strict TAP rules and its M1–M25 board are not
+modified, forked in place, or reused as a Gate B carrier.
+
+```text
+Gate A runner  scripts/gates/mysql-sales-wave7-gate-a.mjs      FROZEN, unchanged
+Gate B runner  scripts/gates/mysql-sales-wave10-gate-b.mjs     NEW, owned by the
+                                                            Wave 10 acceptance stage
+```
+
+The Gate B runner may reuse genuinely shared, gate-agnostic infrastructure — in particular the
+disposable-target guard `server/test-utils/mysql-disposable-target.js` and the shared
+`server/test-utils/temp-db.js` MySQL path — because those are common platform facilities, not Gate A
+artifacts. It must not import Gate A's suite list, Gate A's static board, or Gate A's per-case
+expectations.
+
+**Runner contract (all mandatory):**
+
+1. **Real evidence only.** The M-board is composed from the cases' actual execution results. A hard-
+   coded status literal, a static array, or a status that is not derived from an executed assertion
+   is forbidden. This is the specific defect recorded in `§37.31.15` R3 for the Gate A board; Gate B
+   must not reproduce it.
+2. **Strict TAP.** Each suite must satisfy `pass === tests`, `fail === 0`, `skipped === 0`,
+   `cancelled === 0`, `todo === 0`. A missing, malformed or unparsable counter fails the run.
+3. **Fail fast.** The first nonzero child exit stops the campaign and no later case is reported.
+   A stopped campaign is `NOT_RUN` for the remaining cases, never `PASS`.
+4. **Protected target.** The exact disposable identity and the exact destructive-operation
+   acknowledgement are revalidated before any reset, `SELECT DATABASE()` is verified before every
+   reset, and every table identifier is validated — per `AGENTS.md §13` and the existing shared
+   guard.
+5. **Per-suite isolation and cleanup.** The schema is reset separately before each suite, and each
+   suite cleans up the objects it created. A cleanup failure is a failure.
+6. **Zero skips.** No Gate B case may be skipped, cancelled or reported as todo.
+
+#### 37.34.4.2 The seven cases
+
+Gate B holds exactly these seven real-execution cases (`§37.18.2`), and each must execute against
+the real Wave 10 production code:
+
+```text
+B-COMPOSE  Credit / Gate / Sales lock-order composition — that L2→L3→L4→L5 sits
+           between L1 and L6, and that Credit takes no Sales or Finance
+           business-row lock.
+B-M9       Credit Check vs SO Submit, same order.
+B-M10      Two salespersons, one customer aggregate; exactly one commits under
+           ONLY_ONE_FITS, with §36.8.1 preconditions asserted or the fixture
+           declared unconstructible.
+B-M11      Credit Profile mutation vs active Credit Check.
+B-M12      Credit Special Approval vs policy mutation.
+B-M15      Empty parent set, two salespersons, one customer aggregate.
+B-M19C     The Credit half of M19: a genuinely missing mandatory Profile fails
+           closed at the pre-lock guard with zero prohibited side effects; §37.39.7 governs.
+```
+
+#### 37.34.4.3 Evidence classification and its limits
+
+Every Gate B case declares its `§37.10` evidence layer before execution, and every reported result
+is labelled with exactly one of `PRODUCTION_SERIALIZED_OUTCOME`, `RAW_ROW_LEVEL_LOCK_ORDER` or
+`STATIC_INTENT`. The three are never merged.
+
+- **Raw row-level lock order proves lock mechanics only.** Because production `transaction()`
+  serialises every MySQL transaction at the L0 gate row (`§37.10` D), a raw session that opens its
+  own `BEGIN` and issues explicit `SELECT … FOR UPDATE` in the L1…L8 order can assert **lock
+  acquisition and wait order and lock-wait behaviour only**. It may **not** assert a business
+  outcome and it may **not** be reported as production behaviour. The production gate is never
+  disabled, bypassed or reconfigured; the raw probe simply does not use `transaction()`.
+- **A raw result is never a business result.** "Exactly one committed", "the aggregate was
+  enforced", "the exposure did not double-count" are business claims and require
+  `PRODUCTION_SERIALIZED_OUTCOME`. A lock-order observation does not establish them.
+- **Pre-fix deadlock evidence.** Where the case's subject is a documented deadlock reproducer — the
+  confirmed pre-existing Wave 7 deadlock (`§36.12.1`), the concealed empty-parent cycle
+  (`§36.14.2`), or the M1 / M7 lineage — the fixture must **first** be shown to deadlock against the
+  pre-fix ordering in the RAW layer. A fixture that only passes after the fix has not demonstrated
+  that the defect existed and cannot be reported as a reproducer (`§37.10` F). Where no pre-fix
+  deadlocking ordering is documented for a case, the case records that explicitly as *pre-fix
+  deadlock not established for this ordering*; it must not assert a deadlock it did not observe, and
+  *not established* is not `PASS` for that sub-claim.
+- **Capacity preconditions are proved, never assumed.** Every capacity race case must first prove
+  its own precondition from the **actually computed** `available = credit_limit_cents − E`, where `E`
+  is the PURE_DERIVED exposure computed from committed facts **before** the race starts
+  (`§36.8.1`). The precondition assertion is independent of which transaction wins:
+  `BOTH_FIT` → both commit; `ONLY_ONE_FITS` → exactly one commits and one receives 409 `BLOCK`;
+  `NEITHER_FITS` → both receive 409 `BLOCK`. **Only after the `ONLY_ONE_FITS` precondition is proven
+  may "exactly one fails" be required.** If the precondition cannot be constructed, the fixture
+  declares itself unconstructible and asserts that fact; it does not pass.
+- **Rejection paths prove zero side effects.** Every rejection path must assert zero rows in the
+  `§37.10` G table set. For Gate B that set additionally includes `credit_check_results` **and**
+  `credit_special_approval`, and no audit row may exist for the rejected decision. A rejection that
+  leaves a result row is a failure, not a warning.
+- **Common race assertions** (`§36.8.5`) apply to every Gate B race: committed exposure never
+  exceeds the applicable ceiling, no row exists in a partially applied state, every committed
+  decision has its audit rows, an idempotent replay returns the stored result without a second
+  effect, and no committed transaction leaves an orphan anchor.
+
+#### 37.34.4.4 Wave 10 not implemented
+
+While Wave 10 is not implemented, **every** Gate B case remains `BLOCKED_BY_WAVE10`. This state is
+neither `PASS`, nor a skip, nor a deferred-and-green result. The Gate B runner must be able to
+report this state truthfully, and the state may only be released by `§37.34.4.1`'s real-execution
+path.
+
+### 37.34.5 §1–#15 Design status correspondence
+
+This table corresponds one-to-one with the Requirement record's matrix. The Design **does not close
+any business policy or historical-evidence question that the Requirement did not close.** Where the
+Design already satisfies an item, the item is not re-designed.
+
+| # | Design position | Evidence produced in which stage |
+|---|---|---|
+| 1 | Already satisfied by `§36.2.2` and the Wave 9 migration. No re-design. | Closed; no further evidence required |
+| 2 | Already satisfied by `§36.2.2` and the Wave 9 migration CHECK. No re-design. | Closed |
+| 3 | Already satisfied by `§36.2.2` / `§36.3.4` step 5 / `§36.6.3` step 6 and `credit-profile.js`. Wave 10 must *consume* this resolver, not re-derive it. | Closed for Wave 9; Wave 10 consumption proven in the Wave 10 implementation and acceptance |
+| 4 | Already satisfied by `§36.2.4` and the Wave 9 migration. No re-design. | Closed |
+| 5 | Already satisfied by `§36.2.3` and the Wave 9 migration. No re-design. | Closed |
+| 6 | Already satisfied for Wave 9 by `§36.5.2` / `§36.2.6` and the migration's FK-free column. The Wave 11 realization is defined by `§36.5.3` / `§36.5.5` I-6. | Closed at Wave 9; I-6 evidence is produced by the Wave 11 protected MySQL gate |
+| 7 | Already satisfied by `§36.5.2`'s construction. No re-design. | Closed |
+| 8 | Wave 9 metadata convergence is satisfied by `§36.5.5` and the migration's `assertMySql`. The **Wave 10 → Wave 11** ordering obligation is a Wave 10 implementation duty: create `credit_check_results` before the table that references it, and append `§36.5.5`-style assertions unconditionally. | Wave 10 implementation stage, then the protected MySQL gate in that stage |
+| 9 | Already satisfied by `§36.4` and `credit-anchor.js`. No re-design. Wave 10 must provision in `POLICY_SCOPE → AGGREGATE → SALESPERSON` order. | Closed |
+| 10 | The identity/uniqueness contract is satisfied by `§36.2.5` and the Wave 9 migration. The **writer** is Wave 10 scope (`§36.6.3` step 7). | Closed for the contract; writer proven by the Wave 10 implementation and acceptance |
+| 11 | The naming decision is settled by `§36.2.1` and `§36.2.7`. The Wave 10 table is **created** by the Wave 10 implementation exactly as `§36.2.7` specifies. | Wave 10 implementation stage |
+| 12 | The Wave 9 `INITIAL_ASSIGNED` ownership is satisfied by `§36.7.1` and `credit-profile.js`. The `EVALUATED` path is SC107, a Wave 11 capability. Wave 10 must not create a second rating writer. | Closed for Wave 9; Wave 11 obligation deferred |
+| 13 | The split is deliberate: `§36.8.2` limits Wave 9 to infrastructure-level R-SAL-24; `§36.8.3` W10-R1…W10-R12 are the Wave 10 full business races. Design defines **what evidence closes it**: W10-R1…W10-R12 executed as real independent-session MySQL races with `§36.8.1` preconditions proved, plus the Gate B Credit cases. | Wave 10 implementation + Wave 10 acceptance; the Credit-integration subset closes only through Gate B |
+| 14 | See `§37.34.6` — non-destructive compatibility boundary, no claim about unknown external state. | No automatic evidence. Requires a separately authorized read-only external inventory; until then it remains open |
+| 15 | See `§37.34.7` — the exact missing cross-database evidence and the protected gate that must produce it. | Wave 10 implementation's protected MySQL gate, and any separately authorized Wave 9-focused protected run |
+
+### 37.34.6 `LEGACY_DATA_EVIDENCE_PENDING` — non-destructive compatibility boundary
+
+The legacy Credit Profile inventory remains an unresolved external-evidence dependency. This
+Design defines the **compatibility boundary** that makes that dependency non-blocking, and does
+**not** assert anything about the unknown external database.
+
+```text
+AUTHORITY   The Wave 9 `credit_profile` table is the single authority for Credit
+            Profile state. Wave 10 reads it through the existing effective-date
+            resolver and writes nothing into it except through the Wave 9
+            canonical writers.
+
+NO INFERENCE Wave 10 must not read, backfill, normalise, repair, deduplicate or
+            otherwise interpret any legacy row. It must not infer that a legacy
+            row is valid, invalid, duplicated or absent. A row it reads is a row
+            the Wave 9 physical contract admits; nothing more is claimed.
+
+NO REPAIR   A row that violates the Wave 9 physical contract — PK form,
+            `salesperson_scope_key` normalization, `anchor_id` referential
+            integrity, `effective_from`/`effective_to` interval validity, `status`
+            domain — must fail closed. Wave 10 must not create a compatibility
+            path that silently repairs, skips or reinterprets it.
+
+NO NEW PATH Wave 10 introduces no legacy-shaped table, no legacy import, no
+            one-time backfill and no alternate Profile source.
+
+NO CLAIM   This Design does not state that no legacy data exists, does not state
+            that legacy data does exist, and does not make a historical
+            compatibility claim in either direction.
+
+STILL PENDING The external read-only inventory remains a separately authorized
+            operation and remains NOT PERFORMED.
+```
+
+Wave 10 is therefore **not blocked** by this item: `§36.5.6` already defines a safe default (the
+table is created empty, no backfill, no invented records), and Wave 10 neither depends on nor is
+endangered by the legacy inventory.
+
+### 37.34.7 Cross-database evidence gap — what is missing, when, and by which gate
+
+`§36.5.4` / `§36.5.5` obligations that are **not evidenced** for the six Wave 9 tables:
+
+```text
+I-3   Explicit orphan check after bootstrap AND after every live upgrade,
+      executed with FOREIGN_KEY_CHECKS restored to its session default.
+      MISSING — no orphan-check query exists in the Wave 9 migration or in the
+      Wave 9 MySQL integration test.
+
+I-4   Row preservation — a row-count snapshot for every pre-existing table
+      identical before and after replay and after each upgrade path.
+      MISSING — no such comparison exists, and there is no dedicated Wave 9
+      migration / upgrade-path test file (unlike the Wave 2 / 6 / 7 equivalents).
+
+I-6   Forward-FK convergence after Wave 11.
+      NOT DUE — Wave 11 does not exist.
+
+TYPE  Physical type parity is asserted for four named columns only
+      (`credit_lock_anchors.anchor_key`, `credit_profile_ratings.
+      evaluation_result_id`, `credit_check_rules.result_payload_json`,
+      `credit_policy_snapshots.notes_json`), not for every column of the six
+      tables.
+```
+
+```text
+MISSING EVIDENCE   I-3, I-4, and full column-type parity for the six Wave 9
+                   tables, plus the Wave 9 → 10 upgrade-path equivalence.
+
+WHEN              During the Wave 10 implementation stage, in the same protected
+                   disposable-MySQL campaign that proves the Wave 10 tables and
+                   the Gate B cases. A dedicated Wave 9-focused protected run is
+                   an alternative and requires its own explicit authorization.
+
+WHICH GATE        A protected MySQL gate under AGENTS.md §13 disposable-target
+                   discipline — the same exact-target / destructive-acknowledgement
+                   / SELECT DATABASE() / per-suite-reset / per-suite-cleanup /
+                   strict-TAP contract as §37.34.4.1.
+
+NEVER SUBSTITUTED BY
+                 - SQLite results. A SQLite pass proves control flow and dialect
+                   intent, not real MySQL behaviour.
+                 - The Gate A MySQL campaign. That campaign is Wave 7 evidence.
+                   It cannot stand in as Wave 9 Credit Foundation MySQL evidence,
+                   and it cannot stand in as Wave 10 evidence.
+                 - Static source inspection. §37.10 A proves intended order only.
+```
+
+Until that evidence exists, item #15 remains **partially closed with the residual named above**, and
+no document, report or acceptance statement may describe Wave 9 cross-database parity as verified.
+
+### 37.34.8 The `WAVE11_TABLES` naming item — bounded future change
+
+`server/mysql-sales-customer-wave9-credit.integration.js:52` declares
+
+```js
+const WAVE11_TABLES = ['credit_evaluation_result', 'credit_check_results', 'credit_special_approval'];
+```
+
+The constant's name is inaccurate: `credit_check_results` (`§36.2.7`) and `credit_special_approval`
+(`§36.2.8`) are **Wave 10** tables; only `credit_evaluation_result` (`§36.2.13`) is a Wave 11 table.
+The constant is used only to enumerate table names for an `information_schema` lookup (`:239`), so
+the name affects readability, not behaviour.
+
+**Future bounded change (not authorized, not performed here):**
+
+```text
+CHANGE   Rename the constant to a name that states the actual contents
+         (the Wave 10 result and approval tables plus the Wave 11 evaluation
+         result table), and update its use sites consistently.
+
+MUST NOT The SET of tables inspected must not change as a result of the rename.
+         The rename is a naming correction only; it must not add, remove or
+         substitute a table.
+
+MUST NOT The inspection at :239 must continue to cover exactly
+         { credit_evaluation_result, credit_check_results, credit_special_approval }.
+
+TEST     A source-contract assertion must pin that exact set, so a future edit
+         cannot quietly change which tables the Wave 9 MySQL suite inspects.
+         The suite's substantive assertions must be unchanged by the rename.
+
+STAGE    This is a bounded implementation item inside the Wave 10 implementation
+         stage (or an independent bounded change). It is not a Requirement
+         change and not a Design change to behaviour.
+```
+
+### 37.34.9 Historical status wording — scope of this explanation
+
+`§37.33.4` ends with "Wave 10 remains blocked." The `document.md` Wave 9 Freeze Record §4 and the
+`document.md` Stage B records likewise carry dated boundary statements. **Those statements are not
+modified, reopened or rewritten by this section.** They remain the authoritative record of their own
+stages and their own dates.
+
+This section states the **current** status only, as of 2026-10-24:
+
+- Gate A is accepted and frozen (`§37.33`).
+- The `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` entry condition is satisfied (§37.34.1).
+- Wave 10 has not started; it requires an explicit user Implementation authorization.
+- Gate B remains `BLOCKED_BY_WAVE10` and is not discharged, weakened or deferred.
+- The residual open items `§37.31.15` R1–R4 remain open.
+- The remaining W7-C1 / W7-C2′ follow-up work is not declared complete.
+
+No `log/` entry, no freeze record and no historical stage text is modified by this section.
+
+### 37.34.10 Compatibility, rollback and boundary
+
+- **Compatibility.** No production contract changes. The frozen Wave 9, Wave 7, L0, L1–L8, Finance
+  monetary authority, retry, idempotency, SQLite and MySQL isolation contracts of §37.34.2 remain
+  in force. The Gate A boundary is unchanged.
+- **Rollback.** This section is documentation only and adds no schema, migration or runtime state,
+  so it has no rollback surface. A future Wave 10 implementation must carry its own rollback plan
+  per `AGENTS.md §4.3`.
+- **Not designed here.** The Credit Check business specification, the special-approval policy
+  detail, the API/UI shapes, the migration shape and the test classification of the Wave 10
+  implementation remain as already approved in `§30.17` / `§36.6` / `§36.9` / `§36.8.3`. This
+  section adds none of them.
+- **Not implemented here.** No production source, test, schema, migration, permission, frontend file
+  or `package.json` is modified. No test, build, MySQL gate, migration, database connection, database
+  query, database reset or destructive operation is executed. No Git write operation occurs.
+
+### 37.34.11 Acceptance criteria for this Design
+
+This Design is complete when:
+
+1. `§37.34.1` states one-way, non-skippable state machine with the four invariants.
+2. `§37.34.2` names the frozen inputs and the four prohibitions that bind Wave 10.
+3. `§37.34.3` traces every Wave 10 concern to an existing approved source and adds no new business
+   rule.
+4. `§37.34.4` specifies an independent Gate B runner, the seven fixed cases, the three evidence
+   classes and their limits, the pre-fix deadlock obligation, the capacity-precondition proof
+   obligation, the zero-side-effect obligation, the board-from-real-evidence rule, the strict TAP /
+   fail-fast / protected-target / cleanup / zero-skip contract, and the `BLOCKED_BY_WAVE10` state.
+5. `§37.34.5` corresponds to the Requirement matrix item by item and closes nothing the Requirement
+   did not close.
+6. `§37.34.6` defines a non-destructive compatibility boundary without claiming anything about the
+   unknown external database.
+7. `§37.34.7` names the missing cross-database evidence, when it is produced and by which protected
+   gate.
+8. `§37.34.8` records the `WAVE11_TABLES` naming correction as a bounded future change with a
+   source-contract test requirement.
+9. `§37.34.9` limits this section's status statement to current status only.
+
+**HARD STOP.** This Design is complete. Implementation is **not** authorized by it and must not
+begin without the user's explicit approval (`AGENTS.md §4.0`, `§4.3`).
+
+**Status: `DESIGN_RECONCILIATION_COMPLETE`.**
+
+## 37.35 Wave 10 Implementation Record (2026-10-24)
+
+### 37.35.0 Authorization, scope and status
+
+The user granted an explicit Wave 10 **Implementation** authorization under `AGENTS.md §4.4`.
+This section records what was implemented. It does **not** re-decide any Credit business rule,
+does not reopen `§36`, `§37.0–§37.34` or the Gate A freeze record, and does not declare
+acceptance. `§37.34` is preserved verbatim.
+
+```text
+STATUS                     WAVE10_IMPLEMENTATION_READY_FOR_EXTERNAL_REVIEW
+IMPLEMENTATION_COMPLETE    authorized implementation + its local verification only
+WAVE10_ACCEPTANCE_NOT_DECLARED
+GATE_A_FROZEN
+GATE_B_NOT_RUN
+WAVE11_NOT_STARTED
+NO_GIT_WRITE
+NO_DATABASE_OPERATION
+```
+
+### 37.35.1 Delivered files and their canonical responsibility
+
+| File | Responsibility |
+|---|---|
+| `server/migrations/sales-customer-wave10-credit-check.js` | The two Wave 10 tables (`credit_check_results` §36.2.7, `credit_special_approval` §36.2.8), their SQLite / MySQL DDL, named indexes, dialect parity assertions and idempotent replay. Registered as `wave-10-credit-check` (wave 10) in `server/migrations/sales-customer-domain.js`. |
+| `server/modules/credit-check.js` | `evaluateCredit()` — the `§36.6.3` runtime sequence, `resolveApplicableCreditScopes()` (§36.3.1), `computeCreditExposure()` (§36.3.2), the `§36.3.4` L2–L5 lock chain, the `§36.6.6` Special Approval consumption, the `POST /api/credit/check` and `GET /api/credit/check-results` surfaces. |
+| `server/modules/credit-special-approval.js` | Credit Special Approval request / decide / list / detail, the authority ceiling, expiry, scope mode, SOD and idempotency (§36.6.6, §29.26). |
+| `server/modules/credit-scope.js` | Added `requireCreditEvaluationAuthority()`, `requireCreditSpecialApprovalRequestAuthority()` and `requireCreditSpecialApprovalDecisionAuthority()` (§36.9.3 SC111, §34.7 P2 / P4). |
+| `server/modules/sales-prepayment-gate.js` | `authorizeSalesPrepaymentGateWithPlan()` gained an optional `afterParentLock` callback. It fires after the L1 Finance PREPAYMENT parent lock and **before** the L6 gate-result lock, and also on the `NOT_REQUIRED` branch so that the Credit Check still runs when no prepayment requirement exists (§36.14.5 M19). The gate's own decision logic, evidence rows and error contracts are unchanged. |
+| `server/modules/sales-orders.js` | The Credit Check is composed into the reserved L2–L5 window of the submit path, and the `approve` branch is split from `reject` and re-sequenced to `L1? → L2..L5 → L8` (§37.19.1). `reject` / `close` / `cancel` remain L8-only and are unchanged. |
+| `server/app.js` | The Credit Check is composed into the L2–L5 window of the Sales Delivery Confirm path; the six Wave 10 routes are registered in `ownedRouteTable`. |
+| `server/db.js` | Two new permission codes: `CREDIT_EVALUATE` and `CREDIT_SPECIAL_APPROVE`. The seeded role grants are **not** changed (§15.6); the final role matrix stays a Wave 12 obligation (§30.15.1). |
+| `src/pages/credit-check.jsx` | The `credit-check` evaluate surface and the `credit-special-approvals` surface. |
+| `src/navigation/applicationRegistry.js` | Two new contextual routes, both parented to `customers`, with no launcher tile (§36.9.5). |
+| `server/sales-customer-wave10-credit-check.test.js` | The Wave 10 focused suite (36 cases). |
+
+### 37.35.2 Runtime sequence actually implemented
+
+`evaluateCredit()` executes `§36.6.3` steps 1–10:
+
+```text
+1  Credit Management enabled gate. CREDIT_MANAGEMENT_ENABLED is absent -> false -> no
+   credit control, no evidence row, no audit row. The stage's effective rule set is
+   resolved here; a stage with no applicable effective rule is not credit-controlled.
+2  The logical check group is resolved from
+   (source_ref, stage, business_date, authorization context, policy snapshot
+   fingerprint, evaluated exposure digest). An exact replay resolves the same group and
+   returns the stored result without a second row, audit row or effect.
+3  Applicable control scopes (§36.3.1) and the credit object identity.
+4  Anchors are provisioned and locked in the order POLICY_SCOPE -> AGGREGATE -> SALESPERSON
+   (§36.4 integrated provisioning protocol). See B-13 for the position of the provisioning
+   relative to the Finance PREPAYMENT parent lock.
+5  Lock chain: L1 Finance PREPAYMENT parents (frozen discover -> plan -> lock -> assert),
+   L2 POLICY_SCOPE FOR SHARE, L3 AGGREGATE anchor FOR UPDATE, L4 SALESPERSON anchor
+   FOR UPDATE, L5 credit_profile FOR UPDATE.
+6  PURE_DERIVED exposure per scope, then the control-strength evaluation.
+7  credit_policy_snapshots insert-or-select, one row per scope, one shared fingerprint.
+8  credit_check_results, one row per scope, one shared check_group_id.
+9  Audit rows carrying the fingerprint and the business date.
+10 The caller owns the transaction; a refusal rolls the whole chain back.
+```
+
+### 37.35.3 Exposure projection (PURE_DERIVED)
+
+Exposure is computed inside the check transaction from canonical Sales and Finance facts only.
+No `credit_exposure` table and no physical exposure cache exist.
+
+```text
+CUSTOMER AGGREGATE
+  approved SO commitment   sales_orders APPROVED, commercial_close_state OPEN,
+                           minus the confirmed delivery value of the same order
+  delivered-not-settled    confirmed delivery value minus the AR amount that has
+                           already transitioned out of that stage
+  AR open                  account_receivables open_amount_cents, conversion_state OPEN
+  offset                   the eligible PREPAYMENT amount read through the frozen
+                           Finance adapter (aggregate only, never a sub-limit)
+
+SALESPERSON SUB-LIMIT
+  the same three components, restricted to what is PROVABLY_ATTRIBUTABLE to that
+  salesperson, plus the SO stages of that salesperson's own orders
+  no prepayment offset: Finance holds no salesperson dimension for advance money
+```
+
+A settled AR row (open amount zero) still proves the transition and is therefore never
+counted twice. A consolidated AR row with no resolvable Sales source chain is counted in
+full in the aggregate and is `ATTRIBUTION_AMBIGUOUS` for every sub-limit.
+
+### 37.35.4 Bounded implementation decisions (recorded, not silently absorbed)
+
+These points are not fixed by the approved Requirement and are recorded here as the
+implementation's explicit reading.
+
+```text
+B-1  Credit object identity. The credit object is resolved from the customer's
+     effective credit profiles. Zero effective profiles -> the canonical customer
+     credit object ('CUSTOMER', customer_id), so the missing-profile fail-closed path
+     is reached deterministically. More than one effective credit object -> fail
+     closed with CREDIT_CREDIT_OBJECT_AMBIGUOUS (P6). No new business identifier is
+     introduced.
+
+B-2  Authority ceiling. authority_ceiling_cents is frozen at request time from the
+     evaluated proposal of the bound check result: the approval can never authorise a
+     credit ceiling above the amount that specific proposal required. It is therefore
+     structurally incapable of becoming an unlimited or permanent bypass. The
+     requested ceiling and the requested override may never exceed it.
+
+B-3  Release boundary. A Special Approval releases a scope whose rule outcome is
+     SPECIAL_APPROVAL_REQUIRED. A fail-closed BLOCK (missing profile, P5 not
+     permitted, UNPROVEN_ATTRIBUTION, undefined overdue-day policy) is never released
+     by an approval.
+
+B-4  Decision authority. The request needs CREDIT_SPECIAL_APPROVE; the decision needs
+     CREDIT_MANAGE, which is a different code and satisfies §34.7 P2. The
+     requester/approver separation is enforced at decision time by comparing the
+     approver with the requester recorded in the request audit row.
+
+B-5  Overdue-day policy. CREDIT_SUB_LIMIT_OVERDUE_DAYS is unset and the profile
+     carries no overdue_day_policy -> the policy is undefined and a mandatory
+     sub-limit fails closed with OVERDUE_POLICY_UNDEFINED (§36.3.3). When the policy
+     is defined, the overdue AR is already inside the AR open amount: overdue is a
+     subset of C and is never additive (§29.23.2).
+
+B-6  Stage enforcement. The check runs when the stage has at least one applicable
+     effective rule. A stage with no effective rule is not credit-controlled and
+     leaves no evidence. A missing or ambiguous enforceable profile fails closed in
+     every case, so no scope is ever PASS by omission (§36.6.4).
+
+B-7  Rule strength mapping. Over limit -> the strongest outcome among the applicable
+     rules: scenario OVERRIDE_REQUEST -> SPECIAL_APPROVAL_REQUIRED, scenario
+     WARNING_ONLY -> WARNING, scenario BLOCK -> BLOCK, scenario STANDARD -> the rule's
+     control_strength. check_timing is recorded as evidence; Wave 10 defines a
+     single inline BEFORE_WRITE enforcement point and no deferred surface.
+
+B-8  Aggregated AR over count. A consolidated AR with no resolvable source cannot be
+     released from an obligation stage, so the aggregate is conservative rather than
+     apportioned. The ambiguity is surfaced as UNPROVEN_ATTRIBUTION, which is the
+     designed remedy (§36.3.2.4). No amount is ever split or assigned.
+
+B-9  Credit Profile status. §36.3.1 and §36.6.3 resolve a profile by effective date
+     and existence. A profile whose status is not ACTIVE still binds its limit, which
+     is the fail-closed direction. The business meaning of SUSPENDED / CLOSED is not
+     fixed by the approved Requirement and stays an open Requirement question.
+
+B-10 Exposure age window. No exposure-age window parameter exists in the approved
+     Requirement and none is introduced: the projection covers every committed open
+     obligation of the customer.
+
+B-11 Check group identity. The check group id carries the evaluated exposure digest.
+     A changed fact set therefore produces a new decision and a new evidence row
+     instead of replaying a stale result.
+
+B-12 Platform approval centre. §29.34 names a CREDIT_SPECIAL_APPROVAL approval family.
+     The Platform approval centre mechanism assumes a status column with SUBMITTED
+     and cannot carry the decision column of the Wave 10 table without changing the
+     shared mechanism. Wave 10 therefore exposes the dedicated credit routes only; the
+     Platform family remains a Wave 12 obligation.
+
+B-13 Anchor provisioning position. §36.3.4 step 0 places the idempotent anchor
+     provisioning before the Finance PREPAYMENT parent lock. The implementation performs
+     the provisioning together with the anchor row lock at steps 3 and 4, that is after
+     the Finance parent lock. The committed end state is identical (§36.4 step 2 and step 3
+     are one convergent upsert), and the placement keeps the Finance PREPAYMENT parent
+     strictly ahead of every Credit-owned row lock, which §36.3.4.1 C-3 requires. Two
+     transactions that provision the same anchor therefore serialise on the Finance
+     parent instead of forming an insert-intention / parent-lock cycle.
+```
+
+### 37.35.5 Lock-order composition
+
+| Entrypoint | Sequence | Note |
+|---|---|---|
+| Sales Order submit | L1? → L2 → L3 → L4 → L5 → L6 → L7 → **L8** | The Credit Check runs inside the `afterParentLock` window. |
+| Sales Order approve | L1? → L2 → L3 → L4 → L5 → **L8** | The approve path invokes no gate phase, so the Credit Check owns the L1 lock. §37.19.1 authorizes this re-sequencing. |
+| Sales Order reject / close / cancel | **L8** only | Unchanged; no Credit, no gate. |
+| Sales Delivery confirm | L1? → L2 → L3 → L4 → L5 → L6 → L7 → DELIVERY → **L8** | The Credit Check runs inside the `afterParentLock` window. |
+
+The Credit Check takes no row lock on any Sales business row and no lock that would place
+Sales rows ahead of L2–L5 (§36.3.4.1 C-2). The Finance PREPAYMENT parent is the first lock
+the Credit Check itself takes, and it is always taken through the frozen discover → plan →
+lock → assert pattern (§36.3.4.1 C-1).
+
+### 37.35.6 Evidence produced by this implementation
+
+```text
+server/sales-customer-wave10-credit-check.test.js   36 cases, all PASS on SQLite
+  migration contract, idempotent replay, Wave 11 absence
+  S15   Credit Management gate, no-rule stage, missing mandatory profile fail closed
+  UAT-S-31  SO commitment / delivered / AR / settled-AR stage transitions
+  UAT-S-32  PASS / WARNING / BLOCK / SPECIAL_APPROVAL_REQUIRED, dual-limit control
+  UAT-S-33  special approval request, decision, release, expiry, ceiling, duplicate
+  S14   exposure never double counts; the sub-limit survives the SO -> AR transition
+  S16   per-scope isolation, authority ceiling, expiry, requester/approver separation
+  §36.6.1 / §37.19.1   the approve path is credit-controlled and a refusal leaves no evidence
+```
+
+The evidence level of these results is `STATIC_INTENT` plus single-session business
+assertion on SQLite. They are **not** `PRODUCTION_SERIALIZED_OUTCOME` and they are **not**
+`RAW_ROW_LEVEL_LOCK_ORDER` (§37.10 A–E).
+
+### 37.35.7 Still open after this implementation
+
+```text
+OPEN  W10-R1..W10-R12 and R-SAL-12 / R-SAL-13 / R-SAL-14 remain BLOCKED. They require
+      real independent-session MySQL contention and are discharged only by the protected
+      Gate B campaign. No SQLite result in this record may be reported as race evidence.
+OPEN  Gate B (B-COMPOSE / B-M9 / B-M10 / B-M11 / B-M12 / B-M15 / B-M19C) remains
+      BLOCKED_BY_WAVE10 until the user accepts Wave 10 and the protected campaign runs.
+OPEN  §36.5.4 / §36.5.5 I-3, I-4 and the full column-type parity for the six Wave 9
+      tables are still not evidenced; the Wave 10 -> Wave 11 upgrade-path equivalence is
+      likewise unevidenced (§37.34.7).
+OPEN  LEGACY_DATA_EVIDENCE_PENDING: the read-only legacy Credit Profile inventory is
+      still a separately authorized external operation and was NOT performed (§37.34.6).
+OPEN  B-9 (Credit Profile status semantics) and B-10 (exposure age window) are
+      Requirement questions that the approved Requirement does not close.
+OPEN  The final Credit role matrix (§30.15.1) and the Platform CREDIT_SPECIAL_APPROVAL
+      approval family (§29.34) are Wave 12 obligations.
+```
+
+### 37.35.8 Boundary
+
+No Git write, no tag, no push, no release, no deploy, no MySQL connection, no Gate
+execution, no database reset, no destructive operation and no `document.md` change was
+performed by this implementation.
+
+## 37.36 Wave 10 B-9 / B-10 / S14 Bounded Remediation Design (2026-10-24)
+
+### 37.36.0 Authorization, scope and evidence
+
+The user explicitly authorized the consecutive `AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION`
+closure for B-9, B-10 and S14. The approved Requirement is `document.md` "Wave 10 B-9 / B-10 /
+S14 Bounded Requirement Amendment (2026-10-24)". This section is the independent Design record;
+it does not declare Acceptance or Freeze and authorizes no MySQL, Gate B, Git write, release or
+deployment.
+
+The isolated pre-change reproduction was:
+
+```text
+Mode A final AR                         100000
+Mode B delivered + invoice AR          200000  (defect; expected 100000)
+Mode C provisional                     100000
+Mode C converted invoice AR            200000  (defect; expected 100000)
+```
+
+### 37.36.1 Files and function responsibilities
+
+| File / function | Bounded responsibility |
+|---|---|
+| `server/modules/credit-check.js` `resolveApplicableCreditScopes()` | Reject every resolved non-ACTIVE Profile before any enforceable scope can be evaluated; keep `resolveEffectiveCreditProfile()` unchanged and actor-free. |
+| `server/modules/credit-check.js` `resolveReceivableSource()` and bounded helpers | Resolve invoice-sourced AR through canonical Finance links and validate customer, source, line, order, salesperson and allocated cents. |
+| `server/modules/credit-check.js` `computeCreditExposure()` | Release predecessor buckets by proven invoice allocation exactly once and attribute remaining AR only where Finance/Sales lineage proves it. |
+| `server/sales-customer-wave10-credit-check.test.js` | Add B-9, B-10, S14 and Recognition Mode coverage/regression fixtures. |
+
+No schema, migration, Finance writer, permission, route, Wave 9 resolver, Gate A file, exposure
+ledger or cache is added or modified. `README.md` needs no change because module ownership and
+repository structure do not change.
+
+### 37.36.2 B-9 ACTIVE-only enforceability guard
+
+The consumer-side flow is:
+
+```text
+resolveCustomerCreditObject()
+  → resolveEffectiveCreditProfile() for aggregate / salesperson (unchanged, actor-free)
+  → zero profile: existing CREDIT_PROFILE_MISSING
+  → resolved profile status != ACTIVE:
+       HTTP 409 / CREDIT_PROFILE_NOT_ENFORCEABLE
+       include profile id, scope and status as bounded error evidence
+       no scope evaluation, snapshot, result, audit or approval consumption
+  → every resolved profile ACTIVE:
+       existing aggregate / salesperson scope rules continue
+```
+
+All resolved scopes are checked before returning an applicable scope set. Therefore a suspended or
+closed salesperson sub-limit cannot fall back to an ACTIVE aggregate, and a suspended or closed
+aggregate cannot be bypassed by a salesperson profile. The currently effective version remains the
+authority; no earlier ACTIVE row is searched. This guard is evaluated before any Special Approval
+lookup, so Special Approval cannot cross the status fence.
+
+`solution.md §36.15.9`'s unfiltered engine contract means no human actor/data-scope predicate is
+applied. It does not mean that every resolved status is enforceable. The Wave 9 resolver and its
+accepted effective-date identity remain unchanged.
+
+### 37.36.3 B-10 transition-based retention
+
+`readApprovedOrders()` keeps its current business-date predicate and receives no age predicate.
+There is no parameter, TTL, scheduler or cleanup implementation.
+
+Regression design:
+
+- an old approved, undelivered and open SO remains fully in A;
+- crossing an arbitrary N-day boundary changes nothing;
+- a true canonical delivery transfers only the delivered amount A → B/P/C;
+- a partial invoice transfers only the allocated amount B/P → C;
+- a cancellation/controlled closure releases only an amount the canonical Sales facts actually
+  extinguish; residual Delivery/AR remains;
+- AR remains until its canonical `open_amount_cents` is reduced by settlement/credit/write-off;
+- overdue status never adds another amount to AR open.
+
+### 37.36.4 Canonical invoice-source lineage and validation
+
+For `account_receivables.source_type='SALES_INVOICE'`, resolve:
+
+```text
+account_receivables.source_id
+  → sales_invoices.id (POSTED/current canonical invoice; customer must match AR)
+  → finance_invoice_source_links
+       invoice_side = SALES_INVOICE
+       source_type = SALES_DELIVERY or another explicitly supported Sales source
+       invoiced_amount_cents = authoritative invoiced allocation
+  → source row and source_line_id identity
+  → sales_delivery_items.sales_order_item_id
+  → sales_order_items.order_id
+  → sales_orders.customer_id / salesperson_id
+```
+
+The first implementation supports the already-written physical-sales source
+`SALES_DELIVERY`. Existing direct `SALES_DELIVERY` / `SALES_ORDER` AR behavior stays unchanged.
+Other invoice-link source types are not guessed; an invoice AR that cannot be completely proven
+fails closed with `CREDIT_EXPOSURE_SOURCE_INCONSISTENT`.
+
+Validation invariants:
+
+```text
+IL-1 link invoice_id / invoice_side identify exactly the AR invoice
+IL-2 linked Delivery exists and belongs to the AR customer
+IL-3 source_line_id exists, belongs to that Delivery and maps to one SO item/order
+IL-4 SO customer equals AR customer; cross-customer evidence fails closed
+IL-5 invoiced_amount_cents is a non-negative safe integer
+IL-6 SUM(link allocation) == AR original amount_cents for the supported invoice source
+IL-7 duplicate logical link or conflicting identity fails closed
+IL-8 per-order transition release never exceeds its delivered/source obligation
+```
+
+Links are read only. The repair does not update Finance rows and introduces no reverse lock
+acquisition. The Credit Check continues to take no Sales row lock.
+
+### 37.36.5 Amount conservation and partial settlement
+
+For each invoice AR, link allocations form an immutable transition map. Aggregate exposure applies:
+
+```text
+delivered predecessor for order O -= SUM(proven invoice allocations for O)
+final AR bucket += account_receivables.open_amount_cents once per AR header
+```
+
+This deliberately separates transition amount from remaining amount: a later collection or credit
+reduces the Finance-owned AR open header, while the invoiced amount remains the proof that the
+predecessor bucket already transitioned. The same link is aggregated once by AR and order, so it
+cannot subtract twice.
+
+Salesperson attribution is allowed only when exact:
+
+- if AR open equals original AR amount, link allocations may be attributed by their exact proven
+  salesperson amounts;
+- after partial settlement/credit, the remaining AR may be attributed in full only when every
+  positive linked source resolves to the same salesperson;
+- if a partially settled invoice spans multiple salespersons, canonical Finance facts contain no
+  source-level remaining allocation. The AR is `ATTRIBUTION_AMBIGUOUS`; a mandatory salesperson
+  scope returns `BLOCK / UNPROVEN_ATTRIBUTION`. No proportional, FIFO, equal or residual split is
+  invented;
+- the customer aggregate still uses the exact Finance header open amount and exact source releases.
+
+Conservation:
+
+```text
+AC-1  release(O) <= delivered/source obligation(O)
+AC-2  SUM(release by order for invoice) = SUM(authoritative link allocation)
+AC-3  aggregate outstanding = untransitioned A/B/P + canonical final AR open
+AC-4  each final AR header contributes open_amount_cents exactly once
+AC-5  each source allocation releases its predecessor exactly once
+```
+
+### 37.36.6 Recognition Mode rule-coverage matrix
+
+| State | Resolver result | Enforcement / API | Result + audit | Status |
+|---|---|---|---|---|
+| Credit disabled | management false | `enforced=false`, PASS compatibility | none | implemented, preserve |
+| Global rule (`recognition_mode NULL`) | applicable | normal limit evaluation | required on committed evaluation | implemented |
+| Exact mode rule | applicable only for matching mode | normal evaluation | required | implemented |
+| Rule for another mode only | no applicable rule | `enforced=false` | none | approved no-applicability contract |
+| No effective rule | no applicable rule | `enforced=false` | none | approved no-applicability contract |
+| Applicable WARNING | applicable | WARNING when over limit | required | implemented |
+| Applicable BLOCK | applicable, mandatory | backend fail closed | refusal transaction rolls back successful result/audit | implemented |
+| Explicit customer/scenario exemption | no physical selector exists | OPEN; do not fabricate | none until separately designed | Requirement/model gap |
+| Missing Profile | applicable mandatory rule | 409 `CREDIT_PROFILE_MISSING` | zero successful side effects | implemented |
+| Non-ACTIVE Profile | applicable mandatory rule | 409 `CREDIT_PROFILE_NOT_ENFORCEABLE` | zero successful side effects | this remediation |
+| Aggregate + salesperson | both resolved | both must pass; no fallback | per-scope evidence on success | implemented + status guard |
+
+No nonmatching rule is converted into a global rule. The explicit-exemption row remains OPEN and
+does not block B-9/B-10/S14 because this remediation creates no exemption path.
+
+### 37.36.7 Transaction, error, audit and compatibility
+
+- The caller still owns the transaction. B-9/S14 errors throw HTTP 409 before a successful Credit
+  result and roll back snapshots, result rows, audit, approval consumption and caller mutation.
+- L0, L1–L8, named-lock release, MySQL READ COMMITTED and the existing retry/idempotency contracts
+  are unchanged. New work is bounded read-only source resolution beneath the existing Credit locks;
+  it adds no Finance/Sales row lock and no writer.
+- Exact replay stays unchanged. A current non-ACTIVE Profile changes the effective-state hash and
+  cannot consume a prior approval or replay a successful decision for a new obligation.
+- Mode A direct-source behavior remains unchanged. Mode B/C use existing Finance lineage only.
+- Unknown, missing, cross-customer, over-allocated or internally inconsistent invoice evidence
+  fails closed with `CREDIT_EXPOSURE_SOURCE_INCONSISTENT`; ambiguous multi-salesperson remaining AR
+  uses existing `UNPROVEN_ATTRIBUTION` semantics.
+- Rollback is source-level: revert only the bounded `credit-check.js` and focused-test changes. No
+  data rollback or migration exists.
+
+### 37.36.8 Focused verification matrix
+
+Required SQLite cases include Mode A 100000; Mode B 100000 delivered → 100000 invoice AR = 100000;
+Mode C provisional = 100000; Mode C converted = 100000; Mode B partial invoice 40000 = B 60000 +
+AR 40000; partial collection with one provable salesperson; one invoice over multiple deliveries;
+multi-salesperson partial settlement ambiguity; duplicate/inconsistent links; cross-customer link;
+unknown invoice source; credit/reversal-adjusted open amount; ACTIVE/SUSPENDED/CLOSED aggregate and
+sub-limit; ACTIVE replacement; Special Approval status fence; global/exact/nonmatching/absent
+rules; old unresolved SO; partial delivery; controlled close/cancel evidence; overdue subset.
+
+Safe gates after focused tests: Wave 9 Credit Foundation regression, affected Sales/Delivery/Finance
+regressions, `pnpm.cmd test:fast`, `pnpm.cmd test`, `pnpm.cmd test:heavy`, `pnpm.cmd build`, and
+`git diff --check`. MySQL and Gate B remain NOT_RUN.
+
+### 37.36.9 Design decision record and boundary
+
+```text
+B9_GUARD_AT_WAVE10_CONSUMER
+WAVE9_RESOLVER_ACTOR_FREE_UNCHANGED
+B10_TRANSITION_RETENTION_REMEDIATION
+S14_CANONICAL_INVOICE_LINK_REMEDIATION
+NO_SHADOW_EXPOSURE_OR_FINANCE_ALLOCATION
+PARTIAL_MULTI_SALESPERSON_REMAINDER_FAILS_CLOSED
+EXPLICIT_EXEMPTION_MODEL_GAP_OPEN
+```
+
+This Design changes no implementation file. Under the user's explicit consecutive authorization,
+the next stage is the bounded Implementation above; Acceptance / Freeze remains prohibited.
+
+## 37.37 Wave 10 B-9 / B-10 / S14 Bounded Implementation Record (2026-10-24)
+
+### 37.37.0 Authorization and boundary
+
+The user explicitly authorized the consecutive bounded Implementation after the Requirement in
+`document.md` and Design in §37.36. This record reports that implementation only. It does not
+declare Acceptance or Freeze, does not execute Gate B or MySQL, and performs no Git write,
+database migration, reset, release or deployment.
+
+### 37.37.1 Implemented changes
+
+- `resolveApplicableCreditScopes()` now rejects any currently resolved aggregate or salesperson
+  Profile whose status is not `ACTIVE`. It returns the specific
+  `CREDIT_PROFILE_NOT_ENFORCEABLE` error evidence before scope evaluation or Special Approval
+  consumption, without changing the actor-free Wave 9 effective Profile resolver.
+- `computeCreditExposure()` retains an approved SO commitment while its canonical
+  `commercial_close_state` is `OPEN`; cancellation or controlled closure releases only the
+  undelivered A-stage amount. Existing Delivery and AR facts remain independently authoritative.
+  No age predicate, TTL, scheduler or cleanup path was added.
+- Invoice-sourced AR now resolves through `sales_invoices` and
+  `finance_invoice_source_links` to the Sales Delivery line, SO item and SO. The resolver validates
+  invoice/customer/source identity, safe integer allocation, complete amount conservation and
+  per-order predecessor capacity before releasing the delivered/provisional predecessor.
+- The aggregate uses the Finance-owned AR header `open_amount_cents` exactly once. A full-open AR
+  may use exact link allocations for salesperson attribution; a partially settled AR is attributed
+  only when every positive source belongs to the same salesperson. A multi-salesperson residual is
+  left ambiguous and uses the existing `UNPROVEN_ATTRIBUTION` fail-closed behavior.
+- Missing, unknown, cross-customer or inconsistent invoice lineage throws
+  `CREDIT_EXPOSURE_SOURCE_INCONSISTENT`. No Finance row is written and no guessed allocation or
+  shadow exposure store was introduced.
+
+### 37.37.2 Files changed in this bounded closure
+
+```text
+document.md
+solution.md
+log/2026-10-24.md
+server/modules/credit-check.js
+server/sales-customer-wave10-credit-check.test.js
+```
+
+`README.md`, schema, migrations, Finance writers, permissions, routes, Wave 9 resolver, Gate A and
+Gate B files are unchanged by this closure.
+
+### 37.37.3 Verification evidence
+
+```text
+Focused Wave 10 credit check                         50 / 50 PASS
+Wave 9 credit foundation                            21 / 21 PASS
+Wave 8 mixed Sales Delivery                          7 /  7 PASS
+V2.2 Finance invoice lifecycle                       6 /  6 PASS
+V2.2 Finance recognition production                  3 /  3 PASS
+pnpm.cmd test:fast                                  427 / 427 PASS
+pnpm.cmd test                                      2804 / 2804 PASS
+pnpm.cmd test:heavy                                  67 /  67 PASS
+pnpm.cmd build                                      PASS (1965 modules transformed)
+git diff --check                                    PASS
+```
+
+The focused conservation evidence is:
+
+```text
+Mode A final AR                                      100000
+Mode B before remediation                            200000
+Mode B after remediation                             100000
+Mode C provisional                                   100000
+Mode C converted before remediation                  200000
+Mode C converted after remediation                   100000
+Mode B partial invoice                     60000 + 40000 = 100000
+```
+
+The focused suite also covers SUSPENDED/CLOSED aggregate and salesperson Profiles, ACTIVE
+replacement, the Special Approval status fence, old unresolved SO retention, cancel/controlled
+close transition behavior, partial collection, multi-salesperson ambiguity, missing/inconsistent
+and cross-customer lineage, exact/nonmatching/global Recognition Mode rules and strongest-rule
+selection.
+
+### 37.37.4 Preserved open items and stop state
+
+- The explicit customer/scenario exemption representation remains OPEN because the current schema
+  has no selector. No exemption policy was invented.
+- Real MySQL concurrency/locking, Gate B and the protected M9/M10/M11/M12/M15/M19-CREDIT evidence
+  remain NOT_RUN and require separate exact-target authorization.
+- Legacy external-data inventory remains outside this closure.
+- User Acceptance / Freeze is not authorized and is not declared by this implementation record.
+
+**Implementation state: `IMPLEMENTATION_LOCAL_REGRESSION_PASS — AWAITING_REAL_MYSQL_AUTHORIZATION_AND_USER_ACCEPTANCE`.**
+
+## 37.38 Wave 10 MySQL Acceptance Infrastructure Implementation Record (2026-10-25)
+
+### 37.38.0 Authorization and hard boundary
+
+The user explicitly authorized the bounded implementation of real-MySQL acceptance infrastructure
+for Wave 10. The authorization covers test code, fixtures, independent runners, package/test
+manifests and necessary documentation only. It explicitly excludes every MySQL connection or
+query, reset flag, reset/DROP, DDL/DML, migration execution, Gate A/Gate B execution, Git write,
+release and deployment. No frozen business contract, production handler, schema, migration,
+permission, state transition, Finance authority, L0 or L1-L8 order is changed by this record.
+
+### 37.38.1 Implemented ownership and command surface
+
+```text
+scripts/gates/mysql-sales-wave10-manifest.mjs
+  fixed Wave 10 suites, W10-R1..R12, R-SAL aliases, seven Gate B cases and evidence levels
+
+scripts/gates/mysql-wave10-runner-support.mjs
+  exact disposable-target guard, per-suite reset, sequential strict TAP, fail-fast handling,
+  final cleanup and zero tables/views/triggers/routines/events assertion
+
+scripts/gates/mysql-sales-wave10-acceptance.mjs
+  pnpm.cmd test:mysql:wave10
+  W10-PARITY -> W10-RACES
+
+scripts/gates/mysql-sales-wave10-gate-b.mjs
+  pnpm.cmd test:mysql:gate-b
+  independent Gate B production-race suite -> seven-case Gate B suite -> execution-derived M-board
+```
+
+The Gate B runner parses exactly seven successful execution markers emitted only after the
+corresponding assertions complete. Missing, duplicate, extra or evidence-level-mismatched markers
+fail the runner. It does not contain a static PASS board. Gate A and its frozen manifest are not
+imported or modified.
+
+### 37.38.2 Fixture coverage
+
+- `server/mysql-sales-customer-wave10.integration.js` covers real-MySQL fresh bootstrap, exactly
+  two Wave 10 tables, InnoDB and constraint metadata, the complete ordered physical type signature
+  of all six Wave 9 tables, simulated existing Wave 9 -> Wave 10 additive upgrade, repeated
+  idempotent replay, I-4 pre/post value preservation and dynamic I-3 orphan checks over every
+  physical FK edge of the eight Credit tables.
+- `server/mysql-sales-customer-wave10-concurrency.integration.js` defines twelve separately named
+  W10-R1..W10-R12 cases and the R-SAL-12/13/14 aliases. Each race starts two OS processes, each
+  holding a dedicated `MySqlSyncAdapter` connection. Production-result cases call the actual Credit,
+  Sales Order, Credit Profile, Credit Policy, Special Approval and Finance AR paths. ONLY_ONE_FITS
+  assertions state their capacity inequalities before asserting one winner. Common checks reject
+  duplicate result/approval effects and close every worker session in `finally`.
+- `scripts/gates/mysql-concurrency-sales-wave10-worker.mjs` is the one-session worker. Raw
+  `FOR UPDATE` actions are isolated from production actions and are classified only as
+  `RAW_ROW_LEVEL_LOCK_ORDER`.
+- `server/mysql-sales-customer-wave10-gate-b.integration.js` owns the seven fixed Gate B case
+  assertions and emits their evidence markers. B-COMPOSE remains `STATIC_INTENT`; B-M15 remains
+  `RAW_ROW_LEVEL_LOCK_ORDER`; the other five cases remain `PRODUCTION_SERIALIZED_OUTCOME`.
+- `server/test-utils/wave10-mysql-acceptance-fixture.js` owns bounded seed data, explicit capacity
+  inputs and side-effect projections. It contains no connection configuration and cannot authorize
+  a target.
+- `scripts/mysql-sales-wave10-runners.test.js` is the only new unconditional suite entry. It is a
+  pure source-contract test and proves runner separation, fixed manifests, guard/cleanup/TAP
+  wiring, Gate A immutability and package command mapping. Real MySQL files remain outside
+  FAST/FULL/HEAVY and are reachable only through the protected runners.
+
+### 37.38.3 Local verification and non-executed evidence
+
+```text
+node --check (all ten new JS/MJS files)                         PASS
+Runner source-contract                                         6 / 6 PASS
+Focused Runner + Wave 10 + Wave 9                              77 / 77 PASS
+pnpm.cmd test:fast                                            427 / 427 PASS
+pnpm.cmd test                                                2810 / 2810 PASS
+pnpm.cmd build                                      PASS (1965 modules transformed)
+```
+
+`pnpm.cmd test:heavy` was not run because the repository HEAVY classification contains a
+real-MySQL environment test and this authorization prohibited every MySQL connection. Neither
+`test:mysql:wave10` nor `test:mysql:gate-b` was executed. Therefore the infrastructure is ready for
+external review, but fresh-init/upgrade/parity, independent-session outcomes, Gate B PASS, cleanup
+and the M-board remain **test evidence pending**, not accepted facts.
+
+### 37.38.4 Stop state
+
+No Acceptance/Freeze is declared. The next permitted step is external review. A later real-MySQL
+campaign requires a new authorization naming the exact disposable identity, exact commands and
+destructive operations. Wave 11/12, legacy-data compatibility and the explicit exemption selector
+remain outside this implementation.
+
+**Status: `WAVE10_MYSQL_ACCEPTANCE_INFRASTRUCTURE_READY_FOR_EXTERNAL_REVIEW`.**
+
+## 37.39 Wave 10 MySQL Acceptance Infrastructure Remediation Design (2026-10-25)
+
+### 37.39.0 Authorization, inputs and stop boundary
+
+The user authorized one consecutive `AUDIT -> REQUIREMENT -> DESIGN` documentation stage after the
+external result `WAVE10_MYSQL_ACCEPTANCE_AUTHORIZATION_BLOCKED`. The approved Requirement for this
+Design is `document.md` "Wave 10 MySQL Acceptance Infrastructure Remediation Requirement
+(2026-10-25)", identifiers `W10-AIR-R01` through `W10-AIR-R10`.
+
+This Design changes no implementation. It authorizes no MySQL connection, target probe, reset,
+migration, Gate run, production/test/script edit or Git write. Completion of this section is a HARD
+STOP pending explicit user approval and a separate Implementation authorization.
+
+The source reconciliation is:
+
+| Finding | Result | Current evidence | Design response |
+|---|---|---|---|
+| W10-AUD-001 | CONFIRMED | Gate B M9/M10/M11 markers follow source-regex assertions; M15 is RAW-only; M19C proves only missing Profile/result count | §§37.39.5, 37.39.7 |
+| W10-AUD-002 | CONFIRMED | URL flags and `SELECT DATABASE()` exist; `CURRENT_USER()`, UUID, version, grants and first-inventory policy do not | §37.39.3 |
+| W10-AUD-003 | CONFIRMED | suite child wait has no deadline or process-tree termination | §37.39.4 |
+| W10-AUD-004 | CONFIRMED | no deterministic business barrier; R2/R3/R4/R7/R8/R9/R10/R11/R12 assertions do not prove their contracts | §37.39.6 |
+| W10-AUD-005 | CONFIRMED | R1/R5/R6 use seed-derived constants rather than computed authoritative exposure | §37.39.6.1 |
+| W10-AUD-006 | PARTIALLY_CONFIRMED | final bootstrap minus two tables is not a real upgrade and source parity is handwritten; dynamic I-3 and synthetic row-value I-4 remain useful partial evidence | §37.39.8 |
+| W10-AUD-007 | CONFIRMED | current footprint contains four counters and omits Sales/Gate/Finance identities and values | §37.39.10 |
+| W10-AUD-008 | CONFIRMED | protected manifest has parity+races only; no complete B-9/B-10/S14/Recognition-Mode MySQL matrix | §37.39.9 |
+| W10-AUD-009 | CONFIRMED | shared TAP helper parses summary counters only; local Wave 10 tests are source-regex contracts | §37.39.5, §37.39.11 |
+
+No reconciliation row is a PASS for real MySQL behavior.
+
+### 37.39.1 Design principles and Requirement mapping
+
+```text
+D-1 Evidence owns its case.                         W10-AIR-R01
+D-2 A destructive lease follows empty-target proof. W10-AIR-R02
+D-3 A live child and cleanup never race.             W10-AIR-R03
+D-4 Coordination is server-observed, not sleep.      W10-AIR-R04
+D-5 Capacity expectations come from canonical E.    W10-AIR-R05
+D-6 Upgrade uses bootstrap + ordered registry.       W10-AIR-R06
+D-7 Persistence is compared by identity and value.  W10-AIR-R07
+D-8 Business modes have their own MySQL suite.       W10-AIR-R08
+D-9 Runner behavior is locally executable with fakes.W10-AIR-R09
+D-10 Shared/frozen gates retain current behavior.    W10-AIR-R10
+```
+
+The implementation must not modify a production handler, transaction primitive, migration or
+schema to make an acceptance fixture pass. A newly discovered production defect returns to its own
+Requirement/Design stage.
+
+### 37.39.2 Exact future file and module boundary
+
+The following is the complete planned Implementation file set. A file absent from this table is
+out of scope unless a newly discovered fact forces a new Requirement/Design stop.
+
+| File | Current responsibility | Planned change | Must not change | Req | Tests |
+|---|---|---|---|---|---|
+| `scripts/gates/mysql-sales-wave10-manifest.mjs` | Wave 10/Gate B suite and evidence data | add the business-matrix suite; set B-M15 primary level to production; give every case one owner | Gate A/legacy lists | R01/R08/R10 | L-MAN-01, L-ISO-01 |
+| `scripts/gates/mysql-wave10-runner-support.mjs` | sequential reset/spawn/TAP/final cleanup | delegate identity lease, bounded process lifecycle, strict transcript and state reducer | command names; sequential suite order | R02/R03/R09 | L-RUN-01..10 |
+| `scripts/gates/mysql-sales-wave10-gate-b.mjs` | marker reduction and board output | consume typed case evidence only after all suites and final zero; suppress board on every failure | seven fixed ids | R01/R09 | L-MBR-01..07 |
+| `scripts/gates/mysql-sales-wave10-acceptance.mjs` | bounded Wave 10 entry | no behavioral logic expected; continues to consume manifest | no Gate A/legacy import | R08/R10 | L-ISO-01 |
+| `scripts/gates/mysql-concurrency-sales-wave10-worker.mjs` | one MySQL session and production/raw actions | non-destructive connected-identity check; READY/GO protocol; bounded trace/observer facts; new exact production actions needed by cases | production handler semantics; raw/production classification | R01/R02/R04/R05 | M-R01..12, M-B01..07 |
+| `server/test-utils/mysql-wave10-campaign-target.js` **new** | none | Wave-10-only config+connected identity verifier, grant digest, inventory, in-memory lease and safe report | shared Gate A guard | R02/R10 | L-GRD-01..08 |
+| `server/test-utils/mysql-wave10-process-lifecycle.js` **new** | none | injectable clock/process-tree termination and runner state reducer | production process lifecycle | R03/R09 | L-RUN-01..10 |
+| `scripts/gates/mysql-wave10-tap-transcript.mjs` **new** | none | Wave-10-only complete TAP transcript parser and assertion | shared `tap-summary.js`, hence Gate A behavior | R01/R09/R10 | L-TAP-01..09 |
+| `server/test-utils/temp-db.js` | shared disposable DB handle | add an optional Wave 10 lifecycle callback used only by Wave 10 handles; default path byte-for-behavior unchanged | existing SQLite and Gate A callers | R02/R03/R10 | L-GRD-08, L-ISO-02 |
+| `server/test-utils/wave10-mysql-acceptance-fixture.js` | common seed and four-count footprint | authoritative capacity reader; deterministic coordinator; typed projections; business-matrix builders | production facts/owners | R04/R05/R07/R08 | M-R01..12, M-BIZ-01..20 |
+| `server/test-utils/wave10-mysql-schema-fixture.js` **new** | none | canonical snapshot capped after Wave 9, normalized cross-dialect metadata and connected row graph | migration implementations | R06 | M-MIG-01..08 |
+| `server/mysql-sales-customer-wave10.integration.js` | fresh/parity/simulated upgrade/I-3/I-4 | formal fresh/upgrade/replay/equivalence using schema helper | Wave 9/10 migrations | R06 | M-MIG-01..08 |
+| `server/mysql-sales-customer-wave10-concurrency.integration.js` | W10-R1..R12 | replace weak races/assertions with §37.39.6 matrix | production L0/L1-L8 | R04/R05/R07 | M-R01..12 |
+| `server/mysql-sales-customer-wave10-gate-b.integration.js` | seven Gate B tests/markers | execute each case owner and emit marker from its typed result only | fixed ids and business contracts | R01/R04/R05/R07 | M-B01..07 |
+| `server/mysql-sales-customer-wave10-business-matrix.integration.js` **new** | none | B-9/B-10/S14/Recognition Mode MySQL matrix | exemption gap; Finance authority | R08 | M-BIZ-01..20 |
+| `scripts/mysql-sales-wave10-runners.test.js` | six source-contract tests | behavior tests for guard, lifecycle, board and isolation; retain only useful static checks | no MySQL connection | R01/R02/R03/R09/R10 | L-* |
+| `scripts/testing/test-suites.js` | unconditional suite registry | no new entry expected: the existing local runner test remains registered | no real-MySQL file registration | R09/R10 | L-ISO-01 |
+| `document.md`, `solution.md`, `log/<implementation-date>.md` | canonical records | append actual Implementation and verification evidence after authorization | historical records | R01..R10 | documentation check |
+
+`package.json`, `README.md`, `scripts/gates/tap-summary.js`, every Gate A runner/fixture, production
+Credit/Sales/Finance modules, `server/db.js`, `server/database/*`, migrations and schema files are
+explicitly **not planned changes**. The three new helpers isolate Wave 10 safety and strictness so
+the frozen Gate A execution contract is not silently changed. Existing package commands already
+name the required protected entries.
+
+### 37.39.3 Target Guard and destructive lease
+
+#### 37.39.3.1 Future authorization inputs
+
+The existing three destructive acknowledgements remain mandatory. A future separately authorized
+preflight additionally supplies values obtained from that target, never guessed in code:
+
+```text
+ERP_MYSQL_WAVE10_EXPECTED_SERVER_UUID
+ERP_MYSQL_WAVE10_EXPECTED_CURRENT_USER
+ERP_MYSQL_WAVE10_EXPECTED_GRANTS_SHA256
+ERP_MYSQL_WAVE10_EXPECTED_VERSION_POLICY=MYSQL_8
+ERP_MYSQL_WAVE10_INITIAL_INVENTORY=EMPTY_ONLY
+```
+
+The normalized grant digest sorts canonical `SHOW GRANTS FOR CURRENT_USER()` records before
+SHA-256. Raw grants are neither logged nor passed to M-board. The verifier separately confirms the
+bounded schema privileges required by bootstrap/reset and rejects an unapproved digest even when
+the privileges would be sufficient.
+
+#### 37.39.3.2 Verification order
+
+```text
+validate required env and exact password-free configured identity (no connection)
+  -> open adapter using that immutable config
+  -> SELECT DATABASE(), CURRENT_USER(), @@server_uuid, VERSION()
+  -> normalize grants; compare approved digest and required bounded capabilities
+  -> inventory TABLES/VIEWS/TRIGGERS/ROUTINES/EVENTS for DATABASE()
+  -> require EMPTY_ONLY before the first DROP
+  -> issue an in-memory random campaign lease bound to
+       config identity + actual identity + UUID + grant digest + campaign id
+  -> only then permit the first reset/bootstrap
+```
+
+Every later reset/cleanup reopens or uses a connection, repeats actual database/account/UUID/
+version checks and verifies the lease binding. Grant digest is rechecked before each destructive
+phase. Any mismatch returns a typed refusal and performs no DROP. Object identifiers remain
+enumerated from the authorized schema, type-checked and identifier-validated; views precede base
+tables, FK checks are restored in `finally`, and the database/schema itself is never dropped.
+
+The initial non-empty case is not auto-recovered. It exits with a password-free inventory summary
+and requires a new recovery authorization. After the empty-target lease exists, suite-created
+objects are cleanup-eligible. This distinction prevents historical/pre-existing objects from being
+silently classified as campaign residue.
+
+#### 37.39.3.3 Child identity
+
+Workers perform the same non-destructive actual-identity comparison before accepting commands.
+They receive the authorization values unchanged plus the runner-generated non-secret campaign id;
+they cannot grant a destructive lease. Destructive fixture cleanup is routed through the
+Wave-10-only lifecycle callback and requires the parent-established lease facts. Secret-bearing
+environment objects are never serialized to logs or worker replies.
+
+### 37.39.4 Runner and Cleanup state machine
+
+| State | Entry condition | Permitted next state | PASS allowed |
+|---|---|---|---|
+| `PREFLIGHT` | static env/config accepted | `IDENTITY_VERIFIED` or terminal refusal | no |
+| `IDENTITY_VERIFIED` | connected identity+grants+EMPTY_ONLY confirmed; lease issued | `CLEANUP_RUNNING` for pre-suite reset | no |
+| `SUITE_RUNNING` | reset zero and child spawned | `SUITE_PASSED`, `SUITE_FAILED`, `CHILD_TIMEOUT` | no |
+| `SUITE_PASSED` | exit 0 + complete strict TAP + suite evidence valid | next pre-suite reset or final cleanup | no |
+| `SUITE_FAILED` | spawn/exit/TAP/evidence failure | `CLEANUP_RUNNING` if no live child | no |
+| `CHILD_TIMEOUT` | suite deadline elapsed | `CHILD_TERMINATION_PENDING` | no |
+| `CHILD_TERMINATION_PENDING` | graceful tree stop requested | `CHILD_TERMINATION_CONFIRMED` or `CHILD_TERMINATION_FAILED` | no |
+| `CHILD_TERMINATION_CONFIRMED` | process tree exit observed in bound | `CLEANUP_RUNNING` | no |
+| `CHILD_TERMINATION_FAILED` | tree exit cannot be proven | terminal non-zero; cleanup `NOT_ATTEMPTED_CHILD_LIVE` | no |
+| `CLEANUP_RUNNING` | identity+lease reverified and no live child | `CLEANUP_CONFIRMED` or `CLEANUP_FAILED` | no |
+| `CLEANUP_CONFIRMED` | reset returned and adapter closed | `FINAL_ZERO_OBJECTS_CONFIRMED` after inventory | no |
+| `CLEANUP_FAILED` | identity/reset/inventory/close failure | terminal non-zero | no |
+| `FINAL_ZERO_OBJECTS_CONFIRMED` | all five object categories zero | board rendering then campaign completion | yes, if all suites passed |
+
+Timeout first requests cooperative shutdown so workers roll back/close. The bounded escalation then
+terminates the complete process tree: a POSIX process group when available and a Windows tree-kill
+strategy behind the injected lifecycle interface. The runner waits on actual exit events, never a
+sleep. If any descendant cannot be proven gone, it does not issue cleanup SQL and does not print a
+zero-object or campaign PASS claim.
+
+Only `SUITE_PASSED` advances to another suite. Spawn errors, non-zero exits, invalid TAP and invalid
+case evidence fail fast and skip remaining suites, then clean up. Primary and cleanup failures are
+preserved together; cleanup failure always produces non-zero exit.
+
+### 37.39.5 Strict TAP and M-board evidence pipeline
+
+#### 37.39.5.1 Wave 10 transcript contract
+
+The new Wave-10-only parser consumes a complete captured transcript after child exit. It requires:
+
+- one supported TAP version and exactly one complete top-level plan;
+- each top-level test id appears exactly once and is covered by the plan;
+- every `ok/not ok` record is syntactically complete; directives are parsed, not ignored;
+- summary counters occur once and equal the parsed records and plan;
+- `tests >= 1`, `pass == tests`, and fail/skip/cancelled/todo are zero;
+- a finite non-negative duration and no trailing partial TAP record;
+- child exit code zero.
+
+The shared `tap-summary.js` remains unchanged to avoid changing frozen Gate A behavior. The Wave 10
+runner uses only the stricter transcript object.
+
+#### 37.39.5.2 Typed case evidence
+
+Tests emit a single machine-readable line only after their case assertions finish:
+
+```text
+W10_GATE_B_EVIDENCE {"caseId":"B-M10","level":"PRODUCTION_SERIALIZED_OUTCOME",
+  "suiteId":"gate-b-production","runId":"<campaign-id>","result":"PASS","digest":"<sha256>"}
+```
+
+The digest covers the normalized, secret-free case precondition and postcondition evidence. The
+runner accepts only the current campaign id, owning suite and manifest-declared level. One case has
+one accepted record. Unknown fields do not create cases; unknown case ids, duplicate ids, wrong
+owners, wrong levels, malformed JSON or digest mismatch fail. Human-readable strings and source
+regexes are never parsed as evidence.
+
+Board rendering occurs only after all suite transcripts pass, the seven evidence records validate,
+all children are confirmed exited, final cleanup succeeds and zero objects are confirmed. The
+board itself is a projection of validated records, not a PASS source.
+
+### 37.39.6 W10-R1–R12 concurrency design
+
+#### 37.39.6.1 Common harness and authoritative capacity
+
+Each business race uses Sessions A and B plus Coordinator/Observer C on independent
+`CONNECTION_ID()` values. C takes a test-only raw hold on the existing L0 gate before A/B receive
+GO. A/B invoke production entrypoints and the observer proves both are pending at the intended
+coordination boundary. C releases; A/B then run under unchanged production `transaction()` and L0.
+The raw hold is coordination evidence only. Cases needing a specific downstream observation add a
+bounded case-specific raw hold without bypassing production L0.
+
+Before C releases, a read-only authoritative evaluator computes for every involved scope:
+effective Profile id/status/limit, canonical exposure components and total `E`, business date,
+recognition mode, proposed deltas and `available`. The returned values, not seed constants, classify
+BOTH_FIT/ONLY_ONE_FITS/NEITHER_FITS. The same cents-safe values are asserted against committed
+post-state.
+
+Common postconditions are: ceiling conservation, no partial business state, exact audit and
+idempotency cardinality for winners, zero loser delta, replay equality without second effects,
+no duplicate check-result scope or approval authority, and case-specific cleanup.
+
+#### 37.39.6.2 Case matrix
+
+| Test | Production A / B | Deterministic observation | Exact result | Projection |
+|---|---|---|---|---|
+| M-R01 / R-SAL-12 | `salesOrderAction(approve)` on two distinct SUBMITTED SOs, same customer — §37.39.6.3, corrected 2026-10-25; the former `evaluateCreditCheck`-pair contract is superseded | both queued behind C; run BOTH_FIT and ONLY_ONE_FITS subcases | BOTH_FIT=2 authoritative Sales commitments; ONLY_ONE_FITS=1 commitment+1 409 `CREDIT_CHECK_BLOCKED`; committed delta <= available | P-CREDIT, P-SALES, P-AUDIT-IDEM |
+| M-R02 / R-SAL-13 | production Special Approval decision / `salesOrderAction(approve)` | both READY; seeded request created through production request entry | exactly one effective authority; the other is explicit conflict; never zero winners | P-CREDIT, P-APPROVAL, P-SALES, P-AUDIT-IDEM |
+| M-R03 / R-SAL-14 | production Credit evaluation / Finance AR transition writer | both queued; order of L0 winner recorded | check components equal exact OLD or NEW canonical exposure; final stage counted once | P-CREDIT, P-SALES, P-FINANCE, P-AUDIT-IDEM |
+| M-R04 / R-SAL-24 | Credit evaluation / production Profile version create | both queued; winning order recorded | all result rows and snapshot hashes equal one complete OLD or NEW version set | P-CREDIT, P-POLICY, P-AUDIT-IDEM |
+| M-R05 | two salesperson SO approvals sharing aggregate | computed aggregate ONLY_ONE_FITS; both queued | exactly one economic commitment; shared aggregate ceiling conserved | P-CREDIT, P-SALES, P-AUDIT-IDEM |
+| M-R06 | two same-salesperson SO approvals | computed aggregate BOTH_FIT and sub-limit ONLY_ONE_FITS | exactly one commitment; both ceilings conserved | P-CREDIT, P-SALES, P-AUDIT-IDEM |
+| M-R07 | production aggregate-scope Special Approval decision / sub-limit-controlled SO approval | distinct scope rows proven before GO | aggregate authority cannot release mandatory sub-limit; SO path 409 with zero delta | P-CREDIT, P-APPROVAL, P-SALES, P-AUDIT-IDEM |
+| M-R08 | dual-scope Credit evaluation / salesperson Profile version create | both queued; OLD/NEW ids+hashes captured | aggregate and salesperson result rows belong to one coherent version set | P-CREDIT, P-POLICY, P-AUDIT-IDEM |
+| M-R09 | Credit evaluation of new SO / canonical transition setup already committed before race | fixture proves SO50 is extinguished and final unpaid AR50 exists; new SO20 | aggregate passes; sub-limit exposure=50, proposal=70>60 and blocks | P-CREDIT, P-SALES, P-FINANCE, P-AUDIT-IDEM |
+| M-R10 | two production checks over one consolidated/ambiguous AR | ambiguous Finance lineage asserted before GO | aggregate counts full header; mandatory sub-limit is `BLOCK/UNPROVEN_ATTRIBUTION`; no guessed amount | P-CREDIT, P-FINANCE, P-AUDIT-IDEM |
+| M-R11 | production prepayment-controlled SO action / Credit Check | C holds eligible Finance parent; observe first business waiter there and second at L0, then release | both settle without cycle; exact allowed outcome recorded; no partial facts | P-CREDIT, P-GATE, P-SALES, P-FINANCE, P-AUDIT-IDEM |
+| M-R12 | N>=3 production checks reusing pre-created immutable snapshot | separate raw holder locks snapshot row while checks run after L0 coordination | all BOTH_FIT checks succeed and converge; none waits on/locks existing snapshot row | P-CREDIT, P-AUDIT-IDEM plus lock observation |
+
+R9's SO-to-AR transition is completed through the canonical production lifecycle before the race;
+directly inserting an APPROVED SO is insufficient. R10 creates the exact unsupported attribution
+shape through canonical Finance/Sales source records. If a necessary canonical writer cannot
+construct either shape, Implementation stops for a Design amendment rather than inserting a
+counterfeit state.
+
+#### 37.39.6.3 M-R01 Design Precision Correction (2026-10-25)
+
+**Authorization and scope.** The user authorized one Design-only revision of the M-R01 contract
+after the source audit recorded in `log/2026-10-25.md` under "Wave 10 Implementation Continuation".
+No production code, test, runner, worker, manifest, fixture, schema, migration, package script,
+`document.md`, `README.md` or `AGENTS.md` changed. MySQL was not contacted and no Gate ran.
+
+**Superseded contract.** The M-R01 row in §37.39.6.2 previously required **two
+`evaluateCreditCheck` calls** over two distinct proposed Sales commitments and expected
+"BOTH_FIT=2 commits; ONLY_ONE_FITS=1 commit+1 409". That contract is **superseded** by this
+subsection. The original row is preserved in §37.39.6.2 with an explicit supersession pointer. No
+historical section, log entry, approved Requirement or prior acceptance record is deleted or
+rewritten.
+
+##### A. Why the former contract could not hold, and the audited production entry
+
+The former entry was `evaluateCreditCheck()` — `server/modules/credit-check.js:1060-1104`. It is
+the only public HTTP surface of the Credit engine and the only entry that accepts an arbitrary
+`proposedDeltaCents`, which is why §36.8.3 W10-R1 was originally written as "Credit Check vs
+Credit Check, same customer" — before the Wave 10 implementation made `approve` credit-controlled
+(§37.19.1, §37.35.5). Four source facts disqualify it as the M-R01 entry:
+
+| # | Source fact | Consequence |
+|---|---|---|
+| 1 | `evaluateCreditCheck()` calls only `evaluateCredit()` (`credit-check.js:1076-1090`) and writes `credit_check_results` + `audit_logs` evidence. It mutates no `sales_orders` row. | A successful manual check creates no authoritative Sales commitment. "one commits, one 409" is not expressible as a business outcome. |
+| 2 | The authoritative exposure is `computeCreditExposure()` (`credit-check.js:385-494`), whose Sales stage is `readApprovedOrders()` — `SELECT ... FROM sales_orders WHERE customer_id=? AND status='APPROVED'` (`credit-check.js:224-228`). | Prior `credit_check_results` are not exposure. Two serialized manual checks read the same `E`, so both PASS whenever each independent `E + delta` fits, even when `deltaA + deltaB > available`. The required exactly-one commitment is unreachable through this entry. |
+| 3 | A Credit Check takes no Sales business row lock (§36.3.4.1 C-2, §36.12). `evaluateCreditCheck` therefore never holds the SC91 transition lock. | R-SAL-12's canonical lock identity is "Credit Profile identity + SC91 transition-lock identity" (`document.md` §34.6). The former entry exercises only the first half. |
+| 4 | `evaluateCreditCheck` runs with `consumeApprovals: false` (`credit-check.js:1089`). | It cannot consume a Special Approval, so it is not the full business decision path either. |
+
+The audited entry is `salesOrderAction(db, req, res, actor, orderId, 'approve')` —
+`server/modules/sales-orders.js:877-887` — which dispatches to `approveSalesOrder()`
+(`sales-orders.js:799-875`). Its production sequence is:
+
+```text
+salesOrderAction('approve')
+  :879  requireSalesPermission(actor, 'ORDERS_APPROVE')
+  :883  Idempotency-Key required; :885 idempotencyReplay()
+  :813  discoverSalesOrderApprovePlan()      read-only; status must be 'SUBMITTED',
+                                             creator_id !== actor.id, sales-group scope
+  :816  transaction(db, ...)                 server/db.js:2089-2130
+        :2101  BEGIN IMMEDIATE
+        :2121  L0 gate  SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE
+        :819   L1     lockCreditPrepaymentParents()          credit-check.js:986-991
+        :821   L2..L5 assertCreditAllowsBusinessAction()   credit-check.js:998-1012
+                    stage 'SO_APPROVE'; proposedDeltaCents = plan.totalCents;
+                    sourceRef { sourceType:'SALES_ORDER', sourceId: orderId }
+                    credit-check.js:714-742  L1 skipped (caller holds it) /
+                                             L2 POLICY_SCOPE FOR SHARE /
+                                             L3 AGGREGATE anchor FOR UPDATE /
+                                             L4 SALESPERSON anchor FOR UPDATE /
+                                             L5 credit_profile FOR UPDATE
+                    credit-check.js:745      the exposure is computed AFTER the locks
+        :834   L8     SELECT * FROM sales_orders WHERE id=? FOR UPDATE
+        :836-852       revalidate status / SOD / sales-group scope / plan fingerprint
+        :854          UPDATE sales_orders SET status='APPROVED', reviewer_id=?, reviewed_at=?
+        :856          saveIdempotency('SALES_ORDER_APPROVE')
+        :857          audit('APPROVE','SALES_ORDER',orderId)
+        :859          send(res, 200, { ok:true, id, action:'approve' })
+```
+
+**Why this operation forms and preserves the authoritative Sales commitment.**
+`approveSalesOrder` is the operation that creates the commitment the Credit control governs: it
+transitions `sales_orders.status` from `SUBMITTED` to `APPROVED` and stamps `reviewer_id` and
+`reviewed_at` (`sales-orders.js:854`) — the exact row set that `readApprovedOrders()`
+(`credit-check.js:224-228`) reads back as the approved Sales commitment, and the exact set that
+`computeCreditExposure()` counts as `approvedSoCommitmentCents` (`credit-check.js:438-456`). It
+therefore takes both halves of R-SAL-12's canonical lock identity: the Credit Profile identity
+(`credit_profile ... FOR UPDATE`, `credit-check.js:738-742`) and the SC91 transition lock
+(`sales_orders ... FOR UPDATE`, `sales-orders.js:834`).
+
+This is the frozen intent of §29.25.2, unchanged by this correction: "whichever wins blocks the
+other at the anchor row lock. The blocked transaction reads the updated state (which now includes
+the winner's committed Sales source fact) and re-evaluates against it." The correction aligns the
+M-R01 case with that intent; it does not change it.
+
+##### B. Real capacity precondition
+
+`available = effective credit limit - canonical current exposure`, computed from committed
+authoritative facts **before** the coordinated start and never from seed constants
+(W10-AIR-R05, §36.8.1, §37.39.6.1).
+
+| Input | Authoritative source | Note |
+|---|---|---|
+| Effective Credit Profile | the `credit_profile` row resolved by the Wave 9 effective-date resolver `resolveEffectiveCreditProfile()` (`server/modules/credit-profile.js:44`), for the credit object and scope, `status='ACTIVE'`, `effective_from<=businessDate` | `resolveApplicableCreditScopes()` (`credit-check.js:173-218`) fails closed on a non-ACTIVE row; it never falls back to an older ACTIVE version nor to the aggregate scope (B-9 O2). |
+| Effective limit | `credit_profile.credit_limit_cents` | A NULL / unbounded limit is not a bounded-capacity fixture: the case is explicitly unconstructible and must never be converted into PASS (W10-AIR-R05). |
+| Canonical exposure `E` | `computeCreditExposure()` (`credit-check.js:385-494`), aggregate components `approvedSoCommitmentCents + deliveredNotSettledCents + arOpenCents - eligiblePrepaymentCents` | Derived inside the check transaction from approved Sales Orders, confirmed Deliveries and open AR. There is no persisted exposure cache (S14, R-SAL-23). |
+| Business date | `order.order_date` of the seeded order (`sales-orders.js:785`) | Must satisfy the exposure-window precondition below. |
+| Recognition mode | `resolveRecognitionPolicy(db,'AR','SALES_DELIVERY',null,businessDate).mode` (`sales-orders.js:827`) | A rule whose `recognition_mode` does not match does not apply (`credit-check.js:513-516`). |
+| `amountA` / `amountB` | `sales_orders.total_cents` of the two SUBMITTED orders | The approve path uses `proposedDeltaCents: plan.totalCents` (`sales-orders.js:826`), so the delta is the order total and never a test-supplied number. |
+| Effective rule for stage `SO_APPROVE` | `credit_check_rules WHERE business_stage='SO_APPROVE' AND status='ACTIVE' AND effective_from<=businessDate` (`credit-check.js:508-511`) | A stage with no applicable effective rule is **not credit-controlled** (`credit-check.js:667-675`) and leaves no evidence. Without an effective `SO_APPROVE` rule the M-R01 case is unconstructible, not PASS. |
+| Other applicable constraints | mandatory sub-limit scope, ambiguous attribution, overdue-day policy | `UNPROVEN_ATTRIBUTION` and `OVERDUE_POLICY_UNDEFINED` force a mandatory BLOCK for reasons unrelated to capacity (`credit-check.js:813-821`); they are a different race (W10-R10) and are not M-R01's expected refusal. |
+
+The test inputs satisfy:
+
+```text
+amountA <= available
+amountB <= available
+amountA + amountB >  available      (ONLY_ONE_FITS subcase)
+amountA + amountB <= available      (BOTH_FIT subcase)
+```
+
+These relations hold only while both orders share one credit-control scope, both amounts are
+positive, and no third party changes the scope between the computation and the coordinated start.
+If the real production rule adds a further restriction, the precondition is adjusted to the real
+rule; the outcome is never inferred from the arithmetic alone. When the precondition cannot be
+proven from actual data, "exactly one fails" is **not** asserted and the case fails closed.
+
+**Exposure-window precondition (load-bearing).** `readApprovedOrders()` filters
+`SUBSTR(reviewed_at,1,10)<=businessDate` (`credit-check.js:225-227`), and the winner's
+`reviewed_at` is the wall clock at commit (`sales-orders.js:854`). The winner's freshly created
+commitment is therefore visible to the loser's exposure read only when
+`date(reviewed_at) <= businessDate = order.order_date`. If the campaign runs on a later calendar
+date than the seeded `order_date`, the winner's APPROVED order falls outside the loser's exposure
+window and the ONLY_ONE_FITS subcase would observe two commits. The fixture must therefore derive
+`order_date` from the actual run date, or assert `order_date >= date(reviewed_at)`, and must not
+rely on a fixed date constant.
+
+**Isolation precondition (load-bearing).** The loser's exposure re-read must be a fresh read that
+includes the winner's committed commitment. Production MySQL sessions run at
+`SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED`
+(`server/database/mysql-worker.js:30,107`), so the loser's post-lock `computeCreditExposure()`
+statement sees the winner's committed `sales_orders` row. Under REPEATABLE READ the same statement
+would use the transaction's earlier consistent snapshot, would not see the winner's commitment, and
+the ONLY_ONE_FITS proof would be invalid. §37.17 already declares that "any Design text asserting
+otherwise is incorrect and is superseded here"; the "default engine isolation (REPEATABLE READ)"
+parenthetical in §36.8 is corrected accordingly.
+
+##### C. Independent sessions and concurrency coordination
+
+- Two independent MySQL sessions, proved by two distinct `CONNECTION_ID()` values registered
+  before the race (§37.39.6.1).
+- Each session issues **one** real production request through the production handler
+  `salesOrderAction(..., 'approve')`, with its own `Idempotency-Key`. Authorization, plan
+  discovery, transaction, lock chain, revalidation and commit or refusal are performed by
+  production code only.
+- Coordinator C takes a test-only raw hold on the existing L0 gate row
+  (`mysql_transaction_gates`, `gate_id=1`) and A/B are observed pending at that boundary before C
+  releases. The hold is coordination evidence only (§37.39.6.1, W10-AIR-R04); it never substitutes
+  for a production business result.
+- After the release, the two production transactions serialize on the production L0 gate
+  (`server/db.js:2121`) and then on the Credit chain's L3 AGGREGATE anchor, L4 SALESPERSON anchor
+  and L5 Credit Profile locks (`credit-check.js:725-742`). The loser therefore re-reads the
+  authoritative exposure **after** the winner committed and re-evaluates against it (§29.25.2).
+- A raw wait observation on the anchor row may be captured as `RAW_ROW_LEVEL_LOCK_ORDER`
+  supplementary lock-behaviour diagnostic only. It is never the case's business outcome and never
+  an M-board PASS source.
+- Timeout handling: a session that does not return within the bounded deadline fails the case
+  with a typed, secret-free diagnostic. It is never downgraded to skip/todo or a warning PASS.
+- Prohibited: direct fixture writes that fabricate the commitment, hand-written exposure rows,
+  manually released credit capacity, forged responses, or a raw-lock probe used in place of the
+  production business result. The two SUBMITTED orders are declared setup reference facts; their
+  APPROVED commitment is created only by the production approve path.
+
+##### D. Acceptance results
+
+With the capacity precondition proven and no third-party interference:
+
+1. Exactly one business commitment succeeds. The winner's `sales_orders.status='APPROVED'` with
+   `reviewer_id` and `reviewed_at` set is committed, and the response is HTTP 200 with body
+   `{ ok: true, id: <orderId>, action: 'approve' }` (`sales-orders.js:855,859`).
+2. The other operation is refused by the existing business contract with **HTTP 409** and the
+   existing production error contract — `code: 'CREDIT_CHECK_BLOCKED'`, `decision: 'BLOCK'`,
+   `reasonCodes` containing `OVER_LIMIT`, together with `checkGroupId` and `scopeResults`
+   (`credit-check.js:1002-1011`; the over-limit reason code is produced at
+   `credit-check.js:830-837`). No new error code, message or HTTP status is invented.
+3. Never two successes that together exceed the ceiling: the committed aggregate commitment delta
+   must be `<= available`, and in the ONLY_ONE_FITS subcase the two order totals must together
+   exceed `available`.
+4. The following are **not** the expected credit-race refusal. They fail the case instead:
+   - HTTP 403 from permission, separation-of-duties or sales-group scope (`ORDERS_APPROVE`
+     missing, a creator approving their own order, `SALES_GROUP_SCOPE_DENIED`);
+   - HTTP 409 `只有待审批订单可以处理` (invalid source state) or `SALES_ORDER_APPROVE_PLAN_STALE`
+     (stale plan);
+   - HTTP 409 `CREDIT_PROFILE_MISSING`, `CREDIT_PROFILE_NOT_ENFORCEABLE`, `P5_SUB_LIMIT_ONLY`,
+     `CREDIT_CREDIT_OBJECT_AMBIGUOUS`;
+   - HTTP 409 `CREDIT_EXPOSURE_SOURCE_INCONSISTENT` (broken Sales/Finance lineage);
+   - HTTP 503 `SALES_ORDER_APPROVE_RETRY_EXHAUSTED`.
+   These are setup, authorization or environment failures and must never be reported as the
+   expected credit contention refusal.
+
+##### E. Complete persistence projection
+
+Declared from the real tables and the real production write path (§37.39.10). A table that this
+path does not write is stated explicitly as not applicable; no field and no table is invented.
+
+| Family | Tables | Winner (committed) | Refused transaction (rolled back) |
+|---|---|---|---|
+| P-SALES | `sales_orders`, `sales_order_items` | `status` `SUBMITTED` -> `APPROVED`; `reviewer_id` and `reviewed_at` set; `total_cents`, `salesperson_id`, `commercial_close_state`, `effective_version` unchanged; items unchanged | every field identical to the pre-race snapshot; `status` stays `SUBMITTED`; `reviewer_id` and `reviewed_at` stay NULL |
+| P-CREDIT | `credit_check_results` | exactly one row per applicable scope (`CUSTOMER_AGGREGATE`, `SALESPERSON_SUB_LIMIT`), `stage='SO_APPROVE'`, `decision='PASS'`, `sales_order_id` = the winner's order, `proposed_delta_cents` = the order total, `reason_codes_json` containing `WITHIN_LIMIT` | **zero rows** — the result rows are written inside the same transaction (`credit-check.js:913-933`) and roll back with the refusal |
+| P-CREDIT | `credit_policy_snapshots` | one snapshot per scope, or the pre-existing identical snapshot reused by insert-or-select | no new snapshot row |
+| P-CREDIT | `credit_profile`, `credit_check_rules`, `credit_parameters` | unchanged — this path only reads them (FOR UPDATE without UPDATE) | unchanged |
+| P-APPROVAL | `credit_special_approval` | unchanged — the BLOCK path consumes no approval; approval consumption applies only to a `SPECIAL_APPROVAL_REQUIRED` decision (`credit-check.js:883-907`) | unchanged |
+| P-GATE | `sales_prepayment_requirements`, `sales_prepayment_gate_results` | **not applicable to this path** — the approve path invokes no Gate phase (`sales-orders.js:817-819`); the Credit Check owns the L1 lock instead (`credit-check.js:714-716`) | not applicable |
+| P-FINANCE | `account_receivables`, `payment_collections`, `settlement_unapplied_balances`, `settlement_reversals`, `settlement_reversal_items`, `credit_reversal_components`, `finance_invoice_source_links` | unchanged — this path writes no Finance row. `settlement_unapplied_balances` must be proven to hold **zero** OPEN CUSTOMER/PREPAYMENT rows for the fixture customer, because an eligible prepayment offsets the aggregate exposure (`credit-check.js:749-758`) and would change `available` | unchanged |
+| P-AUDIT-IDEM | `audit_logs` | one `EVALUATE`/`CREDIT_CHECK` row for the winning check group (`credit-check.js:936-952`) and one `APPROVE`/`SALES_ORDER` row (`sales-orders.js:857`) | **zero rows** — the Credit `EVALUATE` audit and the `APPROVE` audit are both written inside the rolled-back transaction |
+| P-AUDIT-IDEM | `idempotency_records` | exactly one `SALES_ORDER_APPROVE` record for the winner's key and fingerprint | **none** — the refusal is raised before `saveIdempotency` (`sales-orders.js:856`) |
+
+The refused transaction's forbidden delta across the whole declared union must be **empty**, not
+merely an unchanged row count (W10-AIR-R07). The winner's delta must be exactly the committed
+Sales commitment plus its Credit, audit and idempotency facts. An exact replay of the winner's
+`Idempotency-Key` must return the stored result with `replayed: true` and produce no second
+effect (`sales-orders.js:885`).
+
+##### F. Evidence level
+
+```text
+M-R01 primary evidence level      PRODUCTION_SERIALIZED_OUTCOME
+M-R01 supplementary diagnostic    RAW_ROW_LEVEL_LOCK_ORDER (anchor / profile wait detail only)
+M-R01 never sufficient            STATIC_INTENT
+```
+
+The M-R01 PASS marker is emitted only after the production responses, the committed authoritative
+rows and the complete before/after projection have all been asserted (§37.39.5.2). The Gate B
+final M-board is generated by real execution evidence and is never hard-coded PASS. This
+subsection changes no other M-R case, no Gate B case, no evidence level, no runner, worker,
+manifest or fixture ownership, and no Requirement.
+
+**Preserved boundaries.** Gate A's frozen contract, runner and accepted evidence are untouched.
+Wave 9's frozen semantics are untouched. B-9 O2, B-10 O1, the S14 Mode B/C bounded repair
+contract, the Credit Profile effective-date resolver, permissions, status history and rating
+provenance, the Finance `open_amount_cents` authority, L0 and the L1-L8 lock order, MySQL READ
+COMMITTED, the existing transaction, idempotency and error contracts, the other six Gate B cases
+and their evidence levels, and the Wave 11 / Wave 12 scope boundaries are all unchanged. No new
+production business rule, credit reservation or capacity mechanism, database schema, migration or
+version change is introduced by this correction.
+
+**Design status: `M_R01_DESIGN_PRECISION_CORRECTION_COMPLETE_AWAITING_IMPLEMENTATION_AUTHORIZATION`.**
+**Stop state: `IMPLEMENTATION_NOT_AUTHORIZED`; `MYSQL_ACCEPTANCE_NOT_RUN`; `GATE_A_FROZEN`;
+`GATE_B_NOT_RUN`; `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`;
+`WAVE12_NOT_STARTED`; `NO_GIT_WRITE`; `NO_DATABASE_OPERATION`.**
+
+### 37.39.7 Gate B case design
+
+| Test/case | Primary level | Actual entry and precondition | Required result and unique marker point |
+|---|---|---|---|
+| M-B01 B-COMPOSE | STATIC_INTENT | bounded source/AST contract over production composition | exact L1?->L2->L3->L4->L5->L6/L7->L8 intent; marker after AST assertions only; no runtime claim |
+| M-B02 B-M9 | PRODUCTION_SERIALIZED_OUTCOME | manual `evaluateCreditCheck` and `salesOrderAction(submit)` on the same DRAFT order; distinct sessions queued by C | exactly one Sales commitment, submit occurs once, any independent check evidence is coherent/idempotent; no duplicate exposure; marker after persistent projection |
+| M-B03 B-M10 | PRODUCTION_SERIALIZED_OUTCOME | two salesperson production approvals; actual aggregate ONLY_ONE_FITS | exactly one commitment and aggregate conservation; marker cannot reuse R5 text/output |
+| M-B04 B-M11 | PRODUCTION_SERIALIZED_OUTCOME | production Profile mutation vs active Credit Check | complete OLD or NEW snapshot/version set; marker after both outcomes and rows verified |
+| M-B05 B-M12 | PRODUCTION_SERIALIZED_OUTCOME | production Special Approval decision vs policy mutation; request seeded by production path | approval is bound to its source snapshot or explicitly rejected after revalidation; no mixed policy authority |
+| M-B06 B-M15 | PRODUCTION_SERIALIZED_OUTCOME | empty eligible prepayment-parent set proven; two salesperson production approvals; computed aggregate ONLY_ONE_FITS | exactly one commits; optional RAW wait detail is supplemental and emits no B-M15 PASS marker |
+| M-B07 B-M19C | PRODUCTION_SERIALIZED_OUTCOME | no eligible prepayment parent; real production Credit entry; mandatory Profile genuinely missing | the production entry rejects at the pre-lock missing-Profile guard with the existing `CREDIT_PROFILE_MISSING` contract; a bounded trace confirms that actual stop boundary and makes no L2-L5-reached claim; the complete before/after projection proves zero prohibited persistent effects; marker only after response, trace and projection assertions |
+
+For B-M19C, the production trace is captured by a test-side adapter proxy/worker trace that records
+only normalized statement classes and table identities. The real production entry must return
+`CREDIT_PROFILE_MISSING`, and the trace must show that execution stopped at the actual missing-
+Profile guard before L2-L5. It must not acquire additional L2-L5 locks solely for evidence, change
+the production invocation/lock order, fabricate a trace or substitute static source matching for
+the runtime result. This trace neither changes production code nor claims RAW row-lock order.
+
+The authoritative before/after projection must prove that the rejection creates no successful
+Credit Check result, business mutation, audit fact, Special Approval consumption or approval-state
+mutation, or idempotency success fact attributable to a successful Credit Check. It also includes
+every additional table/field required by W10-AIR-R07 and the exact production entry point. The
+M-board accepts the B-M19C production marker only after the production-path error, persistent-state
+projection and truthful pre-lock trace have all passed.
+
+A genuinely missing mandatory Profile remains distinct from an effective but non-`ACTIVE` Profile,
+which retains `CREDIT_PROFILE_NOT_ENFORCEABLE`; a Profile that exists but is not applicable retains
+its existing fail-closed contract; authorization and other business rejections remain separate.
+B-9 SUSPENDED/CLOSED belongs to the business matrix, not a relabeling of B-M19C's approved missing-
+Profile contract.
+
+### 37.39.8 Migration, parity and upgrade fixture
+
+#### 37.39.8.1 Canonical shapes
+
+`wave10-mysql-schema-fixture.js` calls `captureSqliteSnapshot()` using a test-only snapshot factory,
+then removes exactly the two `SALES_WAVE10_TABLES` definitions and asserts that the remaining Sales
+registry shape contains all `SALES_WAVE9_TABLES` and no Wave 10/11 Credit table. This derives the
+Wave 9 source metadata from the real canonical SQLite bootstrap rather than handwritten DDL. It
+does not alter `createDatabase()`.
+
+The upgrade flow is:
+
+```text
+runner EMPTY_ONLY reset and identity lease
+  -> capture canonical SQLite snapshot
+  -> derive and validate Wave-9-bounded snapshot
+  -> bootstrapMySql(adapter, wave9Snapshot) on empty target
+  -> seed connected six-table Wave 9 graph
+  -> runSalesCustomerMigrations(adapter, registry steps wave<=10)
+  -> repeat the same ordered registry
+  -> compare rows and normalized metadata
+```
+
+Filtering uses the exported canonical registry and runner; migration functions are not copied.
+Fresh flow independently calls production `createDatabase(config)` on an empty target. The suite
+captures normalized eight-table metadata from both flows and deep-compares it.
+
+#### 37.39.8.2 Metadata normalization and tests
+
+Normalization maps the SQLite logical affinity contract to approved MySQL physical families while
+retaining ordered column name, logical family, nullability, normalized default, PK ordinal, FK
+target/on-update/on-delete, checks, index uniqueness/order and InnoDB/collation requirements.
+
+```text
+M-MIG-01 fresh production bootstrap creates exactly Wave 10's two additions
+M-MIG-02 actual SQLite source vs MySQL target full six-table metadata parity
+M-MIG-03 Wave-9-bounded snapshot -> formal ordered Wave 10 registry upgrade
+M-MIG-04 repeated fresh initialization is idempotent
+M-MIG-05 repeated formal registry upgrade is idempotent
+M-MIG-06 fresh and upgraded eight-table normalized metadata are equal
+M-MIG-07 I-4 connected rows, NULL/boundary values and exact pre/post values survive
+M-MIG-08 I-3 dynamically enumerates every actual FK and finds zero orphans
+```
+
+Any metadata query failure, unknown mapping or missing constraint fails with a structured diff.
+No production history inference is made; `LEGACY_DATA_EVIDENCE_PENDING` stays OPEN.
+
+### 37.39.9 B-9/B-10/S14/Recognition Mode business matrix
+
+The new protected suite is added to `WAVE10_MYSQL_SUITES`, never FAST/FULL/HEAVY:
+
+| Tests | Setup and production assertion |
+|---|---|
+| M-BIZ-01..04 B-9 | ACTIVE succeeds; SUSPENDED and CLOSED each return `CREDIT_PROFILE_NOT_ENFORCEABLE`; current non-ACTIVE does not fall back to old ACTIVE or aggregate; Special Approval cannot bypass; P-CREDIT/P-SALES zero delta on refusal |
+| M-BIZ-05..08 B-10 | unresolved old approved SO remains; arbitrary date advance changes nothing; partial canonical transition releases only transitioned cents; open/overdue AR is counted once until canonical settlement |
+| M-BIZ-09..15 S14 Mode B/C | one and partial invoice; partial collection; multiple deliveries; one salesperson exact allocation; multiple-salesperson ambiguous remaining AR; missing/conflicting link fails closed; aggregate conservation and no stage double-count |
+| M-BIZ-16..20 Recognition | global rule; exact-mode rule; nonmatching-only -> unenforced/no rows; no rule -> unenforced/no rows; strongest applicable outcome and mandatory BLOCK rollback |
+
+Every setup uses canonical Sales/Finance writers where they exist. Direct fixture DML is allowed
+only for immutable reference/setup facts whose production creation is outside the case, and must be
+declared. Source lineage is never synthesized by a proportional/FIFO/equal/residual algorithm.
+The explicit exemption row asserts only that no selector exists and no exemption is applied; it
+does not claim or add support.
+
+### 37.39.10 Persistent projection design
+
+Projection rows are sorted objects with explicit selected fields; volatile timestamps may be
+normalized only when the contract does not compare them. Missing tables/columns fail.
+
+| Projection | Tables and minimum fields |
+|---|---|
+| P-CREDIT | `credit_check_results`: id/group/scope/decision/exposure/proposed/available/snapshot/profile hashes/source; `credit_policy_snapshots`: identity+all hashes; relevant anchor/profile/rule/parameter identities and versions |
+| P-APPROVAL | `credit_special_approval`: id/source result+group/scope/snapshot/ceiling/expiry/decision/consumer; no duplicate effective authority |
+| P-GATE | `sales_prepayment_requirements` and `sales_prepayment_gate_results`: order/stage/snapshot/decision/required/eligible/applied/refunded/override identities |
+| P-SALES | `sales_orders`: id/status/total/salesperson/version/review fields; relevant items and delivery/invoice source identities and amounts |
+| P-FINANCE | `account_receivables`: id/source/customer/original/open/status; settlement/application rows; `settlement_unapplied_balances`; `finance_invoice_source_links`: invoice/source/line/allocation |
+| P-AUDIT-IDEM | relevant `audit_logs`: id/action/entity/user/detail digest; `idempotency_records`: operation/key/fingerprint/status/result digest |
+
+Each M-R, M-B and rejection-capable M-BIZ row declares the union shown in its test definition.
+Snapshot before, winner delta, loser delta, final state and exact replay state are compared
+separately. A rejection PASS requires an empty forbidden delta across the complete declared union,
+not merely unchanged counts.
+
+### 37.39.11 Local behavior test design
+
+All tests below use fake adapters, fake child processes, injected clocks and pure reducers. They
+open no database and remain in the existing registered local test file unless implementation size
+requires a separately approved split.
+
+```text
+L-GRD-01 missing destructive acknowledgements refused before adapter creation
+L-GRD-02 config identity mismatch refused
+L-GRD-03 DATABASE/CURRENT_USER/UUID/version/grant mismatch each refused before DROP
+L-GRD-04 first non-empty inventory refused and no exec(DROP)
+L-GRD-05 exact empty identity issues lease with secret-free report
+L-GRD-06 identity drift before reset/cleanup revokes lease
+L-GRD-07 identifier/type rejection and views-before-tables/FK restore
+L-GRD-08 Wave 10 temp lifecycle uses verifier; default temp-db behavior unchanged
+
+L-RUN-01 success state path reaches final zero then board
+L-RUN-02 spawn error -> cleanup -> non-zero
+L-RUN-03 child non-zero -> cleanup -> non-zero
+L-RUN-04 timeout -> graceful termination confirmed -> cleanup
+L-RUN-05 timeout -> forced tree termination confirmed -> cleanup
+L-RUN-06 termination unconfirmed -> no cleanup SQL and non-zero
+L-RUN-07 cleanup failure blocks board and returns non-zero
+L-RUN-08 final inventory non-zero blocks board
+L-RUN-09 primary+cleanup errors are both retained
+L-RUN-10 remaining suites do not start after first failure
+
+L-TAP-01 valid complete transcript accepted
+L-TAP-02..09 missing/duplicate plan, truncated record, counter mismatch, zero tests,
+             nonzero fail, skip/cancel/todo and trailing partial record rejected
+
+L-MBR-01 valid seven owned typed records accepted
+L-MBR-02..07 missing, duplicate, extra, wrong level, wrong suite/run id and digest mismatch rejected
+L-ISO-01 Wave 10 entry graphs contain no Gate A/legacy suite
+L-ISO-02 real MySQL suites remain outside FAST/FULL/HEAVY and shared Gate A helpers are unchanged
+```
+
+Static source checks may remain for command mapping and forbidden imports, but no source string is
+accepted as lifecycle, TAP, cleanup or production outcome evidence.
+
+### 37.39.12 Design acceptance matrix
+
+| Scope | Requirement | Design | Future files | Future tests | OPEN fact | Separate MySQL authorization |
+|---|---|---|---|---|---|---|
+| W10-AUD-001 | R01 | §§37.39.5, .7 | manifest, Gate B runner/test, worker | L-MBR-*, M-B01..07 | runtime markers/results | yes |
+| W10-AUD-002 | R02 | §37.39.3 | new target helper, runner support, worker, temp-db | L-GRD-* | UUID/account/grant/inventory values | yes |
+| W10-AUD-003 | R03 | §37.39.4 | runner support, new lifecycle helper | L-RUN-* | platform tree termination behavior | no for local; yes for campaign |
+| W10-AUD-004 | R04 | §37.39.6 | concurrency suite, worker, fixture | M-R01..12 | actual waits/outcomes | yes |
+| W10-AUD-005 | R05 | §§37.39.6.1, .7 | fixture, concurrency/Gate B suites | M-R01/R05/R06, M-B03/B06 | actual canonical E | yes |
+| W10-AUD-006 | R06 | §37.39.8 | migration suite, new schema helper | M-MIG-01..08 | actual MySQL metadata/results | yes |
+| W10-AUD-007 | R07 | §37.39.10 | fixture and all business suites | projections in M-R/M-B/M-BIZ | actual persistent deltas | yes |
+| W10-AUD-008 | R08 | §37.39.9 | manifest, new business suite, fixture | M-BIZ-01..20 | exemption gap; actual outcomes | yes |
+| W10-AUD-009 | R09 | §§37.39.4, .5, .11 | runner support, new TAP/lifecycle helpers, local test | L-RUN/TAP/MBR/ISO | none for local behavior | no for local; yes for campaign |
+| Freeze | R10 | §§37.39.1, .2, .13 | no Gate A/Wave 9 production file | L-ISO-* | user Acceptance/Freeze | yes for Wave 10 only |
+
+Design acceptance requires every local L-test to pass after Implementation, every MySQL M-test to
+remain protected and NOT_RUN until separately authorized, `git diff --check`, the appropriate
+local regression/build gates, and an external read-only re-audit before campaign authorization.
+
+### 37.39.13 Error, compatibility, rollback and hard stop
+
+- Guard, lifecycle, TAP, case evidence, projection and metadata errors are typed, secret-free and
+  terminal for the campaign. They never downgrade to skip/todo or a warning PASS.
+- Implementation rollback consists only of reverting the bounded test-infrastructure changes; no
+  production data rollback or migration rollback is authorized or required by this Design.
+- L0, L1-L8, READ COMMITTED, Finance authority, production handlers, schema/migrations,
+  permissions, states, audit and idempotency semantics remain untouched.
+- Gate A runners, fixtures, evidence and freeze record remain untouched. The shared TAP helper and
+  existing disposable-target guard retain their behavior; Wave 10 adds isolated strict layers.
+- Wave 9 is read only as a canonical schema source for a test snapshot. Its frozen migration and
+  business contracts are not modified.
+- `LEGACY_DATA_EVIDENCE_PENDING` and
+  `RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN` remain OPEN.
+- Wave 11 and Wave 12 remain unstarted. No Acceptance or Freeze follows from Design or local tests.
+
+No external database fact is asserted here. Server UUID, actual account, grant digest, inventory,
+lock waits, migration results, persistent outcomes, cleanup and M-board remain
+`OPEN — REQUIRES SEPARATE AUTHORIZATION`.
+
+**Design status: `WAVE10_MYSQL_ACCEPTANCE_REMEDIATION_DESIGN_READY_FOR_USER_APPROVAL`.**
+
+**Stop state: `IMPLEMENTATION_NOT_AUTHORIZED`; `MYSQL_ACCEPTANCE_NOT_RUN`; `GATE_A_FROZEN`;
+`WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`.**
+
+## 37.40 Wave 10 MySQL Acceptance Infrastructure Remediation Implementation Record (2026-10-25)
+
+### 37.40.0 Authorization and boundary
+
+This section records the implementation of the approved §37.39 Remediation Design
+(`document.md` "Wave 10 MySQL Acceptance Infrastructure Remediation Requirement (2026-10-25)",
+`W10-AIR-R01`–`W10-AIR-R10`) and of the approved §37.39.6.3 M-R01 Design Precision Correction.
+It changes no approved Requirement and no approved Design text; §§37.39 and 37.39.6.3 stand
+unchanged.
+
+The stage authorized local implementation and local-only verification only. MySQL access, queries,
+resets, DDL, DML, migrations, every `test:mysql*` command, Gate A, Gate B, the Wave 10 Acceptance
+campaign, Git writes, version/release/deploy and Wave 11/12 remained prohibited. The destructive
+acknowledgement environment was stripped from every child process.
+
+No production business module, migration, schema, permission, status machine, lock order,
+transaction primitive, idempotency contract, package version or Gate A file was changed. The only
+non-Wave-10-infrastructure file touched is one Wave 10 SQLite test fixture, for the calendar
+boundary defect recorded in §37.40.7.
+
+### 37.40.1 Delivered behaviour
+
+| Requirement | Delivered behaviour | Primary files |
+|---|---|---|
+| R01 | One case id, one owner and one manifest-declared evidence level per Gate B case; the typed marker is emitted only after that case's own production actions and persistent postconditions; the reducer rejects missing, duplicate, extra, wrong-level, wrong-owner, wrong-run, digest-mismatched and foreign-suite records; the board is rendered only after every suite, the final cleanup and the zero-object confirmation succeed. | `scripts/gates/mysql-sales-wave10-gate-b.mjs`, `scripts/gates/mysql-sales-wave10-manifest.mjs`, `server/mysql-sales-customer-wave10-gate-b.integration.js` |
+| R02 | Exact password-free target identity, verified `SELECT DATABASE()`, `CURRENT_USER()`, `@@server_uuid` and the MySQL 8 version policy, a SHA-256 grant fingerprint, the `EMPTY_ONLY` first-inventory policy, a campaign lease with contention handling and release, revalidation before every reset and cleanup, lease revocation on identity drift, five-category object inventory, identifier and type validation, views before base tables, FK-check restoration, and a bounded secret-free report form. | `server/test-utils/mysql-wave10-campaign-target.js` |
+| R03 | A finite per-suite deadline, child-timeout detection, cooperative shutdown followed by a platform process-tree termination, bounded exit confirmation, no cleanup while a child may still be live, truthful exit and signal recording, and a typed terminal result for spawn error, non-zero exit, malformed TAP, cleanup failure and final-inventory failure. The unconfirmed-termination path reports `NOT_ATTEMPTED_CHILD_LIVE`. | `server/test-utils/mysql-wave10-process-lifecycle.js`, `scripts/gates/mysql-wave10-runner-support.mjs` |
+| R04 | Every race uses independent `CONNECTION_ID()` sessions and a deterministic coordinator that holds the production L0 gate row while both contenders are observed pending through `performance_schema.data_lock_waits`; the coordinator supports N contenders. | `server/test-utils/wave10-mysql-acceptance-fixture.js`, `server/mysql-sales-customer-wave10-concurrency.integration.js` |
+| R05 | The capacity classification is read from the canonical Wave 9 effective-date resolver and the production exposure projection, and every fixture business date is derived from the actual run date because the exposure window reads `SUBSTR(reviewed_at,1,10)<=businessDate`. | `server/test-utils/wave10-mysql-acceptance-fixture.js` |
+| R06 | The source side is the actual canonical SQLite snapshot; the normalized comparison now covers column defaults and CHECK clauses in addition to columns, nullability, primary keys, foreign keys and indexes; M-MIG-01 asserts the Wave 10 additions keep their InnoDB, foreign-key and check expectations. | `server/test-utils/wave10-mysql-schema-fixture.js`, `server/mysql-sales-customer-wave10.integration.js` |
+| R07 | The projection compares rows by identity and field value; the rejection cases assert an empty forbidden delta across the complete declared union rather than an unchanged row count. | `server/test-utils/wave10-mysql-acceptance-fixture.js` |
+| R08 | M-BIZ-01..20 exist and cover B-9 O2, B-10 O1, S14 Mode B/C and Recognition Mode; the B-10 cancellation uses the canonical production `salesOrderAction(..., 'cancel')` writer and every remaining direct DML is declared as a bounded reference fact. | `server/mysql-sales-customer-wave10-business-matrix.integration.js` |
+| R09 | The Wave 10 transcript parser requires one TAP version, one complete top-level plan, one syntactically complete record per plan entry with contiguous ids, exactly one occurrence of each summary counter, `tests >= 1`, `pass == tests`, zero fail/skip/cancelled/todo, a finite duration, no bail-out, no malformed record and no trailing partial record; 43 local behavior tests cover the guard, the lifecycle, the transcript, the marker grammar and the isolation. | `scripts/gates/mysql-wave10-tap-transcript.mjs`, `scripts/mysql-sales-wave10-runners.test.js` |
+| R10 | Gate A stays frozen, is not imported and is not executed by either Wave 10 runner; the real-MySQL suites stay outside FAST/FULL/HEAVY. | `scripts/gates/mysql-sales-wave10-manifest.mjs`, `scripts/testing/test-suites.js` |
+
+### 37.40.2 The corrected M-R01 contract as implemented
+
+`M-R01` now runs the audited production entry `salesOrderAction(db, req, res, actor, orderId,
+'approve')` → `approveSalesOrder()` (`server/modules/sales-orders.js:877` / `:799`) over two
+independently identified `SUBMITTED` orders. The two orders are declared setup reference facts and
+the `APPROVED` commitment is created only by the production approve path; the superseded
+two-`evaluateCreditCheck` contract is not used anywhere.
+
+The capacity precondition is computed before the coordinated start from the effective Credit
+Profile limit and the canonical exposure `E`, so `available = limit − E` is a real value. The
+BOTH_FIT subcase uses limit 250000 and the ONLY_ONE_FITS subcase limit 150000 against two 100000
+orders, which makes `amountA + amountB > available` hold against the actual capacity.
+
+The coordinator holds `mysql_transaction_gates` `gate_id=1` and both contenders must be observably
+pending on that row before the release. After the release the two production transactions
+serialize on the production L0 gate and then on the L3/L4 anchors and the L5 Credit Profile lock,
+so the loser re-reads the exposure after the winner committed under the production `READ COMMITTED`
+session isolation.
+
+The asserted outcomes are the existing public contracts only: HTTP 200 `{ ok: true, id, action:
+'approve' }` for the winner with `status='APPROVED'`, `reviewer_id` and `reviewed_at` set, and
+HTTP 409 `CREDIT_CHECK_BLOCKED` with `decision: 'BLOCK'`, `reasonCodes` containing `OVER_LIMIT`,
+`checkGroupId` and `scopeResults` for the refused contender. The assertions additionally reject
+the forbidden setup, authorization and environment refusals listed in §37.39.6.3 D.4, the combined
+committed commitment is asserted `<= available`, the refused transaction's forbidden delta across
+the declared union is asserted empty, the winner's audit and idempotency cardinality is asserted
+exactly, the refused order keeps its `SUBMITTED` state, the exposure-window invariant
+`date(reviewed_at) <= businessDate` is asserted, and an exact replay of the winner's
+`Idempotency-Key` is asserted to return the stored result with `replayed: true` and to create no
+second effect.
+
+### 37.40.3 B-M19C as implemented
+
+The real production entry rejects with the existing `CREDIT_PROFILE_MISSING` contract. The bounded
+runtime trace proves the actual stop boundary: the Profile resolution is reached, the L2–L5
+anchor/Profile lock chain is never entered, no `credit_check_results` row is written and no audit
+fact is written. The complete before/after projection is unchanged, and the case records
+`reachedL2L5: false`. §37.39.6.3 and §37.39.7 no longer require L2–L5 to be reached and this case
+makes no such claim.
+
+### 37.40.4 Declared setup facts and the one residual gap
+
+`createSalesDelivery` (`server/app.js:5619`) is the canonical confirmed-delivery writer and it is
+module-private, so it is not reachable from the approved test file set. The historical delivery,
+invoice-lineage and receivable rows, the controlled commercial close of a partially delivered
+order, and the Credit Profile reference rows (a Profile status change has no production writer)
+are therefore declared direct-DML reference facts in the suite headers. Every decision assertion
+still calls the production Credit evaluator, the production exposure resolver, the production
+mandatory guard or the production Sales Order writer.
+
+The M-R09 transition creates its `APPROVED` order through the canonical Sales Order creation,
+submission and approval path and declares only the delivery and AR rows.
+
+`RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN` and `LEGACY_DATA_EVIDENCE_PENDING` remain
+OPEN. No exemption selector was invented and no Wave 10 business semantic was altered.
+
+### 37.40.5 Local verification evidence
+
+```text
+node --check on every modified JavaScript/MJS file         PASS
+node --test scripts/mysql-sales-wave10-runners.test.js     43 tests, 43 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+node --test server/sales-customer-wave10-credit-check.test.js   50 tests, 50 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd test:fast                                         exit 0 — 427 tests, 427 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd test  (FULL)                                      exit 0 — 2847 tests, 2847 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd build                                             PASS — 1965 modules transformed
+git diff --check                                           exit 0
+```
+
+`pnpm.cmd test:heavy` was not run: the HEAVY inventory contains a real-MySQL environment test and
+the registry was not altered to make that command appear safe.
+
+### 37.40.6 Not executed and still pending
+
+```text
+MySQL connection, query, reset, DDL, DML, migration, cleanup   NOT_RUN
+Gate A                                                          FROZEN, NOT_RERUN
+Gate B                                                          NOT_RUN
+Wave 10 Acceptance campaign                                    NOT_RUN
+M-board real execution evidence                                TEST_EVIDENCE_PENDING
+Server UUID, CURRENT_USER, grant fingerprint, initial inventory OPEN — REQUIRES SEPARATE AUTHORIZATION
+LEGACY_DATA_EVIDENCE_PENDING                                   OPEN
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN             OPEN
+Wave 10 user Acceptance and Freeze                             OPEN
+```
+
+### 37.40.7 The repaired pre-existing fixture defect
+
+The first focused run failed five cases in `server/sales-customer-wave10-credit-check.test.js`
+(`UAT-S-31` ×2, `B-10 O1`, `S14`, `§36.6.3 step 2`). The cause is a calendar-boundary defect in
+that test's own fixture: `seedOrder` stamped `reviewed_at` with the wall clock while the fixture's
+business date is the fixed constant `2026-10-24`, so once the clock passed that date the exposure
+window `SUBSTR(reviewed_at,1,10)<=businessDate` excluded the seeded approved order and the
+approved commitment silently dropped out of every affected projection. The repair places the
+approval stamp on the order's own business date, the only business-consistent value. No assertion
+was weakened, removed or relaxed and no production module was touched. The same defect class was
+removed from the Wave 10 MySQL fixture by deriving the business date from the actual run date.
+
+**Implementation status: `WAVE10_IMPLEMENTATION_COMPLETE_LOCAL_VERIFICATION_PASS_AWAITING_MYSQL_ACCEPTANCE_AUTHORIZATION`.**
+**Stop state: `MYSQL_ACCEPTANCE_NOT_RUN`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`;
+`NO_GIT_WRITE`; `NO_DATABASE_OPERATION`.**
+
+## 37.41 Wave 10 MySQL least-privilege readiness and Finance View parity design (2026-10-25)
+
+### 37.41.1 Authorization and boundaries
+
+This Design implements the approved `document.md` W10-LPR-R01..R04 requirements under the user's
+explicit consecutive-stage authorization. Gate A files and behavior, business semantics, schema
+tables, Finance authority, Wave 9 and Wave 11/12 remain unchanged. Design completion proceeds to
+Implementation solely because that authorization expressly includes it; real MySQL Acceptance is
+still a later hard stop.
+
+### 37.41.2 Guard responsibility and verification flow
+
+`server/test-utils/mysql-wave10-campaign-target.js` owns a pure exact-grant validator. Grant lines
+are whitespace-normalized and sorted for the existing SHA-256 fingerprint. Validation classifies
+each line as: permitted global `USAGE`; exact target-schema privilege set; one of three exact
+Performance Schema table reads; or forbidden. `WITH GRANT OPTION`, role/default-role statements,
+unknown lines, unrelated objects, `ALL PRIVILEGES`, extra/missing privileges and all other global
+static/dynamic authority fail closed. Schema comparison is case-insensitive while the trusted
+fingerprint remains an exact normalized-text digest supplied through the existing environment
+contract.
+
+The connected verification order remains static disposable-target authorization, identity query,
+database/account/UUID/version, independently supplied fingerprint, exact least-privilege contract,
+then initial inventory at lease issuance. No current grant is written into trusted configuration.
+
+### 37.41.3 canonical View initialization
+
+`server/modules/finance-open-item-effect-view.js` exports the canonical View name/definition only
+for behavior verification and keeps `ensureFinanceOpenItemEffectsView()` as the sole writer. After
+dependencies exist, it removes a legacy same-name table defensively, drops an existing View and
+recreates the canonical definition. This makes fresh, repeated and stale-definition upgrade paths
+convergent on both SQLite and MySQL; any failure is wrapped and propagated so boot closes the
+adapter.
+
+`server/db.js#createDatabase()` calls the helper on the live MySQL adapter after snapshot bootstrap
+and before the idempotent Sales migration replay. Snapshot capture remains table-only. The existing
+cleanup inventory already identifies `VIEW` and drops Views before base tables, so no cleanup
+algorithm changes.
+
+### 37.41.4 tests and verification
+
+The existing local Wave 10 runner suite receives injected/fake-adapter behavior cases for exact
+grants, every missing privilege, global static/dynamic excess, grant option, roles, unrelated scope,
+identity/fingerprint and inventory. A local SQLite behavior test proves View first creation,
+repeated convergence, stale replacement, dependency-derived rows and canonical definition; source
+contract checks prove the live MySQL call placement and frozen Gate A hash/content remains unchanged.
+Existing cleanup-order coverage is retained.
+
+Verification clears all MySQL credentials, reset/destructive/campaign variables in each child
+process, then runs syntax, focused Guard/View and related Wave 9/10/Finance suites, FAST, FULL,
+build and `git diff --check`. HEAVY and every `test:mysql*` command remain prohibited.
+
+### 37.41.5 dedicated account and read-only preflight
+
+After local PASS, the existing privileged connection is used first only to inspect whether
+`modern_erp_wave10@127.0.0.1` exists and has roles/grants. If absent, a cryptographically random
+password held only in process memory creates that exact account. If present, remediation proceeds
+only when its grants prove it is dedicated. Account statements are restricted to that account:
+revoke existing authority if required, grant the exact target-schema set and the three exact
+Performance Schema reads, with no delegation. The old account is untouched.
+
+The same process then connects as the dedicated account and performs only identity, grants/digest,
+role/excess, Performance Schema reads, own PROCESSLIST, five-category inventory and Guard
+verification. It sends no target-schema DDL/DML/bootstrap/migration/reset/cleanup. Credentials are
+never printed, logged or committed. If no approved durable secret facility is available, the
+ephemeral password is not persisted and this limitation is reported before future Acceptance.
+
+Rollback for this bounded account operation is account-only and requires separate authorization;
+there is no product-schema rollback because no product-schema mutation is permitted here.
+
+**Design status: `WAVE10_MYSQL_LEAST_PRIVILEGE_AND_VIEW_PARITY_DESIGN_COMPLETE_IMPLEMENTATION_AUTHORIZED`.**
+
+## 37.42 Wave 10 MySQL least-privilege readiness implementation record (2026-10-25)
+
+Implementation followed §37.41 without changing Gate A or business semantics. The Guard now
+accepts only global `USAGE`, the exact eleven target-schema privileges and exact table-level
+`SELECT` on the three lock-observation tables; it rejects missing/extra privileges, unrelated
+scope, dynamic/global administration, delegation, roles and unknown grant syntax. `TRIGGER` and
+`CREATE VIEW` are mandatory. Identity, independently supplied digest and inventory checks remain
+in the existing fail-closed lifecycle.
+
+The canonical Finance helper now replaces an existing View definition before recreating it, while
+retaining the defensive legacy-table removal. The live MySQL factory calls it after snapshot table
+bootstrap and before Sales migration replay. Existing cleanup already drops Views before tables.
+
+Local verification ran with all MySQL and destructive variables removed:
+
+```text
+syntax checks                                      PASS
+focused Guard/View/Wave9/Wave10/Finance            132 / 132 PASS
+FAST                                                427 / 427 PASS
+FULL                                               2852 / 2852 PASS
+build                                               1965 modules PASS
+git diff --check                                    PASS
+Gate A scoped diff                                  0 bytes
+```
+
+The dedicated account was absent, then was created as
+`modern_erp_wave10@127.0.0.1` with a process-memory random password. Its grant digest is
+`45e5fb73fa02562efc0828d5fe6feb153a55fbeff742f05fcda50136b872b44c`; server UUID is
+`5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`. Read-only preflight proved MySQL 8.0.37, exact identity,
+zero roles, Guard PASS, all three Performance Schema reads, own PROCESSLIST visibility and zero
+tables/views/triggers/routines/events. The password was not persisted. No target-schema statement,
+Gate A/B or Acceptance command ran.
+
+**Implementation status: `WAVE10_MYSQL_PREFLIGHT_READY_AWAITING_ACCEPTANCE_CAMPAIGN_AUTHORIZATION`.**
+
+### 37.40.8 Canonical production writer remediation continuation (2026-10-25)
+
+#### 37.40.8.1 Authorization and scope
+
+The Canonical Delivery Writer Reachability Audit established that the module-private
+`createSalesDelivery` (`server/app.js:5619`) is reachable through the registered production route
+`POST /api/sales-deliveries` (`server/app.js:2654`) and that the confirmation action is reachable
+through `POST /api/sales-deliveries/:id` (`server/app.js:2658`). No production export, new
+production service or business semantic is required. This subsection records the implementation that
+brings the Wave 10 acceptance fixtures into conformance with the approved canonical-writer
+requirement. It adds no Requirement and changes no approved Design text.
+
+Code changes are confined to the four files of the approved §37.39.2 table that carry the Wave 10
+acceptance fixtures:
+
+| File | Change |
+|---|---|
+| `server/test-utils/wave10-mysql-acceptance-fixture.js` | The canonical HTTP adapter (`wave10HttpResponse`, `wave10HttpRequest`, `wave10HttpLogin`), the canonical Delivery request builder, a login-capable fixture account, the initial inventory and cash settlement account reference rows, a quantity parameter on the production order body, and the removal of the two noncanonical substitute writers. |
+| `scripts/gates/mysql-concurrency-sales-wave10-worker.mjs` | The `http-request` worker action, which drives the real `createApp(db)` handler after a real `POST /api/auth/login`. |
+| `server/mysql-sales-customer-wave10-concurrency.integration.js` | M-R03 and M-R09 now use the canonical Sales Order and Delivery transitions. |
+| `server/mysql-sales-customer-wave10-business-matrix.integration.js` | M-BIZ-05..M-BIZ-14 now use the canonical Sales Order, Delivery, invoice and collection transitions. |
+
+#### 37.40.8.2 The canonical Delivery route and its authentication contract
+
+The Delivery transition is exercised over the production HTTP dispatch, not by importing the private
+function. `createApp(db)` (`server/app.js:2249`) returns the real application handler; the fixture
+supplies a request/response adapter that satisfies the observed application contract — `setHeader`,
+`removeHeader` (`server/lib/http.js:171`), `once('finish')` (`server/app.js:2263`) and `end`
+(`server/lib/http.js:158`). `readJson` consumes the request as an async byte stream and requires a
+`application/json` content type (`server/lib/http.js:82`).
+
+The worker authenticates through `POST /api/auth/login` (`server/app.js:2305`), which verifies the
+password with `verifyPassword` (`server/db.js:305`), inserts the `sessions` row
+(`server/app.js:3188`) and returns a bearer token. The authenticated request then passes
+`authenticate` (`server/app.js:2308`) and `allow(actor, 'SALES_DELIVERIES_MANAGE')`
+(`server/app.js:5620`, `:5713`). The fixture accounts use the existing permitted `role-admin` role,
+which already carries every permission (`server/db.js:1729`). The credential is a test-only
+constant inside the fixture module; it is never printed, logged or persisted in generated evidence.
+
+#### 37.40.8.3 Replaced noncanonical business mutations
+
+| Case | Removed direct mutation | Canonical writer now used |
+|---|---|---|
+| M-R03 | `INSERT INTO sales_deliveries(status='CONFIRMED')` + `sales_delivery_items`; directly inserted APPROVED order | `createSalesOrder` → `salesOrderAction('submit')` → `salesOrderAction('approve')`; `POST /api/sales-deliveries` → `POST /api/sales-deliveries/:id` (`SEPARATE` billing); the existing canonical invoice create/post worker actions |
+| M-R09 | directly inserted CONFIRMED delivery and a directly inserted `SALES_ORDER`-sourced receivable | canonical order lifecycle; `POST /api/sales-deliveries` → confirmation with `LEGACY_DIRECT` billing, whose production recognition writer creates the final AR |
+| M-BIZ-05, M-BIZ-06 | directly inserted APPROVED order | canonical order create/submit/approve |
+| M-BIZ-07 | directly inserted CONFIRMED delivery; `UPDATE sales_orders SET commercial_close_state='CLOSED'` | canonical delivery create/confirm; canonical `salesOrderAction('close')` |
+| M-BIZ-08 | `UPDATE account_receivables SET paid_cents, open_amount_cents, status` | `POST /api/payment-collections` → `POST /api/payment-collections/:id/confirm` |
+| M-BIZ-09..M-BIZ-13 | directly inserted CONFIRMED delivery, POSTED invoice, `finance_invoice_source_links` and receivable | canonical delivery create/confirm; canonical `createSalesInvoice` + `postSalesInvoice` |
+| M-BIZ-14 | the same, plus two directly inserted `finance_invoice_source_links` rows | canonical deliveries for two salespersons invoiced on one canonical invoice header, then a canonical collection |
+| M-BIZ-11 | directly written receivable open amount | canonical collection allocation and its production balance refresh |
+
+The two noncanonical substitute writers `seedConfirmedDelivery` and `seedPostedInvoiceLineage` were
+removed from the fixture because no call site remains.
+
+#### 37.40.8.4 Remaining direct DML, classified as intentional reference or negative fixtures
+
+- The Credit Profile, rule, parameter and lock-anchor reference rows, and the `SUSPENDED`/`CLOSED`
+  Profile status transitions of M-BIZ-02 and M-BIZ-03 — a Profile status change has no production
+  writer.
+- The DRAFT Sales Order rows that serve only as the credit check's source reference.
+- The historical approval stamp of M-BIZ-05 — no production writer creates a 2010 document.
+- The manual receivable and the overdue due date of M-BIZ-08 — a receivable reference fact that is
+  settled canonically afterwards.
+- The deliberately broken invoice lineage of M-BIZ-15 — the negative fixture that proves an
+  inconsistent lineage fails closed.
+- The initial inventory row and the cash settlement account — master reference data that the
+  canonical writers read. They are never evidence that a business transaction occurred.
+- The SUBMITTED reference orders of M-R01 and the M-R09 proposal — a proposal precondition, not the
+  transition under acceptance.
+
+#### 37.40.8.5 The canonical side effects the fixtures now produce
+
+The canonical paths create state the former direct-SQL fixtures did not, and the assertions were
+recalculated against the real business outcome rather than the synthetic totals:
+
+- `sales_deliveries` and `sales_delivery_items` with the production source mode, billing mode,
+  confirmation actor and confirmation timestamp, plus the delivery-scoped
+  `finance_recognition_policy` row.
+- The on-hand inventory deduction, the `inventory_transactions` rows, the tracked source movements
+  and the source-value issuance with the COGS system voucher.
+- `finance_invoice_source_links`, one per confirmed delivery line, produced by the production
+  recognition writer instead of a direct insert.
+- `account_receivables` with `item_class='SOURCE'`, `item_kind='FINAL'`, the invoice or delivery
+  source chain and `open_amount_cents` as the authoritative outstanding balance.
+- `payment_collections`, `payment_collection_items`, the settlement voucher and the settlement
+  movement, with the receivable outstanding balance refreshed by the production settlement writer.
+- The delivery, invoice, collection and confirmation `audit_logs` facts and the corresponding
+  `idempotency_records`.
+
+The invariants are preserved: no duplicate credit exposure, no double release of a predecessor
+obligation, `open_amount_cents` remains the authoritative balance, no speculative allocation, no
+prohibited side effect on a rejected operation, and no duplicate audit or idempotency effect on an
+exact replay.
+
+#### 37.40.8.6 Local verification
+
+```text
+node --check on the four modified files                      PASS
+node /tmp/w10-http-smoke.mjs (adapter contract, no database) PASS
+node --test scripts/mysql-sales-wave10-runners.test.js
+  server/sales-customer-wave9-credit-foundation.test.js
+  server/sales-customer-wave10-credit-check.test.js         114 tests, 114 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd test:fast                                           exit 0 — 427 tests, 427 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd test (FULL)                                         exit 0 — 2847 tests, 2847 pass, 0 fail, 0 skipped, 0 todo, 0 cancelled
+pnpm.cmd build                                               PASS — 1965 modules transformed
+git diff --check                                             exit 0
+```
+
+The canonical Delivery, invoice, collection and race suites are protected real-MySQL files. They are
+not registered in FAST, FULL or HEAVY and cannot be executed in this stage, so their behaviour is
+code-verified only. `pnpm.cmd test:heavy`, every `test:mysql*` command and every Gate campaign were
+not run.
+
+#### 37.40.8.7 Remaining MySQL-only evidence gaps
+
+```text
+Canonical Delivery create/confirm over the real route          TEST_EVIDENCE_PENDING
+Canonical invoice posting, source links and AR recognition     TEST_EVIDENCE_PENDING
+Canonical collection settlement and balance refresh            TEST_EVIDENCE_PENDING
+Canonical close, cancel and the resulting exposure arithmetic  TEST_EVIDENCE_PENDING
+All W10-R1..R12 races, Gate B markers and the M-board           TEST_EVIDENCE_PENDING
+Server UUID, CURRENT_USER, grant fingerprint, initial inventory OPEN — REQUIRES SEPARATE AUTHORIZATION
+LEGACY_DATA_EVIDENCE_PENDING                                   OPEN
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN             OPEN
+Wave 10 user Acceptance and Freeze                             OPEN
+```
+
+**Continuation status: `WAVE10_CANONICAL_WRITER_REMEDIATION_LOCAL_VERIFICATION_COMPLETE_AWAITING_MYSQL_ACCEPTANCE_AUTHORIZATION`.**
+**Stop state: `MYSQL_ACCEPTANCE_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`;
+`NO_GIT_WRITE`; `NO_DATABASE_OPERATION`.**
+
+### 37.40.9 Real MySQL Acceptance campaign result (2026-10-25)
+
+The user authorized one controlled campaign against only
+`modern_erp_domain_test` through `modern_erp_wave10@127.0.0.1`. Each executable round rotated an
+ephemeral in-process password, re-ran the fail-closed target Guard, used the canonical reset and
+cleanup lifecycle, and independently proved zero tables, views, triggers, routines and events after
+both commands. The observed target identity remained MySQL 8.0.37, server UUID
+`5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`, with normalized grant digest
+`45e5fb73fa02562efc0828d5fe6feb153a55fbeff742f05fcda50136b872b44c`.
+
+Three bounded remediation rounds corrected defects exposed only by the real MySQL path:
+
+- the canonical finance open-item View replacement now drops the old View and uses valid MySQL
+  `CREATE VIEW` syntax;
+- Wave 10 unique-key parity compares ordered unique column sets instead of backend-generated
+  constraint names;
+- fresh MySQL bootstrap maps `credit_special_approval.scope_mode` to the approved `VARCHAR(128)`
+  physical contract;
+- the Acceptance fixture consumes the canonical Wave 9 global policy anchor instead of inserting a
+  duplicate; and
+- foreign-key metadata queries qualify every joined Information Schema column.
+
+After each remediation round, the affected focused suite and the required local gates passed. The
+final local evidence is focused 133/133, FAST 428/428, FULL 2853/2853, build 1965 modules and
+`git diff --check` PASS.
+
+The final real-MySQL round remains blocked:
+
+```text
+pnpm.cmd test:mysql:gate-b   exit 1
+  W10 production races      12 total, 4 pass, 8 fail
+  PASS                      M-R04, M-R08, M-R10, M-R12
+  FAIL                      M-R01, M-R02, M-R05, M-R06, M-R11
+                            WAVE10_WAIT_EVIDENCE_UNAVAILABLE: mysql_transaction_gates
+  FAIL                      M-R03, M-R09
+                            canonical order path returned 409 SALES_PARAMETER_UNAVAILABLE
+  FAIL                      M-R07
+                            ER_BAD_FIELD_ERROR: unknown column scope_type
+  Gate B cases/markers      NOT_RUN — prerequisite production-races suite failed
+  M-board                   NOT_GENERATED
+
+pnpm.cmd test:mysql:wave10  exit 1
+  W10 parity                7 total, 4 pass, 3 fail
+  PASS                      M-MIG-03, M-MIG-04, M-MIG-05, M-MIG-07, M-MIG-08
+  FAIL                      M-MIG-01, M-MIG-02 — CHECK expression normalization mismatch
+  FAIL                      M-MIG-06 — fresh/upgrade physical type and index-name drift
+  W10 races/business matrix NOT_RUN — prerequisite parity suite failed
+  M-BIZ-01..M-BIZ-20        NOT_RUN
+  PASS marker/M-board       NOT_GENERATED
+```
+
+The campaign included four actual executions of each authorized command. One additional Gate B
+launcher invocation terminated before suite execution because Windows PowerShell classified native
+stderr as a terminating error; an earlier orchestration attempt failed before either command while
+creating the in-memory credential. Neither orchestration-only failure performed target-schema work.
+Every actual command ended with `CLEANUP_CONFIRMED`, followed by an independent zero-inventory
+proof. The final stdout transcripts are:
+
+- `C:\Users\Administrator\AppData\Local\Temp\modern-erp-wave10-gate-b-final-out-68682b7507c3461195b589617032ebaf.log`;
+- `C:\Users\Administrator\AppData\Local\Temp\modern-erp-wave10-acceptance-final-out-c6f77c820af341ecba8c78dfb6f2cfd4.log`.
+
+The 602 protected local database/WAL/SHM files retained manifest digest
+`b2a388519fa768bfd2e07e18a2a0539f16a5b9f85905ed2e6e6cb9796c55054d`; Gate A stayed frozen,
+Wave 11 and Wave 12 were not started, and no Git write, release or deployment occurred.
+
+**Campaign status: `WAVE10_MYSQL_ACCEPTANCE_BLOCKED`.**
+**Stop state: `GATE_A_FROZEN`; `GATE_B_FAILED`; `WAVE10_PARITY_FAILED`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE10_NOT_FROZEN`; `WAVE11_NOT_STARTED`;
+`WAVE12_NOT_STARTED`; `NO_GIT_WRITE`.**

@@ -93,6 +93,11 @@ function mysqlType(column, indexed) {
   if (name === 'from_position_identity_json' || name === 'to_position_identity_json') return 'LONGTEXT';
   if (name === 'from_position_key' || name === 'to_position_key') return 'CHAR(64)';
   if (name === 'request_fingerprint') return 'CHAR(67)';
+  // Wave 10 credit approval mode is a bounded enum whose canonical live
+  // migration and physical parity contract require VARCHAR(128). It is not
+  // indexed, so the generic TEXT fallback would otherwise produce LONGTEXT
+  // only on snapshot bootstrap.
+  if (name === 'scope_mode') return 'VARCHAR(128)';
   if (name.endsWith('_json') || name === 'json_payload') return 'JSON';
   // Wave 9 credit-object identities concatenate several independently
   // bounded business IDs. Keep the canonical string lossless while the

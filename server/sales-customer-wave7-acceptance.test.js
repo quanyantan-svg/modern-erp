@@ -16,11 +16,11 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createDatabase, hashPassword, transaction } from './db.js';
-import { createApp } from './app.js';
+import { confirmSalesDelivery, createApp } from './app.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import {
   evaluateSalesPrepaymentGate, overridePrepaymentGateResult,
@@ -36,6 +36,7 @@ import {
   resolveEligiblePrepaymentForSalesGate, acquireParentBalanceLock,
 } from './modules/sales-prepayment-finance-adapter.js';
 import { HttpError } from './lib/http.js';
+import { salesOrderAction } from './modules/sales-orders.js';
 
 const DAY = '2026-10-18';
 
@@ -103,6 +104,46 @@ function makeRes() {
     writeHead(s) { state.statusCode = s; },
   };
   return state;
+}
+
+function submitReq(key, body = {}) {
+  const req = makeReq(body);
+  req.headers['idempotency-key'] = key;
+  return req;
+}
+
+function installMonotonicClock(t, readings) {
+  let index = 0;
+  const last = readings[readings.length - 1];
+  return t.mock.method(process.hrtime, 'bigint', () => readings[index++] ?? last);
+}
+
+function transactionProbeDb(db, { beforeBegin = null } = {}) {
+  const state = { begins: 0, statements: [] };
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') {
+        return (sql) => {
+          state.statements.push(String(sql));
+          return target.prepare(sql);
+        };
+      }
+      if (prop === 'exec') {
+        return (sql) => {
+          const text = String(sql);
+          state.statements.push(text);
+          if (/^BEGIN\b/i.test(text)) {
+            state.begins += 1;
+            beforeBegin?.(target, state.begins);
+          }
+          return target.exec(sql);
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return { db: proxy, state };
 }
 
 async function buildRealEntryHarness(label) {
@@ -182,7 +223,67 @@ function addEntryBalance(db, customerId, suffix, amount) {
   return `w7-entry-balance-${suffix}`;
 }
 
-const entryActor = { id: 'user-sales', roleCode: 'SALES', permissions: ['SALES_MANAGE', 'SALES_VIEW'], isSystemAdmin: false };
+const entryActor = { id: 'user-sales', roleCode: 'SALES', permissions: ['SALES_MANAGE', 'SALES_VIEW', 'ORDERS_SUBMIT'], isSystemAdmin: false };
+const deliveryActor = { ...entryActor, permissions: [...entryActor.permissions, 'SALES_DELIVERIES_MANAGE'] };
+
+async function createImplementationEDeliveryFixture(h, suffix, { sourceMode = 'DIRECT_ORDER' } = {}) {
+  const customerId = addEntryCustomer(h, suffix); const stamp = new Date().toISOString();
+  const orderId = `w7-e-order-${suffix}`; const lineId = `w7-e-line-${suffix}`;
+  h.db.prepare(`INSERT INTO sales_orders(id,order_no,customer_id,status,total_cents,creator_id,created_at,updated_at,order_date,requested_delivery_date,payment_terms,payment_terms_days,ship_to_contact_name,ship_to_phone,ship_to_address,commercial_close_state)
+    VALUES(?,?,?,'APPROVED',10000,'user-sales',?,?,?,?,?,30,'Receiver','13000000000','Wave7 address','OPEN')`)
+    .run(orderId, `W7-E-SO-${suffix}`, customerId, stamp, stamp, DAY, DAY, 'MONTHLY');
+  h.db.prepare(`INSERT INTO sales_order_items(id,order_id,product_id,quantity,unit_price_cents,amount_cents,line_no,base_quantity_num,base_quantity_den)
+    VALUES(?,?,'product-001',1,10000,10000,1,1,1)`).run(lineId, orderId);
+  let deliveryNoticeId = null; let deliveryNoticeLineId = null;
+  if (sourceMode === 'DELIVERY_NOTICE') {
+    deliveryNoticeId = `w7-e-notice-${suffix}`; deliveryNoticeLineId = `w7-e-notice-line-${suffix}`;
+    h.db.prepare(`INSERT INTO delivery_notices(id,notice_no,sales_order_id,state,warehouse_id,ship_to_snapshot_json,planned_delivery_date,business_date,customer_id,customer_snapshot_json,creator_id,created_at,updated_at,confirmed_at,confirmed_by)
+      VALUES(?,? ,?,'CONFIRMED','warehouse-001','{}',?,?,?,'{}','user-sales',?,?,?,'user-sales')`)
+      .run(deliveryNoticeId, `W7-E-DN-${suffix}`, orderId, DAY, DAY, customerId, stamp, stamp, stamp);
+    h.db.prepare(`INSERT INTO delivery_notice_lines(id,delivery_notice_id,sales_order_item_id,scheduled_qty_micros,notified_qty_micros,cancelled_notified_qty_micros,line_no)
+      VALUES(?,?,?,1000000,0,0,1)`).run(deliveryNoticeLineId, deliveryNoticeId, lineId);
+  }
+  const created = await h.call('/api/sales-deliveries', { token: h.tokens.admin, method: 'POST', body: {
+    sourceMode, deliveryNoticeId, salesOrderId: orderId, warehouseId: 'warehouse-001', billingMode: 'LEGACY_DIRECT', deliveryDate: DAY,
+    items: [{ salesOrderItemId: lineId, deliveryNoticeLineId, productId: 'product-001', quantity: 1 }],
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const oqc = await h.call('/api/oqc', { token: h.tokens.admin, method: 'POST', body: { sales_delivery_id: created.data.id } });
+  assert.equal(oqc.status, 201, JSON.stringify(oqc.data));
+  const completed = await h.call(`/api/oqc/${oqc.data.id}/complete`, { token: h.tokens.admin, method: 'POST', body: {
+    result: 'PASS', inspection_quantity: 1, passed_quantity: 1, failed_quantity: 0,
+  } });
+  assert.equal(completed.status, 200, JSON.stringify(completed.data));
+  return { id: created.data.id, orderId, lineId, customerId, deliveryNoticeId, deliveryNoticeLineId, suffix };
+}
+
+async function createSubmitFixture(harness, suffix, { withRequirement = true } = {}) {
+  const customerId = addEntryCustomer(harness, suffix);
+  const created = await harness.call('/api/sales-orders', {
+    token: harness.tokens.sales,
+    method: 'POST',
+    key: `create-${suffix}`,
+    body: {
+      customerId,
+      orderDate: DAY,
+      requestedDeliveryDate: DAY,
+      shipToContactName: 'Receiver',
+      shipToPhone: '13000000000',
+      shipToAddress: 'Wave7 address',
+      paymentTerms: 'MONTHLY',
+      items: [{ productId: 'product-001', uomCode: harness.uom, quantityDecimal: '10' }],
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  if (withRequirement) {
+    addRequirement(harness.db, created.data.id, suffix);
+    addEntryBalance(harness.db, customerId, suffix, 50000);
+    const evaluated = makeRes();
+    await evaluateSalesPrepaymentGate(harness.db, makeReq({ snapshotKey: `eval-${suffix}`, businessDate: DAY }), evaluated, entryActor, created.data.id, 'PLANNING_RELEASE');
+    assert.equal(evaluated.body.gateDecision, 'PASS');
+  }
+  return { id: created.data.id, customerId };
+}
 
 // ---------- WARN decision matrix ----------
 
@@ -615,6 +716,306 @@ test('Acceptance: real RESERVATION entry preserves NOT_EVALUATED and NOT_REQUIRE
   }
 });
 
+test('Implementation D: Reservation lock order is Parent -> Result -> Requirement -> Order -> Item -> adapter -> intent', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 100000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-order','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-order-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+
+    const probe = transactionProbeDb(db);
+    const res = makeRes();
+    await requestReservationIntent(probe.db, makeReq({
+      salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+      quantity: 1, reservationMode: 'ON_HAND_RESERVATION', businessDate: DAY,
+    }), res, actor);
+    assert.equal(res.statusCode, 201);
+    const statements = probe.state.statements;
+    const begin = statements.findIndex((sql) => /^BEGIN\b/i.test(sql));
+    const parentLocks = statements.map((sql, index) => ({ sql, index }))
+      .filter(({ sql, index }) => index > begin && sql.includes('settlement_unapplied_balances') && sql.includes('WHERE id=?'));
+    const resultLock = statements.findIndex((sql, index) => index > begin && sql.includes('sales_prepayment_gate_results') && sql.includes('ORDER BY evaluated_at DESC'));
+    const requirementLock = statements.findIndex((sql, index) => index > resultLock && sql.includes('sales_prepayment_requirements WHERE id='));
+    const orderLock = statements.findIndex((sql, index) => index > requirementLock && sql.includes('FROM sales_orders WHERE id='));
+    const itemLock = statements.findIndex((sql, index) => index > orderLock && sql.includes('FROM sales_order_items WHERE id='));
+    const adapterInsert = statements.findIndex((sql, index) => index > itemLock && sql.includes('INSERT INTO planning_reservations'));
+    const intentInsert = statements.findIndex((sql, index) => index > adapterInsert && sql.includes('INSERT INTO sales_reservation_intent'));
+    assert.equal(parentLocks.length, 1);
+    assert.ok(parentLocks[0].index < resultLock && resultLock < requirementLock);
+    assert.ok(requirementLock < orderLock && orderLock < itemLock && itemLock < adapterInsert && adapterInsert < intentInsert);
+    assert.equal(parentLocks.filter(({ index }) => index > requirementLock).length, 0);
+
+    const source = readFileSync(resolve('server/modules/sales-reservation-intent.js'), 'utf8');
+    const requestBody = source.slice(source.indexOf('export async function requestReservationIntent'), source.indexOf('export async function grantReservationIntent'));
+    assert.ok(requestBody.includes('discoverReservationIntentPlan(db, actor, input)'));
+    assert.ok(requestBody.includes('authorizeSalesPrepaymentGateWithPlan'));
+    assert.ok(!requestBody.includes('authorizeSalesPrepaymentGateForMutation'));
+    assert.ok(requestBody.indexOf('return send(res, 201, result)') > requestBody.indexOf('transaction(db, () =>'));
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: all four Reservation modes retain canonical Inventory/Planning ownership', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 100000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-modes','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-modes-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    db.prepare(`INSERT INTO planned_orders(id,order_no,product_id,quantity,released_quantity,status,source_type,supply_type,need_date,created_at,updated_at,created_by,updated_by)
+      VALUES('po-d-modes','PO-D-MODES','p-acc',20,0,'CONFIRMED','MRP','MAKE',?,?,?,?,?)`).run(DAY, now, now, userId, userId);
+
+    const requests = [
+      { reservationMode: 'INVENTORY_LOCK' },
+      { reservationMode: 'MANUAL_RESERVATION', supplySourceType: 'ON_HAND' },
+      { reservationMode: 'ON_HAND_RESERVATION' },
+      { reservationMode: 'EXPECTED_SUPPLY_RESERVATION', expectedSupplySourceType: 'PLANNED_ORDER', expectedSupplySourceId: 'po-d-modes' },
+    ];
+    for (const request of requests) {
+      const res = makeRes();
+      await requestReservationIntent(db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, businessDate: DAY, ...request,
+      }), res, actor);
+      assert.equal(res.statusCode, 201, request.reservationMode);
+    }
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 4);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_type='SALES_ORDER' AND source_id='so-acc' AND status='ACTIVE'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM planning_reservations WHERE demand_source_type='SALES_ORDER' AND demand_source_id='so-acc' AND status='ACTIVE'").get().n, 3);
+    const expected = db.prepare("SELECT supply_source_type,supply_source_id FROM planning_reservations WHERE supply_source_id='po-d-modes'").get();
+    assert.deepEqual([expected.supply_source_type, expected.supply_source_id], ['PLANNED_ORDER', 'po-d-modes']);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: Requirement drift triggers fresh discovery and exactly one committed Reservation effect', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 100000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-retry','so-acc',0,40000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-retry-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const probe = transactionProbeDb(db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) target.prepare("UPDATE sales_prepayment_requirements SET required_amount_cents=50000 WHERE id='req-d-retry'").run();
+      },
+    });
+    const res = makeRes();
+    await requestReservationIntent(probe.db, makeReq({
+      salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+      quantity: 1, reservationMode: 'ON_HAND_RESERVATION', businessDate: DAY,
+    }), res, actor);
+    assert.equal(res.statusCode, 201);
+    assert.equal(probe.state.begins, 2);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM planning_reservations WHERE demand_source_id='so-acc'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_RESERVATION_INTENT' AND action='REQUEST'").get().n, 1);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: a newly appearing Parent forces fresh discovery before Reservation succeeds', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 60000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-parent','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-parent-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const probe = transactionProbeDb(db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) {
+          target.prepare(`INSERT INTO settlement_unapplied_balances(id,side,balance_type,party_id,source_type,source_id,source_no,
+            original_amount_cents,business_date,settlement_account_id,status,created_by,created_at)
+            VALUES('sub-d-parent-new','CUSTOMER','PREPAYMENT','cus-acc','PAYMENT_COLLECTION','pc-d-parent-new','PC-D-PARENT-NEW',10000,?,NULL,'OPEN',?,?)`).run(DAY, userId, now);
+        }
+      },
+    });
+    const res = makeRes();
+    await requestReservationIntent(probe.db, makeReq({
+      salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+      quantity: 1, reservationMode: 'ON_HAND_RESERVATION', businessDate: DAY,
+    }), res, actor);
+    assert.equal(res.statusCode, 201);
+    assert.equal(probe.state.begins, 2);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n, 1);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: unsupported Parent type is not retried and cannot authorize Reservation', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 60000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-parent-type','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-parent-type-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const probe = transactionProbeDb(db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) target.prepare("UPDATE settlement_unapplied_balances SET balance_type='CREDIT' WHERE id='sub-acc'").run();
+      },
+    });
+    await assert.rejects(
+      requestReservationIntent(probe.db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, reservationMode: 'INVENTORY_LOCK', businessDate: DAY,
+      }), makeRes(), actor),
+      (error) => error instanceof HttpError
+        && error.status === 409
+        && error.details?.code === 'SALES_PREPAYMENT_PARENT_TYPE_UNSUPPORTED'
+        && error.message === '结算余额类型不支持预付门: CREDIT',
+    );
+    assert.equal(probe.state.begins, 1, 'unsupported Parent is an immediate fail-closed business error');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n, 0);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: retry exhaustion is bounded at three and leaves zero durable request effects', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  const previous = process.env.ERP_GATE_ATTEMPTS_MAX;
+  process.env.ERP_GATE_ATTEMPTS_MAX = '3';
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 100000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-exhaust','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-exhaust-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const beforeGate = db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id='so-acc'").get().n;
+    const probe = transactionProbeDb(db, {
+      beforeBegin(target, attempt) {
+        target.prepare("UPDATE sales_orders SET order_no=? WHERE id='so-acc'").run(`SO-D-EXHAUST-${attempt}`);
+      },
+    });
+    const res = makeRes();
+    await assert.rejects(
+      requestReservationIntent(probe.db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, reservationMode: 'INVENTORY_LOCK', businessDate: DAY,
+      }), res, actor),
+      (error) => error instanceof HttpError
+        && error.status === 503
+        && error.details?.code === 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED'
+        && error.details?.attempts === 3,
+    );
+    assert.equal(probe.state.begins, 3);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM planning_reservations WHERE demand_source_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id='so-acc'").get().n, beforeGate);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_RESERVATION_INTENT' AND action='REQUEST'").get().n, 0);
+    assert.equal(res.statusCode, null); assert.equal(res.ended, false);
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_MAX;
+    else process.env.ERP_GATE_ATTEMPTS_MAX = previous;
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: Gate and downstream failures leave no orphan Inventory, Planning, intent or mutation audit', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-atomic','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-atomic-block', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    for (const mode of ['INVENTORY_LOCK', 'ON_HAND_RESERVATION']) {
+      await assert.rejects(
+        requestReservationIntent(db, makeReq({
+          salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+          quantity: 1, reservationMode: mode, businessDate: DAY,
+        }), makeRes(), actor),
+        (error) => error instanceof HttpError && error.code === 'SALES_PREPAYMENT_GATE_BLOCKED',
+      );
+    }
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM planning_reservations WHERE demand_source_id='so-acc'").get().n, 0);
+
+    seedPrepaymentBalance(db, userId, now, 100000);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-atomic-pass', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const beforeAuth = db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n;
+    await assert.rejects(
+      requestReservationIntent(db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, reservationMode: 'EXPECTED_SUPPLY_RESERVATION', businessDate: DAY,
+        expectedSupplySourceType: 'EXPECTED', expectedSupplySourceId: 'expected-d-atomic',
+      }), makeRes(), actor),
+      (error) => error instanceof HttpError && error.code === 'SALES_RESERVATION_EXPECTED_BOUNDED_EXTENSION_REQUIRED',
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n, beforeAuth);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_RESERVATION_INTENT' AND action='REQUEST'").get().n, 0);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('Implementation D: duplicate active intent and Reservation override behavior remain exact', async () => {
+  const { db, temp } = buildDb();
+  const { userId, now } = seedBaseContext(db);
+  try {
+    const actor = actorUser(userId);
+    seedPrepaymentBalance(db, userId, now, 30000);
+    db.prepare(`INSERT INTO sales_prepayment_requirements(id,sales_order_id,line_no,required_amount_cents,ratio_basis,created_at,created_by)
+      VALUES('req-d-override','so-acc',0,50000,'ORDER_VALUE',?,?)`).run(now, userId);
+    await evaluateSalesPrepaymentGate(db, makeReq({ snapshotKey: 'd-override-eval', businessDate: DAY }), makeRes(), actor, 'so-acc', 'RESERVATION');
+    const evaluated = db.prepare("SELECT id FROM sales_prepayment_gate_results WHERE snapshot_key='d-override-eval'").get();
+    await overridePrepaymentGateResult(db, makeReq({ reason: 'reservation exception' }), makeRes(), actor, evaluated.id);
+
+    const first = makeRes();
+    await requestReservationIntent(db, makeReq({
+      salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+      quantity: 1, reservationMode: 'INVENTORY_LOCK', businessDate: DAY,
+    }), first, actor);
+    assert.equal(first.statusCode, 201);
+    const authorized = db.prepare("SELECT gate_decision,override_reason FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get();
+    assert.deepEqual([authorized.gate_decision, authorized.override_reason], ['OVERRIDE_REQUIRED', 'reservation exception']);
+    const beforeLocks = db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n;
+    const beforeGate = db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n;
+    await assert.rejects(
+      requestReservationIntent(db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, reservationMode: 'INVENTORY_LOCK', businessDate: DAY,
+      }), makeRes(), actor),
+      (error) => error instanceof HttpError && error.code === 'SALES_RESERVATION_INTENT_DUPLICATE',
+    );
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n, beforeLocks);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE snapshot_key LIKE 'ACTION|RESERVATION|REQUEST|%'").get().n, beforeGate);
+  } finally {
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 // ---------- Real PLANNING_RELEASE / Sales Order submit entry ----------
 
 test('Acceptance: real Sales Order submit covers PASS/WARN/BLOCK/override/effective dates/replay/conflict and rollback', async () => {
@@ -694,6 +1095,92 @@ test('Acceptance: real Sales Order submit covers PASS/WARN/BLOCK/override/effect
     const notRequired = await createOrder('submit-not-required');
     assert.equal((await submit(notRequired, 'submit-not-required-key')).status, 200); assert.equal(effects(notRequired).authResults, 0);
   } finally { await h.close(); }
+});
+
+test('Implementation C: Submit SQL order is Parent -> Result -> Requirement -> Order -> Items with no late Parent lock', async () => {
+  const h = await buildRealEntryHarness('submit-order');
+  try {
+    const order = await createSubmitFixture(h, 'submit-order');
+    const probe = transactionProbeDb(h.db);
+    const res = makeRes();
+    await salesOrderAction(probe.db, submitReq('submit-order-key'), res, entryActor, order.id, 'submit');
+    assert.equal(res.statusCode, 200);
+    const statements = probe.state.statements;
+    const begin = statements.findIndex((sql) => /^BEGIN\b/i.test(sql));
+    const parentLocks = statements.map((sql, index) => ({ sql, index }))
+      .filter(({ sql, index }) => index > begin && sql.includes('settlement_unapplied_balances') && sql.includes('WHERE id=?'));
+    const resultLock = statements.findIndex((sql, index) => index > begin && sql.includes('sales_prepayment_gate_results') && sql.includes('ORDER BY evaluated_at DESC'));
+    const requirementLock = statements.findIndex((sql, index) => index > begin && sql.includes('sales_prepayment_requirements WHERE id='));
+    const orderLock = statements.findIndex((sql, index) => index > requirementLock && sql.includes('SELECT * FROM sales_orders WHERE id='));
+    const itemLock = statements.findIndex((sql, index) => index > orderLock && sql.includes('SELECT * FROM sales_order_items WHERE order_id=') && sql.includes('ORDER BY id'));
+    const mutation = statements.findIndex((sql, index) => index > itemLock && sql.includes("UPDATE sales_orders SET status='SUBMITTED'"));
+    assert.equal(parentLocks.length, 1, 'the Submit path locks each planned Parent exactly once');
+    assert.ok(parentLocks[0].index < resultLock && resultLock < requirementLock, 'L1 -> L6 -> L7');
+    assert.ok(requirementLock < orderLock && orderLock < itemLock && itemLock < mutation, 'L7 -> L8 Order -> L8 Items -> mutation');
+    assert.equal(parentLocks.filter(({ index }) => index > requirementLock).length, 0, 'no Parent FOR UPDATE after L7');
+
+    const source = readFileSync(resolve('server/modules/sales-orders.js'), 'utf8');
+    const action = source.slice(source.indexOf('export async function salesOrderAction'));
+    assert.ok(action.includes("if (action === 'submit') return submitSalesOrder"), 'Submit is structurally separated before the legacy non-Submit transaction');
+    assert.ok(!action.slice(action.indexOf('let result;')).includes('authorizeSalesPrepaymentGateWithPlan'), 'Approve/Reject/Close/Cancel remain Gate-free');
+  } finally { await h.close(); }
+});
+
+test('Implementation C: a stale unlocked Submit plan is freshly rediscovered once and commits exactly one effect', async () => {
+  const h = await buildRealEntryHarness('submit-retry');
+  try {
+    const order = await createSubmitFixture(h, 'submit-retry');
+    const probe = transactionProbeDb(h.db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) target.prepare("UPDATE sales_orders SET status='REJECTED' WHERE id=?").run(order.id);
+      },
+    });
+    const res = makeRes();
+    await salesOrderAction(probe.db, submitReq('submit-retry-key'), res, entryActor, order.id, 'submit');
+    assert.equal(res.statusCode, 200);
+    assert.equal(probe.state.begins, 2, 'the second outer attempt must open only after fresh discovery');
+    assert.equal(h.db.prepare('SELECT status FROM sales_orders WHERE id=?').get(order.id).status, 'SUBMITTED');
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=? AND snapshot_key LIKE 'ACTION|PLANNING_RELEASE|SUBMIT|%'").get(order.id).n, 1);
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND entity_id=? AND action='SUBMIT'").get(order.id).n, 1);
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_ORDER_SUBMIT' AND document_id=?").get(order.id).n, 1);
+    const replay = makeRes();
+    await salesOrderAction(h.db, submitReq('submit-retry-key'), replay, entryActor, order.id, 'submit');
+    assert.equal(replay.statusCode, 200); assert.equal(replay.body.replayed, true);
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=? AND snapshot_key LIKE 'ACTION|PLANNING_RELEASE|SUBMIT|%'").get(order.id).n, 1);
+  } finally { await h.close(); }
+});
+
+test('Implementation C: stale-plan exhaustion stops at three attempts with zero Submit/Gate/idempotency/audit effects', async () => {
+  const h = await buildRealEntryHarness('submit-exhaust');
+  const previous = process.env.ERP_GATE_ATTEMPTS_MAX;
+  process.env.ERP_GATE_ATTEMPTS_MAX = '3';
+  try {
+    const order = await createSubmitFixture(h, 'submit-exhaust');
+    const beforeGate = Number(h.db.prepare('SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=?').get(order.id).n);
+    const probe = transactionProbeDb(h.db, {
+      beforeBegin(target, attempt) {
+        target.prepare('UPDATE sales_orders SET status=? WHERE id=?').run(attempt % 2 ? 'REJECTED' : 'DRAFT', order.id);
+      },
+    });
+    const res = makeRes();
+    await assert.rejects(
+      salesOrderAction(probe.db, submitReq('submit-exhaust-key'), res, entryActor, order.id, 'submit'),
+      (error) => error instanceof HttpError
+        && error.status === 503
+        && error.details?.code === 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED'
+        && error.details?.attempts === 3,
+    );
+    assert.equal(probe.state.begins, 3);
+    assert.notEqual(h.db.prepare('SELECT status FROM sales_orders WHERE id=?').get(order.id).status, 'SUBMITTED');
+    assert.equal(Number(h.db.prepare('SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=?').get(order.id).n), beforeGate);
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='SALES_ORDER' AND entity_id=? AND action='SUBMIT'").get(order.id).n, 0);
+    assert.equal(h.db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_ORDER_SUBMIT' AND document_id=?").get(order.id).n, 0);
+    assert.equal(res.statusCode, null); assert.equal(res.ended, false);
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_MAX;
+    else process.env.ERP_GATE_ATTEMPTS_MAX = previous;
+    await h.close();
+  }
 });
 
 // ---------- Real DELIVERY / Sales Delivery confirm entry ----------
@@ -779,4 +1266,195 @@ test('Acceptance: real Sales Delivery confirm covers decisions, stale balance, d
     assert.equal((await confirm(afterDate, 'delivery-after-key')).status, 200); assert.equal(effects(afterDate).authResults, 0);
     const notRequired = await createDelivery('not-required'); assert.equal((await confirm(notRequired, 'delivery-not-required-key')).status, 200); assert.equal(effects(notRequired).authResults, 0);
   } finally { await h.close(); }
+});
+
+test('Implementation E: Delivery locks Gate before authoritative Delivery, Order and source rows', async () => {
+  const h = await buildRealEntryHarness('delivery-e-order');
+  try {
+    const delivery = await createImplementationEDeliveryFixture(h, 'order');
+    addRequirement(h.db, delivery.orderId, 'delivery-e-order');
+    addEntryBalance(h.db, delivery.customerId, 'delivery-e-order', 50000);
+    await evaluateSalesPrepaymentGate(h.db, makeReq({ snapshotKey: 'delivery-e-order-eval' }), makeRes(), entryActor, delivery.orderId, 'DELIVERY');
+    const probe = transactionProbeDb(h.db);
+    const res = makeRes();
+    await confirmSalesDelivery(probe.db, submitReq('delivery-e-order-key', { action: 'confirm' }), res, deliveryActor, delivery.id);
+    assert.equal(res.statusCode, 200);
+    const statements = probe.state.statements;
+    const begin = statements.findIndex((sql) => /^BEGIN\b/i.test(sql));
+    const parent = statements.findIndex((sql, index) => index > begin && sql.includes('settlement_unapplied_balances') && sql.includes('WHERE id=?'));
+    const result = statements.findIndex((sql, index) => index > parent && sql.includes('sales_prepayment_gate_results') && sql.includes('ORDER BY evaluated_at DESC'));
+    const requirement = statements.findIndex((sql, index) => index > result && sql.includes('sales_prepayment_requirements WHERE id='));
+    const deliveryLock = statements.findIndex((sql, index) => index > requirement && sql.includes('SELECT * FROM sales_deliveries WHERE id='));
+    const orderLock = statements.findIndex((sql, index) => index > deliveryLock && sql.includes('SELECT * FROM sales_orders WHERE id='));
+    const sourceLock = statements.findIndex((sql, index) => index > orderLock && sql.includes('SELECT * FROM sales_order_items WHERE id=') && sql.includes('order_id='));
+    const mutation = statements.findIndex((sql, index) => index > sourceLock && sql.includes("UPDATE sales_deliveries SET total_cents="));
+    assert.ok(parent >= 0 && parent < result && result < requirement, 'L1 -> L6 -> L7');
+    assert.ok(requirement < deliveryLock && deliveryLock < orderLock && orderLock < sourceLock && sourceLock < mutation,
+      'Gate locks precede the canonical Delivery -> Order -> source lock graph and mutation');
+    assert.equal(statements.filter((sql, index) => index > requirement && sql.includes('settlement_unapplied_balances') && sql.includes('WHERE id=?')).length, 0,
+      'no late Finance Parent lock is acquired after L7');
+    const source = readFileSync(resolve('server/app.js'), 'utf8');
+    const confirm = source.slice(source.indexOf('export async function confirmSalesDelivery'), source.indexOf('// ============ Sales Returns'));
+    assert.ok(confirm.includes('const { delivery: locked, order: so } = lockAndConsumeSalesDeliveryCapacity'));
+    assert.ok(confirm.indexOf('deliveryFingerprint(locked, so, lockedItems') < confirm.indexOf("assertQualityGate(db, 'OQC'"),
+      'locked authority is compared before OQC and every economic effect');
+  } finally { await h.close(); }
+});
+
+test('Implementation E: Delivery stale fingerprint rediscovery commits exactly one economic effect and replay remains exact', async () => {
+  const h = await buildRealEntryHarness('delivery-e-retry');
+  try {
+    const delivery = await createImplementationEDeliveryFixture(h, 'retry');
+    const probe = transactionProbeDb(h.db, {
+      beforeBegin(target, attempt) {
+        if (attempt === 1) target.prepare('UPDATE sales_deliveries SET total_cents=total_cents+1 WHERE id=?').run(delivery.id);
+      },
+    });
+    const res = makeRes();
+    await confirmSalesDelivery(probe.db, submitReq('delivery-e-retry-key', { action: 'confirm' }), res, deliveryActor, delivery.id);
+    assert.equal(res.statusCode, 200); assert.equal(probe.state.begins, 2);
+    const footprint = () => ({
+      status: h.db.prepare('SELECT status FROM sales_deliveries WHERE id=?').get(delivery.id).status,
+      inventory: Number(h.db.prepare("SELECT COUNT(*) n FROM inventory_transactions WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.id).n),
+      valuation: Number(h.db.prepare("SELECT COUNT(*) n FROM inventory_valuation_movements WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.id).n),
+      cogs: Number(h.db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='SALES_DELIVERY_COGS' AND source_id=?").get(delivery.id).n),
+      ar: Number(h.db.prepare("SELECT COUNT(*) n FROM account_receivables WHERE source_type='SALES_DELIVERY' AND source_id=?").get(delivery.id).n),
+      idempotency: Number(h.db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='SALES_DELIVERY_CONFIRM' AND document_id=?").get(delivery.id).n),
+      audit: Number(h.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='CONFIRM' AND entity_type='SALES_DELIVERY' AND entity_id=?").get(delivery.id).n),
+    });
+    const committed = footprint();
+    assert.deepEqual(committed, { status: 'CONFIRMED', inventory: 1, valuation: 1, cogs: 1, ar: 1, idempotency: 1, audit: 1 });
+    const replay = makeRes();
+    await confirmSalesDelivery(h.db, submitReq('delivery-e-retry-key', { action: 'confirm' }), replay, deliveryActor, delivery.id);
+    assert.equal(replay.statusCode, 200); assert.equal(replay.body.replayed, true); assert.deepEqual(footprint(), committed);
+  } finally { await h.close(); }
+});
+
+test('Implementation E: Delivery Notice retry exhaustion rolls back capacity, Gate and every downstream effect', async () => {
+  const h = await buildRealEntryHarness('delivery-e-exhaust');
+  const previous = process.env.ERP_GATE_ATTEMPTS_MAX; process.env.ERP_GATE_ATTEMPTS_MAX = '3';
+  try {
+    const delivery = await createImplementationEDeliveryFixture(h, 'exhaust', { sourceMode: 'DELIVERY_NOTICE' });
+    const probe = transactionProbeDb(h.db, {
+      beforeBegin(target, attempt) {
+        target.prepare('UPDATE sales_deliveries SET total_cents=? WHERE id=?').run(10000 + attempt, delivery.id);
+      },
+    });
+    await assert.rejects(
+      confirmSalesDelivery(probe.db, submitReq('delivery-e-exhaust-key', { action: 'confirm' }), makeRes(), deliveryActor, delivery.id),
+      (error) => error.status === 503 && error.details?.code === 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED' && error.details?.attempts === 3,
+    );
+    assert.equal(probe.state.begins, 3);
+    assert.equal(h.db.prepare('SELECT state FROM delivery_notices WHERE id=?').get(delivery.deliveryNoticeId).state, 'CONFIRMED');
+    assert.equal(Number(h.db.prepare('SELECT notified_qty_micros FROM delivery_notice_lines WHERE id=?').get(delivery.deliveryNoticeLineId).notified_qty_micros), 0);
+    assert.equal(h.db.prepare('SELECT status FROM sales_deliveries WHERE id=?').get(delivery.id).status, 'DRAFT');
+    for (const [table, where] of [
+      ['inventory_transactions', "source_type='SALES_DELIVERY' AND source_id=?"],
+      ['inventory_valuation_movements', "source_type='SALES_DELIVERY' AND source_id=?"],
+      ['accounting_vouchers', "source_id=? AND source_type IN ('SALES_DELIVERY','SALES_DELIVERY_COGS')"],
+      ['account_receivables', "source_type='SALES_DELIVERY' AND source_id=?"],
+      ['idempotency_records', "operation_type='SALES_DELIVERY_CONFIRM' AND document_id=?"],
+    ]) assert.equal(Number(h.db.prepare(`SELECT COUNT(*) n FROM ${table} WHERE ${where}`).get(delivery.id).n), 0, table);
+    assert.equal(Number(h.db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='CONFIRM' AND entity_type='SALES_DELIVERY' AND entity_id=?").get(delivery.id).n), 0);
+    assert.equal(Number(h.db.prepare("SELECT COUNT(*) n FROM sales_prepayment_gate_results WHERE sales_order_id=? AND snapshot_key LIKE 'ACTION|DELIVERY|CONFIRM|%'").get(delivery.orderId).n), 0);
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_MAX; else process.env.ERP_GATE_ATTEMPTS_MAX = previous;
+    await h.close();
+  }
+});
+
+test('F2-09/F2-16/F2-17: Submit deadline before attempt 1 preserves its exact causeCode contract', async (t) => {
+  const h = await buildRealEntryHarness('f2-submit-deadline');
+  const previous = process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+  process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = '1000';
+  try {
+    const order = await createSubmitFixture(h, 'f2-submit-deadline');
+    const probe = transactionProbeDb(h.db);
+    installMonotonicClock(t, [0n, 1_000_000_000n]);
+    await assert.rejects(
+      salesOrderAction(probe.db, submitReq('f2-submit-deadline-key'), makeRes(), entryActor, order.id, 'submit'),
+      (error) => {
+        assert.equal(error.status, 503);
+        assert.equal(error.code, 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED');
+        assert.equal(error.message, '销售订单提交重试已耗尽');
+        assert.deepEqual(error.details, {
+          code: 'SALES_ORDER_SUBMIT_RETRY_EXHAUSTED', retryable: true, attempts: 0,
+          causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+        });
+        return true;
+      },
+    );
+    assert.equal(probe.state.begins, 0);
+    assert.notEqual(h.db.prepare('SELECT status FROM sales_orders WHERE id=?').get(order.id).status, 'SUBMITTED');
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+    else process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = previous;
+    await h.close();
+  }
+});
+
+test('F2-09/F2-16/F2-17: Reservation deadline before attempt 1 preserves its exact causeCode contract', async (t) => {
+  const { db, temp } = buildDb();
+  const { userId } = seedBaseContext(db);
+  const previous = process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+  process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = '1000';
+  try {
+    const probe = transactionProbeDb(db);
+    installMonotonicClock(t, [0n, 1_000_000_000n]);
+    await assert.rejects(
+      requestReservationIntent(probe.db, makeReq({
+        salesOrderId: 'so-acc', salesOrderItemId: 'soi-acc', productId: 'p-acc', warehouseId: 'wh-acc',
+        quantity: 1, reservationMode: 'INVENTORY_LOCK', businessDate: DAY,
+      }), makeRes(), actorUser(userId)),
+      (error) => {
+        assert.equal(error.status, 503);
+        assert.equal(error.code, 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED');
+        assert.equal(error.message, '预留意图请求重试已耗尽');
+        assert.deepEqual(error.details, {
+          code: 'SALES_RESERVATION_INTENT_RETRY_EXHAUSTED', retryable: true, attempts: 0,
+          causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+        });
+        return true;
+      },
+    );
+    assert.equal(probe.state.begins, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM sales_reservation_intent WHERE sales_order_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM inventory_locks WHERE source_id='so-acc'").get().n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM planning_reservations WHERE demand_source_id='so-acc'").get().n, 0);
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+    else process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = previous;
+    db.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+test('F2-09/F2-16/F2-17: Delivery deadline before attempt 1 preserves its exact causeCode contract', async (t) => {
+  const h = await buildRealEntryHarness('f2-delivery-deadline');
+  const previous = process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+  process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = '1000';
+  try {
+    const delivery = await createImplementationEDeliveryFixture(h, 'f2-deadline');
+    const probe = transactionProbeDb(h.db);
+    installMonotonicClock(t, [0n, 1_000_000_000n]);
+    await assert.rejects(
+      confirmSalesDelivery(probe.db, submitReq('f2-delivery-deadline-key', { action: 'confirm' }), makeRes(), deliveryActor, delivery.id),
+      (error) => {
+        assert.equal(error.status, 503);
+        assert.equal(error.code, 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED');
+        assert.equal(error.message, '销售出库确认重试已耗尽');
+        assert.deepEqual(error.details, {
+          code: 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED', retryable: true, attempts: 0,
+          causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+        });
+        return true;
+      },
+    );
+    assert.equal(probe.state.begins, 0);
+    assert.equal(h.db.prepare('SELECT status FROM sales_deliveries WHERE id=?').get(delivery.id).status, 'DRAFT');
+  } finally {
+    if (previous === undefined) delete process.env.ERP_GATE_ATTEMPTS_BUDGET_MS;
+    else process.env.ERP_GATE_ATTEMPTS_BUDGET_MS = previous;
+    await h.close();
+  }
 });

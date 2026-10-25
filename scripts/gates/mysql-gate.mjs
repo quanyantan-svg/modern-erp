@@ -3,17 +3,15 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { MySqlSyncAdapter } from '../../server/database/mysql-adapter.js';
+import { assertAuthorizedDisposableMySqlTarget } from '../../server/test-utils/mysql-disposable-target.js';
+import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 const missing = required.filter((name) => !process.env[name]);
-if (missing.length || process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
-  console.error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE${missing.length ? ` (${missing.join(', ')} missing)` : ' (ERP_MYSQL_TEST_ALLOW_RESET=true required)'}`);
-  process.exit(2);
-}
-if (!/(?:test|phase7[abc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
-  console.error(`Refusing MySQL integration tests for non-disposable database: ${process.env.ERP_DB_NAME}`);
+if (missing.length) {
+  console.error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE (${missing.join(', ')} missing)`);
   process.exit(2);
 }
 
@@ -31,6 +29,8 @@ process.env.NODE_ENV = 'test';
 process.env.ERP_SEED_DEMO = 'false';
 
 const resetConfig = resolveDatabaseConfig({ backend: 'mysql' });
+try { assertAuthorizedDisposableMySqlTarget(resetConfig); }
+catch (error) { console.error(error.message); process.exit(2); }
 const childEnv = {
   ...process.env,
   ERP_DB_BACKEND: 'mysql',
@@ -142,6 +142,7 @@ function tee(stream, target, capture) {
   console.error('CHILD ERP_DB_PORT =', childEnv.ERP_DB_PORT);
   console.error('CHILD ERP_DB_NAME =', childEnv.ERP_DB_NAME);
   console.error('CHILD ERP_DB_USER =', childEnv.ERP_DB_USER);
+  const results = [];
   for (const file of files) {
     const capture = { value: '' };
     const child = spawn(process.execPath, ['--test', '--test-concurrency=1', resolve(repoRoot, file)], {
@@ -170,6 +171,12 @@ function tee(stream, target, capture) {
       console.error('=== END MYSQL GATE FAILURE DIAGNOSTIC ===');
       process.exit(code || 1);
     }
+    const summary = parseTapSummary(capture.value);
+    assertTapSummaryStrict(file, summary);
+    results.push({ file, summary });
   }
   console.log('MYSQL TESTS = PASS');
+  for (const { file, summary } of results) {
+    console.log(`  ${file}: ${summary.pass} / ${summary.tests} PASS (skipped ${summary.skipped}, cancelled ${summary.cancelled}, todo ${summary.todo})`);
+  }
 })();

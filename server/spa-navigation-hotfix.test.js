@@ -129,9 +129,12 @@ describe('navigation state and regression contracts', () => {
     // SUPPLIERS_VIEW and INVENTORY_TRANSFER_CONFIRM (114); Core Scope
     // Cleanup removed CRM_VIEW, CRM_MANAGE, PROJECT_VIEW,
     // PROJECT_MANAGE (110). Batch A adds six bounded Sales permissions.
-    assert.equal(PERMISSIONS.length, 224);
+    // Wave 10 adds CREDIT_EVALUATE and CREDIT_SPECIAL_APPROVE (226).
+    assert.equal(PERMISSIONS.length, 226);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_VIEW').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_MANAGE').length, 1);
+    assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_EVALUATE').length, 1);
+    assert.equal(PERMISSIONS.filter(([code]) => code === 'CREDIT_SPECIAL_APPROVE').length, 1);
     assert.equal(PERMISSIONS.filter(([code]) => code.startsWith('SALES_')).length >= 4, true);
   });
   test('exact targets initialize Sales Delivery and Purchase Receipt detail state', () => {

@@ -15,8 +15,8 @@
 //
 // SQLite-compatible portable SQL.
 
-const VIEW_DDL = `
-CREATE VIEW IF NOT EXISTS finance_open_item_effects AS
+export const FINANCE_OPEN_ITEM_EFFECTS_VIEW_DDL = `
+CREATE VIEW finance_open_item_effects AS
   -- ============================================================
   -- A. SETTLEMENT_ALLOCATION
   -- ============================================================
@@ -151,10 +151,14 @@ CREATE VIEW IF NOT EXISTS finance_open_item_effects AS
 
 export function ensureFinanceOpenItemEffectsView(db) {
   try {
+    // Converge an existing installation on the canonical definition. Both
+    // SQLite and MySQL reject DROP VIEW when the object is a legacy table,
+    // so each defensive object-kind removal is isolated.
+    try { db.exec('DROP VIEW IF EXISTS finance_open_item_effects'); } catch (_ignored) { /* legacy table */ }
     // Drop legacy materialized cache if any (defensive; prior closures must
     // never have created a physical table — guard only).
     try { db.exec('DROP TABLE IF EXISTS finance_open_item_effects'); } catch (_ignored) { /* ignore */ }
-    db.exec(VIEW_DDL);
+    db.exec(FINANCE_OPEN_ITEM_EFFECTS_VIEW_DDL);
   } catch (error) {
     // Surface so caller can fail closed at boot.
     throw new Error('ensureFinanceOpenItemEffectsView failed: ' + error.message);

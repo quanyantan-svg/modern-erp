@@ -47,10 +47,13 @@ function lockParentBalances(db, balanceIds) {
   const ordered = [...new Set(balanceIds)].sort();
   for (const id of ordered) {
     const row = db.prepare(`SELECT id, status, side, balance_type FROM settlement_unapplied_balances WHERE id=?${lockSuffix(db)}`).get(id);
-    if (!row) throw new HttpError(409, `结算余额不存在: ${id}`);
-    if (row.status !== 'OPEN') throw new HttpError(409, `结算余额已关闭: ${id}`);
+    // Structured codes: a parent that vanished, closed or changed type means the
+    // discovered candidate plan is stale. Callers must classify on these codes, never
+    // on the human-readable message. Messages and HTTP status are unchanged.
+    if (!row) throw new HttpError(409, `结算余额不存在: ${id}`, { code: 'SALES_PREPAYMENT_PARENT_MISSING', parentBalanceId: id });
+    if (row.status !== 'OPEN') throw new HttpError(409, `结算余额已关闭: ${id}`, { code: 'SALES_PREPAYMENT_PARENT_CLOSED', parentBalanceId: id });
     if (!PREPAYMENT_BALANCE_TYPES.includes(row.balance_type)) {
-      throw new HttpError(409, `结算余额类型不支持预付门: ${row.balance_type}`);
+      throw new HttpError(409, `结算余额类型不支持预付门: ${row.balance_type}`, { code: 'SALES_PREPAYMENT_PARENT_TYPE_UNSUPPORTED', parentBalanceId: id });
     }
   }
 }

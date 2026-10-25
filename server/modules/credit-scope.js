@@ -85,3 +85,26 @@ export function requireCreditConfigurationRead(actor) {
   if (actorHas(actor, 'CREDIT_VIEW')) return;
   throw new HttpError(403, '没有查看信用配置的权限', { code: 'CREDIT_PERMISSION_DENIED' });
 }
+
+// §36.9.3 SC111 — the Credit Check evaluation capability.
+export function requireCreditEvaluationAuthority(actor) {
+  if (actor?.roleCode === 'ADMIN') return;
+  if (actorHas(actor, 'CREDIT_EVALUATE')) return;
+  throw new HttpError(403, '没有执行信用检查的权限', { code: 'CREDIT_EVALUATE_DENIED' });
+}
+
+// §36.9.3 SC111 — requesting a Credit Special Approval.
+export function requireCreditSpecialApprovalRequestAuthority(actor) {
+  if (actor?.roleCode === 'ADMIN') return;
+  if (actorHas(actor, 'CREDIT_SPECIAL_APPROVE')) return;
+  throw new HttpError(403, '没有申请信用特别审批的权限', { code: 'CREDIT_SPECIAL_APPROVAL_DENIED' });
+}
+
+// §34.7 P2 / P4 — deciding a Credit Special Approval needs an authority that
+// is separate from the request authority, and the granted amount stays
+// bounded by the authority ceiling frozen at request time.
+export function requireCreditSpecialApprovalDecisionAuthority(actor) {
+  if (actor?.roleCode === 'ADMIN') return;
+  if (actorHas(actor, 'CREDIT_MANAGE')) return;
+  throw new HttpError(403, '没有审批信用特别审批的权限', { code: 'CREDIT_SPECIAL_APPROVAL_DENIED' });
+}

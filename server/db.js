@@ -57,6 +57,8 @@ export const PERMISSIONS = [
   ['SALES_PRICING_OVERRIDE', '执行销售价格与订单时折扣覆盖'],
   ['CREDIT_VIEW', '查看信用策略与信用档案'],
   ['CREDIT_MANAGE', '管理信用策略与信用档案'],
+  ['CREDIT_EVALUATE', '执行信用检查'],
+  ['CREDIT_SPECIAL_APPROVE', '申请信用特别审批'],
   ['SUPPLIERS_VIEW', '查看供应商'],
   ['SUPPLIERS_MANAGE', '管理供应商资料'],
   ['DASHBOARD_VIEW', '查看仪表板'],
@@ -576,6 +578,10 @@ export function createDatabase(target) {
     seedDemo: shouldSeedDemoData(),
   });
   try {
+    // The SQLite snapshot intentionally contains tables only. Recreate the
+    // canonical derived Finance projection on the live MySQL adapter after
+    // its dependency tables have been bootstrapped.
+    ensureFinanceOpenItemEffectsView(db);
     // The fresh bootstrap snapshot already passed through the same canonical
     // runner. Replaying it on the live adapter is intentional: future steps
     // must be idempotent so this is a no-op/reconciliation for fresh MySQL and
@@ -1872,19 +1878,245 @@ function waitForTransactionRetry(attempt) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
 }
 
-function releaseMySqlIdempotencyLocks(db) {
-  if (db?.dialect !== 'mysql' || !db._idempotencyLocks?.size) return;
-  for (const lockName of db._idempotencyLocks) {
-    try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } catch {}
+// ---------------------------------------------------------------------------
+// Transaction lifecycle safety (document.md §5.4.1-§5.4.2, solution.md
+// §37.30-§37.31).
+//
+// Two independent layers:
+//
+//   LAYER 1 — session state. Owned by the MySQL adapter. It is a conservative
+//   permit derived only from acknowledged Worker responses and from the
+//   adapter's own request-outcome classification. It is never a probe of
+//   server state, and it never overrides `db.isTransaction`, which stays the
+//   canonical transaction mirror.
+//
+//   LAYER 2 — named-lock release verification. Owned here. It proves that a
+//   registered MySQL named idempotency lock is no longer owned by a session
+//   this adapter will reuse.
+//
+// The adapter is the single source of session truth; this module is the single
+// source of lock-ownership truth. Neither re-derives the other's facts.
+// ---------------------------------------------------------------------------
+
+export const MYSQL_TRANSACTION_ADMISSION_REFUSED = 'MYSQL_TRANSACTION_ADMISSION_REFUSED';
+
+const MYSQL_ADMISSION_REASONS = Object.freeze({
+  ACTIVE: 'SESSION_TRANSACTION_ACTIVE',
+  UNCERTAIN: 'SESSION_STATE_UNCERTAIN',
+  QUARANTINED: 'ADAPTER_QUARANTINED',
+  TERMINATED: 'ADAPTER_TERMINATED',
+});
+
+// The current session state of a MySQL connection. A connection that cannot
+// report a trusted state is treated as uncertain: admission fails closed.
+export function mysqlSessionState(db) {
+  if (!db || db.dialect !== 'mysql') return null;
+  if (db.quarantined) return 'QUARANTINED';
+  const state = db.sessionState;
+  if (state === 'ACTIVE' || state === 'UNCERTAIN' || state === 'TERMINATED') return state;
+  if (state === 'IDLE_TRUSTED' || state === 'FRESH') return state;
+  return 'UNCERTAIN';
+}
+
+// Pre-BEGIN admission guard (§37.31 R1). BEGIN is refused when a transaction
+// is already open on the session, when the session state is indeterminate, and
+// when the adapter is quarantined or terminated. Issuing START TRANSACTION in
+// any of those states would let MySQL implicitly commit prior work.
+export function assertMySqlTransactionAdmission(db) {
+  if (db?.dialect !== 'mysql') return;
+  const state = mysqlSessionState(db);
+  if (state === 'IDLE_TRUSTED' || state === 'FRESH') return;
+  const reason = MYSQL_ADMISSION_REASONS[state] || MYSQL_ADMISSION_REASONS.UNCERTAIN;
+  db.admissionRefusalCount = Number(db.admissionRefusalCount || 0) + 1;
+  // The session carries a transaction this attempt does not own, or an
+  // indeterminate state. Either way it must not be reused, and it must not
+  // be rolled back by this attempt.
+  quarantineMySqlAdapter(db, 'transaction_admission_refused');
+  const error = new Error(`MySQL transaction admission refused: ${reason}`);
+  error.code = MYSQL_TRANSACTION_ADMISSION_REFUSED;
+  error.reason = reason;
+  throw error;
+}
+
+function quarantineMySqlAdapter(db, reason) {
+  if (!db || typeof db.quarantine !== 'function') return false;
+  const state = db.quarantine(reason);
+  return state !== false && state !== null && state !== undefined;
+}
+
+// Layer 2 — the one authoritative named-lock release contract.
+//
+// RELEASE_LOCK = 1 proves that the executing session held the lock and
+// released it, therefore the executing session IS the original owner. Any
+// other outcome (0, NULL, an unexpected value, a driver exception or a
+// timeout) is NOT a confirmed release and forces quarantine. A session epoch
+// mismatch proves the result describes a different session than the one that
+// owned the lock, so it is never read as evidence about the original.
+export function releaseMySqlIdempotencyLocks(db, { lockNames = null, sessionDestroyed = false } = {}) {
+  const result = { attempted: 0, verified: [], unverified: [], sessionReplaced: false, quarantined: false };
+  if (db?.dialect !== 'mysql') return result;
+  const registry = db._idempotencyLocks instanceof Set ? db._idempotencyLocks : null;
+  if (!registry) return result;
+  const targets = lockNames ? lockNames.filter((name) => registry.has(name)) : [...registry];
+  if (!targets.length) return result;
+
+  if (sessionDestroyed) {
+    // The session that owned these locks is gone. The server reclaims its
+    // locks when it reaps the session, so ownership is resolved without
+    // issuing any statement against a replacement session.
+    for (const lockName of targets) registry.delete(lockName);
+    result.sessionReplaced = true;
+    result.verified = targets;
+    return result;
   }
-  db._idempotencyLocks.clear();
+
+  const state = mysqlSessionState(db);
+  if (state === 'QUARANTINED' || state === 'TERMINATED') {
+    // A quarantined adapter must never issue another statement.
+    result.quarantined = true;
+    for (const lockName of targets) result.unverified.push({ outcome: 'ADAPTER_QUARANTINED', code: null });
+    return result;
+  }
+
+  const epochBefore = db.sessionEpoch ?? null;
+  const lockEpoch = db._idempotencyLockEpoch ?? null;
+  for (const lockName of targets) {
+    result.attempted += 1;
+    try {
+      const row = db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName);
+      const value = row?.released;
+      if (value === 1) {
+        result.verified.push(lockName);
+        registry.delete(lockName);
+        continue;
+      }
+      result.unverified.push({
+        outcome: value === 0
+          ? 'NOT_OWNER'
+          : (value === null || value === undefined) ? 'LOCK_ABSENT' : 'UNEXPECTED_VALUE',
+        code: null,
+      });
+    } catch (error) {
+      if (error?.sessionLost === true) {
+        result.sessionReplaced = true;
+        result.unverified.push({ outcome: 'SESSION_REPLACED', code: error?.code ?? null });
+      } else {
+        result.unverified.push({ outcome: 'ERROR', code: error?.code ?? null });
+      }
+    }
+  }
+
+  const epochAfter = db.sessionEpoch ?? null;
+  const sessionReplaced = result.sessionReplaced
+    || (epochBefore !== null && epochAfter !== null && epochAfter !== epochBefore)
+    || (lockEpoch !== null && epochAfter !== null && epochAfter !== lockEpoch);
+  if (sessionReplaced) {
+    // The session that owned the locks is gone, so the lock cannot survive on
+    // any session this adapter will reuse. Ownership is resolved, and it is
+    // NOT reported as a confirmed RELEASE_LOCK.
+    result.sessionReplaced = true;
+    for (const entry of result.unverified) {
+      if (entry.outcome === 'NOT_OWNER' || entry.outcome === 'LOCK_ABSENT') entry.outcome = 'SESSION_REPLACED';
+    }
+    if (result.unverified.every((entry) => entry.outcome === 'SESSION_REPLACED')) {
+      for (const lockName of targets) registry.delete(lockName);
+      result.quarantined = false;
+      return result;
+    }
+  }
+
+  if (result.unverified.length) {
+    result.quarantined = quarantineMySqlAdapter(db, 'idempotency_lock_release_unverified');
+  }
+  return result;
+}
+
+// The BEGIN startup boundary. This attempt owns no transaction, so no COMMIT
+// and no ROLLBACK is issued here. A confirmed release keeps the connection
+// reusable; an unknown session state or an unverified release retires it.
+function settleFailedTransactionStart(db, error, { releaseLocks = true } = {}) {
+  if (db?.dialect !== 'mysql') return { resolved: true, quarantined: false };
+  const timedOut = error?.mysqlRequestTimeout === true;
+  const sessionLost = error?.sessionLost === true;
+  if (timedOut || sessionLost) {
+    // The Worker may still be executing the statement. A request timeout does
+    // not cancel the underlying MySQL statement, and discarding the response
+    // does not cancel it either. Any further statement would be queued behind
+    // it on the same session, so its result would be ambiguous. The session is
+    // destroyed instead.
+    const quarantined = quarantineMySqlAdapter(db, timedOut ? 'transaction_start_timeout' : 'transaction_start_session_lost');
+    if (sessionLost && releaseLocks) releaseMySqlIdempotencyLocks(db, { sessionDestroyed: true });
+    return { resolved: false, quarantined };
+  }
+  if (!releaseLocks) {
+    // The read path owns no named lock. A lock that is still registered
+    // belongs to an enclosing operation and must not be released here.
+    return { resolved: true, quarantined: false };
+  }
+  const release = releaseMySqlIdempotencyLocks(db);
+  return { resolved: release.unverified.length === 0, quarantined: release.quarantined };
+}
+
+// The ROLLBACK settlement gate. A retry is admitted only after a proven
+// rollback and a trusted session state.
+function settleTransactionRollback(db) {
+  const outcome = { proven: false, quarantined: false, reason: null };
+  if (!db?.isTransaction) {
+    const state = mysqlSessionState(db);
+    outcome.proven = state === 'IDLE_TRUSTED' || state === 'FRESH';
+    if (!outcome.proven) {
+      outcome.reason = 'ROLLBACK_STATE_UNTRUSTED';
+      outcome.quarantined = quarantineMySqlAdapter(db, 'rollback_state_untrusted');
+    }
+    return outcome;
+  }
+  try {
+    db.exec('ROLLBACK');
+    const state = mysqlSessionState(db);
+    outcome.proven = state === 'IDLE_TRUSTED';
+    if (!outcome.proven) {
+      outcome.reason = 'ROLLBACK_NOT_ACKNOWLEDGED';
+      outcome.quarantined = quarantineMySqlAdapter(db, 'rollback_not_acknowledged');
+    }
+  } catch (error) {
+    outcome.reason = 'ROLLBACK_FAILED';
+    outcome.quarantined = quarantineMySqlAdapter(db, 'rollback_failed');
+  }
+  return outcome;
+}
+
+// An uncertain COMMIT must never be converted into a retried write.
+function isUncertainCommit(error) {
+  return error?.mysqlRequestTimeout === true || error?.sessionLost === true;
 }
 
 export function transaction(db, work) {
   const mysql = db?.dialect === 'mysql';
   const retryLimit = mysql ? mysqlTransactionRetryLimit() : 0;
   for (let attempt = 0; ; attempt += 1) {
-    db.exec('BEGIN IMMEDIATE');
+    if (mysql) {
+      assertMySqlTransactionAdmission(db);
+      // The named idempotency locks are acquired by the caller immediately
+      // before this attempt, on the same session, so the epoch observed here
+      // is the epoch that owns them.
+      db._idempotencyLockEpoch = db.sessionEpoch ?? null;
+      let startupError = null;
+      try {
+        db.exec('BEGIN IMMEDIATE');
+      } catch (error) {
+        startupError = error;
+      }
+      if (startupError) {
+        // The original startup exception stays the primary failure. This
+        // attempt owns no transaction, so neither COMMIT nor ROLLBACK is
+        // issued here.
+        settleFailedTransactionStart(db, startupError);
+        throw startupError;
+      }
+    } else {
+      db.exec('BEGIN IMMEDIATE');
+    }
+    let commitAttempted = false;
     try {
       if (mysql) {
         // Global order: transaction gate first, then business rows. Holding the
@@ -1894,16 +2126,38 @@ export function transaction(db, work) {
         if (!gate) throw new Error('MySQL transaction gate is unavailable');
       }
       const result = work();
+      commitAttempted = true;
       db.exec('COMMIT');
       releaseMySqlIdempotencyLocks(db);
       return result;
     } catch (error) {
-      try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
-      if (!mysql || !isRetryableMySqlTransactionError(error) || attempt >= retryLimit) {
-        if (mysql && isRetryableMySqlTransactionError(error)) {
+      let rollback;
+      if (mysql) {
+        rollback = settleTransactionRollback(db);
+      } else {
+        // SQLite keeps its original settlement: a best-effort rollback of the
+        // transaction this attempt owns.
+        try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+        rollback = { proven: true, quarantined: false };
+      }
+      const retriable = mysql && isRetryableMySqlTransactionError(error);
+      if (!retriable || attempt >= retryLimit) {
+        if (retriable) {
           error.transactionRetryExhausted = true;
           error.transactionAttempts = attempt + 1;
         }
+        releaseMySqlIdempotencyLocks(db);
+        throw error;
+      }
+      if (!rollback.proven) {
+        // A failed or uncertain ROLLBACK is a terminal retry boundary. No
+        // further BEGIN may be issued on this session.
+        releaseMySqlIdempotencyLocks(db);
+        throw error;
+      }
+      if (commitAttempted && isUncertainCommit(error)) {
+        // The COMMIT outcome is unknown, so the mutation may already be
+        // durable. It is never retried automatically.
         releaseMySqlIdempotencyLocks(db);
         throw error;
       }
@@ -1913,9 +2167,26 @@ export function transaction(db, work) {
 }
 
 export function readTransaction(db, work) {
-  db.exec('BEGIN');
+  const mysql = db?.dialect === 'mysql';
+  if (mysql) {
+    assertMySqlTransactionAdmission(db);
+    let startupError = null;
+    try {
+      db.exec('BEGIN');
+    } catch (error) {
+      startupError = error;
+    }
+    if (startupError) {
+      // No named lock is released here: a lock that is still registered
+      // belongs to an enclosing operation, not to this read.
+      settleFailedTransactionStart(db, startupError, { releaseLocks: false });
+      throw startupError;
+    }
+  } else {
+    db.exec('BEGIN');
+  }
   try {
-    if (db?.dialect === 'mysql') {
+    if (mysql) {
       // MySQL sessions run at READ COMMITTED. This shared lock is held on
       // the same canonical gate acquired exclusively by every writer, so a
       // resolver sees one coherent state without changing global isolation
@@ -1927,7 +2198,11 @@ export function readTransaction(db, work) {
     db.exec('COMMIT');
     return result;
   } catch (error) {
-    try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+    if (mysql) {
+      settleTransactionRollback(db);
+    } else {
+      try { if (db.isTransaction) db.exec('ROLLBACK'); } catch {}
+    }
     throw error;
   }
 }

@@ -154,7 +154,7 @@ import {
 import { applyTreasuryMovement } from './modules/finance-treasury-movement.js';
 import { handleFinanceRoute } from './modules/finance-routes.js';
 import { recognizeFinanceExposure } from './modules/finance-recognition.js';
-import { RECOGNITION_MODES, setSourceRecognitionPolicy } from './modules/finance-recognition-policy.js';
+import { RECOGNITION_MODES, resolveRecognitionPolicy, setSourceRecognitionPolicy } from './modules/finance-recognition-policy.js';
 import {
   availabilityHandler, createQcpHandler, freezeQualityPolicy, genealogyHandler, holdIdentityHandler, listTrackingIdentitiesHandler,
   listQcpHandler, postTrackedMovement, reconcileTrackingHandler, saveAllocationsHandler,
@@ -206,6 +206,13 @@ import { listSalesParameters, upsertSalesParameters } from './modules/sales-para
 import { listCreditAnchors, provisionCreditAnchor } from './modules/credit-anchor.js';
 import { createCreditParameter, createCreditRule, listCreditParameters, listCreditRules } from './modules/credit-policy.js';
 import { createCreditProfile, getCreditProfile, listCreditProfiles } from './modules/credit-profile.js';
+import { evaluateCreditCheck, listCreditCheckResults, assertCreditAllowsBusinessAction } from './modules/credit-check.js';
+import {
+  decideCreditSpecialApproval,
+  getCreditSpecialApproval,
+  listCreditSpecialApprovals,
+  requestCreditSpecialApproval,
+} from './modules/credit-special-approval.js';
 import {
   listSalesGroups, listSalespersonMemberships, listSalespersons,
   saveSalesGroup, saveSalesperson, saveSalespersonMembership,
@@ -244,6 +251,7 @@ import {
   authorizeSalesPrepaymentGateForMutation, discoverSalesPrepaymentGatePlan,
   authorizeSalesPrepaymentGateWithPlan,
 } from './modules/sales-prepayment-gate.js';
+import { isGateRetryAdmissionExpired, startGateRetryAdmission } from './modules/sales-gate-retry-admission.js';
 import {
   consumeReservationIntent, getReservationIntent, grantReservationIntent, listReservationIntents,
   releaseReservationIntent, requestReservationIntent,
@@ -587,6 +595,12 @@ ownedRouteTable.register({ method: 'POST', path: '/api/credit/anchors/provision'
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/profiles', handler: ({ db,res,actor,url }) => listCreditProfiles(db,res,actor,url), owner: 'server/modules/credit-profile.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/credit/profiles', handler: ({ db,req,res,actor }) => createCreditProfile(db,req,res,actor), owner: 'server/modules/credit-profile.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/profiles\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditProfile(db,res,actor,params[0]), owner: 'server/modules/credit-profile.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/check', handler: ({ db,req,res,actor }) => evaluateCreditCheck(db,req,res,actor), owner: 'server/modules/credit-check.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/check-results', handler: ({ db,res,actor,url }) => listCreditCheckResults(db,res,actor,url), owner: 'server/modules/credit-check.js' });
+ownedRouteTable.register({ method: 'POST', path: '/api/credit/special-approvals', handler: ({ db,req,res,actor }) => requestCreditSpecialApproval(db,req,res,actor), owner: 'server/modules/credit-special-approval.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/special-approvals', handler: ({ db,res,actor,url }) => listCreditSpecialApprovals(db,res,actor,url), owner: 'server/modules/credit-special-approval.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/special-approvals\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditSpecialApproval(db,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
+ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/special-approvals\/([^/]+)\/decide$/, handler: ({ db,req,res,actor,params }) => decideCreditSpecialApproval(db,req,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales/groups', handler: ({ db, res, actor }) => listSalesGroups(db, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales/groups', handler: ({ db, req, res, actor }) => saveSalesGroup(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/groups\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesGroup(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });
@@ -5706,18 +5720,126 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
     const key = String(req.headers['idempotency-key'] || body.idempotencyKey || `document-${deliveryId}`); const fingerprint = requestFingerprint({ action });
     const replay = idempotencyReplay(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint); if (replay) return send(res, 200, { ...replay, replayed: true });
     if (!delivery.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
-    const gatePlan = discoverSalesPrepaymentGatePlan(db, delivery.sales_order_id, delivery.delivery_date);
-    transaction(db, () => {
-      authorizeSalesPrepaymentGateWithPlan(db, gatePlan, {
-        stage: 'DELIVERY', actorId: actor.id,
-        mutationKey: `ACTION|DELIVERY|CONFIRM|${deliveryId}|${key}`,
+    const maxAttempts = (() => {
+      const configured = Number(process.env.ERP_GATE_ATTEMPTS_MAX ?? 3);
+      return Number.isSafeInteger(configured) && configured >= 1 && configured <= 3 ? configured : 3;
+    })();
+    const rediscoveryCodes = new Set([
+      'SALES_PREPAYMENT_LOCK_PLAN_STALE',
+      'SALES_PREPAYMENT_PARENT_MISSING',
+      'SALES_PREPAYMENT_PARENT_CLOSED',
+      'SALES_DELIVERY_CONFIRM_PLAN_STALE',
+    ]);
+    const waitForRediscovery = (attempt) => Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)), 0, 0,
+      Math.min(100, 20 * (2 ** (attempt - 1))),
+    );
+    const deliveryFingerprint = (candidate, order, items, noticeSources) => requestFingerprint({
+      delivery: candidate && {
+        id: candidate.id, salesOrderId: candidate.sales_order_id, customerId: candidate.customer_id,
+        status: candidate.status, deliveryDate: candidate.delivery_date, warehouseId: candidate.warehouse_id,
+        totalCents: Number(candidate.total_cents), sourceMode: candidate.source_mode,
+        deliveryNoticeId: candidate.delivery_notice_id || null, billingMode: candidate.billing_mode,
+      },
+      order: order && {
+        id: order.id, customerId: order.customer_id, status: order.status,
+        commercialCloseState: order.commercial_close_state, totalCents: Number(order.total_cents),
+        salesGroupId: order.sales_group_id || null, paymentTermsDays: Number(order.payment_terms_days || 0),
+      },
+      items: items.map((item) => ({
+        id: item.id, salesOrderItemId: item.sales_order_item_id, productId: item.product_id,
+        quantity: Number(item.quantity), unitPriceCents: Number(item.unit_price_cents),
+        amountCents: Number(item.amount_cents), baseQuantityNum: item.base_quantity_num,
+        baseQuantityDen: item.base_quantity_den, deliveryNoticeLineId: item.delivery_notice_line_id || null,
+      })),
+      noticeSources,
+    });
+    const readDeliveryPlan = () => {
+      const candidate = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
+      if (!candidate) throw new HttpError(404, '销售出库单不存在');
+      if (!candidate.sales_order_id) throw new HttpError(409, '旧版无来源销售出货不可确认，请使用库存调整单');
+      if (candidate.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+      const order = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(candidate.sales_order_id);
+      if (!order) throw new HttpError(409, '来源销售订单不存在或未审批');
+      const items = db.prepare('SELECT * FROM sales_delivery_items WHERE delivery_id=? ORDER BY sales_order_item_id,id').all(deliveryId);
+      const noticeSources = candidate.source_mode === 'DELIVERY_NOTICE'
+        ? items.map((item) => {
+            const notice = db.prepare('SELECT id,sales_order_id FROM delivery_notices WHERE id=?').get(candidate.delivery_notice_id);
+            const line = db.prepare('SELECT id,delivery_notice_id,sales_order_item_id FROM delivery_notice_lines WHERE id=?').get(item.delivery_notice_line_id);
+            return { noticeId: notice?.id || null, noticeOrderId: notice?.sales_order_id || null,
+              lineId: line?.id || null, lineNoticeId: line?.delivery_notice_id || null,
+              lineOrderItemId: line?.sales_order_item_id || null };
+          })
+        : [];
+      const gatePlan = discoverSalesPrepaymentGatePlan(db, candidate.sales_order_id, candidate.delivery_date);
+      return Object.freeze({
+        fingerprint: deliveryFingerprint(candidate, order, items, noticeSources),
+        gatePlan: Object.freeze({ ...gatePlan, parentBalanceIds: Object.freeze([...gatePlan.parentBalanceIds]) }),
       });
-      const locked = db.prepare('SELECT * FROM sales_deliveries WHERE id=?').get(deliveryId);
-      if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
-      lockAndConsumeSalesDeliveryCapacity(db, deliveryId);
-      const so = db.prepare('SELECT * FROM sales_orders WHERE id=?').get(locked.sales_order_id);
-      if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
-      if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
+    };
+    const admission = startGateRetryAdmission(process.env.ERP_GATE_ATTEMPTS_BUDGET_MS);
+    let attemptsStarted = 0;
+    const deadlineExhausted = () => new HttpError(503, '销售出库确认重试已耗尽', {
+      code: 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED',
+      retryable: true,
+      attempts: attemptsStarted,
+      causeCode: 'SALES_PREPAYMENT_GATE_ADMISSION_DEADLINE_EXCEEDED',
+    });
+    while (attemptsStarted < maxAttempts) {
+      if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+      attemptsStarted += 1;
+      const attempt = attemptsStarted;
+      const plan = readDeliveryPlan();
+      try {
+        transaction(db, () => {
+          authorizeSalesPrepaymentGateWithPlan(db, plan.gatePlan, {
+            stage: 'DELIVERY', actorId: actor.id,
+            mutationKey: `ACTION|DELIVERY|CONFIRM|${deliveryId}|${key}`,
+            // §36.14.3 — the Credit Check composes strictly between L1 and L6.
+            // A delivery confirmation transitions the obligation from the
+            // approved-SO commitment into the delivered / AR stage, so the
+            // proposed delta is net neutral: no economic amount is added.
+            afterParentLock: ({ parentBalanceIds }) => {
+              const subject = db.prepare(`SELECT d.customer_id, d.delivery_date, so.salesperson_id
+                FROM sales_deliveries d LEFT JOIN sales_orders so ON so.id=d.sales_order_id WHERE d.id=?`).get(deliveryId);
+              const deliveryDate = subject.delivery_date || plan.gatePlan.businessDate;
+              assertCreditAllowsBusinessAction(db, {
+                customerId: subject.customer_id,
+                salespersonId: subject.salesperson_id,
+                stage: 'SALES_DELIVERY_CONFIRM',
+                businessDate: deliveryDate,
+                proposedDeltaCents: 0,
+                recognitionMode: resolveRecognitionPolicy(db, 'AR', 'SALES_DELIVERY', deliveryId, deliveryDate).mode,
+                sourceRef: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId },
+                actorId: actor.id,
+                authorizationContext: actor.id,
+                prepaymentParentsLocked: parentBalanceIds.length > 0,
+              });
+            },
+          });
+          // This helper owns the canonical Delivery -> Order -> Order Item -> Notice
+          // lock sequence. Its provisional Notice-capacity writes remain inside this
+          // transaction and therefore roll back if the final comparison below fails.
+          const { delivery: locked, order: so } = lockAndConsumeSalesDeliveryCapacity(db, deliveryId);
+          const suffix = db.dialect === 'mysql' ? ' FOR UPDATE' : '';
+          const lockedItems = db.prepare(`SELECT * FROM sales_delivery_items WHERE delivery_id=? ORDER BY sales_order_item_id,id${suffix}`).all(deliveryId);
+          const lockedNoticeSources = locked.source_mode === 'DELIVERY_NOTICE'
+            ? lockedItems.map((item) => {
+                const notice = db.prepare(`SELECT id,sales_order_id FROM delivery_notices WHERE id=?${suffix}`).get(locked.delivery_notice_id);
+                const line = db.prepare(`SELECT id,delivery_notice_id,sales_order_item_id FROM delivery_notice_lines WHERE id=?${suffix}`).get(item.delivery_notice_line_id);
+                return { noticeId: notice?.id || null, noticeOrderId: notice?.sales_order_id || null,
+                  lineId: line?.id || null, lineNoticeId: line?.delivery_notice_id || null,
+                  lineOrderItemId: line?.sales_order_item_id || null };
+              })
+            : [];
+          if (deliveryFingerprint(locked, so, lockedItems, lockedNoticeSources) !== plan.fingerprint) {
+            throw new HttpError(409, '销售出库确认计划已过期，请重新发现后重试', {
+              code: 'SALES_DELIVERY_CONFIRM_PLAN_STALE',
+            });
+          }
+          if (locked.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以确认');
+          if (!so || so.status !== 'APPROVED') throw new HttpError(409, '来源销售订单不存在或未审批');
+          if (locked.customer_id !== so.customer_id) throw new HttpError(409, '出货客户与来源销售订单不一致');
       assertQualityGate(db, 'OQC', deliveryId);
       assertFinancialPeriodsOpen(db, locked.delivery_date);
       // §29.16 / Wave 7: bound Sales Delivery confirm to the DELIVERY stage
@@ -5751,31 +5873,49 @@ export async function confirmSalesDelivery(db, req, res, actor, deliveryId) {
         }
         assertStrongReservationAvailability(db, { productId: item.product_id, warehouseId: locked.warehouse_id,
           quantity: baseQuantity, demandSourceType: 'SALES_ORDER', demandSourceId: so.id });
-        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(delivery.warehouse_id, item.product_id);
+        const current = db.prepare('SELECT quantity FROM inventory WHERE warehouse_id=? AND product_id=?').get(locked.warehouse_id, item.product_id);
         if (!current || current.quantity < baseQuantity) throw new HttpError(400, '库存不足');
-        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: delivery.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });
-        const balance = adjustInventory(db, delivery.warehouse_id, item.product_id, -baseQuantity, now);
+        postTrackedMovement(db, { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceItemId: item.id, productId: item.product_id, warehouseId: locked.warehouse_id, quantity: baseQuantity, direction: 'OUT', businessDate: locked.delivery_date });
+        const balance = adjustInventory(db, locked.warehouse_id, item.product_id, -baseQuantity, now);
         const transactionId=id();
-        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, delivery.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, delivery.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
-        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:delivery.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+delivery.delivery_no});
+        db.prepare('INSERT INTO inventory_transactions(id,warehouse_id,product_id,quantity_change,direction,balance_after,source_type,source_id,source_no,remark,creator_id,created_at,business_date) VALUES(?,?,?,?,\'OUT\',?,\'SALES_DELIVERY\',?,?,?,?,?,?)').run(transactionId, locked.warehouse_id, item.product_id, baseQuantity, balance, deliveryId, locked.delivery_no, '销售出库', actor.id, now, locked.delivery_date);
+        const lineCogs=issueSourceValue(db,{ businessDate:locked.delivery_date,productId:item.product_id,warehouseId:locked.warehouse_id,quantity:baseQuantity,movementType:'SALES_DELIVERY_COGS',sourceType:'SALES_DELIVERY',sourceId:deliveryId,sourceItemId:item.id,inventoryTransactionId:transactionId }).reduce((s,x)=>s-x.valueDeltaCents,0); cogsCents+=lineCogs; cogsInventoryEntries.push({role:inventoryAccountRole(db,item.product_id),direction:'CREDIT',amountCents:lineCogs,summary:'销售出库成本 '+locked.delivery_no});
       }
       db.prepare('UPDATE sales_deliveries SET total_cents=?,status=\'CONFIRMED\', confirmed_at=?, confirmed_by=?, updated_at=? WHERE id=?').run(authoritative.totalCents, now, actor.id, now, deliveryId);
-      if (cogsCents > 0) createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+delivery.delivery_no},...cogsInventoryEntries] });
+      if (cogsCents > 0) createSystemVoucher(db,{ sourceType:'SALES_DELIVERY_COGS',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'COGS',direction:'DEBIT',amountCents:cogsCents,summary:'销售出库成本 '+locked.delivery_no},...cogsInventoryEntries] });
       const physicalAmountCents = authoritative.totalCents - serviceAmountCents;
       if (physicalAmountCents > 0) {
         const recognition = recognizeFinanceExposure(db, {
-          side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: delivery.delivery_no },
+          side: 'AR', source: { sourceType: 'SALES_DELIVERY', sourceId: deliveryId, sourceNo: locked.delivery_no },
           invoice: null, amountCents: physicalAmountCents, businessDate: locked.delivery_date,
-          partyId: delivery.customer_id, paymentTermsDays: so.payment_terms_days,
-          actorId: actor.id, createdAt: delivery.created_at,
+          partyId: locked.customer_id, paymentTermsDays: so.payment_terms_days,
+          actorId: actor.id, createdAt: locked.created_at,
         });
         if (recognition.recognitionMode === RECOGNITION_MODES.DIRECT) {
-          const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(delivery.customer_id)?.name || '';
-          createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:physicalAmountCents,summary:'销售出库 '+delivery.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:physicalAmountCents,summary:'销售出库 '+delivery.delivery_no+' 确认收入'}]});
+          const customerName = db.prepare('SELECT name FROM customers WHERE id = ?').get(locked.customer_id)?.name || '';
+          createSystemVoucher(db,{sourceType:'SALES_DELIVERY',sourceId:deliveryId,businessDate:locked.delivery_date,actorId:actor.id,entries:[{role:'ACCOUNTS_RECEIVABLE',direction:'DEBIT',amountCents:physicalAmountCents,summary:'销售出库 '+locked.delivery_no+' '+customerName},{role:'SALES_REVENUE',direction:'CREDIT',amountCents:physicalAmountCents,summary:'销售出库 '+locked.delivery_no+' 确认收入'}]});
         } else if (locked.billing_mode === 'DIRECT_BILL') autoInvoiceDelivery(db, deliveryId, actor.id, `DIRECT_BILL:${deliveryId}`);
       }
       saveIdempotency(db, 'SALES_DELIVERY_CONFIRM', deliveryId, key, fingerprint, { ok: true, id: deliveryId, status: 'CONFIRMED' });
-      audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + delivery.delivery_no);
+          audit(db, actor.id, 'CONFIRM', 'SALES_DELIVERY', deliveryId, '确认销售出库 ' + locked.delivery_no);
+        });
+        return send(res, 200, { ok: true });
+      } catch (error) {
+        const code = error?.details?.code || error?.code;
+        const retryable = error?.transactionRetryExhausted || rediscoveryCodes.has(code);
+        if (!retryable) throw error;
+        if (attempt >= maxAttempts) {
+          throw new HttpError(503, '销售出库确认重试已耗尽', {
+            code: 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED', retryable: true,
+            attempts: attempt, causeCode: code || null,
+          });
+        }
+        if (isGateRetryAdmissionExpired(admission)) throw deadlineExhausted();
+        waitForRediscovery(attempt);
+      }
+    }
+    throw new HttpError(503, '销售出库确认重试已耗尽', {
+      code: 'SALES_DELIVERY_CONFIRM_RETRY_EXHAUSTED', retryable: true,
     });
   } else if (action === 'cancel') {
     if (delivery.status !== 'DRAFT') throw new HttpError(409, '只有草稿状态可以取消');

@@ -4,17 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../../server/db.js';
 import { resolveDatabaseConfig } from '../../server/database/config.js';
 import { parseTapSummary, assertTapSummaryStrict } from './tap-summary.js';
+import { assertAuthorizedDisposableMySqlTarget } from '../../server/test-utils/mysql-disposable-target.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD'];
 const missing = required.filter((name) => !process.env[name]);
-if (missing.length || process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
-  console.error(`MYSQL CONCURRENCY TEST ENVIRONMENT = UNAVAILABLE${missing.length ? ` (${missing.join(', ')} missing)` : ' (ERP_MYSQL_TEST_ALLOW_RESET=true required)'}`);
-  process.exit(2);
-}
-if (!/(?:test|phase7[bc]|disposable)/i.test(process.env.ERP_DB_NAME)) {
-  console.error(`Refusing MySQL concurrency tests for non-disposable database: ${process.env.ERP_DB_NAME}`);
+if (missing.length) {
+  console.error(`MYSQL CONCURRENCY TEST ENVIRONMENT = UNAVAILABLE (${missing.join(', ')} missing)`);
   process.exit(2);
 }
 
@@ -32,6 +29,8 @@ process.env.NODE_ENV = 'test';
 process.env.ERP_SEED_DEMO = 'false';
 
 const resetConfig = resolveDatabaseConfig({ backend: 'mysql' });
+try { assertAuthorizedDisposableMySqlTarget(resetConfig); }
+catch (error) { console.error(error.message); process.exit(2); }
 const childEnv = {
   ...process.env,
   ERP_DB_BACKEND: 'mysql',
@@ -174,6 +173,7 @@ async function runSuite(label, file) {
     { label: 'sales-customer-batch-a', file: 'server/mysql-sales-customer-batch-a-concurrency.integration.js' },
     { label: 'sales-customer-wave6', file: 'server/mysql-sales-customer-wave6-concurrency.integration.js' },
     { label: 'sales-customer-wave7', file: 'server/mysql-sales-customer-wave7-concurrency.integration.js' },
+    { label: 'sales-customer-wave7-a-raw', file: 'server/mysql-sales-customer-wave7-raw-locks.integration.js' },
     { label: 'sales-customer-wave8', file: 'server/mysql-sales-customer-wave8-concurrency.integration.js' },
     { label: 'sales-customer-wave9', file: 'server/mysql-sales-customer-wave9-anchor-concurrency.integration.js' },
   ];

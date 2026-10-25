@@ -170,6 +170,91 @@ Modern ERP 是 mobile-first 制造业 ERP。长期目标不是复制传统桌面
 
 失败必须回滚库存、价值、AR/AP、资金、凭证、审计和幂等结果。关键 mutation 必须写 audit。
 
+### 5.4.1 事务启动失败与连接级幂等命名锁安全（2026-10-24 澄清）
+
+本条仅补充事务尚未成功启动时的异常路径，不改变任何业务计算、状态机、权限、金额、锁顺序或重试规则。
+
+- 调用方已经取得并登记的 MySQL 连接级幂等命名锁，在事务启动失败后不得遗留在仍可复用的活动连接上。
+- 事务启动失败必须保留并向上抛出原始启动异常及其既有分类；不得把它静默改写为业务成功、幂等 replay、普通业务 409，亦不得为其新增自动重试。
+- 只有能够证明由本次启动尝试创建的事务才允许由该异常路径回滚。不得提交或回滚调用方、外层流程或其他操作拥有的事务。
+- 如果命名锁释放失败，且无法确认连接已经失效或锁已经由服务器释放，则该连接不得继续作为安全可复用连接；不得仅清除本地登记后宣称 cleanup 成功。
+- 成功启动后的 COMMIT、ROLLBACK、既有 MySQL 内层重试、L0 transaction gate、Finance Parent/业务锁顺序、READ COMMITTED 隔离、幂等 scope/fingerprint/replay、业务原子性与 SQLite `BEGIN IMMEDIATE` 语义全部保持不变。
+- 验收必须以确定性 fault injection 覆盖：启动前失败、持有命名锁时启动失败、释放成功、原始异常保留、不回滚外部事务、释放失败时连接不可被不安全复用，以及正常 COMMIT/ROLLBACK、既有重试、Refund replay/conflict/零重复经济副作用和 SQLite 兼容性回归。
+
+### 5.4.2 事务生命周期安全补充要求（2026-10-24 外部复核补充）
+
+本条补充 `solution.md §37.30` 外部复核提出的 R1–R7 缺口，仅约束事务与连接生命周期，不改变任何业务计算、状态机、权限、金额、锁顺序、幂等 scope 或既有重试规则；`§5.4.1` 全部条款继续有效。
+
+#### R1 事务启动所有权
+
+- 在尝试 BEGIN 之前，事务尝试必须先判定当前连接的事务状态。
+- 若已存在活动事务，或该状态不可信，事务尝试必须拒绝发起 BEGIN。
+- 不得在已有活动事务的情况下发出新的 START TRANSACTION；MySQL 会隐式提交既有事务。
+- 只有能够证明由本次尝试成功创建并由本次尝试拥有的事务，才允许被该路径回滚。
+- 所有权判定必须基于本次尝试自身的证据；连接级事务标记本身不得作为所有权证明。
+- 本条不得改变既有嵌套调用约定：既有模块的嵌套守卫仍然直接执行函数体而不再次进入事务。
+
+#### R2 回滚失败
+
+- 若 ROLLBACK 失败、超时，或回滚结果不确定，必须同时满足：
+  - 不得再接纳任何事务重试；
+  - 不得发出新的 BEGIN；
+  - 必须隔离该 adapter；
+  - 必须启动有界会话拆除；
+  - 必须保留主操作的原始异常，并把 cleanup 失败单独记录；
+  - 未取得证明前不得报告回滚成功。
+- 主操作异常的优先级不得因 cleanup 失败而被替换或降级。
+
+#### R3 正常路径的已验证释放
+
+- COMMIT 成功后，必须验证已登记的 MySQL 命名锁释放结果。
+- 最终失败的事务清理之后，在原会话已知且健康时必须验证释放结果。
+- 释放结果 1 为已确认；结果 0、NULL、传输失败与超时均为未确认。
+- 未确认的释放必须立即隔离该连接。
+- 不得撤销或改写已经提交的业务事务。
+- 不得对已经提交的 mutation 进行静默重试。
+
+#### R4 Finance 幂等 replay 释放
+
+- `server/modules/financial-controls.js` 的 `idempotencyReplay()` 既有释放路径不得：
+  - 忽略无法验证的 RELEASE_LOCK 结果；
+  - 在继续复用活动连接时抹除未知的锁归属；
+  - 重连之后把新会话误当作原持有者。
+- 必须复用 R3 相同的已批准释放与隔离合同。
+- 不得改变 exact replay 的 200 语义、冲突 fingerprint 的 409 语义或既有幂等 scope。
+
+#### R5 读事务启动
+
+- 必须处理 `readTransaction()` 中与 `transaction()` 等价的 BEGIN-before-try 安全边界。
+- 失败或超时的读事务启动不得使状态不确定的 adapter 继续可复用，也不得导致对外部事务的回滚。
+- 不得把本条扩展为读隔离级别或 L0 锁定的重新设计。
+
+#### R6 Worker 与 adapter 不确定性
+
+- 超时的同步请求可能仍在 Worker 中继续执行。
+- 隔离必须阻止该 adapter 上的任何后续业务 SQL。
+- Worker 终止是异步的，必须暴露真实的 PENDING / CONFIRMED / FAILED 状态。
+- 隔离本身不构成服务端命名锁已释放的证明。
+- 不得自动重放结果不确定的写入、COMMIT 或 ROLLBACK。
+
+#### R7 测试注册安全
+
+- 纯确定性测试可以加入本地 FAST / FULL / HEAVY 套件。
+- 真实 MySQL 集成测试必须保留在受保护的、显式的 MySQL 测试门禁之后。
+- 不得把真实 MySQL 集成测试注册进无条件的 `test:heavy` 命令。
+- 未获得新鲜的精确目标授权前，不得运行破坏性 MySQL 测试。
+
+#### 兼容性与边界
+
+- 必须保留：MySQL L0 transaction gate；L1–L8 业务锁顺序；既有 Finance 金额权威；既有有效重试语义；既有幂等行为；SQLite 行为；MySQL READ COMMITTED 隔离；既有 Wave 7 Gate A 用例；Gate B / Wave 10 边界；既有 schema 与 migration。
+- 不得引入新的 ERP 业务功能、新的自动启动重试或广泛的数据库引擎重写。
+
+#### 后续 Design 必须定义的内容
+
+- 最小可允许的生产文件清单；候选为 `server/db.js`、`server/database/mysql-adapter.js`、`server/database/mysql-worker.js`、`server/modules/financial-controls.js`。
+- 除非独立证明必要，否则不得修改协议层。
+- 未来测试必须覆盖的用例：外部事务的 pre-BEGIN 拒绝；BEGIN 失败与超时；已验证与失败的 RELEASE_LOCK；正常 COMMIT 释放；ROLLBACK 失败且其后不得再重试；COMMIT 成功后释放失败；replay 命中/冲突与释放失败；`readTransaction()` 启动失败；Worker 迟到完成与隔离；连接拆除结果上报；原始异常保持稳定；零重复金额事实；SQLite 兼容性。
+
 ---
 
 ## 6. 必须保持的端到端主链
@@ -8016,3 +8101,1020 @@ This freeze does not freeze the ERP project as a whole and is not a Git commit, 
 database migration or version change. Git closure remains pending separate user authorization.
 
 **Status: `WAVE9_FINAL_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PENDING`.**
+
+## Gate A Final Acceptance and Freeze Record (2026-10-24)
+
+### 1. Acceptance decision
+
+The user explicitly accepted `GATE_A_MYSQL_CAMPAIGN_PASS` and authorized the Gate A
+`FINAL_ACCEPTANCE_PASS / FROZEN` record on the basis of the single authorized real-MySQL
+execution of `pnpm test:mysql` against
+`mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`
+(server UUID `5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`, MySQL 8.0.37).
+Gate A is therefore accepted and frozen at the approved Requirement boundary of §37 and the
+existing Wave 7 Sales & Customer contract. This record closes Acceptance/Freeze documentation
+only. It rewrites no approved business rule, permission contract, schema, state transition,
+ownership boundary, lock order, isolation level or historical stage record, and it changes no
+production code.
+
+### 2. Accepted Requirement boundary
+
+The frozen Gate A boundary comprises:
+
+- the Wave 7 Sales & Customer capability set exercised by the bounded Gate A campaign
+  (A-PARITY, A-PROD, A-RAW, A-TXLIFE);
+- the MySQL L0 transaction gate and the L1–L8 business lock order;
+- the canonical named-lock lifecycle and its single authoritative release contract, including
+  the transaction-start-failure path;
+- the existing effective-retry semantics, the existing idempotency contract and the Finance
+  monetary authority rules exercised by M19–M25;
+- the existing SQLite compatibility behavior and MySQL `READ COMMITTED` session isolation;
+- the existing schema, migration and reconciliation contracts, together with the existing
+  target-identity guard, authorization checks and fail-fast gate rules.
+
+### 3. Final acceptance evidence
+
+The user accepted the following completed evidence as the Gate A Final Acceptance basis. The
+MySQL campaign below was produced by the single authorized execution:
+
+```text
+A-PARITY   server/mysql-sales-customer-wave7.integration.js                 4 / 4 PASS
+A-PROD     server/mysql-sales-customer-wave7-concurrency.integration.js     6 / 6 PASS
+A-RAW      server/mysql-sales-customer-wave7-raw-locks.integration.js       4 / 4 PASS
+A-TXLIFE   server/mysql-transaction-start-safety.integration.js             8 / 8 PASS
+TAP fail / skipped / cancelled / todo                                     0 / 0 / 0 / 0
+GATE A MYSQL CAMPAIGN                                                            PASS
+```
+
+The applicable Gate A M-cases are `PASS`: M1–M8, M13, M14, M16–M18, M19-GRNR, M20–M25.
+M9, M10, M11, M12, M15 and M19-CREDIT are reported `BLOCKED_BY_WAVE10` by the runner itself
+and are not discharged by this record.
+
+The accepted A-TXLIFE real-session evidence covers verified server-side named-lock release,
+session destruction with server lock reclamation and retirement from
+`information_schema.PROCESSLIST`, the post-quarantine session-identity set equalling the
+original set minus exactly the quarantined victim, the absence of any adapter connection leak
+beyond the intentionally live primary and observer sessions, and the production
+`transaction()` lifecycle releasing the replay-miss lock with both the exact-replay and
+fingerprint-conflict reacquired locks released.
+
+Supporting local regression evidence recorded earlier on 2026-10-24 and not re-run in this
+freeze stage, per the stage authorization: `test:fast` 427/427 PASS, `test` 2754/2754 PASS,
+`test:heavy` 67/67 PASS, `build` PASS (1964 modules transformed), `git diff --check` PASS.
+The earlier M24/M25 remediation stage additionally recorded `test:fast` 397/397 PASS and
+`test` 2724/2724 PASS on the same baseline.
+
+Post-run read-only inventory of the authorized database returned zero tables, zero views,
+zero triggers, zero routines and zero events, with target identity unchanged.
+
+### 4. Preserved open dependencies and downstream gate
+
+- Gate B remains `BLOCKED_BY_WAVE10`. It holds `B-COMPOSE`, `B-M9`, `B-M10`, `B-M11`,
+  `B-M12`, `B-M15` and `B-M19C`. Gate A is not a prerequisite for Gate B, and this freeze
+  does not discharge, weaken or defer Gate B.
+- M9, M10, M11, M12, M15 and M19-CREDIT remain `BLOCKED_BY_WAVE10`.
+- The residual open items recorded in `solution.md §37.31.15` (R1–R4) remain open and
+  unchanged. They were recorded, not fixed, and this freeze does not close them.
+- Wave 10 and Wave 11 are not started, accepted or authorized by this record. Their
+  Requirements and Design remain future work subject to the existing gate and a separate
+  explicit authorization.
+- This record does not declare the remaining W7-C1 / W7-C2′ follow-up work complete. Gate B
+  acceptance must still be completed and separately authorized.
+- The disclosed operational risk of the broad global administrative grant on the disposable
+  test account remains as recorded in `log/2026-10-24.md` and is not changed by this freeze.
+
+### 5. Frozen boundary and change control
+
+The freeze is limited to the accepted Gate A campaign boundary. Any future change to the
+Gate A M-case set, the runner manifest or its suite order, the strict TAP / fail-fast /
+cleanup rules, the target-identity guard, the canonical named-lock release contract, the
+MySQL session isolation level, the L0 / L1–L8 lock order or the accepted A-TXLIFE fixture
+semantics must restart the repository's
+`AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION → ACCEPTANCE` sequence.
+
+This freeze does not freeze the ERP project as a whole and is not a Git commit, tag,
+release, deployment, database migration or version change. Git closure remains pending
+separate user authorization.
+
+**Status: `GATE_A_FINAL_ACCEPTANCE_PASS — FROZEN`.**
+
+---
+
+## Wave 10 Precondition Requirement Reconciliation (2026-10-24)
+
+### 1. Authorization, scope and frozen protection
+
+**Authorization.** The user authorized one bounded Requirement stage: reconcile the Wave 10 entry
+conditions against the current repository fact, reconcile the Stage C carry-forward register #1–#15
+against real implementation and test evidence, and correct a bounded set of document-state
+contradictions. Under the amended `AGENTS.md §4.0` the same authorization extends to the
+immediately following Design stage, which must HARD STOP before Implementation.
+
+**Scope.** This record is Requirement-only. It introduces no business rule, no permission contract,
+no schema, no state transition, no ownership boundary, no lock order, no isolation level and no
+acceptance conclusion. It changes no production source, no test, no migration and no
+`package.json`.
+
+**Explicitly not modified.** The Gate A Final Acceptance and Freeze Record (2026-10-24); the Wave 9
+Final Acceptance and Freeze Record (2026-10-23); the Stage B Requirement Applicability Closure
+(2026-10-22) and its §13–§15 amendments; every earlier Stage A/B/C record; `solution.md`;
+`README.md`; the frozen Gate A runner, its suite manifest, its suite order, its strict TAP /
+fail-fast / per-suite-cleanup rules, the target-identity guard, the named-lock release contract and
+the Gate A M1–M25 board.
+
+**Read-only basis.** Every statement below was read from the local working tree and the local Git
+state at `feature/sales-waves6-13@2037cb632e2464477fe9752dc3113dac3c0eacf3`, package `1.6.2`. No
+database was connected, no test, build, migration, reset or destructive operation was executed, and
+no Git write operation was performed.
+
+### 2. Canonical dependency direction
+
+The authoritative dependency direction is fixed and is not re-decided by this record:
+
+```text
+Gate A Final Acceptance + Freeze
+  → Wave 10 Implementation
+  → Gate B Acceptance
+  → Gate B Freeze
+  → Wave 11
+```
+
+- **Gate A is accepted and frozen.** See "Gate A Final Acceptance and Freeze Record (2026-10-24)"
+  §1–§3 and `solution.md §37.33`. The accepted evidence is the single authorized real-MySQL
+  execution of `pnpm test:mysql` against
+  `mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test`
+  (server UUID `5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`, MySQL 8.0.37): A-PARITY 4/4, A-PROD 6/6,
+  A-RAW 4/4, A-TXLIFE 8/8, TAP fail/skipped/cancelled/todo 0/0/0/0.
+- **Gate B is a downstream obligation of Wave 10, never a prerequisite for it.** This is already the
+  canonical position and is confirmed, not changed, here: `solution.md §37.18` ("Gate A does not
+  depend on Gate B; Gate B is a downstream obligation of Wave 10 itself and is never a prerequisite
+  for Gate A"), `solution.md §37.26` ("Gate B is not a prerequisite for Gate A, and Gate A does not
+  discharge Gate B"), and the Gate A Freeze Record §4 ("Gate A is not a prerequisite for Gate B, and
+  this freeze does not discharge, weaken or defer Gate B").
+- **Gate B must be executed against real Wave 10 production code.** `solution.md §37.18.2` requires
+  every Gate B case to be reported `BLOCKED_BY_WAVE10` until Wave 10 is separately authorized and
+  implemented, and never as PASS, never as skipped-and-green, never as "verified by inspection".
+- **No Gate B-0 exists and none is created.** No preparatory gate may be introduced to bypass this
+  order.
+
+### 3. `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` — status reconciliation
+
+The label was defined as a *condition*, not as a permanent state. `solution.md §37.18.1` states:
+"Gate A passing, plus **explicit user Final Acceptance**, is what satisfies
+`WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS`." `solution.md §37.26` restates it: the label "is
+unchanged and is satisfied only by Gate A plus explicit user Final Acceptance."
+
+| Fact | Evidence |
+|---|---|
+| Gate A campaign PASS | `log/2026-10-24.md` — "authorized Gate A MySQL campaign execution (single run)" |
+| Explicit user Final Acceptance granted | `log/2026-10-24.md` — "Gate A — Final Acceptance and Freeze Record (2026-10-24)"; `document.md` Gate A Freeze Record §1 |
+| Both limbs of the defining condition are satisfied | 2026-10-24 |
+
+**Current status: the condition named by `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` is
+satisfied as of 2026-10-24.** The label remains a valid historical identifier of the Wave 10 entry
+gate and is retained as such; it is **not** an active block, and it must no longer be restated as an
+unmet current condition.
+
+Historical statements that recorded this label as "active and unchanged" were accurate on their own
+record dates and are **preserved as history, not rewritten**: `document.md` §14.9 and §15.11
+(2026-10-22); `document.md` "Wave 9 Final Acceptance and Freeze Record" §4 (2026-10-23);
+`solution.md` §36.16.4 (2026-10-22); and the `solution.md` §37 stage boundary paragraphs of
+2026-10-23 / 2026-10-24. Each of them is superseded **for current status only** by this record and
+by the Gate A Freeze Record.
+
+What genuinely remains open is **not** this label. It is:
+
+1. **Gate B acceptance** — a downstream obligation dischargeable only after Wave 10 is implemented
+   and the fixtures are executed against it (`solution.md §37.18.2`).
+2. **The remaining W7-C1 / W7-C2′ follow-up work** and the residual open items R1–R4 in
+   `solution.md §37.31.15` — explicitly not declared complete by the Gate A Freeze Record §4 or by
+   `solution.md §37.33.3`.
+3. **Wave 10 implementation itself** — not started, not accepted, not authorized.
+
+### 4. Stage C carry-forward register #1–#15 — closure evidence matrix
+
+The register is `document.md` §10 "Stage C Design carry-forward register" (Stage B Requirement
+Applicability Closure, 2026-10-22). It was opened at Stage B — before Stage C Design and before any
+Wave 9 implementation — and states of itself: "**None is resolved by this Stage B record**." That
+statement is correct for 2026-10-22 and is preserved. What was missing is the *current* status,
+which is recorded below.
+
+Each item was checked against the current repository, not against the existence of a freeze record.
+A freeze record is not evidence that an item is closed, and SQLite-only evidence is not evidence of
+real MySQL concurrency.
+
+| # | Carried-forward Design issue | Current status | Wave 10 blocking |
+|---|---|---|---|
+| 1 | `credit_profile` physical primary key and candidate keys | Closed | Not blocking |
+| 2 | Nullable salesperson normalized-scope uniqueness and bidirectional consistency | Closed | Not blocking |
+| 3 | Effective-date interval overlap and deterministic active Profile resolution | Closed | Not blocking |
+| 4 | `credit_check_rules.id` PK / UNIQUE definition | Closed | Not blocking |
+| 5 | `credit_parameters` column UNIQUE versus composite PK conflict | Closed | Not blocking |
+| 6 | `credit_profile_ratings` Wave 9 → Wave 11 deferred FK | Closed at Wave 9 | Not blocking; Wave 11 realization deferred |
+| 7 | SQLite foreign-key creation versus pre-target DML behavior | Closed by design construction | Not blocking |
+| 8 | MySQL FK ordering and idempotent metadata convergence | Partially closed | Not blocking; Wave 10 obligation |
+| 9 | Stable Credit Anchor provisioning transaction boundary | Closed | Not blocking |
+| 10 | Credit Policy Snapshot fingerprint identity and uniqueness | Closed | Not blocking; Wave 10 runtime writer |
+| 11 | Canonical names: `credit_lock_anchors` and `credit_check_results` | Partially closed | Not blocking; Wave 10 deliverable |
+| 12 | Credit Profile rating canonical write owner | Closed for the Wave 9 path | Not blocking; Wave 11 `EVALUATED` path deferred |
+| 13 | R-SAL-12 / R-SAL-24 infrastructure versus full business-race timing | Open by design | Future acceptance obligation |
+| 14 | Read-only legacy inventory and conditional bootstrap | Open — `LEGACY_DATA_EVIDENCE_PENDING` | Not blocking; unresolved evidence |
+| 15 | SQLite / MySQL PK, UNIQUE, CHECK, FK and indexed-column type parity | Partially closed — evidence incomplete | Not blocking; cross-database evidence obligation |
+
+#### #1 — `credit_profile` physical primary key and candidate keys
+
+- **Original Requirement:** `document.md` §34.3 SC87–SC89 (Credit Profile identity and effective-dated
+  versioning); register §10 #1.
+- **Existing Design:** `solution.md §36.2.2` (`credit_profile`, A-51, supersedes §29.22 PK) and
+  `§36.5.5` (contract assertion requirement).
+- **Implementation evidence:** `server/migrations/sales-customer-wave9-credit-foundation.js:79`
+  (`id TEXT PRIMARY KEY NOT NULL`, SQLite) and `:176` (`id VARCHAR(128) NOT NULL PRIMARY KEY`,
+  MySQL); candidate key `uq_credit_profile_scope_version` UNIQUE(`anchor_id`,`effective_from`) at
+  `:22`; lookup index `ix_credit_profile_customer_scope` at `:23`.
+- **Test evidence:** `server/sales-customer-wave9-credit-foundation.test.js` (SQLite focused, in FAST
+  and FULL; covered by the accepted Wave 9 `test:fast` 380/380 and `test` 2647/2647) and
+  `server/mysql-sales-customer-wave9-credit.integration.js` (real MySQL, accepted 17/17). The
+  migration's own `assertSqlite` (`:226`) and `assertMySql` (`:247`) assert column identity/order and
+  PK per table and fail closed on drift; both ran in the accepted MySQL execution.
+- **Current status:** **Closed.** The key contract is settled by Design, implemented in Wave 9, and
+  asserted on both engines.
+- **Wave 10 blocking:** **Not blocking.** Wave 10 may not alter this contract.
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract.
+
+#### #2 — Nullable salesperson normalized-scope uniqueness and bidirectional consistency
+
+- **Original Requirement:** `document.md` §34.3 SC87 (optional salesperson dimension; §3 B-1) and the
+  register §10 #2.
+- **Existing Design:** `solution.md §36.2.2` — `salesperson_scope_key` NOT NULL normalized (`*` for
+  aggregate) with a bidirectional consistency CHECK; `§36.3.1` applicable control scope resolution.
+- **Implementation evidence:** migration `:82` `salesperson_scope_key TEXT NOT NULL`; the bidirectional
+  CHECK at `:92`; `ix_credit_profile_customer_scope` at `:23`; scope derivation in
+  `server/modules/credit-profile.js:31`.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — "SC87 aggregate and
+  sub-limit identities normalize to distinct scopes on MySQL" (accepted 17/17), whose own comment
+  records that "Scope normalization is enforced as a physical MySQL CHECK, not only in code"; plus the
+  SQLite focused suite.
+- **Current status:** **Closed.**
+- **Wave 10 blocking:** **Not blocking.** Wave 10 must consume the same normalized scope key rather
+  than derive a second scope representation.
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract and a Wave 10 read constraint.
+
+#### #3 — Effective-date interval overlap and deterministic active Profile resolution
+
+- **Original Requirement:** `document.md` §34.3 SC88 (effective dating); register §10 #3, whose
+  cross-scope case was gated by `REQUIREMENT_DECISION_PENDING-1`.
+- **Existing Design:** `solution.md §36.2.2`; `§36.3.4` step 5; `§36.6.3` step 6 ("resolve effective
+  `credit_profile` at `business_date` (exactly one row, else fail closed)"). The cross-scope ordering
+  was resolved by the approved Dual-Limit decision at `document.md` §13 / §9.1 (2026-10-22).
+- **Implementation evidence:** `server/modules/credit-profile.js:124`
+  `closePredecessorAndAssertNoOverlap` — `:127` same-scope-same-`effective_from` → HTTP 409
+  `CREDIT_PROFILE_VERSION_EXISTS`; `:129-130` predecessor closure; `:133` overlap rejection; `:44`
+  `resolveEffectiveCreditProfile` with `effective_from<=? AND (effective_to IS NULL OR
+  effective_to>=?) ORDER BY effective_from DESC, id`; `:66` the same deterministic predicate in the
+  list resolver.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — "SC88 effective-dated
+  resolution, predecessor closure, overlap rejection and overdue policy persist on MySQL" (accepted
+  17/17); SQLite focused suite.
+- **Current status:** **Closed.**
+- **Wave 10 blocking:** **Not blocking.** Wave 10 must call this exact resolver and must fail closed
+  when the effective row is not unique; it may not re-derive an effective row by its own rule.
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract and a Wave 10 consumption
+  constraint.
+
+#### #4 — `credit_check_rules.id` PK / UNIQUE definition
+
+- **Original Requirement:** `document.md` §34.3 SC83–SC86; register §10 #4.
+- **Existing Design:** `solution.md §36.2.4` (A-49, supersedes §29.21 missing key).
+- **Implementation evidence:** migration `:62` / `:164` primary key; `uq_credit_check_rules_version`
+  UNIQUE(`rule_code`,`effective_from`) at `:20`; `ix_credit_check_rules_stage_date` at `:21`.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — "SC83-SC86 control
+  scope, timing and both rule strengths round-trip on MySQL" (accepted 17/17); SQLite focused suite;
+  metadata PK assertion executed on real MySQL.
+- **Current status:** **Closed.**
+- **Wave 10 blocking:** **Not blocking.**
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract.
+
+#### #5 — `credit_parameters` column UNIQUE versus composite PK conflict
+
+- **Original Requirement:** `document.md` §34.3 SC83–SC84 (configurable Credit Parameters);
+  register §10 #5.
+- **Existing Design:** `solution.md §36.2.3` (A-48, supersedes §29.21 UNIQUE/PK conflict).
+- **Implementation evidence:** migration `:47` / `:156` primary key; `uq_credit_parameters_version`
+  UNIQUE(`code`,`effective_from`) at `:18`.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — the three AP5 cases
+  (human READ, human WRITE, and "ordinary Sales cannot disable Credit Management or weaken BLOCK to
+  WARNING") at accepted 17/17; SQLite focused suite.
+- **Current status:** **Closed.** The column-level uniqueness that would have defeated effective
+  versioning is not present.
+- **Wave 10 blocking:** **Not blocking.**
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract.
+
+#### #6 — `credit_profile_ratings` Wave 9 → Wave 11 deferred FK
+
+- **Original Requirement:** `document.md` §34.3 SC89 (initial-rating provenance); register §10 #6.
+- **Existing Design:** `solution.md §36.5.2` (the one deferred FK — "no `REFERENCES` clause, either
+  engine" in Wave 9); `§36.2.6`; `§36.5.3` (Wave 11 ordering); `§36.5.5` I-6 (forward-FK convergence).
+- **Implementation evidence:** migration `:120` `evaluation_result_id TEXT` with **no** `REFERENCES`
+  clause in the SQLite DDL and **no** FK to `credit_evaluation_result` in the MySQL DDL block
+  (`:203`ff); the provenance CHECK at `:124` enforces `INITIAL_ASSIGNED ⟺ evaluation_result_id IS
+  NULL`.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — "SC89 initial rating
+  provenance is recorded and rating evidence is append-only on MySQL" (accepted 17/17); the
+  `assertMySql` nullability assertion confirms
+  `credit_profile_ratings.evaluation_result_id IS_NULLABLE='YES'`, executed on real MySQL.
+- **Current status:** **Closed at Wave 9.** The deferred-FK design is implemented exactly as designed.
+  The **Wave 11 realization** of the constraint (`fk_credit_profile_ratings_evaluation_result`) is
+  future work and is not yet due; `§36.5.2` states that Wave 10 adds no FK on this column.
+- **Wave 10 blocking:** **Not blocking.**
+- **Minimal handling:** **Close at Wave 9**; carry the Wave 11 realization forward as a Wave 11
+  migration obligation.
+
+#### #7 — SQLite foreign-key creation versus pre-target DML behavior
+
+- **Original Requirement:** `document.md` §10 item #7 (cross-dialect fact that Stage C must establish
+  and Stage D must prove by test).
+- **Existing Design:** `solution.md §36.5.2` — the design deliberately takes the option that depends
+  on **no** DDL-tolerance assumption, so that the question has no runtime expression: "MySQL never
+  sees a FK to a nonexistent parent, because no `REFERENCES` clause is emitted in Wave 9; SQLite never
+  sees an unresolvable reference at DDL time, for the same reason."
+- **Implementation evidence:** confirmed for both engines — no `REFERENCES` clause on
+  `evaluation_result_id` in the SQLite DDL (`:120`) or the MySQL DDL (`:203`ff); the migration's
+  `assertMySql` requires the FK set to equal the declared set exactly (`fks.length !== contract.fks.length`
+  → drift), so an added forward FK would fail closed.
+- **Test evidence:** the claim is structural and is asserted on real MySQL by the accepted 17/17
+  execution of `server/mysql-sales-customer-wave9-credit.integration.js` (which runs the migration
+  through the MySQL path); SQLite focused suite.
+- **Current status:** **Closed by design construction.** The pre-target DML question was eliminated
+  rather than answered by assumption. The separate upgrade-path equivalence obligation is tracked
+  under #15.
+- **Wave 10 blocking:** **Not blocking.**
+- **Minimal handling:** **Close** on the design-construction ground; retain the upgrade-path
+  equivalence obligation under #15.
+
+#### #8 — MySQL FK ordering and idempotent metadata convergence
+
+- **Original Requirement:** `document.md` §10 item #8.
+- **Existing Design:** `solution.md §36.5.3` (required ordering inside Wave 11) and `§36.5.5`
+  (contract assertions I-1 … I-8, "must assert unconditionally after creating tables, so that
+  `CREATE TABLE IF NOT EXISTS` cannot silently adopt a drifted pre-existing structure").
+- **Implementation evidence:** migration `createIndexes` (`:129`ff) probes
+  `information_schema.STATISTICS` on MySQL and only issues the `CREATE INDEX` when absent
+  (probe-then-act convergence); `assertMySql` (`:247`) runs unconditionally after table creation
+  (`:312`) and fails closed on column-order, PK, FK-target, CHECK-count or index-shape drift, with
+  **no repair DDL**.
+- **Test evidence:** executed on real MySQL in the accepted `server/mysql-sales-customer-wave9-credit.integration.js`
+  run (17/17) and the accepted Wave 9 MySQL Integration 73/73.
+- **Current status:** **Partially closed.** The Wave 9 metadata convergence and fail-closed assertion
+  are implemented and executed. The **Wave 10 → Wave 11 FK ordering** obligation of `§36.5.4`
+  ("Wave 9 → 10 upgrade: 2 tables added; `credit_special_approval` FK target created before the
+  referencing table") and `§36.5.5` I-6 cannot exist yet, because the Wave 10 tables do not exist.
+- **Wave 10 blocking:** **Not blocking** for Wave 10 to start. It is a **Wave 10 implementation
+  obligation**: Wave 10 must create the target before the referencing table and must append its own
+  `§36.5.5`-style read-only assertions.
+- **Minimal handling:** **Partially close**; carry the Wave 10/11 ordering and assertion obligation
+  into the Wave 10 scope. Do not record this item as fully closed.
+
+#### #9 — Stable Credit Anchor provisioning transaction boundary
+
+- **Original Requirement:** `document.md` §10 item #9.
+- **Existing Design:** `solution.md §36.4` — the integrated provisioning protocol (five steps:
+  pure key derivation → INSERT with duplicate tolerance → **unconditional** re-read and
+  `FOR UPDATE` → fail closed → continue), explicitly superseding the self-contradictory §29.21.1;
+  "No partial business mutation — the anchor INSERT is in the same transaction as the business
+  mutation".
+- **Implementation evidence:** `server/modules/credit-anchor.js:72` `ensureCreditLockAnchor` —
+  `:85` the MySQL-only ` FOR UPDATE` re-read (SQLite relies on `BEGIN IMMEDIATE` serialization),
+  `:87` fail closed `CREDIT_ANCHOR_UNRESOLVABLE`, `:88` `CREDIT_ANCHOR_SHAPE_CONFLICT`. The
+  transaction boundary is real: `server/modules/credit-profile.js:148` opens `transaction(db, () => …)`
+  and the anchor provisioning (`:152`), overlap check (`:156`), profile insert (`:160`), rating insert
+  (`:167`), audit and idempotency all execute inside that one transaction.
+- **Test evidence:** `server/mysql-sales-customer-wave9-anchor-concurrency.integration.js` — accepted
+  "MySQL Wave 9 Anchor 4/4 PASS" (`document.md` Wave 9 Final Acceptance §3), proving independent
+  real-MySQL sessions, genuine same-key contention for both `CREDIT_OBJECT` and `POLICY_SCOPE`,
+  deadlock classification, acknowledged rollback and one final logical row; plus
+  `server/mysql-sales-customer-wave9-credit.integration.js` "anchor identity stays canonical and
+  group-free on MySQL" (accepted 17/17).
+- **Current status:** **Closed.**
+- **Wave 10 blocking:** **Not blocking.** Wave 10 must provision anchors in the fixed
+  `POLICY_SCOPE → AGGREGATE → SALESPERSON` order and must not add a second provisioning protocol.
+- **Minimal handling:** **Close**; retain as a frozen Wave 9 contract and a Wave 10 composition
+  constraint.
+
+#### #10 — Credit Policy Snapshot fingerprint identity and uniqueness
+
+- **Original Requirement:** `document.md` §10 item #10.
+- **Existing Design:** `solution.md §36.2.5` (A-50, supersedes §29.21 fingerprint uniqueness) and
+  `§36.3.4` step 6 (insert-only; existing rows read with no row lock) and `§36.3.4.3`.
+- **Implementation evidence:** migration `:106` `snapshot_fingerprint TEXT NOT NULL`;
+  `uq_credit_policy_snapshots_identity` UNIQUE(`credit_lock_anchor_id`,`business_date`,
+  `snapshot_fingerprint`) at `:24`; the `credit_policy_snapshots` table at `:102` (SQLite) / `:192`
+  (MySQL).
+- **Test evidence:** metadata index-shape assertion executed on real MySQL in the accepted 17/17 run;
+  SQLite focused suite. **No production writer of `credit_policy_snapshots` exists yet** — the
+  snapshot writer belongs to the Wave 10 `evaluateCredit()` runtime (`§36.6.3` step 7).
+- **Current status:** **Closed** for the identity/uniqueness contract. The **runtime writer** is a
+  Wave 10 deliverable, not a Wave 9 defect.
+- **Wave 10 blocking:** **Not blocking.**
+- **Minimal handling:** **Close** the contract; record the writer as Wave 10 scope.
+
+#### #11 — Canonical names: `credit_lock_anchors` and `credit_check_results`
+
+- **Original Requirement:** `document.md` §10 item #11.
+- **Existing Design:** `solution.md §36.2.1` (`credit_lock_anchors`, A-62, Wave 9) and `§36.2.7`
+  (`credit_check_results`, A-54, **plural canonical**, Wave 10, supersedes §29.25.1).
+- **Implementation evidence:** `credit_lock_anchors` **exists** — migration `:30` / `:146`, listed in
+  `SALES_WAVE9_TABLES` (`:6`ff). `credit_check_results` **does not exist**: no
+  `CREATE TABLE ... credit_check_results` and no `CREATE TABLE ... credit_special_approval` exists
+  anywhere under `server/`, and no `evaluateCredit` symbol exists in any server module. The Wave 10
+  runtime is therefore absent, exactly as the Gate A M-board records.
+- **Test evidence:** Wave 9 accepted evidence covers `credit_lock_anchors` only. No Wave 10 table
+  evidence exists and none can exist before Wave 10 implementation.
+- **Current status:** **Partially closed.** The *naming* question is closed by Design for both names
+  (`credit_lock_anchors` shipped; `credit_check_results` plural canonical is fixed for Wave 10). The
+  Wave 10 table itself is not implemented.
+- **Wave 10 blocking:** **Not blocking.** This is a **Wave 10 deliverable**, not a Wave 10
+  precondition.
+- **Minimal handling:** **Partially close** the naming question; carry the table creation as Wave 10
+  scope. Do not record the Wave 10 table as existing.
+
+#### #12 — Credit Profile rating canonical write owner
+
+- **Original Requirement:** `document.md` §34.3 SC89 (rating provenance) and `§14` (Wave 9
+  authorization); register §10 #12.
+- **Existing Design:** `solution.md §36.7.1` — "`credit_profile_ratings` is the SOLE canonical owner
+  of applied rating state; `credit_profile.rating_grade` / `rating_effective_from` /
+  `rating_effective_to` are a DERIVED READ PROJECTION … maintained inside the same transaction as the
+  rating application, and never written independently"; `§36.7.2` rating application flow (SC107,
+  Wave 11).
+- **Implementation evidence:** `server/modules/credit-profile.js:167` writes the
+  `INITIAL_ASSIGNED` rating row and `:160` writes the inline projection columns, both inside the
+  single `transaction(db, …)` opened at `:148`; the migration CHECK at `:124` enforces the
+  `INITIAL_ASSIGNED` / `evaluation_result_id IS NULL` pairing. No second rating writer exists.
+- **Test evidence:** `server/mysql-sales-customer-wave9-credit.integration.js` — "SC89 initial rating
+  provenance is recorded and rating evidence is append-only on MySQL" (accepted 17/17); SQLite
+  focused suite.
+- **Current status:** **Closed for the Wave 9 `INITIAL_ASSIGNED` path.** The **`EVALUATED`** rating
+  application path is SC107, a Wave 11 capability, and does not exist yet.
+- **Wave 10 blocking:** **Not blocking.** Wave 10 must not create a second rating writer; the Credit
+  Special Approval workflow (`§36.6.6`) must not write rating rows.
+- **Minimal handling:** **Close** for Wave 9; carry the `EVALUATED` path forward as a Wave 11
+  obligation.
+
+#### #13 — R-SAL-12 / R-SAL-24 infrastructure versus full business-race timing
+
+- **Original Requirement:** `document.md` §10 item #13.
+- **Existing Design:** `solution.md §36.8.2` (Wave 9 infrastructure fixtures W9-R1…W9-R7, and the
+  explicit limit "R-SAL-24 is **infrastructure-level only** at Wave 9. No Wave 9 fixture may claim
+  full R-SAL-24 verification."); `§36.8.3` (Wave 10 full business races W10-R1…W10-R12); `§37.10`
+  (M9–M12, M15 and M19-Credit are Wave 10 only and "must be reported as BLOCKED, never as PASS").
+- **Implementation evidence:** the Wave 9 infrastructure half exists — `ensureCreditLockAnchor`
+  (`server/modules/credit-anchor.js:72`) takes exactly one anchor row `FOR UPDATE` and no other
+  Credit lock. The full business-race half cannot exist: `credit_check_results` and
+  `credit_special_approval` do not exist and `evaluateCredit` does not exist.
+- **Test evidence:** the accepted Wave 9 evidence covers the infrastructure half only —
+  "MySQL Wave 9 Credit 17/17 PASS", "MySQL Concurrency 106/106 including Wave 9 Anchor 4/4".
+  **No Wave 10 full business-race evidence exists.**
+- **Current status:** **Open by design, and correctly split.** Wave 9 covered the infrastructure half
+  within its stated limit; the full business-race half is an explicit Wave 10 obligation and, for
+  Credit integration, a Gate B obligation.
+- **Wave 10 blocking:** **Not a precondition** — it is the **core Wave 10 acceptance obligation**
+  (W10-R1…W10-R12) and the downstream Gate B obligation (B-M9, B-M10, B-M11, B-M12, B-M15, B-M19C).
+- **Minimal handling:** **Keep open** as a Wave 10 implementation + Gate B acceptance obligation. Do
+  not mark PASS; do not let the Wave 9 infrastructure evidence stand in for it.
+
+#### #14 — Read-only legacy inventory and conditional bootstrap
+
+- **Original Requirement:** `document.md` §10 item #14 and the `LEGACY_DATA_EVIDENCE_PENDING`
+  classification (`document.md` Stage B §1 classification table; §5 applicability; §9.1 closing note
+  that it "remains open by design").
+- **Existing Design:** `solution.md §36.5.6` — the legacy bootstrap is **CONDITIONAL** and blocked
+  behind `LEGACY_DATA_EVIDENCE_PENDING`: Wave 9 "create the new `credit_profile` table empty; do NOT
+  backfill; do NOT invent Credit Profile records; do NOT fabricate historical credit limits or
+  ratings; do NOT silently resolve ambiguous legacy identity; do NOT claim historical compatibility".
+- **Implementation evidence:** `server/migrations/sales-customer-wave9-credit-foundation.js` contains
+  **no** `INSERT INTO credit_profile` — the table is created empty. The safe default is implemented
+  as designed.
+- **Test evidence:** **none exists, and none can exist without authorization.** No authorized
+  read-only external inventory has been performed. `document.md` Wave 9 Final Acceptance §4 keeps
+  `LEGACY_DATA_EVIDENCE_PENDING` open and unchanged, and no compatibility claim is made in either
+  direction.
+- **Current status:** **Open — `LEGACY_DATA_EVIDENCE_PENDING`.** The unresolved fact is preserved: the
+  existence of a legacy `credit_profile` table carrying rows in an external environment is **unknown**
+  and unproven in either direction. **It is not established that no legacy data exists**, and this
+  record does not assert it.
+- **Wave 10 blocking:** **Not blocking.** `§36.5.6` defines a safe default (empty table, no backfill),
+  so Wave 10 neither depends on nor is endangered by the legacy inventory.
+- **Minimal handling:** **Keep open** as an unresolved external-evidence dependency with a
+  non-destructive compatibility boundary. Do not close it, do not reclassify it, and do not describe
+  it as "verified that no legacy data exists".
+
+#### #15 — SQLite / MySQL PK, UNIQUE, CHECK, FK and indexed-column type parity
+
+- **Original Requirement:** `document.md` §10 item #15.
+- **Existing Design:** `solution.md §36.5.4` (migration equivalence proof obligations) and `§36.5.5`
+  (contract assertion requirement plus I-1…I-8).
+- **Implementation evidence:** the migration implements per-table contract assertions for both
+  engines — `assertSqlite` (`:226`) and `assertMySql` (`:247`), invoked unconditionally after table
+  creation (`:312`). `assertMySql` covers column identity/order, PK column order, FK set with
+  referenced table and column, CHECK count, index shape (column order and uniqueness), the I-5
+  nullability parity (`credit_profile.salesperson_scope_key` `NO`; `credit_profile.salesperson_id`
+  and `credit_profile_ratings.evaluation_result_id` `YES`) and a bounded physical-type parity set
+  (`credit_lock_anchors.anchor_key` `varchar(512)`;
+  `credit_profile_ratings.evaluation_result_id` `varchar(128)`;
+  `credit_check_rules.result_payload_json` `json`; `credit_policy_snapshots.notes_json` `json`).
+- **Test evidence:** the assertions execute on real MySQL as part of the accepted
+  `server/mysql-sales-customer-wave9-credit.integration.js` run (17/17) and the accepted Wave 9
+  MySQL Integration 73/73.
+- **Current status:** **Partially closed — evidence incomplete.** The per-table metadata contract is
+  implemented and executed on a real MySQL, but three `§36.5.4` / `§36.5.5` obligations are **not
+  evidenced**:
+  - **I-3 (explicit orphan check after bootstrap and after every live upgrade, executed with
+    `FOREIGN_KEY_CHECKS` restored)** — no orphan-check query exists in the Wave 9 migration or in the
+    Wave 9 MySQL integration test.
+  - **I-4 (row preservation across replay and each upgrade path)** — no row-count snapshot comparison
+    exists for the six Wave 9 tables; and there is **no dedicated Wave 9 migration / upgrade-path
+    test file**, unlike the equivalent Wave 2 / Wave 6 / Wave 7 migration tests.
+  - **I-6 (forward-FK convergence after Wave 11)** — future by construction; Wave 11 does not exist.
+  The physical-type parity assertion also covers only four named columns, not every column type of
+  the six tables.
+- **Wave 10 blocking:** **Not blocking** for Wave 10 to start. It is a **cross-database evidence
+  obligation** that must be discharged by a protected MySQL gate; the SQLite-only evidence must not
+  be presented as real MySQL verification, and the Gate A MySQL evidence must not be presented as
+  Wave 9 Credit Foundation MySQL evidence.
+- **Minimal handling:** **Partially close**; record exactly which real evidence is missing, when it
+  must be produced and which protected gate must produce it. Do not describe this item as
+  cross-database verified.
+
+### 5. Bounded document-state contradiction corrections
+
+| # | Contradiction | Verified finding | Correction applied in this stage |
+|---|---|---|---|
+| 1 | `document.md` / `solution.md` wording that describes Wave 10 as still blocked by Gate B | **No such current-state wording exists.** The canonical direction is already correct: `solution.md §37.18`, `§37.26`, `§37.33.3` and the Gate A Freeze Record §4 all state that Gate B is a downstream obligation and never a prerequisite. `document.md` contains no line asserting the reverse. | No historical text rewritten. §2 of this record states the canonical direction explicitly and confirms it against the existing authority. |
+| 2 | `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` mechanically restated as an unmet current condition | **The label's own defining condition is met.** `§37.18.1` / `§37.26` define it as "satisfied only by Gate A plus explicit user Final Acceptance"; both occurred on 2026-10-24. | §3 of this record states the current status as satisfied, keeps the label as a historical identifier, and preserves every dated historical statement as history rather than rewriting it. |
+| 3 | #1–#15 uniformly recorded as OPEN against later Stage C Design, Wave 9 implementation, SQLite and MySQL evidence and the Gate A freeze | **The uniform-OPEN statement is stale for current status.** 10 items are closed, 3 are partially closed with a precisely named residual, and 2 remain open by design. | §4 of this record adds the per-item closure evidence matrix. The original `§10` register text is preserved verbatim as the 2026-10-22 record. |
+| 4 | `server/mysql-sales-customer-wave9-credit.integration.js:52` — `WAVE11_TABLES` contains the Wave 10 tables `credit_check_results` and `credit_special_approval` alongside the Wave 11 table `credit_evaluation_result` | **Confirmed.** The constant name is misleading; the three tables are used at `:239` only as a set of table names to locate `information_schema` rows. The name does not affect behaviour. | **Recorded only.** No source change is made in this stage. Renaming the constant (and any accompanying assertion text) is a bounded future implementation item that must not alter the set of tables inspected. |
+| 5 | The Gate A M1–M25 board is a static array, while a future Gate B must be evidenced by real execution | **Confirmed.** `scripts/gates/mysql-sales-wave7-gate-a.mjs:100`–`:107` is a hard-coded literal array of case/status pairs, already recorded as an open item in `solution.md §37.31.15` R3 ("Recorded, not fixed"). | **Recorded only.** The Gate A runner, its board and its frozen conclusions are not modified. The Design stage must require that Gate B use its own runner and generate its board from real execution evidence rather than a literal. |
+
+### 6. Preserved unresolved evidence, real blockers and Wave 10 entry conditions
+
+**Unresolved evidence that is preserved and must not be reported as closed:**
+
+1. `LEGACY_DATA_EVIDENCE_PENDING` (#14) — no authorized read-only external inventory exists. The
+   existence of legacy `credit_profile` rows remains unknown and unproven in either direction.
+2. #15 — the `§36.5.4` upgrade-path equivalence obligations and `§36.5.5` I-3 (orphan check) and I-4
+   (row preservation) are **not evidenced** for the six Wave 9 tables; no dedicated Wave 9
+   migration/upgrade-path test file exists.
+3. #8 — the Wave 10 → Wave 11 FK ordering and forward-FK convergence obligations cannot exist yet.
+4. #13 — the Wave 10 full business races (W10-R1…W10-R12) and the Gate B Credit-integration cases
+   (B-COMPOSE, B-M9, B-M10, B-M11, B-M12, B-M15, B-M19C) have **no** execution evidence.
+5. #11 — `credit_check_results` and `credit_special_approval` do not exist; no `evaluateCredit`
+   production path exists.
+6. `solution.md §37.31.15` R1–R4 — recorded, not fixed; not closed by the Gate A freeze.
+7. The remaining W7-C1 / W7-C2′ follow-up work, which the Gate A Freeze Record §4 explicitly does
+   not declare complete.
+8. The disclosed broad global administrative grant on the disposable test account, as recorded in
+   `log/2026-10-24.md`.
+9. The `WAVE11_TABLES` naming item (§5 #4) and the static Gate A M-board (§5 #5), both recorded as
+   bounded future implementation items.
+
+**Real conditions for entering Wave 10:**
+
+- **Authorisation is the only precondition.** Per §2, the canonical dependency direction makes Gate B
+  a downstream obligation, and per §3 the `WAVE10_BLOCKED_UNTIL_W7_C1_C2_ACCEPTANCE_PASS` condition
+  is satisfied. No Gate B-0 exists. The gate that Wave 10 waits on is therefore the explicit user
+  authorization to implement, not a further technical gate.
+- **Wave 10 must not be pre-empted.** The Credit Check engine, `credit_check_results`,
+  `credit_special_approval`, the Special Approval workflow and the SO Submit / Approve / Delivery
+  Confirm integration belong to Wave 10 and must not be implemented earlier under another wave
+  name, and must not be simulated by fixture-computed exposure.
+- **Wave 10 inherits the frozen contracts.** Wave 9 (Credit Foundation), Wave 7 (Sales & Customer),
+  the L0 transaction gate, the L1–L8 lock order, the Finance monetary authority, the effective
+  retry semantics, the idempotency contract, the SQLite behaviour, the MySQL `READ COMMITTED`
+  isolation and the frozen Gate A boundary all remain in force.
+
+### 7. Boundary and status
+
+This record is a Requirement reconciliation only. It modifies `document.md` and the append-only
+`log/2026-10-24.md` only. It changes no production source, no test, no schema, no migration, no
+`README.md`, no `package.json`, no permission, no lock order and no acceptance conclusion. It does
+not reopen, modify or weaken the frozen Gate A record, its runner, its suite manifest, its suite
+order, its strict TAP / fail-fast / cleanup rules, its target-identity guard, its named-lock release
+contract or its M1–M25 board. It does not close any Requirement that this record does not itself
+close, and it does not claim that any Gate, Wave or legacy-data question has been verified beyond
+the evidence cited above.
+
+No test, build, MySQL gate, migration, database query, database reset or destructive operation was
+executed. No Git add, commit, push, pull, fetch, merge, rebase, reset, restore, clean, stash or tag
+was performed. No release or deployment occurred. Wave 10 and Wave 11 remain unstarted.
+
+**Status: `REQUIREMENT_RECONCILIATION_COMPLETE`.**
+
+---
+
+## Wave 10 B-9 / B-10 / S14 Bounded Requirement Amendment (2026-10-24)
+
+### 1. Authorization and bounded reopen
+
+The user explicitly approved the consecutive `AUDIT → REQUIREMENT → DESIGN → IMPLEMENTATION`
+closure for Wave 10 B-9, B-10 and S14. This subsection records the Requirement phase only. It
+does not declare Acceptance or Freeze and does not authorize MySQL, Gate B, Git write, release or
+deployment.
+
+The original Wave 9 Final Acceptance and Freeze Record remains authoritative historical evidence.
+Only the B-9 Profile-status semantic is reopened, and only to apply the ACTIVE-only enforceability
+rule below. Wave 9 schema, migration, anchor identity, policy versioning, rating provenance,
+effective-date resolution and permission policy remain frozen. This bounded reopen is not
+automatically re-frozen; focused compatibility evidence and explicit user Acceptance remain
+required.
+
+### 2. B-9 — O2 ACTIVE-only Credit Profile enforceability
+
+- An effective `ACTIVE` Credit Profile is eligible for mandatory Credit Check. Its limit,
+  applicable rule, effective date and authorization continue to determine PASS / WARNING / BLOCK.
+- An effective `SUSPENDED` Profile cannot authorize a new controlled credit commitment. Mandatory
+  Credit Check fails closed. Suspension is not an exemption and does not disable Credit Management.
+- An effective `CLOSED` Profile cannot authorize a new controlled credit commitment. Mandatory
+  Credit Check fails closed. Closing a Profile does not settle, cancel, erase or release an existing
+  economic obligation.
+- Historical Profile, Rating, Sales Order, Delivery, AR, settlement, approval and exposure facts
+  remain intact. Eligibility is restored only by a valid effective `ACTIVE` Profile under the
+  existing versioning contract.
+- A missing required Profile retains `CREDIT_PROFILE_MISSING`. An effective but non-ACTIVE Profile
+  is distinct and must fail with `CREDIT_PROFILE_NOT_ENFORCEABLE`. Ambiguous effective Profiles keep
+  the existing fail-closed behavior.
+- The resolver must not fall back to an earlier ACTIVE version when the currently effective version
+  is `SUSPENDED` or `CLOSED`, and a mandatory salesperson sub-limit must not fall back to the
+  aggregate Profile as a bypass.
+- Special Approval is a bounded ceiling/scope exception only. It cannot override the non-ACTIVE
+  status fence and cannot make a suspended or closed Profile ACTIVE.
+- Historical exposure remains visible and derived from canonical facts. Refusing a new commitment
+  must not delete or release old exposure.
+- Exact replay of an already committed operation creates no new side effect. A new economic
+  obligation is checked against the currently applicable Profile status.
+- Existing explicit Credit Management disable/exemption behavior remains governed by the existing
+  contract; Profile status creates no new exemption.
+
+### 3. B-10 — O1 transition-based retention; no age expiry
+
+An unresolved approved Sales Order commitment remains in Credit Exposure until a canonical
+business lifecycle transition removes or transfers its outstanding economic obligation. Elapsed
+calendar time alone never releases it.
+
+Consequences:
+
+- no exposure-age parameter, expiry default, day-counting algorithm, TTL, scheduler or cleanup path;
+- no automatic release of an old but valid undelivered commitment and no age-based removal of open AR;
+- delivery, invoice, AR, collection, refund, credit adjustment, cancellation and closure follow
+  their canonical business facts;
+- cancellation or closure releases only the extinguished amount; any residual Delivery, AR or
+  other outstanding obligation remains counted;
+- business-date/as-of eligibility remains valid and separate from age expiry;
+- `CREDIT_SUB_LIMIT_OVERDUE_DAYS` remains an overdue-AR policy and never becomes an SO commitment
+  expiry control;
+- overdue AR is a subset of AR open and is never an additional exposure bucket.
+
+This subsection supersedes only the ambiguous "within exposure window" / "age <= window" wording
+in `solution.md §29.23.1` and `§36.3.2`. Their historical text is preserved; the operative rule is
+transition-based retention with no age expiry.
+
+### 4. S14 — existing-contract remediation
+
+Mode B (`INVOICE_DRIVEN_OPEN_ITEM`) and Mode C (`PROVISIONAL_TO_FINANCIAL`) invoice-sourced final AR
+must use authoritative Finance source links and allocation evidence so that one outstanding
+economic portion is counted exactly once across SO commitment, delivered/provisional exposure and
+final AR.
+
+This is an implementation defect against existing SC90–SC92, S14, `solution.md §29.23.2` and
+`§36.3.2.2`; it is not a new business policy. The repair must consume canonical Finance ownership,
+including `finance_invoice_source_links.invoiced_amount_cents`, and must not create a second Finance
+allocation, Credit Exposure ledger or mutable exposure cache. A source-level amount or remaining-AR
+allocation that cannot be proven from canonical facts must fail closed; it must never be guessed,
+equally split or proportionally fabricated.
+
+### 5. Recognition Mode rule-coverage boundary
+
+- A rule with `recognition_mode IS NULL` is globally applicable for its stage and effective date.
+- A mode-specific rule applies only to its matching Recognition Mode.
+- Multiple applicable rules retain the existing strongest-outcome evaluation.
+- Credit Management disabled retains the existing explicit bypass.
+- When Credit Management is enabled but no effective rule applies to the actual mode, the existing
+  Wave 10 contract treats the stage as not credit-controlled: `enforced=false`, no decision row and
+  no audit row. A rule for another mode must not be silently promoted to a global rule.
+- An applicable mandatory BLOCK rule remains backend fail-closed. WARNING and bounded Special
+  Approval retain their existing semantics, subject to the new non-ACTIVE Profile fence.
+- The current physical rule model has no explicit customer/scenario exemption discriminator even
+  though `solution.md §29.22.1` names explicit exemption as a possible bypass. This is recorded as
+  an OPEN contract-to-model gap. This bounded amendment does not invent an exemption, permission,
+  default rule or unconditional enforcement policy.
+
+### 6. Requirement decision record
+
+```text
+B9_O2_REQUIREMENT_APPROVED
+B10_O1_REQUIREMENT_APPROVED
+S14_EXISTING_CONTRACT_REMEDIATION_AUTHORIZED
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN
+WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED
+```
+
+## Wave 10 MySQL Acceptance Infrastructure Remediation Requirement (2026-10-25)
+
+### 1. Authorization, source and bounded status
+
+The user explicitly authorized one consecutive `AUDIT -> REQUIREMENT -> DESIGN` documentation
+stage for the Wave 10 MySQL Acceptance Infrastructure remediation. This section records the
+Requirement phase only. The immediately following Design phase may proceed without an intervening
+approval, but Design completion is a mandatory HARD STOP. Production code, tests, fixtures,
+runners, workers, manifests, TAP parsing, package scripts, MySQL access, destructive database
+operations and Git writes are not authorized by this stage.
+
+The current source audit reconciled findings `W10-AUD-001` through `W10-AUD-009`. Findings 001,
+002, 003, 004, 005, 007, 008 and 009 are `CONFIRMED`. Finding 006 is
+`PARTIALLY_CONFIRMED`: the current fixture does not exercise the formal Wave 9 physical upgrade
+path or compare actual source and target schema signatures, but its dynamic foreign-key edge
+enumeration and value-by-value preservation of its synthetic six-table graph remain valid local
+test intentions. No finding is treated as real-MySQL execution evidence.
+
+This remediation does not alter the approved Wave 10 business meaning. It specifies the evidence
+infrastructure required before a separately authorized real-MySQL campaign may be requested.
+
+### 2. W10-AIR-R01 — Evidence authenticity and M-board identity
+
+Each fixed Gate B case has exactly one case identity, one primary evidence level, one executable
+case owner and one marker emission point. A marker is emitted only after that exact case's
+preconditions, production or raw action, persistent postconditions and cleanup obligations have
+passed in the current process run.
+
+- `B-COMPOSE` is `STATIC_INTENT`; it proves static composition only and makes no runtime lock or
+  business-outcome claim.
+- `B-M9`, `B-M10`, `B-M11`, `B-M12`, `B-M15` and `B-M19C` require
+  `PRODUCTION_SERIALIZED_OUTCOME` as their primary M-board evidence. A separate raw diagnostic may
+  supplement a case, but cannot produce or replace its production marker.
+- `B-M15` must prove the real empty-parent, two-salesperson aggregate-capacity business result;
+  observing one anchor row wait is insufficient.
+- Source text, function names, constant arithmetic, a different R-case, historical logs, SQLite
+  output and a prewritten PASS list cannot produce a production marker.
+- Missing, duplicate, extra, out-of-order ownership, wrong-level or cross-case marker reuse fails
+  the Gate B runner. A failed TAP suite, child-process failure, unconfirmed child termination,
+  cleanup failure or missing final-zero confirmation suppresses the M-board entirely.
+
+### 3. W10-AIR-R02 — Destructive-target identity and inventory safety
+
+Before the first destructive statement, the runner must establish one immutable campaign identity
+from both approved configuration and the connected server:
+
+1. exact password-free `mysql://user@host:port/database` authorization;
+2. exact configured host, port, database and user;
+3. actual `SELECT DATABASE()` result;
+4. actual `CURRENT_USER()` result;
+5. actual server UUID and MySQL 8 version policy;
+6. a normalized effective-grant fingerprint and the required bounded schema privileges;
+7. an initial object inventory covering tables, views, triggers, routines and events.
+
+The UUID, actual account and grant fingerprint are future preflight outputs requiring separate
+authorization; they must never be guessed or committed as unverified constants. The first campaign
+run uses `EMPTY_ONLY`: a non-empty initial inventory fails before DROP and requires a separately
+authorized recovery decision. Once an empty target and full identity have been confirmed, the
+runner may hold an in-memory campaign lease for objects created by that run. Every per-suite reset
+and final cleanup must revalidate database, actual account, UUID and version before acting.
+Identity drift revokes the lease and fails closed without destructive action.
+
+Passwords, raw grants, full environment dumps, SQL payloads and connection secrets must not appear
+in errors, TAP or M-board output. Reports may include only the password-free target identity,
+server-UUID digest or approved bounded form, version, account identity, grant digest and inventory
+counts.
+
+### 4. W10-AIR-R03 — Bounded child lifecycle and cleanup
+
+Every suite has an explicit wall-clock deadline. Timeout enters `CHILD_TIMEOUT`; the runner must
+request graceful termination of the suite process and its workers, wait for bounded exit
+confirmation, escalate to a platform-safe process-tree termination, and again wait for bounded
+confirmation. Fixed sleeps are not exit evidence.
+
+If termination is confirmed, suite failure proceeds to final cleanup. If termination cannot be
+confirmed, cleanup must not race a possibly live database client: the run fails non-zero with
+cleanup recorded as `NOT_ATTEMPTED_CHILD_LIVE`. All ordinary suite failures, non-zero exits, spawn
+errors, malformed TAP, marker failures and runner exceptions with no live child enter final
+cleanup. Identity failure before a destructive lease performs no cleanup. Cleanup identity drift,
+reset failure, zero-object failure or adapter-close failure is terminal and prevents PASS.
+
+### 5. W10-AIR-R04 — Deterministic independent-session business races
+
+W10-R1 through W10-R12 must use distinct MySQL connections and the real production handlers or
+services named by the approved contract. `Promise.all` alone is not a concurrency barrier. Each
+case must provide a deterministic coordinator and, where needed, an observer connection:
+
+- both contenders register distinct `CONNECTION_ID()` values and announce READY;
+- a coordinator holds the existing L0 transaction gate or the case's approved raw coordination
+  row so both production calls are demonstrably pending before release;
+- `performance_schema` observation, bounded query-state observation or another exact server fact
+  proves the required wait; inability to observe required evidence fails rather than sleeps to
+  PASS;
+- raw coordination never becomes the production business result;
+- both transaction outcomes, authoritative final rows, amounts, audits and idempotency records are
+  asserted after all sessions settle.
+
+The required case meanings remain those in `solution.md §36.8.3`: R1 covers BOTH_FIT and
+ONLY_ONE_FITS Credit Checks; R2 allows exactly one effective Special/standard authority, not zero;
+R3 proves an exact OLD-or-NEW exposure and no transition double-count; R4 and R8 prove coherent
+version sets; R7 races a different-scope approval against a mandatory sub-limit refusal; R9 uses a
+real final unpaid AR reached from an SO transition; R10 uses consolidated or otherwise
+source-unprovable AR and returns `UNPROVEN_ATTRIBUTION`; R11 proves Finance-parent-first completion
+without a cycle; R12 uses N independent production checks and separately proves that reuse of an
+existing immutable snapshot takes no snapshot-row lock.
+
+### 6. W10-AIR-R05 — Authoritative capacity preconditions
+
+Every capacity race must calculate its classification from committed authoritative facts before
+release of the race barrier. It reads the applicable effective Profile limit, canonical
+recognition-mode-aware exposure `E`, business date, scope, cents unit and each proposed delta, then
+derives `available = limit - E`.
+
+The fixture records and asserts exactly one of:
+
+```text
+BOTH_FIT      da <= available AND db <= available AND da + db <= available
+ONLY_ONE_FITS da <= available AND db <= available AND da + db >  available
+NEITHER_FITS  da >  available AND db >  available
+```
+
+The expected winner count follows that computed classification. A constant copied from seed input
+is not proof. NULL/unbounded limits, currency mismatch, unsafe integers, ambiguous attribution or
+a precondition that changes before the coordinated start make the fixture explicitly
+unconstructible or fail closed; they cannot be converted into PASS.
+
+### 7. W10-AIR-R06 — Formal migration, parity, upgrade and preservation
+
+Fresh initialization must use the production `createDatabase()` MySQL bootstrap path. The upgrade
+fixture must begin from an actual canonical SQLite snapshot whose Sales & Customer registry is
+bounded through Wave 9, materialize that snapshot through the production MySQL bootstrap, and then
+invoke the canonical ordered migration registry through Wave 10. Creating the final schema and
+dropping two tables is not an upgrade fixture.
+
+For all six Wave 9 tables, parity compares normalized metadata captured from the actual canonical
+SQLite Wave 9 source schema with actual MySQL `information_schema`: complete ordered columns,
+logical type mapping, nullability, defaults, primary keys, foreign keys, checks and indexes where
+the cross-dialect contract applies. Handwritten type strings may be diagnostic expectations but
+cannot be the source side.
+
+The suite must prove:
+
+- fresh bootstrap and Wave 9->10 upgrade produce equivalent normalized metadata for the eight
+  Credit tables;
+- repeated formal initialization and repeated registry upgrade are idempotent;
+- I-4 compares complete pre/post values for a non-empty, referentially connected six-table Wave 9
+  graph, including nullable and boundary-value variants, not row counts alone;
+- I-3 dynamically enumerates every actual FK edge of the eight tables and finds zero orphans;
+- every difference is reported and cleanup remains subject to R02/R03.
+
+`LEGACY_DATA_EVIDENCE_PENDING` remains open. Synthetic fixtures never prove the state of an
+external historical database.
+
+### 8. W10-AIR-R07 — Case-complete zero-side-effect projections
+
+Each rejection, loser, rollback and replay case declares its projection before execution and
+compares it afterward by stable identity, business status, monetary fields, version/fingerprint and
+relationships, not total row count alone. The union includes, where the case can touch them:
+
+- `credit_check_results`, `credit_special_approval`, `credit_policy_snapshots` and Profile/rule/
+  parameter version facts;
+- `sales_prepayment_requirements`, `sales_prepayment_gate_results` and eligible Finance parent
+  balances;
+- `sales_orders`, order items and applicable delivery/invoice source facts;
+- `account_receivables`, settlement/application facts and `finance_invoice_source_links`;
+- relevant `audit_logs` and `idempotency_records` rows, including operation keys and stored result;
+- every other table written by the exact production entrypoint under test.
+
+A required table or column that cannot be queried is a fixture failure. No necessary projection is
+silently skipped. A winning transaction's expected effects are asserted separately from the
+loser's zero-effect delta, and exact replay must create no second economic, audit or idempotency
+effect.
+
+### 9. W10-AIR-R08 — Real-MySQL business matrix
+
+The protected Wave 10 campaign must include a separately named business-matrix suite covering:
+
+- B-9 O2: effective ACTIVE allows evaluation; effective SUSPENDED and CLOSED return
+  `CREDIT_PROFILE_NOT_ENFORCEABLE`; no fallback to an earlier ACTIVE version or aggregate bypass;
+  Special Approval cannot cross the status fence; historical exposure remains intact.
+- B-10 O1: an old unresolved approved SO and open AR remain exposed across arbitrary business-date
+  distance; only proven lifecycle extinction/transition releases an amount; overdue AR is not an
+  extra bucket.
+- S14 Mode B/C: authoritative invoice-source links, partial invoice, partial settlement, multiple
+  deliveries, multiple salespersons, exact single-source attribution, missing/inconsistent
+  lineage and ambiguous remaining allocation. No proportional, FIFO, equal or residual guessing is
+  allowed.
+- Recognition Mode: global rule, exact-mode rule, nonmatching-only rule, no applicable rule,
+  strongest applicable outcome and mandatory BLOCK rollback.
+
+The explicit customer/scenario exemption selector remains
+`RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN`. The matrix asserts that no selector or bypass
+is fabricated; it does not implement or claim exemption support. SQLite evidence may remain useful
+regression evidence but cannot close this MySQL matrix.
+
+### 10. W10-AIR-R09 — Strict TAP, marker grammar and local behavior tests
+
+Strict TAP acceptance requires one complete top-level plan, a valid end-of-stream, internally
+consistent test records and summary counters, at least one test, `pass == tests`, and zero fail,
+skip, cancelled or todo. Missing, duplicate, extra, illegal, truncated or contradictory records
+fail even when the child exit code is zero. A non-zero exit always fails.
+
+The runner orchestration, target verifier, process lifecycle, TAP parser and M-board reducer must
+be testable without a database through injected adapters/processes/clocks or pure state reducers.
+Local behavioral tests must cover guard refusal, identity mismatch, non-zero exit, hang and both
+termination outcomes, malformed/incomplete TAP, cleanup failure, final-zero failure, every marker
+cardinality/level error, suppression of PASS and Gate A/legacy execution-graph isolation. Source
+regex checks may supplement but cannot replace these tests.
+
+### 11. W10-AIR-R10 — Freeze, compatibility and authorization boundary
+
+- Gate A remains frozen and is neither imported nor executed by either Wave 10 runner.
+- Wave 9 schema, business semantics and freeze history remain unchanged. Wave 9 participation is
+  limited to a test-only physical snapshot and compatibility verification required by R06.
+- L0, L1-L8, READ COMMITTED, Finance monetary authority, permissions, status, idempotency and
+  production transaction semantics are unchanged.
+- No shadow ledger, mutable exposure cache, new business feature, Wave 11/12 implementation or
+  schema correction may be introduced to make a test pass.
+- Real MySQL suites remain outside unconditional FAST/FULL/HEAVY and are reachable only through
+  explicit protected commands after separate exact-target authorization.
+- Passing local remediation tests authorizes neither MySQL execution nor Acceptance/Freeze.
+
+### 12. Requirement acceptance and OPEN facts
+
+The future Implementation is Requirement-complete only when every `W10-AIR-R01` through
+`W10-AIR-R10` mapping has executable tests and no lower evidence class is promoted. The following
+facts remain OPEN until their separately authorized phases:
+
+```text
+OPEN  actual server UUID, CURRENT_USER and effective-grant fingerprint
+OPEN  actual initial object inventory at the future campaign target
+OPEN  all real-MySQL migration, race, lock, rollback, cleanup and M-board results
+OPEN  LEGACY_DATA_EVIDENCE_PENDING
+OPEN  RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN
+OPEN  Wave 10 user Acceptance and Freeze
+```
+
+**Requirement status: `WAVE10_MYSQL_ACCEPTANCE_REMEDIATION_REQUIREMENT_COMPLETE`.**
+
+## Wave 10 MySQL least-privilege readiness and Finance View parity requirement (2026-10-25)
+
+### Authorization, scope and audited gap
+
+The user authorized one consecutive Audit → Requirement → Design → Implementation → local
+verification → dedicated-account remediation → read-only preflight sequence, with the hard stop
+immediately before any real MySQL Acceptance campaign. The existing Guard is `PARTIAL`: it omits
+`TRIGGER` and can admit global DML, dynamic administration, grant delegation or inherited roles.
+MySQL initialization is `SEMANTIC_MISMATCH`: unlike SQLite, it does not install the canonical
+`finance_open_item_effects` derived View because the SQLite snapshot contains tables only.
+
+### W10-LPR-R01 — exact dedicated-account contract
+
+The campaign account is exactly `modern_erp_wave10@127.0.0.1`, connected only to
+`modern_erp_domain_test`. Its target-schema privileges are exactly `SELECT`, `INSERT`, `UPDATE`,
+`DELETE`, `CREATE`, `DROP`, `ALTER`, `INDEX`, `REFERENCES`, `TRIGGER` and `CREATE VIEW`. Its only
+privileges outside that schema are table-scoped `SELECT` on
+`performance_schema.data_locks`, `performance_schema.data_lock_waits` and
+`performance_schema.threads`. `USAGE ON *.*` is the sole permitted global grant.
+
+Every other privilege is forbidden, including global DML/DDL, `ALL PRIVILEGES`, `PROCESS`,
+`SUPER`, `FILE`, `SHUTDOWN`, reload, account/role/replication administration, every dynamic
+administrative privilege, routine/event authority, unrelated-schema authority and `WITH GRANT
+OPTION`. No role may be granted, active or default. A global privilege never substitutes for an
+explicit target-schema privilege.
+
+### W10-LPR-R02 — fail-closed identity and fingerprint
+
+Before a campaign lease or destructive lifecycle action, the Guard must verify in order: exact
+configured host/port/database/user; `DATABASE()`; exact `CURRENT_USER()`; approved server UUID;
+MySQL 8 version policy; normalized effective `SHOW GRANTS` fingerprint; the exact privilege and
+no-role contract above; and the approved initial five-category object inventory. Missing,
+additional, inherited, differently scoped or delegated authority fails closed before mutation.
+The trusted grant fingerprint is supplied independently; current grants must never be learned or
+promoted automatically as trusted.
+
+### W10-LPR-R03 — canonical Finance View parity
+
+`server/modules/finance-open-item-effect-view.js` remains the single canonical definition of
+`finance_open_item_effects`. Fresh SQLite and MySQL initialization, repeated initialization and an
+existing-schema upgrade must all leave exactly that derived View available after its dependency
+tables exist. Initialization is idempotent, corrects a stale prior View definition, never creates a
+materialized/shadow table, and fails closed on dependency or DDL error. Inventory and cleanup must
+continue to classify and remove it as a View before base tables. Cross-backend projection semantics
+and Finance monetary authority are unchanged.
+
+### W10-LPR-R04 — evidence and boundaries
+
+Local behavior tests must prove: the valid exact grant set; every missing required schema
+privilege; global static or dynamic excess; grant delegation; role inheritance/default role;
+schema/account/database/UUID/version/fingerprint mismatch; inventory refusal; View first install,
+repeat, stale-definition upgrade, canonical definition and dependencies; cleanup View ordering;
+and zero Gate A change. Syntax, focused suites, related Wave 9/10/Finance tests, FAST, FULL, build
+and `git diff --check` are required with MySQL/destructive environment removed.
+
+This requirement authorizes no Gate A edit or execution, Gate B, Acceptance, target-schema
+bootstrap/reset/migration/DDL/DML/cleanup, unrelated account/schema change, Git write, Wave 11 or
+Wave 12 work. The only permitted external mutation after local verification is creation or exact
+grant remediation of the confirmed-dedicated account named in R01, followed solely by read-only
+preflight. Real MySQL Acceptance remains separately authorized.
+
+**Requirement status: `WAVE10_MYSQL_LEAST_PRIVILEGE_AND_VIEW_PARITY_REQUIREMENT_APPROVED_BY_CONSECUTIVE_AUTHORIZATION`.**

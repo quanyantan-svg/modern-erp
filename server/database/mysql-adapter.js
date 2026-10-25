@@ -92,6 +92,16 @@ export class MySqlSyncAdapter {
     this.closed = false;
     this.requestId = 0;
     this.requestTimeoutMs = requestTimeoutMs;
+    // Transaction lifecycle safety (§37.31 R6). `sessionState` is a conservative
+    // permit derived only from acknowledged Worker responses and from the
+    // adapter's own request-outcome classification. It is never a probe of
+    // server state and it never overrides `isTransaction`, which remains the
+    // canonical transaction mirror.
+    this.sessionState = 'FRESH';
+    this.sessionEpoch = null;
+    this.quarantined = false;
+    this.quarantineState = null;
+    this.admissionRefusalCount = 0;
     const configuredSlowQueryMs = Number(process.env.SLOW_QUERY_MS || 500);
     this.slowQueryMs = Number.isSafeInteger(configuredSlowQueryMs) && configuredSlowQueryMs >= 1 && configuredSlowQueryMs <= 300_000
       ? configuredSlowQueryMs : 500;
@@ -114,7 +124,72 @@ export class MySqlSyncAdapter {
     this._request('connect', config);
   }
 
+  // A quarantined adapter is terminal for this instance. It refuses every
+  // further statement, and the Worker thread is terminated so the MySQL
+  // session is destroyed and the server reclaims whatever it still held.
+  quarantine(reason) {
+    if (this.quarantineState) return this.quarantineState;
+    this.quarantined = true;
+    this.closed = true;
+    this.sessionState = 'QUARANTINED';
+    const state = {
+      reason: String(reason || 'unknown'),
+      at: new Date().toISOString(),
+      state: 'TERMINATION_PENDING',
+      termination: null,
+      errorCode: null,
+    };
+    this.quarantineState = state;
+    this.logger.error('mysql_session_quarantined', { reason: state.reason });
+    state.termination = Promise.resolve()
+      .then(() => this.worker.terminate())
+      .then(() => {
+        state.state = 'TERMINATION_CONFIRMED';
+        this.sessionState = 'TERMINATED';
+      })
+      .catch((error) => {
+        state.state = 'TERMINATION_FAILED';
+        state.errorCode = error?.code || null;
+        this.logger.error('mysql_session_teardown_failed', { reason: state.reason, code: state.errorCode });
+      });
+    return state;
+  }
+
+  // The session identity is owned by the Worker that owns the connection. A
+  // changed epoch proves the session was replaced, so any response describing
+  // the new session must never be read as evidence about the old one.
+  _observeSessionEpoch(response) {
+    if (typeof response?.sessionEpoch !== 'number') return;
+    if (this.sessionEpoch !== null && response.sessionEpoch !== this.sessionEpoch) {
+      this.sessionState = 'FRESH';
+    }
+    this.sessionEpoch = response.sessionEpoch;
+  }
+
+  _applyRequestFailure(error) {
+    if (error?.mysqlRequestTimeout === true) {
+      // The Worker may still be executing the statement. Its outcome is
+      // indeterminate, so the session is no longer a trusted place to start a
+      // transaction.
+      this.sessionState = 'UNCERTAIN';
+      return;
+    }
+    if (error?.sessionLost === true) {
+      this.sessionState = 'UNCERTAIN';
+      return;
+    }
+    if (error?.classification === 'COMMIT' || error?.classification === 'ROLLBACK') {
+      // The server rejected the statement, so the transaction is still open.
+      this.sessionState = 'ACTIVE';
+    }
+  }
+
   _request(action, payload = {}) {
+    if (this.quarantined) {
+      const error = new Error(`MySQL adapter is quarantined: ${this.quarantineState?.reason || 'unknown'}`);
+      error.code = 'MYSQL_SESSION_QUARANTINED';
+      throw error;
+    }
     if (this.closed && action !== 'close') throw new Error('MySQL database is closed');
     this.requestId = this.requestId >= 0x7ffffffe ? 1 : this.requestId + 1;
     const requestId = this.requestId;
@@ -123,14 +198,25 @@ export class MySqlSyncAdapter {
     const wait = Atomics.wait(state, 0, 0, this.requestTimeoutMs);
     if (wait === 'timed-out') {
       abandonWorkerRequest(state, requestId);
-      throw new Error(`MySQL ${action} timed out after ${this.requestTimeoutMs / 1000} seconds`);
+      const error = new Error(`MySQL ${action} timed out after ${this.requestTimeoutMs / 1000} seconds`);
+      // A request timeout does NOT cancel the underlying MySQL statement.
+      error.mysqlRequestTimeout = true;
+      error.mysqlRequestTimeoutMs = this.requestTimeoutMs;
+      this._applyRequestFailure(error);
+      throw error;
     }
     const decoded = readWorkerResponse(this.responseBuffer, requestId);
-    if (!decoded) throw new Error(`MySQL ${action} returned an invalid response generation`);
+    if (!decoded) {
+      const error = new Error(`MySQL ${action} returned an invalid response generation`);
+      this._applyRequestFailure(error);
+      throw error;
+    }
     const response = decoded.value;
+    this._observeSessionEpoch(response);
     if (decoded.status === 2) {
       const error = new Error(response.message || 'MySQL operation failed');
       Object.assign(error, response);
+      this._applyRequestFailure(error);
       throw error;
     }
     return response;
@@ -158,19 +244,17 @@ export class MySqlSyncAdapter {
 
   exec(sql) {
     const translated = translateSqliteSql(sql);
-    const normalized = translated.replace(/;\s*$/, '').trim().toUpperCase();
     const result = this._request('exec', { sql: translated });
-    // The worker is the authoritative source for transaction state because
-    // it can detect a transaction lost to a recoverable connection error and
-    // must reset inTransaction to false even when the COMMIT/ROLLBACK did not
-    // successfully run.
+    // The Worker is the authoritative source for both the transaction mirror
+    // and the exec classification (§37.31 R6). The parent never re-derives
+    // the classification, so exactly one classifier exists.
     if (typeof result?.inTransaction === 'boolean') {
       this.isTransaction = result.inTransaction;
-    } else if (normalized === 'START TRANSACTION' || normalized === 'BEGIN') {
-      this.isTransaction = true;
-    } else if (normalized === 'COMMIT' || normalized === 'ROLLBACK') {
-      this.isTransaction = false;
     }
+    const classification = result?.classification;
+    if (classification === 'BEGIN') this.sessionState = 'ACTIVE';
+    else if (classification === 'COMMIT' || classification === 'ROLLBACK') this.sessionState = 'IDLE_TRUSTED';
+    else if (this.sessionState === 'FRESH') this.sessionState = 'IDLE_TRUSTED';
     return result;
   }
 

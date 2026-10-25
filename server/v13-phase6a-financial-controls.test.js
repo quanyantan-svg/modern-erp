@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -207,5 +208,255 @@ describe('V1.3 Phase 6A financial and transaction controls', () => {
     const nextAp = ensurePayableSource(db, { id: 'p6-uat-next-ap', sourceType: 'PURCHASE_RECEIPT', sourceNo: 'PR-P6-UAT-NEXT', partyId: 'supplier-003', businessDate: '2026-10-05', effectCents: 600000, creatorId: 'user-sales' });
     assert.equal((await post('/api/settlement/balance-applications', 'accounting', { side: 'AP', creditId: supplierCredit.id, openItemId: nextAp, amountCents: 100000, businessDate: '2026-10-05', reason: 'UAT供应商贷项应用' })).status, 201);
     assert.equal(openItemSnapshot(db, 'AP', nextAp).openCents, 500000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W7-C1 / W7-C2' Implementation A — Finance Refund post-lock monetary authority
+// (solution.md §37.6, §37.10 A-MONEY / A-REFUND / A-SIDE / A-STATIC)
+//
+// These tests exercise the corrected createRefund() against durable business
+// facts on a single-connection SQLite run. They deliberately do NOT claim real
+// concurrent proof: per §37.10 A-RAW, row-level concurrency evidence requires a
+// disposable real-MySQL gate, which is not authorized in this stage. What is
+// asserted here is the capacity AUTHORITY contract and the zero-side-effect
+// property on every rejection path.
+// ---------------------------------------------------------------------------
+
+describe('V1.3 Phase 6A refund post-lock monetary authority', () => {
+  let handle; let db; let server; let base; const tokens = {};
+  const request = (path, role, method = 'GET', body, key) => fetch(base + path, { method, headers: { ...(role ? { authorization: `Bearer ${tokens[role]}` } : {}), ...(body ? { 'content-type': 'application/json' } : {}), ...(key ? { 'idempotency-key': key } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const post = (path, role, body = {}, key) => request(path, role, 'POST', body, key);
+  const settlement = async (kind, partyKey, partyId, amount, allocations = [], unapplied = 0) => {
+    const path = kind === 'COLLECTION' ? '/api/payment-collections' : '/api/payment-disbursements';
+    const body = { [partyKey]: partyId, businessDate: '2026-11-02', amountCents: amount, paymentMethod: 'BANK', settlementAccountId: 'refund-auth-bank', allocations, unappliedAmountCents: unapplied, explicitUnapplied: unapplied > 0 };
+    const created = await (await post(path, 'accounting', body)).json();
+    assert.equal((await post(`${path}/${created.id}/confirm`, 'accounting', {}, `auth-confirm-${created.id}`)).status, 200);
+    return created;
+  };
+  // Durable-fact snapshot used by every zero-side-effect assertion.
+  const facts = (balanceId) => ({
+    refunds: db.prepare('SELECT COUNT(*) n FROM financial_refunds WHERE balance_id=?').get(balanceId).n,
+    refundCents: Number(db.prepare("SELECT COALESCE(SUM(amount_cents),0) n FROM financial_refunds WHERE balance_id=? AND status='CONFIRMED'").get(balanceId).n),
+    vouchers: db.prepare("SELECT COUNT(*) n FROM accounting_vouchers WHERE source_type='FINANCIAL_REFUND'").get().n,
+    movements: db.prepare("SELECT COUNT(*) n FROM settlement_account_movements WHERE source_type='FINANCIAL_REFUND'").get().n,
+    audits: db.prepare("SELECT COUNT(*) n FROM audit_logs WHERE entity_type='FINANCIAL_REFUND' AND action='CONFIRM'").get().n,
+    idem: db.prepare("SELECT COUNT(*) n FROM idempotency_records WHERE operation_type='REFUND_CONFIRM' AND status='SUCCEEDED'").get().n,
+  });
+  const refund = (body, key) => post('/api/financial-refunds', 'accounting', body, key);
+
+  before(async () => {
+    handle = createTempDb({ label: 'v13-p6a-refund-authority' }); db = handle.db;
+    const stamp = new Date().toISOString();
+    db.prepare("INSERT INTO bank_accounts(id,bank_name,account_no,account_name,account_type,balance_cents,currency,active,created_at,updated_at) VALUES('refund-auth-bank','授权银行','AUTH-001','退款授权测试户','CHECKING',0,'CNY',1,?,?)").run(stamp, stamp);
+    server = createServer(createApp(db, { distDir: resolve('dist') })); await new Promise((done) => server.listen(0, '127.0.0.1', done)); base = `http://127.0.0.1:${server.address().port}`;
+    tokens.accounting = (await (await post('/api/auth/login', null, { username: 'accounting', password: 'accounting123' })).json()).token;
+  });
+  after(async () => { await new Promise((done, fail) => server.close((e) => e ? fail(e) : done())); handle.cleanup(); });
+
+  const prepayCustomer = async (customerId, amount) => {
+    await settlement('COLLECTION', 'customerId', customerId, amount, [], amount);
+    return db.prepare("SELECT * FROM settlement_unapplied_balances WHERE party_id=? AND balance_type='PREPAYMENT' ORDER BY created_at DESC").get(customerId);
+  };
+  const baseBody = (balanceId, partyId, amountCents) => ({ side: 'CUSTOMER', balanceId, partyId, amountCents, businessDate: '2026-11-03', settlementAccountId: 'refund-auth-bank', paymentMethod: 'BANK', reason: '超额退款测试' });
+
+  // R1 + R10 — a refund inside current capacity commits every durable fact and
+  // leaves a nonnegative canonical remaining balance.
+  test('refund within current capacity commits every durable fact and keeps remaining nonnegative', async () => {
+    const balance = await prepayCustomer('customer-001', 10000);
+    const response = await refund(baseBody(balance.id, 'customer-001', 4000), 'auth-r1');
+    assert.equal(response.status, 201, JSON.stringify(await response.clone().json()));
+    const created = await response.json();
+    const row = db.prepare('SELECT * FROM financial_refunds WHERE id=?').get(created.id);
+    assert.equal(row.status, 'CONFIRMED'); assert.equal(row.amount_cents, 4000); assert.equal(row.balance_id, balance.id);
+    assert.ok(db.prepare("SELECT 1 FROM accounting_vouchers WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(created.id));
+    assert.ok(db.prepare("SELECT 1 FROM settlement_account_movements WHERE source_type='FINANCIAL_REFUND' AND source_id=?").get(created.id));
+    assert.ok(db.prepare("SELECT 1 FROM audit_logs WHERE entity_type='FINANCIAL_REFUND' AND entity_id=? AND action='CONFIRM'").get(created.id));
+    assert.ok(db.prepare("SELECT 1 FROM idempotency_records WHERE operation_type='REFUND_CONFIRM' AND document_id=? AND status='SUCCEEDED'").get(`CUSTOMER:${balance.id}`));
+    const remaining = unappliedBalanceSnapshot(db, balance.id).remainingCents;
+    assert.equal(remaining, 6000); assert.ok(remaining >= 0, 'remaining must never be negative');
+  });
+
+  // R2 + R9 — an over-refund is refused and creates no voucher, movement, refund,
+  // audit or idempotency fact.
+  test('refund beyond remaining capacity is refused with zero durable side effect', async () => {
+    const balance = await prepayCustomer('customer-002', 5000);
+    const before = facts(balance.id);
+    const response = await refund(baseBody(balance.id, 'customer-002', 5001), 'auth-r2');
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, 'FINANCIAL_REFUND_CAPACITY_EXCEEDED');
+    assert.deepEqual(facts(balance.id), before);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 5000);
+  });
+
+  // R3 — two DIFFERENT idempotency keys, each individually valid against the
+  // original capacity, must not both consume the same capacity. This asserts the
+  // outcome invariant only; real concurrent proof is Gate A A-RAW on a
+  // disposable MySQL, which is deliberately not fabricated here.
+  test('two distinct refund keys cannot both consume the same capacity', async () => {
+    const balance = await prepayCustomer('customer-003', 10000);
+    assert.equal((await refund(baseBody(balance.id, 'customer-003', 7000), 'auth-r3-a')).status, 201);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 3000);
+    const second = await refund(baseBody(balance.id, 'customer-003', 7000), 'auth-r3-b');
+    assert.equal(second.status, 409);
+    const after = facts(balance.id);
+    assert.equal(after.refunds, 1, 'only one refund may exist');
+    assert.ok(after.refundCents <= 10000, 'consumed must never exceed the original balance');
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 3000);
+  });
+
+  // R4 — a CONFIRMED application reduces refundable capacity and the refund path
+  // observes the reduced amount.
+  test('refund after a confirmed application respects the reduced capacity', async () => {
+    await settlement('COLLECTION', 'customerId', 'customer-001', 10000, [], 10000);
+    const balance = db.prepare("SELECT * FROM settlement_unapplied_balances WHERE party_id='customer-001' AND balance_type='PREPAYMENT' ORDER BY created_at DESC").get();
+    const ar = ensureReceivableSource(db, { id: 'auth-r4-ar', sourceType: 'SALES_DELIVERY', sourceNo: 'SD-AUTH-R4', partyId: 'customer-001', businessDate: '2026-11-04', effectCents: 10000, creatorId: 'user-sales' });
+    assert.equal((await post('/api/settlement/balance-applications', 'accounting', { side: 'AR', balanceId: balance.id, openItemId: ar, amountCents: 7000, businessDate: '2026-11-04' })).status, 201);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 3000);
+    const before = facts(balance.id);
+    assert.equal((await refund(baseBody(balance.id, 'customer-001', 4000), 'auth-r4')).status, 409);
+    assert.deepEqual(facts(balance.id), before);
+    assert.equal((await refund(baseBody(balance.id, 'customer-001', 3000), 'auth-r4-ok')).status, 201);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 0);
+  });
+
+  // R5 — a CONFIRMED UNAPPLIED settlement reversal component reduces refundable
+  // capacity, and the refund path observes it.
+  test('refund after a confirmed UNAPPLIED reversal respects the reduced capacity', async () => {
+    const balance = await prepayCustomer('customer-001', 10000);
+    const stamp = new Date().toISOString();
+    db.prepare("INSERT INTO settlement_reversals(id,reversal_no,settlement_type,settlement_id,amount_cents,business_date,reason,status,creator_id,created_at) VALUES('auth-r5-rev','RV-AUTH-R5','COLLECTION','auth-r5-doc',4000,'2026-11-04','未核销冲销','CONFIRMED','user-accounting',?)").run(stamp);
+    db.prepare("INSERT INTO settlement_reversal_items(id,reversal_id,component_type,original_component_id,amount_cents) VALUES('auth-r5-item','auth-r5-rev','UNAPPLIED',?,4000)").run(balance.id);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 6000);
+    const before = facts(balance.id);
+    assert.equal((await refund(baseBody(balance.id, 'customer-001', 7000), 'auth-r5')).status, 409);
+    assert.deepEqual(facts(balance.id), before);
+    assert.equal((await refund(baseBody(balance.id, 'customer-001', 6000), 'auth-r5-ok')).status, 201);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 0);
+  });
+
+  // R6 — only CONFIRMED applications/refunds reduce capacity; reversing an
+  // application restores it under the existing canonical status rules.
+  test('reversing an application restores capacity because only CONFIRMED counts', async () => {
+    await settlement('COLLECTION', 'customerId', 'customer-002', 10000, [], 10000);
+    const balance = db.prepare("SELECT * FROM settlement_unapplied_balances WHERE party_id='customer-002' AND balance_type='PREPAYMENT' ORDER BY created_at DESC").get();
+    const ar = ensureReceivableSource(db, { id: 'auth-r6-ar', sourceType: 'SALES_DELIVERY', sourceNo: 'SD-AUTH-R6', partyId: 'customer-002', businessDate: '2026-11-05', effectCents: 10000, creatorId: 'user-sales' });
+    const application = await (await post('/api/settlement/balance-applications', 'accounting', { side: 'AR', balanceId: balance.id, openItemId: ar, amountCents: 7000, businessDate: '2026-11-05' })).json();
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 3000);
+    assert.equal((await post(`/api/settlement/balance-applications/${application.id}/reverse`, 'accounting', { reason: '应用冲销' })).status, 200);
+    assert.equal(db.prepare('SELECT status FROM balance_applications WHERE id=?').get(application.id).status, 'REVERSED');
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 10000, 'REVERSED application must not reduce capacity');
+    assert.equal((await refund(baseBody(balance.id, 'customer-002', 10000), 'auth-r6')).status, 201);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 0);
+  });
+
+  // R2-R7 — exact replay must win over mutable capacity even after the first
+  // request fully depletes the balance. A conflicting fingerprint still fails by
+  // idempotency identity, while a fresh key sees the authoritative zero capacity.
+  test('exact idempotent replay survives full depletion without duplicate effects', async () => {
+    const balance = await prepayCustomer('customer-003', 10000);
+    const body = baseBody(balance.id, 'customer-003', 10000);
+    const first = await refund(body, 'auth-r7'); assert.equal(first.status, 201);
+    const created = await first.json();
+    const before = facts(balance.id);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 0);
+    const replay = await refund(body, 'auth-r7');
+    assert.equal(replay.status, 200);
+    const replayed = await replay.json();
+    assert.equal(replayed.id, created.id); assert.equal(replayed.replayed, true);
+    assert.deepEqual(facts(balance.id), before, 'replay must not add any durable fact');
+    const conflict = await refund({ ...body, amountCents: 9999 }, 'auth-r7');
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(facts(balance.id), before, 'same-key conflict must not add any durable fact');
+    const fresh = await refund(body, 'auth-r7-fresh');
+    assert.equal(fresh.status, 409);
+    assert.equal((await fresh.json()).code, 'FINANCIAL_REFUND_CAPACITY_EXCEEDED');
+    assert.deepEqual(facts(balance.id), before, 'fresh key after depletion must not add any durable fact');
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 0);
+  });
+
+  // R8 — the same idempotency key with a different request fingerprint is refused.
+  test('same idempotency key with a conflicting request is refused', async () => {
+    const balance = await prepayCustomer('customer-001', 10000);
+    const body = baseBody(balance.id, 'customer-001', 1500);
+    assert.equal((await refund(body, 'auth-r8')).status, 201);
+    const before = facts(balance.id);
+    const conflict = await refund({ ...body, reason: '不同的退款原因' }, 'auth-r8');
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(facts(balance.id), before);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, 8500);
+  });
+
+  // §37.6 — a balance whose canonical remaining is negative fails closed rather
+  // than being absorbed, and produces no durable fact.
+  test('negative authoritative remaining capacity fails closed with a distinct code', async () => {
+    const balance = await prepayCustomer('customer-002', 1000);
+    const stamp = new Date().toISOString();
+    db.prepare("INSERT INTO financial_refunds(id,refund_no,side,balance_id,party_id,amount_cents,business_date,settlement_account_id,payment_method,reference,reason,creator_id,created_at) VALUES('auth-neg-refund','RNEG-AUTH','CUSTOMER',?,'customer-002',2000,'2026-11-04','refund-auth-bank','BANK','','历史超额退款','user-accounting',?)").run(balance.id, stamp);
+    assert.equal(unappliedBalanceSnapshot(db, balance.id).remainingCents, -1000);
+    const before = facts(balance.id);
+    const response = await refund(baseBody(balance.id, 'customer-002', 1), 'auth-negative');
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, 'FINANCIAL_REFUND_CAPACITY_NEGATIVE');
+    assert.deepEqual(facts(balance.id), before, 'a negative-capacity refund must leave every fact untouched');
+  });
+
+  // R11 — CUSTOMER/SUPPLIER and PREPAYMENT/CREDIT both keep working unchanged.
+  test('customer, supplier and CREDIT-balance refunds all remain compatible', async () => {
+    await settlement('PAYMENT', 'supplierId', 'supplier-001', 3000, [], 3000);
+    const supplierBalance = db.prepare("SELECT * FROM settlement_unapplied_balances WHERE party_id='supplier-001' ORDER BY created_at DESC").get();
+    const supplierRefund = await post('/api/financial-refunds', 'accounting', { side: 'SUPPLIER', balanceId: supplierBalance.id, partyId: 'supplier-001', amountCents: 1200, businessDate: '2026-11-06', settlementAccountId: 'refund-auth-bank', paymentMethod: 'BANK', reason: '供应商退款' }, 'auth-r11-supplier');
+    assert.equal(supplierRefund.status, 201, JSON.stringify(await supplierRefund.clone().json()));
+    assert.equal(unappliedBalanceSnapshot(db, supplierBalance.id).remainingCents, 1800);
+
+    // A credit only materialises a CREDIT balance for the portion that exceeds the
+    // open item, so the open item must be smaller than the adjustment.
+    const ar = ensureReceivableSource(db, { id: 'auth-r11-credit-ar', sourceType: 'SALES_DELIVERY', sourceNo: 'SD-AUTH-R11', partyId: 'customer-003', businessDate: '2026-11-06', effectCents: 900, creatorId: 'user-sales' });
+    const credit = applyCreditAdjustment(db, { side: 'AR', adjustmentType: 'RETURN', sourceType: 'SALES_RETURN', sourceId: 'auth-r11-return', sourceNo: 'SRET-AUTH-R11', targetOpenItemId: ar, partyId: 'customer-003', businessDate: '2026-11-06', amountCents: 2000, actorId: 'user-accounting' });
+    const creditBalance = db.prepare("SELECT * FROM settlement_unapplied_balances WHERE balance_type='CREDIT' AND source_id=?").get(credit.id);
+    assert.ok(creditBalance, 'an unapplied credit must materialise a CREDIT balance');
+    assert.equal(creditBalance.balance_type, 'CREDIT');
+    assert.equal(Number(creditBalance.original_amount_cents), 1100);
+    assert.equal(unappliedBalanceSnapshot(db, creditBalance.id).remainingCents, 1100);
+    const creditRefund = await post('/api/financial-refunds', 'accounting', { side: 'CUSTOMER', creditId: credit.id, partyId: 'customer-003', amountCents: 900, businessDate: '2026-11-06', settlementAccountId: 'refund-auth-bank', paymentMethod: 'BANK', reason: '退货贷项退款' }, 'auth-r11-credit');
+    assert.equal(creditRefund.status, 201, JSON.stringify(await creditRefund.clone().json()));
+    assert.equal(unappliedBalanceSnapshot(db, creditBalance.id).remainingCents, 200);
+  });
+
+  // R12 + §37.10 A-STATIC — the post-lock authority read is ordered after the
+  // canonical lock and before any business effect, and uses portable SQL that
+  // behaves identically on SQLite and MySQL.
+  test('post-lock capacity authority is ordered after the parent lock and before every business effect', () => {
+    const source = readFileSync(resolve('server/modules/financial-controls.js'), 'utf8');
+    const body = source.slice(source.indexOf('export async function createRefund'), source.indexOf('export async function reverseRefund'));
+    const replay = body.indexOf("idempotencyReplay(db, 'REFUND_CONFIRM'");
+    const transactionStart = body.indexOf('transaction(db, () => {');
+    assert.ok(replay > 0, 'canonical replay lookup must be present');
+    assert.ok(transactionStart > replay, 'a fresh request must enter the transaction after replay lookup');
+    const betweenReplayAndTransaction = body.slice(replay, transactionStart);
+    assert.ok(!betweenReplayAndTransaction.includes('throw new HttpError'), 'no application rejection may strand the MySQL idempotency named lock before transaction()');
+    assert.ok(!betweenReplayAndTransaction.includes('unappliedBalanceSnapshot'), 'mutable capacity must not reject an exact committed replay');
+    // Anchor every monetary ordering assertion to the transaction body.
+    const tx = body.slice(body.indexOf('transaction(db, () => {'));
+    const lock = tx.indexOf('acquireParentBalanceLock(db, balance.id)');
+    const authority = tx.indexOf('const currentAvailable = unappliedBalanceSnapshot(db, balance.id).remainingCents');
+    const negative = tx.indexOf('FINANCIAL_REFUND_CAPACITY_NEGATIVE');
+    const exceed = tx.indexOf('amount > currentAvailable');
+    assert.ok(lock > 0, 'the canonical parent lock must be present');
+    assert.ok(authority > lock, 'capacity authority must be read after the canonical lock');
+    assert.ok(negative > authority, 'the negative-capacity check must follow the authority read');
+    assert.ok(exceed > negative, 'the capacity-exceeded check must follow the negative-capacity check');
+    const effects = {
+      voucher: tx.indexOf('generateVoucher(db'),
+      refundInsert: tx.indexOf('INSERT INTO financial_refunds'),
+      movement: tx.indexOf('recordSettlementMovement(db'),
+      idempotency: tx.indexOf("saveIdempotency(db, 'REFUND_CONFIRM'"),
+      auditWrite: tx.indexOf("audit(db, actor.id, 'CONFIRM', 'FINANCIAL_REFUND'"),
+    };
+    for (const [name, index] of Object.entries(effects)) {
+      assert.ok(index > exceed, `${name} must be written only after the authoritative capacity check`);
+    }
+    const authorityStatement = tx.slice(tx.indexOf('SELECT id,side,party_id,status FROM settlement_unapplied_balances'), tx.indexOf('const currentAvailable'));
+    assert.ok(!/FOR UPDATE|LOCK IN SHARE MODE|GET_LOCK|--/i.test(authorityStatement), 'the authority read must use portable SQL only');
   });
 });

@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDatabase } from '../db.js';
 import { resolveDatabaseConfig } from '../database/config.js';
+import { assertAuthorizedDisposableMySqlTarget, resetAuthorizedDisposableMySqlSchema } from './mysql-disposable-target.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const defaultRepoDb = resolve(repoRoot, 'data', 'erp.db');
@@ -72,15 +73,12 @@ export function createTempDb({
   label = 'db',
   filename,
   production = false,
+  mysqlLifecycle = null,
 } = {}) {
   if (process.env.ERP_TEST_DB_BACKEND === 'mysql') {
-    if (process.env.ERP_MYSQL_TEST_ALLOW_RESET !== 'true') {
-      throw new Error('MySQL integration tests require ERP_MYSQL_TEST_ALLOW_RESET=true');
-    }
     const config = resolveDatabaseConfig({ backend: 'mysql' });
-    if (!/(?:test|phase7[abc]|disposable)/i.test(config.database)) {
-      throw new Error(`Refusing MySQL test reset for non-test database: ${config.database}`);
-    }
+    if (mysqlLifecycle) mysqlLifecycle.beforeCreate(config);
+    else assertAuthorizedDisposableMySqlTarget(config);
     const previousSeed = process.env.ERP_SEED_DEMO;
     const previousNode = process.env.NODE_ENV;
     if (production) {
@@ -88,7 +86,10 @@ export function createTempDb({
       process.env.ERP_SEED_DEMO = 'false';
     }
     let db;
-    try { db = createDatabase(config); }
+    try {
+      db = createDatabase(config);
+      if (mysqlLifecycle) mysqlLifecycle.verify(db, config);
+    }
     finally {
       if (production) {
         if (previousSeed === undefined) delete process.env.ERP_SEED_DEMO; else process.env.ERP_SEED_DEMO = previousSeed;
@@ -102,14 +103,10 @@ export function createTempDb({
       cleanup() {
         if (closed) return;
         try {
-          db.exec('SET FOREIGN_KEY_CHECKS=0');
-          for (const row of db.prepare('SHOW TABLES').all()) {
-            const table = Object.values(row)[0];
-            if (!/^[a-zA-Z0-9_]+$/.test(table)) throw new Error(`Unsafe MySQL table name: ${table}`);
-            db.exec(`DROP TABLE \`${table}\``);
-          }
-          db.exec('SET FOREIGN_KEY_CHECKS=1');
-        } finally { db.close(); closed = true; }
+          if (mysqlLifecycle) mysqlLifecycle.reset(db, config);
+          else resetAuthorizedDisposableMySqlSchema(db, config);
+        }
+        finally { db.close(); closed = true; }
       },
     };
   }

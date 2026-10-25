@@ -17,6 +17,10 @@ const styles = readFileSync(join(repoRoot, 'src/styles/v16-sales-deliveries.css'
 const main = readFileSync(join(repoRoot, 'src/main.jsx'), 'utf8');
 const app = readFileSync(join(repoRoot, 'src/App.jsx'), 'utf8');
 const serverApp = readFileSync(join(repoRoot, 'server/app.js'), 'utf8');
+const confirmSalesDeliverySource = serverApp.slice(
+  serverApp.indexOf('export async function confirmSalesDelivery('),
+  serverApp.indexOf('function listSalesReturns('),
+);
 
 function section(start, end) {
   const from = source.indexOf(start);
@@ -227,7 +231,7 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     // Finance Operations Domain Closure added finance-invoices + finance-treasury,
     // raising the canonical active count from 59 to 61. Wave 7 added
     // sales-prepayment-gates + sales-reservation-intents, raising it to 67.
-    assert.equal(ROUTE_PRESENTATIONS.length, 70, 'canonical routes plus Wave 9 must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 72, 'canonical routes plus Wave 10 must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesDeliveryRoute = enabledByRoute.get('sales-deliveries');
@@ -259,8 +263,8 @@ describe('V1.6.2 Phase 1 sales-delivery presentation contract', () => {
     // Frontend primary may surface 确认出库, but the server still owns quality gate.
     assert.match(detail, /submittable[\s\S]{0,200}primary = \{ kind: 'confirm'/);
     assert.match(
-      serverApp,
-      /if \(action === 'confirm'\)[\s\S]{0,2000}assertQualityGate\(db, ['"]OQC['"], deliveryId\)/,
+      confirmSalesDeliverySource,
+      /if \(action === 'confirm'\)[\s\S]+assertQualityGate\(db, ['"]OQC['"], deliveryId\)/,
     );
   });
 });

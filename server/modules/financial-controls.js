@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { transaction } from '../db.js';
+import { releaseMySqlIdempotencyLocks, transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { allow, allowAny, HttpError, readJson, send } from '../lib/http.js';
 import { openItemSnapshot, refreshOpenItem, unappliedBalanceSnapshot } from './settlement-core.js';
@@ -43,15 +43,16 @@ export function idempotencyReplay(db, operationType, documentId, key, fingerprin
   try {
     row = db.prepare('SELECT * FROM idempotency_records WHERE operation_type=? AND document_id=? AND idempotency_key=?').get(operationType, documentId, key);
   } catch (error) {
-    if (db?.dialect === 'mysql') {
-      try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } finally { db._idempotencyLocks.delete(lockName); }
-    }
+    // The shared release contract (§37.31 R4) verifies the result and retires
+    // the connection when the release cannot be verified. The original lookup
+    // exception stays the primary failure.
+    if (db?.dialect === 'mysql') releaseMySqlIdempotencyLocks(db, { lockNames: [lockName] });
     throw error;
   }
   if (!row) return null;
-  if (db?.dialect === 'mysql') {
-    try { db.prepare('SELECT RELEASE_LOCK(?) released').get(lockName); } finally { db._idempotencyLocks.delete(lockName); }
-  }
+  // A replay hit releases the lock through the same verified contract. The
+  // exact-replay 200 and the fingerprint-conflict 409 are unchanged.
+  if (db?.dialect === 'mysql') releaseMySqlIdempotencyLocks(db, { lockNames: [lockName] });
   if (row.request_fingerprint !== fingerprint) throw new HttpError(409, '同一幂等键不能用于不同请求内容');
   return JSON.parse(row.result_json);
 }
@@ -191,8 +192,7 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
   if (!['CUSTOMER', 'SUPPLIER'].includes(side)) throw new HttpError(400, '退款方向不正确');
   const balance = loadBalance(db, body.balanceId, body.creditId);
   if (balance.side !== side || balance.party_id !== body.partyId) throw new HttpError(409, '退款来源与往来单位不匹配');
-  const amount = cents(body.amountCents); const available = unappliedBalanceSnapshot(db, balance.id).remainingCents;
-  if (amount > available) throw new HttpError(409, '退款金额超过可退款余额');
+  const amount = cents(body.amountCents);
   const method = String(body.paymentMethod || 'BANK').toUpperCase(); const account = requireSettlementAccount(db, method, body.settlementAccountId);
   const reason = String(body.reason || '').trim(); if (!reason) throw new HttpError(400, '请填写退款原因');
   const businessDate = date(body.businessDate); const id = randomUUID(); const refundNo = number(side === 'CUSTOMER' ? 'CREF' : 'SREF');
@@ -203,6 +203,20 @@ export async function createRefund(db, req, res, actor, generateVoucher) {
     // R-SAL-15 bounded extension: serialize on the canonical V22 PREPAYMENT parent
     // balance lock when this refund reduces a PREPAYMENT-eligible balance.
     acquireParentBalanceLock(db, balance.id);
+    // §37.6: the canonical balance row is now locked, so identity and capacity are
+    // re-read under that lock and the post-lock value is the only monetary authority
+    // for this confirmation. Exact committed replay was resolved before entering the
+    // transaction, while a fresh request reaches this transaction immediately after
+    // idempotencyReplay so its MySQL named lock is released by transaction().
+    const lockedBalance = db.prepare('SELECT id,side,party_id,status FROM settlement_unapplied_balances WHERE id=?').get(balance.id);
+    if (!lockedBalance) throw new HttpError(409, `结算余额不存在: ${balance.id}`);
+    if (lockedBalance.status !== 'OPEN') throw new HttpError(409, `结算余额已关闭: ${balance.id}`, { code: 'FINANCIAL_REFUND_BALANCE_NOT_OPEN' });
+    if (lockedBalance.side !== side || lockedBalance.party_id !== body.partyId) throw new HttpError(409, '退款来源与往来单位不匹配');
+    const currentAvailable = unappliedBalanceSnapshot(db, balance.id).remainingCents;
+    // A negative remaining balance means an earlier over-refund already exists. Surface
+    // it; never absorb or self-heal it here.
+    if (currentAvailable < 0) throw new HttpError(409, '未核销余额剩余金额为负，账务已被超额退款，请先核对', { code: 'FINANCIAL_REFUND_CAPACITY_NEGATIVE' });
+    if (amount > currentAvailable) throw new HttpError(409, '退款金额超过可退款余额', { code: 'FINANCIAL_REFUND_CAPACITY_EXCEEDED' });
     const controlCode = side === 'CUSTOMER' ? '1122' : '2202';
     const subjects = db.prepare('SELECT id,code FROM accounting_subjects WHERE active=1 AND code IN (?,?)').all(account.subjectCode, controlCode);
     const map = Object.fromEntries(subjects.map((s) => [s.code, s.id]));
