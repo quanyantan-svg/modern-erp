@@ -28,7 +28,10 @@ const INDEXES = Object.freeze([
 
 // Table-level uniqueness that the design fixes by name. SQLite stores these as
 // auto-indexes, so the assertions compare column sets rather than index names.
-const UNIQUE_CONSTRAINTS = Object.freeze([
+// The approved constraint identity is exported because the cross-dialect
+// comparison uses it to decide which table-level UNIQUE constraint may carry a
+// backend-generated name.
+export const UNIQUE_CONSTRAINTS = Object.freeze([
   { table: 'credit_check_results', name: 'uq_credit_check_results_group_scope', columns: ['check_group_id', 'scope_type'] },
   { table: 'credit_special_approval', name: 'uq_credit_special_approval_source', columns: ['source_credit_check_result_id'] },
 ]);

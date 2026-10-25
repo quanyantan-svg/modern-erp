@@ -7,6 +7,9 @@ import {
   wave10BusinessDate, wave10DeliveryRequest, wave10ProjectionDelta, wave10SalesCommitment,
   withWave10Race,
 } from './test-utils/wave10-mysql-acceptance-fixture.js';
+import {
+  assertObservedExposure, readCreditExposureCents,
+} from './test-utils/wave10-credit-result.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD', 'ERP_MYSQL_WAVE10_CAMPAIGN_LEASE'];
 for (const name of required) if (!process.env[name]) throw new Error(`MYSQL TEST ENVIRONMENT = UNAVAILABLE (${name} missing)`);
@@ -290,10 +293,19 @@ test('M-R03 / R-SAL-14 — invoice posting versus Credit evaluation observes exa
     assert.ok(waits.length >= 2, 'both contenders must be observably pending at the L0 coordination boundary');
     assert.ok(outcomes.every(success), JSON.stringify(outcomes));
     const newExposure = readAuthoritativeCapacity(db, { deltaA: 0, deltaB: 0 }).exposureCents;
-    const row = db.prepare("SELECT exposure_cents FROM credit_check_results WHERE scope_type='CUSTOMER_AGGREGATE' ORDER BY evaluated_at DESC LIMIT 1").get();
-    assert.ok(row, 'the credit check must have written its aggregate scope row');
-    assert.ok([oldExposure, newExposure].includes(Number(row.exposure_cents)),
-      `the check must observe exactly the OLD or the NEW canonical exposure (${row.exposure_cents} vs ${oldExposure}/${newExposure})`);
+    // The observed exposure is read from the persisted breakdown of the very
+    // check group this race produced. `credit_check_results` has no
+    // `exposure_cents` column: the production writer stores the observed
+    // exposure inside `component_breakdown_json`. Correlating by the returned
+    // check group — never by the newest row — keeps the comparison on this
+    // decision's own evidence.
+    const evaluated = outcomes.filter((row) => row.outcome?.checkGroupId);
+    assert.equal(evaluated.length, 1, `exactly one contender must return a credit check group: ${JSON.stringify(outcomes)}`);
+    const checkGroupId = evaluated[0].outcome.checkGroupId;
+    const observed = readCreditExposureCents(db, checkGroupId, 'CUSTOMER_AGGREGATE');
+    assert.equal(observed.checkGroupId, checkGroupId);
+    assert.equal(observed.scopeType, 'CUSTOMER_AGGREGATE');
+    assertObservedExposure(observed.exposureCents, [oldExposure, newExposure], 'M-R03 the credit check');
     // The final stage is counted once: the same obligation may not appear in
     // the SO commitment stage and the AR stage at the same time.
     const components = readAuthoritativeCapacity(db, { deltaA: 0, deltaB: 0 }).components;

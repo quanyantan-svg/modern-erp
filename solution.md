@@ -27335,3 +27335,168 @@ result or M-board is claimed.
 **Remediation status: `WAVE10_MYSQL_ACCEPTANCE_BLOCKER_LOCAL_REMEDIATION_PASS`.**
 **Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
 `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`.**
+
+## 37.44 Wave 10 independent review P1 correction (2026-10-25)
+
+### 37.44.0 Authorization and boundary
+
+An independent code review of the pushed remediation commit `73d1c35` raised two P1 findings in the
+Wave 10 acceptance infrastructure. The user authorized a bounded correction of exactly those two
+findings, the local regression, the documentation synchronization, one ordinary fix commit and a
+non-forced fast-forward push of the same recovery branch to `github` and `origin`.
+
+No real MySQL connection, no Gate A, no Gate B, no Wave 10 Acceptance, no migration, reset or
+cleanup was authorized or performed. The frozen contracts are unchanged: the Gate A contract and
+runner, the Wave 9 business semantics and frozen Schema, the L0 transaction gate and the L1–L8 lock
+order, the Finance monetary authority, the Credit Profile status fence, the idempotency contract,
+the MySQL `READ COMMITTED` session isolation, the SQLite behavior, the seven Gate B cases with their
+owners, typed markers and evidence levels, and the Wave 11 / Wave 12 scope boundaries. No business
+Requirement changed, so `document.md` is deliberately untouched. No new business table, Schema or
+acceptance semantic was introduced.
+
+### 37.44.1 REVIEW-P1-01 — M-R03 read a column that does not exist
+
+**Finding.** `server/mysql-sales-customer-wave10-concurrency.integration.js` read
+`credit_check_results.exposure_cents`. The Wave 10 migration
+(`server/migrations/sales-customer-wave10-credit-check.js`) declares twenty columns for that table
+and `exposure_cents` is not one of them, so the M-R03 assertion could never have reached its
+comparison: the query fails with `ER_BAD_FIELD_ERROR` / `no such column: exposure_cents`. The
+production writer stores the observed exposure inside `component_breakdown_json`
+(`server/modules/credit-check.js:922-931`, under the approved contract version
+`CREDIT_EXPOSURE_BREAKDOWN_WAVE10_V1`), which is where the fact actually lives.
+
+The same assertion also selected its row with `ORDER BY evaluated_at DESC LIMIT 1`, i.e. the newest
+row of any check, instead of the row of the check this race produced. The newest row belongs to
+another decision, so even a repaired column could have compared one decision's exposure with
+another decision's expectation.
+
+**Bounded audit of the same defect class.** Every SQL literal of the Wave 10 acceptance suites —
+`server/mysql-sales-customer-wave10-concurrency.integration.js` (M-R01..M-R12),
+`server/mysql-sales-customer-wave10.integration.js` (M-MIG),
+`server/mysql-sales-customer-wave10-business-matrix.integration.js` (M-BIZ),
+`server/mysql-sales-customer-wave10-gate-b.integration.js` (Gate B) and
+`server/test-utils/wave10-mysql-acceptance-fixture.js` — was resolved against the canonical SQLite
+schema and every `SELECT`, `INSERT INTO (...)` and `UPDATE ... SET` column reference was checked.
+The result is exactly one instance: the M-R03 `exposure_cents` access. No other fictional column
+access exists, so no other bounded repair was made.
+
+**Correction.** The observed exposure is now read from the persisted breakdown of the very check
+group the production evaluation returned:
+
+- `server/test-utils/wave10-credit-result.js` (new, engine neutral and dependency free) owns the
+  read path: `W10_EXPOSURE_BREAKDOWN_CONTRACT`, `selectCreditExposureRow()` — the correlation by
+  check group and scope, which rejects a missing and an ambiguous row —
+  `parseCreditExposureCents()` — the approved contract version and a legal cents amount, where a
+  missing field, a wrong contract version, a non-integer amount and an unreadable document are
+  defects and never a silent zero — `readCreditExposureCents()` and `assertObservedExposure()`.
+- M-R03 correlates the rows with the `checkGroupId` the Credit evaluation returned, selects the
+  `CUSTOMER_AGGREGATE` scope row of that check group, and asserts the observed amount is exactly
+  the OLD or exactly the NEW canonical exposure. The two production business actions, the
+  concurrent observation and the exposure-conservation assertions are unchanged, and the exposure
+  comparison itself was not weakened or removed.
+
+**Deterministic evidence without MySQL.** `server/sales-customer-wave10-credit-check.test.js` runs
+the real production `evaluateCredit()` on SQLite and proves that the persisted document and the
+assertion read path describe the same fact: the persisted `component_breakdown_json` yields the
+same amount the production `computeCreditExposure()` projection reports for that scope, the
+database read returns the same amount, and a wrong check group and a wrong amount are both
+detected. Pointing the read path back at the fictional column reproduces the original defect
+exactly — `no such column: exposure_cents` — which is how the test is proven to detect it.
+
+### 37.44.2 REVIEW-P1-02 — the index parity contract
+
+**Finding.** The index comparison in `server/test-utils/wave10-mysql-schema-fixture.js` had two
+defects.
+
+1. `comparableIndexes()` dropped an index when its name looked server-generated and its first
+   column was a foreign-key column, without distinguishing UNIQUE from non-UNIQUE. A UNIQUE index
+   on a foreign-key column is a uniqueness constraint with business semantics, and dropping it
+   from both sides silently removed that constraint from the comparison.
+2. `assertIndexParity()` applied the name contract only when neither side's name looked
+   server-generated. A declared index that was renamed to a name equal to its first column —
+   `ix_credit_check_results_stage_date` renamed to `stage` — therefore escaped the name contract
+   entirely, and the renamed index was accepted.
+
+**Correction.** The new contract is explicit and bounded:
+
+- A server-generated foreign-key support index may be ignored only when it is **provably** all of:
+  **non-unique**, a **single-column** index on a column that is a **compared foreign key** of that
+  table, and **named after that column** the way MySQL names it. Its presence is derived from the
+  foreign-key set, which is compared separately, so InnoDB's index-reuse choice is not a schema
+  difference. A UNIQUE index is never ignored, and an index with additional business semantics
+  keeps its name contract.
+- The **two approved Wave 10 table-level UNIQUE constraints** are matched by their explicit
+  constraint identity plus the ordered unique column set. The identity is the approved constraint
+  name exported by the canonical migration
+  (`UNIQUE_CONSTRAINTS` in `server/migrations/sales-customer-wave10-credit-check.js`), so no name is
+  hard-coded in the comparison and the rule is bounded to those two constraints.
+- **Every other declared index keeps its name contract.** The fact that an actual name happens to
+  equal its first column never excuses a rename, and the rule is not generalized into "MySQL index
+  names do not matter".
+- Strict detection is retained for uniqueness, column order, a missing index, a duplicated index
+  and an extra index.
+- The SQLite side now surfaces a table-level UNIQUE constraint under its approved constraint
+  identity instead of dropping it with the unnamed auto-index, so the declared uniqueness is never
+  missing from the comparison.
+
+`compareWave9SourceTarget()` and `assertEquivalentCreditMetadata()` both call the same
+`assertIndexParity()`, so the two comparison paths use one identical and strict index contract. The
+Wave 9 frozen index contract is untouched: its declared indexes keep their names on both sides.
+
+### 37.44.3 Local verification evidence
+
+The changed files are `server/migrations/sales-customer-wave10-credit-check.js`,
+`server/test-utils/wave10-mysql-schema-fixture.js`,
+`server/test-utils/wave10-credit-result.js` (new),
+`server/test-utils/wave10-mysql-acceptance-fixture.js`,
+`server/mysql-sales-customer-wave10-concurrency.integration.js`,
+`server/sales-customer-wave10-mysql-parity.test.js` and
+`server/sales-customer-wave10-credit-check.test.js`.
+
+Every local command ran with `ERP_DB_*`, `ERP_MYSQL_*`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`,
+`ERP_MYSQL_TEST_*`, `ERP_TEST_DB_BACKEND` and `ERP_SEED_DEMO` removed from the child environment,
+so no local command could open a MySQL connection or a destructive gate. The execution graph was
+inspected first: no real-MySQL suite is registered in FAST, FULL or HEAVY, and the HEAVY manifest
+was re-confirmed to contain no real MySQL path — its only MySQL-named suite drives the in-process
+fake worker `server/database/test-fixtures/delayed-mysql-worker.js`.
+
+```text
+node --check (every changed and new file)                     PASS
+focused (parity + Wave 10 credit check + Wave 9 + Wave 8
+  + Wave 10 runners + Finance invoice/recognition)   223/223 PASS
+pnpm.cmd test:fast                                           447/447 PASS
+pnpm.cmd test                                                2874/2874 PASS
+pnpm.cmd test:heavy                                            67/67 PASS
+pnpm.cmd build                                                PASS
+git diff --check                                             PASS
+```
+
+The new negative cases were proven to fail against the pre-review implementation: with the old
+filter and the old name rule restored, the three REVIEW-P1-02 cases that describe the defects fail
+and the remaining cases keep passing; with the correction in place all of them pass. The
+REVIEW-P1-01 end-to-end case was proven the same way.
+
+### 37.44.4 Not executed and still pending
+
+```text
+MySQL connection, query, reset, DDL, DML, migration, cleanup   NOT_RUN
+Gate A                                                           FROZEN, NOT_RERUN
+Gate B                                                           NOT_RUN
+Wave 10 Acceptance campaign                                     NOT_RUN
+M-R01..M-R12 real-session results                               TEST_EVIDENCE_PENDING
+M-MIG-01..M-MIG-08 real-server metadata evidence                TEST_EVIDENCE_PENDING
+M-BIZ-01..M-BIZ-20                                              NOT_RUN
+Gate B seven typed markers and the M-board                      NOT_GENERATED
+LEGACY_DATA_EVIDENCE_PENDING                                    OPEN
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN             OPEN
+Wave 10 user Acceptance and Freeze                              OPEN
+Wave 11 / Wave 12                                               NOT_STARTED
+```
+
+The correction proves the assertion read path and the index comparator, on SQLite and on pure
+parsed data. It does not substitute for the real MySQL evidence, and no Wave 10 Acceptance, Gate B
+result or M-board is claimed.
+
+**Status: `WAVE10_INDEPENDENT_REVIEW_P1_LOCAL_FIXED`.**
+**Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`.**

@@ -24,6 +24,10 @@ import {
 import {
   assertIndexParity, extractCheckClauses, isBackendGeneratedIndexName, normalizeCheckClause,
 } from './test-utils/wave10-mysql-schema-fixture.js';
+import {
+  assertObservedExposure, parseCreditExposureCents, selectCreditExposureRow,
+  W10_EXPOSURE_BREAKDOWN_CONTRACT,
+} from './test-utils/wave10-credit-result.js';
 
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
@@ -251,6 +255,183 @@ test('a foreign key supporting index is derived from the compared foreign-key se
     foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
     indexes: [
       { name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] },
+      { name: 'credit_profile_id', unique: false, columns: ['credit_profile_id'] },
+    ],
+  };
+  assert.doesNotThrow(() => assertIndexParity(expected, actual, 'index parity'));
+});
+
+// ---------------------------------------------------------------------------
+// REVIEW-P1-01 — the persisted exposure breakdown and the assertion read path
+//
+// `credit_check_results` has no `exposure_cents` column. The production
+// writer stores the observed exposure inside `component_breakdown_json`, so
+// the assertion must read that document of one exact check group.
+// ---------------------------------------------------------------------------
+
+test('the persisted exposure breakdown yields the observed exposure', () => {
+  const breakdown = JSON.stringify({
+    contractVersion: W10_EXPOSURE_BREAKDOWN_CONTRACT,
+    exposureCents: 100000,
+    availableCents: 900000,
+    proposedTotalCents: 100000,
+    overLimitCents: 0,
+    creditLimitCents: 1000000,
+    components: { approvedSoCommitmentCents: 100000, deliveredNotSettledCents: 0, arOpenCents: 0, eligiblePrepaymentCents: 0 },
+    exposureDigest: 'digest',
+    consumedSpecialApprovalId: null,
+  });
+  assert.equal(parseCreditExposureCents(breakdown), 100000);
+});
+
+test('the persisted exposure breakdown rejects a missing field, a wrong contract and a wrong amount', () => {
+  assert.throws(
+    () => parseCreditExposureCents(JSON.stringify({ contractVersion: W10_EXPOSURE_BREAKDOWN_CONTRACT })),
+    /WAVE10_CREDIT_EXPOSURE_CENTS_INVALID/,
+  );
+  assert.throws(
+    () => parseCreditExposureCents(JSON.stringify({ contractVersion: 'SOMETHING_ELSE', exposureCents: 1 })),
+    /WAVE10_CREDIT_EXPOSURE_BREAKDOWN_CONTRACT/,
+  );
+  assert.throws(
+    () => parseCreditExposureCents(JSON.stringify({ contractVersion: W10_EXPOSURE_BREAKDOWN_CONTRACT, exposureCents: 1.5 })),
+    /WAVE10_CREDIT_EXPOSURE_CENTS_INVALID/,
+  );
+  assert.throws(
+    () => parseCreditExposureCents(JSON.stringify({ contractVersion: W10_EXPOSURE_BREAKDOWN_CONTRACT, exposureCents: '100' })),
+    /WAVE10_CREDIT_EXPOSURE_CENTS_INVALID/,
+  );
+  assert.throws(() => parseCreditExposureCents('not json'), /WAVE10_CREDIT_EXPOSURE_BREAKDOWN_UNREADABLE/);
+  assert.throws(() => parseCreditExposureCents(null), /WAVE10_CREDIT_EXPOSURE_BREAKDOWN_UNREADABLE/);
+});
+
+test('the exposure row is correlated by check group and scope, never by recency', () => {
+  const rows = [
+    { check_group_id: 'group-a', scope_type: 'CUSTOMER_AGGREGATE', component_breakdown_json: '{}' },
+    { check_group_id: 'group-a', scope_type: 'SALESPERSON_SUB_LIMIT', component_breakdown_json: '{}' },
+    { check_group_id: 'group-b', scope_type: 'CUSTOMER_AGGREGATE', component_breakdown_json: '{}' },
+  ];
+  assert.equal(selectCreditExposureRow(rows, 'group-a', 'CUSTOMER_AGGREGATE').check_group_id, 'group-a');
+  // A different check group is not the row of this decision.
+  assert.throws(() => selectCreditExposureRow(rows, 'group-c', 'CUSTOMER_AGGREGATE'), /WAVE10_CREDIT_EXPOSURE_ROW_MISSING/);
+  // A different scope is not the row of this scope.
+  assert.throws(() => selectCreditExposureRow(rows, 'group-a', 'OTHER_SCOPE'), /WAVE10_CREDIT_EXPOSURE_ROW_MISSING/);
+  // A duplicated scope row is ambiguous and is never silently resolved.
+  assert.throws(
+    () => selectCreditExposureRow([...rows, rows[0]], 'group-a', 'CUSTOMER_AGGREGATE'),
+    /WAVE10_CREDIT_EXPOSURE_ROW_AMBIGUOUS/,
+  );
+});
+
+test('the observed exposure must be exactly the OLD or the NEW canonical exposure', () => {
+  assert.equal(assertObservedExposure(100000, [100000, 200000]), 100000);
+  assert.equal(assertObservedExposure(200000, [100000, 200000]), 200000);
+  assert.throws(() => assertObservedExposure(150000, [100000, 200000]), /exactly the OLD or the NEW canonical exposure/);
+  assert.throws(() => assertObservedExposure(0, [100000, 200000]), /exactly the OLD or the NEW canonical exposure/);
+  assert.throws(() => assertObservedExposure(1.5, [100000, 200000]), /legal cents amount/);
+});
+
+// ---------------------------------------------------------------------------
+// REVIEW-P1-02 — the index contract
+// ---------------------------------------------------------------------------
+
+test('a UNIQUE index is never filtered out by the foreign-key support rule', () => {
+  // A UNIQUE index on a foreign-key column carries business semantics: it is
+  // a uniqueness constraint, not a redundant support index. It must stay in
+  // the comparison even though its name equals its first column.
+  const expected = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [{ name: 'credit_profile_id', unique: true, columns: ['credit_profile_id'] }],
+  };
+  const actual = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [],
+  };
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'), /index shape parity/);
+});
+
+test('a declared index renamed to its first column name must fail', () => {
+  const expected = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: 'ix_credit_check_results_stage_date', unique: false, columns: ['stage', 'business_date'] }],
+  };
+  const actual = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: 'stage', unique: false, columns: ['stage', 'business_date'] }],
+  };
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'), /must keep its name/);
+});
+
+test('a declared UNIQUE index renamed to its first column name must fail', () => {
+  // A UNIQUE index that is not one of the two approved Wave 10 table-level
+  // constraints keeps its name contract, even when the new name happens to
+  // equal the first column.
+  const expected = {
+    name: 'credit_check_rules', foreignKeys: [],
+    indexes: [{ name: 'uq_credit_check_rules_version', unique: true, columns: ['rule_code', 'effective_from'] }],
+  };
+  const actual = {
+    name: 'credit_check_rules', foreignKeys: [],
+    indexes: [{ name: 'rule_code', unique: true, columns: ['rule_code', 'effective_from'] }],
+  };
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'), /must keep its name/);
+});
+
+test('the approved Wave 10 table-level UNIQUE may carry a backend-generated name', () => {
+  const expected = {
+    name: 'credit_special_approval', foreignKeys: [],
+    indexes: [{ name: 'uq_credit_special_approval_source', unique: true, columns: ['source_credit_check_result_id'] }],
+  };
+  const actual = {
+    name: 'credit_special_approval', foreignKeys: [],
+    indexes: [{ name: 'source_credit_check_result_id', unique: true, columns: ['source_credit_check_result_id'] }],
+  };
+  assert.doesNotThrow(() => assertIndexParity(expected, actual, 'index parity'));
+});
+
+test('an extra index that is not allowed must fail', () => {
+  const expected = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] }],
+  };
+  const actual = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      { name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] },
+      { name: 'ix_credit_check_results_extra', unique: false, columns: ['evaluated_at'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'), /index shape parity/);
+});
+
+test('a duplicated index must fail', () => {
+  const expected = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: 'ix_credit_check_results_group', unique: false, columns: ['check_group_id'] }],
+  };
+  const actual = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      { name: 'ix_credit_check_results_group', unique: false, columns: ['check_group_id'] },
+      { name: 'ix_credit_check_results_group_2', unique: false, columns: ['check_group_id'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'), /index shape parity/);
+});
+
+test('a non-unique foreign-key support index may differ between the backends', () => {
+  const expected = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [{ name: 'ix_credit_check_results_group', unique: false, columns: ['check_group_id'] }],
+  };
+  const actual = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [
+      { name: 'ix_credit_check_results_group', unique: false, columns: ['check_group_id'] },
       { name: 'credit_profile_id', unique: false, columns: ['credit_profile_id'] },
     ],
   };

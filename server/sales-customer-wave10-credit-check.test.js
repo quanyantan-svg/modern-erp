@@ -34,6 +34,10 @@ import {
   decideCreditSpecialApproval,
   requestCreditSpecialApproval,
 } from './modules/credit-special-approval.js';
+import {
+  assertObservedExposure, parseCreditExposureCents, readCreditExposureCents,
+  selectCreditExposureRow,
+} from './test-utils/wave10-credit-result.js';
 import { salesOrderAction } from './modules/sales-orders.js';
 
 const DAY = '2026-10-24';
@@ -1275,5 +1279,62 @@ test('§36.4 — the credit object is resolved from the effective profiles', () 
     seedBase(handle.db);
     const fallback = resolveCustomerCreditObject(handle.db, { customerId: 'cus-w10', businessDate: DAY });
     assert.deepEqual(fallback, { creditObjectType: 'CUSTOMER', creditObjectId: 'cus-w10' });
+  } finally { handle.cleanup(); }
+});
+
+// ---------------------------------------------------------------------------
+// REVIEW-P1-01 — the persisted exposure breakdown and the assertion read path
+//
+// `credit_check_results` has no `exposure_cents` column. The production
+// writer stores the observed exposure inside `component_breakdown_json`, so
+// the assertion must read that document of one exact check group. This test
+// runs the real production writer on SQLite and proves that the persisted
+// document and the assertion read path describe the same fact.
+// ---------------------------------------------------------------------------
+
+test('REVIEW-P1-01 — the persisted exposure breakdown carries the exposure the assertion reads', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    seedParameter(handle.db, 'CREDIT_MANAGEMENT_ENABLED', true);
+    seedRule(handle.db, { businessStage: 'SO_SUBMIT', controlStrength: 'BLOCK' });
+    await seedProfile(handle.db, { creditLimitCents: 1000000 });
+    // A committed approved order occupies the approved-commitment stage.
+    seedOrder(handle.db, { id: 'so-w10-exp', status: 'APPROVED', totalCents: 120000 });
+    const outcome = runCheck(handle.db, { proposedDeltaCents: 0 });
+    assert.equal(outcome.decision, 'PASS');
+
+    // The persisted row is found by the check group the production evaluation
+    // returned — never by the newest row.
+    const rows = handle.db.prepare(`SELECT check_group_id,scope_type,component_breakdown_json
+      FROM credit_check_results`).all();
+    const row = selectCreditExposureRow(rows, outcome.checkGroupId, 'CUSTOMER_AGGREGATE');
+    assert.equal(row.check_group_id, outcome.checkGroupId);
+    assert.equal(row.scope_type, 'CUSTOMER_AGGREGATE');
+
+    // The persisted breakdown holds the observed exposure, and it is the very
+    // amount the production exposure projection reports for that scope.
+    const persisted = parseCreditExposureCents(row.component_breakdown_json);
+    const exposure = computeCreditExposure(handle.db, { customerId: 'cus-w10', businessDate: DAY });
+    const components = exposure.aggregateComponents;
+    const projected = Number(components.approvedSoCommitmentCents || 0)
+      + Number(components.deliveredNotSettledCents || 0)
+      + Number(components.arOpenCents || 0)
+      - Number(components.eligiblePrepaymentCents || 0);
+    assert.equal(persisted, projected, 'the persisted exposure must equal the production exposure projection');
+    assert.equal(persisted, 120000, 'the committed approved commitment is the observed exposure');
+
+    // The same read path through the database returns the same fact, and the
+    // assertion accepts it against the authoritative OLD/NEW exposures.
+    const observed = readCreditExposureCents(handle.db, outcome.checkGroupId, 'CUSTOMER_AGGREGATE');
+    assert.equal(observed.exposureCents, persisted);
+    assertObservedExposure(observed.exposureCents, [120000, 120000], 'the persisted exposure');
+
+    // A wrong check group and a wrong amount are both detected.
+    assert.throws(
+      () => selectCreditExposureRow(rows, 'group-that-does-not-exist', 'CUSTOMER_AGGREGATE'),
+      /WAVE10_CREDIT_EXPOSURE_ROW_MISSING/,
+    );
+    assert.throws(() => assertObservedExposure(observed.exposureCents + 1, [120000, 120000]), /exactly the OLD or the NEW/);
   } finally { handle.cleanup(); }
 });
