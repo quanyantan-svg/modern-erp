@@ -27448,10 +27448,10 @@ Wave 9 frozen index contract is untouched: its declared indexes keep their names
 The changed files are `server/migrations/sales-customer-wave10-credit-check.js`,
 `server/test-utils/wave10-mysql-schema-fixture.js`,
 `server/test-utils/wave10-credit-result.js` (new),
-`server/test-utils/wave10-mysql-acceptance-fixture.js`,
 `server/mysql-sales-customer-wave10-concurrency.integration.js`,
-`server/sales-customer-wave10-mysql-parity.test.js` and
-`server/sales-customer-wave10-credit-check.test.js`.
+`server/sales-customer-wave10-mysql-parity.test.js`,
+`server/sales-customer-wave10-credit-check.test.js`, `solution.md` and
+`log/2026-10-25.md`.
 
 Every local command ran with `ERP_DB_*`, `ERP_MYSQL_*`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`,
 `ERP_MYSQL_TEST_*`, `ERP_TEST_DB_BACKEND` and `ERP_SEED_DEMO` removed from the child environment,
@@ -27500,3 +27500,145 @@ result or M-board is claimed.
 **Status: `WAVE10_INDEPENDENT_REVIEW_P1_LOCAL_FIXED`.**
 **Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
 `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`.**
+
+## 37.45 Wave 10 independent review follow-up — bounded index contract correction (2026-10-25)
+
+### 37.45.0 Authorization and boundary
+
+An independent code review of the pushed commit `6e596697` raised one further P1 finding about the
+Wave 10 acceptance infrastructure. The user authorized a bounded correction of exactly that
+finding, the local regression, the documentation synchronization, and **no** Git write operation:
+the proposed changes are left unstaged for external review.
+
+No real MySQL connection, no Gate A, no Gate B, no Wave 10 Acceptance, no migration, reset or
+cleanup was authorized or performed. The frozen contracts are unchanged: the Gate A contract and
+runner, the Wave 9 business semantics and frozen Schema, the Wave 9 and Wave 10 migrations, the
+production Credit business logic, the canonical database schema, the L0 transaction gate and the
+L1–L8 lock order, the Finance monetary authority, the Credit Profile status fence, the idempotency
+contract, the MySQL `READ COMMITTED` session isolation, the SQLite behavior, and the seven Gate B
+cases with their owners, typed markers and evidence levels. No business Requirement changed, so
+`document.md` and `README.md` are deliberately untouched. No Schema redesign was undertaken.
+
+### 37.45.1 REVIEW-FOLLOWUP-01 — the approved UNIQUE name exception was wider than its contract
+
+**Finding.** In `server/test-utils/wave10-mysql-schema-fixture.js`, `assertIndexParity()` skipped the
+name validation entirely for any UNIQUE index whose table and ordered columns matched an entry of
+the canonical `UNIQUE_CONSTRAINTS`. The exception therefore accepted an arbitrary, non-generated
+alias on either side of the comparison, not only the two legitimate cross-dialect name
+representations.
+
+**Reproduction.** With the canonical constraint
+`credit_check_results / uq_credit_check_results_group_scope / (check_group_id, scope_type)` on the
+expected side and `credit_check_results / unapproved_random_name / (check_group_id, scope_type)` on
+the actual side, `assertIndexParity()` raised nothing and the metadata was **accepted**. The same
+held with the arbitrary alias on the expected side. All four probe cases — canonical name, backend
+generated name, arbitrary actual alias and arbitrary expected alias — were accepted by the
+pre-correction implementation.
+
+**Root cause.** The approved exception and its enforcement were not separated. The lookup
+(`approvedUniqueConstraint()`) correctly identifies *which* constraint is exempt, but the enforcement
+only asked whether a constraint was exempt and never asked whether the presented name was one of
+the legitimate representations of that constraint.
+
+**Bounded correction.** The exemption is now bounded by the presented name, and the name rule is
+the one already approved for backend-generated index names:
+
+```text
+an approved table-level UNIQUE constraint may present EITHER
+  - its canonical migration-declared name, OR
+  - a demonstrably valid backend-generated name (the first column of the
+    constrained ordered column set, with the backend's numeric collision suffix)
+```
+
+Both sides are validated against that rule, because `assertEquivalentCreditMetadata()` compares two
+MySQL materialization paths rather than SQLite against MySQL, so either side may legitimately carry
+the backend-generated name. Every other explicitly named index continues to require exact name
+equality. The foreign-key supporting-index exception, the uniqueness flag, the column order, the
+missing, duplicated and extra index detection are all unchanged.
+
+The correction stays inside the approved Design. §37.39.8.2 retains "index uniqueness/order" as a
+comparison dimension, and the Wave 10 migration already states that the parity assertions compare
+the constrained column set for these table-level UNIQUE constraints because SQLite does not
+preserve a table-constraint name on its auto-index. The name difference that the exception exists
+for is therefore only the canonical name versus a backend-generated one; no approved Requirement or
+Design contract had to change, and no separate authorization is required.
+
+### 37.45.2 Deterministic evidence
+
+`server/sales-customer-wave10-mysql-parity.test.js` now carries the complete contract matrix:
+
+| Case | Expected | Result |
+|---|---|---|
+| Canonical approved UNIQUE name on both sides | PASS | PASS |
+| Approved backend-generated UNIQUE name, actual side | PASS | PASS |
+| Approved backend-generated UNIQUE name, expected side | PASS | PASS |
+| Arbitrary renamed approved UNIQUE, actual side | FAIL | FAIL |
+| Arbitrary renamed approved UNIQUE, expected side | FAIL | FAIL |
+| Arbitrary alias matching columns and uniqueness | FAIL | FAIL |
+| Backend collision suffix `check_group_id_2` | PASS | PASS |
+| Foreign-key supporting-index exception | PASS | PASS |
+| Explicitly named non-exempt UNIQUE renamed | FAIL | FAIL |
+| Missing / extra / duplicated / reordered / de-uniqued | FAIL | FAIL |
+
+The negative cases were proven against the pre-correction implementation: restoring the old rule
+drops the suite from 28/28 to 25/28, and exactly the three cases that describe the defect fail
+while every other case keeps passing. With the correction in place all 28 pass.
+
+The same correction applies to both comparison paths, because `compareWave9SourceTarget()` and
+`assertEquivalentCreditMetadata()` both call the single `assertIndexParity()`. The Wave 9 frozen
+index contract is untouched: its declared indexes are not exempt and keep their names on both
+sides.
+
+### 37.45.3 Corrected change inventory
+
+The §37.44.3 inventory overstated the changed files of commit `6e596697`: it listed
+`server/test-utils/wave10-mysql-acceptance-fixture.js`, which that commit did not change, and it
+omitted the two documentation files. The inventory now reads exactly the eight files of
+`6e596697`. No other historical record was rewritten.
+
+### 37.45.4 Local verification evidence
+
+The changed files are `server/test-utils/wave10-mysql-schema-fixture.js`,
+`server/sales-customer-wave10-mysql-parity.test.js`, `solution.md` and `log/2026-10-25.md`.
+
+Every local command ran with `ERP_DB_*`, `ERP_MYSQL_*`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`,
+`ERP_MYSQL_TEST_*`, `ERP_TEST_DB_BACKEND` and `ERP_SEED_DEMO` removed from the child environment.
+The execution graph was inspected first: no real-MySQL suite is registered in FAST, FULL or HEAVY,
+and the HEAVY manifest contains no real MySQL path — its only MySQL-named suite drives the
+in-process fake worker.
+
+```text
+node --check (every changed file)                             PASS
+node --test server/sales-customer-wave10-mysql-parity.test.js  28/28 PASS (0 skipped)
+pnpm.cmd test:fast                                           455/455 PASS (0 skipped)
+pnpm.cmd test                                                2882/2882 PASS (0 skipped)
+pnpm.cmd test:heavy                                          67/67 PASS (0 skipped)
+pnpm.cmd build                                                PASS
+git diff --check                                             PASS
+```
+
+### 37.45.5 Not executed and still pending
+
+```text
+MySQL connection, query, reset, DDL, DML, migration, cleanup   NOT_RUN
+Gate A                                                           FROZEN, NOT_RERUN
+Gate B                                                           NOT_RUN
+Wave 10 Acceptance campaign                                     NOT_RUN
+M-R01..M-R12 real-session results                               TEST_EVIDENCE_PENDING
+M-MIG-01..M-MIG-08 real-server metadata evidence                TEST_EVIDENCE_PENDING
+M-BIZ-01..M-BIZ-20                                              NOT_RUN
+Gate B seven typed markers and the M-board                      NOT_GENERATED
+LEGACY_DATA_EVIDENCE_PENDING                                    OPEN
+RECOGNITION_MODE_EXPLICIT_EXEMPTION_MODEL_GAP_OPEN             OPEN
+Wave 10 user Acceptance and Freeze                              OPEN
+Wave 11 / Wave 12                                               NOT_STARTED
+Git write                                                       NO_GIT_WRITE
+```
+
+The correction proves the index comparator on pure parsed data. It does not substitute for the
+real MySQL evidence, and no Wave 10 Acceptance, Gate B result or M-board is claimed.
+
+**Status: `WAVE10_REVIEW_FOLLOWUP_LOCAL_PASS`.**
+**Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
+`WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`;
+`NO_GIT_WRITE`.**

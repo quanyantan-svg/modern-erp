@@ -466,12 +466,25 @@ function indexShape(index) {
   return `${index.unique ? 'unique' : 'index'}:${index.columns.join(',')}`;
 }
 
+// The approved table-level UNIQUE constraint may present either its canonical
+// migration-declared name or a name the backend legitimately generates for it.
+// That second case is the only legitimate cross-dialect name difference:
+// SQLite stores the constraint on a nameless auto-index, and MySQL names an
+// unnamed UNIQUE key after its first column. An arbitrary alias is neither, so
+// it is rejected.
+function isApprovedUniqueRepresentation(constraint, index) {
+  return index.name === constraint.name
+    || isBackendGeneratedIndexName(index.name, index.columns);
+}
+
 // The index contract. Every index shape must exist on both sides with the
 // same uniqueness and the same ordered column set, and every declared index
-// must keep its name unless it is one of the approved Wave 10 table-level
-// UNIQUE constraints, whose identity is the approved constraint name. A
-// missing index, a different column order, a different uniqueness, a
-// duplicated index, an extra index or a renamed declared index all fail here.
+// must keep its name. The single exception is an approved Wave 10 table-level
+// UNIQUE constraint, whose identity is the approved constraint name and whose
+// two legitimate cross-dialect representations are the canonical name and a
+// backend-generated one; each side is validated against that rule. A missing
+// index, a different column order, a different uniqueness, a duplicated
+// index, an extra index or a renamed declared index all fail here.
 export function assertIndexParity(expected, actual, label) {
   const expectedIndexes = comparableIndexes(expected, expected.indexes);
   const actualIndexes = comparableIndexes(actual, actual.indexes);
@@ -490,8 +503,15 @@ export function assertIndexParity(expected, actual, label) {
     // A declared index keeps its name. Only an approved table-level UNIQUE
     // constraint may carry a backend-generated name, and the fact that an
     // actual name happens to equal its first column never excuses a rename.
-    const approved = Boolean(index.unique) && Boolean(approvedUniqueConstraint(expected.name, index.columns));
-    if (!approved) {
+    const constraint = index.unique ? approvedUniqueConstraint(expected.name, index.columns) : null;
+    if (constraint) {
+      // Both sides are validated, because the comparison may run between two
+      // MySQL materialization paths rather than between SQLite and MySQL.
+      assert.ok(isApprovedUniqueRepresentation(constraint, index),
+        `${label}: the approved UNIQUE constraint ${constraint.name} must keep its canonical name or a backend-generated name (expected: ${index.name})`);
+      assert.ok(isApprovedUniqueRepresentation(constraint, match),
+        `${label}: the approved UNIQUE constraint ${constraint.name} must keep its canonical name or a backend-generated name (actual: ${match.name})`);
+    } else {
       assert.equal(match.name, index.name,
         `${label}: explicitly named index ${index.name} must keep its name (actual: ${match.name})`);
     }

@@ -437,3 +437,155 @@ test('a non-unique foreign-key support index may differ between the backends', (
   };
   assert.doesNotThrow(() => assertIndexParity(expected, actual, 'index parity'));
 });
+
+// ---------------------------------------------------------------------------
+// REVIEW-FOLLOWUP-01 — the approved UNIQUE constraint name exception
+//
+// The exception is bounded to the two canonical Wave 10 table-level UNIQUE
+// constraints, and each side may present only one of their two legitimate
+// cross-dialect representations: the canonical migration-declared name or a
+// backend-generated name. An arbitrary alias is neither.
+// ---------------------------------------------------------------------------
+
+const APPROVED_UNIQUE = Object.freeze({
+  table: 'credit_check_results',
+  name: 'uq_credit_check_results_group_scope',
+  columns: Object.freeze(['check_group_id', 'scope_type']),
+});
+
+function uniqueTable(name, indexName) {
+  return {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: indexName, unique: true, columns: [...APPROVED_UNIQUE.columns] }],
+  };
+}
+
+test('REVIEW-FOLLOWUP-01 — the canonical approved UNIQUE name passes on both sides', () => {
+  const expected = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  const actual = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  assert.doesNotThrow(() => assertIndexParity(expected, actual, 'index parity'));
+});
+
+test('REVIEW-FOLLOWUP-01 — the approved backend-generated UNIQUE name passes in either direction', () => {
+  const canonical = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  const generated = uniqueTable('credit_check_results', 'check_group_id');
+  // The backend-generated name may sit on the actual side ...
+  assert.doesNotThrow(() => assertIndexParity(canonical, generated, 'index parity'));
+  // ... or on the expected side, which is the fresh-versus-upgrade direction
+  // of assertEquivalentCreditMetadata.
+  assert.doesNotThrow(() => assertIndexParity(generated, canonical, 'index parity'));
+});
+
+test('REVIEW-FOLLOWUP-01 — an arbitrary renamed approved UNIQUE on the actual side fails', () => {
+  const expected = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  const actual = uniqueTable('credit_check_results', 'unapproved_random_name');
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'),
+    /must keep its canonical name or a backend-generated name \(actual: unapproved_random_name\)/);
+});
+
+test('REVIEW-FOLLOWUP-01 — an arbitrary renamed approved UNIQUE on the expected side fails', () => {
+  const expected = uniqueTable('credit_check_results', 'unapproved_random_name');
+  const actual = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  assert.throws(() => assertIndexParity(expected, actual, 'index parity'),
+    /must keep its canonical name or a backend-generated name \(expected: unapproved_random_name\)/);
+});
+
+test('REVIEW-FOLLOWUP-01 — an arbitrary alias is rejected even when the columns and uniqueness match', () => {
+  // The identity of the constraint is the approved name, not the table, the
+  // uniqueness flag and the ordered column set alone.
+  const expected = uniqueTable('credit_check_results', 'uq_credit_check_results_group_scope');
+  for (const alias of ['unapproved_random_name', 'UQ_CREDIT_CHECK_RESULTS_GROUP_SCOPE_2', 'credit_check_results_group_scope', 'scope_type']) {
+    const actual = uniqueTable('credit_check_results', alias);
+    assert.throws(() => assertIndexParity(expected, actual, 'index parity'),
+      /must keep its canonical name or a backend-generated name/,
+      `the alias ${alias} must be rejected`);
+  }
+  // The backend's own collision suffix is a legitimate generated name and is
+  // therefore accepted.
+  const collided = uniqueTable('credit_check_results', 'check_group_id_2');
+  assert.doesNotThrow(() => assertIndexParity(expected, collided, 'index parity'));
+});
+
+test('REVIEW-FOLLOWUP-01 — the foreign-key supporting-index exception is unchanged', () => {
+  const expected = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [{ name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] }],
+  };
+  const actual = {
+    name: 'credit_check_results',
+    foreignKeys: [{ column: 'credit_profile_id', parentTable: 'credit_profile', parentColumn: 'id' }],
+    indexes: [
+      { name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] },
+      { name: 'credit_profile_id', unique: false, columns: ['credit_profile_id'] },
+    ],
+  };
+  assert.doesNotThrow(() => assertIndexParity(expected, actual, 'index parity'));
+});
+
+test('REVIEW-FOLLOWUP-01 — missing, extra, duplicated, reordered and de-uniqued indexes still fail', () => {
+  const base = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      { name: 'uq_credit_check_results_group_scope', unique: true, columns: ['check_group_id', 'scope_type'] },
+      { name: 'ix_credit_check_results_stage_date', unique: false, columns: ['stage', 'business_date'] },
+    ],
+  };
+  const withoutUnique = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [{ name: 'ix_credit_check_results_stage_date', unique: false, columns: ['stage', 'business_date'] }],
+  };
+  assert.throws(() => assertIndexParity(base, withoutUnique, 'index parity'), /index shape parity/);
+
+  const reordered = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      { name: 'uq_credit_check_results_group_scope', unique: true, columns: ['scope_type', 'check_group_id'] },
+      { name: 'ix_credit_check_results_stage_date', unique: false, columns: ['stage', 'business_date'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(base, reordered, 'index parity'), /index shape parity/);
+
+  const deUniqued = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      { name: 'uq_credit_check_results_group_scope', unique: false, columns: ['check_group_id', 'scope_type'] },
+      { name: 'ix_credit_check_results_stage_date', unique: false, columns: ['stage', 'business_date'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(base, deUniqued, 'index parity'), /index shape parity/);
+
+  const extra = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      ...base.indexes,
+      { name: 'ix_credit_check_results_extra', unique: false, columns: ['evaluated_at'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(base, extra, 'index parity'), /index shape parity/);
+
+  const duplicated = {
+    name: 'credit_check_results', foreignKeys: [],
+    indexes: [
+      ...base.indexes,
+      { name: 'ix_credit_check_results_stage_date_2', unique: false, columns: ['stage', 'business_date'] },
+    ],
+  };
+  assert.throws(() => assertIndexParity(base, duplicated, 'index parity'), /index shape parity/);
+});
+
+test('REVIEW-FOLLOWUP-01 — an explicitly named non-exempt UNIQUE keeps exact name equality', () => {
+  const expected = {
+    name: 'credit_check_rules', foreignKeys: [],
+    indexes: [{ name: 'uq_credit_check_rules_version', unique: true, columns: ['rule_code', 'effective_from'] }],
+  };
+  for (const alias of ['rule_code', 'unapproved_random_name', 'effective_from']) {
+    const actual = {
+      name: 'credit_check_rules', foreignKeys: [],
+      indexes: [{ name: alias, unique: true, columns: ['rule_code', 'effective_from'] }],
+    };
+    assert.throws(() => assertIndexParity(expected, actual, 'index parity'),
+      /must keep its name/,
+      `the alias ${alias} must be rejected`);
+  }
+});
