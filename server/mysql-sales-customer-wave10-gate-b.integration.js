@@ -10,7 +10,7 @@ import { GATE_B_CASES } from '../scripts/gates/mysql-sales-wave10-manifest.mjs';
 import {
   captureWave10PersistenceProjection, creditInput, productionOrderBody,
   readAuthoritativeCapacity, runCoordinatedWave10Race, seedSubmittedOrder,
-  wave10ProjectionDelta, withWave10Race,
+  wave10BusinessDate, wave10FutureBusinessDateFrom, wave10ProjectionDelta, withWave10Race,
 } from './test-utils/wave10-mysql-acceptance-fixture.js';
 
 const required = [
@@ -162,14 +162,18 @@ test('M-B04 B-M11 — Profile version mutation versus active production check is
 test('M-B05 B-M12 — production Special Approval decision stays bound to its source snapshot during policy mutation', async () => {
   let evidence;
   await withWave10Race('gate-b-m12', { aggregateLimit: 50000, scenario: 'OVERRIDE_REQUEST', controlStrength: 'WARNING' }, async (db, workers, registrations) => {
+    // §37.49.3.1 — one controlled business date for the case, and one expiry
+    // derived from it and shared by the request and the decision.
+    const businessDate = wave10BusinessDate();
+    const expiryBusinessDate = wave10FutureBusinessDateFrom(businessDate);
     seedSubmittedOrder(db, { id: 'gate-b-m12-order', cents: 100000 });
-    const evaluated = await workers[0].run({ action: 'evaluate', input: creditInput({ orderId: 'gate-b-m12-order' }) });
+    const evaluated = await workers[0].run({ action: 'evaluate', input: creditInput({ orderId: 'gate-b-m12-order', businessDate }) });
     assert.equal(evaluated.outcome?.decision, 'SPECIAL_APPROVAL_REQUIRED');
     const result = db.prepare("SELECT * FROM credit_check_results WHERE check_group_id=? AND decision='SPECIAL_APPROVAL_REQUIRED' ORDER BY id LIMIT 1").get(evaluated.outcome.checkGroupId);
     assert.ok(result);
     const requested = await workers[0].run({ action: 'special-request', actorId: 'w10-race-creator', key: 'gate-b-m12-request', body: {
       sourceCreditCheckResultId: result.id, reason: 'Gate B M12', requestedOverrideCents: 50000,
-      requestedCeilingCents: 100000, requestedExpiryBusinessDate: '2026-12-31', scopeMode: 'ONE_TIME',
+      requestedCeilingCents: 100000, requestedExpiryBusinessDate: expiryBusinessDate, scopeMode: 'ONE_TIME',
     } });
     const approvalId = requested.body?.approval?.id;
     assert.ok(approvalId);
@@ -177,7 +181,7 @@ test('M-B05 B-M12 — production Special Approval decision stays bound to its so
     const { outcomes, waits } = await runCoordinatedWave10Race(workers, registrations, [
       { action: 'special-decide', approvalId, key: 'gate-b-m12-decide', body: {
         decision: 'APPROVED', approvedOverrideCents: 50000, approvedCeilingCents: 100000,
-        approvedExpiryBusinessDate: '2026-12-31', reason: 'bounded approval',
+        approvedExpiryBusinessDate: expiryBusinessDate, reason: 'bounded approval',
       } },
       { action: 'parameter-create', key: 'gate-b-m12-policy', body: {
         code: 'CREDIT_MANAGEMENT_ENABLED', valueBool: true, effectiveFrom: '2026-10-25', status: 'ACTIVE',

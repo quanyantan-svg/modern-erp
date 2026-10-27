@@ -27642,3 +27642,2505 @@ real MySQL evidence, and no Wave 10 Acceptance, Gate B result or M-board is clai
 **Stop state: `MYSQL_ACCEPTANCE_RERUN_NOT_AUTHORIZED`; `GATE_A_FROZEN`; `GATE_B_NOT_RUN`;
 `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`; `WAVE12_NOT_STARTED`;
 `NO_GIT_WRITE`.**
+
+## 37.46 Wave 10 Gate B OQC quality-policy fixture design (2026-10-26)
+
+### 37.46.0 Authorization and boundary
+
+The user authorized one consecutive `AUDIT -> REQUIREMENT -> DESIGN` stage for the Wave 10 Gate B OQC
+fixture gap, with a mandatory HARD STOP at the end of this Design. The Requirement is
+`document.md` §"Wave 10 Gate B OQC quality-policy fixture Requirement (2026-10-26)", clauses
+`W10-QCP-R01` through `W10-QCP-R06`.
+
+**No Implementation is authorized by this section.** No production code, no fixture, no test, no suite
+registry, no schema, no migration, no runner, no manifest and no package change is made here. No
+real MySQL connection, no Gate A, no Gate B, no Wave 10 Acceptance campaign, no destructive database
+operation and no Git write is authorized or performed.
+
+Frozen and unchanged by this Design: the production quality-gate semantics and defaults, the
+outsourcing quality policy (OUT-18), the quality-control-point schema and migrations, the Sales
+Delivery creation and confirmation handlers, the Credit and Finance business semantics, the L0 and
+L1–L8 lock order, READ COMMITTED isolation, permissions, status machines, audit and idempotency
+contracts, the Gate A contract and freeze, the Wave 9 freeze, the seven Gate B case identities and
+evidence levels, the M-board shape, the package version and the release tags.
+
+### 37.46.1 The audited failure chain
+
+```text
+POST /api/sales-deliveries                      (production route, worker session)
+  createSalesDelivery()            server/app.js:5619
+    configureTrackedDraftLines()   server/app.js:4190   <- one call per persisted Delivery line
+      freezeQualityPolicy()        server/modules/traceability-quality.js:436
+        resolveQualityPolicy()     server/modules/traceability-quality.js:418
+          no applicable QCP  ->  { inspectionRequired: true, failSafe: true }   (SALES_DELIVERY)
+          ->  snapshot row: inspection_required = 1, qcp_id = NULL, waiver_reason = NULL
+
+POST /api/sales-deliveries/{id} { action: 'confirm' }   (production route, worker session)
+  confirmSalesDelivery()           server/app.js:5712
+    assertQualityGate(db,'OQC')    server/app.js:5843
+      deriveQualityState()         server/modules/quality-gates.js:191
+        qualityPolicyAllowsPosting()  server/modules/traceability-quality.js:445
+          required = true, no oqc_inspections  ->  NOT_INSPECTED
+      ->  HTTP 409  物流单据质量门禁未通过：未检验   (see 37.46.11)
+```
+
+`server/test-utils/wave10-mysql-acceptance-fixture.js` contains no `quality_control_points`, no
+`logistics_quality_policy_snapshots` and no `oqc_inspections` fact at all, so every Sales Delivery
+created by the Wave 10 acceptance suites freezes a fail-safe policy and is refused at confirmation.
+The 409 is the **correct** production behaviour; the gap is acceptance-fixture infrastructure.
+
+Two further audited facts shape the design:
+
+- The shipped default control points (`server/migrations/v13-phase6b-traceability-quality.js:216-221`)
+  are inserted only when a `user-admin` row exists. The protected Wave 10 MySQL target initializes in
+  production mode, so `user-admin` does not exist and `quality_control_points` is **empty** on that
+  target. Even where the default row exists it carries `inspection_required = 1` and would produce
+  the same refusal.
+- `server/mysql-sales-customer-wave10-business-matrix.integration.js:104-126` (the
+  `W10-BUSINESS-MATRIX` suite of the Wave 10 Acceptance campaign) uses the **same**
+  `seedWave10AcceptanceBase()` and creates *and confirms* Deliveries through the same real HTTP
+  route. It is exposed to the same refusal. The remedy therefore has to live in the **shared fixture
+  base**, not in the Gate B concurrency suite alone.
+
+### 37.46.2 Option comparison
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| **A** | Install a legitimate effective `SALES_DELIVERY` Quality Control Point with `inspection_required = false` and a written reason, then let the existing canonical freeze path snapshot it | **CHOSEN** |
+| **B** | Call `freezeQualityPolicy()` again after Delivery creation for each actual Delivery item | Rejected |
+| **C** | Create and complete a genuine OQC inspection | Rejected as the primary approach |
+| **D** | Directly seed a `logistics_quality_policy_snapshots` row, as the Batch A concurrency test does | Rejected |
+
+**A — chosen.** `createQcp()` (`server/modules/traceability-quality.js:452-470`) is the canonical
+production writer for quality control points. It validates the ADMIN actor, requires a written
+reason for a waiver, computes the next version for the code, inserts the control point and its
+criteria, and writes the canonical `CREATE_VERSION` / `QUALITY_CONTROL_POINT` audit fact. The
+existing canonical path then does the rest without any further production change:
+`configureTrackedDraftLines()` → `freezeQualityPolicy()` → `resolveQualityPolicy()` finds the
+installed control point and freezes `inspection_required = 0` with the control-point id, version and
+reason on the **actual** Delivery line. `deriveQualityState()` then returns `WAIVED`, which
+`assertQualityGate()` accepts as a passing gate state. No production file is touched, and the
+waiver is a real, effective, auditable configuration fact rather than a fabricated row.
+
+**B — rejected.** `freezeQualityPolicy()` is idempotent on `UNIQUE(source_type, source_item_id)` and
+returns the already frozen snapshot without re-resolving
+(`server/modules/traceability-quality.js:437-438`). The canonical Delivery creation has already
+frozen the fail-safe snapshot, so a post-creation call cannot change it. Making B work would require
+deleting the frozen snapshot first — that is exactly the hand-crafted policy evidence that
+`W10-QCP-R03` forbids, and it discards the canonical resolution record. Option A reaches the same
+gate outcome **through** the canonical path, at the correct moment (document creation), with no
+deletion and no rewriting.
+
+**C — rejected as the primary approach.** A genuine OQC inspection is legitimate, but it would make
+the fixture drive a second acceptance surface inside a Credit/Finance acceptance suite: an
+inspection header, inspection items that must match the Delivery line identity, quantity, warehouse
+and tracking snapshot, and a PASS completion, for every Delivery in every Wave 10 case. It would also
+change what M-R03 and M-R09 actually exercise, because an OQC lifecycle would then sit on the same
+confirmation path as the race. The gate accepts two passing states (`PASS` and `WAIVED`), and a
+waiver backed by a real control point with a real reason reaches `WAIVED` without any inspection.
+Option C would be the right choice only if the agreed business requirement were that outgoing
+inspection must actually happen in these cases; that is not the stated requirement, and
+`W10-QCP-R03` explicitly requires the waiver to carry a legitimate test-only business reason rather
+than a performed inspection.
+
+**D — rejected.** The Batch A row (`server/mysql-sales-customer-batch-a-concurrency.integration.js:169-171`)
+carries `qcp_id = NULL`, `qcp_version = NULL` and `waiver_reason = 'CONCURRENCY_FIXTURE'`. It
+references no control point, records no resolution and matches no QCP version, so it fails
+`W10-QCP-R02` and `W10-QCP-R03`. It is also strictly weaker as evidence: because it bypasses the
+policy-resolution contract entirely, a regression in `resolveQualityPolicy()` would not be detected
+by the Wave 10 suites at all.
+
+### 37.46.3 Chosen design — the fixture helper
+
+**Location.** `server/test-utils/wave10-mysql-acceptance-fixture.js`, next to the existing
+`seedWave10SalesParameters()` precedent, which installs the fail-closed Wave 1 `sales_parameters`
+SYSTEM row through the canonical writer `upsertSalesParameters()` for the same reason — a production
+prerequisite must be a real configuration fact, not something invented behind the writer.
+
+**New exported helper.**
+
+```text
+seedWave10QualityPolicy(db, options) -> { id, version, reason, reused }
+```
+
+Responsibilities, in order:
+
+1. **Install through the canonical writer.** Call `createQcp(db, actor, input)` from
+   `server/modules/traceability-quality.js`. The fixture supplies only business inputs; the writer
+   owns the identity, the version, the audit fact and the transaction.
+2. **Write a legitimate test-only reason.** The control point's `remarks` must state that the Wave 10
+   acceptance cases exercise the Sales Delivery → Finance → Credit chain and that outgoing-goods
+   inspection is outside the subject of those cases. It must not claim that an inspection was
+   performed.
+3. **Assert the installed fact.** The row exists, is active, carries the intended operation type,
+   scope and product, `inspection_required = 0`, a non-empty `remarks` equal to the reason, and a
+   version `>= 1`.
+4. **Assert the canonical resolution reads it back.** Call `resolveQualityPolicy(db,
+   'SALES_DELIVERY', productId, wave10BusinessDate())` and require `inspectionRequired === false`,
+   `qcpId === installed.id`, `version === installed.version` and `waiverReason === reason`. This is
+   the proof that the fixture reads a real effective policy rather than a hand-made row.
+5. **Be idempotent within one database.** If an active control point with the same code, scope and
+   product already exists with the same inspection flag, reuse it and return `reused: true` instead
+   of creating a second version. The lookup is written with `COALESCE(product_id,'') = ?` so the
+   same statement is valid on SQLite and MySQL and also for a `NULL` product on a global scope.
+
+**Control point parameters.**
+
+| Field | Value | Reason |
+|---|---|---|
+| `operationType` | `SALES_DELIVERY` | The gate under test is the Sales Delivery OQC gate |
+| `scope` | `PRODUCT`, bound to the fixture product | See 37.46.6 — a product-scoped rule always outranks a global one in the canonical resolution order, so the fixture is correct on a development database (where the shipped global default with `inspection_required = 1` exists) and on the production-mode MySQL target (where `quality_control_points` is empty) |
+| `inspectionRequired` | `false` | The Wave 10 cases are Credit/Finance race cases; outgoing-goods inspection is not their subject |
+| `samplingMode` | `FULL` | A waived rule has no sample |
+| `effectiveFrom` | a fixed past date (`2020-01-01`) | The rule is effective on every business date the campaign may use, including across a midnight boundary during a long campaign. This deliberately differs from the campaign's `wave10BusinessDate()`, which is derived from the run date because the exposure window depends on it |
+| `effectiveTo` | `null` | No expiry |
+| `active` | `true` | The rule is effective |
+| `remarks` | the test-only reason | `W10-QCP-R03` |
+
+**Actor.** `{ id: 'w10-race-approver', roleCode: 'ADMIN', permissions: [...] }`. `createQcp()`
+requires `roleCode === 'ADMIN'`, and `quality_control_points.created_by` references `users(id)`, so
+the actor id must be a seeded user — `w10-race-approver` is created by
+`seedWave10AcceptanceBase()` before the control point is installed.
+
+**Call site.** Inside `seedWave10AcceptanceBase()`, controlled by an explicit option (default
+`true`), placed after the product row and after the user rows and before any business document can
+exist:
+
+```text
+seedWave10AcceptanceBase(db, options)
+  1  users (creator / approver / sales-a / sales-b)          <- role-admin is seeded by seedSchema
+  2  customer, salesperson profiles, sales group, memberships
+  3  warehouse
+  4  product  w10-race-product
+  5  >>> createQcp -> the single SALES_DELIVERY PRODUCT-scoped waiver control point <<<
+  6  product commercial classification, price list / entries / versions, customer extension
+  7  credit parameters, rule, profiles, lock anchors
+  8  inventory, cash settlement account, sales parameters (canonical writer)
+```
+
+The negative regression calls `seedWave10AcceptanceBase(db, { qualityPolicy: false })` and therefore
+skips step 5 entirely, which is exactly the missing-evidence condition.
+
+### 37.46.4 Ordering, identity and version consistency
+
+**Ordering invariant.** The control point must exist **before any Delivery is created**. The policy
+snapshot is frozen once, at document creation, by `configureTrackedDraftLines()` inside the
+Delivery-creation transaction. A control point installed after a Delivery exists cannot change that
+Delivery's snapshot. This is the reason the remedy belongs in the shared base seed and not in a
+per-case step.
+
+```text
+seed base (incl. control point)
+  -> canonical sales order create / submit / approve        (production writers)
+  -> POST /api/sales-deliveries                              (production route)
+       -> freezeQualityPolicy -> resolveQualityPolicy
+          -> snapshot: inspection_required=0, qcp_id=<qcp>, qcp_version=<version>,
+                       waiver_reason=<reason>, product_id=<line product>,
+                       source_id=<delivery id>, source_item_id=<line id>
+  -> POST /api/sales-deliveries/{id} { action:'confirm' }    (production route)
+       -> assertQualityGate('OQC') -> WAIVED -> gate passes
+       -> inventory OUT, COGS voucher, Finance recognition, audit, idempotency
+```
+
+**Identity and version consistency.** The snapshot's identity fields are read from the *persisted*
+document by the production code, never supplied by the fixture:
+
+| Snapshot field | Source | Consistency requirement |
+|---|---|---|
+| `source_type` | the literal `'SALES_DELIVERY'` passed by `configureTrackedDraftLines` | equals the gate's `policySourceType` |
+| `source_id` | the real `sales_deliveries.id` produced by the production route | equals the Delivery the case actually created |
+| `source_item_id` | the real `sales_delivery_items.id` produced by `replaceLogisticsItems` | equals the line the case actually created; `UNIQUE(source_type, source_item_id)` makes "one frozen policy per line" a database-enforced fact |
+| `product_id` | the persisted line's `product_id` | equals the product the installed control point is scoped to |
+| `qcp_id` | `resolveQualityPolicy()` | equals the installed control point id |
+| `qcp_version` | `resolveQualityPolicy()` | equals the installed control point version |
+| `inspection_required` | `resolveQualityPolicy()` | `0` |
+| `waiver_reason` | the control point's `remarks` | equals the declared test-only reason |
+| `resolved_at` | the freeze timestamp | the freeze time, not the control point's creation time |
+
+**Impact on M-R03 and M-R09.** Neither case's Finance or Credit assertion changes.
+
+- **M-R03 (`R-SAL-14`)** — `canonicalDelivery(..., billingMode: 'SEPARATE')` now confirms instead of
+  returning 409. The invoice creation, the OLD exposure read, the coordinated race, the
+  `component_breakdown_json` exposure observation and the stage-conservation assertion are
+  untouched.
+- **M-R09** — `canonicalDelivery(..., billingMode: 'LEGACY_DIRECT')` now confirms, and the final
+  unpaid `SALES_DELIVERY`-sourced receivable that the assertion reads is produced by the production
+  recognition writer exactly as before.
+
+**Why the Finance and Credit assertions remain unchanged.** `assertQualityGate()` has no return
+value that feeds any monetary arithmetic — it either throws or returns, and the returned state is
+not read afterwards. The gate is evaluated at `server/app.js:5843`, *before* the financial writes at
+`server/app.js:5844`+. Once the gate returns `WAIVED` instead of throwing, the remaining sequence is
+byte-identical: `assertFinancialPeriodsOpen`, `authoritativeLogisticsTotal`, the per-line reservation
+/ inventory / COGS loop, the `sales_deliveries` status transition, the COGS system voucher,
+`recognizeFinanceExposure` (or `autoInvoiceDelivery` for `DIRECT_BILL`), `saveIdempotency` and the
+`CONFIRM` audit. The recognition mode, the invoice, the receivable, the exposure projection, the
+capacity classification and the zero-side-effect projections are therefore all unchanged. A `WAIVED`
+gate and a `PASS` gate are the same passing outcome for every downstream writer.
+
+**Effect on the Wave 10 persistence projection.** The control point adds one row to
+`quality_control_points` and one row to `audit_logs` (`CREATE_VERSION` / `QUALITY_CONTROL_POINT`).
+Neither perturbs an existing assertion:
+
+- `quality_control_points` is not part of the declared projection families
+  (`P-CREDIT`, `P-APPROVAL`, `P-GATE`, `P-SALES`, `P-FINANCE`, `P-AUDIT-IDEM`), and no production
+  entry point under test writes it, so it is not a case-scoped mutation surface.
+- `audit_logs` **is** inside `P-AUDIT-IDEM`. The creation audit row is written during the base
+  seeding, which happens before every `captureWave10PersistenceProjection(before)` in every case, so
+  it is present in both the before and the after projection and contributes nothing to any delta.
+- Every existing `audit_logs` count assertion in the Wave 10 suites is filtered by `action` and
+  `entity_type` (`EVALUATE`/`CREDIT_CHECK`, `APPROVE`/`SALES_ORDER`, `CONSUME`/
+  `CREDIT_SPECIAL_APPROVAL`, `SUBMIT`/`SALES_ORDER`), so a `CREATE_VERSION`/`QUALITY_CONTROL_POINT`
+  row cannot be counted by any of them.
+
+The projection families are therefore left unchanged; the base seed is not a case-scoped surface.
+
+### 37.46.5 Repeatability, cleanup, idempotency and concurrency
+
+**Repeatability.** Every Wave 10 suite runs against its own freshly reset disposable schema. The
+seeded control point has a stable business identity (code `QCP-W10-SALES-DELIVERY`, operation type
+`SALES_DELIVERY`, scope `PRODUCT`, bound to the fixture product, `inspection_required = 0`, fixed
+past `effective_from`, no expiry). Only the surrogate row id differs between runs, exactly as for
+every other fixture reference fact.
+
+**Cleanup.** The control point lives in `quality_control_points`, a table created by the canonical
+bootstrap and removed by the per-suite schema reset
+(`resetWave10CampaignSchema()` drops every base table, and the final campaign cleanup drops the
+schema). It leaves no residue and needs no cleanup exemption. It creates no file, no external
+resource and no credential.
+
+**Idempotency.** `seedWave10AcceptanceBase()` runs exactly once per disposable database, and
+`seedWave10QualityPolicy()` additionally detects an already-installed, active, matching control
+point and reuses it rather than creating a second version, so an accidental second call cannot make
+the resolution ambiguous or produce a second `CREATE_VERSION` audit fact.
+
+**Concurrency.** The control point is written on the *parent* connection, inside one transaction,
+before any worker session begins a business action, and it is committed before the workers start.
+The workers never write `quality_control_points`; they only read it. `resolveQualityPolicy()` is a
+plain `SELECT` under READ COMMITTED, so no worker can observe a partially written control point and
+no lock cycle is possible. `freezeQualityPolicy()` inserts into
+`logistics_quality_policy_snapshots`, whose `UNIQUE(source_type, source_item_id)` key is distinct
+per Delivery line, so two concurrent confirmations of two different Deliveries cannot conflict on
+that key. The control point introduces **no new lock participant** and therefore does not alter the
+L0 / L1–L8 order that the races assert.
+
+### 37.46.6 SQLite / MySQL compatibility
+
+- `createQcp()` and `resolveQualityPolicy()` are dialect-agnostic production functions already
+  reachable on both backends (`POST /api/quality-control-points` is registered on both). The helper
+  adds no backend-specific SQL beyond a `COALESCE(product_id,'')` predicate that is valid on both.
+- `quality_control_points`, `quality_control_criteria` and `logistics_quality_policy_snapshots`
+  exist with the same shape on both backends: the MySQL schema is produced by translating the
+  canonical SQLite snapshot, so the columns, the `UNIQUE(code, version)` key and the
+  `UNIQUE(source_type, source_item_id)` key are the same contract on both.
+- **The `PRODUCT` scope is what makes the fixture backend-independent.** The canonical resolution
+  orders by `CASE scope WHEN 'PRODUCT' THEN 0 ELSE 1 END, version DESC`, so a product-scoped control
+  point always outranks a global one. On a development / demo-seeded SQLite database the shipped
+  global default `qcp-global-outgoing-v1` exists with `inspection_required = 1`, and the fixture's
+  product-scoped waiver still wins. On the production-mode MySQL target `quality_control_points` is
+  empty and the fixture's control point is the only applicable one. The resolved result — required
+  `false`, with the fixture's control point id and version — is identical on both backends.
+- The fixture's control point does not depend on the campaign's run date, so the same fixture code
+  is valid whether the campaign runs before or after midnight in the run date's local time zone.
+
+### 37.46.7 Regression plan
+
+**New deterministic file** `server/sales-customer-wave10-quality-policy.test.js`, engine-neutral
+(SQLite), registered in FAST and FULL through `scripts/testing/test-suites.js`. It must not require a
+real MySQL campaign to be meaningful.
+
+| Case | Setup | Assertion |
+|---|---|---|
+| `W10-QCP-T01` — **negative**: missing OQC evidence still blocks | `seedWave10AcceptanceBase(db, { qualityPolicy: false })`, canonical order create/submit/approve, Delivery created through the real HTTP route | the frozen snapshot for the actual Delivery line has `inspection_required = 1`, `qcp_id IS NULL`, `waiver_reason IS NULL`; the real confirmation route returns **HTTP 409** carrying the production refusal raised by `assertQualityGate()` (the production label resolves to `物流单据`, so the refusal text is `物流单据质量门禁未通过：未检验` — see 37.46.11); the Delivery stays `DRAFT`; no inventory transaction, no COGS voucher, no receivable, no `CONFIRM` audit and no idempotency record exist |
+| `W10-QCP-T02` — **positive**: the installed policy fact waives the gate | default seeding with the control point installed | `resolveQualityPolicy()` returns `inspectionRequired === false` with the installed `qcpId`, `version` and `waiverReason`; the frozen snapshot for the actual Delivery line carries `source_type='SALES_DELIVERY'`, the actual `source_id`, the actual `source_item_id`, the actual `product_id`, the installed `qcp_id`, the installed `qcp_version`, `inspection_required = 0` and the declared reason; the real confirmation route returns **HTTP 200**; `sales_deliveries.status='CONFIRMED'` with `confirmed_by` set; exactly one inventory transaction, one `CONFIRM` audit and one `SALES_DELIVERY_CONFIRM` idempotency record exist; the cost effect is bound to the issued cost — the fixture product carries no valuation basis, so the production writer issues one `LEGACY_UNVALUED` valuation movement with a zero value and therefore writes no COGS voucher (see 37.46.11) |
+| `W10-QCP-T03` — the gate is genuinely consulted | both databases from T01 and T02 | `deriveQualityState(db, 'OQC', deliveryId)` is `NOT_INSPECTED` in T01 and `WAIVED` in T02; deactivating the installed control point (`active = 0`) makes the canonical resolution fail-safe again (`inspectionRequired === true`), proving the waiver is policy-driven and not hard-coded; the production `confirmSalesDelivery` source still contains the `assertQualityGate(db, 'OQC', deliveryId)` call, following the existing source-contract pattern in `server/v16-p2-sales-deliveries.test.js` and `server/sales-customer-wave7-acceptance.test.js` |
+| `W10-QCP-T04` — the fixture helper is idempotent and dialect-neutral | one database | a second `seedWave10QualityPolicy()` call returns the same control point id and version with `reused === true`, creates no second version and leaves exactly one `CREATE_VERSION` / `QUALITY_CONTROL_POINT` audit fact; the helper's resolution read-back holds on both backends |
+
+**Campaign-level evidence.** The real MySQL campaign remains the authority for M-R03, M-R09 and the
+`W10-BUSINESS-MATRIX` cases; the local suite proves the fixture contract, not the campaign result.
+`W10-QCP-T01`–`T04` are a precondition for a campaign rerun, not a substitute for it.
+
+### 37.46.8 Detecting an accidental Quality Gate bypass
+
+1. `W10-QCP-T01` proves the production refusal — the exact production status and message — so a
+   weakened or removed fail-safe default fails the local suite.
+2. `W10-QCP-T02` asserts the frozen snapshot's *policy-derived* content (`qcp_id`, `qcp_version`,
+   `waiver_reason`). A hard-coded or hand-made bypass cannot produce a control-point-backed
+   snapshot, so the assertion fails if the fixture stops going through the canonical resolution.
+3. `W10-QCP-T03` deactivates the control point and shows the resolution returning to fail-safe, so
+   the success in T02 is demonstrably a policy effect rather than a constant.
+4. `W10-QCP-T03` re-asserts the production source contract that `confirmSalesDelivery` calls
+   `assertQualityGate(db, 'OQC', deliveryId)`.
+5. `deriveQualityState()` is exposed on the Delivery read path (`getSalesDelivery` and
+   `listSalesDeliveries` return `qualityState`), so a bypass would also surface as a missing or
+   incorrect `qualityState` in the Delivery payload; T01/T02 assert the state code directly.
+6. The implementation change list is bounded to the fixture, one new test file and the suite
+   registry. `server/app.js`, `server/modules/quality-gates.js`,
+   `server/modules/traceability-quality.js`, `server/modules/authoritative-quality.js`, every
+   migration and every schema file are untouched, so the gate implementation itself cannot drift
+   under this Design.
+
+### 37.46.9 Intended implementation file list (not yet modified)
+
+| File | Change | Production behaviour changed |
+|---|---|---|
+| `server/test-utils/wave10-mysql-acceptance-fixture.js` | Add the `W10_QUALITY_ACTOR` constant and the exported `seedWave10QualityPolicy(db, options)` helper; import `createQcp` and `resolveQualityPolicy` from `server/modules/traceability-quality.js`; add the `qualityPolicy` option (default `true`) to `seedWave10AcceptanceBase()` and call the helper after the product and user rows | no |
+| `server/sales-customer-wave10-quality-policy.test.js` | New deterministic SQLite regression implementing `W10-QCP-T01`–`W10-QCP-T04` | no |
+| `scripts/testing/test-suites.js` | Register the new test file in FAST and FULL | no |
+| `server/mysql-sales-customer-wave10-concurrency.integration.js` | **Evidence only**: inside the existing `canonicalDelivery()` helper, read back the frozen policy snapshot for the produced Delivery line and assert it references the installed control point and requires no inspection. No M-R03/M-R09 assertion, expectation or race semantics changes | no |
+| `solution.md` | This section | no |
+| `log/2026-10-26.md` | The append-only record | no |
+
+**Explicitly not modified:** `server/app.js`, `server/modules/quality-gates.js`,
+`server/modules/traceability-quality.js`, `server/modules/authoritative-quality.js`,
+`server/modules/credit-check.js`, `server/modules/sales-orders.js`, every file under
+`server/migrations/` and `server/database/`, `server/mysql-sales-customer-wave10-business-matrix.integration.js`
+(it inherits the fix through the shared base seed), `server/mysql-sales-customer-wave10-gate-b.integration.js`,
+`server/mysql-sales-customer-wave10.integration.js`, every runner, manifest, worker and gate script,
+`README.md`, `package.json` and the release tags.
+
+### 37.46.10 Design acceptance, rollback and hard stop
+
+**Acceptance conditions for the future Implementation.**
+
+1. The control point is installed through `createQcp()` and its resolution is read back through
+   `resolveQualityPolicy()`; no policy snapshot row is ever hand-written by the fixture.
+2. The control point is `PRODUCT`-scoped, `SALES_DELIVERY`, `inspection_required = false`, active,
+   effective from a fixed past date with no expiry, and carries the declared test-only reason.
+3. It is installed before any Delivery is created, so the canonical freeze path resolves it.
+4. Every Delivery in the Wave 10 acceptance suites freezes a snapshot whose `source_id`,
+   `source_item_id`, `product_id`, `qcp_id` and `qcp_version` match the actual document and the
+   installed control point.
+5. The real HTTP confirmation route succeeds in M-R03 and M-R09 and in the business matrix cases,
+   with every Finance/Credit assertion unchanged.
+6. `W10-QCP-T01`–`T04` pass, and `pnpm test:fast`, `pnpm test`, `pnpm build` and
+   `git diff --check` pass with no skipped, todo, cancelled or weakened assertion.
+7. The Gate A diff is zero bytes and no frozen contract is touched.
+
+**Rollback.** The change is confined to acceptance-fixture and test files. Rollback is a plain
+revert of the four implementation files; no schema, migration, data or external state is involved,
+so there is nothing to unwind in a database and no partial-application risk.
+
+**HARD STOP.** This Design is complete and awaits explicit Implementation authorization. No
+Implementation, no real MySQL connection, no Gate A, no Gate B, no Wave 10 Acceptance campaign, no
+destructive database operation, no Git write, no Wave 11 and no Wave 12 work is authorized or
+performed by this stage.
+
+**Status: `WAVE10_GATE_B_FIXTURE_DESIGN_READY_FOR_IMPLEMENTATION_AUTHORIZATION`.**
+**Stop state: `IMPLEMENTATION_NOT_AUTHORIZED`; `MYSQL_NOT_CONNECTED`; `GATE_A_FROZEN`;
+`GATE_B_NOT_RUN`; `WAVE10_FINAL_ACCEPTANCE_NOT_DECLARED`; `WAVE11_NOT_STARTED`;
+`WAVE12_NOT_STARTED`; `NO_GIT_WRITE`.**
+
+### 37.46.11 Implementation-stage factual correction to the expected values (2026-10-26)
+
+The Implementation stage was explicitly authorized under AGENTS.md §4.4. It found three factual
+mismatches between the **expected values** predicted in §37.46.1 and §37.46.7 and the behaviour the
+production code actually produces on the Wave 10 fixture. None of them changes a Design decision, an
+Option verdict, the Requirement clauses `W10-QCP-R01`..`R06`, the intended implementation file list
+or any production behaviour. They are corrections of predicted literals, and they were corrected in
+this section and in `document.md` A6 because the canonical chain must not state a value the
+implementation cannot produce without touching production code, which this Implementation was
+forbidden to do.
+
+**C1 — the production refusal label.** §37.46.1 and the `W10-QCP-T01` row predicted the refusal
+`销售出库单质量门禁未通过：未检验`. `assertQualityGate()` resolves its label with
+`config[kind]?.sourceLabel || config[kind]?.shared?.sourceTypes?.[...]?.sourceLabel || '物流单据'`.
+The per-source label `销售出库单` is declared on `config.OQC.sourceTypes.SALES_DELIVERY`, but the
+resolution reads `config[kind].shared.sourceTypes`, and `shared` carries no `sourceTypes`. The
+resolved label is therefore always the fallback `物流单据`, and the production refusal is
+`物流单据质量门禁未通过：未检验`. The rejection does not change: the state is still `NOT_INSPECTED`
+(`未检验`) and the status is still HTTP 409. The implementation therefore asserts the HTTP refusal
+against the message the production `assertQualityGate()` itself raises, plus the `质量门禁未通过：未检验`
+refusal text, instead of hard-coding a label the production code does not emit. The label-resolution
+nesting defect is **not** fixed here: it is a production-code change and is out of the authorized
+scope. It is reported as an open observation for a future Requirement.
+
+**C2 — the cost effect of the fixture product.** The `W10-QCP-T02` row predicted "exactly one
+inventory transaction, one COGS voucher, one `CONFIRM` audit and one `SALES_DELIVERY_CONFIRM`
+idempotency record". The fixture product `w10-race-product` carries no valuation basis, so the
+production writer `issueSourceValue()` takes the `LEGACY_UNVALUED` path, issues one valuation
+movement with `quantity_delta = -1` and `value_delta_cents = 0`, and `confirmSalesDelivery()`
+creates a COGS voucher only when `cogsCents > 0`. The production contract is therefore: exactly one
+inventory transaction, one `LEGACY_UNVALUED` valuation movement with zero issued cost, and **no** COGS
+voucher. The implementation asserts that causal chain instead of a fixed voucher count, which is
+strictly stronger than a bare count. Installing a valuation cost for the fixture product was
+rejected: it would change the approved inventory and valuation setup, which the Implementation
+authorization forbids.
+
+**C3 — the inventory transaction sign.** `inventory_transactions.quantity_change` stores the issued
+magnitude together with a separate `direction` column, so an outbound line is `quantity_change = 1`
+with `direction = 'OUT'`. The implementation asserts that contract.
+
+**Unchanged by this correction.** §37.46.0 .. §37.46.10 as authored, every Option verdict, the
+`W10-QCP-R01`..`R06` clauses, the intended implementation file list, the production quality-gate
+semantics, the outsourcing quality policy, the schema and migrations, the Sales Delivery handlers,
+the Credit and Finance semantics, the lock order, the permissions, the status machines, the audit and
+idempotency contracts, the Gate A freeze, the Gate B case identities and evidence levels, the M-board
+shape, the package version and the release tags.
+
+**Status: `WAVE10_GATE_B_FIXTURE_DESIGN_EXPECTED_VALUE_CORRECTION_APPLIED`.**
+
+## 37.47 Wave 10 M-R09 credit-capacity contract design (2026-10-26)
+
+### 37.47.0 Authorization and boundary
+
+The user confirmed the M-R09 acceptance contract contains a verified contradiction and authorized one
+consecutive `REQUIREMENT -> DESIGN` stage for it. This section records the Design phase only. The
+Requirement phase is `document.md` → "Wave 10 M-R09 Credit capacity contract Requirement (2026-10-26)".
+**Implementation is not authorized by this stage.** Real MySQL access, Gate B re-execution, the Wave 10
+Acceptance campaign, Git writes, production Credit / Finance / quality-gate code, schema, migrations,
+runners, manifests, package files and Wave 11 remain outside this Design. The mandatory HARD STOP
+follows this section.
+
+The completed OQC Fixture Implementation is preserved unchanged: `seedWave10QualityPolicy()`,
+`readWave10QualityPolicy()`, the `qualityPolicy` option of `seedWave10AcceptanceBase()`, the canonical
+quality-policy regression file and the `assertCanonicalDeliveryQualityPolicy()` evidence read-back
+inside `canonicalDelivery()`.
+
+### 37.47.1 Design basis — the audited contradiction
+
+The audit facts are recorded in `document.md` → A1–A13. The load-bearing derivation, recomputed from
+the source rather than copied from any log:
+
+| Quantity | Value | Source |
+|---|---|---|
+| salesperson sub-limit | 110000 cents | `...wave10-concurrency.integration.js:494` → `seedProfile()` `w10-profile-a` |
+| canonical obligation | 100000 cents | price-list version `unit_price_cents = 100000` × quantity 1 |
+| committed salesperson exposure `E` | 100000 cents | `computeCreditExposure()` — SO-commitment and delivered-not-settled stages released, final unpaid AR carries it once, provably attributable |
+| `available = limit - E` | 10000 cents | `readAuthoritativeCapacity()` |
+| each proposed delta | 20000 cents | `:518`, `:525-526` |
+| `classifyCapacity({10000, 20000, 20000})` | **`NEITHER_FITS`** | fixture `:647-655` |
+
+The contradiction is value-independent. `:521` requires `ONLY_ONE_FITS`, which under the
+`W10-AIR-R05` algebra means `available >= 20000`; `:522` requires `exposureCents + 20000 >
+limitCents`, which means `available < 20000`. The two requirements are mutually exclusive, so the
+pair can never hold — for any limit, exposure or delta the fixture could be given.
+
+Three independent facts converge on `NEITHER_FITS` as the correct classification:
+
+1. **The algebra.** `W10-AIR-R05` in `document.md` states the three-way classification table verbatim
+   and adds *"The expected winner count follows that computed classification."* M-R09's expected winner
+   count is 0 (`:529-534` requires **both** contenders to be refused), and only `NEITHER_FITS` has an
+   expected winner count of 0.
+2. **The approved case matrix.** `solution.md` §37.39.6.2 describes M-R09 as *"aggregate passes;
+   sub-limit exposure=50, proposal=70>60 and blocks"*. The case never claims a winner.
+3. **The production refusal path.** `credit-check.js:807` computes `overLimit` from
+   `exposureCents + proposedDeltaCents > limitCents`; the salesperson scope emits `OVER_LIMIT`
+   (`:830-835`) and never `UNPROVEN_ATTRIBUTION` for a provable attribution (`:813-817`).
+
+`ONLY_ONE_FITS` is the M-R05 / M-R06 serialization semantics — two contenders competing for a
+sufficiently large remaining ceiling, one of which must win. M-R05 (`:400`), M-R06 (`:418`),
+`B-M10` (gate-b `:117`) and `B-M15` (gate-b `:203`) all start from **zero committed exposure**, so
+`available` genuinely exceeds each single delta while their sum exceeds it. M-R09 is the only case in
+the repository whose committed exposure makes the remaining capacity smaller than each proposal. The
+literal at `:521` is a mis-planted M-R05/M-R06 semantic on a case whose entire purpose is that the
+proposal is blocked.
+
+### 37.47.2 Option comparison
+
+**Option A — correct the expected classification literal (CHOSEN).** Replace `'ONLY_ONE_FITS'` with
+`'NEITHER_FITS'` in the M-R09 assertion and make the available-capacity precondition explicit. The
+test then states the canonical algebra it was already written against.
+
+**Option B — retune the fixture limit or exposure (REJECTED — arithmetically impossible).** To make
+`:521` pass, `available` must be at least 20000; `:522` then fails, because `available < 20000` no
+longer holds. No fixture value satisfies both. Repairing the pair would require deleting or rewriting
+`:522` — the `the proposal must exceed the sub-limit` assertion that carries the case's refusal
+intent. That is a test weakening (prohibited by `W10-MR09-R10` and AGENTS.md §10) and it would
+delete the very fact M-R09 exists to prove.
+
+**Option C — retune the proposed deltas (REJECTED — changes the tested business fact).** Making one
+delta fit and the other not yields `ASYMMETRIC`, the fourth branch of `classifyCapacity`, a case that
+does not exist in the approved matrix and one in which exactly one proposal may proceed — the
+opposite of M-R09's contract that both are refused. It would also change the two concurrent requests
+that `W10-MR09-R05` requires be preserved.
+
+**Option D — relax, skip, comment out or replace the assertion with a hardcoded PASS (REJECTED).**
+Prohibited by `W10-MR09-R10`, by `W10-AIR-R05` ("A constant copied from seed input is not proof") and
+by AGENTS.md §10. It masks the defect instead of correcting the contract.
+
+**Option E — change the production classification algebra or the Credit refusal (REJECTED).**
+`classifyCapacity()` mirrors the `W10-AIR-R05` table verbatim, and the production scope evaluation at
+`credit-check.js:807-837` implements the same rule. Changing either would alter the Credit business
+semantics and an approved Requirement, which this stage explicitly forbids, and would affect M-R01,
+M-R05, M-R06, `B-M10` and `B-M15` as well.
+
+### 37.47.3 Chosen design — the exact assertion correction
+
+The entire Implementation is confined to the single assertion block of the single M-R09 case in
+`server/mysql-sales-customer-wave10-concurrency.integration.js`:
+
+1. The expected classification literal becomes `'NEITHER_FITS'`.
+2. One explicit available-capacity precondition is inserted immediately before the classification
+   assertion, so the expected classification is derivable **at the assertion site** instead of
+   requiring the reader to reconstruct the algebra across four lines.
+
+The precondition is `capacity.available < 20000`. For the two deltas of this case (both 20000) that
+is exactly the `NEITHER_FITS` condition of `classifyCapacity()` — `da > available AND db > available` —
+and it is the same inequality `:522` already states in limit-relative form. It introduces no new
+constant and no seed-derived truth: `capacity.available` remains the value computed by
+`readAuthoritativeCapacity()` from the effective Profile and the persisted exposure, and `20000` is
+the delta literal already used twice in the same block.
+
+**Why the precondition is added rather than the bare literal change.** The root cause of the defect is
+structural, not a typo: an opaque classification literal sat next to a contradicting inequality with
+no statement of the precondition that determines the classification, so no reviewer could check the
+expectation against the case's intent without re-deriving the whole capacity chain. The added line
+makes the derivation local and self-evident, and it is **additive evidence** — if the committed
+exposure ever changed so that `available >= 20000`, the precondition fails loudly instead of
+silently mis-classifying. It changes no test semantics, weakens no assertion and skips nothing.
+
+### 37.47.4 Why this is an assertion correction, not a production behaviour change
+
+1. **No production file is modified.** `server/app.js`, `server/modules/credit-check.js`,
+   `server/modules/credit-profile.js`, `server/modules/quality-gates.js` and
+   `server/modules/traceability-quality.js` are not in the change list.
+2. **The production algebra is unchanged and canonical.** `W10-AIR-R05` states the same three-way
+   table that `classifyCapacity()` implements, and the production scope evaluation at
+   `credit-check.js:807-837` applies the same `exposure + delta > limit` rule. Nothing about the
+   classification is redefined.
+3. **The refusal contract asserted after the correction is already the production contract.**
+   `evaluateCreditCheck()` raises HTTP 409 `CREDIT_CHECK_BLOCKED` with the production `reasonCodes`
+   inside the production transaction (`credit-check.js:1091-1101`), and the salesperson scope takes the
+   ordinary capacity branch that emits `OVER_LIMIT` (`:830-835`) while a provable attribution keeps
+   `UNPROVEN_ATTRIBUTION` off the reason list (`:813-817`).
+4. **The change only makes the test agree with the algebra it was already written against.** No
+   business rule, permission, state machine, audit or idempotency contract is defined, redefined,
+   relaxed or re-routed.
+5. **The change is one literal plus one additive assertion.** Nothing is added to, removed from or
+   reordered in the production request path.
+
+### 37.47.5 The preserved M-R09 business and concurrency assertions
+
+The following are preserved **verbatim** and remain in force:
+
+| Assertion | Location | Meaning preserved |
+|---|---|---|
+| `committed.status === 'APPROVED'` | `:501` | the obligation was created by the canonical approval path |
+| `assert.equal(Number(receivable.amount_cents), obligation)` | `:512` | the final AR equals the canonical obligation |
+| `assert.equal(Number(receivable.open_amount_cents), obligation, 'the AR must stay unpaid')` | `:513` | the AR is final and unpaid |
+| `assert.equal(receivable.item_class, 'SOURCE')` | `:514` | the AR is a source-level receivable |
+| `assert.equal(receivable.item_kind, 'FINAL')` | `:515` | the AR is the final recognition |
+| `assert.equal(capacity.exposureCents, obligation, ...)` | `:519` | the transition leaves the obligation in the AR stage — exposure conservation |
+| `assert.equal(capacity.available, capacity.limitCents - obligation)` | `:520` | available is derived from the effective limit and the actual exposure |
+| `assert.ok(capacity.exposureCents + 20000 > capacity.limitCents, 'the proposal must exceed the sub-limit')` | `:522` | each proposal is refused by the sub-limit |
+| `assert.ok(waits.length >= 2, ...)` | `:528` | both contenders are observably pending at the L0 coordination boundary |
+| `assert.equal(httpStatus(outcome), 409, ...)` | `:530` | the production HTTP refusal contract |
+| `assert.equal(outcome.code, 'CREDIT_CHECK_BLOCKED', ...)` | `:531` | the production refusal code |
+| `reasonCodes.includes('OVER_LIMIT')` | `:532` | the refusal is the capacity failure |
+| `!reasonCodes.includes('UNPROVEN_ATTRIBUTION')` | `:533` | the AR attribution stays provable |
+| `assertWave10ProjectionDeltaEmpty(before, after, 'M-R09 blocked evaluations')` | `:536` | zero forbidden persistent delta |
+| `assertNoDuplicateEffects(db)` | `:537` | no duplicate check-result group, no duplicate approval authority |
+
+The canonical chain itself is untouched: `canonicalApprovedOrder()` (canonical create → submit →
+approve), `canonicalDelivery()` with `billingMode: 'LEGACY_DIRECT'` (real HTTP `POST
+/api/sales-deliveries` → confirm), the SUBMITTED proposal `w10-r9-new` of 20000 cents, the two
+coordinated `evaluateEndpoint()` requests of 20000 cents each, and the `assertCanonicalDeliveryQualityPolicy()`
+evidence read-back inside `canonicalDelivery()`.
+
+### 37.47.6 What this Design does not change
+
+- **M-R01, M-R05, M-R06, `B-M10`, `B-M15`** — their `ONLY_ONE_FITS` expectation is correct and is not
+  touched in any way. `server/mysql-sales-customer-wave10-concurrency.integration.js:68`, `:182-184`,
+  `:400`, `:418` and `server/mysql-sales-customer-wave10-gate-b.integration.js:117`, `:203` stay
+  byte-for-byte identical.
+- **The limit, the exposure and the delta values** — 110000, 100000 and 20000/20000 stay as they are.
+- **The fixture** — `server/test-utils/wave10-mysql-acceptance-fixture.js` is not modified at all:
+  not `classifyCapacity()`, not `readAuthoritativeCapacity()`, not `seedWave10AcceptanceBase()`, not the
+  quality-policy helpers.
+- **The OQC Fixture Implementation** — preserved as approved.
+- **The runners, the manifest, the guard, the lease, the protected target, the case identifiers, the
+  evidence levels and the M-board shape** — unchanged. M-R09 is a `GATE-B-PRODUCTION-RACES` case, not one
+  of the seven `GATE-B` suite-2 identities, so no evidence record or M-board shape is affected.
+- **Schema, migrations, package files, `README.md` and the release tags** — unchanged.
+
+### 37.47.7 Intended implementation file list and the exact intended diff (not yet modified)
+
+| File | Change | Production behaviour change |
+|---|---|---|
+| `server/mysql-sales-customer-wave10-concurrency.integration.js` | the M-R09 classification expectation, plus one additive available-capacity precondition | none |
+| `log/2026-10-26.md` | this Design record (append-only) | none |
+
+**Explicitly not modified:** `server/app.js`, `server/modules/credit-check.js`,
+`server/modules/credit-profile.js`, `server/modules/quality-gates.js`,
+`server/modules/traceability-quality.js`, `server/modules/sales-orders.js`,
+`server/test-utils/wave10-mysql-acceptance-fixture.js`,
+`server/mysql-sales-customer-wave10-gate-b.integration.js`,
+`server/mysql-sales-customer-wave10-business-matrix.integration.js`,
+`server/sales-customer-wave10-quality-policy.test.js`, `scripts/testing/test-suites.js`,
+`scripts/gates/**`, `server/migrations/**`, `server/database/**`, `package.json`, `README.md`,
+`document.md` (the Requirement phase is already recorded), `AGENTS.md`, `CLAUDE.md`.
+
+The exact intended diff, **not executed**:
+
+```diff
+--- a/server/mysql-sales-customer-wave10-concurrency.integration.js
++++ b/server/mysql-sales-customer-wave10-concurrency.integration.js
+@@ -518,7 +518,8 @@ test('M-R09 — the canonical SO→AR transition stays in the salesperson exposure an
+     const capacity = readAuthoritativeCapacity(db, { salespersonId: 'w10-race-sp-a', deltaA: 20000, deltaB: 20000 });
+     assert.equal(capacity.exposureCents, obligation, 'the transition must leave the obligation in the AR stage');
+     assert.equal(capacity.available, capacity.limitCents - obligation);
+-    assert.equal(capacity.classification, 'ONLY_ONE_FITS', 'the sub-limit classification must be computed from the actual exposure');
++    assert.ok(capacity.available < 20000, 'each proposed delta must exceed the available sub-limit capacity');
++    assert.equal(capacity.classification, 'NEITHER_FITS', 'the sub-limit classification must be computed from the actual exposure');
+     assert.ok(capacity.exposureCents + 20000 > capacity.limitCents, 'the proposal must exceed the sub-limit');
+     const before = captureWave10PersistenceProjection(db);
+     const { outcomes, waits } = await runCoordinatedWave10Race([a, b, c], registrations, [
+```
+
+Net effect: one literal corrected, one precondition assertion inserted, no assertion removed, no
+message deleted, no other line touched. The assertion message text is preserved verbatim so the
+failure text a reader sees for the classification remains the same phrase as before.
+
+### 37.47.8 Regression plan and evidence level
+
+| Gate | Command | Expected |
+|---|---|---|
+| Shared-fixture regression | `node --test server/sales-customer-wave10-quality-policy.test.js` | 4 tests / 4 pass — unchanged, it shares the fixture module |
+| FAST | `pnpm.cmd test:fast` | pass, no skip / todo / cancelled |
+| FULL | `pnpm.cmd test` | pass, no skip / todo / cancelled |
+| build | `pnpm.cmd build` | PASS |
+| whitespace | `git diff --check` | exit 0 |
+
+**Evidence level.** This is a **test-contract** correction. The corrected M-R09 case can only be
+evaluated by the protected real-MySQL Gate B campaign, which this stage does not authorize and did not
+run. The M-R09 real-MySQL evidence therefore remains `TEST_EVIDENCE_PENDING`; this Design claims no
+Gate B PASS, no Wave 10 Acceptance and no Freeze.
+
+**Open observation, not a scope expansion.** `classifyCapacity()` is currently reachable only through
+`readAuthoritativeCapacity()` inside the MySQL-gated suites; there is no engine-neutral local
+regression over the classification algebra itself. A local SQLite regression over the algebra would
+have made this contradiction visible without a MySQL campaign. Adding one is a separate Requirement and
+is deliberately **not** part of this authorized Implementation.
+
+### 37.47.9 Rollback, compatibility and hard stop
+
+**Rollback.** The change is confined to one assertion block in one test file. A plain revert of that
+file restores the previous state. No schema, migration, data, external system or persistent state is
+involved, so there is no database-side rollback and no partially applied state to reconcile.
+
+**Compatibility.** Unchanged: the production Credit engine, the capacity classification algebra, the
+exposure projection, the production refusal contract, the Finance recognition writers, the canonical
+HTTP routes, the L0 and L1–L8 lock order, READ COMMITTED isolation, permissions, status machines, audit
+and idempotency contracts, the Wave 9 freeze, the Gate A freeze, the Gate B case identities and
+evidence levels, the M-board shape, the package version and the release tags.
+
+**Hard stop.** Design ends here. Implementation requires a separate explicit authorization under
+AGENTS.md §4.4. This stage executed no MySQL connection, no Gate B run, no Git write operation and no
+source-code modification.
+
+**Status: `WAVE10_MR09_CONTRACT_DESIGN_READY`.**
+
+## 37.48 Wave 10 CHECK clause parity normalization design (2026-10-26)
+
+### 37.48.0 Authorization and boundary
+
+The user confirmed the gap `WAVE10_PARITY_CHECK_CLAUSE_ESCAPE_NORMALIZATION_ABSENT` and authorized one
+consecutive `AUDIT / COVERAGE CONFIRMATION -> REQUIREMENT -> DESIGN` stage with a mandatory HARD STOP
+at the end of Design. This section records the Design phase only. The Requirement phase is
+`document.md` -> "Wave 10 CHECK clause parity normalization Requirement (2026-10-26)".
+**Implementation is not authorized by this stage.** Real MySQL access, any Gate B or Wave 10
+Acceptance re-run, Git writes, credential operations, production CHECK definitions, DDL, migrations,
+business code, the Gate runner / manifest, the OQC fixture remediation, the `M-R09` assertion and
+Wave 11 remain outside this Design.
+
+### 37.48.1 Design basis — what the audit proved and what it did not
+
+The audit facts are recorded in `document.md` -> A1..A18. The load-bearing ones, restated from the
+source rather than copied from any log:
+
+| Fact | Consequence for the Design |
+|---|---|
+| A2, A3 | the MySQL-side text really carries backslash-escaped quote delimiters; the transport is lossless, so the bytes are the server's own |
+| A4, A5 | the DDL that created the constraints has plain quoted literals, and the SQLite side of the *same* text parsed cleanly |
+| A6 | the tokenizer has no backslash branch; `\` is an unsupported token |
+| A7 | the unsupported token falls back to `raw:`, which can never equal a parsed canonical form |
+| A8 | the only clause that compared equal is the only one without a string literal |
+| A9 | the tokenizer supports the SQL-standard doubled-quote escape and no other literal form |
+| A11 | the repository never sets `sql_mode`; the session inherits the server default |
+| A13 | no column of the eight compared tables uses a case-sensitive collation, so the case-insensitive literal rule is sound here |
+| A15, A17 | the local regression is source-text only and models the server rendering by hand; the live rendering differs from that model **only** in the literal quoting |
+| A18 | the semantic equivalence is bounded but not closed: the canonical DDL is mode-independent, the server's *rendering convention* is unobserved |
+
+The single load-bearing conclusion: **the divergence is one representational dimension — how a string
+literal's quotes are rendered — and it is confined to the acceptance test contract.**
+
+### 37.48.2 Option comparison
+
+**Option A — restricted, provenance-bound escape recognition in the tokenizer (CHOSEN).**
+The tokenizer's string-literal branch gains the ability to read a string literal whose delimiters are
+backslash-escaped, and only that. The literal's content is taken verbatim; any backslash inside the
+content, any unknown escape, and any unterminated literal are unsupported tokens and therefore
+fail closed. The literal dialect is an explicit parameter derived from the input's provenance, never
+inferred from the bytes.
+
+**Option B — syntax-aware escape normalization before the tokenizer (REJECTED).**
+A pre-pass would have to find the string-literal regions itself in order to unescape them safely,
+which is a second lexer in front of the first. Two lexers over the same grammar drift, and the
+pre-pass is exactly the shape of the forbidden "unconditional global backslash removal" when its
+region detection is imperfect: one missed region silently rewrites a constraint. It also cannot
+express the requirement that an *unknown* escape must fail closed, because a pre-pass that does not
+recognise an escape has no way to distinguish "escaped" from "literal backslash".
+
+**Option C — a unified semantic model for both legal literal representations at the parser layer
+(REJECTED as a structural change; its intent is adopted inside Option A).**
+Moving literal decoding into the parser means changing the token shape, the parser and the
+renderer. That is the largest change of the three and it puts the escape rules in the layer that
+decides *structure* rather than in the layer that decides *where a literal ends*. The intent behind
+Option C is nevertheless adopted: Option A produces **one semantic literal model** for the two
+representations — the decoded content is the same value in both dialects — and the dialect itself is
+an explicit, provenance-derived parameter instead of an implicit guess.
+
+### 37.48.3 Chosen design — the literal dialect
+
+The whole Implementation is confined to the acceptance test contract in
+`server/test-utils/wave10-mysql-schema-fixture.js` and its local regression.
+
+**1. An explicit literal dialect.** Two dialects are declared:
+
+- `sql_standard` — the dialect of the canonical SQLite DDL source. Inside a `'...'` literal only the
+  SQL-standard doubled quote (`''`) denotes a literal quote. A backslash inside a literal is **not**
+  a supported form and is fail-closed, because the two dialects disagree about it and the fixture must
+  not silently pick one.
+- `mysql_catalog` — the dialect of `information_schema.CHECK_CONSTRAINTS.CHECK_CLAUSE`. A string
+  literal's **delimiters are themselves backslash-escaped**, exactly as captured in A2. The content
+  between the escaped delimiters is taken verbatim. A backslash inside the content is fail-closed,
+  because the rendering convention for content escapes is not observed (A18) and guessing it could
+  merge two different literals.
+
+**2. The dialect is bound to provenance, never to the bytes.** `normalizedSqliteTable()` keeps
+reading the canonical SQLite DDL, so its CHECK clauses are decoded in `sql_standard`.
+`readNormalizedMySqlTable()` reads the live catalog, so its CHECK clauses are decoded in
+`mysql_catalog`. No caller can obtain a MySQL rendering and have it decoded as a SQLite source, or
+the reverse, without changing the dialect explicitly.
+
+**3. The tokenizer's literal branch.** Under `sql_standard` the branch keeps its current behaviour
+and additionally rejects a backslash inside a literal. Under `mysql_catalog` the branch reads an
+escaped delimiter, keeps the doubled-delimiter rule symmetrically, and rejects a backslash inside
+the content. In both dialects an **unterminated literal is now an error**: today the scanner runs to
+the end of the text and produces a literal (A9), which is a silent acceptance of malformed input.
+
+**4. A retained diagnostic.** `normalizeCheckClause()` keeps its current return type, so no caller
+changes. A new exported `describeCheckClauseNormalization(value, options)` returns
+`{ form, dialect, canonical, reason }`, where `reason` is the retained parse failure. This is what
+makes an unsupported-syntax fallback distinguishable from a representational one (R05) and gives the
+fail-closed path a name.
+
+**5. The comparison stays the safety net.** Because a mis-decoded literal produces a *different*
+canonical form, the existing `assert.deepEqual(actual.checks, expected.checks)` already refuses to
+call an ambiguously decoded clause equivalent. A literal whose content contains a quote cannot be
+decoded unambiguously under `mysql_catalog`; it produces a parse failure or a differing canonical
+form, and the comparison fails loudly. No additional equivalence shortcut is introduced.
+
+**6. Fail-closed hardening of the standard dialect.** `sql_standard` rejects a backslash inside a
+literal rather than accepting it as an ordinary character. Without this, a SQLite source literal
+containing a backslash and a MySQL rendering of the same value would decode to different values and
+be reported as different constraints — a false negative that is at least safe, but a backslash in the
+SQLite source is also the one input for which the two dialects are genuinely ambiguous, so
+rejecting it is the honest behaviour rather than a silent coin flip.
+
+### 37.48.4 Why this is a test-contract correction, not a production behaviour change
+
+1. **No production file is modified.** `server/app.js`, `server/modules/**`, `server/migrations/**`
+   and `server/database/**` are not in the change list.
+2. **No CHECK definition, DDL or migration changes.** The approved CHECK sets of the eight tables
+   and their counts (A12) are untouched.
+3. **The comparison is not weakened.** `M-MIG-01` and `M-MIG-02` keep their live-database contract;
+   the remediation only changes how a clause is read.
+4. **The `raw:` fallback is not disabled.** It is retained, remains distinct from every parsed
+   canonical form, and gains a retained reason.
+5. **No table, column or literal is special-cased.** The rule is generic over the expression grammar.
+
+### 37.48.5 The preserved contracts
+
+- The 23 approved CHECK constraints of the eight tables keep their counts and their canonical forms.
+- `M-MIG-01` (`:117`) and `M-MIG-02` (`:410`) keep their scope, their live `information_schema`
+  comparison and their `assert.deepEqual` contract.
+- The existing local normalizer regressions (`server/sales-customer-wave10-mysql-parity.test.js:113`,
+  `:128`, `:146`) keep their intent and keep passing; the `:128` sample set is re-labelled to state
+  which dialect each sample is in, and the samples themselves are not weakened.
+- The column, foreign-key, index and physical-type parity contracts, and `assertIndexParity()`, are
+  untouched.
+
+### 37.48.6 SQL_MODE and the provenance of the input
+
+`sql_mode` governs how the server **parses input DDL**. The canonical DDL uses plain quoted
+literals, which denote the same value under every mode, so the enforced constraint is
+mode-independent (A18). The repository does not set `sql_mode` at all, so the session inherits the
+server default, and the live comparison's own session inherits it too.
+
+What is *not* established is the server's **rendering convention** when it re-prints a stored
+expression into `CHECK_CLAUSE`. The Design therefore:
+
+- selects the literal dialect from the input's **provenance** (SQLite DDL source vs. MySQL catalog),
+  never from the byte content;
+- reads and records the effective `@@session.sql_mode` and `VERSION()` from the live session the
+  campaign already uses, so the equivalence is anchored to observed server state;
+- **fails closed with a named diagnostic** if the observed mode disables backslash escapes
+  (`NO_BACKSLASH_ESCAPES`), because under that mode the server's own literal handling differs and
+  the fixture cannot certify the equivalence;
+- treats every rendering form outside the captured convention as unsupported, so a future change in
+  the server's printing convention surfaces as a named failure rather than as a silent mismatch.
+
+### 37.48.7 Intended implementation file list and the exact intended diff (not executed)
+
+| File | Change | Production behaviour change |
+|---|---|---|
+| `server/test-utils/wave10-mysql-schema-fixture.js` | the literal dialect, the restricted tokenizer change, the fail-closed unterminated-literal rule, the retained diagnostic, the live mode/version observation | none |
+| `server/sales-customer-wave10-mysql-parity.test.js` | the T01..T08 regression contract, built on the **captured** live rendering | none |
+| `server/mysql-sales-customer-wave10.integration.js` | **evidence only**: emit the live capture (the raw `CHECK_CLAUSE` bytes per table, `@@session.sql_mode`, `VERSION()`) and refuse a mode that disables backslash escapes | none |
+
+**Why the third file is required, and why it is not a scope expansion.** The captured rendering must
+come from a live server (R10). Only `server/mysql-sales-customer-wave10.integration.js` holds a live
+MySQL connection during the protected campaign; the fixture is a library and the local regression
+never connects. Without a change in that file the capture is never taken and the R10 evidence
+cannot exist. The change in it is strictly additive: it emits evidence and refuses one named mode.
+**No `M-MIG-01` / `M-MIG-02` assertion, comparison or expectation is modified there**, and no
+existing case is added, removed or skipped.
+
+**Explicitly not modified:** `server/app.js`, `server/modules/**`, `server/migrations/**`,
+`server/database/**`, `server/test-utils/wave10-mysql-acceptance-fixture.js`,
+`server/mysql-sales-customer-wave10-concurrency.integration.js`,
+`server/mysql-sales-customer-wave10-gate-b.integration.js`,
+`server/mysql-sales-customer-wave10-business-matrix.integration.js`,
+`server/sales-customer-wave10-quality-policy.test.js`, `scripts/gates/**`,
+`scripts/testing/test-suites.js`, `package.json`, `README.md`, `document.md` (the Requirement phase is
+already recorded), `AGENTS.md`, `CLAUDE.md`.
+
+The intended change in the fixture, **not executed**:
+
+```diff
+@@ export function normalizeCheckClause(value) {
+-export function normalizeCheckClause(value) {
++export function normalizeCheckClause(value, options = {}) {
++  return describeCheckClauseNormalization(value, options).canonical;
++}
++
++export function describeCheckClauseNormalization(value, options = {}) {
++  const dialect = options.dialect ?? CHECK_LITERAL_DIALECT.SQL_STANDARD;
+   const text = String(value || '')
+     .replace(/`/g, '')
+     .replace(/_utf8mb4|_utf8|_binary/gi, '')
+     .replace(/\s+/g, ' ')
+     .trim();
+-  if (!text) return '';
++  if (!text) return { form: 'empty', dialect, canonical: '', reason: 'empty clause' };
+   try {
+-    const tokens = tokenizeCheckClause(text);
++    const tokens = tokenizeCheckClause(text, dialect);
+     const parser = new CheckClauseParser(tokens);
+     const expression = parser.parseExpression();
+     if (parser.index !== tokens.length) throw new CheckClauseSyntaxError('trailing tokens');
+-    return renderCheckClause(expression);
++    return { form: 'canonical', dialect, canonical: renderCheckClause(expression), reason: null };
+   } catch (error) {
+     if (!(error instanceof CheckClauseSyntaxError)) throw error;
+-    return `raw: ${text.toLowerCase()}`;
++    return { form: 'raw', dialect, canonical: `raw: ${text.toLowerCase()}`, reason: error.message };
+   }
+ }
+@@ function tokenizeCheckClause(text) {
++function tokenizeCheckClause(text, dialect) {
+   ...
+   if (char === "'") {
++    // the mysql_catalog dialect reads a literal whose delimiters are escaped
++    ...
++    if (dialect === CHECK_LITERAL_DIALECT.MYSQL_CATALOG) { ... }
+   }
+ }
+```
+
+The net effect of the fixture change: one dialect parameter, one restricted literal branch, one
+fail-closed rule for an unterminated literal, one retained diagnostic. The `raw:` prefix, the
+canonical renderer and every existing caller keep their current behaviour for text that already
+parses.
+
+### 37.48.8 Regression contract
+
+| Case | Assertion |
+|---|---|
+| **T01** | a plain SQLite CHECK and its corresponding MySQL rendering normalize to one identical canonical form (the existing `:128` sample set, re-labelled by dialect) |
+| **T02** | the **captured live** MySQL escaped-literal rendering and the canonical SQLite form normalize to one identical canonical form, with every literal value preserved |
+| **T03** | CHECKs with different `IN` member sets, different literal values and different operand sets stay different (the existing `:146` set plus captured variants) |
+| **T04** | a different comparison operator, `AND` against `OR`, `NOT` against its operand and the presence against the absence of a `NULL` predicate all stay different |
+| **T05** | a doubled quote, an escaped quote, a lone backslash, a doubled backslash, an abnormal quote and an illegal escape are never merged: each either decodes to its own distinct value or fails closed, and no two different inputs normalize alike |
+| **T06** | an unsupported syntax, an unsupported escape and an unterminated literal each produce the `raw:` form **with a retained reason**, and the `raw:` form never equals a parsed canonical form |
+| **T07** | the approved CHECK count of each of the eight tables is unchanged (2 / 2 / 5 / 3 / 1 / 3 / 3 / 4 = 23), and every table's canonical CHECK set is non-empty |
+| **T08** | the existing physical parity, index, foreign-key and column-type contracts, and the existing normalizer regressions, are unchanged and still pass |
+
+T02 is only meaningful against the **captured** bytes. The captured rendering is recorded as a
+constant in `server/sales-customer-wave10-mysql-parity.test.js`, together with the server version,
+the observed `@@session.sql_mode` and the capture date, so the local regression is built on
+observed bytes and not on a hand-written model.
+
+### 37.48.9 Conditions that remain to be verified live
+
+These are **not** proven in this stage and must not be reported as proven:
+
+1. the server's exact rendering convention for a string literal whose **content** contains a quote
+   or a backslash — no such literal exists in the eight approved tables, so the captured evidence
+   cannot decide it; the Design fails closed on it instead of guessing;
+2. the effective `@@session.sql_mode` of the acceptance session, which is to be observed and
+   recorded during the Implementation;
+3. the live `M-MIG-01` / `M-MIG-02` result after the remediation, and the live `W10-RACES` /
+   `W10-BUSINESS-MATRIX` results, which remain `TEST_EVIDENCE_PENDING`;
+4. that the fixture's canonical form is unchanged for every constraint that already normalizes
+   today — this must be shown by the unchanged local regressions, not assumed.
+
+### 37.48.10 Rollback, compatibility and hard stop
+
+**Rollback.** The change is confined to the acceptance test contract in three test-side files. A
+plain revert of those files restores the previous state. No schema, migration, data, external system
+or persistent state is involved, so there is no database-side rollback and no partially applied state
+to reconcile.
+
+**Compatibility.** Unchanged: every production Credit, Finance, Quality and Sales module; every
+migration and schema object; the Gate A freeze; the Wave 9 freeze; the Gate B case identities,
+evidence levels and M-board shape; the `M-R09` assertion; the OQC fixture remediation; the
+package version and the release tags. The canonical CHECK form, the comparison order and the
+approved CHECK counts are unchanged for every constraint that already normalizes today.
+
+**Hard stop.** Design ends here. Implementation requires a separate explicit authorization under
+AGENTS.md §4.4. This stage executed no MySQL connection, no Gate run, no Git write operation and no
+source-code modification.
+
+**Status: `WAVE10_PARITY_CHECK_NORMALIZATION_DESIGN_READY`.**
+
+## 37.49 Wave 10 Final Acceptance blocker consolidated design (2026-10-27)
+
+### 37.49.0 Authorization and boundary
+
+The user reviewed and approved `document.md` -> "Wave 10 Full Acceptance blocker Requirement
+(2026-10-27)" §§1–17, including W10-ACC-R09 and W10-ACC-R10, and authorized the **Design** stage
+under AGENTS.md §4.3, with CB-1, CB-2 and CB-3 required to form **one** Design and one future
+Implementation unit. This section records the Design phase only.
+
+**Not authorized by this stage, and not performed:** Implementation; any test, build, Gate or
+campaign execution; any MySQL or DPAPI credential access; any Git write; any change to production
+code, schema, migration, manifest, runner or protected case identity; Wave 11; release; deployment.
+The Design additionally graded every Coverage Gap and Unverified Risk of the approved Requirement
+(§37.49.10) and reported two newly discovered extensions of the CB-2 blast radius (§37.49.3.4).
+
+### 37.49.1 Design basis — what was verified in the source for this Design
+
+| Fact | Source | Consequence for the Design |
+|---|---|---|
+| The rule-selection predicate | `server/modules/credit-check.js:508-511` — `business_stage=? AND status='ACTIVE' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)`, then the mode filter at `:513-516` | the engine has **no "rule missing" branch**; the only fact it can express is "the rule set offers no rule satisfying (stage ∧ ACTIVE ∧ date-window ∧ mode)" |
+| The unenforced outcome | `credit-check.js:667-675` returns `{enforced:false, decision:'PASS', checkGroupId:null, scopeResults:[], reasonCodes:['NO_APPLICABLE_EFFECTIVE_RULE']}` **before** any profile resolution and before any write | the no-rule outcome writes nothing, and the Profile's own attributes are never consulted on that path |
+| The switch is a separate, earlier gate | `credit-check.js:650-659` returns `['CREDIT_MANAGEMENT_DISABLED']` | the three unenforced paths are three distinct engine branches |
+| The canonical rule contract | `solution.md:26379` — "A stage with no applicable effective rule is **not credit-controlled** (`credit-check.js:667-675`) and leaves no evidence" | the no-rule semantics to preserve are already canonical |
+| `credit_check_rules.status` has **no** vocabulary | wave9 migration `:75` (SQLite DDL) and `:170` (MySQL DDL) declare `status` as free text with no CHECK; `credit_parameters.status` is the only credit table with a declared vocabulary (`CHECK(status IN ('DRAFT','ACTIVE','INACTIVE'))`, `:55`/`:160`); no rule-status value set is declared anywhere in `document.md` or `solution.md` | a non-ACTIVE rule status would be an **invented** business value; the effective window is the declared, dated attribute of a versioned rule |
+| The referential contract | `credit_profile.rule_id TEXT REFERENCES credit_check_rules(id)` (wave9 `:93`), MySQL DDL `:188`, `ON DELETE NO ACTION` (`mysql-schema.js:202`), enforced (`mysql-schema.js:410`/`:472`) | deleting the rule row is impossible, and SQLite enforces the same FK (`server/db.js:313`) |
+| The approval expiry gates | `credit-special-approval.js:169-174` (request) and `:277-282` (decision) compare the expiry against `credit_check_results.business_date`; `credit-check.js:589` compares it again at consumption | the expiry must be **later than the source check's business date**, which is frozen in the result row |
+| The production anchor key | `credit-anchor.js:15-23` — `CREDIT_OBJECT|<type>|<id>|CUSTOMER|<customer>|SCOPE:SALESPERSON|<id>` or `|SCOPE:AGGREGATE` | the fixture must not maintain a second format |
+| Anchor reuse | `credit-anchor.js:72-90` — insert, catch the duplicate, then `SELECT ... WHERE anchor_key=?` and verify `sameShape` (`:62-70`) | an existing anchor with the canonical key is **reused**, not duplicated |
+| Predecessor closure | `credit-profile.js:124-136` — the predecessor is found by `WHERE anchor_id = ?`, and its `effective_to` is set to `previousDate(effectiveFrom)` (`sales-foundation-common.js:36-40`) | the closure operates on the **anchor that actually holds the Profile** |
+| Atomicity | `credit-profile.js:148-186` — the anchor resolution, the closure, both INSERTs, the audits and the idempotency record are inside one `transaction()` | "the new version exists" and "the predecessor is closed" are one atomic fact; the ambiguous two-version state is unreachable once the anchor identity is canonical |
+| The production Profile writer is already the race actor | `scripts/gates/mysql-concurrency-sales-wave10-worker.mjs:149` — `profile-create` calls `createCreditProfile` | CB-3 needs no new path; only the fixture's anchor identity is wrong |
+| The shared fixture is dialect-neutral | the only MySQL-specific code in `server/test-utils/wave10-mysql-acceptance-fixture.js` is the lifecycle factory (`:48`) and the worker helpers (`:174-209`); `seedWave10AcceptanceBase` uses standard SQL and production writers | the fixture's seeding function can be exercised by an engine-neutral local regression |
+| The shared fixture already runs on SQLite | `server/sales-customer-wave10-quality-policy.test.js:55-59` builds a SQLite temp DB and calls `seedWave10AcceptanceBase(db, …)` | the R08 local regression has a proven home and pattern |
+| The production approval and Profile writers are already covered locally | `server/sales-customer-wave10-credit-check.test.js:170` (`createCreditProfile`), `:988`/`:997` (`requestCreditSpecialApproval` / `decideCreditSpecialApproval`) | the CB-2 and CB-3 local regressions need no new production harness |
+| A local "no applicable effective rule" precedent exists | `server/sales-customer-wave10-credit-check.test.js:364` — "S15 — a stage without any effective rule is not credit-controlled" | the engine semantics are already proven locally; the acceptance fixture needs a *richer* expression, and the local regression must cover **both** |
+| The approval idempotency contract | `financial-controls.js:44-58` — the same key with a different fingerprint is a 409 | a date-derived body changes the fingerprint; each campaign recreates the schema, and within one run each request is sent once, so no replay conflict arises. Local regressions must use distinct keys per body variant |
+
+### 37.49.2 CB-1 — the `M-BIZ-19` `no-rule` fixture state
+
+#### 37.49.2.1 Option comparison
+
+**Option A — an explicit no-rule seed mode in the shared fixture that produces a legal "no applicable
+rule" data relation at database initialization.**
+
+Two sub-forms exist and they are not equivalent.
+
+- **A1 — the rule row is never created** (and the Profile binds no rule). *Rejected.* This is exactly
+  what R03 forbids: "The absence of an applicable effective rule must therefore be expressed by the
+  rule set not offering one **for this stage on this business date** — never by the rule fact not
+  existing." It also destroys the audit trail and would force `credit_profile.rule_id` to NULL,
+  degrading the Profile's own rule binding.
+- **A2 — the rule row is created complete and real, and its effective window does not cover the case's
+  business date.** *Chosen.* The rule stays a real, dated, status-bearing, referenced and auditable
+  business object; only the dimension the engine filters on — the effective window — makes the rule
+  set offer nothing for this stage on this business date.
+
+**Option B — legally release the reference first, then delete the test rule.** *Rejected.* "Releasing
+the reference" is exactly one of the operations R02 prohibits: deleting or nulling the referencing
+Profile, or re-pointing it. It also violates R03 ("never by the rule fact not existing") and produces
+an unauditable deletion of a business fact. It is the current defect, split into two steps.
+
+**Option C — set the rule to a non-applicable state (inactive).** *Rejected in this form.* It would
+satisfy R02, but `credit_check_rules.status` carries **no CHECK constraint and no declared value set**
+anywhere in the repository (see §37.49.1). The fixture would have to invent a status value that the
+canonical schema does not declare, which is weaker than a declared, dated attribute and directly
+invites the "inactive-rule substitutes a missing-rule" objection the user raised.
+
+#### 37.49.2.2 The proof that the chosen state is the same fact, not a substitute
+
+The engine's applicability predicate (`credit-check.js:508-516`) is the conjunction of four
+conditions — stage match, `status='ACTIVE'`, the effective window, and the recognition-mode match.
+The engine has **no branch for a missing rule**. Its single unenforced-by-rule outcome is
+"the rule set offers no rule that satisfies the conjunction", and the reason code names exactly that:
+`NO_APPLICABLE_EFFECTIVE_RULE`.
+
+Therefore, for the engine and for every consumer of `evaluateCredit`:
+
+- a rule that does not exist and a rule that exists but fails one conjunct are **the same observable
+  fact** — identical return shape, identical reason code, identical zero writes, identical zero
+  evidence, identical `checkGroupId: null`;
+- the two differ only in their **audit trail**: the absent rule cannot answer "was there a rule for
+  this stage, and if so which version and why was it not applied?", while the retained rule can.
+
+There is consequently no "missing-rule state" at the engine boundary for an inactive rule to
+substitute. The objection is refuted on the engine's own contract, and the retained-rule form is
+strictly the more auditable of the two — which is precisely what R03 requires.
+
+**Why the effective window, and not the stage.** Changing the rule's `business_stage` would make the
+Profile's `rule_id` binding incoherent for the stage being checked, and the fixture's `stage`
+parameter drives both the rule's stage and the case's check stage, so a second stage parameter would
+be needed. The effective window is a declared attribute of every versioned rule, is already how the
+engine selects, and requires exactly one changed column.
+
+**Why the effective window, and not an expiry.** `effective_to` would require a second derived date
+and would additionally have to satisfy `CHECK(effective_to IS NULL OR effective_to>=effective_from)`.
+A future `effective_from` leaves `effective_to` NULL, so the rule is fully in force from a declared
+date, and only one column changes.
+
+**Why the horizon is six months and not one day.** The rule's `effective_from` is read when the
+fixture seeds it; the check's `business_date` is read later. The largest possible divergence is one
+UTC day. A one-day horizon would be unsafe (a midnight crossing would make the rule effective and the
+case would fail); the existing six-month convention leaves roughly 180 days of margin, so no
+midnight crossing can make the rule effective.
+
+#### 37.49.2.3 Chosen design
+
+1. **One new optional fixture parameter.** `seedWave10AcceptanceBase(db, { …, ruleMode = 'EFFECTIVE' })`
+   accepts two values:
+   - `'EFFECTIVE'` (the default, and the behaviour of every existing lifecycle): the seeded rule keeps
+     `effective_from = '2026-01-01'`. This literal is a **past** date and is therefore calendar-stable
+     for every future run — it is deliberately **not** changed to a derived date, because that would
+     alter the seeded fact of all 23 lifecycles without removing any risk.
+   - `'NOT_YET_EFFECTIVE'`: the seeded rule keeps **every** declared attribute — `rule_code`,
+     `business_stage`, `scenario`, `check_timing`, `control_strength`, `credit_item`,
+     `recognition_mode`, `status = 'ACTIVE'`, `result_payload_json`, `created_at`, `created_by` — and
+     only its `effective_from` moves to `wave10FutureBusinessDateFrom(wave10BusinessDate())`, with
+     `effective_to` left NULL.
+2. **`M-BIZ-19` changes.** The `no-rule` variant passes `ruleMode: 'NOT_YET_EFFECTIVE'`; the
+   `DELETE FROM credit_check_rules WHERE id='w10-race-rule'` statement is **removed**. The `disabled`
+   variant keeps the default seed mode, so the two variants differ only in the switch.
+3. **The zero-side-effect assertion is preserved unchanged.** The rule row is seeded **before** the
+   case captures its `before` projection, and the evaluation writes nothing, so
+   `assert.deepEqual(captureWave10PersistenceProjection(db), before)` continues to hold, including for
+   the `credit_check_rules` rows that the projection family `P-CREDIT` covers.
+4. **The three unenforced paths stay distinguishable, and the distinction becomes machine-checked.**
+   The two assertions of the `no-rule` variant are kept verbatim, and the reason code is added to both
+   variants: `['CREDIT_MANAGEMENT_DISABLED']` for `disabled` and `['NO_APPLICABLE_EFFECTIVE_RULE']` for
+   `no-rule`. This is a **strengthening**, disclosed as such: R04 requires the three facts to be
+   distinguishable and named, and the reason code is the engine's own expression of which gate was
+   taken. No assertion is removed, weakened, skipped or reclassified, and the case identity, the
+   manifest entry, the evidence level and the M-board shape are untouched.
+5. **Test-preparation DML versus production business action.** The rule's effective window is a
+   *declared reference fact* of the fixture, in the same class as the seeded rule row, the parameter
+   row, the Profile rows and the lock anchors — it substitutes no business transition. The case still
+   reaches the real resolver: `runCheck` calls the production `evaluateCredit`, which performs the
+   real stage/ACTIVE/date/mode selection. Nothing bypasses the Credit Rule Resolver.
+
+#### 37.49.2.4 Compatibility of the chosen design
+
+- **The other 19 business-matrix cases:** unaffected. The default mode is byte-identical to today's
+  seed, and the `no-rule` mode is used by exactly one lifecycle.
+- **The other 12 race cases and the 7 Gate B cases:** unaffected. Neither suite passes `ruleMode`, and
+  the seeded rule keeps `effective_from = '2026-01-01'`.
+- **The default fixture and Gate B compatibility:** the default seed mode is unchanged, so
+  `server/sales-customer-wave10-quality-policy.test.js`, which calls `seedWave10AcceptanceBase`, sees
+  exactly the same data as before.
+- **SQLite/MySQL consistency:** the change is one column value in one prepared INSERT. The fixture's
+  seeding SQL contains no dialect branch; the date helper is pure calendar arithmetic on a
+  `'YYYY-MM-DD'` string.
+- **Referential integrity:** the Profile's `rule_id` still resolves to the rule row; no statement in
+  the corrected setup deletes, orphans or re-points a referenced row; the FK and its
+  `ON DELETE NO ACTION` behaviour are unchanged in the canonical schema and in the migrated schema.
+- **Production impact:** none. No production code, schema, migration, constraint, permission, state
+  machine, audit or idempotency contract changes.
+
+### 37.49.3 CB-2 — the date-stable Special Approval expiry
+
+#### 37.49.3.1 Chosen design — one controlled business date per case
+
+The governing idea is that **each case owns exactly one controlled business date**, and that date is
+the single source for both the credit check and the expiry derivation. The expiry is therefore a
+**pure function of a value**, not a second reading of the clock.
+
+1. **One new pure fixture export.**
+   `wave10FutureBusinessDateFrom(baseBusinessDate, months = 6)` takes a `'YYYY-MM-DD'` string and
+   returns a `'YYYY-MM-DD'` string, using UTC calendar arithmetic only. Its contract is stated as an
+   invariant it enforces on itself: the result must be a valid calendar date **strictly later** than
+   the base; if it is not, the helper throws rather than returning an unusable value.
+2. **`wave10FutureBusinessDate(months = 6)` is replaced** by the pure helper. Zero-caller proof: the
+   only two call sites in the repository are `server/mysql-sales-customer-wave10-business-matrix.integration.js:234`
+   and `:239`, and both change under this Design. The old helper re-reads the clock, which is exactly
+   the property that must be removed.
+3. **`M-R02` uses one controlled business date.**
+   ```js
+   const businessDate = wave10BusinessDate();
+   const expiryBusinessDate = wave10FutureBusinessDateFrom(businessDate);
+   ```
+   `businessDate` is passed into `creditInput({ orderId: 'w10-r2-order', businessDate })` for the
+   evaluation, and the **same** `expiryBusinessDate` value goes into the request body (`:292`) and the
+   decision body (`:296`). The two fixed `'2026-12-31'` literals disappear.
+4. **`B-M12` (Gate B) uses the file's own controlled business date.** The Gate B suite already freezes
+   its business date at `'2026-10-25'` (`server/mysql-sales-customer-wave10-gate-b.integration.js:37`).
+   The expiry is derived from that same frozen date, so the file's controlled business date, its
+   profile effective dates and its approval expiry all stay mutually consistent, and the case's
+   business semantics are unchanged. The two fixed `'2026-12-31'` literals at `:172` and `:180`
+   disappear.
+5. **`M-BIZ-04` computes its expiry once.** The request (`:234`) and the decision (`:239`) currently
+   call `wave10FutureBusinessDate()` **twice**, which reads the clock twice; the two calls can
+   straddle a UTC month boundary and yield different dates. It now derives one expiry from one
+   controlled business date and uses it in both places. This is the refinement of R09 that R09's own
+   acceptance condition 4 preserves ("`M-BIZ-04` … already uses the derived form and must keep using
+   it"); it is disclosed here because it is a second file touched by CB-2.
+6. **Nothing else changes.** The approval amounts (`requestedOverrideCents` 50000,
+   `requestedCeilingCents` 100000, the approved equivalents), the authority ceiling, the requester /
+   approver separation, the idempotency keys and the whole race structure are untouched. The
+   production date validations (`credit-special-approval.js:169-174` and `:277-282`) are **not**
+   modified, the expiry stays a bounded, audited business attribute of the approval, and the expiry is
+   never made permanent or unbounded.
+
+#### 37.49.3.2 Cross-year analysis
+
+The production gate is `requestedExpiryBusinessDate < result.business_date` — only a **strictly
+earlier** expiry is refused, so an expiry equal to the business date is accepted.
+
+| Controlled business date `B` | Derived expiry `E = B + 6 months` (UTC) | `E > B` | The old literal `'2026-12-31'` against `B` |
+|---|---|---|---|
+| `2026-10-27` | `2027-04-27` | yes | accepted — `2026-12-31 > 2026-10-27` |
+| `2026-12-31` | `2027-06-30` (June has 30 days, so the month addition clamps from 31 to 30) | yes | accepted — equal to `B`, and the gate refuses only a **strictly** earlier date |
+| `2027-01-01` | `2027-07-01` | yes | **refused** — `2026-12-31 < 2027-01-01` → `CREDIT_SPECIAL_APPROVAL_EXPIRY_IN_PAST` |
+| `2028-02-29` | `2028-08-29` (August has 31 days, no clamping) | yes | **refused** — `2026-12-31 < 2028-02-29` |
+
+The cliff therefore starts at `2027-01-01`, exactly as the approved Requirement states, and the
+derived expiry is valid on every one of the four required dates and on every date in between. The
+month-addition clamping (a 31-day source month clamps to the last day of the target month) never
+threatens the invariant: the clamped result is still about five months ahead of the base, so the
+helper's own "strictly later" guard can never fail for a legal input.
+
+These four dates are not prose: they are the negative and positive regression cases specified in
+§37.49.7 (AC-05, AC-06).
+
+#### 37.49.3.3 UTC and drift analysis
+
+- **No second clock reading.** After the change the expiry does not read the clock at all; it is a pure
+  function of the case's controlled business date. The only remaining clock dependence is `B` itself,
+  read once per case.
+- **No request/decision drift.** The request body and the decision body carry the same computed value,
+  so the approval's requested and approved expiry can never disagree — which also removes the
+  month-boundary drift that `M-BIZ-04` had and that a naïve "derive from now" implementation would
+  reintroduce.
+- **No midnight sensitivity at the comparison.** The production gate compares the expiry against
+  `credit_check_results.business_date`, which is the **frozen** `B` of the source check. Both sides of
+  that comparison are therefore derived from the same `B`, so a campaign that crosses 00:00 UTC
+  between the evaluation and the request cannot change the outcome.
+- **The consumption path.** `credit-check.js:589` re-compares `approved_expiry_business_date` against
+  the consuming check's business date, which is the same `B`; `E > B` holds there as well.
+- **The idempotency fingerprint.** A date-derived body changes `requestFingerprint`. A replay of the
+  same key with a different body is a 409 (`financial-controls.js:57`). Within one campaign each
+  request is sent once, and every campaign recreates the target schema, so no stale
+  `idempotency_records` row can collide. The local regressions must use distinct keys per body
+  variant.
+
+#### 37.49.3.4 Blast radius of CB-2 — a newly discovered extension
+
+The approved Requirement's CB-2 evidence named `server/mysql-sales-customer-wave10-concurrency.integration.js:292,296`.
+A repository-wide search during this Design found **the same fixed `'2026-12-31'` expiry in the Gate B
+suite** at `server/mysql-sales-customer-wave10-gate-b.integration.js:172,180` (case `B-M12`), and the
+same literal in the **local** credit test at
+`server/sales-customer-wave10-credit-check.test.js:993,1001,1058,1066,1093,1101,1122,1167,1193`.
+
+- **`B-M12` is in scope and is fixed.** The Gate B suite is part of the protected acceptance
+  infrastructure, it requests and approves a Special Approval expiry, and the user's Design
+  instruction is to eliminate the fixed `2026-12-31`. R09's own wording — "**Any** Special Approval
+  expiry that the acceptance suite requests or approves must remain valid on every calendar date" —
+  already covers it, so no Requirement amendment is required. Note that `B-M12` is not itself a
+  calendar cliff, because its source business date is frozen at `'2026-10-25'`; the literal is
+  nevertheless removed so that the acceptance infrastructure carries no execution-deadline literal at
+  all, and so that the Gate B file's expiry is derived from its own controlled business date.
+- **The local credit test is explicitly out of scope and is deferred.** Its business date is frozen at
+  `'2026-10-24'`, so its literal is never a cliff; changing fourteen literals there would enlarge the
+  diff without removing a risk. It is graded as DEFERRABLE_WITH_JUSTIFICATION in §37.49.10.
+
+### 37.49.4 CB-3 — the canonical Profile anchor and the version chain
+
+#### 37.49.4.1 Chosen design
+
+1. **The fixture stops maintaining a second anchor-key format.** `seedProfile` in
+   `server/test-utils/wave10-mysql-acceptance-fixture.js` builds its `credit_lock_anchors.anchor_key`
+   with the production `creditObjectAnchorKey()` imported from `server/modules/credit-anchor.js`.
+   The fixture already imports production modules (`resolveEffectiveCreditProfile`,
+   `computeCreditExposure`, `upsertSalesParameters`, `createQcp`), so this is consistent with
+   existing practice and removes the possibility of the two formats drifting again.
+2. **Both scopes are checked.**
+   - **AGGREGATE:** `creditObjectAnchorKey({ customerId:'w10-race-customer', salespersonId:null,
+     creditObjectType:'SALES_ORDER', creditObjectId: W10_OBJECT })` yields
+     `CREDIT_OBJECT|SALES_ORDER|W10-RACE-OBJECT|CUSTOMER|w10-race-customer|SCOPE:AGGREGATE` —
+     **byte-identical to the fixture's current value**. The aggregate anchor row, the aggregate
+     Profile and every aggregate-scope case are therefore completely unchanged.
+   - **SALESPERSON:** the same call with `salespersonId:'w10-race-sp-a'` yields
+     `…|SCOPE:SALESPERSON|w10-race-sp-a`, where the fixture currently writes `…|SCOPE:w10-race-sp-a`.
+     This single string is the whole fix.
+3. **The consequence.** `ensureCreditLockAnchor` (`credit-anchor.js:72-90`) now finds the fixture's
+   anchor row instead of provisioning a second one, so `closePredecessorAndAssertNoOverlap`
+   (`credit-profile.js:124-136`) operates on the anchor that actually holds the seeded Profile, and the
+   predecessor **is** closed. `sameShape` (`credit-anchor.js:62-70`) holds, because the fixture's anchor
+   row carries exactly the shape the production call derives — anchor type `CREDIT_OBJECT`, the same
+   customer, the same salesperson (or NULL for the aggregate scope), the same credit object type and
+   id, and NULL policy-scope columns — so no `CREDIT_ANCHOR_SHAPE_CONFLICT` can arise. The insert inside
+   `ensureCreditLockAnchor` now hits the UNIQUE `anchor_key` and is handled by that function's own
+   duplicate handler before its SELECT fallback resolves the row; this is exactly the path the
+   aggregate scope already exercises today, so no new mechanism is introduced.
+4. **The anchor row identity and the FK are unchanged.** The anchor rows keep their ids
+   (`w10-anchor-agg`, `w10-anchor-a`) and the Profile keeps its `anchor_id` foreign key, so there is
+   no schema change, no migration, no new constraint and no FK change. Only the salesperson-scope
+   `anchor_key` string changes.
+
+#### 37.49.4.2 The verdict on the existing `2026-12-31` effective date — it must not be moved
+
+`M-R08` creates the new Profile version with `effectiveFrom: '2026-12-31'`
+(`server/mysql-sales-customer-wave10-concurrency.integration.js:476`). The answer is that this literal
+**stays**:
+
+1. **The atomicity proof removes the ambiguity.** `createCreditProfile` (`credit-profile.js:148-186`)
+   performs the anchor resolution, the predecessor closure, the Profile INSERT, the rating INSERT, the
+   audits and the idempotency record inside **one** `transaction()`. "The new version exists" and "the
+   predecessor is closed" are therefore the same atomic fact. The state "two Profiles qualify for the
+   same scope and business date" is unreachable once the anchor identity is canonical — it can only
+   arise from a create that never committed, and then the new Profile does not exist either.
+2. **The windows are disjoint for every business date.** The predecessor becomes
+   `['2026-01-01', '2026-12-30']` and the new version `['2026-12-31', ∞)`, because
+   `previousDate('2026-12-31') = '2026-12-30'`. Exactly one of them qualifies on any date, so the case
+   is date-stable **without** moving the literal.
+3. **The literal is a declared business fact, not an execution deadline.** It is the effective date of
+   the version the case creates. Moving it to a derived date would make the case's business content
+   depend on the run date — the same anti-pattern R09 forbids for expiries — and would make the
+   version boundary unpinnable.
+4. **Keeping it keeps the boundary testable.** The local regression can assert the resolution
+   *pinned* to the boundary: a business date of `2026-12-30` resolves the old version and `2026-12-31`
+   resolves the new one. A moving boundary could not be pinned at all.
+5. **Asymmetry, recorded rather than hidden.** Before `2026-12-31` the evaluation resolves the
+   predecessor; on and after it, the evaluation resolves the new version, depending on which
+   contender commits first. `M-R08` asserts only coherence — one Profile effective-state hash, one
+   policy snapshot fingerprint, exactly two scope rows — and both sides satisfy it. The Design does not
+   change the asserted behaviour and does not weaken any concurrency-result assertion.
+6. **`M-R04` needs no change at all.** It uses the **aggregate** scope, whose anchor key is already
+   canonical, so its predecessor is already closed today and its `'2026-12-31'` literal is already
+   harmless.
+
+#### 37.49.4.3 Blast radius on the other race cases and on the Gate B suite
+
+The salesperson-scope anchor key changes for the lifecycles that request a salesperson Profile:
+`M-R06`, `M-R07`, `M-R08`, `M-R09` and `M-R10`
+(`server/mysql-sales-customer-wave10-concurrency.integration.js:413,431,472,494,543`).
+`M-R01`, `M-R02`, `M-R03`, `M-R04`, `M-R05`, `M-R11` and `M-R12` are aggregate-only and are
+byte-identical.
+
+For the five affected cases the only observable differences are:
+
+- one fewer `credit_lock_anchors` row (the second, non-canonical anchor is no longer provisioned);
+  `credit_lock_anchors` is **not** in `PROJECTION_TABLES` and **not** in any
+  `WAVE10_PROJECTION_FAMILIES` member, so no asserted projection changes;
+- the policy snapshot now references the fixture's anchor id rather than a newly provisioned one, so
+  the snapshot fingerprint may differ from the previous run. Every affected case asserts only the
+  **equality** of the two scope rows' fingerprints and hashes, never a literal value — `M-R08` at
+  `:485-487` and `M-R04` at `:386-388` — so no assertion changes;
+- the `M-R09` assertion block is not touched by this Design at all.
+
+The Gate B suite requests **no** salesperson Profile, so its anchor keys and its typed evidence are
+unaffected by CB-3; only `B-M12`'s expiry changes under CB-2.
+
+### 37.49.5 Consolidated file whitelist and per-file responsibilities
+
+| # | File | Responsibility | Touch points |
+|---|---|---|---|
+| 1 | `server/test-utils/wave10-mysql-acceptance-fixture.js` | CB-1: the `ruleMode` seed parameter and the `NOT_YET_EFFECTIVE` rule state. CB-2: the pure `wave10FutureBusinessDateFrom` helper replacing `wave10FutureBusinessDate`. CB-3: the canonical anchor key via the production `creditObjectAnchorKey` | the `seedWave10AcceptanceBase` option list and the `credit_check_rules` INSERT; the date helper block (`:37-41`); the `seedProfile` anchor key (`:504-514`) and its new import |
+| 2 | `server/mysql-sales-customer-wave10-business-matrix.integration.js` | CB-1: the `M-BIZ-19` `no-rule` variant — the `ruleMode` option, the removal of the `DELETE`, the reason-code assertions. CB-2: `M-BIZ-04`'s single computed expiry | `:35` (imports), `:199`–`:433` (the two affected cases only) |
+| 3 | `server/mysql-sales-customer-wave10-concurrency.integration.js` | CB-2: `M-R02`'s single controlled business date and its single derived expiry, used by the request and the decision | `:292` and `:296` only. **The `M-R09` block and every other case stay byte-identical** |
+| 4 | `server/mysql-sales-customer-wave10-gate-b.integration.js` | CB-2: `B-M12`'s expiry derived from the file's own frozen business date | `:172` and `:180` only |
+| 5 | `server/sales-customer-wave10-acceptance-contract.test.js` **(new)** | the engine-neutral local regressions for all three fixes, including the negative reproductions of the original defects | new file |
+| 6 | `scripts/testing/test-suites.js` | register the new local regression file | the `FAST` and `FULL` arrays, following the existing Wave 10 entries |
+
+**Explicitly outside the whitelist and therefore untouched:** every production module
+(`credit-check.js`, `credit-profile.js`, `credit-anchor.js`, `credit-special-approval.js`,
+`sales-orders.js`, `commercial-golive.js`); every migration; the schema; the Gate runner and the
+manifest (`scripts/gates/mysql-sales-wave10-*.mjs`); the parity suite and the schema fixture
+(`server/mysql-sales-customer-wave10.integration.js`,
+`server/test-utils/wave10-mysql-schema-fixture.js`); the OQC regression
+(`server/sales-customer-wave10-quality-policy.test.js`); the canonical credit regression
+(`server/sales-customer-wave10-credit-check.test.js`); `package.json`; `document.md`.
+
+### 37.49.6 Invariants, dialect, transaction, RBAC, audit and idempotency analysis
+
+- **Key invariants the Implementation must preserve.**
+  1. `credit_profile.rule_id` always resolves to an existing `credit_check_rules` row.
+  2. No statement in any corrected setup deletes, orphans or re-points a referenced row; the foreign
+     key and its `ON DELETE NO ACTION` behaviour are unchanged.
+  3. `credit_check_rules.status` keeps its canonical value `'ACTIVE'` in every seeded rule; no
+     undeclared status vocabulary is introduced.
+  4. The seeded rule's effective window never covers the `no-rule` case's business date.
+  5. The seeded anchor key equals `creditObjectAnchorKey(...)` for both scopes.
+  6. One controlled business date per case; one derived expiry used by both the request and the
+     decision; the expiry is strictly later than the source check's business date.
+  7. The default seed mode is byte-identical to the pre-Implementation seed.
+  8. The 39 protected cases, the suite manifest, the case identifiers, the evidence levels and the
+     M-board shape are unchanged.
+- **SQLite/MySQL compatibility.** Every change is either a parameter value in an existing prepared
+  statement or a pure function of strings. The fixture's seeding path contains no dialect branch; the
+  date helper performs UTC calendar arithmetic only and returns the same `'YYYY-MM-DD'` shape on both
+  backends; the anchor key is a pure string function of the production module. The canonical FK
+  behaviour is identical on both backends (`mysql-schema.js:202` and `server/db.js:313`).
+- **Transaction boundaries.** No transaction boundary changes. The CB-1 correction removes one
+  autocommit statement; the CB-2 and CB-3 corrections change parameter values only. The production
+  `createCreditProfile` transaction and the production approval transactions are untouched.
+- **RBAC.** The cases' actors are unchanged: `APPROVER` and `REQUESTER` keep
+  `CREDIT_SPECIAL_APPROVE`, and the requester/approver separation asserted by
+  `credit-special-approval.js:234-240` continues to hold because the request still goes out as
+  `w10-race-creator` and the decision as `w10-race-approver`. No permission, role or scope changes.
+- **Audit.** No production audit contract changes. The CB-1 correction removes a raw DML that never
+  produced an audit row; the CB-2 and CB-3 corrections change only fixture reference data. The
+  production audits written by the Profile creation (`CREATE_VERSION`, `INITIAL_ASSIGNED`) and by the
+  approval request/decision are unchanged.
+- **Idempotency.** The cases' idempotency keys are unchanged. The date-derived request body changes
+  the request fingerprint, which is acceptable because each campaign recreates the target schema and
+  each request is issued once per run (§37.49.3.3).
+
+### 37.49.7 Test and negative-regression plan
+
+All local regressions run on the **SQLite** backend, in a bounded, deterministic, environment-independent
+way, and must be executed under a backend that cannot resolve to MySQL.
+
+| ID | Target | Assertion | Why it is a real proof |
+|---|---|---|---|
+| AC-01 | CB-1 negative | with the canonical fixture state, `DELETE FROM credit_check_rules WHERE id='w10-race-rule'` is refused by the database (`SQLITE_CONSTRAINT_FOREIGNKEY`) | reproduces the original defect and proves the referential contract is enforced, so the fix cannot be a deletion |
+| AC-02 | CB-1 positive | the `NOT_YET_EFFECTIVE` state yields `enforced === false`, `decision === 'PASS'`, `reasonCodes === ['NO_APPLICABLE_EFFECTIVE_RULE']`, `checkGroupId === null`, and **zero** rows in `credit_check_results`, `credit_policy_snapshots`, `audit_logs` and `idempotency_records` | proves the corrected state produces the engine's non-enforced outcome and zero evidence |
+| AC-03 | CB-1 referential | the seeded Profile's `rule_id` resolves to an existing rule row; that row keeps every declared attribute, `status = 'ACTIVE'`, `effective_to IS NULL`, `effective_from > B` | proves the rule fact stays real, dated, status-bearing and auditable (R03) |
+| AC-04 | CB-1 path separation | in the `no-rule` state the rule does **not** satisfy (stage ∧ ACTIVE ∧ date-window) at `B`, and in the other-mode state it **does** satisfy that predicate while the requested recognition mode differs from the rule's; the three fixture states (disabled / no-rule / other-mode) differ in their seeded facts and each yields its expected outcome | proves the two rule-absent paths are reached through **different** filters, and that the switch path is a third, earlier gate — this is the machine-checkable form of R04 |
+| AC-05 | CB-2 cross-year positive | for `B` in `2026-10-27`, `2026-12-31`, `2027-01-01`, `2028-02-29`: `wave10FutureBusinessDateFrom(B)` is a valid calendar date strictly later than `B`, and the production `requestCreditSpecialApproval` accepts it against a source check whose `business_date` is `B` | proves the derivation is valid on every required date against the **production** gate |
+| AC-06 | CB-2 negative | the old literal `'2026-12-31'` is **refused** by the production request gate for `B` in `2027-01-01` and `2028-02-29` with `CREDIT_SPECIAL_APPROVAL_EXPIRY_IN_PAST`, and **accepted** for `B` in `2026-10-27` and `2026-12-31` | reproduces the original defect and proves the fix removes the cause rather than the symptom |
+| AC-07 | CB-2 identity | the request body and the decision body carry the same expiry; the stored approval carries that expiry; the approval is consumable at business date `B` | proves the request/decision pair stays coherent and the expiry is still a live, bounded business attribute |
+| AC-08 | CB-3 negative | with today's non-canonical anchor key, a production `createCreditProfile` for the same salesperson scope provisions a **second** anchor, the predecessor is **not** closed, and resolving at a date on or after the new version's `effective_from` raises `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` | reproduces the original defect and proves the anchor identity is its cause |
+| AC-09 | CB-3 positive | with the canonical anchor key, the production `createCreditProfile` reuses the fixture's anchor (no second anchor row), the predecessor's `effective_to` becomes `previousDate(newEffectiveFrom)`, the resolver returns the **old** version at `2026-12-30` and the **new** version at `2026-12-31`, and `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` is never raised | proves the version chain is genuinely closed and both sides of the boundary resolve correctly (the §5 requirement) |
+| AC-10 | CB-3 identity | the fixture's seeded `anchor_key` equals `creditObjectAnchorKey(...)` for the aggregate scope **and** the salesperson scope | proves the fixture no longer maintains a second format |
+| AC-11 | invariants | the eight approved Credit tables keep their 23 CHECK constraints (2/2/5/3/1/3/3/4) and the existing parity, index, foreign-key and physical-type contracts are unchanged | asserted by the **unchanged** parity suite `server/sales-customer-wave10-mysql-parity.test.js`, which must still pass as-is |
+
+**Mandatory regression gates after the Implementation** (each under a backend that cannot resolve to
+MySQL): the new local file; `server/sales-customer-wave10-quality-policy.test.js` (unchanged, but it
+consumes the modified shared fixture); `server/sales-customer-wave10-credit-check.test.js` (unchanged);
+`server/sales-customer-wave10-mysql-parity.test.js` (unchanged); then `pnpm test:fast`, `pnpm test`,
+`pnpm test:heavy` and `pnpm build`, and `git diff --check`.
+
+### 37.49.8 Protection of the already approved work
+
+- **The OQC fixture remediation** (`server/sales-customer-wave10-quality-policy.test.js` and the
+  fixture's `seedWave10QualityPolicy`) is preserved: the fixture's default seed mode keeps
+  `effective_from = '2026-01-01'`, so the OQC control point installation and the `qualityPolicy`
+  default are untouched, and the eight delivery-creating business-matrix cases keep their shared
+  base.
+- **The CHECK parity normalization remediation** is preserved byte-for-byte:
+  `server/test-utils/wave10-mysql-schema-fixture.js` and
+  `server/mysql-sales-customer-wave10.integration.js` are **not** in the whitelist, so
+  `M-MIG-01` / `M-MIG-02` keep the normalized comparison and the local parity regression
+  (`server/sales-customer-wave10-mysql-parity.test.js`, with its three `raw:`-branch assertions) is
+  untouched.
+- **The `M-R09` remediation** is preserved: the `M-R09` block of the concurrency suite is not in the
+  touch points of §37.49.5; only `M-R02`'s two literals change in that file.
+- **The existing PASS evidence** (`WAVE10_GATE_B_PASS`, the parity normalization implementation
+  pass, FAST 467/467, FULL 2894/2894, HEAVY 67/67, build PASS) remains valid for the code it was
+  produced from. It does **not** remain valid as evidence about the two protected suites and the
+  shared fixture that this Implementation changes: see §37.49.11.
+
+### 37.49.9 Rollback
+
+- **Blast radius of the rollback:** the Implementation touches six files, of which five are test
+  contracts and one is the suite manifest. No production code, schema, migration or data is involved,
+  so there is **no** schema rollback, no data rollback and no production rollback. The protected target
+  is recreated by the campaign's own reset, so no database state survives a run.
+- **Single-step rollback:** revert the six whitelisted files to their pre-Implementation content. The
+  canonical code, the schema and the migrations are untouched by the Implementation, so this restores
+  the exact pre-Implementation state, including the pre-existing `WAVE10_MATRIX_M_BIZ_19_NO_RULE_VARIANT_FK_BLOCKED`
+  defect — the rollback therefore re-opens CB-1, CB-2 and CB-3 and must be accompanied by a new
+  Requirement record.
+- **Two-phase rollback** (preferred): phase 1 reverts files 1–4 and 6, restoring the three protected
+  suites to their pre-Implementation behaviour while keeping the new local regression in place, so the
+  local gate keeps reporting the defect; phase 2 removes file 5 and its two `test-suites.js`
+  registrations once the follow-up Requirement is opened.
+- **Rollback trigger:** any local gate failure that cannot be attributed to the Implementation, or any
+  divergence between the local regressions' expectations and the protected campaign's real behaviour.
+
+### 37.49.10 Final grading of the Coverage Gaps and Unverified Risks
+
+| ID | Subject | Grading | Reason |
+|---|---|---|---|
+| **UR-3** | fixture anchor key vs. the production anchor identity | **REQUIRED_FOR_CURRENT_ACCEPTANCE** | it is the root cause of the confirmed blocker CB-3; §37.49.4 fixes it by reusing the production `creditObjectAnchorKey` |
+| **UR-5** | runner's default per-suite timeout vs. the estimated `W10-BUSINESS-MATRIX` runtime | **REQUIRED_FOR_CURRENT_ACCEPTANCE** | the campaign must carry a timeout above the suite's measured runtime; this is satisfied by the operational precondition already in §15.3 and by §37.49.11, not by code |
+| CG-1 | `M-BIZ-03`「does not fall back to a historical ACTIVE」 | **SEPARATE_REQUIREMENT_REQUIRED** | the setup update is a no-op and no historical ACTIVE version exists, so the stated premise is not exercised. Making it real requires a new fixture capability (a historical ACTIVE Profile version) and changes what the case asserts. The case still passes as a CLOSED fail-closed check, so it does not block the Acceptance |
+| CG-2 | `M-BIZ-08`「overdue AR」 | **SEPARATE_REQUIREMENT_REQUIRED** | `credit-check.js` selects `due_date` and never uses it, so the overdue premise is inert. Making it real is a **production** behaviour change (an overdue-day policy over AR due dates), which is a product Requirement, not an acceptance-contract fix |
+| CG-3 | `M-MIG-01` compares only the CHECK constraints of the two Wave 10 tables | **SEPARATE_REQUIREMENT_REQUIRED** | the residual hole is "live MySQL against the canonical SQLite source" for those two tables' columns, foreign-key mapping and indexes. `M-MIG-06` already compares fresh against upgrade over all eight tables including these two, and `M-MIG-02` compares the canonical source against the live target for the six Wave 9 tables. Strengthening `M-MIG-01` would change a protected case's comparison contract, which R07 forbids without an explicit amendment |
+| CG-4 | the hand-written MySQL DDL materialization path of the Wave 9 tables is never exercised | **DEFERRABLE_WITH_JUSTIFICATION** | `credit_lock_anchors.policy_scope_id` is `VARCHAR(128)` through the snapshot path (`mysql-schema.js:114`) and `LONGTEXT` through the migration's own DDL (`wave9:149-150`), but both are the same text family and the column is not a foreign key, is not indexed and is NULL for every anchor the fixture and the production builder create. No acceptance path can produce the divergence, and any future correction would touch a migration, which needs its own Requirement |
+| CG-5 | `M-BIZ-16`'s second and third evaluations are exact replays | **DEFERRABLE_WITH_JUSTIFICATION** | the check-group identity excludes the recognition mode (`credit-check.js:873-876`), so the later calls resolve to the same group and suppress the result row and the audit. The mode filter is nevertheless applied on every call (`:666`), so the asserted per-mode decision is recomputed against the requested mode and the stated fact — a global rule applies to every supported mode — is genuinely established. Only three independent persisted evaluations are not produced, and no Acceptance condition depends on them |
+| CG-6 | `M-R02`'s "exactly one effective authority" is a disjunction | **DEFERRABLE_WITH_JUSTIFICATION** | the line can only fail when *neither* authority exists, so it proves "at least one". The "exactly one" part is carried by the neighbouring `consumes <= 1` (`:309`), the Sales Order approve-audit count (`:310-311`) and the production consumption semantics (`credit-check.js:884-906`), under which a standard approval can only succeed by consuming an approval. Tightening it would change a Gate B-evidenced race case's assertion, which needs its own Requirement and a Gate B re-run |
+| CG-7 | `M-R04`'s Profile-identity assertion is a tautology | **DEFERRABLE_WITH_JUSTIFICATION** | the candidate list is built from the same table the assertion reads, so it can only fail on a deleted Profile. The substantive invariants of the case are proved by the adjacent `profiles.size === 1` / `fingerprints.size === 1` / `hashes.size === 1` assertions (`:386-388`), which are sound |
+| UR-1 | `M-BIZ-06` exposure window across a UTC midnight | **DEFERRABLE_WITH_JUSTIFICATION** | a ~1-in-86 400 calendar race, already documented in the fixture (`:25-33`); the fixture derives the business date from the run date precisely to avoid the silent drop. The failure would be loud, not a false PASS. Fixing it means capturing the business date once per case, which is a fixture behaviour change outside the approved Requirement |
+| UR-2 | `M-BIZ-12` `sales_delivery_no` same-millisecond collision | **DEFERRABLE_WITH_JUSTIFICATION** | the two deliveries are separated by a full HTTP create-and-confirm round trip including a scrypt login, so the collision probability is negligible; the column is UNIQUE, so a collision would be a loud failure |
+| UR-4 | hard-coded date literals in `M-BIZ-05` / `M-BIZ-08` / `M-BIZ-15` / `M-BIZ-20` | **DEFERRABLE_WITH_JUSTIFICATION** | these are declared reference facts that do not enter the derivation of any asserted value; the `M-BIZ-20` rule's `effective_from = '2026-01-01'` is a past date and therefore calendar-stable. They are recorded, not changed, to keep the Implementation minimal |
+| UR-6 | `innodb_lock_wait_timeout = 2` against the 15 s gate-admission budget | **DEFERRABLE_WITH_JUSTIFICATION** | a slow first wait-evidence observation makes the contenders abort and retry, opening gaps in the pending window; if the delay exceeded the budget the approval would be refused with HTTP 503, which the suite explicitly rejects. The failure mode is loud, never a false PASS |
+
+**No Coverage Gap or Unverified Risk classified as REQUIRED_FOR_CURRENT_ACCEPTANCE requires a code
+change beyond the three confirmed blockers**, so no Requirement amendment is needed to execute this
+Design.
+
+### 37.49.11 Future acceptance plan and the suite-timeout question
+
+The sequence below is a plan for **separately authorized** steps; none of it is executed by this
+Design.
+
+1. **Focused local SQLite regression** — the new `server/sales-customer-wave10-acceptance-contract.test.js`
+   (AC-01…AC-11), plus the three unchanged neighbouring suites, under a backend that cannot resolve to
+   MySQL.
+2. **`pnpm test:fast`, `pnpm test`, `pnpm test:heavy`, `pnpm build`, `git diff --check`** in the
+   isolated SQLite environment. The FULL count will change by the new file's case count; the Design
+   does not predict a number, because the Implementation must not be tuned to a number.
+3. **Full read-only acceptance contract verification** — re-read the Requirement's acceptance
+   conditions §13 (now 11 conditions) against the Implementation's actual diff, item by item.
+4. **Protected MySQL preflight** — the read-only identity, grant, inventory, lease and
+   `sql_mode` checks, **plus** the confirmation that `ERP_MYSQL_WAVE10_SUITE_TIMEOUT_MS` is present in
+   the child environment, and an OS process check that no orphan runner holds the target.
+5. **One canonical `pnpm.cmd test:mysql:wave10` campaign** — exactly one run, against the dedicated
+   disposable target, with no mid-campaign patching.
+6. **Strict TAP, final cleanup and the five-category zero inventory** — the runner's own contract.
+7. **A Gate B re-run, then the final Acceptance review.** This step is new and is required: the
+   Implementation changes `server/mysql-sales-customer-wave10-concurrency.integration.js` and the shared
+   acceptance fixture, and the Gate B suite consumes the shared fixture. The existing
+   `WAVE10_GATE_B_PASS` transcript therefore no longer corresponds to the current worktree, and the
+   Gate B typed M-board evidence must be regenerated before the Acceptance can rely on it. The Gate B
+   campaign is a **separately authorized** step and must precede the final review.
+
+**Is `1800000 ms` sufficient?** The measured per-lifecycle cost is ≈27 s (`W10-PARITY` 193 s over 7
+cases; `W10-RACES` 324 s over 12 cases), so `W10-BUSINESS-MATRIX`'s 23 lifecycles estimate to ≈620 s
+against a 1800 s budget — roughly 2.9× headroom. That estimate is nevertheless **not evidence**:
+`W10-BUSINESS-MATRIX` has never been executed, and its cases are heavier than the parity and race
+cases, because they run HTTP logins with scrypt, canonical Delivery and confirmation, invoice posting
+and collection settlement, against a freshly rebuilt 324-table schema each time. A per-lifecycle
+worst case of ≈78 s would exhaust the budget. **The Design therefore treats `1800000 ms` as a
+reasonable but unproven bound and fixes the following principle: if the campaign times out, the run is
+INCONCLUSIVE — not a PASS and not a product defect.** The operator must then, in order: (i) record
+the observed per-lifecycle duration from the transcript and the suite that timed out; (ii) not patch
+anything during or after the run; (iii) re-derive the required budget from the measured duration
+before requesting a second, separately authorized run; and (iv) before that run, confirm that no
+orphan runner process still holds the target, because the runner's timeout path with an **unconfirmed**
+child termination deliberately refuses to reset the target and does not release the campaign lease
+(`mysql-wave10-runner-support.mjs:173-181`, `:216`).
+
+### 37.49.12 Disclosed items for the reviewer's attention
+
+These are **not** blockers and the Design does not expand beyond the approved Requirement, but they
+must be visible to the reviewer.
+
+1. **CB-2's blast radius is wider than the Requirement's evidence named.** The same fixed
+   `'2026-12-31'` expiry exists in the Gate B suite (`B-M12`). It is fixed here under R09's general
+   wording and the explicit Design instruction; the Requirement's CB-2 evidence paragraph named only
+   the concurrency file. No Requirement amendment is required, but the reviewer should confirm that
+   reading.
+2. **`M-BIZ-04` is touched by CB-2** for the same reason: it currently computes its expiry twice from
+   two clock readings. R09's acceptance condition 4 preserves its derived form; this Design makes the
+   derivation single-valued.
+3. **One assertion strengthening is proposed.** `M-BIZ-19` gains the engine's reason code in both
+   variants (`['CREDIT_MANAGEMENT_DISABLED']` and `['NO_APPLICABLE_EFFECTIVE_RULE']`). It strengthens
+   R04's distinguishability requirement into a machine-checked form. No assertion is removed, weakened
+   or skipped, and no case identity changes.
+4. **The local credit regression keeps its frozen `'2026-12-31'` literals** (§37.49.3.4) — a
+   deliberate deferral, recorded in §37.49.10 under UR-4's neighbourhood.
+
+### 37.49.13 Design status
+
+The Design is complete and internally consistent: CB-1, CB-2 and CB-3 form one Implementation unit
+over one six-file whitelist, no production code, schema, migration, manifest, runner or protected case
+identity is touched, every Coverage Gap and Unverified Risk of the approved Requirement is graded, and
+the two newly discovered extensions of the CB-2 blast radius are reported and covered by the approved
+Requirement's own wording. **No issue blocks Implementation.**
+
+**Status: `WAVE10_ACCEPTANCE_BLOCKER_DESIGN_READY`.**
+
+## 37.50 Wave 10 Parity Oracle correctness design (2026-10-27)
+
+### 37.50.0 Authorization and boundary
+
+The user authorized, under AGENTS.md §4.0, one consecutive `AUDIT → REQUIREMENT → DESIGN` stage for the
+two remaining Wave 10 Full Acceptance parity blockers, with a mandatory HARD STOP at the end of
+Design. The Requirement phase is `document.md` → "Wave 10 Parity Oracle Requirement Addendum
+(2026-10-27)" and is recorded there.
+
+This section records the **Design** phase only. **Implementation is not authorized by this stage.**
+Real MySQL access, any protected campaign re-run, Git writes, credential operations, DDL, DML,
+migration execution, production CHECK definitions, production schema, migrations, business code, the
+Gate runner / manifest, the `M-R09` assertion, the OQC fixture remediation and Wave 11 all remain
+outside this Design.
+
+### 37.50.1 Design basis — the audited facts
+
+The facts are recorded in the Requirement Addendum §3 and are not restated here. The four that carry
+the Design:
+
+| Fact | Consequence for the Design |
+|---|---|
+| **P03** — the fixture already calls the production `mysqlTypeFamily`; there is **no** second type mapping in the repository | the Design must not introduce one, and the correction is confined to the **indexed predicate** that is passed into the shared mapper |
+| **P04 / P08** — the predicate difference is observable on exactly **five** foreign-key columns whose names do not end in `_id` | the correction is a **predicate** correction, and it must be proven to change exactly those five and nothing else |
+| **P05** — the referenced parent columns are `VARCHAR(128)`, so a `LONGTEXT` foreign-key child column would be refused by InnoDB | the production generator is **provably right**; the acceptance oracle is provably wrong. No production change is admissible |
+| **P12 / P13 / P14** — the CHECK comparison compares two differently ordered arrays of the same set, and it breaks `M-MIG-01` **and** two `M-MIG-02` tables | the CHECK correction is **not optional** for `M-MIG-02`, and both corrections belong in one Implementation unit |
+
+### 37.50.2 Option comparison — the CHECK comparison
+
+**Option A — sort the catalogue side by its canonical form (CHOSEN, together with B).**
+`readNormalizedMySqlTable()` sorts the normalized canonical forms before it returns them, exactly as
+`extractCheckClauses()` already sorts the SQLite side. The two producers of the same set then produce
+the same ordered array, and the existing `assert.deepEqual` comparisons keep working unchanged.
+
+**Option B — compare the normalized multiset explicitly (CHOSEN, together with A).**
+A named helper compares the two sides as **sorted arrays**: order-insensitive, and sensitive to the
+number of occurrences of each constraint, because the comparison uses arrays and not sets. The helper
+is the single place where the semantics are stated, and it is the target of the negative regressions.
+
+**Option C — compare the raw clauses before normalization (REJECTED).**
+The two sides use different dialects and different rendering conventions, so the raw texts are never
+comparable. Comparing them would reintroduce exactly the defect §37.48 removed.
+
+**Option D — compare the CHECK sets as `Set`s (REJECTED).**
+A set drops multiplicity, so a constraint that appears twice on one side and once on the other would
+compare equal. W10-PAR-R01 requires multiplicity to be preserved, and a duplicated constraint is a real
+schema defect.
+
+**Option E — keep the raw catalogue order and sort the SQLite side by the raw key instead (REJECTED).**
+The SQLite side has no raw catalogue key. The only portable ordering key is the canonical form itself,
+and the catalogue's raw order is a function of the server's rendering, not of the schema.
+
+### 37.50.3 Option comparison — the indexed predicate
+
+**Option A — align the fixture's predicate with the production generator's rule, and pin the two with
+a local regression (CHOSEN).**
+The fixture's indexed set becomes the index columns ∪ the foreign-key source columns, matching
+`mysql-schema.js:184-187`. The type mapping continues to be the production `mysqlTypeFamily`. The
+local regression proves, for **all 117 columns** of the eight tables, that the fixture's prediction is
+byte-identical to the type the production generator itself emits — so any future drift between the two
+is caught by the **local** gate rather than by a protected campaign.
+
+**Option B — export the production predicate and import it in the fixture (REJECTED for this unit).**
+This is the strongest single-source-of-truth form, but `server/database/mysql-schema.js` is on the
+bootstrap path of **every** MySQL suite, so changing it invalidates the `WAVE10_GATE_B_PASS`
+transcript and forces a Gate B re-run before the final review — for a two-line predicate. The
+production file also carries two copies of the rule today (`tableDefinition` at `:184-187` and
+`columnDefinition` at `:209-212`); consolidating them is a worthwhile **follow-up** (§37.50.11), not a
+prerequisite for closing the two blockers.
+
+**Option C — derive the expected type by parsing the production generator's emitted DDL (REJECTED for
+this unit).**
+It removes the duplication entirely, but it makes the *expected* side depend on a DDL parser, so a
+parser defect would silently weaken the expectation. Option A reaches the same guarantee with a
+direct, asserted equality against the generator's output and no new parser in the expectation path.
+
+### 37.50.4 Chosen design — the CHECK normalization, sorting and comparison data flow
+
+The data flow, end to end, after the change:
+
+```text
+SQLite side                                        MySQL side
+-----------                                        ----------
+sqlite_master.sql                                  information_schema.CHECK_CONSTRAINTS.CHECK_CLAUSE
+        |                                                     |
+        v                                                     v
+extractCheckClauses(ddl, {dialect: sql_standard})   normalizeCheckClause(raw, {dialect: mysql_catalog})
+        |                                                     |
+        v                                                     v
+  canonical form  (parse -> expression tree -> re-render)  canonical form
+        |                                                     |
+        v                                                     v
+  .sort()  <- the SQLite side already sorts            .sort()   <- ADDED: the catalogue side now sorts
+        |                                                     |
+        +---------------------------+-------------------------+
+                                    v
+                     assertCheckParity(expected, actual, label)
+                    = deepEqual([...actual].sort(), [...expected].sort())
+```
+
+Five properties of this flow are load-bearing and are stated here so a later change cannot silently
+break them:
+
+1. **The normalizer is not changed.** The grammar, the two literal dialects, the `raw:` fallback and
+   the bounded diagnostic of §37.48 stay exactly as they are. The correction is confined to the
+   **ordering** of the results and to the **comparison** of the two sets.
+2. **The `raw:` fallback is preserved.** A clause that cannot be parsed keeps its distinct `raw:`
+   form, which is a normalizable string and therefore sorts and compares like any other form. A
+   `raw:` form still never compares equal to a parsed form, because the two canonical strings differ.
+   The fallback is neither disabled nor ignored.
+3. **Multiplicity is preserved.** Both sides are compared as **sorted arrays**, never as sets. A
+   constraint that occurs twice on one side and once on the other is a difference, and it fails.
+4. **The comparison is order-insensitive.** The catalogue's order is a function of the server's
+   rendering (the parenthesis-depth prefix dominates under `utf8mb4_0900_ai_ci`), not of the schema.
+   The evidence collection in `server/mysql-sales-customer-wave10.integration.js:57-71` deliberately
+   keeps the **raw** catalogue order, because that order is the ordering-key evidence; it is not the
+   compared shape.
+5. **The comparison is strictly no weaker than before.** Every difference the old comparison could
+   detect — a missing constraint, an extra constraint, a changed expression, a changed multiplicity —
+   is still detected. The only difference the old comparison could detect that the new one cannot is
+   the *order* of the constraints, which carries no business meaning (P13).
+
+### 37.50.5 Chosen design — the indexed predicate and the reuse of `mysqlTypeFamily`
+
+`mysqlTypeFamily()` **is** reused, unchanged. The fixture already calls it
+(`wave10-mysql-schema-fixture.js:407-409`), and this Design adds no second mapping and no
+hand-written type table.
+
+The single correction is the **predicate**: "does the production generator consider this column
+indexed?" The production generator's answer is
+
+```js
+// server/database/mysql-schema.js:184-187
+const indexed = new Set([
+  ...table.indexes.flatMap((index) => index.columns.filter(isValidColumnName)),
+  ...table.foreignKeys.map((foreignKey) => foreignKey.from),
+]);
+```
+
+The fixture's predicate becomes the same set, with the same validity filter on the index columns:
+
+```js
+// server/test-utils/wave10-mysql-schema-fixture.js
+function mysqlIndexedColumns(table) {
+  return new Set([
+    ...table.indexes.flatMap((index) => index.columns.filter(isValidColumnName)),
+    ...table.foreignKeys.map((foreignKey) => foreignKey.from),
+  ]);
+}
+```
+
+`isValidColumnName` is a one-line predicate in `mysql-schema.js:21-23` and is **not** exported. The
+fixture therefore reproduces it as an inline `typeof column === 'string' && column.length > 0` filter
+and says so in a comment that names the production rule. This is the one place where a rule is
+written twice, and §37.50.8's PT03/PT05 regressions are what makes the duplication safe: they assert,
+column by column for all eight tables, that the fixture's prediction equals the type the production
+generator itself emits. A future change to the production rule that the fixture does not follow
+therefore fails the **local** gate.
+
+The predicate change alters the prediction for exactly five columns — the five of P08 — and for
+nothing else:
+
+| Table | Column | Before | After |
+|---|---|---|---|
+| `credit_parameters` | `created_by` | `longtext` | `varchar` |
+| `credit_check_rules` | `created_by` | `longtext` | `varchar` |
+| `credit_profile` | `created_by` | `longtext` | `varchar` |
+| `credit_policy_snapshots` | `captured_by` | `longtext` | `varchar` |
+| `credit_profile_ratings` | `applied_by` | `longtext` | `varchar` |
+
+The Wave 10 tables are unaffected, because their physical types come from the approved contract
+`WAVE10_MYSQL_COLUMN_TYPES`, which the mapper consults before the predicate is ever read (P06).
+
+### 37.50.6 The generic / hand-written DDL verification boundary
+
+The two paths are verified by **different means**, and the boundary is deliberate:
+
+| Path | What it is | How it is verified | What the parity suite compares |
+|---|---|---|---|
+| **generic snapshot bootstrap** | `mysql-schema.js:183-206` `tableDefinition()` applied to the SQLite snapshot; this is what the acceptance actually runs (P10) | the live `M-MIG-01` / `M-MIG-02` comparison, plus the offline PT03/PT05/PT07 regressions against the generator's own emitted DDL | the live MySQL table against the generator's output for the canonical SQLite source |
+| **hand-written migration DDL** | the `mysql(db)` block of each migration (`wave9:142-212`, `wave10:95-146`); **structurally unreachable** in the bootstrap (P11) | the offline PT09 regression, which compares the hand-written declaration against the generic declaration for all 117 columns and requires exactly **one** registered divergence | nothing at runtime — the path cannot run |
+
+The hand-written Wave 10 DDL is additionally covered by the **existing** test "the Wave 10 physical
+column contract equals the canonical live MySQL DDL"
+(`server/sales-customer-wave10-mysql-parity.test.js:162-172`), which stays unchanged.
+
+**The verification boundary therefore is:** the generic path is compared against the live server; the
+hand-written path is compared against the generic path offline. Neither comparison is skipped, and no
+production DDL is modified to make either one agree.
+
+### 37.50.7 Source change whitelist — the exact intended diff (not executed)
+
+Three files. **No production code, no migration, no schema, no runner, no manifest.**
+
+| # | File | Change | Touch points |
+|---|---|---|---|
+| 1 | `server/test-utils/wave10-mysql-schema-fixture.js` | the indexed predicate; the CHECK sort on the catalogue side; the new `assertCheckParity` helper; the two comparison sites use it | `indexedColumns` (`:17-19`) → `mysqlIndexedColumns`; `normalizedSqliteTable` (`:411-443`); `readNormalizedMySqlTable` (`:479-484`); `compareWave9SourceTarget` (`:499-502`); `assertEquivalentCreditMetadata` (`:622-625`); one new exported helper |
+| 2 | `server/mysql-sales-customer-wave10.integration.js` | `M-MIG-01`'s CHECK comparison uses the helper | `:184` (one line) |
+| 3 | `server/sales-customer-wave10-mysql-parity.test.js` | the new `PT01..PT10` block, a pure source-text reader for the eight tables, and the captured raw-ordering evidence | new block appended; no existing assertion changed |
+
+The intended diff, in shape:
+
+```js
+// 1. the predicate
+-function indexedColumns(table) {
+-  return new Set(table.indexes.flatMap((index) => index.columns).filter(Boolean));
+-}
++// §37.50 — the production generator's rule (mysql-schema.js:184-187): a
++// foreign-key source column counts as an indexed column. The narrower
++// index-only rule made the oracle predict a type that InnoDB refuses.
++function mysqlIndexedColumns(table) {
++  return new Set([
++    ...table.indexes.flatMap((index) => index.columns.filter(isValidColumnName)),
++    ...table.foreignKeys.map((foreignKey) => foreignKey.from),
++  ]);
++}
+
+// 2. the canonical CHECK comparison
++export function assertCheckParity(expectedChecks, actualChecks, label) {
++  assert.deepEqual([...actualChecks].sort(), [...expectedChecks].sort(),
++    `${label}: check-constraint parity`);
++}
+
+// 3. the catalogue side sorts its canonical forms
+-    .map((row) => normalizeCheckClause(row.check_clause, { dialect: CHECK_LITERAL_DIALECT.MYSQL_CATALOG }));
++    .map((row) => normalizeCheckClause(row.check_clause, { dialect: CHECK_LITERAL_DIALECT.MYSQL_CATALOG }))
++    .sort();
+
+// 4. the comparison sites
+-    assert.deepEqual(actual.checks, expected.checks, `${tableName}: check-constraint parity`);
++    assertCheckParity(expected.checks, actual.checks, tableName);
+```
+
+**Explicitly outside the whitelist:** `server/database/mysql-schema.js` (and therefore the production
+generator, `mysqlType`, `mysqlTypeFamily` and the production DDL), both migrations, the production
+schema, `server/db.js`, the Gate runner and manifest, the shared acceptance fixture, the concurrency
+suite, the Gate B suite, the business-matrix suite, `package.json`, `document.md` and this section.
+
+**Why the whitelist keeps the Gate B evidence valid.** The Gate B suites import the **acceptance**
+fixture (`wave10-mysql-acceptance-fixture.js`), not the schema fixture and not the parity integration
+file. The schema fixture is imported by exactly two files: `server/mysql-sales-customer-wave10.integration.js`
+and `server/sales-customer-wave10-mysql-parity.test.js`. A change confined to the three whitelisted
+files therefore does **not** invalidate the `WAVE10_GATE_B_PASS` transcript, and **no Gate B re-run is
+required by this Implementation**. A change to `server/database/mysql-schema.js` would have required
+one, which is one of the reasons Option B of §37.50.3 is rejected for this unit.
+
+### 37.50.8 Positive and negative regression plan
+
+The new regressions are added to the **existing** `server/sales-customer-wave10-mysql-parity.test.js`,
+which is already registered in `FAST` and `FULL`. **No new test file is created and
+`scripts/testing/test-suites.js` is not modified.** The file stays a pure test: it opens no database,
+reaches no MySQL server and produces no business result.
+
+**Identifier note.** The file already uses `T01`..`T08` for different tests (the CHECK-normalizer
+regressions of §37.48). The new set therefore uses the prefix **`PT01`..`PT10`**, which is mapped to
+the requested identifiers in the table below. No existing identifier is reused or renumbered.
+
+| Requested | Identifier | Assertion |
+|---|---|---|
+| T01 | **PT01** | the **captured live** catalogue order of the three tables whose order differs (`credit_check_results`, `credit_check_rules`, `credit_profile_ratings`) is a permutation of the canonical SQLite CHECK set; `assertCheckParity` **accepts** it, while the raw arrays differ in order |
+| T02 | **PT02** | a **missing** CHECK must fail: dropping one canonical form from the actual side makes `assertCheckParity` throw |
+| T03 | **PT03** | a differing **multiplicity** must fail: repeating one canonical form on the actual side makes `assertCheckParity` throw |
+| T04 | **PT04** | a **changed expression** must fail: replacing one clause with a semantically different one makes `assertCheckParity` throw |
+| T05 | **PT05** | the **foreign-key columns** are predicted exactly as the production generator predicts: for all eight tables and **all 117 columns**, the oracle's type family equals the type the production generator itself emits — including the five RC-2 columns, which must be `varchar` |
+| T06 | **PT06** | a plain **non-indexed, non-foreign-key** `TEXT` column is still `longtext` (`credit_parameters.value_text`, `credit_check_rules.credit_item`, `credit_profile.initial_state`, …), so the correction does not over-apply |
+| T07 | **PT07** | the **complete physical contract** of the six Wave 9 tables: 76 columns, 15 foreign-key edges, 16 CHECK constraints, 10 declared indexes, `id` as the single-column primary key of each table, and the canonical SQLite DDL and the canonical hand-written MySQL DDL declaring the **same column names in the same order** |
+| T08 | **PT08** | the **two Wave 10 tables** keep their approved physical contract: the generic generator's output for all **41** columns equals `WAVE10_MYSQL_COLUMN_TYPES`, and the hand-written Wave 10 MySQL DDL still equals the same contract |
+| T09 | **PT09** | a **genuine type difference** between the generic path and the hand-written path is still **detected**: `credit_lock_anchors.policy_scope_id` is `varchar` in the generic path and `longtext` in the hand-written path, it is the **only** such divergence among the 117 columns, and a comparison against a hand-written-materialized table still fails |
+| T10 | **PT10** | the **existing** regressions all survive: the CHECK-normalizer block, the index-parity block, the physical-contract block, the approved CHECK cardinality block, the foreign-key and migration-idempotency suites and the Wave 10 credit suite are unchanged and pass; the new block adds no `skip`, `todo` or `only`, and removes no assertion |
+
+**The captured-ordering evidence.** PT01 needs the catalogue's raw rendering in its **catalogue
+order**. Those bytes exist: they are the `raw` values of the `WAVE10_CHECK_METADATA_EVIDENCE` line of
+the 2026-10-27 campaign transcript, for all eight tables. The parity test already embeds a captured
+subset in exactly this way (the `CAPTURED_CHECK_RENDERINGS` block of §37.48, with its provenance
+recorded). PT01 extends that pattern to the three order-divergent tables and records the same
+provenance — server 8.0.37, server UUID `5d3c6a68-b8a5-11f1-8ce6-b025aa71d167`, campaign of
+2026-10-27, target `modern_erp_wave10_disposable_test`.
+
+**The pure source-text reader.** PT05, PT07 and PT09 need a snapshot-shaped table object without a
+database. The parity test already reads the two migration sources as text and already extracts their
+`CREATE TABLE` blocks (`sqliteDdlBlock`, `mysqlDdlBlock`). The new reader extends that with the
+column, foreign-key, index and table-level-UNIQUE extraction, and produces the same shape that
+`captureSqliteSnapshot()` produces, so that `normalizedSqliteTable()` and the production
+`planMySqlAdditiveReconciliation()` can both consume it. PT07's cross-check between the canonical
+SQLite DDL and the canonical hand-written MySQL DDL is what makes the reader's fidelity
+**machine-checked** rather than assumed: the two are independent declarations of the same eight
+tables, and they must agree on the column names and their order.
+
+### 37.50.9 The complete offline physical contract verification of all eight tables
+
+The offline verification is a single, exhaustive pass over the eight tables:
+
+| Table | Columns | Foreign keys | CHECKs | Declared indexes | Auto-indexes | Primary key |
+|---|---|---|---|---|---|---|
+| `credit_lock_anchors` | 10 | 2 | 2 | 2 | 0 | `id` |
+| `credit_parameters` | 12 | 2 | 2 | 2 | 0 | `id` |
+| `credit_check_rules` | 14 | 1 | 5 | 2 | 0 | `id` |
+| `credit_profile` | 19 | 5 | 3 | 2 | 0 | `id` |
+| `credit_policy_snapshots` | 12 | 3 | 1 | 1 | 0 | `id` |
+| `credit_profile_ratings` | 9 | 2 | 3 | 1 | 0 | `id` |
+| `credit_check_results` | 20 | 6 | 3 | 3 | 1 | `id` |
+| `credit_special_approval` | 21 | 4 | 4 | 2 | 1 | `id` |
+| **Total** | **117** | **25** | **23** | **15** | **2** | — |
+
+(17 index entries in total: 15 declared indexes plus the 2 SQLite auto-indexes that carry the two
+Wave 10 table-level UNIQUE constraints.)
+
+For every column the offline pass asserts: name and ordinal, physical type family (against the
+production generator's own emitted DDL), nullability, default, primary-key ordinal, the foreign-key
+mapping and action, the index identity / uniqueness / column order, and the CHECK cardinality and
+expressions. The foreign-key actions are `NO ACTION` on the SQLite side and `NO ACTION` on the
+hand-written MySQL side, so both normalize to `RESTRICT` under the existing
+`normalizeReferentialAction()`.
+
+### 37.50.10 Compatibility across the initialization paths
+
+The three paths that can materialize these eight tables on MySQL, and what this Implementation does
+to each:
+
+| Path | Reached by | Effect of this Implementation |
+|---|---|---|
+| **generic snapshot bootstrap**, fresh target | `bootstrapMySql()` with no `mysql_backend_metadata` marker (`mysql-schema.js:414`) | **none** — the production generator is not modified |
+| **generic snapshot bootstrap**, additive target | `planMySqlAdditiveReconciliation()` (`:310-323`) | **none** |
+| **hand-written migration DDL** | `migrateSalesCustomerWave9CreditFoundation()` / `migrateSalesCustomerWave10CreditCheck()` (`wave9:310`, `wave10:366`) | **none** — the migrations are not modified; the path remains structurally unreachable (P11) |
+| **SQLite** | the canonical local backend | **none** — the SQLite DDL is not modified |
+
+The acceptance comparison itself is unchanged in scope: it still compares the canonical SQLite source
+against the live MySQL target. What changes is that the **expected** side now states the production
+generator's true prediction, and the CHECK comparison becomes order-insensitive. Both changes make the
+comparison **stricter or equal**, never weaker.
+
+### 37.50.11 Stop conditions
+
+The Implementation **stops and reports** — it does not fix — if any of the following is observed:
+
+1. The offline pass finds a column whose oracle prediction differs from the production generator's
+   output **beyond the five columns of P08**. That would mean the production rule has a third
+   dimension this Design did not audit, and the correction is no longer a two-line predicate change.
+2. The hand-written path is found to differ from the generic path on **more than the one registered
+   column** of RC-3. Any further divergence is a new, unregistered production inconsistency and
+   needs its own Requirement.
+3. The offline pass finds a divergence between the canonical SQLite DDL and the canonical hand-written
+   MySQL DDL in the **column names or their order**. That would mean the two canonical declarations
+   of the same table disagree, which is a schema-contract issue, not a test-contract issue.
+4. Any existing parity, index-parity, foreign-key, physical-contract or CHECK-parity regression
+   fails for a reason that is not one of the two intended corrections. The Implementation does not
+   adjust an existing expectation to accommodate an unexplained change.
+5. The Implementation would require a change to `server/database/mysql-schema.js`, to a migration, to
+   the production schema or to the approved `WAVE10_MYSQL_COLUMN_TYPES` contract. Those are outside
+   the whitelist and outside this Requirement.
+
+The **follow-up** items this Design records but does not execute:
+
+- **F1** — consolidate the two copies of the production indexed predicate
+  (`mysql-schema.js:184-187` and `:209-212`) into one exported helper, and have the fixture import it
+  (Option B of §37.50.3). This removes the last hand-written copy of the rule. It touches a
+  production file, so it invalidates the Gate B transcript and needs its own Requirement, Design and
+  Gate B re-run.
+- **F2** — the RC-3 divergence of `credit_lock_anchors.policy_scope_id` between the generic path and
+  the hand-written Wave 9 DDL. Registered as an independent issue under W10-PAR-R10; any correction
+  touches a migration and needs its own Requirement and Design.
+- **F3** — `CG-3`, the residual hole that `M-MIG-01` compares only the CHECK constraints of the two
+  Wave 10 tables. Unchanged by this Design.
+
+### 37.50.12 Rollback and acceptance evidence
+
+**Rollback.** The Implementation touches three files, all of them test contracts. There is no schema
+rollback, no data rollback and no production rollback. The rollback is a single-step revert of the
+three whitelisted files, which restores the pre-Implementation state — and therefore re-opens both
+`M-MIG-01` and `M-MIG-02`, which must be accompanied by a new Requirement record. The rollback
+trigger is any local gate failure that cannot be attributed to the two intended corrections, or any
+divergence between the local regressions' expectations and the protected campaign's real behaviour.
+
+**Acceptance evidence, in order.** None of it is executed by this Design.
+
+1. The focused local regression — `server/sales-customer-wave10-mysql-parity.test.js` with the new
+   `PT01..PT10` block — under a backend that cannot resolve to MySQL.
+2. The unchanged neighbouring local suites: `server/sales-customer-wave10-credit-check.test.js`,
+   `server/sales-customer-wave10-quality-policy.test.js`,
+   `server/sales-customer-wave10-acceptance-contract.test.js`.
+3. `pnpm test:fast`, `pnpm test`, `pnpm test:heavy`, `pnpm build`, `git diff --check`.
+4. A full read-only re-verification of the Requirement Addendum's §6 acceptance conditions against
+   the Implementation's actual diff, item by item.
+5. The read-only protected MySQL preflight — identity, grants, inventory, lease, `sql_mode`, plus the
+   absence of an orphan runner.
+6. Exactly **one** `pnpm.cmd test:mysql:wave10` campaign against the dedicated disposable target, with
+   no mid-campaign patching. `W10-PARITY` must reach 7/7, and the `W10-RACES` and
+   `W10-BUSINESS-MATRIX` suites must produce their **first** evidence.
+7. Strict TAP, the final cleanup confirmation and the five-category zero inventory.
+8. **No Gate B re-run is required by this Implementation** (§37.50.7). If the Implementation's actual
+   diff turns out to touch anything outside the three whitelisted files, a Gate B re-run becomes
+   mandatory again before the final Acceptance review.
+
+### 37.50.13 Design status
+
+The Design is complete and internally consistent: the two confirmed defects are corrected inside the
+acceptance test contract only, by aligning the oracle's indexed predicate with the production
+generator's rule and by comparing the normalized CHECK sets as multisets; the production generator,
+the production schema, both migrations, the approved Wave 10 contract, the CHECK normalizer's grammar
+and its `raw:` fallback, the index-parity contract, the protected case identities and the Gate B
+evidence all stay untouched; the offline physical contract of all eight tables is verified in full;
+the one real production inconsistency found by the audit is registered as an independent issue and is
+**not** corrected here; and every negative regression required to prove that a missing, a repeated or
+a changed constraint still fails, and that a genuine type divergence is still detected, is specified.
+
+**No issue blocks Implementation.**
+
+**Status: `WAVE10_PARITY_ORACLE_DESIGN_READY`.**
+
+## 37.51 Wave 10 Inventory Fixture canonical seeding design (2026-10-27)
+
+### 37.51.0 Authorization and boundary
+
+The same authorization that authorized the Requirement phase (§4.0 consecutive-stage authorization)
+authorizes this Design phase to follow immediately. The Design is recorded here; the Implementation is
+**not** authorized.
+
+Not authorized by this Design: any implementation, any test execution, any build, any MySQL
+connection, any database query, DDL, DML, migration execution or reset, any Gate B or Full Acceptance
+run, any Git write operation, any Freeze, and the start of Wave 11.
+
+This Design covers exactly one production-facing correction — the **shape of the stock that the Wave 10
+shared acceptance fixture seeds** — plus the local regression that proves it. It is a **test-contract**
+change. No production module, no schema, no migration and no historical business data is touched.
+
+### 37.51.1 Design basis — the audited facts
+
+The Design is bound to the Requirement's `document.md` → "Wave 10 Inventory Fixture Requirement
+(2026-10-27)", clauses `W10-INV-R01`..`W10-INV-R13` and acceptance conditions
+`AC-INV-01`..`AC-INV-08`, and to the facts `P01`..`P12` established there. The four facts that
+constrain the Design are:
+
+- **F1** — the fixture seeds a **legacy-shaped** row: `position_key = NULL` with otherwise canonical
+  dimensions (`P01`–`P04`).
+- **F2** — the canonical upsert cannot match that row and therefore **inserts a second row carrying
+  the movement delta**, i.e. a negative shadow row (`P05`, `P06`).
+- **F3** — the availability read is unfiltered and non-deterministic, and on MySQL it returns the
+  shadow row first because the canonical row's `randomUUID()` id sorts before `'w10-race-inventory'`
+  in the clustered index (`P07`, `P08`, `P11`).
+- **F4** — **SQLite does not reproduce the refusal**: its row order returns the legacy row first, so
+  the defect is invisible to a business-outcome-only SQLite assertion (`P09`).
+
+F4 is the single most consequential fact for this Design: **the regression must assert the position
+identity, the row count and the balance sequence — never "the Delivery succeeded"** — otherwise it
+would be green against the defective fixture.
+
+### 37.51.2 Option comparison — how the fixture seeds the canonical stock
+
+| Option | Content | Conclusion |
+|---|---|---|
+| **A1** | Seed through the production canonical absolute writer `setInventoryQuantity()` (`server/lib/stock.js:126-148`) | **ADOPTED** — the production module owns the identity *and* the absolute write; the fixture owns nothing |
+| A2 | Compute the key in the fixture with the production `computePositionKey()` and `INSERT` directly | **REJECTED** — the fixture would own the dimension tuple and the write semantics; two writers for one fact, and the fixture would drift from the production default identity the moment that default changes |
+| A3 | Seed the legacy row and then run the migration's legacy backfill over it | **REJECTED** — the backfill is a one-shot schema operation, not a runtime writer; it is not a stable fixture contract, and its own `:rid` / `:fallback` suffix paths emit **non-canonical** keys (`inventory-position-schema.js:270`, `:273`), i.e. it would seed a shape the canonical writer still cannot match |
+| A4 | Keep the legacy row and additionally seed a canonical row | **REJECTED** — this is precisely the current defect (F2): the pair would hold a positive legacy row and a canonical row that the canonical writer increments from `-1` |
+| A5 | Fix the production availability read to filter by the canonical position | **REJECTED for this unit** — it is a production change and belongs to `W10-INV-RISK-01`'s own Requirement and Design (§37.51.10) |
+
+**Why A1 is the minimum.** `setInventoryQuantity()` is already the production absolute writer for the
+four canonical absolute sites (`server/app.js:4083`, `server/modules/financial-controls.js:394`,
+`server/modules/lifecycle-engine.js:810`, `server/modules/commercial-golive.js:684`). It composes
+`resolveCanonicalPosition()` (`server/lib/stock.js:35-58`), which:
+
+1. refuses a missing or inactive warehouse (`stock.js:36-37`) — the fixture's warehouse is `active=1`;
+2. refuses a missing or inactive product (`stock.js:38-40`) — the fixture's product is `active=1`;
+3. refuses a **bin-enabled** warehouse (`stock.js:41-43`) — the fixture warehouse carries the column
+   default `bin_enabled = 0` (`inventory-position-schema.js:221`);
+4. refuses a **LOT- or SERIAL-tracked** product (`stock.js:44-46`) — the fixture product carries the
+   column default `tracking_policy = 'NONE'`
+   (`server/migrations/v13-phase6b-traceability-quality.js:7`);
+5. computes the position key with the production `computePositionKey()`
+   (`server/lib/inventory-position.js:113-134`) over the frozen default identity
+   `binId=NULL, ownerType='ENTERPRISE', ownerId=NULL, stockStatus='AVAILABLE', lotId=NULL,
+   serialId=NULL` (`stock.js:26-33`).
+
+Every one of those five preconditions was **verified against the fixture's actual seed data**, not
+assumed. The applicability of A1 is therefore established, not presumed.
+
+### 37.51.3 Chosen design — the new `seedWave10Inventory()` data flow
+
+```
+seedWave10AcceptanceBase(db, options)
+  ├─ INSERT warehouses  'w10-race-warehouse'  active=1, bin_enabled=0   (unchanged)
+  ├─ INSERT products   'w10-race-product'   active=1, tracking_policy='NONE' (unchanged)
+  ├─ seedWave10QualityPolicy(db)                                        (unchanged)
+  ├─ seedProfile(...) × 1..3                                            (unchanged)
+  └─ seedWave10Inventory(db)                            ◄── THE ONLY CHANGED NODE
+       │
+       ├─ 1. DELETE FROM inventory WHERE warehouse_id=? AND product_id=?
+       │      (retained verbatim — guarantees isolation and removes any legacy row)
+       │
+       └─ 2. setInventoryQuantity(db, warehouseId, productId, 100, now)
+              │
+              ├─ resolveCanonicalPosition(db, warehouseId, productId)
+              │    └─ computePositionKey(...)            ← the single source of truth
+              │
+              └─ upsert-equivalent absolute write:
+                   INSERT INTO inventory(id, warehouse_id, product_id, quantity, updated_at,
+                     position_key, bin_id, owner_type, owner_id, stock_status, lot_id, serial_id, active)
+                   VALUES(?, ?, ?, 100, ts, <canonical key>, NULL, 'ENTERPRISE', NULL, 'AVAILABLE', NULL, NULL, 1)
+                   — or UPDATE the existing row when the canonical key is already present
+```
+
+The resulting row is **one** row with a canonical `position_key`, `owner_type='ENTERPRISE'`,
+`owner_id=NULL`, `stock_status='AVAILABLE'`, `bin_id/lot_id/serial_id=NULL`, `active=1` and an
+absolute `quantity=100`.
+
+Two properties of this flow are load-bearing and are stated explicitly:
+
+- **The DELETE stays first.** It is the only thing that guarantees the fixture never leaves a second
+  row for the pair, whatever a previous run or a previous shape left behind. The canonical writer's
+  own lookup is by `position_key`, so without the DELETE a stale legacy row would survive the seed.
+- **The write is absolute, not a delta.** `setInventoryQuantity` sets the balance outright; it does
+  not increment. This is what makes the seeded `100` independent of anything that happened before.
+
+### 37.51.4 The single source of truth for the canonical `position_key`
+
+There is exactly **one** place in the entire repository that decides what the canonical default stock
+position of a `(product, warehouse)` pair is, and the fixture will use it and nothing else:
+
+| Concern | Owner | Location |
+|---|---|---|
+| The default identity tuple | `server/lib/stock.js` `DEFAULT_POSITION` (`:26-33`) | frozen by `solution.md §27.2..§27.6` |
+| The preconditions (warehouse / product / bin / tracking) | `server/lib/stock.js` `resolveCanonicalPosition` (`:35-58`) | — |
+| The key derivation | `server/lib/inventory-position.js` `computePositionKey` (`:113-134`) | `solution.md §27.3`, §27.10 |
+| The absolute physical write | `server/lib/stock.js` `setInventoryQuantity` (`:126-148`) | — |
+
+Consequences that this Design **forbids**:
+
+- the fixture must **not** import `computePositionKey` and call it with its own tuple — that would
+  duplicate the default-identity decision in the fixture;
+- the fixture must **not** hard-code a 64-character hex literal;
+- the fixture must **not** branch on `db.dialect`.
+
+The local regression may import `computePositionKey` **for assertion purposes only** — to state the
+expected identity independently of the writer — and that is the single place where the test-side
+copy of the expectation is legitimate, because it asserts against the production function rather than
+replacing it.
+
+### 37.51.5 The invariants — 100 → 99 → 98
+
+| # | Invariant | Held by |
+|---|---|---|
+| I1 | After seeding, exactly **one** row exists for the fixture pair | the retained DELETE + the single absolute write |
+| I2 | **Zero** rows exist with `position_key IS NULL` for the pair | I1 plus the canonical write |
+| I3 | The seeded row's `position_key` equals the production `computePositionKey()` of the canonical default identity | §37.51.4 |
+| I4 | The seeded `quantity` is `100` (absolute, EA) | the absolute write |
+| I5 | After the first canonical confirmation the same row reads `99`; after the second it reads `98` | `adjustInventory` → `upsertByPositionKey` matching the canonical key (`ON DUPLICATE KEY UPDATE`) |
+| I6 | The row count for the pair stays `1` across both confirmations | the canonical key matches the seeded row, so the upsert updates instead of inserting |
+| I7 | **No** row for the pair ever has a negative quantity | I6 — no row is ever created with the movement delta |
+| I8 | The `inventory_transactions` rows carry `quantity_change = 1` and `balance_after = 99` then `98` | the canonical write path (unchanged) |
+| I9 | No row outside the canonical position is created, changed or deleted by the fixture | the fixture writes exactly one row |
+
+I5–I8 are the *observable* form of the correction: with the defective fixture the same sequence
+produced `100` and a separate `-1` row; with the correction it produces one row at `99` then `98`.
+
+### 37.51.6 SQLite / MySQL consistency
+
+The correction is **dialect-neutral by construction**, and this is a property of the data shape, not
+of a conditional:
+
+- The canonical `position_key` is a pure function of the dimension tuple
+  (`computePositionKey`), computed identically on both dialects. The tuple contains only the
+  warehouse id, the product id and the frozen defaults — no dialect-dependent value.
+- The seeded row therefore carries the **same** `position_key` on SQLite and on MySQL, which is the
+  precondition for `ON CONFLICT(position_key) DO UPDATE` (SQLite) and `ON DUPLICATE KEY UPDATE`
+  (MySQL, produced by `server/database/mysql-adapter.js:60`) to resolve to the same row.
+- The MySQL adapter's rewrite of the upsert clause is **already proven** against the live target: the
+  protected campaign executed exactly this upsert (`upsertByPositionKey`) and it inserted the
+  canonical row — that insert is what created the `-1` shadow row in the first place. The corrected
+  fixture reuses the very same statement shape (`setInventoryQuantity`'s INSERT carries the identical
+  13-column list) and therefore needs no new MySQL schema compatibility.
+- The `inventory` table's MySQL physical form is produced by the generic generator from the SQLite
+  snapshot, so `position_key`, `bin_id`, `owner_type`, `owner_id`, `stock_status`, `lot_id`,
+  `serial_id` and `active` exist with the same names and the same nullability on both dialects.
+  `position_key` is nullable on both (`inventory-position-schema.js:228`, `:304`), so the legacy
+  shape remains representable — the correction simply stops **producing** it.
+- The only dialect-dependent behaviour anywhere in this area is the **row selection order** of the
+  unfiltered availability read (F3), which is exactly the production risk registered as
+  `W10-INV-RISK-01`. The correction does not depend on it: with exactly one row for the pair, there
+  is nothing to select.
+
+### 37.51.7 Source change whitelist — the exact intended diff (not executed)
+
+**Three files.** Two are modified, one is created, plus one registration file.
+
+| # | File | Change | Size |
+|---|---|---|---|
+| 1 | `server/test-utils/wave10-mysql-acceptance-fixture.js` | `seedWave10Inventory()`: add the import of the production `setInventoryQuantity` and replace the raw `INSERT INTO inventory(...)` with the canonical absolute write; keep the DELETE; add one fail-closed assertion on the resulting balance | ~8 lines changed |
+| 2 | `server/sales-customer-wave10-inventory-fixture.test.js` **(new)** | the local inventory-seed regression, cases `W10-INV-T01`..`W10-INV-T08` (§37.51.8) | new file |
+| 3 | `scripts/testing/test-suites.js` | register the new regression in the **`FULL` array only** — **not** in `FAST` — with the same explanatory comment style as the neighbouring Wave 10 entries | ~5 lines |
+
+**Suite classification — `FULL` only, and the expected counts.** The manifest's own `FAST`
+classification criterion is that `FAST` "Must not require a temp SQLite or Vite SSR"
+(`scripts/testing/test-suites.js:19-20`, `:573-575`). `W10-INV-T01`..`T08` require a real database
+state, the canonical inventory position identity and the deduction verification, and `createTempDb()`
+(`server/test-utils/temp-db.js:72-162`) is what supplies that state — as a disposable **temp SQLite**.
+The new regression therefore belongs to **`FULL` only**. It is **not** registered in `FAST`, and the
+fixture does **not** bypass `createTempDb()` in order to qualify for `FAST`. No existing `FAST` /
+`FULL` / `HEAVY` classification is changed by this unit — the two pre-existing `FAST` entries that
+create a temp SQLite (`sales-customer-wave10-quality-policy.test.js`,
+`sales-customer-wave10-acceptance-contract.test.js`) are **left exactly as they are**, and the
+pre-existing tension between the manifest's header criterion and those two entries is **not** resolved
+here; it is reported as an open item for a separate, authorized decision.
+
+| Manifest counter (`validate().counts`) | Before | After the Implementation |
+|---|---|---|
+| `onDisk` | 196 | 197 |
+| `FAST` | 23 | **23** (unchanged) |
+| `FULL` | 192 | **193** |
+| `HEAVY` | 7 | **7** (unchanged) |
+| `ALL` (`FULL ∪ HEAVY`) | 199 | **200** |
+
+The "Before" column is the manifest's own reading at the current HEAD (`onDisk 196 / FAST 23 /
+FULL 192 / HEAVY 7 / ALL 199`, `validate().ok === true`, `errors === []`). `server/test-suite-governance.test.js`
+asserts these counters **relatively** (`FAST ⊆ FULL`, `FULL ∩ HEAVY = ∅`, `ALL = FULL + HEAVY`), not
+as absolute numbers, so one added `FULL` entry does not break the governance self-test.
+
+**The intended change to `seedWave10Inventory()`**, in substance (not executed by this Design):
+
+```js
+import { setInventoryQuantity } from '../lib/stock.js';   // new import
+
+export function seedWave10Inventory(db, {
+  warehouseId = 'w10-race-warehouse', productId = 'w10-race-product', quantity = 100,
+} = {}) {
+  const now = new Date().toISOString();
+  db.prepare('DELETE FROM inventory WHERE warehouse_id=? AND product_id=?').run(warehouseId, productId);
+  const balance = setInventoryQuantity(db, warehouseId, productId, quantity, now);
+  assert.equal(balance, quantity, 'the acceptance stock must be seeded at the canonical position');
+}
+```
+
+**Explicitly outside the whitelist and untouched**: `server/app.js`, `server/lib/stock.js`,
+`server/lib/inventory-position.js`, `server/lib/inventory-mutation.js`, every file under
+`server/modules/`, every migration, the inventory schema, `server/db.js`,
+`server/database/mysql-schema.js`, `server/database/mysql-adapter.js`, the three protected MySQL
+suites, the Gate B suite, the concurrency suite, `server/test-utils/wave10-mysql-schema-fixture.js`,
+`server/sales-customer-wave10-mysql-parity.test.js`, `server/sales-customer-wave10-credit-check.test.js`,
+`server/sales-customer-wave10-quality-policy.test.js`,
+`server/sales-customer-wave10-acceptance-contract.test.js`, the runner, the manifest,
+`package.json`, `document.md`, `README.md`, `AGENTS.md`, `APPLY_GUIDE.md`.
+
+**Two design decisions inside the whitelist, stated explicitly:**
+
+- **The seeded row's `id` becomes generated.** `setInventoryQuantity` uses the production `id()`
+  (`server/db.js:2209-2210`, `randomUUID()`), so the fixture no longer forces `'w10-race-inventory'`.
+  A repository-wide search found **zero** references to that literal outside the fixture itself, and
+  `seedWave10Inventory()` has exactly **one** caller (`seedWave10AcceptanceBase()`,
+  `wave10-mysql-acceptance-fixture.js:515`). There is therefore **no compatibility obligation**, and
+  the change breaks no existing test. The alternative — forcing the old id — would require the
+  fixture to perform the physical write itself, which is A2 and is rejected.
+- **A fail-closed assertion on the resulting balance.** `setInventoryQuantity` returns the balance it
+  wrote. The fixture asserts it equals the requested quantity, so a silent refusal to seed (a missing
+  warehouse, an inactive product, a refused identity) surfaces immediately at seed time instead of
+  surfacing later as a confusing `库存不足` inside an unrelated business case.
+
+### 37.51.8 Positive and negative regression plan
+
+The new file `server/sales-customer-wave10-inventory-fixture.test.js` is a **local, dialect-neutral,
+engine-independent** regression: one disposable production-mode SQLite database per case, the real
+production Delivery HTTP route, the real production confirmation route, and the real production
+inventory writer. It never reaches MySQL, never opens a network connection and never depends on the
+calendar.
+
+The helpers it needs — a canonical approved order, a canonical Delivery creation and confirmation —
+are modelled on `server/sales-customer-wave10-quality-policy.test.js` (which already proves the same
+canonical chain on SQLite), so the new file reuses a **proven** shape rather than inventing one.
+
+| ID | Kind | Assertion | Discriminates the defect? |
+|---|---|---|---|
+| `W10-INV-T01` | **negative reproduction** | A deliberately seeded legacy row (`position_key IS NULL`, `quantity=100`) plus one canonical confirmation produces **two** rows for the pair — one with `position_key IS NULL` and one canonical row with `quantity = -1`. This is the machine-verifiable proof of F1/F2 and it is constructed by direct DML, so it is dialect-independent and passes in both states. | no (proves the root cause) |
+| `W10-INV-T02` | positive | After the corrected seed: exactly **one** row for the pair; `position_key` non-`NULL` and equal to the production `computePositionKey()` of the canonical default identity; `owner_type='ENTERPRISE'`; `owner_id IS NULL`; `stock_status='AVAILABLE'`; `bin_id/lot_id/serial_id IS NULL`; `active=1`; `quantity = 100`. | **yes** — fails against the defective fixture |
+| `W10-INV-T03` | positive | Two canonical confirmations leave exactly **one** row for the pair, at `quantity = 99` and then `98`; the `inventory_transactions` rows carry `quantity_change = 1` with `balance_after = 99` and `98`; zero rows with `position_key IS NULL`; zero rows with a negative quantity. | **yes** — fails against the defective fixture |
+| `W10-INV-T04` | negative — **missing** | With the canonical row deleted, the canonical Delivery **creation** is refused by the **production** availability check, with the production refusal (the `W10-RACE-P 库存不足` message composed at `server/app.js:5646`), not by a test-local assertion. The missing case must never be mistaken for a PASS. | no (guards the negative) |
+| `W10-INV-T05` | negative — **duplicate** | With a legacy row present **beside** the canonical row, one canonical confirmation moves the **canonical** row (`100 → 99`) and leaves the legacy row's quantity **untouched**. The identity, not the row count, decides what is decremented. **Determinism requirement (`W10-INV-R14`):** the legacy row's quantity must be set so that **both** candidate rows satisfy the requested quantity, so the production availability guard passes under **either** row selection of the unfiltered read; the case therefore asserts the **write** outcome only and asserts **nothing** about which row that read selected. A variant in which the two rows differ is a **known-risk reproduction** of `W10-INV-RISK-01` and is **never** evidence that the new Fixture contract holds. | no (guards the negative) |
+| `W10-INV-T06` | negative — **wrong identity** | A row carrying a non-canonical `position_key` (and a row carrying a wrong `owner_type` / `stock_status`) is **not** decremented by the canonical writer; its quantity stays unchanged, and the canonical row's balance is unaffected. | no (guards the negative) |
+| `W10-INV-T07` | positive | Re-running `seedWave10AcceptanceBase()` on the same database leaves exactly **one** canonical row for the pair, at `quantity = 100`, and zero legacy rows — the seed is idempotent. | **yes** — fails against the defective fixture |
+| `W10-INV-T08` | positive | The whole canonical chain still completes: one approved order, one Delivery created and confirmed, exactly one `inventory_transactions` OUT row, exactly one `inventory_valuation_movements` row (`LEGACY_UNVALUED`, zero cost), exactly one receivable — i.e. the correction does not disturb any downstream canonical effect. | no (guards the business chain) |
+
+**Two outcome classes — every case declares one, and the report must label it.**
+
+| Class | Meaning | Cases | Expected state |
+|---|---|---|---|
+| **A — new Fixture contract** | asserts the canonical position identity, the row count and the balance sequence | `T02`, `T03`, `T07` (discriminating), plus the guards `T04`, `T06`, `T08` | passes on the corrected fixture; the three discriminating cases **fail** on the defective one |
+| **B — known-defect / known-risk reproduction** | deliberately reproduces a mechanism that is **not** the new contract | `T01` (the defective-fixture mechanism) and any `T05` variant whose two rows differ (the `W10-INV-RISK-01` mechanism) | passes in **both** states; it proves the mechanism is still reachable and is **never** cited as evidence for class A |
+
+A case that cannot state which class it belongs to is **not admissible**, and a class-B result must
+never be reported as a pass of the new Fixture contract. This is the explicit separation between
+"reproducing a known risk" and "the new Fixture contract holds" (`W10-INV-R14`).
+
+**Discrimination proof (mandatory, and it must be executed).** Before the fixture correction is
+applied, the new file is run against the **defective** fixture and `W10-INV-T02`, `W10-INV-T03` and
+`W10-INV-T07` **must fail**; the Implementation then applies the correction and re-runs, and **all
+eight** must pass. A run in which the three discriminating cases never failed is not evidence and
+must be reported as such. This is the direct answer to F4: the regression never relies on the
+business outcome alone.
+
+**Regression execution order after the Implementation** (all on a backend that cannot resolve to
+MySQL):
+
+1. the new file, once against the defective fixture (discrimination proof) and once after the
+   correction;
+2. the unchanged neighbouring consumers of the shared fixture —
+   `server/sales-customer-wave10-quality-policy.test.js` (`W10-QCP-T01..T04`),
+   `server/sales-customer-wave10-acceptance-contract.test.js` (`AC-01..AC11`),
+   `server/sales-customer-wave10-mysql-parity.test.js`, `server/sales-customer-wave10-credit-check.test.js`;
+3. `pnpm test:fast`, `pnpm test`, `pnpm test:heavy`, `pnpm build`, `git diff --check` — the new
+   regression is executed by **`pnpm test`** (the `FULL` gate) and is deliberately **absent** from
+   `pnpm test:fast` (§37.51.7), so a green `pnpm test:fast` is **not** evidence for
+   `W10-INV-T01`..`T08`;
+4. a full read-only re-verification of the Requirement's `AC-INV-01`..`AC-INV-08` against the actual
+   diff, item by item.
+
+The backend isolation defect `WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` is **not** fixed by this
+unit. As the 2026-10-27 campaign did, the local gates are executed in a **controlled child process**
+that explicitly strips `ERP_DB_BACKEND`, `ERP_TEST_DB_BACKEND`, `ERP_DB_HOST`, `ERP_DB_PORT`,
+`ERP_DB_NAME`, `ERP_DB_USER`, `ERP_DB_PASSWORD`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`,
+`ERP_MYSQL_WAVE10_CAMPAIGN_ID`, `ERP_MYSQL_TEST_ALLOW_RESET`, `ERP_MYSQL_TEST_DISPOSABLE_TARGET` and
+`ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS`, and the child's absence of those variables is reported.
+
+### 37.51.9 Compatibility — what the correction does and does not change
+
+| Aspect | Effect |
+|---|---|
+| Fixture public shape | unchanged — `seedWave10AcceptanceBase`, its options and its return values are identical |
+| Seeded pair, product, warehouse, quantity | unchanged (`w10-race-warehouse`, `w10-race-product`, `100` EA) |
+| Canonical delivery / deduction / valuation / Finance / Credit behaviour | unchanged — no production path is touched |
+| Protected case identities, evidence grades, runner, manifest | unchanged |
+| The seeded row's `id` | changes from the fixed `'w10-race-inventory'` to a generated UUID — **zero** external references exist (§37.51.7) |
+| The seeded row's `position_key` | changes from `NULL` to the canonical key — this **is** the correction |
+| The number of rows for the pair during a case | changes from 2 (after the first confirmation) to 1 |
+
+No assertion is deleted, weakened, relaxed or skipped; no amount, delivery count or tolerance is
+changed; no case is skipped. The two failing protected cases keep their exact contracts
+(`M-BIZ-12`: one approved order, two confirmed Deliveries, one posted invoice, two distinct Delivery
+source links, `arOpenCents === 200000`, `deliveredNotSettledCents === 0`; `M-BIZ-14`: two salespersons,
+two order → Delivery chains, one cross-salesperson invoice, `200000` cents invoiced, `100000` cents
+collected, residual AR `100000`, residual **not** attributed to either salesperson).
+
+### 37.51.10 The production inventory risk — the explicit boundary
+
+`W10-INV-RISK-01` (registered in the Requirement §8) is **not** resolved by this correction and must
+not be reported as resolved. The boundary is stated precisely:
+
+- **What this unit fixes** — the *fixture* now seeds a canonical stock row, so the acceptance suites
+  traverse the real canonical delivery chain with one canonical position and the balance sequence
+  `100 → 99 → 98`.
+- **What this unit does not fix** — the production availability read at `server/app.js:5645` and
+  `server/app.js:5876` still selects the first row of an unfiltered `(warehouse_id, product_id)` set.
+  On a real database that holds a legacy-shaped or otherwise differently-identified row for the same
+  pair, the read can still select the wrong row — and the consequence is **not** limited to a false
+  out-of-stock report:
+  - **Direction A — false refusal.** The selected row's quantity is lower than the canonical
+    position's, so the guard refuses a Delivery that the stock could satisfy. This is the failure
+    mode actually observed.
+  - **Direction B — false allowance, then a negative canonical balance.** The selected row's quantity
+    is higher than the canonical position's, so the guard **passes** and the out-bound proceeds even
+    though the canonical position cannot cover it. The canonical writer then lands the delta on the
+    canonical row and carries **no** negative-balance guard (`server/lib/stock.js:60-89`:
+    `quantity = inventory.quantity + excluded.quantity`), so the canonical row can be driven **below
+    zero**.
+- **Why the two are separable** — the fixture's legacy shape was *manufactured* by the fixture; the
+  production read is *unconditional*. Correcting the first removes the manufactured trigger from the
+  acceptance evidence; it does not remove the second from production.
+- **Consequence for Freeze — no pre-decision.** This Design **does not** decide that `W10-INV-RISK-01`
+  blocks, or does not block, the Wave 10 Final Freeze. The attribution of the **observed** acceptance
+  failures to the fixture shape is unchanged (§37.51.1, F1–F4), but the defect's own risk boundary is
+  wider than that observed failure mode. The **Final Freeze Review** must take an **explicit,
+  recorded risk-disposition decision**: either close the risk through its **own** Requirement and
+  Design, or **accept** it with a written justification under an **explicit authorization**. Neither a
+  silent omission nor a blanket "not a blocker" assertion discharges it.
+- **Production prevalence** — `TEST_EVIDENCE_PENDING`. No production dataset was inspected in this
+  stage, so this Design makes **no** claim about how many real rows are affected and **no** claim about
+  how often either direction would fire in production. Directions A and B are **source-reachable
+  conclusions** derived from the read semantics and the known data shapes — the demo seed's
+  `position_key = NULL` rows (`server/db.js:1827-1838`) and the migration backfill's `:rid` /
+  `:fallback` non-canonical suffixes
+  (`server/migrations/inventory-position-schema.js:270`, `:273`).
+- **This unit authorizes no production change.** `server/app.js`, `server/lib/stock.js` and the
+  inventory schema are outside the whitelist (§37.51.7); `W10-INV-RISK-01` is **not** part of the
+  Fixture Implementation's production-code scope.
+
+### 37.51.11 Gate B re-acceptance and the protected Full Acceptance preconditions
+
+**A protected Gate B re-run becomes mandatory.** `server/mysql-sales-customer-wave10-gate-b.integration.js`
+imports the shared acceptance fixture (`:10-14`), and `server/mysql-sales-customer-wave10-concurrency.integration.js`
+reaches it through `withWave10Race()` → `seedWave10AcceptanceBase()`. The fixture is therefore inside
+the Gate B import closure, and the existing `WAVE10_GATE_B_PASS` transcript **no longer corresponds to
+the post-correction working tree**. The Gate B typed M-board evidence must be regenerated before the
+final Acceptance review.
+
+The protected Full Acceptance (`pnpm.cmd test:mysql:wave10`, suites `W10-PARITY`, `W10-RACES`,
+`W10-BUSINESS-MATRIX`) has the same dependency on the corrected fixture and therefore also requires a
+fresh run. Its preconditions are:
+
+1. a protected Gate B re-run that reaches **12/12 + 7/7** with a strict TAP transcript, the seven
+   typed evidence digests recomputed, and `CLEANUP_CONFIRMED` plus the five-category zero inventory;
+2. the between-campaign safety gate: no surviving campaign process, no undecided campaign lease, no
+   foreign session on the target, identity / grants / `sql_mode` / foreign-key enforcement unchanged,
+   and no repository change between the two campaigns;
+3. a fresh read-only preflight against the dedicated disposable target
+   (`127.0.0.1:3306 / modern_erp_wave10_disposable_test / wave10_acceptance`), with the destructive
+   authorization variables stripped from the preflight child process;
+4. `ERP_MYSQL_WAVE10_SUITE_TIMEOUT_MS` set inside the runner's legal range, and the campaign budget
+   re-derived from the observed per-case runtime — the `W10-BUSINESS-MATRIX` suite has **never** run to
+   completion, so the previous estimate remains an unproven bound, and **a timeout is INCONCLUSIVE**,
+   neither a PASS nor a product defect;
+5. the already-verified launcher mechanism preserved unchanged: OS-level `Start-Process` with
+   separate absolute-path stdout / stderr files and the real process exit code, never
+   `$ErrorActionPreference='Stop'` combined with `2>&1 | Tee-Object`;
+6. **exactly one** Full Acceptance run, with no mid-campaign patching and no automatic retry.
+
+**Neither the Gate B re-run nor the Full Acceptance is authorized by this Design.** Both require a
+separate explicit authorization.
+
+### 37.51.12 Rollback and acceptance evidence
+
+**Rollback.** The Implementation touches three files, all of them test contracts: one fixture, one new
+local regression, one suite registration. There is **no** schema rollback, **no** data rollback and
+**no** production rollback. The rollback is a single-step revert of the three whitelisted files,
+which restores the pre-Implementation state — and therefore re-opens `M-BIZ-12` and `M-BIZ-14` in the
+protected Full Acceptance, which must be accompanied by a new Requirement record.
+
+Rollback triggers: any local gate failure that cannot be attributed to the three intended changes;
+any divergence between the local regression's expectations and the protected campaign's real
+behaviour; any sign that the correction touched a file outside the whitelist; any evidence that the
+seeded row's identity differs between SQLite and MySQL.
+
+**Acceptance evidence, in order.** None of it is executed by this Design.
+
+1. the discrimination proof — the new regression **failing** on `W10-INV-T02`, `W10-INV-T03` and
+   `W10-INV-T07` against the defective fixture, and **passing** on all eight cases after the
+   correction (§37.51.8);
+2. the four unchanged neighbouring local suites;
+3. `pnpm test:fast`, `pnpm test`, `pnpm test:heavy`, `pnpm build`, `git diff --check`;
+4. a full read-only re-verification of `AC-INV-01`..`AC-INV-08` against the actual diff;
+5. the protected Gate B re-run, under its own authorization, reaching 12/12 + 7/7;
+6. the protected Full Acceptance, under its own authorization, reaching `W10-PARITY` 7/7,
+   `W10-RACES` 12/12 and `W10-BUSINESS-MATRIX` **20/20** — the last of these being the first evidence
+   that `M-BIZ-12` and `M-BIZ-14` pass on the real MySQL target;
+7. strict TAP, the final cleanup confirmation and the five-category zero inventory;
+8. the Final Freeze Review, at which point `W10-INV-RISK-01` must be given an **explicit, recorded
+   risk-disposition decision**: closed through its own Requirement and Design, or explicitly accepted
+   with a written justification under an explicit authorization. This Design records **no**
+   pre-decision that the risk is non-blocking.
+
+### 37.51.13 Design status
+
+The Design is complete and internally consistent: the shared root cause of `M-BIZ-12` and `M-BIZ-14`
+is established from captured live evidence and from the exact production source paths, not inferred
+from the error message; the correction is a single reuse of the production canonical absolute writer,
+so the fixture owns no identity decision of its own; the invariants `100 → 99 → 98` on exactly one
+canonical row are specified in their observable form; the dialect neutrality is a property of the
+data shape; the regression is designed to **discriminate** the defect rather than merely observe a
+business outcome, because SQLite's row order masks the MySQL refusal; the compatibility analysis
+establishes that no existing test depends on the removed fixed inventory id; the post-stock readiness
+audit found no statically discoverable contradiction behind the two failures; the production inventory
+risk is registered as an independent item with an explicit boundary against the fixture correction;
+and the mandatory Gate B re-run and the protected Full Acceptance preconditions are stated with the
+already-verified launcher mechanism preserved.
+
+**No issue blocks Implementation.**
+
+This Design was corrected on 2026-10-27 by the bounded Requirement Addendum Correction → Design
+Correction recorded in §37.51.14. The corrections are the **test-suite classification** (`FULL` only,
+not `FAST`) and the **`W10-INV-RISK-01` risk boundary** (two directions, and no Freeze pre-decision);
+every other Design decision is unchanged.
+
+**Status: `WAVE10_INVENTORY_FIXTURE_DESIGN_CORRECTED`.**
+
+### 37.51.14 Design correction record (2026-10-27)
+
+The user authorized a **bounded** correction of the completed Requirement and Design — two corrections,
+**no re-audit** — under AGENTS.md §4.0 (consecutive-stage authorization), with a HARD STOP at the end of
+the Design correction. The matching Requirement correction is recorded in `document.md` → §12 of the
+"Wave 10 Inventory Fixture Requirement (2026-10-27)". **Implementation is not authorized by this
+correction.** No implementation, no test execution, no build, no MySQL connection, no database query,
+DDL, DML, migration execution or reset, no Gate B or Full Acceptance run, no Git write operation, no
+Freeze and no Wave 11 was performed.
+
+| # | Correction | Before | After |
+|---|---|---|---|
+| **D1** | **Test-suite classification** | §37.51.7 registered the new regression in the `FAST` **and** the `FULL` arrays; §37.51.8 listed `pnpm test:fast` in the execution order without stating which gate actually runs the new file | §37.51.7 registers it in the **`FULL` array only** (never `FAST`), forbids bypassing `createTempDb()` to qualify for `FAST`, leaves every existing `FAST` / `FULL` / `HEAVY` classification untouched, and states the **expected counts** (`onDisk 196→197`, `FAST 23→23`, `FULL 192→193`, `HEAVY 7→7`, `ALL 199→200`); §37.51.8 states that the new regression is executed by `pnpm test` and is deliberately **absent** from `pnpm test:fast` |
+| **D2** | **`W10-INV-RISK-01` risk boundary** | §37.51.10 said the read "can still select the wrong row and refuse a satisfiable Delivery" and pre-decided that the risk "does **not** block the Wave 10 Freeze on its own" | §37.51.10 keeps **both** directions — **A** false refusal, and **B** false allowance followed by a possible **negative canonical balance**, the canonical upsert carrying no negative-balance guard — and replaces the Freeze pre-decision with an explicit requirement that the **Final Freeze Review** record a risk-disposition decision (close through its own Requirement and Design, or accept with a written justification under an explicit authorization) |
+| **D3** | **Outcome classes in the regression** | the `T05` row asserted the write outcome but did not say what the case does with the non-deterministic availability read, and no classification separated a risk reproduction from a contract pass | §37.51.8's `T05` row carries a **determinism requirement** (`W10-INV-R14`: both rows satisfy the requested quantity, so the case asserts the write outcome only and asserts nothing about which row the read selected), and a new **two-class table** (class A new Fixture contract / class B known-defect or known-risk reproduction) states that a class-B result is never evidence for class A |
+
+**Contradictions eliminated.**
+
+1. **Test layering.** The manifest's `FAST` criterion ("Must not require a temp SQLite or Vite SSR",
+   `scripts/testing/test-suites.js:19-20`, `:573-575`) contradicted the Design's instruction to register a
+   `createTempDb()`-backed regression in `FAST`. Resolved by `W10-INV-R13` + §37.51.7: **`FULL` only**.
+2. **Risk boundary.** The Requirement's "over-refusal, not a stock corruption" framing and the
+   "does not block the Freeze by itself" pre-decision contradicted the source-reachable direction B
+   (the unguarded canonical upsert, `server/lib/stock.js:60-89`). Resolved by the dual-direction impact
+   statement and the explicit, recorded Final Freeze Review disposition.
+
+**Unchanged by this correction.** The use of the production `setInventoryQuantity()` to establish the
+canonical inventory position; the `100 → 99 → 98` balance contract; the `M-BIZ-12` and `M-BIZ-14`
+original business assertions; the positive / negative verification goals of `W10-INV-T01`..`T08`; the
+SQLite / MySQL isolation requirement; the judgement that the shared-fixture change invalidates the
+existing Gate B evidence; the **three-file Implementation whitelist**; and every production Schema,
+migration and inventory business implementation.
+
+**Final Implementation whitelist (unchanged, three files).**
+
+| # | File | Change |
+|---|---|---|
+| 1 | `server/test-utils/wave10-mysql-acceptance-fixture.js` | `seedWave10Inventory()` — production canonical absolute write + retained DELETE + one fail-closed balance assertion |
+| 2 | `server/sales-customer-wave10-inventory-fixture.test.js` **(new)** | the local regression `W10-INV-T01`..`T08`, registered in **`FULL` only** |
+| 3 | `scripts/testing/test-suites.js` | register the new regression in the **`FULL` array only** |
+
+**Final test layering.** `FAST` 23 (unchanged) · `FULL` 192 → 193 · `HEAVY` 7 (unchanged) ·
+`ALL` 199 → 200 · `onDisk` 196 → 197.
+
+**Status: `WAVE10_INVENTORY_FIXTURE_DESIGN_CORRECTED`.**
+## 37.52 Wave 10 Capability Freeze (2026-10-27)
+
+### 37.52.1 Authorization and the boundary of this section
+
+The user explicitly approved the **Wave 10 Capability Freeze** under AGENTS.md §4.5, after
+`WAVE10_FULL_ACCEPTANCE_PASS` and `WAVE10_FREEZE_READY`. This section is the **technical design
+record** of that freeze: it names the frozen artifacts, the frozen contracts, the evidence that
+supports them, and the boundaries that remain in force. It adds no new Requirement, changes no
+Design, and describes no implementation — the freeze changes no code, test, fixture, runner,
+manifest, schema or migration.
+
+It is **not** a production release authorization, **not** a Git commit authorization, and **not** a
+Wave 11 development authorization.
+
+### 37.52.2 Frozen artifacts
+
+| Frozen artifact | Identity |
+|---|---|
+| Frozen business contract version | **`W10-CONTRACT-2026-10-27`** |
+| Requirement clauses | `document.md` §5 `W10-AIR-R01`..`R10`; §9 `W10-AIR-R08` |
+| Capability design | this document §37.40.8 (canonical writers), §37.49, §37.50, §37.51 |
+| Business contracts expressed | canonical Sales / Finance writer contract; S14 invoice→Finance AR recognition and cross-salesperson attribution contract; Recognition Mode refusal contract; Credit exposure projection contract |
+| Code fingerprint at freeze (invariant: every tracked file except `document.md` / `solution.md`, which carry this record) | `a43cd9f8a3310594458b99196d3f7379345163e2ca4ea31abbce9895fd11ff80` over 782 files |
+| All-tracked-files fingerprint, measured before this record was appended (changes to `a1f8ba05eccd4409e0b8d050445953c252e677ba2a39b58c36c40e802d0a2d16` once appended) | `96fe8291853121d2d34d67962aca680b4a73fa18851a0b5e3eb7531cf70e9cf5` over 784 files |
+| Untracked acceptance files at freeze | `server/sales-customer-wave10-acceptance-contract.test.js` = `7ad2bb46602b6e2eedc553ae81e61b5874c62667dcfb8012703e1fdef678c44f` (23629 B) · `server/sales-customer-wave10-inventory-fixture.test.js` = `03d4e32d8008b40a1f8adc86b47b37df391ced1376f97d3713ebda08cc1e69e1` (30073 B) · `server/sales-customer-wave10-quality-policy.test.js` = `5ca14c18dcc3312a89484cf170c2572079e7174d559b04c5cad00f76acab7e01` (25529 B) |
+| Package version / HEAD | `1.6.2` / `420cd3d5ce6f8d46ff388459b5fc6902f45791c6` |
+
+The two untracked daily journals are append-only governance records and are excluded from the
+freeze fingerprint by construction; their freeze-time state was
+`log/2026-10-26.md` = 193385 B / `2ae5bf3fddd52bf57ec3e11f76a4d4dc7b9b1eb944743b1d7eb9948051a5f7d9` and
+`log/2026-10-27.md` = 249190 B / `e69ab75c480d8324950a23f6407ca16e2d14e8a2185ed98eea2bca30756e1786`.
+
+### 37.52.3 Frozen acceptance evidence
+
+| Evidence | Result |
+|---|---|
+| Gate B production races / Gate B suite / typed evidence | 12/12 · 7/7 · 7/7 digests recomputed |
+| W10-PARITY / W10-RACES / W10-BUSINESS-MATRIX | 7/7 · 12/12 · 20/20 |
+| Full Acceptance total | **39/39 PASS**, ExitCode 0, strict TAP PASS |
+| Cleanup / final independent inventory | `CLEANUP_CONFIRMED` / 0-0-0-0-0 |
+| FAST / FULL / HEAVY / build / `git diff --check` | 488/488 · 2923/2923 · 67/67 · PASS · PASS |
+
+`FULL 2923/2923` is the latest baseline (2915 + exactly the 8 new `W10-INV-T01`..`T08` cases);
+the 2915 figure is a superseded pre-inventory-fixture baseline and does not override it.
+
+### 37.52.4 Boundaries that remain in force
+
+| Boundary | Status |
+|---|---|
+| `W10-INV-RISK-01` — production availability read + negative-balance guard | `BLOCKS_RELEASE_ONLY`; must be dispositioned by its own Requirement and Design **before any production release**; this freeze does **not** certify Inventory Domain correctness |
+| `CREDENTIAL_EXPOSURE_OPEN` — local credential residue | `REQUIRES_OWNER_DECISION`; **the owner has not accepted the risk**, and no acceptance is made by this freeze |
+| Seven further OPEN items | keep their deferral justification and applicable boundary; none is rewritten as CLOSED |
+| Sales & Customer Domain as a whole | **not** frozen |
+| Legacy data migration compatibility | **not** certified |
+| Production deployment | **not** approved |
+| Git consolidation of the frozen tree | **requires a separate explicit authorization** (no `add`/`commit`/`push`/`tag`/`merge`/`rebase`/`reset`/`restore`/`clean`/`stash` performed; no version change; no tag created, moved or deleted) |
+| Wave 11 / Wave 12 | **not** started |
+
+### 37.52.5 Freeze status
+
+**`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`** — the Wave 10 accepted capability and its
+acceptance contracts are frozen on the evidence above; production release remains blocked by
+`W10-INV-RISK-01` and pending the owner decision on `CREDENTIAL_EXPOSURE_OPEN`.

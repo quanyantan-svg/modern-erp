@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   assertWave10ProjectionDeltaEmpty, captureWave10PersistenceProjection, creditInput,
-  productionOrderBody, readAuthoritativeCapacity, runCoordinatedWave10Race, seedSubmittedOrder,
-  wave10BusinessDate, wave10DeliveryRequest, wave10ProjectionDelta, wave10SalesCommitment,
-  withWave10Race,
+  productionOrderBody, readAuthoritativeCapacity, readWave10QualityPolicy, runCoordinatedWave10Race,
+  seedSubmittedOrder, wave10BusinessDate, wave10DeliveryRequest, wave10FutureBusinessDateFrom, wave10ProjectionDelta,
+  wave10SalesCommitment, withWave10Race,
 } from './test-utils/wave10-mysql-acceptance-fixture.js';
+import { deriveQualityState } from './modules/quality-gates.js';
 import {
   assertObservedExposure, readCreditExposureCents,
 } from './test-utils/wave10-credit-result.js';
@@ -213,6 +214,45 @@ async function canonicalApprovedOrder(workers, { key, salespersonId = 'w10-race-
   return orderId;
 }
 
+// The frozen quality policy evidence of the canonical Delivery. The snapshot
+// is read back from the persisted rows: it must belong to the actual Delivery
+// and its actual line, carry the identity and version of the canonical test
+// control point, waive the inspection and leave the Delivery in the WAIVED
+// gate state. Nothing here fabricates, rewrites or deletes a snapshot.
+function assertCanonicalDeliveryQualityPolicy(db, { deliveryId, deliveryItemId }) {
+  const qcp = readWave10QualityPolicy(db);
+  assert.ok(qcp, 'the canonical test quality control point must be installed');
+  assert.equal(qcp.operationType, 'SALES_DELIVERY', 'the canonical control point must target the Sales Delivery gate');
+  assert.equal(qcp.scope, 'PRODUCT', 'the canonical control point must be product-scoped');
+  assert.equal(qcp.productId, 'w10-race-product', 'the canonical control point must be bound to the fixture product');
+  assert.equal(qcp.active, true, 'the canonical control point must be effective');
+  assert.equal(qcp.inspectionRequired, false, 'the canonical control point must waive the inspection');
+  assert.ok(qcp.reason, 'the canonical control point must carry a reason');
+  const lines = db.prepare('SELECT id,product_id FROM sales_delivery_items WHERE delivery_id=? ORDER BY line_no,id').all(deliveryId);
+  assert.ok(lines.length, 'the canonical delivery must produce its own lines');
+  const snapshots = db.prepare('SELECT * FROM logistics_quality_policy_snapshots WHERE source_type=? AND source_id=? ORDER BY id')
+    .all('SALES_DELIVERY', deliveryId);
+  assert.equal(snapshots.length, lines.length,
+    `every canonical Delivery line must carry exactly one frozen policy snapshot: ${JSON.stringify(snapshots)}`);
+  const byItem = new Map(snapshots.map((row) => [row.source_item_id, row]));
+  for (const line of lines) {
+    const snapshot = byItem.get(line.id);
+    assert.ok(snapshot, `the canonical Delivery line ${line.id} must carry a frozen policy snapshot`);
+    assert.equal(snapshot.source_id, deliveryId, 'the frozen snapshot must belong to the actual Delivery');
+    assert.equal(snapshot.product_id, line.product_id, 'the frozen snapshot must carry the actual line product');
+    assert.equal(snapshot.qcp_id, qcp.id, 'the frozen snapshot must reference the canonical control point');
+    assert.equal(Number(snapshot.qcp_version), Number(qcp.version), 'the frozen snapshot must carry the canonical control point version');
+    assert.equal(Number(snapshot.inspection_required), 0, 'the frozen snapshot must not require an inspection');
+    assert.ok(snapshot.waiver_reason, 'the frozen snapshot must carry a waiver reason');
+    assert.equal(snapshot.waiver_reason, qcp.reason, 'the frozen snapshot must carry the approved test waiver reason');
+  }
+  assert.ok(byItem.has(deliveryItemId), 'the frozen snapshot must belong to the actual Delivery line');
+  assert.equal(snapshots.filter((row) => Number(row.inspection_required) !== 0).length, 0,
+    'the canonical Delivery must carry no contradictory policy snapshot');
+  const state = deriveQualityState(db, 'OQC', deliveryId);
+  assert.equal(state.code, 'WAIVED', `the canonical Delivery must be waived by the installed policy: ${JSON.stringify(state)}`);
+}
+
 // The canonical Delivery transition. The Delivery is created and confirmed
 // through the registered production HTTP routes, so the real authorization,
 // inventory, transaction, COGS, Finance recognition, audit and idempotency
@@ -225,6 +265,9 @@ async function canonicalDelivery(db, worker, { orderId, orderItemId, quantity = 
   assert.equal(created.statusCode, 201, `canonical delivery creation failed: ${JSON.stringify(created.body)}`);
   const deliveryId = created.body?.id;
   assert.ok(deliveryId, 'the canonical delivery creation must return the delivery id');
+  const frozenItemId = db.prepare('SELECT id FROM sales_delivery_items WHERE delivery_id=? ORDER BY line_no,id LIMIT 1').get(deliveryId)?.id;
+  assert.ok(frozenItemId, 'the canonical delivery creation must freeze its own delivery line');
+  assertCanonicalDeliveryQualityPolicy(db, { deliveryId, deliveryItemId: frozenItemId });
   const confirmed = await worker.run({
     action: 'http-request', method: 'POST', path: `/api/sales-deliveries/${deliveryId}`,
     body: { action: 'confirm' }, headers: { 'idempotency-key': `${key || orderId}-delivery-confirm` },
@@ -232,24 +275,30 @@ async function canonicalDelivery(db, worker, { orderId, orderItemId, quantity = 
   assert.equal(confirmed.statusCode, 200, `canonical delivery confirmation failed: ${JSON.stringify(confirmed.body)}`);
   const deliveryItemId = db.prepare('SELECT id FROM sales_delivery_items WHERE delivery_id=? ORDER BY line_no,id LIMIT 1').get(deliveryId)?.id;
   assert.ok(deliveryItemId, 'the canonical delivery confirmation must produce its own delivery line');
+  assert.equal(deliveryItemId, frozenItemId, 'the confirmed Delivery must keep the line the quality policy was frozen against');
   return { deliveryId, deliveryItemId };
 }
 
 test('M-R02 / R-SAL-13 — Special Approval decision versus standard approval leaves one effective authority', async () => {
   await withWave10Race('w10-r2', { aggregateLimit: 50000, scenario: 'OVERRIDE_REQUEST', controlStrength: 'WARNING' }, async (db, [a, b, c], registrations) => {
+    // §37.49.3.1 — one controlled business date for the case, and one expiry
+    // derived from it and shared by the request and the decision. The expiry
+    // is a pure function of that date, so no calendar can invalidate it.
+    const businessDate = wave10BusinessDate();
+    const expiryBusinessDate = wave10FutureBusinessDateFrom(businessDate);
     seedSubmittedOrder(db, { id: 'w10-r2-order', cents: 100000 });
-    assert.equal((await a.run({ action: 'evaluate', input: creditInput({ orderId: 'w10-r2-order' }) })).status, 200);
+    assert.equal((await a.run({ action: 'evaluate', input: creditInput({ orderId: 'w10-r2-order', businessDate }) })).status, 200);
     const result = db.prepare("SELECT * FROM credit_check_results WHERE decision='SPECIAL_APPROVAL_REQUIRED' ORDER BY id LIMIT 1").get();
     assert.ok(result);
     // The request is created through the production request entry, so the
     // approval is bound to the source result and its snapshot.
     const request = await a.run({ action: 'special-request', actorId: 'w10-race-creator', key: 'w10-r2-request', body: {
       sourceCreditCheckResultId: result.id, reason: 'R2', requestedOverrideCents: 50000,
-      requestedCeilingCents: 100000, requestedExpiryBusinessDate: '2026-12-31', scopeMode: 'ONE_TIME',
+      requestedCeilingCents: 100000, requestedExpiryBusinessDate: expiryBusinessDate, scopeMode: 'ONE_TIME',
     } });
     const approvalId = request.body?.approval?.id; assert.ok(approvalId);
     const { outcomes, waits } = await runCoordinatedWave10Race([a, b, c], registrations, [
-      { action: 'special-decide', approvalId, key: 'w10-r2-decide', body: { decision: 'APPROVED', approvedOverrideCents: 50000, approvedCeilingCents: 100000, approvedExpiryBusinessDate: '2026-12-31' } },
+      { action: 'special-decide', approvalId, key: 'w10-r2-decide', body: { decision: 'APPROVED', approvedOverrideCents: 50000, approvedCeilingCents: 100000, approvedExpiryBusinessDate: expiryBusinessDate } },
       approve('w10-r2-order', 'w10-r2-approve'),
     ]);
     assert.ok(waits.length >= 2, 'both contenders must be observably pending at the L0 coordination boundary');
@@ -474,7 +523,8 @@ test('M-R09 — the canonical SO→AR transition stays in the salesperson exposu
     const capacity = readAuthoritativeCapacity(db, { salespersonId: 'w10-race-sp-a', deltaA: 20000, deltaB: 20000 });
     assert.equal(capacity.exposureCents, obligation, 'the transition must leave the obligation in the AR stage');
     assert.equal(capacity.available, capacity.limitCents - obligation);
-    assert.equal(capacity.classification, 'ONLY_ONE_FITS', 'the sub-limit classification must be computed from the actual exposure');
+    assert.ok(capacity.available < 20000, 'each proposed delta must exceed the available sub-limit capacity');
+    assert.equal(capacity.classification, 'NEITHER_FITS', 'the sub-limit classification must be computed from the actual exposure');
     assert.ok(capacity.exposureCents + 20000 > capacity.limitCents, 'the proposal must exceed the sub-limit');
     const before = captureWave10PersistenceProjection(db);
     const { outcomes, waits } = await runCoordinatedWave10Race([a, b, c], registrations, [

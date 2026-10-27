@@ -12,8 +12,9 @@ import { SALES_WAVE10_TABLES } from './migrations/sales-customer-wave10-credit-c
 import { createTempDb } from './test-utils/temp-db.js';
 import { createWave10MysqlLifecycle } from './test-utils/mysql-wave10-campaign-target.js';
 import {
-  assertEquivalentCreditMetadata, compareWave9SourceTarget, createWave9BoundedSnapshot,
-  normalizedCreditMetadata, normalizedSqliteTable, readNormalizedMySqlTable, rowsById,
+  assertCheckParity, assertEquivalentCreditMetadata, CHECK_LITERAL_DIALECT, compareWave9SourceTarget,
+  createWave9BoundedSnapshot, describeCheckClauseNormalization, normalizedCreditMetadata,
+  normalizedSqliteTable, readNormalizedMySqlTable, rowsById,
 } from './test-utils/wave10-mysql-schema-fixture.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD', 'ERP_MYSQL_WAVE10_CAMPAIGN_LEASE'];
@@ -33,10 +34,76 @@ function register(db, cleanup) {
   return handle;
 }
 
+// §37.48 — bounded live evidence for the CHECK clause literal dialect.
+//
+// The MySQL catalogue renders a string literal with its delimiters
+// backslash-escaped. The protected campaign that captured that rendering also
+// records the server state it was captured against, so the rendering contract
+// is re-confirmed against the live server on the next run instead of being
+// re-modelled by hand.
+//
+// The evidence is bounded: the server version, the session sql_mode and the
+// raw and the canonical form of the CHECK clauses of the eight compared
+// tables. It carries no credential and no other SQL.
+const CHECK_METADATA_EVIDENCE_PREFIX = 'WAVE10_CHECK_METADATA_EVIDENCE ';
+const CHECK_EVIDENCE_MAX_CLAUSE_CHARS = 512;
+const CHECK_EVIDENCE_MAX_REASON_CHARS = 120;
+
+function collectCheckMetadataEvidence(db) {
+  const version = String(db.prepare('SELECT VERSION() version').get()?.version ?? '');
+  const sqlMode = String(db.prepare('SELECT @@session.sql_mode sql_mode').get()?.sql_mode ?? '');
+  const tables = {};
+  for (const tableName of [...SALES_WAVE9_TABLES, ...SALES_WAVE10_TABLES]) {
+    const rows = db.prepare(`SELECT cc.CHECK_CLAUSE check_clause FROM information_schema.CHECK_CONSTRAINTS cc
+      JOIN information_schema.TABLE_CONSTRAINTS tc
+        ON tc.CONSTRAINT_SCHEMA=cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME=cc.CONSTRAINT_NAME
+      WHERE tc.TABLE_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
+      ORDER BY cc.CHECK_CLAUSE`).all(tableName);
+    tables[tableName] = rows.map((row) => {
+      const described = describeCheckClauseNormalization(row.check_clause, { dialect: CHECK_LITERAL_DIALECT.MYSQL_CATALOG });
+      return {
+        raw: String(row.check_clause ?? '').slice(0, CHECK_EVIDENCE_MAX_CLAUSE_CHARS),
+        canonical: String(described.canonical).slice(0, CHECK_EVIDENCE_MAX_CLAUSE_CHARS),
+        form: described.form,
+        reason: described.reason ? String(described.reason).slice(0, CHECK_EVIDENCE_MAX_REASON_CHARS) : null,
+      };
+    });
+  }
+  return {
+    version,
+    sqlMode,
+    // The catalogue rendering convention is only decodable when the session
+    // did not disable backslash escapes. Under NO_BACKSLASH_ESCAPES the same
+    // bytes denote a different value, so the comparison is refused rather
+    // than forced into a canonical form.
+    backslashEscapesEnabled: !/NO_BACKSLASH_ESCAPES/i.test(sqlMode),
+    literalDialect: CHECK_LITERAL_DIALECT.MYSQL_CATALOG,
+    tables,
+  };
+}
+
+let checkMetadataEvidenceEmitted = false;
+
+function emitCheckMetadataEvidence(db) {
+  const evidence = collectCheckMetadataEvidence(db);
+  if (!evidence.backslashEscapesEnabled) {
+    throw new Error(
+      'WAVE10 CHECK METADATA EVIDENCE UNSUPPORTED MODE: the acceptance session disables backslash escapes'
+      + ` (NO_BACKSLASH_ESCAPES in sql_mode=${evidence.sqlMode}), so the catalogue CHECK rendering cannot be`
+      + ' decoded under the mysql_catalog literal dialect and the CHECK parity comparison is refused.',
+    );
+  }
+  checkMetadataEvidenceEmitted = true;
+  process.stdout.write(`${CHECK_METADATA_EVIDENCE_PREFIX}${JSON.stringify(evidence)}\n`);
+}
+
 function fresh(label) {
   const handle = createTempDb({ label, production: true, mysqlLifecycle: lifecycle });
   handles.add(handle);
   assert.equal(handle.db.dialect, 'mysql');
+  // The evidence is emitted once per campaign run, from the first canonical
+  // schema the suite creates. It never changes a comparison assertion.
+  if (!checkMetadataEvidenceEmitted) emitCheckMetadataEvidence(handle.db);
   return handle;
 }
 
@@ -114,7 +181,7 @@ test('M-MIG-01 fresh production bootstrap creates exactly the approved Wave 10 a
     assert.ok(expected, `${tableName}: the canonical SQLite source must declare the table`);
     assert.ok(actual.foreignKeys.length > 0, `${tableName}: the Wave 10 addition must keep its foreign keys`);
     assert.ok(actual.checks.length > 0, `${tableName}: the Wave 10 addition must keep its check constraints`);
-    assert.deepEqual(actual.checks, expected.checks, `${tableName}: check-constraint parity`);
+    assertCheckParity(expected.checks, actual.checks, tableName);
   }
 });
 

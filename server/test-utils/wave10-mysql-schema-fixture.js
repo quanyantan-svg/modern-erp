@@ -14,8 +14,27 @@ export function createWave9BoundedSnapshot(snapshot) {
   return Object.freeze({ tables });
 }
 
-function indexedColumns(table) {
-  return new Set(table.indexes.flatMap((index) => index.columns).filter(Boolean));
+// §37.50 — the production generator's rule (mysql-schema.js:184-187): a
+// foreign-key source column counts as an indexed column.
+//
+// The narrower index-only rule predicted `LONGTEXT` for five foreign-key
+// columns whose names do not end in `_id`. That is not a schema that could
+// exist: InnoDB refuses a foreign key whose child column is not type
+// compatible with its parent column, and every referenced parent column is
+// `VARCHAR(128)`. `isValidColumnName` is the production one-line predicate
+// (mysql-schema.js:21-23); it is not exported, so it is reproduced here.
+//
+// The physical type family itself is still produced by the production
+// `mysqlTypeFamily` — this file contains no second type mapping.
+function isValidColumnName(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function mysqlIndexedColumns(table) {
+  return new Set([
+    ...table.indexes.flatMap((index) => index.columns.filter(isValidColumnName)),
+    ...table.foreignKeys.map((foreignKey) => foreignKey.from),
+  ]);
 }
 
 function normalizeReferentialAction(value) {
@@ -53,22 +72,89 @@ export function normalizeDefault(value) {
 // silently compares equal to a parsed one.
 class CheckClauseSyntaxError extends Error {}
 
-function tokenizeCheckClause(text) {
+// §37.48 — the literal dialect follows the provenance of the input, never the
+// shape of its bytes.
+//
+// `sql_standard` is the dialect of the canonical SQLite DDL source: inside a
+// `'...'` literal only the SQL-standard doubled quote denotes a literal quote.
+//
+// `mysql_catalog` is the dialect of the live MySQL catalogue rendering
+// (`information_schema.CHECK_CONSTRAINTS.CHECK_CLAUSE`). The server renders a
+// string literal with its delimiters themselves backslash-escaped, exactly as
+// the protected Wave 10 acceptance campaign captured it, so such a literal
+// opens and closes with the two-byte sequence \'. The content between the
+// delimiters is taken verbatim.
+//
+// The two dialects disagree about a backslash, so the dialect is an explicit
+// input and is never inferred from the text. A backslash inside a literal is
+// refused in BOTH dialects: under `sql_standard` it is not a supported form,
+// and under `mysql_catalog` the catalogue's rendering convention for *content*
+// escapes was never observed, so decoding one could merge two different
+// literals into one value.
+export const CHECK_LITERAL_DIALECT = Object.freeze({
+  SQL_STANDARD: 'sql_standard',
+  MYSQL_CATALOG: 'mysql_catalog',
+});
+
+const SQL_STANDARD_LITERAL_QUOTE = "'";
+const MYSQL_CATALOG_LITERAL_QUOTE = "\\'";
+
+function literalQuote(dialect) {
+  return dialect === CHECK_LITERAL_DIALECT.MYSQL_CATALOG
+    ? MYSQL_CATALOG_LITERAL_QUOTE
+    : SQL_STANDARD_LITERAL_QUOTE;
+}
+
+// Reads one string literal and returns its semantic value.
+//
+// The SQL-standard dialect accepts the doubled quote (`''` -> `'`). The MySQL
+// catalogue dialect does NOT accept a doubled delimiter: the catalogue escapes
+// every quote it renders, so a doubled form was never observed and accepting
+// one could merge two adjacent literals into a single value.
+//
+// A literal that is not closed, that carries a quote of another kind, or that
+// carries a backslash, is refused. The refusal is a CheckClauseSyntaxError, so
+// the caller falls back to the distinct `raw:` form and never treats the
+// clause as equivalent to a parsed one.
+function readStringLiteral(text, start, dialect) {
+  const quote = literalQuote(dialect);
+  const mysqlCatalog = dialect === CHECK_LITERAL_DIALECT.MYSQL_CATALOG;
+  let cursor = start + quote.length;
+  let value = '';
+  for (;;) {
+    if (cursor >= text.length) throw new CheckClauseSyntaxError('unterminated string literal');
+    if (!mysqlCatalog && text.startsWith("''", cursor)) { value += "'"; cursor += 2; continue; }
+    if (text.startsWith(quote, cursor)) { cursor += quote.length; break; }
+    const char = text[cursor];
+    if (char === '\\') throw new CheckClauseSyntaxError('unsupported escape inside string literal');
+    if (mysqlCatalog && (char === "'" || char === '"' || char === '`')) {
+      throw new CheckClauseSyntaxError('unescaped quote inside string literal');
+    }
+    value += char; cursor += 1;
+  }
+  return { value, next: cursor };
+}
+
+function tokenizeCheckClause(text, dialect = CHECK_LITERAL_DIALECT.SQL_STANDARD) {
   const tokens = [];
   let index = 0;
   while (index < text.length) {
     const char = text[index];
     if (/\s/.test(char)) { index += 1; continue; }
-    if (char === "'") {
-      let cursor = index + 1;
-      let value = '';
-      while (cursor < text.length) {
-        if (text[cursor] === "'" && text[cursor + 1] === "'") { value += "'"; cursor += 2; continue; }
-        if (text[cursor] === "'") { cursor += 1; break; }
-        value += text[cursor]; cursor += 1;
+    if (dialect === CHECK_LITERAL_DIALECT.MYSQL_CATALOG) {
+      // The catalogue dialect opens a literal only with the escaped delimiter.
+      // A plain quote is not a catalogue form, so it is not silently accepted
+      // as one: the dialect is never auto-detected from the text.
+      if (text.startsWith(MYSQL_CATALOG_LITERAL_QUOTE, index)) {
+        const literal = readStringLiteral(text, index, dialect);
+        tokens.push({ kind: 'literal', value: literal.value });
+        index = literal.next;
+        continue;
       }
-      tokens.push({ kind: 'literal', value });
-      index = cursor;
+    } else if (char === "'") {
+      const literal = readStringLiteral(text, index, dialect);
+      tokens.push({ kind: 'literal', value: literal.value });
+      index = literal.next;
       continue;
     }
     if (char === '"' || char === '`') {
@@ -267,26 +353,45 @@ function renderCheckClause(node) {
   }
 }
 
-export function normalizeCheckClause(value) {
+// §37.48 — the normalization diagnostic.
+//
+// `form` is one of `canonical` (the clause was parsed and re-rendered), `raw`
+// (the clause could not be parsed and keeps the distinct, distinguishable
+// `raw:` form) or `empty`. `reason` retains the parse failure, so that an
+// unsupported-syntax fallback can never be confused with a representational
+// one. The diagnostic is bounded: it carries the dialect, the canonical form
+// and one short fixed phrase — never the surrounding SQL and never a
+// credential.
+export function describeCheckClauseNormalization(value, options = {}) {
+  const dialect = options.dialect === CHECK_LITERAL_DIALECT.MYSQL_CATALOG
+    ? CHECK_LITERAL_DIALECT.MYSQL_CATALOG
+    : CHECK_LITERAL_DIALECT.SQL_STANDARD;
   const text = String(value || '')
     .replace(/`/g, '')
     .replace(/_utf8mb4|_utf8|_binary/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!text) return '';
+  if (!text) return Object.freeze({ form: 'empty', dialect, canonical: '', reason: 'empty clause' });
   try {
-    const tokens = tokenizeCheckClause(text);
+    const tokens = tokenizeCheckClause(text, dialect);
     const parser = new CheckClauseParser(tokens);
     const expression = parser.parseExpression();
     if (parser.index !== tokens.length) throw new CheckClauseSyntaxError('trailing tokens');
-    return renderCheckClause(expression);
+    return Object.freeze({ form: 'canonical', dialect, canonical: renderCheckClause(expression), reason: null });
   } catch (error) {
     if (!(error instanceof CheckClauseSyntaxError)) throw error;
-    return `raw: ${text.toLowerCase()}`;
+    return Object.freeze({ form: 'raw', dialect, canonical: `raw: ${text.toLowerCase()}`, reason: error.message });
   }
 }
 
-export function extractCheckClauses(ddl) {
+// The normalization entry point keeps its existing contract: it returns the
+// canonical form of a parsable clause and the distinct `raw:` form of one that
+// is not parsable.
+export function normalizeCheckClause(value, options = {}) {
+  return describeCheckClauseNormalization(value, options).canonical;
+}
+
+export function extractCheckClauses(ddl, options = {}) {
   const sql = String(ddl || '');
   const checks = [];
   const upper = sql.toUpperCase();
@@ -311,7 +416,24 @@ export function extractCheckClauses(ddl) {
       }
     }
   }
-  return checks.map(normalizeCheckClause).sort();
+  return checks.map((clause) => normalizeCheckClause(clause, options)).sort();
+}
+
+// §37.50 — the canonical CHECK comparison.
+//
+// Two CHECK sets are equal when their normalized canonical forms are equal as a
+// multiset. The order of the constraints carries no business meaning — the
+// live catalogue's order is a function of the server's rendering, not of the
+// schema — but the number of occurrences of each constraint does.
+//
+// The two sides are therefore compared as sorted arrays and never as sets, so
+// a repeated constraint stays a repeated constraint and a missing, an extra or
+// a changed constraint is still a difference. The helper never mutates the
+// arrays it receives, and it keeps the strict difference detection and the
+// diagnostic of `assert.deepEqual`.
+export function assertCheckParity(expectedChecks, actualChecks, label) {
+  assert.deepEqual([...actualChecks].sort(), [...expectedChecks].sort(),
+    `${label}: check-constraint parity`);
 }
 
 // The physical type family is decided by the canonical MySQL generator, not by
@@ -323,7 +445,7 @@ export function sqliteColumnToMySqlFamily(column, indexed = false, tableName = '
 }
 
 export function normalizedSqliteTable(table) {
-  const indexed = indexedColumns(table);
+  const indexed = mysqlIndexedColumns(table);
   return Object.freeze({
     name: table.name,
     columns: table.columns.map((column) => Object.freeze({
@@ -386,11 +508,22 @@ export function readNormalizedMySqlTable(db, tableName) {
     if (!indexMap.has(row.index_name)) indexMap.set(row.index_name, { name: row.index_name, unique: !Boolean(row.non_unique), columns: [] });
     indexMap.get(row.index_name).columns.push(row.column_name);
   }
+  // §37.48 — the live catalogue rendering is read in the catalogue dialect.
+  // The dialect follows the provenance of this read, not the shape of the text:
+  // a MySQL catalogue CHECK clause is never decoded as a SQLite DDL source and
+  // the other way round.
   const checks = db.prepare(`SELECT cc.CHECK_CLAUSE check_clause FROM information_schema.CHECK_CONSTRAINTS cc
     JOIN information_schema.TABLE_CONSTRAINTS tc
       ON tc.CONSTRAINT_SCHEMA=cc.CONSTRAINT_SCHEMA AND tc.CONSTRAINT_NAME=cc.CONSTRAINT_NAME
     WHERE tc.TABLE_SCHEMA=DATABASE() AND tc.TABLE_NAME=? AND tc.CONSTRAINT_TYPE='CHECK'
-    ORDER BY cc.CHECK_CLAUSE`).all(tableName).map((row) => normalizeCheckClause(row.check_clause));
+    ORDER BY cc.CHECK_CLAUSE`).all(tableName)
+    .map((row) => normalizeCheckClause(row.check_clause, { dialect: CHECK_LITERAL_DIALECT.MYSQL_CATALOG }))
+    // §37.50 — the catalogue's raw order is a function of the server's
+    // rendering, not of the schema, so the canonical forms are sorted after
+    // the normalization and not before it. The raw text is still read by the
+    // query above, and the raw order is still what the acceptance evidence
+    // records; only the compared shape is canonical.
+    .sort();
   return Object.freeze({
     name: tableName, columns, foreignKeys,
     indexes: [...indexMap.values()].map((index) => Object.freeze(index)).sort((a, b) => a.name.localeCompare(b.name)),
@@ -407,7 +540,7 @@ export function compareWave9SourceTarget(snapshot, db) {
     const actual = readNormalizedMySqlTable(db, tableName);
     assert.deepEqual(actual.columns, expected.columns, `${tableName}: complete column parity`);
     assert.deepEqual(actual.foreignKeys, expected.foreignKeys, `${tableName}: foreign-key parity`);
-    assert.deepEqual(actual.checks, expected.checks, `${tableName}: check-constraint parity`);
+    assertCheckParity(expected.checks, actual.checks, tableName);
     assertIndexParity(expected, actual, `${tableName}: index parity`);
   }
 }
@@ -530,7 +663,7 @@ export function assertEquivalentCreditMetadata(actual, expected, label = 'credit
     assert.equal(actualTable.name, expectedTable.name, `${label}.${tableName}: table identity`);
     assert.deepEqual(actualTable.columns, expectedTable.columns, `${label}.${tableName}: complete column parity`);
     assert.deepEqual(actualTable.foreignKeys, expectedTable.foreignKeys, `${label}.${tableName}: foreign-key parity`);
-    assert.deepEqual(actualTable.checks, expectedTable.checks, `${label}.${tableName}: check-constraint parity`);
+    assertCheckParity(expectedTable.checks, actualTable.checks, `${label}.${tableName}`);
     assertIndexParity(expectedTable, actualTable, `${label}.${tableName}: index parity`);
   }
 }

@@ -6,9 +6,12 @@ import { dirname, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { hashPassword } from '../db.js';
+import { setInventoryQuantity } from '../lib/stock.js';
+import { creditObjectAnchorKey } from '../modules/credit-anchor.js';
 import { computeCreditExposure } from '../modules/credit-check.js';
 import { resolveEffectiveCreditProfile } from '../modules/credit-profile.js';
 import { upsertSalesParameters } from '../modules/sales-parameters.js';
+import { createQcp, resolveQualityPolicy } from '../modules/traceability-quality.js';
 import { createWave10MysqlLifecycle } from './mysql-wave10-campaign-target.js';
 import { createTempDb } from './temp-db.js';
 
@@ -31,12 +34,34 @@ export function wave10BusinessDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// A business date that is always after the current business date, so a
-// bounded approval expiry never depends on the calendar the campaign runs on.
-export function wave10FutureBusinessDate(months = 6) {
-  const date = new Date();
-  date.setUTCMonth(date.getUTCMonth() + months);
-  return date.toISOString().slice(0, 10);
+// A business date that is always after the given controlled business date, so
+// a bounded approval expiry never depends on the calendar the campaign runs on
+// and never depends on a second reading of the clock. The month addition
+// clamps to the last valid day of the target month instead of overflowing, and
+// the helper refuses to return a date that is not strictly later than its base.
+export function wave10FutureBusinessDateFrom(baseBusinessDate, months = 6) {
+  if (!Number.isSafeInteger(months) || months <= 0) {
+    throw new Error(`WAVE10_FUTURE_BUSINESS_DATE_INVALID_MONTHS:${months}`);
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(baseBusinessDate ?? '').trim());
+  if (!match) throw new Error(`WAVE10_FUTURE_BUSINESS_DATE_INVALID_BASE:${baseBusinessDate}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const base = new Date(Date.UTC(year, month - 1, day));
+  if (year < 1000 || base.getUTCFullYear() !== year || base.getUTCMonth() !== month - 1 || base.getUTCDate() !== day) {
+    throw new Error(`WAVE10_FUTURE_BUSINESS_DATE_INVALID_BASE:${baseBusinessDate}`);
+  }
+  const targetMonthIndex = month - 1 + months;
+  const targetYear = year + Math.floor(targetMonthIndex / 12);
+  const targetMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(day, daysInTargetMonth);
+  const expiry = `${String(targetYear).padStart(4, '0')}-${String(targetMonth + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+  if (!(expiry > match[0])) {
+    throw new Error(`WAVE10_FUTURE_BUSINESS_DATE_NOT_LATER:${baseBusinessDate}->${expiry}`);
+  }
+  return expiry;
 }
 
 export const W10_OBJECT = 'W10-RACE-OBJECT';
@@ -297,10 +322,118 @@ export async function seedWave10SalesParameters(db) {
   return body.parameter;
 }
 
+// The Sales Delivery OQC gate is a fail-closed production prerequisite: with
+// no applicable Quality Control Point the canonical resolution freezes
+// `inspection_required = 1` and the confirmation route refuses with HTTP 409.
+// The Wave 10 acceptance cases exercise the Sales Delivery → Finance → Credit
+// chain, and outgoing-goods inspection is outside the subject of those cases.
+// The fixture therefore installs one real, effective and auditable
+// `SALES_DELIVERY` control point that waives the gate for the fixture
+// product, through the canonical quality-control-point writer.
+//
+// The waiver is a configuration fact, never an inspection result: the reason
+// states that the cases do not cover outgoing-goods inspection and never
+// claims that an inspection was performed or that a product passed one.
+//
+// The control point must exist before any Sales Delivery is created. The
+// canonical creation path freezes the quality policy exactly once, at document
+// creation, so a control point installed later cannot change an existing
+// Delivery.
+export const W10_QUALITY_POLICY_CODE = 'QCP-W10-SALES-DELIVERY';
+export const W10_QUALITY_POLICY_REASON = 'Wave 10 验收用例验证销售出库→财务→信用链路，出货检验不属于这些用例范围；本控制点为测试域免检配置，不声明已执行检验。';
+
+const W10_QUALITY_ACTOR = Object.freeze({
+  id: 'w10-race-approver', roleCode: 'ADMIN',
+  permissions: ['OQC_VIEW', 'OQC_MANAGE'],
+});
+
+function qualityControlPointView(row) {
+  if (!row) return null;
+  return Object.freeze({
+    id: row.id, code: row.code, operationType: row.operation_type, scope: row.scope,
+    productId: row.product_id, inspectionRequired: Number(row.inspection_required) === 1,
+    samplingMode: row.sampling_mode, active: Number(row.active) === 1,
+    effectiveFrom: row.effective_from, effectiveTo: row.effective_to,
+    version: Number(row.version), reason: row.remarks,
+  });
+}
+
+function readQualityControlPoint(db, qcpId) {
+  return qualityControlPointView(db.prepare(`SELECT id,code,operation_type,scope,product_id,inspection_required,
+    sampling_mode,active,effective_from,effective_to,version,remarks FROM quality_control_points WHERE id=?`).get(qcpId));
+}
+
+// Reads the canonical test control point without writing anything.
+export function readWave10QualityPolicy(db, {
+  productId = 'w10-race-product', code = W10_QUALITY_POLICY_CODE,
+} = {}) {
+  const row = db.prepare(`SELECT id FROM quality_control_points
+    WHERE code=? AND operation_type='SALES_DELIVERY' AND scope='PRODUCT' AND COALESCE(product_id,'')=?
+    ORDER BY version DESC LIMIT 1`).get(code, productId);
+  return row ? readQualityControlPoint(db, row.id) : null;
+}
+
+// The canonical resolution must read the installed control point, never the
+// fail-safe default and never a hand-made snapshot row.
+function assertWave10PolicyResolution(db, { productId, businessDate, expected, reason }) {
+  const policy = resolveQualityPolicy(db, 'SALES_DELIVERY', productId, businessDate);
+  assert.equal(policy.inspectionRequired, false, 'the canonical resolution must waive the inspection');
+  assert.equal(policy.qcpId, expected.id, 'the canonical resolution must read the installed control point');
+  assert.equal(Number(policy.version), Number(expected.version), 'the canonical resolution must read the installed version');
+  assert.equal(policy.waiverReason, reason, 'the canonical resolution must read the declared reason');
+}
+
+export async function seedWave10QualityPolicy(db, {
+  productId = 'w10-race-product', code = W10_QUALITY_POLICY_CODE,
+  reason = W10_QUALITY_POLICY_REASON, effectiveFrom = '2020-01-01',
+  businessDate = wave10BusinessDate(),
+} = {}) {
+  // Reuse an already-installed, active control point with the same identity
+  // and the same inspection flag. A second version would make the canonical
+  // resolution ambiguous and would leave a second CREATE_VERSION audit fact.
+  const installed = db.prepare(`SELECT id,version FROM quality_control_points
+    WHERE code=? AND operation_type='SALES_DELIVERY' AND scope='PRODUCT' AND COALESCE(product_id,'')=?
+      AND active=1 AND inspection_required=0
+    ORDER BY version DESC LIMIT 1`).get(code, productId);
+  if (installed) {
+    const reused = readQualityControlPoint(db, installed.id);
+    assert.ok(reused, 'the reused quality control point must be readable');
+    assert.equal(reused.version, Number(installed.version), 'the reused control point must keep its version');
+    assert.equal(reused.inspectionRequired, false, 'the reused control point must still waive the inspection');
+    assert.equal(reused.active, true, 'the reused control point must still be effective');
+    assert.equal(reused.reason, reason, 'the reused control point must keep the declared reason');
+    assertWave10PolicyResolution(db, { productId, businessDate, expected: reused, reason });
+    return Object.freeze({ id: reused.id, qcpId: reused.id, version: reused.version, reason: reused.reason, reused: true });
+  }
+  const created = createQcp(db, W10_QUALITY_ACTOR, {
+    code, name: 'Wave 10 出库免检控制点', operationType: 'SALES_DELIVERY', scope: 'PRODUCT',
+    productId, inspectionRequired: false, samplingMode: 'FULL', active: true,
+    effectiveFrom, effectiveTo: null, remarks: reason,
+  });
+  const installedRow = readQualityControlPoint(db, created.id);
+  assert.ok(installedRow, 'the canonical writer must install the quality control point');
+  assert.equal(installedRow.id, created.id, 'the installed control point must carry the canonical identity');
+  assert.equal(installedRow.version, Number(created.version), 'the installed control point must carry the canonical version');
+  assert.ok(installedRow.version >= 1, 'the installed control point must carry a version');
+  assert.equal(installedRow.operationType, 'SALES_DELIVERY', 'the control point must target the Sales Delivery gate');
+  assert.equal(installedRow.scope, 'PRODUCT', 'the control point must be product-scoped');
+  assert.equal(installedRow.productId, productId, 'the control point must be bound to the fixture product');
+  assert.equal(installedRow.inspectionRequired, false, 'the control point must waive the inspection');
+  assert.equal(installedRow.samplingMode, 'FULL', 'a waived control point has no sample');
+  assert.equal(installedRow.active, true, 'the control point must be effective');
+  assert.equal(installedRow.effectiveFrom, effectiveFrom, 'the control point must be effective from a fixed past date');
+  assert.equal(installedRow.effectiveTo, null, 'the control point must not expire');
+  assert.equal(installedRow.reason, reason, 'the control point must carry the declared test-only reason');
+  assertWave10PolicyResolution(db, { productId, businessDate, expected: installedRow, reason });
+  return Object.freeze({ id: installedRow.id, qcpId: installedRow.id, version: installedRow.version, reason: installedRow.reason, reused: false });
+}
+
 export async function seedWave10AcceptanceBase(db, {
   aggregateLimit = 300000, salespersonLimit = null, secondSalespersonLimit = null,
   stage = 'SO_APPROVE', scenario = 'BLOCK', controlStrength = 'BLOCK',
   aggregateProfileStatus = 'ACTIVE', salespersonProfileStatus = 'ACTIVE', secondSalespersonProfileStatus = 'ACTIVE',
+  qualityPolicy = true,
+  ruleMode = 'EFFECTIVE',
 } = {}) {
   const now = new Date().toISOString();
   // The canonical Delivery path is reached over the real HTTP dispatch, so the
@@ -327,6 +460,10 @@ export async function seedWave10AcceptanceBase(db, {
     VALUES('w10-race-warehouse','W10-RACE-WH','Wave 10 Race Warehouse','','',1,?,?)`).run(now, now);
   db.prepare(`INSERT INTO products(id,code,name,category,unit,price_cents,stock_quantity,active,created_at,updated_at)
     VALUES('w10-race-product','W10-RACE-P','Wave 10 Race Product','','EA',100000,0,1,?,?)`).run(now, now);
+  // The Sales Delivery OQC gate is consulted on the confirmation path, and the
+  // canonical creation path freezes the quality policy at document creation.
+  // The control point therefore has to exist before any Delivery can exist.
+  if (qualityPolicy) await seedWave10QualityPolicy(db);
   db.prepare(`INSERT INTO product_commercial_classification(id,product_id,sales_enabled,sales_uom_code,pricing_uom_code,
     default_upper_delivery_tolerance_bps,default_lower_delivery_tolerance_bps,service_classification,service_kind,
     active,created_at,updated_at,created_by,updated_by)
@@ -358,10 +495,21 @@ export async function seedWave10AcceptanceBase(db, {
   // consume that authority fact, not insert a competing identity.
   db.prepare(`INSERT INTO credit_parameters(id,code,value_bool,effective_from,status,created_at,created_by)
     VALUES('w10-race-enabled','CREDIT_MANAGEMENT_ENABLED',1,'2026-01-01','ACTIVE',?,'w10-race-approver')`).run(now);
+  // §37.49.2.3 — the rule is always a complete, real, dated and referenced
+  // business fact. `NOT_YET_EFFECTIVE` does not delete it and does not
+  // degrade it: only its effective window moves, so the rule set offers no
+  // effective rule for this stage on this business date. The default mode
+  // keeps the historical past-dated literal, which is calendar-stable.
+  if (!['EFFECTIVE', 'NOT_YET_EFFECTIVE'].includes(ruleMode)) {
+    throw new Error(`WAVE10_RULE_MODE_INVALID:${ruleMode}`);
+  }
+  const ruleEffectiveFrom = ruleMode === 'NOT_YET_EFFECTIVE'
+    ? wave10FutureBusinessDateFrom(wave10BusinessDate())
+    : '2026-01-01';
   db.prepare(`INSERT INTO credit_check_rules(id,rule_code,business_stage,scenario,check_timing,control_strength,credit_item,
     recognition_mode,effective_from,status,result_payload_json,created_at,created_by)
-    VALUES('w10-race-rule','W10_RACE_RULE',?,?,'BEFORE_WRITE',?,'ORDER_EXPOSURE',NULL,'2026-01-01','ACTIVE','{}',?,'w10-race-approver')`)
-    .run(stage, scenario, controlStrength, now);
+    VALUES('w10-race-rule','W10_RACE_RULE',?,?,'BEFORE_WRITE',?,'ORDER_EXPOSURE',NULL,?,'ACTIVE','{}',?,'w10-race-approver')`)
+    .run(stage, scenario, controlStrength, ruleEffectiveFrom, now);
   seedProfile(db, { id: 'w10-profile-agg', anchorId: 'w10-anchor-agg', salespersonId: null, limit: aggregateLimit, status: aggregateProfileStatus, now });
   if (salespersonLimit != null) seedProfile(db, { id: 'w10-profile-a', anchorId: 'w10-anchor-a', salespersonId: 'w10-race-sp-a', limit: salespersonLimit, status: salespersonProfileStatus, now });
   if (secondSalespersonLimit != null) seedProfile(db, { id: 'w10-profile-b', anchorId: 'w10-anchor-b', salespersonId: 'w10-race-sp-b', limit: secondSalespersonLimit, status: secondSalespersonProfileStatus, now });
@@ -373,13 +521,54 @@ export async function seedWave10AcceptanceBase(db, {
 // Reference data only. Initial on-hand stock and the cash settlement account
 // are master facts that the canonical Delivery and collection writers read;
 // they are never evidence that a business transaction happened.
+//
+// The stock is seeded through the PRODUCTION canonical absolute writer, so the
+// seeded row carries the production position identity and the canonical
+// deduction path matches it. A legacy-shaped row (`position_key IS NULL`) is
+// not an acceptable substitute: the canonical upsert cannot match it, so it
+// would insert a SECOND row carrying the movement delta, and the unfiltered
+// availability read could then select that negative shadow row and refuse a
+// satisfiable Delivery.
 export function seedWave10Inventory(db, {
   warehouseId = 'w10-race-warehouse', productId = 'w10-race-product', quantity = 100,
 } = {}) {
   const now = new Date().toISOString();
+  // The DELETE stays first. It is the only thing that guarantees the fixture
+  // never leaves a second row for the pair, whatever a previous run or a
+  // previous shape left behind.
   db.prepare('DELETE FROM inventory WHERE warehouse_id=? AND product_id=?').run(warehouseId, productId);
-  db.prepare('INSERT INTO inventory(id,warehouse_id,product_id,quantity,updated_at) VALUES(?,?,?,?,?)')
-    .run('w10-race-inventory', warehouseId, productId, quantity, now);
+  const balance = setInventoryQuantity(db, warehouseId, productId, quantity, now);
+  assert.equal(balance, quantity, 'the acceptance stock must be seeded at the canonical position');
+
+  // Fail-closed verification of the seeded state. Every precondition below is
+  // a production invariant of the canonical writer, and a silent refusal to
+  // seed must surface here instead of later as a confusing `库存不足` inside
+  // an unrelated business case. There is NO fallback to a legacy INSERT: if
+  // the production writer cannot create the canonical row, the seed fails.
+  const warehouse = db.prepare('SELECT id,active,bin_enabled FROM warehouses WHERE id=?').get(warehouseId);
+  assert.ok(warehouse && Number(warehouse.active) === 1, 'the acceptance warehouse must exist and be active');
+  assert.equal(Number(warehouse.bin_enabled), 0, 'the acceptance warehouse must not enable bin management');
+  const product = db.prepare('SELECT id,active,tracking_policy FROM products WHERE id=?').get(productId);
+  assert.ok(product && Number(product.active) === 1, 'the acceptance product must exist and be active');
+  assert.equal(product.tracking_policy, 'NONE', 'the acceptance product must not be LOT or SERIAL tracked');
+
+  const rows = db.prepare(`SELECT id,quantity,position_key,bin_id,owner_type,owner_id,stock_status,lot_id,serial_id,active
+    FROM inventory WHERE warehouse_id=? AND product_id=?`).all(warehouseId, productId);
+  assert.equal(rows.length, 1, 'the acceptance stock must exist at exactly one current position');
+  const row = rows[0];
+  assert.ok(row.position_key, 'the seeded stock must carry a canonical position_key');
+  assert.match(String(row.position_key), /^[0-9a-f]{64}$/, 'the seeded position_key must be a canonical SHA-256 key');
+  assert.equal(row.owner_type, 'ENTERPRISE', 'the seeded stock must carry the canonical owner_type');
+  assert.equal(row.owner_id, null, 'the seeded stock must carry a NULL owner_id');
+  assert.equal(row.stock_status, 'AVAILABLE', 'the seeded stock must carry the canonical stock_status');
+  assert.equal(row.bin_id, null, 'the seeded stock must carry a NULL bin_id');
+  assert.equal(row.lot_id, null, 'the seeded stock must carry a NULL lot_id');
+  assert.equal(row.serial_id, null, 'the seeded stock must carry a NULL serial_id');
+  assert.equal(Number(row.active), 1, 'the seeded stock must be active');
+  assert.equal(Number(row.quantity), quantity, 'the seeded stock must carry the requested absolute quantity');
+  const legacy = db.prepare('SELECT COUNT(*) count FROM inventory WHERE warehouse_id=? AND product_id=? AND position_key IS NULL')
+    .get(warehouseId, productId);
+  assert.equal(Number(legacy.count), 0, 'the acceptance seed must leave no legacy NULL position_key row');
 }
 
 export function seedWave10SettlementAccount(db, { id = 'w10-race-cash-account' } = {}) {
@@ -390,8 +579,17 @@ export function seedWave10SettlementAccount(db, { id = 'w10-race-cash-account' }
 }
 
 function seedProfile(db, { id, anchorId, salespersonId, limit, status = 'ACTIVE', now }) {
-  const scope = salespersonId || 'AGGREGATE';
-  const key = `CREDIT_OBJECT|SALES_ORDER|${W10_OBJECT}|CUSTOMER|w10-race-customer|SCOPE:${scope}`;
+  // §37.49.4.1 — the anchor identity is the production one, so the fixture and
+  // `ensureCreditLockAnchor` resolve the same anchor and the production
+  // predecessor closure operates on the anchor that actually holds this
+  // Profile. The aggregate scope key is unchanged by this; the salesperson
+  // scope now carries the production `SCOPE:SALESPERSON|` form.
+  const key = creditObjectAnchorKey({
+    customerId: 'w10-race-customer',
+    salespersonId: salespersonId || null,
+    creditObjectType: 'SALES_ORDER',
+    creditObjectId: W10_OBJECT,
+  });
   db.prepare(`INSERT INTO credit_lock_anchors(id,anchor_key,anchor_type,customer_id,salesperson_id,credit_object_type,
     credit_object_id,policy_scope_type,policy_scope_id,created_at)
     VALUES(?,?,'CREDIT_OBJECT','w10-race-customer',?,'SALES_ORDER',?,NULL,NULL,?)`).run(anchorId, key, salespersonId, W10_OBJECT, now);

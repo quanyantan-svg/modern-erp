@@ -32,7 +32,7 @@ import { createTempDb } from './test-utils/temp-db.js';
 import {
   captureWave10PersistenceProjection, creditInput, productionOrderBody, seedReceivable,
   seedSubmittedOrder, seedWave10AcceptanceBase, wave10BusinessDate, wave10DeliveryRequest,
-  wave10FutureBusinessDate, wave10HttpLogin, wave10HttpRequest, wave10MysqlTempOptions,
+  wave10FutureBusinessDateFrom, wave10HttpLogin, wave10HttpRequest, wave10MysqlTempOptions,
 } from './test-utils/wave10-mysql-acceptance-fixture.js';
 
 const required = ['ERP_DB_HOST', 'ERP_DB_PORT', 'ERP_DB_NAME', 'ERP_DB_USER', 'ERP_DB_PASSWORD', 'ERP_MYSQL_WAVE10_CAMPAIGN_LEASE'];
@@ -136,10 +136,10 @@ function canonicalInvoice(db, { deliveryItems, idempotencyKey, invoiceDate = wav
     })),
     actorId: 'w10-race-creator', idempotencyKey,
   });
-  postSalesInvoice(db, invoice.id, 'w10-race-creator');
+  const postedInvoice = postSalesInvoice(db, invoice.id, 'w10-race-creator');
   const receivable = db.prepare('SELECT * FROM account_receivables WHERE source_type=? AND source_id=?').get('SALES_INVOICE', invoice.id);
   assert.ok(receivable, 'the canonical invoice posting must create the Finance AR');
-  return { invoice, receivable };
+  return { invoice: postedInvoice, receivable };
 }
 
 // The canonical collection settlement. The receivable outstanding balance is
@@ -223,24 +223,28 @@ test('M-BIZ-03 B-9 CLOSED current Profile does not fall back to historical ACTIV
 
 test('M-BIZ-04 B-9 Special Approval and aggregate Profile cannot bypass a non-ACTIVE salesperson scope', async () => {
   await withMatrix('biz04', { aggregateLimit: 50000, salespersonLimit: 50000, scenario: 'OVERRIDE_REQUEST', controlStrength: 'WARNING' }, async (db) => {
+    // §37.49.3.1 — one controlled business date for the whole case, and one
+    // expiry derived from it and shared by the request and the decision.
+    const businessDate = wave10BusinessDate();
+    const expiryBusinessDate = wave10FutureBusinessDateFrom(businessDate);
     seedSubmittedOrder(db, { id: 'biz04-order', cents: 100000, status: 'DRAFT' });
-    const initial = runCheck(db, { orderId: 'biz04-order', proposedDeltaCents: 100000 });
+    const initial = runCheck(db, { orderId: 'biz04-order', proposedDeltaCents: 100000, businessDate });
     const aggregate = initial.scopeResults.find((row) => row.scopeType === 'CUSTOMER_AGGREGATE');
     assert.equal(aggregate.decision, 'SPECIAL_APPROVAL_REQUIRED');
     const aggregateRow = db.prepare("SELECT id FROM credit_check_results WHERE check_group_id=? AND scope_type='CUSTOMER_AGGREGATE'").get(initial.checkGroupId);
     assert.ok(aggregateRow);
     const requested = await invoke(requestCreditSpecialApproval, db, {
       sourceCreditCheckResultId: aggregateRow.id, reason: 'M-BIZ-04', requestedOverrideCents: 50000,
-      requestedCeilingCents: 100000, requestedExpiryBusinessDate: wave10FutureBusinessDate(), scopeMode: 'ONE_TIME',
+      requestedCeilingCents: 100000, requestedExpiryBusinessDate: expiryBusinessDate, scopeMode: 'ONE_TIME',
     }, REQUESTER, 'biz04-request');
     const approvalId = requested.body.approval.id;
     await invoke(decideCreditSpecialApproval, db, {
       decision: 'APPROVED', approvedOverrideCents: 50000, approvedCeilingCents: 100000,
-      approvedExpiryBusinessDate: wave10FutureBusinessDate(), reason: 'bounded',
+      approvedExpiryBusinessDate: expiryBusinessDate, reason: 'bounded',
     }, APPROVER, 'biz04-decide', approvalId);
     db.prepare("UPDATE credit_profile SET status='SUSPENDED' WHERE id='w10-profile-a'").run();
     const before = captureWave10PersistenceProjection(db);
-    assert.throws(() => runCheck(db, { orderId: 'biz04-order', proposedDeltaCents: 100000 }),
+    assert.throws(() => runCheck(db, { orderId: 'biz04-order', proposedDeltaCents: 100000, businessDate }),
       (error) => error.code === 'CREDIT_PROFILE_NOT_ENFORCEABLE' && error.details?.scopeType === 'SALESPERSON_SUB_LIMIT');
     assert.deepEqual(captureWave10PersistenceProjection(db), before);
     assert.equal(Number(db.prepare("SELECT COUNT(*) count FROM audit_logs WHERE entity_type='CREDIT_SPECIAL_APPROVAL' AND action='CONSUME'").get().count), 0);
@@ -420,13 +424,20 @@ test('M-BIZ-18 Recognition other-mode-only is unenforced with no result or audit
 
 test('M-BIZ-19 Recognition disabled and no-rule paths stay unenforced with zero evidence', async () => {
   for (const variant of ['disabled', 'no-rule']) {
-    await withMatrix(`biz19-${variant}`, { aggregateLimit: 50000, stage: 'SO_SUBMIT' }, (db) => {
+    await withMatrix(`biz19-${variant}`, {
+      aggregateLimit: 50000, stage: 'SO_SUBMIT',
+      // §37.49.2.3 — the no-rule variant keeps the rule as a complete, real,
+      // dated and referenced fact and only moves its effective window, so the
+      // rule set offers no effective rule for this stage on this business
+      // date. No rule row is deleted and no reference is released.
+      ruleMode: variant === 'no-rule' ? 'NOT_YET_EFFECTIVE' : 'EFFECTIVE',
+    }, (db) => {
       seedSubmittedOrder(db, { id: `biz19-${variant}-order`, status: 'DRAFT' });
       if (variant === 'disabled') db.prepare("UPDATE credit_parameters SET value_bool=0 WHERE code='CREDIT_MANAGEMENT_ENABLED'").run();
-      else db.prepare("DELETE FROM credit_check_rules WHERE id='w10-race-rule'").run();
       const before = captureWave10PersistenceProjection(db);
       const result = runCheck(db, { orderId: `biz19-${variant}-order`, stage: 'SO_SUBMIT', proposedDeltaCents: 100000 });
       assert.equal(result.enforced, false); assert.equal(result.decision, 'PASS');
+      assert.deepEqual(result.reasonCodes, [variant === 'disabled' ? 'CREDIT_MANAGEMENT_DISABLED' : 'NO_APPLICABLE_EFFECTIVE_RULE']);
       assert.deepEqual(captureWave10PersistenceProjection(db), before);
     });
   }

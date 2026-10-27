@@ -103,10 +103,32 @@ const FULL = [
   'server/sales-customer-wave8-residual.test.js',
   'server/sales-customer-wave9-credit-foundation.test.js',
   'server/sales-customer-wave10-credit-check.test.js',
+  // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
+  // single-connection regression over the real Delivery HTTP route: the
+  // canonical control-point writer installs the fixture fact, the production
+  // fail-safe still refuses without it, and the waiver is policy-driven.
+  'server/sales-customer-wave10-quality-policy.test.js',
   // Wave 10 cross-dialect MySQL parity helpers: the canonical CHECK
   // normalization and the index / physical-type comparison contracts. Pure
   // parsing and comparison; no database connection.
   'server/sales-customer-wave10-mysql-parity.test.js',
+  // Wave 10 acceptance-contract regressions (AC-01..AC-11). Engine-neutral
+  // local proof of the three corrected acceptance-contract defects: the
+  // no-rule fixture state, the date-stable Special Approval expiry and the
+  // canonical Credit Profile anchor identity, including the negative
+  // reproduction of each original defect. Bounded and deterministic; each
+  // case owns one disposable temp SQLite database and never reaches MySQL.
+  'server/sales-customer-wave10-acceptance-contract.test.js',
+  // Wave 10 inventory-fixture canonical-seeding regressions (W10-INV-T01..T08).
+  // The local proof that the shared acceptance fixture seeds exactly one
+  // canonical inventory position through the production absolute writer, so
+  // the canonical deduction path lands 100 -> 99 -> 98 on that one row
+  // instead of creating a negative shadow row. Each case owns one disposable
+  // temp SQLite database and never reaches MySQL. It is deliberately NOT
+  // registered in FAST: the manifest's FAST criterion excludes temp-SQLite
+  // dependency, and these cases require a real database state, the canonical
+  // position identity and the deduction verification.
+  'server/sales-customer-wave10-inventory-fixture.test.js',
   'server/sales-customer-batch-a.test.js',
 
   // ----- Procurement & Outsourcing Domain — Wave A foundation -----
@@ -570,6 +592,18 @@ const FAST = [
   'scripts/mysql-sales-wave7-gate-a-runner.test.js',
   // Wave 10 cross-dialect parity helpers — pure DDL parsing and comparison.
   'server/sales-customer-wave10-mysql-parity.test.js',
+  // Wave 10 Gate B OQC quality-policy fixture contract. Unlike the other
+  // FAST entries this one creates one disposable temp SQLite per case, because
+  // the fixture contract is only observable through the real Delivery HTTP
+  // route and the real quality gate. It stays a bounded, deterministic and
+  // environment-independent regression (no MySQL, no Vite SSR, no network).
+  'server/sales-customer-wave10-quality-policy.test.js',
+  // Wave 10 acceptance-contract regressions (AC-01..AC-11). Like the OQC
+  // entry above, each case creates one disposable temp SQLite; the fixture
+  // state and the anchor identity are only observable through the real Credit
+  // writers. Bounded, deterministic and environment-independent (no MySQL, no
+  // Vite SSR, no network).
+  'server/sales-customer-wave10-acceptance-contract.test.js',
   // Transaction Lifecycle Safety — pure fault injection, no real MySQL.
   'server/db-transaction-start-safety.test.js',
 
