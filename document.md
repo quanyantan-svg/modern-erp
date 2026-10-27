@@ -11191,3 +11191,368 @@ No OPEN item is rewritten as CLOSED by this freeze.
 - Wave 11 is **not** started by this freeze.
 
 **Freeze status: `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`.**
+
+## Package B — Local Test Backend Isolation Requirement (2026-10-27)
+
+### 1. Authorization, scope, and what this Requirement is not
+
+The user confirmed the Inventory Correctness Audit (`INVENTORY_CORRECTNESS_AUDIT_READY`) and
+approved exactly one Capability Gap to enter the governance flow:
+
+`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT`
+
+Under AGENTS.md §4.0 the user granted one continuous authorization covering **Requirement →
+Design** for this unit only. This section is the **Requirement** record. The matching **Design**
+record is appended to `solution.md` as `§37.53`.
+
+Explicitly **not** authorized by this unit, and **not** performed while producing this record:
+
+- Implementation of any kind;
+- any real MySQL connection, campaign, gate, or destructive operation;
+- Git `add` / `commit` / `push` / `tag` / `merge` / `rebase` / `reset` / `restore` / `clean` /
+  `stash`;
+- any change to `package.json`, `APPLY_GUIDE.md`, an existing release tag, a frozen Wave 10
+  business contract, a Credit / Inventory production module, the MySQL schema or any migration,
+  or a Gate B / Wave 10 manifest;
+- Wave 11 implementation, production release, deployment, or a Freeze.
+
+The historical sections of this document that already record
+`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` (`:10052`, `:10690`, `:11044`, `:11175`) are **not
+modified**. Per AGENTS.md §12 and §5, this unit appends a new record and leaves history intact.
+
+### 2. Confirmed problem statement
+
+The ordinary test launcher does not isolate its child process from the developer's ambient
+environment. The defect is confirmed by direct source reading, not by inference from a failure.
+
+**Path A — `ERP_TEST_DB_BACKEND` selects a real MySQL target.**
+`server/test-utils/temp-db.js:78` reads `process.env.ERP_TEST_DB_BACKEND` and, when it equals
+`mysql`, resolves a MySQL configuration and opens a live MySQL database instead of a disposable
+temporary SQLite database. The path is guarded by the disposable-target authorization
+(`server/test-utils/mysql-disposable-target.js:17-39`), so it fails closed when the authorization
+variables are absent — but the authorization variables are themselves ambient.
+
+**Path B — `ERP_DB_BACKEND` makes `setupAdmin()` abandon the SQLite path it was given.**
+`scripts/admin/setup-admin.mjs:72` derives the `backend` parameter from
+`process.env.ERP_DB_BACKEND`, and `:93-100` branches on it: on `mysql` it calls
+`createDatabaseFn()` with **no path**, so `server/db.js:574` resolves the configuration from the
+environment and the caller-supplied `dbPath` is **discarded**. `server/setup-admin.test.js:76-84`
+and `server/phase-e-accounting.test.js:208-209` call `setupAdmin()` without an explicit `backend`,
+so an ambient `ERP_DB_BACKEND=mysql` sends the FULL suite's administrator creation to an ambient
+MySQL target.
+
+**Path C — an ambient `ERP_DB_PATH` breaks an existing passing test.**
+`server/production-safety.test.js:19` spawns `reset-data` with `{ ...process.env, ...env }`. The
+case *"development: NO ERP_DB_PATH → REFUSE (no default-repo fallback)"* (`:276-288`) supplies
+only `NODE_ENV` and relies on `ERP_DB_PATH` being **absent** from the inherited environment. An
+ambient `ERP_DB_PATH` makes that case target the ambient database instead of refusing.
+
+**Path D — an ambient `ERP_DB_BACKEND` breaks an existing passing test.**
+`server/setup-admin.test.js:320-333` asserts that `setupAdmin()` with `backend` omitted uses the
+SQLite path and persists the user in SQLite. Under an ambient `ERP_DB_BACKEND=mysql` the default
+becomes `mysql` and the assertion does not hold.
+
+Paths C and D are significant beyond the reported defect: they mean an ordinary `pnpm test` on an
+environment with a configured database can **fail**, and a failure of the isolation guard is
+indistinguishable from a product regression.
+
+**The ambient variables that can cause target drift are enumerable and closed.** Every
+database-target-relevant environment variable read anywhere in `server/`, `scripts/` or `src/` is:
+`ERP_DB_BACKEND`, `ERP_TEST_DB_BACKEND`, `ERP_DB_PATH`, `ERP_DB_HOST`, `ERP_DB_PORT`,
+`ERP_DB_NAME`, `ERP_DB_USER`, `ERP_DB_PASSWORD`, `ERP_DB_SSL`,
+`ERP_DB_SSL_REJECT_UNAUTHORIZED`, `ERP_SEED_DEMO`, `ERP_MYSQL_TEST_ALLOW_RESET`,
+`ERP_MYSQL_TEST_DISPOSABLE_TARGET`, `ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS`,
+`ERP_MYSQL_WAVE10_CAMPAIGN_ID`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`,
+`ERP_MYSQL_WAVE10_EXPECTED_SERVER_UUID`, `ERP_MYSQL_WAVE10_EXPECTED_CURRENT_USER`,
+`ERP_MYSQL_WAVE10_EXPECTED_GRANTS_SHA256`, `ERP_MYSQL_WAVE10_EXPECTED_VERSION_POLICY`,
+`ERP_MYSQL_WAVE10_INITIAL_INVENTORY`, and `ERP_RESET_PRODUCTION_OK`.
+
+Three further variables are read by the code and are **not** database-target selectors:
+`ERP_DB_TX_RETRY_MAX` (MySQL transaction retry ceiling — inert under SQLite),
+`ERP_GATE_ATTEMPTS_MAX` and `ERP_GATE_ATTEMPTS_BUDGET_MS` (Sales Delivery confirmation retry
+tuning — business behaviour, not target selection). They are outside the isolation boundary.
+
+`NODE_ENV` is also read (`server/db.js:1852`, `server/reset-data.js:48`). It is not a target
+selector: only the literal value `production` suppresses the demo seed. It is therefore **not**
+part of the isolation boundary, and the isolated environment must reproduce the behaviour of the
+known-good clean shell rather than impose a new `NODE_ENV` value.
+
+### 3. Requirement clauses
+
+**PB-ISO-R01 — One isolation boundary for every ordinary suite.**
+The ordinary test launcher MUST establish a single, suite-independent environment boundary for
+`FAST`, `FULL`, `HEAVY` and `ALL`. The boundary MUST NOT vary with the requested suite name, with
+the resolved file list, or with the presence of `--filter` / `--list`.
+
+**PB-ISO-R02 — The ordinary test child MUST be explicitly SQLite.**
+Every ordinary test child MUST run with the SQLite backend explicitly selected. No ordinary test
+may resolve a MySQL backend from ambient environment state. The selection MUST be explicit and
+positive, not merely the absence of a competing variable.
+
+**PB-ISO-R03 — Credentials, destructive authorization, and campaign identity MUST NOT be inherited.**
+The ordinary test child MUST NOT inherit any MySQL connection credential or endpoint variable,
+the disposable-target reset authorization, the destructive-operation approval, the production
+reset sentinel, or any Wave 10 campaign lease or expected-identity variable. The complete list is
+enumerated in §2 and is closed: it is derived from the code, not from the operating system.
+
+**PB-ISO-R04 — `ERP_DB_PATH` MUST be absent from the ordinary test child.**
+The ordinary test child MUST NOT inherit a database path, and specifically MUST NOT be able to
+point at the repository default database or at any persistent user database. The variable MUST be
+**absent**, not redirected: absence is what makes every code path that requires an explicit
+database target fail closed rather than silently select one, and it is what the existing
+`production-safety` case at `server/production-safety.test.js:276-288` already requires.
+
+**PB-ISO-R05 — `setupAdmin()` MUST NOT drift to MySQL in the ordinary test environment.**
+`setupAdmin()` invoked without an explicit `backend` MUST use the SQLite path supplied by its
+caller. The requirement is satisfied by the isolated environment alone; the production CLI
+behaviour of `scripts/admin/setup-admin.mjs` — where an operator selects MySQL through the
+environment — MUST remain unchanged.
+
+**PB-ISO-R06 — Production database resolution MUST NOT change.**
+The isolation MUST NOT be achieved by altering the default behaviour of `createDatabase()` or
+`resolveDatabaseConfig()`. Production backend and path resolution remains environment-driven and
+fail-closed. The ordinary launcher is the only place where isolation is established.
+
+**PB-ISO-R07 — The protected MySQL gates MUST be unaffected.**
+The protected MySQL commands — `pnpm test:mysql`, `pnpm test:mysql:legacy`,
+`pnpm test:mysql:concurrency`, `pnpm test:mysql:gate-a`, `pnpm test:mysql:gate-b`,
+`pnpm test:mysql:wave10`, `pnpm test:mysql:performance`,
+`pnpm test:mysql:finance-concurrency` — MUST keep their own launchers and their own explicitly
+constructed child environments. They MUST continue to select MySQL and MUST continue to enforce
+their own destructive-target and campaign-identity guards. The ordinary launcher's isolation MUST
+NOT be inherited by them, and MUST NOT weaken them.
+
+**PB-ISO-R08 — Suite semantics MUST be unchanged.**
+The suite manifest classification, the on-disk test discovery, the file list handed to the test
+runner, the `--list` behaviour, and the exit-code propagation from the test runner to the shell
+MUST remain exactly as they are today. No existing `FAST` / `FULL` / `HEAVY` classification may
+change, and no existing test file may move between suites.
+
+**PB-ISO-R09 — No secret may be disclosed.**
+The ordinary launcher MAY report which variables were removed or pinned, by **name and presence
+only**. It MUST NOT print, log, echo, or encode the value of any environment variable — in
+particular no password, no connection string, and no campaign lease.
+
+**PB-ISO-R10 — Isolation failure MUST fail closed.**
+If the isolated environment cannot be constructed, or if any variable named in §2 that MUST be
+absent is found present in the constructed child environment, the launcher MUST abort the run with
+a non-zero exit code and a diagnostic that names the offending **variable names** only. It MUST
+NOT continue with a partially sanitized environment.
+
+**PB-ISO-R11 — The parent process environment MUST NOT be mutated.**
+The launcher MUST construct the isolated environment as a child-only artifact. It MUST NOT add,
+delete, or overwrite any variable in its own `process.env`. This holds both for the ordinary test
+child and for any in-process assertion the launcher performs.
+
+**PB-ISO-R12 — No MySQL opt-in in the ordinary launcher.**
+The ordinary launcher MUST NOT provide a switch, flag, or environment variable that re-enables
+MySQL for the ordinary suites. Real MySQL execution continues to require the existing protected
+commands, which carry their own explicit authorization. A contributor running `pnpm test` MUST NOT
+be able to reach a real MySQL target by any means short of invoking a protected command.
+
+**PB-ISO-R13 — The isolated environment MUST reproduce the known-good baseline.**
+The isolated environment MUST be equivalent, for database-target purposes, to the clean-shell
+environment under which the recorded `FAST` / `FULL` / `HEAVY` baselines were measured: SQLite
+explicitly selected, no database path, no MySQL credential, no destructive authorization, and no
+campaign identity. Existing test semantics — including the demo-seed decision, the
+`reset-data` refusals, and the `setupAdmin()` default — MUST remain unchanged.
+
+**PB-ISO-R14 — Cross-platform equivalence.**
+The isolation MUST behave identically on Windows (PowerShell, `cmd`) and on Linux / macOS. It MUST
+NOT depend on a shell, on a POSIX-only path form, or on the presence of any particular operating
+system variable. The only operating-system variables it depends on are those the child process
+inherits unchanged.
+
+### 4. Acceptance conditions
+
+The future Implementation MUST be verifiable against the following conditions. Each condition
+names the evidence class it requires.
+
+- **AC-ISO-01 (T01)** — Under a clean environment, an ordinary test child resolves the SQLite
+  backend and reports the isolated backend status. *Pure-function / child-process probe.*
+- **AC-ISO-02 (T02)** — With `ERP_TEST_DB_BACKEND=mysql` present in the parent environment, the
+  ordinary test child still resolves SQLite, and the temporary-database helper takes its SQLite
+  branch. *Child-process probe; **must not** open a MySQL connection.*
+- **AC-ISO-03 (T03)** — With `ERP_DB_BACKEND=mysql` present in the parent environment, the
+  ordinary test child still resolves SQLite. *Child-process probe.*
+- **AC-ISO-04 (T04)** — With `ERP_DB_PATH` present in the parent environment, the ordinary test
+  child does not carry it, and the existing `production-safety` case *"development: NO
+  ERP_DB_PATH → REFUSE"* continues to hold. *Existing-test preservation plus child-process probe.*
+- **AC-ISO-05 (T05)** — With MySQL credentials, the disposable-target authorization, the
+  destructive-operation approval, the production reset sentinel, and the Wave 10 campaign lease
+  and expected-identity variables all present in the parent environment, none of them is present
+  in the ordinary test child. *Pure-function assertion over the complete §2 list.*
+- **AC-ISO-06 (T06)** — `setupAdmin()` invoked without an explicit `backend` inside the ordinary
+  test environment persists the administrator in the caller-supplied SQLite path and does not
+  contact MySQL. *Existing-test preservation plus an explicit assertion.*
+- **AC-ISO-07 (T07)** — The suite manifest, the on-disk discovery result, the resolved file list
+  for `FAST` / `FULL` / `HEAVY` / `ALL`, and the exit-code propagation are unchanged. *Assertion
+  over the manifest contract plus a non-zero-exit propagation check.*
+- **AC-ISO-08 (T08)** — Every protected MySQL command entry point is unmodified and still
+  selects MySQL through its own launcher. *Static contract assertion; **no** MySQL execution.*
+- **AC-ISO-09 (T09)** — The isolation holds on Windows and on Linux / macOS, and depends on no
+  shell-specific behaviour. *Static contract assertion over the child-environment construction.*
+- **AC-ISO-10 (T10)** — The launcher reports the isolation status by variable **name** only; no
+  environment variable value appears in its output. *Static assertion over the launcher's own
+  reporting surface.*
+- **AC-ISO-11 (T11)** — The launcher's own `process.env` is unchanged before and after the run.
+  *In-process assertion.*
+- **AC-ISO-12 (T12)** — The ordinary launcher exposes no MySQL opt-in: no flag, argument, or
+  environment variable in its interface can cause a MySQL backend to be selected. *Static
+  contract assertion.*
+
+### 5. Compatibility and forbidden changes
+
+**Compatible by construction.** The suite manifest is unchanged; no test file is added, removed,
+or reclassified; `package.json` is unchanged; the production database resolution contract in
+`server/db.js` and `server/database/config.js` is unchanged; `scripts/admin/setup-admin.mjs`
+production CLI behaviour is unchanged; the protected MySQL launchers are unchanged; the recorded
+`FAST` / `FULL` / `HEAVY` / build evidence remains the reference baseline.
+
+**Forbidden in this unit.** Any change to `package.json`, `APPLY_GUIDE.md`, `AGENTS.md`,
+`README.md`, the frozen Wave 10 business contracts, the Credit or Inventory production modules,
+the MySQL schema or any migration, `scripts/testing/test-suites.js`, and any Gate B or Wave 10
+manifest.
+
+**Forbidden outcome.** The isolation must not be achieved by weakening an existing assertion, by
+deleting a test, by reclassifying a suite, by skipping a case, by changing the production meaning
+of `ERP_DB_BACKEND`, or by introducing an opt-in that lets the ordinary launcher reach MySQL.
+
+### 6. Boundary, evidence class, and the disposition of this OPEN item
+
+- **Evidence class.** Every statement in §2 is `SOURCE_DERIVED` from direct source reading, and
+  is corroborated by two existing test cases that an ambient environment breaks
+  (`server/production-safety.test.js:276-288` and `server/setup-admin.test.js:320-333`). No
+  database was connected and no test suite was executed while producing this Requirement.
+- **`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` remains OPEN.** This Requirement **registers the
+  defect and its acceptance contract**; it does **not** close the item. The item may be closed
+  only by an Implementation that satisfies §4 and an Acceptance that records the evidence.
+- **No relation to `W10-INV-RISK-01`.** The inventory correctness risk is untouched by this unit;
+  its `BLOCKS_RELEASE_ONLY` classification stands.
+- **Relation to Wave 11.** Wave 11 local regression evidence must be produced in an environment
+  this contract makes trustworthy. Package B is therefore a **recommended precondition** for Wave
+  11 local acceptance, but it is **not** a Wave 11 development dependency and **not** a release
+  blocker on its own.
+
+**Requirement status: `PACKAGE_B_TEST_ISOLATION_REQUIREMENT_APPROVED`.**
+
+## Package B — Local Test Backend Isolation Final Acceptance and Capability Closure (2026-10-27)
+
+### 1. Authorization and scope of this record
+
+The user reviewed the Package B Implementation report (`PACKAGE_B_TEST_ISOLATION_IMPLEMENTATION_PASS`)
+and the Package B Design Erratum report (`PACKAGE_B_DESIGN_ERRATUM_READY`) and explicitly authorized,
+under AGENTS.md §4.5:
+
+1. Package B Final Acceptance;
+2. recording the Package B Capability Closure after Acceptance passes;
+3. precise staging of exactly the six approved files;
+4. one Chinese Git commit;
+5. a normal push to both `github` (GitHub) and `origin` (Gitee) on the current recovery branch.
+
+This record is the **Acceptance / Closure decision record**. It does **not** reopen Wave 10, does
+**not** alter any production business contract, does **not** authorize a release or a deployment, and
+does **not** start Wave 11.
+
+### 2. The item being closed
+
+**`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` — disposition: `RESOLVED — LOCAL TEST RUNNER SCOPE`.**
+
+The defect was remediated by an independent, separately authorized Package B implementation:
+
+- **Requirement** — `## Package B — Local Test Backend Isolation Requirement (2026-10-27)`
+  (clauses `PB-ISO-R01`..`PB-ISO-R14`, acceptance conditions `AC-ISO-01`..`AC-ISO-12`);
+- **Design** — `solution.md` → `## 37.53 Package B — Local Test Backend Isolation Design
+  (2026-10-27)`, with a bounded erratum to §37.53.5 M4 that separates the inherited-value denylist
+  from the required final pin;
+- **Implementation** — three files only: `scripts/testing/test-env.js` (new),
+  `scripts/testing/run-tests.js`, `server/test-suite-governance.test.js`;
+- **Acceptance** — this section.
+
+**The historical OPEN evidence is not erased.** The original registrations at `document.md:10052`,
+`:10690`, `:11044` and `:11175`, and the deferred-item listing inside the frozen Wave 10 Capability
+Freeze record, remain exactly as written. This section records a **later, independent disposition**
+of that item and does not retroactively edit the Wave 10 record.
+
+### 3. Scope of the fix — and what it explicitly does **not** claim
+
+1. The defect was fixed through an independent Package B implementation. It was not fixed as a side
+   effect of any other unit, and no other unit's scope was changed.
+2. The isolation covers **only** ordinary test runs started through `scripts/testing/run-tests.js`
+   (the `pnpm test`, `pnpm test:fast`, `pnpm test:heavy`, `pnpm test:all` and `pnpm test:list`
+   entry points).
+3. It does **not** claim that an arbitrary directly executed Node script is isolated. A script run
+   outside the ordinary runner still sees the ambient environment, exactly as before.
+4. It does **not** claim that any real MySQL gate was re-executed. No MySQL instance was contacted
+   and no gate or campaign was run during Package B implementation, acceptance or closure.
+5. It does **not** change production database behaviour. `server/db.js`,
+   `server/database/config.js`, `server/test-utils/temp-db.js` and `scripts/admin/setup-admin.mjs`
+   were not modified. `createDatabase()` and `resolveDatabaseConfig()` keep their production,
+   environment-driven, fail-closed semantics, and the `setup-admin` CLI keeps its MySQL bootstrap
+   path.
+
+### 4. Acceptance evidence by condition and evidence grade
+
+Evidence grades are stated as recorded, and a condition whose only possible proof would require a
+live MySQL target is recorded as `NOT_RUN` rather than claimed as passed.
+
+| Condition | Requirement | Evidence | Grade |
+|---|---|---|---|
+| `AC-ISO-01` | clean environment ⇒ SQLite | `PB-ISO-T01` (pure) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-02` | `ERP_TEST_DB_BACKEND=mysql` contamination removed | `PB-ISO-T02` (**real child process** reports the environment it sees) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-03` | `ERP_DB_BACKEND=mysql` contamination removed | `PB-ISO-T03` (**real child process**) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-04` | `ERP_DB_PATH` contamination removed | `PB-ISO-T04` (**real child process**) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-05` | the complete 22-name denylist is removed | `PB-ISO-T05` (pure; iterates the whole list) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-06` | `setupAdmin()` uses the caller SQLite path | `PB-ISO-T06` (pure; stubbed factory, no database opened) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-07` | FAST / FULL / HEAVY / ALL semantics and exit-code propagation unchanged | `PB-ISO-T07` (static contract + **real child process** exit codes) plus the full FAST / FULL / HEAVY runs below | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-08` | the protected MySQL gateways are unaffected | `PB-ISO-T08` (static dependency contract: no gateway imports the ordinary runner or the isolation module; the isolation module's importers are exactly two files) | `STATIC_VERIFIED` |
+| `AC-ISO-09` | Windows case-insensitive spellings cannot bypass the isolation | `PB-ISO-T09` (pure) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-10` | variable names observable, secret values never carried or printed | `PB-ISO-T10` (pure + static) | `LOCAL_TEST_PROVEN` + `STATIC_VERIFIED` |
+| `AC-ISO-11` | the parent environment is never mutated | `PB-ISO-T11` (pure) | `LOCAL_TEST_PROVEN` |
+| `AC-ISO-12` | no MySQL opt-in; a contaminated environment is refused | `PB-ISO-T12` (pure + static) | `LOCAL_TEST_PROVEN` + `STATIC_VERIFIED` |
+
+**Local gate evidence on the accepted tree** (the three implementation files are byte-identical to
+the state in which these results were produced, and only the approved M4 documentation erratum
+followed, so the results are reused rather than re-run):
+
+| Gate | Result |
+|---|---|
+| focused — `server/test-suite-governance.test.js` | **20 / 20 PASS** (0 fail / 0 cancelled / 0 skipped / 0 todo) |
+| `pnpm test:fast` | **500 / 500 PASS** |
+| `pnpm test` | **2935 / 2935 PASS** |
+| `pnpm test:heavy` | **67 / 67 PASS** |
+| `pnpm build` | **PASS** |
+| `git diff --check` | **PASS** |
+
+**Explicitly `NOT_RUN`** — recorded so that no reader mistakes silence for a pass:
+
+| Item | Why not run | What the closure therefore does not claim |
+|---|---|---|
+| real-MySQL connection isolation | no MySQL instance was contacted; Package B never connects to one | no claim that the isolation was exercised against a live MySQL target |
+| MySQL destructive-reset refusal under the ordinary runner | running it would require a real destructive authorization, which was never granted | no claim that a MySQL reset was attempted and refused by the ordinary launcher |
+
+Both items are out of scope for `AC-ISO-01`..`AC-ISO-12`: the isolation boundary under test is the
+ordinary launcher, and the destructive reset path lives in the protected gateways, which keep their
+own guards and are covered by `AC-ISO-08`'s static contract.
+
+### 5. Preservation of the Wave 10 freeze and of the remaining OPEN items
+
+- **Wave 10 Capability Freeze remains `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`.** This closure
+  does not lift the release hold, does not certify the Inventory Domain, does not certify legacy
+  data migration compatibility, and does not approve a deployment.
+- **`W10-INV-RISK-01` — `BLOCKS_RELEASE_ONLY`** — unchanged and still blocking production release.
+  Package B did not touch the Inventory domain, the canonical stock read/write path, or the
+  negative-balance risk.
+- **`CREDENTIAL_EXPOSURE_OPEN` — `REQUIRES_OWNER_DECISION`** — unchanged. Package B neither read,
+  recorded, rotated nor accepted any credential; the residual local exposure remains an owner
+  decision that this record does not make on the owner's behalf.
+- The remaining deferred OPEN items keep their own deferral justification and boundary. This
+  closure changes **one** item only.
+- **Production release is still not authorized.** The system as a whole is **not** declared ready
+  for production release.
+
+### 6. Closure status
+
+**`PACKAGE_B_TEST_ISOLATION_ACCEPTANCE_PASS`**
+
+**`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` — `RESOLVED — LOCAL TEST RUNNER SCOPE`**

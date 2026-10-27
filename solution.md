@@ -30144,3 +30144,415 @@ the 2915 figure is a superseded pre-inventory-fixture baseline and does not over
 **`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`** — the Wave 10 accepted capability and its
 acceptance contracts are frozen on the evidence above; production release remains blocked by
 `W10-INV-RISK-01` and pending the owner decision on `CREDENTIAL_EXPOSURE_OPEN`.
+
+## 37.53 Package B — Local Test Backend Isolation Design (2026-10-27)
+
+### 37.53.1 Scope, authorization, and the constraints this design must satisfy
+
+This section is the **Design** record for the Package B unit whose Requirement is
+`document.md` → `## Package B — Local Test Backend Isolation Requirement (2026-10-27)`.
+It is produced under the AGENTS.md §4.0 continuous authorization granted by the user, which
+covers **Requirement → Design** only.
+
+**Design-only.** No implementation is performed by this record. The Implementation requires a
+separate, explicit authorization.
+
+**Input basis actually read for this design** — `package.json`; `scripts/testing/run-tests.js`
+(full, 123 lines); `scripts/testing/test-suites.js` (criteria and editing rules);
+`server/test-utils/temp-db.js` (full); `server/db.js` (`createDatabase`, `shouldSeedDemoData`);
+`server/database/config.js` (full, 54 lines); `scripts/admin/setup-admin.mjs` (full, 176 lines);
+`server/setup-admin.test.js`; `server/phase-e-accounting.test.js`; `server/production-safety.test.js`;
+`server/reset-safety.test.js`; `server/mysql-adapter-timeout.test.js`;
+`server/database/test-fixtures/delayed-mysql-worker.js`; `server/test-suite-governance.test.js`;
+`server/database/mysql-adapter.js`; `server/database/mysql-schema.js`;
+`server/test-utils/mysql-disposable-target.js`; `server/test-utils/mysql-wave10-campaign-target.js`;
+`server/reset-data.js`; the seven HEAVY suite members; and every `scripts/gates/*` entry point.
+
+**Constraints carried from the Requirement that bind this design:**
+
+| # | Constraint | Design consequence |
+|---|---|---|
+| C1 | The ordinary child MUST be explicitly SQLite (`PB-ISO-R02`) | a positive pin, not the absence of a competing variable |
+| C2 | `ERP_DB_PATH` MUST be **absent**, not redirected (`PB-ISO-R04`) | the sanitized env deletes it; `resolveDatabaseConfig`'s sqlite branch then fails closed for any code path that needs an explicit target |
+| C3 | Production resolution MUST NOT change (`PB-ISO-R06`) | `server/db.js` and `server/database/config.js` are **not** in the whitelist |
+| C4 | Protected gates MUST be unaffected (`PB-ISO-R07`) | the change is confined to the ordinary launcher and a module only it imports |
+| C5 | No MySQL opt-in (`PB-ISO-R12`) | the ordinary launcher exposes no switch that can select MySQL |
+| C6 | Fail closed (`PB-ISO-R10`) | the sanitized env is verified after construction; a surviving forbidden name aborts the run |
+| C7 | No parent pollution (`PB-ISO-R11`) | the sanitizer returns a new object; it never writes `process.env` |
+| C8 | No secret disclosure (`PB-ISO-R09`) | the launcher reports **names** and presence only |
+
+### 37.53.2 Module and function responsibility
+
+Three files, one of them new. The design deliberately separates *policy* (what must not be
+inherited) from *mechanism* (how the child is spawned) so the policy is unit-testable as a pure
+function.
+
+**`scripts/testing/test-env.js` — NEW. Side-effect-free isolation policy.**
+
+| Export | Responsibility |
+|---|---|
+| `ISOLATED_TEST_BACKEND` | the single pinned backend value, `'sqlite'` |
+| `FORBIDDEN_INHERITED_ENV_NAMES` | the closed list of environment variable names that MUST NOT appear in an ordinary test child. Derived from the code, not from the operating system — see §37.53.4 |
+| `buildIsolatedTestEnv(parentEnv)` | **pure.** Returns a **new** environment object for the ordinary test child: a copy of the parent environment, minus every forbidden name, plus the pinned backend. Also returns the list of removed **names** for reporting. Never reads or writes `process.env`; never mutates its argument |
+| `assertIsolatedTestEnv(env)` | **pure.** Verifies a candidate environment satisfies the contract: the pinned backend is exactly `ISOLATED_TEST_BACKEND`, and no forbidden name survives (matched case-insensitively). Throws an error naming the offending **variables** — never their values |
+
+The module imports nothing from `server/`, has no side effects at import time, and performs no I/O.
+
+**Why the policy cannot live inside `scripts/testing/run-tests.js`.** `run-tests.js` is a
+top-level-effect program: at import it parses `process.argv`, validates the suite manifest,
+may `process.exit(2)`, and — absent `--list` — spawns the test runner. A test file that
+imported it would execute the whole runner instead of testing it. A separate, side-effect-free
+module is therefore the only shape that admits a pure-function regression. This is the "necessary
+regression" that justifies exceeding a one-file change.
+
+**`scripts/testing/run-tests.js` — MODIFIED. Mechanism only.**
+
+The launcher keeps every existing responsibility (suite resolution, manifest validation, missing
+file check, `--list`, exit-code propagation) **byte-for-byte in behaviour**. The only change is
+at the environment-construction site: instead of `const env = { ...process.env }` it constructs
+the isolated environment through `buildIsolatedTestEnv(process.env)`, verifies it through
+`assertIsolatedTestEnv`, reports the isolation status by name, and hands the verified object to
+`spawn` as the child's `env`.
+
+**`server/test-suite-governance.test.js` — MODIFIED. The regression.**
+
+Package B's regression cases are added here. §37.53.10 justifies the placement and states the
+alternative that was rejected.
+
+### 37.53.3 Call and data flow
+
+```text
+developer shell (may carry ERP_DB_BACKEND=mysql, ERP_DB_PATH, ERP_DB_PASSWORD, …)
+        │
+        ▼
+scripts/testing/run-tests.js  <suite> [--list] [--filter]
+        │  1. resolve suite  → 2. validate manifest  → 3. --list? → exit(0)
+        │  4. missing-file check → exit(2)
+        ▼
+  buildIsolatedTestEnv(process.env)      ← pure; returns a NEW object
+        │  • copy parent env
+        │  • drop every FORBIDDEN name (case-insensitive)
+        │  • pin ERP_DB_BACKEND = 'sqlite'
+        ▼
+  assertIsolatedTestEnv(env)             ← pure; throws on any violation
+        │  violation → print offending NAMES → exit(2)   (fail closed, C6)
+        ▼
+  report isolation status (names only, no values, C8)
+        ▼
+  spawn(process.execPath, ['--test', …files], { env })      ← the ONLY change of substance
+        │
+        ▼
+  node --test → one child process per test file
+        │
+        ├─ createTempDb()  → SQLite branch  (ERP_TEST_DB_BACKEND absent)
+        ├─ setupAdmin()    → backend resolves to 'sqlite' → createDatabase(dbPath)
+        ├─ createDatabase(path)  → SQLite, env irrelevant
+        └─ reset-data spawns → ERP_DB_PATH absent → refuses without a target
+```
+
+The isolation boundary is the **`spawn` call**. Everything above it runs in the developer's
+process and is unaffected; everything below it sees only the sanitized environment.
+
+### 37.53.4 The complete sanitization contract
+
+This is the closed list. Every name is read by code in `server/`, `scripts/` or `src/`; the list
+is derived from the code, so it is complete with respect to database-target drift and does not
+depend on what happens to be exported in any particular shell.
+
+**A — MUST be absent from the ordinary test child (22 names).**
+
+| Group | Names |
+|---|---|
+| Backend selector (test-only) | `ERP_TEST_DB_BACKEND` |
+| Backend selector (production) | `ERP_DB_BACKEND` — deleted here, then re-pinned (see B) |
+| Database path | `ERP_DB_PATH` |
+| Connection endpoint & credential | `ERP_DB_HOST`, `ERP_DB_PORT`, `ERP_DB_NAME`, `ERP_DB_USER`, `ERP_DB_PASSWORD`, `ERP_DB_SSL`, `ERP_DB_SSL_REJECT_UNAUTHORIZED` |
+| Demo seed toggle | `ERP_SEED_DEMO` |
+| Destructive-target authorization | `ERP_MYSQL_TEST_ALLOW_RESET`, `ERP_MYSQL_TEST_DISPOSABLE_TARGET`, `ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS` |
+| Production reset sentinel | `ERP_RESET_PRODUCTION_OK` |
+| Wave 10 campaign identity & lease | `ERP_MYSQL_WAVE10_CAMPAIGN_ID`, `ERP_MYSQL_WAVE10_CAMPAIGN_LEASE`, `ERP_MYSQL_WAVE10_EXPECTED_SERVER_UUID`, `ERP_MYSQL_WAVE10_EXPECTED_CURRENT_USER`, `ERP_MYSQL_WAVE10_EXPECTED_GRANTS_SHA256`, `ERP_MYSQL_WAVE10_EXPECTED_VERSION_POLICY`, `ERP_MYSQL_WAVE10_INITIAL_INVENTORY` |
+
+**B — MUST be explicitly set (1 name).**
+
+| Name | Value | Rationale |
+|---|---|---|
+| `ERP_DB_BACKEND` | `'sqlite'` | satisfies `PB-ISO-R02` by positive selection. `setup-admin.mjs:72` and `config.js:29` then both resolve SQLite, and `config.js:30` would reject any other value |
+
+**C — MUST be preserved (unchanged from the parent environment).**
+
+| Name(s) | Rationale for keeping |
+|---|---|
+| `NODE_ENV` | Not a target selector. Only the literal `'production'` suppresses the demo seed (`server/db.js:1852`) and blocks `reset-data` (`server/reset-data.js:48`). Changing it would alter existing test semantics, which `PB-ISO-R13` forbids. The isolated environment therefore reproduces the clean-shell behaviour rather than imposing a new value |
+| `ERP_DB_TX_RETRY_MAX` | A MySQL transaction-retry ceiling, inert under SQLite. It cannot cause target drift |
+| `ERP_GATE_ATTEMPTS_MAX`, `ERP_GATE_ATTEMPTS_BUDGET_MS` | Sales Delivery confirmation retry tuning — business behaviour under test, not target selection. Removing them would change what the delivery-confirm retry cases exercise |
+| `NODE_TEST_FLAGS` | Consumed by `run-tests.js:101` to build the child's test-runner flags. Preserving it keeps the existing CI override behaviour |
+| All operating-system variables (`PATH`, `SystemRoot`, `COMSPEC`, `PATHEXT`, `TEMP`, `TMP`, `TMPDIR`, `HOME`, `USERPROFILE`, `LANG`, `LC_ALL`, …) | Required for the child process to start at all on every supported platform |
+
+**D — Explicitly NOT in scope.** `DATABASE_URL` is read nowhere in the repository. It is
+included in the forbidden list anyway as a defensive measure so that a future reader cannot
+introduce a second backend selector without the isolation catching it.
+
+### 37.53.5 Construction mechanics — the four details that decide correctness
+
+**M1 — The parent environment is never mutated.** `buildIsolatedTestEnv` takes the parent
+environment as an *argument*, copies it into a fresh object, and returns that object. It performs
+no assignment to `process.env` and no `delete` on it. The launcher then passes the returned
+object to `spawn`. `PB-ISO-R11` is satisfied by construction, not by discipline. The design does
+not attempt to restore anything afterwards, because nothing is changed.
+
+**M2 — Deletion is case-insensitive.** On Windows `process.env` is a case-insensitive proxy, and
+a child resolves `process.env.ERP_DB_BACKEND` case-insensitively. A developer shell that exports
+`erp_db_backend=mysql` would therefore still select MySQL in the child if the sanitizer removed
+only the exactly-cased key. The sanitizer therefore iterates the parent's keys and drops **every**
+key whose upper-cased form is in the forbidden set. On POSIX this is a harmless superset (env
+names are case-sensitive there, so `erp_db_backend` was never a selector); on Windows it closes a
+real bypass. This is the substance behind `AC-ISO-09` / `T09`.
+
+**M3 — The backend is pinned positively, not left absent.** `ERP_DB_BACKEND` is deleted in the
+forbidden pass and then **set** to `'sqlite'`. Setting it explicitly means that the isolation does
+not depend on a future default change in `config.js:29` or `setup-admin.mjs:72`, and it satisfies
+`PB-ISO-R02`'s "positive, not merely absence" wording.
+
+**M4 — The contract is verified, not assumed.** After construction the launcher calls
+`assertIsolatedTestEnv` on the candidate environment. The 22-variable denylist governs
+**inherited values**: all 22 denylisted variables MUST be removed from the candidate
+environment, and the final child environment MUST then contain exactly one correctly-spelled
+`ERP_DB_BACKEND` key whose value is `'sqlite'`. The other 21 denylisted variables MUST be
+absent from the final environment, and no additional case-insensitive variant of
+`ERP_DB_BACKEND` may be present. Any such variant, or any non-`'sqlite'` value, MUST fail
+closed. On failure the launcher prints the **offending variable names** and exits non-zero
+(`:2`, matching the runner's existing fail-closed convention for manifest and missing-file
+failures). It never falls back to the un-sanitized environment, and never proceeds with a
+partially sanitized one — `PB-ISO-R10`. Environment verification reports variable **names**
+only; it never emits a variable value or a secret — `PB-ISO-R09`.
+
+*Bounded Design erratum (2026-10-27). The preceding M4 wording is corrected to state the
+denylist-versus-pin distinction explicitly: the 22-variable denylist governs inherited
+values, while the final child environment carries exactly one canonical `ERP_DB_BACKEND`
+key set to `'sqlite'` and none of the other 21 denylisted variables. The correction changes
+no Requirement, no implementation rule and no acceptance condition; it aligns the Design
+text with the approved and tested `scripts/testing/test-env.js` behaviour as locked by
+`PB-ISO-T05`, `PB-ISO-T09` and `PB-ISO-T12`.*
+
+### 37.53.6 `setupAdmin()` and `createTempDb()` compatibility
+
+**`setupAdmin()` — no change to the script, and none is permitted.**
+
+`scripts/admin/setup-admin.mjs:72` derives the `backend` parameter from
+`process.env.ERP_DB_BACKEND`. Inside the ordinary test child that variable is pinned to
+`'sqlite'`, so the default resolves to `'sqlite'` and `:98-99` takes the SQLite branch:
+`createDatabaseFn(dbPath)` → `createSqliteDatabase(dbPath)` → the environment is never consulted
+for the path. The caller's `dbPath` is honoured, which is exactly what
+`server/setup-admin.test.js:320-333` asserts and what `server/phase-e-accounting.test.js:208-209`
+relies on.
+
+Changing `setup-admin.mjs` would be wrong on two counts. First, `:135` and `:93-96` are the
+production MySQL administrator bootstrap path — an operator selects MySQL there through the
+environment — so altering the default would break that path. Second, `server/setup-admin.test.js:
+257-317` injects both `backend: 'mysql'` **and** a fake `createDatabaseFn`, so it needs no live
+MySQL and is unaffected by the environment in any case. The script is therefore outside the
+Implementation whitelist.
+
+**`createTempDb()` — no change to the helper.** With `ERP_TEST_DB_BACKEND` absent,
+`server/test-utils/temp-db.js:78` takes the SQLite branch, and `assertNotRepoPath` (`:28-44`,
+applied at `:116`) protects the temporary path from resolving inside the repository. The MySQL
+branch (`:79-112`) becomes unreachable from the ordinary suite; its disposable-target guard
+(`server/test-utils/mysql-disposable-target.js:17-39`) remains as defence-in-depth for any direct
+caller. The helper is outside the Implementation whitelist.
+
+**`createDatabase()` / `resolveDatabaseConfig()` — no change.** `server/db.js:573` keeps the
+string form bypassing the environment entirely, and `:574` keeps the object / no-argument form
+environment-driven for production. `config.js:33-35` keeps failing closed when a SQLite path is
+required and absent — which is precisely why `PB-ISO-R04` demands *absence* rather than a
+redirected path: a redirected path would silently select a database, whereas absence makes every
+such code path refuse.
+
+### 37.53.7 FAST / FULL / HEAVY / ALL compatibility
+
+`package.json` routes `test`, `test:fast`, `test:heavy`, `test:all` and `test:list` through the
+single runner `scripts/testing/run-tests.js`, so **one** boundary covers all four suites
+(`PB-ISO-R01`) and the boundary is independent of the suite name.
+
+| Aspect | Effect |
+|---|---|
+| Suite manifest | **unchanged** — `scripts/testing/test-suites.js` is not modified; no file is added, removed, or reclassified; `FAST ⊆ FULL`, `FULL ∩ HEAVY = ∅` and `ALL = FULL ∪ HEAVY` all continue to hold (`AC-ISO-07`) |
+| On-disk discovery | unchanged — `listTestFilesOnDisk` and `validate` are untouched |
+| Resolved file list | unchanged — the sanitized environment does not participate in suite resolution |
+| `--list` | unchanged — `run-tests.js:76-83` exits before any environment is constructed |
+| Exit-code propagation | unchanged — `:111-117` is untouched; `:111-117`'s signal handling and `code === null ? 1 : code` semantics are preserved |
+| `NODE_TEST_FLAGS` | preserved (list C), so the CI override still works |
+
+**HEAVY, file by file.** The HEAVY suite has exactly seven members; each was read.
+
+| HEAVY member | Effect of Package B |
+|---|---|
+| `server/production-safety.test.js` | **Improved, not merely unaffected.** `:19` spawns `reset-data` with `{ ...process.env, ...env }`, and the case at `:276-288` supplies only `NODE_ENV`, relying on `ERP_DB_PATH` being absent from the inherited environment. Today an ambient `ERP_DB_PATH` breaks that case. With the isolated child the variable is always absent, so the case holds deterministically on any developer machine |
+| `server/reset-safety.test.js` | **Neutral.** `:92-93` already deletes `ERP_DB_PATH` and `NODE_ENV` from its own process before spawning, and `:151-168` supplies `ERP_RESET_PRODUCTION_OK: 'YES'` **explicitly** in the per-call `env`. The sanitized child removes the sentinel from the ambient, but the test supplies what it needs |
+| `server/mysql-adapter-timeout.test.js` | **Unaffected.** It constructs `new MySqlSyncAdapter({}, { workerUrl: './database/test-fixtures/delayed-mysql-worker.js', requestTimeoutMs: 2_000 })` — an empty configuration, a local deliberately-delayed worker fixture, **zero** `process.env` reads, and no `createDatabase` / `createTempDb` call. It never opens a MySQL connection, so there is no database target to drift. Its timeout assertion is unaffected |
+| `server/backup-restore.test.js` | **Unaffected** — no `ERP_DB_*` and no `env:` reference |
+| `server/systemd.test.js` | **Unaffected** — no `ERP_DB_*` and no `env:` reference |
+| `server/nginx.test.js` | **Unaffected** — no `ERP_DB_*` and no `env:` reference |
+| `server/uat-r6-linux-build-architecture.test.js` | **Unaffected** — no `ERP_DB_*` and no `env:` reference |
+
+**One honest consequence to be recorded at Implementation time.** The regression cases are added
+to a file that is already in FULL, so FULL's **case count** increases (the frozen baseline is
+`2923 / 2923`). This is the same shape as the frozen Wave 10 fixture precedent, where
+`document.md` §`W10-INV-R13` recorded that "the only count that moves is FULL". The frozen
+**file set** and every suite classification are unchanged, which is what keeps the frozen
+evidence meaningful.
+
+### 37.53.8 Protected MySQL gate non-interference
+
+The non-interference is **structural**, not merely asserted:
+
+1. `scripts/gates/*` and `scripts/diagnostics/*` never import `scripts/testing/run-tests.js`.
+   A repository-wide search for `run-tests` under those directories returns **zero** matches.
+2. Each gate selects MySQL in **its own** process and constructs **its own** child environment.
+   The Gate A runner is representative: `scripts/gates/mysql-sales-wave7-gate-a.mjs:26` sets
+   `process.env.ERP_DB_BACKEND = 'mysql'`, `:35-41` builds an explicit `childEnv`, and `:76-80`
+   spawns with `env: childEnv`. `scripts/gates/mysql-wave10-runner-support.mjs:79-82, 119-123,
+   151-154`, `scripts/gates/mysql-gate.mjs:26-40`, `scripts/gates/mysql-concurrency-gate.mjs:26-37`
+   and `scripts/gates/mysql-finance-concurrency-gate.mjs:39-48` follow the same pattern.
+3. The new module `scripts/testing/test-env.js` is imported by exactly two files — the ordinary
+   launcher and the regression test. **No gate can load it**, therefore no gate's environment can
+   be sanitized by it, and no gate's MySQL selection can be overridden by it.
+4. The gates are launched by the operator (or by a protected runner), never by
+   `run-tests.js`, so they inherit the developer's environment unchanged — which is exactly what
+   they require.
+
+**Consequence:** `pnpm test:mysql`, `pnpm test:mysql:legacy`, `pnpm test:mysql:concurrency`,
+`pnpm test:mysql:gate-a`, `pnpm test:mysql:gate-b`, `pnpm test:mysql:wave10`,
+`pnpm test:mysql:performance` and `pnpm test:mysql:finance-concurrency` continue to select MySQL
+and continue to enforce their own disposable-target, campaign-lease and expected-identity guards.
+`AC-ISO-08` is satisfied by this static structure and requires **no** MySQL execution to verify.
+
+### 37.53.9 Cross-platform behaviour
+
+| Concern | Resolution |
+|---|---|
+| Shell dependence | None. The child environment is a plain JavaScript object handed to Node's `spawn(..., { env })`, which is Node's own cross-platform mechanism. No shell is invoked, no command string is built, and no POSIX-only path form is used |
+| Windows variable-name case | Handled by M2 (case-insensitive deletion). Without it, `erp_db_backend=mysql` on Windows would still select MySQL in the child |
+| Windows child startup | The sanitizer removes only the enumerated names, so `SystemRoot`, `COMSPEC`, `PATHEXT` and `PATH` are preserved and the child starts normally |
+| POSIX child startup | `PATH`, `HOME`, `TMPDIR` and the locale variables are preserved |
+| Temporary directory | Unchanged. `server/test-utils/temp-db.js` uses `node:os` `tmpdir()` and `mkdtempSync`; the sanitizer does not touch `TMPDIR`/`TEMP`/`TMP` |
+| Line endings | The changed files are JavaScript sources with LF endings already; the change introduces no CRLF/LF mixing |
+| Windows vs Linux equivalence of the contract | The forbidden list is the same on every platform; only the *matching* is case-insensitive, which is a superset of POSIX behaviour and therefore never weaker |
+
+`AC-ISO-09` / `T09` is satisfied by M2 plus the fact that no platform-specific API is used.
+
+### 37.53.10 Regression design — where the Package B regression lives, and what it asserts
+
+**Placement decision: extend `server/test-suite-governance.test.js`; do not add a new test file.**
+
+Reasons, in order of weight:
+
+1. **No manifest change is required, and a manifest change is forbidden by this unit.**
+   `scripts/testing/test-suites.js:19-33` requires every on-disk `*.test.js` to be classified into
+   a suite. A new test file would therefore have to be added to `scripts/testing/test-suites.js`
+   — and that file was touched by the frozen Wave 10 commit and is covered by the freeze
+   fingerprint. Extending an already-classified file avoids that entirely.
+2. **The file is already registered in FAST and FULL** (it self-lists, by design, with an
+   explanatory note at its header). The regression therefore runs in both suites with **no**
+   change to any existing classification, and `FAST ⊆ FULL` continues to hold.
+3. **It already imports from `scripts/testing/`** — the same directory as the new module — so the
+   import path follows an established precedent in that very file.
+4. **Subject-matter fit.** The file is the suite runner's own contract self-test. The Package B
+   contract is the suite runner's environment contract.
+5. **FAST eligibility.** The new cases need no temporary SQLite, no Vite SSR and no database.
+   They satisfy the documented FAST criterion at `scripts/testing/test-suites.js:29-31` and the
+   supplementary statement at `:582-585` ("the fast suite must remain a deterministic regression
+   within seconds"). The only child processes involved are a bounded number of trivial `node -e`
+   probes.
+
+**The rejected alternative**, recorded so the decision is reviewable: a new file such as
+`server/test-runner-env-isolation.test.js`, registered in FAST **and** FULL, would also satisfy
+the manifest rules — listing it in both keeps `FAST ⊆ FULL`, and listing it in the manifest
+satisfies the "every on-disk test file is classified" invariant, with no `HEAVY` justification
+record required because `FULL ∩ HEAVY = ∅` is unaffected. It was rejected because it edits the
+frozen suite manifest, changes the FULL **file set**, and therefore moves the frozen FULL
+baseline's file count — all in exchange for a file split that the existing placement already
+provides.
+
+**Case design.** The cases use three evidence techniques only — a pure function over a
+constructed parent environment, a child-process environment probe, and a static contract
+assertion. **No case connects to MySQL, and no case uses a real destructive authorization.**
+
+| # | Case | Technique | Asserts |
+|---|---|---|---|
+| `PB-ISO-T01` | clean parent → SQLite | pure function | the pinned backend is `'sqlite'`; the forbidden set is absent; no forbidden name survives |
+| `PB-ISO-T02` | parent carries `ERP_TEST_DB_BACKEND=mysql` | pure function + child probe | the child environment does not contain `ERP_TEST_DB_BACKEND`; the child's resolved backend is SQLite; `createTempDb()` takes its SQLite branch — **asserted without opening a MySQL connection** |
+| `PB-ISO-T03` | parent carries `ERP_DB_BACKEND=mysql` | pure function + child probe | the child environment's `ERP_DB_BACKEND` is `'sqlite'`; the child's resolved backend is SQLite |
+| `PB-ISO-T04` | parent carries `ERP_DB_PATH` | pure function + child probe | `ERP_DB_PATH` is absent from the child; the existing `production-safety` refusal case continues to hold |
+| `PB-ISO-T05` | parent carries credentials, reset authorization, destructive approval, production sentinel and the whole Wave 10 campaign set | pure function | **none** of the enumerated names appears in the child environment; the case iterates the complete forbidden list rather than a hand-picked subset, so a future addition to the list is automatically covered |
+| `PB-ISO-T06` | `setupAdmin()` without an explicit `backend` | existing behaviour + explicit assertion | the administrator is persisted in the caller-supplied SQLite path; no MySQL connection is attempted |
+| `PB-ISO-T07` | suite semantics | static contract | the manifest, the on-disk discovery, the resolved file lists for FAST/FULL/HEAVY/ALL and the exit-code propagation are unchanged; the launcher exposes no argument that selects a backend |
+| `PB-ISO-T08` | protected gates | static contract | every `test:mysql*` entry point still resolves to a gate runner under `scripts/gates/` or `scripts/diagnostics/`, still selects MySQL through its own launcher, and does not import the ordinary launcher |
+| `PB-ISO-T09` | cross-platform | pure function | the forbidden-name matching is case-insensitive: a parent key differing only in case is still removed; the preserved set still contains the platform variables the child needs |
+| `PB-ISO-T10` | no secret disclosure | static contract | the launcher's reporting surface contains variable **names** only; no environment variable value is interpolated into any output path |
+| `PB-ISO-T11` | no parent pollution | in-process assertion | the launcher's own `process.env` is unchanged before and after the run |
+| `PB-ISO-T12` | no MySQL opt-in | static contract | the ordinary launcher's argument and environment interface exposes no switch that can cause a MySQL backend to be selected |
+
+**Fail-closed proof.** `PB-ISO-T10`/`T12` are static; in addition, the `assertIsolatedTestEnv`
+failure path is covered by a pure-function case that feeds a deliberately contaminated candidate
+environment and asserts that the assertion rejects it and names the offending variables — without
+spawning anything.
+
+### 37.53.11 Exact future Implementation file whitelist
+
+| # | File | Change |
+|---|---|---|
+| 1 | `scripts/testing/test-env.js` | **NEW** — the side-effect-free isolation policy and the pure `buildIsolatedTestEnv` / `assertIsolatedTestEnv` functions |
+| 2 | `scripts/testing/run-tests.js` | **MODIFIED** — construct, verify, report and pass the isolated environment to `spawn`; nothing else changes |
+| 3 | `server/test-suite-governance.test.js` | **MODIFIED** — append the Package B regression cases `PB-ISO-T01..T12` |
+
+**Explicitly NOT in the whitelist**, and unchanged by the Implementation:
+
+`package.json`; `scripts/testing/test-suites.js`; `server/db.js`; `server/database/config.js`;
+`server/database/mysql-adapter.js`; `server/database/mysql-schema.js`;
+`server/test-utils/temp-db.js`; `server/test-utils/mysql-disposable-target.js`;
+`server/test-utils/mysql-wave10-campaign-target.js`; `scripts/admin/setup-admin.mjs`;
+`server/reset-data.js`; every file under `scripts/gates/`, `scripts/acceptance/` and
+`scripts/diagnostics/`; every `server/*.test.js` other than
+`server/test-suite-governance.test.js`; all schema, migration and canonical business modules;
+`document.md`; `solution.md`; `AGENTS.md`; `README.md`; `APPLY_GUIDE.md`; and every release tag.
+
+**Verification the future Implementation must execute**, in the isolated environment:
+
+focused regression for `server/test-suite-governance.test.js` → `pnpm test:fast` → `pnpm test`
+→ `pnpm test:heavy` → `pnpm build` → `git diff --check`. It **must not** re-run the Wave 10 Full
+MySQL Acceptance, and it must not connect to any MySQL instance.
+
+### 37.53.12 State, audit, and compatibility considerations
+
+- **Transactions.** None. The unit touches no database, no schema and no data.
+- **Audit.** No business mutation occurs, so no audit row is required. The launcher's isolation
+  status line is the operator-visible evidence that the boundary was established.
+- **State machines.** None touched.
+- **RBAC / SOD.** None touched.
+- **Compatibility.** The change is confined to the local test harness. Production behaviour —
+  `createDatabase()`, `resolveDatabaseConfig()`, `setup-admin`, `reset-data`, the protected
+  gateways — is byte-for-byte unchanged. The isolated child environment is equivalent, for
+  database-target purposes, to the clean-shell environment under which the recorded
+  `FAST` / `FULL` / `HEAVY` baselines were measured, which is what makes the frozen evidence
+  reproducible.
+- **Blast radius.** One launcher path plus one new module. The only consumer of the new module is
+  the ordinary launcher and the regression test.
+
+### 37.53.13 Failure behaviour and rollback
+
+| Failure | Behaviour |
+|---|---|
+| `buildIsolatedTestEnv` throws | the launcher prints the reason (variable **names** only) and exits non-zero; it never falls back to the raw environment |
+| `assertIsolatedTestEnv` finds a surviving forbidden name or a wrong pinned backend | the launcher prints the offending **names** and exits non-zero (`2`, matching the runner's existing convention at `:57` and `:91`) |
+| The child process fails to start | existing behaviour at `:119-122` is preserved unchanged |
+| The child exits with a signal | existing behaviour at `:111-115` is preserved unchanged |
+
+**Rollback.** The unit produces no schema, no migration, no data change, no external state and no
+database operation, so there is nothing to roll back beyond the three files. Reverting
+`scripts/testing/run-tests.js` restores the previous behaviour exactly; the new module becomes
+unreferenced and can be deleted; the regression cases are removed with the file change. There is
+no ordering constraint between the runner change and the test change — reverting only the runner
+would make the regression fail, which is the intended regression-lock behaviour, not a
+rollback hazard.
+
+**Design status: `PACKAGE_B_TEST_ISOLATION_DESIGN_APPROVED`.**

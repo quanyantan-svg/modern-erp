@@ -30,6 +30,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { SUITES, validate, listTestFilesOnDisk } from './test-suites.js';
+import {
+  buildIsolatedTestEnv,
+  assertIsolatedTestEnv,
+  ISOLATED_TEST_BACKEND,
+} from './test-env.js';
 
 const repoRoot = SUITES.repoRoot;
 
@@ -97,10 +102,35 @@ console.error(`[run-tests] suite=${label} files=${files.length}`);
 
 // We pass --test directly. --test-reporter=spec keeps output close to
 // the previous default for human readers. CI can override via NODE_TEST_FLAGS.
-const env = { ...process.env };
+//
+// Package B (`PB-ISO-R01`..`R12`): the ordinary test child must never inherit
+// the developer's ambient database environment. The isolated child environment
+// is built and verified by the pure policy module BEFORE any child is started;
+// on violation the run fails closed and no child is started
+// (`solution.md §37.53.2`, `§37.53.3`, `§37.53.5`).
+let env;
+let removedEnvNames = [];
+try {
+  const isolation = buildIsolatedTestEnv(process.env);
+  removedEnvNames = isolation.removed;
+  env = assertIsolatedTestEnv(isolation.env);
+} catch (error) {
+  // Variable NAMES and the error type only — never a value.
+  console.error(`[run-tests] environment isolation FAILED: ${error.message}`);
+  process.exit(2);
+}
+
 const extraFlags = (env.NODE_TEST_FLAGS || '').trim();
 
 const childArgs = ['--test', ...extraFlags.split(/\s+/).filter(Boolean), ...files];
+
+// Isolation status: the backend marker and the NAMES of the variables that
+// were removed. No environment value is ever printed
+// (`PB-ISO-R09`, `AC-ISO-10`).
+console.error(
+  `[run-tests] isolation=${ISOLATED_TEST_BACKEND} removed=${removedEnvNames.length}`
+  + (removedEnvNames.length > 0 ? ` vars=${removedEnvNames.join(',')}` : ''),
+);
 
 const child = spawn(process.execPath, childArgs, {
   stdio: 'inherit',
