@@ -189,11 +189,28 @@ export async function createCreditRule(db, req, res, actor) {
   return send(res, 201, response);
 }
 
-export function ensureCreditPolicySnapshot(db, input) {
+// W11-A U1 — the single pure implementation of the policy snapshot fingerprint.
+//
+// solution.md §37.54.5.2 and §37.54.15.9.2: a read path must be able to
+// compute the fingerprint WITHOUT persisting a snapshot row, which is only
+// possible when the pure computation is separated from the persistence.
+// `ensureCreditPolicySnapshot` delegates to this function, so exactly one
+// fingerprint algorithm exists.
+//
+// Pure: no database access, no time dependency, no side effect. The hash input
+// order (parameterSetHash, ruleSetHash, profileEffectiveStateHash), the HASH
+// validation rule, the length-prefixed canonical encoding, the SHA-256 digest
+// and the `CSP1:` prefix are the original ones, unchanged.
+export function computePolicySnapshotFingerprint(input) {
   const hashes = [input.parameterSetHash, input.ruleSetHash, input.profileEffectiveStateHash];
   if (!hashes.every((value) => HASH.test(String(value || '')))) throw new HttpError(400, '策略快照哈希必须为 64 位小写十六进制');
   const canonical = hashes.map((value) => `${value.length}:${value}`).join('');
-  const fingerprint = `CSP1:${createHash('sha256').update(canonical).digest('hex')}`;
+  return `CSP1:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
+export function ensureCreditPolicySnapshot(db, input) {
+  const fingerprint = computePolicySnapshotFingerprint(input);
+  const hashes = [input.parameterSetHash, input.ruleSetHash, input.profileEffectiveStateHash];
   const businessDate = normalizeBusinessDate(input.businessDate);
   const scopeType = enumValue(input.scopeType, ['CUSTOMER_AGGREGATE','SALESPERSON_SUB_LIMIT'], '信用范围');
   let row = db.prepare(`SELECT * FROM credit_policy_snapshots WHERE credit_lock_anchor_id=? AND business_date=? AND snapshot_fingerprint=?`)

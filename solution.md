@@ -30632,7 +30632,7 @@ rollback hazard.
 
 ```text
 server/modules/credit-scope.js            EXTENDED (canonical read-scope decision + predicate projection)
-server/modules/credit-check.js            EXTENDED (read-only exposure fingerprint + factDigest; no behaviour change)
+server/modules/credit-check.js            EXTENDED (W11-A: 追加两个既有符号的命名导出；W11-D: 返回值追加 factDigest；均为纯附加，无行为变更)
 server/modules/credit-policy.js           EXTENDED (pure fingerprint computation split from persistence)
 server/modules/credit-profile.js          REFACTORED (single shared rating-writer helper; behaviour preserving)
 server/modules/credit-query.js            NEW (SC101/SC102 DERIVED read layer — no tables)
@@ -30652,6 +30652,8 @@ server/modules/credit-reconciliation.js   NEW (SC99/SC100 CHECK-only + determini
 **明确禁止**：不得把 `evaluateCredit()` 或 `POST /api/credit/check` 用作 GET 查询的实现路径。`evaluateCredit()` 会取写锁、解析并写入 `credit_policy_snapshots`、写入 `credit_check_results`、写入 `audit_logs`，并可能消费特别审批（`credit-check.js:895-906`）——它是**业务决策**而非查询。
 
 **不得复制第二套信用算法。** `computeCreditExposure()` 是唯一的敞口派生实现（阶段转换、AR 来源链、销售员归属、模糊归属计数）。本节只为其**返回值增加** `factDigest`（纯附加，不改变任何既有返回字段或既有调用方行为），以支持 R100-2 的可验证确定性。
+
+**`factDigest` 的执行归属**：该字段由 **W11-D** 实施（R100-2 属 SC100，见 §37.54.11.2 与 §37.54.15.6）。**W11-A 不新增该字段**，W11-A 只复用 `computeCreditExposure()` 既有的敞口组件与金额口径（见 §37.54.15.9.1）。
 
 **读路径的快照指纹必须可只读计算。** `ensureCreditPolicySnapshot()`（`credit-policy.js:192`）**会 INSERT**。因此本节要求把纯计算与持久化拆分：
 
@@ -32552,13 +32554,14 @@ MySQL（需受保护 disposable 环境 + 独立授权）：pnpm test:mysql（及
 | 项 | 内容 |
 |---|---|
 | 功能范围 | `GET /api/credit/exposure`、`GET /api/credit/exceptions`、`GET /api/credit/exceptions/:id`；`credit-query.js`；`credit-query.jsx` 界面 |
-| 文件影响 | `server/modules/credit-query.js`（新）、`server/modules/credit-check.js`（导出 `computeCreditExposure` 的 `factDigest`）、`server/modules/credit-policy.js`（拆分纯指纹函数）、`server/modules/credit-scope.js`（谓词投影）、`server/app.js`（路由）、`src/pages/credit-query.jsx`（新）、`src/navigation/applicationRegistry.js`（路由）、新增测试与 acceptance 脚本 |
-| 复用点 | `computeCreditExposure`、`resolveEffectiveCreditProfile`、`buildScopeHashes`、`computePolicySnapshotFingerprint`、`resolveCreditReadMode` / `creditScopePredicate` |
+| 文件影响 | `server/modules/credit-query.js`（新）、`server/modules/credit-check.js`（**仅追加**两个既有符号的命名导出 `buildScopeHashes` / `CREDIT_CHECK_RESULT_SCOPE`，见 §37.54.5.2 与 §37.54.15.9.2；**不**新增 `factDigest` —— 该字段属 W11-D）、`server/modules/credit-policy.js`（拆分纯指纹函数 `computePolicySnapshotFingerprint`，内联算法不变）、`server/app.js`（登记 3 个 GET）、`src/pages/credit-query.jsx`（新）、`src/navigation/applicationRegistry.js`（contextual 路由）、新增测试与 acceptance 脚本。**`server/modules/credit-scope.js` 零改动**（§37.54.15.9.5） |
+| 复用点 | `computeCreditExposure`、`resolveEffectiveCreditProfile`、`buildScopeHashes`、`computePolicySnapshotFingerprint`、`resolveCreditReadMode` / `creditScopePredicate`、`CREDIT_CHECK_RESULT_SCOPE` —— 全部按 §37.54.5.2 从**既有模块直接导入**；不得在新模块复制算法或 Scope SQL |
 | 新增表 / API / UI | **无表**；3 个 GET 端点；1 个 contextual 路由 |
 | 事务 / RBAC | 零事务、零写入；`CREDIT_VIEW` + 五级 Scope |
 | 测试范围 | UAT-S-35-A1..A7；零副作用；分页；权限负向；SQLite + MySQL 等价 |
 | MySQL Gate | Fresh / Upgrade / Replay / 两引擎 id 序列等价 / 零副作用摘要比对 |
-| 停止条件 | 查询路径出现任何写入；或出现第二套敞口算法 |
+| 停止条件 | 查询路径出现任何写入；或出现第二套敞口算法；或出现第二套 Credit Read Mode Resolver；或为取得复用点而在新模块复制既有算法 / Scope SQL；或改动 `credit-scope.js` |
+| 冻结载荷治理 | W11-A U1 / U2 对 W11-SEC-01 冻结载荷（14 项）的增量变更，按 §37.54.15.9.4 的**有界例外治理**执行；原 14 项冻结指纹**永久保留**，不得被重算或覆盖 |
 | Acceptance 标识 | `W11_A_ACCEPTANCE_PASS` |
 | 依赖 | **W11-SEC 必须先通过** |
 | 后续授权边界 | 完成后方可授权 W11-D |
@@ -32640,6 +32643,233 @@ Freeze 状态          W11_SEC_01_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PEN
 
 Requirement 侧记录：`document.md` → `## W11-SEC-01 — Credit Read Scope Final Acceptance and Capability Freeze Record (2026-10-28)`；当日 append-only 记录：`log/2026-10-28.md`。
 
+#### 37.54.15.9 W11-A Bounded Design Correction（2026-10-28）
+
+授权：`W11_A_BOUNDED_DESIGN_CORRECTION_ONLY`（AGENTS.md §4.3 DESIGN）。本轮**仅** Design Correction：**未**进入 Implementation，**未**修改任何代码、测试、Gate、Schema、Migration 或 API，**未**执行 FAST / FULL / Build / MySQL Gate，**未**连接任何数据库，**未**执行任何 Git 写操作。
+
+本节**就地修正** W11-A 的包合同（§37.54.15.3）与共享基础（§37.54.5.1 / §37.54.5.2），并新增 W11-SEC-01 冻结载荷的**有界例外治理**。本节**不重定义** §37.54.15.2 已固定的 W11-SEC-01 Freeze Boundary，也**不追溯覆盖** W11-SEC-01 已冻结的任何基线、指纹或 Git 证据。
+
+##### 37.54.15.9.1 修正一 —— `factDigest` 归属
+
+| 项 | 修正前（§37.54.15.3） | 修正后 |
+|---|---|---|
+| 归属 | W11-A 文件影响含「`credit-check.js`（导出 `computeCreditExposure` 的 `factDigest`）」 | **`factDigest` 属 W11-D**（R100-2 属 SC100；§37.54.11.2 与 §37.54.15.6 已如此归属） |
+| W11-A 职责 | —— | **只复用**既有 `computeCreditExposure()` 返回的敞口组件与金额口径，**不**新增该字段 |
+| 后果 | W11-A 会对已冻结的 `credit-check.js` 产生一次无业务必要的改动 | W11-A 对 `credit-check.js` 的唯一改动收敛为**两个既有符号的命名导出**（见 §37.54.15.9.2） |
+
+**不得**因此提前改变任何 Wave 10 敞口算法、结果格式或决策语义。
+
+##### 37.54.15.9.2 修正二 —— 三个复用点的唯一获取方案（Q1 = 方案 A）
+
+**裁决**：**方案 A** —— 在 `credit-check.js` 中**追加**命名导出；**禁止**在新模块复制既有算法或 Scope SQL。
+
+| 复用点 | 现状 | 唯一获取方案 | 禁止 |
+|---|---|---|---|
+| `buildScopeHashes` | `credit-check.js:540` 模块私有纯函数（只读参数 / 规则 / 档案状态并做 SHA-256） | 在 `credit-check.js` **保留现有实现**，追加 `export { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE };` | 不得改函数体、不得改 SQL、不得改字段、不得改哈希顺序、不得改序列化、不得改返回结构、不得改任何既有调用位置、不得新增第二套 hash builder |
+| `CREDIT_CHECK_RESULT_SCOPE` | `credit-check.js:1048` 模块私有冻结常量 | 同上，随同一次追加导出 | **禁止**在 `credit-query.js` 中复制其 `aggregateExpr` / `selfExpr` SQL 字符串 |
+| `computePolicySnapshotFingerprint` | **尚不存在**；指纹逻辑内联于 `ensureCreditPolicySnapshot`（`credit-policy.js:192-196`） | 按 §37.54.5.2 从 `credit-policy.js` 提取**纯函数**，并让 `ensureCreditPolicySnapshot` 委托调用 | 不得改变三个 Hash 的输入次序、Hash 校验规则、长度前缀 canonical 编码、SHA-256 生成方式、`CSP1:` 前缀、Snapshot 持久化行为、唯一性、幂等与历史记录 |
+
+新模块必须继续调用 `resolveCreditReadMode` / `requireCreditReadScope` / `creditScopePredicate`，**禁止创建第二套 Credit Read Mode Resolver**。新增查询的业务过滤必须与 Scope Predicate 组合在**同一条 SQL 的 WHERE** 中，确保分页、总数与排序均在授权范围内执行。
+
+##### 37.54.15.9.3 指纹函数提取的等价性合同
+
+`computePolicySnapshotFingerprint` 的提取必须**逐字节等价**。测试矩阵（有效 / 无效 / 边界）：
+
+| # | 输入类别 | 断言 |
+|---|---|---|
+| 1 | 有效：三 Hash 均为 64 位小写十六进制 | 输出等于**提取前** `ensureCreditPolicySnapshot` 内联算法对同一输入的输出，逐字节相同 |
+| 2 | 无效：任一 Hash 非 64 位小写十六进制 | 与提取前**同样**抛 400（`HASH` 规则不变），错误类型与消息不变 |
+| 3 | 边界：含前导零 / 全零 / 空字符串 / 非 ASCII | 与提取前逐字节相同（长度前缀编码对长度敏感） |
+| 4 | 次序敏感：交换三个 Hash 的位置 | 输出**不同**，证明输入次序被保留 |
+| 5 | 持久化不变：以同一输入调用 `ensureCreditPolicySnapshot` | 写入行、唯一性、幂等与历史记录与提取前完全一致 |
+
+该函数**不得**执行任何数据库写入（纯函数，无 `db` 参数）。
+
+##### 37.54.15.9.4 W11-SEC-01 冻结载荷的有界例外治理
+
+W11-SEC-01 已于 2026-10-28 正式冻结，其 14 项冻结载荷指纹与 Git 归档证据**永久保留、不得重新定义**。本节**不是**对 W11-SEC-01 冻结基线的追溯覆盖，而是**面向未来的、版本化的、有界**的变更授权记录。
+
+```text
+例外身份            W11_A_FROZEN_PAYLOAD_BOUNDED_AMENDMENT（新增，仅 W11-A 适用）
+适用范围            W11-A U1（仅限下列两项）与 W11-A U2（仅限下列两项）
+不适用              W11-SEC-01 既有证据本身；任何其它包；任何 Wave 9 / Wave 10 冻结文件
+
+U1 允许（仅限 credit-check.js）
+  - 追加 `export { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE };`
+  - 不允许修改原函数体、常量内容、既有导出、既有调用位置、业务 SQL 或权限判断
+  - 不允许改变任何 Wave 10 / W11-SEC 的业务行为
+  - 不允许修改 credit-scope.js
+
+U2 允许（仅限两个冻结载荷文件，且仅为**追加登记**）
+  - package.json：追加一条 W11-A Gate 脚本（沿用既有 test:mysql:wave11-sec / test:mysql:local 形态）
+  - scripts/testing/test-suites.js：追加登记 W11-A 的 SQLite 套件
+  - 不允许修改 package.json 的 version；不允许登记任何 MySQL 集成文件；不允许改动既有登记
+
+必须记录
+  - credit-check.js 修改前 / 修改后的 SHA-256
+  - 两者差异**仅为**上述约定的追加导出（逐行可核对）
+  - package.json / test-suites.js 修改前 / 修改后的 SHA-256 与增量说明
+  - 原 W11-SEC-01 的 14 项冻结 SHA-256 **原样保留**，不得被新值覆盖或替换
+
+禁止
+  - 以任何形式重算、覆盖、替换或作废 W11-SEC-01 已冻结的 14 项指纹
+  - 以「基线已漂移」为由重新建立 W11-SEC-01 的身份基线
+  - 将本例外扩大为对冻结文件的任意修改授权
+  - 未经独立授权即实施 U1 / U2
+```
+
+**语义定位**：这是**版本化有界变更记录**（versioned bounded change record），**不是**追溯覆盖 W11-SEC-01 的原有冻结基线。W11-SEC-01 的冻结基线在其签发时点的事实与指纹**永久有效**；本例外只声明**其后**允许发生、且仅允许发生的那几处追加变更。
+
+##### 37.54.15.9.5 W11-A 的 `credit-scope.js` 不修改结论
+
+§37.54.15.3 原「文件影响」列有 `server/modules/credit-scope.js`（谓词投影）。经核验，W11-SEC-01 已交付**通用**谓词投影 `creditScopePredicate(mode, { aggregateExpr, selfExpr, selfValue })`（`credit-scope.js:108`，纯投影、不判定模式），已满足 §37.54.5.3「授权决策只有一个来源，SQL 形状按表投影」的要求。故 **W11-A 不需要修改 `credit-scope.js`**；该文件属 W11-SEC-01 冻结载荷，**保持零改动**。
+
+##### 37.54.15.9.6 本节未发生事项
+
+```text
+未修改任何业务代码、测试、Gate、Migration、Schema 或 API
+未运行 FAST / FULL / Build / MySQL Gate
+未访问或修改任何数据库、账号、口令、DPAPI 凭据、Grants 或 GLOBAL 参数
+未修改 W11-SEC-01 既有冻结证据、指纹或 Git 归档
+未修改 package.json version，未创建 / 移动 / 删除任何 Release Tag
+未执行任何 Git 写操作（add / commit / push / merge / rebase / reset / restore / stash / clean）
+未启动 U1 / U2 / U3 Implementation；未启动 W11-B / W11-C / W11-D
+未新增任何业务决策、Schema、跨域写入、权限码或角色
+```
+
+##### 37.54.15.9.7 U1 实施记录（2026-10-28）
+
+本节记录 W11-A U1（Read Primitives）的实际实施结果。U1 属于已批准的 `W11_A_FROZEN_PAYLOAD_BOUNDED_AMENDMENT`（§37.54.15.9.4）；本节**不重定义** W11-SEC-01 的冻结基线，**未**追溯覆盖其任何指纹或 Git 证据。
+
+```text
+实施范围（与 §37.54.15.9.2 完全一致，无扩张）
+  server/modules/credit-check.js    追加 export { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE };
+                                    +13 / -0（纯附加）。函数体、常量内容、既有导出、
+                                    既有调用位置、业务 SQL 与权限判断均未改动
+  server/modules/credit-policy.js   提取 computePolicySnapshotFingerprint 纯函数，
+                                    ensureCreditPolicySnapshot 委托调用；+19 / -2
+                                    （被替换的两行即原内联指纹赋值与被改写的函数首行）
+                                    credit-policy.js 不在 W11-SEC-01 的 14 项冻结载荷内
+
+未改动  credit-scope.js（零改动）；任何 Schema / Migration / API / 权限码 / 角色；
+        package.json；scripts/testing/test-suites.js；任何既有测试文件
+```
+
+**冻结载荷增量变更证据**（§37.54.15.9.4 要求的记录）：
+
+| 文件 | 修改前 | 修改后 |
+|---|---|---|
+| `server/modules/credit-check.js` | `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0`（W11-SEC-01 冻结指纹） | `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384`（U1） |
+| `server/modules/credit-policy.js` | `94f2df0a267722ba4d343315668dd82c2c3e5e723dde2363c785a5ecff6aa98b` | `9088a222e58d85e24539500a65a9e2b97a347fb89b0e20544e0c4fc34924fea8`（非冻结载荷） |
+| `scripts/testing/test-suites.js` | 未改动 | 未改动 |
+| `package.json` | 未改动 | 未改动 |
+
+**差异证明**：把 `credit-check.js` 中追加的 `export` 块移除后重新计算 SHA-256，结果**逐字节等于**修改前的冻结指纹 `3bf4eb51…72f0`。该性质由 `scripts/sales-customer-wave11-a-primitives.test.js` 的 T5 断言**永久固化**为可机器复验的合同。W11-SEC-01 原 14 项冻结指纹**原样保留**，未重算、未覆盖、未作废。
+
+**等价性证据**：Golden Vectors 于 U1-B 修改**之前**从**原实现**采集（驱动 `ensureCreditPolicySnapshot` 于一次性 SQLite fixture），含 7 个有效向量与 10 个无效向量，golden 文件 SHA-256 `5f5212c4aa31e40d50e983c9f4655d14cb1e0025b567f0d839bd133b0e778c18`。修改后以同一脚本重新采集，结果与 golden **逐字节相同**，唯一差异是快照行 id（`randomUUID()`，本就非确定）；7 个指纹、10 组错误语义、行数与幂等指纹全部一致。
+
+**测试证据** —— `scripts/sales-customer-wave11-a-primitives.test.js`（5 / 5 PASS）：
+
+| 用例 | 内容 |
+|---|---|
+| T1 | 提取后的纯函数逐字节复现**原实现采集**的 golden vectors（不与自身包装函数比较） |
+| T2 | 无效输入的错误类别 / 状态码 / 消息 / 业务码不回归 |
+| T3 | 边界、Hash 次序敏感、重复调用确定性、长度前缀 canonical 编码、`CSP1:` 前缀 |
+| T4 | 快照持久化行为不变：首次创建、幂等、唯一性、历史不改写、非法输入零写入 |
+| T5 | 追加导出无感：移除追加块复现冻结指纹、Scope 常量内容不变、hash builder 合同不变、仓库内仅一个 resolver / predicate / hash builder / 指纹算法 |
+
+**分类债务（本轮有意未登记）**：`scripts/sales-customer-wave11-a-primitives.test.js` 位于 `scripts/`，**不在** `scripts/testing/test-suites.js` 的任何 suite 中 —— 登记它必须修改该清单，而 U1 授权明确禁止该修改。治理不变式「`server/` 与 `src/lib/` 下的每个 `*.test.js` 必须被分类」因此**字面成立**，治理自检继续通过。该文件**必须**在下一个获授权轮次登记进 FULL；在此之前它被显式执行，结果记入当日日志。
+
+##### 37.54.15.9.8 U1 测试登记完成与测试治理收口（2026-10-28）
+
+本节记录 W11-A U1 等价性测试被正式纳入 **FULL** 的治理收口。它关闭 §37.54.15.9.7 末段声明的**分类债务**。本节**不重定义** W11-SEC-01 的冻结基线。
+
+**登记变更（唯一允许的测试配置变更）**
+
+```text
+文件        scripts/testing/test-suites.js
+性质        仅追加 —— 一条 FULL 登记路径 + 其必要说明注释；+11 / -0，0 删除
+登记内容    'scripts/sales-customer-wave11-a-primitives.test.js'
+未改动      FAST 清单；HEAVY 清单；既有 FULL 条目；validate()；Runner；package.json；
+            任何真实 MySQL 集成测试；未移动任何测试文件
+选择 FULL   U1 测试含隔离 SQLite Fixture 与快照持久化验证，不符合纯数据库无关的
+            FAST 分类准则，故按 §37.54.15.9.7 的登记纪律归入 FULL
+```
+
+**冻结载荷增量变更（同一有界例外治理）**
+
+| 文件 | 修改前 | 修改后 |
+|---|---|---|
+| `scripts/testing/test-suites.js` | `6e75875ac6a4fd697221fa1523f8c25a513b27ced3efc7e88ea78ecfc42cca88`（W11-SEC-01 冻结指纹） | `b982808f0d74b5d0b3b2207f343c50e4c4a30bb10f005f9e599b2e4a4ce9e01d` |
+| `server/modules/credit-check.js` | `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0`（W11-SEC-01 冻结指纹） | `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384`（U1 追加导出，自 U1 实施后未再变动） |
+
+其余 **12 项** W11-SEC-01 冻结载荷逐项复算**未变**。W11-SEC-01 原 14 项冻结指纹**永久保留**，未重算、未覆盖、未作废；本轮**未**执行任何 W11-SEC Re-Freeze。
+
+**测试治理合同验证**
+
+| 合同 | 结果 |
+|---|---|
+| 治理自检 `server/test-suite-governance.test.js` | **20 / 20 PASS** |
+| 清单校验 `suite manifest passes validation` | PASS |
+| `FAST ⊆ FULL` | PASS |
+| `FULL ∩ HEAVY = ∅` | PASS |
+| 无重复登记 | PASS |
+| 登记文件均存在于磁盘 | PASS |
+| 每个磁盘上的 `*.test.js` 已被分类 | PASS |
+| `ALL = FULL ∪ HEAVY` | PASS |
+| HEAVY 理由记录齐备 | PASS |
+| 计数 | `FAST=23 FULL=195 HEAVY=7 ALL=202 onDisk=198`（U1 文件仅出现在 FULL） |
+
+**FULL 回归**：**2954 / 2954 PASS**，359 suites，0 fail，254 s。原始证据不止于总计数增加 —— 仓库自有的 `run-tests.js full --list` 清单输出中，`scripts/sales-customer-wave11-a-primitives.test.js` 明确出现在 FULL 清单第 27 行（紧接 W11-SEC 条目），且该次 FULL 的 TAP transcript 内含该文件的 T1..T5 五个用例（`ok 55` … `ok 59`）。
+
+**U1 测试的未来兼容性（只读结论，T5 断言未修改、未削弱）**
+
+T5 的冻结指纹断言把 `credit-check.js` 的 `[0, U1 导出标记)` 前缀重算为 SHA-256，并要求其等于 W11-SEC-01 冻结指纹 `3bf4eb51…72f0`。实测：`computeCreditExposure` 的返回块位于 **byte 22943**，U1 导出标记位于 **byte 52594**，即 W11-D 计划的 `factDigest` 追加（§37.54.11.2、§37.54.15.6）落在该前缀**之内**。
+
+结论：**一旦 W11-D 合法落地其有界追加，T5 的指纹断言将失败** —— 失败原因是基线推进，不是缺陷。其余 T5 断言不受影响：W11-D 的 `factDigest` 复用既有 `sha256` / `canonicalJson`（§37.54.11.2），故「唯一 resolver / 唯一 predicate / 唯一 hash builder / 唯一 canonicalJson / 唯一指纹算法」五项计数仍为 1；`CREDIT_CHECK_RESULT_SCOPE` 内容与 `buildScopeHashes` 合同亦不受影响。
+
+未来维护要求：W11-D 必须以**自身的版本化有界例外**取得授权，并**单独记录**其对 `credit-check.js` 的修改前 / 修改后指纹；届时 T5 的指纹基线必须**重指向**该新授权基线（可泛化为一条已记录的指纹链），而 W11-SEC-01 的原指纹 `3bf4eb51…72f0` **必须永久保留**于日志与测试常量史中。**不得**以放宽比较、删除断言或跳过用例的方式消除该失败。
+
+##### 37.54.15.9.9 U1 正式 Acceptance 与限定范围 Capability Freeze（2026-10-28）
+
+授权：用户 2026-10-28 指令 —— 批准 **W11-A U1 Technical Acceptance PASS** 并授权完成 U1 的限定范围 Capability Freeze 与正式验收记录（AGENTS.md §4.5）。本轮**仅**文档与状态记录：未修改任何业务代码、测试断言、测试清单、`package.json`、API / 路由 / UI、Migration 或 Schema；未连接或修改真实 MySQL；未修改账号 / 口令 / DPAPI / Grants / GLOBAL 参数；未重跑 FAST / FULL / Build / HEAVY / MySQL Gate；未启动 U2 / U3；未执行任何 Git 写操作；未 Release / Deploy / Version Bump。
+
+**签发的状态标识**
+
+```text
+Acceptance 标识   W11_A_U1_ACCEPTANCE_PASS
+Freeze 状态       W11_A_U1_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PENDING
+```
+
+**为何是子单元标识**：§37.54.15.3 的 `W11_A_ACCEPTANCE_PASS` 保留给**完整的 W11-A 包**（3 个 GET 端点 + `credit-query.js` + `credit-query.jsx` + FULL 覆盖 = U1 + U2 + U3）。U2 / U3 **未启动**，因此现在签发该标识会**过度声称**包级完成。U1 采用与 Wave 11 安全包同构的子单元命名（`W11_SEC_01_ACCEPTANCE_PASS` 的形态），签发 `W11_A_U1_ACCEPTANCE_PASS`。`— FROZEN — GIT_CLOSURE_PENDING` 后缀与 W11-SEC-01 冻结在其 Git Journal 收尾之前所用状态完全一致。
+
+**U1 冻结的五项内容**（与 `document.md` → `## W11-A U1 — Read Primitives Final Acceptance and Bounded Freeze Record (2026-10-28)` §3 逐项对应）：
+
+```text
+F1  credit-check.js 中 buildScopeHashes / CREDIT_CHECK_RESULT_SCOPE 两个既有符号的追加导出
+F2  credit-policy.js 中唯一的纯函数 computePolicySnapshotFingerprint 及其委托
+F3  Snapshot Writer 持久化行为（首次创建 / 幂等 / 唯一性 / 历史不改写 / 非法输入零写入）
+F4  U1 专项测试套件及其 FULL 登记
+F5  增量冻结指纹、技术说明与验收证据
+```
+
+**增量冻结载荷清单**（原指纹永久保留，未重算、未覆盖、未作废；**未**执行 W11-SEC Re-Freeze）：
+
+| 文件 | 原指纹 | U1 后指纹 | 差异性质 |
+|---|---|---|---|
+| `server/modules/credit-check.js` | `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0`（W11-SEC-01 冻结） | `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384` | **仅授权的追加导出及说明注释** |
+| `scripts/testing/test-suites.js` | `6e75875ac6a4fd697221fa1523f8c25a513b27ced3efc7e88ea78ecfc42cca88`（W11-SEC-01 冻结） | `b982808f0d74b5d0b3b2207f343c50e4c4a30bb10f005f9e599b2e4a4ce9e01d` | **仅一项 FULL 登记及说明注释** |
+| `server/modules/credit-policy.js` | 非 W11-SEC-01 冻结载荷 | `94f2df0a…98b` → `9088a222…fea8` | 纯指纹提取 |
+| `scripts/sales-customer-wave11-a-primitives.test.js` | — | `37074ad129ca89cdb34e3ac40a95eb03073c2f6912ec65fee0043f269b5f8767` | U1 专项套件 |
+
+其余 **12 项** W11-SEC-01 冻结载荷逐项未变。
+
+**T5 前向维护义务**：T5 的冻结指纹断言**当前有效**并随 F1 一并冻结。W11-D 计划的 `factDigest` 追加落在 T5 重算前缀之内（`computeCreditExposure` 返回块 byte 22943，U1 导出标记 byte 52594），故合法的 W11-D 有界变更将使该比较失败 —— 那是**基线推进，不是缺陷**。W11-D 必须以**自身的**版本化有界例外取得授权并**单独记录**其修改前 / 修改后指纹；届时 T5 的基线必须**重指向**该新授权基线（可泛化为已记录的指纹链），而 W11-SEC-01 原指纹 `3bf4eb51…72f0` **必须永久保留**。**不得**以删除、跳过或放宽断言的方式提前规避。本轮**未修改 T5**。
+
+**本节不改变的边界**：`W11_A_ACCEPTANCE_PASS` 仍保留给完整 W11-A 包；U2 / U3 未启动；W11-B / W11-C / W11-D 未启动；D-2..D-5 仍阻塞 W11-B / W11-C；`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`、`W10-INV-RISK_01`、`LEGACY_DATA_EVIDENCE_PENDING`、`CREDENTIAL_EXPOSURE_OPEN`（USER_ACCEPTED / DEFERRED）全部保留；生产发布仍未获授权。HEAVY、真实 MySQL Gate、Build、浏览器验收本轮**未运行**，一律 NOT_RUN，**不得**标记为 PASS。
+
+**状态演进证据**：W11-SEC-01 的冻结记录仍显示其签发时的 `GIT_CLOSURE_PENDING`，**未被改写**；其后续 Git Journal 收尾记录在 `log/2026-10-28.md`。本节同样**不**通过改写旧记录来陈述状态演进。
+
 ### 37.54.16 Compatibility, forbidden changes and preserved contracts
 
 **必须继承且不得破坏**：Wave 9 Credit Profile / Rule / Parameter；Wave 10 Credit Exposure / Check / Special Approval；Dual-Limit Control（§13 P1–P13）；PURE_DERIVED Exposure；S05 / S14 / S15 / S16 / S17 / S19；五个 Credit 业务身份；Finance canonical AR / Settlement；Credit Policy Snapshot 指纹；既有 39/39 Wave 10 MySQL 验收证据。
@@ -32719,7 +32949,9 @@ Requirement 侧记录：`document.md` → `## W11-SEC-01 — Credit Read Scope F
 | **C4** | 唯一评级写者未区分 INITIAL 与 EVALUATION 两种业务来源；INITIAL 路径被隐含地绑定到评估对象；FK 变更的兼容性表述不准确 | §37.54.10.6（CORRECTION-4）、§37.54.12.7 | 双业务来源（`INITIAL_ASSIGNED` / `EVALUATION_APPLIED`，后者**显式映射**到冻结物理取值 `'EVALUATED'`，既有 CHECK 不改）；INITIAL 路径**不要求**评分表或 evaluation result；两来源的授权 / 幂等 / 审计身份分离；`createCreditProfile` 行为保持重构为调用同一 writer；`rating_*` 三列在源码合同中只出现于该 writer；既有评级历史不迁移 / 不伪造 / 不清空；FK 明确为**对既有冻结表的兼容性 Schema 扩展** | **无重开**。R107-4 与 §36.7.1 的唯一写者要求据此被可机器验证地落实 |
 | **C5** | DAG 含未经 Requirement 依据的 `W11-A → W11-D` 硬依赖；W11-SEC 冻结边界与证据状态未明确 | §37.54.15.1（CORRECTION-5）、§37.54.15.2（Freeze Boundary + 证据状态规则）、§37.54.15.6、§37.54.14.6 | 撤销 `W11-A → W11-D` 硬边，改为可选复用；W11-SEC Freeze Boundary 明确“允许收紧已批准的越权读取行为”与五项禁止；明确“**一次原本越权的读取被拒绝不构成 Wave 10 不兼容失败**”；证据分级规则：SQLite PASS ≠ MySQL Acceptance PASS，未执行项一律 `NOT_RUN`，受限签发标识 | **无重开** |
 
-**净结论**：五项修正**均未触发 REQUIREMENT_REOPEN**。C1 修正的是实现对 R-D2-1 的偏离；C2 在 R99-6 / R100-6 的允许空间内收敛；C3、C4 在已批准语义内补全；C5 撤销一条过度约束并明确边界。
+| **C6** | W11-A 包合同把 `factDigest` 归给 W11-A；三个复用点（`buildScopeHashes` / `CREDIT_CHECK_RESULT_SCOPE` / `computePolicySnapshotFingerprint`）在包合同层未落实其可获得性 | §37.54.5.1、§37.54.5.2、§37.54.15.3、§37.54.15.9 | `factDigest` 归 **W11-D**（R100-2 属 SC100）；W11-A 对 `credit-check.js` 只**追加**两个既有符号的命名导出（Q1 = 方案 A），禁止复制算法或 Scope SQL；`computePolicySnapshotFingerprint` 按 §37.54.5.2 从 `credit-policy.js` 提取为纯函数并由 `ensureCreditPolicySnapshot` 委托，等价性由 §37.54.15.9.3 的有效 / 无效 / 边界矩阵证明；`credit-scope.js` **零改动**；新增 §37.54.15.9.4 的 W11-SEC-01 冻结载荷**有界例外治理**（版本化、前向、不得追溯覆盖原冻结指纹） | **无重开**。修正的是包合同与共享基础的归属一致性，未新增任何业务语义、Schema、权限码或角色 |
+
+**净结论**：六项修正**均未触发 REQUIREMENT_REOPEN**。C1 修正的是实现对 R-D2-1 的偏离；C2 在 R99-6 / R100-6 的允许空间内收敛；C3、C4 在已批准语义内补全；C5 撤销一条过度约束并明确边界；C6 收敛 W11-A 包合同与共享基础的归属一致性，并把冻结载荷的增量变更纳入有界例外治理。
 
 **本节不新增任何业务政策、不新增权限码、不新增角色、不新增 SC / UAT / Race ID、不改写历史冻结设计文本。** 历史文本 `solution.md:12607`、`:12616`、`:19698` 及 Wave 9 / Wave 10 冻结合同均未被改写。
 

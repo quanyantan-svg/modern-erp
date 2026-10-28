@@ -1137,3 +1137,16 @@ export const __creditCheckInternals = Object.freeze({
   approvalReleasesScope,
   presentResultRow,
 });
+
+// W11-A U1 — additive named exports for the EXISTING read-only primitives.
+//
+// solution.md §37.54.15.9.2 (Q1 = option A) and §37.54.5.2: the Wave 11 Credit
+// Query read layer imports these two existing symbols from this module instead
+// of re-implementing the Scope SQL or a second hash builder.
+//
+// This statement adds export bindings only. The `buildScopeHashes` function
+// body, the `CREDIT_CHECK_RESULT_SCOPE` constant content, every existing call
+// site and every existing export are untouched, and no business behaviour
+// changes. It is a bounded amendment to the W11-SEC-01 frozen payload
+// (§37.54.15.9.4), not a redefinition of that freeze.
+export { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE };

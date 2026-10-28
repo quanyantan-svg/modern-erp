@@ -114,6 +114,17 @@ const FULL = [
   // database and drives the real Credit writers, which is outside the FAST
   // criterion of a bounded, database-free regression.
   'server/sales-customer-wave11-sec-scope.test.js',
+  // Wave 11 W11-A U1 — Credit Read Scope read primitives (solution.md
+  // §37.54.5.2 / §37.54.15.3 / §37.54.15.9). The equivalence suite for the
+  // bounded U1 amendment: the extracted pure policy-snapshot fingerprint
+  // function measured against golden vectors captured from the ORIGINAL
+  // implementation before the extraction, the unchanged invalid-input error
+  // semantics, the boundary and hash-order sensitivity, the snapshot writer
+  // persistence behaviour, and the inertness of the additive named export in
+  // credit-check.js. It is deliberately NOT registered in FAST: every case
+  // builds a disposable SQLite fixture and verifies snapshot persistence, which
+  // is outside the FAST criterion of a bounded, database-free regression.
+  'scripts/sales-customer-wave11-a-primitives.test.js',
   // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
   // single-connection regression over the real Delivery HTTP route: the
   // canonical control-point writer installs the fixture fact, the production
