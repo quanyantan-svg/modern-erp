@@ -103,6 +103,17 @@ const FULL = [
   'server/sales-customer-wave8-residual.test.js',
   'server/sales-customer-wave9-credit-foundation.test.js',
   'server/sales-customer-wave10-credit-check.test.js',
+  // Wave 11 W11-SEC-01 — Credit Read Scope remediation (document.md §4 D2
+  // R-D2-1..R-D2-6, solution.md §37.54.5.3 / §37.54.7). The canonical scope
+  // resolver and the four Credit read surfaces it governs: the five-mode
+  // authorization matrix, the CORRECTION-1 historical-date regression and
+  // the fail-closed behaviour on unattributable relations. Every case owns one
+  // disposable temp SQLite and produces its Credit facts through the
+  // production writers, so it never asserts against an impossible structure.
+  // It is deliberately NOT registered in FAST: each case migrates a fresh
+  // database and drives the real Credit writers, which is outside the FAST
+  // criterion of a bounded, database-free regression.
+  'server/sales-customer-wave11-sec-scope.test.js',
   // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
   // single-connection regression over the real Delivery HTTP route: the
   // canonical control-point writer installs the fixture fact, the production

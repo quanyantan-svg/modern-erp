@@ -30556,3 +30556,2171 @@ would make the regression fail, which is the intended regression-lock behaviour,
 rollback hazard.
 
 **Design status: `PACKAGE_B_TEST_ISOLATION_DESIGN_APPROVED`.**
+
+---
+
+## 37.54 Wave 11 — Sales & Customer Credit Evaluation / Reconciliation / Query — Stage C Design Closure (2026-10-27)
+
+### 37.54.1 Authorization, scope, authority and what this design is not
+
+- Authorization: `WAVE11_STAGE_C_DESIGN_ONLY`（AGENTS.md §4.3 DESIGN）。
+- 前置：`WAVE11_STAGE_B_REQUIREMENT_READY`（本日 `document.md` `Wave 11 — … — Stage B Requirement Closure (2026-10-27)`），已由用户确认 PASS。
+- 本节是 **Design**，不是 Implementation。本节**未**创建任何代码、Schema、Migration、测试、Runner 或 UI 资产；**未**执行任何 Migration、测试门禁或 MySQL 连接；**未**执行任何 Git 写操作。
+- 本节**未**修改 `document.md`、`README.md`、`AGENTS.md`、`CLAUDE.md`、`APPLY_GUIDE.md`、`package.json` 或任何生产源文件、测试、Fixture、Manifest / Runner。
+- 本节**未**新增、删除或重编号任何 SC ID、UAT ID、Race ID 或 Invariant ID；**未**修改已批准的 D1 / D2 / D3。
+- 本节以**现行 `document.md` Requirement 为权威**。凡既有 Design 与之不一致者，按 §37.54.4 逐条处置；对 Wave 11 尚未实施的设计作**有界新版本声明**，**不修改历史冻结证据**。
+- 物理表名、模块文件名与 API 形态是 **Design 产物**，在 Stage B 属未锁定项；本节首次锁定它们，但不改变任何业务语义。
+
+### 37.54.2 Baseline verification and pre-existing worktree
+
+| 项 | 值 | 核对方式 |
+|---|---|---|
+| Branch | `work/sales-waves6-13-recovery-20261025` | `git rev-parse --abbrev-ref HEAD` |
+| 当前开发 HEAD | `510974a4f55995c51d276d6f0e6f9e042b84f276` | `git rev-parse HEAD` |
+| `package.json` version | `1.6.2` | `package.json` |
+| Git release tag | `v1.6.2` → `229169bb555ec122197604de64b3b1ebfee59ced` | `git rev-list -n1 v1.6.2`；`git tag --points-at HEAD` 为空 |
+| Remotes | `github` → GitHub；`origin` → Gitee | `git remote -v` |
+| 进入本阶段前工作树 | `M document.md`（Stage B，666 insertions / 0 deletions）、`M log/2026-10-27.md`（Stage A 217 + Stage B 364 insertions，0 deletions） | `git status --porcelain`、`git diff --stat` |
+| Wave 10 | `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` | `document.md:11193`、`:11540` |
+| Package B | `PACKAGE_B_TEST_ISOLATION_ACCEPTANCE_PASS` | `document.md:11556` |
+
+**无未知代码变更、无基线漂移。** 上述两个 dirty 文件正是 Stage A / Stage B 的未提交成果，本节**完整保留**，不覆盖、不改写。`v1.6.2` **不指向**当前开发 HEAD（落后 147 个 commit）；本节及此后记录均不得声称相反。
+
+### 37.54.3 Requirement conformance basis and design-to-requirement map
+
+| Requirement（Stage B） | 本节设计位置 | 结论 |
+|---|---|---|
+| R99-1..R99-6 | §37.54.11（W11-D）、§37.54.7.4 | 逐条实现，零权威写入 |
+| R100-1..R100-7 | §37.54.11、§37.54.6.4、§37.54.12.6 | 逐条实现；R-SAL-23 结构/行为证明分离 |
+| R101-1..R101-7 | §37.54.9（W11-A） | 逐条实现；只读路径复用 canonical 计算 |
+| R102-1..R102-5 | §37.54.9 | 逐条实现；例外历史为 DERIVED，无第二事实表 |
+| R103-1..R103-3 | §37.54.10.2（W11-B 表 1） | 逐条实现；指标生效日期化 + 引用后不可就地改写 |
+| R104-1..R104-3 | §37.54.10.3 | 逐条实现；方案生效日期化 + 等级边界无重叠无空洞 |
+| R105-1..R105-7 | §37.54.10.4–§37.54.10.6 | 逐条实现；权重为整数毫权重、评分全整数查表 |
+| R106-1..R106-5 | §37.54.12 | 逐条实现；单表多评人 + 单聚合 |
+| R107-1..R107-9 | §37.54.12.5–§37.54.12.9 | 逐条实现；唯一评级写者 + write-class authority |
+| R-D2-1..R-D2-6 | §37.54.8（W11-SEC-01） | 逐条实现；复用 `credit-scope.js`，不建第二 resolver |
+| R-D3-1..R-D3-5 | §37.54.12.6、§37.54.15.3 | 逐条实现；权限类别分离，不引入人员级分离 |
+| UAT-S-34-A1..A8 | §37.54.14.1 | 逐条映射到测试与 MySQL 证据 |
+| UAT-S-35-A1..A7 | §37.54.14.2 | 同上 |
+| UAT-S-36-A1..A9 | §37.54.14.3 | 同上 |
+| A-D2-1..A-D2-8 | §37.54.8.5 | 同上 |
+| A-D3-1..A-D3-5 | §37.54.14.4 | 同上 |
+
+**无 REQUIREMENT_REOPEN 触发项**：本节未改变任何已批准业务语义。§37.54.17 列出的待确认项均为 **Design 决策**，不触及 Requirement 文本。
+
+### 37.54.4 Design governance — existing-Design conflicts and their disposition
+
+| # | 旧 Design 精确位置 | 新 Requirement 精确位置 | 处置 | 兼容性 / 历史证据影响 |
+|---|---|---|---|---|
+| G-1 | `solution.md:12607`（`credit_recalculation_history.kind ∈ ('CHECK_ONLY','DETERMINISTIC_REBUILD')`）、`:12616`、`:19698` | `document.md` Stage B R100-1、R100-5、R100-6；D1 | **有界新版本声明**（§37.54.6）。`DETERMINISTIC_REBUILD` 被**退役**（retired），不是被重新定义；新 kind 为 `DETERMINISTIC_RECALCULATION` | 旧名称**从未物理落地**（§37.54.6.1），无数据、无字段、无历史行受影响；历史设计文本**保持原样不改写**，由 supersession map 使其可解释 |
+| G-2 | `solution.md:19700-19710`（§36.7.5 "DETERMINISTIC_REBUILD remains defined but unexercised"） | 同上 | 同 G-1；本节声明其在 Wave 11 范围内的**有界取代** | 同上 |
+| G-3 | `solution.md:19822-19823`（`GET /api/credit/exposure` / `GET /api/credit/exceptions`） | R101、R102 | **一致**，本节细化其响应结构、分页与 Scope 语义 | 无冲突 |
+| G-4 | `solution.md:19824-19829`（`/api/credit/evaluation/*`、`/api/credit/reconciliation/run`） | R103–R107、R99–R100 | **一致**，本节细化端点集合与错误合同 | 无冲突 |
+| G-5 | `solution.md:19641-19651`（§36.7.1 评级写入唯一 owner） | R107-4 | **一致**，本节以**单一共享写入函数**落实（§37.54.12.7） | 需对 Wave 9 `createCreditProfile` 做**行为保持**重构，Wave 9 回归套件必须原样通过 |
+| G-6 | `solution.md:19694`（§36.7.4 多评人条目存于 `sheet_data_json`） | R105-5、R106-1 | **一致**，本节不引入独立评分明细表（§37.54.10.5） | 无冲突；避免第二套评分事实 |
+| G-7 | `solution.md:19692`（`credit_evaluation_result` 为唯一聚合，带 `evaluator_count`） | R106-3、R107-1 | **一致** | 无冲突 |
+| G-8 | `solution.md:19423-19437`（§36.5.3 Wave 11 建表顺序） | §37.54.12.3 | **一致**，本节按 registry 的 (wave, id) 排序落实同一依赖顺序（§37.54.12.2） | 无冲突 |
+| G-9 | `solution.md:19456-19460`（§36.5.5，`FOREIGN_KEY_CHECKS=0` 使 DDL 成功不构成 RI 证据） | §37.54.12.10 | **一致并加强**：命名 FK 存在性、目标候选键、数据级 RI 三项独立验证 | 无冲突 |
+| G-10 | `solution.md:19671-19672`（`applied_to_profile_id` 绑定版本而非 anchor） | R107-2 | **一致**，本节补足并发保护（FOR UPDATE + 单次写入断言） | 无冲突 |
+| G-11 | `solution.md:8910`（`credit_evaluation_scoring_sheet` 候选列含 `profile_snapshot_identity`） | R105-4 | **细化**：改为显式 `credit_profile_id`（版本）+ `business_date`，并规定 apply 时重新校验版本未变 | 列名不同属 Stage B 未锁定的物理设计；语义更严格，无冲突 |
+| G-12 | `solution.md:8912`（`credit_recalculation_history` 候选列含 `result_summary`） | R99-6、R100-6 | **CORRECTION-2 已修订**：列名调整为 `result_snapshot_json`，承载**不可修改、非权威**的执行期结果快照（`contractVersion` + `authoritative:false` + `consumedByCreditCalculation:false`）；顶层**无**金额列，无任何 Credit writer 读取该表（§37.54.6.5 G-1..G-6、§37.54.11.4） | 既有 Wave 10 先例 `credit_check_results.component_breakdown_json` 即同型逐决策不可变快照，非新规范；Requirement 的“结果摘要”要求由此满足，且不构成第二套台账 |
+
+### 37.54.5 Shared design foundations
+
+#### 37.54.5.1 Canonical module ownership (Wave 11)
+
+```text
+server/modules/credit-scope.js            EXTENDED (canonical read-scope decision + predicate projection)
+server/modules/credit-check.js            EXTENDED (read-only exposure fingerprint + factDigest; no behaviour change)
+server/modules/credit-policy.js           EXTENDED (pure fingerprint computation split from persistence)
+server/modules/credit-profile.js          REFACTORED (single shared rating-writer helper; behaviour preserving)
+server/modules/credit-query.js            NEW (SC101/SC102 DERIVED read layer — no tables)
+server/modules/credit-evaluation.js       NEW (SC103–SC107 indicators/schemes/models/sheets/results + rating application)
+server/modules/credit-reconciliation.js   NEW (SC99/SC100 CHECK-only + deterministic recalculation)
+```
+
+`server/app.js` 保持 HTTP lifecycle + auth + thin dispatch（AGENTS.md §8）。不新增 mixed-owner 文件。
+
+#### 37.54.5.2 Canonical read-only computation reuse — and the explicit non-reuse of the check path
+
+| 用途 | 复用对象 | 是否写入 |
+|---|---|---|
+| W11-A exposure 查询 | `computeCreditExposure()`（`credit-check.js:385`）+ `resolveEffectiveCreditProfile()`（`credit-profile.js:44`）+ 新的纯函数 `computePolicySnapshotFingerprint()` | **零写入** |
+| W11-D SC99 / SC100 | 同上（同一函数，无第二套算法） | 仅写 `credit_recalculation_history` 审计行 + `audit_logs` |
+
+**明确禁止**：不得把 `evaluateCredit()` 或 `POST /api/credit/check` 用作 GET 查询的实现路径。`evaluateCredit()` 会取写锁、解析并写入 `credit_policy_snapshots`、写入 `credit_check_results`、写入 `audit_logs`，并可能消费特别审批（`credit-check.js:895-906`）——它是**业务决策**而非查询。
+
+**不得复制第二套信用算法。** `computeCreditExposure()` 是唯一的敞口派生实现（阶段转换、AR 来源链、销售员归属、模糊归属计数）。本节只为其**返回值增加** `factDigest`（纯附加，不改变任何既有返回字段或既有调用方行为），以支持 R100-2 的可验证确定性。
+
+**读路径的快照指纹必须可只读计算。** `ensureCreditPolicySnapshot()`（`credit-policy.js:192`）**会 INSERT**。因此本节要求把纯计算与持久化拆分：
+
+```text
+NEW  credit-policy.js
+  computePolicySnapshotFingerprint({parameterSetHash, ruleSetHash, profileEffectiveStateHash})
+      -> 'CSP1:<sha256 hex>'      (pure; no db access)
+
+  ensureCreditPolicySnapshot(input)   (UNCHANGED public behaviour)
+      -> now delegates the fingerprint computation to computePolicySnapshotFingerprint()
+```
+
+`buildScopeHashes()`（`credit-check.js:540`）当前为模块私有且纯函数（只读参数、规则与档案状态并做 SHA-256）。本节要求将其**导出**并复用，读路径据此计算指纹而**不**持久化任何 snapshot 行。
+
+#### 37.54.5.3 Scope predicate model — one resolver, several projections
+
+**设计原则：授权决策只有一个来源，SQL 形状按表投影。** 不新建第二个 Scope Resolver。
+
+```text
+credit-scope.js
+  NEW  resolveCreditReadMode(db, actor)
+          -> { mode, selfSalespersonId, authorizationDate }   (canonical AUTHORIZATION DECISION)
+          -> authorizationDate is SERVER-CONTROLLED and is NEVER taken from the request
+
+  KEEP resolveCreditProfileReadScope(db, actor, { businessDate })
+          -> public signature unchanged;
+             the businessDate argument is retained ONLY as a historical DATA FILTER
+             and MUST NOT be forwarded into self-scope eligibility evaluation
+             (see the CORRECTION-1 finding below)
+
+  NEW  creditScopePredicate(mode, { aggregateExpr, selfExpr, selfValue })
+          -> { sql, args }                      (pure PROJECTION; cannot decide a mode)
+```
+
+**CORRECTION-1 (2026-10-27) — 授权日期与查询日期必须分离，且现有代码存在可利用的越权读取。**
+
+Stage C 初稿把 `businessDate` 透传进 `resolveCreditReadMode`，这与 Stage B R-D2-1（“读取资格必须依据**当前有效**授权判定；历史上曾属于某销售组不得成为永久读取权”）**冲突**。经复核真实代码，该冲突不是纸面问题，而是**现存可利用缺口**：
+
+```text
+credit-scope.js:39-50  resolveSelfSalespersonId(db, actor, businessDate)
+  date = businessDate || today()
+  SELECT 1 FROM salesperson_group_memberships m JOIN sales_groups g ...
+    WHERE m.salesperson_id=? AND m.active=1 AND g.active=1
+      AND m.effective_from<=? AND (m.effective_to IS NULL OR m.effective_to>=?)   <-- ? = 调用方传入的 businessDate
+
+salesperson_group_memberships 同时具备 active 与 effective_from/effective_to
+(sales-customer-wave1-foundation.js:61-66)，且写入侧同时更新这两组字段
+(sales-foundation.js:183)。
+
+可达路径：GET /api/credit/profiles?businessDate=<过去日期>
+  -> credit-profile.js:56-58 把用户提供的 businessDate 传入 resolveCreditProfileReadScope
+  -> credit-profile.js:69-72 用该 scope 谓词过滤
+  => 一条"已按日期终止（effective_to 已设、active 仍为 1）"的历史成员关系，
+     在过去的 businessDate 上重新命中，用户重新获得 AGGREGATE_PLUS_SELF 自额度可见性。
+```
+
+**修正后的三类日期合同**（三者互不替代）：
+
+| # | 日期 | 来源 | 用途 | 禁止 |
+|---|---|---|---|---|
+| 1 | **Server-controlled authorization date** | 服务端时钟，经 `currentBusinessDate()` 取得 | 判定**读者当前**的自额度资格（销售员档案 active、销售组 active、成员关系当前有效） | **禁止**取自任何请求参数 |
+| 2 | **User-requested historical business date** | 请求参数（`businessDate`） | 仅作为**数据过滤器**，决定返回哪些历史记录 / 哪些生效版本 | **禁止**参与授权判定 |
+| 3 | **Historical fact's original business date** | 事实行自身携带（如 `credit_check_results.business_date`、`credit_profile.effective_from`） | 决定该事实归属的业务期间 | **禁止**被改写或被用作授权依据 |
+
+**规范业务日期与时区**：本仓库的业务日期是**无时区的日历日**（`YYYY-MM-DD`），由 `normalizeBusinessDate()`（`server/lib/http.js:127-143`）以 UTC 日历探针校验合法性；仓库的"今天"约定为**服务端当前 UTC 日历日** `new Date().toISOString().slice(0,10)`（`server/` 内 112 处一致使用；`previousDate()` 亦以 UTC 计算，`sales-foundation-common.js:33-37`）。本修正**沿用该既有约定**，不引入新的时区概念，也不新建第二套日期语义。
+
+```text
+NEW  credit-scope.js
+  currentBusinessDate()                       -> server UTC calendar date (canonical)
+  resolveCreditReadMode(db, actor)            -> 用 currentBusinessDate() 判定自额度资格
+  resolveSelfSalespersonId(db, actor)         -> 签名去除 businessDate 参数；
+                                                成员关系判定固定使用 currentBusinessDate()
+```
+
+**历史成员关系不得重新授予当前已失去的权限**：成员关系若已按当前日期终止（`effective_to` 已过或 `active=0`），无论请求携带哪个历史 `businessDate`，都**不得**恢复 `AGGREGATE_PLUS_SELF`。`AGGREGATE_ONLY` 与 `CROSS_GROUP` 的既有 Aggregate Read Policy **不受影响**（见 §37.54.7.3 与 §37.54.14.4 的负向用例）。
+
+**边界**：`server/modules/sales-scope.js:16` 的 `assertGroupScope()` 是**单据销售组范围**判定，其 `businessDate` 语义属于上表第 3 类（历史事实自身的业务日期），**不在本修正范围内，不得改动**。本修正只针对 **Credit 授权**读取路径。
+
+**行为等价性的修订**：原 Stage C 要求的"`resolveCreditProfileReadScope` 行为等价"**不再适用于自额度资格分支** —— 该分支必须按上述修正收紧（这正是 W11-SEC-01 的越权读取整改）。行为等价性义务保留于**其余分支**（模式判定顺序、ADMIN / DENY / CROSS_GROUP / AGGREGATE_ONLY 行为、`assertBindableSelfId` 结构护栏），并由既有 `server/sales-customer-wave9-credit-foundation.test.js` 与新增负向用例共同证明；**不得**为迁就旧断言而保留越权读取。
+
+模式 → 谓词映射（`credit_check_results` 形状）：
+
+| Mode | 谓词 |
+|---|---|
+| `ALL` / `CROSS_GROUP` | `1=1` |
+| `DENY` | 请求在授权阶段即 403，不产生查询 |
+| `AGGREGATE_ONLY` | `(scope_type='CUSTOMER_AGGREGATE')` |
+| `AGGREGATE_PLUS_SELF` | `(scope_type='CUSTOMER_AGGREGATE' OR (scope_type='SALESPERSON_SUB_LIMIT' AND credit_profile_id IN (SELECT id FROM credit_profile WHERE salesperson_scope_key=?)))` |
+
+模式 → 谓词映射（`credit_special_approval` 形状）：
+
+| Mode | 谓词 |
+|---|---|
+| `ALL` / `CROSS_GROUP` | `1=1` |
+| `AGGREGATE_ONLY` | `(scope_type='CUSTOMER_AGGREGATE')` |
+| `AGGREGATE_PLUS_SELF` | `(scope_type='CUSTOMER_AGGREGATE' OR (scope_type='SALESPERSON_SUB_LIMIT' AND source_credit_check_result_id IN (SELECT id FROM credit_check_results WHERE credit_profile_id IN (SELECT id FROM credit_profile WHERE salesperson_scope_key=?))))` |
+
+**设计要点**：
+
+1. 特别审批的可见性**锚定其来源 Credit Check**（`source_credit_check_result_id`），不是锚定自身字段 —— 这就是"审批记录与来源 Credit Check 之间的可信 scope 关联"。
+2. `credit_check_results.credit_profile_id` 可为 NULL。此类行在 `AGGREGATE_ONLY` / `AGGREGATE_PLUS_SELF` 下**一律排除**（fail closed：无法归属的行不得因可见性规则而被降级为 aggregate）；在 `ALL` / `CROSS_GROUP` 下保留。
+3. `scope_type` 的取值来自 Wave 10 已冻结的 `CHECK(scope_type IN ('CUSTOMER_AGGREGATE','SALESPERSON_SUB_LIMIT'))`，本节**不改写**该 CHECK，只复用其取值域。
+4. `salesperson_scope_key` 的语义来自 Wave 9：`'*'` = Customer Aggregate，= 销售员 id = Salesperson Sub-Limit（`credit-profile.js:104`、`:162`）。本节**不改写**该语义。
+5. **CORRECTION-1**：模式判定所用的日期一律为服务端当前有效日期（§37.54.5.3 的三类日期合同）；请求携带的历史 `businessDate` 只作为数据过滤器，**不进入**模式判定。五级模式语义不变，**不新建权限模型**。
+
+#### 37.54.5.4 Identity model — the five Credit identities in Wave 11
+
+| 身份 | 物理载体 | Wave 11 中的读写角色 |
+|---|---|---|
+| Stable Credit Object / Lock Identity | `credit_lock_anchors.anchor_key` | **只读**（W11-A/D 解析 scope 与锁序；W11-C 评级应用取 `FOR UPDATE`） |
+| Effective Credit Profile Version | `credit_profile` 生效期版本行 | **只读**（W11-A/D 解析额度）；W11-C **写**（仅评级内联投影） |
+| Immutable Policy Snapshot | `credit_policy_snapshots` | **只读**；读路径**只计算**指纹，不新增行 |
+| Credit Evaluation Result | `credit_evaluation_result`（W11-C 新建） | W11-C **唯一写者** |
+| Applied Rating History | `credit_profile_ratings` | W11-C 追加 `EVALUATED` 行；**不改写**既有行的不可变字段 |
+
+四者不得因实现便利合并（Stage B R-D3-3、`document.md:6843-6851`）。
+
+#### 37.54.5.5 Error code registry (Wave 11 new codes)
+
+```text
+CREDIT_SCOPE_DENIED                  403  (existing, credit-scope.js:66)
+CREDIT_READ_SCOPE_NOT_APPLICABLE     403  (DENY mode on a Credit read surface)
+CREDIT_PROFILE_MISSING               409  (existing semantics; no profile configured != zero limit)
+CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS   409  (existing, credit-profile.js:51)
+CREDIT_EXPOSURE_SOURCE_INCONSISTENT  409  (existing, credit-check.js:251)
+CREDIT_EVALUATE_DENIED               403  (existing, credit-scope.js:92)
+CREDIT_MANAGEMENT_DENIED             403  (existing, credit-scope.js:80)
+CREDIT_QUERY_INVALID_INPUT           400
+CREDIT_QUERY_INVALID_PAGINATION      400
+CREDIT_EVALUATION_INDICATOR_INVALID  400
+CREDIT_EVALUATION_SCHEME_INVALID     400
+CREDIT_EVALUATION_MODEL_INVALID      400
+CREDIT_EVALUATION_WEIGHT_INVALID     400
+CREDIT_EVALUATION_INPUT_OUT_OF_RANGE 400
+CREDIT_EVALUATION_MISSING_INDICATOR  400
+CREDIT_EVALUATION_DUPLICATE_INDICATOR 400
+CREDIT_SHEET_STATE_INVALID           409
+CREDIT_SHEET_NOT_FINALIZED           409
+CREDIT_SHEET_NOT_ALLOWED_SCORER      403
+CREDIT_SHEET_ALREADY_FINALIZED       409
+CREDIT_EVALUATION_RESULT_NOT_FOUND   404
+CREDIT_EVALUATION_RESULT_ALREADY_APPLIED 409
+CREDIT_RATING_TARGET_PROFILE_CHANGED 409
+CREDIT_RATING_NOT_ALLOWED            403
+CREDIT_RECONCILIATION_INVALID_INPUT  400
+CREDIT_RECONCILIATION_NOT_APPLICABLE 409
+```
+
+所有新增错误码遵循既有 `HttpError(message, {code})` 形态（`server/lib/http.js`）。越权对象与不存在对象**共用**同一 404 码与同一 message（§37.54.8.4）。
+
+### 37.54.6 C-2 / C-3 — DETERMINISTIC_REBUILD conflict closure
+
+#### 37.54.6.1 A — physical existence audit
+
+对 `DETERMINISTIC_REBUILD` 与 `credit_recalculation_history` 的物理落地核查结果：
+
+| 核查项 | 方法 | 结果 |
+|---|---|---|
+| `credit_recalculation_history` 表 | `server/` 全量 `CREATE TABLE` 检索 | **0 命中** |
+| 该表出现在 migration registry | `server/migrations/sales-customer-domain.js:23-42` | **否**（registry 止于 `wave-10-credit-check`） |
+| 该表出现在 Wave 9 / Wave 10 DDL | `sales-customer-wave9-credit-foundation.js`、`sales-customer-wave10-credit-check.js` | **否** |
+| `kind` 列 / CHECK 枚举 | 上述两个 migration 的 `CONTRACTS` | **否** |
+| 任何持久化的 `DETERMINISTIC_REBUILD` 行 | 全仓检索 | **0 命中** |
+| 历史数据依赖 | — | **无** |
+
+**结论：`DETERMINISTIC_REBUILD` 只存在于未来设计文本（`solution.md:12607`、`:12616`、`:19698`），从未有任何物理枚举、字段、表、持久化记录或历史数据。** 因此不存在兼容性依赖、不存在需要保留可解释性的历史行、不存在需要迁移的枚举值。
+
+#### 37.54.6.2 B — bounded supersession of the cache-rebuild meaning
+
+**处置：退役（retire），不重新定义。**
+
+```text
+OLD (design text only, never implemented)
+  kind = 'DETERMINISTIC_REBUILD'
+  meaning: 重建一个持久化派生缓存（cache rebuild）
+
+NEW (Wave 11)
+  kind = 'DETERMINISTIC_RECALCULATION'
+  meaning: 从权威事实做确定性重算，不产生任何持久化 mutable exposure cache
+```
+
+**为什么必须换名而不是重定义**：旧名称的语义内核是"重建缓存"。若把同一名称赋予"无缓存重算"，则任何读到旧设计文本或旧 kind 的读者无法区分"缓存重建"与"确定性重算" —— 这在 S05（已批准历史执行不得被静默改写）语境下构成**审计可追溯性风险**：一个未来维护者可能据旧名推断存在缓存并据以设计重建逻辑。换名使两者在字面上不可混淆，且由本 supersession map 记录退役原因与日期。
+
+**旧名退役的副作用必须为零**：因旧名从未落地，退役不影响任何列、任何 CHECK、任何索引、任何行、任何 API 响应、任何已执行的验收证据。
+
+#### 37.54.6.3 C — historical record interpretability without rewriting history
+
+- `solution.md:12607`、`:12616`、`:19698` **保持原样**，不改写、不删除。它们继续作为历史设计证据存在。
+- 本 supersession map（§37.54.6.5）提供从旧语义到新语义的**可追溯映射**，使旧文本在 Wave 11 语境下仍可解释。
+- 因为**不存在任何物理或数据依赖**，"不伪造数据、不重写历史"在本项上**天然成立**：无需迁移、无需 backfill、无需任何历史行的重解释。
+- 冻结的 Wave 9 / Wave 10 验收证据与 `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` 不受本取代影响。
+
+#### 37.54.6.4 D — SC99 / SC100 independent contracts
+
+| | **SC99 CHECK-only Reconciliation** | **SC100 Deterministic Recalculation** |
+|---|---|---|
+| 端点 | `POST /api/credit/reconciliation/check` | `POST /api/credit/reconciliation/recalculate` |
+| HTTP 语义 | POST（产生一次执行审计记录） | POST（产生一次执行审计记录） |
+| 授权 | `CREDIT_EVALUATE` | `CREDIT_EVALUATE` |
+| 输入 | `customerId`、`businessDate`、可选 `salespersonId`、`creditObjectType`/`creditObjectId`、可选 `referenceCheckGroupId` | `customerId`、可选 `salespersonId`、`businessDate`、`creditObjectType`/`creditObjectId` |
+| 核心动作 | 读取权威事实 → 计算当前敞口 → **与参考决策比对** + **独立评估构成自身一致性** | 读取权威事实 → 计算当前敞口 → **输出重算结果与确定性证据** |
+| 输出 | per-scope `{creditLimitCents, usedCents, remainingCents, components[], consistency, discrepancyCodes[], referenceComparison}` | per-scope `{creditLimitCents, usedCents, remainingCents, components[], factDigest, policySnapshotFingerprint, profileEffectiveStateHash, creditProfileId}` |
+| 是否产生 Credit Check Decision | **否**（不写 `credit_check_results`，不产生 decision） | **否** |
+| 是否写权威事实 | **否** | **否** |
+| 审计 | 1 行 `credit_recalculation_history`（`kind='CHECK_ONLY'`）+ 1 行 `audit_logs` | 1 行 `credit_recalculation_history`（`kind='DETERMINISTIC_RECALCULATION'`）+ 1 行 `audit_logs` |
+| 幂等 | 幂等键 + 执行身份（见 §37.54.13.4） | 同左 |
+| 失败模式 | 事实不一致 → 409 fail closed（`CREDIT_EXPOSURE_SOURCE_INCONSISTENT`）；无档案 → 409 `CREDIT_PROFILE_MISSING` | 同左 |
+
+**输出差异的语义边界**：SC99 回答"记录在案的结论与当前事实是否一致，构成本身是否自洽"；SC100 回答"在指定对象/范围/业务日期上，权威事实推导出的敞口与额度结果是什么，且可复现"。两者都返回 limit / used / remaining / component breakdown（R99-4、R101-1、R100-1），但 SC99 **额外**携带一致性与差异判定，SC100 **额外**携带确定性证据（`factDigest`）与快照身份。
+
+#### 37.54.6.5 E — `credit_recalculation_history` physical decision
+
+**需要物理存储**，理由：R99-6 / R100-6 要求记录审计与执行证据；无物理记录则"只读执行"不可证明。
+
+**但它必须结构上不可能成为敞口余额权威数据源。设计保证：**
+
+```text
+G-1  该表不含任何**顶层金额列**。
+     没有 credit_limit / exposure / used / remaining / amount / balance / cents
+     之类的可聚合数值列。执行期金额只存在于唯一一个不可变结果快照 JSON 中
+     （result_snapshot_json），因此不存在任何可被索引 / 聚合 / 求和的金额列。
+G-2  该表没有任何外键指向 credit_profile_ratings / credit_check_results /
+     credit_special_approval，因此不可能被反查当作决策证据的一部分。
+G-3  没有任何信用计算路径读取该表。
+     computeCreditExposure / evaluateCredit / 任何 Query 端点均不引用它。
+G-4  它与余额的区别是结构性的：余额必须可累加（read + write），
+     该表是只追加的、只含判定与身份与执行期结果快照的记录，
+     没有任何"更新余额"的写路径。
+G-5  Migration contract assertion（§37.54.12.9）显式断言该表列集合中
+     不存在顶层金额型列；任何未来向该表添加金额列的改动都会使断言失败。
+G-6  该表只有一个写入者（credit-reconciliation.js），且写入即终态；
+     任何 UPDATE / DELETE 路径的存在即为违约。
+```
+
+**CORRECTION-2 (2026-10-27) — 撤销“digest 可恢复历史金额”的错误论断，并改为不可修改的执行期结果快照。**
+
+Stage C 初稿在此处声称“需要历史金额时，由 `factDigest` 确定性地重算得到”。**该论断不成立**：密码学摘要**不可逆**，仅凭 `factDigest` 无法恢复任何历史 canonical fact 或历史金额；只有在底层事实**至今未变**且能够被重新读取时，重算才可能得到同一结果，而一旦事实变化，历史金额**不可得**。初稿因此给出了一个无法兑现的审计承诺。
+
+**核对 Requirement 后的正确结论**：R99-6 / R100-6 明确要求执行证据包含“**结果摘要**”，R99-4 要求 reconciliation result 含 limit / used / remaining / component breakdown。**只存身份与元数据、完全不含结果金额，会使执行记录在源事实变化后无法自证** —— 这既不满足 Requirement，也削弱了审计价值。因此在允许的设计空间内采用**不可修改、非权威的执行期结果快照**：
+
+```text
+result_snapshot_json（唯一金额承载列，不可变，非权威）
+{
+  "contractVersion": "CREDIT_RECONCILIATION_RESULT_SNAPSHOT_WAVE11_V1",
+  "authoritative": false,
+  "consumedByCreditCalculation": false,
+  "scopes": [
+    { "scopeType": "CUSTOMER_AGGREGATE",
+      "creditLimitCents": <int>, "usedCents": <int>, "remainingCents": <int>,
+      "overLimitCents": <int>,
+      "components": { ... },
+      "consistency": "CONSISTENT|INCONSISTENT|UNRESOLVED",
+      "discrepancyCodes": [ ... ] }
+  ],
+  "factCounts": { "orders": n, "deliveries": n, "receivables": n },
+  "referenceComparison": "MATCHED|MISMATCHED|NOT_APPLICABLE"
+}
+```
+
+**它不是余额，理由是结构性的而非仅靠约定**：
+
+1. 它是**执行期快照**，不是当前余额 —— 每次执行追加一行，从不 UPDATE，语义是“这次执行得出了什么”，不是“现在有多少”。
+2. 它**不被任何 Credit Exposure / Credit Check writer 读取**（G-3）—— 无任何路径把它当作余额输入。
+3. 它带 `authoritative:false` 与 `consumedByCreditCalculation:false` 的显式标记与独立的 `contractVersion`。
+4. 顶层**无金额列**（G-1 / G-5），因此不存在可被聚合的余额面。
+5. **既有先例**：Wave 10 已冻结的 `credit_check_results.component_breakdown_json`（`CREDIT_EXPOSURE_BREAKDOWN_WAVE10_V1`）正是同一种"逐决策不可变敞口分解快照"，且 Wave 9 / Wave 10 的冻结设计已明确它**不是**第二套台账。Wave 11 沿用同一已被验收的模式，**不引入新的规范**。
+
+**由此产生的直接推论（修正版）**：SC99 / SC100 的**响应**与**持久化执行证据**携带执行期金额；`factDigest` 的作用是**识别**该次执行所依据的事实集合并使确定性可验证，**不是**恢复历史金额的手段。审计员读该快照即知当时结论；若需复算，必须在**同一事实集合**（digest 相同）且**同一算法契约版本**下重算，并按 §37.54.11.3 的三态语义比较。
+
+#### 37.54.6.6 F — R-SAL-23 structural proof vs behavioural proof
+
+R-SAL-23 保持 `CONDITIONAL`（`document.md:5062`、`:5067`、`:5076`）。在 PURE_DERIVED 下，其验收由两类**互相独立**的证明承担：
+
+```text
+STRUCTURAL (W11-R4)  —— 证明"不存在可被覆盖的在途缓存"
+  S-1  负向表名断言：schema 中不存在任何匹配敞口/占用余额语义 denylist 的表
+       (credit_exposure / credit_occupancy / credit_balance /
+        credit_exposure_cache / credit_occupancy_ledger)
+  S-2  列级断言：credit_recalculation_history 的列集合不含金额型列
+  S-3  允许清单断言：credit_* 体系中携带敞口语义金额的表仅
+       credit_check_results（逐决策不可变证据）与
+       credit_profile.credit_limit_cents（配置上限，非余额）
+  S-4  源码静态合同断言：server/modules/credit-*.js 的全部 INSERT/UPDATE
+       目标均落在允许清单内；不存在任何"更新敞口余额"的写路径
+
+BEHAVIOURAL (W11-R3) —— 证明"重算不覆盖在途决策"
+  B-1  重算与并发信用消费事务（SO 提交 / 审批 / 出库确认）并发
+  B-2  断言：无 canonical Sales / Inventory / Finance / Accounting 行被修改
+  B-3  断言：无 credit_check_results 行被修改或新增
+  B-4  断言：无 credit_policy_snapshots 行被修改或新增
+  B-5  断言：重算仅新增 credit_recalculation_history 审计行
+  B-6  断言：并发 Credit Check 仍只产生一条 decision，且不被重算影响
+```
+
+结构性证明证明"没有可被覆盖的状态"，行为性证明证明"重算确实不覆盖在途决策"。两者缺一不可，**不得互相替代**。
+
+#### 37.54.6.7 Supersession map (bounded, Wave 11 scope only)
+
+```text
+frozen clause                                  -> Wave 11 replacement
+solution.md:12607  kind 'DETERMINISTIC_REBUILD'  -> kind 'DETERMINISTIC_RECALCULATION' (§37.54.6.2)
+solution.md:12616  'deterministic rebuild NOT exercised
+                     against any materialized cache in this baseline'
+                                               -> superseded in Wave 11 scope:
+                                                  deterministic recalculation IS exercised,
+                                                  with no materialized cache (§37.54.6.4)
+solution.md:19698  'DETERMINISTIC_REBUILD remains defined but unexercised'
+                                               -> superseded in Wave 11 scope (same)
+```
+
+取代范围**仅限 Wave 11 尚未实施的设计**。历史文本不改写；取代记录本身即为可追溯证据。
+
+### 37.54.7 W11-SEC-01 — Security Read Scope Remediation（独立有界工作包）
+
+#### 37.54.7.1 定位与边界
+
+W11-SEC-01 **不是** W11-A 的附带修改，而是**独立、安全优先、有界**的工作包。
+
+| 项 | 内容 |
+|---|---|
+| 性质 | 修复 Wave 10 冻结读取路径上的既有数据权限缺陷（Stage A 发现，Stage B 立项） |
+| 影响入口 | `listCreditCheckResults()`（`credit-check.js:1043`）、`listCreditSpecialApprovals()`（`credit-special-approval.js:299`）、`getCreditSpecialApproval()`（`:314`），以及审计确认的同类读取入口 |
+| 不得变更 | Wave 10 的信用**决策**语义、**敞口计算**、**特别审批申请/决策**语义；不得静默放宽 `CREDIT_VIEW`；不得新增角色或权限码 |
+| 授权 | 本次仅批准 **Design**。**Implementation 需用户另行批准跨冻结边界的有界修复授权** |
+| 交付顺序 | **必须先于** W11-A 开放新的历史查询面 |
+
+#### 37.54.7.2 复用与不新建 resolver
+
+复用 `server/modules/credit-scope.js`（§37.54.5.3）。**唯一改动**是把"模式判定"与"谓词投影"分离：
+
+```text
+resolveCreditReadMode(db, actor, {businessDate})   NEW canonical decision
+resolveCreditProfileReadScope(...)                KEEP, now delegating (behaviour identical)
+creditScopePredicate(mode, {aggregateExpr, selfExpr, selfValue})   NEW pure projection
+```
+
+**不新建**第二个 Credit Scope Resolver。任何 Scope 判定都必须来自 `resolveCreditReadMode`。
+
+#### 37.54.7.3 五级模式在该工作包中的语义
+
+| Mode | 生效条件 | 对 check results / approvals 的效果 |
+|---|---|---|
+| `ALL` | `actor.roleCode === 'ADMIN'` | 全部可见 |
+| `DENY` | 无 `CREDIT_VIEW`（且非 ADMIN） | **403 `CREDIT_SCOPE_DENIED`**，不产生查询 |
+| `CROSS_GROUP` | 有 `CREDIT_VIEW` 且有 `SALES_CROSS_GROUP` | 全部可见（跨组数据范围） |
+| `AGGREGATE_ONLY` | 有 `CREDIT_VIEW`，无 `SALES_CROSS_GROUP`，**无有效销售员身份或无有效成员关系** | 只见 Customer Aggregate 范围 |
+| `AGGREGATE_PLUS_SELF` | 有 `CREDIT_VIEW`，无 `SALES_CROSS_GROUP`，有**当前有效**销售员身份与成员关系 | 见 Customer Aggregate + **本人** Salesperson Sub-Limit |
+
+**当前有效**判定沿用 `resolveSelfSalespersonId()`（`credit-scope.js:39-50`）：活动销售员档案 + 活动销售组 + **服务端当前有效日期**下的成员关系。
+
+**CORRECTION-1 修订**：该函数的 `businessDate` 参数**被移除**，成员关系判定固定使用 `currentBusinessDate()`（服务端当前 UTC 日历日）。原实现把调用方传入的 `businessDate` 用于成员关系的日期窗口判定，使"已按日期终止的历史成员关系"在过去的 `businessDate` 上重新命中，从而重新授予 `AGGREGATE_PLUS_SELF` —— 违反 R-D2-1。**历史上曾属于某销售组不构成永久读取权**；成员关系若已按当前日期终止，无论请求携带哪个历史 `businessDate` 都不得恢复自额度资格。
+
+**不受影响**：既有 Aggregate Read Policy 完全保留 —— `CREDIT_VIEW` 持有者对 Customer Aggregate 的读取能力不变（§14 AP2），`SALES_CROSS_GROUP` 的跨组范围不变（AP4），`DENY` 与 `ADMIN` 行为不变（AP5）。本修正**只收紧**自额度（他人子限额）的可见性，**不新建权限模型**，五级 `CREDIT_READ_MODE` 保持不变。
+
+#### 37.54.7.4 List 与 Detail 的同一边界
+
+| 面 | 修复前 | 修复后 |
+|---|---|---|
+| `listCreditCheckResults` | 仅 `CREDIT_VIEW` | `resolveCreditReadMode` + check-results 谓词 |
+| `listCreditSpecialApprovals` | 仅 `CREDIT_VIEW` | `resolveCreditReadMode` + approvals 谓词 |
+| `getCreditSpecialApproval` | 仅 `CREDIT_VIEW` | `resolveCreditReadMode` + **单行同谓词**查询 |
+| `getCreditProfile`（已有） | 已施加谓词 | **不变** |
+| `listCreditProfiles`（已有） | 已施加谓词 | **不变** |
+
+Detail 与 List **必须使用同一谓词构造器**，不允许 Detail 使用更宽的路径（§8 要求 A-D2-4）。
+
+#### 37.54.7.5 单点绕过封闭
+
+以下入口**不得**绕过 Scope：
+
+| 绕过向量 | 封闭方式 |
+|---|---|
+| `sourceType=SALES_ORDER` + `sourceId` | 过滤条件与 Scope 谓词 **AND** 组合，不是替代 |
+| `checkGroupId` | 同上 |
+| `salesOrderId` | 同上 |
+| `decision` / `scopeType` / `stage` 等业务筛选 | 同上；筛选不得**放宽** Scope |
+| `limit` / `offset` | 分页在 Scope 谓词**之内**计算 |
+| Detail 的 `approvalId` | 单行查询同样带 Scope 谓词 |
+
+#### 37.54.7.6 分页 / 总数 / 排序的等价性
+
+```text
+limit   default 50, max 200, integer > 0        (越界 -> 400 CREDIT_QUERY_INVALID_PAGINATION)
+offset  default 0, integer >= 0
+total   COUNT(*) over the SAME predicate (same scope, same filters)
+
+ordering (check results)
+  ORDER BY business_date DESC, evaluated_at DESC, id DESC
+  id 为唯一键 -> 跨引擎确定性全序
+
+ordering (special approvals)
+  ORDER BY CASE WHEN decided_at IS NULL THEN 0 ELSE 1 END ASC,
+           decided_at DESC, id DESC
+  显式 CASE 而非 `decided_at IS NULL DESC`：
+  两引擎对 NULL 排序默认行为的差异被显式消除，PENDING 恒在前
+```
+
+**不泄漏**：`total` 必须在 Scope 谓词之内计算 —— 不得先统计全量再裁剪；不得返回"其他范围还有 N 条"之类的元信息。
+
+#### 37.54.7.7 不可枚举性
+
+Scope 外对象的响应与不存在对象**完全一致**：同一 status code、同一 message、同一 code（`404` + 既有形态）。不引入 403 与 404 的差异，不引入时间侧信道差异（同一查询形状、同一次返回）。
+
+#### 37.54.7.8 审批与来源 Credit Check 的可信 scope 关联
+
+```text
+数据合同（migration 期断言，不做静默修复）：
+  对每一条 credit_special_approval：
+     approval.scope_type MUST equal
+     (SELECT scope_type FROM credit_check_results
+       WHERE id = approval.source_credit_check_result_id)
+  违反 -> fail closed（迁移中止并报告），不得 UPDATE 修正
+
+运行时合同：
+  审批的可见范围由其来源 check result 推导（谓词见 §37.54.5.3）
+```
+
+#### 37.54.7.9 当前授权变动不改写历史业务事实
+
+本工作包**只收紧可见范围**。不 UPDATE 任何 `credit_check_results` / `credit_special_approval` 行；不因授权变化删除或遮蔽历史事实。历史事实仍按其原 Business Date 与原上下文存在，只是不再对当前无权者可见。
+
+#### 37.54.7.10 权限矩阵（正反测试须全覆盖）
+
+| Actor | ALL | DENY | CROSS_GROUP | AGGREGATE_ONLY | AGGREGATE_PLUS_SELF |
+|---|---|---|---|---|---|
+| ADMIN | ✔ 全部 | ✘ | ✔ 全部 | ✘ | ✘ |
+| `CREDIT_VIEW` + `SALES_CROSS_GROUP` | ✘ | ✘ | ✔ 全部 | ✘ | ✘ |
+| `CREDIT_VIEW` + 有效销售员身份 | ✘ | ✘ | ✘ | ✘ | ✔ 汇总 + 本人子限额 |
+| `CREDIT_VIEW` + 无有效销售员身份 | ✘ | ✘ | ✘ | ✔ 仅汇总 | ✘ |
+| `CREDIT_MANAGE` only（无 `CREDIT_VIEW`） | ✘ | ✔ 403 | ✘ | ✘ | ✘ |
+| `SALES_CROSS_GROUP` only | ✘ | ✔ 403 | ✘ | ✘ | ✘ |
+| 无任何 Credit 权限 | ✘ | ✔ 403 | ✘ | ✘ | ✘ |
+
+**CORRECTION-1 负向测试设计（历史成员关系不得重新授予权限）**
+
+固定夹具：销售员 `S` 拥有 `CREDIT_VIEW`，无 `SALES_CROSS_GROUP`；其成员关系 `M` 为 `active=1` 且 `effective_to = D_end`（`D_end` 早于服务端当前日期），即**已按日期退出**；`S` 的 `salesperson_profiles` 仍 `active=1`；`S` 另有一张客户 `C` 的 Customer Aggregate 档案与一张他人销售员 `T` 的 Salesperson Sub-Limit 档案。
+
+| # | 场景 | 请求 | 期望 | 证明的合同 |
+|---|---|---|---|---|
+| N-1 | 已退出成员关系 + 当前日期查询 | `GET /api/credit/check-results`（无 `businessDate`） | 模式 = `AGGREGATE_ONLY`；**不得**出现 `T` 的子限额行 | CORRECTION-1 / R-D2-1 |
+| N-2 | 已退出成员关系 + **过去**的 `businessDate` | `GET /api/credit/check-results?businessDate=D_in`（`D_in` 落在 `M` 的有效期内） | 模式**仍**为 `AGGREGATE_ONLY`；**不得**出现 `T` 的子限额行 | 历史成员关系不得恢复自额度 |
+| N-3 | 同上 + 直接指定 `checkGroupId` | `GET /api/credit/check-results?checkGroupId=<属于 T 子限额的组>` | 返回**空集**（不是 403，且不泄漏该组存在性） | 单点绕过封闭 |
+| N-4 | 同上 + 直接指定 `approvalId` | `GET /api/credit/special-approvals/<T 子限额的审批 id>` | **404**，与"不存在"完全不可区分 | 不可枚举性 |
+| N-5 | 已退出成员关系 + 篡改 `businessDate` 为未来 | `?businessDate=<未来日期>` | 模式仍为 `AGGREGATE_ONLY`；不得出现 `T` 的子限额行 | 未来日期不得授予权限 |
+| N-6 | 既有 Aggregate Read Policy 未被收紧 | 同 N-1 | `C` 的 Customer Aggregate 行**仍然可见** | Aggregate Read Policy 保持（§14 AP2） |
+| N-7 | 当前**有效**成员关系不受影响 | 另设销售员 `S2`，成员关系 `M2` 当前有效 | 模式 = `AGGREGATE_PLUS_SELF`；可见 `C` 汇总 + `S2` 本人子限额；**不可见** `T` 子限额 | 收紧只针对已失去的资格 |
+| N-8 | 分页不得泄漏范围外计数 | `?limit=1&offset=0` | `total` 只统计 Scope 内行 | 分页在 Scope 谓词之内计算 |
+
+**负向用例同时施加于** `listCreditCheckResults`、`listCreditSpecialApprovals`、`getCreditSpecialApproval`，并按 §37.54.7.11 在 SQLite 与 MySQL 上比对返回 id 集合与顺序。
+
+#### 37.54.7.11 SQLite / MySQL 等价性
+
+- 谓词只使用 ANSI 可移植构造（`IN (SELECT ...)`、`=`, `OR`, `CASE`），不依赖方言。
+- 排序使用显式 `CASE`，消除 NULL 排序差异。
+- 断言脚本对两引擎跑同一组 fixture，比对**返回的 id 集合与顺序**（而非 SQL 文本）。
+
+#### 37.54.7.12 实施期技术同步（2026-10-27/28，W11-SEC-01 Implementation）
+
+本节**只记录实施时对 §37.54.5.3 / §37.54.7 的技术落地决议**，不改写已批准设计文本，不新增业务语义。授权：`WAVE11_PACKAGE_W11_SEC_IMPLEMENTATION_ONLY`。
+
+| # | 议题 | 决议 | 依据 |
+|---|---|---|---|
+| I-1 | 授权日期 | `resolveCreditReadMode(db, actor)` 内部取 `currentBusinessDate()`（服务端 UTC 日历日），**只读一次**并同时用于成员关系判定与返回的 `authorizationDate` | §37.54.5.3 三类日期合同第 1 行；CORRECTION-1 |
+| I-2 | `resolveCreditProfileReadScope` 的 `businessDate` | 签名保留；`businessDate` **不转发**给 resolver，仅由 `listCreditProfiles` 用作数据过滤器 | §37.54.5.3「businessDate MUST NOT be forwarded into self-scope eligibility evaluation」 |
+| I-3 | 审批可见性的锚点 | 审批的**两个分支都锚定来源 Credit Check**（`source_credit_check_result_id IN (SELECT ... )`），不锚定自身 `scope_type`；来源结果的 `scope_type` 必须与审批一致，否则 fail closed | §37.54.7.8 运行时合同「审批的可见范围由其来源 check result 推导」；§37.54.5.3 设计要点 1 |
+| I-4 | 不可归属的行 | `credit_check_results.credit_profile_id IS NOT NULL` 计入**两个受限模式**的谓词；`NULL` 行不被降级为 aggregate | §37.54.5.3 设计要点 2（fail closed） |
+| I-5 | 分页 / 总数 | 冻结的 Wave 10 两个列表**不新增** `limit` / `offset` / `total` 参数与字段（响应体形状不变）；既有 `LIMIT 500` 与 `ORDER BY` 在**同一条带 Scope 谓词的语句**内计算，因此计数与排序天然落在授权范围内 | §37.54.7.6 的 `limit`/`offset`/`total` 规格属于 §37.54.8 的新查询面；本次不得改动冻结响应合同（授权 §5 禁止新增 API / 改变冻结行为） |
+| I-6 | 排序 | 特别审批列表改用显式 `CASE WHEN decided_at IS NULL THEN 0 ELSE 1 END ASC, decided_at DESC, id DESC`（PENDING 恒在前，与原 `decided_at IS NULL DESC` 结果等价）；信用检查结果列表保持 `evaluated_at DESC, id DESC`（`id` 为唯一键，已是跨引擎确定性全序） | §37.54.7.6「显式 CASE 而非 `decided_at IS NULL DESC`」；§37.54.7.11 |
+| I-7 | ADMIN 的判定 | 三个 Wave 10 读取面由 `actorHas` 判定，ADMIN 恒为 `ALL`（与 §37.54.5.3 的 `actorHas` 语义及 §37.54.7.10 权限矩阵一致）。此前这三个面用 `allow()`，对**权限数组未显式含 `CREDIT_VIEW` 的 ADMIN** 会返回 403；本次统一为仓库既有的 ADMIN 语义，非 ADMIN 行为不变 | §37.54.7.10 权限矩阵第一行 |
+| I-8 | 拒绝语义 | 三个 Wave 10 读取面在 `DENY` 模式下于**查询之前**抛 403 `CREDIT_SCOPE_DENIED`（message `没有查看信用数据的权限`）；`resolveCreditProfileReadScope` 的既有 message `没有查看信用档案的权限` 与 code 保持不变 | §37.54.7.3 DENY 行；§37.54.5.5 错误码登记表 |
+
+**未发生事项**：本节不改变 `credit_check_results` / `credit_special_approval` 的结构、写入语义、决策语义、敞口算法、审批状态机、余额、额度或评级；不新增权限码或角色；不改写任何历史业务事实。
+
+#### 37.54.7.13 统一本机 MySQL 测试目标与 Gate Launcher（2026-10-28 实施期技术同步）
+
+本节**只记录实施期新增的测试基础设施设计**，不改写 §37.54.7.11 的等价性合同、§37.54.14.4 的权限矩阵或任何已批准的业务 Requirement。授权：用户 2026-10-28 指令「实现一个统一的本地 MySQL Gate Launcher」并在其后执行 W11-SEC 真实 MySQL Gate。
+
+##### 37.54.7.13.1 目标收敛：一个实例、一个 Schema、一个最小权限账号
+
+| 项 | 值 |
+|---|---|
+| Host / Port | `127.0.0.1` / `3306` |
+| Database | `modern_erp_domain_test` |
+| User | `modern_erp_test` |
+| Disposable target | `mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test` |
+| 目标 Schema 权限 | `SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE VIEW, TRIGGER`（11 项） |
+| Performance Schema 读取 | `DATA_LOCKS` / `DATA_LOCK_WAITS` / `THREADS` 三张表的 `SELECT` |
+| 全局权限 | 仅 `USAGE`；无角色、无 `WITH GRANT OPTION`、无 GRANT OPTION 委派 |
+
+**唯一权威合同仍是仓库既有实现**：`assertExactLeastPrivilegeGrants`（`server/test-utils/mysql-wave10-campaign-target.js`）。目标合同文件**不复制**该权限清单——复制会产生第二份可能漂移的权限合同。
+
+##### 37.54.7.13.2 模块职责
+
+| 文件 | 职责 |
+|---|---|
+| `scripts/gates/mysql-local-target-contract.mjs` | 唯一 canonical 的目标身份（host/port/database/user）与 disposable target 字符串。**不含任何 secret** |
+| `scripts/gates/mysql-local-preflight.mjs` | **只读**核验：连接身份、五类对象计数、最小权限合同比对、与固定基线的漂移比对。**从不调用 `createDatabase()`**，因此从不建表 |
+| `scripts/gates/mysql-local-baseline.mjs` | 建立固定身份基线（server UUID / CURRENT_USER / grants SHA-256）。**只读**；不建 Schema、不建账号、不发 GRANT |
+| `scripts/gates/setup-mysql-local-gate.ps1` | 一次性本地设置：掩码提示输入测试账号口令 → DPAPI 加密保存 → 建立固定基线 |
+| `scripts/gates/run-mysql-local-gate.ps1` | 统一 launcher：读凭据 → 读基线 → 只读 preflight → 机器级互斥锁 → 运行受保护 Gate → 独立清理复核 |
+| `scripts/gates/mysql-sales-wave11-sec-gate.mjs` | W11-SEC 专属 Gate 入口，**未改动**：复用既有 `runProtectedMySqlCampaign`，只跑 W11-SEC 一个 suite |
+
+##### 37.54.7.13.3 凭据处理合同
+
+```text
+- 口令只存在于两处：DPAPI blob（当前 Windows 用户范围）与运行 Gate 子进程的进程环境。
+- 不得写入 Git、仓库配置、日志、命令行参数或任何进程参数列表。
+- 首次设置通过 PowerShell 掩码提示（Read-Host -AsSecureString）获取，之后由 DPAPI 读取。
+- DPAPI 使用 DataProtectionScope.CurrentUser；Windows PowerShell 5.1 不预加载该程序集，
+  因此脚本必须先 Add-Type -AssemblyName System.Security（PowerShell 7 下该调用为无害 no-op）。
+- launcher 在结束前清除自身进程内的敏感环境变量。
+```
+
+##### 37.54.7.13.4 固定身份基线与漂移防护
+
+```text
+- 基线由 setup 脚本**显式**建立，不是每次运行重新生成。
+- launcher 的 EXPECTED 值一律从基线文件读取，与实时结果**比较**，绝不替换。
+- preflight 检测到 database / currentUser / serverUuid / grants 指纹任一漂移即拒绝启动 Gate。
+- 重新建立基线是**显式动作**（setup 脚本的 -ForceBaseline），且必须先报告漂移字段。
+- 禁止「每次运行重新生成 EXPECTED 值」这种绕过身份漂移防护的做法。
+```
+
+##### 37.54.7.13.5 串行化与清理验证
+
+```text
+- 任何会清理 Schema 的 Gate 必须在同一台机器上串行执行。
+- 统一 launcher 在运行 Gate 期间持有机器级命名互斥体
+  （Global\ModernERP.MySqlGate.<database>）；拿不到锁即拒绝启动。
+- 命名互斥体在进程异常退出时由操作系统释放，不会留下死锁。
+- 既有受保护 runner 另有进程内 lease（activeCampaignLeases），按目标身份拒绝第二个 campaign。
+- Gate 结束后，launcher **移除破坏性授权变量**后用**新会话**重新统计五类对象，
+  清理结论因此不依赖 Gate 自己的报告。
+```
+
+##### 37.54.7.13.6 TAP 形状合同（I-9）
+
+受保护 runner 用 `assertWave10TapTranscriptStrict` 严格解析子进程 transcript，其合同要求**恰好一个顶层 plan**，且 `summary.tests === summary.pass === plan`。`describe(...)` 包裹会把 plan 下沉一层，产生嵌套 TAP 而被严格解析器拒绝。
+
+因此 W11-SEC 集成文件采用**扁平顶层 `test()`**（与同一 runner 解析的 `server/mysql-sales-customer-wave10.integration.js` 同形），共享的 setup / teardown 由顶层 `before` / `after` hook 承担。该改动**只涉及测试文件结构**，不改变任何断言、fixture、Schema、API 或业务行为。
+
+##### 37.54.7.13.7 环境前置条件（I-10）
+
+MySQL 8 在 `log_bin=1` 且 `log_bin_trust_function_creators=0` 时，要求 `SUPER` 或 `SET_USER_ID` 才能 `CREATE TRIGGER`。本机实例二进制日志开启，而本轮 Schema bootstrap 必须创建触发器（`inventory_mutation_log` 3 个 + Wave 2 价格 3 个）。
+
+最小权限账号按设计**不**持有 `SUPER`（扩大账号权限被明确禁止），因此本机 MySQL 必须开启 `log_bin_trust_function_creators=1`。这是**服务器级开关**，不是账号权限：
+
+```text
+- 它不放宽账号的授权集合；grants 指纹不变，固定基线继续有效。
+- 它只解除「二进制日志开启时 TRIGGER 权限不足以建触发器」这一服务器侧限制。
+- 该开关为运行时生效，不重启服务、不迁移数据目录；MySQL 重启后会回到默认值。
+- 禁止以「给测试账号加 SUPER / SET_USER_ID」或「改 Schema 跳过触发器」替代该开关：
+  前者扩大账号权限，后者删除业务控制，二者都被禁止。
+```
+
+##### 37.54.7.13.8 未发生事项
+
+本节不改变任何业务语义、Schema、Migration、API、UI、权限码、角色、审计、状态机、敞口算法或已冻结的 Wave 9 / Wave 10 行为；不新增第二套数据库测试架构（受保护 runner 与其严格 TAP 解析器**未修改**）；不新增 `*.test.js`（`scripts/testing/test-suites.js` 本轮**未改动**）；不修改 `document.md` 的已批准 Requirement。
+
+##### 37.54.7.13.9 当前本机数据库清单与目标绑定（2026-10-28 用户清理后）
+
+用户已清理旧 ERP 数据库，并以 `root` 执行 `SHOW DATABASES` 核验。本节记录清理后的**当前环境事实**，
+供后续任何 Gate 重跑绑定目标时使用。
+
+| Schema | 状态 | 用途 |
+|---|---|---|
+| `modern_erp_domain_test` | 存在，**空库** | 统一受保护测试目标（§37.54.7.13.1） |
+| `calculator_db` | 存在，但 `calculation_history` 的 `.ibd` 文件缺失（Missing Tablespace，**未恢复正常**） | 历史遗留；本项目不使用，受保护 Gate 不触碰 |
+
+已删除的历史 ERP Schema：`modern_erp_e2_test`、`modern_erp_phase7c_test`、
+`modern_erp_phase7c_test_disposable`、`modern_erp_v161_disposable_test`、
+`modern_erp_wave10_disposable_test`。
+
+**对既有章节的读法约定**：本节之前的 Wave 10 / Wave 11 历史设计小节（如 §37.51.11 第 3 项）
+所记的 disposable 目标 `modern_erp_wave10_disposable_test` 与账号 `wave10_acceptance`，
+是**当时 campaign 的历史目标与历史证据来源**，其正文**不改写**；但该目标**现已不存在**，
+任何未来的 Gate B / Wave 10 重跑必须绑定 §37.54.7.13.1 的统一目标，不得再指向已删除的 Schema。
+
+### 37.54.8 W11-A — Credit Query / Exception History（SC101–SC102）
+
+#### 37.54.8.1 API
+
+```text
+GET /api/credit/exposure
+    ?customerId=            required
+    &salespersonId=         optional (absent -> both scopes reported)
+    &businessDate=          optional (default = today)
+    &creditObjectType=      optional (default 'CUSTOMER')
+    &creditObjectId=        optional (default = customerId)
+    -> 200 { exposure: { customerId, businessDate, scopes: [ ... ], policySnapshot } }
+    -> 409 CREDIT_PROFILE_MISSING | CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS
+    -> 409 CREDIT_EXPOSURE_SOURCE_INCONSISTENT
+
+GET /api/credit/exceptions
+    ?customerId=            optional
+    &scopeType=             optional (CUSTOMER_AGGREGATE | SALESPERSON_SUB_LIMIT)
+    &decision=              optional (PASS|WARNING|BLOCK|SPECIAL_APPROVAL_REQUIRED)
+    &stage=                 optional
+    &hasApproval=           optional (true|false)
+    &businessDateFrom=      optional
+    &businessDateTo=        optional
+    &limit= &offset=        optional
+    -> 200 { exceptions: [ ... ], total, limit, offset }
+    -> 400 CREDIT_QUERY_INVALID_INPUT | CREDIT_QUERY_INVALID_PAGINATION
+
+GET /api/credit/exceptions/:checkResultId
+    -> 200 { exception: { ... , approval: {...}|null , sourceOrder: {...}|null , sourceDelivery: {...}|null } }
+    -> 404 (scope 外与不存在不可区分)
+```
+
+**不新增**写端点。**不新增**物理表。
+
+#### 37.54.8.2 Response 结构 — limit / used / remaining / component breakdown
+
+```json
+{
+  "exposure": {
+    "customerId": "...",
+    "businessDate": "2026-10-27",
+    "scopes": [
+      {
+        "scopeType": "CUSTOMER_AGGREGATE",
+        "creditProfileId": "...",
+        "creditLimitCents": 10000000,
+        "usedCents": 4200000,
+        "remainingCents": 5800000,
+        "unlimited": false,
+        "overLimitCents": 0,
+        "components": {
+          "approvedSoCommitmentCents": 1000000,
+          "deliveredNotSettledCents": 500000,
+          "arOpenCents": 2700000,
+          "eligiblePrepaymentCents": 0,
+          "ambiguousAttributionCents": 0
+        },
+        "hasAmbiguousAttribution": false,
+        "factCounts": { "orders": 3, "deliveries": 2, "receivables": 5 }
+      }
+    ],
+    "policySnapshot": {
+      "fingerprint": "CSP1:<64 hex>",
+      "persisted": true,
+      "creditPolicySnapshotId": "...",
+      "profileEffectiveStateHash": "<64 hex>"
+    }
+  }
+}
+```
+
+**口径一致性（R101-1）**：`usedCents` = `computeCreditExposure` 的 `exposureCents`；`remainingCents` = `creditLimitCents − usedCents`（可为负 → `overLimitCents > 0`）。`credit_limit_cents IS NULL`（不设上限）→ `unlimited: true` 且 `remainingCents: null`。**空档案绝不表示零额度** —— 无档案时返回 409 `CREDIT_PROFILE_MISSING`（§37.54.12.4 的空状态要求）。
+
+#### 37.54.8.3 Component breakdown 与历史快照区分
+
+- `components` 来自**当前事实的实时派生**（`computeCreditExposure`），不是历史快照。
+- **历史**决策的 breakdown 来自 `credit_check_results.component_breakdown_json`（Wave 10 冻结载荷 `CREDIT_EXPOSURE_BREAKDOWN_WAVE10_V1`），只在例外历史中出现。二者在响应中**分属不同字段**，绝不混用。
+- `policySnapshot.fingerprint` 由**只读**计算得出；若已存在对应 `credit_policy_snapshots` 行则一并返回其 id（`persisted: true`），否则 `persisted: false`。**查询路径不创建 snapshot 行**。
+
+#### 37.54.8.4 Exception history 结构与来源
+
+```text
+权威来源 = credit_check_results
+           LEFT JOIN credit_special_approval ON source_credit_check_result_id = check_result_id
+           LEFT JOIN source SO / SD（sales_orders / sales_deliveries 的展示字段）
+```
+
+| 字段 | 来源 |
+|---|---|
+| `checkResultId` / `checkGroupId` | `credit_check_results` |
+| `scopeType` | `credit_check_results.scope_type` |
+| `stage` / `businessDate` | `credit_check_results` |
+| `decision` | `credit_check_results.decision` |
+| `reasonCodes` | `credit_check_results.reason_codes_json` |
+| `recordedBreakdown` | `credit_check_results.component_breakdown_json`（历史快照） |
+| `policySnapshotFingerprint` / `profileEffectiveStateHash` | `credit_check_results` |
+| `sourceOrderId` / `sourceDeliveryId` | `credit_check_results` |
+| `approval` | `credit_special_approval`（含 `decision`、`scopeMode`、`approvedCeilingCents`、`approvedExpiryBusinessDate`、`approverId`、`decidedAt`） |
+| `sourceOrder` / `sourceDelivery` | 展示用身份字段（id / 单号 / 状态），**不**复制商业金额 |
+
+**例外分类不重新派生**：分类完全来自已持久化的 `decision` + `reason_codes_json` + 审批 `decision`。绝不通过重算敞口来"重新判定"历史例外 —— 那将引入第二套判定逻辑并可能改写历史含义。
+
+#### 37.54.8.5 零副作用保证
+
+1. **静态合同**：`credit-query.js` 内**不得**出现 `INSERT` / `UPDATE` / `DELETE` / `CREATE`。以源码合同断言固化。
+2. **运行时合同**：端点只在 `GET` 注册；**不开启事务**（`transaction(db, ...)` 不得被调用）；不得调用 `ensureCreditPolicySnapshot`、`ensureCreditLockAnchor`、`saveIdempotency` 或任何写函数。
+3. **只读复用**：`computeCreditExposure`（纯 SELECT）、`resolveEffectiveCreditProfile`（纯 SELECT）、`buildScopeHashes`（纯 SELECT + 哈希）、`computePolicySnapshotFingerprint`（纯函数）。
+4. **回归断言**：对同一请求连续调用两次，数据库**全部表的行数与内容摘要**必须完全一致（SQLite 与 MySQL 各证）。
+
+#### 37.54.8.6 移动端 / 界面设计
+
+- 新增 **contextual** route `credit-query`（`src/navigation/applicationRegistry.js`），**不新增 launcher 顶层入口**（§36.9.5 "Credit adds no primary top-level entry in Waves 9-11"）。
+- 页面归属 `src/pages/credit-query.jsx`；路由权限 `any: ['CREDIT_VIEW']`。
+- 形态：`LIST（例外历史） → DETAIL（敞口 + 例外详情）`。**无 EDITOR**（纯只读面）。
+- 复用既有 Credit 工作面视觉与既有 Sales 导航；不改变既有 `credit-foundation` / `credit-check` / `credit-special-approvals` 三条路由。
+- 移动优先约束（AGENTS.md §7）：主基线 390 CSS px；同时验证 320 / 430 / 680；触摸目标 ≥ 44 CSS px；核心任务不依赖永久横向滚动；状态、业务身份与 primary action 优先。
+- 空状态必须明示"未配置信用档案"，不得暗示零额度。
+- FAIL-CLOSED 与 PASS 必须视觉可区分（§36.9.5）。
+
+### 37.54.9 W11-B — Credit Evaluation Foundation（SC103–SC105）
+
+#### 37.54.9.1 业务身份与状态机
+
+```text
+credit_evaluation_indicator      定义（生效日期化）
+credit_evaluation_scheme         等级方案（生效日期化）
+credit_evaluation_model          模型（绑定 scheme + 权重，生效日期化）
+credit_evaluation_scoring_sheet  评分表（DRAFT -> SUBMITTED -> FINALIZED -> APPLIED）
+credit_evaluation_result         聚合结果（W11-C 拥有，UNIQUE(sheet_id)）
+```
+
+**版本策略复核结论**：
+
+| 问题 | 结论 | 理由 |
+|---|---|---|
+| 是否需要独立 Model Version 表 | **不需要** | 沿用 Wave 9 已冻结的生效日期版本化形态：`UNIQUE(code, effective_from)`（同 `credit_parameters`、`credit_profile`）。模型权重变更 = 新模型行 |
+| 是否需要独立 Scheme Version 表 | **不需要** | 同上；`UNIQUE(code, effective_from)`。等级边界随行不可变 |
+| 是否需要独立评分明细表 | **不需要** | §36.7.4 已冻结"per-evaluator entries live in `sheet_data_json`"。独立明细表将构成第二套评分事实来源，违反 R-D3-3 / S05 |
+| 指标是否需要版本表 | **不需要** | 同生效日期版本化；被模型引用后不得就地改写（R103-3），由 `effective_from` 承载 |
+
+**兼容性**：以上形态与 Wave 9 已落地的 `credit_parameters` / `credit_profile` 版本化模式**同构**，不引入新的版本语义。
+
+**CORRECTION-3 (2026-10-27) — 生效日期版本化合同补全。**
+
+初稿仅以 `UNIQUE(code, effective_from)` 作为版本化依据，并称“模型权重变更 = 新模型行”。**该唯一键不阻止生效区间重叠**：`code='E1'` 的 `effective_from=2026-01-01` 与 `effective_from=2026-06-01` 两行可同时存在且区间重叠，导致同一业务身份在重叠期出现**两个生效版本**。补全合同如下（不新增版本表，保留已批准的定点整数评分设计）：
+
+```text
+(1) 生效区间唯一性
+    同一 (kind, code) 下，任一 business date 至多命中一个生效版本。
+    UNIQUE(code, effective_from) 只保证"同一生效日不重复"，
+    区间重叠必须由应用层显式检测并拒绝（见 (2)(3)）。
+    区间约定：effective_to 为 NULL 表示开区间至 9999-12-31。
+
+(2) 共享锁身份（并发版本创建）
+    锁身份 = 该配置的业务身份 (kind, code)，跨会话唯一。
+    实现：MySQL 使用仓库既有的确定性命名锁
+          SELECT GET_LOCK('erp-credit-cfg-<sha256(kind|code).slice(0,48)>', 10)
+          —— 与 financial-controls.js:32-41 的幂等命名锁同一机制、
+             同一受控释放合同 releaseMySqlIdempotencyLocks（db.js:1955）、
+             同一 48 字符长度约定
+          SQLite：无需额外锁（写事务本身串行化）
+    锁必须覆盖"检测重叠 -> 关闭前驱 -> 插入新版本"的完整检查-写入区间。
+
+(3) 前驱终止与后继切换规则
+    沿用 credit-profile.js:124-136 closePredecessorAndAssertNoOverlap 的既有语义：
+      - 新版本 effective_from 与某既有版本相同 -> 409（版本已存在）
+      - 存在前驱且其 effective_to 覆盖新版本起始 -> 把前驱 effective_to
+        收紧为 previousDate(新 effective_from)（仓库既有 previousDate 语义）
+      - 新版本区间与任何既有版本区间重叠 -> 409（区间重叠）
+      - 与任一版本重叠的检查覆盖整个时间线，而非只看前驱
+
+(4) 被引用后不可变
+    指标 / 方案 / 模型行一经被引用即不可就地改写（R103-3）：
+      - indicator 被任一 model 的 indicator_weights_json 引用 -> 不可 UPDATE
+      - scheme 被任一 model 引用 -> 不可 UPDATE
+      - model 被任一 scoring_sheet 引用 -> 不可 UPDATE
+    变更只能通过新建版本（新的 effective_from）实现；
+    旧行保留，不被删除、不被覆盖。
+    唯一允许的 UPDATE 是 status: ACTIVE -> RETIRED（单向）。
+
+(5) 已生成评分表的可追溯性
+    模型以**指标行 id**（而非 code）引用指标：
+      indicator_weights_json = { "<indicator row id>": <weightMilli>, ... }
+    因此追溯链为：scoring_sheet.model_id -> model.indicator_weights_json
+                  -> 指标行 id -> 该不可变指标行
+    由于指标 / 方案 / 模型行均不可变，该链**精确**指向评分表当时使用的
+    指标版本、方案版本与权重，无需额外的快照列。
+    结果行另存 model_id 与 scheme_id（既有 DDL），使结果同样可追溯。
+    必须有断言：一张已 FINALIZED 的评分表所引用的模型，其指标集合与权重
+    在任何时点解析结果不变（防止"事后改指标导致历史评分含义漂移"）。
+
+(6) SQLite / MySQL 等价的冲突检测
+    两引擎使用**同一套检测逻辑与同一组错误码**：
+      - 409 版本已存在
+      - 409 区间重叠
+      - 409 引用后不可变
+    差异只在序列化原语（MySQL 命名锁 + FOR UPDATE 行锁；SQLite 写事务串行化），
+    **判定结果与错误码必须逐一致**。
+    既有先例：credit-profile.js:125 使用 `FOR UPDATE` 锁定时间线行；
+    Wave 11 在其之上补命名锁，以覆盖"时间线为空"的首次创建竞争。
+```
+
+**与既有冻结设计的兼容**：本补全不改变 Wave 9 的 `credit_parameters` / `credit_profile` 版本化语义，只是把**同一套语义**（唯一生效版本、前驱收紧、区间不重叠、引用后不可变）显式施加到 Wave 11 新增的三类配置对象上，并补上 Wave 9 用"锚点行 FOR UPDATE"实现的**空时间线竞争**缺口（以命名锁覆盖）。**不新增版本表，不新增业务语义。**
+
+#### 37.54.9.2 评分确定性规则（整数，零浮点）
+
+```text
+单位：milli-point（1 point = 1000 milli-points）
+权重：milli-weight（10000 milli-weight = 100%）
+
+indicator.max_score_milli  : 正整数
+model weight per indicator  : 整数 milli-weight，模型内合计必须 == 10000
+
+indicator 得分（achieved）：
+  QUALITATIVE -> 枚举查表：input_spec_json.options 中与输入值**恰好一条**匹配
+                  -> 该 option 的 scoreMilli
+  QUANTITATIVE -> 区间查表：input_spec_json.bands 中与输入值**恰好一条**匹配
+                  -> 该 band 的 scoreMilli
+
+加权贡献（contribution）：
+  contribution_milli = round_half_up( achieved_milli * weight_milli / 10000 )
+  即 floor( (achieved_milli * weight_milli + 5000) / 10000 )
+  —— 纯整数运算，无浮点，跨引擎逐位一致
+
+模型总分：
+  total_score_milli = sum(contribution_milli over all indicators of the model)
+  —— 逐项先舍入再求和，舍入点唯一
+
+模型满分：
+  max_total_milli = sum( round_half_up(max_score_milli * weight_milli / 10000) )
+
+等级判定：
+  grade = 唯一满足 band.minScoreMilli <= total_score_milli <= band.maxScoreMilli 的 grade
+  方案等级区间必须连续覆盖 [0, max_total_milli]，无重叠、无空洞
+```
+
+**禁止插值、禁止浮点、禁止引擎相关舍入。** 这使 R105-2 / R105-6 与 R106-3（合成确定性）在两引擎上可逐位复现。
+
+#### 37.54.9.3 输入合同与异常处理
+
+| 情形 | 行为 |
+|---|---|
+| 定性输入不在枚举内 | 400 `CREDIT_EVALUATION_INPUT_OUT_OF_RANGE` |
+| 定量输入不在任何 band 内（含越界） | 400 `CREDIT_EVALUATION_INPUT_OUT_OF_RANGE`（**不夹取**、不静默截断） |
+| 模型引用的指标在评分时已失效 | 400 `CREDIT_EVALUATION_INDICATOR_INVALID` |
+| 评分表缺少模型中的某个指标 | 400 `CREDIT_EVALUATION_MISSING_INDICATOR`（**不得按 0 分计入**） |
+| 同一指标被重复提交 | 400 `CREDIT_EVALUATION_DUPLICATE_INDICATOR` |
+| 模型权重合计 ≠ 10000 | 400 `CREDIT_EVALUATION_WEIGHT_INVALID` |
+| 方案等级区间有重叠 / 空洞 / 不覆盖满分 | 400 `CREDIT_EVALUATION_SCHEME_INVALID` |
+| 指标已生效且被模型引用后再改写 | 409 `CREDIT_EVALUATION_INDICATOR_INVALID`（只允许新建版本） |
+
+#### 37.54.9.4 Scoring Sheet 生命周期与绑定
+
+```text
+DRAFT      创建；仅 sheet 作者与被列入 allowed scorer 的评分人可编辑
+SUBMITTED  评分人提交自己的条目；不可再改
+FINALIZED  聚合完成，生成 credit_evaluation_result；不可再改
+APPLIED    评级已应用到某个 Credit Profile version（由 W11-C 写入）
+
+绑定（创建时固定）：
+  credit_object_type / credit_object_id
+  customer_id
+  profile_scope_key          '*' = Customer Aggregate，= 销售员 id
+  business_date
+  credit_profile_id          解析出的、在 business_date 生效的 profile 版本
+  model_id                   模型版本（其 scheme_id 随之固定）
+  allowed_evaluator_ids_json  有界评分人集合（R106-2）
+```
+
+**R105-4 的绑定纪律**：评分表绑定**版本**而非 anchor。创建时解析并固定 `credit_profile_id`；**apply 时必须重新解析**在 business_date 生效的 profile 版本并与固定值比对；不一致 → 409 `CREDIT_RATING_TARGET_PROFILE_CHANGED`（fail closed，要求重新评分），**不得静默改绑**。
+
+**载荷规范化**：`sheet_data_json` 在写入前必须规范化为**确定性排序**的 JSON（评分人按 id 升序，条目按指标 code 升序，键名固定顺序），使 `sha256(canonicalJson(sheet_data_json))` 成为可复现的确定性摘要。
+
+#### 37.54.9.5 API
+
+```text
+GET    /api/credit/evaluation/indicators        list (CREDIT_VIEW)
+POST   /api/credit/evaluation/indicators        create version (CREDIT_MANAGE + scope)
+GET    /api/credit/evaluation/schemes           list (CREDIT_VIEW)
+POST   /api/credit/evaluation/schemes           create version (CREDIT_MANAGE + scope)
+GET    /api/credit/evaluation/models            list (CREDIT_VIEW)
+POST   /api/credit/evaluation/models            create version (CREDIT_MANAGE + scope)
+GET    /api/credit/evaluation/sheets            list (CREDIT_VIEW + scope)
+POST   /api/credit/evaluation/sheets            create sheet (CREDIT_EVALUATE)
+GET    /api/credit/evaluation/sheets/:id        detail (CREDIT_VIEW + scope)
+POST   /api/credit/evaluation/sheets/:id/score  submit own entries (CREDIT_EVALUATE + allowed scorer)
+POST   /api/credit/evaluation/sheets/:id/finalize  finalize -> result (CREDIT_EVALUATE)
+POST   /api/credit/evaluation/results/:id/apply apply rating to profile version (CREDIT_MANAGE + scope)  [W11-C]
+```
+
+配置类写入（indicator / scheme / model）使用既有 `requireCreditManagementAuthority`（= ADMIN 或 `CREDIT_MANAGE` + `SALES_CROSS_GROUP`，§14 AP4.1）。评分类写入使用 `requireCreditEvaluationAuthority`（`CREDIT_EVALUATE`）。**不新增权限码。**
+
+#### 37.54.9.6 权限 / 审计 / 幂等 / 不可变历史
+
+| 动作 | 权限 | 审计实体 / action | 幂等键作用域 | 不可变性 |
+|---|---|---|---|---|
+| create indicator/scheme/model version | `CREDIT_MANAGE` + scope | `CREDIT_EVALUATION_INDICATOR` / `CREDIT_EVALUATION_SCHEME` / `CREDIT_EVALUATION_MODEL`，action `CREATE_VERSION` | `code` + `effectiveFrom` | 行创建后**不得 UPDATE**（除状态迁移到 `RETIRED`，且仅允许 `ACTIVE -> RETIRED`） |
+| create sheet | `CREDIT_EVALUATE` | `CREDIT_EVALUATION_SCORING_SHEET` / `CREATE` | `documentId` = 目标 scope + business_date + model_id | DRAFT 可编辑；SUBMITTED 后载荷冻结 |
+| score | `CREDIT_EVALUATE` + allowed scorer | `CREDIT_EVALUATION_SCORING_SHEET` / `SCORE` | sheet_id + evaluator_id | 评分人只能写自己的条目；已提交条目不得覆盖（重复提交 → 409） |
+| finalize | `CREDIT_EVALUATE` | `CREDIT_EVALUATION_RESULT` / `FINALIZE` | sheet_id | 结果行不可变（`applied_*` 除外，见 W11-C） |
+
+幂等沿用既有 `idempotencyReplay` / `requestFingerprint` / `saveIdempotency`（`server/modules/financial-controls.js`，`credit-profile.js:149` 已是同款用法）。每次写操作在**单一事务**内完成并写 `audit_logs`（§34.7 P5）。
+
+#### 37.54.9.7 界面
+
+- 新增 contextual route `credit-evaluation`（`src/pages/credit-evaluation.jsx`），**不新增 launcher 顶层入口**。
+- 形态：`LIST（评分表 / 模型） → DETAIL（评分表） → EDITOR（评分）`。
+- 评分面为移动优先：逐指标输入、当前得分/满分/权重即时显示、提交后只读。
+- 空状态、FAIL-CLOSED 与 PASS 视觉可区分。
+- 配置类界面（indicator / scheme / model）为受控管理面，沿用既有 ADVANCED_CONFIGURATION 形态。
+
+### 37.54.10 W11-C — Multi-Scorer & Rating Application（SC106–SC107）
+
+#### 37.54.10.1 Bounded multi-scorer（SC106）
+
+```text
+范围：仅限单个 scoring sheet
+聚合：每个 sheet 恰好一个 credit_evaluation_result（UNIQUE(sheet_id)）
+评人数：credit_evaluation_result.evaluator_count
+合成：确定性 —— total_score_milli = Σ contribution_milli
+并发：finalize 对 sheet 行 FOR UPDATE -> 两个并发 finalize 只产生一个聚合结果
+跨 sheet 聚合：禁止
+企业级开放评人池：禁止
+```
+
+#### 37.54.10.2 Scorer 授权范围
+
+- 评分人必须在 `allowed_evaluator_ids_json` 内 → 否则 403 `CREDIT_SHEET_NOT_ALLOWED_SCORER`。
+- 评分人必须具备 `CREDIT_EVALUATE`（`requireCreditEvaluationAuthority`）。
+- 评分人**不得**对其他客户或其他销售员子额度评分：sheet 在创建时固定 `customer_id` 与 `profile_scope_key`，评分端点**不接受**任何目标参数（不接受 customerId / salespersonId），因此评分人无法越界改靶（R106-5）。
+- 评分端点不接受 `credit_object` / `customer` 参数 —— 目标在 sheet 上，不在请求上。
+
+#### 37.54.10.3 评分提交与并发
+
+```text
+提交（score）事务：
+  1  SELECT ... FROM credit_evaluation_scoring_sheet WHERE id=? FOR UPDATE
+  2  校验 status = 'DRAFT'（SUBMITTED/FINALIZED/APPLIED -> 409 CREDIT_SHEET_STATE_INVALID）
+  3  校验 actor ∈ allowed_evaluator_ids
+  4  校验该 evaluator 尚无条目（重复提交 -> 409 CREDIT_SHEET_STATE_INVALID）
+  5  校验条目：指标存在且有效、无重复、取值在范围内
+  6  规范化 sheet_data_json（确定性排序）
+  7  UPDATE sheet SET sheet_data_json=?, evaluator_count=?, updated_at=?, updated_by=?
+  8  COMMIT
+```
+
+Sheet 行锁保证并发评分**不丢更新**（读-改-写整体在锁内）。多评人上限由 `allowed_evaluator_ids_json` 的长度约束（R106-1 的"有界"）。
+
+#### 37.54.10.4 Finalize 状态机
+
+```text
+DRAFT -> SUBMITTED -> FINALIZED -> APPLIED
+```
+
+- `SUBMITTED`：所有 allowed scorer 均已提交（或显式放弃）时方可进入。设计选择：**不自动推进** —— 显式 `finalize` 要求所有 allowed scorer 均已提交，否则 409 `CREDIT_SHEET_NOT_FINALIZED`。这避免了"部分评分被静默当作完整评分"的语义歧义。
+- `FINALIZED`：在同一事务内
+
+```text
+  1  SELECT ... FROM credit_evaluation_scoring_sheet WHERE id=? FOR UPDATE
+  2  校验 status = 'SUBMITTED' 且所有 allowed scorer 已提交
+  3  重算每条目得分与加权贡献（纯整数）
+  4  校验模型指标集合完整（无缺失、无重复）
+  5  判定 grade（方案等级区间唯一命中）
+  6  INSERT INTO credit_evaluation_result(...)  -- UNIQUE(sheet_id) 保证唯一聚合
+  7  UPDATE sheet SET status='FINALIZED', finalized_at=?, finalized_by=?
+  8  audit + COMMIT
+```
+
+#### 37.54.10.5 独立 Credit Evaluation Result 身份（R107-1）
+
+```text
+credit_evaluation_result 具备自身 id、来源 sheet、model/scheme 版本、
+profile 目标、total_score_milli、rating_grade、evaluator_count。
+它不是 Credit Profile version，不是 Policy Snapshot，不是 Applied Rating History。
+四者各自独立存储、互不替代（§37.54.5.4）。
+```
+
+`credit_evaluation_result` 同时记录评分时的身份锚点：`credit_profile_id`（评分绑定的版本）、`profile_effective_state_hash`、`policy_snapshot_fingerprint`（评分时的策略状态），使评分结论可复现。
+
+#### 37.54.10.6 Rating Result Application → Credit Profile Version（R107-2、R107-3、R107-5、R107-6）
+
+**唯一评级写者**（R107-4 / §36.7.1 的落实）：
+
+```text
+NEW  credit-profile.js
+  applyCreditRating(db, {
+    creditProfileId, ratingGrade, ratingEffectiveFrom, ratingEffectiveTo,
+    businessSource,        // 'INITIAL_ASSIGNED' | 'EVALUATION_APPLIED'
+    ratingSourceKey,       // INITIAL: 'INITIAL_ASSIGNED'；EVALUATION: evaluation_result_id
+    evaluationResultId,    // INITIAL: null；EVALUATION: <result id>（非空）
+    actorId, appliedAt,
+    supersedePrevious      // INITIAL: false（无前驱）；EVALUATION: true
+  })
+    -> 在单一事务内：
+       a) 若 supersedePrevious：把该 profile 当前未 superseded 的评级行
+          superseded_at = applied_at
+          （仅 superseded_at 迁移；rating_grade / applied_at / applied_by /
+            evaluation_result_id 永不改写）
+       b) INSERT INTO credit_profile_ratings(...)
+       c) UPDATE credit_profile SET rating_grade=?, rating_effective_from=?,
+          rating_effective_to=? WHERE id=?
+```
+
+**CORRECTION-4 (2026-10-27) — 双业务来源、单一写者的精确边界。**
+
+```text
+两种业务来源（同一 writer，不同来源身份）
+  INITIAL_ASSIGNED
+    物理 rating_source_type = 'INITIAL_ASSIGNED'   （Wave 9 既有 CHECK 取值，不改写）
+    物理 rating_source_key  = 'INITIAL_ASSIGNED'
+    物理 evaluation_result_id = NULL
+    **不要求存在任何评分表 / 评估对象** —— INITIAL 路径不依赖 W11-B/C 的任何对象
+    触发场景：Credit Profile Version 创建（Wave 9 行为）
+
+  EVALUATION_APPLIED（业务来源名）
+    物理 rating_source_type = 'EVALUATED'           （Wave 9 既有 CHECK 取值，不改写）
+    物理 rating_source_key  = <evaluation_result_id>
+    物理 evaluation_result_id = <evaluation_result_id>（非空，与 source_key 相等）
+    要求存在已 FINALIZED 的 credit_evaluation_result（W11-C 拥有）
+    触发场景：SC107 Rating Result Application
+
+  命名说明：Wave 9 已冻结的 CHECK 仅允许 'INITIAL_ASSIGNED' 与 'EVALUATED'
+  两个物理取值（wave9 migration SQLite :125 / MySQL :207）。因此本设计使用
+  业务来源名 EVALUATION_APPLIED，并**显式映射**到冻结物理取值 'EVALUATED'；
+  该 CHECK **不被修改、不被放宽、不被新增取值**。
+```
+
+**INITIAL 路径与 Evaluation 路径的职责分离**：
+
+| | INITIAL_ASSIGNED | EVALUATION_APPLIED |
+|---|---|---|
+| 是否需要评分表 | **否** | 是（FINALIZED） |
+| 是否需要 evaluation result | **否** | 是（非空 FK） |
+| 授权 | 既有 `requireCreditManagementAuthority`（AP4.1） | write-class `CREDIT_MANAGE`（AP4.1）；**`CREDIT_EVALUATE` 单独不足以授权** |
+| 幂等合同 | 既有 profile 创建幂等（`CREDIT_PROFILE_CREATE`） | **独立**幂等合同：结果 id + 行锁 + `applied_to_profile_id IS NULL` + `uq_credit_profile_ratings_application` |
+| 审计身份 | `CREDIT_PROFILE_RATING` / `INITIAL_ASSIGNED`（既有） | `CREDIT_EVALUATION_RESULT` / `APPLY`（与 SCORE / FINALIZE 可区分） |
+| 并发 | 既有档案版本锁 | §36.3.4 统一锁序 + 结果行锁 |
+
+**唯一写者的强化（可机器验证）**：`credit_profile.rating_grade` / `rating_effective_from` / `rating_effective_to` 在 Wave 9 DDL 中**可为 NULL**（`sales-customer-wave9-credit-foundation.js:88-90`），因此 `createCreditProfile` **不再**在档案 INSERT 中提供这三个值，而是：
+
+```text
+createCreditProfile（行为保持重构）
+  1  INSERT INTO credit_profile(... 不含 rating_* 三列 ...)   -- FK 顺序：档案行须先存在
+  2  applyCreditRating({ businessSource:'INITIAL_ASSIGNED',
+                         ratingSourceKey:'INITIAL_ASSIGNED',
+                         evaluationResultId:null, supersedePrevious:false, ... })
+       -> INSERT credit_profile_ratings('INITIAL_ASSIGNED','INITIAL_ASSIGNED',NULL,...)
+       -> UPDATE credit_profile SET rating_grade=?, rating_effective_from=?,
+                                  rating_effective_to=? WHERE id=?
+  3  后置不变量断言：credit_profile.rating_grade ==
+     (SELECT rating_grade FROM credit_profile_ratings
+       WHERE credit_profile_id=? AND superseded_at IS NULL)
+```
+
+事务内的中间态（档案行已存在而 rating_* 尚为 NULL）**对外不可见**（未提交），事务结束时的最终行与 Wave 9 现状**逐字段一致**。
+
+**静态合同断言**：`rating_grade` / `rating_effective_from` / `rating_effective_to` 三个列名，在 `server/modules/credit-*.js` 全部 INSERT / UPDATE 语句中**只出现在 `applyCreditRating` 之内**（一条 UPDATE）。由此"唯一写者"由**源码合同**而非仅由约定保证。
+
+**冻结兼容性与既有评级历史**：
+
+```text
+- Wave 9 初始化行为不变：档案创建仍产出 INITIAL_ASSIGNED 评级行，
+  rating_source_key='INITIAL_ASSIGNED'，evaluation_result_id IS NULL，
+  且同一事务内写入档案与评级 —— 由既有
+  server/sales-customer-wave9-credit-foundation.test.js **原样通过**证明；
+  若该测试需要修改才能通过，说明行为已变 -> 立即停止。
+- 既有评级历史**不迁移、不伪造、不清空**：既有行的 rating_grade /
+  applied_at / applied_by / evaluation_result_id 永不改写；
+  仅 superseded_at 可按 §36.7.2 的既定语义迁移。
+- `credit_profile_ratings` 的新增外键属于**对既有冻结表的兼容性 Schema 扩展**：
+  新增一条命名 FK 约束，列集合、既有 CHECK、既有唯一索引与全部既有行
+  保持等价；SQLite 侧以行保全重建实现（§37.54.12.3）。
+  **不得**表述为"完全没有修改旧表"。
+- 不产生第二个评级正式写入路径：INITIAL 与 EVALUATION 两个来源共用
+  同一个 writer 函数、同一组物理列、同一套后置不变量断言。
+```
+
+**`createCreditProfile` 必须改为调用同一 `applyCreditRating`**，从而字面上只有一个写者函数。`createCreditProfile` 当前的 INSERT 路径已把初始评级与档案创建放在同一事务内；重构后语义等价，必须由既有 `server/sales-customer-wave9-credit-foundation.test.js` **原样通过**证明（行为保持回归门）。
+
+**Apply 事务与锁序**（承接 §36.3.4 与 §36.7.3）：
+
+```text
+1  RBAC: requireCreditManagementAuthority(actor)
+       (ADMIN 或 CREDIT_MANAGE + SALES_CROSS_GROUP —— §14 AP4.1 既有语义)
+       CREDIT_EVALUATE 单独不足以授权本步（R-D3-1 / A-D3-1）
+2  幂等检查（idempotencyReplay）
+3  锁序（§36.13 / §36.14 统一顺序）：
+     3a  POLICY_SCOPE anchor   FOR SHARE
+     3b  CREDIT_OBJECT anchor  FOR UPDATE   （目标 profile 的 aggregate / salesperson scope）
+     3c  credit_profile 行     FOR UPDATE
+4  SELECT ... FROM credit_evaluation_result WHERE id=? FOR UPDATE
+     校验 applied_to_profile_id IS NULL
+       -> 否则 409 CREDIT_EVALUATION_RESULT_ALREADY_APPLIED
+5  重新解析在 business_date 生效的 profile 版本
+     与 result.credit_profile_id 比对
+       -> 不一致 409 CREDIT_RATING_TARGET_PROFILE_CHANGED（不静默改绑）
+6  校验 target profile 的 customer_id / profile_scope_key 与 result 一致
+     （防止跨客户 / 跨子额度应用，R107-5）
+7  applyCreditRating(...)   —— 单一写者，同一事务
+8  UPDATE credit_evaluation_result
+       SET applied_to_profile_id=?, applied_at=?, applied_by=?
+9  audit（action = 'APPLY'，与 'SCORE' / 'FINALIZE' 可区分，R-D3-2 / A-D3-3）
+10 COMMIT
+```
+
+**并发保护**：`credit_evaluation_result` 行锁 + `applied_to_profile_id IS NULL` 断言，使"同一结果被应用两次"在并发下也不可能（第二个事务等待后看到非空 → 409）。`credit_profile_ratings` 的 `uq_credit_profile_ratings_application` UNIQUE(credit_profile_id, rating_source_key) 提供第二道 DB 级保证。
+
+**不产生第二个 Credit Profile writer**：`credit_profile` 的 `rating_*` 三列**只**在 `applyCreditRating` 内被更新，且必须与同事务插入的 `credit_profile_ratings` 行取值一致 —— 由 `applyCreditRating` 单点保证，不存在第二条路径。
+
+#### 37.54.10.7 已有 EVALUATED CHECK 约束的启用
+
+Wave 9 已落地：
+
+```sql
+CHECK((rating_source_type='INITIAL_ASSIGNED' AND rating_source_key='INITIAL_ASSIGNED'
+       AND evaluation_result_id IS NULL)
+   OR (rating_source_type='EVALUATED' AND evaluation_result_id IS NOT NULL
+       AND rating_source_key=evaluation_result_id))
+```
+
+W11-C 创建 `credit_evaluation_result` 后，`EVALUATED` 分支由**构造**满足：apply 写入时 `evaluation_result_id` 非空且等于 `rating_source_key`。**该 CHECK 不被修改、不被放宽。**
+
+#### 37.54.10.8 Deferred FK 的启用
+
+```sql
+-- SQLite：建新表 -> 复制 -> 删旧 -> 重命名（行保全，参照 inventory-position-schema.js:286-318）
+-- MySQL：ALTER TABLE credit_profile_ratings
+--   ADD CONSTRAINT fk_credit_profile_ratings_evaluation_result
+--   FOREIGN KEY (evaluation_result_id) REFERENCES credit_evaluation_result(id)
+```
+
+**加 FK 前置断言**：`SELECT COUNT(*) FROM credit_profile_ratings WHERE evaluation_result_id IS NOT NULL` 必须为 **0**（Wave 9/10 从未写入 `EVALUATED`）。不为 0 则**中止并报告**，绝不迁移、不伪造、不清空。
+
+**加 FK 后置断言**：`credit_profile_ratings` 中每条 `evaluation_result_id IS NOT NULL` 的行，其目标必须存在于 `credit_evaluation_result`（数据级 RI）。
+
+#### 37.54.10.9 与 Credit Check 的并发一致性（R-SAL-24 / W11-R1）
+
+评级应用改变 `credit_profile.rating_grade` / `rating_effective_*` → 改变 `profile_effective_state_hash` → 改变 policy snapshot 指纹。因评级路径与 Credit Check 取**同一** aggregate anchor `FOR UPDATE` 与**同一** profile 行锁，两者串行化：
+
+```text
+W11-R1 断言：
+  - 一次 Credit Check 只使用一个 coherent 的 effective policy / profile 版本
+    （不得混合评级前后的 rating 状态）
+  - 序列化结果只能是 OLD 或 NEW，不得混合
+  - 评级应用与检查的 audit 行各自存在
+  - 无部分应用状态
+```
+
+既有 §36.6.2 的 race-corollary invariant（特别审批必须追溯到产生它的确切 Check 与 snapshot）在 W11-C 下**不变**：评级应用**不得**改写任何 `credit_check_results` / `credit_special_approval` 行。
+
+#### 37.54.10.10 SOD 边界
+
+本阶段**只**实施**授权类别分离**（`CREDIT_EVALUATE` vs write-class `CREDIT_MANAGE`）。**不**强制"评分人 ≠ 应用人"（Stage B L-1 已记录：若业务后续要求人员级分离，**必须返回 Requirement 层重开**）。**不**新增角色、审批流程或权限码。
+
+### 37.54.11 W11-D — Reconciliation & Recalculation（SC99–SC100）
+
+#### 37.54.11.1 两个可执行操作的分离
+
+| | SC99 CHECK-only | SC100 Deterministic Recalculation |
+|---|---|---|
+| 端点 | `POST /api/credit/reconciliation/check` | `POST /api/credit/reconciliation/recalculate` |
+| 是否比对参考决策 | **是**（可选 `referenceCheckGroupId`） | 否 |
+| 是否输出一致性判定 | **是** | 否 |
+| 是否输出确定性证据 | 否 | **是**（`factDigest`） |
+| 写入 | 仅 `credit_recalculation_history` + `audit_logs` | 同左 |
+| 产生 Credit Check Decision | **否** | **否** |
+
+#### 37.54.11.2 信用计算复用点
+
+两者**共用**同一实现：`computeCreditExposure()`（`credit-check.js:385`）+ `resolveEffectiveCreditProfile()`（`credit-profile.js:44`）+ `buildScopeHashes()`（本节导出）+ `computePolicySnapshotFingerprint()`。
+
+**不新建第二套信用算法。** 本节对 `computeCreditExposure` 的唯一改动是**返回值追加** `factDigest` 字段（纯附加；既有调用方 `credit-check.js` 与其测试不受影响）。
+
+`factDigest` 计算：对本次读取到的权威事实集合做规范化 SHA-256：
+
+```text
+factDigest = sha256(canonicalJson({
+  orders:      [{id, total_cents, salesperson_id, commercial_close_state, reviewed_at}...],
+  deliveries:  [{id, sales_order_id, total_cents}...],
+  receivables: [{id, source_type, source_id, amount_cents, open_amount_cents,
+                 recognition_mode, item_kind, item_class, due_date}...],
+}))
+```
+
+规范化输入集合的固定规则：按 `id` 升序；字段名固定顺序；只包含**参与派生计算**的字段（不含 `created_at` 等审计时间戳）；数值一律按 `Number(...)` 归一为整数；字符串一律原样（不 trim、不改大小写）。因此 `factDigest` 相同 ⇒ 事实集合逐字段相同 ⇒ 按 R100-2 派生结果必然相同。这使确定性**可验证**而非仅被声明。
+
+**CORRECTION-2 补充 —— digest 的能力边界与绑定关系：**
+
+```text
+factDigest 的能力边界（必须如实表述）
+  - 摘要不可逆：仅凭 factDigest 无法恢复任何历史 canonical fact 或历史金额
+  - factDigest 相同 => 事实集合逐字段相同 => 派生结果必然相同（正向成立）
+  - factDigest 不同 => 事实集合不同（但无法仅凭摘要说明"哪里不同"，
+    差异需由 §37.54.11.3 的重算比对给出）
+  - 因此 digest 是"同一性标识"，不是"恢复手段"
+
+绑定关系（三者必须同时绑定才能断言可复现）
+  businessDate            —— 参与派生的时间口径；不同 businessDate 不是同一次执行
+  contractVersion         —— 算法/载荷契约版本；不同版本之间不构成 replay
+  factDigest              —— 事实集合同一性
+
+  executionIdentity = sha256(canonicalJson({
+    kind, contractVersion, businessDate, scopeFilter, factDigest }))
+
+replay 等价性判定（三态，不得二值化）
+  EQUIVALENT     contractVersion 相同 AND businessDate 相同 AND scope 相同
+                 AND factDigest 相同  -> 重算结果与历史快照必然相同
+  DRIFTED        contractVersion 相同 AND businessDate 相同 AND scope 相同
+                 AND factDigest 不同  -> 源事实已变化；给出差异项，不得声称等价
+  NOT_COMPARABLE contractVersion 不同（或 businessDate / scope 不同）
+                 -> 该 replay 不具业务意义，必须显式声明，不得静默比较
+```
+
+**读快照一致性（CORRECTION-2 修订）**：初稿称“计算本身在事务外完成（纯读取），不取任何写锁”。该说法在**一致性**上不成立 —— 在 MySQL 的 READ COMMITTED 下，多语句读取**不保证**跨语句的同一快照。本节改为使用仓库既有的 canonical 一致性读机制：
+
+```text
+server/db.js:2169  readTransaction(db, work)
+  MySQL  : BEGIN + 对 mysql_transaction_gates 的共享锁 (LOCK IN SHARE MODE)
+           —— 与每个写者持有的排他锁互斥（db.js:2125 FOR UPDATE），
+              因此 resolver 看到**一个连贯状态**，且不改变全局隔离级别、
+              不产生持久化写入（该语义已由 db.js:2190-2193 固化）
+  SQLite : 延迟 BEGIN 提供一致读快照
+```
+
+SC99 / SC100 的**事实读取必须整体运行在 `readTransaction` 之内**，从而保证 orders / deliveries / receivables 来自同一快照；`factDigest` 正是在该快照内计算，与 `result_snapshot_json` 同源。既有的一致性断言（AR 来源链守恒、转换 ≤ 已交付、归属歧义分类）在同一快照内评估，异常一律 fail closed。
+
+**失败零权威数据副作用**：任何失败（事实不一致、无档案、写入冲突）都**不写** `credit_recalculation_history`、**不写** `audit_logs`、**不修改**任何 canonical 事实。历史行只在成功提交时追加。
+
+**确定性重放的必要前提**：重放一次历史执行，必须同时满足 ① 相同 `businessDate`；② 相同 scope；③ 相同 `contractVersion`；④ 源事实未被修改（`factDigest` 相同）。四条中任一不满足，按上面的三态语义报告，**不得**输出"一致"的结论。
+
+#### 37.54.11.3 只读数据流与快照一致性
+
+```text
+读路径：canonical facts（Sales + Finance，只读）
+      -> computeCreditExposure（纯）
+      -> resolveEffectiveCreditProfile（纯）
+      -> buildScopeHashes（纯）+ computePolicySnapshotFingerprint（纯）
+      -> 只读查询既有 credit_policy_snapshots（若存在对应指纹则返回其 id）
+      -> 响应
+```
+
+**绝不**调用 `ensureCreditPolicySnapshot`（会 INSERT）。响应中的 `policySnapshot.persisted` 如实反映是否已有对应快照行。
+
+**CORRECTION-2 修订**：本数据流必须整体运行在 `readTransaction` 之内（`server/db.js:2169`），以保证 orders / deliveries / receivables / 参数 / 规则 / 档案状态来自**同一快照**；见 §37.54.11.5 的两阶段划分与 §37.54.11.2 的 digest 绑定。
+
+#### 37.54.11.4 `credit_recalculation_history` 写入边界
+
+```text
+写入者：只有 credit-reconciliation.js
+写入内容：kind, credit_object_type/id, customer_id, salesperson_scope_key,
+          business_date, fact_digest, policy_snapshot_fingerprint,
+          profile_effective_state_hash, scope_filter_json,
+          result_snapshot_json, discrepancy_count, drift_detected,
+          duration_ms, triggered_by, triggered_at
+禁止内容：任何**顶层**金额列；金额只允许存在于唯一的不可变
+          result_snapshot_json 中（CORRECTION-2，§37.54.6.5）
+禁止读取者：任何信用计算路径（computeCreditExposure / evaluateCredit / 查询端点）
+禁止变更：写入即终态；该表不得存在 UPDATE / DELETE 路径
+```
+
+`result_snapshot_json` 结构（CORRECTION-2；执行期结果快照，不可变、非权威）：
+
+```json
+{
+  "contractVersion": "CREDIT_RECONCILIATION_RESULT_SNAPSHOT_WAVE11_V1",
+  "authoritative": false,
+  "consumedByCreditCalculation": false,
+  "scopes": [
+    { "scopeType": "CUSTOMER_AGGREGATE",
+      "creditLimitCents": 10000000,
+      "usedCents": 4200000,
+      "remainingCents": 5800000,
+      "overLimitCents": 0,
+      "components": { "approvedSoCommitmentCents": 1000000,
+                      "deliveredNotSettledCents": 500000,
+                      "arOpenCents": 2700000,
+                      "eligiblePrepaymentCents": 0,
+                      "ambiguousAttributionCents": 0 },
+      "consistency": "CONSISTENT",
+      "discrepancyCodes": [] }
+  ],
+  "factCounts": { "orders": 3, "deliveries": 2, "receivables": 5 },
+  "referenceComparison": "MATCHED"
+}
+```
+
+该快照与 `factDigest` **同源**：二者都在 `readTransaction` 的同一快照内产生，因此快照中的金额与 digest 所标识的事实集合严格对应。
+
+#### 37.54.11.5 事务与并发
+
+- SC99 / SC100 是 **POST 执行**。
+- **CORRECTION-2 修订**：初稿称“计算本身在事务外完成（纯读取），不取任何写锁”。该说法在**一致性**上不成立 —— MySQL 的 READ COMMITTED 下多语句读取不保证跨语句同一快照。修正为：
+
+```text
+1  事实读取整体运行在 readTransaction(db, work) 之内（server/db.js:2169）
+   —— MySQL: BEGIN + 共享锁 mysql_transaction_gates (LOCK IN SHARE MODE)
+      与每个写者的排他锁互斥，resolver 看到**一个连贯状态**，
+      不改变全局隔离级别、不产生持久化写入（db.js:2190-2193 已固化该语义）
+   —— SQLite: 延迟 BEGIN 提供一致读快照
+   在该快照内同时完成：computeCreditExposure、buildScopeHashes、
+   computePolicySnapshotFingerprint、factDigest 计算、result_snapshot_json 生成
+2  若在快照内发现事实不一致（computeCreditExposure 抛 409）
+   -> readTransaction 回滚，不写任何行，错误直接返回（fail closed）
+3  快照读完成后，另起一个写事务追加 1 行 credit_recalculation_history
+   + 1 行 audit_logs，然后提交
+```
+
+- 两阶段的原因：读快照与写历史**必须**分离，否则历史行会与"写入时的最新事实"产生**时间错配**（历史行声称的依据是快照，行却写在更晚的时刻）。因此历史行必须携带 `factDigest` 与 `policy_snapshot_fingerprint`，明确它绑定的是**哪个快照**。
+- 读阶段**不与在途 Credit Check 竞争**：它取的是共享读边界，不取任何业务行写锁；写阶段只写 `credit_recalculation_history` 与 `audit_logs` 两张审计型表。
+- **失败零权威数据副作用**：任何失败路径都**不**写历史行、**不**写 audit 行、**不**修改任何 canonical 事实。
+
+#### 37.54.11.6 幂等与重试
+
+```text
+幂等键：请求 Idempotency-Key
+执行身份（idempotency documentId）：
+  kind + credit_object_type + credit_object_id + customer_id +
+  salesperson_scope_key + business_date + referenceCheckGroupId(可选)
+
+重放语义：
+  - 命中同一执行身份 -> 重算并返回当前结果，不新增历史行
+  - 由于 R100-2 确定性，同一事实快照下重算结果与首次完全一致
+  - 因此幂等存储只保存执行身份，不保存金额（与 §37.54.6.5 一致）
+```
+
+#### 37.54.11.7 历史数据异常时的 fail-closed 行为
+
+| 异常 | 行为 |
+|---|---|
+| AR 来源链不一致（`CREDIT_EXPOSURE_SOURCE_INCONSISTENT`） | 409，**不修复**，不写历史行，不静默忽略 |
+| 归属模糊（`ATTRIBUTION_AMBIGUOUS`） | **不失败** —— 金额全额计入 aggregate 且在 sub-limit 下不可归属（Wave 10 已冻结语义）；响应显式携带 `hasAmbiguousAttribution` 与 `ambiguousAttributionCents` |
+| 转换超过已交付义务（`TRANSITION_EXCEEDS_DELIVERED_OBLIGATION`） | 409 fail closed |
+| 无生效档案 | 409 `CREDIT_PROFILE_MISSING`（**不**暗示零额度） |
+| 档案生效版本不唯一 | 409 `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` |
+
+**不静默修复历史数据**（R99-5）：任何异常都显式报告或失败，绝不写回 canonical 事实。
+
+#### 37.54.11.8 `drift_detected` 的定义
+
+`drift_detected = 1` 当且仅当 SC99 的参考比对发现记录决策与当前事实**不一致**（`referenceComparison = 'MISMATCHED'`）。SC100 不产出 drift（它没有参考比对），其 `drift_detected` 恒为 0。
+
+### 37.54.12 最终 Schema / Migration / SQLite / MySQL 设计
+
+#### 37.54.12.1 最终表清单
+
+| # | 表 | 所属包 | 新增 | 说明 |
+|---|---|---|---|---|
+| 1 | `credit_evaluation_indicator` | W11-B | 新表 | 指标定义（生效日期化） |
+| 2 | `credit_evaluation_scheme` | W11-B | 新表 | 等级方案（生效日期化） |
+| 3 | `credit_evaluation_model` | W11-B | 新表 | 模型（scheme + 权重） |
+| 4 | `credit_evaluation_scoring_sheet` | W11-B | 新表 | 评分表 |
+| 5 | `credit_evaluation_result` | W11-C | 新表 | 唯一聚合结果 + 应用目标 |
+| 6 | `credit_recalculation_history` | W11-D | 新表 | 审计型执行元数据 + 唯一不可变执行期结果快照（`result_snapshot_json`）；**无顶层金额列**，无任何 Credit writer 读取（CORRECTION-2） |
+| 7 | `credit_profile_ratings.evaluation_result_id` → `credit_evaluation_result(id)` | W11-C | **deferred FK** | 启用 Wave 9 已预留的列 |
+
+#### 37.54.12.2 Migration ordering 与 registry 条目
+
+Registry 排序规则为 `(wave, id)`（`sales-customer-domain.js:44-49`），wave 合法区间 0..13。本节选用**三步** wave-11 条目，其 id 在同一 wave 内的字典序**恰好等于依赖序**：
+
+| Registry id | wave | 内容 | 依赖 |
+|---|---|---|---|
+| `wave-11-credit-evaluation-foundation` | 11 | indicator → scheme → model → scoring_sheet | Wave 9 / 10 |
+| `wave-11-credit-evaluation-result-application` | 11 | credit_evaluation_result + deferred FK on `credit_profile_ratings` | foundation |
+| `wave-11-credit-reconciliation` | 11 | credit_recalculation_history | 无（仅依赖 Wave 9 / 10） |
+
+字典序校验：`...-evaluation-foundation` < `...-evaluation-result-application`（`f` < `r`）< `...-reconciliation`（`e` < `r`）。**符合 §36.5.3 的 target-first 顺序**（scheme → model → scoring_sheet → result → deferred FK → credit_recalculation_history）。
+
+#### 37.54.12.3 SQLite DDL
+
+```sql
+-- W11-B
+CREATE TABLE IF NOT EXISTS credit_evaluation_indicator (
+  id TEXT PRIMARY KEY NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  indicator_kind TEXT NOT NULL CHECK(indicator_kind IN ('QUALITATIVE','QUANTITATIVE')),
+  description TEXT NOT NULL,
+  max_score_milli INTEGER NOT NULL CHECK(max_score_milli > 0),
+  input_spec_json TEXT NOT NULL,
+  effective_from TEXT NOT NULL,
+  effective_to TEXT NULL,
+  status TEXT NOT NULL CHECK(status IN ('ACTIVE','RETIRED')),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  CONSTRAINT uq_credit_evaluation_indicator_version UNIQUE (code, effective_from),
+  CONSTRAINT ck_credit_evaluation_indicator_dates CHECK (effective_to IS NULL OR effective_to >= effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS credit_evaluation_scheme (
+  id TEXT PRIMARY KEY NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  grade_boundaries_json TEXT NOT NULL,
+  effective_from TEXT NOT NULL,
+  effective_to TEXT NULL,
+  status TEXT NOT NULL CHECK(status IN ('ACTIVE','RETIRED')),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  CONSTRAINT uq_credit_evaluation_scheme_version UNIQUE (code, effective_from),
+  CONSTRAINT ck_credit_evaluation_scheme_dates CHECK (effective_to IS NULL OR effective_to >= effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS credit_evaluation_model (
+  id TEXT PRIMARY KEY NOT NULL,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  scheme_id TEXT NOT NULL REFERENCES credit_evaluation_scheme(id),
+  indicator_weights_json TEXT NOT NULL,
+  effective_from TEXT NOT NULL,
+  effective_to TEXT NULL,
+  status TEXT NOT NULL CHECK(status IN ('ACTIVE','RETIRED')),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  CONSTRAINT uq_credit_evaluation_model_version UNIQUE (code, effective_from),
+  CONSTRAINT ck_credit_evaluation_model_dates CHECK (effective_to IS NULL OR effective_to >= effective_from)
+);
+
+CREATE TABLE IF NOT EXISTS credit_evaluation_scoring_sheet (
+  id TEXT PRIMARY KEY NOT NULL,
+  sheet_no TEXT NOT NULL,
+  model_id TEXT NOT NULL REFERENCES credit_evaluation_model(id),
+  credit_object_type TEXT NOT NULL,
+  credit_object_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  profile_scope_key TEXT NOT NULL,
+  credit_profile_id TEXT NOT NULL REFERENCES credit_profile(id),
+  business_date TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('DRAFT','SUBMITTED','FINALIZED','APPLIED')),
+  allowed_evaluator_ids_json TEXT NOT NULL,
+  sheet_data_json TEXT NOT NULL,
+  evaluator_count INTEGER NOT NULL DEFAULT 0 CHECK(evaluator_count >= 0),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  updated_at TEXT NULL,
+  updated_by TEXT NULL REFERENCES users(id),
+  submitted_at TEXT NULL,
+  finalized_at TEXT NULL,
+  finalized_by TEXT NULL REFERENCES users(id),
+  applied_at TEXT NULL,
+  CONSTRAINT uq_credit_evaluation_scoring_sheet_no UNIQUE (sheet_no),
+  CONSTRAINT ck_credit_evaluation_scoring_sheet_dates CHECK (applied_at IS NULL OR applied_at >= created_at)
+);
+
+-- W11-C
+CREATE TABLE IF NOT EXISTS credit_evaluation_result (
+  id TEXT PRIMARY KEY NOT NULL,
+  sheet_id TEXT NOT NULL REFERENCES credit_evaluation_scoring_sheet(id),
+  model_id TEXT NOT NULL REFERENCES credit_evaluation_model(id),
+  scheme_id TEXT NOT NULL REFERENCES credit_evaluation_scheme(id),
+  credit_profile_id TEXT NOT NULL REFERENCES credit_profile(id),
+  profile_effective_state_hash TEXT NOT NULL,
+  policy_snapshot_fingerprint TEXT NOT NULL,
+  business_date TEXT NOT NULL,
+  total_score_milli INTEGER NOT NULL CHECK(total_score_milli >= 0),
+  max_score_milli INTEGER NOT NULL CHECK(max_score_milli >= 0),
+  rating_grade TEXT NOT NULL,
+  evaluator_count INTEGER NOT NULL CHECK(evaluator_count > 0),
+  created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  applied_to_profile_id TEXT NULL REFERENCES credit_profile(id),
+  applied_at TEXT NULL,
+  applied_by TEXT NULL REFERENCES users(id),
+  CONSTRAINT uq_credit_evaluation_result_sheet UNIQUE (sheet_id),
+  CONSTRAINT ck_credit_evaluation_result_application CHECK (
+    (applied_to_profile_id IS NULL AND applied_at IS NULL AND applied_by IS NULL)
+    OR (applied_to_profile_id IS NOT NULL AND applied_at IS NOT NULL AND applied_by IS NOT NULL)
+  ),
+  CONSTRAINT ck_credit_evaluation_result_target CHECK (applied_to_profile_id IS NULL OR applied_to_profile_id = credit_profile_id)
+);
+
+-- W11-D
+CREATE TABLE IF NOT EXISTS credit_recalculation_history (
+  id TEXT PRIMARY KEY NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('CHECK_ONLY','DETERMINISTIC_RECALCULATION')),
+  credit_object_type TEXT NOT NULL,
+  credit_object_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL REFERENCES customers(id),
+  salesperson_scope_key TEXT NOT NULL,
+  business_date TEXT NOT NULL,
+  fact_digest TEXT NOT NULL,
+  policy_snapshot_fingerprint TEXT NOT NULL,
+  profile_effective_state_hash TEXT NOT NULL,
+  scope_filter_json TEXT NOT NULL,
+  result_snapshot_json TEXT NOT NULL,
+  discrepancy_count INTEGER NOT NULL DEFAULT 0 CHECK(discrepancy_count >= 0),
+  drift_detected INTEGER NOT NULL DEFAULT 0 CHECK(drift_detected IN (0,1)),
+  duration_ms INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
+  triggered_by TEXT NOT NULL REFERENCES users(id),
+  triggered_at TEXT NOT NULL
+);
+```
+
+**deferred FK（SQLite）**：`credit_profile_ratings` 无 `ALTER TABLE ADD CONSTRAINT`，按 `inventory-position-schema.js:286-318` 的既有形态重建：
+
+```sql
+-- 1) 建新表（列、CHECK、FK 与既有完全一致，仅新增一条 FK）
+CREATE TABLE credit_profile_ratings_new ( ... ,
+  CONSTRAINT fk_credit_profile_ratings_evaluation_result
+    FOREIGN KEY (evaluation_result_id) REFERENCES credit_evaluation_result(id));
+-- 2) 行保全复制
+INSERT INTO credit_profile_ratings_new SELECT ... FROM credit_profile_ratings;
+-- 3) 换名
+DROP TABLE credit_profile_ratings;
+ALTER TABLE credit_profile_ratings_new RENAME TO credit_profile_ratings;
+-- 4) 重建既有唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_profile_ratings_application
+  ON credit_profile_ratings(credit_profile_id, rating_source_key);
+```
+
+#### 37.54.12.4 MySQL 8 DDL
+
+MySQL 侧与 SQLite **同构**，差异仅为类型映射：
+
+```text
+TEXT     -> LONGTEXT
+INTEGER  -> BIGINT
+BOOLEAN-ish CHECK(0/1) -> INTEGER（MySQL CHECK 表达式原生支持）
+JSON 载荷 -> JSON
+id / 外键列 -> VARCHAR(128)
+```
+
+每张表的 MySQL DDL 显式写出（参照 `sales-customer-wave10-credit-check.js:98-145` 的既有形态），并在 `server/database/mysql-schema.js` 的类型映射中登记对应的 JSON 列，使**新建 MySQL 库**（由 SQLite 快照 bootstrap）与**存量 MySQL 库**（live upgrade）产出**同构**结果。
+
+关键差异点：
+
+- MySQL 8 支持 CHECK 约束（8.0.16+），与 SQLite 的 CHECK 语义对齐；`CHECK(drift_detected IN (0,1))` 在两引擎均为真值约束。
+- MySQL 不支持 `ALTER TABLE ... ADD CONSTRAINT` 之外的表重建语义，deferred FK 走 `ALTER TABLE credit_profile_ratings ADD CONSTRAINT fk_credit_profile_ratings_evaluation_result FOREIGN KEY (evaluation_result_id) REFERENCES credit_evaluation_result(id)`（既有先例：`mysql-schema.js:239`）。
+- SQLite 的 `INTEGER` 与 MySQL 的 `BIGINT` 对 `max_score_milli` 等分值均足够；**全部评分数值使用整数**，无 FLOAT/DOUBLE 列。
+- 字符集与排序规则沿用既有 Credit 表：`utf8mb4 / utf8mb4_0900_ai_ci`。
+
+#### 37.54.12.5 Fresh install / Upgrade / Idempotent replay
+
+| 路径 | 义务 |
+|---|---|
+| Fresh SQLite init | registry 重放 wave 1..11，创建 14 张 Credit 表（Wave 9 六张 + Wave 10 两张 + Wave 11 六张） |
+| Wave 8 → 9 → 10 → 11 upgrade | 每个 wave 只新增自己的表；既有表与行不被触碰（`credit_profile_ratings` 因 FK 而被**重建**，但列、CHECK、唯一索引与**全部行**保持等价） |
+| Fresh MySQL init | SQLite 快照 → MySQL → registry 重放，得到相同 PK/UNIQUE/FK/CHECK 形状 |
+| Live MySQL sequential upgrade | 逐 wave 增量应用于 live adapter |
+| Repeated replay | 每一步 probe-then-act；第二次完整重放为已验证 no-op |
+
+**Idempotency 形态**（沿用既有）：`CREATE TABLE IF NOT EXISTS` + 索引存在性探测（`information_schema.STATISTICS` / `PRAGMA index_list`）+ FK 添加前的存在性探测。deferred FK 的重复添加必须被探测跳过。
+
+**注意**：`credit_profile_ratings` 的 SQLite 重建在重复重放时必须被探测跳过（探测"新 FK 已存在"），否则会重建两次。
+
+#### 37.54.12.6 历史行保全与未知历史数据处理
+
+- 六张新表**无历史行**，无需 backfill。
+- `credit_profile_ratings` 的既有行**全部保留**，`evaluation_result_id` 全部为 NULL（Wave 9/10 从未写 `EVALUATED`）。
+- **加 FK 前置断言**：`COUNT(*) WHERE evaluation_result_id IS NOT NULL` 必须为 0；否则**中止并报告**，**不**迁移、**不**伪造、**不**清空。
+- 未知的既有历史行（若未来出现脏数据）**不做猜测式修复** —— migration fail closed 并报告，由人工处置。
+- `LEGACY_DATA_EVIDENCE_PENDING` 适用于既有 legacy 兼容路径，**不**适用于本节的六张新表或 deferred FK。
+
+#### 37.54.12.7 与 Wave 9 / 10 既有字段及约束的冲突检查
+
+| 检查项 | 结论 |
+|---|---|
+| 新表列名是否与 Wave 9/10 冲突 | 无 —— 六张表均为新表名 |
+| `credit_evaluation_result.applied_to_profile_id` → `credit_profile(id)` | 目标存在；`credit_profile.id` 是 PK ✓ |
+| `credit_evaluation_result.sheet_id` → `credit_evaluation_scoring_sheet(id)` | 目标存在；PK ✓ |
+| `credit_evaluation_scoring_sheet.credit_profile_id` → `credit_profile(id)` | 目标存在；PK ✓ |
+| `credit_evaluation_scoring_sheet.customer_id` → `customers(id)` | 目标存在 ✓ |
+| `credit_evaluation_model.scheme_id` → `credit_evaluation_scheme(id)` | 新表，PK ✓ |
+| `credit_profile_ratings` 既有 CHECK 是否被改动 | **否** —— 只增加一条外键，CHECK 原样保留 |
+| `credit_profile_ratings` 的变更性质（CORRECTION-4 明确） | 这是**对既有冻结 Wave 9 表的兼容性 Schema 扩展**：新增一条命名 FK 约束；列集合与顺序、既有 3 条 CHECK、既有唯一索引 `uq_credit_profile_ratings_application` 与**全部既有行**保持等价；SQLite 侧以行保全重建实现。**不得**表述为"完全没有修改旧表" |
+| `uq_credit_profile_ratings_application` 是否被改动 | **否** —— 重建后按原定义重建 |
+| `credit_check_results` / `credit_special_approval` 是否被改动 | **否** —— W11 不触碰这两张表的结构（W11-SEC 只改读取路径的**查询**，不改表） |
+| Wave 9 / Wave 10 迁移文件是否被改动 | **否** —— Wave 11 为独立的 registry 条目 |
+
+#### 37.54.12.8 索引设计
+
+```text
+credit_evaluation_indicator      uq_credit_evaluation_indicator_version (code, effective_from) UNIQUE
+                                 ix_credit_evaluation_indicator_lookup (code, status, effective_from)
+credit_evaluation_scheme         uq_credit_evaluation_scheme_version (code, effective_from) UNIQUE
+credit_evaluation_model          uq_credit_evaluation_model_version (code, effective_from) UNIQUE
+                                 ix_credit_evaluation_model_scheme (scheme_id, effective_from)
+credit_evaluation_scoring_sheet  uq_credit_evaluation_scoring_sheet_no (sheet_no) UNIQUE
+                                 ix_credit_evaluation_scoring_sheet_scope (customer_id, profile_scope_key, business_date)
+                                 ix_credit_evaluation_scoring_sheet_status (status)
+credit_evaluation_result         uq_credit_evaluation_result_sheet (sheet_id) UNIQUE
+                                 ix_credit_evaluation_result_profile (credit_profile_id)
+                                 ix_credit_evaluation_result_applied (applied_to_profile_id)
+credit_recalculation_history     ix_credit_recalculation_history_scope (customer_id, business_date)
+                                 ix_credit_recalculation_history_kind (kind, triggered_at)
+```
+
+`credit_recalculation_history` **不建**金额列，故不存在金额索引。
+
+#### 37.54.12.9 Contract assertions
+
+沿用 Wave 8 / 9 / 10 形态（`sales-customer-wave8-service-consignment.js:389-497` 的 `information_schema` 断言 + `PRAGMA` 断言）：
+
+每张新表断言：列集合与顺序、NULLability、默认值、PK 列顺序、**命名 FK 集合与目标**、命名 UNIQUE 组与列顺序、CHECK 数量、索引形状。**必须在建表后无条件断言**，使 `CREATE TABLE IF NOT EXISTS` 无法静默采纳漂移的既有结构。任一不符 → fail closed，**不做修复性 DDL**。
+
+#### 37.54.12.10 MySQL 物理元数据对等 + FK 实际存在与数据级 RI 的独立验证
+
+**`server/database/mysql-schema.js:410` 设 `SET FOREIGN_KEY_CHECKS=0`，至 `:472` 才恢复。** 因此 DDL 成功**不能**替代引用完整性证据。§36.5.5 已规定，本节具体化为三项**独立**验证：
+
+```text
+I-1  命名 FK 存在性
+     每条声明的 FK 必须出现在 information_schema.KEY_COLUMN_USAGE，
+     且 CONSTRAINT_NAME / COLUMN_NAME / REFERENCED_TABLE / REFERENCED_COLUMN 全部匹配
+
+I-2  被引用候选键
+     每个 FK 目标列必须是目标表 PRIMARY KEY 或命名 UNIQUE 的最左前缀
+
+I-3  数据级引用完整性
+     对每条 FK 逐行验证：子表非空外键值必须在父表存在
+     （含 credit_profile_ratings.evaluation_result_id ->
+      credit_evaluation_result.id）
+
+附加  I-4  跨引擎形状对等
+      SQLite 与 MySQL 的列名/顺序/NULLability/PK/FK 目标/UNIQUE/CHECK 数量
+      通过同一份 CONTRACTS 常量断言，两引擎跑同一断言逻辑
+```
+
+#### 37.54.12.13 Rollback / compatibility
+
+```text
+新增对象：6 张新表 + 1 条 deferred FK
+既有对象形状变更：仅 credit_profile_ratings 增加一条 FK 约束
+既有数据变更：无（无 backfill、无 UPDATE、无 DELETE）
+
+Rollback：
+  MySQL  : ALTER TABLE credit_profile_ratings DROP FOREIGN KEY fk_credit_profile_ratings_evaluation_result;
+           DROP TABLE credit_evaluation_result; ... ; DROP TABLE credit_evaluation_indicator;
+  SQLite : 重建 credit_profile_ratings 去掉该 FK；DROP TABLE ...（按依赖逆序）
+
+兼容性：
+  - 新表对 Wave 9/10 代码零影响（无既有代码引用）
+  - credit_profile_ratings 的 EVALUATED 分支在 Wave 11 前不可达，加 FK 不改变可达性
+  - 加 FK 前后，INITIAL_ASSIGNED 分支行为完全不变
+  - 既有 Wave 9 / Wave 10 迁移文件不被改动
+```
+
+### 37.54.13 Transaction / Lock Order / Idempotency / Audit
+
+#### 37.54.13.1 授权矩阵（Wave 11 全操作）
+
+| 操作 | 权限 | Scope 约束 | SOD |
+|---|---|---|---|
+| 读取 exposure / exceptions | `CREDIT_VIEW` | 五级 `CREDIT_READ_MODE` | — |
+| 读取 check results / approvals（修复后） | `CREDIT_VIEW` | 五级 `CREDIT_READ_MODE` | — |
+| 读取 indicator / scheme / model / sheet / result | `CREDIT_VIEW` | sheet 施加 scope 谓词 | — |
+| 创建 indicator / scheme / model 版本 | `CREDIT_MANAGE` | `requireCreditManagementAuthority`（ADMIN 或 `CREDIT_MANAGE` + `SALES_CROSS_GROUP`） | — |
+| 创建 / 评分 / 终评 scoring sheet | `CREDIT_EVALUATE` | 目标由 sheet 固定；评分人须在 allowed 集合内 | 评分 ≠ 应用（**不强制**） |
+| 读取 indicator / scheme / model 配置 | `CREDIT_VIEW` | 全局（AP5 读合同） | — |
+| **应用评级结果到 profile version** | **write-class：`CREDIT_MANAGE`（+ 既有后端管理 scope 限制）** | 目标 profile 的 customer / scope 必须与 result 一致 | 评分 ≠ 应用（**不强制**） |
+| 申请特别审批 | `CREDIT_SPECIAL_APPROVE` | 既有 | 请求人 ≠ 审批人（既有 Wave 10 合同，**不变**） |
+| 决策特别审批 | `CREDIT_MANAGE` | 既有 | 同上 |
+| SC99 / SC100 执行 | `CREDIT_EVALUATE` | 目标 customer 必须在可读范围 | — |
+
+**`CREDIT_EVALUATE` 不自动授予评级应用写权限**；**`CREDIT_VIEW` 仅授权读取，不授予跨 Scope 查看**；**不新增任何权限码**。
+
+#### 37.54.13.2 锁序与锁身份
+
+Wave 11 全部写路径**复用 §36.13 / §36.14 的统一顺序**，不自建顺序：
+
+```text
+1  POLICY_SCOPE anchor   FOR SHARE
+2  CREDIT_OBJECT anchor  FOR UPDATE
+3  credit_profile 行     FOR UPDATE
+4  业务行（sheet / result）
+```
+
+理由：评级应用必须与并发 Credit Check 串行化（§37.54.10.9）。若评级应用采用不同顺序，会与 Credit Check 形成新环。**Wave 11 不得引入新的锁序层，也不得引入新的 anchor 类型。**
+
+#### 37.54.13.3 零失败副作用
+
+| 场景 | 行为 |
+|---|---|
+| 授权失败 | 在任何写入前 403 |
+| 输入校验失败 | 在任何写入前 400 |
+| 幂等重放 | 返回已存结果，**不产生第二次效果** |
+| 唯一约束冲突 | 回滚，翻译为业务错误（沿用 `translateConstraintError`） |
+| 事实不一致 | 回滚，409 fail closed |
+| 重复应用同一 result | 409（行锁 + `applied_to_profile_id IS NULL` 断言 + UNIQUE 三重保证） |
+| 并发 finalize | 第二个事务等待后被拒（UNIQUE(sheet_id)） |
+
+#### 37.54.13.4 幂等
+
+| 操作 | 幂等作用域 | 机制 |
+|---|---|---|
+| 创建 indicator / scheme / model | `code` + `effectiveFrom` | `idempotencyReplay` + 业务 UNIQUE |
+| 创建 sheet | 目标 scope + business_date + model_id | `idempotencyReplay` |
+| 评分提交 | sheet_id + evaluator_id | 状态机 + sheet 行锁（重复提交 409） |
+| finalize | sheet_id | 状态机 + UNIQUE(sheet_id) |
+| **应用评级** | result_id | 行锁 + `applied_to_profile_id IS NULL` + `uq_credit_profile_ratings_application` |
+| SC99 / SC100 | 执行身份（kind + object + scope + business_date [+ reference]） | 幂等存储只存执行身份，**不存金额**；重放时重算 |
+
+#### 37.54.13.5 Audit
+
+所有 Wave 11 写操作写 `audit_logs`，且**审计身份可区分**（R-D3-2 / A-D3-3）：
+
+```text
+CREDIT_EVALUATION_INDICATOR   / CREATE_VERSION
+CREDIT_EVALUATION_SCHEME      / CREATE_VERSION
+CREDIT_EVALUATION_MODEL       / CREATE_VERSION
+CREDIT_EVALUATION_SCORING_SHEET / CREATE | SCORE | FINALIZE
+CREDIT_EVALUATION_RESULT      / FINALIZE | APPLY
+CREDIT_RECALCULATION          / CHECK_ONLY | DETERMINISTIC_RECALCULATION
+```
+
+审计载荷必须包含：actor、business_date、目标身份、policy snapshot 指纹、profile effective state hash（适用时）、结果标识。审计行**不得**成为任何计算输入。
+
+#### 37.54.13.6 SQLite / MySQL 事务语义
+
+- SQLite：`BEGIN IMMEDIATE` 串行化写者；行锁语义由 SQLite 自身保证。
+- MySQL：READ COMMITTED（§37.17，2026-10-25 修正后的口径）；显式 `FOR UPDATE` / `FOR SHARE`。
+- 两引擎**使用同一套锁序与同一套状态机**，不依赖任一引擎的隐式行为。
+- **不得**因为 MySQL 的全局事务门串行化了写操作，就宣称业务对象层面的并发设计已被证明 —— 业务并发证明必须来自 §37.54.14 的独立会话 fixture。
+
+### 37.54.14 Acceptance architecture
+
+#### 37.54.14.1 SC99 / SC100 — UAT-S-34
+
+| UAT 子断言 | API / UI | Schema | Writer / Reader | 测试类型 | MySQL 证据 |
+|---|---|---|---|---|---|
+| A1 CHECK-only 返回 per-scope limit/used/remaining/breakdown 与一致性 | `POST /api/credit/reconciliation/check` | `credit_recalculation_history`（写） | Writer: reconciliation；Reader: — | SQLite 行为 | Fresh + Upgrade |
+| A2 双限额分别报告，无未归属合并数字 | 同上 | 同上 | 同上 | SQLite 行为 | 同上 |
+| A3 显式 business_date 生效 | 同上 | 同上 | 同上 | SQLite 行为 | 同上 |
+| A4 零写入（Sales/Finance/Inventory/Accounting 逐字段一致） | 同上 | 全库摘要比对 | — | SQLite 行为 | 同上 |
+| A5 确定性：同事实快照重复执行结果一致 | 同上 | `fact_digest` | — | SQLite 行为 | 同上 |
+| A6 不覆盖在途/历史 Credit Check | 同上 | `credit_check_results` / `credit_policy_snapshots` 摘要比对 | — | SQLite 行为 | **独立会话并发** |
+| A7 无持久化 mutable exposure cache（结构性） | — | 负向 schema 断言 + 源码静态合同 | — | 静态合同 | `information_schema` 断言 |
+| A8 审计证据存在且非权威 | 同上 | `credit_recalculation_history` | Reader: 无计算路径引用 | 静态合同 + 行为 | 同上 |
+
+#### 37.54.14.2 SC101 / SC102 — UAT-S-35
+
+| UAT 子断言 | API / UI | Schema | Writer / Reader | 测试类型 | MySQL 证据 |
+|---|---|---|---|---|---|
+| A1 limit/used/remaining 与 Check 口径一致 | `GET /api/credit/exposure` | 无新增 | Reader: profile + facts | SQLite 行为 | 同查询在 MySQL 等价 |
+| A2 component breakdown 含来源身份 | 同上 | 无新增 | 同上 | 同上 | 同上 |
+| A3 例外历史覆盖各类例外与 reason codes，可分别过滤 | `GET /api/credit/exceptions` | 无新增 | Reader: `credit_check_results` + `credit_special_approval` | 同上 | 同上 |
+| A4 零副作用 | 同上 | 全库摘要比对 | — | 静态 + 行为 | 同上 |
+| A5 历史结论可链接 snapshot 指纹与 profile 状态 | `GET /api/credit/exceptions/:id` | 无新增 | Reader: `credit_check_results` | 同上 | 同上 |
+| A6 稳定排序 + 分页 + Scope 内总数 | 列表端点 | 无新增 | — | SQLite 行为 | 两引擎返回 id 序列一致 |
+| A7 后端谓词级数据范围 | 全部读取面 | 无新增 | — | 权限负向矩阵 | 两引擎等价 |
+
+#### 37.54.14.3 SC103 — SC107 — UAT-S-36
+
+| UAT 子断言 | API / UI | Schema | Writer / Reader | 测试类型 | MySQL 证据 |
+|---|---|---|---|---|---|
+| A1 指标类型/有效期/最大分值可定义并校验 | `POST /api/credit/evaluation/indicators` | `credit_evaluation_indicator` | Writer: evaluation | SQLite 行为 + 迁移 | Fresh + Upgrade + Parity |
+| A2 方案等级边界无重叠无空洞 | `POST .../schemes` | `credit_evaluation_scheme` | 同上 | 同上 | 同上 |
+| A3 模型权重可校验，非法权重被拒 | `POST .../models` | `credit_evaluation_model` | 同上 | 同上 | 同上 |
+| A4 评分表生命周期受控；缺失指标不按 0 分计入 | `POST .../sheets` + `/score` + `/finalize` | `credit_evaluation_scoring_sheet` | 同上 | 同上 | 同上 |
+| A5 多评人限于单表；单聚合；合成确定性 | `/finalize` | `credit_evaluation_result` | 同上 | SQLite 行为 | **W11-R2 独立会话并发** |
+| A6 评级结果独立身份 | `GET .../results/:id` | `credit_evaluation_result` | 同上 | 静态 + 行为 | FK 存在性 + RI |
+| A7 绑定 profile version；重复应用被拒且无第二次效果 | `POST .../results/:id/apply` | `credit_profile_ratings` + `credit_evaluation_result` | Writer: evaluation（唯一） | SQLite 行为 | **W11-R1 独立会话并发** |
+| A8 write-class authority 强制 | 同上 | — | — | 权限负向 | 同上 |
+| A9 无第二个 profile 写者；历史 check/approval 未被改写 | 全 Wave 11 | 全库摘要比对 | 静态合同（唯一 writer 断言） | 静态 + 行为 | 同上 |
+
+#### 37.54.14.4 W11-SEC-01 权限负向矩阵
+
+| 面 | 正向 | 负向 | 类型 |
+|---|---|---|---|
+| `listCreditCheckResults` | ADMIN / CROSS_GROUP 可见全部；AGGREGATE_ONLY 只见汇总；AGGREGATE_PLUS_SELF 见汇总 + 本人 | DENY 403；AGGREGATE_ONLY 不得见他人子限额行；AGGREGATE_PLUS_SELF 不得见他人子限额行 | SQLite 行为 + 权限负向 | 两引擎返回 id 集合等价 |
+| `listCreditSpecialApprovals` | 同上 | 同上 | 同上 | 同上 |
+| `getCreditSpecialApproval` | 可见范围与 List 一致 | Scope 外 → 404（与不存在不可区分） | 同上 | 同上 |
+| 单点绕过 | `sourceId` / `checkGroupId` / `approvalId` / 分页 均不越界 | 逐一负向用例 | 同上 | 同上 |
+| 历史不改写 | 授权变更后历史行**逐字段不变** | — | 静态 + 行为 | 同上 |
+
+#### 37.54.14.5 Race / 并发证据矩阵
+
+| Fixture | 竞争事务 | 锁 | 期望 | 证据级别 |
+|---|---|---|---|---|
+| W11-R1 | 评级应用 vs Credit Check | AGGREGATE anchor + profile 行 | 串行化；一次检查不混合评级前后状态 | **真实 MySQL 独立会话** |
+| W11-R2 | 两次并发 finalize | sheet 行 FOR UPDATE | 恰好一个聚合结果；`evaluator_count` 正确 | **真实 MySQL 独立会话** |
+| W11-R3 | 重算 vs 并发信用消费事务 | 只读 canonical 扫描 | 无 canonical Sales/Inventory/Finance/Accounting 行被修改 | **真实 MySQL 独立会话** |
+| W11-R4 | n/a（静态） | n/a | 不存在持久化 exposure cache；断言成立 | 静态合同 + `information_schema` |
+
+所有 race fixture 必须遵循 §36.8.1 的**容量前置断言**（先证明 `available`，再断言"恰好一个失败"），使用独立连接、显式事务、READ COMMITTED。**不得**以 intra-session 模拟宣称 PASS。
+
+#### 37.54.14.6 证据分级（不得混淆）
+
+```text
+E1 静态源码合同         —— 唯一写者、无顶层金额列、无 INSERT/UPDATE 于查询模块、负向 schema 断言
+E2 SQLite 行为证据     —— 功能、权限负向、状态机、幂等、零副作用、迁移与重放
+E3 真实 MySQL 证据     —— Fresh / Upgrade / Replay / FK 存在性 / 数据级 RI / 形状对等 / 独立会话并发
+E4 浏览器 / 移动端证据 —— 320 / 390 / 430 / 680 CSS px，direct/refresh/back/forward
+E5 门禁证据            —— Build / FAST / FULL / HEAVY
+```
+
+**不得预先宣布任何测试 PASS。** 本节只定义应取得哪一级证据。
+
+**证据状态规则（CORRECTION-5 明确）**：
+
+```text
+- E2 PASS 不等于 E3 PASS。SQLite 行为证据不得被当作真实 MySQL 证据引用，
+  也不得由静态合同、既有 Wave 10 证据或设计文档代替。
+- 未实际执行的项目，证据状态一律记为 NOT_RUN；不得以 PASS、预期通过或
+  "与既有行为一致"等措辞代替。
+- 每个包的 Acceptance 标识必须与其实际取得的最高证据等级一同签发；
+  证据等级不足时只能签发带 `_SQLITE_PASS_MYSQL_NOT_RUN` 之类的限定标识。
+```
+
+#### 37.54.14.7 浏览器 / 移动端验收
+
+新增界面：`credit-query`（W11-A）、`credit-evaluation`（W11-B / W11-C）。
+
+```text
+脚本：scripts/acceptance/sales-customer-wave11-credit-responsive.mjs
+既有先例：scripts/acceptance/sales-customer-wave9-credit-responsive.mjs
+宽度：320 / 390 / 430 / 680 CSS px（390 为主基线）
+检查项：直接 URL / 刷新 / 返回 / 前进；空状态；FAIL-CLOSED 与 PASS 可区分；
+        触摸目标 >= 44 CSS px；核心任务无永久横向滚动；无新增 launcher 顶层入口
+```
+
+#### 37.54.14.8 门禁
+
+```text
+日常有界：pnpm test:fast && pnpm build && git diff --check
+跨域 / canonical metadata：pnpm test && pnpm build && git diff --check
+schema / migration / MySQL：追加 pnpm test:heavy
+MySQL（需受保护 disposable 环境 + 独立授权）：pnpm test:mysql（及既有 wave10 专用 runner 不重跑）
+```
+
+测试 suite 登记于 `scripts/testing/test-suites.js`（既有 credit 条目在 `:104-105`）。
+
+### 37.54.15 Package contracts and dependency DAG
+
+#### 37.54.15.1 依赖 DAG
+
+```text
+        [W11-SEC]  Security Read Scope Remediation
+              |
+              v
+        [W11-A]    Credit Query / Exception History      SC101-SC102
+
+        [W11-B]    Evaluation Foundation                  SC103-SC105
+              |
+              v
+        [W11-C]    Multi-Scorer / Rating Application      SC106-SC107
+
+        [W11-D]    Reconciliation / Recalculation         SC99-SC100
+              ^
+              |  (仅依赖 W11-SEC 的 Scope 合同)
+        [W11-SEC]
+```
+
+**CORRECTION-5 (2026-10-27) — 依赖边修正。** 初稿的 DAG 把 `W11-A → W11-D` 画成硬依赖，属**未经 Requirement 依据**的过度约束，已撤销。
+
+```text
+硬依赖（成立，且有 Requirement / Stage B 依据）
+  W11-A  -> W11-SEC   （Stage B §11："W11-SEC 必须先于开放新的历史查询入口完成"）
+  W11-C  -> W11-B    （SC106 的评分表与 SC107 的评估结果对象由 W11-B 提供）
+  W11-D  -> W11-SEC  （W11-D 的对外读取必须满足 W11-SEC 的 Scope 合同）
+
+非依赖（明确不构成阻塞）
+  W11-B  !-> W11-A
+  W11-D  !-> W11-A   （撤销）
+  W11-A  !-> W11-B / W11-C
+  W11-D  !-> W11-B / W11-C
+```
+
+`W11-D` 与 `W11-A` 之间只允许**可选复用**：若 `W11-A` 已落地，`W11-D` **可以**复用其读取构造器（`creditScopePredicate`、分页与排序构造），但 `W11-D` 的实施**不因此被阻塞**，也**不得**因此新增硬依赖。若 `W11-A` 未落地，`W11-D` 自行实现等价的 Scope 谓词投影即可 —— 二者共用 `credit-scope.js` 的**同一个**授权判定（`resolveCreditReadMode`），因此不会出现两套互相冲突的 Scope 语义。
+
+#### 37.54.15.2 W11-SEC — Security Read Scope Remediation
+
+| 项 | 内容 |
+|---|---|
+| 功能范围 | `credit-scope.js` 拆分（`resolveCreditReadMode` + `creditScopePredicate`）；`listCreditCheckResults` / `listCreditSpecialApprovals` / `getCreditSpecialApproval` 施加 Scope 谓词；分页 / 总数 / 稳定排序；不可枚举响应 |
+| 文件影响 | `server/modules/credit-scope.js`（重构）、`server/modules/credit-check.js`、`server/modules/credit-special-approval.js`（读取路径）、`server/app.js`（仅在需要新参数时）、新增 `server/sales-customer-wave11-sec-scope.test.js`、测试 suite 登记 |
+| 复用点 | `resolveCreditProfileReadScope`（保留并委托）、`resolveSelfSalespersonId`、`sales-scope.js` 的 `actorHas` / `activeSalespersonForActor` |
+| 新增表 / API / UI | **无表**；**无新 API**；**无新 UI** |
+| 事务 / RBAC | 只读查询，无事务；五级 `CREDIT_READ_MODE` |
+| 测试范围 | 权限负向矩阵（§37.54.14.4）、分页等价性、不可枚举性、Wave 9/10 回归不受影响 |
+| MySQL Gate | 两引擎返回 id 集合与顺序等价；`listCreditCheckResults` / `listCreditSpecialApprovals` / `getCreditSpecialApproval` 的 scope 断言 |
+| 停止条件 | 任何既有 Wave 10 行为（决策、敞口、审批语义、响应字段语义）发生变化 → 立即停止 |
+| Acceptance 标识 | `W11_SEC_01_ACCEPTANCE_PASS` |
+| 授权边界 | **需用户另行批准的跨冻结边界有界修复授权**；不得夹带进其它包 |
+| 后续授权边界 | 完成后方可授权 W11-A |
+
+**W11-SEC-01 Freeze Boundary（CORRECTION-5 明确）**
+
+```text
+允许（且仅允许）收紧已批准的越权读取行为
+  - 对 Wave 10 读取路径施加 canonical Credit Read Scope 谓词
+  - 收紧密钥可见性（他人子限额的历史行不再可见）
+  - 分页、总数与稳定排序的收敛
+  - 越权对象与不存在对象的可区分性收敛为不可区分
+
+禁止（任何一项被触碰即为越界，立即停止）
+  - 改变 Wave 10 信用检查与审批的决策语义
+  - 改变 Credit Exposure Algorithm（computeCreditExposure 的任何派生逻辑）
+  - 改变 Credit Check Historical Snapshots（credit_check_results 的写入、
+    内容、指纹与不可变性）
+  - 改变 Special Approval State Machine（申请 / 决策 / 权限上限 / 失效期 /
+    幂等 / 审计）
+  - 改变正常授权主体（ADMIN / CROSS_GROUP / AGGREGATE_ONLY 以及当前有效的
+    AGGREGATE_PLUS_SELF 主体）的既有业务合同与可见范围
+  - 任何表结构 / Migration / 新 API / 新 UI / 新权限码
+
+兼容性判定的关键约定
+  **一次"原本越权的读取被拒绝"不构成 Wave 10 不兼容失败。**
+  这正是本整改的目的：把已被明确判定为越权的读取行为收紧到授权合同之内。
+  Wave 10 的不兼容判据是"正常授权主体的既有业务合同被改变"，
+  而不是"越权读取不再被允许"。
+  由此，CORRECTION-1 引入的自额度资格收紧（历史成员关系不得恢复权限）
+  属于**预期内的收紧**，不是回归。
+```
+
+**W11-SEC-01 证据状态规则（CORRECTION-5 明确）**
+
+```text
+- 本次仅授权 Design Correction，**不执行任何 MySQL 验收**。
+- W11-SEC 的 **SQLite 测试 PASS 不代表 MySQL Acceptance PASS**。
+  SQLite 行为证据（E2）与真实 MySQL 证据（E3）是两个独立等级（§37.54.14.6）。
+- 真实 MySQL 测试需要**独立授权**；在取得该授权并实际执行之前，
+  W11-SEC 的 MySQL 证据状态必须记为 **NOT_RUN**，
+  不得以 SQLite 结果、静态合同或既有 Wave 10 证据代替。
+- 相应地，W11-SEC 的 Acceptance 标识 `W11_SEC_01_ACCEPTANCE_PASS`
+  只能在 SQLite 与 MySQL 两级证据均实际取得后方可签发；
+  仅 SQLite PASS 时只能签发 `W11_SEC_01_SQLITE_PASS_MYSQL_NOT_RUN`。
+```
+
+#### 37.54.15.3 W11-A — Credit Query / Exception History
+
+| 项 | 内容 |
+|---|---|
+| 功能范围 | `GET /api/credit/exposure`、`GET /api/credit/exceptions`、`GET /api/credit/exceptions/:id`；`credit-query.js`；`credit-query.jsx` 界面 |
+| 文件影响 | `server/modules/credit-query.js`（新）、`server/modules/credit-check.js`（导出 `computeCreditExposure` 的 `factDigest`）、`server/modules/credit-policy.js`（拆分纯指纹函数）、`server/modules/credit-scope.js`（谓词投影）、`server/app.js`（路由）、`src/pages/credit-query.jsx`（新）、`src/navigation/applicationRegistry.js`（路由）、新增测试与 acceptance 脚本 |
+| 复用点 | `computeCreditExposure`、`resolveEffectiveCreditProfile`、`buildScopeHashes`、`computePolicySnapshotFingerprint`、`resolveCreditReadMode` / `creditScopePredicate` |
+| 新增表 / API / UI | **无表**；3 个 GET 端点；1 个 contextual 路由 |
+| 事务 / RBAC | 零事务、零写入；`CREDIT_VIEW` + 五级 Scope |
+| 测试范围 | UAT-S-35-A1..A7；零副作用；分页；权限负向；SQLite + MySQL 等价 |
+| MySQL Gate | Fresh / Upgrade / Replay / 两引擎 id 序列等价 / 零副作用摘要比对 |
+| 停止条件 | 查询路径出现任何写入；或出现第二套敞口算法 |
+| Acceptance 标识 | `W11_A_ACCEPTANCE_PASS` |
+| 依赖 | **W11-SEC 必须先通过** |
+| 后续授权边界 | 完成后方可授权 W11-D |
+
+#### 37.54.15.4 W11-B — Credit Evaluation Foundation
+
+| 项 | 内容 |
+|---|---|
+| 功能范围 | indicator / scheme / model / scoring sheet 的定义、版本、生命周期、评分、finalize 的**基础部分**（结果与 apply 属 W11-C） |
+| 文件影响 | `server/modules/credit-evaluation.js`（新）、`server/migrations/sales-customer-wave11-credit-evaluation.js`（新）、`server/migrations/sales-customer-domain.js`（registry 增 1 条）、`server/database/mysql-schema.js`（类型映射）、`server/app.js`（路由）、`src/pages/credit-evaluation.jsx`（新）、`src/navigation/applicationRegistry.js`（路由）、新增测试 |
+| 复用点 | `credit-scope.js` 的授权助手、`financial-controls.js` 的幂等助手、`audit`、`normalizeBusinessDate` / `assertDateRange`、`translateConstraintError` |
+| 新增表 / API / UI | 4 张表；7 个端点（3 GET + 3 POST 配置 + sheet 创建/评分/finalize 属本包）；1 个 contextual 路由 |
+| 事务 / RBAC | 配置写 = `CREDIT_MANAGE` + scope；评分写 = `CREDIT_EVALUATE`；全部单事务 + audit + 幂等 |
+| 测试范围 | UAT-S-36-A1..A4；权重 / 区间 / 缺失 / 重复 / 越界输入负向；状态机；幂等；迁移与重放 |
+| MySQL Gate | Fresh / Upgrade / Replay / 形状对等 / FK 存在性 / 数据级 RI |
+| 停止条件 | 评分出现浮点运算；或缺失指标被按 0 分计入；或配置行可被就地改写 |
+| Acceptance 标识 | `W11_B_ACCEPTANCE_PASS` |
+| 依赖 | 无（可与 W11-A 并行） |
+| 后续授权边界 | 完成后方可授权 W11-C |
+
+#### 37.54.15.5 W11-C — Multi-Scorer / Rating Application
+
+| 项 | 内容 |
+|---|---|
+| 功能范围 | 多评人评分聚合（SC106）；`credit_evaluation_result`；评级应用到 profile version（SC107）；deferred FK 启用；`applyCreditRating` 单一写者 |
+| 文件影响 | `server/modules/credit-evaluation.js`（扩展）、`server/modules/credit-profile.js`（**行为保持重构**：改用 `applyCreditRating`）、`server/migrations/sales-customer-wave11-credit-evaluation-result.js`（新，含 deferred FK）、`server/migrations/sales-customer-domain.js`（registry 增 1 条）、`server/database/mysql-schema.js`（类型映射）、`server/app.js`（路由）、`src/pages/credit-evaluation.jsx`（扩展）、新增测试与 MySQL 并发 fixture |
+| 复用点 | W11-B 的对象与身份；`credit-profile.js` 的版本解析；`credit-scope.js` 的授权助手；`financial-controls.js` 的幂等助手 |
+| 新增表 / API / UI | 1 张表 + 1 条 deferred FK；2 个端点（`GET results/:id`、`POST results/:id/apply`）；`credit-evaluation` 路由扩展 |
+| 事务 / RBAC | apply = write-class `CREDIT_MANAGE` + 既有后端管理 scope；锁序 §37.54.13.2；单事务 + audit + 三重幂等 |
+| 测试范围 | UAT-S-36-A5..A9；W11-R1 / W11-R2 独立会话并发；Wave 9 评级回归原样通过；唯一写者静态断言 |
+| MySQL Gate | Fresh / Upgrade / Replay / FK 存在性 / 数据级 RI / **W11-R1 / W11-R2 真实并发** |
+| 停止条件 | `credit_profile` 出现第二个写者；或 Wave 9 既有评级测试需要被修改才能通过 |
+| Acceptance 标识 | `W11_C_ACCEPTANCE_PASS` |
+| 依赖 | **W11-B 必须先通过** |
+| 后续授权边界 | 完成后方可授权 W11-D（若 W11-D 复用其构造器） |
+
+#### 37.54.15.6 W11-D — Reconciliation & Recalculation
+
+| 项 | 内容 |
+|---|---|
+| 功能范围 | SC99 CHECK-only reconciliation；SC100 deterministic recalculation；`credit_recalculation_history` |
+| 文件影响 | `server/modules/credit-reconciliation.js`（新）、`server/migrations/sales-customer-wave11-credit-reconciliation.js`（新）、`server/migrations/sales-customer-domain.js`（registry 增 1 条）、`server/modules/credit-check.js`（`computeCreditExposure` 返回值追加 `factDigest` —— 纯附加）、`server/modules/credit-policy.js`（纯指纹函数）、`server/app.js`（路由）、新增测试 |
+| 复用点 | `computeCreditExposure`、`resolveEffectiveCreditProfile`、`buildScopeHashes`、`computePolicySnapshotFingerprint` |
+| 新增表 / API / UI | 1 张表（**无金额列**）；2 个 POST 端点；无新 UI（结果可在 `credit-query` 面呈现） |
+| 事务 / RBAC | `CREDIT_EVALUATE`；单事务写 1 行历史 + 1 行 audit；计算只读；幂等只存执行身份 |
+| 测试范围 | UAT-S-34-A1..A8；W11-R3 / W11-R4；零副作用；确定性复算；fail-closed |
+| MySQL Gate | Fresh / Upgrade / Replay / 形状对等 / **W11-R3 真实并发** / 无金额列断言 |
+| 停止条件 | 历史表出现任何金额列；或出现第二套敞口算法；或 R-SAL-23 的结构性断言被弱化 |
+| Acceptance 标识 | `W11_D_ACCEPTANCE_PASS` |
+| 依赖 | **W11-SEC 必须先通过**（唯一硬依赖）。**不依赖 W11-A** —— 若 W11-A 已落地可**可选复用**其读取构造器，但未落地不构成阻塞（CORRECTION-5） |
+| 后续授权边界 | 完成后进入 Wave 11 整体验收评估 |
+
+#### 37.54.15.7 禁止事项
+
+- **不得**把 `W11-SEC` 的跨冻结 Implementation 静默并入 `W11-A`。
+- **不得**将 A / B / C / D 合成一个大型、不可分验收的提交。
+- 每个包**独立**取得 Implementation 授权、独立取证、独立 Acceptance 标识。
+- 不要求一次性实施全部五包。
+
+#### 37.54.15.8 W11-SEC-01 Freeze Status（2026-10-28）
+
+用户在 2026-10-28 批准 **W11-SEC-01 Technical Acceptance PASS** 并授权 **W11-SEC-01 Capability Freeze**。本节签发该状态，**不重定义** §37.54.15.2 已由 CORRECTION-5 固定的 Freeze Boundary。
+
+```text
+Acceptance 标识      W11_SEC_01_ACCEPTANCE_PASS
+Freeze 状态          W11_SEC_01_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PENDING
+证据前置条件        §37.54.15.2 的证据状态规则已满足 —— SQLite 与真实 MySQL 两级证据均已实际取得
+冻结范围            仅 Credit Read Scope 只读权限整改（W11-SEC-01），及其 SQLite/MySQL
+                    验收证据、统一 MySQL Gate 运行配置、对应测试与文档
+不冻结              其它任何业务域；Wave 11 整体；Wave 10 的 Release Block
+依赖状态            §37.54.15.3 的「W11-SEC 必须先通过」前置条件就此满足，
+                    但 W11-A / W11-B / W11-C / W11-D 的 Implementation 均未启动、仍需各自授权
+保留                WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED；W10_INV_RISK_01_BLOCKS_RELEASE_ONLY；
+                    LEGACY_DATA_EVIDENCE_PENDING；CREDENTIAL_EXPOSURE_OPEN（USER_ACCEPTED / DEFERRED）
+本轮未发生          任何 Git 写操作；版本号变更；Release Tag 变更；Release；Deploy；
+                    任何大型测试或 MySQL Gate 重跑；任何数据库 / 口令 / Grants / GLOBAL 变量变更；
+                    身份基线重建
+```
+
+Requirement 侧记录：`document.md` → `## W11-SEC-01 — Credit Read Scope Final Acceptance and Capability Freeze Record (2026-10-28)`；当日 append-only 记录：`log/2026-10-28.md`。
+
+### 37.54.16 Compatibility, forbidden changes and preserved contracts
+
+**必须继承且不得破坏**：Wave 9 Credit Profile / Rule / Parameter；Wave 10 Credit Exposure / Check / Special Approval；Dual-Limit Control（§13 P1–P13）；PURE_DERIVED Exposure；S05 / S14 / S15 / S16 / S17 / S19；五个 Credit 业务身份；Finance canonical AR / Settlement；Credit Policy Snapshot 指纹；既有 39/39 Wave 10 MySQL 验收证据。
+
+**禁止**：
+
+```text
+不得创建第二套 Credit Exposure Ledger 或持久化 mutable exposure cache
+不得写 Finance / Inventory / Accounting 权威事实
+不得改写历史 Check / Approval Snapshot
+不得产生第二个 Credit Profile 评级写者
+不得新增未经 Requirement 批准的权限码或角色
+不得发明权限蕴含（permission registry 是扁平的）
+不得放宽 CREDIT_VIEW，不得弱化已收紧的 Scope
+不得就地改写已生效且被引用的 indicator / scheme / model
+不得在评分中使用浮点
+不得让缺失指标按 0 分计入
+不得把 query 实现为 write
+不得在查询路径调用 ensureCreditPolicySnapshot / ensureCreditLockAnchor / saveIdempotency
+不得重跑或重开 Wave 10 验收
+不得解除 W10-INV-RISK-01 / CREDENTIAL_EXPOSURE_OPEN / LEGACY_DATA_EVIDENCE_PENDING
+```
+
+**Wave 9 行为保持义务**：`credit-profile.js` 的 `applyCreditRating` 重构是**行为保持**的；`server/sales-customer-wave9-credit-foundation.test.js` 必须**原样通过**（不得修改该测试以适配重构）。若该测试需要修改才能通过，说明重构改变了行为 → 停止。
+
+### 37.54.17 Open Design items and REQUIREMENT_REOPEN candidates
+
+| ID | 事项 | 性质 | 是否阻塞 | 处置 |
+|---|---|---|---|---|
+| D-1 | ~~`result_summary_json` 不含任何金额~~ → **CORRECTION-2 已解决**：改为唯一的不可变执行期结果快照 `result_snapshot_json`（含执行期金额，带 `authoritative:false` 与 `contractVersion`），顶层**无**金额列，无任何 Credit writer 读取该表 | Design 决策（**已闭合**，不改 Requirement） | **不阻塞** | 无需用户裁决。R99-6 / R100-6 要求记录“结果摘要”，本设计据此保留可自证的结果快照，并撤销“digest 可恢复历史金额”的错误论断 |
+| D-2 | 评分数值一律整数 milli-point、权重整数 milli-weight、**禁止插值与浮点** | Design 决策 | 阻塞 W11-B | 请用户确认 |
+| D-3 | 模型 / 方案 / 指标**不设独立版本表**，采用生效日期版本化（沿用 Wave 9 形态） | Design 决策 | 阻塞 W11-B | 请用户确认 |
+| D-4 | 评分表创建时**固定** profile 版本；apply 时版本变化则 fail closed 要求重新评分 | Design 决策 | 阻塞 W11-C | 请用户确认 |
+| D-5 | `credit_evaluation_result` 对 sheet 唯一；重新评价必须新建评分表 | Design 决策 | 阻塞 W11-C | 请用户确认 |
+| D-6 | W11-SEC-01 的跨冻结边界 Implementation 授权 | 授权事项（Stage B 已记录） | 阻塞 W11-SEC | 需用户另行批准 |
+| D-7 | 评分人 ≠ 应用人的**人员级**分离 | **未决业务决策**（Stage B L-1） | **不阻塞** | 明确**不强制**；若未来需要，必须返回 Requirement 层重开 |
+
+**无 REQUIREMENT_REOPEN 触发项。** D-1..D-5 均为 Requirement 允许范围内的 Design 决策，且**均不阻塞 W11-SEC** —— W11-SEC 不涉及任何新表、任何评分语义、任何金额口径。
+
+### 37.54.18 Stage C boundary and status
+
+**本节不启动任何 Implementation。** 未执行 Migration、未执行测试、未连接 MySQL、未执行 Git 写操作、未 release、未 deploy。
+
+**未实施的后续阶段**：W11-SEC / W11-A / W11-B / W11-C / W11-D 的 Implementation，各自需要独立授权；W11-SEC 另需跨冻结边界的专门授权。
+
+**Design status: `WAVE11_STAGE_C_DESIGN_READY`.**
+
+- `DESIGN_ONLY_NO_IMPLEMENTATION_NO_MIGRATION_NO_MYSQL`;
+- `REQUIREMENT_CONFORMANCE_R99_TO_R107_D1_D2_D3_MAPPED`;
+- `C2_C3_CONFLICT_CLOSURE_MATRIX_COMPLETE_DETERMINISTIC_REBUILD_RETIRED_NOT_REDEFINED`;
+- `NO_PHYSICAL_ARTIFACT_OF_DETERMINISTIC_REBUILD_EVER_EXISTED_ZERO_COMPATIBILITY_IMPACT`;
+- `CREDIT_RECALCULATION_HISTORY_HAS_ZERO_MONETARY_COLUMNS`;
+- `R_SAL_23_CONDITIONAL_PRESERVED_STRUCTURAL_AND_BEHAVIOURAL_PROOFS_SEPARATED`;
+- `ONE_SCOPE_RESOLVER_CREDIT_SCOPE_JS_EXTENDED_NO_SECOND_RESOLVER`;
+- `SINGLE_RATING_WRITER_APPLY_CREDIT_RATING`;
+- `NO_NEW_PERMISSION_CODE_NO_NEW_ROLE`;
+- `FIVE_INDEPENDENT_IMPLEMENTATION_PACKAGES_WITH_DEPENDENCY_DAG`;
+- `NO_SOLUTION_MD_HISTORY_REWRITTEN_ONLY_BOUNDED_SUPERSESSION_DECLARED`;
+- `NO_DOCUMENT_MD_MODIFIED`; `NO_README_MD_MODIFIED`; `NO_CODE_SCHEMA_MIGRATION_TEST_RUNNER_MODIFIED`;
+- `NO_MYSQL_CONNECTED`; `NO_GIT_WRITE`; `NO_RELEASE`; `NO_DEPLOY`;
+- `W10_INV_RISK_01_BLOCKS_RELEASE_ONLY_PRESERVED`;
+- `CREDENTIAL_EXPOSURE_OPEN_REQUIRES_OWNER_DECISION_PRESERVED`;
+- `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED_PRESERVED`;
+- `HARD_STOP_AFTER_STAGE_C_DESIGN`.
+
+### 37.54.19 Bounded Design Correction index（2026-10-27）
+
+本节是**勘误索引**，不是第二套规范。每一项的对应正文**已就地修正**；本节只记录"改了什么、在哪里、依据是什么、是否触发 Requirement 重开"。若本节与正文表述不一致，**以就地修正后的正文为准**。
+
+授权：`WAVE11_STAGE_C_BOUNDED_DESIGN_CORRECTION_ONLY`。本轮仅 Design Correction，未进入 Implementation，未执行 Migration / 测试 / MySQL，未执行任何 Git 写操作。
+
+| Correction | 问题 | 就地修正位置 | 修正要点 | Requirement 影响 |
+|---|---|---|---|---|
+| **C1** | 自额度资格用**请求提供的历史 businessDate** 判定 → 已按日期退出的历史成员关系可重新获得 `AGGREGATE_PLUS_SELF` | §37.54.5.3、§37.54.5.3 设计要点 5、§37.54.7.3、§37.54.7.10（N-1..N-8）、§37.54.14.4 | 三类日期分离（server-controlled authorization date / user-requested historical business date / historical fact's original business date）；`resolveCreditReadMode(db, actor)` 不再接受 businessDate；`resolveSelfSalespersonId` 去除该参数；沿用仓库既有 UTC 日历日约定（`toISOString().slice(0,10)`，112 处一致）；`sales-scope.js` 的单据组范围**不改** | **无重开**。修正的是对 R-D2-1 的实现偏离，收紧至已批准的 Requirement 语义 |
+| **C2** | "digest 可确定性恢复历史金额" —— 密码学摘要不可逆，该论断不成立 | §37.54.6.5（G-1..G-6 + CORRECTION-2）、§37.54.11.2、§37.54.11.3、§37.54.11.4、§37.54.11.5、§37.54.12.1、§37.54.12.3、§37.54.4 G-12、§37.54.17 D-1 | 撤销恢复论断；改为唯一不可变执行期结果快照 `result_snapshot_json`（含执行期金额，`authoritative:false` + `contractVersion`），顶层无金额列，无任何 Credit writer 读取；digest 规范化输入集合固定；`businessDate` + `contractVersion` + `factDigest` 三重绑定；replay 三态（EQUIVALENT / DRIFTED / NOT_COMPARABLE）；事实读取改用既有 `readTransaction`（`db.js:2169`）取得一致快照；失败零权威副作用 | **无重开**。R99-6 / R100-6 要求记录“结果摘要”，本设计据此选择可自证的快照形态 |
+| **C3** | 仅以 `UNIQUE(code, effective_from)` 作为版本化依据，**未阻止生效区间重叠**，且缺并发锁身份与可追溯性保证 | §37.54.9.1（CORRECTION-3 (1)..(6)） | 补齐区间唯一性检测、共享锁身份（MySQL 既有确定性命名锁 + 受控释放合同 + SQLite 写事务串行化）、前驱终止与后继切换（沿用 `closePredecessorAndAssertNoOverlap` 语义）、被引用后不可变、模型以**指标行 id** 引用保证评分表可精确追溯、两引擎等价冲突检测与同一组错误码 | **无重开**。不新增版本表，不改已批准的定点整数评分设计 |
+| **C4** | 唯一评级写者未区分 INITIAL 与 EVALUATION 两种业务来源；INITIAL 路径被隐含地绑定到评估对象；FK 变更的兼容性表述不准确 | §37.54.10.6（CORRECTION-4）、§37.54.12.7 | 双业务来源（`INITIAL_ASSIGNED` / `EVALUATION_APPLIED`，后者**显式映射**到冻结物理取值 `'EVALUATED'`，既有 CHECK 不改）；INITIAL 路径**不要求**评分表或 evaluation result；两来源的授权 / 幂等 / 审计身份分离；`createCreditProfile` 行为保持重构为调用同一 writer；`rating_*` 三列在源码合同中只出现于该 writer；既有评级历史不迁移 / 不伪造 / 不清空；FK 明确为**对既有冻结表的兼容性 Schema 扩展** | **无重开**。R107-4 与 §36.7.1 的唯一写者要求据此被可机器验证地落实 |
+| **C5** | DAG 含未经 Requirement 依据的 `W11-A → W11-D` 硬依赖；W11-SEC 冻结边界与证据状态未明确 | §37.54.15.1（CORRECTION-5）、§37.54.15.2（Freeze Boundary + 证据状态规则）、§37.54.15.6、§37.54.14.6 | 撤销 `W11-A → W11-D` 硬边，改为可选复用；W11-SEC Freeze Boundary 明确“允许收紧已批准的越权读取行为”与五项禁止；明确“**一次原本越权的读取被拒绝不构成 Wave 10 不兼容失败**”；证据分级规则：SQLite PASS ≠ MySQL Acceptance PASS，未执行项一律 `NOT_RUN`，受限签发标识 | **无重开** |
+
+**净结论**：五项修正**均未触发 REQUIREMENT_REOPEN**。C1 修正的是实现对 R-D2-1 的偏离；C2 在 R99-6 / R100-6 的允许空间内收敛；C3、C4 在已批准语义内补全；C5 撤销一条过度约束并明确边界。
+
+**本节不新增任何业务政策、不新增权限码、不新增角色、不新增 SC / UAT / Race ID、不改写历史冻结设计文本。** 历史文本 `solution.md:12607`、`:12616`、`:19698` 及 Wave 9 / Wave 10 冻结合同均未被改写。
+
+**Design status: `WAVE11_STAGE_C_BOUNDED_CORRECTION_READY`.**

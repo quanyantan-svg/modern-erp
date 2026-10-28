@@ -25,9 +25,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import {
-  HttpError, allow, assertAllowedFields, normalizeBusinessDate, readJson, requiredCode, requiredText, send,
+  HttpError, assertAllowedFields, normalizeBusinessDate, readJson, requiredCode, requiredText, send,
 } from '../lib/http.js';
-import { requireCreditSpecialApprovalDecisionAuthority, requireCreditSpecialApprovalRequestAuthority } from './credit-scope.js';
+import {
+  creditScopePredicate, requireCreditReadScope, requireCreditSpecialApprovalDecisionAuthority,
+  requireCreditSpecialApprovalRequestAuthority, resolveCreditReadMode,
+} from './credit-scope.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 
 export const CREDIT_SPECIAL_APPROVAL_SCOPE_MODES = Object.freeze(['ONE_TIME', 'TIME_BOUNDED', 'OBJECT_BOUNDED']);
@@ -82,11 +85,29 @@ function present(row) {
   };
 }
 
+function approvalNotFound() {
+  return new HttpError(404, '信用特别审批不存在', { code: 'CREDIT_SPECIAL_APPROVAL_NOT_FOUND' });
+}
+
 function readApproval(db, id, { locked = false } = {}) {
   const row = db.prepare(`SELECT * FROM credit_special_approval WHERE id=?${locked ? lockSuffix(db) : ''}`).get(id);
-  if (!row) throw new HttpError(404, '信用特别审批不存在', { code: 'CREDIT_SPECIAL_APPROVAL_NOT_FOUND' });
+  if (!row) throw approvalNotFound();
   return row;
 }
+
+// §37.54.5.3 / §37.54.7.8 — the Special Approval read shape. An approval is
+// attributable only through its source Credit Check, and that source result is
+// itself attributable only through the Credit Profile it was evaluated
+// against. Both branches therefore anchor on the source result, so an
+// approval whose source link is missing or whose scope type contradicts its
+// source fails closed instead of being read as aggregate.
+const CREDIT_SPECIAL_APPROVAL_SCOPE = Object.freeze({
+  aggregateExpr: "scope_type='CUSTOMER_AGGREGATE' AND source_credit_check_result_id IN "
+    + "(SELECT id FROM credit_check_results WHERE scope_type='CUSTOMER_AGGREGATE' AND credit_profile_id IS NOT NULL)",
+  selfExpr: "scope_type='SALESPERSON_SUB_LIMIT' AND source_credit_check_result_id IN "
+    + "(SELECT id FROM credit_check_results WHERE scope_type='SALESPERSON_SUB_LIMIT' AND credit_profile_id IN "
+    + '(SELECT id FROM credit_profile WHERE salesperson_scope_key=?))',
+});
 
 // The approval request may only be made against a scope that explicitly
 // requires an exception. A fail-closed BLOCK is never releasable.
@@ -297,9 +318,17 @@ export async function decideCreditSpecialApproval(db, req, res, actor, approvalI
 }
 
 export function listCreditSpecialApprovals(db, res, actor, url) {
-  allow(actor, 'CREDIT_VIEW');
-  const where = [];
-  const args = [];
+  const readMode = resolveCreditReadMode(db, actor);
+  requireCreditReadScope(readMode.mode);
+  const scopePredicate = creditScopePredicate(readMode.mode, {
+    ...CREDIT_SPECIAL_APPROVAL_SCOPE,
+    selfValue: readMode.selfSalespersonId,
+  });
+  // The scope predicate is part of the same statement as the business
+  // filters, so a filter can never widen the scope and the ordering and LIMIT
+  // are computed over the authorized rows only.
+  const where = [scopePredicate.sql];
+  const args = [...scopePredicate.args];
   const decision = String(url.searchParams.get('decision') || '').trim().toUpperCase();
   const scopeType = String(url.searchParams.get('scopeType') || '').trim().toUpperCase();
   const salesOrderId = String(url.searchParams.get('salesOrderId') || '').trim();
@@ -307,13 +336,23 @@ export function listCreditSpecialApprovals(db, res, actor, url) {
   if (scopeType) { where.push('scope_type=?'); args.push(scopeType); }
   if (salesOrderId) { where.push('source_sales_order_id=?'); args.push(salesOrderId); }
   const rows = db.prepare(`SELECT * FROM credit_special_approval
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY decided_at IS NULL DESC, decided_at DESC, id DESC LIMIT 500`).all(...args);
+    WHERE ${where.join(' AND ')}
+    ORDER BY CASE WHEN decided_at IS NULL THEN 0 ELSE 1 END ASC, decided_at DESC, id DESC LIMIT 500`).all(...args);
   return send(res, 200, { approvals: rows.map(present) });
 }
 
 export function getCreditSpecialApproval(db, res, actor, approvalId) {
-  allow(actor, 'CREDIT_VIEW');
-  return send(res, 200, { approval: present(readApproval(db, approvalId)) });
+  const readMode = resolveCreditReadMode(db, actor);
+  requireCreditReadScope(readMode.mode);
+  const scopePredicate = creditScopePredicate(readMode.mode, {
+    ...CREDIT_SPECIAL_APPROVAL_SCOPE,
+    selfValue: readMode.selfSalespersonId,
+  });
+  // The detail query carries the very same predicate as the list, so an
+  // out-of-scope approval is indistinguishable from an absent one.
+  const row = db.prepare(`SELECT * FROM credit_special_approval WHERE id=? AND ${scopePredicate.sql}`).get(approvalId, ...scopePredicate.args);
+  if (!row) throw approvalNotFound();
+  return send(res, 200, { approval: present(row) });
 }
 
 export const __creditSpecialApprovalInternals = Object.freeze({

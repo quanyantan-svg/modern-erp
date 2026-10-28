@@ -21,12 +21,12 @@ import { createHash } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import {
-  HttpError, allow, assertAllowedFields, normalizeBusinessDate, readJson, requiredCode, requiredText, send,
+  HttpError, assertAllowedFields, normalizeBusinessDate, readJson, requiredCode, requiredText, send,
 } from '../lib/http.js';
 import { ensureCreditLockAnchor } from './credit-anchor.js';
 import { ensureCreditPolicySnapshot } from './credit-policy.js';
 import { resolveEffectiveCreditProfile } from './credit-profile.js';
-import { requireCreditEvaluationAuthority } from './credit-scope.js';
+import { creditScopePredicate, requireCreditEvaluationAuthority, requireCreditReadScope, resolveCreditReadMode } from './credit-scope.js';
 import {
   assertPrepaymentParentPlanCurrent,
   discoverEligiblePrepaymentParents,
@@ -1040,10 +1040,28 @@ function presentResultRow(row) {
   };
 }
 
+// §37.54.5.3 — the Credit Check Result read shape. A result row is
+// attributable only through the Credit Profile it was evaluated against, so
+// `credit_profile_id` is the anchor of both scopes: a result whose profile
+// cannot be attributed is excluded (fail closed) instead of being treated as
+// aggregate.
+const CREDIT_CHECK_RESULT_SCOPE = Object.freeze({
+  aggregateExpr: "scope_type='CUSTOMER_AGGREGATE' AND credit_profile_id IS NOT NULL",
+  selfExpr: "scope_type='SALESPERSON_SUB_LIMIT' AND credit_profile_id IN (SELECT id FROM credit_profile WHERE salesperson_scope_key=?)",
+});
+
 export function listCreditCheckResults(db, res, actor, url) {
-  allow(actor, 'CREDIT_VIEW');
-  const where = [];
-  const args = [];
+  const readMode = resolveCreditReadMode(db, actor);
+  requireCreditReadScope(readMode.mode);
+  const scopePredicate = creditScopePredicate(readMode.mode, {
+    ...CREDIT_CHECK_RESULT_SCOPE,
+    selfValue: readMode.selfSalespersonId,
+  });
+  // The scope predicate is part of the same statement as the business
+  // filters, so filtering can never widen the scope and the ordering and
+  // LIMIT are computed over the authorized rows only.
+  const where = [scopePredicate.sql];
+  const args = [...scopePredicate.args];
   const sourceType = String(url.searchParams.get('sourceType') || '').trim().toUpperCase();
   const sourceId = String(url.searchParams.get('sourceId') || '').trim();
   const stage = String(url.searchParams.get('stage') || '').trim().toUpperCase();
@@ -1053,7 +1071,7 @@ export function listCreditCheckResults(db, res, actor, url) {
   if (stage) { where.push('stage=?'); args.push(stage); }
   if (checkGroupId) { where.push('check_group_id=?'); args.push(checkGroupId); }
   const rows = db.prepare(`SELECT * FROM credit_check_results
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY evaluated_at DESC, id DESC LIMIT 500`).all(...args);
+    WHERE ${where.join(' AND ')} ORDER BY evaluated_at DESC, id DESC LIMIT 500`).all(...args);
   return send(res, 200, { results: rows.map(presentResultRow) });
 }
 

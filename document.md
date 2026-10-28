@@ -4768,6 +4768,8 @@ SC107 Credit Rating Result Application → Credit Profile                       
 
 > baseline 之内；external bureau / AI / ML / complex corporate-risk analytics = OUT_OF_SCOPE（§34.10）。
 
+> Wave 11（SC99–SC107）的 Requirement 完成矩阵、已批准的 D1 / D2 / D3 决策、UAT-S-34/35/36 子断言与交付包装顺序见本文档 `Wave 11 — Sales & Customer Credit Evaluation / Reconciliation / Query — Stage B Requirement Closure (2026-10-27)`。本节文本本身未被改写。
+
 #### 34.3.27 Permissions / RBAC / SOD（SC108–SC114）
 
 ```text
@@ -11556,3 +11558,812 @@ own guards and are covered by `AC-ISO-08`'s static contract.
 **`PACKAGE_B_TEST_ISOLATION_ACCEPTANCE_PASS`**
 
 **`WAVE10_LOCAL_GATE_BACKEND_ISOLATION_ABSENT` — `RESOLVED — LOCAL TEST RUNNER SCOPE`**
+
+---
+
+## Wave 11 — Sales & Customer Credit Evaluation / Reconciliation / Query — Stage B Requirement Closure (2026-10-27)
+
+### 1. Authorization, scope and what this record is not
+
+- Authorization: `WAVE11_STAGE_B_REQUIREMENT_ONLY`（AGENTS.md §4.2 REQUIREMENT）。
+- 前置：Wave 11 Stage A Audit 结论 `WAVE11_STAGE_A_AUDIT_READY`（本日 `log/2026-10-27.md` Stage A 条目），已由用户确认 PASS。
+- 本节**只**补充并收敛 Wave 11（SC99–SC107）的 Requirement，并固化已批准的 D1 / D2 / D3 三个业务决策。
+- 本节**未**进入 Design，**未**进入 Implementation；**未**修改 `solution.md`、`README.md`、`AGENTS.md`、`APPLY_GUIDE.md`；**未**修改任何生产代码、测试、Schema、Migration 或测试 Runner；**未**执行任何测试门禁或 MySQL 连接；**未**执行任何 Git 写操作。
+- 本节**未**修改 §34.3.24–§34.3.26 的 SC99–SC107 能力定义文本；**未**新增、删除或重编号任何 SC ID、UAT ID 或 Race ID；**未**改变冻结总数（SC 114 / Invariants 20 / UAT 44 / Races 24 / Audit CAP 36）。
+- 本节引用的既有 canonical 对象名（`credit_profile`、`credit_profile_ratings`、`credit_check_results`、`credit_special_approval`、`credit_policy_snapshots`、`credit_lock_anchors`）是 §34 与 Wave 9 / Wave 10 已冻结的**事实**，不是本节的新设计。**新物理表结构、模块文件与 Migration DDL 属 Stage C Design 决定，本节不锁定。**
+
+### 2. Baseline verification and metadata correction
+
+| 项 | 值 | 核对方式 |
+|---|---|---|
+| Branch | `work/sales-waves6-13-recovery-20261025` | `git rev-parse --abbrev-ref HEAD` |
+| 当前开发 HEAD | `510974a4f55995c51d276d6f0e6f9e042b84f276` | `git rev-parse HEAD` |
+| `package.json` version | `1.6.2` | `package.json` |
+| Git release tag | `v1.6.2` → `229169bb555ec122197604de64b3b1ebfee59ced` | `git rev-list -n1 v1.6.2` |
+| 工作树（进入本阶段前） | 仅 `M log/2026-10-27.md`（Stage A append-only 记录，217 insertions / 0 deletions） | `git status --porcelain`、`git diff --stat` |
+| Remotes | `github` → GitHub；`origin` → Gitee | `git remote -v` |
+| Wave 10 | `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` | `document.md:11193`、`:11540` |
+| Package B | `PACKAGE_B_TEST_ISOLATION_ACCEPTANCE_PASS` | `document.md:11556`；本日日志 Stage A / Package B 条目 |
+
+**勘误 A — tag / version / HEAD 三者必须区分。**
+`v1.6.2` **不指向**当前开发 HEAD。`git tag --points-at HEAD` 返回空；`v1.6.2` 指向 `229169b`，落后当前 HEAD **147 个 commit**。
+本日 Stage A 日志条目中"release tag 位于 HEAD"的表述为**错误**，其来源是 `git describe --tags --abbrev=0` 的输出被误读为 tag-at-HEAD 结果。按本阶段授权要求，此处**只记录必要勘误，不修改已归档历史**；本节及此后所有 Wave 11 记录均**不得**声称 `v1.6.2` 指向当前开发 HEAD。
+
+**勘误 B — Package B token。**
+Canonical stored token = `PACKAGE_B_TEST_ISOLATION_ACCEPTANCE_PASS`；historical report shorthand = `PACKAGE_B_ACCEPTED_FROZEN_PUSHED`。两者描述**同一已验收归档成果**，仅后者无出处。**不得据此重新打开 Package B**，也不得改写已归档记录。
+
+### 3. D1 — SC99 / SC100 Credit Reconciliation & Deterministic Recalculation（APPROVED）
+
+**批准的业务决策**：保持现有 PURE_DERIVED Credit Exposure 模型；**不**新增持久化 mutable Credit Exposure cache；**不**建立第二套 Credit Occupancy Ledger。
+
+**并同时批准**：SC99 与 SC100 **均**必须形成实际可执行的业务能力；**不得**以"当前没有 cache"充当 SC100 完成的替代证明。
+
+#### 3.1 SC99 与 SC100 的业务边界
+
+| | SC99 CHECK-only Reconciliation | SC100 Deterministic Recalculation |
+|---|---|---|
+| 回答的问题 | 当前信用敞口构成与业务一致性规则是否成立？不一致在哪里？ | 在指定 Credit Object / Scope / Business Date 上，权威事实推导出的派生敞口与额度结果是什么？ |
+| 输出 | reconciliation result + discrepancy 标识 | 重算出的敞口与额度结果（确定性） |
+| 是否写权威事实 | 否 | 否 |
+| 是否写持久化敞口状态 | 否 | 否 |
+
+两者**不得**合并为同一动作：SC99 产出的是**一致性核对结论**，SC100 产出的是**重算结果**。
+
+#### 3.2 SC99 Requirement clauses
+
+```text
+R99-1  CANONICAL FACTS
+       SC99 读取的信用敞口构成必须与 Credit Check 使用同一 canonical facts
+       集合与同一 PURE_DERIVED 派生规则（§34.3.21 SC90..SC92 + S14）。
+       SC99 不得建立、读取或依赖任何持久化 mutable Credit Exposure cache，
+       也不得建立第二套 occupancy ledger。
+
+R99-2  SCOPE
+       SC99 必须以显式 Credit Object 与显式 Scope 为输入。
+       双限额（Customer Aggregate / Salesperson Sub-Limit）下必须**分别**报告
+       两个 scope 的结果；不得只报告 aggregate，也不得把两个 scope 合并成
+       一个未归属数字。
+
+R99-3  BUSINESS DATE
+       必须以显式 business_date 为口径（S19）。created_at / confirmed_at 等
+       audit timestamp 不得充当业务日期。
+
+R99-4  CHECK-ONLY RESULT
+       必须返回明确的 reconciliation result：每个 scope 的 limit / used /
+       remaining / component breakdown，加上"一致 / 不一致"判定与可定位的
+       discrepancy 标识。无法判定时必须显式标记为无法判定，不得静默省略。
+
+R99-5  ZERO MUTATION
+       SC99 必须只读。不得修改任何 Sales / Finance / Inventory / Accounting
+       权威事实（S17）；不得静默修复历史数据；不得产生任何可改变后续
+       Credit Check 结果的持久化状态。
+
+R99-6  AUDIT EVIDENCE
+       SC99 执行必须留下执行证据（执行者、business date、scope、参数化查询
+       条件、结果摘要、耗时、发现的不一致计数）。该证据**不得**成为余额或
+       敞口的权威数据源，也不得被任何 Credit Check 消费为敞口输入。
+```
+
+#### 3.3 SC100 Requirement clauses
+
+```text
+R100-1  RECALCULATION INPUT
+       按指定 Credit Object、Scope、Business Date 重新读取权威事实，
+       重新计算派生信用敞口及额度结果。
+
+R100-2  DETERMINISM
+       同一事实快照 + 同一 Scope + 同一 Business Date 必须得到确定性结果。
+       重复执行必须得到相同结果；结果不得因执行次数、执行者身份或执行
+       时刻而改变。
+
+R100-3  NO OVERWRITE OF IN-FLIGHT DECISIONS
+       不得覆盖或修改任何既有 Credit Check 决策记录；不得修改既有
+       policy snapshot。SC100 不得成为第二个决策来源。
+
+R100-4  NO HISTORICAL REWRITE
+       不得重写 Finance / Sales / Inventory / Accounting 历史事实（S17）。
+
+R100-5  NO PERSISTED MUTABLE EXPOSURE CACHE
+       SC100 不得创建任何持久化 mutable Credit Exposure cache。
+       第二套 Credit Occupancy Ledger 被禁止。
+
+R100-6  RECALCULATION HISTORY IS AUDIT-ONLY
+       若记录 recalculation history，只记录审计与执行证据（kind、触发者、
+       触发时间、source snapshot window、scope filter、结果摘要、耗时、
+       不一致计数、drift 标记）。
+       该记录**不得**成为余额或敞口的权威数据源，**不得**被任何
+       Credit Check 或 Query 消费为敞口输入。
+
+R100-7  R-SAL-23 UNDER PURE_DERIVED
+       R-SAL-23 保持其既有 CONDITIONAL 定义（§34.6 R-SAL-23 行、§34.6 计数
+       行、§34.13 引用），不因本决策被改写为 REAL 或被删除。
+       在 D1 的 PURE_DERIVED 基线下，SC100 的并发验收由**结构性 + 行为性**
+       两类证明共同完成：
+       (a) 结构性 —— 不存在持久化 mutable Credit Exposure cache，故不存在
+             可被重算覆盖的在途敞口状态；
+       (b) 行为性 —— 重算与并发 Credit Check 同时发生时，重算不修改任何
+             canonical 行、不修改 check result、不产生第二个决策来源。
+```
+
+#### 3.4 与既有冻结 Design 的精确冲突记录（不擅自改写历史合同）
+
+| # | 既有冻结文本 | 与 D1 的关系 | 处理 |
+|---|---|---|---|
+| C-1 | §34.3.24 SC100 文本是条件式："**若**重建派生 cache，必须先读 latest canonical snapshot，且 must never overwrite in-flight concurrent credit decision" | **不冲突**。D1 明确不建 cache，故该条件子句不触发；SC100 仍须可执行 | Stage C 按 R100-1..R100-7 落地 |
+| C-2 | 既有 Design 将重算 kind 定义为 `('CHECK_ONLY','DETERMINISTIC_REBUILD')`，且明示 "deterministic rebuild NOT exercised against any materialized cache in this baseline" | **语义冲突**。D1 使 `DETERMINISTIC_REBUILD` 成为**无缓存的重算**，而既有 kind 词汇是按"缓存重建"语义定义的 | **本节不决定** kind 词汇。Stage C 必须在 Stage C Design 中显式处置（沿用并重定义该 kind，或另立一个表达"重算"的 kind），且必须保持 R100-6 的 audit-only 约束不变 |
+| C-3 | §36.7.5 "DETERMINISTIC_REBUILD remains defined but unexercised" | **语义冲突**，同 C-2 | 同 C-2。本节不修改 `solution.md` |
+| C-4 | §34.8 row 15 的 Read/Write 方向写作 "R: read-only from canonical + cache" | **不是冲突，但存在误读风险**。该行的 "R" 是**跨域方向**陈述（Credit 只读其它 Domain 的 canonical truth），不是"Credit 自身对象只读" | Stage C 必须按本节 §9 的方向表理解，不得据此把 SC103–SC107 误读为只读 |
+
+**本节不修改 `solution.md`，不重写任何历史冻结 Requirement。** 上述 C-2 / C-3 作为 Stage C 前置输入移交。
+
+### 4. D2 — Credit Read Scope（APPROVED）与 Security Remediation 追踪项
+
+**批准的业务决策**：SC101 / SC102 采用**已经存在**的五级 `CREDIT_READ_MODE`（`ALL` / `DENY` / `CROSS_GROUP` / `AGGREGATE_PLUS_SELF` / `AGGREGATE_ONLY`）；列表与详情**必须**由后端执行数据范围过滤；不得因拥有 `CREDIT_VIEW` 就读取所有销售员子额度、信用检查结果或特别审批历史；Scope 解析必须复用现有 canonical Credit Read Scope 规则。
+
+**并同时批准**：
+
+```text
+R-D2-1  当前有效授权判定
+       读取资格必须依据**当前有效**授权判断。历史上曾属于某销售组，
+       不得成为永久保留历史查看权限的理由。
+
+R-D2-2  历史业务事实不改写
+       历史业务事实本身仍按原 Business Date 保留。数据范围收敛**不得**
+       修改、删除或改写任何历史证据。
+
+R-D2-3  覆盖全部读取面
+       必须覆盖：
+         - Credit Exposure Query
+         - Credit Exception History
+         - Credit Check Result List / Detail
+         - Credit Special Approval List / Detail
+         - 关联 Credit Profile 及其 Scope
+         - 查询过滤、分页、总数及关联数据
+
+R-D2-4  禁止表层过滤
+       禁止仅在 API 返回后做不安全的表层过滤。范围过滤必须下推到查询
+       谓词层。
+
+R-D2-5  禁止单点绕过
+       禁止通过单一 Check Group、Source ID、Approval ID 或分页信息绕过
+       Scope。越权目标的响应必须与"不存在"不可区分。
+
+R-D2-6  不得改写冻结授权语义
+       不得因本决策改写 §14 AP1–AP4.1、§15 AP5 或 §34.7 P1–P5。
+       既有合同继续有效；本决策只把既有合同**适用**到新的读取面。
+```
+
+**与既有授权合同的关系（精确）**：§14 AP3 明确"Read restriction applies to **every** read surface, not only the list"，并逐项点名 collection queries、detail-by-ID、effective-dated profile versions、historical rating records、nested / expanded responses、任何会暴露受限子限额数据的 API projection。D2 与 AP3 **一致**，是把既有 Profile 读取面的合同**扩展适用**到 SC101 / SC102 的读取面，不新增权限码、不新增角色、不新增隐含权限蕴含（§14 AP4 "permission registry is flat"）。
+
+#### 4.1 Security Remediation 追踪项 `W11-SEC-01`
+
+| 项 | 内容 |
+|---|---|
+| ID | `W11-SEC-01` |
+| 分类 | **既有数据权限缺陷**，由 Wave 11 Stage A Audit 发现 |
+| 性质 | 涉及**已冻结的 Wave 10 读取路径** —— `listCreditCheckResults()`、`listCreditSpecialApprovals()`、`getCreditSpecialApproval()` 及其它实际受影响入口。这些入口当前仅判 `CREDIT_VIEW`，**未**施加 canonical Credit Read Scope 谓词，因而 `CREDIT_VIEW` 持有者可读取全部客户的检查结果与特别审批历史，包含其他销售员的子额度 scope 行 |
+| Requirement 后果 | SC101 / SC102 的验收**不得**在该缺陷未闭合时判定通过；SC102 不得把这两张表直接作为例外历史来源 |
+| 授权边界 | 未来 Implementation 须获得**独立、有界的跨冻结边界授权**，专门用于修补该读取路径；**不得**顺带改动 Wave 10 的检查、审批、敞口或业务行为 |
+| 不重开 | **不得**重新打开 Wave 10 的全部业务验收；`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` 与既有 39/39 MySQL 验收证据保持不变 |
+| 本阶段 | **不得**在本阶段修改任何现有接口代码（本阶段为 Requirement-only） |
+| 交付顺序 | 必须**先于**开放新的历史查询入口完成（见 §11） |
+| 验收 | 见 §8 A-D2-* |
+
+### 5. D3 — Evaluation 与 Rating Application 的授权分离（APPROVED）
+
+**批准的业务决策**：`CREDIT_EVALUATE` 授权信用评分与评估相关操作；`CREDIT_EVALUATE` **单独不得**授权把评分结果应用到生效 Credit Profile；正式 SC107 Rating Result Application 必须具备 `CREDIT_MANAGE` 对应的 **write-class authority**，并遵守现有后端信用管理 Scope 限制。
+
+```text
+R-D3-1  AUTHORITY SPLIT
+       评分 / 评估动作（创建评分表、提交、终评）需要 CREDIT_EVALUATE。
+       评分结果应用到生效 Credit Profile 需要 write-class authority：
+       ADMIN，或 CREDIT_MANAGE 且满足现有后端信用管理 Scope 限制
+       （§14 AP4.1 的既有语义，不新增、不放宽）。
+       CREDIT_EVALUATE 单独**不足以**授权应用。
+
+R-D3-2  DISTINGUISHABLE ACTIONS
+       评分与评级应用必须是**可区分的业务动作**，具有**可区分的审计身份**
+       与**可区分的幂等合同**。不得把评分与应用折叠为同一动作，也不得
+       让应用动作借用评分动作的审计或幂等记录。
+
+R-D3-3  IDENTITY SEPARATION
+       Credit Evaluation Result 必须保持独立且可追溯：
+         ≠ Credit Profile version
+         ≠ Policy Snapshot
+         ≠ Applied Rating History
+       四者不得因实现便利被合并为单一物理身份
+       （§14 Stage B B-4 五身份约束，见 `document.md:6843-6851`）。
+
+R-D3-4  APPLY BOUNDARIES
+       评级应用必须：
+         - 绑定明确的 Credit Profile version（business_date 生效的那一个），
+           不得绑定 anchor；
+         - 不通过修改历史 Check / Approval Snapshot 实现；
+         - 不覆盖无关客户或其他销售员的子额度；
+         - 不产生第二个 Credit Profile 评级写者
+           （profile 的评级内联投影必须由同一次评级应用事务派生）。
+
+R-D3-5  TRANSACTION / CONCURRENCY / DUPLICATE ACCEPTANCE
+       必须具备明确的重复应用拒绝、并发串行化与事务完整性验收
+       （见 §6 SC107、§7 R-SAL-24）。
+```
+
+**现有 SOD 合同对本项的适用边界（记录，不新增规则）**：
+
+```text
+既有事实：Credit Special Approval 已冻结"申请审批分离"（requester ≠ approver，
+          违反时 fail closed）。该规则**不覆盖**评分与评级应用。
+
+既有事实：§34.7 P1–P5 的五项不可破坏原则中，P1 = VIEW ≠ WRITE、
+          P2 = CREATE ≠ APPROVE、P4 = CREDIT SPECIAL APPROVAL 需要
+          bounded authority。P2 的适用范围是"创建"与"审批"这一对动作。
+
+本阶段决策边界：
+  - 本 Requirement 批准的是**授权类别分离**（evaluate 类权限 vs write-class
+    权限），**不是人员分离**。
+  - **不**新增审批角色、**不**新增审批流程、**不**新增"评分人必须不同于
+    应用人"的人员级规则。
+  - 若业务后续要求人员级分离（评分人 ≠ 正式应用人），必须**返回 Requirement
+    层重开**，不得由 Design 或 Implementation 静默引入。
+```
+
+### 6. SC99–SC107 Requirement 完成矩阵
+
+#### 6.1 汇总
+
+| SC | Requirement 状态 | 主要业务条款 | Acceptance | Race | 覆盖（实现层） |
+|---|---|---|---|---|---|
+| SC99 | **COMPLETE（本节收敛）** | R99-1..R99-6 | UAT-S-34 | — | `MISSING` |
+| SC100 | **COMPLETE（本节收敛）** | R100-1..R100-7 | UAT-S-34 | R-SAL-23（CONDITIONAL，结构性 + 行为性证明） | `MISSING` |
+| SC101 | **COMPLETE（本节收敛）** | R101-1..R101-7 | UAT-S-35 | — | `MISSING` |
+| SC102 | **COMPLETE（本节收敛）** | R102-1..R102-5 | UAT-S-35 | — | `MISSING` |
+| SC103 | **COMPLETE（本节收敛）** | R103-1..R103-3 | UAT-S-36 | — | `MISSING` |
+| SC104 | **COMPLETE（本节收敛）** | R104-1..R104-3 | UAT-S-36 | — | `MISSING` |
+| SC105 | **COMPLETE（本节收敛）** | R105-1..R105-7 | UAT-S-36 | — | `MISSING` |
+| SC106 | **COMPLETE（本节收敛）** | R106-1..R106-5 | UAT-S-36 | W11-R2 | `MISSING` |
+| SC107 | **COMPLETE（本节收敛）** | R107-1..R107-9 | UAT-S-36 | R-SAL-24 / W11-R1 | `MISSING` |
+
+> **Requirement 完成 ≠ 已实现。** 九项 Capability 的实现层 Coverage 仍为 `MISSING`；Stage B 不产生任何实现。
+> SC99–SC107 的能力定义文本（§34.3.24–§34.3.26）**未被本节改写**，仍为权威锚点；本节是其收敛与验收细化。
+
+#### 6.2 SC101 — Credit Query clauses
+
+```text
+R101-1  LIMIT / USED / REMAINING
+       必须返回该 scope 的 credit limit、used（已占用）与 remaining（可用），
+       且口径必须与 Credit Check 使用的派生规则**同一**。不得与 SC99 / SC100
+       形成两套计算口径。
+
+R101-2  COMPONENT BREAKDOWN
+       必须返回敞口构成分解：组件 + 金额 + 来源身份。来源身份必须可追溯到
+       canonical 事实，且必须与 SC99 / SC100 的分解口径一致。
+
+R101-3  SCOPE
+       必须按 Customer Aggregate 与 Salesperson Sub-Limit 分别可查询。
+       双限额下二者必须各自成立且不重复计数（S14）。
+
+R101-4  BUSINESS DATE / EFFECTIVE DATE
+       必须以显式 business_date 为口径；所用 Credit Profile 必须是该日期
+       的生效版本（S19）。必须同时可返回该日期生效的 policy snapshot 身份。
+
+R101-5  ZERO SIDE EFFECT
+       查询必须严格无副作用：不得写入 check result、不得创建 policy
+       snapshot、不得占用写锁、不得改变任何状态。
+       **SC101 不得以执行 Credit Check 作为实现路径。**
+
+R101-6  HISTORICAL SNAPSHOT LINKAGE
+       返回结果必须能链接到作出该结论的 policy snapshot 指纹与 profile
+       effective state 身份，使历史结论可被复现（§34.6.2 coherent snapshot；
+       S05）。
+
+R101-7  PERMISSION / DATA SCOPE
+       后端必须执行五级 CREDIT_READ_MODE 过滤（R-D2-1..R-D2-6）。
+```
+
+#### 6.3 SC102 — Credit Exception History clauses
+
+```text
+R102-1  AUTHORITATIVE SOURCE
+       例外历史必须由 credit_check_results（决定）、credit_special_approval
+       （特别审批）与来源 SO / SD 关联**派生**。不得建立第二套例外事实表，
+       不得复制历史决策。
+
+R102-2  EXCEPTION CATEGORIES
+       over-limit / overdue / warning / block / special approval 及 reason
+       codes 必须可区分、可分别过滤。
+
+R102-3  IMMUTABLE HISTORY
+       不得改写任何历史 check / approval 记录（S05）。历史例外事实按其
+       原 Business Date 与原决策上下文呈现。
+
+R102-4  PERMISSION / DATA SCOPE
+       同 R101-7；并且不得通过单一 Check Group、Source ID、Approval ID 或
+       分页参数绕过 Scope。
+
+R102-5  PAGINATION / ORDERING
+       必须支持稳定排序与分页，并返回满足当前 Scope 的总数。
+       不得以固定上限截断冒充分页。
+```
+
+#### 6.4 SC103 / SC104 / SC105 clauses
+
+```text
+R103-1  INDICATOR DEFINITION
+       每个指标必须有唯一 code、名称、类型（QUALITATIVE / QUANTITATIVE）、
+       业务含义、有效起止日期与状态。
+
+R103-2  INPUTS AND MAXIMUM SCORE
+       QUALITATIVE 指标的输入为人工评价值；QUANTITATIVE 指标的输入必须
+       定义其来源与口径（可由 canonical 事实或登记事实确定）。
+       每个指标必须声明其最大分值。
+
+R103-3  INDICATOR IMMUTABILITY
+       已被某个 model 引用的指标定义不得被就地改写；变更必须通过新版本
+       生效，历史评分继续引用其当时生效的版本。
+
+R104-1  SCHEME
+       每个评级方案必须有唯一 code、名称、等级集合，以及每个等级的分值
+       边界。边界必须无重叠、无空洞、无歧义。
+
+R104-2  SCHEME / INDICATOR BINDING
+       方案必须声明其适用的指标集合；权重由 model 决定，不由 scheme 决定。
+
+R104-3  SCHEME EFFECTIVE DATING
+       方案必须生效日期化。历史评分必须继续引用其当时生效的方案版本，
+       不得被后续方案版本重新解释。
+
+R105-1  MODEL
+       model 必须绑定 scheme、声明适用期间、声明每个指标的权重。
+       权重的语义（满分权重 / 相对权重）必须被显式声明。
+
+R105-2  WEIGHT VALIDATION
+       权重必须可校验；负值、超范围值与违反模型自身约束的权重组合必须
+       被显式拒绝，不得静默归一。
+
+R105-3  SCORING SHEET LIFECYCLE
+       评分表生命周期必须为 DRAFT → SUBMITTED → FINALIZED，另有独立的
+       "已应用"结果状态。状态转换必须由后端控制并留痕；不得存在跳过中间
+       状态的路径。
+
+R105-4  SHEET BINDING
+       评分表必须绑定明确的评估对象与 Business Date（或明确的 Credit
+       Profile version）。**不得**绑定 anchor。
+
+R105-5  SHEET DATA
+       逐指标评分必须记录：指标 code、输入类型、输入取值、得分。
+       缺失指标不得被当作 0 分静默计入。
+
+R105-6  INPUT VALIDATION
+       定性 / 定量输入必须校验取值范围。越界输入必须显式拒绝并返回
+       可定位错误，不得静默截断或夹取。
+
+R105-7  VERSION BOUNDARIES
+       indicator / scheme / model / sheet 四者的版本边界互相独立。
+       评分结果必须记录其引用的 model 版本与 scheme 版本。
+```
+
+#### 6.5 SC106 / SC107 clauses
+
+```text
+R106-1  BOUNDED PARTICIPATION
+       多评人参与范围**限于单个评分表**。不得建立企业级开放评人池，
+       不得跨评分表聚合。
+
+R106-2  PARTICIPANT SCOPE AND AUTHORITY
+       评分人必须具备 evaluation authority；每个评分表必须限定可参与的
+       评分人集合。
+
+R106-3  SINGLE-SHEET AGGREGATION
+       每个评分表聚合为**唯一** Credit Evaluation Result，并携带参与评分
+       人数。合成规则必须确定性：相同输入得到相同聚合结果。
+
+R106-4  FINALIZATION CONCURRENCY
+       两个并发的终评不得产生两个聚合结果。
+
+R106-5  NO CROSS-SCOPE EVALUATION
+       评分人不得对其他客户或其他销售员的子额度评分。
+
+R107-1  INDEPENDENT EVALUATION RESULT IDENTITY
+       Credit Evaluation Result 保留独立且可追溯的身份，且不等于 Credit
+       Profile version、不等于 Policy Snapshot、不等于 Applied Rating
+       History（R-D3-3）。
+
+R107-2  PROFILE VERSION BINDING
+       应用必须绑定明确的、在 business_date 生效的 Credit Profile version；
+       不得绑定 anchor。
+
+R107-3  WRITE-CLASS AUTHORITY
+       应用必须具备 write-class authority（ADMIN，或 CREDIT_MANAGE 且满足
+       现有后端信用管理 Scope 限制）。CREDIT_EVALUATE 单独不足以授权应用
+       （R-D3-1）。
+
+R107-4  SOLE RATING WRITER
+       不产生第二个 Credit Profile 评级写者。profile 的评级内联投影必须
+       由同一次评级应用事务派生，不得被任何其他路径独立写入。
+
+R107-5  NO HISTORY REWRITE / NO CROSS-SCOPE EFFECT
+       不通过修改历史 Check / Approval Snapshot 实现；不覆盖无关客户或
+       其他销售员的子额度。
+
+R107-6  DUPLICATE APPLICATION REJECTED
+       同一 evaluation result 对同一 profile version 的重复应用必须被拒绝，
+       且不得产生第二次效果。
+
+R107-7  CONCURRENCY WITH CREDIT CHECK
+       评级应用与并发 Credit Check 必须串行化；一次 Credit Check 不得
+       混合评级前后的状态（R-SAL-24 / §34.6.2）。
+
+R107-8  DISTINGUISHABLE AUDIT IDENTITY
+       评分与评级应用必须是可区分的业务动作，具有可区分的审计身份
+       （§34.7 P5）。
+
+R107-9  SOD BOUNDARY RECORDED
+       本项不引入人员级分离规则；既有 SOD 合同的适用边界按 §5 记录
+       （若需人员级分离，必须返回 Requirement 层重开）。
+```
+
+### 7. UAT-S-34 / 35 / 36 与 R-SAL-23 / R-SAL-24 追溯
+
+**编号规则**：UAT-S-34 / 35 / 36 **保持原始编号**，不新增、不重编号任何顶层 UAT ID（冻结范围仍为 UAT-S-01..UAT-S-44）。下列子断言为**既有 UAT ID 之下的子断言标识**，不是新的 UAT ID。Race 侧引用既有 R-SAL-23 / R-SAL-24 与既有 Design 已定义的 `W11-R1`..`W11-R4` fixture，不新增 Race ID。
+
+| UAT | 覆盖 SC | 子断言 | 验收要点 |
+|---|---|---|---|
+| UAT-S-34 | SC99–SC100 | `UAT-S-34-A1` | CHECK-only reconciliation 返回 per-scope limit / used / remaining / component breakdown 与一致性判定 |
+| | | `UAT-S-34-A2` | 双限额下 aggregate 与 sub-limit 分别报告；不存在未归属的合并数字 |
+| | | `UAT-S-34-A3` | 显式 business_date 生效；不以 audit timestamp 代替 |
+| | | `UAT-S-34-A4` | 零写入：Sales / Finance / Inventory / Accounting canonical 行在执行前后逐字段一致 |
+| | | `UAT-S-34-A5` | 确定性：同一事实快照 + 同一 scope + 同一 business_date 重复执行结果一致 |
+| | | `UAT-S-34-A6` | 不覆盖在途 Credit Check 决策；既有 check result 与 policy snapshot 不变 |
+| | | `UAT-S-34-A7` | 无持久化 mutable exposure cache（结构性断言）；recalculation history 不被任何查询消费为敞口输入 |
+| | | `UAT-S-34-A8` | 审计证据存在且不可作为权威数据源 |
+| UAT-S-35 | SC101–SC102 | `UAT-S-35-A1` | limit / used / remaining 与 Credit Check 口径一致 |
+| | | `UAT-S-35-A2` | component breakdown 含组件 / 金额 / 来源身份，且可追溯 |
+| | | `UAT-S-35-A3` | 例外历史覆盖 over-limit / overdue / warning / block / special approval 与 reason codes，可分别过滤 |
+| | | `UAT-S-35-A4` | 查询零副作用：无写入、无新 snapshot、无写锁占用 |
+| | | `UAT-S-35-A5` | 历史结论可链接到 policy snapshot 指纹与 profile effective state 身份 |
+| | | `UAT-S-35-A6` | 稳定排序 + 分页 + Scope 内总数；不以固定上限冒充分页 |
+| | | `UAT-S-35-A7` | 后端谓词级数据范围过滤（见 §8） |
+| UAT-S-36 | SC103–SC107 | `UAT-S-36-A1` | 指标类型、有效期、最大分值可定义并被校验 |
+| | | `UAT-S-36-A2` | 方案等级边界无重叠、无空洞 |
+| | | `UAT-S-36-A3` | model 权重可校验；非法权重被显式拒绝 |
+| | | `UAT-S-36-A4` | 评分表生命周期状态机受后端控制；缺失指标不按 0 分计入 |
+| | | `UAT-S-36-A5` | 多评人限于单表；单表聚合为唯一结果并携带参与人数；合成确定性 |
+| | | `UAT-S-36-A6` | 评级结果独立身份，且 ≠ profile version ≠ policy snapshot ≠ applied rating history |
+| | | `UAT-S-36-A7` | 应用绑定 profile version；重复应用被拒绝且无第二次效果 |
+| | | `UAT-S-36-A8` | write-class authority 强制；CREDIT_EVALUATE 单独不足以应用 |
+| | | `UAT-S-36-A9` | 不产生第二个 profile 评级写者；历史 check / approval snapshot 未被改写 |
+
+| Race | 状态（Requirement 层） | 验收义务 |
+|---|---|---|
+| R-SAL-23 | **保持 CONDITIONAL**（§34.6 / §34.6 计数行 / §34.13 引用均不变） | PURE_DERIVED 下由 `UAT-S-34-A7` 结构性断言 + `UAT-S-34-A6` 行为性断言共同证明；**不**被改写为 REAL，**不**被删除，**不**并入 R-SAL-12 |
+| R-SAL-24 | **保持既有 DORMANT 定义**；Wave 11 使其可被实际激活用例覆盖 | `UAT-S-36-A7` + `W11-R1`：评级应用与并发 Credit Check 串行化，一次检查不混合评级前后状态；`W11-R1` fixture 属既有 Design 已定义的 fixture，不新增 Race ID |
+| W11-R2 | 既有 Design fixture | 两次并发终评只产生一个聚合结果，参与人数正确 |
+| W11-R3 | 既有 Design fixture | 重算与并发信用消费事务并发时，无 canonical Sales / Inventory / Finance / Accounting 行被修改（S17） |
+| W11-R4 | 既有 Design fixture | 结构性断言：不存在持久化 exposure cache；断言成立 |
+
+### 8. Data scope / RBAC / SOD 验收要求
+
+```text
+A-D2-1  SCOPE MODE RESOLUTION
+       五个读取模式（ALL / DENY / CROSS_GROUP / AGGREGATE_PLUS_SELF /
+       AGGREGATE_ONLY）必须复用现有 canonical Credit Read Scope 解析规则，
+       不得在查询层另写一套。
+
+A-D2-2  CURRENT-EFFECTIVE ELIGIBILITY
+       读取资格按**当前有效**授权判定。历史销售组归属不构成永久读取权。
+
+A-D2-3  PREDICATE-LEVEL FILTERING
+       过滤必须下推到查询谓词。禁止"先取全量再在应用层过滤"。
+
+A-D2-4  SINGLE-OBJECT BYPASS CLOSED
+       通过 Check Group / Source ID / Approval ID / 分页参数 / 排序参数
+       均不得取得 Scope 外的对象。
+
+A-D2-5  INDISTINGUISHABLE DENIAL
+       Scope 外对象的响应必须与"对象不存在"不可区分。
+
+A-D2-6  EXISTING WAVE 10 READ PATHS REMEDIATED
+       `listCreditCheckResults()`、`listCreditSpecialApprovals()`、
+       `getCreditSpecialApproval()` 及其它实际受影响入口必须施加 canonical
+       Scope 谓词。修正**只允许收紧可见范围**，不得改变任何 Wave 10
+       检查 / 审批 / 敞口业务行为、不得改变既有响应契约中已冻结的字段
+       语义。
+
+A-D2-7  REMEDIATION SCOPE IS BOUNDED
+       `W11-SEC-01` 的 Implementation 必须依据独立授权执行，且必须：
+         - 只收紧数据可见范围；
+         - 不新增权限码、不新增角色；
+         - 不修改 Wave 10 业务行为；
+         - 不重新打开 Wave 10 的全部业务验收。
+
+A-D2-8  NO WRITE IMPLICIT
+       读取路径不得隐含任何写入。查询、例外历史与详情读取必须零副作用。
+
+A-D3-1  AUTHORITY SPLIT ENFORCED
+       评分 / 评估动作要求 CREDIT_EVALUATE；评级应用要求 write-class
+       authority。两者必须由后端分别强制，且必须存在"CREDIT_EVALUATE 单独
+       不足以应用"的负向验收。
+
+A-D3-2  WRITE-SCOPE LIMIT RESPECTED
+       评级应用必须遵守既有后端信用管理 Scope 限制（§14 AP4.1），
+       不得成为绕过该限制的路径。
+
+A-D3-3  AUDIT IDENTITY DISTINCT
+       评分与评级应用的审计记录必须可区分、可分别追溯（§34.7 P5）。
+
+A-D3-4  SOD BOUNDARY NOT EXPANDED
+       本阶段不引入人员级分离规则。验收**不得**假设"评分人 ≠ 应用人"
+       为强制条件。若后续要求该规则，必须先返回 Requirement 层。
+
+A-D3-5  NO NEW ROLE OR PERMISSION CODE
+       本节不引入新角色、不引入新权限码，不发明权限蕴含（§14 AP4）。
+```
+
+### 9. Cross-domain boundaries（Wave 11 专用）
+
+| 能力 | Credit 的方向 | 依赖 Domain | 禁止 |
+|---|---|---|---|
+| SC99 / SC100 | **只读** canonical facts；仅写 Credit 自有的执行/审计证据 | Finance Operations（AR / advance / unapplied / refund / write-off）、Sales（SO commitment / delivery） | 不得修改 Sales / Finance / Inventory / Accounting 历史事实（S17）；不得创建第二套 Credit Occupancy Ledger；不得建立持久化 mutable exposure cache |
+| SC101 / SC102 | **只读** Credit 自有历史 + canonical facts | Finance Operations（canonical facts 只读消费）、Platform（存储与读 RBAC） | 不得建立第二套例外事实表；不得把查询变成写入；不得绕过 canonical Scope |
+| SC103 / SC104 / SC105 | **R/W** Credit 自有评估对象（指标 / 方案 / 模型 / 评分表） | Master & Engineering（Customer identity 只读引用） | 不得写入 Inventory physical truth、Finance AR truth 或 Accounting 历史记录；不得改变既有 Credit Check / Special Approval 行为 |
+| SC106 / SC107 | **R/W** Credit 自有评估与评级历史；SC107 写入 Credit Profile version | Finance Operations（canonical facts 只读）、Platform（授权 / 审计机制） | 不得产生第二个 Credit Profile 评级写者；不得覆盖无关客户或他人子额度；不得改写历史 Check / Approval Snapshot；不得由 Credit Evaluation 写入 Finance / Accounting 事实 |
+
+**通用禁止（继承 §34.8 row 15）**：Credit Recalculation / Query / Evaluation 不得改写 Sales / Inventory / Finance 历史事实；不得制造 second Sales / Finance exposure ledger；不得 second Customer identity；不得把 Platform 变成 Credit 业务 owner。
+
+### 10. 冻结合同继承声明
+
+本节**继承且不得破坏**以下既有冻结合同：
+
+| # | 冻结合同 | 位置 | 本节的关系 |
+|---|---|---|---|
+| F-1 | Wave 9 Credit Profile / Rule / Parameter | §34.3.18–§34.3.20 | 继承；SC105–SC107 只在 Credit 自有对象上扩展，不改写 Profile / Rule / Parameter 语义 |
+| F-2 | Wave 10 Credit Exposure / Check / Special Approval | §34.3.21–§34.3.23 | 继承；SC99–SC102 只读消费既有 check result / approval 事实，不改写其产生逻辑 |
+| F-3 | Dual-Limit Control（§13 P1–P13） | `document.md` 2026-10-22 Stage B §13 | 继承；R99-2 / R101-3 直接依赖双限额语义 |
+| F-4 | PURE_DERIVED Exposure | `solution.md` §29.24.1 | 继承（D1 明确保持） |
+| F-5 | S05 / S14 / S15 / S16 / S17 / S19 | §34.4 | 继承并被本节引用为强制约束 |
+| F-6 | 五个 Credit 业务身份 | `document.md:6843-6851` | 继承；R-D3-3 显式重申不得塌缩 |
+| F-7 | Finance canonical AR / Settlement | Finance Operations Domain Closure | 继承；Credit 只读消费，不写入 |
+| F-8 | Credit Policy Snapshot 指纹 | Wave 9 冻结设计 | 继承；R101-6 要求历史结论可链接该指纹 |
+| F-9 | Wave 10 MySQL 验收 39/39 PASS | 本日日志 Wave 10 Freeze | 继承为既有证据；本节不重跑、不重开 |
+
+**明确禁止**：不得把 Wave 9 / Wave 10 已冻结的 Requirement 改写为 Wave 11 的新设计；不得把九项能力误报为已有实现；不得在 Requirement 层锁定表结构、模块文件或 Migration DDL。
+
+### 11. Wave 11 交付包装（逻辑交付包）
+
+本节只记录**逻辑**交付包与依赖顺序，**不**在本阶段启动任何 Package Implementation，**不**锁定物理结构。
+
+```text
+W11-SEC   Security Read Scope Remediation (W11-SEC-01)
+          —— 独立、有界的工作边界
+          —— 必须先于开放新的历史查询入口完成
+          —— 需独立授权
+
+W11-A     Credit Query / Exception History        SC101–SC102
+          依赖：W11-SEC 完成
+          Schema：不引入新的例外事实表；查询为 DERIVED
+
+W11-B     Credit Evaluation Foundation            SC103–SC105
+          依赖：无（与 W11-A 相互独立）
+          Schema：需要新增评估对象；具体结构由 Stage C Design 决定
+
+W11-C     Multi-Scorer & Rating Application       SC106–SC107
+          依赖：W11-B
+          Schema：依赖 W11-B 的评估对象；并需处理既有评级列与
+                  评估结果之间的引用关系（结构由 Stage C Design 决定）
+
+W11-D     Credit Reconciliation / Recalculation    SC99–SC100
+          依赖：W11-SEC（读取面须先具备 canonical Scope）
+          Schema：仅审计/执行证据；不建立持久化 mutable exposure cache
+```
+
+**顺序依据（证据）**：
+
+1. `W11-SEC` 先行的依据：SC102 的例外历史权威来源是既有 check result / approval 表；`W11-SEC-01` 未闭合时开放新的历史读取面，等于把已存在的越权面复制到新的 Query / Exception History 入口（§4.1、§8 A-D2-6）。
+2. `W11-B` 先于 `W11-C` 的依据：SC106 的多评人参与范围限于单个评分表，SC107 的应用对象是 Credit Evaluation Result —— 二者都依赖评分表与评分结果的存在（§6.5 R106-1 / R107-1）。
+3. `W11-A` 与 `W11-B` 相互独立的依据：SC101 / SC102 消费既有 check result / approval / policy snapshot 事实，不需要评估对象；SC103–SC105 不读取例外历史（R101-7 与 R103..R105 无交叉）。
+4. `W11-D` 置于末尾的依据：SC99 / SC100 的读侧必须先有 canonical Scope 能力（W11-SEC），且 D1 已排除持久化缓存，因此本包不引入任何"第二套台账"风险面；将其置于末位可在其它包已稳定后一次验证 S17 零写入。
+5. **本节不建议把九项合并为单一不可验证提交，也不建议在 D1 / D2 / D3 未闭合前进入任何 Implementation。**
+
+### 12. Compatibility 与禁止变更
+
+- 本节**不改变**任何已冻结的 Capability 定义文本、UAT 编号、Race 编号、Invariant 文本、Permission 语义或既有 API 契约。
+- 本节**不**授权任何 Schema、Migration、代码、测试或 Runner 变更。
+- 本节**不**授权任何 MySQL 执行、发布、部署或 Git 写操作。
+- 本节**不**解除 `W10-INV-RISK-01`（`BLOCKS_RELEASE_ONLY`）、`CREDENTIAL_EXPOSURE_OPEN`（`REQUIRES_OWNER_DECISION`）、`LEGACY_DATA_EVIDENCE_PENDING`，也**不**解除 `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`。
+- 本节**不**重开 Wave 10 的全部业务验收；既有 39/39 MySQL 验收证据保持不变。
+- 兼容性要求：`W11-SEC-01` 的修正只允许**收紧**数据可见范围，不得改变 Wave 10 已冻结的业务行为或响应字段语义。
+
+### 13. 剩余真实业务决策（本阶段未决、且不阻塞 Requirement 完成）
+
+| ID | 事项 | 本阶段处置 | 边界 |
+|---|---|---|---|
+| L-1 | 评分人与正式应用人是否必须为不同人员 | **未新增规则**。§5 只批准**授权类别分离**（evaluate 类 vs write-class），**不**批准人员级分离。若业务后续要求人员级分离，**必须返回 Requirement 层重开**，不得由 Design 或 Implementation 静默引入 | 本阶段不得静默增加审批角色或流程（R-D3 / A-D3-4） |
+| L-2 | Stage C 中重算 kind 的词汇处置（沿用并重定义 `DETERMINISTIC_REBUILD`，或另立表达"重算"的 kind） | 移交 Stage C Design | 本节只记录冲突 C-2 / C-3，不预先决定；R100-6 的 audit-only 约束在两种处置下均不变 |
+| L-3 | `W11-SEC-01` 的 Implementation 授权 | 需**独立、有界的跨冻结边界授权** | 不得夹带进 W11-A / W11-B / W11-C / W11-D 的实施授权 |
+
+L-1 与 L-2 **不阻塞** Requirement 完成，也**不阻塞** Stage C Design 启动；L-3 **阻塞** W11-SEC 的 Implementation，但不阻塞 Stage C Design。
+
+### 14. Stage C Design 前置条件
+
+进入 Stage C Design 前应满足：
+
+1. 本节（Wave 11 Stage B Requirement Closure）已获用户确认。
+2. §3 C-2 / C-3 的 kind 语义冲突作为 Stage C 输入已被接受（由 Stage C Design 处置，本节不预设结论）。
+3. `W11-SEC-01` 的有界授权边界已明确（不夹带、不重开 Wave 10 验收）。
+4. 交付包装顺序（§11）已被接受，或已给出基于证据的顺序调整理由。
+
+**Stage C Design 不得**在本节之外自行扩展：不得引入第二套 Credit Exposure Ledger；不得引入持久化 mutable exposure cache；不得引入新角色或新权限码；不得改写 Wave 9 / Wave 10 冻结合同；不得在本阶段之外新增 SC / UAT / Race ID；不得改写历史 Check / Approval Snapshot；不得把查询实现为写入。
+
+### 15. 本阶段明确不实施
+
+```text
+Design（表结构 / 模块划分 / Migration DDL / 锁序 / 具体 API 形态）
+Implementation（任何代码、Schema、测试、Runner）
+任何真实 MySQL 执行与 campaign
+任何 Git 写操作（add / commit / push / merge / rebase / tag）
+Release / Deploy
+前端与移动端界面实现
+Wave 10 验收重跑
+```
+
+### 16. 状态
+
+**`WAVE11_STAGE_B_REQUIREMENT_READY`**
+
+- `REQUIREMENT_ONLY_NO_DESIGN_NO_IMPLEMENTATION`;
+- `D1_D2_D3_APPROVED_AND_RECORDED`;
+- `SC99_SC107_REQUIREMENT_COMPLETE_IMPLEMENTATION_COVERAGE_STILL_MISSING`;
+- `UAT_S_34_35_36_NUMBERING_PRESERVED_NO_NEW_TOP_LEVEL_UAT_ID`;
+- `R_SAL_23_CONDITIONAL_PRESERVED`; `R_SAL_24_PRESERVED`;
+- `W11_SEC_01_SECURITY_REMEDIATION_TRACKER_ESTABLISHED`;
+- `NO_SOLUTION_MD_MODIFIED`; `NO_CODE_SCHEMA_MIGRATION_TEST_RUNNER_MODIFIED`;
+- `NO_MYSQL_CONNECTED`; `NO_GIT_WRITE`; `NO_RELEASE`; `NO_DEPLOY`;
+- `W10_INV_RISK_01_BLOCKS_RELEASE_ONLY_PRESERVED`;
+- `CREDENTIAL_EXPOSURE_OPEN_REQUIRES_OWNER_DECISION_PRESERVED`;
+- `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED_PRESERVED`;
+- `HARD_STOP_AFTER_STAGE_B_REQUIREMENT`.
+
+---
+
+## W11-SEC-01 — Credit Read Scope Final Acceptance and Capability Freeze Record (2026-10-28)
+
+### 1. Authorization and scope of this record
+
+The user reviewed the W11-SEC-01 Implementation report, the real-MySQL Gate report
+(`W11_SEC_01_MYSQL_GATE_READY_FOR_USER_ACCEPTANCE`), the read-only Acceptance Evidence
+Reconciliation and the Documentation & Evidence Closure report, and explicitly authorized,
+under AGENTS.md §4.5:
+
+1. `W11-SEC-01` Technical Acceptance PASS;
+2. the `W11-SEC-01` Capability Freeze.
+
+This authorization covers **only**:
+
+- the Credit Read Scope security read remediation;
+- the W11-SEC SQLite / MySQL acceptance evidence;
+- the W11-SEC unified MySQL Gate run configuration;
+- the corresponding tests, documentation and audit records.
+
+It does **not** authorize a Wave 11 Freeze, does **not** freeze any other business domain,
+does **not** lift the Wave 10 release hold, and does **not** authorize a release, a
+deployment, a version change or a release tag. Git Commit / Push remain separately
+authorized actions and were **not** performed.
+
+### 2. The item being closed
+
+`W11-SEC-01` — Security Read Scope Remediation (`solution.md` → `§37.54.15.2`).
+
+- **Requirement** — `document.md` → `## Wave 11 — Sales & Customer Credit Evaluation /
+  Reconciliation / Query — Stage B Requirement Closure (2026-10-27)`, clauses `R-D2-1`..`R-D2-6`
+  and §4.1 `W11-SEC-01`;
+- **Design** — `solution.md` → `§37.54.7` (incl. CORRECTION-1), `§37.54.14`, `§37.54.15.1`,
+  `§37.54.15.2`, the implementation-period technical synchronization `§37.54.7.13` (unified
+  local MySQL target and Gate launcher) and `§37.54.7.13.9` (current database inventory);
+- **Implementation** — `server/modules/credit-scope.js`, `server/modules/credit-check.js`,
+  `server/modules/credit-special-approval.js`; new `server/sales-customer-wave11-sec-scope.test.js`,
+  `server/test-utils/wave11-sec-scope-fixture.js`, `server/mysql-sales-customer-wave11-sec-scope.integration.js`;
+  test-suite registration in `scripts/testing/test-suites.js`; `scripts/gates/mysql-sales-wave11-sec-gate.mjs`;
+  `scripts/gates/mysql-local-target-contract.mjs`, `mysql-local-preflight.mjs`, `mysql-local-baseline.mjs`,
+  `run-mysql-local-gate.ps1`, `setup-mysql-local-gate.ps1`; `package.json` scripts
+  `test:mysql:wave11-sec` / `test:mysql:local` / `test:mysql:local:setup`;
+- **Acceptance** — this section.
+
+The Freeze Boundary is the one already fixed by CORRECTION-5 in `solution.md` → `§37.54.15.2`
+("W11-SEC-01 Freeze Boundary"). This record does **not** redefine it.
+
+### 3. Scope of the closure — and what it explicitly does **not** claim
+
+1. The closure covers **only** the tightening of already-approved over-privileged read
+   behaviour: the canonical Credit Read Scope predicate on the Wave 10 read paths, the
+   tightening of key visibility, the convergence of paging / totals / stable ordering, and
+   the convergence of "out of scope" and "not found" into indistinguishable responses.
+2. It does **not** change the Wave 10 credit-check and approval **decision** semantics.
+3. It does **not** change the Credit Exposure Algorithm.
+4. It does **not** change the Credit Check historical snapshots, nor the Special Approval
+   state machine, idempotency or audit paths.
+5. It does **not** change the existing business contract or visibility of normally
+   authorized subjects (`ADMIN` / `CROSS_GROUP` / `AGGREGATE_ONLY` / a currently valid
+   `AGGREGATE_PLUS_SELF` subject).
+6. It adds **no** table, **no** migration, **no** new API, **no** new UI, **no** new
+   permission code and **no** new role.
+7. A read that was **already judged over-privileged** and is now refused is **not** a Wave 10
+   incompatibility. The Wave 10 incompatibility criterion is "the existing business contract
+   of a normally authorized subject changed", not "an over-privileged read is no longer
+   allowed". The CORRECTION-1 self-limit tightening is therefore an **intended tightening**,
+   not a regression.
+8. It does **not** certify the Inventory Domain, does **not** certify legacy data migration
+   compatibility, and does **not** approve a deployment.
+
+### 4. Acceptance evidence by condition and evidence grade
+
+Evidence grades are stated as recorded. A condition whose only possible proof would require a
+live MySQL target is recorded as `NOT_RUN` rather than claimed as passed.
+
+| Condition | Evidence | Grade | Result |
+|---|---|---|---|
+| Canonical Scope contract on SQLite (five-mode matrix, fail-closed, non-enumerable) | `server/sales-customer-wave11-sec-scope.test.js` — 14 / 14 PASS | E2 SQLite | PASS |
+| Canonical Scope contract on a **real MySQL 8** session (same fixture, same production writers) | `server/mysql-sales-customer-wave11-sec-scope.integration.js` — W11-SEC-M1..M9 **9 / 9 PASS** | E3 Real MySQL | PASS |
+| SQLite ↔ MySQL authorized id sets and their order are identical | W11-SEC-M3 / M4 | E3 | PASS |
+| Historical / future `businessDate` cannot restore a lapsed self-limit scope | W11-SEC-M5 | E3 | PASS |
+| Single-object bypass closed; out-of-scope detail indistinguishable from absent | W11-SEC-M6 | E3 | PASS |
+| Unattributable rows (`credit_profile_id IS NULL`) fail closed under restricted modes | W11-SEC-M7 | E3 | PASS |
+| An approval is visible only through its trusted source check result | W11-SEC-M8 | E3 | PASS |
+| The remediation writes no Credit fact | W11-SEC-M9 | E3 | PASS |
+| Wave 9 / Wave 10 regression | `sales-customer-wave9-credit-foundation.test.js`, `sales-customer-wave10-credit-check.test.js`, `sales-customer-wave10-acceptance-contract.test.js` | E2 | PASS |
+| FAST suite | `pnpm test:fast` — **500 / 500 PASS** | E2 | PASS |
+| FULL suite | `pnpm test` — **2949 / 2949 PASS** | E2 | PASS |
+| Build | `pnpm build` — PASS | E2 | PASS |
+| Test-suite governance | `server/test-suite-governance.test.js` — **20 / 20 PASS** | E2 | PASS |
+| Whitespace | `git diff --check` — PASS | E2 | PASS |
+| Fixed MySQL identity and least-privilege contract | `scripts/gates/mysql-local-preflight.mjs` — `drift = []`, grants SHA-256 `bef61617…807e` equals the fixed baseline | E3 | PASS |
+| Five-category cleanup after the gate | `FINAL ZERO OBJECTS = {tables:0, views:0, triggers:0, routines:0, events:0}`, confirmed twice and independently (protected runner final reset, plus a **fresh session** after the destructive authorization variables were removed) | E3 | PASS |
+
+**Explicitly `NOT_RUN`** — recorded so that no reader mistakes silence for a pass:
+
+| Item | Why not run | What the closure therefore does not claim |
+|---|---|---|
+| HEAVY suite | not authorized | no claim that the heavy suite passes |
+| browser / mobile acceptance | not authorized | no claim that the frontend credit-check / special-approval lists were accepted in a browser; the reduced row count for restricted subjects is an **intended** consequence of refused over-privileged reads and was not browser-verified |
+| Wave 10 acceptance re-run | out of scope and prohibited | no claim that the Wave 10 campaign was re-executed; the existing 39 / 39 Wave 10 MySQL acceptance evidence is unchanged |
+| other MySQL gates (`test:mysql` / `test:mysql:concurrency` / `test:mysql:legacy` / `test:mysql:finance-concurrency` / `test:mysql:performance`) | not adapted to the unified target | no claim that any MySQL gate other than W11-SEC is adapted to the unified local target |
+| MySQL migration | no schema or migration change was made | no claim that a MySQL migration was executed or validated |
+
+### 5. Preservation of the Wave 10 freeze and of the remaining OPEN items
+
+- **Wave 10 Capability Freeze remains `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`.** This
+  closure does not lift the release hold, does not certify the Inventory Domain, does not
+  certify legacy data migration compatibility, and does not approve a deployment.
+- **`W10-INV-RISK-01` — `BLOCKS_RELEASE_ONLY`** — unchanged and still blocking production release.
+- **`CREDENTIAL_EXPOSURE_OPEN` — `USER_ACCEPTED / DEFERRED`.** The owner was informed and
+  chose to defer the remediation. This closure does **not** read, compare, export, rotate or
+  otherwise touch any credential, does not modify the DPAPI store and does not rebuild the
+  identity baseline. The deferral is an accepted-and-pending disposition, **not** an
+  elimination of the risk.
+- **`LEGACY_DATA_EVIDENCE_PENDING`** — unchanged; the external historical inventory was not
+  authorized and not executed, so this closure does not claim the historical data was verified.
+- **Wave 11 `W11-A` / `W11-B` / `W11-C` / `W11-D` are NOT started.** The `W11-SEC must pass
+  first` dependency recorded in `solution.md` → `§37.54.15.3` is now satisfied **for that
+  dependency only**; it does not authorize any of their Implementations.
+- **D-2 / D-3 / D-4 / D-5** remain open and continue to block W11-B / W11-C.
+- **Production release is still not authorized.** The system as a whole is **not** declared
+  ready for production release.
+- **Git consolidation still requires separate authorization.** This freeze is a decision record
+  only: no `git add`, `commit`, `push`, `tag`, `merge`, `rebase`, `reset`, `restore`, `clean`
+  or `stash` was performed, no `package.json` version was changed, and no release tag was
+  created, moved or deleted. Committing and pushing the frozen tree is a separate, explicitly
+  authorized action.
+
+### 6. Closure status
+
+**`W11_SEC_01_ACCEPTANCE_PASS`**
+
+**`W11_SEC_01_ACCEPTANCE_PASS — FROZEN — GIT_CLOSURE_PENDING`**
+
+- `WAVE11_STAGE_A_AUDIT_READY` preserved; `WAVE11_STAGE_B_REQUIREMENT_READY` preserved;
+  `WAVE11_STAGE_C_DESIGN_READY` preserved;
+- `SQLITE_AND_MYSQL_EVIDENCE_BOTH_OBTAINED` — the CORRECTION-5 evidence-state rule is satisfied;
+- `FREEZE_SCOPE_EXACTLY_W11_SEC_01` — no other business domain is frozen;
+- `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED_PRESERVED`;
+- `CREDENTIAL_EXPOSURE_OPEN_USER_ACCEPTED_DEFERRED`;
+- `W11_A_B_C_D_NOT_STARTED`;
+- `NO_GIT_WRITE`; `NO_RELEASE`; `NO_DEPLOY`; `NO_VERSION_CHANGE`; `NO_TAG_CHANGE`.
