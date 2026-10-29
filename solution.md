@@ -32870,6 +32870,77 @@ F5  增量冻结指纹、技术说明与验收证据
 
 **状态演进证据**：W11-SEC-01 的冻结记录仍显示其签发时的 `GIT_CLOSURE_PENDING`，**未被改写**；其后续 Git Journal 收尾记录在 `log/2026-10-28.md`。本节同样**不**通过改写旧记录来陈述状态演进。
 
+##### 37.54.15.10 W11-A U2-1 实施记录（2026-10-28）
+
+授权：用户 2026-10-28 指令 —— **W11-A U2-1 — SC101 Credit Query / SC102 Credit Exception History Backend Implementation**。本轮**仅**实施 U2-1：未实施 U3；未新增 Credit Query 之外的 API、权限码、业务表或 Migration；未执行真实 MySQL Gate；未签发 U2 Acceptance / Freeze；未执行任何 Git 写操作。
+
+**实施范围**
+
+| 文件 | 性质 | 说明 |
+|---|---|---|
+| `server/modules/credit-query.js` | **新建** | 三个 GET 处理函数；纯只读 |
+| `server/app.js` | **修改（+5/-0）** | 一行 import + 三个 `ownedRouteTable.register`，owner 统一为 `server/modules/credit-query.js`；既有 Credit 路由**零改动** |
+| `server/sales-customer-wave11-a-credit-query.test.js` | **新建** | U2-1 SQLite 验收套件，29 个用例 |
+| `scripts/testing/test-suites.js` | **修改（+14/-0）** | FULL 追加登记 U2-1 套件；FAST / HEAVY / `validate()` / Runner **零改动** |
+
+**canonical 复用证据**：模块只调用 `computeCreditExposure`、`resolveEffectiveCreditProfile` 的生效版本形态、`buildScopeHashes`、`computePolicySnapshotFingerprint`、`resolveCreditReadMode`、`requireCreditReadScope`、`creditScopePredicate`、`resolveCreditProfileReadScope`、`resolveCustomerCreditObject` 与**导入的** `CREDIT_CHECK_RESULT_SCOPE`。本模块**不含**任何自己的敞口算法、指纹算法或 Scope SQL；`creditScopePredicate` 的两段投影由既有常量提供，模块只提供 credit_profile 表的投影（取自 `resolveCreditProfileReadScope`，不另写 Scope SQL）。
+
+**三处实施判读（对已批准设计的落地说明，不是 Requirement 变更）**
+
+1. **"?salespersonId= absent → both scopes reported"**：查询报告**聚合档位**加上 canonical 谓词准入的**全部销售员子限额档位**；请求显式指定某个销售员时只报告该档位。准入判定完全来自 `resolveCreditProfileReadScope`，任何不被准入的档位**不出现**于响应（既不报空、也不报禁止）。
+2. **规则集 stage**：canonical hash builder 从首个 scope 读取 `scopes[0].stage`，而查询 API 无 stage 参数。本实现从数据推导该 stage：优先取所报档位档案所绑定规则（`credit_profile.rule_id`）的 `business_stage`；否则取该业务日期上第一个存在生效规则的 stage；当客户**没有任何生效规则**时规则集为空，stage 不可能改变 hash，取 canonical stage 列表首项。该 stage 选择不影响已批准的任何语义。
+3. **例外列表的授权行选取**：canonical Scope 谓词使用 `credit_check_results` 的**裸列名**。为避免与 `credit_special_approval` 的同名列产生歧义，授权行先在**仅含 credit_check_results 的派生表**中选出，展示用的 approval / 源单 JOIN 在其外层进行。JOIN 永远不会扩大授权集合。
+
+**例外列表的筛选参数**严格取 §37.54.8.1 已批准的七个（`customerId`、`scopeType`、`decision`、`stage`、`hasApproval`、`businessDateFrom`、`businessDateTo`）加 `limit` / `offset`；**未**新增未批准的参数。Check Group 与来源单据的**越权构造**由「详情与列表共用同一 Scope 谓词」这一合同挡住，并由非枚举用例逐项证明。
+
+**零副作用三层证明**
+
+| 层 | 证据 |
+|---|---|
+| E1 静态 | `credit-query.js` 代码行中不存在 `INSERT / UPDATE / DELETE / CREATE / ALTER / DROP`、`transaction(`、`ensureCreditPolicySnapshot(`、`ensureCreditLockAnchor(`、`evaluateCredit(`、`saveIdempotency(`、`audit(`；5 条 `db.prepare` 全部为 SELECT |
+| E2 运行时 | 被测请求前后**全库逐表行数与内容摘要**完全一致；`credit_check_results` / `credit_policy_snapshots` / `credit_profile` / `audit_logs` 行数不变；同请求两次调用返回完全相同的结果且库内容不变 |
+| — 归因分离 | 测试 fixture 的初始化写入（含生产 writer 产生的 check result 与 approval）与被测 GET 的业务写入**分别记录**，不混为一谈 |
+
+**验收结果**
+
+```text
+U2-1 专项测试            29 / 29 PASS
+W11-SEC 原 14 项          14 / 14 PASS   （断言未改）
+U1 原 5 项                 5 /  5 PASS
+Wave 9 credit foundation  21 / 21 PASS
+Wave 10 credit check      51 / 51 PASS
+Wave 10 acceptance ctr.   11 / 11 PASS
+测试治理自检               20 / 20 PASS
+FAST                     500 / 500 PASS
+FULL                    2983 / 2983 PASS（359 suites，0 fail）
+Build                    PASS
+真实 MySQL Gate            NOT_RUN（本轮不授权）
+```
+
+**冻结载荷增量**：`scripts/testing/test-suites.js` 由 `b982808f…e01d` 变为 `a86d25a2…2db`，差异**仅为**一项 FULL 登记及说明注释（+14/-0，0 删除）。`credit-check.js`、`credit-policy.js`、U1 套件与其余 12 项 W11-SEC 冻结载荷**逐项未变**；W11-SEC-01 原 14 项指纹原样保留，未重算、未覆盖、未作废，未执行任何 Re-Freeze。
+
+**真实 MySQL E3 预备计划（下一轮独立授权后实施）**
+
+```text
+入口            新增 scripts/gates/mysql-sales-wave11-a-gate.mjs，复用既有
+                scripts/gates/mysql-wave10-runner-support.mjs 的 runProtectedMySqlCampaign，
+                **不新建第二套受保护 runner**；经统一 launcher
+                scripts/gates/run-mysql-local-gate.ps1 运行，目标仍是
+                modern_erp_domain_test / modern_erp_test
+等价性          与 SQLite 使用**同一业务 fixture**（复用 U2-1 套件的 fixture 与生产 writer），
+                比较两引擎的例外历史 id 序列、Scope 可见集合、聚合与子限额金额逐值相等
+五级权限        在 MySQL 上复跑同一权限负向矩阵，比较两引擎的可见集合与 total
+零写入          运行前后 information_schema 五类对象计数与逐表摘要比对，
+                并由受保护 runner 的 final reset 与 launcher 的新会话复核双重确认归零
+最小权限        复用仓库既有 assertExactLeastPrivilegeGrants 合同，不复制第二份权限清单
+对象归零        运行前后 tables/views/triggers/routines/events 均为 0
+Trigger 前置    MySQL80 重启后 log_bin_trust_function_creators 回到 0，
+                最小权限账号无法 CREATE TRIGGER ⇒ E3 运行前必须先经**单独授权的**
+                管理员操作恢复该运行时前置；本轮不连接 MySQL、不读取 DPAPI、不修改任何凭据
+```
+
+**状态**：`W11_A_U2_E2_IMPLEMENTED_READY_FOR_E3` —— SQLite E2 行为证据已取得，**不构成完整 U2 Acceptance PASS**。
+
 ### 37.54.16 Compatibility, forbidden changes and preserved contracts
 
 **必须继承且不得破坏**：Wave 9 Credit Profile / Rule / Parameter；Wave 10 Credit Exposure / Check / Special Approval；Dual-Limit Control（§13 P1–P13）；PURE_DERIVED Exposure；S05 / S14 / S15 / S16 / S17 / S19；五个 Credit 业务身份；Finance canonical AR / Settlement；Credit Policy Snapshot 指纹；既有 39/39 Wave 10 MySQL 验收证据。
@@ -32956,3 +33027,2205 @@ F5  增量冻结指纹、技术说明与验收证据
 **本节不新增任何业务政策、不新增权限码、不新增角色、不新增 SC / UAT / Race ID、不改写历史冻结设计文本。** 历史文本 `solution.md:12607`、`:12616`、`:19698` 及 Wave 9 / Wave 10 冻结合同均未被改写。
 
 **Design status: `WAVE11_STAGE_C_BOUNDED_CORRECTION_READY`.**
+
+---
+
+### 37.54.20 W11-A U2 Pre-E3 Bounded Requirement & Design Correction（2026-10-28）
+
+#### 37.54.20.1 Authorization, chronology and supersession boundary
+
+Authorization: after the U2-1 implementation and the bounded Pre-E3 semantic parity verification,
+the user approved `D-U2-1` and `D-U2-2` and explicitly authorized the consecutive
+Requirement → Design Correction recorded in `document.md` →
+`W11-A U2 — Bounded Requirement Correction after Pre-E3 Semantic Parity Verification`.
+
+This section is a **forward bounded correction**, not a rewrite of history:
+
+- §37.54.8 remains evidence of the originally approved U2 design;
+- §37.54.15.10 remains the truthful U2-1 implementation/test record at the time it was produced;
+- this section supersedes only §37.54.8.1–§37.54.8.3 and the stage interpretation in
+  §37.54.15.10 where they conflict with D-U2-1 / D-U2-2;
+- the former shared top-level `policySnapshot` response and all implicit stage fallback are retired;
+- the original 29/29, FAST 500/500, FULL 2983/2983 and Build PASS records are preserved but do not
+  constitute evidence for the corrected cases;
+- U2 E3 is blocked until corrected Implementation and corrected SQLite E2 pass.
+
+No Wave 9 / Wave 10 business writer, U1 fingerprint algorithm, W11-SEC read-scope contract, frozen
+digest or historical Snapshot is changed by this Design Correction.
+
+#### 37.54.20.2 Corrected API request and error contract
+
+```text
+GET /api/credit/exposure
+    ?customerId=            required
+    &stage=                 required; one of CREDIT_CHECK_STAGES
+    &salespersonId=         optional
+    &businessDate=          optional (default = server current business date)
+    &creditObjectType=      optional (default CUSTOMER)
+    &creditObjectId=        optional (default customerId)
+
+CREDIT_CHECK_STAGES (reuse; no second constant)
+    SO_SUBMIT | SO_APPROVE | SALES_DELIVERY_CONFIRM
+
+stage missing / empty / invalid
+    -> HTTP 400
+    -> code CREDIT_QUERY_INVALID_INPUT
+```
+
+The handler imports and validates against the existing `CREDIT_CHECK_STAGES`. Stage is parsed only
+after canonical Credit read authorization has passed and is used only as a rule-set context. It is
+never forwarded to `resolveCreditReadMode`, never changes `authorizationDate`, and never implies that
+`evaluateCredit()` or a real Sales mutation is running.
+
+Delete the U2-1 `resolveRuleStage()` interpretation. The corrected implementation contains no query
+that chooses `business_stage`, no Profile-bound stage substitution, no `ORDER BY business_stage
+LIMIT 1`, no lexical first stage and no `CREDIT_CHECK_STAGES[0]` default.
+
+`GET /api/credit/exceptions` and `GET /api/credit/exceptions/:checkResultId` retain their existing
+request/error contracts. Their optional `stage` is a filter over **historical persisted results** and
+is not the SC101 dynamic-computation stage input.
+
+#### 37.54.20.3 Corrected response — Per-Scope Computed Policy Identity
+
+The corrected response has no shared top-level `policySnapshot`. Each returned `scopes[]` entry owns
+one computed identity:
+
+```json
+{
+  "exposure": {
+    "customerId": "cus-1",
+    "businessDate": "2026-10-28",
+    "stage": "SO_APPROVE",
+    "scopes": [
+      {
+        "scopeType": "CUSTOMER_AGGREGATE",
+        "creditProfileId": "cp-aggregate",
+        "creditLimitCents": 100000,
+        "usedCents": 260000,
+        "remainingCents": -160000,
+        "unlimited": false,
+        "overLimitCents": 160000,
+        "components": {
+          "approvedSoCommitmentCents": 300000,
+          "deliveredNotSettledCents": 0,
+          "arOpenCents": 0,
+          "eligiblePrepaymentCents": 40000,
+          "ambiguousAttributionCents": 0
+        },
+        "computedPolicyIdentity": {
+          "customerId": "cus-1",
+          "businessDate": "2026-10-28",
+          "stage": "SO_APPROVE",
+          "scopeType": "CUSTOMER_AGGREGATE",
+          "creditProfileId": "cp-aggregate",
+          "creditLockAnchorId": "anchor-aggregate",
+          "parameterSetHash": "<64 lowercase hex>",
+          "ruleSetHash": "<64 lowercase hex>",
+          "profileEffectiveStateHash": "<64 lowercase hex>",
+          "fingerprint": "CSP1:<64 lowercase hex>",
+          "persisted": false,
+          "creditPolicySnapshotId": null
+        }
+      }
+    ]
+  }
+}
+```
+
+`creditLockAnchorId` is read from the effective Profile's already-provisioned `anchor_id`; the query
+must not call `ensureCreditLockAnchor`. If a Profile is visible and effective but its canonical anchor
+cannot be read, the existing invariant error is returned fail closed; no anchor is provisioned by GET.
+
+The name `computedPolicyIdentity` deliberately differs from SC102's historical Snapshot fields. A
+`CSP1:` fingerprint does not itself encode stage or business date, so callers must treat the complete
+object—not the fingerprint string alone—as the business identity.
+
+#### 37.54.20.4 Per-scope hash and viewer-independence algorithm
+
+For each already-authorized returned scope independently:
+
+```text
+hashScope = {
+  scopeType,
+  profile: thisScopeEffectiveProfile,
+  stage: explicitRequestStage
+}
+
+hashes = buildScopeHashes(db, {
+  scopes: [hashScope],        // exactly one scope; never all viewer-visible Profiles
+  businessDate
+})
+
+fingerprint = computePolicySnapshotFingerprint({
+  parameterSetHash: hashes.parameterSetHash,
+  ruleSetHash: hashes.ruleSetHash,
+  profileEffectiveStateHash: hashes.profileEffectiveStateHash
+})
+```
+
+Consequences:
+
+- `ruleSetHash` is the effective rule set for the explicit stage only;
+- `profileEffectiveStateHash` contains only this scope's effective Profile state;
+- the hash input cannot include another visible or hidden Profile;
+- ADMIN and Self get identical hashes/fingerprint for the same authorized scope and context;
+- different scope Profiles may legitimately produce different profile-state hashes/fingerprints;
+- no second hash builder, canonical JSON encoder or CSP1 implementation is introduced.
+
+The U1 algorithm remains byte-for-byte frozen. Per-scope isolation changes only which already-approved
+input set is supplied to `buildScopeHashes`; it does not change hash serialization, input field order,
+SHA-256 or the `CSP1:` computation.
+
+#### 37.54.20.5 D-U2-1 amount/data flow and Finance adapter contract
+
+```text
+resolveCreditReadMode(actor) + requireCreditReadScope
+  -> validate request including explicit stage
+  -> resolve customer credit object
+  -> resolve effective Profiles under the canonical SQL scope predicate
+  -> for each admitted scope:
+       computeCreditExposure(customerId, salespersonId-or-null, businessDate)
+       if CUSTOMER_AGGREGATE:
+         resolveEligiblePrepaymentForSalesGate({
+           customerId,
+           businessDate,
+           gateStage: 'CREDIT_CHECK',
+           salesOrderId: null,
+           remainingRequiredCents: 0,
+           lockMode: 'NONE'
+         })
+         copy eligibleAmountCents only into this response's aggregate components
+       if SALESPERSON_SUB_LIMIT:
+         eligiblePrepaymentCents = 0
+       calculate used / remaining / over-limit with frozen integer-cent arithmetic
+       calculate this scope's computedPolicyIdentity
+  -> send response
+```
+
+Why `gateStage: 'CREDIT_CHECK'`: the frozen adapter requires a non-empty diagnostic gate-stage value;
+its balance selection depends on customer and business date, not on this label or `salesOrderId`.
+SC101 is reusing the Credit Check's eligible-prepayment semantics, not creating a new Finance query
+contract. `salesOrderId:null` is intentional because SC101 is a current exposure query, not a source
+document decision.
+
+Static adapter audit confirms `lockMode='NONE'`:
+
+- performs only SELECTs over `settlement_unapplied_balances`, `balance_applications`,
+  `financial_refunds`, `settlement_reversal_items` and `settlement_reversals`;
+- skips `lockParentBalances()` and therefore emits no `FOR UPDATE`;
+- opens no transaction, writes no row, provisions no lock/anchor and calls no audit writer;
+- preserves the existing Finance remaining-eligible formula, including its existing per-balance
+  lower bound; W11-A adds no new `MAX(0)` or rounding rule;
+- returns source identities internally, but SC101 projects only `eligibleAmountCents` and must not
+  expose those Finance identities.
+
+The adapter is invoked only after read authorization and visible Profile resolution. At most one
+aggregate eligible-prepayment read is needed per request; the result is never applied to a Sub-Limit.
+
+Corrected arithmetic:
+
+```text
+Aggregate used = approved SO + delivered-not-settled + AR open - eligible prepayment
+Sub-Limit used = approved SO + delivered-not-settled + attributable AR open
+remaining      = credit limit - used                 // may be negative
+over-limit     = max(0, used - credit limit)         // existing presentation rule
+```
+
+No proposed delta participates in SC101 `usedCents`.
+
+#### 37.54.20.6 Persisted lookup and historical compatibility
+
+For a computed scope identity, the optional read-only persistence lookup is exact:
+
+```text
+credit_policy_snapshots
+WHERE business_date = computed.businessDate
+  AND snapshot_fingerprint = computed.fingerprint
+  AND scope_type = computed.scopeType
+  AND credit_profile_id = computed.creditProfileId
+ORDER BY captured_at DESC, id DESC
+LIMIT 1
+```
+
+The former `credit_profile_id=? OR credit_profile_id IS NULL` broad match is not part of the corrected
+identity contract. `persisted:true` means only that the exact computed per-scope identity already has
+a persisted row; it does **not** claim that the row came from the current GET or that the GET replayed
+a historical decision. GET never inserts that row.
+
+SC102 remains unchanged:
+
+```text
+credit_check_results.credit_policy_snapshot_id
+credit_check_results.policy_snapshot_fingerprint
+credit_check_results.profile_effective_state_hash
+credit_check_results.stage / business_date / decision / check_group_id
+  -> original persisted historical Credit Check identity
+```
+
+Exception list/detail must continue to return those stored fields verbatim. They never substitute a
+new SC101 computed identity and never recompute history. No Snapshot migration, backfill or rewrite is
+introduced.
+
+#### 37.54.20.7 RBAC, transaction, side-effect and error design
+
+| Concern | Corrected contract |
+|---|---|
+| RBAC / data scope | `resolveCreditReadMode` and `requireCreditReadScope` execute first; effective Profile resolution combines date and canonical SQL scope predicate in one statement |
+| Stage | required request business context; validated against imported `CREDIT_CHECK_STAGES`; never an authorization input |
+| Transaction | none; SC101 remains an ordinary read-only GET and does not call `transaction()` or `readTransaction()` |
+| Locks | none; Finance adapter uses `lockMode='NONE'`; no Credit anchor/profile/rule locks |
+| Writers | no `evaluateCredit`, `ensureCreditPolicySnapshot`, `ensureCreditLockAnchor`, idempotency or audit writer |
+| Finance privacy | only aggregate eligible amount enters response components; no balance/source identity is projected |
+| Missing/invalid stage | 400 `CREDIT_QUERY_INVALID_INPUT` |
+| Missing/ambiguous Profile | existing 409 `CREDIT_PROFILE_MISSING` / `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` |
+| Source inconsistency | existing 409 `CREDIT_EXPOSURE_SOURCE_INCONSISTENT` |
+| Missing anchor invariant | fail closed; no GET-time repair/provisioning |
+| Historical endpoints | response and error contracts unchanged |
+
+Static and runtime zero-write assertions continue to cover all three GET endpoints. Runtime evidence
+must compare complete table contents, not only selected row counts.
+
+#### 37.54.20.8 Compatibility and consumer audit
+
+Repository consumer audit found no UI/API client for `/api/credit/exposure`: current consumers are the
+route registration and the uncommitted U2-1 test suite only. U3 has not started. Therefore the safest
+correction is to **replace**, not deprecate alongside, the unaccepted shared top-level
+`exposure.policySnapshot` with `scopes[].computedPolicyIdentity` and add required request `stage`.
+
+There must not be two simultaneously active fields with conflicting semantics. The old U2-1 tests
+that asserted the former field or omitted stage are retained as test cases but, in the separately
+authorized Implementation Correction, must be updated with an explicit correction record rather than
+deleted or weakened. Tests unrelated to the corrected contract remain byte-for-byte unchanged.
+
+U3 must consume the corrected shape, explicitly choose/receive a stage and render computed identity
+as current query context—not as a historical Check Snapshot.
+
+#### 37.54.20.9 Minimum future Implementation Correction scope
+
+Only a separately authorized Implementation round may change:
+
+```text
+server/modules/credit-query.js
+  - import Finance eligible-prepayment adapter
+  - remove resolveRuleStage and every implicit fallback
+  - require/validate stage
+  - apply aggregate-only prepayment
+  - compute one identity per scope
+  - replace shared policySnapshot response with computedPolicyIdentity per scope
+  - exact persisted lookup
+
+server/sales-customer-wave11-a-credit-query.test.js
+  - retain the existing 29 test intentions
+  - record and correct only assertions invalidated by the approved contract
+  - add nonzero-prepayment, explicit-stage, multi-stage, viewer-independence,
+    historical-compatibility and zero-write cases
+
+solution.md / log/YYYY-MM-DD.md
+  - append actual implementation and evidence records after authorization
+```
+
+No change is designed for `credit-check.js`, `credit-policy.js`, `credit-scope.js`, the Finance
+adapter, `server/app.js`, `scripts/testing/test-suites.js`, `package.json`, Schema or Migration. The
+existing test filename remains registered, so no suite-manifest change is needed. If implementation
+proves any additional file necessary, it must stop and return to Design rather than expand scope.
+
+#### 37.54.20.10 Corrected SQLite E2 and MySQL E3 gates
+
+Corrected SQLite E2, before any MySQL authorization:
+
+1. production Writer creates zero/nonzero/effective-date/historical-date prepayment fixtures;
+2. Aggregate and Sub-Limit exact used/remaining/component values match the Wave 10 check amount with
+   `proposedDeltaCents` excluded;
+3. same-day SO_SUBMIT and SO_APPROVE rules produce different rule hashes selected only by request stage;
+4. missing/empty/invalid stage returns 400 `CREDIT_QUERY_INVALID_INPUT`;
+5. source contract contains no fallback query/default;
+6. ADMIN and Self receive equal identity for the same authorized Profile; unauthorized Profiles are
+   absent from every value/hash/count;
+7. every scope identity states customer/date/stage/scope/Profile and is deterministic;
+8. SC101 computed identities and SC102 historical persisted identities remain distinct and accurate;
+9. repeated GETs leave a complete whole-database digest unchanged and create no Snapshot;
+10. original 29 tests remain present; corrected assertions are traceably recorded, not removed;
+11. focused Wave 9/10/W11-SEC/U1 regression, FAST, FULL, Build and `git diff --check` pass.
+
+Only then may status return to `READY_FOR_E3`. Real MySQL E3 remains a separate authorization and must:
+
+- reuse the corrected business fixture and production Writer;
+- compare SQLite/MySQL amounts, per-scope hash fields, fingerprints, historical IDs and authorized
+  visible sets exactly;
+- rerun the missing/invalid stage and multi-stage matrix;
+- prove viewer-independent identity and no unauthorized leakage;
+- prove all GETs zero-write through before/after table contents plus protected campaign cleanup;
+- reuse the existing protected runner, least-privilege contract and unified disposable target;
+- leave five object classes at zero after cleanup.
+
+No SQLite result is a substitute for E3, and no E3 result automatically signs U2 Acceptance/Freeze.
+
+#### 37.54.20.11 Rollback and freeze boundary
+
+This Design adds no Schema and therefore needs no database rollback. Future implementation rollback,
+if authorized and required before Acceptance, consists only of reverting the bounded unaccepted U2
+query/test correction while preserving all historical documentation; destructive Git operations are
+not implied or authorized.
+
+Preserved without modification:
+
+```text
+W11_SEC_01_ACCEPTANCE_PASS — FROZEN — GIT_JOURNAL_CLOSED
+W11_A_U1_ACCEPTANCE_PASS — FROZEN — GIT_JOURNAL_CLOSED
+U1 CSP1 algorithm and digest chain
+Wave 10 Credit Check / eligible-prepayment / historical Snapshot writers
+WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED
+W10_INV_RISK_01 / LEGACY_DATA_EVIDENCE_PENDING / CREDENTIAL_EXPOSURE_OPEN
+```
+
+Not authorized: production code/test changes, MySQL, U3, W11-B/C/D, Acceptance/Freeze, Git Commit/Push,
+Release or Deploy.
+
+#### 37.54.20.12 Design status
+
+**Status: `W11_A_U2_BOUNDED_CORRECTION_DESIGN_READY`.**
+
+- `D_U2_1_FINAL_AGGREGATE_USED_DESIGNED`;
+- `FINANCE_ADAPTER_LOCKMODE_NONE_READ_ONLY_VERIFIED`;
+- `SUB_LIMIT_PREPAYMENT_ZERO_PRESERVED`;
+- `D_U2_2_EXPLICIT_STAGE_REQUIRED_NO_FALLBACK`;
+- `PER_SCOPE_COMPUTED_POLICY_IDENTITY_DESIGNED`;
+- `VIEWER_DEPENDENT_SHARED_IDENTITY_RETIRED`;
+- `DYNAMIC_COMPUTED_VS_HISTORICAL_PERSISTED_NAMES_AND_FLOWS_SEPARATED`;
+- `NO_SECOND_EXPOSURE_FINANCE_HASH_OR_FINGERPRINT_ALGORITHM`;
+- `MINIMUM_FUTURE_FILES_CLOSED`;
+- `CORRECTED_SQLITE_E2_REQUIRED_BEFORE_MYSQL_E3`;
+- `OLD_U2_1_HISTORY_PRESERVED_NOT_OVERCLAIMED`;
+- `W11_SEC_U1_WAVE10_FREEZE_BOUNDARIES_PRESERVED`;
+- `NO_IMPLEMENTATION_TEST_SCHEMA_MIGRATION_MYSQL_GIT_WRITE`;
+- `HARD_STOP_AFTER_DESIGN_CORRECTION`.
+
+#### 37.54.20.13 Bounded Implementation Correction（2026-10-28）
+
+本节记录用户在 `W11_A_U2_BOUNDED_CORRECTION_DESIGN_READY` 后单独授权的有界实施结果。实际生产
+修改仅发生在 `server/modules/credit-query.js`，测试修正仅发生在
+`server/sales-customer-wave11-a-credit-query.test.js`；未修改 `credit-check.js`、
+`credit-policy.js`、`credit-scope.js`、Finance adapter、`server/app.js`、测试登记、Schema 或
+Migration。
+
+SC101 的 Aggregate 金额先继续复用 `computeCreditExposure()` 取得原始组件，再以
+`resolveEligiblePrepaymentForSalesGate()`、`gateStage='CREDIT_CHECK'`、`salesOrderId=null`、
+`remainingRequiredCents=0`、`lockMode='NONE'` 取得 canonical eligible amount，并且只把
+`eligibleAmountCents` 投影到 Aggregate 组件。Salesperson Sub-Limit 仍使用原始组件中的 0；没有
+复制 Finance 扣减算法、没有截断负数 remaining、没有返回 Finance 余额来源身份。
+
+`GET /api/credit/exposure` 在 Credit Read Mode / Scope fail-closed 后要求显式 `stage`，并以导入的
+`CREDIT_CHECK_STAGES` 验证；缺失、空值和非法值统一返回 400 `CREDIT_QUERY_INVALID_INPUT`。已删除
+Profile 绑定规则、规则表首行和默认常量的所有 stage 回退。请求 stage 只进入规则 Hash 上下文，
+不改变授权日期或 Credit Read Mode；Finance adapter 的 gateStage 仍保持既有 `CREDIT_CHECK` 合同。
+
+每个已授权档位分别以 `{ scopeType, profile: thisProfile, stage }` 调用一次
+`buildScopeHashes()`，再调用冻结的 `computePolicySnapshotFingerprint()`；结果作为
+`scopes[].computedPolicyIdentity` 返回，显式携带 customer/date/stage/scope/Profile/Anchor、三项
+Hash 与 fingerprint。旧的 viewer-dependent 顶层 `exposure.policySnapshot` 已被替换，不保留第二个
+冲突字段。持久化匹配严格使用 businessDate + fingerprint + scopeType + profileId + anchorId；0 条
+返回 `persisted=false`，1 条返回精确 ID，多条 fail closed，且不接受 `credit_profile_id IS NULL`。
+SC102 仍逐字投影原 `credit_check_results` 及特别审批中的历史 Snapshot 身份，不使用动态身份覆盖或
+重算历史。
+
+#### 37.54.20.14 Corrected SQLite E2 evidence
+
+U2 专项测试由原 29 项扩展为 36 项，原 29 项测试意图全部保留。所有既有 exposure 请求按 D-U2-2
+补入显式 stage；原测试
+`UAT-S-35-A5 the policy snapshot identity is computed and linked, never persisted` 修正为
+`UAT-S-35-A5 every scope has a computed policy identity and the read never persists it`：旧断言验证共享
+顶层身份，新断言验证每档独立、可重算且不持久化的身份。权限负向、分页、零写入及历史身份保护
+测试未删除、未 skip、未弱化。
+
+新增 7 项覆盖：
+
+1. 生产 Finance Writer 创建 40,000 分有效预收款；同一 fixture 下 Credit Check 与 SC101 Aggregate
+   `usedCents=260000`，`eligiblePrepaymentCents=40000`，`remainingCents=-160000`；Sub-Limit
+   `usedCents=300000`、eligible=0；`proposedDeltaCents` 不进入 used；
+2. 预收款 businessDate 生效边界；
+3. 同日 SO_SUBMIT / SO_APPROVE 不同规则产生各自且不同的 ruleSetHash；
+4. stage 缺失、空、非法均为 400，并验证 DENY 在敏感读取前 403；
+5. 源码无隐式 stage fallback；
+6. ADMIN 与 Self 对相同档位的完整 computed identity 相等，Self 不得获知额外档位；
+7. 动态身份与历史身份分离、精确 persisted lookup、既有历史准确且 GET 不创建 Snapshot。
+
+E1 静态证据同时确认 Finance adapter 使用 `lockMode='NONE'`，adapter 的 `FOR UPDATE` 只在
+`lockMode === 'FOR_UPDATE'` 分支出现，SC101 不投影 source balance identities。E2 在 fixture Writer
+阶段结束后才测量 GET，重复请求前后比较全库内容摘要；摘要不变，Snapshot 数不增加，无 Audit /
+Snapshot Writer / Lock Provision。
+
+实际门禁结果：
+
+```text
+Corrected U2 SQLite                         36/36 PASS
+W11-SEC frozen scope                       14/14 PASS
+W11-A U1 frozen primitives                  5/5 PASS
+Wave 9 focused                             21/21 PASS
+Wave 10 acceptance contract + credit       62/62 PASS (11 + 51)
+Test Suite Governance                      20/20 PASS
+FAST                                      500/500 PASS
+FULL                                    2990/2990 PASS, 359 suites
+Build                                      PASS (1965 modules)
+git diff --check                           PASS
+Real MySQL E3                              NOT_RUN
+```
+
+#### 37.54.20.15 Corrected implementation status and E3 boundary
+
+**Status: `W11_A_U2_E2_CORRECTED_READY_FOR_E3`.**
+
+- `D_U2_1_AGGREGATE_PREPAYMENT_PARITY_CORRECTED`;
+- `D_U2_2_EXPLICIT_STAGE_NO_FALLBACK_CORRECTED`;
+- `PER_SCOPE_VIEWER_INDEPENDENT_COMPUTED_IDENTITY_CORRECTED`;
+- `EXACT_PERSISTED_LOOKUP_AND_HISTORICAL_SEPARATION_PROVEN`;
+- `CORRECTED_U2_36_OF_36`;
+- `FOCUSED_FAST_FULL_GOVERNANCE_BUILD_DIFF_CHECK_PASS`;
+- `ZERO_WRITE_SQLITE_E1_E2_PROVEN`;
+- `W11_SEC_U1_WAVE10_FREEZE_BOUNDARIES_PRESERVED`;
+- `REAL_MYSQL_E3_NOT_RUN_REQUIRES_SEPARATE_AUTHORIZATION`;
+- `NO_U2_ACCEPTANCE_OR_FREEZE_NO_U3_NO_GIT_WRITE`;
+- `HARD_STOP_AFTER_CORRECTED_E2`.
+
+#### 37.54.20.16 Real MySQL E3 implementation attempt（2026-10-28）
+
+用户在 `W11_A_U2_E2_CORRECTED_READY_FOR_E3` 后单独授权真实 MySQL E3。本轮已建立独立 Gate
+`scripts/gates/mysql-sales-wave11-a-gate.mjs`，其唯一 suite 为
+`server/mysql-sales-customer-wave11-a-credit-query.integration.js`，并继续复用未修改的
+`runProtectedMySqlCampaign`。`package.json` 只追加 `test:mysql:wave11-a`，既有本地默认入口、
+W11-SEC Gate 和其他 scripts 不变。
+
+新增共享 fixture `server/test-utils/wave11-a-credit-query-fixture.js`，把原 U2 SQLite 测试中的
+Credit Query 准备方法提取为 SQLite/MySQL 共用代码；原 36 项断言未改变，重构后实跑 36/36 PASS。
+E3 suite 采用十项单层 TAP，覆盖金额、40,000 分预收款、日期边界、显式三 stage、per-scope
+identity、viewer independence、动态/历史分离、五级 Scope、分页、404 等价及全库零写入摘要。
+跨引擎只把生产 Writer 生成的随机 Profile/Anchor 物理 ID 映射为稳定业务键；金额、stage、scope、
+规则 Hash、排序、授权集合和错误合同不做归一化。
+
+真实运行前的首次沙箱内只读 preflight 在建立数据库连接之前因 Windows DPAPI 当前用户上下文不匹配
+失败（`Key not valid for use in specified state`）。随后请求在当前 Windows 用户上下文执行同一只读
+preflight，但执行环境安全审查拒绝该提升请求。未读取明文密码、未连接 MySQL、未启动 Protected
+Gate、未执行 Reset/Cleanup，也未查询到实时 `log_bin_trust_function_creators`。禁止使用手工密码、
+旁路 Launcher 或降低身份检查，因此本轮不能形成真实 MySQL E3 证据。
+
+**Status: `W11_A_U2_E3_ENVIRONMENT_BLOCKED`.**
+
+- `E3_GATE_AND_SUITE_IMPLEMENTED_NOT_EXECUTED`;
+- `SQLITE_SHARED_FIXTURE_36_OF_36_PASS`;
+- `DPAPI_USER_CONTEXT_UNAVAILABLE_IN_SANDBOX`;
+- `ELEVATED_READ_ONLY_PREFLIGHT_REJECTED`;
+- `MYSQL_CONNECTION_RESET_GATE_POSTFLIGHT_NOT_RUN`;
+- `NO_E3_PASS_NO_U2_ACCEPTANCE_OR_FREEZE`;
+- `HARD_STOP`.
+
+#### 37.54.20.17 E3 M2/M4/M9 exact failure triage（2026-10-29）
+
+本节依据完整真实 MySQL transcript
+`w11-a-u2-e3-20261029-074456.tap.log` 记录第二次 E3 的精确结果：MySQL 8.0.37，M1/M3/M5/
+M6/M7/M8/M10 PASS，M2/M4/M9 FAIL，Gate exit 1，Protected Cleanup confirmed，fresh-session
+tables/views/triggers/routines/events 均为 0。三个失败均为独立 `testCodeFailure`；before/after 已完成，
+不是共享 Hook 连锁失败。
+
+M2 的 `0 !== 300000` 来自测试误选：collector 先按 `profileKey` 排序三个 ADMIN scope，再只把
+`amount` 投影到 `adminAmounts`，丢失 Profile 身份；断言用
+`find(scopeType === 'SALESPERSON_SUB_LIMIT')`，因此命中按字典序位于 `sp-self` 前的 `sp-other`。
+该隐藏 Profile 没有本客户的销售占用，真实 used=0；目标 `sp-self` 仍为 300000。问题在测试证据选择，
+不是 SC101 金额实现，也不是 MySQL 专属差异。最小未来修正是保留 amount 对应的稳定 `profileKey`，
+明确选择 `cus-w11-self:sp-self:*`，并独立断言 `sp-other` 为 0；不得把期望改成 0。
+
+M9 的 `true !== false` 是 pagination evidence key 碰撞，不是数据库重复页或越权。共享 fixture 先在
+HISTORICAL 执行一次生产 Credit Check，Preparation B 又在 TODAY 执行同订单/同 scope 的 Credit
+Check；两行具有不同真实 `checkResultId`，但 `normalizeHistory()` 把两者都压缩为
+`sourceOrderId:scopeType`。SQLite 一次性复现显示 page 0/page 2 的真实 ID 不同，而压缩 key 分别相同。
+最小未来修正应使用各引擎真实 `checkResultId` 验证本引擎跨页无重叠，同时继续用稳定业务投影比较
+SQLite/MySQL 页内容；不得用 Set 去重或放松非枚举断言。
+
+M4 是已证明的生产跨引擎 ruleSetHash 合同冲突，不能按本轮测试白名单修正。冻结
+`buildScopeHashes()` 把原始 `result_payload_json` 字符串直接纳入 canonical input。SQLite 物理列为
+TEXT，生产 Writer 保存 `{"identity":"SO_APPROVE"}`；MySQL 物理列为 JSON，读取为
+`{"identity": "SO_APPROVE"}`。其余输入（稳定 rule id、code、stage、scenario、timing、strength、
+credit item、mode、effective dates）一致。使用冻结 `canonicalJson/sha256` 独立复算：
+
+```text
+SQLite compact JSON -> 3f2c670a3b45da049efcfd24cceb7d2214007d89bda0b8eded979838f5d1f60c
+MySQL JSON rendering -> 5c54471880d334b95fad0373338a928f0d102d76d8c02abc4942e24a96ab2bcd
+```
+
+两值逐字命中 transcript 的 expected/actual；parameterSetHash 与 normalizedProfileHash 已相等，故
+normalizedFingerprint 仅随 ruleSetHash 分叉。这不是随机 Fixture ID、排序或规则选择问题，而是冻结
+算法对后端 JSON 文本表示敏感的真实生产语义缺陷。
+
+修复 M4 需要独立 Requirement/Design 裁决：定义跨引擎 JSON semantic canonicalization、Hash 合同
+版本及既有 Snapshot/历史引用兼容策略，然后才可授权修改冻结 `buildScopeHashes()`。将 fixture payload
+改成 `{}`、忽略 ruleSetHash、强制比较归一值或改写历史 Snapshot 都会隐藏真实缺陷，未执行。
+
+因此本轮未修改 Integration Suite、共享 Fixture或任何生产文件；M2/M9 的已证实测试修正也按“发现
+生产 Hash 冲突即停止自动修复”的授权边界保留为后续同一有界实施项。真实 MySQL 未重跑。
+
+**Status: `W11_A_U2_E3_PRODUCTION_CORRECTION_REQUIRED`.**
+
+- `E3_SECOND_RUN_7_OF_10_PASS_M2_M4_M9_FAIL`;
+- `M2_TEST_PROFILE_SELECTION_DEFECT_PROVEN`;
+- `M9_TEST_EVIDENCE_KEY_COLLISION_PROVEN`;
+- `M4_CROSS_ENGINE_JSON_RENDERING_HASH_CONFLICT_PROVEN`;
+- `FROZEN_HASH_AND_HISTORY_NOT_MODIFIED`;
+- `PRODUCTION_REQUIREMENT_DESIGN_CORRECTION_REQUIRED_BEFORE_RERUN`;
+- `CLEANUP_CONFIRMED_FINAL_INVENTORY_ZERO`;
+- `NO_MYSQL_RERUN_NO_GIT_WRITE_NO_ACCEPTANCE_FREEZE_OR_U3`;
+- `HARD_STOP`.
+
+#### 37.54.20.18 E3 GET zero-write measurement boundary correction（2026-10-29）
+
+本节记录用户在 `W11_A_U2_E3_TEST_FAILED — CLEANUP_CONFIRMED` 后批准的有界测试修正。该修正只
+处理代码审查已确认的 measurement-boundary 缺陷，不声称已经证明此前真实 MySQL 运行的第一个原始
+错误。生产信用实现、共享 Fixture、Gate、Protected Runner、Launcher、Preflight、Schema 与 Migration
+均未修改。
+
+`collectEngineEvidence()` 现在显式分为三个阶段：
+
+1. Fixture Preparation A：共享 `seedWorld`、订单准备、stage rule、额外 Profile Writer；随后单独对
+   zero-prepayment SC101 GET 做一次 before/after 全库摘要观测；
+2. Fixture Preparation B：Finance 40,000 分预收款 Writer 与 `evaluateCredit()` Credit Check Writer；
+   后者可能 provision Anchor/Snapshot，因此其金额证据先保存，再建立最终 baseline；同时预先解析
+   Profile/Anchor 稳定业务键及范围外历史 ID；
+3. Final GET-only Observation：baseline 后仅调用生产 `getCreditExposure`、`listCreditExceptions`、
+   `getCreditException`；身份规范化只读取准备阶段内存 Map，不再直接查询数据库。最后通过 observer
+   取得 after snapshot。
+
+最终证明继续比较完整数据库每张表的 count + content digest，并额外逐项锁定
+`credit_policy_snapshots`、`credit_check_results`、`audit_logs`、`payment_collections`、
+`settlement_unapplied_balances`、`balance_applications`、`financial_refunds`、
+`settlement_reversal_items`。这些关键表必须实际存在，且 before/after 摘要完全相等；Snapshot 行数、
+全库摘要以及重复 GET 结果断言没有删除或放宽。
+
+原 10 项顶层 TAP `W11-A-E3-M1` 至 `M10` 全部保留，名称、业务范围和断言强度未降低。静态语法检查
+PASS；共享 Fixture 静态检查 PASS；受影响的 SQLite U2 suite 36/36 PASS；`git diff --check` PASS。
+本轮未连接 MySQL、未运行 Gate/Reset/Cleanup，上一轮真实失败不能被本轮静态/SQLite 结果替代。
+
+下一次真实 Gate 必须由用户在 Windows PowerShell 外层捕获完整 stdout/stderr 到当前用户私有目录：
+
+```powershell
+$evidenceDir = Join-Path $env:LOCALAPPDATA 'ModernERP\mysql-gate\evidence'
+New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$tapLog = Join-Path $evidenceDir "w11-a-u2-e3-$stamp.tap.log"
+& powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 `
+  -Script test:mysql:wave11-a 2>&1 | Tee-Object -FilePath $tapLog
+$gateExit = $LASTEXITCODE
+"GATE_EXIT_CODE=$gateExit" | Tee-Object -FilePath $tapLog -Append
+Write-Host "TAP evidence: $tapLog"
+exit $gateExit
+```
+
+该日志只保存在 LocalAppData，不得提交 Git；现有 Launcher 不打印明文密码。必须保留完整首个
+`not ok`、YAML diagnostic、stack、退出码、Runner cleanup 和 fresh-session 五类对象结果，禁止只保存
+尾部外层异常。
+
+**Status: `W11_A_U2_E3_TEST_CORRECTION_READY_FOR_RERUN`.**
+
+- `CONFIRMED_MEASUREMENT_BOUNDARY_DEFECT_CORRECTED`;
+- `CREDIT_CHECK_WRITER_BEFORE_FINAL_BASELINE`;
+- `FINAL_WINDOW_PRODUCTION_GET_HANDLERS_ONLY`;
+- `FULL_DATABASE_AND_CRITICAL_TABLE_ZERO_WRITE_ASSERTIONS_PRESERVED`;
+- `MYSQL_TOP_LEVEL_TAP_10_OF_10_DECLARATIONS_PRESERVED`;
+- `SQLITE_U2_36_OF_36_PASS`;
+- `REAL_MYSQL_RERUN_NOT_RUN`;
+- `PRIOR_FIRST_ORIGINAL_ERROR_STILL_UNPROVEN`;
+- `NO_E3_PASS_NO_ACCEPTANCE_FREEZE_OR_U3`;
+- `HARD_STOP`.
+
+#### 37.54.20.19 Cross-Engine Hash Contract Bounded Design Correction（2026-10-29）
+
+##### 37.54.20.19.1 Authorization, evidence and supersession boundary
+
+用户在 `W11_A_U2_E3_PRODUCTION_CORRECTION_REQUIRED` 后连续授权 Requirement → Design
+Correction。对应 Requirement 已追加于 `document.md` → `W11-A U2 E3 — Cross-Engine Credit
+Policy Hash Contract Requirement Correction`，状态为
+`W11_A_U2_E3_HASH_CORRECTION_REQUIREMENT_READY`。
+
+本节只向前修正 M4 的 Hash 合同，并记录 M2/M9 的测试修正设计。§37.54.20.13–§37.54.20.18
+仍是其发生时的真实实现、E2、E3 和排查记录；不回写、不覆盖。当前真实 MySQL E3 仍是 7/10，
+Cleanup confirmed，不能被本 Design 改写为 PASS。
+
+确认的 M4 输入与冻结 V1 输出为：
+
+```text
+SQLite TEXT  {"identity":"SO_APPROVE"}
+  -> 3f2c670a3b45da049efcfd24cceb7d2214007d89bda0b8eded979838f5d1f60c
+MySQL JSON   {"identity": "SO_APPROVE"}
+  -> 5c54471880d334b95fad0373338a928f0d102d76d8c02abc4942e24a96ab2bcd
+```
+
+`parameterSetHash`、normalized Profile state、规则业务字段与稳定规则 ID 相同，故根因唯一落在
+`result_payload_json` 的物理字符串。`canonicalJson()` 会递归排序传入对象，但 V1 把 payload 当成
+字符串属性，所以不会进入字符串内部。
+
+##### 37.54.20.19.2 Dependency graph and persisted identities
+
+```text
+createCreditRule(resultPayload object)
+  -> JSON.stringify
+  -> credit_check_rules.result_payload_json
+       SQLite TEXT / MySQL native JSON rendering
+  -> buildScopeHashes
+       parameterSetHash
+       ruleSetHash  <--- M4 physical-rendering dependency
+       profileEffectiveStateHash
+  -> computePolicySnapshotFingerprint
+  -> credit_policy_snapshots(id, fingerprint, three hashes)
+  -> evaluateCredit
+       checkGroupId
+       credit_check_results(snapshot id/fingerprint/profile hash)
+       audit_logs
+  -> credit_special_approval
+       exact source result + snapshot id + fingerprint binding
+
+SC101 -> buildScopeHashes + pure fingerprint -> per-scope computed identity
+SC102 -> stored check/snapshot/approval fields verbatim
+```
+
+实际持久化关系确认：Snapshot 存三项 Hash 与 fingerprint；Check Result 存 Snapshot FK、fingerprint、
+Profile Hash 与 Check Group；特别审批复制来源 Result、Snapshot ID、fingerprint 与 Profile Hash；消费查询
+同时匹配 Snapshot ID 与 fingerprint。SC101 只动态计算并只读查找；SC102 不计算历史身份。
+
+##### 37.54.20.19.3 JSON semantic canonicalization contract
+
+新增一个**有界 payload 解析/验证原语**，不新增第二套 Hash builder，也不引入通用 JSON 库：
+
+```text
+parseCreditRulePayload(rawDatabaseValue)
+  1. SQL NULL/undefined -> CREDIT_RULE_PAYLOAD_MISSING
+  2. validate strict JSON lexical form and reject observable duplicate object keys
+  3. JSON.parse
+  4. require top-level plain object
+  5. recursively validate values and number domain
+  6. return semantic object; do not hash and do not write
+```
+
+该原语可位于独立、窄职责的 `server/modules/credit-rule-payload.js`，由 Rule Writer 与
+`credit-check.js` 共同使用。它只负责 strict JSON/object/duplicate/number 边界；唯一的递归排序与
+序列化仍使用 `credit-check.js` 既有 `canonicalJson()`，唯一 Scope Hash 入口仍是
+`buildScopeHashes()`。
+
+规范化规则：
+
+| JSON value | V2 contract |
+|---|---|
+| object | member name 按既有 `canonicalJson()` 的确定顺序递归排序 |
+| array | 顺序、重复元素与长度原样保留；元素递归规范化 |
+| string/key | JSON escape spelling 被解析；Unicode code points 不做额外 NFC/NFD 转换 |
+| finite fractional number | 采用 `JSON.parse` 后 ECMAScript Number，再由 `JSON.stringify` 确定表示 |
+| integer | 必须 `Number.isSafeInteger`；超范围 fail closed，禁止舍入碰撞 |
+| `-0` / `0` | 同一数值语义，规范表示为 `0` |
+| boolean / nested `null` | 分别保留为 `true/false/null` |
+| top-level `{}` | 合法 |
+| top-level `[]` / scalar / JSON `null` | `CREDIT_RULE_PAYLOAD_TYPE_INVALID` |
+| malformed JSON | `CREDIT_RULE_PAYLOAD_INVALID_JSON` |
+| SQL NULL | `CREDIT_RULE_PAYLOAD_MISSING`，与 JSON null 明确区分 |
+| duplicate object key | 如在应用边界可见则 `CREDIT_RULE_PAYLOAD_DUPLICATE_KEY` |
+
+生产 Writer 的 request body 已是 JS object，天然不存在 raw-text 重复 Key；Implementation 必须把
+显式 array/scalar/null 从当前静默 `{}` 改为 fail closed，缺省/未提供仍按既有 `{}`。SQLite TEXT 无
+JSON CHECK；MySQL JSON 会验证并物理规范化，且原始重复 Key 可能不可恢复。因此 raw SQL 写入不属于
+业务合同；MySQL 已吞并的非法重复 Key 不可伪装成可证明的跨引擎输入。无需 Schema/Migration，读取
+边界对仍可观测的非法值 fail closed。
+
+V2 规则集输入把 `resultPayloadJson: rawString` 替换为
+`resultPayload: parseCreditRulePayload(rawString)`，随后由既有 outer `canonicalJson()` 统一序列化；
+规则排序与其余字段保持不变。V2 `ruleSetHash` 使用域分隔：
+
+```text
+SHA256("CREDIT_RULE_SET_V2\0" + canonicalJson(v2RuleProjection))
+```
+
+参数 Hash 和 Profile Hash 的现有算法不变；返回 identity 同时携带
+`hashContractVersion='CREDIT_POLICY_HASH_V2'`，避免把裸 64 hex 脱离版本解释。
+
+##### 37.54.20.19.4 Alternatives and selected decision
+
+| 路线 | 跨引擎 | 历史/Freeze | Replay/审批 | 结论 |
+|---|---|---|---|---|
+| A. 原地改变 `buildScopeHashes`，仍称 CSP1 | 新计算可一致 | 同一 `CSP1:` 名称出现两种语义；旧 Golden、旧 Snapshot 身份与 T5 失真 | 新旧 Check Group/审批无法可靠分层 | **拒绝** |
+| B. 保留 V1，新增显式 V2 identity | 一致且可测试 | V1 原值永久保留；V2 单独 Golden/指纹链 | 可用 CSP2/CCHK2 隔离并显式处理 legacy replay | **选择** |
+| C. 只在读取边界规范化 JSON，再另定兼容规则 | 是 | 若无版本仍等同 A；若有版本实质是 B 的实现方式 | 单独使用不能关闭历史身份问题 | **作为 B 的实现机制，不单独成案** |
+
+唯一推荐方案：**B + C(boundary mechanism)**。生产中仍只有一个 `buildScopeHashes()` 和一个
+`computePolicySnapshotFingerprint()`，二者由显式 `hashContractVersion` 选择 V1/V2；不得建立 U2
+专用 builder。V1 branch 必须逐字节保留旧投影、旧 digest 与旧 prefix，仅用于 Golden、历史验证和
+legacy replay。所有新动态查询和新 Credit Check 明确请求 V2。
+
+V2 Snapshot fingerprint：
+
+```text
+canonical = lengthPrefix("CREDIT_POLICY_SNAPSHOT_V2")
+          + lengthPrefix(parameterSetHash)
+          + lengthPrefix(ruleSetHash)
+          + lengthPrefix(profileEffectiveStateHash)
+fingerprint = "CSP2:" + SHA256(canonical)
+```
+
+V1 继续是原三个 Hash 的 length-prefix 串与 `CSP1:`，不插入 version，不重算。V2 的 domain
+string 进入 digest，不只是换 prefix。
+
+##### 37.54.20.19.5 Snapshot and SC101/SC102 compatibility
+
+无需 Schema/Migration：
+
+- `credit_policy_snapshots.snapshot_fingerprint VARCHAR(128)/TEXT` 可容纳 `CSP2:`；
+- `credit_check_results.check_group_id VARCHAR(128)/TEXT` 可容纳 `CCHK2:`；
+- Snapshot 三 Hash 列继续存 64 lowercase hex；其版本由 fingerprint prefix 权威确定；
+- 新 Snapshot 的 `notes_json.contractVersion='CREDIT_POLICY_SNAPSHOT_V2'` 仅作诊断，不是身份权威；
+- `CSP1:` / `CCHK1:` 行不 UPDATE、不 backfill、不重写。
+
+`ensureCreditPolicySnapshot()` 接受显式 contract version。纯
+`computePolicySnapshotFingerprint()` 保留 V1 默认/显式路径以维持 U1 Golden，并增加显式 V2 路径；
+生产 Snapshot Writer 必须显式传 V2，禁止因遗漏参数继续写 V1。
+
+SC101 每档 `computedPolicyIdentity` 增加：
+
+```json
+{
+  "hashContractVersion": "CREDIT_POLICY_HASH_V2",
+  "fingerprintVersion": "CSP2",
+  "fingerprint": "CSP2:<64 lowercase hex>"
+}
+```
+
+其它 customer/date/stage/scope/Profile/Anchor/三 Hash 字段保留。persisted lookup 仍精确匹配
+businessDate + fingerprint + scope + Profile + Anchor；`persisted=false` 只表示没有 exact CSP2 row，
+不否定 CSP1 历史。GET 不调用 Writer。
+
+SC102 继续逐字段返回数据库已存的 Snapshot ID、fingerprint、rule hash、Profile hash、Check Group 与
+approval binding。可由 `CSP1/CSP2`、`CCHK1/CCHK2` 前缀识别版本，但不得用当前规则重算历史；未知或
+畸形 prefix fail closed。旧 Snapshot 与新 Snapshot 即使业务上下文相同，也因 prefix 与 digest domain
+不同而可区分。
+
+##### 37.54.20.19.6 Replay, Check Group and Special Approval
+
+新决策的 Group identity 使用：
+
+```text
+CCHK2:SHA256(
+  "CREDIT_CHECK_GROUP_V2\0" |
+  source | stage | businessDate | authorizationContext |
+  V2 parameter/rule/profile hashes | exposureDigest
+)
+```
+
+V1 CCHK1 公式完全保留。为防止版本切换把同一事实静默写成第二个决定，Writer 在任何 V2 Snapshot、
+Result、approval-consumption audit 之前执行 replay gate：
+
+1. 计算当前业务输入的原 V1 candidate（包括当前 `authorizationContext`、V1 hashes 与 exposure
+   digest），按 exact `CCHK1:` 查找；
+2. 若存在，验证 group 行数/Scope 集、source、stage、businessDate、recognitionMode、proposed delta、
+   component breakdown、Profile/Anchor、Snapshot FK 与 Snapshot 三 Hash 全部相符；只有全部相符才走
+   原 V1 replay/approval 语义，不创建 CSP2/CCHK2；
+3. exact candidate 不存在时，按同一 source + stage + businessDate 查询 legacy contextual rows；若其
+   存储的业务投影与当前事实相同或无法区分，但 CCHK1 不能精确证明（例如跨引擎物理 JSON 或缺失的
+   authorizationContext 证据），抛 409 `CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS`，事务零新增写入；
+4. 只有不存在 legacy candidate，或存储的 exposure/proposed delta/Profile/parameter/recognition 等
+   可证明业务事实已经变化时，才进入 V2 Snapshot 与 CCHK2 写入；单凭 rule hash 不同不能证明变化，
+   因为它正是 M4 的分叉字段。
+
+这一定义不尝试从 Hash prefix 猜测授权上下文，也不自动把 V1 转为 V2。跨引擎搬迁后若无法证明 exact
+legacy replay，明确拒绝是设计结果，不是生成第二个决定。
+
+特别审批兼容：
+
+- legacy exact replay 只使用其原 Check Result 的 Snapshot ID + CSP1 fingerprint，继续遵守既有
+  expiry、scope mode、source order、authority ceiling、SOD 与 one-time audit 规则；
+- V2 只查找 exact CSP2 Snapshot ID + fingerprint；CSP1 approval 永不释放 CCHK2；
+- 新 V2 approval 正常复制 V2 来源身份；不迁移、不复制、不提前消费旧 approval；
+- ambiguous legacy replay 在 approval lookup/consume 之前拒绝，保证零误消费、零重复消费。
+
+##### 37.54.20.19.7 Freeze exception and U1 T5 evidence chain
+
+永久保留：W11-SEC 原 14 项 SHA-256、U1 四项增量指纹、U1 原 7 valid + 10 invalid CSP1 Golden、
+原 Wave 10 行为证据。它们描述各自签发时点，不用新值覆盖。
+
+未来 Implementation 需要精确冻结例外：
+
+```text
+server/modules/credit-check.js
+  仅允许：version constants；单一 buildScopeHashes 的显式 V1/V2 branch；V2 rule payload
+  semantic input；CCHK2；legacy replay gate。禁止改变 V1 projection/digest/output。
+
+server/modules/credit-policy.js
+  仅允许：纯 fingerprint 函数的显式 V2 branch；Snapshot Writer 显式 version dispatch；
+  Rule Writer 对 payload 合法域 fail closed。禁止改变 CSP1 branch 与旧行查询/写入结果。
+```
+
+U1 T5 不得再以“当前正文仍逐字节等于 W11-SEC”代表 V2 完整性。后续获批时应有界演进为版本化证据链：
+
+1. 原 W11-SEC digest 与 U1 pre/post digest 常量原样保留并继续断言其历史来源；
+2. 原 CSP1 Golden、V1 builder Golden、Scope constant 与唯一 owner 断言继续执行；
+3. 为本次授权的两个 frozen files 记录 implementation-before / implementation-after SHA-256；
+4. 新增独立、预先固定来源的 V2 Golden Vectors；
+5. T5 对当前文件验证新授权后的完整 digest，并以 V1 Golden 证明旧算法兼容，不删除、skip 或放宽
+   原保护目的。
+
+这是新的 versioned bounded amendment，不是 W11-SEC/U1 Re-Freeze。Implementation 前必须再次核对
+旧指纹；Implementation 后单独记录新基线。
+
+##### 37.54.20.19.8 M2/M9 test-only corrections
+
+M2：collector 的 amount evidence 必须保留 `profileKey`，断言显式取
+`cus-w11-self:sp-self`（完整 fixture key 为 `cus-w11-self:sp-self:2026-08-28`），验证 used=300000；
+Aggregate 仍为 eligible=40000、used=260000；另独立断言 `sp-other` used=0。不得再按首个
+`SALESPERSON_SUB_LIMIT` 选择，也不得把 expected 改为 0。
+
+M9：每个引擎内部页间重叠直接比较真实 `checkResultId`。跨引擎内容比较使用至少
+sourceOrderId + scopeType + stage + businessDate + stable Profile key + proposedDelta + decision 的稳定投影；
+在比较前逐项/成对断言投影在该结果集内唯一，输出条数必须等于输入条数。`Set` 只能用于显式
+uniqueness assertion，不能产出去重后的比较数据。范围外详情与不存在仍保持相同 404。
+
+##### 37.54.20.19.9 Transaction, errors, audit, compatibility and rollback
+
+| Concern | Design |
+|---|---|
+| transaction | `evaluateCredit()` 继续由调用方事务包裹；payload/hash/replay 验证在所有新写入之前；错误随事务回滚 |
+| GET | SC101/SC102 只读，无 transaction/lock/writer/audit；invalid persisted prefix fail closed |
+| error | payload 使用 R-HASH-01 的四类明确错误；legacy ambiguity 使用 409 `CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS` |
+| audit | 新 CCHK2 非 replay 仍写既有 EVALUATE audit；V1 exact replay 与 approval consume 保持原语义；拒绝路径零 audit |
+| RBAC/SOD | 无权限码、角色、read scope、approval authority 或 SOD 变化 |
+| state | 不修改 approval state machine；只强化版本匹配 |
+| compatibility | V1 rows/read APIs immutable；new writes V2；unknown version rejected |
+| schema | none；prefix 存入既有字段，notes 仅诊断 |
+| rollback | 在任何生产 V2 写入前可回退有界代码；一旦生产存在 CSP2/CCHK2，旧二进制不认识 V2，禁止直接降级，须另行授权 forward-compatible rollback plan |
+
+本轮不部署、不产生生产 V2 行，因此没有数据 rollback 动作。
+
+##### 37.54.20.19.10 Future Implementation whitelist
+
+后续必须单独授权，且只允许：
+
+```text
+server/modules/credit-rule-payload.js                         NEW, bounded parser/validator only
+server/modules/credit-check.js                               V1/V2 hash + replay gate
+server/modules/credit-policy.js                              CSP2 + writer validation/version dispatch
+server/modules/credit-query.js                               SC101 V2 metadata/exact persisted lookup
+scripts/sales-customer-wave11-a-primitives.test.js           V1 preservation/T5 chain/V2 vectors
+server/sales-customer-wave10-credit-check.test.js            V2/replay/approval/error regressions
+server/sales-customer-wave11-a-credit-query.test.js          SC101/SC102 V2 + zero-write regressions
+server/mysql-sales-customer-wave11-a-credit-query.integration.js  M2/M9 + M4 E3 evidence
+solution.md
+log/YYYY-MM-DD.md
+```
+
+`server/modules/credit-special-approval.js` 无需修改：现有 exact Snapshot ID + fingerprint 匹配已满足
+版本隔离。共享 fixture 原则上无需修改；若 Implementation 证明必须为 JSON nested/invalid vectors 扩展
+fixture，必须先返回 Design，不得自行扩大。禁止修改 Schema/Migration、`server/app.js`、Finance
+adapter、`credit-scope.js`、package scripts、test manifest、Gate/Runner/Launcher/Preflight。
+
+##### 37.54.20.19.11 Acceptance matrix and recovery conditions
+
+Future SQLite E2：
+
+1. V1 7/10 Golden、V1 builder output、CSP1 prefix/ordering 全部原样 PASS；
+2. V2 fixed Golden 独立保存，重复调用确定；
+3. whitespace、object key order、nested object 在 V2 等价；array reorder 不等价；
+4. strings/escape、finite fraction、safe integer、`-0` 合同成立；unsafe integer/non-finite 拒绝；
+5. SQL NULL、JSON null、empty array、malformed JSON、observable duplicate key 分类型 fail closed 且零写；
+6. `{}` 合法，`{}` 与有效非空对象 Hash 不同；
+7. old Snapshot/Result/approval 字段逐字不变；CSP1/CSP2、CCHK1/CCHK2 可区分；
+8. exact V1 replay 返回旧 group；ambiguous replay 409 且全库摘要不变；changed fact 可写 CCHK2；
+9. CSP1 approval 不能释放 CCHK2；exact V1 approval replay 保持既有规则；
+10. SC101 每 scope V2、viewer independent、GET 零写；SC102 verbatim history；
+11. M2 精确 Profile 与 sp-other 两个断言；M9 raw ID 无重叠及 collision-free projection；
+12. Wave 9/10、W11-SEC 14、U1、U2 focused，FAST、FULL、Build、`git diff --check` PASS；
+13. frozen before/after digest chain 与 V2 Golden 来源完整记录。
+
+Future real MySQL E3（另行授权）必须在同一生产 Writer/fixture 上证明上述合法 JSON vectors 与 SQLite
+得到完全相同的 V2 ruleSetHash、CSP2 identity 和 CCHK2；M1..M10 顶层 TAP 10/10，无 skip/todo；M2、
+M4、M9 均按新合同通过；完整数据库 + 关键表 GET before/after 摘要相同；Protected Cleanup confirmed，
+fresh-session tables/views/triggers/routines/events 全为 0。不得忽略 ruleSetHash、替换比较结果或用空
+payload 绕过 M4。
+
+只有 E2 与真实 E3 全部恢复后，状态才可进入 U2 Acceptance review；本 Design 本身不签发 Acceptance。
+
+##### 37.54.20.19.12 Remaining risks and Design status
+
+已闭合的关键选择：V2 语义域、版本格式、无 Migration、旧行不可变、legacy replay fail-closed、审批
+隔离、SC101/SC102、T5 指纹链、M2/M9 与实现白名单。
+
+保留风险但不阻塞 Design：MySQL native JSON 已吞并的 raw-SQL duplicate-key 原始形态不可恢复；该输入
+明确不属于生产 Writer 合同。跨引擎迁移后的 V1 exact replay 若缺少可证明 authorizationContext 将按
+设计 409 拒绝，不会静默产生 V2 决策。生产部署/降级需要未来独立授权；本轮不涉及。
+
+**Status: `W11_A_U2_E3_HASH_CORRECTION_DESIGN_READY`.**
+
+- `V1_IMMUTABLE_V2_EXPLICIT_SELECTED`;
+- `SEMANTIC_JSON_CANONICALIZATION_DESIGNED`;
+- `SINGLE_HASH_AND_FINGERPRINT_OWNERS_PRESERVED`;
+- `CSP2_CCHK2_DOMAIN_SEPARATED`;
+- `NO_SCHEMA_MIGRATION_HISTORY_REWRITE_OR_APPROVAL_MIGRATION`;
+- `LEGACY_REPLAY_EXACT_OR_AMBIGUOUS_FAIL_CLOSED`;
+- `SC101_V2_SC102_VERBATIM_HISTORY`;
+- `W11_SEC_U1_GOLDEN_AND_DIGEST_CHAIN_PRESERVED`;
+- `M2_M9_TEST_ONLY_CORRECTIONS_DESIGNED`;
+- `IMPLEMENTATION_REQUIRES_SEPARATE_AUTHORIZATION`;
+- `NO_MYSQL_GIT_WRITE_ACCEPTANCE_FREEZE_OR_U3`;
+- `HARD_STOP_AFTER_DESIGN`.
+
+#### 37.54.20.20 Versioned Hash Implementation Correction（2026-10-29）
+
+本节记录用户在 `W11_A_U2_E3_HASH_CORRECTION_DESIGN_READY` 后单独批准的 Implementation；不覆盖
+§37.54.20.19 的 Requirement/Design，也不改写两次真实 MySQL E3 的历史结果。
+
+实现保持单一 `buildScopeHashes()` 与单一 `computePolicySnapshotFingerprint()` owner。新增窄职责
+`credit-rule-payload.js`，生产 Rule Writer 对显式 null/array/scalar、非有限数及不安全整数 fail closed；缺省
+payload 仍为 `{}`。V1 继续以原始 `result_payload_json` 字符串生成原 rule hash/CSP1/CCHK1；V2 将持久化值解析为
+语义对象后复用原 `canonicalJson()`，使用 `CREDIT_RULE_SET_V2`、`CREDIT_POLICY_SNAPSHOT_V2` 与
+`CREDIT_CHECK_GROUP_V2` 三个 digest domain，分别生成 V2 rule hash、CSP2 与 CCHK2。未知 hash version 在读取或
+解析规则 payload 前拒绝。
+
+`evaluateCredit()` 现在显式要求调用方已进入事务。它在任何 CSP2/CCHK2、Result、Approval Consumption 或 Audit
+写入前计算并核对 CCHK1 候选：Source、日期、Stage、授权上下文（由原 CCHK1 组成证明）、Scope、Profile、Anchor、
+金额组件、决策、三项 V1 hash、Snapshot 与 Result 链全部一致才沿用原 CCHK1/CSP1；同来源/Stage/日期存在业务投影
+相同但身份无法证明的 V1 候选时返回 409 `CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS`。调用方事务使此前必要的
+Finance/Policy lock 与 Anchor provision 一并回滚；未新增抢先 Result lock，Finance → Credit 锁序不变。原 Special
+Approval writer 未改，消费侧仍按 Snapshot ID + fingerprint 精确匹配，故 CSP1 approval 不能释放 CCHK2。
+
+SC101 显式请求 V2，并返回 `hashContractVersion=CREDIT_POLICY_HASH_V2`、`fingerprintVersion=CSP2`；完整 V2
+identity 的 persisted lookup 仍只读。SC102 不重算历史值，逐字返回合法 CSP1/CSP2 与 CCHK1/CCHK2；未知或畸形
+prefix 返回 `CREDIT_POLICY_IDENTITY_VERSION_INVALID`，且不修复、不回填。M2 保留并按完整 Profile key 精确选择
+`sp-self`，另证 `sp-other=0`；M9 在单引擎内用真实 Result ID 证明页间无重叠，跨引擎比较前先证明稳定业务投影唯一，
+不使用 Set 去重。
+
+验证结果：V1/V2 primitives 9/9；Wave 10 + U2 focused 93/93；W11-SEC/U1/Wave 9/Governance focused
+64/64；FAST 500/500；FULL 3000/3000（359 suites）；Build PASS；MySQL E3 NOT_RUN。Integration Suite 静态
+检查 PASS，M1–M10 十个顶层 TAP、原断言强度与完整 GET 全库零写窗口保留。真实 MySQL 跨引擎结论仍必须由用户
+后续独立授权的 protected rerun 给出。
+
+**Implementation status: `W11_A_U2_E3_V2_IMPLEMENTED_READY_FOR_MYSQL_RERUN`.**
+
+#### 37.54.20.21 Versioned Hash Implementation 续轮实测修正（2026-10-29）
+
+本节记录 Implementation 续轮的实测修正，只覆盖 §37.54.20.19.8 的 M2/M9 测试实现与 §37.54.20.19.7
+的 T5 证据链实现，不改变任何生产 Hash / Replay / Approval 语义，也不改写 §37.54.20.19 的
+Requirement / Design。
+
+**M2 — Profile key 必须由 Fixture 常量派生，不得硬编码日历日。** §37.54.20.19.8 给出的
+`cus-w11-self:sp-self:2026-08-28` 是 Design 撰写当日的字面量。共享 Fixture 的 `PROFILE_FROM`
+是相对当前日历日推导的（`HISTORICAL=TODAY-30d`，`PROFILE_FROM=HISTORICAL-30d`），Fixture 自身
+要求"日期从当前日历日推导，永不静默过期"。因此该字面量每天失效，M2 的 scope 选择会返回
+`undefined`。实现改为从 Fixture 导出的 `PROFILE_FROM` 派生精确完整 key：
+
+```text
+SELF_SUB_LIMIT_PROFILE_KEY  = `${SELF_CUSTOMER}:${SELF_SALESPERSON}:${PROFILE_FROM}`
+OTHER_SUB_LIMIT_PROFILE_KEY = `${SELF_CUSTOMER}:${OTHER_SALESPERSON}:${PROFILE_FROM}`
+```
+
+选择语义不变：仍是按完整 Profile key 精确匹配，绝不回退为"第一条 SALESPERSON_SUB_LIMIT"，并对
+两个 scope 各保留一条"必须存在"断言。collector 的 amount evidence 在 `adminAmounts`、`zero` 与
+`historical` 三个投影上一律保留 `profileKey`。
+
+**M9 — 稳定投影必须使用 §37.54.20.19.8 规定的完整维度集。** 实现的历史投影键补齐为：
+
+```text
+sourceOrderId | scopeType | stage | businessDate | stableProfileKey | proposedDeltaCents | decision
+```
+
+- `stableProfileKey` 取 `credit_profile` 的稳定业务键 `customer_id:salesperson_scope_key:effective_from`；
+  per-engine 的 `credit_profile_id` 是 UUID，不能跨引擎识别，不得进入投影。
+- `proposedDeltaCents` 由持久化 `recordedBreakdown` 的 `proposedTotalCents - exposureCents` 推导，
+  不新增 API 字段、不改变 SC102 响应结构。
+- 单引擎页间重叠仍直接比较真实 `checkResultId`；`Set` 只用于显式唯一性断言，不产出去重后的比较
+  数据；输出条数必须等于输入条数。
+
+**T5 — 冻结摘要必须对行尾稳定，历史链节点必须两两不同。** `core.autocrlf=true` 在 checkout 时把
+工作树改写为 CRLF 而 Git 以 LF 存 blob，因此冻结摘要改为对 **LF 归一化**字节计算；该常量等于将要
+提交的 blob 摘要，证据链可对仓库对象复核。历史链的六个节点（W11-SEC 的 credit-check / credit-policy、
+U1 的 credit-check / credit-policy、V2 的 credit-check / credit-policy）断言两两不同，落实"历史证明
+与新版证明不得混为同一个 SHA"。
+
+**新增 T10 — M4 跨引擎修复的无 MySQL 可执行证明。** 同一 Writer 输出在 SQLite 为紧凑 JSON TEXT、在
+MySQL native JSON 为带空格规范渲染。用例断言 V1 rule hash 与 V1 CSP1 **必须不同**（复现 M4 分叉），
+V2 rule hash、CSP2 fingerprint 与 CCHK2 group identity **必须完全相同**。该用例在无 MySQL 连接的
+条件下成立，真实 MySQL 逐值一致仍由 E3 rerun 给出。
+
+**未决矛盾（未自行修改）。** ONE_TIME 特别审批在 replay 路径上可被重复"消费"：连续两次 exact replay
+都返回 `PASS` 且 `consumedSpecialApprovalId` 相同，而 CONSUME 审计行数为 0。实测确认 legacy 路径与
+当前路径行为完全一致，且 `findConsumableApproval()` 与 `if (!isReplay)` 审计守卫均未被本轮修改，
+因此这是 Wave 10 既有行为而非本轮回归。§37.54.20.19.6 要求的是"继续遵守既有 one-time audit 规则"
+与"ambiguous replay 在 approval lookup/consume 之前拒绝"，后者已实现并由零副作用用例证明；改变审批
+消费/审计语义属新的业务规则，按 `AGENTS.md §4.4` 必须返回 Requirement/Design 层另行授权。
+
+### 37.54.22 W11-A U2 ONE_TIME 特别审批消费与 Replay 语义更正 Design（2026-10-29）
+
+#### 37.54.22.1 授权、证据基线与取代边界
+
+授权：`W11_A_U2_ONE_TIME_REPLAY_CORRECTION_REQUIREMENT_DESIGN_ONLY`（AGENTS.md §4.3 DESIGN，并按 §4.0
+连续阶段授权与 §4.2 Requirement 连续执行）。Requirement 侧见 `document.md`
+`## W11-A U2 — ONE_TIME 特别审批消费与 Replay 语义更正 Requirement（2026-10-29）`。
+
+本轮**仅** Requirement / Design：**未**进入 Implementation，**未**修改任何生产代码、测试、Schema、
+Migration、Gate、Runner、Launcher、Preflight、`package.json`、`AGENTS.md` 或冻结历史记录；**未**执行
+FAST / FULL / Heavy / Build / MySQL Gate；**未**连接任何数据库；**未**执行任何 Git 写操作。
+
+基线：Branch `work/sales-waves6-13-recovery-20261025`；HEAD `d9e5d50a9103612a17070f806312b822281eb6c6`；
+Version `1.6.2`；工作树保持未提交状态。
+
+**取代与被取代关系（明确）**
+
+| 对象 | 关系 |
+|---|---|
+| §37.54.20.21 末段登记的"未决矛盾（未自行修改）" | **被本节正式关闭**。该登记继续原样保留作为历史证据；本节不删除、不改写它 |
+| §36.6.3 step 2「Replay returns the stored result」 | **保留并补充**。原句继续有效；本节补充"释放结论的读回语义"（§37.54.22.5） |
+| §36.6.6 Special Approval 合同 | **保留并补充**。原 Scope / Ceiling / SOD / Expiry / Snapshot 绑定条款逐条不变；本节补充消费语义（§37.54.22.3 / §37.54.22.4） |
+| §37.54.20.19.6 的「继续遵守既有 one-time audit 规则」 | **被本节重新定义**。既有 Wave 10 实现并不存在可被"遵守"的 one-time audit 规则（见 §37.54.22.2）；本节给出该规则的完整定义 |
+| `document.md` R-HASH-05 `SPECIAL_APPROVAL_EXACT_BINDING_PRESERVED` | **不变**。CSP1 审批不释放 CCHK2 的规则不变 |
+| W11-SEC-01 的 14 项冻结指纹、U1 的增量指纹 | **不变**，不得重算或覆盖 |
+
+#### 37.54.22.2 根因：释放键与写审计键不是同一个键
+
+现有实现在同一段代码里使用了**两个互不相干的键**：
+
+```text
+findConsumableApproval()   键 = 该审批是否已有 CONSUME 审计行   → 决定"这张审批还能不能用"
+消费段 if (!isReplay)      键 = 该 Check Group 是否是 replay      → 决定"要不要写 CONSUME 审计行"
+决定翻转 result.decision='PASS'                                  → 无论 isReplay 与否都会发生
+```
+
+当"该审批已有 CONSUME 审计行"为假且"该 Group 是 replay"为真时，两者同时成立，结果是：
+
+```text
+决定 = PASS，consumedSpecialApprovalId = <审批>，CONSUME 审计行数 = 0
+```
+
+即 **C-1 虚构消费**。因为"已消费"的唯一判据是那张不存在的审计行，该审批**永远**被判为未消费，
+于是 **C-2 跨动作重复消费**随之成立。
+
+**反向缺陷 C-3**：当首次消费落在**非 replay**（新建 Group）路径时，落盘 Result 行为 `PASS`；此后同一
+Group 的合法幂等 replay 会重新执行"已消费"判定并把决定退回 `SPECIAL_APPROVAL_REQUIRED`（CCHK2 路径），
+或在 CCHK1 路径因落盘决定 `PASS` 与重算的 `SPECIAL_APPROVAL_REQUIRED` 不等而直接 409
+`CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS`。**同一根因同时产生"放行两次"与"合法重放被拒"两个方向的错误。**
+
+**附带缺陷 C-4**：`consumedSpecialApprovalId` 是 Scope 循环外的单一变量。当范围 A 被释放而范围 B 未被
+释放时，B 的落盘明细会残留 A 的审批 ID，使"哪张审批释放了本范围"成为假命题。
+
+**结论**：现有实现中不存在"one-time audit 规则"这一可被遵守的规则；它只有一个被 `isReplay` 错误
+门控的副作用。因此本节不是"修改一条既有规则"，而是**首次定义**该规则并补齐其证据结构。
+
+#### 37.54.22.3 消费身份模型
+
+**消费身份 = `(approval_id, check_group_id, scope_type)`。**
+
+该身份**不是新发明的**：既有 CONSUME 审计的 detail 已经持久化 `checkGroupId` 与 `scopeType`
+（`credit-check.js` 消费段）。本节把这条既有的隐含身份**提升为显式的、被持久化且被唯一约束保护的
+一等事实**。
+
+**为什么不能用 Snapshot 或来源单据作为消费身份**
+
+`findConsumableApproval()` 按 `(scope_type, source_credit_policy_snapshot_id,
+source_policy_snapshot_fingerprint, source_sales_order_id)` 匹配。Snapshot 的身份是
+`(credit_lock_anchor_id, business_date, snapshot_fingerprint)`，而 Check Group 的身份额外包含
+`source_id`、`stage`、`authorization_context` 与 `exposure_digest`。因此**同一 Snapshot + 同一来源单据
+可以对应多个不同的 Check Group**：
+
+| 情形 | Check Group | Snapshot | 是否同一业务动作 |
+|---|---|---|---|
+| 同一订单、同一阶段、同一授权上下文、同一敞口 | 相同 | 相同 | 是（幂等重放） |
+| 同一订单、同一阶段、**授权上下文不同**（不同操作者） | 不同 | 相同 | **否** |
+| 同一订单、同一阶段、**敞口事实变化** | 不同 | 相同 | **否** |
+| 两个不同出库单、同一客户、同一业务日、同一阶段规则 | 不同 | 相同 | **否** |
+| 出库范围审批（`source_sales_order_id IS NULL`） | 任意 | 相同 | 任意出库单均可命中 |
+
+最后一行是 C-2 的最强路径：`source_sales_order_id IS NULL` 时，`findConsumableApproval()` 的
+`(source_sales_order_id IS NULL OR source_sales_order_id=?)` 对**任意**同范围同快照的检查都成立。
+因此"不得因采用相同 Snapshot 或来源而绕过限制"必须由**消费身份**保证，而不能由查找谓词保证。
+
+**Check Group 与业务动作的关系**：Check Group 身份已包含 `source_ref`、`stage` 与 `business_date`，
+即它已经就是"某一个业务动作在某组事实下的一次信用评估"。因此
+`(approval_id, check_group_id, scope_type)` 恰好表达了"这张审批被用在了哪一个业务动作的哪一个范围上"。
+**事实变化导致的新 Check Group 视为新的业务动作**（与既有 §37.35.4 B-11「事实变化产生新决定而不是
+重放陈旧结果」一致），已消费的 ONE_TIME 审批不得被它复用；需要继续放行时必须针对新的 Check Result
+申请**新的**审批，原审批保持只读历史。
+
+#### 37.54.22.4 消费证据的持久化结构
+
+##### 37.54.22.4.1 选定的结构：新增消费账本表
+
+```sql
+CREATE TABLE IF NOT EXISTS credit_special_approval_consumption (
+  id                TEXT NOT NULL PRIMARY KEY,
+  approval_id       TEXT NOT NULL REFERENCES credit_special_approval(id),
+  scope_mode        TEXT NOT NULL CHECK(scope_mode IN ('ONE_TIME','TIME_BOUNDED','OBJECT_BOUNDED')),
+  consumption_key   TEXT NOT NULL,
+  check_group_id    TEXT NOT NULL,
+  scope_type        TEXT NOT NULL CHECK(scope_type IN ('CUSTOMER_AGGREGATE','SALESPERSON_SUB_LIMIT')),
+  business_date     TEXT NOT NULL,
+  consumed_at       TEXT NOT NULL,
+  consumed_by       TEXT NULL REFERENCES users(id),
+  audit_id          TEXT NULL,
+  CONSTRAINT uq_credit_special_approval_consumption UNIQUE (approval_id, consumption_key),
+  CONSTRAINT ck_credit_special_approval_consumption_one_time
+    CHECK (scope_mode <> 'ONE_TIME' OR consumption_key = 'SINGLE')
+);
+CREATE INDEX IF NOT EXISTS ix_credit_special_approval_consumption_group
+  ON credit_special_approval_consumption(check_group_id);
+```
+
+`consumption_key` 的派生规则（**由代码单一实现，不在 SQL 中拼接**，以保证 SQLite 与 MySQL 一致）：
+
+| scope_mode | consumption_key | 唯一约束的效果 |
+|---|---|---|
+| `ONE_TIME` | 字面量 `'SINGLE'` | `(approval_id,'SINGLE')` 全局唯一 ⇒ **一张 ONE_TIME 审批至多一条消费记录** |
+| `TIME_BOUNDED` / `OBJECT_BOUNDED` | `` `${check_group_id}#${scope_type}` `` | 每个 `(审批, 业务动作, 范围)` 至多一条；同一审批可被不同动作重复消费 |
+
+**为什么用 `consumption_key` 而不是一个可空的 `one_time_key` 列**：可空列方案依赖"两引擎的 UNIQUE 索引
+都把多个 NULL 视为互不相同"这一行为。该行为在本轮**无法在真实 MySQL 上验证**（本轮不连接 MySQL），
+因此设计**不依赖任何未验证的引擎行为**。`consumption_key` 方案只依赖"NOT NULL 列上的普通 UNIQUE"，
+这是两引擎共同支持的最基本约束。
+
+**为什么是新增表而不是给 `credit_special_approval` 加列**
+
+| 维度 | 新增账本表（选定） | `credit_special_approval` 加列 |
+|---|---|---|
+| 旧审批行 | **完全不动**，零迁移 | 需 `ALTER TABLE`，且旧审批的消费状态要么迁移、要么运行时另找来源 |
+| 可重复消费模式 | 天然支持多次消费（每动作一条） | 单行只能存一次，与 TIME_BOUNDED / OBJECT_BOUNDED 语义冲突 |
+| 唯一性约束 | 库层直接判定"至多一次" | 只能靠条件 UPDATE 的影响行数，语义较弱 |
+| 追加性 | 纯追加，不可改写 | 原地更新既有行，与"历史证据只能追加"相悖 |
+| 第二套权威风险 | 无——单表单读路径 | 列 + 审计两处状态，需额外对账 |
+
+选定新增表的核心理由：**它使"不迁移旧 Approval"在构造上成立**——旧审批行一个字节都不改，旧消费由其
+既有不可变 CONSUME 审计证据证明（§37.54.22.6.2）。
+
+##### 37.54.22.4.2 迁移合同
+
+- 新文件 `server/migrations/sales-customer-wave11-a-credit-consumption.js`，形态对齐
+  `server/migrations/sales-customer-wave10-credit-check.js`：SQLite 与 MySQL 两套 DDL、导出的表名与
+  约束名清单、以及 MySQL 列类型清单。
+- 在 `server/migrations/sales-customer-domain.js` 的迁移清单中以
+  `Object.freeze({ id: 'wave-11-a-credit-consumption', wave: 11, migrate: ... })` 登记。
+- **纯 additive**：`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`。**无** backfill、
+  **无** `UPDATE`、**无** `DROP`、**无** 历史行改写。既有 `credit_check_results`、
+  `credit_special_approval`、`credit_policy_snapshots`、`audit_logs` 的 DDL 一律不动。
+- 迁移是**幂等**的：重复执行不产生第二次效果。
+- 迁移**不得**在启动路径上被无条件执行到生产既有库而跳过对账：MySQL 侧沿用 Wave 10 的既有做法
+  （bootstrap 走 SQLite 规范快照，live upgrade 走本迁移的 MySQL DDL）。
+
+##### 37.54.22.4.3 消费账本与既有审计的关系
+
+- **CONSUME 审计**保留并继续写入：它是面向人的审计证据（P5），也是 SC102 之外的独立可核验渠道。
+- **消费账本**是机器可判定的权威：它持有唯一约束，使"至多一次"在库层可判定。
+- 二者在**同一事务**内一并写入，因此不可能互相矛盾。
+- `credit_special_approval_consumption.audit_id` 指向该次消费写入的 CONSUME 审计行 ID，形成双向可追。
+
+##### 37.54.22.4.4 历史 CONSUME 审计的读取（不迁移、不猜测）
+
+账本表在更正生效时为空。更正生效**之前**已发生的消费只存在于 CONSUME 审计行中。因此消费状态读取
+必须是**两个来源的并集**，且必须由**同一个函数**产出：
+
+```text
+readApprovalConsumptionState(db, approvalId) ->
+  { consumed: bool, checkGroupId: string|null, scopeType: string|null, source: 'LEDGER'|'LEGACY_AUDIT'|'UNKNOWN' }
+```
+
+- **账本优先**：若账本存在该审批的记录，以账本为准（`check_group_id` 与 `scope_type` 是列，不是 JSON）。
+- **历史审计回退**：账本无记录时，读取该审批的既有 CONSUME 审计行，**解析**其 `detail` JSON，取
+  `checkGroupId` 与 `scopeType`。
+- **跨引擎解析纪律**：`audit_logs.detail` 在 SQLite 是 TEXT、在 MySQL 是 native JSON，两者**渲染不同**
+  （这正是 M4 的根因）。因此**必须 `JSON.parse` 后取字段**，**禁止**对 detail 做字符串比较或前缀比较。
+- **fail closed**：若历史 CONSUME 审计行存在但 `detail` 不可解析、或缺少 `checkGroupId` / `scopeType`，
+  则返回 `{ consumed: true, checkGroupId: null, scopeType: null, source: 'UNKNOWN' }`。
+  该状态**不等于**任何当前 `(check_group_id, scope_type)`，因此落入 `CONSUMED_BY_OTHER_ACTION`，
+  拒绝释放。**不得猜测**其归属（R-ONE-04-e）。
+- **不写回**：历史消费**不得**被回填进账本（那是"迁移旧审批"的变体）。账本只记录更正生效后的消费。
+
+#### 37.54.22.5 决策算法
+
+##### 37.54.22.5.1 作用域内的求值顺序（不变的部分）
+
+`evaluateCredit()` 的既有顺序**全部保留**：step 1 开关 → step 3 规则与范围 → L1 Finance 父锁 → L2
+POLICY_SCOPE 锚点 → L3/L4 CREDIT_OBJECT 锚点 → L5 档案行 → step 6 敞口与评估 → step 7 规则行
+`FOR UPDATE` → step 2 检查组身份解析 → Scope 循环 → 写 Result 行 → 写 EVALUATE 审计。
+
+**不改变**：决策规则、金额口径、reason code 的既有构成（除新增一个拒绝用 reason code）、快照与检查组
+身份公式、锁序、事务归属。
+
+##### 37.54.22.5.2 消费判定表（每个 `releasable` 范围）
+
+判定输入：`approval`（候选审批）、`state`（该审批的消费状态）、`checkGroupId`（当前检查组）、
+`scopeType`（当前范围）、`consumeApprovals`（调用方是否请求消费）。
+
+| # | `state.consumed` | `state` 与当前动作匹配 | scope_mode | 结论 | 释放？ | 写入 |
+|---|---|---|---|---|---|---|
+| 1 | 否 | — | 任意 | `RELEASED_FIRST_CONSUMPTION` | 是 | **账本 1 行 + CONSUME 审计 1 行** |
+| 2 | 是 | 是（同一 `check_group_id` + `scope_type`） | 任意 | `RELEASED_REPLAY` | 是 | **无** |
+| 3 | 是 | 否 | `ONE_TIME` | `REFUSED_ALREADY_CONSUMED` | **否** | **无** |
+| 4 | 是 | 否 | `TIME_BOUNDED` / `OBJECT_BOUNDED` | `RELEASED_FIRST_CONSUMPTION` | 是 | **账本 1 行 + CONSUME 审计 1 行** |
+
+第 4 行说明：可重复消费模式的既有语义（可在有效期内 / 对象内重复使用）**不变**；变的只是它的每一次
+消费现在都可被证明，且同一动作的重放不再重复计入。
+
+第 3 行：被别的业务动作消费过的 ONE_TIME 审批**不得**释放。Scope 决定维持
+`SPECIAL_APPROVAL_REQUIRED`，并追加 reason code `SPECIAL_APPROVAL_ALREADY_CONSUMED`。
+对外仍是既有的 409 `CREDIT_SPECIAL_APPROVAL_REQUIRED`（**不新增 HTTP 错误码**，以免破坏既有错误合同），
+差异由 reason code 显式表达。
+
+##### 37.54.22.5.3 候选审批的选取（查找谓词不变，判定外移）
+
+`findConsumableApproval()` 的**匹配谓词逐字不变**（scope_type / snapshot id / snapshot fingerprint /
+source sales order / 已批准 / 未过期 / `ORDER BY decided_at, id`）。改变的只有一件事：
+
+- **删除**该函数内部的"已消费即跳过"分支；
+- 消费判定**外移**到 §37.54.22.5.2 的判定表；
+- 候选循环遇到"第 3 行"情形的 ONE_TIME 审批时**继续**尝试下一个候选（保持既有"跳过已消费项后取下一个"
+  的行为），但必须把"存在一张被别的动作消费掉的匹配审批"这一事实带回调用方，用于产生
+  `SPECIAL_APPROVAL_ALREADY_CONSUMED` reason code。
+
+##### 37.54.22.5.4 释放后的 Scope 结论与响应
+
+- 释放后的决定：`PASS`。
+- 释放后的 reason codes：`preRelease.reasonCodes` 去掉 `OVER_LIMIT` 与 `SPECIAL_APPROVAL_REQUIRED`，
+  再追加 `SPECIAL_APPROVAL_CONSUMED`。该结果**在首次消费与合法重放之间完全一致**（幂等结论一致性）。
+- `consumedSpecialApprovalId`：**当且仅当**当前 `(check_group_id, scope_type)` 存在消费记录时非空
+  （第 1 行与第 2 行）。因此"返回了审批 ID 却没有任何消费记录"这一 C-1 现象不再可能；
+  "已有消费记录却不返回审批 ID"也不可能（R-ONE-02-d）。
+- `replayed` 语义不变（描述检查组是否 replay），与消费是否在本次调用发生**正交**。
+- `approvalAvailable`：**当且仅当**存在一张匹配审批、其释放条件成立、且它不是"被别的动作消费掉的
+  ONE_TIME"。只读路径（`consumeApprovals=false`）下同样按此口径给出。
+
+##### 37.54.22.5.5 首次消费与业务动作的原子提交
+
+- 账本行与 CONSUME 审计在**调用方事务内**写入，紧随释放决定。
+- 调用方事务由三个生产调用方持有：`server/modules/sales-orders.js` 的 SO_SUBMIT 路径、SO_APPROVE 路径，
+  以及 `server/app.js` 的 SALES_DELIVERY_CONFIRM 路径；三者均在 `transaction(db, ...)` 内调用
+  `assertCreditAllowsBusinessAction`。因此"业务动作失败 ⇒ 消费证据一并回滚"由既有事务归属合同保证，
+  **无需新增事务边界**。
+- 拒绝路径（`CREDIT_SPECIAL_APPROVAL_REQUIRED` / `CREDIT_CHECK_BLOCKED` / 409 身份不可重放）
+  **零写入**：账本、CONSUME 审计、Result 行、审批行均不变。
+
+##### 37.54.22.5.6 C-4 修正：明细按 Scope 归位
+
+`consumedSpecialApprovalId` 必须**每个 Scope 各自持有**：在某 Scope 的循环内先清零，只有该 Scope 真正
+被释放时才赋值。未被释放的 Scope 行，其 `component_breakdown_json.consumedSpecialApprovalId` 必须为
+`null`，不得残留其它 Scope 的审批 ID。
+
+##### 37.54.22.5.7 C-3 修正：重放比对接受"落盘为释放后结论"
+
+CCHK1 路径的 `legacyGroupMatchesCurrent(..., requireDecision: true)` 会比较落盘决定与重算的**释放前**
+决定。当该 Group 是在消费发生时创建的（落盘决定为 `PASS`、reason codes 为
+`['SPECIAL_APPROVAL_CONSUMED']`、明细含 `consumedSpecialApprovalId`）时，比较必然失败并抛 409。
+
+修正方式（**不推迟比较、不改变比较位置**）：落盘行**自身携带的释放标记**即构成"落盘结论 = 释放后结论"
+的证明。判定式：
+
+```text
+storedDecisionMatches :=
+    stored.decision === preRelease.decision
+ OR (stored.decision === 'PASS'
+     AND preRelease.decision === 'SPECIAL_APPROVAL_REQUIRED'
+     AND storedRowProvesRelease(stored))
+
+storedRowProvesRelease(row) :=
+    row.reason_codes_json 含 'SPECIAL_APPROVAL_CONSUMED'
+ AND row.component_breakdown_json.consumedSpecialApprovalId 是非空字符串
+
+storedReasonCodesMatch :=
+    canonical(stored.reasonCodes) === canonical(preRelease.reasonCodes)
+ OR (storedRowProvesRelease(stored)
+     AND canonical(stored.reasonCodes) === canonical(postRelease.reasonCodes))
+```
+
+`postRelease.reasonCodes` 是 `preRelease.reasonCodes` 的**纯函数**（§37.54.22.5.4 的过滤 + 追加），
+因此不需要把比较推迟到 Scope 循环之后，也不需要在循环中缓冲写入。**身份/事实比对**
+（source、stage、businessDate、recognitionMode、proposed delta、breakdown、Profile/Anchor、Snapshot FK
+与三 Hash）**逐条不变**，仍然先于任何写入执行并仍然在失败时以 409 零写入结束。
+
+##### 37.54.22.5.8 只读路径（`consumeApprovals=false`）
+
+`POST /api/credit/check` 的只读评估路径**不消费**、**不写账本**、**不写 CONSUME 审计**、**不锁审批行**。
+它按 §37.54.22.5.4 的口径报告 `approvalAvailable`，但**不翻转决定**（维持
+`SPECIAL_APPROVAL_REQUIRED`），与既有行为一致。该路径同样**不得**产生任何消费副作用。
+
+#### 37.54.22.6 历史兼容
+
+##### 37.54.22.6.1 V1 / V2 身份隔离
+
+- 审批查找仍要求 **snapshot id + fingerprint 精确相等**，因此 **CSP1 审批永不释放 CCHK2 决定**，
+  **CSP2 审批只绑定 CSP2**。该规则由 §37.54.20.19.6 与 `document.md` R-HASH-05 固定，本节不放松。
+- 账本记录 `check_group_id`（自带 `CCHK1:` / `CCHK2:` 前缀），因此消费证据天然可按版本区分，
+  且不需要新增任何版本字段。
+- CCHK1 exact replay 继续使用其原 Check Result 的 CSP1 快照与既有 expiry / scope mode / source order /
+  authority ceiling / SOD 规则；本节只改变**消费证据的写入与读回**，不改变 V1 的身份选择。
+
+##### 37.54.22.6.2 旧审批、旧快照、旧 Result 一律不动
+
+| 对象 | 更正后的处置 |
+|---|---|
+| 旧 `credit_special_approval` 行 | **不改、不迁、不复制、不追加列**。其历史消费由既有 CONSUME 审计证明 |
+| 旧 `credit_check_results` 行 | **不改**。落盘决定仍可能是 `SPECIAL_APPROVAL_REQUIRED`（释放发生在其后），释放事实由账本 + CONSUME 审计证明 |
+| 旧 `credit_policy_snapshots` 行 | **不改**。CSP1 与 CSP2 并存继续有效 |
+| 旧 `audit_logs` 行 | **不改、不删**。仅被读取（`JSON.parse` 后取 `checkGroupId` / `scopeType`） |
+| CCHK1 / CSP1 身份 | **不重写** |
+| 新账本行 | **纯追加**，不可原位改写 |
+
+**重要且明确的取舍**：当释放发生在一个已存在的 Check Group 上时，其 Result 行**保持** `SPECIAL_APPROVAL_REQUIRED`。
+这是"不重写旧 Check Result"的直接推论，也是 §36.6.3 step 2「Replay returns the stored result」在释放语义
+下的正确解释——**检查组的行记录的是该组被评估时的结论，释放事实记录在消费账本与 CONSUME 审计中**。
+读者通过"该 Result 绑定的审批 + 该审批的消费记录 + CONSUME 审计"三者即可复原完整事实链。
+由此产生一项**已知的后续项**（本轮不实施）：SC102 未来可选择暴露"该例外是否已被审批释放"，但本轮
+**不改** SC101/SC102 的响应结构。
+
+##### 37.54.22.6.3 SC101 / SC102 不回归
+
+- `server/modules/credit-query.js` **零改动**。它只读 `credit_check_results` 与
+  `credit_special_approval`，账本表不参与其查询，因此其可见性谓词、分页、身份版本校验
+  （`/^CCHK[12]:[0-9a-f]{64}$/`、`/^CSP[12]:[0-9a-f]{64}$/`）与零写入 GET 合同全部原样保持。
+- 唯一需要复核的是 C-4 修正对 `recordedBreakdown.consumedSpecialApprovalId` 的影响：修正后未释放的
+  Scope 行该字段为 `null`，这**更**符合 SC102 的"不复制商业金额、只呈现已持久化事实"合同。
+- W11-SEC-01 的 14 项冻结指纹、U1 的增量指纹与 §37.54.15.9.4 的有界例外治理**不受本节影响**。
+
+#### 37.54.22.7 事务归属、锁序与并发
+
+##### 37.54.22.7.1 事务归属
+
+`evaluateCredit()` 既有合同"调用方必须已拥有事务"**不变**（`db.isTransaction` 断言保留）。三个生产调用方
+（`sales-orders.js` SO_SUBMIT、`sales-orders.js` SO_APPROVE、`app.js` SALES_DELIVERY_CONFIRM）均已在
+`transaction(db, ...)` 内调用，**前置条件已被全部生产调用方满足**。本节**不新增**事务边界。
+
+##### 37.54.22.7.2 锁序：新增一类锁，且严格排在既有位置之后
+
+| 层 | 锁对象 | 既有/新增 | 相对位置 |
+|---|---|---|---|
+| L1 | Finance PREPAYMENT 父余额 `FOR UPDATE` | 既有 | **始终第一**（Finance → Credit 合同不变） |
+| L2 | POLICY_SCOPE 锚点 `FOR SHARE` | 既有 | 不变 |
+| L3/L4 | CREDIT_OBJECT 锚点 | 既有 | 不变（aggregate 先于 salesperson） |
+| L5 | `credit_profile` 行 `FOR UPDATE` | 既有 | 不变 |
+| L6 | `credit_check_rules` 行 `FOR UPDATE` | 既有 | 不变 |
+| **L7** | **`credit_special_approval` 候选行 `FOR UPDATE`（按 `decided_at, id` 升序）** | **新增** | **在 L6 之后、调用方的 L8 业务行之前** |
+| L8 | 调用方业务行（如 `sales_orders`） | 既有（调用方所有） | 不变，仍为最后 |
+
+- L7 位于 L6 之后，符合 §29.44 锁矩阵既有"approval FOR UPDATE → snapshot FOR UPDATE → SO FOR UPDATE"
+  的相对次序。
+- **不得**在消费路径上新增对 `credit_check_results` 的行锁：§37.54.20.20 已确立"未新增抢先 Result lock"，
+  本节保持该结论。审批申请路径锁 Result 行、审批决策路径只锁审批行，二者都不进入 Credit 锁链，
+  因此不与 L7 形成等待环。
+- 候选审批**按 `decided_at, id` 升序一次性加锁**（MySQL：`ORDER BY decided_at, id FOR UPDATE`；
+  SQLite：无锁后缀，写事务本身已串行化），因此所有事务的加锁顺序一致，无死锁面。
+
+##### 37.54.22.7.3 并发单次消费：三层保证
+
+**第一层（结构性证据）**：本仓库的 MySQL 事务在 `transaction()` 起始处即取全局事务闸门
+`SELECT gate_id FROM mysql_transaction_gates WHERE gate_id=1 FOR UPDATE`，并持有至 COMMIT/ROLLBACK；
+SQLite 使用 `BEGIN IMMEDIATE`（写事务串行化）。因此**在当前部署形态下，两个事务不会交错执行**
+消费读—写序列。
+
+**第二层（局部不变量）**：本设计**不依赖**上述全局串行化。局部保证由两项构成：
+
+1. **L7 审批行 `FOR UPDATE`**：所有对同一审批的消费尝试被串行化。
+2. **账本 UNIQUE 约束 `UNIQUE (approval_id, consumption_key)`**：即使串行化被移除（例如未来放宽事务闸门、
+   换用真正并发的后端、或把信用检查移入并行路径），库层约束仍然判定"至多一次"。
+
+**第三层（可见性）**：消费结论的读回必须能看见并发事务已提交的写入。MySQL 默认 REPEATABLE READ 下，
+**普通 `SELECT` 读的是事务快照，可能看不见并发已提交的消费行**。因此：
+
+- 账本读取必须是**当前读**（MySQL 用 `FOR UPDATE` 的锁定读），不是普通一致性读；
+- 审批行本身通过 L7 的 `FOR UPDATE` 读取，其 `consumed` 状态同样来自当前读；
+- 历史 CONSUME 审计的读取只用于识别**更正生效之前**的历史消费，该状态是静止的，不存在并发写入窗口；
+  即使它读不到某个并发新写入的 CONSUME 行，对应的新消费**必然同时写入了账本行**，而账本读取是当前读，
+  因此结论仍然正确。
+
+**第四层（冲突表达）**：若竞态仍然穿透（唯一约束被触发），必须以**显式冲突**结束：捕获唯一约束冲突并
+翻译为既有的 `translateConstraintError` 模式（例如 `CREDIT_SPECIAL_APPROVAL_ALREADY_CONSUMED`，409），
+事务整体回滚，失败方**零写入**。**不得**出现两个赢家，**不得**静默成功。
+
+##### 37.54.22.7.4 锁序不变性核对
+
+本节**不改变**以下既有结论：Finance PREPAYMENT 父锁仍是 Credit Check 自取的第一把锁；Policy Scope 锚点
+仍在 Finance 之后；Anchor 供给仍在调用方事务内、失败时随事务回滚；Wave 10 的 L1–L8 入口矩阵不变。
+
+#### 37.54.22.8 替代方案比较与选定
+
+| 方案 | 描述 | 结论 | 理由 |
+|---|---|---|---|
+| **A** | **仅用现有 audit_logs**：把"已消费"继续建立在 CONSUME 审计行上，只把 `if (!isReplay)` 改成"若该审批尚未被消费则写" | **否决** | 库层无 `(entity_type, entity_id, action)` 唯一约束，"至多一次"只能靠先查后写；在 MySQL REPEATABLE READ 下普通读可能看不见并发提交的行，双消费**不可证明**；R-ONE-01-b / R-ONE-05-c 不满足 |
+| **B** | **给 `credit_special_approval` 加消费状态列** | **否决** | 需 `ALTER TABLE`；单行无法承载可重复消费模式的多次消费；只存"第一次消费"与只读路径的历史回退形成两套状态；与"历史证据只能追加"相悖 |
+| **C** | **新增消费账本表 + UNIQUE 约束 + 审批行串行化 + 历史审计回退** | **选定** | 唯一性在库层可判定；旧审批零改动（不迁移）；纯追加；单表单读路径，无第二套权威；支持三种 scope_mode；与 Wave 10 决策、权限、金额、Finance 锁序全部无关且不变 |
+| **D** | **replay 一律不得消费**（发现已消费即直接拒绝） | **否决** | 审批获批后的**首次**业务动作经常落在既有检查组上（因为审批必须绑定一个已存在的 Result）；方案 D 会使"审批获批后仍无法下单"，直接破坏业务可用性 |
+| **E** | **把审批消费状态编进 Check Group 身份** | **否决** | 会改写 V1 的身份公式，违反 CCHK1 历史不可变与 V1/V2 身份隔离；并使"消费"反过来决定"检查组身份"，形成循环依赖 |
+| **F** | **把 ONE_TIME 语义改为"同一 Check Group 内一次性"** | **否决** | 不能阻止跨动作复用（C-2）；把审批的有效性绑定到评估身份，而不是绑定到"这张审批只能用一次"这一业务承诺 |
+
+**选定方案 C**，且 C 与既有合同的相容性已逐条核对：Wave 10 决策规则不变、权限模型不变、金额口径不变、
+Finance → Credit 锁序不变、V1/V2 身份隔离不变、历史不可变不变、SC101/SC102 不变。
+
+#### 37.54.22.9 精确 Implementation 文件白名单（未来轮次，需独立授权）
+
+**本节是授权申请，不是授权本身。** 实施前必须获得对下列文件的**精确**授权，并按 §37.54.15.9.4 的
+有界例外治理登记新的例外身份（建议：`W11_A_ONE_TIME_REPLAY_CORRECTION_BOUNDED_AMENDMENT`），
+因为 `server/modules/credit-check.js` 属 W11-SEC-01 冻结载荷（其 U1 增量指纹为 `3bf4eb51…72f0` 基线上的
+追加导出），既有例外只授权"追加两个具名导出"，**不覆盖**本节所述的行为性修改。
+
+| # | 文件 | 允许的修改 | 性质 |
+|---|---|---|---|
+| 1 | `server/modules/credit-check.js` | 仅限：消费判定函数、候选审批选取的判定外移、账本读写、`consumedSpecialApprovalId` 按 Scope 归位、replay 比对的释放标记放宽。**不得**触碰：敞口计算、决策规则、锁序、身份公式、快照写入、SC101/SC102 查询 | **冻结载荷 · 行为性修改 · 需新例外** |
+| 2 | `server/migrations/sales-customer-wave11-a-credit-consumption.js`（**新建**） | 仅限新增 `credit_special_approval_consumption` 表与其索引、导出表名/约束名/列类型清单 | 新增 additive 迁移 |
+| 3 | `server/migrations/sales-customer-domain.js` | **仅**追加一条迁移登记项 | 迁移登记 |
+| 4 | `server/sales-customer-wave10-credit-check.test.js` | **仅追加**新用例；**不得**修改、删除或弱化任何既有断言（含 "V2 approval isolation" 用例） | 既有 Golden 追加 |
+| 5 | `server/sales-customer-wave11-a-credit-query.test.js` | **仅追加**回归用例，证明 SC101/SC102 不回归 | 回归追加 |
+| 6 | `server/mysql-sales-customer-wave11-a-credit-query.integration.js` | **仅追加**E3 并发与一次性消费用例 | E3 追加 |
+| 7 | `scripts/gates/mysql-sales-wave11-a-gate.mjs` | **仅追加**E3 用例登记 | Gate 追加 |
+| 8 | `scripts/testing/test-suites.js` | **仅追加**登记项；不得改动既有登记 | 测试登记 |
+| 9 | `server/modules/credit-query.js` | **零改动** | — |
+| 10 | `server/modules/credit-special-approval.js` | **零改动** | — |
+| 11 | `server/modules/credit-policy.js`、`credit-scope.js`、`credit-anchor.js`、`credit-profile.js`、`credit-rule-payload.js` | **零改动** | — |
+
+**必须记录**：文件 1 修改前 / 修改后的 SHA-256；两者差异**仅为**上表允许的范围（逐行可核对）；
+文件 2 / 3 为纯新增；W11-SEC-01 原 14 项冻结指纹**原样保留**，不得被重算、覆盖或作废；不得据此
+执行任何 W11-SEC Re-Freeze。
+
+**明确禁止**：修改 `package.json` 的 `version`；改动 `AGENTS.md`；改动任何冻结历史记录；改动 Wave 10
+既有迁移文件；扩大本白名单到任何未列出的文件。
+
+#### 37.54.22.10 测试合同
+
+##### 37.54.22.10.1 必须覆盖的用例（对应 `document.md` R-ONE-07）
+
+| # | 用例 | 期望 | 证据级别 |
+|---|---|---|---|
+| T-01 | ONE_TIME 首次合法消费（新建 Group） | 决定 `PASS`；账本 1 行；CONSUME 审计 1 行；`consumedSpecialApprovalId` 非空 | SQLite E2 |
+| T-02 | 同一动作合法幂等 Replay | 决定 `PASS`；`consumedSpecialApprovalId` 与 T-01 相同；账本仍 1 行；CONSUME 审计仍 1 行 | SQLite E2 |
+| T-03 | 连续两次 Replay | 不得虚构第二次消费；账本 1 行；CONSUME 审计 1 行 | SQLite E2 |
+| T-04 | 不同动作复用同一 ONE_TIME | 决定维持 `SPECIAL_APPROVAL_REQUIRED`；reason code 含 `SPECIAL_APPROVAL_ALREADY_CONSUMED`；账本仍 1 行；CONSUME 审计仍 1 行；零写入 | SQLite E2 |
+| T-05 | 未消费 vs 已消费严格区分 | 未消费者可被首次消费；已被他动作消费者不可被释放 | SQLite E2 |
+| T-06 | 原历史 Result 不变 | 消费前后既有 `credit_check_results` 行**逐字段**不变 | SQLite E2 |
+| T-07 | 首次消费与业务动作原子提交 | 业务动作回滚后账本 0 行、CONSUME 审计 0 行 | SQLite E2 |
+| T-08 | 事务失败零消费审计 | 消费写入后强制抛错，整体回滚，零痕迹 | SQLite E2 |
+| T-09 | 释放与消费在 CCHK2 路径同样成立 | T-01..T-03 在 V2 路径重做一遍 | SQLite E2 |
+| T-10 | V1 Approval 不得释放 CCHK2；CSP2 Approval 必须绑定 CSP2 | 既有断言保持 + 明确用例 | SQLite E2 |
+| T-11 | C-3 修正：落盘为释放后结论的 Group 可被重放 | 重放返回 `PASS` 与同一审批 ID，不再 409 | SQLite E2 |
+| T-12 | C-4 修正：未释放 Scope 的明细不含他人审批 ID | `consumedSpecialApprovalId` 为 `null` | SQLite E2 |
+| T-13 | 历史 CONSUME 审计回退 | 预置一条历史 CONSUME 审计（无账本行）→ 视为已消费；释放被拒 | SQLite E2 |
+| T-14 | 历史 CONSUME 审计明细不可解析 | fail closed：视为已被未知动作消费，拒绝释放 | SQLite E2 |
+| T-15 | 库层唯一约束直接生效 | 同一 `(approval_id,'SINGLE')` 第二次插入被库拒绝 | SQLite E2（**方言中立断言**） |
+| T-16 | SC101/SC102 不回归 | 零写入 GET；内容与跨引擎等价 | SQLite E2 |
+| T-17 | 真实 MySQL 一次性消费并发 | 两个独立竞争者只产生一次消费；失败方零写入；显式冲突 | **真实 MySQL E3** |
+| T-18 | 真实 MySQL T-15 的方言复核 | 唯一约束在 MySQL 上同样拒绝第二次写入 | **真实 MySQL E3** |
+
+T-15 与 T-18 成对存在的原因：本设计刻意**不依赖**"两引擎对 NULL 的 UNIQUE 处理"这一未在本轮验证的
+行为；T-18 是对真实引擎行为的直接取证。
+
+##### 37.54.22.10.2 不得弱化的既有回归
+
+既有 V1/V2 Golden、M2 / M4 / M9、U1（含 T5 冻结摘要断言）、W11-SEC-01 14 项冻结指纹、W10-R1..R12、
+M-BIZ-01..M-BIZ-0x、GATE-B M-B01..M-B07、并发集成用例、以及 `scripts/testing/test-suites.js` 的既有登记，
+**一律不得删除、不得 skip、不得降级分类、不得修改断言以迁就新实现**。
+
+其中既有断言 `"V2 approval isolation — CSP1 approval releases only exact V1 replay and never a changed
+CCHK2"` 在新语义下**仍然成立**（exact V1 replay 仍返回 `PASS` 与同一 `consumedSpecialApprovalId`，
+changed CCHK2 仍返回 `SPECIAL_APPROVAL_REQUIRED`），因此该 Golden **不需要修改**——本设计刻意选择
+"重放返回与首次消费一致的结论"，正是为了不破坏它。区别只在于：现在该重放**同时**留下了一条消费记录
+与一条 CONSUME 审计，而旧实现一条都不留。
+
+##### 37.54.22.10.3 SQLite / MySQL 验收矩阵
+
+| 维度 | SQLite | MySQL 8 | 一致性要求 |
+|---|---|---|---|
+| 消费三态判定 | T-01..T-14 | T-17 对应用例 | 逐值相同 |
+| 账本唯一约束 | T-15 | T-18 | 同为"拒绝第二次写入"，**不比较错误文案** |
+| 审批行串行化 | 写事务天然串行（`BEGIN IMMEDIATE`） | `FOR UPDATE` + 全局事务闸门 | 判定结果相同 |
+| 消费记录内容 | 列值 | 列值 | 逐列相同（`check_group_id`、`scope_type`、`approval_id`） |
+| 历史审计回退解析 | `JSON.parse` | `JSON.parse`（native JSON 渲染不同但解析结果相同） | 解析后字段相同 |
+| 拒绝路径写入量 | 0 | 0 | 相同 |
+| 并发结果 | 不适用（单写者） | 恰好一个赢家 | — |
+
+#### 37.54.22.11 回滚、冻结边界与剩余风险
+
+**回滚**：本更正的持久化结构是**纯新增表**，不含任何对既有表的 ALTER。回滚时只需停止使用该表即可，
+既有数据不受影响；不得在回滚路径上 `DROP` 既有表或删除既有审计行。若实施后发现必须回滚**代码**，
+新增的表可以保留为空而不产生任何业务影响（无消费者）。
+
+**冻结边界**：本节**不**签发 U2 Acceptance，**不**冻结任何 Capability，**不**启动 U3，**不**构成
+W11-SEC-01 的 Re-Freeze。
+
+**剩余风险与阻塞**
+
+| # | 风险 | 处置 |
+|---|---|---|
+| L-1 | `server/modules/credit-check.js` 是 W11-SEC-01 冻结载荷，其行为性修改超出 §37.54.15.9.4 既有例外 | **阻塞项**：实施前必须取得新的有界例外授权并登记修改前后 SHA-256 |
+| L-2 | 真实 MySQL 上的行为（唯一约束、`FOR UPDATE` 当前读、全局事务闸门下的并发结果）本轮**未取证** | 由 T-17 / T-18 在获授权的 E3 轮取证；在此之前不得签发 U2 Acceptance |
+| L-3 | 账本为空的过渡期：更正生效后、首次消费发生前，旧审批的历史消费靠 CONSUME 审计回退识别 | 已由 §37.54.22.4.4 覆盖并有 T-13 / T-14 取证 |
+| L-4 | SC102 目前不暴露"该例外是否已被审批释放"，读者需自行关联审批与账本 | 本轮**不改** SC102 响应结构；登记为后续开放项 |
+| L-5 | TIME_BOUNDED / OBJECT_BOUNDED 的多次消费现在会产生多条账本行，其"对象边界"语义在出库范围（`source_sales_order_id IS NULL`）下依然较宽 | 本轮**不改**其既有语义；登记为后续开放项 |
+| L-6 | `credit_check_results` 无 `special_approval_id` 列，释放关联仍只存在于 `component_breakdown_json` | 与 §29.25.1 A-54 的设计描述存在实现差异；本轮**不**改表结构，登记为后续开放项 |
+| L-7 | 本轮未做任何 Git 写操作，工作树保持未提交 | 由用户决定提交时机与内容 |
+
+#### 37.54.22.12 Design 状态
+
+**Status: `W11_A_U2_ONE_TIME_REPLAY_CORRECTION_DESIGN_READY`.**
+
+设计在现有业务合同下**闭合**：Wave 10 的决策、权限、金额与 Finance 锁序全部保持不变；V1/V2 身份隔离
+保持不变；历史不可变保持不变；SC101/SC102 保持不变。选定方案以**新增纯附加消费账本 + 审批行串行化 +
+历史 CONSUME 审计回退**实现"ONE_TIME 至多消费一次"，并以 `(approval_id, check_group_id, scope_type)`
+把"首次消费"与"合法幂等重放"区分开。
+
+- `ONE_TIME_CONSUMPTION_IDENTITY_APPROVAL_GROUP_SCOPE`;
+- `CONSUMPTION_LEDGER_ADDITIVE_ONLY`;
+- `FIRST_CONSUMPTION_WRITES_EVIDENCE_REPLAY_DOES_NOT`;
+- `CROSS_ACTION_REUSE_REFUSED_FAIL_CLOSED`;
+- `LEGACY_CONSUME_AUDIT_FALLBACK_NO_MIGRATION`;
+- `HISTORY_IMMUTABLE_NO_APPROVAL_MIGRATION_NO_RESULT_REWRITE`;
+- `FINANCE_CREDIT_LOCK_ORDER_UNCHANGED`;
+- `CONCURRENCY_SINGLE_CONSUMPTION_DB_CONSTRAINT_BACKSTOP`;
+- `WAVE10_DECISION_PERMISSION_AMOUNT_CONTRACTS_UNCHANGED`;
+- `DESIGN_COMPLETE_HARD_STOP_NO_IMPLEMENTATION_NO_MYSQL_NO_GIT_NO_ACCEPTANCE_NO_U3`.
+
+**HARD STOP**：本节完成后停止，等待用户对 Design 的明确确认。在获得确认前**不得**实施、**不得**连接
+MySQL、**不得**执行任何 Git 写操作、**不得**签发 U2 Acceptance、**不得**启动 U3。
+
+#### 37.54.22.13 Implementation Evidence（2026-10-29）
+
+##### 37.54.22.13.1 授权、Amendment Identity 与基线
+
+授权：`W11_A_U2_ONE_TIME_REPLAY_CORRECTION_REQUIREMENT_DESIGN_ONLY` 之后的
+**W11-A U2 — ONE_TIME Special Approval Consumption Bounded Implementation**（用户本轮正式授权）。
+本节记录**实际实施结果**。本轮**未**连接 MySQL、**未**执行任何 Git 写操作、**未**签发 U2
+Acceptance / Freeze、**未**启动 U3。
+
+基线：Branch `work/sales-waves6-13-recovery-20261025`；HEAD `d9e5d50a9103612a17070f806312b822281eb6c6`；
+Version `1.6.2`；工作树保持未提交状态。
+
+**新的 Amendment Identity**：`W11_A_ONE_TIME_REPLAY_CORRECTION_BOUNDED_AMENDMENT`。它**不重定义**
+W11-SEC-01 的冻结基线，也**不**追溯覆盖 U1 与 V2 的证据链；它只声明本轮获批的那几处变更，并按
+§37.54.15.9.4 的治理要求把 T5 基线**重指向**本轮的新授权基线。
+
+##### 37.54.22.13.2 冻结版本化指纹链（LF 归一化，对将要提交的 blob 计算）
+
+| 载荷 | W11-SEC 冻结 | U1 增量 | V2 | **本轮 ONE_TIME 修正** |
+|---|---|---|---|---|
+| `server/modules/credit-check.js` | `3bf4eb51…72f0` | `eceb2f77…8384` | `5c5a5a71…792b` | **`1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc`** |
+| `server/modules/credit-policy.js` | `94f2df0a…98b` | `9088a222…fea8` | `5fc76f39…f96e7` | **未变** `5fc76f39…f96e7` |
+| `server/modules/credit-scope.js` | `f31033bd…1a3bc` | — | `f31033bd…1a3bc` | **未变** `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` |
+| `server/modules/credit-special-approval.js` | `04594b3d…89c4` | — | `04594b3d…89c4` | **未变** `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` |
+
+`server/modules/credit-check.js` 的修改**仅为** §37.54.22.5 批准的 ONE_TIME 消费状态机、L7 锁与证据
+写入，以及 §37.54.22.5.6/§37.54.22.5.7 的 Scope 级身份修正与重放结论放宽。**未**改变 CSP1/CSP2、
+CCHK1/CCHK2 的任何算法，**未**改变信用占用金额计算，**未**改变审批的金额上限、有效期、权限与 SOD，
+**未**改变 Finance → Credit 锁序。
+
+本轮新增/变更载荷的摘要：
+
+```text
+1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc  server/modules/credit-check.js
+8348456384e1d5bef8962e1078f792d710ecd9cc587734eff84034b63b5c94a5  server/migrations/sales-customer-wave11-a-credit-consumption.js
+f82c31fb5b1a6cc5d69550f8f45a1f31ca2e33edb9064d38cea7064742176f37  server/migrations/sales-customer-domain.js
+b280cb6c758a49b02f60a2fec81c8ea1ec6ff61e641dc96ff571225f42c304af  server/sales-customer-wave10-credit-check.test.js
+ab6b23e26152b52171adb7f5b28bcdb4ac28572d3bf38af83eed8f9251c45f8c  server/sales-customer-wave11-a-credit-query.test.js
+768c24578552f017a35efc1afb84d8adc127d9da9e9770f93be5d2979451fb77  server/mysql-sales-customer-wave11-a-credit-query.integration.js
+a0929892e7d849b3706ab31217a40e67e55b64a1d26b666dc60a97bb3b51db3e  server/sales-customer-wave0-migration-runner.test.js
+c68d4707eaed7501d9f81e35a928755564ed5b2c97f5430fd708b67d7f73036b  scripts/sales-customer-wave11-a-primitives.test.js
+```
+
+T5 的指纹链因此**扩为七个互不相同**的链接（原六项全部保留，无一被重算、覆盖或作废）：
+`3bf4eb51…` / `eceb2f77…` / `5c5a5a71…` / `1f11fbee…`（credit-check）与
+`94f2df0a…` / `9088a222…` / `5fc76f39…`（credit-policy）。
+
+##### 37.54.22.13.3 实施范围与白名单核对
+
+| # | §37.54.22.9 白名单文件 | 本轮状态 | 摘要 / 变更 |
+|---|---|---|---|
+| 1 | `server/modules/credit-check.js` | **已修改** | +425 / -71（消费状态机、L7 锁、Scope 级身份、重放结论放宽） |
+| 2 | `server/migrations/sales-customer-wave11-a-credit-consumption.js` | **已新建** | 新增 `credit_special_approval_consumption`（additive DDL） |
+| 3 | `server/migrations/sales-customer-domain.js` | **已修改** | +6 / -0（仅一条迁移登记） |
+| 4 | `server/sales-customer-wave10-credit-check.test.js` | **已修改** | +630 / -2（**仅追加** T-01..T-16 用例） |
+| 5 | `server/sales-customer-wave11-a-credit-query.test.js` | **已修改** | 追加 1 个 SC101/SC102 回归用例 |
+| 6 | `server/mysql-sales-customer-wave11-a-credit-query.integration.js` | **已修改** | 追加 T-17 / T-18（真实 MySQL 专属） |
+| 7 | `scripts/gates/mysql-sales-wave11-a-gate.mjs` | **未修改** | T-17/T-18 与既有 M1..M10 同一集成文件，既有 Gate 登记已覆盖 |
+| 8 | `scripts/testing/test-suites.js` | **未修改** | 本轮**未新增** `*.test.js` 文件，无需登记 |
+| 9 | `server/modules/credit-query.js` | **未修改** | 零改动 |
+| 10 | `server/modules/credit-special-approval.js` | **未修改** | 零改动 |
+| 11 | `credit-policy.js` / `credit-scope.js` / `credit-anchor.js` / `credit-profile.js` / `credit-rule-payload.js` | **未修改** | 零改动 |
+
+**白名单外的两处治理记账变更（已获用户"继续"授权，且为被授权变更的强制记账）**
+
+| 文件 | 变更 | 依据 |
+|---|---|---|
+| `server/sales-customer-wave0-migration-runner.test.js` | 3 行 / 3 行：注册表步数 10 → 11、步 id 列表追加 `wave-11-a-credit-consumption`、测试标题改为 "Wave 1 through Wave 11" | 登记迁移**必须**同步该治理断言；Wave 6/7/8/9/10 每一轮都做过同一件事（Wave 10：commit `4f0022d`，`length 9 → 10` + id 列表追加）。断言意图（"注册表恰含已批准的步"）**未**被削弱 |
+| `scripts/sales-customer-wave11-a-primitives.test.js` | T5 指纹链扩为七项；"当前源码 == 授权基线"由 `V2_CREDIT_CHECK_SHA256` 重指向新增的 `ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256` | `log/2026-10-28.md:1733` 的既有维护规则："T5 的指纹基线必须**重指向**该新授权基线，而 W11-SEC-01 原指纹必须永久保留……**不得**以放宽比较、删除断言或跳过用例消除该失败"。比较**未**放宽、断言**未**删除、用例**未**跳过 |
+
+##### 37.54.22.13.4 Migration：fresh / upgrade / idempotency / 约束
+
+| 验证项 | 结果 |
+|---|---|
+| SQLite 新库 bootstrap | 表、列序、可空性、3 个 CHECK、2 个 FK、`UNIQUE(approval_id, consumption_key)`、组索引全部成立 |
+| 已存在数据库 upgrade | 重新打开同一文件后新增**恰好一张**表；既有 `credit_check_results` / `credit_special_approval` / `audit_logs` 行数**逐项不变**；升级后的表集合与全新 bootstrap **完全一致** |
+| 重复执行幂等 | 连续三次执行后表仍为 1 张、行数不变 |
+| 唯一约束 | 第二次 `(approval_id,'SINGLE')` 插入被库拒绝 |
+| ONE_TIME 键约束 | `scope_mode='ONE_TIME'` 且 `consumption_key<>'SINGLE'` 被 CHECK 拒绝 |
+| 可重复模式 | `TIME_BOUNDED` 可持有第二条（动作键不同）消费行 |
+| 外键 | 指向不存在的审批被拒绝 |
+| 无 backfill | 升级后账本为空；历史消费**未**被迁移 |
+
+**物理类型合同**：MySQL 的列类型与通用 snapshot bootstrap 对该表的解析结果**逐列相同**
+（`id`/`approval_id`/`scope_mode`/`consumption_key`/`check_group_id`/`consumed_by`/`audit_id` 为
+`VARCHAR(128)`；`scope_type`/`business_date`/`consumed_at` 为 `LONGTEXT`），因此
+**fresh bootstrap 路径与 live upgrade 路径产出同一物理 schema**，且**无需**修改
+`server/database/mysql-schema.js`。`CHECK` 覆盖 `LONGTEXT` 列是 Wave 9 已验证的形状
+（`credit_check_rules.scenario`）。
+
+##### 37.54.22.13.5 消费状态机实施结果
+
+| 状态 | 实现 | 证据 |
+|---|---|---|
+| `UNCONSUMED` | 写入 1 条账本行 + 1 条 CONSUME 审计 | T-01 |
+| `CONSUMED_BY_THIS_ACTION` | 复用原消费结论；**不**新增账本、**不**新增审计 | T-02 / T-03 / T-09 |
+| `CONSUMED_BY_OTHER_ACTION` | 拒绝释放；维持 `SPECIAL_APPROVAL_REQUIRED` + reason code `SPECIAL_APPROVAL_ALREADY_CONSUMED`；**零写入** | T-04 / T-05 |
+
+- 消费写入**不再**由 `isReplay` 决定；决定它的是审批的消费状态。
+- 账本行**先写**、CONSUME 审计**后写**：唯一约束冲突发生时，审计行根本不会产生。
+- 唯一约束冲突被翻译为显式 409 `CREDIT_SPECIAL_APPROVAL_ALREADY_CONSUMED`，事务整体回滚。
+- `consumedSpecialApprovalId` **当且仅当**当前 `(check_group_id, scope_type)` 存在消费记录时非空；
+  Scope 级字段已加入响应与 EVALUATE 审计明细。
+- Scope 级身份修正（C-4）：未被释放的 Scope 行，其明细 `consumedSpecialApprovalId` 为 `null`，
+  **不**再残留其它 Scope 的审批 ID（T-12）。
+- 重放结论修正（C-3）：落盘行自带释放标记即构成"落盘结论 = 释放后结论"的证明，落盘决定为 `PASS`
+  的组**不再**被判为身份不可重放（T-11 / T-11b）。
+- 历史兼容：既有 CONSUME 审计行经 `JSON.parse` 解析后**被承认**为消费权威；明细损坏时**fail closed**
+  （T-13 / T-13b / T-14）；历史消费**未**被迁入账本。
+- L7 锁：候选审批行按 `decided_at, id` 稳定顺序 `FOR UPDATE` 取得，排在既有 L1–L6 之后、调用方业务行
+  之前；**未**新增 Check Result 行锁；Finance → Credit 锁序不变。
+- 只读路径（`consumeApprovals=false`）**不**写账本、**不**写审计、**不**翻转决定（T-16b）。
+
+##### 37.54.22.13.6 本轮实际执行的验证（全部来自本轮运行）
+
+| 序列项 | 命令 / 范围 | 结果 |
+|---|---|---|
+| Migration fresh / upgrade / idempotency / 约束 | 一次性 SQLite 夹具 | PASS（见 §37.54.22.13.4） |
+| T-01..T-16 | `node --test server/sales-customer-wave10-credit-check.test.js` | **75 / 75 PASS**（原 56 + 新 19） |
+| V1/V2 Golden | 同上（既有 golden 未删未改） | PASS |
+| Wave 10 Credit Focused | 同上 | PASS |
+| W11-SEC 冻结回归 | `node --test server/sales-customer-wave0-migration-runner.test.js server/sales-customer-wave10-acceptance-contract.test.js server/sales-customer-wave11-sec-scope.test.js` | **32 / 32 PASS** |
+| W11-A U1 证据链 | `node --test scripts/sales-customer-wave11-a-primitives.test.js` | **10 / 10 PASS** |
+| W11-A U2 回归 | `node --test server/sales-customer-wave11-a-credit-query.test.js` | **38 / 38 PASS**（原 37 + 新 1） |
+| MySQL 集成套件静态检查 | `node --check` + 具名导出解析 | PASS（语法通过，**全部具名导入可解析**） |
+| Test Governance | 随 FULL 执行 | PASS |
+| FAST | `pnpm test:fast` | **500 / 500 PASS** |
+| FULL | `pnpm test` | **3021 / 3021 PASS**（359 suites；原 3001 + 新 20） |
+| Build | `pnpm build` | PASS |
+| `git diff --check` | — | PASS（无空白错误） |
+| 冻结指纹链 | LF 归一化 SHA-256 | PASS（七链互不相同） |
+
+**NOT_RUN — MANUAL MYSQL GATE REQUIRED**
+
+| 项 | 状态 |
+|---|---|
+| T-17 真实 MySQL 跨会话一次性消费唯一性 | **NOT_RUN** —— 本轮禁止连接 MySQL |
+| T-18 真实 MySQL 唯一约束与物理类型目录取证 | **NOT_RUN** —— 同上 |
+| Real MySQL E3 M1..M10 复跑 | **NOT_RUN** —— 同上 |
+| Protected MySQL Gate / Reset / Cleanup | **NOT_RUN** —— 同上 |
+
+**T-17 能证明什么、不能证明什么**：它证明**独立 MySQL 会话**之间的一次性消费——第二个会话读回第一个
+会话已提交的消费并被显式拒绝。它**不能**证明真正的同时交错，因为本仓库的 MySQL 应用事务由全局事务
+闸门串行化（§37.54.22.7.3 第一层）；库层唯一约束是与该串行化无关的引擎中立兜底。
+
+##### 37.54.22.13.7 实施状态
+
+**Status: `W11_A_U2_ONE_TIME_IMPLEMENTED_READY_FOR_MYSQL_GATE`.**
+
+本地实施与回归全部通过；真实 MySQL 尚未运行。**本状态不是 U2 Acceptance，也不是 Capability Freeze。**
+下一步：由用户在当前 Windows 用户上下文中运行既有受保护 Launcher，完成 E3 M1..M10 与 T-17 / T-18 的
+取证。本轮**未**执行任何 Git 写操作，工作树保持未提交。
+
+---
+
+### 37.54.23 W11-A U2 — 白名单例外 Amendment Record 与 T-17 断言更正（2026-10-29）
+
+#### 37.54.23.1 授权与基线
+
+- 授权：**W11-A U2 — ONE_TIME Final Whitelist Exception & T-17 Correction**（用户本轮明确批准）。
+  批准内容仅限：① §37.54.22.9 白名单外两份**测试**文件的既有必要增量；② 对
+  `server/mysql-sales-customer-wave11-a-credit-query.integration.js` 的**一次最小测试修正**。
+  该批准**不**构成对任何其它越界修改的授权。
+- 前置只读复核结论：`W11_A_U2_ONE_TIME_WHITELIST_EXCEPTION_REVIEW_READY`。
+- 基线：Branch `work/sales-waves6-13-recovery-20261025`；HEAD
+  `d9e5d50a9103612a17070f806312b822281eb6c6`；Version `1.6.2`；工作树保持未提交，全部 U2 实施成果保留。
+- 本轮**未**连接 MySQL、**未**运行任何 MySQL Gate、**未**执行任何 Git 写操作、**未**修改生产代码、
+  Schema、Migration、Protected Runner / Launcher / Preflight、`package.json`、Test Suite Manifest
+  或任何冻结历史记录。
+
+#### 37.54.23.2 白名单例外 Amendment Record
+
+新增例外身份 **`W11_A_ONE_TIME_WHITELIST_EXCEPTION_AMENDMENT`**。它**不重定义** W11-SEC-01 的冻结基线，
+**不**追溯覆盖 U1 与 V2 的证据链，只记录本轮获批的两处白名单外增量。
+
+| # | 文件 | 实际变更 | 批准范围 | 判定 |
+|---|---|---|---|---|
+| X1 | `server/sales-customer-wave0-migration-runner.test.js` | **+3 / −3** | 仅三处治理记账 | 已批准 |
+| X2 | `scripts/sales-customer-wave11-a-primitives.test.js` | **+227 / −13** | 仅 T5 基线重指向与新增 T6..T10 | 已批准 |
+
+**X1 — Wave 0 Registry Test（三处 bookkeeping，无其它变化）**
+
+| 位置 | 变更 | 事实核对 |
+|---|---|---|
+| 测试标题 | `Wave 1 through Wave 10` → `Wave 1 through Wave 11` | 与注册表实际步数一致 |
+| `SALES_CUSTOMER_MIGRATIONS.length` | `10` → `11` | 注册表**确实**含 11 条（`server/migrations/sales-customer-domain.js:43-46`）；runner 接受 `wave: 11`（同文件 `:83`，合法区间 `0..13`） |
+| 批准步 id 列表 | 追加 `'wave-11-a-credit-consumption'` | 与注册表 id **逐字相同**，追加在末尾，顺序不变 |
+
+其余断言**逐字节未改**：`BATCH_A_COLUMNS` 计数 27、`Object.isFrozen`、`wave-1` / `wave-2` id、
+`WAVE8_BOUNDED_STEPS.length` / `.at(-1)` / `wave >= 9` 三项、`WAVE11_SALES_TABLES` 不得存在。
+无 skip / todo / only；无断言被删除或放宽；未把预期值改成错误实现的结果。
+`WAVE8_BOUNDED_STEPS.some((step) => step.wave >= 9) === false` 仍然成立，因为该夹具按 `wave <= 8` 过滤，
+新增的 `wave: 11` 步骤落在夹具之外。
+
+**X2 — U1 Primitives（T1–T4 原断言保留，T5 当前版本完整性继续执行）**
+
+- **T1–T4 的函数体逐字节未改**：`git diff -U0` 的第一个正文 hunk 落在 T5 内部，T1–T4 区间无任何 hunk。
+  Golden 向量与全部断言保持原样。
+- **T5 的断言强度未被削弱**：5b（`CREDIT_CHECK_RESULT_SCOPE` 内容）、5c（hash builder 合同与确定性）、
+  5d（唯一 resolver / predicate / hash builder / canonicalJson / 指纹算法）与"具名导出块仍原样存在"
+  全部保留；T5 的断言**数量增加**、**无一条被删除**、**无用例被跳过**。
+- **唯一无法保留其旧形式的断言**：`sha256(导出标记之前的源码) === 3bf4eb51…`。它现在是**结构性不可满足**的：
+  当前文件剥离导出块后的 LF 归一化摘要为 `b4dff887…`，既不等于 `3bf4eb51…`（W11-SEC）也不等于
+  `eceb2f77…`（U1），因为本轮获批的 ONE_TIME 行为性修改落在函数体内部（导出标记位于 byte 70635 / 71225）。
+  该断言的替换依据仓库**既有**维护规则 `log/2026-10-28.md:1733`：T5 基线必须**重指向**新的授权基线，
+  原指纹必须永久保留，**不得**以放宽比较、删除断言或跳过用例消除失败。
+  实际执行结果：**比较未放宽**（仍为 64 位小写十六进制的严格相等）、**断言未删除**、**用例未跳过**。
+- **EOL 规范化**：`contentDigest` 只做 `CRLF → LF` 折叠，不触及任何其它字节，不改变语义载荷；
+  冻结常量本就以 LF 归一化字节（= 将要提交的 Git blob）计算，与 `log/2026-10-29.md` 的记录口径一致。
+  相对旧的裸字节摘要，该归一化**更贴近**被冻结的内容，而非放松比较。
+
+#### 37.54.23.3 冻结证据链的独立核验事实
+
+本轮对 T5 指纹链的**每一项**独立复算，不以"七个摘要互不相同"充当完整性证明。
+
+| 常量 | 独立核验方式 | 结论 |
+|---|---|---|
+| `W11_SEC_FROZEN_CREDIT_CHECK_SHA256` `3bf4eb51…` | `git show 177a8ea:server/modules/credit-check.js` | **MATCH**（存在独立 Git blob） |
+| `W11_SEC_FROZEN_CREDIT_POLICY_SHA256` `94f2df0a…` | `git show 177a8ea:server/modules/credit-policy.js` | **MATCH**（存在独立 Git blob） |
+| `U1_PRE_V2_CREDIT_CHECK_SHA256` `eceb2f77…` | `git show ca9811a:server/modules/credit-check.js` | **MATCH**（存在独立 Git blob） |
+| `U1_PRE_V2_CREDIT_POLICY_SHA256` `9088a222…` | `git show ca9811a:server/modules/credit-policy.js` | **MATCH**（存在独立 Git blob） |
+| `ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256` `1f11fbee…` | 当前工作树文件的 LF 归一化摘要 | **MATCH** |
+| `V2_CREDIT_POLICY_SHA256` `5fc76f39…` | 当前工作树文件的 LF 归一化摘要 | **MATCH** |
+| `V2_CREDIT_CHECK_SHA256` `5c5a5a71…` | **无 Git 对象可比对** | **documentary only** |
+
+**如实标记**：未提交的 V2 中间版本 `5c5a5a71…` 只在 `log/2026-10-29.md` 与本节留下文档记录，
+**没有**对应的 Git blob，因此**不宣称七个 SHA 全部具备独立 Git blob**。
+七个摘要互不相同这一事实**只**作为"复制粘贴串号"防护使用，**不**充当完整性证明。
+
+**新增版本期望 SHA 的来源**：两个当前基线常量均为测试文件中的**硬编码字面量**，
+测试以 `contentDigest(当前源码) === 字面量` 比较，**不在测试运行时由当前源码动态生成**；
+本轮另行独立复算当前文件摘要，两者一致。
+
+**历史链接在可执行测试中的当前地位（如实记录）**：四个历史摘要现在只参与"互不相同"检查，
+**不再**有任何可执行断言把它们绑定到各自的载荷内容。原先"剥离导出块可复现 W11-SEC 指纹"的
+**字节包含性证明**因获批的行为性修改而不可能继续存在，这是该修改的**直接且不可避免**的后果，
+不是本次越界增量造成的。历史完整性现由：测试常量 + 本节 + `log/2026-10-29.md` 摘要链 +
+Git 对象（`177a8ea` / `ca9811a`）共同承担。
+
+#### 37.54.23.4 T-17 静态复核结论：生产语义与 Design **无冲突**
+
+**被复核的错误断言及其根因**
+
+Session B 使用不同的 `authorizationContext` ⇒ 产生不同的 Check Group（CCHK2 前像含
+`authorizationContext`，`server/modules/credit-check.js:1178-1183`）。
+ONE_TIME 账本已记录其它动作的消费 ⇒ `readApprovalConsumptionState` 返回
+`{ consumed: true, matchesThisAction: false }`（`credit-check.js:661-670`）⇒
+`findConsumableApproval` 置 `consumedByAnotherAction` 并 `continue`（`credit-check.js:727-736`），
+返回 `approval: null` ⇒ `evaluateCredit` 走 `credit-check.js:1204-1215`，**返回**业务拒绝结论，
+**不抛异常**。唯一的 409 抛出点 `writeApprovalConsumption`（`credit-check.js:764`）在 `approval` 为 null 时
+**不可达**；`legacyContextGroups` 只匹配 `CCHK1:%`（`credit-check.js:861-872`），故 CCHK2 路径也不会抛
+`CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS`。`transaction()`（`server/db.js:2093`）正常提交。
+
+**三种持久化形态的区分（本路径的实际归属）**
+
+| 形态 | 内容 | 本路径是否适用 |
+|---|---|---|
+| **A** | 只读拒绝、无新增持久化事实 | **否** |
+| **B** | 直接调用返回拒绝结果，并保留该**新 Check Group 自身**的评估事实 | **是** —— T-17 的 session B |
+| **C** | 生产业务调用方在拒绝后抛异常，使整笔事务回滚 | **是** —— 生产路径 |
+
+形态 C 的证据：`assertCreditAllowsBusinessAction`（`credit-check.js:1346-1360`）在
+`decision` 非 PASS / WARNING 时抛 409 `CREDIT_SPECIAL_APPROVAL_REQUIRED`；三个生产调用方都把该调用
+放在自己的 `transaction(db, ...)` 内（`server/modules/sales-orders.js:707` / `:816`、
+`server/app.js:5799`），因此该次评估写入的 Result 行、Snapshot、Anchor 与 EVALUATE 审计
+**一并回滚** ⇒ 提交态**零写入**。
+
+**形态 B 与已批准合同的一致性**
+
+- `document.md` **R-ONE-03-c**：拒绝路径零写入——不写消费记录、不写 CONSUME 审计、**不改 Check Result**、
+  不改审批。B 与 C 均满足：拒绝分支只追加 reason code（`credit-check.js:1213-1215`），
+  不写账本、不写 CONSUME 审计、不 UPDATE 任何既有 Result 行、不 UPDATE 审批行
+  （`credit-check.js` 内**不存在**对 `credit_special_approval` 的 UPDATE / DELETE）。
+- `document.md` **R-ONE-03-d**：业务事实变化导致的新 Check Group（含新的授权上下文）视为**新的业务动作**。
+  新业务动作产出新的评估事实是被批准的语义。
+- **R-ONE-02-d**：响应中的 `consumedSpecialApprovalId` 当且仅当当前 `(check_group_id, scope_type)`
+  确实存在消费记录时非空。拒绝分支的 Scope 与组级字段均为 `null`（`credit-check.js:1245` / `:1277`）。
+- **已通过**的 SQLite **T-04 / T-05** 已经采用形态 B：其 `runCheck` 助手
+  （`server/sales-customer-wave10-credit-check.test.js:300-304`）**直接**调用 `evaluateCredit` 并提交事务；
+  **T-05** 更进一步读取**被拒组自己的** Result 行
+  （`:1646` `scopeRow(handle.db, refused.checkGroupId, 'CUSTOMER_AGGREGATE')`）去申请第二张审批——
+  若拒绝路径不写 Result 行，T-05 无法通过。
+- `solution.md` §37.54.22.5.5 的"拒绝路径零写入：账本、CONSUME 审计、Result 行、审批行均不变"
+  位于**生产事务归属**段落内，其零写入由调用方回滚保证（形态 C）。
+
+**结论：被复核的拒绝路径的持久化结果与已批准的 Requirement / Design 一致，不存在生产语义冲突。**
+本轮**不**签发 `W11_A_U2_T17_PRODUCTION_SEMANTIC_BLOCKER`，**不**修改任何生产模块或 Schema，
+**不**以调整生产 `evaluateCredit()` 去迎合错误测试。
+
+#### 37.54.23.5 T-17 断言更正（最小测试修正）
+
+唯一修改文件：`server/mysql-sales-customer-wave11-a-credit-query.integration.js`（白名单第 6 项内的更正）。
+
+| 原断言 | 更正后 | 依据 |
+|---|---|---|
+| `sessionBOutcome === null` | `sessionBOutcome` 非空，且 `decision === 'SPECIAL_APPROVAL_REQUIRED'` | R-ONE-03-b；形态 B |
+| `sessionBError` 为真、`status === 409` | `sessionBError === null`（拒绝是业务结论，抛异常反而是**合同偏离**，故断言其**不存在**） | R-ONE-03-b；`credit-check.js:1204-1215` |
+| `sessionBError.code === 'SPECIAL_APPROVAL_REQUIRED'` | 该项**整体删除**（`SPECIAL_APPROVAL_REQUIRED` 是*决定*不是错误码；真正的抛出码是 `SPECIAL_APPROVAL_ALREADY_CONSUMED`） | `credit-check.js:764` / `:1352` |
+| —（新增） | 被拒 Scope 携带 `SPECIAL_APPROVAL_ALREADY_CONSUMED`，且**恰好一个** Scope 携带；其 `scopeType` 等于审批的 `scope_type` | R-ONE-03-b |
+| —（新增） | 被拒 Scope 与组级的 `consumedSpecialApprovalId` 均为 `null`；`approvalAvailable === false` | R-ONE-02-d |
+| —（新增） | 拒绝前后**审批行逐字段相等**、**既有 Check Result 行逐字段相等**（`deepEqual` 前后快照） | R-ONE-03-c「不改 Check Result / 不改审批」 |
+| —（新增） | Session A 的合法 Replay 仍返回 `PASS`、同一 `consumedSpecialApprovalId`、同一 `checkGroupId`，账本仍 1 行、CONSUME 审计仍 1 行 | R-ONE-02-a |
+
+**保留不动**：账本唯一消费行（`consumption_key === 'SINGLE'`、`check_group_id` 绑定 Session A）、
+CONSUME 审计计数为 1、Session A 的首次消费结论、T-18 的全部断言、M1–M10 的全部顶层测试。
+
+**本轮未借机扩大范围**：两份已批准的白名单例外文件**未再改动一行**；生产模块、Schema、Migration、
+Protected Runner / Launcher / Preflight、`package.json`、Test Suite Manifest **均未改动**。
+
+#### 37.54.23.6 本轮实际执行的验证
+
+全部在剥离 MySQL 指向环境变量的隔离子进程中执行（`ERP_DB_BACKEND=sqlite`，
+`ERP_MYSQL_TEST_ALLOW_RESET` / `ERP_DB_HOST` / `ERP_DB_PATH` 等均已证实不存在）。
+
+| 序列项 | 命令 / 范围 | 结果 |
+|---|---|---|
+| Integration Suite 语法 | `node --check server/mysql-sales-customer-wave11-a-credit-query.integration.js` | **PASS** |
+| ONE_TIME Focused | `node --test server/sales-customer-wave10-credit-check.test.js` | **75 / 75 PASS** |
+| SQLite 跨动作决策与副作用回归（T-17 的 SQLite 对照） | `node --test --test-name-pattern="T-04\|T-05\|T-13\|T-02\|T-03" …` | **6 / 6 PASS**（T-02 / T-03 / T-04 / T-05 / T-13 / T-13b） |
+| U1 Primitives / T5 证据链 | `node --test scripts/sales-customer-wave11-a-primitives.test.js` | **10 / 10 PASS** |
+| Wave 0 Migration Registry | `node --test server/sales-customer-wave0-migration-runner.test.js` | **7 / 7 PASS** |
+| W11-A U2 回归（SC101 / SC102） | `node --test server/sales-customer-wave11-a-credit-query.test.js` | **38 / 38 PASS** |
+| `git diff --check` | — | **PASS**（无空白错误） |
+
+**NOT_RUN — MANUAL MYSQL GATE REQUIRED**（本轮禁止连接 MySQL）
+
+| 项 | 状态 |
+|---|---|
+| T-17 真实 MySQL 跨会话一次性消费唯一性 | **NOT_RUN** |
+| T-18 真实 MySQL 唯一约束与物理类型目录取证 | **NOT_RUN** |
+| Real MySQL E3 M1..M10 复跑 | **NOT_RUN** |
+| Protected MySQL Gate / Reset / Cleanup | **NOT_RUN** |
+
+**SQLite 结果不得替代真实 MySQL 实证**：T-17 / T-18 仍必须在受保护 Launcher 下取证。
+
+#### 37.54.23.7 未发生事项与状态
+
+- 未修改任何生产业务模块、Schema / Migration、Protected Runner / Launcher / Preflight、
+  `package.json`、Test Suite Manifest、冻结历史记录或两份已批准的白名单例外文件。
+- 未连接 MySQL；未创建 / Reset / 清理任何数据库；未触碰 DPAPI 凭据、账号、Grants 或 GLOBAL 参数。
+- 未执行 Git Commit / Push / Merge / Rebase / Reset / Restore / Clean / Stash；未 Version Bump / Tag /
+  Release / Deploy；未执行 W11-SEC Re-Freeze。
+- 未签发 U2 Acceptance / Freeze；未启动 U3 / W11-B / W11-C / W11-D。
+- 未改动 M1–M10、T-17 / T-18 的既有覆盖范围；未 skip、未 todo、未弱化任何既有测试。
+
+**Status: `W11_A_U2_E3_FINAL_RERUN_READY`.**
+
+T-17 的断言已更正为**已批准的返回式拒绝合同**，且被复核的跨动作拒绝副作用与 §37.54.22 的
+Requirement / Design 一致。本状态**不是** U2 Acceptance，也不是 Capability Freeze。
+下一步：用户在受保护 Launcher 下运行真实 MySQL E3（M1..M10 + T-17 / T-18）取证。
+
+---
+
+### 37.54.24 W11-A U2 — E3 T-17 测试数据根因诊断与 Fixture 有界修正（2026-10-29）
+
+#### 37.54.24.1 授权、基线与本轮范围
+
+- 授权：**W11-A U2 — E3 T-17 Fixture Ambiguity & T-18 Isolation Correction**（用户本轮明确批准）。
+- 基线：Branch `work/sales-waves6-13-recovery-20261025`，HEAD `d9e5d50a9103612a17070f806312b822281eb6c6`，
+  `package.json` version `1.6.2`。
+- 触发事实：受保护 MySQL Gate 已执行，`w11-a-u2-e3-20261029-152933.tap.log` 记录 M1–M10 **10/10 PASS**、
+  T-17 **FAIL**、T-18 **FAIL（依赖 T-17 失败）**、Total 10/12、`GATE_EXIT_CODE=1`、`CLEANUP_CONFIRMED`。
+- 本轮范围：**只**诊断并修正 T-17 的测试数据问题与 T-18 的测试依赖问题。
+  **不授权**修改生产业务代码、Schema、Migration 或 MySQL 环境。
+- 白名单：`server/mysql-sales-customer-wave11-a-credit-query.integration.js`（优先）、
+  `server/test-utils/wave11-a-credit-query-fixture.js`（有界）、`solution.md`、`log/YYYY-MM-DD.md`。
+- M2、M4、M9 已在真实 MySQL 验收通过，本轮**不重新打开**。
+
+#### 37.54.24.2 根因：两个**独立**的 Fixture 碰撞（生产语义正确，测试数据错误）
+
+真实 MySQL 的失败点是 `CREDIT_EFFECTIVE_VERSION_AMBIGUOUS`。本轮用**隔离 SQLite 复现**证明：
+E3 套件把**两个各自正确但互相独立**的 Fixture 世界放进**同一个** MySQL 数据库，
+而两个生产解析器把这些事实当作**全局**事实：
+
+| # | 事实 | 共享世界（M1–M10） | T-17 的 Wave-10 世界 | 生产解析器 | 后果 |
+|---|---|---|---|---|---|
+| C-1 | `credit_parameters` 的 `CREDIT_MANAGEMENT_ENABLED` | `param-CREDIT_MANAGEMENT_ENABLED`（ACTIVE，`effective_from=PROFILE_FROM`，`effective_to=NULL`，值 1） | `w10-race-enabled`（ACTIVE，`effective_from=2026-01-01`，`effective_to=NULL`，值 1） | `readEffectiveParameter`（`credit-check.js:90-95`）：同一 Code 在业务日期上出现 **>1** 个有效 ACTIVE 版本即拒绝 | `CREDIT_EFFECTIVE_VERSION_AMBIGUOUS`（**本轮报告的失败**） |
+| C-2 | `credit_check_rules` 在**阶段**上的有效规则集 | `W11_A_SO_APPROVE`（SO_APPROVE，scenario `BLOCK`，strength `BLOCK`，自 `PROFILE_FROM` 起有效） | `W10_RACE_RULE`（SO_APPROVE，scenario `OVERRIDE_REQUEST`，strength `WARNING`，自 `2026-01-01` 起有效） | `effectiveRuleRows`（`credit-check.js:509-512`）收集该阶段**全部**有效规则，`strongestOutcome` 取最强 | 阶段结论变成 **BLOCK**（rank 3）而非可释放的 `SPECIAL_APPROVAL_REQUIRED`（rank 1）——**修复 C-1 之后 T-17 仍会失败** |
+
+隔离 SQLite 复现（同一数据库内合成两个世界）的实测输出：
+
+```
+effective CREDIT_MANAGEMENT_ENABLED versions at 2026-10-29: 2
+=== 4. T-17 first evaluation, AS SHIPPED (stage SO_APPROVE) ===
+THROWN code=CREDIT_EFFECTIVE_VERSION_AMBIGUOUS message=信用参数生效版本不唯一
+=== 6. T-17 first evaluation at stage SO_APPROVE (parameter ambiguity fixed) ===
+decision=BLOCK scopes=CUSTOMER_AGGREGATE:BLOCK
+effective rules at SO_APPROVE=[W10_RACE_RULE(OVERRIDE_REQUEST/WARNING), W11_A_SO_APPROVE(BLOCK/BLOCK)]
+=== 7. T-17 first evaluation at stage SO_SUBMIT ===
+decision=SPECIAL_APPROVAL_REQUIRED scopes=CUSTOMER_AGGREGATE:SPECIAL_APPROVAL_REQUIRED
+```
+
+**结论**：生产代码**无缺陷**。`readEffectiveParameter` 拒绝在两个重叠 ACTIVE 版本之间猜测是正确的保护，
+`effectiveRuleRows` 取最强结论也是已批准语义。缺陷在**测试数据**：两个 Fixture 世界被合成到同一个数据库，
+却没有合成出**唯一**的参数版本与**可释放**的阶段规则集。
+
+#### 37.54.24.3 随后的两个潜伏 Fixture 缺陷（同一根因链：T-17 从未真正跑通过）
+
+C-1 在进入账本验证之前就抛出，因此 T-17 的后续代码**从未被执行**。隔离复现继续暴露两个更靠后的缺陷：
+
+| # | 缺陷 | 证据 | 修正 |
+|---|---|---|---|
+| C-3 | T-17 用 `SELECT * FROM credit_check_results WHERE decision='SPECIAL_APPROVAL_REQUIRED' ORDER BY id LIMIT 1` 取来源行。共享世界**本身就有 8 条** `SPECIAL_APPROVAL_REQUIRED` 结果（4 客户 × 2 范围），因此该查询会取到**共享世界的行**，从而把审批绑到错误的快照上 | `seedWorld` 的 `runCheck`（limit 100000 / delta 200000）必然超限 | 来源行改为**按本用例自己的 check group** 定位：`WHERE check_group_id=? AND decision='SPECIAL_APPROVAL_REQUIRED'` |
+| C-4 | T-17 用**同一个 actor**（`ADMIN`）申请并审批特别审批 | 生产 SOD（`credit-special-approval.js:255-261`，§36.6.6）拒绝申请人＝审批人，抛 `CREDIT_SPECIAL_APPROVAL_SOD` | 申请用 `ADMIN`、审批用共享 Fixture 的独立审批人 `DECIDER`，与共享世界决定自身审批的做法完全一致 |
+
+C-3、C-4 与 C-1/C-2 属同一条链：**T-17 在真实 MySQL 上从未真正进入过消费路径**。
+
+#### 37.54.24.4 Fixture 修正（只改测试数据，不改生产）
+
+**修正 1 —— 参数版本收敛为一条版本链（消除 C-1）**
+
+`reconcileParameterVersions`（`server/test-utils/wave11-a-credit-query-fixture.js`）执行**生产写入器自己执行的**
+版本转换 `closePredecessorAndAssertRange`（`credit-policy.js:32-46`）：前序版本的生效窗口在**后继版本生效日的
+前一天**关闭，并在前序版本上写下 `superseded_by_id` 链接。
+
+- 收敛前：`w10-race-enabled` [2026-01-01, ∞) ∥ `param-CREDIT_MANAGEMENT_ENABLED` [2026-08-29, ∞) → 重叠。
+- 收敛后：`w10-race-enabled` [2026-01-01, 2026-08-28] → `param-CREDIT_MANAGEMENT_ENABLED` [2026-08-29, ∞)。
+- 两个版本的 `value_bool` **相同**（均为 1），因此关闭窗口**不改变任何日期上参数所陈述的事实**：
+  Credit Management 在**每个**日期上都保持**开启**，T-17 的“信用管理开启”前提原样保留。
+- **不删除**任何参数行，**不修改**生产 Resolver，**不改变** T-17 的业务日期。
+- fail-closed：若同一 Code 的各 ACTIVE 版本取值不一致（收敛会改变业务事实），直接拒绝；
+  收敛后若业务日期上仍不是**恰好一个**有效版本，直接拒绝。
+
+**修正 2 —— ONE_TIME 阶段选择可释放的阶段（消除 C-2）**
+
+`ONE_TIME_STAGE = 'SO_SUBMIT'`：这是**规范 SQLite 对照**（T-01..T-14，`prepareApprovalScenario`）使用的阶段，
+也是合成后的 E3 数据库中**唯一**有效规则集可释放的阶段——共享世界在 SO_SUBMIT 的 `W11_SEC_SO_OVERRIDE`
+与 T-17 自己的 `W10_RACE_RULE` 同为 `OVERRIDE_REQUEST` / `WARNING`；而共享世界在 SO_APPROVE 的
+`W11_A_SO_APPROVE` 是强制 `BLOCK`。
+
+- **不修改**生产规则解析器；**不删除**共享世界的任何规则。
+- 不改变 Profile / Rule / Snapshot / Sales Order / 金额的批准合同：T-17 仍是
+  “聚合额度 50000 分 + 提议增量 100000 分 → 超限 → 申请覆盖 50000 分 / 上限 100000 分 → 可释放的
+  `SPECIAL_APPROVAL_REQUIRED`”。
+- `ensureWave10OneTimeWorld` 在运行前 fail-closed 复核：该阶段必须有有效规则，且每条有效规则的
+  `scenario` 必须是 `OVERRIDE_REQUEST` 且 `control_strength` 不得为 `BLOCK`——否则立即拒绝，
+  而不是让结论以难以理解的方式不匹配。
+
+**修正 3 —— T-17 / T-18 共享一个幂等的世界准备**
+
+`ensureWave10OneTimeWorld` 每个数据库只准备一次，且是幂等的：T-17 与 T-18 各自调用它，谁先到谁准备，
+后到者复用。**两个用例互不依赖，也不依赖对方已经 PASS。**
+
+#### 37.54.24.5 T-18 独立性证明
+
+| 要求 | 实现 | 证据 |
+|---|---|---|
+| 不依赖 T-17 已经 PASS | T-18 不再读取任何 T-17 证据（原 `oneTimeConsumptionEvidence` 已删除）；它自己调用幂等的 `ensureWave10OneTimeWorld`，世界不存在时由它自己准备 | 静态检查：`oneTimeConsumptionEvidence` / “T-17 must have produced” 在集成文件中**零命中** |
+| 不通过执行顺序取得隐式成功前提 | T-18 有自己的订单 `w11a-t18-order`、自己的 Check Group、自己的审批 | T-18 的审批 id ≠ T-17 的审批 id（隔离复现实测） |
+| 消费事实来自合法生产 Writer | 申请与审批走 `requestCreditSpecialApproval` / `decideCreditSpecialApproval`（生产 handler），消费走生产 `evaluateCredit` 路径 | T-18 断言 `consumed.decision === 'PASS'`、`consumed.consumedSpecialApprovalId === approvalId`、账本恰好 1 行 |
+| 独立验证 MySQL 原生 UNIQUE 拒绝 | T-18 对**自己**的审批做第二次 `(approval_id,'SINGLE')` 原始 INSERT，断言被拒绝 | 该断言与 T-17 的审批无关：唯一约束是 `(approval_id, consumption_key)` |
+| 重复 INSERT 未制造第二份记录 | 断言该审批的消费行数仍为 1 | — |
+| information_schema 真实物理列合同 | 原断言**原样保留**（列名序列、`varchar` / `longtext` 族） | — |
+| 不得为独立性复制整套 Credit 业务实现 | 只复用既有最小 Fixture Helper（`seedWave10AcceptanceBase` / `seedSubmittedOrder` / `creditInput` / 生产审批 handler），**未新增**任何 Credit 业务实现 | — |
+
+#### 37.54.24.6 未改动的既有合同
+
+M1–M10 的**采集路径完全未变**：`collectEngineEvidence` 仍在 `before()` 中、在任何 ONE_TIME 事实写入**之前**
+完成，故 M2 金额、M4 V2 Rule Hash / CSP2 / CCHK2 跨引擎相等、M9 分页唯一性、M10 GET 零写入的
+事实与断言一字未动。ONE_TIME 世界在 T-17/T-18 内部准备，不进入 M1–M10 的测量窗口，
+共享世界的结果行与阶段规则保持原样。T-17 的既有断言（账本唯一消费行、`consumption_key='SINGLE'`、
+`check_group_id` 绑定 Session A、CONSUME 审计计数为 1、审批行与既有 Result 行逐字段不变、
+Session A 合法 Replay）**全部保留**；T-18 的既有断言（原生 UNIQUE 拒绝、消费行数、information_schema 物理列）
+**全部保留**。
+
+#### 37.54.24.7 本轮实际执行的验证（全部来自本轮运行，**未连接 MySQL**）
+
+| 序列项 | 命令 / 范围 | 结果 |
+|---|---|---|
+| 隔离 SQLite 复现（合成两个世界） | 一次性脚本（仓库外临时目录） | **复现 C-1（`CREDIT_EFFECTIVE_VERSION_AMBIGUOUS`）与 C-2（`decision=BLOCK`）**，并证明 SO_SUBMIT 得出 `SPECIAL_APPROVAL_REQUIRED` |
+| 隔离 SQLite 修正验证 | 同一脚本 + **真实的** `ensureWave10OneTimeWorld` | T-17 全流程 PASS；T-18 独立流程 PASS；参数链与账本形态如 §37.54.24.4 |
+| Integration Suite 语法 | `node --check server/mysql-sales-customer-wave11-a-credit-query.integration.js` | **PASS** |
+| Fixture 模块语法 | `node --check server/test-utils/wave11-a-credit-query-fixture.js` | **PASS** |
+| 顶层用例数量 | `grep -c '^test('` | **12**（M1–M10 + T-17 + T-18） |
+| skip / todo / only | 静态扫描 | **零命中** |
+| T-18 独立性静态检查 | 静态扫描 | **零命中**（无 T-17 证据依赖） |
+| ONE_TIME Focused | `node --test server/sales-customer-wave10-credit-check.test.js` | **75 / 75 PASS** |
+| W11-A U2 回归 + U1 Primitives + Wave 0 Registry | `node --test server/sales-customer-wave11-a-credit-query.test.js scripts/sales-customer-wave11-a-primitives.test.js server/sales-customer-wave0-migration-runner.test.js` | **55 / 55 PASS**（38 + 10 + 7） |
+| W11-SEC 冻结回归 | `node --test server/sales-customer-wave11-sec-scope.test.js` | **14 / 14 PASS** |
+| FAST | `pnpm test:fast`（剥离 MySQL 指向变量） | **500 / 500 PASS** |
+| `git diff --check` | — | **PASS**（无空白错误） |
+| 冻结载荷指纹 | LF 归一化 SHA-256 | `credit-check.js` = `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc`（**未变**）；`credit-policy.js` = `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7`（**未变**） |
+
+**NOT_RUN — MANUAL MYSQL GATE REQUIRED**
+
+| 项 | 状态 |
+|---|---|
+| T-17 真实 MySQL 跨会话一次性消费唯一性 | **NOT_RUN** —— 本轮禁止连接 MySQL |
+| T-18 真实 MySQL 唯一约束与物理类型目录取证 | **NOT_RUN** —— 同上 |
+| Real MySQL E3 M1..M10 复跑 | **NOT_RUN** —— 同上 |
+| Protected MySQL Gate / Reset / Cleanup | **NOT_RUN** —— 同上 |
+
+**SQLite 结果不得替代真实 MySQL 实证**：T-17 / T-18 仍必须在受保护 Launcher 下取证。
+
+#### 37.54.24.8 未发生事项与状态
+
+- 未修改任何生产业务模块、Schema / Migration、Protected Runner / Launcher / Preflight、
+  `package.json`、Test Suite Manifest 或冻结历史记录。
+- 未连接 MySQL；未创建 / Reset / 清理任何数据库；未触碰 DPAPI 凭据、账号、Grants 或 GLOBAL 参数。
+- 未执行 Git Commit / Push / Merge / Rebase / Reset / Restore / Clean / Stash；未 Version Bump / Tag /
+  Release / Deploy；未执行 W11-SEC Re-Freeze。
+- 未签发 U2 Acceptance / Freeze；未启动 U3 / W11-B / W11-C / W11-D。
+- 未改动 M1–M10 的覆盖范围与断言；未 skip、未 todo、未弱化任何既有测试。
+
+**Status: `W11_A_U2_E3_T17_T18_FIX_READY_FOR_RERUN`.**
+
+T-17 / T-18 的失败已定位为**测试 Fixture 缺陷**并有界修正：两个 Fixture 世界合成到同一个数据库时，
+参数版本收敛为唯一版本链，ONE_TIME 阶段改用可释放的 `SO_SUBMIT`，来源行按本用例自己的 Check Group 定位，
+审批人与申请人按生产 SOD 分离；T-18 改为自备消费事实、不再依赖 T-17。本状态**不是** U2 Acceptance，
+也不是 Capability Freeze。下一步：用户在受保护 Launcher 下复跑 E3 M1..M10 与 T-17 / T-18 取证。
+
+---
+
+### 37.54.25 W11-A U2 — 冻结实施与证据摘要（2026-10-29）
+
+#### 37.54.25.1 授权与阶段边界
+
+用户审阅 `W11_A_U2_FINAL_ACCEPTANCE_REVIEW_PASS` 后，在 AGENTS.md §4.5 下正式批准：
+
+1. `W11-A U2` 技术验收 PASS；
+2. `W11-A U2` Capability Freeze 与本冻结记录。
+
+授权范围**严格限定**为：SC101 Credit Exposure Query 后端、SC102 Credit Exception History 后端、
+V2 Cross-Engine Hash Contract（Rule Hash / CSP2 / CCHK2）、V1 历史身份与 Replay 兼容、
+ONE_TIME Special Approval Consumption Correction，以及相关 Schema / Migration / 测试 / 验收证据。
+
+**不**包含 U3 移动端；**不**代表整个 W11-A Package 已完成；**不**签发 `W11_A_ACCEPTANCE_PASS`；
+**不**解除 Wave 10 发布保持；**不**授权 Release / Deploy / Version / Tag；Git Commit / Push
+仍需独立授权且本轮**未**执行。
+
+本节**不重写**任何既有记录：`§37.54.15.10`（U2-1 实施记录）、`§37.54.22`（ONE_TIME Design）、
+`§37.54.23`（白名单例外 Amendment）、`§37.54.24`（E3 T-17/T-18 Fixture 修正）、
+W11-SEC-01 Freeze Record 与 W11-A U1 Freeze Record 全部原样保留。凡既有记录陈述已不完整之处，
+**准确现状在本节与 `document.md` 的 U2 Freeze Record 中给出**，既有记录不被改写。
+
+#### 37.54.25.2 冻结实施清单与已验证文件指纹
+
+`LF` = LF 归一化字节的 SHA-256，等于提交本工作树后将写入的 Git blob 摘要；`raw` = 当前工作树
+字节的 SHA-256。全部数值均为本轮**从源文件重算**，未从日志转抄。
+
+| SHA-256 (LF) | SHA-256 (raw) | EOL | 文件 | 角色 |
+|---|---|---|---|---|
+| `10a10e079818cb0edc406758514f5d7a16bfcd536e50e0e888a5152de988b684` | 同左 | LF | `server/modules/credit-query.js` | SC101 / SC102 只读后端（新建） |
+| `195b627ce17d2b5ab44ad3cd10264c5f960ecb3a932bb2d8fd7b1cc704f79020` | 同左 | LF | `server/modules/credit-rule-payload.js` | V2 语义化 Rule Payload（新建） |
+| `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc` | 同左 | LF | `server/modules/credit-check.js` | ONE_TIME 消费状态机（V2 + ONE_TIME 有界修订） |
+| `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7` | 同左 | LF | `server/modules/credit-policy.js` | V2 CSP1 / CSP2 指纹（有界修订） |
+| `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` | 同左 | LF | `server/modules/credit-scope.js` | 冻结载荷，**逐字节未变** |
+| `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` | 同左 | LF | `server/modules/credit-special-approval.js` | 冻结载荷，**逐字节未变** |
+| `8348456384e1d5bef8962e1078f792d710ecd9cc587734eff84034b63b5c94a5` | 同左 | LF | `server/migrations/sales-customer-wave11-a-credit-consumption.js` | 消费账本 Migration（新建） |
+| `f82c31fb5b1a6cc5d69550f8f45a1f31ca2e33edb9064d38cea7064742176f37` | `8bd01b0ec8f71623efa6943789ff8c5ada9d51c854bbcf6bb961d5a8408595db` | CRLF | `server/migrations/sales-customer-domain.js` | Migration 注册表（+1 wave-11 步） |
+| `8188be82cd92f79f01e18e8bb156e9e4f274534777c6198e63b58c8a41344204` | `5b35e91f2d3cf579d3787ef7c52839d85028c946c4edfe88fcd08b0b53f6f896` | CRLF | `server/app.js` | 3 条 GET 路由登记 |
+| `ab6b23e26152b52171adb7f5b28bcdb4ac28572d3bf38af83eed8f9251c45f8c` | 同左 | LF | `server/sales-customer-wave11-a-credit-query.test.js` | U2 SQLite 验收套件（新建） |
+| `d38c4f0028ccd522a1ac7b5c303e54d5602ca64afbda9d36518d70f424096a9f` | 同左 | LF | `server/mysql-sales-customer-wave11-a-credit-query.integration.js` | 真实 MySQL E3 套件（新建） |
+| `e836163df10c54448a70650d85a8b4653c48e9e5dbe17691c5e666933acc8aa5` | 同左 | LF | `server/test-utils/wave11-a-credit-query-fixture.js` | 共享生产 Writer Fixture（新建） |
+| `b280cb6c758a49b02f60a2fec81c8ea1ec6ff61e641dc96ff571225f42c304af` | 同左 | LF | `server/sales-customer-wave10-credit-check.test.js` | T-01..T-16 ONE_TIME 用例 |
+| `a0929892e7d849b3706ab31217a40e67e55b64a1d26b666dc60a97bb3b51db3e` | `c3228663801f5df18e0bd5563d04d14f22e83046d4bd79c820116e3d504a448f` | CRLF | `server/sales-customer-wave0-migration-runner.test.js` | 注册表步数与 id 列表 |
+| `c68d4707eaed7501d9f81e35a928755564ed5b2c97f5430fd708b67d7f73036b` | `79f541579f24fde497f5a661d2132eaac07d26e2112f4d93bcb74c3d2ef73d27` | CRLF | `scripts/sales-customer-wave11-a-primitives.test.js` | T5 七链证据链 + T6..T10 |
+| `c3b9b7c6025774d9421d85246fdfb442e115b3c46aca43d6382ec04e67d867e2` | 同左 | LF | `scripts/gates/mysql-sales-wave11-a-gate.mjs` | 受保护 E3 Gate（新建） |
+| `e9ad0b45c4d673e8bf19ab5dd8a8745e1c5aa3bc4b84bac9d6545ae8e93e9ca1` | `a86d25a2df40c49b19e1623174b4f3f19ceb17162450179ef852ab2d74edb2db` | CRLF | `scripts/testing/test-suites.js` | U2 套件 FULL 登记 |
+| `22bb3103e51198592b5d4209f73f7dff22992f6d59e937f214dfd1e7ab5cc5e5` | `0f292be3a2504a29865065bfeb64be557a0d8a47502addd940327036b8d021c5` | CRLF | `package.json` | `test:mysql:wave11-a` 脚本项（+1/-0） |
+
+#### 37.54.25.3 冻结证据链与独立校验
+
+每条历史链接都**从 Git 对象重新计算**，并标注可复现该值的换行约定，因此每条链接都可对仓库对象
+复核，而不是只对某一次 checkout 复核。
+
+| 链接 | SHA-256 | 换行约定 | 独立校验 |
+|---|---|---|---|
+| W11-SEC-01 `credit-check.js` | `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0` | LF blob | `git show 177a8ea:…` MATCH |
+| W11-SEC-01 `credit-policy.js` | `94f2df0a267722ba4d343315668dd82c2c3e5e723dde2363c785a5ecff6aa98b` | LF blob | `git show 177a8ea:…` MATCH |
+| W11-SEC-01 `credit-scope.js` | `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` | LF blob | `git show 177a8ea:…` MATCH |
+| W11-SEC-01 `credit-special-approval.js` | `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` | LF blob | `git show 177a8ea:…` MATCH |
+| W11-SEC-01 `test-suites.js` | `6e75875ac6a4fd697221fa1523f8c25a513b27ced3efc7e88ea78ecfc42cca88` | blob 的 CRLF 渲染 | `git show 177a8ea:…` MATCH |
+| U1 `credit-check.js` | `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384` | LF blob | `git show ca9811a:…` MATCH |
+| U1 `credit-policy.js` | `9088a222e58d85e24539500a65a9e2b97a347fb89b0e20544e0c4fc34924fea8` | LF blob | `git show ca9811a:…` MATCH |
+| U1 `test-suites.js` | `b982808f0d74b5d0b3b2207f343c50e4c4a30bb10f005f9e599b2e4a4ce9e01d` | blob 的 CRLF 渲染 | `git show ca9811a:…` MATCH |
+| U1 `sales-customer-wave11-a-primitives.test.js` | `37074ad129ca89cdb34e3ac40a95eb03073c2f6912ec65fee0043f269b5f8767` | blob 的 CRLF 渲染 | `git show ca9811a:…` MATCH |
+| U1 `sales-customer-wave11-sec-scope.test.js` | `fb12c9e1c715438ff2ff5808109123b32ea902518e1ad16c652f23f7b6e1ba4c` | LF blob | `git show ca9811a:…` MATCH |
+| V2 `credit-check.js` | `5c5a5a71aabaae01dc06d60305ca1886b608da0ad524f162a4447f22170e792b` | LF | **无 Git blob —— 仅文档记录** |
+| V2 `credit-policy.js` | `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7` | LF | 当前工作树 MATCH |
+| ONE_TIME `credit-check.js` | `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc` | LF | 当前工作树 MATCH |
+
+W11-SEC-01 原 14 项冻结载荷的**准确现状**：**11 项仍与原冻结版本逐字节相同**；3 项被后续获批的有界修订
+取代（`credit-check.js` — U1 追加导出 → V2 版本化 Hash → ONE_TIME 消费；`test-suites.js` — U1 一项
+FULL 登记 → U2-1 一项 FULL 登记；`package.json` — U2-1 一项 Gate 脚本项，`version` 字段未变）。
+原 14 项指纹**永久保留**，未被重算、覆盖或作废；**未**执行 W11-SEC-01 Re-Freeze，**未**执行 U1 Re-Freeze。
+
+**如实披露（B-9）**：`§37.54.15.10` 与 `log/2026-10-28.md` §7 的"其余 12 项 W11-SEC 冻结载荷逐项未变"
+对 `package.json` **不准确**——该轮确实改动了一行（`test:mysql:wave11-a` 脚本项）。该改动本身已被
+计划并授权（`log/2026-10-28.md` §1425），最小、纯追加、对版本号中性，但未列入该轮的冻结载荷增量块。
+准确现状（11 / 14）以本节与 `document.md` 的 U2 Freeze Record 为准；既有记录**不被改写**。
+
+#### 37.54.25.4 真实 MySQL E3 证据
+
+```text
+证据文件   %LOCALAPPDATA%\ModernERP\mysql-gate\evidence\w11-a-u2-e3-20261029-161412.tap.log
+字节数     9492
+SHA-256    52c18b1c02eccfaee447f8e7ed24e6b32eea52f36cbdcec65086f7af8c4a3ac7
+目标实例   mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test
+服务端     MySQL 8.0.37  uuid=256c7a4e-d275-11f1-885b-b025aa71d167
+Grants     bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e（与固定基线一致）
+结果       # tests 12 / # pass 12 / # fail 0 / # cancelled 0 / # skipped 0 / # todo 0
+           GATE_EXIT_CODE=0   CLEANUP=CONFIRMED
+           FINAL ZERO OBJECTS = {tables:0, views:0, triggers:0, routines:0, events:0}
+```
+
+TAP 保存在仓库之外，**不提交 Git**。此前失败的 Gate 历史**保留且未被覆盖**：
+
+```text
+w11-a-u2-e3-20261029-074456.tap.log  29198 B  3954a77b01ddacf6421aeaf54a30191c78c1d42738a844c1c75c612f004a580e  7/10（M2/M4/M9 FAIL）
+w11-a-u2-e3-20261029-152933.tap.log  15304 B  4a8aeb9b5dc69538497939e8c4a0205e9f07aeece5f25689d420d2ccbf2a077f  10/12（T-17/T-18 FAIL）
+w11-a-u2-e3-20261029-161412.tap.log   9492 B  52c18b1c02eccfaee447f8e7ed24e6b32eea52f36cbdcec65086f7af8c4a3ac7  12/12 PASS
+```
+
+**NOT_RUN 明示**：HEAVY 套件、浏览器 / 移动端验收、其它 MySQL Gate、独立的破坏性 MySQL migration
+campaign、本轮**未**重跑 E3。以上一律不产生任何 PASS 声明。
+
+#### 37.54.25.5 白名单例外收口
+
+| 文件 | 变更 | 判定 |
+|---|---|---|
+| `server/sales-customer-wave0-migration-runner.test.js` | +3 / −3 | **收口**：注册表步数 10 → 11、step id 列表追加 `wave-11-a-credit-consumption`、标题更新。断言意图**增强**（新步必须存在）。 |
+| `scripts/sales-customer-wave11-a-primitives.test.js` | +227 / −13 | **收口**：T5 基线重指向新授权的 ONE_TIME 基线，新增 T6..T10；T1..T4 逐字节未改；未弱化断言、未跳过用例。 |
+
+两条例外身份 `W11_A_ONE_TIME_REPLAY_CORRECTION_BOUNDED_AMENDMENT` 与
+`W11_A_ONE_TIME_WHITELIST_EXCEPTION_AMENDMENT` **均不重定义** W11-SEC-01 冻结基线。未发现其它
+越界改动：新 Migration 已在 `SALES_CUSTOMER_MIGRATIONS` 正式登记；U2 套件仅登记于 **FULL**，
+FAST / HEAVY / `validate()` / Runner 未变；历史文件未被覆盖；受保护 Runner / Launcher / Preflight /
+Setup **未**被修改，新 Gate 复用既有唯一 `runProtectedMySqlCampaign` 属主。
+
+#### 37.54.25.6 剩余风险与下一阶段边界
+
+**A. U2 验收阻塞项：无。**
+
+**B. 已披露的非阻塞限制**（B-1..B-9，完整表述见 `document.md` U2 Freeze Record §9）：T-17 只证明
+**独立 MySQL 会话**之间的一次性消费，不等于任意并发交错（应用事务由全局事务闸门串行化，库层 UNIQUE
+是与该串行化无关的引擎中立兜底）；V2 中间版本 `5c5a5a71…` 无 Git blob（已扫描仓库全部 blob 确认），
+仅文档记录；SC102 不暴露"该例外是否已被审批释放"（设计 L-4）；`credit_check_results` 无
+`special_approval_id` 列（设计 L-6）；TIME_BOUNDED / OBJECT_BOUNDED 既有语义未扩展（L-5）；
+W11-A Credit Query **UI 不存在**且属 **U3** 范围；HEAVY / 浏览器 / 其它 MySQL Gate **NOT_RUN**；
+T5 历史链接为硬编码常量、由审计对 Git blob 复核；U2-1 轮对 `package.json` 的单行改动未列入其冻结载荷
+增量块（准确现状为 11 / 14）。
+
+**C. 项目级发布阻塞（保持不变，非 U2 Capability Gate 失败，本轮不予解除）**：`W10-INV-RISK-01`
+（`BLOCKS_RELEASE_ONLY`）、`CREDENTIAL_EXPOSURE_OPEN`（`USER_ACCEPTED / DEFERRED`）、
+`LEGACY_DATA_EVIDENCE_PENDING`、`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`、D-2..D-5 继续阻塞
+W11-B / W11-C。生产发布仍未获授权。
+
+**冻结边界与下一阶段**：本节**签发** U2 Acceptance 与 U2 Capability Freeze，**不**签发
+`W11_A_ACCEPTANCE_PASS`，**不**冻结 W11-A Package，**不**启动 U3 / W11-B / W11-C / W11-D，
+**不**执行 Git 写操作、Release、Deploy、Version 或 Tag 变更。后续顺序为：① 独立执行 Git Closure；
+② 核对全部 U2 文件与历史 U1 归属；③ 在用户明确批准后再执行 Git Commit / Push；④ Git Closure 完成后再
+启动 W11-A U3 的独立授权流程。
+
+**Status: `W11_A_U2_FINAL_ACCEPTANCE_PASS — FROZEN`.**

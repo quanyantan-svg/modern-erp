@@ -42,8 +42,11 @@ import { test } from 'node:test';
 
 import { createDatabase } from '../server/db.js';
 import { migrateSalesCustomerDomain } from '../server/migrations/sales-customer-domain.js';
-import { computePolicySnapshotFingerprint, ensureCreditPolicySnapshot } from '../server/modules/credit-policy.js';
-import { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE } from '../server/modules/credit-check.js';
+import {
+  CREDIT_POLICY_HASH_VERSIONS, computePolicySnapshotFingerprint, ensureCreditPolicySnapshot,
+} from '../server/modules/credit-policy.js';
+import { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE, __creditCheckInternals } from '../server/modules/credit-check.js';
+import { parseCreditRulePayload } from '../server/modules/credit-rule-payload.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -52,7 +55,38 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // export block, so removing that block must reproduce this digest exactly.
 const W11_SEC_FROZEN_CREDIT_CHECK_SHA256 =
   '3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0';
+const W11_SEC_FROZEN_CREDIT_POLICY_SHA256 =
+  '94f2df0a267722ba4d343315668dd82c2c3e5e723dde2363c785a5ecff6aa98b';
+const U1_PRE_V2_CREDIT_CHECK_SHA256 =
+  'eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384';
+const U1_PRE_V2_CREDIT_POLICY_SHA256 =
+  '9088a222e58d85e24539500a65a9e2b97a347fb89b0e20544e0c4fc34924fea8';
+const V2_CREDIT_CHECK_SHA256 =
+  '5c5a5a71aabaae01dc06d60305ca1886b608da0ad524f162a4447f22170e792b';
+const V2_CREDIT_POLICY_SHA256 =
+  '5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7';
+// The W11-A U2 ONE_TIME consumption amendment. The V2 payload above stays a
+// permanent historical link; this is the CURRENT authorised baseline of the
+// same owner. log/2026-10-28.md already fixed this maintenance rule: a later
+// package must re-point the T5 baseline to its own newly authorised baseline
+// and must keep every earlier digest in the chain. The comparison is never
+// relaxed, no assertion is deleted and no case is skipped.
+const ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256 =
+  '1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc';
 const U1_EXPORT_MARKER = '\n// W11-A U1 — additive named exports';
+
+// The frozen digest identifies the CONTENT of a frozen payload, not the line
+// endings the local checkout happens to use. `core.autocrlf=true` rewrites a
+// checked-out working tree to CRLF while Git stores the blob LF-normalized, so
+// the digest is taken over the LF-normalized bytes. That makes the frozen
+// constant equal to the digest of the committed Git blob, so the evidence link
+// can be re-verified against the repository object and not only against one
+// checkout.
+function contentDigest(source) {
+  return createHash('sha256')
+    .update(Buffer.from(source.replace(/\r\n/g, '\n'), 'utf8'))
+    .digest('hex');
+}
 
 // GOLDEN VECTORS — PROVENANCE: captured on 2026-10-28 from the ORIGINAL
 // credit-policy.js implementation BEFORE the U1-B extraction, by driving
@@ -428,16 +462,35 @@ test('T4 the snapshot writer persistence behaviour is unchanged', () => {
   });
 });
 
-test('T5 the additive export is inert and introduces no second algorithm or resolver', () => {
-  // 5a. Removing the appended export block reproduces the W11-SEC-01 frozen digest.
+test('T5 the versioned frozen evidence chain preserves V1 and one canonical owner', () => {
+  // 5a. Historical digests remain explicit, immutable links in the evidence
+  // chain. V1 Golden tests above, rather than a false claim that the current
+  // V2 source is byte-identical, prove the old algorithm remains executable.
   const source = readFileSync(join(repoRoot, 'server/modules/credit-check.js'), 'utf8');
+  const policyBytes = readFileSync(join(repoRoot, 'server/modules/credit-policy.js'));
   const index = source.indexOf(U1_EXPORT_MARKER);
   assert.ok(index > 0, 'the appended export block must exist');
-  const stripped = Buffer.from(source.slice(0, index), 'utf8');
-  assert.equal(createHash('sha256').update(stripped).digest('hex'), W11_SEC_FROZEN_CREDIT_CHECK_SHA256,
-    'credit-check.js minus the appended export must be byte-identical to the W11-SEC-01 frozen payload');
+  // The historical proof and the new proof are two different digests. They
+  // must never collapse into one another: the W11-SEC payload, the U1
+  // additive-extraction payload and the V2 payload are three distinct frozen
+  // states of the same owner.
+  const chain = [
+    W11_SEC_FROZEN_CREDIT_CHECK_SHA256,
+    W11_SEC_FROZEN_CREDIT_POLICY_SHA256,
+    U1_PRE_V2_CREDIT_CHECK_SHA256,
+    U1_PRE_V2_CREDIT_POLICY_SHA256,
+    V2_CREDIT_CHECK_SHA256,
+    V2_CREDIT_POLICY_SHA256,
+    ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256,
+  ];
+  assert.equal(new Set(chain).size, chain.length,
+    'every frozen evidence link must be a distinct digest — history and V2 may never share one SHA');
+  assert.equal(contentDigest(source), ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256,
+    'the current credit-check source must equal the authorised ONE_TIME consumption evidence link');
+  assert.equal(contentDigest(policyBytes.toString('utf8')), V2_CREDIT_POLICY_SHA256,
+    'the current credit-policy source must equal the authorised V2 evidence link');
   assert.match(source.slice(index), /export \{ buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE \};/,
-    'the appended block must be exactly the authorised named export');
+    'the authorised named export must remain present');
 
   // 5b. The exported Scope constant carries its frozen content, unchanged.
   assert.deepEqual(CREDIT_CHECK_RESULT_SCOPE, {
@@ -460,11 +513,14 @@ test('T5 the additive export is inert and introduces no second algorithm or reso
     }];
     const hashes = buildScopeHashes(db, { scopes, businessDate: '2026-10-28' });
     assert.deepEqual(Object.keys(hashes).sort(),
-      ['parameterSetHash', 'profileEffectiveStateHash', 'ruleSetHash'],
-      'the hash builder output contract must be unchanged');
-    for (const [key, value] of Object.entries(hashes)) {
+      ['hashContractVersion', 'parameterSetHash', 'profileEffectiveStateHash', 'ruleSetHash'],
+      'the versioned hash builder output contract must be explicit');
+    assert.equal(hashes.hashContractVersion, CREDIT_POLICY_HASH_VERSIONS.V1);
+    for (const [key, value] of Object.entries(hashes).filter(([key]) => key !== 'hashContractVersion')) {
       assert.match(value, /^[0-9a-f]{64}$/, `${key} must be a 64 character lowercase hex digest`);
     }
+    assert.equal(hashes.ruleSetHash, '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945',
+      'the independently specified empty V1 rule-set Golden must remain unchanged');
     const again = buildScopeHashes(db, { scopes, businessDate: '2026-10-28' });
     assert.deepEqual(again, hashes, 'the hash builder must be deterministic for the same input');
   });
@@ -486,8 +542,166 @@ test('T5 the additive export is inert and introduces no second algorithm or reso
     'there must be exactly one canonical JSON serialiser in credit-check.js');
   assert.equal(countOf('createHash(', policySource), 1,
     'there must be exactly one digest computation in credit-policy.js');
-  assert.equal(countOf('`CSP1:${', policySource), 1,
-    'there must be exactly one fingerprint algorithm in credit-policy.js');
+  assert.equal(countOf("prefix = 'CSP1:'", policySource), 1, 'the CSP1 branch must exist exactly once');
+  assert.equal(countOf("prefix = 'CSP2:'", policySource), 1, 'the CSP2 branch must exist exactly once');
   assert.equal(countOf('export function computePolicySnapshotFingerprint', policySource), 1,
     'the fingerprint function must be exported exactly once');
+});
+
+test('T6 V2 payload parsing is semantic, ordered for arrays and fail closed at its boundary', () => {
+  assert.deepEqual(parseCreditRulePayload(' { "b" : [1, {"z":null,"a":true}], "a" : -0 } '),
+    { b: [1, { z: null, a: true }], a: 0 });
+  assert.deepEqual(parseCreditRulePayload('{"a":1.25,"b":9007199254740991}'),
+    { a: 1.25, b: 9007199254740991 });
+  for (const [raw, code] of [
+    [null, 'CREDIT_RULE_PAYLOAD_MISSING'],
+    ['null', 'CREDIT_RULE_PAYLOAD_TYPE_INVALID'],
+    ['[]', 'CREDIT_RULE_PAYLOAD_TYPE_INVALID'],
+    ['{"a":', 'CREDIT_RULE_PAYLOAD_INVALID_JSON'],
+    ['{"a":1,"a":2}', 'CREDIT_RULE_PAYLOAD_DUPLICATE_KEY'],
+    ['{"a":9007199254740992}', 'CREDIT_RULE_PAYLOAD_NUMBER_UNSAFE'],
+  ]) {
+    assert.throws(() => parseCreditRulePayload(raw), (error) => error.code === code, `${code} must fail closed`);
+  }
+});
+
+test('T7 V2 Rule Hash and CSP2 have independent fixed Golden vectors', () => {
+  const A = 'a'.repeat(64); const B = 'b'.repeat(64); const C = 'c'.repeat(64);
+  const fingerprint = computePolicySnapshotFingerprint({
+    hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+    parameterSetHash: A, ruleSetHash: B, profileEffectiveStateHash: C,
+  });
+  assert.equal(fingerprint, 'CSP2:c3dba51a16321cf3f57a9eb16d334324ac6b4042df3c55df86c7f4682b23f15e');
+  assert.notEqual(fingerprint, fingerprintOf(A, B, C));
+
+  withFixture((db) => {
+    const scopes = [{
+      scopeType: 'CUSTOMER_AGGREGATE', stage: 'SO_SUBMIT',
+      profile: {
+        id: 'cp-v2', anchor_id: 'anchor-v2', credit_limit_cents: 100000,
+        status: 'ACTIVE', initial_state: 'NORMAL', rating_grade: 'A',
+        rating_effective_from: '2026-01-01', rating_effective_to: null,
+        overdue_day_policy: 'DEFAULT', rule_id: 'rule-v2', effective_from: '2026-01-01', effective_to: null,
+      },
+    }];
+    const v1 = buildScopeHashes(db, { scopes, businessDate: '2026-10-28' });
+    const v2 = buildScopeHashes(db, {
+      scopes, businessDate: '2026-10-28', hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+    });
+    assert.throws(
+      () => buildScopeHashes(db, { scopes, businessDate: '2026-10-28', hashContractVersion: 'UNKNOWN' }),
+      (error) => error.status === 400 && error.code === 'CREDIT_POLICY_HASH_VERSION_INVALID',
+    );
+    assert.equal(v1.ruleSetHash, '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945');
+    assert.equal(v2.ruleSetHash, '241416276fef32a99a36bbd59a1f44630025723a4f8d6a9ea3a467ed83f36ff5');
+  });
+});
+
+test('T8 V2 Rule Hash ignores object whitespace/key order but preserves array order', () => {
+  withFixture((db) => {
+    db.prepare(`INSERT INTO credit_check_rules(id,rule_code,business_stage,scenario,check_timing,control_strength,
+      credit_item,recognition_mode,effective_from,effective_to,status,result_payload_json,created_at,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'rule-v2-semantic', 'RULE_V2_SEMANTIC', 'SO_SUBMIT', 'STANDARD', 'BEFORE_WRITE', 'WARNING',
+      'TOTAL_EXPOSURE', null, '2026-01-01', null, 'ACTIVE',
+      '{"b":[1,{"z":null,"a":true}],"a":0}', '2026-01-01T00:00:00.000Z', null,
+    );
+    const scopes = [{
+      scopeType: 'CUSTOMER_AGGREGATE', stage: 'SO_SUBMIT',
+      profile: {
+        id: 'cp-v2-semantic', anchor_id: 'anchor-v2-semantic', credit_limit_cents: 100000,
+        status: 'ACTIVE', initial_state: 'NORMAL', rating_grade: 'A', rating_effective_from: null,
+        rating_effective_to: null, overdue_day_policy: 'DEFAULT', rule_id: 'rule-v2-semantic',
+        effective_from: '2026-01-01', effective_to: null,
+      },
+    }];
+    const hash = () => buildScopeHashes(db, {
+      scopes, businessDate: '2026-10-28', hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+    }).ruleSetHash;
+    const compact = hash();
+    db.prepare('UPDATE credit_check_rules SET result_payload_json=? WHERE id=?')
+      .run(' { "a" : -0, "b" : [1, { "a" : true, "z" : null }] } ', 'rule-v2-semantic');
+    assert.equal(hash(), compact, 'semantic object equivalence must ignore whitespace and key order');
+    db.prepare('UPDATE credit_check_rules SET result_payload_json=? WHERE id=?')
+      .run('{"a":0,"b":[{"a":true,"z":null},1]}', 'rule-v2-semantic');
+    assert.notEqual(hash(), compact, 'array order must remain part of the V2 identity');
+  });
+});
+
+test('T9 CCHK1 and CCHK2 composition have independent fixed Golden vectors', () => {
+  const fields = [
+    'SALES_ORDER', 'so-golden', 'SO_SUBMIT', '2026-10-29', 'actor-golden',
+    'a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64), 'd'.repeat(64),
+  ];
+  assert.equal(`CCHK1:${__creditCheckInternals.sha256(fields.join('|'))}`,
+    'CCHK1:80e68969d1167ae13692b458b404756784753fa72c3b0865ebec2cda7f3d6b43');
+  assert.equal(`CCHK2:${__creditCheckInternals.sha256(['CREDIT_CHECK_GROUP_V2\0', ...fields].join('|'))}`,
+    'CCHK2:f98c5edb123a0d1d75407f2d0417fac6f5ccbfdc7737aeac65598fb0c564fd33');
+});
+
+test('T10 the V2 identity chain is independent of the physical JSON rendering the engine stores', () => {
+  // The M4 cross-engine defect, proven without a MySQL connection. The same
+  // Writer output is stored by SQLite as the compact JSON TEXT the Writer
+  // produced, and by MySQL native JSON as a canonically SPACED rendering of
+  // the same value. The V1 rule hash reads that raw text, so the two engines
+  // disagree on the same business fact. The V2 rule hash reads the SEMANTIC
+  // object, so the whole V2 chain — rule hash, CSP2 fingerprint and CCHK2
+  // group identity — must be identical across both renderings.
+  const compact = '{"identity":"SO_APPROVE","detail":{"z":null,"a":true}}';
+  const mysqlRendering = '{"identity": "SO_APPROVE", "detail": {"z": null, "a": true}}';
+  withFixture((db) => {
+    db.prepare(`INSERT INTO credit_check_rules(id,rule_code,business_stage,scenario,check_timing,control_strength,
+      credit_item,recognition_mode,effective_from,effective_to,status,result_payload_json,created_at,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'rule-v2-rendering', 'RULE_V2_RENDERING', 'SO_SUBMIT', 'STANDARD', 'BEFORE_WRITE', 'WARNING',
+      'TOTAL_EXPOSURE', null, '2026-01-01', null, 'ACTIVE',
+      compact, '2026-01-01T00:00:00.000Z', null,
+    );
+    const scopes = [{
+      scopeType: 'CUSTOMER_AGGREGATE', stage: 'SO_SUBMIT',
+      profile: {
+        id: 'cp-v2-rendering', anchor_id: 'anchor-v2-rendering', credit_limit_cents: 100000,
+        status: 'ACTIVE', initial_state: 'NORMAL', rating_grade: 'A', rating_effective_from: null,
+        rating_effective_to: null, overdue_day_policy: 'DEFAULT', rule_id: 'rule-v2-rendering',
+        effective_from: '2026-01-01', effective_to: null,
+      },
+    }];
+    const identity = (version) => {
+      const hashes = buildScopeHashes(db, { scopes, businessDate: '2026-10-28', hashContractVersion: version });
+      const fingerprint = computePolicySnapshotFingerprint({
+        hashContractVersion: version,
+        parameterSetHash: hashes.parameterSetHash,
+        ruleSetHash: hashes.ruleSetHash,
+        profileEffectiveStateHash: hashes.profileEffectiveStateHash,
+      });
+      const groupId = `CCHK${version === CREDIT_POLICY_HASH_VERSIONS.V1 ? 1 : 2}:${__creditCheckInternals.sha256([
+        version === CREDIT_POLICY_HASH_VERSIONS.V1 ? '' : 'CREDIT_CHECK_GROUP_V2\0',
+        'SALES_ORDER', 'so-v2-rendering', 'SO_SUBMIT', '2026-10-28', 'actor-v2-rendering',
+        hashes.parameterSetHash, hashes.ruleSetHash, hashes.profileEffectiveStateHash, 'd'.repeat(64),
+      ].join('|'))}`;
+      return { ruleSetHash: hashes.ruleSetHash, fingerprint, groupId };
+    };
+    const write = (payload) => db.prepare('UPDATE credit_check_rules SET result_payload_json=? WHERE id=?')
+      .run(payload, 'rule-v2-rendering');
+
+    write(compact);
+    const compactV1 = identity(CREDIT_POLICY_HASH_VERSIONS.V1);
+    const compactV2 = identity(CREDIT_POLICY_HASH_VERSIONS.V2);
+    write(mysqlRendering);
+    const spacedV1 = identity(CREDIT_POLICY_HASH_VERSIONS.V1);
+    const spacedV2 = identity(CREDIT_POLICY_HASH_VERSIONS.V2);
+
+    assert.notEqual(compactV1.ruleSetHash, spacedV1.ruleSetHash,
+      'the V1 raw-text rule hash must reproduce the M4 cross-engine divergence');
+    assert.notEqual(compactV1.fingerprint, spacedV1.fingerprint,
+      'the V1 CSP1 fingerprint must inherit the M4 divergence');
+    assert.equal(compactV2.ruleSetHash, spacedV2.ruleSetHash,
+      'the V2 rule hash must be identical across the two physical renderings');
+    assert.equal(compactV2.fingerprint, spacedV2.fingerprint,
+      'the CSP2 fingerprint must be identical across the two physical renderings');
+    assert.equal(compactV2.groupId, spacedV2.groupId,
+      'the CCHK2 group identity must be identical across the two physical renderings');
+    assert.match(compactV2.fingerprint, /^CSP2:[0-9a-f]{64}$/);
+    assert.match(compactV2.groupId, /^CCHK2:[0-9a-f]{64}$/);
+  });
 });

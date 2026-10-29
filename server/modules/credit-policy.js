@@ -4,6 +4,7 @@ import { audit } from '../lib/audit.js';
 import { assertAllowedFields, HttpError, normalizeBusinessDate, optionalText, readJson, requiredCode, requiredText, send } from '../lib/http.js';
 import { assertDateRange, previousDate, translateConstraintError } from './sales-foundation-common.js';
 import { ensureCreditLockAnchor } from './credit-anchor.js';
+import { validateCreditRulePayloadValue } from './credit-rule-payload.js';
 import { requireCreditConfigurationRead, requireCreditManagementAuthority } from './credit-scope.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 
@@ -165,7 +166,7 @@ export async function createCreditRule(db, req, res, actor) {
     status: enumValue(body.status || 'ACTIVE', STATUS, '状态'),
   };
   assertDateRange(value.effectiveFrom, value.effectiveTo);
-  const resultPayload = body.resultPayload && typeof body.resultPayload === 'object' && !Array.isArray(body.resultPayload) ? body.resultPayload : {};
+  const resultPayload = body.resultPayload === undefined ? {} : validateCreditRulePayloadValue(body.resultPayload);
   const key = String(req.headers['idempotency-key'] || '').trim();
   const fingerprint = requestFingerprint(body);
   let response;
@@ -201,11 +202,34 @@ export async function createCreditRule(db, req, res, actor) {
 // order (parameterSetHash, ruleSetHash, profileEffectiveStateHash), the HASH
 // validation rule, the length-prefixed canonical encoding, the SHA-256 digest
 // and the `CSP1:` prefix are the original ones, unchanged.
+export const CREDIT_POLICY_HASH_VERSIONS = Object.freeze({
+  V1: 'CREDIT_POLICY_HASH_V1',
+  V2: 'CREDIT_POLICY_HASH_V2',
+});
+
+function lengthPrefix(value) {
+  return `${value.length}:${value}`;
+}
+
 export function computePolicySnapshotFingerprint(input) {
   const hashes = [input.parameterSetHash, input.ruleSetHash, input.profileEffectiveStateHash];
   if (!hashes.every((value) => HASH.test(String(value || '')))) throw new HttpError(400, '策略快照哈希必须为 64 位小写十六进制');
-  const canonical = hashes.map((value) => `${value.length}:${value}`).join('');
-  return `CSP1:${createHash('sha256').update(canonical).digest('hex')}`;
+  const version = input.hashContractVersion || CREDIT_POLICY_HASH_VERSIONS.V1;
+  let prefix;
+  let canonical;
+  if (version === CREDIT_POLICY_HASH_VERSIONS.V1) {
+    prefix = 'CSP1:';
+    canonical = hashes.map(lengthPrefix).join('');
+  } else if (version === CREDIT_POLICY_HASH_VERSIONS.V2) {
+    prefix = 'CSP2:';
+    canonical = [
+      'CREDIT_POLICY_SNAPSHOT_V2',
+      ...hashes,
+    ].map(lengthPrefix).join('');
+  } else {
+    throw new HttpError(400, '策略快照哈希合同版本无效', { code: 'CREDIT_POLICY_HASH_VERSION_INVALID' });
+  }
+  return `${prefix}${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export function ensureCreditPolicySnapshot(db, input) {

@@ -125,6 +125,20 @@ const FULL = [
   // builds a disposable SQLite fixture and verifies snapshot persistence, which
   // is outside the FAST criterion of a bounded, database-free regression.
   'scripts/sales-customer-wave11-a-primitives.test.js',
+  // Wave 11 W11-A U2-1 — SC101 Credit Query / SC102 Credit Exception History
+  // (solution.md §37.54.8, document.md Stage B §6.2 / §6.3 / §7 / §8). The
+  // acceptance suite for the read-only Credit query layer: the canonical
+  // exposure amount against the Credit Check, the component breakdown, the
+  // exception history with its filters, the stable pagination and the scope
+  // total, the five-mode authorization matrix, the separation of the current
+  // authorization date from a requested historical business date, the
+  // non-enumerability of the detail, and the three-layer zero-side-effect
+  // proof. Every case owns one disposable temp SQLite and reuses the W11-SEC
+  // fixture, so the facts under test are the canonical ones. It is
+  // deliberately NOT registered in FAST: each case migrates a fresh database
+  // and drives the real Credit writers, which is outside the FAST criterion of
+  // a bounded, database-free regression.
+  'server/sales-customer-wave11-a-credit-query.test.js',
   // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
   // single-connection regression over the real Delivery HTTP route: the
   // canonical control-point writer installs the fixture fact, the production

@@ -103,13 +103,13 @@ function assertWave9ProductionSchema(db) {
   assert.equal(sourceFk?.to, 'id');
 }
 
-test('canonical production registry contains approved Wave 1 through Wave 10 steps and preserves the bounded Wave 8 fixture', () => {
+test('canonical production registry contains approved Wave 1 through Wave 11 steps and preserves the bounded Wave 8 fixture', () => {
   assert.equal(Object.values(BATCH_A_COLUMNS).flat().length, 27);
   assert.equal(Object.isFrozen(SALES_CUSTOMER_MIGRATIONS), true);
-  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 10);
+  assert.equal(SALES_CUSTOMER_MIGRATIONS.length, 11);
   assert.equal(SALES_CUSTOMER_MIGRATIONS[0].id, 'wave-1-commercial-foundation');
   assert.equal(SALES_CUSTOMER_MIGRATIONS[1].id, 'wave-2-pricing-discount');
-  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement','wave-7-prepayment-reservation','wave-8-service-consignment','wave-9-credit-foundation','wave-10-credit-check']);
+  assert.deepEqual(SALES_CUSTOMER_MIGRATIONS.slice(2).map((step) => step.id), ['wave-3-quotation','wave-4-canonical-sales-order','wave-5-delivery-notice','wave-6-return-replacement','wave-7-prepayment-reservation','wave-8-service-consignment','wave-9-credit-foundation','wave-10-credit-check','wave-11-a-credit-consumption']);
   assert.equal(WAVE8_BOUNDED_STEPS.length, 8);
   assert.equal(WAVE8_BOUNDED_STEPS.at(-1).id, 'wave-8-service-consignment');
   assert.equal(WAVE8_BOUNDED_STEPS.some((step) => step.wave >= 9), false);

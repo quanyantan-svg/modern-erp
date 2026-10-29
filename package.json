@@ -22,6 +22,7 @@
     "test:mysql:wave10": "node scripts/gates/mysql-sales-wave10-acceptance.mjs",
     "test:mysql:gate-b": "node scripts/gates/mysql-sales-wave10-gate-b.mjs",
     "test:mysql:wave11-sec": "node scripts/gates/mysql-sales-wave11-sec-gate.mjs",
+    "test:mysql:wave11-a": "node scripts/gates/mysql-sales-wave11-a-gate.mjs",
     "test:mysql:local": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave11-sec",
     "test:mysql:local:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/setup-mysql-local-gate.ps1",
     "test:mysql:performance": "node scripts/diagnostics/mysql-phase7c-performance.mjs",

@@ -20,15 +20,19 @@ import { test } from 'node:test';
 import { createDatabase, hashPassword, transaction } from './db.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
 import { SALES_WAVE10_TABLES } from './migrations/sales-customer-wave10-credit-check.js';
-import { createCreditParameter, createCreditRule } from './modules/credit-policy.js';
+import {
+  CREDIT_POLICY_HASH_VERSIONS, computePolicySnapshotFingerprint, createCreditParameter, createCreditRule,
+} from './modules/credit-policy.js';
 import { createCreditProfile } from './modules/credit-profile.js';
 import {
   computeCreditExposure,
+  buildScopeHashes,
   evaluateCredit,
   isCreditManagementEnabled,
   lockCreditPrepaymentParents,
   resolveApplicableCreditScopes,
   resolveCustomerCreditObject,
+  __creditCheckInternals,
 } from './modules/credit-check.js';
 import {
   decideCreditSpecialApproval,
@@ -299,6 +303,57 @@ function runCheck(db, overrides = {}) {
   return outcome;
 }
 
+function convertV2DecisionToLegacy(db, outcome, overrides = {}, { authorizationContext } = {}) {
+  const input = checkInput(overrides);
+  const scopes = outcome.scopeResults.map((result) => ({
+    scopeType: result.scopeType,
+    stage: input.stage,
+    profile: db.prepare('SELECT * FROM credit_profile WHERE id=?').get(result.creditProfileId),
+  }));
+  const hashes = buildScopeHashes(db, {
+    scopes,
+    businessDate: input.businessDate,
+    hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V1,
+  });
+  const exposureDigest = __creditCheckInternals.sha256(__creditCheckInternals.canonicalJson(
+    outcome.scopeResults.map((result) => ({
+      scopeType: result.scopeType,
+      exposureCents: result.exposureCents,
+      proposedTotalCents: result.proposedTotalCents,
+      availableCents: result.availableCents,
+      creditLimitCents: result.creditLimitCents,
+    })),
+  ));
+  const context = authorizationContext || input.authorizationContext;
+  const legacyGroupId = `CCHK1:${__creditCheckInternals.sha256([
+    input.sourceRef.sourceType, input.sourceRef.sourceId, input.stage, input.businessDate, context,
+    hashes.parameterSetHash, hashes.ruleSetHash, hashes.profileEffectiveStateHash, exposureDigest,
+  ].join('|'))}`;
+  transaction(db, () => {
+    for (const result of outcome.scopeResults) {
+      const fingerprint = computePolicySnapshotFingerprint({
+        hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V1,
+        parameterSetHash: hashes.parameterSetHash,
+        ruleSetHash: hashes.ruleSetHash,
+        profileEffectiveStateHash: hashes.profileEffectiveStateHash,
+      });
+      db.prepare(`UPDATE credit_policy_snapshots SET snapshot_fingerprint=?,parameter_set_hash=?,rule_set_hash=?,
+        profile_effective_state_hash=? WHERE id=?`).run(
+        fingerprint, hashes.parameterSetHash, hashes.ruleSetHash, hashes.profileEffectiveStateHash,
+        result.creditPolicySnapshotId,
+      );
+      db.prepare(`UPDATE credit_check_results SET id=?,check_group_id=?,policy_snapshot_fingerprint=?,
+        profile_effective_state_hash=? WHERE id=?`).run(
+        `${legacyGroupId}:${result.scopeType}`, legacyGroupId, fingerprint, hashes.profileEffectiveStateHash,
+        `${outcome.checkGroupId}:${result.scopeType}`,
+      );
+    }
+    db.prepare(`UPDATE audit_logs SET entity_id=? WHERE entity_type='CREDIT_CHECK' AND entity_id=?`)
+      .run(legacyGroupId, outcome.checkGroupId);
+  });
+  return legacyGroupId;
+}
+
 // ---------------------------------------------------------------------------
 // Migration contract
 // ---------------------------------------------------------------------------
@@ -341,6 +396,43 @@ test('Wave 10 tables carry the approved keys, foreign keys and CHECK constraints
     assert.match(resultSql, /UNIQUE \(check_group_id, scope_type\)/);
     assert.match(resultSql, /sales_order_id IS NOT NULL OR sales_delivery_id IS NOT NULL/);
   } finally { handle.cleanup(); }
+});
+
+test('V2 rule writer rejects explicit non-object payloads and preserves the omitted default', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    const baseBody = {
+      ruleCode: 'WRITER_PAYLOAD_V2',
+      businessStage: 'SO_SUBMIT',
+      scenario: 'STANDARD',
+      checkTiming: 'BEFORE_WRITE',
+      controlStrength: 'BLOCK',
+      creditItem: 'ORDER_EXPOSURE',
+      effectiveFrom: DAY,
+      status: 'ACTIVE',
+    };
+    for (const [payload, code] of [
+      [null, 'CREDIT_RULE_PAYLOAD_TYPE_INVALID'],
+      [[], 'CREDIT_RULE_PAYLOAD_TYPE_INVALID'],
+      ['scalar', 'CREDIT_RULE_PAYLOAD_TYPE_INVALID'],
+      [{ amount: Number.MAX_SAFE_INTEGER + 1 }, 'CREDIT_RULE_PAYLOAD_NUMBER_UNSAFE'],
+    ]) {
+      const before = handle.db.prepare('SELECT COUNT(*) AS count FROM credit_check_rules').get().count;
+      const failed = await invokeFailure(createCreditRule, handle.db, { ...baseBody, resultPayload: payload }, ADMIN,
+        `writer-invalid-${code}-${typeof payload}`);
+      assert.equal(failed.statusCode, 400);
+      assert.equal(failed.code, code);
+      assert.equal(handle.db.prepare('SELECT COUNT(*) AS count FROM credit_check_rules').get().count, before,
+        'an invalid writer payload must create no rule row');
+    }
+
+    const created = await invoke(createCreditRule, handle.db, baseBody, ADMIN, 'writer-omitted-default');
+    assert.equal(created.statusCode, 201);
+    assert.deepEqual(created.body.rule.resultPayload, {}, 'an omitted payload keeps the historical empty-object default');
+  } finally {
+    handle.cleanup();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -973,17 +1065,82 @@ test('§36.6.3 step 2 — a changed exposure produces a new decision instead of 
   } finally { handle.cleanup(); }
 });
 
+test('V2 compatibility — an exact CCHK1 replay reuses its immutable legacy result and snapshot', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    seedParameter(handle.db, 'CREDIT_MANAGEMENT_ENABLED', true);
+    seedRule(handle.db, { businessStage: 'SO_SUBMIT', controlStrength: 'BLOCK' });
+    await seedProfile(handle.db, { creditLimitCents: 1000000 });
+    const created = runCheck(handle.db, { proposedDeltaCents: 100000 });
+    const legacyGroupId = convertV2DecisionToLegacy(handle.db, created, { proposedDeltaCents: 100000 });
+    const snapshotCount = handle.db.prepare('SELECT COUNT(*) count FROM credit_policy_snapshots').get().count;
+    const replay = runCheck(handle.db, { proposedDeltaCents: 100000 });
+    assert.equal(replay.checkGroupId, legacyGroupId);
+    assert.equal(replay.replayed, true);
+    assert.match(replay.scopeResults[0].policySnapshotFingerprint, /^CSP1:/);
+    assert.equal(handle.db.prepare('SELECT COUNT(*) count FROM credit_policy_snapshots').get().count, snapshotCount);
+    assert.equal(creditCheckRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('V2 compatibility — an unprovable legacy replay is 409 and transactionally zero-write', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    seedParameter(handle.db, 'CREDIT_MANAGEMENT_ENABLED', true);
+    seedRule(handle.db, { businessStage: 'SO_SUBMIT', controlStrength: 'BLOCK' });
+    await seedProfile(handle.db, { creditLimitCents: 1000000 });
+    const created = runCheck(handle.db, { proposedDeltaCents: 100000 });
+    convertV2DecisionToLegacy(handle.db, created, { proposedDeltaCents: 100000 }, { authorizationContext: 'unknown-legacy-context' });
+    const before = {
+      snapshots: handle.db.prepare('SELECT COUNT(*) count FROM credit_policy_snapshots').get().count,
+      results: handle.db.prepare('SELECT COUNT(*) count FROM credit_check_results').get().count,
+      audits: handle.db.prepare('SELECT COUNT(*) count FROM audit_logs').get().count,
+      anchors: handle.db.prepare('SELECT COUNT(*) count FROM credit_lock_anchors').get().count,
+    };
+    assert.throws(
+      () => transaction(handle.db, () => evaluateCredit(handle.db, checkInput({ proposedDeltaCents: 100000 }))),
+      (error) => error.status === 409 && error.code === 'CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS',
+    );
+    assert.deepEqual({
+      snapshots: handle.db.prepare('SELECT COUNT(*) count FROM credit_policy_snapshots').get().count,
+      results: handle.db.prepare('SELECT COUNT(*) count FROM credit_check_results').get().count,
+      audits: handle.db.prepare('SELECT COUNT(*) count FROM audit_logs').get().count,
+      anchors: handle.db.prepare('SELECT COUNT(*) count FROM credit_lock_anchors').get().count,
+    }, before);
+  } finally { handle.cleanup(); }
+});
+
+test('V2 compatibility — a proven changed exposure may create a distinct CCHK2 decision', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    seedParameter(handle.db, 'CREDIT_MANAGEMENT_ENABLED', true);
+    seedRule(handle.db, { businessStage: 'SO_SUBMIT', controlStrength: 'BLOCK' });
+    await seedProfile(handle.db, { creditLimitCents: 1000000 });
+    const created = runCheck(handle.db, { proposedDeltaCents: 100000 });
+    convertV2DecisionToLegacy(handle.db, created, { proposedDeltaCents: 100000 }, { authorizationContext: 'unknown-legacy-context' });
+    seedOrder(handle.db, { id: 'so-v2-changed', totalCents: 250000, salespersonId: 'sp-w10' });
+    const changed = runCheck(handle.db, { proposedDeltaCents: 100000 });
+    assert.match(changed.checkGroupId, /^CCHK2:/);
+    assert.equal(changed.replayed, false);
+    assert.equal(creditCheckRows(handle.db).length, 2);
+  } finally { handle.cleanup(); }
+});
+
 // ---------------------------------------------------------------------------
 // UAT-S-33 / S16 / R-SAL-13 — the Credit Special Approval
 // ---------------------------------------------------------------------------
 
-async function prepareApprovalScenario(db, { scopeMode = 'ONE_TIME', decision = 'APPROVED' } = {}) {
+async function prepareApprovalScenario(db, { scopeMode = 'ONE_TIME', decision = 'APPROVED', legacy = false } = {}) {
   seedBase(db);
   seedParameter(db, 'CREDIT_MANAGEMENT_ENABLED', true);
   seedRule(db, { businessStage: 'SO_SUBMIT', scenario: 'OVERRIDE_REQUEST', controlStrength: 'WARNING' });
   await seedProfile(db, { creditLimitCents: 100000 });
   const outcome = runCheck(db, { proposedDeltaCents: 200000 });
   assert.equal(outcome.decision, 'SPECIAL_APPROVAL_REQUIRED');
+  if (legacy) convertV2DecisionToLegacy(db, outcome, { proposedDeltaCents: 200000 });
   const result = creditCheckRows(db)[0];
   const requestRes = await invoke(requestCreditSpecialApproval, db, {
     sourceCreditCheckResultId: result.id,
@@ -1017,6 +1174,23 @@ test('UAT-S-33 — an approved special approval releases exactly its own scope',
     assert.equal(outcome.decision, 'PASS');
     assert.ok(outcome.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_CONSUMED'));
     assert.equal(outcome.consumedSpecialApprovalId, approval.id);
+  } finally { handle.cleanup(); }
+});
+
+test('V2 approval isolation — CSP1 approval releases only exact V1 replay and never a changed CCHK2', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db, { legacy: true });
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.match(replay.checkGroupId, /^CCHK1:/);
+    assert.equal(replay.decision, 'PASS');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+
+    seedOrder(handle.db, { id: 'so-v2-after-approval', totalCents: 250000, salespersonId: 'sp-w10' });
+    const changed = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.match(changed.checkGroupId, /^CCHK2:/);
+    assert.equal(changed.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    assert.equal(changed.consumedSpecialApprovalId, null);
   } finally { handle.cleanup(); }
 });
 
@@ -1336,5 +1510,459 @@ test('REVIEW-P1-01 — the persisted exposure breakdown carries the exposure the
       /WAVE10_CREDIT_EXPOSURE_ROW_MISSING/,
     );
     assert.throws(() => assertObservedExposure(observed.exposureCents + 1, [120000, 120000]), /exactly the OLD or the NEW/);
+  } finally { handle.cleanup(); }
+});
+
+// ---------------------------------------------------------------------------
+// §37.54.22.10 — the ONE_TIME consumption acceptance matrix (T-01..T-16)
+//
+// solution.md §37.54.22.3..§37.54.22.7 and document.md R-ONE-01..R-ONE-07.
+//
+// The consumption identity of an approval is (approval_id, check_group_id,
+// scope_type). These cases prove that the identity, not the check group's
+// replay flag, decides whether a consumption happens, that the consumption
+// evidence is written exactly once, that a consumed ONE_TIME approval can
+// never release a second business action, and that the historical CONSUME
+// audit rows remain a valid authority for the consumptions that happened
+// before the ledger existed.
+//
+// T-17 and T-18 are real-MySQL-only cases. They are NOT simulated here and
+// they are NOT_RUN in this round; they belong to the protected MySQL gate.
+// ---------------------------------------------------------------------------
+
+function consumptionRows(db) {
+  return db.prepare('SELECT * FROM credit_special_approval_consumption ORDER BY consumed_at, id').all();
+}
+
+function consumeAuditRows(db) {
+  return db.prepare("SELECT * FROM audit_logs WHERE entity_type='CREDIT_SPECIAL_APPROVAL' AND action='CONSUME' ORDER BY created_at, id").all();
+}
+
+function approvalConsumptionRows(db, approvalId) {
+  return db.prepare('SELECT * FROM credit_special_approval_consumption WHERE approval_id=? ORDER BY consumed_at, id').all(approvalId);
+}
+
+function scopeRow(db, checkGroupId, scopeType) {
+  return db.prepare('SELECT * FROM credit_check_results WHERE check_group_id=? AND scope_type=?').get(checkGroupId, scopeType);
+}
+
+function breakdownOf(row) {
+  return JSON.parse(row.component_breakdown_json || '{}');
+}
+
+function insertLegacyConsumeAudit(db, { id, approvalId, checkGroupId, scopeType, detail }) {
+  db.prepare(`INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id, detail, created_at)
+    VALUES(?,?,'CONSUME','CREDIT_SPECIAL_APPROVAL',?,?,?)`).run(
+    id, 'w10-admin', approvalId, detail === undefined
+      ? JSON.stringify({ checkGroupId, scopeType, businessDate: DAY, proposedTotalCents: 200000, approvedCeilingCents: 200000 })
+      : detail,
+    new Date().toISOString(),
+  );
+}
+
+test('T-01 — the first legal consumption of a ONE_TIME approval writes the ledger row and the CONSUME audit exactly once', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    const outcome = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(outcome.decision, 'PASS');
+    assert.equal(outcome.consumedSpecialApprovalId, approval.id);
+    assert.ok(outcome.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_CONSUMED'));
+    const ledger = consumptionRows(handle.db);
+    assert.equal(ledger.length, 1, 'the first consumption must write exactly one ledger row');
+    assert.equal(ledger[0].approval_id, approval.id);
+    assert.equal(ledger[0].scope_mode, 'ONE_TIME');
+    assert.equal(ledger[0].consumption_key, 'SINGLE');
+    assert.equal(ledger[0].check_group_id, outcome.checkGroupId);
+    assert.equal(ledger[0].scope_type, 'CUSTOMER_AGGREGATE');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'the first consumption must write exactly one CONSUME audit');
+    assert.equal(outcome.scopeResults[0].consumedSpecialApprovalId, approval.id);
+  } finally { handle.cleanup(); }
+});
+
+test('T-02 — the exact replay of the same business action reuses the original conclusion and writes nothing', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    const first = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(replay.decision, 'PASS');
+    assert.equal(replay.replayed, true);
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    assert.equal(replay.consumedSpecialApprovalId, first.consumedSpecialApprovalId);
+    assert.ok(replay.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_CONSUMED'));
+    assert.equal(consumptionRows(handle.db).length, 1, 'the replay must not write a second ledger row');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'the replay must not write a second CONSUME audit');
+  } finally { handle.cleanup(); }
+});
+
+test('T-03 — two consecutive replays never fabricate a second consumption', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    runCheck(handle.db, { proposedDeltaCents: 200000 });
+    const second = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    const third = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(second.decision, 'PASS');
+    assert.equal(third.decision, 'PASS');
+    assert.equal(second.consumedSpecialApprovalId, approval.id);
+    assert.equal(third.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 1);
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+    assert.equal(approvalConsumptionRows(handle.db, approval.id).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-04 — a ONE_TIME approval consumed by another business action is refused with an explicit reason code', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    const first = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(consumptionRows(handle.db).length, 1);
+    // A different authorization context is a DIFFERENT business action: it
+    // produces a different check group at the same snapshot and the same
+    // source order, so it reaches the very same approval.
+    const other = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    assert.equal(other.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    assert.ok(other.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_ALREADY_CONSUMED'));
+    assert.equal(other.consumedSpecialApprovalId, null);
+    assert.equal(consumptionRows(handle.db).length, 1, 'the refused action must not consume the approval again');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'the refused action must not write a second CONSUME audit');
+    assert.equal(approvalConsumptionRows(handle.db, approval.id)[0].check_group_id, first.checkGroupId,
+      'the consumption stays bound to the action that consumed it');
+  } finally { handle.cleanup(); }
+});
+
+test('T-05 — a consumed approval and an unconsumed approval are strictly distinguished', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    runCheck(handle.db, { proposedDeltaCents: 200000 });
+    // A second business action reaches the same approval and is refused.
+    const refused = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    assert.equal(refused.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    // A SECOND approval, bound to the other group's own result row, is not
+    // consumed and must still be able to release its own business action.
+    const otherRow = scopeRow(handle.db, refused.checkGroupId, 'CUSTOMER_AGGREGATE');
+    const requested = await invoke(requestCreditSpecialApproval, handle.db, {
+      sourceCreditCheckResultId: otherRow.id,
+      reason: '第二个业务动作的独立审批',
+      requestedOverrideCents: 100000,
+      requestedCeilingCents: 200000,
+      requestedExpiryBusinessDate: '2026-12-31',
+      scopeMode: 'ONE_TIME',
+    }, EVALUATOR, 'second-approval-request');
+    assert.equal(requested.statusCode, 201);
+    const decided = await invokeWithId(decideCreditSpecialApproval, handle.db, {
+      decision: 'APPROVED',
+      approvedOverrideCents: 100000,
+      approvedCeilingCents: 200000,
+      approvedExpiryBusinessDate: '2026-12-31',
+      reason: '独立授权',
+    }, ADMIN, requested.body.approval.id, 'second-approval-decide');
+    assert.equal(decided.statusCode, 200);
+    assert.notEqual(requested.body.approval.id, approval.id);
+    const released = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    assert.equal(released.decision, 'PASS', 'the unconsumed approval must still release its own action');
+    assert.equal(released.consumedSpecialApprovalId, requested.body.approval.id);
+    assert.equal(approvalConsumptionRows(handle.db, approval.id).length, 1);
+    assert.equal(approvalConsumptionRows(handle.db, requested.body.approval.id).length, 1);
+    assert.equal(consumeAuditRows(handle.db).length, 2);
+  } finally { handle.cleanup(); }
+});
+
+test('T-06 — a consumption never rewrites the historical Check Result rows', async () => {
+  const handle = buildDb();
+  try {
+    await prepareApprovalScenario(handle.db);
+    const before = creditCheckRows(handle.db).map((row) => ({ ...row }));
+    const outcome = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(outcome.decision, 'PASS');
+    assert.deepEqual(creditCheckRows(handle.db).map((row) => ({ ...row })), before,
+      'the immutable Check Result rows must be byte-identical after a consumption');
+  } finally { handle.cleanup(); }
+});
+
+test('T-07 — the first consumption and the business action it releases commit together or not at all', async () => {
+  const handle = buildDb();
+  try {
+    await prepareApprovalScenario(handle.db);
+    assert.throws(
+      () => transaction(handle.db, () => {
+        const outcome = evaluateCredit(handle.db, checkInput({ proposedDeltaCents: 200000 }));
+        assert.equal(outcome.decision, 'PASS');
+        assert.equal(consumptionRows(handle.db).length, 1, 'the consumption is written before the business action fails');
+        throw new Error('business action refused');
+      }),
+      /business action refused/,
+    );
+    assert.equal(consumptionRows(handle.db).length, 0, 'a rolled back business action must leave no consumption');
+    assert.equal(consumeAuditRows(handle.db).length, 0, 'a rolled back business action must leave no CONSUME audit');
+    // The approval is still unconsumed, so the next attempt can consume it.
+    const retry = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(retry.decision, 'PASS');
+    assert.equal(consumptionRows(handle.db).length, 1);
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-08 — a failed transaction leaves zero consumption evidence and the approval stays unconsumed', async () => {
+  const handle = buildDb();
+  try {
+    await prepareApprovalScenario(handle.db);
+    assert.throws(
+      () => transaction(handle.db, () => {
+        evaluateCredit(handle.db, checkInput({ proposedDeltaCents: 200000 }));
+        throw Object.assign(new Error('business action refused'), { code: 'BUSINESS_ACTION_REFUSED' });
+      }),
+      (error) => error.code === 'BUSINESS_ACTION_REFUSED',
+    );
+    assert.equal(consumptionRows(handle.db).length, 0);
+    assert.equal(consumeAuditRows(handle.db).length, 0);
+  } finally { handle.cleanup(); }
+});
+
+test('T-09 — the exact V1 legacy replay is a real consumption and it leaves the evidence behind', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db, { legacy: true });
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.match(replay.checkGroupId, /^CCHK1:/);
+    assert.equal(replay.decision, 'PASS');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    const ledger = consumptionRows(handle.db);
+    assert.equal(ledger.length, 1, 'the legacy replay must record the consumption');
+    assert.equal(ledger[0].check_group_id, replay.checkGroupId);
+    assert.equal(ledger[0].consumption_key, 'SINGLE');
+    assert.equal(ledger[0].scope_type, 'CUSTOMER_AGGREGATE');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'the legacy replay must write the CONSUME audit');
+    // The second legacy replay must not fabricate a second consumption.
+    const again = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(again.decision, 'PASS');
+    assert.equal(again.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 1);
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-10 — a CSP1 approval never releases a CCHK2 decision and never is consumed twice', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db, { legacy: true });
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.match(replay.checkGroupId, /^CCHK1:/);
+    assert.equal(replay.decision, 'PASS');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    seedOrder(handle.db, { id: 'so-v2-after-approval', totalCents: 250000, salespersonId: 'sp-w10' });
+    const changed = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.match(changed.checkGroupId, /^CCHK2:/);
+    assert.equal(changed.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    assert.equal(changed.consumedSpecialApprovalId, null);
+    assert.equal(consumptionRows(handle.db).length, 1, 'the CSP1 approval must not be consumed again by CCHK2');
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+    assert.equal(approvalConsumptionRows(handle.db, approval.id)[0].check_group_id, replay.checkGroupId);
+  } finally { handle.cleanup(); }
+});
+
+test('T-11 — a group whose stored row was written by a release keeps its released conclusion on replay', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    // A different authorization context creates a NEW group at the same
+    // snapshot, so the approval is consumed while that group is written. Its
+    // stored row therefore carries the released conclusion.
+    const created = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    assert.match(created.checkGroupId, /^CCHK2:/);
+    assert.equal(created.decision, 'PASS');
+    assert.equal(created.consumedSpecialApprovalId, approval.id);
+    const row = scopeRow(handle.db, created.checkGroupId, 'CUSTOMER_AGGREGATE');
+    assert.equal(row.decision, 'PASS');
+    assert.ok(JSON.parse(row.reason_codes_json).includes('SPECIAL_APPROVAL_CONSUMED'));
+    assert.equal(breakdownOf(row).consumedSpecialApprovalId, approval.id);
+    // The replay of that group must reuse the released conclusion instead of
+    // falling back to SPECIAL_APPROVAL_REQUIRED.
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    assert.equal(replay.decision, 'PASS', 'the replay must not fall back to SPECIAL_APPROVAL_REQUIRED');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 1, 'the replay must not consume the approval a second time');
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-11b — a legacy group whose stored row carries the released conclusion is replayable', async () => {
+  const handle = buildDb();
+  try {
+    const { approval, result } = await prepareApprovalScenario(handle.db, { legacy: true });
+    // The historical shape of a group that was WRITTEN by a release: the
+    // stored row carries the released decision and the release markers, and
+    // the consumption is proven by the historical CONSUME audit row.
+    handle.db.prepare("UPDATE credit_check_results SET decision='PASS', reason_codes_json=? WHERE id=?")
+      .run(JSON.stringify(['SPECIAL_APPROVAL_CONSUMED']), result.id);
+    const breakdown = breakdownOf(handle.db.prepare('SELECT * FROM credit_check_results WHERE id=?').get(result.id));
+    breakdown.consumedSpecialApprovalId = approval.id;
+    handle.db.prepare('UPDATE credit_check_results SET component_breakdown_json=? WHERE id=?')
+      .run(JSON.stringify(breakdown), result.id);
+    insertLegacyConsumeAudit(handle.db, {
+      id: 'legacy-consume-audit', approvalId: approval.id,
+      checkGroupId: result.check_group_id, scopeType: 'CUSTOMER_AGGREGATE',
+    });
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(replay.decision, 'PASS', 'the replay of a released legacy group must not be refused');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 0, 'the historical consumption is not migrated into the ledger');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'the replay must not write a second CONSUME audit');
+  } finally { handle.cleanup(); }
+});
+
+test('T-12 — an unreleased scope never carries another scope approval identity', async () => {
+  const handle = buildDb();
+  try {
+    seedBase(handle.db);
+    seedParameter(handle.db, 'CREDIT_MANAGEMENT_ENABLED', true);
+    seedRule(handle.db, { businessStage: 'SO_SUBMIT', scenario: 'OVERRIDE_REQUEST', controlStrength: 'WARNING' });
+    await seedProfile(handle.db, { creditLimitCents: 100000 });
+    await seedProfile(handle.db, { salespersonId: 'sp-w10', creditLimitCents: 50000 });
+    const initial = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(initial.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    const aggregateRow = scopeRow(handle.db, initial.checkGroupId, 'CUSTOMER_AGGREGATE');
+    const requested = await invoke(requestCreditSpecialApproval, handle.db, {
+      sourceCreditCheckResultId: aggregateRow.id,
+      reason: '仅批准客户汇总范围',
+      requestedOverrideCents: 100000,
+      requestedCeilingCents: 200000,
+      requestedExpiryBusinessDate: '2026-12-31',
+      scopeMode: 'ONE_TIME',
+    }, EVALUATOR, 'aggregate-only-request');
+    assert.equal(requested.statusCode, 201);
+    const decided = await invokeWithId(decideCreditSpecialApproval, handle.db, {
+      decision: 'APPROVED',
+      approvedOverrideCents: 100000,
+      approvedCeilingCents: 200000,
+      approvedExpiryBusinessDate: '2026-12-31',
+    }, ADMIN, requested.body.approval.id, 'aggregate-only-decide');
+    assert.equal(decided.statusCode, 200);
+    // A new group at the same snapshot: the aggregate scope is released while
+    // the group is written, and the sub-limit scope is not released at all.
+    const created = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+    const released = scopeRow(handle.db, created.checkGroupId, 'CUSTOMER_AGGREGATE');
+    const notReleased = scopeRow(handle.db, created.checkGroupId, 'SALESPERSON_SUB_LIMIT');
+    assert.equal(released.decision, 'PASS');
+    assert.equal(breakdownOf(released).consumedSpecialApprovalId, requested.body.approval.id);
+    assert.equal(notReleased.decision, 'SPECIAL_APPROVAL_REQUIRED', 'an aggregate approval never releases the sub-limit scope');
+    assert.equal(breakdownOf(notReleased).consumedSpecialApprovalId, null,
+      'an unreleased scope must not borrow another scope approval identity');
+    assert.equal(created.scopeResults.find((row) => row.scopeType === 'CUSTOMER_AGGREGATE').consumedSpecialApprovalId, requested.body.approval.id);
+    assert.equal(created.scopeResults.find((row) => row.scopeType === 'SALESPERSON_SUB_LIMIT').consumedSpecialApprovalId, null);
+    assert.equal(consumptionRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-13 — a historical CONSUME audit row is a valid consumption authority when the ledger is empty', async () => {
+  const handle = buildDb();
+  try {
+    const { approval, result } = await prepareApprovalScenario(handle.db);
+    // The historical evidence: a CONSUME audit row and no ledger row.
+    insertLegacyConsumeAudit(handle.db, {
+      id: 'legacy-consume-own', approvalId: approval.id,
+      checkGroupId: result.check_group_id, scopeType: 'CUSTOMER_AGGREGATE',
+    });
+    assert.equal(consumptionRows(handle.db).length, 0, 'the ledger is empty');
+    const replay = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(replay.decision, 'PASS', 'the historical consumption belongs to this very action');
+    assert.equal(replay.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 0, 'the historical consumption is not migrated');
+    assert.equal(consumeAuditRows(handle.db).length, 1, 'no second CONSUME audit is produced');
+  } finally { handle.cleanup(); }
+});
+
+test('T-13b — a historical CONSUME audit row of another action refuses the reuse', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    insertLegacyConsumeAudit(handle.db, {
+      id: 'legacy-consume-other', approvalId: approval.id,
+      checkGroupId: `CCHK1:${'f'.repeat(64)}`, scopeType: 'CUSTOMER_AGGREGATE',
+    });
+    const refused = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(refused.decision, 'SPECIAL_APPROVAL_REQUIRED');
+    assert.ok(refused.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_ALREADY_CONSUMED'));
+    assert.equal(refused.consumedSpecialApprovalId, null);
+    assert.equal(consumptionRows(handle.db).length, 0);
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-14 — a corrupt historical CONSUME audit fails closed', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    insertLegacyConsumeAudit(handle.db, {
+      id: 'legacy-consume-broken', approvalId: approval.id, detail: 'not-json-at-all',
+    });
+    const refused = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(refused.decision, 'SPECIAL_APPROVAL_REQUIRED', 'an unprovable consumption must fail closed');
+    assert.ok(refused.scopeResults[0].reasonCodes.includes('SPECIAL_APPROVAL_ALREADY_CONSUMED'));
+    assert.equal(refused.consumedSpecialApprovalId, null);
+    assert.equal(consumptionRows(handle.db).length, 0);
+    assert.equal(consumeAuditRows(handle.db).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-15 — the database refuses a second ONE_TIME consumption of the same approval', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    const outcome = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(outcome.decision, 'PASS');
+    assert.throws(
+      () => handle.db.prepare(`INSERT INTO credit_special_approval_consumption(id, approval_id, scope_mode,
+          consumption_key, check_group_id, scope_type, business_date, consumed_at, consumed_by, audit_id)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+        't15-second', approval.id, 'ONE_TIME', 'SINGLE', outcome.checkGroupId,
+        'CUSTOMER_AGGREGATE', DAY, new Date().toISOString(), 'w10-admin', null,
+      ),
+      /UNIQUE|constraint/i,
+      'the unique constraint is the database-level final defence',
+    );
+    assert.equal(approvalConsumptionRows(handle.db, approval.id).length, 1);
+  } finally { handle.cleanup(); }
+});
+
+test('T-16 — the repeatable scope modes keep their existing consumable semantics', async () => {
+  for (const scopeMode of ['TIME_BOUNDED', 'OBJECT_BOUNDED']) {
+    const handle = buildDb();
+    try {
+      const { approval } = await prepareApprovalScenario(handle.db, { scopeMode });
+      const first = runCheck(handle.db, { proposedDeltaCents: 200000 });
+      assert.equal(first.decision, 'PASS', `${scopeMode} must release its own action`);
+      assert.equal(first.consumedSpecialApprovalId, approval.id);
+      const second = runCheck(handle.db, { proposedDeltaCents: 200000, authorizationContext: 'w10-other-actor' });
+      assert.equal(second.decision, 'PASS', `${scopeMode} stays consumable until its boundary`);
+      assert.equal(second.consumedSpecialApprovalId, approval.id);
+      const rows = approvalConsumptionRows(handle.db, approval.id);
+      assert.equal(rows.length, 2, `${scopeMode} records one consumption per business action`);
+      assert.equal(rows[0].consumption_key, `${first.checkGroupId}#CUSTOMER_AGGREGATE`);
+    } finally { handle.cleanup(); }
+  }
+});
+
+test('T-16b — a read-only evaluation consumes nothing', async () => {
+  const handle = buildDb();
+  try {
+    const { approval } = await prepareApprovalScenario(handle.db);
+    let outcome;
+    transaction(handle.db, () => {
+      outcome = evaluateCredit(handle.db, checkInput({ proposedDeltaCents: 200000, consumeApprovals: false }));
+    });
+    assert.equal(outcome.decision, 'SPECIAL_APPROVAL_REQUIRED', 'a read-only evaluation never releases the scope');
+    assert.equal(outcome.consumedSpecialApprovalId, null);
+    assert.equal(outcome.scopeResults[0].approvalAvailable, true, 'the approval is reported as available');
+    assert.equal(consumptionRows(handle.db).length, 0, 'a read-only evaluation writes no ledger row');
+    assert.equal(consumeAuditRows(handle.db).length, 0, 'a read-only evaluation writes no CONSUME audit');
+    // The business path can still consume it afterwards.
+    const business = runCheck(handle.db, { proposedDeltaCents: 200000 });
+    assert.equal(business.decision, 'PASS');
+    assert.equal(business.consumedSpecialApprovalId, approval.id);
+    assert.equal(consumptionRows(handle.db).length, 1);
   } finally { handle.cleanup(); }
 });

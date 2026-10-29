@@ -17,14 +17,15 @@
 //   - A missing / ambiguous mandatory profile fails closed. There is no path
 //     that turns an unknown state into PASS.
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import {
   HttpError, assertAllowedFields, normalizeBusinessDate, readJson, requiredCode, requiredText, send,
 } from '../lib/http.js';
 import { ensureCreditLockAnchor } from './credit-anchor.js';
-import { ensureCreditPolicySnapshot } from './credit-policy.js';
+import { CREDIT_POLICY_HASH_VERSIONS, ensureCreditPolicySnapshot } from './credit-policy.js';
+import { parseCreditRulePayload } from './credit-rule-payload.js';
 import { resolveEffectiveCreditProfile } from './credit-profile.js';
 import { creditScopePredicate, requireCreditEvaluationAuthority, requireCreditReadScope, resolveCreditReadMode } from './credit-scope.js';
 import {
@@ -537,7 +538,12 @@ function strongestOutcome(outcomes) {
 // §36.6.3 step 6 — per-scope evaluation
 // ---------------------------------------------------------------------------
 
-function buildScopeHashes(db, { scopes, businessDate }) {
+function buildScopeHashes(db, {
+  scopes, businessDate, hashContractVersion = CREDIT_POLICY_HASH_VERSIONS.V1,
+}) {
+  if (![CREDIT_POLICY_HASH_VERSIONS.V1, CREDIT_POLICY_HASH_VERSIONS.V2].includes(hashContractVersion)) {
+    throw new HttpError(400, '信用策略哈希合同版本无效', { code: 'CREDIT_POLICY_HASH_VERSION_INVALID' });
+  }
   const parameters = db.prepare(`SELECT id, code, value_text, value_int, value_bool, value_date, effective_from, effective_to
     FROM credit_parameters WHERE status='ACTIVE' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)
     ORDER BY code, effective_from, id`).all(businessDate, businessDate);
@@ -557,14 +563,20 @@ function buildScopeHashes(db, { scopes, businessDate }) {
     effectiveFrom: scope.profile.effective_from,
     effectiveTo: scope.profile.effective_to,
   }));
+  const ruleProjection = rules.map((rule) => ({
+    id: rule.id, ruleCode: rule.rule_code, businessStage: rule.business_stage, scenario: rule.scenario,
+    checkTiming: rule.check_timing, controlStrength: rule.control_strength, creditItem: rule.credit_item,
+    recognitionMode: rule.recognition_mode, effectiveFrom: rule.effective_from, effectiveTo: rule.effective_to,
+    ...(hashContractVersion === CREDIT_POLICY_HASH_VERSIONS.V1
+      ? { resultPayloadJson: rule.result_payload_json }
+      : { resultPayload: parseCreditRulePayload(rule.result_payload_json) }),
+  }));
   return {
+    hashContractVersion,
     parameterSetHash: sha256(canonicalJson(parameters)),
-    ruleSetHash: sha256(canonicalJson(rules.map((rule) => ({
-      id: rule.id, ruleCode: rule.rule_code, businessStage: rule.business_stage, scenario: rule.scenario,
-      checkTiming: rule.check_timing, controlStrength: rule.control_strength, creditItem: rule.credit_item,
-      recognitionMode: rule.recognition_mode, effectiveFrom: rule.effective_from, effectiveTo: rule.effective_to,
-      resultPayloadJson: rule.result_payload_json,
-    })))),
+    ruleSetHash: hashContractVersion === CREDIT_POLICY_HASH_VERSIONS.V1
+      ? sha256(canonicalJson(ruleProjection))
+      : sha256(`CREDIT_RULE_SET_V2\0${canonicalJson(ruleProjection)}`),
     profileEffectiveStateHash: sha256(canonicalJson(profileState)),
   };
 }
@@ -573,30 +585,6 @@ function buildScopeHashes(db, { scopes, businessDate }) {
 // §36.6.6 — Special Approval consumption
 // ---------------------------------------------------------------------------
 
-function findConsumableApproval(db, scope, snapshot, businessDate) {
-  const rows = db.prepare(`SELECT * FROM credit_special_approval
-    WHERE decision='APPROVED' AND scope_type=?
-      AND source_credit_policy_snapshot_id=?
-      AND source_policy_snapshot_fingerprint=?
-      AND (source_sales_order_id IS NULL OR source_sales_order_id=?)
-    ORDER BY decided_at, id`).all(
-    scope.scopeType,
-    snapshot.id,
-    snapshot.snapshot_fingerprint,
-    scope.sourceSalesOrderId || null,
-  );
-  for (const row of rows) {
-    if (row.approved_expiry_business_date && String(row.approved_expiry_business_date) < businessDate) continue;
-    if (row.scope_mode === 'ONE_TIME') {
-      const consumed = db.prepare(`SELECT 1 present FROM audit_logs
-        WHERE entity_type='CREDIT_SPECIAL_APPROVAL' AND entity_id=? AND action='CONSUME' LIMIT 1`).get(row.id);
-      if (consumed) continue;
-    }
-    return row;
-  }
-  return null;
-}
-
 function approvalReleasesScope(approval, { proposedTotalCents, overLimitCents }) {
   const ceiling = approval.approved_ceiling_cents == null ? null : Number(approval.approved_ceiling_cents);
   const override = approval.approved_override_cents == null ? null : Number(approval.approved_override_cents);
@@ -604,6 +592,283 @@ function approvalReleasesScope(approval, { proposedTotalCents, overLimitCents })
   if (proposedTotalCents > ceiling) return false;
   if (overLimitCents > override) return false;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// §37.54.22 — the ONE_TIME consumption state machine
+// ---------------------------------------------------------------------------
+//
+// The consumption identity of an approval is (approval_id, check_group_id,
+// scope_type). A check group already identifies ONE business action at ONE
+// fact set, so this identity answers exactly "which business action used this
+// approval on which scope". It is deliberately NOT derived from the snapshot
+// or from the source document: the same snapshot and the same source order can
+// carry several different check groups, and those are different business
+// actions. The identity is the one the historical CONSUME audit detail
+// already carried; this module makes it explicit and persists it.
+const CONSUMPTION_SINGLE_USE_KEY = 'SINGLE';
+const SPECIAL_APPROVAL_CONSUMED = 'SPECIAL_APPROVAL_CONSUMED';
+const SPECIAL_APPROVAL_ALREADY_CONSUMED = 'SPECIAL_APPROVAL_ALREADY_CONSUMED';
+
+function consumptionKeyFor(scopeMode, checkGroupId, scopeType) {
+  if (scopeMode === 'ONE_TIME') return CONSUMPTION_SINGLE_USE_KEY;
+  return `${checkGroupId}#${scopeType}`;
+}
+
+// The release conclusion of one scope. The over-limit reason codes are
+// replaced by the single fact that a Special Approval released this scope.
+// The very same projection serves the first consumption and the idempotent
+// replay of that consumption, so both return an identical conclusion.
+function releasedReasonCodes(reasonCodes) {
+  return [
+    ...reasonCodes.filter((code) => code !== 'OVER_LIMIT' && code !== 'SPECIAL_APPROVAL_REQUIRED'),
+    SPECIAL_APPROVAL_CONSUMED,
+  ];
+}
+
+// The historical CONSUME audit detail is structured JSON and it is PARSED,
+// never string-matched: the same writer stores a compact JSON text in SQLite
+// and a differently rendered JSON text in MySQL, so a textual comparison
+// would be engine dependent. A detail that cannot be parsed does not prove
+// WHICH action consumed the approval; the caller then fails closed.
+function parseLegacyConsumeDetail(detail) {
+  let parsed;
+  try { parsed = JSON.parse(String(detail || '')); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const checkGroupId = typeof parsed.checkGroupId === 'string' ? parsed.checkGroupId : '';
+  const scopeType = typeof parsed.scopeType === 'string' ? parsed.scopeType : '';
+  if (!checkGroupId || !scopeType) return null;
+  return { checkGroupId, scopeType };
+}
+
+/**
+ * The consumption state of one approval.
+ *
+ * The ledger is the machine-verifiable authority. The historical CONSUME audit
+ * rows remain the authority for the consumptions that happened before the
+ * ledger existed; they are read back, never migrated, never rewritten.
+ *
+ * Both reads are locking reads when a consumption decision is about to be
+ * taken, so a consumption committed by a concurrent transaction is visible
+ * under the MySQL REPEATABLE READ isolation level.
+ */
+function readApprovalConsumptionState(db, approvalId, { checkGroupId, scopeType, lock }) {
+  const suffix = lock ? lockSuffix(db) : '';
+  const ledgerRows = db.prepare(`SELECT check_group_id, scope_type FROM credit_special_approval_consumption
+    WHERE approval_id=? ORDER BY consumed_at, id${suffix}`).all(approvalId);
+  if (ledgerRows.length) {
+    const own = ledgerRows.find((row) => row.check_group_id === checkGroupId && row.scope_type === scopeType);
+    if (own) {
+      return {
+        consumed: true, matchesThisAction: true,
+        checkGroupId: own.check_group_id, scopeType: own.scope_type, source: 'LEDGER',
+      };
+    }
+    return {
+      consumed: true, matchesThisAction: false,
+      checkGroupId: ledgerRows[0].check_group_id, scopeType: ledgerRows[0].scope_type, source: 'LEDGER',
+    };
+  }
+  const legacyRows = db.prepare(`SELECT detail FROM audit_logs
+    WHERE entity_type='CREDIT_SPECIAL_APPROVAL' AND entity_id=? AND action='CONSUME'
+    ORDER BY created_at, id${suffix}`).all(approvalId);
+  if (!legacyRows.length) {
+    return { consumed: false, matchesThisAction: false, checkGroupId: null, scopeType: null, source: 'NONE' };
+  }
+  const parsed = legacyRows.map((row) => parseLegacyConsumeDetail(row.detail));
+  if (parsed.some((entry) => entry === null)) {
+    // The historical evidence does not prove WHICH action consumed the
+    // approval. Fail closed: it is treated as consumed by an unknown action.
+    return { consumed: true, matchesThisAction: false, checkGroupId: null, scopeType: null, source: 'UNKNOWN' };
+  }
+  const own = parsed.find((entry) => entry.checkGroupId === checkGroupId && entry.scopeType === scopeType);
+  if (own) {
+    return {
+      consumed: true, matchesThisAction: true,
+      checkGroupId: own.checkGroupId, scopeType: own.scopeType, source: 'LEGACY_AUDIT',
+    };
+  }
+  return {
+    consumed: true, matchesThisAction: false,
+    checkGroupId: parsed[0].checkGroupId, scopeType: parsed[0].scopeType, source: 'LEGACY_AUDIT',
+  };
+}
+
+/**
+ * The candidate approval for one releasable scope.
+ *
+ * The matching predicate is unchanged: the approval must be APPROVED, bind the
+ * exact snapshot identity of the check, carry the same scope type and either
+ * bind the same source order or bind no source order at all. The CONSUMPTION
+ * judgement is not made here: it is made by the state machine, which needs the
+ * current check group identity and therefore cannot live inside the lookup.
+ *
+ * L7 — the candidate rows are locked in one stable order (decided_at, id)
+ * after the Credit lock chain (L1..L6) and before the caller's business row.
+ * Every transaction takes them in that same order, so the approval lock can
+ * never deadlock.
+ */
+function findConsumableApproval(db, scope, snapshot, businessDate, { checkGroupId, scopeType, lock }) {
+  const rows = db.prepare(`SELECT * FROM credit_special_approval
+    WHERE decision='APPROVED' AND scope_type=?
+      AND source_credit_policy_snapshot_id=?
+      AND source_policy_snapshot_fingerprint=?
+      AND (source_sales_order_id IS NULL OR source_sales_order_id=?)
+    ORDER BY decided_at, id${lock ? lockSuffix(db) : ''}`).all(
+    scope.scopeType,
+    snapshot.id,
+    snapshot.snapshot_fingerprint,
+    scope.sourceSalesOrderId || null,
+  );
+  let consumedByAnotherAction = false;
+  for (const row of rows) {
+    if (row.approved_expiry_business_date && String(row.approved_expiry_business_date) < businessDate) continue;
+    const state = readApprovalConsumptionState(db, row.id, { checkGroupId, scopeType, lock });
+    if (state.consumed && !state.matchesThisAction && row.scope_mode === 'ONE_TIME') {
+      // A ONE_TIME approval that another business action already consumed can
+      // never release again. It is skipped, and the refusal is reported so the
+      // scope can carry the explicit reason code.
+      consumedByAnotherAction = true;
+      continue;
+    }
+    return { approval: row, state, consumedByAnotherAction };
+  }
+  return { approval: null, state: null, consumedByAnotherAction };
+}
+
+/**
+ * The first legal consumption of an approval.
+ *
+ * The ledger row and the CONSUME audit row are written in the caller's
+ * transaction, so the consumption and the business action it releases commit
+ * together or not at all. The ledger row is written FIRST: the unique
+ * constraint is the database-level final defence, and a race must not leave a
+ * CONSUME audit row behind.
+ */
+function writeApprovalConsumption(db, {
+  approval, checkGroupId, scopeType, businessDate, actorId, proposedTotalCents,
+}) {
+  const auditId = randomUUID();
+  const consumptionKey = consumptionKeyFor(approval.scope_mode, checkGroupId, scopeType);
+  try {
+    db.prepare(`INSERT INTO credit_special_approval_consumption(id, approval_id, scope_mode, consumption_key,
+        check_group_id, scope_type, business_date, consumed_at, consumed_by, audit_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
+      randomUUID(), approval.id, approval.scope_mode, consumptionKey,
+      checkGroupId, scopeType, businessDate, new Date().toISOString(), actorId ?? null, auditId,
+    );
+  } catch (error) {
+    // The loser of a concurrent consumption of the same ONE_TIME approval ends
+    // here: an explicit conflict and zero writes.
+    if (/UNIQUE|constraint|duplicate/i.test(String(error?.message || ''))) {
+      throw new HttpError(409, '信用特别审批已被其它业务动作消费', { code: SPECIAL_APPROVAL_ALREADY_CONSUMED });
+    }
+    throw error;
+  }
+  // The audit row is written by this module so the ledger row can point at it.
+  // The detail shape is unchanged from the historical writer, so the
+  // historical read stays compatible with the rows written from now on.
+  db.prepare(`INSERT INTO audit_logs(id, user_id, action, entity_type, entity_id, detail, created_at)
+    VALUES(?,?,?,'CREDIT_SPECIAL_APPROVAL',?,?,?)`).run(
+    auditId, actorId ?? null, 'CONSUME', approval.id, JSON.stringify({
+      checkGroupId,
+      scopeType,
+      businessDate,
+      proposedTotalCents,
+      approvedCeilingCents: Number(approval.approved_ceiling_cents),
+    }), new Date().toISOString(),
+  );
+}
+
+/**
+ * A stored Check Result that was written by a release carries the release
+ * markers itself: the released decision, the release reason code and the
+ * approval identity in its breakdown. That self-contained evidence is what
+ * lets a replay of such a group reuse the original conclusion instead of
+ * treating the group as unprovable.
+ */
+function storedRowProvesRelease(row) {
+  let codes;
+  try { codes = JSON.parse(row.reason_codes_json || '[]'); } catch { return false; }
+  if (!Array.isArray(codes) || !codes.includes(SPECIAL_APPROVAL_CONSUMED)) return false;
+  let breakdown;
+  try { breakdown = JSON.parse(row.component_breakdown_json || '{}'); } catch { return false; }
+  const identity = breakdown?.consumedSpecialApprovalId;
+  return typeof identity === 'string' && identity !== '';
+}
+
+function storedBreakdownMatches(row, result) {
+  let breakdown;
+  try { breakdown = JSON.parse(row.component_breakdown_json || '{}'); } catch { return false; }
+  return Number(row.proposed_delta_cents) === result.proposedTotalCents - result.exposureCents
+    && Number(breakdown.exposureCents) === result.exposureCents
+    && Number(breakdown.availableCents) === result.availableCents
+    && Number(breakdown.proposedTotalCents) === result.proposedTotalCents
+    && Number(breakdown.overLimitCents) === result.overLimitCents
+    && (breakdown.creditLimitCents == null ? null : Number(breakdown.creditLimitCents)) === result.limitCents
+    && canonicalJson(breakdown.components || {}) === canonicalJson(result.components || {});
+}
+
+function storedReasonCodesMatch(row, result, releaseProven = false) {
+  let stored;
+  try { stored = JSON.parse(row.reason_codes_json || '[]'); } catch { return false; }
+  if (canonicalJson(stored) === canonicalJson(result.reasonCodes)) return true;
+  // A group whose stored row was written BY a release carries the released
+  // reason codes instead of the over-limit ones. Its own release markers are
+  // the proof, so the replay of that group is not unprovable.
+  if (!releaseProven) return false;
+  return canonicalJson(stored) === canonicalJson(releasedReasonCodes(result.reasonCodes));
+}
+
+function legacyGroupMatchesCurrent(db, rows, {
+  scopeResults, source, stage, businessDate, recognitionMode, hashes, requireDecision,
+}) {
+  if (rows.length !== scopeResults.length) return false;
+  const byScope = new Map(rows.map((row) => [row.scope_type, row]));
+  if (byScope.size !== rows.length) return false;
+  for (const result of scopeResults) {
+    const row = byScope.get(result.scope.scopeType);
+    if (!row
+      || row.stage !== stage
+      || row.business_date !== businessDate
+      || row.recognition_mode !== recognitionMode
+      || row.sales_order_id !== source.salesOrderId
+      || row.sales_delivery_id !== source.salesDeliveryId
+      || row.credit_profile_id !== result.scope.profile.id
+      || row.credit_lock_anchor_id !== result.scope.anchorId) return false;
+    // §37.54.22.5.7 — a stored row that was written BY a release carries the
+    // released conclusion. The replay of that group must reuse the original
+    // conclusion, so the stored release markers are accepted as the proof that
+    // the stored decision is the released form of the current evaluation.
+    const releaseProven = requireDecision && storedRowProvesRelease(row);
+    if ((requireDecision && row.decision !== result.decision
+        && !(releaseProven && row.decision === 'PASS' && result.decision === 'SPECIAL_APPROVAL_REQUIRED'))
+      || (requireDecision && !storedReasonCodesMatch(row, result, releaseProven))
+      || !storedBreakdownMatches(row, result)) return false;
+    const snapshot = db.prepare('SELECT * FROM credit_policy_snapshots WHERE id=?').get(row.credit_policy_snapshot_id);
+    if (!snapshot
+      || snapshot.snapshot_fingerprint !== row.policy_snapshot_fingerprint
+      || !String(snapshot.snapshot_fingerprint).startsWith('CSP1:')
+      || snapshot.parameter_set_hash !== hashes.parameterSetHash
+      || snapshot.profile_effective_state_hash !== hashes.profileEffectiveStateHash
+      || snapshot.credit_lock_anchor_id !== result.scope.anchorId
+      || snapshot.credit_profile_id !== result.scope.profile.id
+      || (requireDecision && snapshot.rule_set_hash !== hashes.ruleSetHash)) return false;
+  }
+  return true;
+}
+
+function legacyContextGroups(db, { source, stage, businessDate }) {
+  const sourceColumn = source.sourceType === 'SALES_ORDER' ? 'sales_order_id' : 'sales_delivery_id';
+  const rows = db.prepare(`SELECT * FROM credit_check_results
+    WHERE check_group_id LIKE 'CCHK1:%' AND ${sourceColumn}=? AND stage=? AND business_date=?
+    ORDER BY check_group_id,scope_type`).all(source.sourceId, stage, businessDate);
+  const groups = new Map();
+  for (const row of rows) {
+    if (!groups.has(row.check_group_id)) groups.set(row.check_group_id, []);
+    groups.get(row.check_group_id).push(row);
+  }
+  return groups;
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +898,9 @@ function normalizeSourceRef(sourceRef) {
  * date and no control applies (§29.22.1).
  */
 export function evaluateCredit(db, input) {
+  if (!db?.isTransaction) {
+    throw new HttpError(500, '信用检查必须在事务中执行', { code: 'CREDIT_CHECK_TRANSACTION_REQUIRED' });
+  }
   const stage = requiredCode(input.stage, '信用检查阶段');
   if (!CREDIT_CHECK_STAGES.includes(stage)) throw new HttpError(400, '信用检查阶段无效');
   const businessDate = normalizeBusinessDate(input.businessDate, '业务日期');
@@ -757,37 +1025,21 @@ export function evaluateCredit(db, input) {
   const eligiblePrepaymentCents = Number(prepayment.eligibleAmountCents || 0);
   exposure.aggregateComponents.eligiblePrepaymentCents = eligiblePrepaymentCents;
 
-  const hashes = buildScopeHashes(db, { scopes, businessDate });
-
-  // §36.3.4 step 6 — the snapshot is created or selected before the decision
-  // is written, so the evidence always precedes the artifact that cites it.
-  const snapshots = new Map();
-  for (const scope of scopes) {
-    const snapshot = ensureCreditPolicySnapshot(db, {
-      creditLockAnchorId: scope.anchorId,
-      scopeType: scope.scopeType,
-      creditProfileId: scope.profile.id,
-      businessDate,
-      parameterSetHash: hashes.parameterSetHash,
-      ruleSetHash: hashes.ruleSetHash,
-      profileEffectiveStateHash: hashes.profileEffectiveStateHash,
-      capturedBy: actorId,
-      notes: {
-        contractVersion: 'CREDIT_POLICY_SNAPSHOT_WAVE10_V1',
-        stage,
-        recognitionMode,
-        checkGroupScope: scopes.map((item) => item.scopeType),
-      },
-    });
-    snapshots.set(scope.scopeType, snapshot);
-  }
+  const hashes = buildScopeHashes(db, {
+    scopes, businessDate, hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+  });
+  const legacyHashes = buildScopeHashes(db, {
+    scopes, businessDate, hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V1,
+  });
 
   // §36.3.4 step 7 — the effective rule rows FOR UPDATE, id ASC. The rule set
   // must not have changed under the snapshot that was just recorded.
   for (const rule of applicableRules) {
     db.prepare(`SELECT id FROM credit_check_rules WHERE id=?${lockSuffix(db)}`).get(rule.id);
   }
-  const lockedRuleHash = buildScopeHashes(db, { scopes, businessDate }).ruleSetHash;
+  const lockedRuleHash = buildScopeHashes(db, {
+    scopes, businessDate, hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+  }).ruleSetHash;
   if (lockedRuleHash !== hashes.ruleSetHash) {
     throw new HttpError(409, '信用规则在锁定后发生变化', { code: 'CREDIT_RULE_CHANGED_UNDER_LOCK' });
   }
@@ -845,7 +1097,7 @@ export function evaluateCredit(db, input) {
 
     scopeResults.push({
       scope,
-      snapshot: snapshots.get(scope.scopeType),
+      snapshot: null,
       exposureCents,
       availableCents,
       proposedTotalCents,
@@ -870,41 +1122,127 @@ export function evaluateCredit(db, input) {
     availableCents: result.availableCents,
     creditLimitCents: result.limitCents,
   }))));
-  const checkGroupId = `CCHK1:${sha256([
+  const legacyCheckGroupId = `CCHK1:${sha256([
     source.sourceType, source.sourceId, stage, businessDate, authorizationContext,
-    hashes.parameterSetHash, hashes.ruleSetHash, hashes.profileEffectiveStateHash, exposureDigest,
+    legacyHashes.parameterSetHash, legacyHashes.ruleSetHash, legacyHashes.profileEffectiveStateHash, exposureDigest,
   ].join('|'))}`;
+  const exactLegacyRows = db.prepare('SELECT * FROM credit_check_results WHERE check_group_id=? ORDER BY scope_type')
+    .all(legacyCheckGroupId);
+  let checkGroupId;
+  let existingRows;
+  let isReplay;
+  if (exactLegacyRows.length) {
+    if (!legacyGroupMatchesCurrent(db, exactLegacyRows, {
+      scopeResults, source, stage, businessDate, recognitionMode, hashes: legacyHashes, requireDecision: true,
+    })) {
+      throw new HttpError(409, '历史信用检查身份无法安全重放', { code: 'CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS' });
+    }
+    checkGroupId = legacyCheckGroupId;
+    existingRows = exactLegacyRows;
+    isReplay = true;
+    for (const result of scopeResults) {
+      const row = exactLegacyRows.find((item) => item.scope_type === result.scope.scopeType);
+      result.snapshot = db.prepare('SELECT * FROM credit_policy_snapshots WHERE id=?').get(row.credit_policy_snapshot_id);
+    }
+  } else {
+    const ambiguousLegacy = [...legacyContextGroups(db, { source, stage, businessDate }).values()]
+      .some((rows) => legacyGroupMatchesCurrent(db, rows, {
+        scopeResults, source, stage, businessDate, recognitionMode, hashes: legacyHashes, requireDecision: false,
+      }));
+    if (ambiguousLegacy) {
+      throw new HttpError(409, '历史信用检查身份无法安全重放', { code: 'CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS' });
+    }
 
-  const existingRows = db.prepare('SELECT * FROM credit_check_results WHERE check_group_id=? ORDER BY scope_type').all(checkGroupId);
-  const isReplay = existingRows.length > 0;
+    // The replay decision is complete before the first V2 identity write.
+    // A thrown ambiguity error rolls back every earlier lock/anchor action in
+    // the required caller-owned transaction.
+    for (const result of scopeResults) {
+      result.snapshot = ensureCreditPolicySnapshot(db, {
+        hashContractVersion: CREDIT_POLICY_HASH_VERSIONS.V2,
+        creditLockAnchorId: result.scope.anchorId,
+        scopeType: result.scope.scopeType,
+        creditProfileId: result.scope.profile.id,
+        businessDate,
+        parameterSetHash: hashes.parameterSetHash,
+        ruleSetHash: hashes.ruleSetHash,
+        profileEffectiveStateHash: hashes.profileEffectiveStateHash,
+        capturedBy: actorId,
+        notes: {
+          contractVersion: 'CREDIT_POLICY_SNAPSHOT_V2',
+          stage,
+          recognitionMode,
+          checkGroupScope: scopes.map((item) => item.scopeType),
+        },
+      });
+    }
+    checkGroupId = `CCHK2:${sha256([
+      'CREDIT_CHECK_GROUP_V2\0',
+      source.sourceType, source.sourceId, stage, businessDate, authorizationContext,
+      hashes.parameterSetHash, hashes.ruleSetHash, hashes.profileEffectiveStateHash, exposureDigest,
+    ].join('|'))}`;
+    existingRows = db.prepare('SELECT * FROM credit_check_results WHERE check_group_id=? ORDER BY scope_type').all(checkGroupId);
+    isReplay = existingRows.length > 0;
+  }
 
   // §36.6.3 steps 8 and 9 — one result row per applicable scope plus the
   // audit rows carrying the fingerprint and the business date.
   let consumedApprovalId = null;
+  const consumedApprovalIds = new Set();
   for (const result of scopeResults) {
+    // The consumption identity is PER SCOPE. An unreleased scope never carries
+    // another scope's approval identity.
+    let scopeConsumedApprovalId = null;
     if (result.releasable) {
-      const approval = findConsumableApproval(db, {
+      const candidate = findConsumableApproval(db, {
         scopeType: result.scope.scopeType,
         sourceSalesOrderId: source.salesOrderId,
-      }, result.snapshot, businessDate);
+      }, result.snapshot, businessDate, {
+        checkGroupId,
+        scopeType: result.scope.scopeType,
+        lock: consumeApprovals,
+      });
+      const approval = candidate.approval;
       const releasable = approval && approvalReleasesScope(approval, {
         proposedTotalCents: result.proposedTotalCents,
         overLimitCents: result.overLimitCents,
       });
       result.approvalAvailable = Boolean(releasable);
-      if (releasable && consumeApprovals) {
-        result.decision = 'PASS';
-        result.reasonCodes = result.reasonCodes.filter((code) => code !== 'OVER_LIMIT' && code !== 'SPECIAL_APPROVAL_REQUIRED');
-        result.reasonCodes.push('SPECIAL_APPROVAL_CONSUMED');
-        consumedApprovalId = approval.id;
-        if (!isReplay) {
-          audit(db, actorId, 'CONSUME', 'CREDIT_SPECIAL_APPROVAL', approval.id, JSON.stringify({
-            checkGroupId, scopeType: result.scope.scopeType, businessDate,
-            proposedTotalCents: result.proposedTotalCents, approvedCeilingCents: Number(approval.approved_ceiling_cents),
-          }));
+      if (!releasable) {
+        // The approval exists and matches this scope, but another business
+        // action already consumed it. The refusal is explicit.
+        if (candidate.consumedByAnotherAction) {
+          result.reasonCodes = [...result.reasonCodes, SPECIAL_APPROVAL_ALREADY_CONSUMED];
         }
+      } else if (!consumeApprovals) {
+        // A read-only evaluation reports the approval as available and
+        // consumes nothing. It writes no ledger row and no audit row.
+      } else if (candidate.state.consumed && candidate.state.matchesThisAction) {
+        // CONSUMED_BY_THIS_ACTION — this very business action already consumed
+        // the approval. The original conclusion is reused: no second ledger
+        // row, no second audit row, no second economic effect.
+        result.decision = 'PASS';
+        result.reasonCodes = releasedReasonCodes(result.reasonCodes);
+        scopeConsumedApprovalId = approval.id;
+      } else {
+        // UNCONSUMED — the first legal consumption of this approval.
+        writeApprovalConsumption(db, {
+          approval,
+          checkGroupId,
+          scopeType: result.scope.scopeType,
+          businessDate,
+          actorId,
+          proposedTotalCents: result.proposedTotalCents,
+        });
+        result.decision = 'PASS';
+        result.reasonCodes = releasedReasonCodes(result.reasonCodes);
+        scopeConsumedApprovalId = approval.id;
+      }
+      if (scopeConsumedApprovalId) {
+        consumedApprovalIds.add(scopeConsumedApprovalId);
+        consumedApprovalId = scopeConsumedApprovalId;
       }
     }
+    result.consumedSpecialApprovalId = scopeConsumedApprovalId;
     if (isReplay) continue;
     const rowId = `${checkGroupId}:${result.scope.scopeType}`;
     const eligiblePrepaymentIdentity = result.scope.scopeType === AGGREGATE_SCOPE
@@ -928,10 +1266,15 @@ export function evaluateCredit(db, input) {
         creditLimitCents: result.limitCents,
         components: result.components,
         exposureDigest,
-        consumedSpecialApprovalId: consumedApprovalId,
+        consumedSpecialApprovalId: scopeConsumedApprovalId,
       }), eligiblePrepaymentIdentity, new Date().toISOString(), actorId,
     );
   }
+
+  // The group-level pointer is only truthful when the scopes consumed one and
+  // the same approval. When two scopes consumed two different approvals the
+  // per-scope rows and the ledger carry the precise identity.
+  if (consumedApprovalIds.size !== 1) consumedApprovalId = null;
 
   if (!isReplay) {
     audit(db, actorId, 'EVALUATE', 'CREDIT_CHECK', checkGroupId, JSON.stringify({
@@ -946,6 +1289,7 @@ export function evaluateCredit(db, input) {
         availableCents: result.availableCents,
         proposedTotalCents: result.proposedTotalCents,
         reasonCodes: result.reasonCodes,
+        consumedSpecialApprovalId: result.consumedSpecialApprovalId,
       })),
       consumedSpecialApprovalId: consumedApprovalId,
     }));
@@ -970,6 +1314,10 @@ export function evaluateCredit(db, input) {
       reasonCodes: result.reasonCodes,
       creditLimitCents: result.limitCents,
       approvalAvailable: Boolean(result.approvalAvailable),
+      // The consumption identity of THIS scope. It is non-null exactly when a
+      // consumption record exists for (approval, check group, scope), so a
+      // returned approval identity can never be an unproven claim.
+      consumedSpecialApprovalId: result.consumedSpecialApprovalId || null,
       components: result.components,
     })),
     consumedSpecialApprovalId: consumedApprovalId,
@@ -1124,6 +1472,9 @@ export async function evaluateCreditCheck(db, req, res, actor) {
 export const __creditCheckInternals = Object.freeze({
   CREDIT_PARAMETERS,
   DEFAULT_CREDIT_OBJECT_TYPE,
+  CONSUMPTION_SINGLE_USE_KEY,
+  SPECIAL_APPROVAL_CONSUMED,
+  SPECIAL_APPROVAL_ALREADY_CONSUMED,
   sha256,
   canonicalJson,
   ruleOutcome,
@@ -1135,6 +1486,11 @@ export const __creditCheckInternals = Object.freeze({
   resolveReceivableAttribution,
   findConsumableApproval,
   approvalReleasesScope,
+  consumptionKeyFor,
+  releasedReasonCodes,
+  parseLegacyConsumeDetail,
+  readApprovalConsumptionState,
+  storedRowProvesRelease,
   presentResultRow,
 });
 
@@ -1144,9 +1500,7 @@ export const __creditCheckInternals = Object.freeze({
 // Query read layer imports these two existing symbols from this module instead
 // of re-implementing the Scope SQL or a second hash builder.
 //
-// This statement adds export bindings only. The `buildScopeHashes` function
-// body, the `CREDIT_CHECK_RESULT_SCOPE` constant content, every existing call
-// site and every existing export are untouched, and no business behaviour
-// changes. It is a bounded amendment to the W11-SEC-01 frozen payload
-// (§37.54.15.9.4), not a redefinition of that freeze.
+// The original additive export remains the only public hash-builder binding.
+// The later V2 bounded amendment versions this same owner; it does not create
+// a query-only builder or redefine the historical W11-SEC/U1 evidence.
 export { buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE };

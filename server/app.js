@@ -213,6 +213,7 @@ import {
   listCreditSpecialApprovals,
   requestCreditSpecialApproval,
 } from './modules/credit-special-approval.js';
+import { getCreditException, getCreditExposure, listCreditExceptions } from './modules/credit-query.js';
 import {
   listSalesGroups, listSalespersonMemberships, listSalespersons,
   saveSalesGroup, saveSalesperson, saveSalespersonMembership,
@@ -601,6 +602,10 @@ ownedRouteTable.register({ method: 'POST', path: '/api/credit/special-approvals'
 ownedRouteTable.register({ method: 'GET', path: '/api/credit/special-approvals', handler: ({ db,res,actor,url }) => listCreditSpecialApprovals(db,res,actor,url), owner: 'server/modules/credit-special-approval.js' });
 ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/special-approvals\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditSpecialApproval(db,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
 ownedRouteTable.register({ method: 'POST', path: /^\/api\/credit\/special-approvals\/([^/]+)\/decide$/, handler: ({ db,req,res,actor,params }) => decideCreditSpecialApproval(db,req,res,actor,params[0]), owner: 'server/modules/credit-special-approval.js' });
+// W11-A U2-1 — SC101 Credit Query / SC102 Credit Exception History (read-only).
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/exposure', handler: ({ db,res,actor,url }) => getCreditExposure(db,res,actor,url), owner: 'server/modules/credit-query.js' });
+ownedRouteTable.register({ method: 'GET', path: '/api/credit/exceptions', handler: ({ db,res,actor,url }) => listCreditExceptions(db,res,actor,url), owner: 'server/modules/credit-query.js' });
+ownedRouteTable.register({ method: 'GET', path: /^\/api\/credit\/exceptions\/([^/]+)$/, handler: ({ db,res,actor,params }) => getCreditException(db,res,actor,params[0]), owner: 'server/modules/credit-query.js' });
 ownedRouteTable.register({ method: 'GET', path: '/api/sales/groups', handler: ({ db, res, actor }) => listSalesGroups(db, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'POST', path: '/api/sales/groups', handler: ({ db, req, res, actor }) => saveSalesGroup(db, req, res, actor), owner: 'server/modules/sales-foundation.js' });
 ownedRouteTable.register({ method: 'PATCH', path: /^\/api\/sales\/groups\/([^/]+)$/, handler: ({ db, req, res, actor, params }) => saveSalesGroup(db, req, res, actor, params[0]), owner: 'server/modules/sales-foundation.js' });

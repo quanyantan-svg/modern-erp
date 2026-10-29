@@ -12514,3 +12514,898 @@ is acceptable — while the W11-SEC-01 original digest `3bf4eb51…72f0` stays p
 - `HEAVY_MYSQL_GATE_BUILD_BROWSER_NOT_RUN`; `NO_PASS_CLAIMED_FOR_THEM`;
 - `NO_CODE_CHANGE_IN_THIS_ROUND`; `NO_MYSQL_CONNECTION`; `NO_CREDENTIAL_ACCESS`;
 - `NO_GIT_WRITE`; `NO_RELEASE`; `NO_DEPLOY`; `NO_VERSION_CHANGE`; `NO_TAG_CHANGE`.
+
+---
+
+## W11-A U2 — Bounded Requirement Correction after Pre-E3 Semantic Parity Verification (2026-10-28)
+
+### 1. Authorization, chronology and bounded scope
+
+Authorization: the user accepted the Pre-E3 verdict
+`W11_A_U2_PRE_E3_BOUNDED_CORRECTION_REQUIRED` and approved the consecutive
+**Requirement → Design Correction** for exactly two business decisions:
+
+- `D-U2-1` — Customer Aggregate `usedCents` includes canonical Finance eligible prepayment;
+- `D-U2-2` — SC101 requires an explicit Credit Check stage and uses a per-scope computed policy identity.
+
+This record is later than the U2-1 Implementation record. It does **not** rewrite that history. The
+reported U2-1 results (29/29 SQLite, FAST 500/500, FULL 2983/2983 and Build PASS) remain true results
+for the cases executed at that time, but they do not prove the newly exposed nonzero-prepayment or
+multi-stage identity cases. U2 E3 remains blocked until a separately authorized implementation
+correction and corrected E2 regression pass.
+
+The six accepted findings are:
+
+```text
+G-A1  Aggregate eligible prepayment was omitted
+G-B1  the Stage Requirement was undefined
+G-B2  the fallback strategy was not approved
+G-B3  the computed policy identity did not state its Stage
+G-B4  the dynamic identity depended on viewer-visible Profiles
+G-B5  dynamic and historical identities were not fully distinguished
+```
+
+This section changes only SC101 / SC102 Requirement details needed to close those findings. It does
+not reopen all W11-A, does not change Wave 10 Credit Check, does not change U1, W11-SEC-01 or their
+frozen fingerprints, and does not authorize Implementation, MySQL, U3 or Git writes.
+
+### 2. D-U2-1 — final Credit used amount
+
+#### 2.1 Canonical source and amount contract
+
+SC101 must report the same final current occupancy used by the formal Wave 10 Credit Check:
+
+```text
+Customer Aggregate usedCents
+  = approvedSoCommitmentCents
+  + deliveredNotSettledCents
+  + arOpenCents
+  - eligiblePrepaymentCents
+
+Salesperson Sub-Limit usedCents
+  = approvedSoCommitmentCents
+  + deliveredNotSettledCents
+  + arOpenCents
+
+Salesperson Sub-Limit eligiblePrepaymentCents = 0
+```
+
+- The raw Sales / Delivery / AR projection continues to come from the one canonical
+  `computeCreditExposure()` implementation.
+- Customer Aggregate eligible prepayment must come from the existing Finance adapter through its
+  verified `lockMode='NONE'` read path. SC101 must not copy Finance balance selection, application,
+  refund, reversal or remaining-eligible arithmetic.
+- Eligible prepayment is aggregate-only because Finance advance money has no salesperson dimension.
+- Money remains safe integer cents. The existing Wave 10 subtraction boundary and negative-result
+  behaviour are preserved exactly. SC101 must not add `MAX(0)`, change rounding, cap a negative
+  remaining amount or otherwise change the frozen Wave 10 algorithm.
+- No second Credit Exposure calculator, ledger or mutable exposure cache may be created.
+
+This clause supersedes any reading of R101-1 that treats the zero-filled initial
+`eligiblePrepaymentCents` component returned by `computeCreditExposure()` as the final Credit Check
+amount. R101-1 means the **final** amount after the same canonical Finance offset that the Credit
+Check applies.
+
+#### 2.2 Read-only and authorization boundary
+
+Before reading business facts, SC101 must complete `CREDIT_VIEW` and canonical Credit Read Scope
+authorization. It may derive data only for scopes admitted by that authorization.
+
+The eligible-prepayment read must:
+
+- use `lockMode='NONE'`;
+- perform no row lock, no transaction, no insert/update/delete, no audit and no lock provisioning;
+- not call the Credit Check writer, Snapshot writer or idempotency writer;
+- not expose Finance source-balance identities or other unauthorized Finance detail in the SC101
+  response;
+- preserve the zero-business-write contract of all three W11-A GET endpoints.
+
+If the existing adapter cannot satisfy those properties, Implementation must stop and report the
+adapter as a blocker; the Finance adapter must not be changed under a W11-A correction authorization.
+
+### 3. D-U2-2 — explicit Stage
+
+`GET /api/credit/exposure` requires an explicit `stage` request parameter. The accepted values are
+the existing `CREDIT_CHECK_STAGES` values only:
+
+```text
+SO_SUBMIT
+SO_APPROVE
+SALES_DELIVERY_CONFIRM
+```
+
+Missing, empty or invalid `stage` returns HTTP 400 with existing business code
+`CREDIT_QUERY_INVALID_INPUT`. No new stage constant or implicit default is allowed.
+
+The following fallback behaviours are prohibited:
+
+- deriving the stage from a Profile-bound rule;
+- `ORDER BY business_stage LIMIT 1`;
+- choosing the lexicographically first effective stage;
+- choosing the first element of `CREDIT_CHECK_STAGES`.
+
+The explicit stage selects the rule context whose dynamic identity is being queried. It does not
+claim that a real Credit Check is being executed, does not change current authorization and must
+never be used as an authorization input. A future U3 caller must explicitly select the stage or
+receive it from an exact business entry context; the UI must not guess it.
+
+### 4. Per-Scope Computed Policy Identity
+
+Every returned authorized business credit scope has its own **computed** policy identity. A shared
+top-level fingerprint built from all Profiles visible to the current viewer is prohibited.
+
+For one scope, the identity must bind at least:
+
+```text
+customerId
+businessDate
+stage
+scopeType
+creditProfileId (or the equivalent canonical Profile identity)
+parameterSetHash
+ruleSetHash for the explicit stage
+profileEffectiveStateHash for this scope only
+computedPolicyFingerprint
+persisted
+creditPolicySnapshotId (nullable; only when the exact computed identity already exists)
+```
+
+The existing `buildScopeHashes()` and frozen U1 `computePolicySnapshotFingerprint()` are the only
+hash/fingerprint implementations. For each returned scope, the hash builder receives only that
+authorized scope and the explicit stage. Other viewer-visible or hidden Profiles must not
+participate.
+
+Required invariants:
+
+1. Same scope + stage + business date + effective Profile/Rule/Parameter state gives the same
+   computed identity to every viewer authorized to see that scope.
+2. A viewer cannot infer another scope through hashes, counts, ordering or any other identity field.
+3. Different Profiles may have different identities.
+4. The frozen `CSP1:` algorithm and input ordering are unchanged.
+5. A fingerprint string alone is not a complete business identity: consumers must use it together
+   with its explicit customer/date/stage/scope/Profile context.
+6. A computed SC101 identity is not automatically a historical Wave 10 Credit Check Snapshot.
+
+### 5. Historical Snapshot compatibility
+
+SC102 continues to expose the immutable identity persisted by the original Credit Check:
+
+- `credit_check_results.credit_policy_snapshot_id` and `policy_snapshot_fingerprint`;
+- the referenced `credit_policy_snapshots` row;
+- the original profile effective-state hash, stage, business date and decision identity.
+
+SC101 computed identity must be named and nested as a dynamic per-scope identity. It must not replace,
+regenerate, overwrite or masquerade as the SC102 historical Snapshot. No historical Snapshot is
+rewritten or backfilled by this correction.
+
+### 6. Corrected acceptance contract
+
+The corrected SQLite E2 must retain all original 29 U2-1 tests and add at least:
+
+- zero and nonzero eligible prepayment created through a production Writer;
+- exact Aggregate and Sub-Limit used/remaining amounts;
+- prepayment effective-date and historical-business-date boundaries;
+- same-day SO_SUBMIT and SO_APPROVE rules with different rule sets;
+- explicit stage determines `ruleSetHash`; missing/empty/invalid stage is rejected;
+- no lexicographic, Profile-bound or default-stage fallback remains;
+- every computed identity states its stage and belongs to one scope;
+- ADMIN and Self receive the same identity for the same authorized Profile;
+- different Profiles may differ and unauthorized Profiles leak no identity;
+- computed identity does not impersonate a historical Snapshot;
+- SC102 historical Snapshot linkage remains exact;
+- every GET leaves a whole-database content digest unchanged.
+
+Only after corrected SQLite E2, focused Wave 9/10/W11-SEC/U1 regression, FAST, FULL, Build and
+`git diff --check` pass may U2 return to E3 readiness. Real MySQL E3 remains separately authorized
+and must rerun the corrected amount, stage, viewer-independence, historical-link and zero-write
+matrix on the protected disposable target.
+
+### 7. Requirement status and freeze boundary
+
+**Status: `W11_A_U2_BOUNDED_CORRECTION_REQUIREMENT_READY`.**
+
+- `D_U2_1_D_U2_2_APPROVED_AND_RECORDED`;
+- `AGGREGATE_PREPAYMENT_FINAL_USED_CONTRACT_FIXED`;
+- `SUB_LIMIT_PREPAYMENT_ZERO_PRESERVED`;
+- `EXPLICIT_STAGE_REQUIRED_NO_FALLBACK`;
+- `PER_SCOPE_COMPUTED_IDENTITY_VIEWER_INDEPENDENT`;
+- `HISTORICAL_SNAPSHOT_IDENTITY_PRESERVED`;
+- `OLD_U2_1_RESULTS_PRESERVED_NOT_OVERCLAIMED`;
+- `U2_E3_BLOCKED_PENDING_CORRECTED_IMPLEMENTATION_AND_E2`;
+- `W11_SEC_01_ACCEPTANCE_PASS_FROZEN_GIT_JOURNAL_CLOSED_PRESERVED`;
+- `W11_A_U1_ACCEPTANCE_PASS_FROZEN_GIT_JOURNAL_CLOSED_PRESERVED`;
+- `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED_PRESERVED`;
+- `NO_CODE_TEST_SCHEMA_MIGRATION_MYSQL_GIT_WRITE`.
+
+---
+
+## W11-A U2 E3 — Cross-Engine Credit Policy Hash Contract Requirement Correction (2026-10-29)
+
+### 1. Authorization, finding and bounded scope
+
+After the second real-MySQL E3 run returned 7/10 PASS, the user accepted the exact triage of M2,
+M4 and M9 and authorized one consecutive **Requirement → Design Correction**. This Requirement
+stage addresses the confirmed M4 production defect and records the already-confirmed test-only M2
+and M9 corrections. It does not reopen all Wave 10 or W11-A.
+
+The confirmed M4 fact is:
+
+```text
+SQLite TEXT  {"identity":"SO_APPROVE"}
+MySQL JSON   {"identity": "SO_APPROVE"}
+```
+
+These values are the same JSON object, but V1 `buildScopeHashes()` hashes the physical
+`result_payload_json` string. The resulting `ruleSetHash`, `CSP1:` fingerprint and downstream
+identity therefore differ by database engine. Treating M4 as a comparison-only failure is
+prohibited.
+
+### 2. R-HASH-01 — supported Credit Rule payload domain
+
+The supported business input is the value accepted by the production Credit Rule Writer:
+
+- the top-level value MUST be a JSON object;
+- nested objects, arrays, strings, finite numbers, booleans and JSON literal `null` are allowed;
+- object member order and insignificant JSON whitespace carry no business meaning;
+- array order carries business meaning and MUST be preserved;
+- object keys and string values preserve their Unicode code points; escape spelling is not
+  identity;
+- numbers use the JSON/ECMAScript finite-number value model; `-0` and `0` have one canonical
+  representation, non-finite values are invalid, and integer values outside the safe-integer range
+  are rejected rather than rounded into another business value;
+- an empty object is valid; an empty array is not an object and is invalid;
+- SQL `NULL`, JSON literal `null`, malformed JSON and a valid non-object top-level JSON value are
+  distinct invalid conditions and MUST fail closed before any Snapshot, Check Result, approval
+  consumption or audit write.
+
+Duplicate object keys are not a supported Credit Rule payload. The production HTTP Writer receives
+an object, not raw JSON text, and therefore cannot create duplicate keys. SQLite `TEXT` has no JSON
+constraint; MySQL `JSON` validates and may normalize a raw SQL value before it is read back. Raw SQL
+insertion is not a supported business interface and MUST NOT be used to claim cross-engine parity
+for duplicate-key input. A duplicate key that remains observable at the application boundary MUST
+be rejected; it MUST NOT be silently resolved by first-key or last-key wins.
+
+This correction does not authorize a general JSON framework, a rewrite of other JSON columns or a
+new database-wide JSON policy.
+
+### 3. R-HASH-02 — V2 semantic canonicalization and identity
+
+For every supported payload, the new rule-set contract MUST parse the JSON value and hash its
+semantic canonical form:
+
+1. recursively sort object member names deterministically;
+2. recursively canonicalize member values;
+3. preserve array element order and multiplicity;
+4. serialize primitives by the value rules in R-HASH-01;
+5. include an explicit V2 domain/version marker in the rule-set digest input.
+
+The same legal rule rows, effective date and stage MUST produce the same V2 `ruleSetHash` on SQLite
+and MySQL. Different semantic payloads MUST remain distinguishable. The database dialect MUST NOT
+select the algorithm.
+
+The new Snapshot identity MUST be explicitly versioned as `CSP2:<64 lowercase hex>` and its digest
+input MUST be domain-separated from CSP1. New Credit Check group identities MUST use the disjoint
+`CCHK2:<64 lowercase hex>` namespace. A bare 64-character `ruleSetHash` is not a complete identity;
+its owning contract version MUST be present in runtime/query context. SC101 MUST expose that version
+per scope and MUST remain viewer-independent.
+
+### 4. R-HASH-03 — V1 immutability and coexistence
+
+All existing V1 artifacts remain immutable facts:
+
+- `CSP1:` Snapshot rows and their three stored hashes;
+- `CCHK1:` Check Results and check-group IDs;
+- Check Result → Snapshot references;
+- Special Approval → Check Result / Snapshot / fingerprint references;
+- audit history and the original W11-SEC / U1 Golden Vectors and digests.
+
+No backfill, UPDATE, identity rewrite, automatic approval migration or historical audit mutation is
+permitted. V1 calculation remains available only for historical verification and exact legacy
+replay. New policy calculation and new persisted decisions use V2. A V1 and V2 fingerprint MUST
+never be compared as if the prefixes were cosmetic.
+
+No Schema or Migration is required by this Requirement: `snapshot_fingerprint` and
+`check_group_id` already carry versioned prefixes within their current lengths, and Snapshot
+`notes_json` may carry a diagnostic contract label. The prefixes and the calculation path—not
+`notes_json`—are authoritative.
+
+### 5. R-HASH-04 — replay and Check Group safety
+
+Before creating any V2 Snapshot or decision, a Credit Check MUST evaluate legacy replay safety:
+
+- an exact, provable CCHK1 replay continues to resolve the original rows and original Snapshot
+  references under V1 semantics;
+- a new V2 decision uses CCHK2 and cannot collide with CCHK1;
+- if an existing legacy result has the same source/stage/business-date context and appears to
+  represent the same business facts, but exact replay cannot be proved (including representation or
+  cross-engine-history ambiguity), the operation MUST fail closed with an explicit conflict and
+  zero new Snapshot / Check Result / approval-consumption / audit writes;
+- a materially changed rule, Profile, parameter, exposure, proposed delta or recognition context may
+  produce a new V2 decision after the implementation proves that it is not an ambiguous legacy
+  replay;
+- Hash prefix equality or inequality alone is never sufficient replay evidence.
+
+### 6. R-HASH-05 — Special Approval compatibility
+
+An existing approval remains bound to its original Check Result, Snapshot ID, fingerprint, scope,
+source-order condition and expiry rules. It may release only the exact V1 replay for which the
+existing Wave 10 contract already permits consumption. It MUST NOT release a new CSP2/CCHK2 decision.
+A V2 decision requiring an approval follows the existing request/decision authority, SOD, expiry,
+scope and one-time rules but creates a new approval binding; no old approval is migrated, duplicated
+or consumed merely because the version changed.
+
+### 7. R-HASH-06 — SC101 and SC102
+
+SC101 computes V2 per-scope identity and MUST return an explicit hash-contract version together with
+the stage, Profile, three hashes and `CSP2:` fingerprint. Its read-only persisted lookup matches the
+complete V2 identity only and creates nothing. `persisted=false` means no exact V2 Snapshot match;
+it does not deny the possible existence of immutable V1 history.
+
+SC102 continues to return each stored historical Snapshot ID, fingerprint, rule hash, profile hash,
+Check Group and approval binding verbatim. It MUST NOT recompute, normalize or rewrite historical
+identity. `CSP1:` / `CCHK1:` remain sufficient authoritative version markers for existing rows;
+unknown or malformed persisted prefixes fail closed rather than being guessed.
+
+### 8. R-HASH-07 — evidence, freeze and acceptance
+
+The original W11-SEC 14-file digest record, U1 four incremental fingerprints, U1 CSP1 Golden
+Vectors and historical Wave 10 behavior evidence remain permanently recorded. A future authorized
+Implementation that changes a frozen file MUST establish a new bounded before/after digest link and
+new V2 Golden Vectors without replacing the old values. U1 T5's historical-protection purpose MUST
+remain; deleting, skipping or weakening it is prohibited.
+
+Future E2/E3 must prove at least: whitespace/key-order equivalence; nested object/array behavior;
+SQL NULL versus JSON null; malformed/non-object/duplicate-key rejection within the supported
+boundary; V1 Golden preservation; independent V2 Golden Vectors; old/new Snapshot distinction;
+legacy replay and ambiguity refusal; approval binding; per-scope viewer independence; SC102
+immutability; zero-write GETs; and real SQLite/MySQL parity using the same production Writer.
+
+M2 and M9 remain test-only corrections: M2 selects `cus-w11-self:sp-self` by retained Profile key
+and separately proves `sp-other` is zero; M9 uses real `checkResultId` for within-engine pagination
+uniqueness and a collision-free, uniqueness-checked business projection for cross-engine content.
+No `Set` deduplication, expected-value weakening or M4 bypass is permitted.
+
+### 9. Requirement status and stage boundary
+
+**Status: `W11_A_U2_E3_HASH_CORRECTION_REQUIREMENT_READY`.**
+
+- `SEMANTIC_JSON_V2_REQUIRED`;
+- `CSP2_CCHK2_EXPLICIT_VERSIONING_REQUIRED`;
+- `CSP1_CCHK1_HISTORY_IMMUTABLE`;
+- `LEGACY_REPLAY_PROVE_OR_FAIL_CLOSED`;
+- `SPECIAL_APPROVAL_EXACT_BINDING_PRESERVED`;
+- `NO_SCHEMA_MIGRATION_OR_HISTORY_REWRITE`;
+- `M2_M9_TEST_ONLY_CORRECTIONS_RECORDED`;
+- `REQUIREMENT_STAGE_COMPLETE_DESIGN_STAGE_AUTHORIZED_CONSECUTIVELY`;
+- `NO_CODE_TEST_MYSQL_GIT_WRITE_ACCEPTANCE_FREEZE_OR_U3`.
+
+## W11-A U2 — ONE_TIME 特别审批消费与 Replay 语义更正 Requirement（2026-10-29）
+
+### 1. 授权、事实认定与有界范围
+
+本节是**有界 Requirement 更正**，只处理一个已确认的业务矛盾：ONE_TIME 信用特别审批在 Credit Check
+的 replay 路径上可以被反复"消费"，且消费事实从不落盘。
+
+授权来源：本轮指令显式授权对该矛盾进行 Requirement / Design 复核（AGENTS.md §4.2 / §4.3，并按 §4.0
+连续阶段授权连续执行 Requirement 与 Design）。
+
+基线：Branch `work/sales-waves6-13-recovery-20261025`；HEAD `d9e5d50a9103612a17070f806312b822281eb6c6`；
+Version `1.6.2`。
+
+**事实认定（代码与既有测试证据，非推测）**
+
+| 编号 | 事实 | 证据位置 |
+|---|---|---|
+| F-1 | ONE_TIME 的"已消费"判定**只**依赖 `audit_logs` 中 `entity_type='CREDIT_SPECIAL_APPROVAL' AND action='CONSUME'` 的行 | `server/modules/credit-check.js` `findConsumableApproval()` |
+| F-2 | 释放决定的翻转与 CONSUME 审计的写入被**两个不同的键**控制：翻转键是"审批是否已消费"，写审计键是"Check Group 是否 replay" | `credit-check.js` 消费段 `if (releasable && consumeApprovals) { ... if (!isReplay) { audit(... 'CONSUME' ...) } }` |
+| F-3 | 因此在 replay 路径上决定翻转为 `PASS` 并返回 `consumedSpecialApprovalId`，但 **CONSUME 审计行数始终为 0** | 既有 Wave 10 golden 用例 `server/sales-customer-wave10-credit-check.test.js`（"V2 approval isolation — CSP1 approval releases only exact V1 replay and never a changed CCHK2"）断言 `replay.decision === 'PASS'` 且 `replay.consumedSpecialApprovalId === approval.id`，**且从不断言 CONSUME 审计行数**；该用例在当前基线下通过 |
+| F-4 | `credit_special_approval` 表**没有**任何消费状态列；`credit_check_results` 表**没有** `special_approval_id` 列；审批与被释放范围的持久化关联只存在于 `component_breakdown_json.consumedSpecialApprovalId` | `server/migrations/sales-customer-wave10-credit-check.js` |
+| F-5 | `audit_logs` **没有** `(entity_type, entity_id, action)` 唯一约束；只有 `idx_audit_entity(entity_type, entity_id)` 普通索引 | `server/db.js` |
+| F-6 | 消费身份在既有证据中**已经**是 `(approval_id, check_group_id, scope_type)` —— CONSUME 审计的 detail 已持久化 `checkGroupId` 与 `scopeType` | `credit-check.js` CONSUME 审计 detail |
+| F-7 | 消费作用域查找**不**按 Check Group 绑定，而是按 `(scope_type, source_credit_policy_snapshot_id, source_policy_snapshot_fingerprint, source_sales_order_id)` 绑定；`source_sales_order_id IS NULL` 时匹配任意同快照同范围的检查 | `credit-check.js` `findConsumableApproval()` |
+
+**本节更正的四个业务矛盾**
+
+| 编号 | 矛盾 | 业务后果 |
+|---|---|---|
+| **C-1** | **虚构消费**：replay 路径返回 `PASS` 并点名审批，但持久化事实（不可变 Check Result、审计轨迹）没有任何消费记录 | 审计与业务事实矛盾；`consumedSpecialApprovalId` 不再可信 |
+| **C-2** | **跨动作重复消费**：因消费从未落盘，"已消费"永远为假，同一 ONE_TIME 审批可被**另一个业务动作**再次释放 | ONE_TIME 的"只消费一次"承诺失效 |
+| **C-3** | **合法重放与持久化事实矛盾**（反向）：当首次消费发生在非 replay（新建 Group）路径时，落盘的 Result 行为 `PASS`；此后同一 Group 的合法幂等 replay 会重新执行"已消费"判定并把决定退回 `SPECIAL_APPROVAL_REQUIRED`（CCHK2 路径），或在 CCHK1 路径因决定比对失败而直接 409 `CREDIT_CHECK_LEGACY_REPLAY_AMBIGUOUS` | 已被业务接受的幂等重放被拒绝；重放结论与落盘结论互相矛盾 |
+| **C-4** | **落盘明细串值**：`consumedSpecialApprovalId` 是 Scope 循环外的单一变量；某范围被释放而另一范围未被释放时，**未被释放**的那一行的 `component_breakdown_json.consumedSpecialApprovalId` 会残留前一范围的审批 ID | 落盘的"哪张审批释放了本范围"为假；SC102 历史读取给出错误关联 |
+
+C-1/C-2 已在 `log/2026-10-29.md` §6 与 `solution.md` §37.54.20.21 末段登记为未决矛盾；C-3 与 C-4
+为本轮复核新增认定，证据同上表。
+
+**有界范围**
+
+纳入本更正：
+
+- ONE_TIME 审批的"消费"语义（何时成立、证据落在何处、如何被再次读取）；
+- Credit Check replay 的**结论**必须与已持久化的业务事实一致；
+- 消费证据的原子性、失败零副作用与并发单次消费；
+- 消费作用域查找与 Check Group 绑定关系的正确性。
+
+**明确不纳入**（不得因本更正被顺带改变）：
+
+- 敞口计算、决策规则、金额口径、权限模型、角色与权限码；
+- Finance → Credit 锁序、L1–L8 锁序、事务归属合同；
+- V1（CCHK1/CSP1）与 V2（CCHK2/CSP2）的身份隔离规则与历史不可变规则；
+- 审批的申请/决策权威、Authority Ceiling、SOD、有效期、Scope 绑定（R-HASH-05 已固定的 `SPECIAL_APPROVAL_EXACT_BINDING_PRESERVED` 不变）；
+- SC101/SC102 的响应结构与只读零副作用合同；
+- TIME_BOUNDED / OBJECT_BOUNDED 的**可重复消费**语义本身（其既有"可在有效期内/对象内重复使用"语义保持不变，仅其消费记录变得可证明）。
+
+### 2. R-ONE-01 — ONE_TIME 的"只消费一次"必须是可证明的业务事实
+
+- **R-ONE-01-a**：一个 ONE_TIME 审批在系统内**至多存在一次有效消费**。该事实必须可由持久化证据独立证明，不得由"本次调用是否 replay"推导。
+- **R-ONE-01-b**：消费的存在性判定**不得**仅由 `audit_logs` 的行数推导。审计轨迹是面向人的证据；消费事实的权威必须是具备唯一性约束的结构化记录，使"至多一次"在数据库层可判定。
+- **R-ONE-01-c**：消费的身份必须是 `(approval_id, check_group_id, scope_type)`。该身份**不得**由"相同 Snapshot"或"相同来源单据"推导——同一 Snapshot、同一来源可以对应多个不同的 Check Group（业务事实变化或授权上下文变化），这些是不同的业务动作。
+- **R-ONE-01-d**：消费成立必须与它所释放的那次业务动作**同一事务**提交。业务动作被拒绝或事务回滚时，不得留下任何消费证据。
+- **R-ONE-01-e**：`credit_special_approval` 与 `credit_check_results` 的既有历史行**不得**被迁移、重写或追加消费标记来"补齐"状态。历史消费由其既有的不可变 CONSUME 审计证据证明。
+
+### 3. R-ONE-02 — 首次消费与合法幂等 Replay 必须可区分
+
+Credit Check 的**检查组（Check Group）**与审批的**消费（Consumption）**是两个正交的事实：
+
+- Check Group 回答"这一次业务动作的这次信用评估是什么结论"；
+- Consumption 回答"这张审批是否已经被用掉、用在了哪一次业务动作上"。
+
+因此必须区分以下三种状态，且三者必须产生**互不相同且可区分**的结果：
+
+| 状态 | 含义 | 决定 | 消费写入 |
+|---|---|---|---|
+| `UNCONSUMED` | 该审批从未被消费 | 若满足释放条件则 `PASS` | **写入一次**消费记录与一次 CONSUME 审计 |
+| `CONSUMED_BY_THIS_ACTION` | 已被消费，且消费身份正是当前 `(check_group_id, scope_type)` | `PASS`（**复用原消费结论**） | **不写入**任何消费记录或审计 |
+| `CONSUMED_BY_OTHER_ACTION` | 已被消费，且消费身份属于另一个 Check Group 或另一个 Scope | **不得释放**；维持 `SPECIAL_APPROVAL_REQUIRED` | **不写入**任何消费记录或审计 |
+
+- **R-ONE-02-a**：`CONSUMED_BY_THIS_ACTION` 的重放**必须**返回与首次消费一致的结论与同一 `consumedSpecialApprovalId`。合法业务幂等重放不得产生第二次库存、信用、资金或审批消费副作用。
+- **R-ONE-02-b**：`UNCONSUMED` 状态下发生的消费，其消费证据必须被写入，**即使**该次评估落在既有 Check Group 上（replay）。Check Group 是否 replay 决定的是"要不要写 Check Result 行"，**不是**"要不要写消费证据"。
+- **R-ONE-02-c**：`CONSUMED_BY_OTHER_ACTION` 的重放**不得**因为"采用了相同 Snapshot"或"采用了相同来源单据"而被放行。
+- **R-ONE-02-d**：响应中的 `consumedSpecialApprovalId` **当且仅当**当前 `(check_group_id, scope_type)` 确实存在消费记录时非空。不得出现"返回了审批 ID 但无消费记录"的情形，也不得出现"已有消费记录却不返回审批 ID"的情形。
+- **R-ONE-02-e**：当首次消费落在一个**已存在**的 Check Group 上时，其不可变 Result 行**保持原样**（例如仍为 `SPECIAL_APPROVAL_REQUIRED`），释放事实由消费记录与 CONSUME 审计证明；历史 Check Result **不得**被改写为 `PASS`。
+
+### 4. R-ONE-03 — 跨业务动作复用必须拒绝
+
+- **R-ONE-03-a**：已被其它业务动作消费的 ONE_TIME 审批，必须被拒绝用于任何**不符合原授权**的再次消费。原授权的边界由 Scope、Snapshot 身份、Authority Ceiling、Override 与有效期共同界定。
+- **R-ONE-03-b**：拒绝必须是**显式**的：决定维持 `SPECIAL_APPROVAL_REQUIRED`，并携带可机器识别的 reason code（`SPECIAL_APPROVAL_ALREADY_CONSUMED`），不得静默降级、不得伪造 `PASS`、不得改写历史。
+- **R-ONE-03-c**：拒绝路径**零写入**——不写消费记录、不写 CONSUME 审计、不改 Check Result、不改审批。
+- **R-ONE-03-d**：业务事实变化导致的新 Check Group（含新的授权上下文）视为**新的业务动作**。已消费的 ONE_TIME 审批不得被它复用；如需继续放行，必须针对新的 Check Result 申请**新的**审批（原审批保持只读历史）。此规则与既有"事实变化产生新决定而不是重放陈旧结果"的合同一致。
+
+### 5. R-ONE-04 — 消费证据与持久化业务事实必须一致
+
+- **R-ONE-04-a**：任何被返回为 `PASS` 的释放，都必须存在对应的、可独立核验的消费证据。该证据必须能回答"哪张审批、在哪个 Check Group、释放了哪个 Scope、什么时刻、被谁消费"。
+- **R-ONE-04-b**：落盘的 Check Result 明细必须与该行的决定一致。未被释放的 Scope 行**不得**携带其它 Scope 的 `consumedSpecialApprovalId`（更正 C-4）。
+- **R-ONE-04-c**：Check Group 的重放比对**不得**因为"落盘决定是消费后的 `PASS`、而本次重算的释放前结论是 `SPECIAL_APPROVAL_REQUIRED`"而判定为身份不可重放。重放比对必须接受由该行自身携带的释放标记所证明的"落盘结论 = 释放后结论"。
+- **R-ONE-04-d**：历史 CONSUME 审计证据是**既有事实**。当一张审批在更正生效前已被消费时，系统必须依据其既有 CONSUME 审计证据识别该消费，并按 R-ONE-02 的三态处理；不得因结构化消费记录为空而把该审批当作未消费。
+- **R-ONE-04-e**：既有 CONSUME 审计证据若不足以证明消费身份（例如明细不可解析或缺少 Check Group / Scope），系统**必须 fail closed**：把该审批视为已被某个**未知**业务动作消费并拒绝释放，**不得猜测**其归属。
+
+### 6. R-ONE-05 — 失败零副作用与并发单次消费
+
+- **R-ONE-05-a**：消费记录与 CONSUME 审计必须与被保护的业务动作在**同一事务**内提交。业务动作被拒绝或事务回滚时，两者一并回滚，数据库中**不得**留下任何消费痕迹。
+- **R-ONE-05-b**：两个相互独立、竞争同一 ONE_TIME 审批的请求，**至多一个**可以得到释放结论。不得双放行。
+- **R-ONE-05-c**：单次消费的保证**不得**仅依赖"先查后写"的应用层判断。该保证必须由具备唯一性约束的结构化记录在数据库层判定，并辅以对审批行的串行化读取，使结论在并发下可证明。
+- **R-ONE-05-d**：消费结论的读回必须能看见并发事务已提交的写入，不得因事务隔离级别而读到陈旧快照并误判为"未消费"。
+- **R-ONE-05-e**：并发冲突必须以**显式冲突**结束（不得静默失败、不得两个赢家），且失败方**零写入**。
+
+### 7. R-ONE-06 — V1/V2 身份隔离与历史不可变
+
+- **R-ONE-06-a**：V1 审批（CSP1 绑定）永远不得释放 V2 决定（CCHK2）；V2 审批必须绑定 CSP2。此规则与 R-HASH-05 已固定的 `SPECIAL_APPROVAL_EXACT_BINDING_PRESERVED` 一致，本更正**不放松**它。
+- **R-ONE-06-b**：不得修改任何旧 Snapshot、旧 Check Result、旧 Approval；不得迁移旧 Approval；不得重写 CCHK1/CSP1；不得把旧审批复制成新审批；不得引入第二套信用审批权威。
+- **R-ONE-06-c**：消费记录是**追加**证据，不得原位改写既有消费行。
+- **R-ONE-06-d**：SC101 / SC102 的历史读取**不得回归**：零写入 GET 合同、可见性谓词、分页与内容等价性、身份版本校验（CCHK1/CCHK2、CSP1/CSP2 前缀）全部保持。
+- **R-ONE-06-e**：本更正不得改变 SQLite 与 MySQL 的行为一致性合同。两引擎的判定结果、唯一性保证与错误语义必须一致；跨引擎差异（例如 JSON 文本渲染差异）不得成为业务判定依据。
+
+### 8. R-ONE-07 — 验收要求与阶段边界
+
+更正必须由下列证据支撑，且**不得**删除或弱化任何既有 V1/V2 Golden、M2/M4/M9、U1、W11-SEC 与 Wave 10 回归：
+
+1. ONE_TIME 首次合法消费：消费记录与 CONSUME 审计各恰好一条，决定为 `PASS`。
+2. 同一动作合法幂等 Replay：返回 `PASS` 与同一 `consumedSpecialApprovalId`，消费记录与 CONSUME 审计**数量不变**。
+3. 不同动作复用同一 ONE_TIME：被拒绝，决定维持 `SPECIAL_APPROVAL_REQUIRED` 并携带 `SPECIAL_APPROVAL_ALREADY_CONSUMED`，零写入。
+4. 连续两次 Replay **不得**虚构两次消费。
+5. 已消费与未消费审批严格区分：未消费的可被首次消费；已消费（他动作）的不可被释放。
+6. 原历史 Result 不变：消费不修改任何既有 Check Result 行。
+7. 首次消费与业务动作原子提交：业务动作回滚时消费记录与 CONSUME 审计一并消失。
+8. 事务失败零消费审计。
+9. 并发竞争仅有一个合法消费结果，且失败方零写入。
+10. V1 Approval 不得释放 CCHK2；CSP2 Approval 必须绑定 CSP2。
+11. SC101/SC102 历史读取不回归（含零写入 GET 与跨引擎内容等价）。
+12. 真实 MySQL 下的一次性消费并发验收。
+
+**阶段边界**：本节只产生 Requirement。它**不**授权实现、测试、Schema / Migration、Gate / Runner、
+package.json、AGENTS.md、冻结历史记录的任何修改；**不**授权连接 MySQL、运行 MySQL Gate、任何 Git 写操作、
+U2 Acceptance 签发或 U3 启动。设计见 `solution.md` §37.54.22。
+
+### 9. Requirement 状态与阶段边界
+
+**Status: `W11_A_U2_ONE_TIME_REPLAY_CORRECTION_REQUIREMENT_READY`.**
+
+- `ONE_TIME_SINGLE_CONSUMPTION_PROVABLE`;
+- `FIRST_CONSUMPTION_VS_EXACT_REPLAY_DISTINGUISHED`;
+- `CROSS_ACTION_REUSE_REFUSED`;
+- `CONSUMPTION_EVIDENCE_MATCHES_PERSISTED_FACTS`;
+- `FAILED_TRANSACTION_ZERO_CONSUMPTION_EVIDENCE`;
+- `CONCURRENT_SINGLE_CONSUMPTION_GUARANTEED`;
+- `V1_V2_IDENTITY_ISOLATION_PRESERVED`;
+- `HISTORY_IMMUTABLE_NO_APPROVAL_MIGRATION`;
+- `LEGACY_CONSUME_EVIDENCE_FAIL_CLOSED`;
+- `REQUIREMENT_STAGE_COMPLETE_DESIGN_STAGE_AUTHORIZED_CONSECUTIVELY`;
+- `NO_CODE_TEST_SCHEMA_GATE_MYSQL_GIT_WRITE_ACCEPTANCE_FREEZE_OR_U3`.
+
+---
+
+## W11-A U2 — Credit Query / Exception History Final Acceptance and Capability Freeze Record (2026-10-29)
+
+### 1. Authorization and scope of this record
+
+The user reviewed the W11-A U2 Final Acceptance Evidence Review
+(`W11_A_U2_FINAL_ACCEPTANCE_REVIEW_PASS`) and explicitly authorized, under AGENTS.md §4.5:
+
+1. `W11-A U2` Technical Acceptance PASS;
+2. the `W11-A U2` Capability Freeze and its acceptance record.
+
+This authorization covers **only**:
+
+- SC101 Credit Exposure Query — the read-only backend;
+- SC102 Credit Exception History — the read-only backend;
+- the V2 Cross-Engine Hash Contract (Rule Hash / CSP2 / CCHK2) and its V1 historical compatibility;
+- the ONE_TIME Special Approval Consumption Correction;
+- the additive Schema / Migration, the corresponding tests, and the acceptance evidence.
+
+It does **not** authorize the W11-A U3 mobile / UI unit, does **not** declare the W11-A Package
+complete, does **not** freeze any other business domain, does **not** lift the Wave 10 release hold,
+and does **not** authorize a release, a deployment, a version change or a release tag. Git Commit /
+Push remain separately authorized actions and were **not** performed.
+
+This record does **not** rewrite the W11-SEC-01 Freeze Record, the W11-A U1 Freeze Record, or any
+earlier W11-A U2 Requirement / Design / Implementation record. Where an earlier record's statement is
+now incomplete, the accurate current state is stated **here** and the earlier record is left untouched.
+
+### 2. The item being closed
+
+`W11-A U2` — SC101 / SC102 Credit Query / Exception History, the V2 cross-engine hash contract, and
+the ONE_TIME Special Approval Consumption Correction.
+
+- **Requirement** — `document.md` → `§6.2` / `§6.3` (R101-1..R101-7, R102-1..R102-5);
+  `## W11-A U2 — Bounded Requirement Correction after Pre-E3 Semantic Parity Verification (2026-10-28)`
+  (D-U2-1, D-U2-2); `## W11-A U2 E3 — Cross-Engine Credit Policy Hash Contract Requirement Correction
+  (2026-10-29)` (R-HASH-01..R-HASH-05); `## W11-A U2 — ONE_TIME 特别审批消费与 Replay 语义更正
+  Requirement（2026-10-29）` (R-ONE-01..R-ONE-07).
+- **Design** — `solution.md` → `§37.54.8`, `§37.54.20`, `§37.54.22`, `§37.54.23`, `§37.54.24`,
+  and `§37.54.25` (Frozen Implementation / Evidence Summary).
+- **Implementation** — `server/modules/credit-query.js`, `server/modules/credit-rule-payload.js`,
+  `server/modules/credit-check.js`, `server/modules/credit-policy.js`,
+  `server/migrations/sales-customer-wave11-a-credit-consumption.js`,
+  `server/migrations/sales-customer-domain.js`, `server/app.js`; the U2 / U1 / Wave 10 / Wave 0 test
+  files, the shared fixture, the suite registration and the protected MySQL gate.
+- **Acceptance** — this section.
+
+### 3. Exact baseline and worktree inventory
+
+Read-only verification immediately before this record was written:
+
+| Item | Value | Result |
+|---|---|---|
+| Branch | `work/sales-waves6-13-recovery-20261025` | as expected |
+| HEAD | `d9e5d50a9103612a17070f806312b822281eb6c6` | as expected |
+| `package.json` version | `1.6.2` | unchanged |
+| Release tag | `v1.6.2` | unchanged, not moved, not created |
+| Modified files | **12** | matches expectation |
+| Untracked files | **8** | matches expectation |
+| Total | **20** | matches expectation |
+
+**Modified (12)** — `document.md`, `log/2026-10-28.md`, `package.json`,
+`scripts/sales-customer-wave11-a-primitives.test.js`, `scripts/testing/test-suites.js`,
+`server/app.js`, `server/migrations/sales-customer-domain.js`, `server/modules/credit-check.js`,
+`server/modules/credit-policy.js`, `server/sales-customer-wave0-migration-runner.test.js`,
+`server/sales-customer-wave10-credit-check.test.js`, `solution.md`.
+
+**Untracked (8)** — `log/2026-10-29.md`, `scripts/gates/mysql-sales-wave11-a-gate.mjs`,
+`server/migrations/sales-customer-wave11-a-credit-consumption.js`,
+`server/modules/credit-query.js`, `server/modules/credit-rule-payload.js`,
+`server/mysql-sales-customer-wave11-a-credit-query.integration.js`,
+`server/sales-customer-wave11-a-credit-query.test.js`,
+`server/test-utils/wave11-a-credit-query-fixture.js`.
+
+**Surface breakdown** (this corrects the count mislabel in the preceding review report, which
+labelled a group of eight entries as "6"):
+
+| Surface | Count | Files |
+|---|---|---|
+| Production runtime modules | 4 | `credit-query.js`, `credit-rule-payload.js`, `credit-check.js`, `credit-policy.js` |
+| App wiring | 1 | `server/app.js` (3 route registrations) |
+| Schema / Migration | 2 | `sales-customer-domain.js`, `sales-customer-wave11-a-credit-consumption.js` |
+| Test files | 5 | `wave11-a-credit-query.test.js`, `mysql-sales-customer-wave11-a-credit-query.integration.js`, `wave10-credit-check.test.js`, `wave0-migration-runner.test.js`, `wave11-a-primitives.test.js` |
+| Shared test fixture | 1 | `wave11-a-credit-query-fixture.js` |
+| Test-suite manifest | 1 | `scripts/testing/test-suites.js` |
+| Protected MySQL gate | 1 | `scripts/gates/mysql-sales-wave11-a-gate.mjs` |
+| Package script entry | 1 | `package.json` |
+| Canonical documents | 2 | `document.md`, `solution.md` |
+| Journal | 2 | `log/2026-10-28.md`, `log/2026-10-29.md` |
+
+**Test & gate surface = 8** (5 test files + 1 shared fixture + 1 suite manifest + 1 protected gate).
+
+No file was cleared, overwritten, reset, stashed or reverted. No `src/` file changed. No Git write
+was performed.
+
+### 4. Acceptance evidence by condition and evidence grade
+
+Grades: `E1` static contract, `E2` SQLite, `E3` real MySQL 8.
+
+| Condition | Evidence | Grade | Result |
+|---|---|---|---|
+| SC101 exposure equals the canonical Credit Check amount | `wave11-a-credit-query.test.js` UAT-S-35-A1 ×2, CORRECTION T-A ×2 | E2 | PASS |
+| SC101 aggregate / sub-limit scopes separated, never double counted | R101-3, UAT-S-35-A7 | E2 | PASS |
+| SC101 explicit stage, no implicit fallback | CORRECTION T-B ×3 | E2 | PASS |
+| SC101 component breakdown vs. historical snapshot separation | UAT-S-35-A2 ×2 | E2 | PASS |
+| SC101 per-scope computed identity, viewer independence | UAT-S-35-A5 ×2, CORRECTION T-C, T-D | E2 | PASS |
+| SC101 five-level read scope, negative cases | UAT-S-35-A7 ×2, R101-3, R101-4 ×2, R101-7 | E2 | PASS |
+| SC101 zero side effect — static, runtime, repeatable | UAT-S-35-A4 E1 + E2 ×2 | E1 / E2 | PASS |
+| SC102 exception history derived from canonical rows | UAT-S-35-A3 ×3, R102-1, R102-3 | E2 | PASS |
+| SC102 deterministic pagination and authorized total | UAT-S-35-A6 ×3 | E2 | PASS |
+| SC102 detail non-enumerable; scope cannot be bypassed | R102-4 ×2, R102-3 | E2 | PASS |
+| SC102 versioned history returned verbatim, unknown prefix fails closed | SC102 identity test | E2 | PASS |
+| V2 Rule Hash / CSP2 / CCHK2 independent Golden vectors | `wave11-a-primitives.test.js` T7, T9 | E1 / E2 | PASS |
+| V2 identity independent of the engine's physical JSON rendering (M4 defect) | `wave11-a-primitives.test.js` T10 | E2 | PASS |
+| V1 historical compatibility — CSP1 / CCHK1 unchanged | `wave11-a-primitives.test.js` T1–T4, T5 chain | E1 / E2 | PASS |
+| V1 replay compatibility and legacy ambiguity refusal | `wave10-credit-check.test.js` V2 compatibility cases | E2 | PASS |
+| ONE_TIME first legal consumption writes ledger + audit exactly once | T-01 | E2 | PASS |
+| ONE_TIME exact replay reuses the conclusion, writes nothing | T-02, T-03 | E2 | PASS |
+| ONE_TIME cross-action reuse refused, zero writes | T-04, T-05, T-13b | E2 | PASS |
+| ONE_TIME historical CONSUME audit is a valid authority; corrupt detail fails closed | T-13, T-13b, T-14 | E2 | PASS |
+| ONE_TIME transaction atomicity and rollback leave zero evidence | T-07, T-08 | E2 | PASS |
+| ONE_TIME repeatable scope modes keep their existing semantics | T-16, T16b | E2 | PASS |
+| SC101 / SC102 not regressed by the consumption ledger | `§37.54.22.6.3` case | E2 | PASS |
+| Migration — column order, nullability, 3 CHECK, 2 FK, UNIQUE, index | `wave0-migration-runner.test.js` + migration self-assertions | E1 / E2 | PASS |
+| Combined focused regression | 75 + 38 + 10 + 7 + 14 | E2 | **144 / 144 PASS** |
+| FAST suite | `pnpm test:fast` | E2 | **500 / 500 PASS** (37 suites) |
+| FULL suite | `pnpm test` | E2 | **3021 / 3021 PASS** (359 suites) |
+| Build | `pnpm build` | — | PASS |
+| Whitespace | `git diff --check` | — | PASS |
+| Real MySQL 8 cross-engine parity, M1–M10 | `w11-a-u2-e3-20261029-161412.tap.log` | **E3** | **10 / 10 PASS** |
+| Real MySQL ONE_TIME cross-session single consumption (T-17) | same TAP | **E3** | **PASS** |
+| Real MySQL ledger UNIQUE + physical type catalog (T-18) | same TAP | **E3** | **PASS** |
+| Fixed MySQL identity and least-privilege contract | TAP grants SHA-256 `bef61617…807e` = fixed baseline | E3 | PASS |
+| Five-category cleanup after the gate | `FINAL ZERO OBJECTS = {tables:0, views:0, triggers:0, routines:0, events:0}`, `CLEANUP = CONFIRMED` | E3 | PASS |
+
+**Real MySQL E3 evidence** — `w11-a-u2-e3-20261029-161412.tap.log`:
+
+| Attribute | Value |
+|---|---|
+| Evidence path | `%LOCALAPPDATA%\ModernERP\mysql-gate\evidence\w11-a-u2-e3-20261029-161412.tap.log` (resolved: `C:\Users\Administrator\AppData\Local\ModernERP\mysql-gate\evidence\…`) |
+| Size | 9492 bytes |
+| SHA-256 | `52c18b1c02eccfaee447f8e7ed24e6b32eea52f36cbdcec65086f7af8c4a3ac7` |
+| Target instance | `mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test` |
+| Server | MySQL `8.0.37`, uuid `256c7a4e-d275-11f1-885b-b025aa71d167` |
+| Grants fingerprint | `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` |
+| Result | `# tests 12 / # pass 12 / # fail 0 / # cancelled 0 / # skipped 0 / # todo 0`; `GATE_EXIT_CODE=0`; `CLEANUP = CONFIRMED` |
+
+The evidence is stored outside the repository and is **not** committed to Git.
+
+**Earlier failed gate evidence is preserved and was not overwritten:**
+
+| TAP file | Bytes | SHA-256 | Outcome |
+|---|---|---|---|
+| `w11-a-u2-e3-20261029-074456.tap.log` | 29198 | `3954a77b01ddacf6421aeaf54a30191c78c1d42738a844c1c75c612f004a580e` | 2nd E3 — 7 / 10, M2 / M4 / M9 FAIL |
+| `w11-a-u2-e3-20261029-152933.tap.log` | 15304 | `4a8aeb9b5dc69538497939e8c4a0205e9f07aeece5f25689d420d2ccbf2a077f` | 3rd E3 — 10 / 12, T-17 / T-18 FAIL |
+| `w11-a-u2-e3-20261029-161412.tap.log` | 9492 | `52c18b1c02eccfaee447f8e7ed24e6b32eea52f36cbdcec65086f7af8c4a3ac7` | 4th E3 — **12 / 12 PASS** |
+
+**Explicitly `NOT_RUN`** — recorded so that no reader mistakes silence for a pass:
+
+| Item | Why not run | What this closure therefore does not claim |
+|---|---|---|
+| HEAVY suite | not authorized in this round | no claim that the heavy suite passes; `HEAVY` contains `reset-safety` / `backup-restore` and was not run unbidden |
+| browser / mobile acceptance | not authorized in this round | no claim that any UI was accepted in a browser; the W11-A Credit Query UI is **U3** scope and does not exist yet |
+| other MySQL gates (`test:mysql`, `test:mysql:concurrency`, `test:mysql:legacy`, `test:mysql:finance-concurrency`, `test:mysql:performance`) | not adapted to the unified target | no claim that any MySQL gate other than the W11-A U2 gate ran against the unified local target |
+| MySQL migration as a separate destructive campaign | no destructive MySQL operation was authorized in this round | no claim that a MySQL migration campaign beyond the protected gate's own lifecycle was executed |
+| a second MySQL E3 rerun | forbidden; the user's transcript is the accepted evidence | no claim beyond the retained transcript |
+
+### 5. Freeze scope — what is and is not claimed
+
+**Frozen by this record:**
+
+- the SC101 Credit Exposure Query **backend** and the SC102 Credit Exception History **backend**;
+- the V2 Cross-Engine Hash Contract (Rule Hash / CSP2 / CCHK2) and the V1 historical compatibility;
+- the ONE_TIME Special Approval Consumption Correction and its consumption ledger;
+- the additive Schema / Migration and the corresponding tests and acceptance evidence;
+- the bounded amendments and their versioned evidence chain.
+
+**Explicitly NOT claimed by this record:**
+
+| Not claimed | Consequence |
+|---|---|
+| `W11_A_ACCEPTANCE_PASS` | The W11-A **package** token remains reserved and is **not** issued. |
+| W11-A Package Freeze | Not granted. |
+| U3 Complete | Not granted. W11-A U3 remains responsible for the mobile / UI surface. |
+| Wave 11 Complete | Not granted. W11-B / W11-C / W11-D have not started; D-2..D-5 still block W11-B / W11-C. |
+| Sales & Customer Domain Complete | Not granted. |
+| Production Release Ready | Not granted. |
+
+The W11-A Credit Query **UI** (`src/pages/credit-query.jsx`, the `credit-query` contextual route) does
+**not** exist. Design `§37.54.8.6` places it in the W11-A package and `§37.54.20.8` assigns the UI
+consumer role to U3; the executed U2-1 round was authorized as **Backend** Implementation. The UI is
+therefore **U3** scope, and this U2 freeze must not be worded as if the W11-A package were complete.
+
+### 6. Frozen evidence chain
+
+Every digest below was **recomputed from source** for this record, not copied from an earlier log.
+The `EOL` column states the convention that reproduces the recorded value, so each historical link is
+re-verifiable against a Git object rather than against one particular checkout.
+
+| Link | SHA-256 | EOL convention | Independent verification |
+|---|---|---|---|
+| W11-SEC-01 `server/modules/credit-check.js` | `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0` | LF blob | `git show 177a8ea:…` — MATCH |
+| W11-SEC-01 `server/modules/credit-policy.js` | `94f2df0a267722ba4d343315668dd82c2c3e5e723dde2363c785a5ecff6aa98b` | LF blob | `git show 177a8ea:…` — MATCH |
+| W11-SEC-01 `server/modules/credit-scope.js` | `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` | LF blob | `git show 177a8ea:…` — MATCH |
+| W11-SEC-01 `server/modules/credit-special-approval.js` | `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` | LF blob | `git show 177a8ea:…` — MATCH |
+| W11-SEC-01 `scripts/testing/test-suites.js` | `6e75875ac6a4fd697221fa1523f8c25a513b27ced3efc7e88ea78ecfc42cca88` | CRLF render of the blob | `git show 177a8ea:…` — MATCH |
+| U1 `server/modules/credit-check.js` | `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384` | LF blob | `git show ca9811a:…` — MATCH |
+| U1 `server/modules/credit-policy.js` | `9088a222e58d85e24539500a65a9e2b97a347fb89b0e20544e0c4fc34924fea8` | LF blob | `git show ca9811a:…` — MATCH |
+| U1 `scripts/testing/test-suites.js` | `b982808f0d74b5d0b3b2207f343c50e4c4a30bb10f005f9e599b2e4a4ce9e01d` | CRLF render of the blob | `git show ca9811a:…` — MATCH |
+| U1 `scripts/sales-customer-wave11-a-primitives.test.js` | `37074ad129ca89cdb34e3ac40a95eb03073c2f6912ec65fee0043f269b5f8767` | CRLF render of the blob | `git show ca9811a:…` — MATCH |
+| U1 `server/sales-customer-wave11-sec-scope.test.js` | `fb12c9e1c715438ff2ff5808109123b32ea902518e1ad16c652f23f7b6e1ba4c` | LF blob | `git show ca9811a:…` — MATCH |
+| V2 `server/modules/credit-check.js` | `5c5a5a71aabaae01dc06d60305ca1886b608da0ad524f162a4447f22170e792b` | LF | **no Git blob — documentary only** |
+| V2 `server/modules/credit-policy.js` | `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7` | LF | current worktree — MATCH |
+| ONE_TIME `server/modules/credit-check.js` | `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc` | LF | current worktree — MATCH |
+
+The **current** authorized baseline of each frozen production payload is listed in §7. The historical
+digests above are **permanently preserved**: they were not recomputed, overwritten, redefined or
+voided, and **no W11-SEC-01 Re-Freeze and no U1 Re-Freeze was performed**.
+
+The T5 assertion in `scripts/sales-customer-wave11-a-primitives.test.js` now asserts a **seven-link
+mutually-distinct chain** plus `contentDigest(current source) === 1f11fbee…29cc`. The current source
+is pinned against a **hard-coded literal** that is not generated at test runtime, and the W11-SEC-01
+digest survives as link 1 of the chain. The original "stripped-prefix" assertion became structurally
+unsatisfiable after the approved behavioural change (recorded in `log/2026-10-29.md`); it was replaced
+under the U1 forward-maintenance obligation (`document.md` → U1 Freeze Record §6) with a comparison of
+equal or greater strength. **No assertion was weakened, no case was skipped, and no historical digest
+was dropped.**
+
+### 7. Freeze file inventory and verified file fingerprints
+
+`LF` is the SHA-256 of the LF-normalized bytes, which equals the digest of the Git blob that a commit
+of this worktree would store. `raw` is the SHA-256 of the bytes as they sit in the working tree today.
+All values were computed for this record.
+
+| SHA-256 (LF = committed blob) | SHA-256 (raw, current worktree) | EOL | File | Role |
+|---|---|---|---|---|
+| `10a10e079818cb0edc406758514f5d7a16bfcd536e50e0e888a5152de988b684` | same | LF | `server/modules/credit-query.js` | SC101 / SC102 read-only backend — **new** |
+| `195b627ce17d2b5ab44ad3cd10264c5f960ecb3a932bb2d8fd7b1cc704f79020` | same | LF | `server/modules/credit-rule-payload.js` | V2 semantic rule payload — **new** |
+| `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc` | same | LF | `server/modules/credit-check.js` | ONE_TIME consumption state machine — V2 + ONE_TIME amendment |
+| `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7` | same | LF | `server/modules/credit-policy.js` | V2 CSP1 / CSP2 fingerprint — V2 amendment |
+| `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` | same | LF | `server/modules/credit-scope.js` | frozen, **unchanged** |
+| `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4` | same | LF | `server/modules/credit-special-approval.js` | frozen, **unchanged** |
+| `8348456384e1d5bef8962e1078f792d710ecd9cc587734eff84034b63b5c94a5` | same | LF | `server/migrations/sales-customer-wave11-a-credit-consumption.js` | consumption ledger migration — **new** |
+| `f82c31fb5b1a6cc5d69550f8f45a1f31ca2e33edb9064d38cea7064742176f37` | `8bd01b0ec8f71623efa6943789ff8c5ada9d51c854bbcf6bb961d5a8408595db` | CRLF | `server/migrations/sales-customer-domain.js` | migration registry (+1 wave-11 step) |
+| `8188be82cd92f79f01e18e8bb156e9e4f274534777c6198e63b58c8a41344204` | `5b35e91f2d3cf579d3787ef7c52839d85028c946c4edfe88fcd08b0b53f6f896` | CRLF | `server/app.js` | 3 route registrations |
+| `ab6b23e26152b52171adb7f5b28bcdb4ac28572d3bf38af83eed8f9251c45f8c` | same | LF | `server/sales-customer-wave11-a-credit-query.test.js` | U2 SQLite acceptance suite — **new** |
+| `d38c4f0028ccd522a1ac7b5c303e54d5602ca64afbda9d36518d70f424096a9f` | same | LF | `server/mysql-sales-customer-wave11-a-credit-query.integration.js` | real-MySQL E3 suite — **new** |
+| `e836163df10c54448a70650d85a8b4653c48e9e5dbe17691c5e666933acc8aa5` | same | LF | `server/test-utils/wave11-a-credit-query-fixture.js` | shared production-writer fixture — **new** |
+| `b280cb6c758a49b02f60a2fec81c8ea1ec6ff61e641dc96ff571225f42c304af` | same | LF | `server/sales-customer-wave10-credit-check.test.js` | T-01..T-16 ONE_TIME cases |
+| `a0929892e7d849b3706ab31217a40e67e55b64a1d26b666dc60a97bb3b51db3e` | `c3228663801f5df18e0bd5563d04d14f22e83046d4bd79c820116e3d504a448f` | CRLF | `server/sales-customer-wave0-migration-runner.test.js` | registry step count and id list |
+| `c68d4707eaed7501d9f81e35a928755564ed5b2c97f5430fd708b67d7f73036b` | `79f541579f24fde497f5a661d2132eaac07d26e2112f4d93bcb74c3d2ef73d27` | CRLF | `scripts/sales-customer-wave11-a-primitives.test.js` | T5 seven-link evidence chain + T6..T10 |
+| `c3b9b7c6025774d9421d85246fdfb442e115b3c46aca43d6382ec04e67d867e2` | same | LF | `scripts/gates/mysql-sales-wave11-a-gate.mjs` | protected E3 gate — **new** |
+| `e9ad0b45c4d673e8bf19ab5dd8a8745e1c5aa3bc4b84bac9d6545ae8e93e9ca1` | `a86d25a2df40c49b19e1623174b4f3f19ceb17162450179ef852ab2d74edb2db` | CRLF | `scripts/testing/test-suites.js` | FULL registration of the U2 suite |
+| `22bb3103e51198592b5d4209f73f7dff22992f6d59e937f214dfd1e7ab5cc5e5` | `0f292be3a2504a29865065bfeb64be557a0d8a47502addd940327036b8d021c5` | CRLF | `package.json` | `test:mysql:wave11-a` script entry (+1/-0) |
+
+**Current state of the W11-SEC-01 original 14 frozen payloads.** Re-verified for this record against
+the `177a8ea` blobs and against the current worktree: **11 of 14 are still byte-identical**. Three are
+superseded by later authorized bounded amendments, and this is the **accurate** current statement:
+
+| Superseded payload | W11-SEC-01 frozen digest | Current baseline | Nature of the difference |
+|---|---|---|---|
+| `server/modules/credit-check.js` | `3bf4eb51…72f0` | `1f11fbee…29cc` | U1 additive named export → V2 versioned hash → ONE_TIME consumption. Three recorded bounded amendments. |
+| `scripts/testing/test-suites.js` | `6e75875a…ca88` | `a86d25a2…2db` (CRLF) | U1 one FULL registration → U2-1 one FULL registration. Both additive comments only. |
+| `package.json` | `160d4ab4…0875` | `0f292be3…21c5` (CRLF) | U2-1 one gate script entry `test:mysql:wave11-a` (+1/-0). The `version` field is unchanged at `1.6.2`. |
+
+The W11-SEC-01 original 14 digests remain permanently recorded in `log/2026-10-28.md` §1014-1027 and in
+the W11-SEC-01 Freeze Record; they were not recomputed, overwritten or voided.
+
+### 8. Whitelist exception closure
+
+| File | Change | Disposition |
+|---|---|---|
+| `server/sales-customer-wave0-migration-runner.test.js` | +3 / −3 | **Closed.** Registry step count 10 → 11, the step-id list extended with `wave-11-a-credit-consumption`, and the test title updated. The assertion intent is **strengthened**: the new step must be present. |
+| `scripts/sales-customer-wave11-a-primitives.test.js` | +227 / −13 | **Closed.** The T5 baseline was re-pointed to the newly authorized ONE_TIME baseline and T6..T10 were added. T1..T4 are byte-unchanged; no assertion was weakened; no case was skipped. |
+
+Both exceptions were granted under the identities `W11_A_ONE_TIME_REPLAY_CORRECTION_BOUNDED_AMENDMENT`
+and `W11_A_ONE_TIME_WHITELIST_EXCEPTION_AMENDMENT`. Neither **redefines** the W11-SEC-01 freeze
+baseline. The only deletions in the Wave 10 suite are an import line and a helper signature, both
+re-expanded without changing any default or any assertion.
+
+No other unauthorized out-of-scope change was found. The new migration is formally registered in
+`SALES_CUSTOMER_MIGRATIONS`; the U2 suite is registered in **FULL** only, and FAST / HEAVY /
+`validate()` / the Runner were not altered; no historical file was overwritten; the protected Runner,
+Launcher, Preflight and Setup scripts were **not** modified — the new gate reuses the single existing
+`runProtectedMySqlCampaign` owner.
+
+### 9. Residual risks
+
+**A. U2 Acceptance blockers — none.**
+
+**B. Disclosed, non-blocking limitations**
+
+- **B-1** T-17 proves single consumption across **independent MySQL sessions**. It does **not** prove
+  an arbitrary concurrent interleaving: the MySQL application transaction gate serializes application
+  transactions by design (`§37.54.22.7.3`). The database `UNIQUE (approval_id, consumption_key)` is the
+  engine-independent backstop. This result must not be restated as a concurrency stress result.
+- **B-2** The V2 intermediate digest `5c5a5a71…792b` has **no Git blob**. Every blob in the repository
+  was scanned; it exists only as a documentary record. It is a permanent historical link, not
+  independently re-verifiable.
+- **B-3** (design L-4) SC102 does **not** expose "was this exception released by an approval"; the
+  reader must correlate the approval with the ledger. Registered as an open follow-up; the SC101 /
+  SC102 response structure was deliberately not changed.
+- **B-4** (design L-6) `credit_check_results` has **no `special_approval_id` column** (verified: zero
+  occurrences); the release association exists only in `component_breakdown_json.consumedSpecialApprovalId`
+  plus the new ledger. This differs from the §29.25.1 A-54 design description. Registered as an open
+  follow-up; no table structure was changed.
+- **B-5** (design L-5) TIME_BOUNDED / OBJECT_BOUNDED now produce multiple ledger rows, and the
+  "object boundary" semantics remain broad for the outbound scope (`source_sales_order_id IS NULL`).
+  Their existing consumable semantics were **not** extended in this round.
+- **B-6** The W11-A Credit Query **UI** does not exist; it is U3 scope. See §5.
+- **B-7** HEAVY suite, browser / mobile acceptance and the other MySQL gates were **not authorized and
+  not run**. No claim is made for them.
+- **B-8** The T5 historical links are hard-coded constants that an auditor verifies against Git blobs;
+  the test itself does not query Git at runtime. That verification was performed for this record and
+  passes (§6).
+- **B-9** The U2-1 round's frozen-payload increment block (`log/2026-10-28.md` §7 and `solution.md`
+  `§37.54.15.10`) states that "the remaining 12 W11-SEC-01 frozen payloads are individually
+  unchanged". That statement is **inaccurate for `package.json`**, which the same round changed by one
+  line (the `test:mysql:wave11-a` script entry). The change itself was planned and authorized
+  (`log/2026-10-28.md` §1425) and is minimal, additive and version-neutral, but it was not itemised in
+  that increment block. This record states the accurate current state (**11 of 14** unchanged; three
+  superseded with reasons and current baselines). The earlier records are **not** rewritten.
+
+**C. Project-level release risks — unchanged, not U2 Capability Gate failures, and not discharged by
+this record**
+
+- **`W10-INV-RISK-01` — `BLOCKS_RELEASE_ONLY`** — unchanged and still blocking production release.
+- **`CREDENTIAL_EXPOSURE_OPEN` — `USER_ACCEPTED / DEFERRED`** — unchanged. The owner accepted and
+  deferred the remediation. This closure neither read, compared, exported nor modified any credential,
+  did not modify the DPAPI store, and did not rebuild the identity baseline.
+- **`LEGACY_DATA_EVIDENCE_PENDING`** — unchanged; the external historical inventory was not authorized
+  and not executed.
+- **`WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`** — unchanged. This closure does not lift the release
+  hold and does not approve a deployment.
+- **D-2..D-5** remain open and continue to block W11-B / W11-C.
+- **Production release is still not authorized.** The system as a whole is **not** declared ready for
+  production release.
+
+### 10. Preservation of the Wave 10 freeze and of the remaining OPEN items
+
+- **Wave 10 Capability Freeze remains `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED`.**
+- **`W11-SEC-01` Freeze Record, `W11-A U1` Freeze Record and every earlier W11-A U2 Requirement /
+  Design / Implementation record are preserved verbatim.** They are **not** rewritten, recomputed,
+  overwritten or voided by this record. The W11-SEC-01 original 14 digests and the U1 digests remain
+  permanently recorded.
+- **`W11_A_ACCEPTANCE_PASS` is not issued** and remains reserved for the complete W11-A package.
+- **W11-A U3 / W11-B / W11-C / W11-D have not started.** This freeze authorizes none of their
+  Implementations.
+- **Git consolidation still requires separate authorization.** This freeze is a decision record only: no
+  `git add`, `commit`, `push`, `tag`, `merge`, `rebase`, `reset`, `restore`, `clean` or `stash` was
+  performed, no `package.json` version was changed, and no release tag was created, moved or deleted.
+  The working tree remains uncommitted; the timing and content of any commit are the user's decision.
+
+### 11. Closure status
+
+**`W11_A_U2_FINAL_ACCEPTANCE_PASS`**
+
+**`W11_A_U2_FINAL_ACCEPTANCE_PASS — FROZEN`**
+
+- `W11_A_U2_ONLY` — the W11-A package token `W11_A_ACCEPTANCE_PASS` is **not** issued;
+- `SC101_BACKEND_ACCEPTED`; `SC102_BACKEND_ACCEPTED`;
+- `V2_HASH_CONTRACT_ACCEPTED`; `V1_HISTORY_COMPATIBILITY_PRESERVED`;
+- `ONE_TIME_SINGLE_CONSUMPTION_PROVABLE`;
+- `REAL_MYSQL_E3_12_OF_12_PASS` — `GATE_EXIT_CODE=0`, `CLEANUP_CONFIRMED`, five-category final zero
+  objects, TAP SHA-256 `52c18b1c02eccfaee447f8e7ed24e6b32eea52f36cbdcec65086f7af8c4a3ac7`;
+- `FOCUSED_144_OF_144`; `FAST_500_OF_500`; `FULL_3021_OF_3021`; `BUILD_PASS`; `DIFF_CHECK_PASS`;
+- `W11_SEC_01_FROZEN_DIGESTS_PRESERVED` — 11 of 14 still byte-identical, 3 superseded by recorded
+  bounded amendments; `NO_W11_SEC_01_RE_FREEZE`; `NO_U1_RE_FREEZE`;
+- `WHITELIST_EXCEPTIONS_CLOSED`;
+- `B1_TO_B9_DISCLOSED_NON_BLOCKING`;
+- `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED_PRESERVED`;
+- `W10_INV_RISK_01_BLOCKS_RELEASE_ONLY_PRESERVED`;
+- `CREDENTIAL_EXPOSURE_OPEN_USER_ACCEPTED_DEFERRED_PRESERVED`;
+- `LEGACY_DATA_EVIDENCE_PENDING_PRESERVED`;
+- `W11_A_U3_NOT_STARTED`; `W11_B_C_D_NOT_STARTED`; `D2_TO_D5_BLOCK_W11_B_C_PRESERVED`;
+- `HEAVY_MYSQL_GATE_BROWSER_NOT_RUN` — `NO_PASS_CLAIMED_FOR_THEM`;
+- `NO_GIT_WRITE`; `NO_RELEASE`; `NO_DEPLOY`; `NO_VERSION_CHANGE`; `NO_TAG_CHANGE`.
