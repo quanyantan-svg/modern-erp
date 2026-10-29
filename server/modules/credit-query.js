@@ -43,6 +43,8 @@ const AGGREGATE_SCOPE_TYPE = 'CUSTOMER_AGGREGATE';
 const SALESPERSON_SCOPE_TYPE = 'SALESPERSON_SUB_LIMIT';
 const AGGREGATE_SCOPE_KEY = '*';
 const EXCEPTION_DECISIONS = Object.freeze(['PASS', 'WARNING', 'BLOCK', 'SPECIAL_APPROVAL_REQUIRED']);
+const EXCEPTION_CATEGORIES = Object.freeze(['OVER_LIMIT', 'OVERDUE', 'WARNING', 'BLOCK', 'SPECIAL_APPROVAL']);
+const OVERDUE_EVIDENCE_VERSION = 'CREDIT_OVERDUE_EVIDENCE_V1';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
@@ -63,6 +65,52 @@ function scopeTypeOf(value) {
     throw new HttpError(400, '信用范围类型无效', { code: 'CREDIT_QUERY_INVALID_INPUT' });
   }
   return text;
+}
+
+function categoryOf(value) {
+  const text = String(value || '').trim().toUpperCase();
+  if (!EXCEPTION_CATEGORIES.includes(text)) {
+    throw new HttpError(400, '信用例外分类无效', { code: 'CREDIT_QUERY_INVALID_INPUT' });
+  }
+  return text;
+}
+
+function categoryPredicate(db, category) {
+  if (category === 'WARNING' || category === 'BLOCK') {
+    return { sql: 'r.decision=?', args: [category] };
+  }
+  if (category === 'SPECIAL_APPROVAL') {
+    return {
+      sql: `(r.decision='SPECIAL_APPROVAL_REQUIRED' OR EXISTS (
+        SELECT 1 FROM credit_special_approval ca WHERE ca.source_credit_check_result_id=r.id
+      ))`,
+      args: [],
+    };
+  }
+  if (category === 'OVER_LIMIT') {
+    return db.dialect === 'mysql'
+      ? { sql: `JSON_CONTAINS(r.reason_codes_json, JSON_QUOTE(?), '$')=1`, args: ['OVER_LIMIT'] }
+      : {
+          sql: `EXISTS (SELECT 1 FROM json_each(r.reason_codes_json) rc WHERE rc.value=?)`,
+          args: ['OVER_LIMIT'],
+        };
+  }
+  const versionPath = '$.overdueEvidence.evidenceVersion';
+  const statusPath = '$.overdueEvidence.status';
+  const amountPath = '$.overdueEvidence.overdueOpenAmountCents';
+  return db.dialect === 'mysql'
+    ? {
+        sql: `(JSON_UNQUOTE(JSON_EXTRACT(r.component_breakdown_json,?))=?
+          AND JSON_UNQUOTE(JSON_EXTRACT(r.component_breakdown_json,?))='PROVEN_OVERDUE'
+          AND CAST(JSON_UNQUOTE(JSON_EXTRACT(r.component_breakdown_json,?)) AS SIGNED)>0)`,
+        args: [versionPath, OVERDUE_EVIDENCE_VERSION, statusPath, amountPath],
+      }
+    : {
+        sql: `(json_extract(r.component_breakdown_json,?)=?
+          AND json_extract(r.component_breakdown_json,?)='PROVEN_OVERDUE'
+          AND CAST(json_extract(r.component_breakdown_json,?) AS INTEGER)>0)`,
+        args: [versionPath, OVERDUE_EVIDENCE_VERSION, statusPath, amountPath],
+      };
 }
 
 function exposureStageOf(value) {
@@ -395,6 +443,54 @@ function exceptionItem(row) {
       'approval.sourcePolicySnapshotFingerprint',
     )
     : null;
+  let reasonCodes;
+  let recordedBreakdown;
+  try {
+    reasonCodes = JSON.parse(row.reason_codes_json || '[]');
+    recordedBreakdown = JSON.parse(row.component_breakdown_json || '{}');
+  } catch {
+    throw new HttpError(500, '信用历史载荷无效', { code: 'CREDIT_HISTORY_PAYLOAD_INVALID' });
+  }
+  if (!Array.isArray(reasonCodes) || !recordedBreakdown || typeof recordedBreakdown !== 'object'
+      || Array.isArray(recordedBreakdown)) {
+    throw new HttpError(500, '信用历史载荷无效', { code: 'CREDIT_HISTORY_PAYLOAD_INVALID' });
+  }
+  const rawEvidence = recordedBreakdown.overdueEvidence;
+  let overdueEvidence;
+  if (rawEvidence == null) {
+    overdueEvidence = {
+      evidenceVersion: null,
+      status: 'UNKNOWN',
+      completeness: 'PARTIAL',
+      reason: 'EVIDENCE_NOT_CAPTURED',
+    };
+  } else {
+    const validStatus = ['PROVEN_OVERDUE', 'PROVEN_NOT_OVERDUE', 'UNKNOWN'].includes(rawEvidence.status);
+    const validCompleteness = ['COMPLETE', 'PARTIAL'].includes(rawEvidence.completeness);
+    const validAmount = Number.isSafeInteger(rawEvidence.overdueOpenAmountCents)
+      && rawEvidence.overdueOpenAmountCents >= 0;
+    const validDigest = /^[0-9a-f]{64}$/.test(String(rawEvidence.evidenceDigest || ''));
+    if (rawEvidence.evidenceVersion !== OVERDUE_EVIDENCE_VERSION || !validStatus
+        || !validCompleteness || !validAmount || !validDigest
+        || (rawEvidence.status === 'PROVEN_OVERDUE' && rawEvidence.overdueOpenAmountCents <= 0)) {
+      throw new HttpError(500, '信用逾期历史证据无效', { code: 'CREDIT_OVERDUE_EVIDENCE_INVALID' });
+    }
+    // Persisted source identities prove the immutable history but are not part
+    // of the public Credit DTO. CREDIT_VIEW does not imply live Finance-detail
+    // authority.
+    const { sourceFacts: _privateSourceFacts, ...publicEvidence } = rawEvidence;
+    overdueEvidence = publicEvidence;
+  }
+  const specialApprovalRequiredAtCheck = row.decision === 'SPECIAL_APPROVAL_REQUIRED';
+  const hasApprovalAssociation = Boolean(row.approval_id);
+  const categories = [];
+  if (reasonCodes.includes('OVER_LIMIT')) categories.push('OVER_LIMIT');
+  if (overdueEvidence.evidenceVersion === OVERDUE_EVIDENCE_VERSION
+      && overdueEvidence.status === 'PROVEN_OVERDUE'
+      && overdueEvidence.overdueOpenAmountCents > 0) categories.push('OVERDUE');
+  if (row.decision === 'WARNING') categories.push('WARNING');
+  if (row.decision === 'BLOCK') categories.push('BLOCK');
+  if (specialApprovalRequiredAtCheck || hasApprovalAssociation) categories.push('SPECIAL_APPROVAL');
   return {
     checkResultId: row.id,
     checkGroupId,
@@ -403,8 +499,12 @@ function exceptionItem(row) {
     stage: row.stage,
     businessDate: row.business_date,
     decision: row.decision,
-    reasonCodes: JSON.parse(row.reason_codes_json || '[]'),
-    recordedBreakdown: JSON.parse(row.component_breakdown_json || '{}'),
+    reasonCodes,
+    recordedBreakdown: { ...recordedBreakdown, overdueEvidence },
+    categories,
+    overdueEvidence,
+    specialApprovalRequiredAtCheck,
+    hasApprovalAssociation,
     policySnapshotFingerprint,
     profileEffectiveStateHash: row.profile_effective_state_hash,
     sourceOrderId: row.sales_order_id,
@@ -489,6 +589,12 @@ function buildExceptionQuery(db, actor, url) {
     }
     const exists = 'EXISTS (SELECT 1 FROM credit_special_approval ha WHERE ha.source_credit_check_result_id = r.id)';
     where.push(hasApproval === 'true' ? exists : `NOT ${exists}`);
+  }
+  const category = String(url.searchParams.get('category') || '').trim();
+  if (category) {
+    const predicate = categoryPredicate(db, categoryOf(category));
+    where.push(predicate.sql);
+    args.push(...predicate.args);
   }
   const businessDateFrom = String(url.searchParams.get('businessDateFrom') || '').trim();
   if (businessDateFrom) {

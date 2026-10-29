@@ -73,6 +73,11 @@ const V2_CREDIT_POLICY_SHA256 =
 // relaxed, no assertion is deleted and no case is skipped.
 const ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256 =
   '1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc';
+// W11_A_OVERDUE_T5_FORWARD_CHAIN_WHITELIST_AMENDMENT: prospective overdue
+// evidence extends the same canonical owner. Keep the seven historical links
+// above immutable and make this eighth static digest the current source proof.
+const OVERDUE_EVIDENCE_FORWARD_CREDIT_CHECK_SHA256 =
+  '6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1';
 const U1_EXPORT_MARKER = '\n// W11-A U1 — additive named exports';
 
 // The frozen digest identifies the CONTENT of a frozen payload, not the line
@@ -482,11 +487,12 @@ test('T5 the versioned frozen evidence chain preserves V1 and one canonical owne
     V2_CREDIT_CHECK_SHA256,
     V2_CREDIT_POLICY_SHA256,
     ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256,
+    OVERDUE_EVIDENCE_FORWARD_CREDIT_CHECK_SHA256,
   ];
   assert.equal(new Set(chain).size, chain.length,
     'every frozen evidence link must be a distinct digest — history and V2 may never share one SHA');
-  assert.equal(contentDigest(source), ONE_TIME_CONSUMPTION_CREDIT_CHECK_SHA256,
-    'the current credit-check source must equal the authorised ONE_TIME consumption evidence link');
+  assert.equal(contentDigest(source), OVERDUE_EVIDENCE_FORWARD_CREDIT_CHECK_SHA256,
+    'the current credit-check source must equal the authorised overdue-evidence forward link');
   assert.equal(contentDigest(policyBytes.toString('utf8')), V2_CREDIT_POLICY_SHA256,
     'the current credit-policy source must equal the authorised V2 evidence link');
   assert.match(source.slice(index), /export \{ buildScopeHashes, CREDIT_CHECK_RESULT_SCOPE \};/,

@@ -14,9 +14,9 @@ import {
 } from './test-utils/wave11-sec-scope-fixture.js';
 import {
   DEFAULT_EXPOSURE_STAGE, ONE_TIME_CEILING_CENTS, ONE_TIME_OVERRIDE_CENTS, ONE_TIME_PROPOSED_DELTA_CENTS,
-  OTHER_SALESPERSON, SELF_CUSTOMER, SELF_SALESPERSON,
+  OTHER_CUSTOMER, OTHER_SALESPERSON, SELF_CUSTOMER, SELF_SALESPERSON,
   contentDigest, databaseDigest, databaseSnapshot, ensureWave10OneTimeWorld,
-  readExposure, scopeOf,
+  readExposure, runObservedCreditCheck, seedObservedReceivable, shiftCreditDate, scopeOf,
   seedCreditQueryWorld, writeAdvanceReceipt, writeStageRule, writeSubLimitProfile,
 } from './test-utils/wave11-a-credit-query-fixture.js';
 import { CREDIT_POLICY_HASH_VERSIONS, computePolicySnapshotFingerprint } from './modules/credit-policy.js';
@@ -77,6 +77,10 @@ function buildIdentityContexts(db) {
     JOIN credit_lock_anchors a ON a.id=cp.anchor_id`).all();
   return new Map(rows.map((profile) => [profile.id, {
     profileKey: `${profile.customer_id}:${profile.salesperson_scope_key}:${profile.effective_from}`,
+    customerId: profile.customer_id,
+    salespersonScopeKey: profile.salesperson_scope_key,
+    creditObjectType: profile.credit_object_type,
+    creditObjectId: profile.credit_object_id,
     anchorKey: profile.anchor_key,
     creditLimitCents: profile.credit_limit_cents == null ? null : Number(profile.credit_limit_cents),
     status: profile.status,
@@ -131,7 +135,107 @@ async function createStableStageRule(db, stage) {
   return stableId;
 }
 
-function normalizeHistory(item, profileKeys) {
+function normalizeOverdueEvidence(db, item, profileKeys, captureWindow) {
+  const row = db.prepare(`SELECT component_breakdown_json
+    FROM credit_check_results WHERE id=?`).get(item.checkResultId);
+  assert.ok(row, `missing persisted Check Result ${item.checkResultId}`);
+  const persistedBreakdown = JSON.parse(row.component_breakdown_json);
+  const persisted = persistedBreakdown.overdueEvidence;
+  if (persisted == null) {
+    assert.deepEqual(item.overdueEvidence, {
+      evidenceVersion: null,
+      status: 'UNKNOWN',
+      completeness: 'PARTIAL',
+      reason: 'EVIDENCE_NOT_CAPTURED',
+    });
+    assert.deepEqual(item.recordedBreakdown.overdueEvidence, item.overdueEvidence);
+    return {
+      publicEvidence: item.overdueEvidence,
+      integrity: { state: 'EVIDENCE_NOT_CAPTURED' },
+    };
+  }
+
+  const { evidenceDigest, ...unsignedEvidence } = persisted;
+  assert.match(evidenceDigest, /^[0-9a-f]{64}$/, 'persisted evidence digest shape');
+  assert.equal(contentDigest(unsignedEvidence), evidenceDigest,
+    'persisted overdue evidence must match an independent canonical digest recomputation');
+  assert.notEqual(contentDigest({
+    ...unsignedEvidence,
+    overdueOpenAmountCents: Number(unsignedEvidence.overdueOpenAmountCents) + 1,
+  }), evidenceDigest, 'a protected economic amount mutation must not satisfy the persisted digest');
+
+  const { sourceFacts: _privateSourceFacts, ...expectedPublicEvidence } = persisted;
+  assert.deepEqual(item.overdueEvidence, expectedPublicEvidence,
+    'the public evidence must be the persisted payload with only private source facts removed');
+  assert.deepEqual(item.recordedBreakdown.overdueEvidence, expectedPublicEvidence,
+    'recordedBreakdown must expose the same sanitized persisted evidence');
+
+  const capturedAtMs = Date.parse(persisted.capturedAt);
+  assert.ok(Number.isFinite(capturedAtMs), 'capturedAt must be a valid timestamp');
+  assert.equal(new Date(capturedAtMs).toISOString(), persisted.capturedAt,
+    'capturedAt must be canonical ISO UTC');
+  assert.ok(capturedAtMs >= Date.parse(captureWindow.startedAt)
+    && capturedAtMs <= Date.parse(captureWindow.completedAt),
+  'capturedAt must fall inside this engine fixture capture window');
+  const resultProfile = profileKeys.get(item.creditProfileId);
+  assert.ok(resultProfile, `missing result Profile ${item.creditProfileId}`);
+  assert.equal(resultProfile.creditObjectType, CREDIT_OBJECT_TYPE);
+  assert.equal(resultProfile.creditObjectId, `CREDIT-${resultProfile.customerId.toUpperCase()}`);
+  if (item.scopeType === 'CUSTOMER_AGGREGATE') {
+    assert.equal(resultProfile.salespersonScopeKey, '*',
+      'Aggregate result must retain the canonical wildcard salesperson scope');
+  } else {
+    assert.ok(resultProfile.salespersonScopeKey, 'Sub-Limit result must retain its salesperson scope');
+  }
+  const sourceCustomer = item.sourceOrderId
+    ? db.prepare('SELECT customer_id FROM sales_orders WHERE id=?').get(item.sourceOrderId)?.customer_id
+    : (item.sourceDeliveryId
+      ? db.prepare('SELECT customer_id FROM sales_deliveries WHERE id=?').get(item.sourceDeliveryId)?.customer_id
+      : null);
+  if (sourceCustomer) assert.equal(resultProfile.customerId, sourceCustomer,
+    'the evidence Profile must not cross customer scope');
+
+  const rawGraceProfileId = persisted.gracePolicy?.profileId ?? null;
+  let stableGraceProfileKey = null;
+  if (rawGraceProfileId == null) {
+    assert.equal(item.scopeType, 'CUSTOMER_AGGREGATE',
+      'only Aggregate due-date evidence may omit a grace Profile identity');
+  } else {
+    const graceProfile = profileKeys.get(rawGraceProfileId);
+    assert.ok(graceProfile, `missing grace Profile ${rawGraceProfileId}`);
+    assert.equal(rawGraceProfileId, item.creditProfileId,
+      'grace Profile must be the Result effective Profile');
+    assert.equal(item.scopeType, 'SALESPERSON_SUB_LIMIT');
+    assert.equal(graceProfile.customerId, resultProfile.customerId);
+    assert.equal(graceProfile.creditObjectType, resultProfile.creditObjectType);
+    assert.equal(graceProfile.creditObjectId, resultProfile.creditObjectId);
+    assert.equal(graceProfile.status, 'ACTIVE');
+    assert.ok(graceProfile.effectiveFrom <= item.businessDate
+      && (graceProfile.effectiveTo == null || graceProfile.effectiveTo >= item.businessDate),
+    'grace Profile must be effective on the Result business date');
+    stableGraceProfileKey = graceProfile.profileKey;
+  }
+
+  return {
+    publicEvidence: {
+      ...expectedPublicEvidence,
+      capturedAt: 'VERIFIED_ISO_UTC_WITHIN_ENGINE_CAPTURE_WINDOW',
+      gracePolicy: {
+        ...expectedPublicEvidence.gracePolicy,
+        profileId: stableGraceProfileKey,
+      },
+      evidenceDigest: 'VERIFIED_INDEPENDENT_CANONICAL_SHA256',
+    },
+    integrity: {
+      state: 'PERSISTED_EVIDENCE_VERIFIED',
+      graceProfileKey: stableGraceProfileKey,
+      capturedAtContract: 'ISO_UTC_PERSISTED_AND_IN_CAPTURE_WINDOW',
+      digestContract: 'RECOMPUTED_AND_TAMPER_REJECTED',
+    },
+  };
+}
+
+function normalizeHistory(db, item, profileKeys, captureWindow) {
   // The stable projection carries every approved identity dimension: source
   // order, scope type, stage, business date, the STABLE business Profile key,
   // the proposed delta and the decision. Two Check Results of the same order
@@ -140,6 +244,7 @@ function normalizeHistory(item, profileKeys) {
   const breakdown = item.recordedBreakdown || {};
   const profileKey = profileKeys.get(item.creditProfileId)?.profileKey ?? 'UNATTRIBUTED';
   const proposedDeltaCents = Number(breakdown.proposedTotalCents || 0) - Number(breakdown.exposureCents || 0);
+  const normalizedOverdue = normalizeOverdueEvidence(db, item, profileKeys, captureWindow);
   return {
     key: [
       item.sourceOrderId, item.scopeType, item.stage, item.businessDate,
@@ -150,7 +255,11 @@ function normalizeHistory(item, profileKeys) {
     businessDate: item.businessDate,
     decision: item.decision,
     reasonCodes: item.reasonCodes,
-    recordedBreakdown: item.recordedBreakdown,
+    recordedBreakdown: {
+      ...item.recordedBreakdown,
+      overdueEvidence: normalizedOverdue.publicEvidence,
+    },
+    evidenceIntegrity: normalizedOverdue.integrity,
     approval: item.approval ? {
       scopeType: item.approval.scopeType,
       decision: item.approval.decision,
@@ -161,19 +270,22 @@ function normalizeHistory(item, profileKeys) {
   };
 }
 
-async function historyView(db, actor, params = {}, { includeResultIds = false, profileKeys = new Map() } = {}) {
+async function historyView(db, actor, params = {}, {
+  includeResultIds = false, profileKeys = new Map(), captureWindow,
+} = {}) {
   const result = await read(listCreditExceptions, db, actor, params);
   if (result.statusCode !== 200) return { statusCode: result.statusCode, code: result.code };
   const view = {
     statusCode: 200,
     total: result.body.total,
-    items: result.body.exceptions.map((item) => normalizeHistory(item, profileKeys)),
+    items: result.body.exceptions.map((item) => normalizeHistory(db, item, profileKeys, captureWindow)),
   };
   if (includeResultIds) view.resultIds = result.body.exceptions.map((item) => item.checkResultId);
   return view;
 }
 
 async function collectEngineEvidence(db) {
+  const captureWindow = { startedAt: new Date().toISOString(), completedAt: null };
   await seedCreditQueryWorld(db);
   const approveRuleId = await createStableStageRule(db, 'SO_APPROVE');
   await createStableStageRule(db, 'SALES_DELIVERY_CONFIRM');
@@ -212,6 +324,7 @@ async function collectEngineEvidence(db) {
     exposureCents: item.exposureCents,
     availableCents: item.availableCents,
   }));
+  captureWindow.completedAt = new Date().toISOString();
   const outOfScope = db.prepare(`SELECT id,sales_order_id,scope_type FROM credit_check_results
     WHERE sales_order_id='so-cus-w11-other' AND scope_type='SALESPERSON_SUB_LIMIT'`).get();
   assert.ok(outOfScope, 'the prepared out-of-scope history row must exist');
@@ -267,11 +380,15 @@ async function collectEngineEvidence(db) {
 
   const histories = {};
   for (const [name, actor] of Object.entries({ ALL: ADMIN, CROSS_GROUP: CROSS_READER, AGGREGATE_ONLY: UNMAPPED_ACTOR, AGGREGATE_PLUS_SELF: SELF_ACTOR })) {
-    histories[name] = await historyView(db, actor, {}, { profileKeys: identityContexts });
+    histories[name] = await historyView(db, actor, {}, { profileKeys: identityContexts, captureWindow });
   }
-  histories.DENY = await historyView(db, NO_CREDIT, {}, { profileKeys: identityContexts });
-  const page0 = await historyView(db, ADMIN, { limit: 2, offset: 0 }, { includeResultIds: true, profileKeys: identityContexts });
-  const page1 = await historyView(db, ADMIN, { limit: 2, offset: 2 }, { includeResultIds: true, profileKeys: identityContexts });
+  histories.DENY = await historyView(db, NO_CREDIT, {}, { profileKeys: identityContexts, captureWindow });
+  const page0 = await historyView(db, ADMIN, { limit: 2, offset: 0 }, {
+    includeResultIds: true, profileKeys: identityContexts, captureWindow,
+  });
+  const page1 = await historyView(db, ADMIN, { limit: 2, offset: 2 }, {
+    includeResultIds: true, profileKeys: identityContexts, captureWindow,
+  });
   const deniedDetail = await readById(getCreditException, db, SELF_ACTOR, outOfScope.id);
   const absentDetail = await readById(getCreditException, db, SELF_ACTOR, 'w11-a-no-such-result');
 
@@ -430,6 +547,160 @@ test('W11-A-E3-M10 all measured GETs are repeatable and leave the complete datab
   assert.equal(mysqlEvidence.measuredDigestBefore, mysqlEvidence.measuredDigestAfter);
   assert.equal(typeof mysqlEvidence.measuredDigestAfter, 'string');
   assert.equal(mysqlEvidence.measuredDigestAfter.length, 64);
+});
+
+test('W11-A-E3-M11 prospective OVERDUE evidence has SQLite/MySQL parity and immutable replay', () => {
+  const checks = [];
+  for (const [label, db] of [['sqlite', sqliteDb], ['mysql', mysqlDb]]) {
+    seedObservedReceivable(db, {
+      id: 'ar-w11-overdue-mysql-parity',
+      deliveryId: 'sd-w11-overdue-mysql-parity',
+      dueDate: shiftCreditDate(TODAY, -20),
+    });
+    const check = runObservedCreditCheck(db, { authorizationContext: 'w11a-overdue-m11' });
+    const rows = db.prepare('SELECT scope_type,component_breakdown_json FROM credit_check_results WHERE check_group_id=? ORDER BY scope_type')
+      .all(check.checkGroupId);
+    const view = rows.map((row) => {
+      const evidence = JSON.parse(row.component_breakdown_json).overdueEvidence;
+      return {
+        scopeType: row.scope_type,
+        evidenceVersion: evidence.evidenceVersion,
+        basis: evidence.basis,
+        classificationBusinessDate: evidence.classificationBusinessDate,
+        status: evidence.status,
+        completeness: evidence.completeness,
+        gracePolicy: {
+          source: evidence.gracePolicy.source,
+          days: evidence.gracePolicy.days,
+          parameterCode: evidence.gracePolicy.parameterCode,
+        },
+        observedOpenAmountCents: evidence.observedOpenAmountCents,
+        overdueOpenAmountCents: evidence.overdueOpenAmountCents,
+        sourceCount: evidence.sourceCount,
+        overdueSourceCount: evidence.overdueSourceCount,
+        unknownSourceCount: evidence.unknownSourceCount,
+        sourceFacts: evidence.sourceFacts.map((item) => ({ ...item })),
+      };
+    });
+    const before = rows.map((row) => row.component_breakdown_json);
+    const replay = runObservedCreditCheck(db, { authorizationContext: 'w11a-overdue-m11' });
+    assert.equal(replay.replayed, true, label);
+    assert.deepEqual(
+      db.prepare('SELECT component_breakdown_json FROM credit_check_results WHERE check_group_id=? ORDER BY scope_type')
+        .all(check.checkGroupId).map((row) => row.component_breakdown_json),
+      before,
+      `${label} replay must not rewrite evidence`,
+    );
+    checks.push(view);
+  }
+  assert.deepEqual(checks[1], checks[0], 'native MySQL and SQLite evidence semantics must match');
+});
+
+test('W11-A-E3-M12 native MySQL JSON categories preserve UNKNOWN, authorization, COUNT and zero-write', async () => {
+  // Convert the SAME stable logical row into the exact old payload shape on
+  // both engines. `id` contains a CCHK2 digest whose Profile inputs include
+  // engine-local UUIDs, so ORDER BY id would randomly pick different business
+  // rows and could remove evidence from only one engine's M11 OVERDUE row.
+  const legacyTargets = [];
+  for (const [label, db] of [['sqlite', sqliteDb], ['mysql', mysqlDb]]) {
+    const candidates = db.prepare(`SELECT r.id,r.sales_order_id,r.scope_type,r.stage,r.business_date,
+        r.component_breakdown_json,cp.customer_id,cp.salesperson_scope_key,cp.credit_object_type,
+        cp.credit_object_id,cp.effective_from
+      FROM credit_check_results r
+      JOIN credit_profile cp ON cp.id=r.credit_profile_id
+      WHERE r.sales_order_id=? AND r.scope_type='SALESPERSON_SUB_LIMIT'
+        AND cp.customer_id=? AND cp.salesperson_scope_key=?`).all(
+      `so-${OTHER_CUSTOMER}`, OTHER_CUSTOMER, OTHER_SALESPERSON,
+    );
+    assert.equal(candidates.length, 1, `${label} must have one exact legacy-conversion target`);
+    const old = candidates[0];
+    const breakdown = JSON.parse(old.component_breakdown_json);
+    assert.ok(breakdown.overdueEvidence, `${label} target must start with prospective evidence`);
+    assert.notEqual(breakdown.overdueEvidence.status, 'PROVEN_OVERDUE',
+      `${label} legacy conversion must not remove a real OVERDUE category member`);
+    legacyTargets.push({
+      salesOrderId: old.sales_order_id,
+      scopeType: old.scope_type,
+      stage: old.stage,
+      businessDate: old.business_date,
+      customerId: old.customer_id,
+      salespersonScopeKey: old.salesperson_scope_key,
+      creditObjectType: old.credit_object_type,
+      creditObjectId: old.credit_object_id,
+      profileEffectiveFrom: old.effective_from,
+      evidenceVersion: breakdown.overdueEvidence.evidenceVersion,
+      evidenceStatus: breakdown.overdueEvidence.status,
+      evidenceCompleteness: breakdown.overdueEvidence.completeness,
+      classificationBusinessDate: breakdown.overdueEvidence.classificationBusinessDate,
+      overdueOpenAmountCents: breakdown.overdueEvidence.overdueOpenAmountCents,
+    });
+    delete breakdown.overdueEvidence;
+    db.prepare('UPDATE credit_check_results SET component_breakdown_json=? WHERE id=?')
+      .run(JSON.stringify(breakdown), old.id);
+    const persisted = JSON.parse(db.prepare('SELECT component_breakdown_json FROM credit_check_results WHERE id=?')
+      .get(old.id).component_breakdown_json);
+    assert.equal(persisted.overdueEvidence, undefined, `${label} target must have the exact old payload shape`);
+  }
+  assert.deepEqual(legacyTargets[1], legacyTargets[0],
+    'the old-payload conversion must target the same logical business row on both engines');
+
+  const categoryBusinessView = (db, result) => {
+    const profileKeys = buildIdentityContexts(db);
+    return result.body.exceptions.map((item) => {
+      const evidence = item.overdueEvidence;
+      const graceProfile = evidence.gracePolicy?.profileId
+        ? profileKeys.get(evidence.gracePolicy.profileId)?.profileKey ?? 'UNATTRIBUTED'
+        : null;
+      return {
+        sourceOrderId: item.sourceOrderId,
+        sourceDeliveryId: item.sourceDeliveryId,
+        scopeType: item.scopeType,
+        profileKey: profileKeys.get(item.creditProfileId)?.profileKey ?? 'UNATTRIBUTED',
+        stage: item.stage,
+        businessDate: item.businessDate,
+        decision: item.decision,
+        reasonCodes: item.reasonCodes,
+        specialApprovalRequiredAtCheck: item.specialApprovalRequiredAtCheck,
+        hasApprovalAssociation: item.hasApprovalAssociation,
+        evidence: {
+          evidenceVersion: evidence.evidenceVersion,
+          basis: evidence.basis ?? null,
+          classificationBusinessDate: evidence.classificationBusinessDate ?? null,
+          status: evidence.status,
+          completeness: evidence.completeness,
+          reason: evidence.reason ?? null,
+          graceProfile,
+          graceDays: evidence.gracePolicy?.days ?? null,
+          graceSource: evidence.gracePolicy?.source ?? null,
+          observedOpenAmountCents: evidence.observedOpenAmountCents ?? null,
+          overdueOpenAmountCents: evidence.overdueOpenAmountCents ?? null,
+          sourceCount: evidence.sourceCount ?? null,
+          overdueSourceCount: evidence.overdueSourceCount ?? null,
+          unknownSourceCount: evidence.unknownSourceCount ?? null,
+        },
+      };
+    }).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  };
+
+  const before = databaseDigest(mysqlDb);
+  for (const category of ['OVER_LIMIT', 'OVERDUE', 'WARNING', 'BLOCK', 'SPECIAL_APPROVAL']) {
+    const mysql = await read(listCreditExceptions, mysqlDb, ADMIN, { category, limit: 200, offset: 0 });
+    const sqlite = await read(listCreditExceptions, sqliteDb, ADMIN, { category, limit: 200, offset: 0 });
+    assert.equal(mysql.statusCode, 200, category);
+    assert.equal(mysql.body.total, sqlite.body.total, `${category} filtered total parity`);
+    assert.equal(mysql.body.exceptions.length, Number(mysql.body.total), `${category} MySQL complete result set`);
+    assert.equal(sqlite.body.exceptions.length, Number(sqlite.body.total), `${category} SQLite complete result set`);
+    assert.ok(mysql.body.exceptions.every((item) => item.categories.includes(category)), category);
+    assert.ok(sqlite.body.exceptions.every((item) => item.categories.includes(category)), category);
+    assert.deepEqual(categoryBusinessView(mysqlDb, mysql), categoryBusinessView(sqliteDb, sqlite),
+      `${category} filtered logical business row parity`);
+  }
+  const unknown = await read(listCreditExceptions, mysqlDb, ADMIN, { limit: 200 });
+  assert.ok(unknown.body.exceptions.some((item) => item.overdueEvidence.reason === 'EVIDENCE_NOT_CAPTURED'));
+  const self = await read(listCreditExceptions, mysqlDb, SELF_ACTOR, { category: 'OVERDUE' });
+  const admin = await read(listCreditExceptions, mysqlDb, ADMIN, { category: 'OVERDUE' });
+  assert.ok(self.body.total <= admin.body.total, 'category must not widen the canonical read scope');
+  assert.equal(databaseDigest(mysqlDb), before, 'native MySQL category GETs must be zero-write');
 });
 
 // ---------------------------------------------------------------------------

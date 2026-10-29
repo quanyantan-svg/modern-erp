@@ -139,6 +139,11 @@ const FULL = [
   // and drives the real Credit writers, which is outside the FAST criterion of
   // a bounded, database-free regression.
   'server/sales-customer-wave11-a-credit-query.test.js',
+  // W11-A forward-only OVERDUE evidence amendment. Disposable SQLite proof
+  // for prospective immutable AR observation evidence, historical UNKNOWN,
+  // five-category server filtering, pagination/scope and replay preservation.
+  // It is not FAST because every case runs the production migration chain.
+  'server/sales-customer-wave11-a-overdue-evidence.test.js',
   // Wave 10 Gate B OQC quality-policy fixture contract. Deterministic
   // single-connection regression over the real Delivery HTTP route: the
   // canonical control-point writer installs the fixture fact, the production

@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { transaction } from '../db.js';
 import {
   ADMIN, CREDIT_OBJECT_TYPE, HISTORICAL, PROFILE_FROM, TODAY,
   invoke, read, seedWorld,
@@ -14,6 +15,7 @@ import { createCreditRule } from '../modules/credit-policy.js';
 import { createCreditProfile } from '../modules/credit-profile.js';
 import { postAdvanceReceipt } from '../modules/finance-unapplied-balance.js';
 import { getCreditExposure } from '../modules/credit-query.js';
+import { evaluateCredit } from '../modules/credit-check.js';
 import {
   seedWave10AcceptanceBase, wave10BusinessDate, wave10FutureBusinessDateFrom,
 } from './wave10-mysql-acceptance-fixture.js';
@@ -53,6 +55,70 @@ export function scopeOf(exposure, scopeType) {
 
 export function readExposure(db, actor, params = {}) {
   return read(getCreditExposure, db, actor, { stage: DEFAULT_EXPOSURE_STAGE, ...params });
+}
+
+export function shiftCreditDate(date, days) {
+  const probe = new Date(`${date}T00:00:00.000Z`);
+  probe.setUTCDate(probe.getUTCDate() + days);
+  return probe.toISOString().slice(0, 10);
+}
+
+export function seedObservedReceivable(db, {
+  id = 'ar-w11-overdue',
+  customerId = SELF_CUSTOMER,
+  orderId = `so-${SELF_CUSTOMER}`,
+  deliveryId = 'sd-w11-overdue',
+  amountCents = 100000,
+  openAmountCents = amountCents,
+  dueDate = shiftCreditDate(TODAY, -1),
+  businessDate = TODAY,
+} = {}) {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT OR IGNORE INTO warehouses(id,code,name,address,manager,active,created_at,updated_at)
+    VALUES('wh-w11-overdue','WH-W11-OVERDUE','W11 Overdue','','',1,?,?)`).run(now, now);
+  db.prepare(`INSERT INTO sales_deliveries(id,delivery_no,sales_order_id,customer_id,warehouse_id,handler_id,total_cents,
+      status,delivery_date,remark,creator_id,created_at,updated_at,confirmed_at,confirmed_by,billing_mode,
+      delivery_notice_id,source_mode)
+    VALUES(?,?,?,?,'wh-w11-overdue',?,?,'CONFIRMED',?,'',?,?,?, ?,?,'DIRECT_BILL',NULL,'DIRECT_ORDER')`)
+    .run(deliveryId, deliveryId.toUpperCase(), orderId, customerId, ADMIN.id, amountCents,
+      businessDate, ADMIN.id, now, now, `${businessDate}T09:00:00.000Z`, ADMIN.id);
+  db.prepare(`INSERT INTO account_receivables(id,voucher_no,customer_id,source_type,source_id,amount_cents,paid_cents,
+      write_off_cents,status,due_date,creator_id,created_at,business_date,updated_at,open_amount_cents,item_class,
+      recognition_mode,item_kind,conversion_state)
+    VALUES(?,?,?,?,?,?,0,0,?,?,?,?,?,?,?,?,?,?,'OPEN')`)
+    .run(id, id.toUpperCase(), customerId, 'SALES_DELIVERY', deliveryId, amountCents, 'PENDING', dueDate,
+      ADMIN.id, now, businessDate, now, openAmountCents, 'SOURCE', 'DIRECT_BUSINESS_OPEN_ITEM', 'FINAL');
+  return { id, deliveryId, orderId };
+}
+
+export function runObservedCreditCheck(db, {
+  businessDate = TODAY,
+  customerId = SELF_CUSTOMER,
+  salespersonId = SELF_SALESPERSON,
+  sourceId = `so-${SELF_CUSTOMER}`,
+  authorizationContext = `overdue:${businessDate}`,
+  proposedDeltaCents = 0,
+} = {}) {
+  let outcome;
+  const evaluate = () => {
+    outcome = evaluateCredit(db, {
+      customerId,
+      salespersonId,
+      creditObjectType: CREDIT_OBJECT_TYPE,
+      creditObjectId: `CREDIT-${customerId.toUpperCase()}`,
+      stage: DEFAULT_EXPOSURE_STAGE,
+      businessDate,
+      proposedDeltaCents,
+      recognitionMode: 'DIRECT_BUSINESS_OPEN_ITEM',
+      sourceRef: { sourceType: 'SALES_ORDER', sourceId },
+      actorId: ADMIN.id,
+      authorizationContext,
+      consumeApprovals: false,
+    });
+  };
+  if (db.isTransaction) evaluate();
+  else transaction(db, evaluate);
+  return outcome;
 }
 
 export async function writeAdvanceReceipt(db, { amountCents, businessDate = TODAY, key }) {

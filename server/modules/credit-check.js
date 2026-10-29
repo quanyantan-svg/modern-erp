@@ -56,6 +56,8 @@ const DEFAULT_CREDIT_OBJECT_TYPE = 'CUSTOMER';
 
 const AGGREGATE_SCOPE = 'CUSTOMER_AGGREGATE';
 const SALESPERSON_SCOPE = 'SALESPERSON_SUB_LIMIT';
+const OVERDUE_EVIDENCE_VERSION = 'CREDIT_OVERDUE_EVIDENCE_V1';
+const OVERDUE_EVIDENCE_BASIS = 'CANONICAL_AR_OBSERVED_AT_CHECK';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -127,6 +129,41 @@ function readOverdueDayPolicy(db, profile, businessDate) {
     if (Number.isSafeInteger(days) && days >= 0) return days;
   }
   return null;
+}
+
+function resolveOverdueGracePolicy(db, scope, businessDate) {
+  if (scope.scopeType === AGGREGATE_SCOPE) {
+    return { source: 'DUE_DATE_CONTRACT', days: 0, profileId: null, parameterCode: null };
+  }
+  const profileValue = String(scope.profile?.overdue_day_policy ?? '').trim();
+  if (profileValue !== '') {
+    const days = Number(profileValue);
+    if (Number.isSafeInteger(days) && days >= 0) {
+      return { source: 'CREDIT_PROFILE', days, profileId: scope.profile.id, parameterCode: null };
+    }
+  }
+  // Evidence capture must never introduce a new decision failure. Ambiguous or
+  // malformed policy history therefore makes the factual classification
+  // UNKNOWN instead of throwing from the existing decision path.
+  const rows = db.prepare(`SELECT id,value_int FROM credit_parameters
+    WHERE code=? AND status='ACTIVE' AND effective_from<=?
+      AND (effective_to IS NULL OR effective_to>=?)
+    ORDER BY effective_from DESC,id`).all(
+    CREDIT_PARAMETERS.SUB_LIMIT_OVERDUE_DAYS, businessDate, businessDate,
+  );
+  if (rows.length === 1) {
+    const days = Number(rows[0].value_int);
+    if (Number.isSafeInteger(days) && days >= 0) {
+      return {
+        source: 'CREDIT_PARAMETER', days, profileId: scope.profile?.id || null,
+        parameterCode: CREDIT_PARAMETERS.SUB_LIMIT_OVERDUE_DAYS,
+      };
+    }
+  }
+  return {
+    source: 'UNDEFINED', days: null, profileId: scope.profile?.id || null,
+    parameterCode: CREDIT_PARAMETERS.SUB_LIMIT_OVERDUE_DAYS,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -239,7 +276,14 @@ function readOpenReceivables(db, customerId, businessDate) {
   // whose open amount is already zero. A settled row still proves that the
   // obligation has left the SO-commitment and delivered stages, and it must
   // never be counted twice.
-  return db.prepare(`SELECT id, customer_id, source_type, source_id, amount_cents, open_amount_cents, recognition_mode,
+  // Read cents as decimal text so both engines expose out-of-safe-range legacy
+  // values to the evidence classifier instead of SQLite throwing before the
+  // approved UNKNOWN contract can be applied. All decision/evidence consumers
+  // below still perform their existing explicit Number conversion.
+  const amountProjection = db?.dialect === 'mysql'
+    ? 'CAST(amount_cents AS CHAR) amount_cents, CAST(open_amount_cents AS CHAR) open_amount_cents'
+    : 'CAST(amount_cents AS TEXT) amount_cents, CAST(open_amount_cents AS TEXT) open_amount_cents';
+  return db.prepare(`SELECT id, customer_id, source_type, source_id, ${amountProjection}, recognition_mode,
       item_kind, item_class, due_date FROM account_receivables
     WHERE customer_id=? AND conversion_state='OPEN' AND SUBSTR(business_date,1,10)<=?
     ORDER BY id`).all(customerId, businessDate);
@@ -383,7 +427,9 @@ function resolveReceivableAttribution(db, receivable) {
 // §36.3.2 / §36.3.2.2 — the transition-aware exposure projection. Every
 // obligation occupies exactly one stage, so the same economic amount is never
 // counted twice.
-export function computeCreditExposure(db, { customerId, salespersonId = null, businessDate }) {
+export function computeCreditExposure(db, {
+  customerId, salespersonId = null, businessDate, captureOverdueObservation = false,
+}) {
   const orders = readApprovedOrders(db, customerId, businessDate);
   const deliveries = readConfirmedDeliveries(db, customerId, businessDate);
   const receivables = readOpenReceivables(db, customerId, businessDate);
@@ -396,6 +442,7 @@ export function computeCreditExposure(db, { customerId, salespersonId = null, bu
 
   const arByOrder = new Map();
   const arBySalesperson = new Map();
+  const overdueReceivableObservations = [];
   let arOpenTotal = 0;
   let ambiguousOpenCents = 0;
   for (const receivable of receivables) {
@@ -412,10 +459,33 @@ export function computeCreditExposure(db, { customerId, salespersonId = null, bu
       entry.open += open;
       arByOrder.set(transition.orderId, entry);
     }
-    if (open <= 0) continue;
+    if (open <= 0) {
+      if (captureOverdueObservation) {
+        overdueReceivableObservations.push({
+          openItemId: receivable.id,
+          dueDate: receivable.due_date ?? null,
+          observedOpenAmountCents: open,
+          attribution: { kind: 'ZERO_OR_NEGATIVE' },
+        });
+      }
+      continue;
+    }
     arOpenTotal += open;
     const attribution = resolveReceivableAttribution(db, receivable);
     if (attribution.kind === 'PROVABLY_ALLOCATED') {
+      if (captureOverdueObservation) {
+        overdueReceivableObservations.push({
+          openItemId: receivable.id,
+          dueDate: receivable.due_date ?? null,
+          observedOpenAmountCents: open,
+          attribution: {
+            kind: attribution.kind,
+            allocations: attribution.allocations
+              .map((item) => ({ salespersonId: item.salespersonId, amountCents: Number(item.amountCents) }))
+              .sort((left, right) => left.salespersonId.localeCompare(right.salespersonId)),
+          },
+        });
+      }
       for (const allocation of attribution.allocations) {
         arBySalesperson.set(
           allocation.salespersonId,
@@ -425,8 +495,24 @@ export function computeCreditExposure(db, { customerId, salespersonId = null, bu
       continue;
     }
     if (attribution.kind !== 'PROVABLY_ATTRIBUTABLE') {
+      if (captureOverdueObservation) {
+        overdueReceivableObservations.push({
+          openItemId: receivable.id,
+          dueDate: receivable.due_date ?? null,
+          observedOpenAmountCents: open,
+          attribution: { kind: 'UNKNOWN', reason: attribution.reason || 'UNPROVEN_ATTRIBUTION' },
+        });
+      }
       ambiguousOpenCents += open;
       continue;
+    }
+    if (captureOverdueObservation) {
+      overdueReceivableObservations.push({
+        openItemId: receivable.id,
+        dueDate: receivable.due_date ?? null,
+        observedOpenAmountCents: open,
+        attribution: { kind: attribution.kind, salespersonId: attribution.salespersonId },
+      });
     }
     arBySalesperson.set(attribution.salespersonId, (arBySalesperson.get(attribution.salespersonId) || 0) + open);
   }
@@ -491,7 +577,138 @@ export function computeCreditExposure(db, { customerId, salespersonId = null, bu
     orderCount: orders.length,
     deliveryCount: deliveries.length,
     receivableCount: receivables.length,
+    ...(captureOverdueObservation ? {
+      overdueObservation: {
+        receivables: overdueReceivableObservations.sort((left, right) => left.openItemId.localeCompare(right.openItemId)),
+      },
+    } : {}),
   };
+}
+
+function utcCalendarDay(value) {
+  const text = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const milliseconds = Date.parse(`${text}T00:00:00.000Z`);
+  if (!Number.isFinite(milliseconds) || new Date(milliseconds).toISOString().slice(0, 10) !== text) return null;
+  return milliseconds / 86400000;
+}
+
+function buildOverdueEvidence(db, {
+  scope, businessDate, observedAt, salespersonId, overdueObservation,
+}) {
+  const gracePolicy = resolveOverdueGracePolicy(db, scope, businessDate);
+  const capturedBusinessDate = String(observedAt || '').slice(0, 10);
+  // Current open_amount_cents proves the target date only for the UTC calendar
+  // day on which it was observed. Backdated/future checks retain their normal
+  // Credit decision but their overdue classification is explicitly UNKNOWN.
+  const asOfProven = businessDate === capturedBusinessDate;
+  const businessDay = utcCalendarDay(businessDate);
+  const sourceFacts = [];
+  let observedOpenAmountCents = 0;
+  let overdueOpenAmountCents = 0;
+  let overdueSourceCount = 0;
+  let unknownSourceCount = 0;
+  let sourceCount = 0;
+  let amountUnsafe = false;
+
+  for (const observed of overdueObservation?.receivables || []) {
+    const open = Number(observed.observedOpenAmountCents);
+    let relevantOpenAmountCents;
+    let attribution;
+    if (scope.scopeType === AGGREGATE_SCOPE) {
+      relevantOpenAmountCents = open;
+      attribution = 'AGGREGATE';
+    } else if (observed.attribution?.kind === 'PROVABLY_ATTRIBUTABLE') {
+      if (observed.attribution.salespersonId !== salespersonId) continue;
+      relevantOpenAmountCents = open;
+      attribution = 'PROVABLY_ATTRIBUTABLE';
+    } else if (observed.attribution?.kind === 'PROVABLY_ALLOCATED') {
+      const allocation = observed.attribution.allocations.find((item) => item.salespersonId === salespersonId);
+      if (!allocation) continue;
+      relevantOpenAmountCents = Number(allocation.amountCents);
+      attribution = 'PROVABLY_ALLOCATED';
+    } else if (open > 0) {
+      relevantOpenAmountCents = null;
+      attribution = 'UNKNOWN';
+    } else {
+      relevantOpenAmountCents = open;
+      attribution = 'UNKNOWN';
+    }
+
+    let classification = 'NOT_OVERDUE';
+    let daysPastDue = null;
+    const amountSafe = Number.isSafeInteger(open) && open >= 0
+      && (relevantOpenAmountCents == null
+        || (Number.isSafeInteger(relevantOpenAmountCents) && relevantOpenAmountCents >= 0));
+    const dueDay = utcCalendarDay(observed.dueDate);
+    const positiveOrUnknown = relevantOpenAmountCents == null || relevantOpenAmountCents > 0;
+    if (positiveOrUnknown || !amountSafe) sourceCount += 1;
+
+    if (!amountSafe) {
+      classification = 'UNKNOWN';
+    } else if (!asOfProven || businessDay == null || dueDay == null
+        || gracePolicy.days == null || relevantOpenAmountCents == null) {
+      classification = positiveOrUnknown ? 'UNKNOWN' : 'NOT_OVERDUE';
+    } else if (relevantOpenAmountCents > 0) {
+      daysPastDue = Math.max(0, businessDay - dueDay);
+      classification = daysPastDue > gracePolicy.days ? 'OVERDUE' : 'NOT_OVERDUE';
+    }
+
+    if (Number.isSafeInteger(relevantOpenAmountCents) && relevantOpenAmountCents > 0) {
+      const nextObserved = observedOpenAmountCents + relevantOpenAmountCents;
+      if (Number.isSafeInteger(nextObserved)) observedOpenAmountCents = nextObserved;
+      else { amountUnsafe = true; classification = 'UNKNOWN'; }
+    }
+    if (classification === 'OVERDUE') {
+      const nextOverdue = overdueOpenAmountCents + relevantOpenAmountCents;
+      if (Number.isSafeInteger(nextOverdue)) {
+        overdueOpenAmountCents = nextOverdue;
+        overdueSourceCount += 1;
+      } else {
+        amountUnsafe = true;
+        classification = 'UNKNOWN';
+        unknownSourceCount += 1;
+      }
+    } else if (classification === 'UNKNOWN') {
+      unknownSourceCount += 1;
+    }
+    sourceFacts.push({
+      openItemId: observed.openItemId,
+      dueDate: utcCalendarDay(observed.dueDate) == null ? null : observed.dueDate,
+      observedOpenAmountCents: Number.isSafeInteger(open) ? open : null,
+      relevantOpenAmountCents: Number.isSafeInteger(relevantOpenAmountCents) ? relevantOpenAmountCents : null,
+      attribution,
+      daysPastDue,
+      classification,
+    });
+  }
+
+  if (amountUnsafe) {
+    observedOpenAmountCents = 0;
+    overdueOpenAmountCents = 0;
+  }
+  const completeness = unknownSourceCount === 0 && !amountUnsafe && asOfProven && gracePolicy.days != null
+    ? 'COMPLETE' : 'PARTIAL';
+  const status = overdueOpenAmountCents > 0
+    ? 'PROVEN_OVERDUE'
+    : (completeness === 'COMPLETE' ? 'PROVEN_NOT_OVERDUE' : 'UNKNOWN');
+  const evidence = {
+    evidenceVersion: OVERDUE_EVIDENCE_VERSION,
+    basis: OVERDUE_EVIDENCE_BASIS,
+    classificationBusinessDate: businessDate,
+    capturedAt: observedAt,
+    scopeType: scope.scopeType,
+    status,
+    completeness,
+    gracePolicy,
+    observedOpenAmountCents,
+    overdueOpenAmountCents,
+    sourceCount,
+    overdueSourceCount,
+    unknownSourceCount,
+    sourceFacts: sourceFacts.sort((left, right) => left.openItemId.localeCompare(right.openItemId)),
+  };
+  return { ...evidence, evidenceDigest: sha256(canonicalJson(evidence)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,7 +1227,10 @@ export function evaluateCredit(db, input) {
   }
 
   // ---- step 6: exposure, evaluation and the policy snapshot --------------
-  const exposure = computeCreditExposure(db, { customerId, salespersonId, businessDate });
+  const observedAt = new Date().toISOString();
+  const exposure = computeCreditExposure(db, {
+    customerId, salespersonId, businessDate, captureOverdueObservation: true,
+  });
   // §36.3.2 — the eligible prepayment is an aggregate-only offset. It is read
   // through the frozen Finance adapter beneath the L1 parent locks that the
   // caller already holds (or that this engine took for a standalone check).
@@ -1107,6 +1327,10 @@ export function evaluateCredit(db, input) {
       releasable,
       reasonCodes,
       components,
+      overdueEvidence: buildOverdueEvidence(db, {
+        scope, businessDate, observedAt, salespersonId,
+        overdueObservation: exposure.overdueObservation,
+      }),
     });
   }
 
@@ -1267,7 +1491,8 @@ export function evaluateCredit(db, input) {
         components: result.components,
         exposureDigest,
         consumedSpecialApprovalId: scopeConsumedApprovalId,
-      }), eligiblePrepaymentIdentity, new Date().toISOString(), actorId,
+        overdueEvidence: result.overdueEvidence,
+      }), eligiblePrepaymentIdentity, observedAt, actorId,
     );
   }
 

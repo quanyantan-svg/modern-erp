@@ -35229,3 +35229,689 @@ W11-B / W11-C。生产发布仍未获授权。
 启动 W11-A U3 的独立授权流程。
 
 **Status: `W11_A_U2_FINAL_ACCEPTANCE_PASS — FROZEN`.**
+
+---
+
+### 37.54.26 W11-A OVERDUE Evidence Foundation — Bounded Design (2026-10-29)
+
+#### 37.54.26.1 Phase identity and constraints
+
+This design implements the approved Requirement identity
+`W11_A_OVERDUE_EVIDENCE_FOUNDATION` and closes the design portion of
+`W11_A_U3_0_POST_FREEZE_SC102_CONTRACT_GAP`. It is a forward-only amendment proposal, not an
+implementation and not a U2 re-freeze.
+
+Preserved without semantic change:
+
+- W11-SEC, W11-A U1 and W11-A U2 historical records and Git objects;
+- CSP1/CSP2, CCHK1/CCHK2 inputs and digests;
+- Credit decisions, limits, exposure amounts, policy/profile snapshot identity;
+- Special Approval and ONE_TIME consumption;
+- Finance AR writers, effect tables, balance equation and reversal behavior;
+- five-level Credit Read Mode and non-enumerable detail 404.
+
+No new AR table, Exception ledger, permission, route, decision or Finance lock order is introduced.
+
+#### 37.54.26.2 Canonical fact read and observation boundary
+
+`computeCreditExposure()` remains the sole Credit projection owner. Its existing
+`readOpenReceivables()` statement already reads the authoritative fields needed by the evidence:
+
+```text
+id, customer_id, source_type, source_id, amount_cents, open_amount_cents,
+recognition_mode, item_kind, item_class, due_date, business_date,
+conversion_state (in the WHERE predicate)
+```
+
+The implementation extends the internal projection result; it must not issue a second AR query for
+overdue classification. While the existing receivable loop derives `arOpenCents` and salesperson
+attribution, it also constructs a deterministic, `id ASC` list of evidence inputs from those exact row
+objects and the exact attribution result.
+
+The read statement is the observation boundary. `observedAt` is generated once immediately before the
+canonical exposure read and is reused as every new scope Result's `evaluated_at` and evidence
+`capturedAt`. A concurrent Finance mutation committed after that SELECT does not rewrite the observed
+fact; a later Check reads a new projection. This amendment takes no new Finance lock and does not claim
+an arbitrary historical transaction snapshot.
+
+The evidence basis is named `CANONICAL_AR_OBSERVED_AT_CHECK`. It means:
+
+```text
+classification date = requested Credit businessDate
+balance              = canonical current open_amount_cents observed by that Check
+capture time         = observedAt
+historical claim     = only the immutable observation, never reconstructed as-of Finance state
+```
+
+#### 37.54.26.3 Evidence calculation
+
+Add one pure internal builder, conceptually:
+
+```text
+buildOverdueEvidence({
+  scopeType, profile, businessDate, observedAt, salespersonId,
+  receivableEvidenceInputs
+}) -> overdueEvidence
+```
+
+It performs no SQL and no write. Calendar-day arithmetic uses UTC date-only values. Invalid dates,
+unsafe cents or unprovable attribution produce UNKNOWN facts; they are never coerced.
+
+Grace resolution:
+
+```text
+CUSTOMER_AGGREGATE:
+  graceDays = 0
+  policySource = DUE_DATE_CONTRACT
+
+SALESPERSON_SUB_LIMIT:
+  first valid non-negative safe integer from:
+    1. effective profile.overdue_day_policy
+    2. effective CREDIT_SUB_LIMIT_OVERDUE_DAYS parameter
+  otherwise policySource = UNDEFINED and negative proof is UNKNOWN
+```
+
+Per source:
+
+```text
+daysPastDue = max(0, UTC-day-difference(businessDate, dueDate))
+OVERDUE     = relevantOpenCents > 0 AND daysPastDue > graceDays
+NOT_DUE     = relevantOpenCents > 0 AND daysPastDue <= graceDays
+UNKNOWN     = missing/invalid due date, unsafe amount, undefined required grace,
+              or unprovable Sub-Limit attribution
+```
+
+Aggregate `relevantOpenCents` is the row's observed open amount. Sub-Limit uses the existing
+`PROVABLY_ATTRIBUTABLE` amount or the existing conserved `PROVABLY_ALLOCATED` amount for that
+salesperson. No proportional remainder allocation is added. Ambiguous positive AR is recorded as an
+unknown source for the Sub-Limit and remains governed by the existing `UNPROVEN_ATTRIBUTION` decision
+branch.
+
+Overall evidence status:
+
+```text
+if overdueOpenAmountCents > 0                       -> PROVEN_OVERDUE
+else if every relevant positive source is provable -> PROVEN_NOT_OVERDUE
+else                                                -> UNKNOWN
+```
+
+`completeness` is `COMPLETE` only when every relevant positive source is provable; otherwise
+`PARTIAL`. Thus `PROVEN_OVERDUE + PARTIAL` is valid: existence is proven but the amount is a lower
+bound and the UI must label it as incomplete.
+
+#### 37.54.26.4 Immutable payload design; no Schema migration
+
+Use the existing immutable `credit_check_results.component_breakdown_json`. Keep its base
+`contractVersion: CREDIT_EXPOSURE_BREAKDOWN_WAVE10_V1` and append one sibling property:
+
+```json
+{
+  "overdueEvidence": {
+    "evidenceVersion": "CREDIT_OVERDUE_EVIDENCE_V1",
+    "basis": "CANONICAL_AR_OBSERVED_AT_CHECK",
+    "classificationBusinessDate": "YYYY-MM-DD",
+    "capturedAt": "ISO-8601",
+    "scopeType": "CUSTOMER_AGGREGATE | SALESPERSON_SUB_LIMIT",
+    "status": "PROVEN_OVERDUE | PROVEN_NOT_OVERDUE | UNKNOWN",
+    "completeness": "COMPLETE | PARTIAL",
+    "gracePolicy": {
+      "source": "DUE_DATE_CONTRACT | CREDIT_PROFILE | CREDIT_PARAMETER | UNDEFINED",
+      "days": 0,
+      "profileId": "nullable",
+      "parameterCode": "nullable"
+    },
+    "observedOpenAmountCents": 0,
+    "overdueOpenAmountCents": 0,
+    "sourceCount": 0,
+    "overdueSourceCount": 0,
+    "unknownSourceCount": 0,
+    "sourceFacts": [
+      {
+        "openItemId": "...",
+        "dueDate": "YYYY-MM-DD|null",
+        "observedOpenAmountCents": 0,
+        "relevantOpenAmountCents": 0,
+        "attribution": "AGGREGATE|PROVABLY_ATTRIBUTABLE|PROVABLY_ALLOCATED|UNKNOWN",
+        "daysPastDue": "integer|null",
+        "classification": "OVERDUE|NOT_OVERDUE|UNKNOWN"
+      }
+    ],
+    "evidenceDigest": "sha256-lower-hex"
+  }
+}
+```
+
+`sourceFacts` is sorted by `openItemId`, then attribution identity. It contains only canonical Finance
+identities and observed amounts; no customer name, order number or guessed identity is stored.
+`evidenceDigest` is SHA-256 of the canonical object excluding the digest field. It is payload-integrity
+evidence only and is deliberately excluded from CSP2, CCHK2, `exposureDigest`, decision and replay
+identity.
+
+No new physical column or migration is required. Old payloads have no `overdueEvidence` path and are
+presented as `UNKNOWN`. This is the minimum additive storage design and avoids duplicating the same
+fact into a new column or table.
+
+#### 37.54.26.5 Transaction, replay and atomicity
+
+The builder executes inside the existing caller-owned Credit Check transaction. The evidence object is
+serialized in the same `INSERT credit_check_results` statement as the decision and existing breakdown.
+Insert failure rolls back the complete business transaction; there is no evidence-only row or partial
+write.
+
+Exact replay behavior:
+
+- an existing Result is returned unchanged; its stored evidence is never recomputed or patched;
+- a pre-amendment Result remains UNKNOWN;
+- `storedBreakdownMatches()` continues comparing the frozen Wave 10 decision/exposure members and
+  ignores the additive evidence sibling;
+- no evidence member enters CCHK1/CCHK2, CSP1/CSP2, rule/profile hashes or ONE_TIME identity;
+- a new fact set that changes open exposure already changes the existing `exposureDigest` and follows
+  the existing new-Check path.
+
+The production code has no ordinary writer that mutates `account_receivables.due_date`. If a future
+authorized Finance design permits such mutation, it must separately decide whether due-date identity
+enters Credit replay identity; this amendment does not silently add that behavior.
+
+#### 37.54.26.6 Five-category predicate model
+
+Add optional single-valued `category` to the existing `GET /api/credit/exceptions`. Accepted values:
+
+```text
+OVER_LIMIT | OVERDUE | WARNING | BLOCK | SPECIAL_APPROVAL
+```
+
+Validation is case-normalized and fail-closed; any other non-empty value returns HTTP 400
+`CREDIT_QUERY_INVALID_INPUT`.
+
+The category expression is appended to `buildExceptionQuery()` after the canonical Credit scope
+predicate and before the shared `{ where, args }` is returned. Existing COUNT and LIST therefore use
+the identical authorized predicate before pagination.
+
+Exact SQLite predicates:
+
+```sql
+-- OVER_LIMIT
+EXISTS (
+  SELECT 1 FROM json_each(r.reason_codes_json) rc
+  WHERE rc.value = 'OVER_LIMIT'
+)
+
+-- OVERDUE
+json_extract(r.component_breakdown_json,'$.overdueEvidence.evidenceVersion')
+  = 'CREDIT_OVERDUE_EVIDENCE_V1'
+AND json_extract(r.component_breakdown_json,'$.overdueEvidence.status')
+  = 'PROVEN_OVERDUE'
+AND CAST(json_extract(
+  r.component_breakdown_json,'$.overdueEvidence.overdueOpenAmountCents'
+) AS INTEGER) > 0
+
+-- WARNING / BLOCK
+r.decision = 'WARNING'
+r.decision = 'BLOCK'
+
+-- SPECIAL_APPROVAL
+(r.decision = 'SPECIAL_APPROVAL_REQUIRED'
+ OR EXISTS (
+   SELECT 1 FROM credit_special_approval ca
+   WHERE ca.source_credit_check_result_id = r.id
+ ))
+```
+
+Exact MySQL predicates:
+
+```sql
+-- OVER_LIMIT
+JSON_CONTAINS(r.reason_codes_json, JSON_QUOTE('OVER_LIMIT'), '$') = 1
+
+-- OVERDUE
+JSON_UNQUOTE(JSON_EXTRACT(
+  r.component_breakdown_json,'$.overdueEvidence.evidenceVersion'
+)) = 'CREDIT_OVERDUE_EVIDENCE_V1'
+AND JSON_UNQUOTE(JSON_EXTRACT(
+  r.component_breakdown_json,'$.overdueEvidence.status'
+)) = 'PROVEN_OVERDUE'
+AND CAST(JSON_UNQUOTE(JSON_EXTRACT(
+  r.component_breakdown_json,'$.overdueEvidence.overdueOpenAmountCents'
+)) AS SIGNED) > 0
+
+-- WARNING / BLOCK / SPECIAL_APPROVAL
+-- identical relational predicates to SQLite
+```
+
+Values must be bound parameters in implementation; literals above specify semantics. No `LIKE`, raw
+substring or client-side post-pagination filter is allowed. Missing JSON paths evaluate non-matching,
+which gives old UNKNOWN rows correct prospective compatibility.
+
+#### 37.54.26.7 DTO and U3 consumer contract
+
+`exceptionItem()` adds:
+
+```text
+categories: exact persisted categories in stable order
+overdueEvidence: parsed evidence or {
+  evidenceVersion: null,
+  status: 'UNKNOWN',
+  completeness: 'PARTIAL',
+  reason: 'EVIDENCE_NOT_CAPTURED'
+}
+specialApprovalRequiredAtCheck: decision === SPECIAL_APPROVAL_REQUIRED
+hasApprovalAssociation: approval != null
+```
+
+The stable category order is `OVER_LIMIT, OVERDUE, WARNING, BLOCK, SPECIAL_APPROVAL`. DTO derivation
+uses the same exact facts as the SQL predicates. A malformed recognized evidence version fails closed
+with `CREDIT_OVERDUE_EVIDENCE_INVALID`; it is not silently interpreted as not overdue.
+
+U3 may display and filter these stored historical categories. It must label the evidence as captured
+historical Check evidence and must not display newly computed `/api/credit/exposure` as the historical
+snapshot. UNKNOWN remains visible on detail and never becomes FALSE.
+
+#### 37.54.26.8 Permission and privacy
+
+The existing `creditScopePredicate()` remains the first predicate over `credit_check_results`.
+Category clauses only narrow that set. The category COUNT cannot enumerate invisible rows. The Detail
+handler first resolves the same authorized Result; only then may its stored Finance identities be
+serialized. No `FINANCE_AR_VIEW` permission is added: the evidence is part of an already authorized
+Credit Result, contains only minimum identities/amounts, and exposes no broader live Finance query.
+
+#### 37.54.26.9 Amendment identity and frozen-file protection
+
+Future implementation identity:
+
+`W11_A_OVERDUE_EVIDENCE_FORWARD_ONLY_AMENDMENT`
+
+Protected Before SHA-256 values at this Design baseline:
+
+| File | Before SHA-256 | Planned disposition |
+|---|---|---|
+| `server/modules/credit-check.js` | `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc` | bounded amendment |
+| `server/modules/credit-query.js` | `10a10e079818cb0edc406758514f5d7a16bfcd536e50e0e888a5152de988b684` | bounded amendment |
+| `server/test-utils/wave11-a-credit-query-fixture.js` | `e836163df10c54448a70650d85a8b4653c48e9e5dbe17691c5e666933acc8aa5` | bounded fixture extension |
+| `server/mysql-sales-customer-wave11-a-credit-query.integration.js` | `d38c4f0028ccd522a1ac7b5c303e54d5602ca64afbda9d36518d70f424096a9f` | bounded MySQL evidence extension |
+| `scripts/testing/test-suites.js` | `a86d25a2df40c49b19e1623174b4f3f19ceb17162450179ef852ab2d74edb2db` | register one new FULL test only if required |
+
+The following frozen regressions are not planned for editing and must remain byte-identical:
+
+| File | Frozen comparison SHA-256 |
+|---|---|
+| `server/sales-customer-wave10-credit-check.test.js` | `b280cb6c758a49b02f60a2fec81c8ea1ec6ff61e641dc96ff571225f42c304af` |
+| `server/sales-customer-wave11-a-credit-query.test.js` | `ab6b23e26152b52171adb7f5b28bcdb4ac28572d3bf38af83eed8f9251c45f8c` |
+
+Implementation Closure must record every After SHA-256. A changed frozen comparison file is an
+unauthorized scope breach unless the user separately approves it. Historical Freeze SHA values remain
+historical and are never overwritten by the new After values.
+
+#### 37.54.26.10 Exact implementation whitelist
+
+The future U3-0 amendment is limited to:
+
+```text
+M server/modules/credit-check.js
+M server/modules/credit-query.js
+M server/test-utils/wave11-a-credit-query-fixture.js
+A server/sales-customer-wave11-a-overdue-evidence.test.js
+M server/mysql-sales-customer-wave11-a-credit-query.integration.js
+M scripts/testing/test-suites.js              only to classify the new test in FULL
+M document.md                                 implementation/acceptance append only
+M solution.md                                 implementation/acceptance append only
+M log/<implementation-date>.md                append only
+```
+
+Explicitly excluded:
+
+- `server/app.js` (the endpoint already exists);
+- every migration and schema file;
+- Finance production modules and Finance effect/due-schedule tables;
+- `package.json`, version, tag and release files;
+- U3 route/page/UI files;
+- the two frozen comparison test files above.
+
+If implementation proves that a migration, Finance writer change, CCHK/CSP identity change or a file
+outside this list is necessary, it must HARD STOP and return to Requirement/Design.
+
+#### 37.54.26.11 Test and acceptance matrix
+
+Future tests are not currently executed and carry no PASS claim.
+
+| Area | Required evidence | Planned owner |
+|---|---|---|
+| Not due / boundary / overdue | due future, equal date, one day past, grace boundary + one | new SQLite foundation test |
+| Missing due / invalid amount / undefined grace | UNKNOWN; never false/overdue | new SQLite foundation test |
+| Zero / partial / full settlement | evidence uses observed canonical open cents | new SQLite test + existing Finance writers |
+| Reversal | later Check sees reopened canonical amount; old Result unchanged | new SQLite test |
+| Multiple AR | exact sum, stable identities/digest, no duplicate | new SQLite test |
+| Aggregate/Sub-Limit | aggregate all; sub-limit exact attribution; ambiguity UNKNOWN | new SQLite + MySQL cases |
+| Five categories | exact predicates and legal overlap | SQLite + protected MySQL extension |
+| Old rows | missing evidence path -> UNKNOWN; not returned by OVERDUE filter | SQLite + MySQL |
+| Pagination | filtered total/list identical, stable order, no client filtering | SQLite + MySQL |
+| Five read modes / 404 | no scope widening or enumeration | reuse U2 suite + new category cases |
+| GET zero-write | repeated list/detail category calls preserve DB digest | reuse U2 snapshot helper |
+| Atomic failure | failed Check creates no Result/evidence/audit residue | new SQLite test |
+| Replay | same Check reuses immutable evidence; CCHK2/CSP2 unchanged | new test + frozen Wave 10 suite |
+| ONE_TIME | consumption and replay unchanged | frozen U2 regression + protected MySQL E3 when authorized |
+| Cross-engine JSON | identical category membership and DTO | SQLite/MySQL parity assertions |
+| Browser/U3 | UI consumes real Backend filter; mock is supplemental only | later U3-5, not this amendment |
+
+Required gates after a separately authorized implementation:
+
+```text
+focused new SQLite suite
+existing Wave 10 Credit Check suite
+existing W11-A U2 Credit Query suite
+pnpm test
+pnpm build
+git diff --check
+protected disposable MySQL W11-A gate with added parity cases
+```
+
+Heavy, other MySQL campaigns and browser evidence run only when their later stage is separately
+authorized. None is claimed by this Design.
+
+#### 37.54.26.12 Risks and explicit non-decisions
+
+- JSON category predicates are exact and portable through dialect-specific builders but are not
+  indexed. Correctness closes in this amendment; performance at very large history volume remains an
+  observable risk. An indexed/generated column requires separate evidence and authorization, not an
+  implicit migration.
+- The existing Credit exposure read does not lock AR rows. Evidence therefore proves the same
+  statement-observed fact used by the decision, not a new cross-domain serialization guarantee.
+- Header `due_date` is the current Credit/Finance fact. Mutable multi-date due schedules are excluded;
+  adopting schedule-level aging would be a separate Finance Requirement.
+- This amendment does not make overdue a decision input. Any future request to block/warn based on
+  overdue facts is a separate Credit policy change.
+- U3 route, selector, navigation and mobile page remain blocked until this Backend amendment receives
+  its own Implementation, Acceptance and Freeze authorization.
+
+#### 37.54.26.13 Design conclusion
+
+The forward-only evidence path is technically closed without Finance economic-write changes, Schema
+migration, historical backfill, CCHK/CSP changes or a second ledger. Requirement and Design evidence
+remain separate; this section records Design only.
+
+**Design status: `W11_A_OVERDUE_FOUNDATION_DESIGN_READY`.**
+
+HARD STOP. Implementation, tests, database operations, Git writes, U3 UI, Release and Deploy remain
+unauthorized.
+
+### 37.54.27 OVERDUE Foundation Implementation and T5 forward-chain exception record (2026-10-29)
+
+#### 37.54.27.1 Authorization and exact scope
+
+The owner separately authorized the bounded implementation and then, after the original T5 hard stop,
+authorized `W11_A_OVERDUE_T5_FORWARD_CHAIN_WHITELIST_AMENDMENT`. The latter adds exactly
+`scripts/sales-customer-wave11-a-primitives.test.js` to the prior nine-path implementation whitelist.
+No Schema, Migration, Finance production writer, UI, version, tag, release or deployment surface is
+included. The previous hard stop was caused by T5 still requiring the current `credit-check.js` to equal
+the U2 ONE_TIME digest after the approved prospective OVERDUE implementation had extended that same
+canonical owner.
+
+#### 37.54.27.2 Forward evidence chain
+
+T5 keeps all seven historical values and identities, and appends one static eighth value:
+
+1. W11-SEC credit-check: `3bf4eb5190f3c8f59c0d7446fe07cd0264992126cffaa8616c1ccbecd7e272f0`;
+2. W11-SEC credit-policy: `94f2df0a267722ba4d343315668dd82c2c3e5e723dde2363c785a5ecff6aa98b`;
+3. U1 credit-check: `eceb2f775476caa008769c9040077aaea87a3191e3eb886175cddef67f9e8384`;
+4. U1 credit-policy: `9088a222e58d85e24539500a65a9e2b97a347fb89b0e20544e0c4fc34924fea8`;
+5. V2 credit-check: `5c5a5a71aabaae01dc06d60305ca1886b608da0ad524f162a4447f22170e792b`;
+6. V2 credit-policy: `5fc76f39b3b82358593d5ea443faeedb6e828610b185be1a9ea235c15cbf96e7`;
+7. ONE_TIME credit-check: `1f11fbee91d9526b4604b5af9a16ecb38d5856dc77c3184d1ab1e478603029cc`;
+8. OVERDUE forward credit-check: `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`.
+
+The current source assertion compares LF-normalized content with the static
+`OVERDUE_EVIDENCE_FORWARD_CREDIT_CHECK_SHA256`; the V2 policy assertion and the distinct-link,
+Scope, hash-builder, fingerprint and single-resolver assertions remain active. T1-T4 and T6-T10 were
+not weakened, skipped or converted to dynamic expected values. The LF-normalized primitives test file
+changed from `c68d4707eaed7501d9f81e35a928755564ed5b2c97f5430fd708b67d7f73036b` to
+`d047f087cf365e41c61badf72cbdfd87cd53a8adedeb94bbbb7a368c24787488`.
+
+Independent `git show` reproduction confirmed the W11-SEC pair at `177a8ea`, the U1 pair at
+`ca9811a`, and the U2 ONE_TIME/policy pair at
+`e281f458836ad5c6b4a2900063ffb90141e8c6c1`. This is a forward amendment, not a rewrite or U2
+re-freeze.
+
+#### 37.54.27.3 Implemented E0 contract
+
+The implementation reuses the exact AR observation made by `computeCreditExposure()` and writes
+`CREDIT_OVERDUE_EVIDENCE_V1` into the same immutable Result payload. Evidence remains outside the
+Credit decision, CSP/CCHK and exposure digest. Exact replay returns the persisted payload; historical
+rows without evidence remain UNKNOWN; malformed recognized evidence fails closed; no backfill, second
+AR truth source or historical Result rewrite exists. Aggregate and Sub-Limit grace/attribution remain
+separate. The UTC date proof gate allows proof only when `classificationBusinessDate` equals the UTC
+date of `capturedAt`; backdated and future-date observations degrade to UNKNOWN. Invalid negative and
+out-of-safe-range cents are explicitly UNKNOWN. Cents are projected as decimal text per dialect before
+classification so SQLite cannot throw before that approved boundary is applied. Internal `sourceFacts`
+are removed from both public evidence and `recordedBreakdown`.
+
+SC102 implements the five exact, overlapping server categories through dialect-specific JSON
+predicates. COUNT and LIST share the same authorized predicate, UNKNOWN never matches OVERDUE, and all
+GET paths remain zero-write and preserve 404 non-enumeration.
+
+#### 37.54.27.4 Verification evidence and remaining boundary
+
+- syntax checks: PASS;
+- T5 plus OVERDUE focused run: 19/19 PASS (T1-T10 and E-01-E-09);
+- frozen combined U1/U2/W11-SEC/Wave10/OVERDUE run: 146/146 PASS;
+- FAST: 500/500 PASS, 37 suites;
+- FULL: 3030/3030 PASS, 359 suites, zero fail/skip/todo;
+- frontend build: PASS, 1965 modules transformed;
+- `git diff --check`: PASS;
+- M11/M12: present as enabled top-level protected-gate cases and syntax/static contract checked only.
+
+No real MySQL command was run: `MYSQL_OVERDUE_GATE_NOT_RUN`. Therefore engine parity, native MySQL JSON
+execution and protected cleanup remain the next separately authorized evidence boundary. No Acceptance,
+Freeze, Git write, U3 implementation or release is claimed here.
+
+**Implementation status: `W11_A_OVERDUE_FOUNDATION_IMPLEMENTED_READY_FOR_MYSQL`.**
+
+### 37.54.28 OVERDUE E3 M8/M9 bounded cross-engine comparison amendment (2026-10-29)
+
+#### 37.54.28.1 Authorization, evidence boundary and root cause
+
+The owner authorized only the M8/M9 comparison amendment in
+`server/mysql-sales-customer-wave11-a-credit-query.integration.js`, with optional shared-Fixture use
+only if necessary, plus append-only Design/Journal evidence. Production Credit modules, Schema,
+Migration, Gate/Runner, package, UI, frozen regression tests, real MySQL execution and Git writes were
+not authorized. The shared Fixture was not changed by this amendment.
+
+The user-supplied failed artifact is retained under identity
+`W11_A_OVERDUE_E3_1_FAIL_M8_M9`: `w11-a-overdue-e3-20261029-212733.tap.log`, 14 tests, 12 PASS,
+M8/M9 FAIL, M11/M12/T17/T18 PASS, no skip/cancel/todo, exit code 1 and final five-class cleanup zero.
+The raw TAP file was not accessible in the repository, the available Codex attachments or the searched
+project paths, so no unavailable diagnostic line is reconstructed or quoted.
+
+An independent two-SQLite reproduction used the production migration chain, the shared fixture and the
+original M8 full-field projection. Across 10 history rows it found 25 value differences whose distinct
+field suffixes were exactly:
+
+1. `overdueEvidence.capturedAt` — legitimate capture-time difference;
+2. `overdueEvidence.gracePolicy.profileId` — legitimate independent-database UUID difference;
+3. `overdueEvidence.evidenceDigest` — legitimate consequence because the canonical digest binds the
+   preceding engine-local facts.
+
+No Credit decision, reason code, amount, evidence classification, business date, scope, authorization,
+COUNT, order or pagination field differed. Any fourth field would have failed the reproduction instead
+of entering the amendment path.
+
+#### 37.54.28.2 Correct comparison contract
+
+`normalizeOverdueEvidence()` now proves each engine's evidence before producing a stable cross-engine
+projection. It reads the raw persisted Result payload, independently recomputes
+`contentDigest(unsignedEvidence)`, requires exact digest equality, and proves a protected overdue-amount
+mutation cannot satisfy that digest. The public DTO and `recordedBreakdown` must both equal the persisted
+payload with only private `sourceFacts` removed.
+
+`capturedAt` must be canonical ISO UTC, lie inside that engine's fixture capture window and remain the
+exact persisted/read value. The referenced Result Profile and grace Profile must exist in that engine,
+match the Customer, credit object and Aggregate/Sub-Limit scope, be ACTIVE/effective where applicable,
+and the grace Profile must be the Result's effective Profile. Only after these assertions pass are the
+three engine-local values projected to stable proof tokens/business keys. Every other business field is
+still deeply compared by M8/M9. M11's byte-for-byte replay assertion continues to prove that replay does
+not replace the timestamp, Profile identity or digest.
+
+M8 continues to compare ALL, DENY, CROSS_GROUP, AGGREGATE_ONLY and AGGREGATE_PLUS_SELF histories,
+including full business sequences and invisibility of unauthorized rows. M9 continues to compare full
+page items and authorized totals, prove no overlap/stable order, and require out-of-scope Detail to be
+indistinguishable from absent Detail. No status-only, total-only or length-only substitute was added.
+
+#### 37.54.28.3 Verification and frozen-chain preservation
+
+- syntax/import: PASS;
+- OVERDUE SQLite E-01–E-09: 9/9 PASS;
+- U1 T1–T10: 10/10 PASS;
+- U2 SQLite regression: 38/38 PASS;
+- combined U1/U2/W11-SEC/Wave10/OVERDUE regression: 146/146 PASS, no fail/skip/todo;
+- `git diff --check`: PASS;
+- M1–M12 and T17/T18 remain enabled top-level tests; no skip/todo/only marker exists;
+- FAST 500/500, FULL 3030/3030 and Build PASS are retained from the immediately preceding Foundation
+  verification on the same ten-path implementation worktree, before this MySQL-test-only amendment;
+  they were not falsely reported as rerun here.
+
+LF-normalized SHA verification: `credit-check.js` remains
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`; primitives remains
+`d047f087cf365e41c61badf72cbdfd87cd53a8adedeb94bbbb7a368c24787488`; frozen Wave 10 and U2
+comparison tests remain respectively `b280cb6c758a49b02f60a2fec81c8ea1ec6ff61e641dc96ff571225f42c304af`
+and `ab6b23e26152b52171adb7f5b28bcdb4ac28572d3bf38af83eed8f9251c45f8c`. The current amended
+integration test is `c0bf832a83169560c3dfa8d2ed04618ac890f37d1efbc853f6770e25352426ea`.
+
+No real MySQL command was run. The amendment therefore ends at `MYSQL_RERUN_PENDING`; it does not claim
+that M8/M9 now pass on MySQL and does not erase the retained failed E3 artifact.
+
+**Status: `W11_A_OVERDUE_E3_M8_M9_AMENDMENT_READY_FOR_RERUN`.**
+
+### 37.54.29 OVERDUE E3-2 M12 deterministic legacy-row correction (2026-10-29)
+
+#### 37.54.29.1 E3-2 evidence and exact engine direction
+
+The owner supplied the second protected E3 result under identity
+`W11_A_OVERDUE_E3_2_FAILED_M12_OVERDUE_TOTAL_PARITY`: artifact
+`w11-a-overdue-e3-rerun-20261029-215236.tap.log`, raw SHA-256
+`65d08307bc9edcf8f017bdd34821c1fbf6ee9a369f14a1d41f66cbbfee9d6e48`, 14 tests / 13 PASS /
+M12 FAIL, no skip/todo, exit code 1 and confirmed five-class cleanup. Node's strict-equality diagnostic reports
+the first argument as actual and the second as expected; M12 calls `assert.equal(mysql.total,
+sqlite.total)`. Therefore `actual=1` is MySQL and `expected=2` is SQLite.
+
+#### 37.54.29.2 Root cause and pollution boundary
+
+M8/M9 do not mutate the shared database. Their added helper performs SELECTs, parses detached JSON,
+constructs a new tampered in-memory object for digest rejection, and asserts DTO/persistence/Profile
+relationships. The measured GET phase is also guarded by complete before/after database digests. M11
+intentionally adds the same dedicated receivable and two Result scopes to each engine, then proves exact
+replay does not rewrite them.
+
+The mutation was inside M12 itself:
+
+```sql
+SELECT id,component_breakdown_json FROM credit_check_results ORDER BY id LIMIT 1
+```
+
+`id` begins with CCHK2, whose Profile inputs contain independent engine-local UUIDs. Ordering by that
+physical digest does not identify the same logical row across engines. M12 then deleted
+`overdueEvidence` from whichever unrelated row happened to sort first. A 20-run isolated SQLite audit
+reproduced both branches: selecting a non-OVERDUE row preserved total 2, while selecting the M11 group
+reduced total 2 to 1. In the latter branch the selected row was exactly
+`so-cus-w11-self / CUSTOMER_AGGREGATE / SO_SUBMIT / 2026-10-29`, with
+`CREDIT_OVERDUE_EVIDENCE_V1 / PROVEN_OVERDUE`; its sibling Sub-Limit row remained, hence total 1.
+
+This is test-fixture state coupling through a randomized physical identity, not a production Category
+SQL defect and not an M8/M9 write leak.
+
+#### 37.54.29.3 Bounded correction
+
+M12 now selects exactly one stable old-payload conversion target by the approved business identity:
+
+`so-cus-w11-other + SALESPERSON_SUB_LIMIT + cus-w11-other + sp-other`.
+
+It requires one candidate, proves the candidate initially carries prospective evidence, proves it is
+not an OVERDUE member, compares its complete stable logical identity/evidence classification across
+engines, removes evidence from that exact row, and rereads persistence to prove the old payload shape.
+Thus the compatibility fixture cannot alter the genuine M11 OVERDUE set.
+
+M12 also changed each category read from a one-row page to a complete bounded 200-row result and now
+requires LIST length = authorized COUNT and compares stable logical business row sets, not merely totals.
+The comparison retains source identity, scope, stable Profile business key, stage, business date,
+decision, reasons, approval association and all deterministic evidence/classification amounts and
+counts. Engine-local timestamp/digest/UUID fields remain excluded only under the already-proven M8/M9
+integrity contract.
+
+#### 37.54.29.4 Production predicate and proof-gate conclusion
+
+No production change is necessary. The MySQL predicate requires JSON-unquoted V1 version,
+`PROVEN_OVERDUE` and signed numeric amount greater than zero; SQLite requires the same three facts via
+`json_extract` and integer cast. Both COUNT and LIST use the same authorized WHERE and parameter list.
+The E3-2 direction is fully explained by M12 deleting one MySQL evidence member before the query, while
+the other four category comparisons passed.
+
+The M11 pair uses the same `TODAY` classification date in each engine and real runtime `capturedAt`;
+the prospective proof gate remains unchanged. UNKNOWN is not counted as OVERDUE, replay remains
+immutable, and no historical Result outside the disposable test mutation is rewritten.
+
+#### 37.54.29.5 Verification and hashes
+
+- syntax/import: PASS;
+- combined U1/U2/W11-SEC/Wave10/OVERDUE regression: 146/146 PASS, zero fail/skip/todo;
+- `git diff --check`: PASS;
+- M1–M12/T17/T18: 14 unique enabled top-level tests; no skip/todo/only;
+- FAST 500/500, FULL 3030/3030 and Build PASS remain the preceding Foundation evidence and were not
+  represented as rerun after this integration-test-only correction.
+
+LF-normalized integration SHA changed from
+`c0bf832a83169560c3dfa8d2ed04618ac890f37d1efbc853f6770e25352426ea` to
+`51c07397e2deee9d8c84676d09af4504dc9bfb77982dc372472d9b00bd295892`. Production
+`credit-query.js` remains `24889d82a602cd2cd1187dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b` and the
+shared Fixture remains `80a251a2cd05f58746490280683b905414b8d6b05f6eb91535e6d818ffbb9eab`.
+The frozen credit-check, primitives, Wave10 and U2 comparison SHAs remain unchanged.
+
+No real MySQL rerun occurred. The next state is `MYSQL_RERUN_PENDING`.
+
+**Status: `W11_A_OVERDUE_E3_M12_CORRECTION_READY_FOR_RERUN`.**
+
+### 37.54.30 OVERDUE Foundation Final Acceptance and Freeze evidence summary (2026-10-29)
+
+#### 37.54.30.1 Authorization and frozen object
+
+After reviewing the complete evidence report, the user explicitly approved Final Acceptance PASS /
+FROZEN for exactly `W11_A_OVERDUE_EVIDENCE_FORWARD_ONLY_AMENDMENT`. The formal Requirement-side
+record is `document.md` → “W11-A OVERDUE Evidence Foundation Final Acceptance and Capability Freeze
+Record (2026-10-29)”. This summary does not expand that scope and does not freeze W11-A Package or U3.
+
+#### 37.54.30.2 Technical acceptance evidence
+
+The accepted design and implementation preserve one canonical Finance AR observation, prospective-only
+versioned evidence in the immutable Check Result, historical UNKNOWN, UTC proof, Aggregate/Sub-Limit
+grace and attribution, independent digest verification, exact Replay, privacy projection, five exact
+categories, authorization-scoped COUNT/list/detail, zero-write GET and SQLite/MySQL parity. Evidence
+remains outside Credit Decision, exposure digest, CSP/CCHK and ONE_TIME identity.
+
+Local evidence is E-01–E-09 9/9, U1 T1–T10 10/10, Combined 146/146, FAST 500/500, FULL 3030/3030,
+Build PASS and diff-check PASS, with execution rounds accurately separated. The final protected MySQL
+artifact `w11-a-overdue-e3-3-20261029-220531.tap.log` is 10528 raw bytes, UTF-16 LE with BOM, SHA-256
+`69aeda58e704c85cbbf0a49d247b5b6d8867152f082530bb225dbdf53a7c71ce`; MySQL 8.0.37 passed
+M1–M12 and T17/T18, 14/14, exit 0, no skip/cancel/todo and confirmed five-class cleanup. E3-1
+`ab953837…b01d` (M8/M9) and E3-2 `65d08307…6e48` (M12) remain preserved failure evidence.
+
+#### 37.54.30.3 Frozen payload and historical compatibility
+
+The seven canonical LF SHA-256 values are:
+
+```text
+6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1  server/modules/credit-check.js
+24889d82a602cd2cd1187dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b  server/modules/credit-query.js
+80a251a2cd05f58746490280683b905414b8d6b05f6eb91535e6d818ffbb9eab  server/test-utils/wave11-a-credit-query-fixture.js
+d9be1fe267afbf94913984c69d24dd1b581721167a99f14e61be1b4abb06dc55  server/sales-customer-wave11-a-overdue-evidence.test.js
+51c07397e2deee9d8c84676d09af4504dc9bfb77982dc372472d9b00bd295892  server/mysql-sales-customer-wave11-a-credit-query.integration.js
+d047f087cf365e41c61badf72cbdfd87cd53a8adedeb94bbbb7a368c24787488  scripts/sales-customer-wave11-a-primitives.test.js
+9b94aa98230d984b97eabe7631127cf0c307022d272153ffc6093f5efbce040d  scripts/testing/test-suites.js
+```
+
+The primitives and suite-manifest raw CRLF hashes are respectively `2c314438…7561` and
+`26865ec9…d03`; all other raw hashes equal LF. W11-SEC/U1/U2/V2/ONE_TIME history is preserved and the
+OVERDUE SHA is a new forward link. The already disclosed V2 intermediate credit-check digest has no
+standalone reachable Git blob and is not claimed otherwise.
+
+#### 37.54.30.4 Boundaries and status
+
+U3, routes/navigation, W11-A Package, W11-B/C/D, release blockers, Tag, Release and Deploy remain
+outside this Freeze. No Git write or new test/MySQL run was authorized in the Freeze-record round.
+
+**Status: `W11_A_OVERDUE_FOUNDATION_ACCEPTANCE_PASS_FROZEN`.**
