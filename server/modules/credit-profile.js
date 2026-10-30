@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { audit } from '../lib/audit.js';
 import { assertAllowedFields, HttpError, normalizeBusinessDate, optionalText, readJson, requiredCode, requiredText, send } from '../lib/http.js';
+import { foldSearchText } from '../lib/search-fold.js';
 import { assertDateRange, previousDate, translateConstraintError } from './sales-foundation-common.js';
 import { ensureCreditLockAnchor } from './credit-anchor.js';
 import { requireCreditManagementAuthority, resolveCreditProfileReadScope } from './credit-scope.js';
@@ -157,11 +158,17 @@ export async function createCreditProfile(db, req, res, actor) {
       const profileId = randomUUID();
       const ratingId = randomUUID();
       const now = new Date().toISOString();
+      // W11-A U3 — the derived Credit Object search keys are written in the
+      // same statement, so a new Profile version is searchable at once. The
+      // predecessor closure above never touches these fields.
       db.prepare(`INSERT INTO credit_profile(id,anchor_id,customer_id,salesperson_scope_key,salesperson_id,credit_object_type,
-        credit_object_id,credit_limit_cents,initial_state,status,rating_grade,rating_effective_from,rating_effective_to,
+        credit_object_id,credit_object_type_search_key,credit_object_id_search_key,
+        credit_limit_cents,initial_state,status,rating_grade,rating_effective_from,rating_effective_to,
         overdue_day_policy,rule_id,effective_from,effective_to,created_at,created_by)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(profileId, anchor.id, value.customerId, value.salespersonScopeKey,
-        value.salespersonId, value.creditObjectType, value.creditObjectId, value.creditLimitCents, value.initialState,
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(profileId, anchor.id, value.customerId, value.salespersonScopeKey,
+        value.salespersonId, value.creditObjectType, value.creditObjectId,
+        foldSearchText(value.creditObjectType), foldSearchText(value.creditObjectId),
+        value.creditLimitCents, value.initialState,
         value.status, value.ratingGrade, value.ratingEffectiveFrom, value.ratingEffectiveTo, value.overdueDayPolicy,
         value.ruleId, value.effectiveFrom, value.effectiveTo, now, actor.id);
       db.prepare(`INSERT INTO credit_profile_ratings(id,credit_profile_id,rating_source_type,rating_source_key,

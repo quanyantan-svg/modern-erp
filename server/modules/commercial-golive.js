@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { transaction } from '../db.js';
 import { HttpError, allow, allowAny, normalizeBusinessDate, readJson, send } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
+import { foldSearchText } from '../lib/search-fold.js';
 import { applyCreditAdjustment, ensurePayableSource, ensureReceivableSource, openItemSnapshot, reverseCreditAdjustment } from './settlement-core.js';
 import { idempotencyReplay, requestFingerprint, saveIdempotency } from './financial-controls.js';
 import { assertFinancialPeriodsOpen, createSystemVoucher, inventoryAccountRole, receiveValue, reverseSystemVoucher, systemHealth } from './financial-inventory.js';
@@ -694,7 +695,11 @@ export function commitImport(db,id){return atomic(db,()=>{
     db.prepare("UPDATE import_batches SET status='COMMITTED',committed_at=? WHERE id=?").run(now,id);return{...db.prepare('SELECT * FROM import_batches WHERE id=?').get(id),openingBatchId:opening.id};
   }
   for(const x of rows){
-    if(batch.entity_type==='customers')db.prepare("INSERT INTO customers(id,code,name,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,'','','',1,?,?)").run(randomUUID(),x.code,x.name,now,now);
+    // W11-A U3 — only a committed import row creates a customer, and the
+    // derived search keys are written in the same statement inside the same
+    // transaction, so a failed or rolled back import never leaves an
+    // inconsistent key behind.
+    if(batch.entity_type==='customers')db.prepare("INSERT INTO customers(id,code,name,code_search_key,name_search_key,contact,phone,address,active,created_at,updated_at) VALUES(?,?,?,?,?,'','','',1,?,?)").run(randomUUID(),x.code,x.name,foldSearchText(x.code),foldSearchText(x.name),now,now);
     else if(batch.entity_type==='suppliers')db.prepare("INSERT INTO suppliers(id,code,name,contact,phone,address,active,created_at,updated_at,email) VALUES(?,?,?,'','','',1,?,?,'')").run(randomUUID(),x.code,x.name,now,now);
     else if(batch.entity_type==='warehouses')db.prepare("INSERT INTO warehouses(id,code,name,address,manager,active,created_at,updated_at) VALUES(?,?,?,'','',1,?,?)").run(randomUUID(),x.code,x.name,now,now);
     else if(batch.entity_type==='uoms'){db.prepare('INSERT OR IGNORE INTO uoms(code,name,created_at,updated_at) VALUES(?,?,?,?)').run(x.code,x.name,now,now);if(x.product_code){const product=db.prepare('SELECT id FROM products WHERE code=?').get(x.product_code);if(!product)throw new HttpError(409,`UOM 换算产品 ${x.product_code} 不存在`);createUomConversion(db,{productId:product.id,uomCode:x.code,uomName:x.name,numerator:Number(x.numerator),denominator:Number(x.denominator),effectiveFrom:x.effective_from});}}

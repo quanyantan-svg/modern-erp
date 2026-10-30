@@ -199,7 +199,7 @@ describe('P1B — application launcher contract', () => {
     const sales = applicationMetadata.MOBILE_APPLICATION_GROUPS.find((g) => g.key === 'sales-customer');
     assert.deepEqual(
       sales.items.map((item) => item.page),
-      ['customers', 'quotations', 'orders', 'sales-deliveries', 'returns']
+      ['customers', 'quotations', 'orders', 'sales-deliveries', 'returns', 'credit-query']
     );
   });
 

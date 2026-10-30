@@ -225,7 +225,7 @@ describe('V1.6 P3 — sales-order document contract', () => {
     //   - OrderDocumentDetail still branches by kind so purchase detail is
     //     rendered through the legacy pipeline
     //   - PurchaseOrderDetail still wires kind="purchase"
-    assert.equal(ROUTE_PRESENTATIONS.length, 72, 'canonical routes plus Wave 10 must remain enabled');
+    assert.equal(ROUTE_PRESENTATIONS.length, 73, 'canonical routes plus W11-A U3 must remain enabled');
     assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'frozen five disabled routes must remain disabled');
 
     const salesRoute = enabledByRoute.get('orders');

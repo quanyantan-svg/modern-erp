@@ -7,6 +7,7 @@ import {
   ensureV14E2ConfirmPermission,
   migrateV14E2BusinessDate,
 } from '../migrations/v14-e2-business-date.js';
+import { migrateW11ASelectorSearchKey } from '../migrations/sales-customer-wave11-a-selector-search-key.js';
 import {
   MYSQL_RESPONSE_HEADER_BYTES,
   abandonWorkerRequest,
@@ -292,6 +293,12 @@ export function createMySqlDatabase(config, { createSqliteSnapshot, seedDemo = f
     migrateV14E2BusinessDate(adapter);
     ensureV14E2ConfirmPermission(adapter);
     ensureV14E2CanonicalRolePermissions(adapter);
+    // W11-A U3 — run the same additive migration against the live adapter
+    // after bootstrap. A fresh snapshot already carries the columns; this
+    // pass pins their MySQL collation and verifies/backfills their values. An
+    // existing deployment gains the columns and the same fail-closed
+    // reconciliation before the adapter can be returned to the application.
+    migrateW11ASelectorSearchKey(adapter);
     return adapter;
   } catch (error) {
     adapter.close();

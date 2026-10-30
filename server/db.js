@@ -39,6 +39,8 @@ import { migratePlanningDomainSchema } from './migrations/planning-domain-schema
 import { migrateProcurementOutsourcingSchema } from './migrations/procurement-outsourcing-schema.js';
 import { migrateInventoryPositionSchema } from './migrations/inventory-position-schema.js';
 import { migrateSalesCustomerDomain } from './migrations/sales-customer-domain.js';
+import { migrateW11ASelectorSearchKey } from './migrations/sales-customer-wave11-a-selector-search-key.js';
+import { foldSearchText } from './lib/search-fold.js';
 
 export const PERMISSIONS = [
   ['SALES_VIEW', '查看销售商业单据'],
@@ -539,6 +541,14 @@ function createSqliteDatabase(filename) {
   // after frozen prerequisite domain schema so future Sales steps can safely
   // consume their canonical owners without reordering existing migrations.
   migrateSalesCustomerDomain(db);
+  // W11-A U3 — the additive Selector Search Key migration. It runs after the
+  // customer and the Credit Profile tables exist, so the columns can be added
+  // and the stored rows can be backfilled.
+  migrateW11ASelectorSearchKey(db);
+  // W11-A U3 — the demo seed runs after the additive search key migration, so
+  // the demo customers write their derived search keys in the insert itself
+  // and a repeated initialization never breaks an existing customer.
+  if (shouldSeedDemoData()) seedDemoData(db);
 
   return db;
 }
@@ -1797,12 +1807,18 @@ function seedDemoData(db) {
     insertUser.run(user[0], user[1], user[2], password.hash, password.salt, user[4], now);
   }
 
-  const insertCustomer = db.prepare('INSERT OR IGNORE INTO customers(id, code, name, contact, phone, address, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)');
+  const insertCustomer = db.prepare('INSERT OR IGNORE INTO customers(id, code, name, code_search_key, name_search_key, contact, phone, address, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)');
   for (const c of [
     ['customer-001', 'C001', '深圳创想科技有限公司', '李经理', '13800138001', '广东省深圳市南山区科技园', now, now],
     ['customer-002', 'C002', '广州智联电子有限公司', '王总', '13900139002', '广东省广州市天河区珠江新城', now, now],
     ['customer-003', 'C003', '东莞制造业公司', '张总', '13700137003', '广东省东莞市长安镇', now, now],
-  ]) insertCustomer.run(...c);
+  ]) {
+    const [id, code, name, contact, phone, address, createdAt, updatedAt] = c;
+    insertCustomer.run(
+      id, code, name, foldSearchText(code), foldSearchText(name),
+      contact, phone, address, createdAt, updatedAt,
+    );
+  }
 
   const insertSupplier = db.prepare('INSERT OR IGNORE INTO suppliers(id, code, name, contact, phone, address, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)');
   for (const s of [
@@ -1853,10 +1869,13 @@ export function shouldSeedDemoData() {
   return true;
 }
 
+// The base seed. The demo seed is deliberately NOT part of it: the demo
+// customers write their derived search keys in the insert itself, so the demo
+// seed has to run after the additive Selector Search Key migration created the
+// columns. See createSqliteDatabase.
 function seed(db) {
   seedSchema(db);
   reconcileV14E2Permissions(db);
-  if (shouldSeedDemoData()) seedDemoData(db);
 }
 
 const MYSQL_RETRYABLE_TRANSACTION_CODES = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);

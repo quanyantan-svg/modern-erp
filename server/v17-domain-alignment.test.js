@@ -11,7 +11,7 @@ import { BUSINESS_DOMAIN_KEYS, CANONICAL_DOMAIN_KEYS, PLATFORM_DOMAIN } from '..
 const repoRoot = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(repoRoot, path), 'utf8');
 
-test('Domain Alignment keeps 72 active and 5 disabled routes after Wave 10', () => {
+test('Domain Alignment keeps 73 active and 5 disabled routes after W11-A U3', () => {
   // Finance Operations adds two canonical hub routes while retaining the
   // existing invoice and settlement deep links as contextual surfaces.
   // inventory routes are merged into the canonical inventory hub per
@@ -21,7 +21,7 @@ test('Domain Alignment keeps 72 active and 5 disabled routes after Wave 10', () 
   // Wave 9 adds one contextual credit-foundation setup surface and no tile.
   // Wave 10 adds two contextual credit surfaces (credit-check /
   // credit-special-approvals) and no tile.
-  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 72);
+  assert.equal(ACTIVE_APPLICATION_ROUTES.length, 73);
   assert.equal(DISABLED_APPLICATION_ROUTES.length, 5);
   const canonical = new Set(CANONICAL_DOMAIN_KEYS);
   for (const route of APPLICATION_ROUTES) assert.ok(canonical.has(route.domain), `${route.key}: ${route.domain}`);

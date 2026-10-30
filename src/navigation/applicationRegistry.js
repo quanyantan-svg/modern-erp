@@ -16,6 +16,7 @@ const ACTIVE_ROUTE_DEFINITIONS = Object.freeze([
   route('sales-pricing','销售定价与订单时折扣','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','salesDiscount',{any:['SALES_PRICING_VIEW','SALES_PRICING_MANAGE','SALES_PRICING_OVERRIDE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('credit-foundation','信用管理基础','sales-customer','ADVANCED_CONFIGURATION','CONFIG','contextual','销售与客户','salesDiscount',{any:['CREDIT_VIEW','CREDIT_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('credit-check','信用检查','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','salesDiscount',{any:['CREDIT_VIEW','CREDIT_EVALUATE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
+  route('credit-query','信用额度与例外查询','sales-customer','FLOW_SUPPORTING','WORKFLOW','contextual','销售与客户','reports',{permission:'CREDIT_VIEW'},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'launcher'}),
   route('credit-special-approvals','信用特别审批','sales-customer','FLOW_INTERNAL_STEP','WORKFLOW','contextual','销售与客户','approvals',{any:['CREDIT_VIEW','CREDIT_SPECIAL_APPROVE','CREDIT_MANAGE']},{parentRoute:'customers',desktopExposure:'contextual',mobileExposure:'contextual'}),
   route('business-overview','业务总览','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','primary','会计与分析','overview',{permission:'DASHBOARD_VIEW'},{mobileExposure:'launcher',desktopExposure:'global'}),
   route('dashboard','工作台','accounting-analytics','FLOW_SUPPORTING','WORKFLOW','secondary','会计与分析','dashboard',{permission:'DASHBOARD_VIEW'},{mobileExposure:'role-workspace',desktopExposure:'role-workspace'}),
@@ -136,6 +137,7 @@ const loadScreenModule = (path) => {
     case '../pages/sales-pricing.jsx': return import('../pages/sales-pricing.jsx');
     case '../pages/credit-foundation.jsx': return import('../pages/credit-foundation.jsx');
     case '../pages/credit-check.jsx': return import('../pages/credit-check.jsx');
+    case '../pages/credit-query.jsx': return import('../pages/credit-query.jsx');
     case '../pages/sales-batch-a.jsx': return import('../pages/sales-batch-a.jsx');
     case '../pages/wave8-sales.jsx': return import('../pages/wave8-sales.jsx');
     default: return Promise.reject(new Error(`Unknown route screen module: ${path}`));
@@ -153,6 +155,7 @@ const SCREEN_DEFINITIONS = Object.freeze({
   'sales-pricing': defaultScreen('../pages/sales-pricing.jsx'),
   'credit-foundation': defaultScreen('../pages/credit-foundation.jsx'),
   'credit-check': named('../pages/credit-check.jsx','CreditCheck'),
+  'credit-query': defaultScreen('../pages/credit-query.jsx'),
   'credit-special-approvals': named('../pages/credit-check.jsx','CreditSpecialApprovals'),
   quotations: named('../pages/sales-batch-a.jsx','Quotations'),
   'delivery-notices': named('../pages/sales-batch-a.jsx','DeliveryNotices'),
@@ -209,6 +212,7 @@ const DETAIL_TARGET_ROUTES = new Set([
   'planned-orders','planning-reservations','planning-configuration',
   'engineering-reference','engineering-substitute','engineering-change',
   'sourcing-pricing','outsourcing',
+  'credit-query',
 ]);
 const ROUTE_QUERY_KEYS = Object.freeze({
   orders: ['documentType'], 'purchase-orders': ['documentType'], 'purchase-receipts': ['documentType'],
@@ -227,6 +231,7 @@ const CONTEXTUAL_ROUTES = new Set([
   'sales-pricing',
   'credit-foundation',
   'credit-check',
+  'credit-query',
   'credit-special-approvals',
   'delivery-notices','sales-order-changes',
   'dashboard','sales-discounts','purchase-discounts','sales-invoices','supplier-bills',
@@ -268,7 +273,7 @@ const launcherGroup = (key, label, kind, module, items) => Object.freeze({
 
 export const APPLICATION_LAUNCHER_GROUPS = Object.freeze([
   launcherGroup('master-engineering','Master & Engineering','domain','master', [['products','货品资料','products'],['engineering-reference','工程基础资料','engineeringReference'],['boms','BOM','boms'],['product-routings','制品工序标准','routings'],['engineering-substitute','替代料与可配置 BOM','substitute'],['engineering-change','工程变更','engineeringChange']]),
-  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['quotations','销售报价','orders'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}]]),
+  launcherGroup('sales-customer','Sales & Customer','domain','sales', [['customers','客户资料','customers'],['quotations','销售报价','orders'],['orders','销售订单','orders'],['sales-deliveries','销售出货','salesDeliveries'],['returns','销售退货','returns',{key:'returns:sales',target:{documentType:'SALES_RETURN'}}],['credit-query','信用额度与例外','reports']]),
   launcherGroup('planning','Planning','domain','planning', [['planner-workbench','计划员工作台','dashboard'],['forecasts','计划预测','forecasts'],['mrp-runs','MRP','mrpRuns'],['planned-orders','计划订单','mrpRuns'],['production-instructions','生产指令','planningDocuments'],['purchase-instructions','采购指令','planningDocuments']]),
   launcherGroup('procurement-outsourcing','Procurement & Outsourcing','domain','purchasing', [['suppliers','供应商资料','suppliers'],['sourcing-pricing','寻源与定价','sourcingPricing'],['purchase-requisitions','请购单','planningDocuments'],['purchase-orders','采购订单','purchaseOrders'],['purchase-receipts','采购收货','purchaseReceipts'],['returns','采购退货','returns',{key:'returns:purchase',target:{documentType:'PURCHASE_RETURN'}}],['outsourcing','委外加工','outsourcing']]),
   launcherGroup('manufacturing-quality','Manufacturing & Quality','domain','production', [['production-orders','制令单','productionOrders'],['material-issues','用料出库','salesDeliveries'],['production-quality','生产质量','iqc'],['production-receipts','生产入库','purchaseReceipts'],['production-scan','生产扫码','traceability'],['quality-configuration','质量配置','iqc']]),

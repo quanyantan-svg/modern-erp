@@ -220,13 +220,34 @@ const CONTRACTS = Object.freeze({
   credit_profile_ratings: { columns: ['id','credit_profile_id','rating_source_type','rating_source_key','evaluation_result_id','rating_grade','applied_at','applied_by','superseded_at'], pk: ['id'], fks: [['credit_profile_id','credit_profile'],['applied_by','users']], checks: 3 },
 });
 
+// WAVE9_ADDITIVE_SCHEMA_COMPATIBILITY_EXCEPTION
+//
+// Wave 9 still owns the exact nineteen-column Credit Profile base contract.
+// U3 Search Semantics may append only this exact ordered suffix. Zero, one or
+// two suffix columns are accepted so a non-transactional additive migration
+// can resume from V0/V1/V2; no other table receives an additive exception.
+const CREDIT_PROFILE_APPROVED_ADDITIVE_SUFFIX = Object.freeze([
+  'credit_object_type_search_key',
+  'credit_object_id_search_key',
+]);
+
 function same(actual, expected) { return JSON.stringify(actual) === JSON.stringify(expected); }
 function conflict(message) { throw new Error(`Wave 9 schema conflict: ${message}`); }
+
+function matchesWave9ColumnIdentity(table, actual, base) {
+  if (table !== 'credit_profile') return same(actual, base);
+  if (actual.length < base.length || actual.length > base.length + CREDIT_PROFILE_APPROVED_ADDITIVE_SUFFIX.length) {
+    return false;
+  }
+  if (!same(actual.slice(0, base.length), base)) return false;
+  const suffix = actual.slice(base.length);
+  return same(suffix, CREDIT_PROFILE_APPROVED_ADDITIVE_SUFFIX.slice(0, suffix.length));
+}
 
 function assertSqlite(db) {
   for (const [table, contract] of Object.entries(CONTRACTS)) {
     const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-    if (!same(columns.map((row) => row.name), contract.columns)) conflict(`${table} column identity/order drifted`);
+    if (!matchesWave9ColumnIdentity(table, columns.map((row) => row.name), contract.columns)) conflict(`${table} column identity/order drifted`);
     if (!same(columns.filter((row) => row.pk).sort((a,b) => a.pk-b.pk).map((row) => row.name), contract.pk)) conflict(`${table} primary key drifted`);
     const fks = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
     for (const [column, target] of contract.fks) {
@@ -248,7 +269,7 @@ function assertMySql(db) {
   for (const [table, contract] of Object.entries(CONTRACTS)) {
     const columns = db.prepare(`SELECT COLUMN_NAME name,IS_NULLABLE nullable FROM information_schema.COLUMNS
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? ORDER BY ORDINAL_POSITION`).all(table);
-    if (!same(columns.map((row) => row.name), contract.columns)) conflict(`${table} column identity/order drifted`);
+    if (!matchesWave9ColumnIdentity(table, columns.map((row) => row.name), contract.columns)) conflict(`${table} column identity/order drifted`);
     const pk = db.prepare(`SELECT COLUMN_NAME name FROM information_schema.KEY_COLUMN_USAGE
       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND CONSTRAINT_NAME='PRIMARY' ORDER BY ORDINAL_POSITION`).all(table).map((row) => row.name);
     if (!same(pk, contract.pk)) conflict(`${table} primary key drifted`);

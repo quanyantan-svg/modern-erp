@@ -47,7 +47,7 @@ function assertRouteScreen(routeKey, modulePath, exportName) {
 
 // ----- 1. Route inventory assertions (derived from authoritative source) -----
 
-test('P8 route inventory: 71 enabled + 5 disabled = 76 entries', () => {
+test('P8 route inventory: 73 enabled + 5 disabled = 78 entries', () => {
   // Core Scope Cleanup removed the 6 extension routes
   // (projects, tasks, timesheets, contacts, followups, activities).
   // Planning Closure added 2 contextual routes (planning-reservations,
@@ -55,9 +55,9 @@ test('P8 route inventory: 71 enabled + 5 disabled = 76 entries', () => {
   // Procurement & Outsourcing Domain Closure adds sourcing-pricing + outsourcing.
   // Finance Operations Domain Closure adds finance-invoices + finance-treasury
   // as dedicated primary routes, raising the count from 59 to 61.
-  assert.equal(ROUTE_PRESENTATIONS.length, 72, 'ROUTE_PRESENTATIONS must include the Wave 10 routes');
+  assert.equal(ROUTE_PRESENTATIONS.length, 73, 'ROUTE_PRESENTATIONS must include the W11-A U3 route');
   assert.equal(DISABLED_ROUTE_PRESENTATIONS.length, 5, 'DISABLED_ROUTE_PRESENTATIONS must hold 5 removed/disabled routes');
-  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 77);
+  assert.equal(ROUTE_PRESENTATIONS.length + DISABLED_ROUTE_PRESENTATIONS.length, 78);
 });
 
 test('P8 route inventory: enabled route keys are unique and no collision with disabled keys', () => {
@@ -183,7 +183,7 @@ test('P8 contextual: every route with parentRoute references an enabled parent r
   // Sales Wave 2 adds sales-pricing as a contextual child of customers.
   // Wave 7 adds sales-prepayment-gates + sales-reservation-intents as contextual
   // children of orders, bringing the total to 17.
-  assert.equal(contextualCount, 22, 'contextual routes with parentRoute must total 22 after Wave 10');
+  assert.equal(contextualCount, 23, 'contextual routes with parentRoute must total 23 after W11-A U3');
 });
 
 test('P8 contextual: frozen O2C/P2P settlement and quality children keep their route relationships', () => {

@@ -35915,3 +35915,2725 @@ U3, routes/navigation, W11-A Package, W11-B/C/D, release blockers, Tag, Release 
 outside this Freeze. No Git write or new test/MySQL run was authorized in the Freeze-record round.
 
 **Status: `W11_A_OVERDUE_FOUNDATION_ACCEPTANCE_PASS_FROZEN`.**
+
+### 37.54.31 W11-A U3-0 Credit Query Mobile UI — Bounded Design (2026-10-29)
+
+#### 37.54.31.1 Design authority, inputs and frozen boundary
+
+This Design follows the consecutively authorized Requirement in `document.md` → “W11-A U3-0 Credit
+Query Mobile UI — Bounded Requirement Amendment”. It reuses the targeted U3 Audit and the accepted
+U2/OVERDUE implementation. It neither edits nor supersedes the frozen meanings of SC101, SC102,
+CSP1/CSP2, CCHK1/CCHK2, ONE_TIME, overdue evidence, canonical exposure or Credit Read Mode.
+
+The design identity is `W11_A_U3_CREDIT_QUERY_UI_CONTRACT`. It introduces one bounded read projection
+and one UI surface. No Schema/Migration, writer, transaction, audit record, version bump or release
+change is designed.
+
+#### 37.54.31.2 A — Route and screen ownership
+
+`src/navigation/applicationRegistry.js` remains the only route authority. Future implementation adds:
+
+```text
+route key       credit-query
+screen          src/pages/credit-query.jsx (default export CreditQueryPage)
+access          any: ['CREDIT_VIEW']
+domain/group    sales-customer / Sales & Customer
+classification contextual
+parentRoute     null
+mobile          Sales & Customer launcher tile
+desktop         normal visible navigation projection
+detail target   documentId interpreted only as checkResultId
+```
+
+`parentRoute:null` is intentional: a CREDIT_VIEW-only actor does not require access to `customers`.
+The launcher addition is a tile inside the existing Sales & Customer group, not a ninth domain or a
+new navigation layer. `credit-query` is added to the registry's contextual set, screen loader switch,
+screen definition, launcher group and detail-target set. The same canonical hash route supports:
+
+```text
+#credit-query
+#credit-query/<encoded-checkResultId>
+```
+
+`routeLocation.js`, `App.jsx`, `AppNavigationContext`, `RouteScreen`, `MobileShell` and `api.js` are
+reused unchanged unless implementation evidence proves a contract defect. Permission is checked by
+the shell before screen mount; every API independently enforces backend authorization.
+
+This is a bounded forward clarification of §37.54.8.6: “no launcher top-level entry” continues to mean
+no new top-level domain or navigation system. The authorized U3 Requirement now requires one nested
+domain tile so CREDIT_VIEW-only users can reach the otherwise contextual screen.
+
+#### 37.54.31.3 B — UI component responsibility
+
+All U3-specific components initially live in `src/pages/credit-query.jsx`; no second shared component
+library is created before reuse is proven.
+
+| Component | Responsibility |
+|---|---|
+| `CreditQueryPage` | owns tabs, canonical query context, URL detail target, request cancellation/stale-response guards and state resets |
+| `CreditQueryContext` | customer/Credit Object option, business date and explicit stage; does not accept free-form ids as authorization |
+| `CreditExposureSummary` | separate Aggregate/Sub-Limit sections, amount/components/fact counts and per-scope computed identity |
+| `CreditExceptionFilters` | category/decision/scope/stage/date/customer/approval filters; sheet on narrow widths; applied-filter summary and clear |
+| `CreditExceptionList` | dense server-paged rows, total, stable next/previous controls and selection |
+| `CreditExceptionDetail` | immutable Check facts, approval/source/policy identity and overdue evidence tri-state |
+| `HistoricalToCurrentExposureAction` | resolves the authorized Profile identity, then seeds a new current-query context without copying history amounts |
+| `CreditQueryState` | loading skeleton, empty, denied, validation, network/server error and retry presentations |
+
+Reuse `MobilePage`/existing application rail, shared buttons/inputs/status treatments, `api()` and
+`useAppNavigation`. Do not reuse the existing report-only `BusinessEntitySelector`: its REPORT_* gate
+and inactive-history contract are intentionally different. Do not reuse legacy Profile management
+cards as the U3 layout.
+
+#### 37.54.31.4 C — API contract mapping
+
+| UI need | Endpoint | Mapping |
+|---|---|---|
+| authorized query options | new `GET /api/credit/query-options` | minimal customer/object selector projection |
+| SC101 exposure | frozen `GET /api/credit/exposure` | current query date/stage; `scopes[]` displayed without arithmetic changes |
+| SC102 history | frozen `GET /api/credit/exceptions` | server filters, authorized total and offset pagination |
+| SC102 detail | frozen `GET /api/credit/exceptions/:checkResultId` | immutable history and 404 non-enumeration |
+| historical identity resolution | existing `GET /api/credit/profiles/:creditProfileId` | customer/object/scope/salesperson identity under current authorization |
+
+No UI call uses `/api/customers`; no U3 function requires CUSTOMERS_VIEW or CREDIT_MANAGE. The API
+client remains `src/api.js`. `ApiError.status/code` selects state copy; text matching is forbidden.
+
+#### 37.54.31.5 D — Exception → Exposure context flow
+
+```text
+route/documentId
+  → GET exception detail (current Credit scope, non-enumerating 404)
+  → read immutable creditProfileId + historical date/stage/check ids
+  → GET profile detail by creditProfileId (same current Credit scope, non-enumerating 404)
+  → build context {customerId, creditObjectType, creditObjectId,
+                   historicalScopeType, salespersonId|null}
+  → render historical section unchanged
+  → user activates “查询当前额度”
+  → current query date defaults to server-aligned today and stage is explicitly selected/confirmed
+  → GET exposure with the resolved business identity
+  → render current-query section separately
+```
+
+The screen never sends a salesperson id from a hidden scope and never treats a URL id as authority.
+For an Aggregate historical result, no salesperson is sent. For an authorized Sub-Limit, its
+salesperson may seed the optional filter; if membership was revoked, profile detail returns the same
+404 as absence and no current call is made. An expired Profile may explain authorized history, but the
+exposure endpoint independently resolves the Profile effective on the new date and may return
+`CREDIT_PROFILE_MISSING`. No fallback to today's or another Profile is allowed.
+
+Race protection: every selector/context change invalidates previous request tokens, clears exposure,
+detail-derived current context and history offset, and ignores late responses. Browser Back/Forward
+re-parses the canonical detail target; it does not resurrect stale in-memory authorization results.
+
+#### 37.54.31.6 E — CREDIT_VIEW-only selector source
+
+The new owner is `server/modules/credit-query-options.js`; it does not modify the frozen Query/Profile
+owners. `server/app.js` registers only:
+
+```text
+GET /api/credit/query-options
+  ?businessDate=YYYY-MM-DD       optional; default server current date
+  &q=...                         optional bounded search
+  &customerId=...                optional exact authorized hydration/filter
+  &creditObjectType=...          optional only with the full exact identity
+  &creditObjectId=...            optional only with the full exact identity
+  &limit=1..100                  optional; default 30
+  &offset=non-negative integer   optional; default 0
+
+200 {
+  options: [{
+    customerId, customerCode, customerName, customerActive,
+    creditObjectType, creditObjectId,
+    availableScopeTypes: ['CUSTOMER_AGGREGATE'|'SALESPERSON_SUB_LIMIT', ...]
+  }],
+  total, limit, offset, businessDate
+}
+```
+
+Validation returns 400 with a new selector-specific input/pagination code. Exact identity parameters
+are all-or-none. Unknown and out-of-scope exact identities both return an empty authorized set; the
+endpoint does not provide an existence oracle.
+
+Data flow:
+
+1. call `resolveCreditProfileReadScope(db, actor)`; DENY throws before query;
+2. select only Profile rows effective on `businessDate`, with its canonical `predicateSql/Args` in the
+   same inner authorized relation;
+3. detect more than one effective row for the same stable business key + `salesperson_scope_key` and
+   fail with existing `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` semantics;
+4. join `customers` only after authorization and project only id/code/name/active;
+5. apply exact filter/search to the authorized relation, group by customer/object business key, derive
+   `availableScopeTypes`, and calculate COUNT and page from the same grouped conditions;
+6. order by customer code, customer id, object type and object id for a deterministic total order.
+
+The requested business date is data selection only; it is never passed to or used by the read-mode
+decision. Query text is bounded and escaped through prepared parameters. SQLite/MySQL use equivalent
+portable grouped queries (or dialect-specific syntax only when tests prove identical logical rows).
+The module contains no write verb/function, transaction, audit or idempotency call. Customer contact,
+phone, address, terms and Profile limit/rating/rule/creator fields never enter the DTO.
+
+#### 37.54.31.7 F — Five-level permission matrix
+
+| Mode/account | Route | Selector / Exposure / History / Detail |
+|---|---|---|
+| ADMIN (`ALL`) | visible | all authorized Credit rows/scopes |
+| `CROSS_GROUP` | visible | same cross-group Credit projection; no Customers permission inferred |
+| `AGGREGATE_PLUS_SELF` | visible | Aggregate + current actor's eligible self Sub-Limit only |
+| `AGGREGATE_ONLY` | visible | Aggregate only; no hint/count/id for hidden Sub-Limits |
+| `DENY` / no CREDIT_VIEW | shell denies mount | backend returns canonical 403 if called directly |
+
+Current authorization date always controls the mode. Historical business date cannot restore a
+revoked self scope. Frontend visibility is convenience only; the selector, Profile detail, exposure,
+history and detail each fail closed on the server.
+
+#### 37.54.31.8 G — Historical versus current presentation
+
+The detail uses two visually and semantically separate regions:
+
+```text
+历史信用检查
+  historical businessDate / stage / checkGroupId / checkResultId
+  stored decision / reasons / recordedBreakdown / policy/profile hashes / approval
+
+当前额度查询
+  explicitly selected current query businessDate / stage
+  current customer/object identity
+  live derived scopes / components / computedPolicyIdentity
+```
+
+Labels use “历史记录” and “当前查询”; neither relies on color. No amount, policy identity or overdue
+state crosses regions. The current region is absent until an authorized query succeeds. Long ids use
+break-anywhere plus explicit copy affordances; monetary values use tabular numerals and cents-to-display
+formatting with no floating-point business arithmetic.
+
+OVERDUE presentation maps exact persisted status:
+
+| Status | UI copy |
+|---|---|
+| `PROVEN_OVERDUE` + COMPLETE | 已证实逾期 |
+| `PROVEN_OVERDUE` + PARTIAL | 已证实逾期（证据不完整，金额可能非全部） |
+| `PROVEN_NOT_OVERDUE` | 已证实未逾期 |
+| `UNKNOWN` / missing V1 | 未知（未取得完整历史证据） |
+
+#### 37.54.31.9 H — Category, filters and pagination
+
+Exposure and Exceptions are two task tabs under one page. Exceptions opens as the default when a
+detail target exists; otherwise the user's current tab may remain in session state only.
+
+On 320–430 px, category is a compact segmented/selection control and remaining filters live in one
+bottom sheet/full-width filter surface. Applied filters are summarized outside the sheet with a count
+and one clear action. On 680 px, the filter region may remain inline. Every filter change resets offset
+to zero and cancels the prior request.
+
+The list requests one backend page and renders backend `total/limit/offset`; it never paginates a
+client-filtered superset. Previous/next are disabled at exact bounds. Rows show customer/object context
+when already selected, historical date/stage, scope, decision, category indicators and approval status;
+low-value hashes remain in detail. Category overlap renders multiple semantic labels on one row.
+
+#### 37.54.31.10 I — Error, loading and empty states
+
+| Condition | Presentation / action |
+|---|---|
+| initial selector loading | selector-shaped skeleton; no stale options |
+| no authorized options | “当前权限范围内没有可查询的信用对象”; no Customers link requirement |
+| exposure not yet requested | prompt for context/date/stage |
+| `CREDIT_PROFILE_MISSING` | “所选日期没有有效的可见信用档案”; never zero limit |
+| empty exception page at offset 0 | filter-aware empty state + clear filters |
+| empty page at nonzero offset | reset to last valid page once; no automatic wider query |
+| 403 | permission-denied state; clear cached rows/details |
+| detail 404 | one neutral “记录不存在或无权查看” state |
+| 400 validation | field/filter-local error using structured code |
+| network/5xx | retain query inputs, clear protected results, explicit retry |
+| route/screen load failure | existing `RouteErrorBoundary` |
+
+Skeletons approximate final rows. Errors are associated with controls and announced. Retry repeats the
+same bounded request; it does not alter filters, permissions or scope.
+
+#### 37.54.31.11 J — Mobile responsive layout
+
+Design baseline follows the repository ERP Mobile Taste: `DESIGN_VARIANCE 3`, `MOTION_INTENSITY 2`,
+`VISUAL_DENSITY 8`.
+
+| Width | Layout decision |
+|---|---|
+| 320 | 16 px gutter; single column; selector/filter surfaces full width; list replaces detail on drill-in; no page horizontal scroll |
+| 390 | primary intentional layout; compact context header, one dominant title, 44 px controls, dense divider rows |
+| 430 | same hierarchy with longer facts kept inline where readable; no extra card grid |
+| 680 | existing single rail; optional list/detail split for Exceptions and inline filters; same route and DOM semantics |
+
+Order is context → status/critical warning → amounts/key facts → components/identity. Use continuous list
+surfaces and dividers, not one floating card per row. No hero, gradient, glass, decorative animation,
+new bottom navigation or dependency is added. Sticky actions, if used for “查询”, include safe-area
+padding and never cover validation/errors. Motion is limited to short sheet/detail transitions and
+respects reduced motion.
+
+#### 37.54.31.12 K — Browser acceptance
+
+Browser Acceptance uses a real local backend fixture and authenticated accounts, not static mocks.
+For each authorized account, verify launcher visibility, direct hash URL, deep-linked detail, refresh,
+Back/Forward, tab/detail state, filter reset and stale-response protection. Exercise keyboard focus,
+Escape/close, screen-reader names, error announcements and touch targets.
+
+At 320/390/430/680 capture viewport evidence for: selector open/results, SC101 both scopes, missing
+Profile, exception list with category overlap, filter surface, detail with long ids, UNKNOWN/PARTIAL
+overdue evidence, denied/404, loading/empty/network error. Assert no page-level horizontal overflow and
+no fixed/sticky overlap. Browser calls must be inspected to prove only authorized endpoints/parameters
+are sent and that no `/api/customers` request occurs for CREDIT_VIEW-only.
+
+#### 37.54.31.13 L — Backend contract amendment necessity
+
+One backend amendment is necessary: the selector projection in §37.54.31.6. Reusing
+`GET /api/credit/profiles` would transmit full Profile management fields, provide no customer label and
+leave grouping/pagination undefined; using `/api/customers` or the REPORT selector would add unrelated
+permission requirements or leak a wider customer set.
+
+No amendment is necessary for Exception → Exposure. Existing Exception `creditProfileId`, protected
+Profile Detail and frozen Exposure parameters form a complete authorized chain. Therefore:
+
+```text
+credit-query.js        zero production change
+credit-profile.js      zero production change
+credit-scope.js        zero production change
+credit-check.js        zero production change
+SC101/SC102 DTOs       zero change
+Schema/Migration       zero change
+```
+
+#### 37.54.31.14 M — Exact future Implementation whitelist
+
+Only a separately authorized Implementation may modify/create:
+
+```text
+server/modules/credit-query-options.js                         NEW selector owner
+server/app.js                                                  one GET route/import
+src/navigation/applicationRegistry.js                         route/screen/target/launcher
+src/pages/credit-query.jsx                                    NEW U3 screen
+src/styles.css                                                 bounded U3 responsive styles
+server/sales-customer-wave11-a-credit-query-ui.test.js         NEW selector/UI contract suite
+scripts/testing/test-suites.js                                 register the new suite
+document.md                                                    append implementation/acceptance record only
+solution.md                                                    append implementation evidence only
+log/2026-10-29.md                                              append-only journal
+```
+
+The whitelist excludes all frozen Credit modules/tests, `src/api.js`, shared shell/navigation runtime,
+BusinessEntitySelector, Schema/Migration, package version and release files. If implementation proves
+any excluded production file necessary, it must HARD STOP and return to Requirement/Design rather
+than expand scope.
+
+#### 37.54.31.15 N — Test suite and acceptance plan
+
+The new Node/Vite suite covers:
+
+1. selector input/pagination validation, stable grouping/order and exact minimal DTO;
+2. CREDIT_VIEW-only without CUSTOMERS_VIEW/CREDIT_MANAGE; all five read modes;
+3. current versus historical `businessDate`, expired versions, duplicate effective ambiguity,
+   inactive customer label and current-date authorization independence;
+4. exact identity hydration, unknown/unauthorized equality, no contact/management-field leakage;
+5. SQLite/MySQL logical parity and complete database-digest zero-write proof;
+6. registry route/screen/access/launcher/detail-target integrity and CREDIT_VIEW-only reachability;
+7. UI source contracts for frozen endpoint mapping, structured errors, state reset, overdue tri-state,
+   no `/api/customers`, and no mutation calls;
+8. responsive CSS contracts at 320/390/430/680 plus no permanent page overflow;
+9. real browser matrix from §37.54.31.12;
+10. focused U3 + existing Wave 9 Profile, Wave 10 Credit, U2 Query, OVERDUE and W11-SEC regressions,
+    then FULL, Build and `git diff --check` under AGENTS.md §10.2.
+
+Real MySQL is required only for the new selector parity/zero-write gate when separately authorized.
+The frozen U2/OVERDUE E3 evidence is not rerun merely to design U3 and is not replaced by frontend tests.
+
+#### 37.54.31.16 O — Freeze compatibility
+
+The design consumes existing frozen contracts without changing bytes or meanings. New selector rows are
+derived from effective Profile/customer identity under the existing predicate and are not Credit facts,
+snapshots or history. They create no row and cannot affect decision, exposure, overdue evidence,
+special approval or consumption.
+
+Acceptance must re-hash the protected `credit-check.js` and `credit-query.js` values, run frozen
+regressions, prove no Schema/version/tag change and record any new selector module as a forward U3
+payload only. U3 cannot claim W11-A Package Freeze until its own user-approved Acceptance completes.
+
+#### 37.54.31.17 P — Stage boundaries and implementation units
+
+Future authorized implementation is divided without implied continuation:
+
+```text
+U3-A  read-only selector contract
+      new owner + route + SQLite/MySQL parity + zero-write/security tests
+
+U3-B  canonical route and mobile SC101/SC102 UI
+      registry + screen + bounded styles + frontend contract tests
+
+U3-C  browser/responsive/security acceptance
+      real backend/account matrix + frozen regressions + evidence review
+```
+
+U3-A is required before U3-B can claim a usable CREDIT_VIEW-only selector. U3-B must not implement
+Credit writers. U3-C is Acceptance evidence, not permission to Freeze, Commit, Push, release or start
+W11-B/C/D. Each later stage requires the authorization appropriate under AGENTS.md.
+
+#### 37.54.31.18 Design conclusion
+
+The three U3 gaps are design-closed without a business-contract conflict. One minimal forward selector
+API is necessary; no frozen DTO, Credit truth, permission model or database structure changes. The
+route and responsive screen reuse the existing shell, registry, API client and 680 rail.
+
+**Status: `W11_A_U3_CONTRACT_DESIGN_READY`.**
+
+HARD STOP after Design. Implementation, tests, MySQL, Git writes, Acceptance/Freeze, Release/Deploy and
+W11-B/C/D remain unauthorized.
+
+### 37.54.32 W11-A U3-A Implementation Checkpoint / U3-B Whitelist Block (2026-10-29)
+
+#### 37.54.32.1 U3-A actual implementation
+
+The authorized implementation added `server/modules/credit-query-options.js`, registered one GET in
+`server/app.js`, added the shared U3 test suite and registered that suite. The production query uses
+one authorized effective-Profile relation for ambiguity detection, logical COUNT and paged LIST.
+Prepared parameters bind date, exact identity, search and pagination. The DTO is the exact minimum
+projection from §37.54.31.6; Customer management and Profile management fields are absent.
+
+P0-A was resolved without amendment: Selector and frozen SC101 both select by business key,
+`effective_from/effective_to` and canonical scope, do not filter Profile status, and fail on multiple
+effective versions of one scope. P0-C was resolved without amendment: the seeded/production ADMIN role
+contains `CREDIT_VIEW`, so frontend access requires no global permission exception.
+
+Focused U3-A was 9/9 PASS. Related Wave 9/U2 Credit regression was 59/59 PASS. Syntax/import and
+diff-check passed. The first focused execution was 7/9 because two new test fixtures reused an Anchor
+at the same effective date and hit the existing unique constraint; only the new test fixture was
+corrected to use valid distinct Anchors/overlapping version dates, after which all assertions passed.
+No production semantic or expected result was weakened.
+
+#### 37.54.32.2 U3-B blocking dependency proof
+
+P0-B confirmed that a real `#credit-query/<checkResultId>` implementation requires all four canonical
+changes: active route definition, screen loader/map, detail-target membership and launcher entry. This
+necessarily increases the active route/presentation inventory from 72 to 73 and adds one contextual
+route.
+
+Repository audit found literal 72-route assertions in at least these existing files:
+
+```text
+server/v14-e8-product-consistency.test.js
+server/v15-d0-shared-ux-foundations.test.js
+server/v15-d10-final-ux-acceptance.test.js
+server/v15-d9-extension-system-ux.test.js
+server/v16-p2-sales-deliveries.test.js
+server/v16-p2-sales-order-list.test.js
+server/v16-p3-1-micro-polish.test.js
+server/v16-p3-sales-order-document.test.js
+server/v16-p4-purchase-receipts.test.js
+server/v16-p8-flow-consistency.test.js
+server/v16-sitewide-rollout.test.js
+server/v17-domain-alignment.test.js
+server/v17-p0-frontend-application-architecture.test.js
+```
+
+The final file also asserts the exact contextual inventory. These paths are outside
+§37.54.31.14. Updating only the new U3 suite cannot make FULL pass; changing the canonical route shape
+to evade inventory is not permitted. Under the user's explicit hard-stop rule, U3-B therefore stopped
+before any Registry/UI/CSS edit.
+
+#### 37.54.32.3 Required next authorization
+
+The smallest safe continuation is a whitelist-only Design amendment naming the affected existing
+route inventory tests and limiting changes to mechanical active-count/presentation-count totals,
+combined-total arithmetic and addition of `credit-query` to the expected contextual set. All unrelated
+assertions, disabled-route counts and behavior tests remain protected.
+
+**Status: `W11_A_U3_B_IMPLEMENTATION_BLOCKED`.**
+
+#### 37.54.33.5 Bounded two-failure correction and local gate closure
+
+The user explicitly authorized a minimal forward amendment for the two reproducible FULL failures:
+`src/styles.css` and one additional test path,
+`server/v16-p1-mobile-enterprise-foundation.test.js`. No other implementation or test path was
+reopened.
+
+F1 removed only the U3-owned `@media (min-width: 681px)` wrapper and its bounded filter-sheet width
+declaration. The U3 base rail remains `max-width: 680px`, the 430/340 maximum-width adaptations remain
+intact, and no new desktop branch, hidden content or global token/shell change was introduced. The CSS
+SHA-256 changed from `b903a53074460395c5661a5546112b869e98d32389e8d4ee8f767ea79beb7b0b`
+to `d7cce0b54f8b799d90be1433f9b749f5f7685506b7f43c95e06621092957dd85`.
+
+F2 preserved the exact `assert.deepEqual` launcher inventory and its original five members, appending
+only `credit-query` in the actual Registry order. OQC remains absent and every other launcher assertion
+is unchanged. The fourteenth test SHA-256 changed from
+`9298ada290682f83039dfa8d2e46eacac4326ce90cea3269e92528d999c9f1d4` to
+`d4a33320ce414a46264debc667dcf3806958799ab3e55344dfb9e23b57332fca`.
+
+Stage A passed 418/418 tests across the two corrected contracts, U3-A/U3-B, thirteen route-inventory
+tests and related frozen Credit regression, with 0 fail/skip/todo. `git diff --check` passed after
+removing one patch-created EOF blank line, and both frozen owner hashes remained exact. Stage B passed
+FAST 500/500, FULL 3045/3045 (359 suites) and Vite Build (1966 modules). The prior two FULL failures
+remain recorded above and were not overwritten.
+
+No browser acceptance, real MySQL, Git write, Freeze, release/deploy or later-wave work occurred.
+U3-C browser/security acceptance and user Acceptance/Freeze remain separate future gates.
+
+**Status: `W11_A_U3_AB_IMPLEMENTED_READY_FOR_ACCEPTANCE_GATES`.**
+
+### 37.54.33 W11-A U3-B Route Inventory Test Whitelist Forward Amendment (2026-10-30)
+
+#### 37.54.33.1 Authority and bounded purpose
+
+The user explicitly authorized the 2026-10-30 log-path correction, the previously audited route
+inventory whitelist amendment, the mechanical correction of exactly thirteen existing tests, and
+resumption of the already approved U3-B implementation. This amendment changes implementation file
+scope only. It does not change the approved U3 Requirement, backend contracts, Credit permissions,
+SC101/SC102 DTOs, OVERDUE semantics, Schema/Migration or any frozen Credit implementation.
+
+`log/2026-10-30.md` is added as a new append-only path. `log/2026-10-29.md` remains read-only from
+this point and retains the original U3-A checkpoint and U3-B hard-stop evidence.
+
+#### 37.54.33.2 Exact mechanical test whitelist
+
+Only the following existing files and assertions are added to §37.54.31.14:
+
+| Path | Before SHA-256 | Exact permitted correction |
+|---|---|---|
+| `server/v14-e8-product-consistency.test.js` | `18846f3c2caa8e42b2fd43cdd1d866132d53c9e31a5997ef3c46b86b99461917` | complete active presentation set `72 -> 73` |
+| `server/v15-d0-shared-ux-foundations.test.js` | `d94def094934d1b379a3f8978d4a1b791dfca745a8e683ae646e4a30446dffc7` | presentation length/uniqueness and active set `72 -> 73` |
+| `server/v15-d10-final-ux-acceptance.test.js` | `09f1043ad3a6a847d597cbc530d1a1624f2b5effc13b7c1d7c8648753021d81d` | active/presentation/dynamic manifest counts and matching labels `72 -> 73` |
+| `server/v15-d9-extension-system-ux.test.js` | `31238c41887f0bbc54df03afdd5ea3fd86c83b6747b6b4f48cd8f09226706572` | complete presentation count `72 -> 73` |
+| `server/v16-p2-sales-deliveries.test.js` | `35d4a924f3409703f8a66918ee011cc88fa24344f2f8e270ca771a32f4adcb9a` | complete presentation count `72 -> 73` |
+| `server/v16-p2-sales-order-list.test.js` | `77b030456bd65c6b9428fd7959df2ba91268d82d38a835c11bf6424bcc4a60a8` | complete presentation count `72 -> 73` |
+| `server/v16-p3-1-micro-polish.test.js` | `d00bfbc9314a5bf6d62512f0928194205ed15bc59dfdd2c97f6ff869cbd6e35a` | complete presentation count `72 -> 73` |
+| `server/v16-p3-sales-order-document.test.js` | `5aa6000c45f94d72b1f921f331edecbbbcf75fba7b1ffa654cb92cb198d083fb` | complete presentation count `72 -> 73` |
+| `server/v16-p4-purchase-receipts.test.js` | `ea3f7a01e1e8d9edea29df56ca15202b359a8dad4893eb2801452a04274ca883` | complete presentation count `72 -> 73` |
+| `server/v16-p8-flow-consistency.test.js` | `bfee2abb54959f0a2c1d7533e14c0ae23c251f8344b933d4fdc00b3580a947cc` | active `72 -> 73`, combined `77 -> 78`, contextual-parent `22 -> 23`, and matching labels |
+| `server/v16-sitewide-rollout.test.js` | `1e06c46f46204424f71f4b888b0cd3be62ecf4e53de10d356f0ec4cabbb39681` | complete enabled-key count `72 -> 73`; add only `credit-query` to the explicit post-V1.6 route and contextual-parent matrix whitelists |
+| `server/v17-domain-alignment.test.js` | `c34c9870a9e6ebafc5fbd841c5d514cd0de3c120bd6a1bbf61b76f9f01983425` | active count and matching test title `72 -> 73` |
+| `server/v17-p0-frontend-application-architecture.test.js` | `1ce8bd63421bdd0aaff9bf2cb1d1b2087fd091a4073f7175b57561106a41b84e` | active/presentation `72 -> 73`; add only `credit-query` to the exact contextual set; matching title |
+
+All thirteen paths resolve uniquely. None belongs to the W11-A protected Credit SHA manifest. Their
+existing route uniqueness, permission, loader, URL-security, disabled-route, parent, domain and
+business assertions remain intact. No assertion may be skipped, weakened or replaced with a dynamic
+expectation.
+
+#### 37.54.33.3 Derived count proof and continuation boundary
+
+The new canonical route is one enabled presentation and therefore changes the active/presentation
+inventory from 72 to 73 and the P8 combined enabled-plus-disabled count from 77 to 78. It is explicitly
+classified `CONTEXTUAL` and has `parentRoute: 'customers'`, so the P8 contextual route-with-parent
+count changes from 22 to 23 and the V17 exact contextual set gains only `credit-query`.
+
+After recording this whitelist, implementation may resume only within §37.54.31.14, the thirteen
+paths above, `document.md`, `solution.md`, and `log/2026-10-30.md`. Real MySQL, U3-C Acceptance/Freeze,
+Git writes, version/tag changes, release/deploy and later waves remain prohibited.
+
+No MySQL, U3-C, Acceptance/Freeze, Git write, Release/Deploy or W11-B/C/D was performed.
+
+#### 37.54.33.4 FULL regression blocker discovered after implementation
+
+The authorized focused route/UI run passed 231/231 and FAST passed 500/500. The first FULL run then
+reported 3043/3045 PASS with exactly two failures and no skip/todo; a diagnostic FULL rerun reproduced
+the same two failures:
+
+1. `server/v12-core-pages-ui.test.js` rejects any `@media (min-width: ...)` rule after the canonical
+   core-page CSS marker. The bounded U3 CSS can satisfy this without changing that test, by removing
+   the U3 desktop-only media branch.
+2. `server/v16-p1-mobile-enterprise-foundation.test.js` freezes the Sales & Customer launcher pages
+   to exactly `customers`, `quotations`, `orders`, `sales-deliveries`, and `returns`. The approved
+   §37.54.31 route contract requires `credit-query` to be an additional tile in that same existing
+   group. Passing both contracts therefore requires a mechanical forward amendment to this fourteenth
+   test file.
+
+The current user authorization explicitly forbids automatically expanding the thirteen-test whitelist
+to a fourteenth test. Removing or hiding the launcher tile would violate the approved Requirement and
+Design and would make CREDIT_VIEW-only mobile access incomplete. No production-side workaround or
+assertion weakening is acceptable. Implementation therefore stops with the working tree preserved;
+the CSS correction is also intentionally not applied after the whitelist blocker was confirmed.
+
+**Status: `W11_A_U3_B_IMPLEMENTATION_BLOCKED`.**
+
+### 37.54.34 W11-A U3-C real-browser acceptance hard stop (2026-10-30)
+
+The user authorized U3-C1 real Microsoft Edge acceptance and an independent U3-C2 protected-MySQL
+Selector Gate readiness audit. U3-C1 used the real Vite production build, `playwright-core` with the
+installed Edge executable, the real application router and HTTP server, a disposable SQLite database,
+production Credit writers, and two dedicated browser identities: exactly `CREDIT_VIEW`, and no Credit
+permission. No production source or frozen backend contract was changed.
+
+The browser harness passed B01 through B05 before the first required detail navigation found a real
+HTTP integration defect in B06. The SC102 list returned an authorized persisted Result whose identity
+contains `:`. `src/pages/credit-query.jsx` correctly protects the path segment with
+`encodeURIComponent(id)`, but `server/lib/route-table.js` returns regular-expression captures without
+URL-decoding them. The `/api/credit/exceptions/:id` adapter therefore queried the percent-encoded text
+instead of the persisted Result identity and returned `404 CREDIT_EXCEPTION_NOT_FOUND` for the same
+row that the list had just exposed. The UI consequently cannot open normal SC102 detail/deep links for
+these canonical Result identities.
+
+The reproducible evidence is outside the repository at
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-browser-2026-10-30T01-03-23-028Z`.
+`browser-acceptance-failure.json` SHA-256 is
+`9bcf4ccc52fc5e57e29cf74a0e6f46405ca5286615b18755c463e13148a39a67`; `failure-state.png`
+SHA-256 is `4b1b80e33905386aaaebb0c43bbb872c98d1942b3b311c900a9ddf633a9519b0`.
+B06 is FAIL. B07-B09 and the 320/390/430/680 responsive matrix are NOT_RUN. U3-C2 is also NOT_RUN
+because the user required an immediate hard stop when real-browser acceptance finds a product defect.
+No MySQL connection, reset, runner or gate was executed.
+
+**Status: `W11_A_U3_C_BROWSER_ACCEPTANCE_BLOCKED`.**
+
+### 37.54.35 W11-A U3-C B06 bounded URL-encoding correction and browser acceptance (2026-10-30)
+
+#### 37.54.35.1 Root cause
+
+The B06 failure was a real HTTP integration defect, not an authorization outcome. The persisted SC102
+Result identity is built by the Credit Check writer as
+`rowId = ${checkGroupId}:${scopeType}` (`server/modules/credit-check.js:1471`), where `checkGroupId` is
+`CCHK1:<sha256>` or `CCHK2:<sha256>` and `scopeType` is `CUSTOMER_AGGREGATE` or `SALESPERSON_SUB_LIMIT`.
+The canonical identity therefore contains `:` characters. `src/pages/credit-query.jsx` correctly protects
+the path segment with `encodeURIComponent(id)`, but `server/lib/route-table.js` returns the regular
+expression capture of the request path without URL-decoding it. The adapter handed the percent-encoded
+text to `getCreditException`, which then queried a non-existent row and returned
+`404 CREDIT_EXCEPTION_NOT_FOUND` for a row the authorized list had just exposed.
+
+The correction belongs to the HTTP parameter adaptation boundary of that one route. The route table, the
+frozen `credit-query.js` owner, the frozen `credit-check.js` writer, the Credit Scope Resolver, the schema
+and every other route stay untouched. The frontend keeps its normal `encodeURIComponent` protection.
+
+#### 37.54.35.2 Correction
+
+`server/app.js` registers a dedicated adapter for `GET /api/credit/exceptions/:checkResultId`:
+
+- the raw regular-expression capture is read exactly as the route table produced it;
+- `decodeURIComponent` is applied exactly once; a malformed percent sequence is caught and produces the
+  empty identity instead of an exception, so a wrong encoding can never become HTTP 500;
+- the decoded value must match the canonical identity grammar
+  `/^CCHK[12]:[0-9a-f]{64}:(?:CUSTOMER_AGGREGATE|SALESPERSON_SUB_LIMIT)$/` before it is used;
+- an identity that does not match becomes the empty string, which the frozen owner resolves through its
+  existing authorization predicate and its existing non-enumerating 404 contract.
+
+The grammar is not invented: it is the writer's own identity composition read from
+`server/modules/credit-check.js`, cross-checked against the persisted facts. The strict grammar is also
+what makes a second decoding impossible. `decodeURIComponent('%253A')` yields `%3A`, which cannot match
+the grammar, so a double-encoded URL is rejected instead of being promoted into a legal identity.
+
+`server/app.js` SHA-256 moved from
+`f11ac044ee2b4f0d2631491338968805fed35d2ca63646a37ea24e1c1a90abe7` to
+`c3e908f836d2aedcfc054a2d904e97de3c3ec542674c6f78a93becd2a2878e63`.
+
+#### 37.54.35.3 Encoding and security contract
+
+| Input | Contract |
+| --- | --- |
+| `%3A` and `%3a` | decoded once, canonical identity restored, HTTP 200 for an authorized row |
+| already unencoded `:`, `CCHK1` and `CCHK2` | unchanged path, HTTP 200 for an authorized row |
+| `CUSTOMER_AGGREGATE` and `SALESPERSON_SUB_LIMIT` | both identities accepted, both scope types proven |
+| malformed percent sequence (`%`, `%2`, `%zz`) | no exception, neutral 404, never HTTP 500 |
+| `%25`, `%2F`, `%5C`, `..%2Fsecret` | neutral 404, no traversal, no other row matched |
+| double encoding | rejected, never promoted to a legal identity |
+| unknown identity | neutral 404 `CREDIT_EXCEPTION_NOT_FOUND` |
+| unauthorized identity | the same neutral 404 `CREDIT_EXCEPTION_NOT_FOUND`, no existence signal |
+| identity without the Credit Read Scope | HTTP 403 `CREDIT_SCOPE_DENIED`, the existing scope semantics |
+
+The unknown identity and the unauthorized identity are byte-identical in status, code and message, so the
+response cannot be used to probe for the existence of a record.
+
+#### 37.54.35.4 Focused regression
+
+`server/sales-customer-wave11-a-credit-query-ui.test.js` adds one bounded HTTP case,
+`U3-C B06 HTTP adapter decodes one canonical identity layer and preserves scope-safe failures`. It drives
+the real HTTP route table over a real SQLite database and proves list-to-detail identity equality,
+DTO equality with the list row without recomputing history, the persisted `CCHK1` legacy grammar, both
+scope types, the non-enumerating 404 pair, the malformed and traversal inputs, the double encoding, the
+scope-refused 403 and the zero-write digest equality around every measured GET.
+
+Related Credit regression 157/157, FAST 500/500 and FULL 3046/3046 passed. FULL grew by exactly one test
+against the previous 3045/3045: the new B06 HTTP case. No existing assertion was removed, skipped or
+downgraded, and there was no fail, skip or todo.
+
+#### 37.54.35.5 Real-browser acceptance
+
+The acceptance harness is `scripts/acceptance/sales-customer-wave11-a-u3-browser-uat.mjs`. It uses the
+real Vite production build, `playwright-core` with the installed Microsoft Edge executable, the real
+application router and HTTP server, a disposable SQLite database, the production Credit writers and two
+dedicated identities: exactly `CREDIT_VIEW`, and no Credit permission. The original B06 failure evidence
+directory is preserved unchanged.
+
+B01 through B09 all pass:
+
+- B01 — the `CREDIT_VIEW`-only launcher tile and the query-options read, with no `/api/customers` request;
+- B02 — the denied identity sees no launcher tile, the direct URL renders `permission_denied` and the API
+  answers 403;
+- B03 — the SC101 query returns both scope cards and the amount facts;
+- B04 — all five server categories are present and the OVERDUE filter narrows the list;
+- B05 — 38 authorized rows paginate over two pages with no overlap;
+- B06 — the authorized detail opens from the list, a direct hash link resolves in a fresh document, refresh
+  keeps the detail, Back returns to the list, Forward returns to the detail, and the unknown, unauthorized
+  and tampered identities all stay on the neutral 404 surface. The real browser request is
+  `GET /api/credit/exceptions/CCHK2%3A...%3ASALESPERSON_SUB_LIMIT` and answers 200;
+- B07 — the historical detail and the current exposure stay separated, the current read uses today's date;
+- B08 — the four overdue evidence states are present. The UNKNOWN row renders the warning tone with the
+  title `未知` and never the affirmative not-overdue or zero-risk labels; the PROVEN_OVERDUE/COMPLETE row
+  renders `已证实逾期`;
+- B09 — a held superseded selector read shows the loading state, the newest context survives the release of
+  the stale read, a real network abort exposes the retry affordance and the retry recovers, an invalid
+  query answers 400 and an empty result renders the empty state.
+
+The accepted evidence directory is
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-browser-2026-10-30-b06-fixed-r5`.
+`browser-acceptance-results.json` SHA-256 is
+`060e3aa9290cfc0809453bbb5fc1347134fe6810a498f92d41cb64ee504e23f6` and `manifest.json` SHA-256 is
+`5036f36e7da3b98014a66ca3c800cc6e8c7099def07f6347eea4899ec16e7e6c`. The manifest carries the SHA-256 of
+every screenshot.
+
+#### 37.54.35.6 Four-viewport responsive matrix
+
+Measured in the real Edge viewport at 320, 390, 430 and 680 by 844 CSS pixels, for SC101, the SC102 list,
+the filter sheet, the SC102 detail, the historical-to-current separation, the long identity, the money
+and the date values.
+
+| Width | clientWidth | scrollWidth | Main bounds | Smallest target | Overflowing elements | Focus stops | Distinct focus stops |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 320 | 320 | 320 | 28 - 292 | 44 px | 0 | 14 | 6 |
+| 390 | 390 | 390 | 32 - 358 | 44 px | 0 | 14 | 6 |
+| 430 | 430 | 430 | 32 - 398 | 44 px | 0 | 14 | 6 |
+| 680 | 680 | 680 | 32 - 648 | 44 px | 0 | 14 | 6 |
+
+There is no horizontal overflow at any width, no element leaves the viewport, the smallest interactive
+target is 44 px tall and every focused element stays inside the viewport. The 92-character canonical
+Check Result ID renders without overflowing its own column, and the evaluated date and the money values
+render in the same column without overflow. The deep link is opened with the keyboard only, so the
+keyboard operability of the identity navigation is proven at every width.
+
+#### 37.54.35.7 U3-C2 MySQL Selector Gate readiness audit (read-only)
+
+This audit is read-only. No MySQL connection, reset, runner or gate was executed.
+
+**A. Independent Selector integration suite path.**
+`server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`. It follows the proven pattern
+of the frozen W11-A E3 suite: `createTempDb({ label: 'w11-a-u3-selector-mysql-e3', production: true })`
+against `ERP_TEST_DB_BACKEND=mysql`, an assertion that `db.dialect === 'mysql'`, the production fixture
+`seedCreditQueryWorld` on the MySQL adapter, the same engine evidence on a disposable SQLite side, and
+`databaseDigest` before and after every measured GET. The file must not be registered in
+`scripts/testing/test-suites.js`; MySQL integration files are never part of FAST or FULL.
+
+**B. Protected gate runner path.**
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`, a new gate entry that calls the existing
+`runProtectedMySqlCampaign` from `scripts/gates/mysql-wave10-runner-support.mjs` with its own campaign
+label `W11-A U3 SELECTOR MYSQL E3 ACCEPTANCE` and its own suite list. The frozen
+`scripts/gates/mysql-sales-wave11-a-gate.mjs` is not modified.
+
+**C. Exact next-stage whitelist.**
+
+| Path | Action |
+| --- | --- |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | new |
+| `scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` | new |
+| `package.json` | one new script `test:mysql:wave11-a:selector` |
+| `document.md` | the Requirement section for the Selector MySQL gate |
+| `solution.md` | this Design section and its acceptance record |
+| `log/<date>.md` | append-only evidence |
+
+No production file, no frozen Credit owner, no shared MySQL fixture and no existing gate runner is in the
+whitelist. The existing `server/test-utils/wave11-a-credit-query-fixture.js` and
+`server/test-utils/wave11-sec-scope-fixture.js` are sufficient and must stay unmodified.
+
+**D. Test IDs.**
+
+| ID | Contract |
+| --- | --- |
+| `W11-A-U3-E3-S01` | the suite runs on a real MySQL adapter and one shared production fixture |
+| `W11-A-U3-E3-S02` | the five-level Credit Read Mode projects the same logical options on both engines |
+| `W11-A-U3-E3-S03` | the logical COUNT and the list share one authorized set and paginate without overlap |
+| `W11-A-U3-E3-S04` | the customer and Credit Object search matches identically on both engines |
+| `W11-A-U3-E3-S05` | the exact identity filter and the invalid input contract are identical |
+| `W11-A-U3-E3-S06` | the effective-date window and the revoked-membership rule match SC101 |
+| `W11-A-U3-E3-S07` | an ambiguous effective Profile answers 409 on both engines |
+| `W11-A-U3-E3-S08` | an unknown exact identity returns an empty non-enumerating page |
+| `W11-A-U3-E3-S09` | every measured GET is repeatable and leaves the database unchanged |
+| `W11-A-U3-E3-S10` | the ordering contract is collation-stable for the fixture identities |
+
+**E. SQLite / MySQL parity matrix.** The MySQL column facts below were read from the emitted bootstrap
+DDL with a recording mock adapter, without a MySQL server.
+
+| Behaviour | SQLite | MySQL 8 | Parity risk | Mitigation |
+| --- | --- | --- | --- | --- |
+| `customers.code` collation | `TEXT`, binary comparison | `VARCHAR(128) COLLATE utf8mb4_0900_ai_ci` | the MySQL order and search are case- and accent-insensitive | the fixture identities are uppercase ASCII; the parity assertion is set equality plus one explicit collation-stable order |
+| `customers.name` | `TEXT` | `LONGTEXT`, `ai_ci` | the same insensitivity | the fixture names are ASCII |
+| `customers.active` | `INTEGER` | `BIGINT` | none | `Boolean(row.customer_active)` is correct on both |
+| `credit_profile.effective_from` / `effective_to` | `TEXT` | `VARCHAR(128)` / `LONGTEXT` | both compare lexicographically | the values are `YYYY-MM-DD`, which is chronologically ordered |
+| `credit_profile.credit_object_type` grouping | `TEXT` | `LONGTEXT` | the MySQL group key is truncated at `max_sort_length` | the values are short codes |
+| `LIMIT ? OFFSET ?` | bound parameters | client-side interpolation by the adapter | the value becomes a literal | the pagination input is validated as a decimal integer before the query |
+| derived table `COUNT` | accepted | needs an alias | none | the alias `authorized_options` is present |
+| `LIKE` wildcards in `q` | `%` and `_` are wildcards | the same | the same input matches the same rows | an explicit parity case with `%` and `_` |
+| `LOWER()` folding | ASCII only | `utf8mb4` | non-ASCII folding differs | the fixture identities are ASCII |
+| `JOIN customers` | inner join | inner join | none | none |
+
+**F. Preflight, reset and cleanup constraints.** The new gate runs only through the existing protected
+launcher `scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave11-a:selector`. The launcher
+reads the DPAPI credential and the pinned identity baseline, withholds the destructive variables from the
+read-only preflight, proves the live identity and the empty schema, takes the machine-wide named mutex,
+sets `ERP_MYSQL_TEST_ALLOW_RESET=true`, `ERP_MYSQL_TEST_DISPOSABLE_TARGET` and
+`ERP_MYSQL_TEST_DESTRUCTIVE_OPERATIONS`, pins the expected server UUID, current user, grants digest,
+version policy and the `EMPTY_ONLY` initial inventory, runs the gate, verifies the five object categories
+again on a fresh session and clears the sensitive variables. The campaign resets the schema before the
+suite, asserts the zero-object inventory, passes the campaign id and the encoded lease to the child,
+parses the TAP transcript strictly, resets again at the end and releases the lease. The suite child
+refuses to run without the five `ERP_DB_*` variables and `ERP_MYSQL_TEST_ALLOW_RESET=true`, and
+`assertAuthorizedDisposableMySqlTarget` still refuses a target whose name lacks the disposable hint or
+whose identity does not match the approved one.
+
+**G. Isolation from the existing E3 suite.** The new runner is a separate file with a separate campaign
+label, so the campaign id and the lease differ from the frozen W11-A U2 E3 campaign. The machine-wide
+mutex still serializes both gates against the same target, so they can never clean the same schema
+concurrently. The new integration file has its own basename and is not registered in the SQLite test
+registry, so FAST and FULL never reach MySQL. The shared fixtures are imported read-only and are not
+modified by either suite.
+
+**H. Independent MySQL execution authorization.** Running the new gate against the local disposable MySQL
+target requires a separate explicit user authorization. This audit neither requests nor performs it. No
+MySQL connection, reset, runner or gate was executed in this stage.
+
+**Status: `W11_A_U3_BROWSER_ACCEPTANCE_PASS_MYSQL_GATE_READY`.**
+
+### 37.54.36 W11-A U3 Selector Protected MySQL Gate — Design Amendment (2026-10-30)
+
+#### 37.54.36.1 Authorization, baseline and reuse boundary
+
+The user authorized one consecutive sequence: review the existing U3-C2 readiness audit, confirm or
+amend the Requirement, confirm or amend the Design, review implementation and execution readiness, and
+hard stop. The MySQL gate implementation, any MySQL connection or reset, a new integration suite or
+runner, a `package.json` or test-registry change, production code, the real MySQL gate, Git writes,
+Final Acceptance/Freeze and Release/Deploy were not authorized and did not happen.
+
+The baseline is branch `work/sales-waves6-13-recovery-20261025`, HEAD
+`8c716f64dbeb8d650c3dd87a43661ed205fdcfdd`, version `1.6.2`, an empty index and the 26 existing U3
+authorized worktree paths.
+
+This Design confirms §37.54.35.7 as the design basis and amends it. It does not restate the audit and it
+does not create a parallel contract. The Requirement layer is `document.md`
+"W11-A U3 Selector Protected MySQL Gate — Bounded Requirement Amendment (2026-10-30)", sections R-U3-GATE-01
+through R-U3-GATE-06.
+
+The amendments to §37.54.35.7 are exactly four:
+
+1. §37.54.35.7 A–H are confirmed unchanged except for the addition of a dedicated selector gate fixture
+   helper and a read-only MySQL collation probe, both registered in the whitelist of §37.54.36.8;
+2. the S01–S10 identities are kept and are given their exact ten-field acceptance content in
+   §37.54.36.4;
+3. §37.54.35.7 E gains the resolved collation and grouping analysis of §37.54.36.5;
+4. §37.54.35.7 H gains the explicit rule that the open case/accent business decision is measured and
+   reported by the gate and never asserted as cross-engine equality.
+
+#### 37.54.36.2 The subject and the single surface under test
+
+The gate exercises exactly one production surface, `GET /api/credit/query-options`, owned by
+`server/modules/credit-query-options.js`. It drives the production handler through the shared
+`read(handler, db, actor, params)` helper of `server/test-utils/wave11-sec-scope-fixture.js`, which
+returns `{ statusCode, body, code, message }` and never lets a denied read escape the handler. The gate
+never calls the HTTP route table, because the selector has no per-record route and its contract is the
+authorization projection, not a path adaptation.
+
+#### 37.54.36.3 The fixture and its identities
+
+The gate uses a dedicated fixture helper, `server/test-utils/wave11-a-selector-gate-fixture.js`, which
+imports the shared `seedWorld` read-only and extends it. The shared fixture files are not modified, so
+the frozen W11-A U2 E3 suite keeps its exact data.
+
+The shared world contributes the five-level read mode, the effective-date boundaries and the membership
+boundaries:
+
+| Fact | Shared value |
+| --- | --- |
+| customers | `cus-w11-self`, `cus-w11-other`, `cus-w11-expired`, `cus-w11-future`, code `id.toUpperCase()`, name `id` |
+| Credit Object per customer | `creditObjectType = 'SALES_ORDER'`, `creditObjectId = 'CREDIT-' + id.toUpperCase()` |
+| Profile versions per customer | one aggregate (`salesperson_scope_key = '*'`) and one sub-limit (`salesperson_scope_key = sp-x`), both `status = 'ACTIVE'`, `effective_from = PROFILE_FROM`, `effective_to = NULL` |
+| memberships | `sp-self` and `sp-other` valid, `sp-expired` ended, `sp-future` not started |
+| actors | `ADMIN` (ALL), `CROSS_READER` (CROSS_GROUP), `SELF_ACTOR` (AGGREGATE_PLUS_SELF), `OTHER_ACTOR` (AGGREGATE_PLUS_SELF, own sub-limit), `UNMAPPED_ACTOR` / `EXPIRED_ACTOR` / `FUTURE_ACTOR` (AGGREGATE_ONLY), `NO_CREDIT` (DENY) |
+
+The helper adds exactly the identities the shared world does not contain, and it adds them with the
+production writers wherever a production writer exists:
+
+| Added identity | Purpose | Production writer |
+| --- | --- | --- |
+| customer `cus-w11-case`, code `Cus-W11-Case`, name `Müller GmbH`, one aggregate Profile | the case and accent probe | `createCreditProfile` for the Profile, a direct customer insert like the shared `seedCustomer` |
+| customer `cus-w11-multi`, two Credit Objects `CREDIT-CUS-W11-MULTI-A` and `-B`, one aggregate Profile each | multiple Credit Objects | `createCreditProfile` twice |
+| customers `cus-w11-dup-a` and `cus-w11-dup-b`, both named `Shared Display Name`, distinct codes, one aggregate Profile each | the same display name on different logical customers | `createCreditProfile` |
+| a second aggregate Profile version of `cus-w11-self` with a different `effective_from` | the ambiguous effective version | the same direct insert the U3-A SQLite case uses, with a fixed technical id |
+
+Every added identity is visible to `ADMIN` and, through its aggregate scope, to every `CREDIT_VIEW` holder,
+so the search, grouping, count and pagination assertions can observe it.
+
+The SQLite side and the MySQL side of the gate are created by the identical helper, so the two engines
+receive byte-identical business facts. The technical Profile ids are generated per database and are
+therefore never compared; only the stable business key
+`customerId + creditObjectType + creditObjectId` is compared.
+
+#### 37.54.36.4 S01–S10 exact acceptance matrix
+
+The S01–S10 identities of §37.54.35.7 D are kept. Each field is now fixed.
+
+**S01 — `W11-A-U3-E3-S01`: a real MySQL adapter and one shared production fixture**
+
+- A. Test ID: `W11-A-U3-E3-S01`.
+- B. Requirement reference: R-U3-GATE-01 subject; R-U3-GATE-03 class "test environment difference".
+- C. Real SQLite fixture: `createTempDb({ label: 'w11-a-u3-selector-sqlite', production: true })`, asserted
+  `db.dialect === 'sqlite'`, seeded by the shared gate fixture helper.
+- D. Real MySQL fixture: `createTempDb({ label: 'w11-a-u3-selector-mysql-e3', production: true })` under
+  `ERP_TEST_DB_BACKEND=mysql`, asserted `db.dialect === 'mysql'`, seeded by the same helper.
+- E. Expected business result: both dialects are created from the identical business facts and produce the
+  identical logical option set for the base identities.
+- F. Unauthorized result: no customer identity may reach a denied actor on either engine.
+- G. COUNT/List assertion: the logical `total` equals the number of distinct logical option keys on both
+  engines.
+- H. Zero-write assertion: `databaseDigest` before and after is identical on both engines.
+- I. Database-specific behaviour: the MySQL side must never fall back to SQLite; the dialect assertion is
+  the proof, and it is the same pattern the frozen E3 suite uses.
+- J. Failure criteria: a wrong dialect, a differing fixture, or a differing base logical option set fails
+  the test.
+
+**S02 — `W11-A-U3-E3-S02`: the five-level Credit Read Mode**
+
+- B. R-U3-GATE-01 items 1, 2 and 3.
+- C./D. The shared world, on both engines.
+- E. Expected business result: the exact expected option set per mode — `ADMIN` sees four logical options
+  with both scope types; `CROSS_READER` sees the same four; `SELF_ACTOR` sees four options where only
+  `cus-w11-self` carries `SALESPERSON_SUB_LIMIT`; `OTHER_ACTOR` sees four options where only `cus-w11-other`
+  carries it; `UNMAPPED_ACTOR`, `EXPIRED_ACTOR` and `FUTURE_ACTOR` see four options with
+  `CUSTOMER_AGGREGATE` only; `NO_CREDIT` is denied.
+- F. Unauthorized result: `NO_CREDIT` receives HTTP 403 `CREDIT_SCOPE_DENIED` and zero rows; the
+  `AGGREGATE_ONLY` actors never receive a `SALESPERSON_SUB_LIMIT` scope type; the sub-limit of another
+  salesperson never appears.
+- G. COUNT/List assertion: `total` equals the row count in every mode, and the mode sets are strictly
+  nested `DENY ⊂ AGGREGATE_ONLY ⊂ AGGREGATE_PLUS_SELF ⊂ CROSS_GROUP = ALL` on the shared identities.
+- H. Zero-write assertion: `databaseDigest` before and after every mode read.
+- I. Database-specific behaviour: the scope predicate is part of the SQL relation, so the grouping, the
+  count and the pagination all see the same authorized set; the gate asserts the count and the rows agree
+  so that a post-filter would be detected.
+- J. Failure criteria: any mode sees an unauthorized row, any mode's set differs between the engines, or
+  the count disagrees with the row count.
+
+**S03 — `W11-A-U3-E3-S03`: the logical COUNT, the list and the grouping**
+
+- B. R-U3-GATE-01 items 4, 5, 9 and 10.
+- E. Expected business result: `cus-w11-self` appears once with both scope types although two Profile
+  versions exist; `cus-w11-multi` appears twice, once per Credit Object; `cus-w11-dup-a` and `cus-w11-dup-b`
+  appear as two separate options despite the identical display name. Every returned row carries exactly the
+  approved field set `customerId, customerCode, customerName, customerActive, creditObjectType,
+  creditObjectId, availableScopeTypes` and no customer contact, phone, address, payment terms, creator,
+  rule, rating or limit field.
+- F. Unauthorized result: the field whitelist is asserted for every authorized actor too, so a scope leak
+  through the projection is a failure, and the DTO of a denied actor is never produced.
+- G. COUNT/List assertion: `total` equals the number of distinct logical option keys; the sum of the page
+  row counts equals `total`; no page overlaps another; the reassembled page union equals the unpaginated
+  option key set.
+- H. Zero-write assertion: `databaseDigest` before and after the whole pagination walk.
+- I. Database-specific behaviour: the COUNT uses a derived table over the same relation as the list; the
+  gate asserts that the derived-table count equals the row count of the union of the pages, which is the
+  form of the parity that survives a collation difference in the display columns.
+- J. Failure criteria: a differing count, a differing option key set, an overlapping page, a missing or
+  extra DTO field, or a differing field set between the engines.
+
+**S04 — `W11-A-U3-E3-S04`: the customer and Credit Object search**
+
+- B. R-U3-GATE-01 item 8; R-U3-GATE-04.
+- E. Expected business result: a prefix query on the customer code, a contains query on the customer name
+  and a query on the Credit Object identity each return exactly the expected option key set, on both
+  engines, for the ASCII business identities.
+- F. Unauthorized result: a query that matches an unauthorized customer returns nothing; the search runs
+  inside the authorized relation, so a match can never widen the scope.
+- G. COUNT/List assertion: the filtered `total` equals the filtered row count and the filtered set is a
+  subset of the unfiltered authorized set.
+- H. Zero-write assertion: `databaseDigest` before and after every query.
+- I. Database-specific behaviour: this is the measured dimension. The gate runs the case probe
+  (`q = 'cus-w11-case'` and `q = 'CUS-W11-CASE'`), the accent probe (`q = 'muller'` and `q = 'müller'`
+  against `Müller GmbH`) and a wildcard probe (`q = '%'` and `q = '_'`), records the four result sets of
+  both engines, and asserts only what the business contract defines: the ASCII case-insensitive match, the
+  authorized-subset invariant, the count agreement and the zero-write guarantee. The accent outcome is
+  recorded as a typed finding and is never asserted as cross-engine equality.
+- J. Failure criteria: a differing ASCII case-insensitive result, an unauthorized customer in a result
+  set, a count that disagrees with the rows, or a zero-write violation. A recorded accent divergence is a
+  finding, not a failure.
+
+**S05 — `W11-A-U3-E3-S05`: the exact identity filter and the invalid input contract**
+
+- B. R-U3-GATE-01, R-U3-2 of the existing Requirement.
+- E. Expected business result: a complete identity triple returns exactly the matching option, and an
+  incomplete identity is refused with HTTP 400 `CREDIT_QUERY_OPTIONS_INVALID_INPUT`; the same holds for an
+  out-of-range `limit`, a negative `offset`, a malformed business date and an over-long query text.
+- F. Unauthorized result: an identity that names an unauthorized customer returns an empty page with
+  `total = 0`, which is indistinguishable from an unknown identity.
+- G. COUNT/List assertion: the exact-identity page has `total` equal to zero or one and the row count equal
+  to the same value.
+- H. Zero-write assertion: `databaseDigest` before and after the refused and accepted reads.
+- I. Database-specific behaviour: the exact filter is an equality on the business key and is therefore
+  collation-independent, so it must be identical on both engines without any normalization.
+- J. Failure criteria: a differing status, a differing error code, a differing total, or a non-empty page
+  for an unknown or unauthorized identity.
+
+**S06 — `W11-A-U3-E3-S06`: the effective-date window and the revoked membership**
+
+- B. R-U3-GATE-01 items 6 and 7.
+- E. Expected business result: a historical business date returns the Profile versions effective on that
+  date while the authorization decision still uses the server's current date; a historical date never
+  restores a revoked self membership, and the `sp-expired` and `sp-future` memberships stay invisible.
+- F. Unauthorized result: the expired and future sub-limit scope types never appear for any business date.
+- G. COUNT/List assertion: the count for a historical date equals the number of logical options effective
+  on that date and the row set equals the effective set.
+- H. Zero-write assertion: `databaseDigest` before and after the dated reads.
+- I. Database-specific behaviour: the date comparison is a lexicographic comparison of `YYYY-MM-DD` strings
+  on both engines; the gate asserts the effective sets agree on both engines for the shared boundaries
+  `HISTORICAL`, `YESTERDAY`, `TODAY` and `FUTURE_DATE`.
+- J. Failure criteria: a differing effective set, a restored revoked membership, or a count that disagrees
+  with the rows.
+
+**S07 — `W11-A-U3-E3-S07`: the ambiguous effective Profile**
+
+- B. R-U3-GATE-01 item 12.
+- E. Expected business result: two effective versions of the same effective scope answer HTTP 409
+  `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` on both engines and never a silently collapsed option.
+- F. Unauthorized result: the 409 does not disclose the version count, the version identities or the
+  version dates.
+- G. COUNT/List assertion: the ambiguous read returns no options and no total, because it is refused before
+  the projection.
+- H. Zero-write assertion: `databaseDigest` before and after the refused read.
+- I. Database-specific behaviour: the ambiguity check groups by
+  `customer_id, credit_object_type, credit_object_id, salesperson_scope_key` with `HAVING COUNT(*) > 1`;
+  the gate asserts the same 409 on both engines for the same fact.
+- J. Failure criteria: a missing, a different or a non-disclosing 409, or a collapsed option instead of a
+  refusal.
+
+**S08 — `W11-A-U3-E3-S08`: the unknown exact identity**
+
+- B. R-U3-GATE-01, the non-enumeration clause of R-U3-2.
+- E. Expected business result: an unknown identity returns an empty page with `total = 0` and HTTP 200.
+- F. Unauthorized result: the unknown identity and an unauthorized identity produce byte-identical
+  responses, so the response cannot be used to probe for the existence of a customer.
+- G. COUNT/List assertion: `total = 0` and the row count is zero in both cases.
+- H. Zero-write assertion: `databaseDigest` before and after both reads.
+- I. Database-specific behaviour: no existence probe is possible through the projection, because the count
+  is computed over the authorized relation on both engines.
+- J. Failure criteria: a differing status, body or total between the unknown and the unauthorized case, or
+  any row in either result.
+
+**S09 — `W11-A-U3-E3-S09`: the repeatable, zero-write measurement**
+
+- B. R-U3-GATE-01 item 14.
+- E. Expected business result: two identical reads of the same query return byte-identical option sets,
+  totals, orderings and scope types on both engines.
+- F. Unauthorized result: a denied read is repeatable in the same way and never returns a row.
+- G. COUNT/List assertion: the repeated reads agree on `total`, on the option key sequence and on the order.
+- H. Zero-write assertion: `databaseDigest` is identical before and after the whole measurement block on
+  both engines; this is the strongest zero-write proof because the digest covers every table.
+- I. Database-specific behaviour: the digest enumerates the base tables through
+  `information_schema.tables` on MySQL and through `sqlite_master` on SQLite, which is the proven
+  cross-engine helper of the shared fixture.
+- J. Failure criteria: any digest difference, any non-repeating read, or a differing order between the
+  engines.
+
+**S10 — `W11-A-U3-E3-S10`: the ordering, the collation and the grouping review**
+
+- B. R-U3-GATE-01 items 11 and 13; R-U3-GATE-03 and R-U3-GATE-04.
+- E. Expected business result: the option order is stable across two reads and across the page boundary on
+  both engines, and the order of the collation-unambiguous ASCII fixture identities is identical on both
+  engines.
+- F. Unauthorized result: the order never places an unauthorized option into the page, and the total never
+  exceeds the authorized count.
+- G. COUNT/List assertion: the ordered key sequence of the unpaginated read equals the concatenation of the
+  ordered key sequences of the pages.
+- H. Zero-write assertion: `databaseDigest` before and after the ordering probe.
+- I. Database-specific behaviour: the read-only probe of §37.54.36.5 runs first, and the case, accent,
+  duplicate-display-name and wildcard probes are measured and recorded. The collation-dependent outcome is
+  recorded as a finding and is never asserted as equality.
+- J. Failure criteria: an unstable order, a differing order on the collation-unambiguous identities, a
+  page overlap, or a zero-write violation. A recorded collation divergence is a finding, not a failure.
+
+#### 37.54.36.5 Collation and grouping analysis
+
+The following facts were established without a MySQL server, by driving `bootstrapMySql` with a recording
+mock adapter and by reading the production writers.
+
+**The emitted MySQL DDL.**
+
+```text
+CREATE TABLE IF NOT EXISTS `customers` (
+  `id` VARCHAR(128) NOT NULL,
+  `code` VARCHAR(128) NOT NULL,
+  `name` LONGTEXT NOT NULL,
+  `active` BIGINT NOT NULL DEFAULT 1,
+  PRIMARY KEY (`id`),
+  UNIQUE (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+
+CREATE TABLE IF NOT EXISTS `credit_profile` (
+  `customer_id` VARCHAR(128) NOT NULL,
+  `salesperson_scope_key` VARCHAR(128) NOT NULL,
+  `credit_object_type` LONGTEXT NOT NULL,
+  `credit_object_id` VARCHAR(128) NOT NULL,
+  `effective_from` VARCHAR(128) NOT NULL,
+  `effective_to` LONGTEXT,
+  PRIMARY KEY (`id`),
+  FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ...
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+```
+
+**PAD_ATTRIBUTE.** `utf8mb4_0900_ai_ci` is a `NO PAD` collation, so a `VARCHAR` comparison does not ignore
+trailing spaces the way the `utf8mb4_bin` family does. The gate does not assume this. It reads
+`information_schema.collations` for `PAD_ATTRIBUTE` and `IS_COMPILED` of the live collation and records
+the value, together with `@@collation_server`, `@@collation_connection` and `@@max_sort_length`, in the
+S10 evidence. The probe is read-only and uses the same `information_schema.columns` pattern that
+`server/database/mysql-schema.js` and `server/migrations/sales-customer-wave8-service-consignment.js`
+already use for the column metadata.
+
+**The LONGTEXT grouping question, answered.** The `LONGTEXT` type alone does not prove a truncation
+collision, and the current fixture being short does not prove the supported range. The decisive fact is the
+production write contract:
+
+- `credit_object_type` is written through `requiredCode`, which is `requiredText(value, label, 50)`
+  followed by `/^[A-Za-z0-9_-]+$/` and `toUpperCase()`. The field is therefore at most 50 characters,
+  ASCII only, and stored uppercase.
+- The truncation boundary of a MySQL group or sort key on a `TEXT` column is `max_sort_length`, 1024 bytes
+  by default. 50 characters can never reach it, and an ASCII-only, uppercase-normalized value cannot
+  collide by case either.
+- The `GROUP BY` of the selector is
+  `cp.customer_id, c.code, c.name, c.active, cp.credit_object_type, cp.credit_object_id`.
+  `c.name` is also a `LONGTEXT` group key, but `cp.customer_id` is in the same group key and determines
+  `c.code`, `c.name` and `c.active` functionally, so the name can neither merge nor split a group.
+
+Conclusion: for the currently supported business range, no MySQL grouping truncation or collation
+collision is reachable, and this is a property of the production writer contract rather than of the
+current fixture. The gate therefore does not need a truncation probe. It still records the read-only
+column metadata, the live `PAD_ATTRIBUTE` and `@@max_sort_length`, and the observed maximum byte length of
+`credit_object_type` in the fixture, so the boundary is re-proved on the live target instead of assumed.
+The gate must not modify the schema, the collation or any database configuration.
+
+**The case and accent question, resolved as a risk rather than a rule.** The comparison that is affected
+is the search relation:
+
+```sql
+(LOWER(c.code) LIKE LOWER(?) OR LOWER(c.name) LIKE LOWER(?)
+  OR LOWER(cp.credit_object_type) LIKE LOWER(?) OR LOWER(cp.credit_object_id) LIKE LOWER(?))
+```
+
+`LOWER` folds ASCII only on SQLite, while on MySQL the same columns are compared under
+`utf8mb4_0900_ai_ci`, which folds case and accents. The consequences are exact and bounded:
+
+- for `credit_object_type`, no divergence is possible, because the writer restricts it to ASCII uppercase;
+- for `customers.code` and `credit_profile.credit_object_id`, no divergence is possible for ASCII input,
+  because ASCII case folding is identical on both engines;
+- for `customers.name`, which is free text, a Latin accent makes the two engines differ: `q = 'müller'`
+  matches on MySQL and does not match on SQLite, and `q = 'muller'` matches on MySQL because the collation
+  is accent-insensitive and does not match on SQLite;
+- the `UNIQUE (code)` key and the `PRIMARY KEY (id)` are themselves under the accent- and
+  case-insensitive collation, so two business identities that differ only by case or accent cannot be
+  stored on MySQL at all, while SQLite accepts them. This is a storage-level environment difference, not a
+  business result, and the fixture must not seed such identities.
+
+The business contract does not define the case and accent semantics, so the gate must not freeze one. The
+Requirement registers this as an open decision, R-U3-GATE-04. The gate measures it, asserts only the
+defined invariants, records the divergence as a typed finding and leaves the decision to the Requirement
+layer and the business owner. The U3 Freeze stays blocked while that decision is open.
+
+#### 37.54.36.6 Independent suite design
+
+`server/mysql-sales-customer-wave11-a-credit-query-options.integration.js`.
+
+- It is a MySQL integration suite. The repository convention is that a `*.integration.js` file is executed
+  only by a protected MySQL campaign. No such file is registered in `scripts/testing/test-suites.js`, and
+  this one must not be registered either: it requires a live disposable target and the protected reset
+  authorization, which is outside the FAST criterion of a bounded, database-free regression and outside the
+  FULL criterion of an engine-neutral regression. Registering it would make the ordinary regression reach
+  MySQL, which is prohibited.
+- It is flat top-level TAP only: exactly ten top-level `test()` calls, no `describe`, no nested plan, one
+  test name per line.
+- It runs with `--test-concurrency=1`, which the protected campaign already passes, so the ten tests share
+  the database sequentially.
+- It never writes a line that the strict TAP parser could read as a record. Every diagnostic is emitted as
+  a TAP diagnostic whose first word is not one of `tests`, `suites`, `pass`, `fail`, `cancelled`,
+  `skipped` or `todo`, and the evidence JSON is written to a file outside the repository, never to stdout.
+- The evidence file is written to `U3_SELECTOR_EVIDENCE_DIR` when it is set and to a fresh directory under
+  the operating system temporary directory otherwise. It never writes inside the working tree, so a gate
+  run cannot pollute the repository.
+- The engine facts are collected per engine and compared only through the stable business key
+  `customerId + creditObjectType + creditObjectId`. A raw Profile id, an anchor id, a request id or a
+  timestamp is never compared between the engines.
+- Each engine first satisfies the complete contract on its own. Only then is a comparison made, and the
+  comparison is made per requirement item rather than per total.
+
+#### 37.54.36.7 Independent runner design
+
+`scripts/gates/mysql-sales-wave11-a-selector-gate.mjs`.
+
+- It follows the frozen runner `scripts/gates/mysql-sales-wave11-a-gate.mjs` exactly and reuses
+  `runProtectedMySqlCampaign` from `scripts/gates/mysql-wave10-runner-support.mjs`. The frozen runner and
+  the frozen W11-A U2 E3 integration suite are not modified, and the U3 Selector cases are never added to
+  the old E3 suite.
+- Its campaign label is `W11-A U3 SELECTOR MYSQL E3 ACCEPTANCE`, its suite label is
+  `W11-A-U3-SELECTOR-OPTIONS` and its suite file is the new integration suite.
+- The new `package.json` script name is `test:mysql:wave11-a:selector`. The name is free: the existing
+  MySQL scripts are `test:mysql`, `test:mysql:legacy`, `test:mysql:concurrency`, `test:mysql:gate-a`,
+  `test:mysql:wave10`, `test:mysql:gate-b`, `test:mysql:wave11-sec`,
+  `test:mysql:wave11-a`, `test:mysql:local`, `test:mysql:local:setup`, `test:mysql:performance` and
+  `test:mysql:finance-concurrency`, and `test:mysql:wave11-a:selector` is not among them. The existing
+  `test:mysql:wave11-a` keeps pointing at the frozen U2 E3 gate.
+- The gate is executed only through `scripts/gates/run-mysql-local-gate.ps1 -Script
+  test:mysql:wave11-a:selector`, which is the protected launcher and which already accepts any script name.
+
+#### 37.54.36.8 Exact implementation whitelist
+
+The complete file set that a future Implementation stage may touch. No other path may be touched, and a
+later Implementation stage must not expand this list without a new authorization.
+
+| Path | Action | Reason |
+| --- | --- | --- |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | new | the independent MySQL integration suite |
+| `server/test-utils/wave11-a-selector-gate-fixture.js` | new | the dedicated selector gate fixture helper |
+| `scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` | new | the independent protected gate runner |
+| `package.json` | modify | exactly one new script `test:mysql:wave11-a:selector` |
+| `document.md` | modify | the Requirement record and, after a real run, the acceptance evidence record |
+| `solution.md` | modify | this Design record and, after a real run, the execution record |
+| `log/<date>.md` | append | the stage log |
+
+Explicitly **not** in the whitelist: `scripts/testing/test-suites.js`, because a MySQL integration suite is
+never registered in the SQLite regression registry; `server/modules/credit-query-options.js`,
+`server/modules/credit-query.js`, `server/modules/credit-check.js`, `server/modules/credit-scope.js`,
+`server/lib/route-table.js`, `server/app.js`, `src/`, every migration and every schema file; the shared
+fixtures `server/test-utils/wave11-sec-scope-fixture.js` and
+`server/test-utils/wave11-a-credit-query-fixture.js`; the frozen runner
+`scripts/gates/mysql-sales-wave11-a-gate.mjs`; the frozen E3 suite
+`server/mysql-sales-customer-wave11-a-credit-query.integration.js`; and the shared runner support module
+`scripts/gates/mysql-wave10-runner-support.mjs`.
+
+#### 37.54.36.9 Protected target contract review
+
+The review confirms that the protected contract of §37.54.35.7 F is complete and that no new gate-specific
+requirement is missing. The identity preflight proves the server UUID, the current account and the grants
+fingerprint against the pinned baseline; the MySQL 8 version policy is enforced; the initial inventory must
+be `EMPTY_ONLY`; the reset authorization and the destructive operation set must be the approved ones; the
+machine-wide named mutex serializes every schema-clearing gate for the target; the TAP transcript is
+validated strictly; the cleanup is deterministic; and the five object categories are re-counted on a fresh
+session after the run, so the cleanup conclusion does not depend on the gate's own report. A drifted
+identity, a non-empty initial inventory or a failed cleanup fails or blocks the gate. Re-pinning the reset
+authorization fingerprint, creating a new test database, changing the MySQL instance or relaxing any check
+is forbidden.
+
+The strict TAP acceptance is exact: one `TAP version 13` header, exactly one top-level plan, the planned
+count equal to the parsed top-level record count, contiguous and unique test ids, every record a plain
+`ok`, every summary field present exactly once, `tests = pass = planned`, and `fail`, `cancelled`,
+`skipped` and `todo` all zero. A `Bail out!`, a malformed record, a nested plan, a truncated transcript or
+any skip or todo marker fails the campaign.
+
+#### 37.54.36.10 Prevention of the previous E3 failure patterns
+
+| Previous failure pattern | The design control |
+| --- | --- |
+| random UUIDs causing a cross-engine order difference | only the stable business key is compared; the order is asserted on the business key sequence, never on the technical id |
+| selecting a destructive fixture by physical id | the fixture identities are named business identities created by the production writers; the ambiguous-version case is the one fixed technical id, created identically on both engines |
+| comparing raw capture timestamps byte for byte | no timestamp is compared across engines; the effective-date boundaries are the named business dates `HISTORICAL`, `YESTERDAY`, `TODAY` and `FUTURE_DATE` |
+| cross-engine fixture pollution | the SQLite and the MySQL side are two separate databases created by the identical helper; no state is shared and no side writes to the other |
+| an unverified COUNT/List equivalence | the COUNT is compared with the union of the pages and with the unpaginated set, per mode and per filter, in S03 |
+| over-normalization hiding a real field difference | the DTO field set is compared exactly, field by field, with no normalization, in S03 |
+| comparing only the final total | the logical option key sets are compared, not only the totals, in S03, S04, S05, S06 and S09 |
+| resolving a failure with a skip, a todo or a weakened assertion | the strict TAP acceptance rejects any skip, todo, not-ok, bail-out or missing record; the design forbids lowering a classification |
+
+The normalization rule is explicit: a value may be normalized only after each engine has independently
+satisfied the complete contract, and only a technical identity may ever be normalized. A business identity,
+a permission outcome, an amount, a classification, a grouping result and a pagination partition are never
+normalized.
+
+#### 37.54.36.11 Freeze preservation and documentation integrity
+
+The frozen identities stay untouched: `server/modules/credit-check.js` is
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1` and `server/modules/credit-query.js` is
+`24889d82a602cd2cd11807dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`. The W11-SEC, U1, U2, the OVERDUE
+evidence foundation, the CSP/CCHK identity and the ONE_TIME approval semantics keep their freeze
+identities. The version stays `1.6.2` and no annotated tag is created, moved or deleted.
+
+The existing evidence keeps its exact identity: the U3-C browser acceptance PASS and its evidence
+directory, the original B06 FAIL with its preserved screenshot and failure JSON and their SHA-256 values,
+the B06 fix evidence, the FAST 500/500 result, the FULL 3046/3046 result and the 1966-module build. None
+of them may be restated as a real MySQL result. `document.md` and `solution.md` were amended
+append-only, and `log/2026-10-30.md` is append-only.
+
+#### 37.54.36.12 Implementation and execution readiness
+
+The Implementation stage is ready to start against the whitelist of §37.54.36.8 and is expected to produce,
+without any further design change:
+
+1. the new integration suite with exactly ten flat top-level TAP tests;
+2. the new dedicated fixture helper;
+3. the new protected runner and the single `package.json` script;
+4. the focused local run of the new suite on SQLite only, as a dry proof that the ten tests are sound
+   before any MySQL execution;
+5. a real MySQL execution through `scripts/gates/run-mysql-local-gate.ps1 -Script
+   test:mysql:wave11-a:selector`, which needs its own explicit user authorization.
+
+The real MySQL execution remains unauthorized in this stage. No MySQL connection, schema reset, runner or
+gate was executed here.
+
+#### 37.54.36.13 Open decision and residual risks
+
+1. The case and accent semantics of the free-text customer name search remain an open business decision,
+   registered in `document.md` R-U3-GATE-04. The gate measures and reports it; it does not decide it, and
+   the U3 Freeze stays blocked until the business owner decides.
+2. The MySQL server facts `PAD_ATTRIBUTE`, `@@max_sort_length` and the live collation are read on the
+   target at run time and recorded. The analysis of §37.54.36.5 relies on the emitted bootstrap DDL and on
+   the production writer contracts, both of which are repository facts; the run-time probe is the proof
+   that the live target matches them.
+3. The gate proves the Selector surface only. It does not extend the MySQL coverage of SC101, SC102, the
+   OVERDUE evidence, the CSP/CCHK identity or the ONE_TIME approval semantics, which keep the evidence
+   that their own frozen E3 campaign already produced.
+4. The real MySQL result is an evidence milestone, not an acceptance of the U3 capability and not a Freeze.
+
+**Design status: `W11_A_U3_MYSQL_SELECTOR_GATE_DESIGN_READY`.**
+
+### 37.54.37 W11-A U3 Selector Protected MySQL Gate — Implementation Record (2026-10-30)
+
+#### 37.54.37.1 Authorization and boundary
+
+The user authorized the Implementation only: the S01 to S10 integration suite, the independent runner,
+the dedicated fixture, the package script and the local non-MySQL verification. A real MySQL
+connection, a MySQL reset, the real gate execution, a production Selector change, a new business
+semantic, the Final Acceptance/Freeze and every Git write were not authorized and did not happen.
+
+This record is the as-built description of the seven authorized paths. It does not claim a real MySQL
+result.
+
+#### 37.54.37.2 The three new artifacts
+
+| Path | SHA-256 | Role |
+| --- | --- | --- |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | `a65aa2d01bccb98923b6a6e217dd72e122d0ce646ba3dd4d999c9a69755dd69f` | the protected MySQL integration suite, ten flat top-level TAP tests |
+| `server/test-utils/wave11-a-selector-gate-fixture.js` | `64d394b15842035fa4d59460e2a5ff2eb28895e2f97da5df2595dd9ad705d575` | the dedicated selector gate fixture and the read-only MySQL metadata probe |
+| `scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` | `e1cbf47190b991b4174e173929f73e70bc51ddaab7600ed3c434735c591fa779` | the independent protected gate runner |
+| `package.json` | `43d6ec696d2a54896c6968bc163710341a8a85431bad9efa29cdd44169047dee` | one new script `test:mysql:wave11-a:selector` |
+
+The package script count for `test:mysql*` is now 13. The existing `test:mysql:wave11-a` still points
+at the frozen U2 E3 gate. The version stays `1.6.2`.
+
+#### 37.54.37.3 The fixture identities and their determinism proof
+
+The dedicated fixture reuses the shared W11-SEC world read-only and extends it with the business
+identities the world does not contain. Every Credit Profile is created through the production writer
+`createCreditProfile`; the single direct insert is the ambiguous effective version, which the
+production writer deliberately refuses to create because it forbids an overlapping version.
+
+| Identity | Code | Name | Profiles | Purpose |
+| --- | --- | --- | --- | --- |
+| `cus-w11-case` | `Cus-W11-Case` | `Müller GmbH` | one aggregate | the mixed-case code and the accented name |
+| `cus-w11-unicode` | `CUS-W11-UNICODE` | `Ångström AB` | one aggregate | the non-ASCII capital letter |
+| `cus-w11-multi` | `CUS-W11-MULTI` | `Multi Object Customer` | two aggregates, two Credit Objects | multiple Credit Objects |
+| `cus-w11-dup-a`, `cus-w11-dup-b` | `CUS-W11-DUP-A`, `CUS-W11-DUP-B` | both `Shared Display Name` | one aggregate each | the same display name on two logical customers |
+| `cus-w11-window` | `CUS-W11-WINDOW` | `Date Window Customer` | one aggregate, one sub-limit of `sp-self` that ends on the historical date | the effective-date window |
+| `cus-w11-subonly` | `CUS-W11-SUBONLY` | `Sub Limit Only Customer` | one sub-limit of `sp-other` | a customer that only owns a sub-limit scope |
+| `cus-w11-ambig` | `CUS-W11-AMBIG` | `Ambiguous Version Customer` | one aggregate | the ambiguous effective version |
+
+Determinism proof. Every business identity is named, never generated. The only generated values are the
+Profile ids, the anchor ids, the rating ids and the idempotency keys, and none of them is compared
+across engines. The comparison key is always the stable business key
+`customerId + creditObjectType + creditObjectId`. The fixture writes one fixed technical id for the
+ambiguous version, `u3-selector-ambiguous`, on both engines, and removes it again in the same test.
+
+The measured logical option counts on the reference engine are: `ADMIN` 13, `CROSS_READER` 13,
+`SELF_ACTOR` 12, `OTHER_ACTOR` 13, and 12 for each of the three aggregate-only readers. The difference
+is real and is the point of the fixture: `sp-other` owns the sub-limit of `cus-w11-other` and of
+`cus-w11-subonly`, so only that reader sees the sub-limit-only customer, and `sp-self` owns the
+sub-limit of `cus-w11-self` and of the window customer.
+
+#### 37.54.37.4 The suite structure
+
+The suite drives `listCreditQueryOptions` through the shared `read` helper of the W11-SEC fixture, so a
+refused read never leaves the handler. It creates the MySQL target with `createTempDb` under the
+protected disposable target guard, exactly like the frozen E3 suite, and it creates the SQLite
+reference with `createDatabase` on a temporary directory, because `createTempDb` would resolve to MySQL
+inside the protected campaign.
+
+| Case | Identity | Assertion content |
+| --- | --- | --- |
+| S01 | `W11-A-U3-E3-S01` | the dialect of each side, the identical option sets, the identical totals and the zero-write digests |
+| S02 | `W11-A-U3-E3-S02` | the exact option set, scope types and count of seven readers, the denied reader, and the `CREDIT_VIEW`-only permission set |
+| S03 | `W11-A-U3-E3-S03` | the seven-field DTO, the grouping of two Profile versions, the two Credit Objects, the two same-named customers, and the non-overlapping pagination that rebuilds the set |
+| S04 | `W11-A-U3-E3-S04` | the six defined search probes on both engines and the wildcard parity with the authorized-subset invariant |
+| S05 | `W11-A-U3-E3-S05` | the exact identity, a different Credit Object, a different Credit Object type and six refused inputs with identical codes on both engines |
+| S06 | `W11-A-U3-E3-S06` | the historical and the current effective version of the window customer, and the revoked membership that a historical date does not restore |
+| S07 | `W11-A-U3-E3-S07` | the HTTP 409 `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS` on both engines and the restored read after the temporary version is removed |
+| S08 | `W11-A-U3-E3-S08` | the byte-identical response of an unknown and an unauthorized identity, and the scope predicate applied before the projection |
+| S09 | `W11-A-U3-E3-S09` | two identical reads and the unchanged database digest |
+| S10 | `W11-A-U3-E3-S10` | the read-only MySQL collation metadata, the truncation-boundary proof, the stable order of the collation-unambiguous identities, the stable pagination and the full measurement matrix |
+
+#### 37.54.37.5 The runner wiring and the safety controls
+
+The runner is a six-line gate entry. It imports `runProtectedMySqlCampaign` from
+`scripts/gates/mysql-wave10-runner-support.mjs`, declares its own suite label
+`W11-A-U3-SELECTOR-OPTIONS`, its own file and its own campaign label
+`W11-A U3 SELECTOR MYSQL E3 ACCEPTANCE`. It contains no reset, no identity check, no cleanup and no
+TAP parser, and it does not reference the frozen U2 E3 gate.
+
+The suite itself refuses to start without the five `ERP_DB_*` variables and without
+`ERP_MYSQL_TEST_ALLOW_RESET=true`. `createTempDb` adds the disposable-target guard, which refuses a
+target whose name lacks the disposable hint or whose identity does not match the approved one. The
+protected launcher remains the only entry point, so the machine-wide mutex, the identity pins, the
+`EMPTY_ONLY` initial inventory, the destructive operation set, the strict TAP validation and the
+five-category zero inventory are unchanged and owned by the existing machinery.
+
+#### 37.54.37.6 The strict TAP compatibility
+
+The suite is flat top-level TAP only: exactly ten `test()` calls, no `describe`, no `it`, no nested
+plan helper, no skip, no todo and no only. The ten names map one to one onto S01 to S10 and each one
+is a single line whose first character is not a space, so every name renders as a plain `ok N - name`
+record. The suite writes no TAP record and no TAP summary line to stdout. Its only stdout output is
+one diagnostic that starts with `# W11-A-U3-E3 EVIDENCE`, whose first word is not one of the reserved
+summary names. The evidence JSON is written to a file outside the repository, to `U3_SELECTOR_EVIDENCE_DIR`
+when it is set and to a fresh temporary directory otherwise.
+
+#### 37.54.37.7 The open semantic decision inside the gate
+
+`CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN` is the exact marker carried by the suite, by the evidence file
+and by the campaign output.
+
+The measurement matrix of S10 covers the ASCII case, the Unicode case, the accent, the customer name
+search, the group-by behaviour, the order and the stable pagination. Every measured probe records the
+SQLite result, the MySQL result and whether they diverge. The gate asserts only what the business
+contract defines for each probe: the HTTP status, that the result never leaves the authorized set,
+that the count agrees with the number of rows, and, for the defined probes, the exact expected set.
+
+The reference SQLite results of the probes are known and are recorded here as the reference, not as an
+engine authority:
+
+| Probe | SQLite reference | Expected MySQL behaviour |
+| --- | --- | --- |
+| `cus-w11-case` | the case customer | the same |
+| `CUS-W11-CASE` | the case customer | the same |
+| `muller` | no row | the case customer, because the MySQL collation folds the accent |
+| `müller` | the case customer | the same |
+| `Müller` | the case customer | the same |
+| `MÜLLER` | no row | the case customer, because the MySQL folding is Unicode aware |
+| `ångström` | no row | the unicode customer, because the MySQL folding is Unicode aware |
+| `Ångström` | the unicode customer | the same |
+| `cus-w11-sel\f` | no row | the self customer, because the MySQL `LIKE` treats the backslash as an escape character and the SQLite `LIKE` does not |
+| `%` and `_` | the whole authorized set | the same, and the parity is asserted |
+
+The last row of that table is a genuine cross-engine result difference that is not only a case or
+accent question: the backslash is an escape character in a MySQL `LIKE` pattern and it is not in
+SQLite, so the same query text selects a different row. It is recorded under the same open decision
+and it is measured, never asserted away.
+
+#### 37.54.37.8 The truncation-boundary proof
+
+S10 reads the live MySQL facts with a read-only probe: `@@max_sort_length`, `@@collation_server`,
+`@@collation_connection`, `@@sql_mode`, `@@version`, the `PAD_ATTRIBUTE` and the compile flag of
+`utf8mb4_0900_ai_ci` from `information_schema.collations`, the column metadata of the five grouped
+`credit_profile` columns from `information_schema.columns`, and the observed maximum byte length of
+`credit_object_type`.
+
+The probe asserts only what is a property of the production contract and of the data: the observed
+maximum byte length of `credit_object_type` is at most 50 characters, which is the bound of the
+production writer, and it is below the group-key truncation boundary `@@max_sort_length`, which
+therefore cannot be reached for the supported range. Every other fact, including the `PAD_ATTRIBUTE`
+and the live collation, is recorded in the evidence file rather than asserted, so the analysis of
+§37.54.36.5 is re-proved on the live target instead of assumed. The probe never writes, never changes
+a session variable and never changes a schema or a collation.
+
+#### 37.54.37.9 The local non-MySQL verification
+
+No MySQL connection was made. The local verification consisted of:
+
+- the syntax check of the three new files and of the package JSON;
+- a static inspection that proved exactly ten top-level tests, the S01 to S10 identity mapping, the
+  TAP record shape of every name, the absence of `describe`, `it`, `skip`, `todo`, `only` and a nested
+  plan helper in the executable code, the runner wiring, the absence of a second reset, identity,
+  cleanup or TAP parser, the absence of a direct MySQL driver, the safety of the stdout diagnostics,
+  the reuse of the shared world and the production writer in the fixture, and the package script
+  registration without a name conflict;
+- a fixture contract review that ran the production selector against a disposable SQLite database in a
+  scratch script outside the repository. It measured every expected logical option set, the five read
+  modes, the DTO field set, the order, the search probes, the effective-date window, the revoked
+  membership, the exact identity, the refused inputs, the ambiguity, the pagination and the zero-write
+  digest. This is the source of the reference values in §37.54.37.7 and of the counts in
+  §37.54.37.3;
+- the existing non-MySQL regression: the four focused Credit suites 77/77, the governance suite 20/20
+  and FAST 500/500, all executed through the isolation wrapper that strips every MySQL-pointing
+  variable and keeps `ERP_DB_PATH` absent.
+
+#### 37.54.37.10 The future protected execution procedure
+
+The gate is executed only through the existing protected launcher:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave11-a:selector
+```
+
+The launcher proves the identity and the empty schema before the gate, takes the machine-wide mutex,
+binds the destructive authorization to the pinned target, runs the campaign, re-counts the five object
+categories on a fresh session and clears the sensitive variables. The campaign resets the schema before
+the suite, spawns the suite with the campaign id and the encoded lease, validates the TAP transcript
+strictly, resets the schema again and releases the lease. The suite writes its evidence JSON to
+`U3_SELECTOR_EVIDENCE_DIR` when that variable is set.
+
+This execution needs its own explicit user authorization and did not happen in this stage.
+
+**Implementation status: `W11_A_U3_MYSQL_SELECTOR_GATE_IMPLEMENTED_READY_FOR_PROTECTED_EXECUTION`.**
+
+### 37.54.38 W11-A U3 Selector Protected MySQL E3 Execution Record (2026-10-30)
+
+#### 37.54.38.1 Authorization and boundary
+
+The user authorized one single protected real-MySQL execution of the W11-A U3 Selector E3 gate, on the
+existing disposable MySQL test database only. The authorization included the reset, recreate and cleanup
+that the existing protected launcher performs on the approved disposable test schema after every safety
+check has passed. It authorized no destructive operation on any other database, instance or business
+data.
+
+Not authorized and not performed: a modification of any test or production code, a modification of a
+schema definition or a migration, a change of the MySQL service configuration, a reset of the
+credentials or of the grants baseline, a second automatic gate run, the Final Acceptance/Freeze, any Git
+write, and Merge/Tag/Release/Deploy. The gate was executed exactly once.
+
+#### 37.54.38.2 Execution baseline and artifact manifest
+
+Branch `work/sales-waves6-13-recovery-20261025`, HEAD
+`8c716f64dbeb8d650c3dd87a43661ed205fdcfdd`, version `1.6.2`, an empty index and exactly the 30
+authorized worktree paths, unchanged before and after the execution.
+
+| Artifact | SHA-256 | Verified |
+| --- | --- | --- |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | `a65aa2d01bccb98923b6a6e217dd72e122d0ce646ba3dd4d999c9a69755dd69f` | exact |
+| `server/test-utils/wave11-a-selector-gate-fixture.js` | `64d394b15842035fa4d59460e2a5ff2eb28895e2f97da5df2595dd9ad705d575` | exact |
+| `scripts/gates/mysql-sales-wave11-a-selector-gate.mjs` | `e1cbf47190b991b4174e173929f73e70bc51ddaab7600ed3c434735c591fa779` | exact |
+| `package.json` | `43d6ec696d2a54896c6968bc163710341a8a85431bad9efa29cdd44169047dee` | exact |
+
+The protected launcher `scripts/gates/run-mysql-local-gate.ps1`, the shared runner support
+`scripts/gates/mysql-wave10-runner-support.mjs`, the frozen U2 E3 gate
+`scripts/gates/mysql-sales-wave11-a-gate.mjs` and the frozen U2 E3 integration suite are unmodified
+against the repository HEAD. The new integration file is not registered in the SQLite suite registry, so
+it is in neither FAST nor FULL.
+
+#### 37.54.38.3 The protected target preflight
+
+The launcher proved the target before the campaign started, from the pinned local identity baseline and
+the DPAPI-encrypted credential:
+
+| Fact | Live value | Baseline | Match |
+| --- | --- | --- | --- |
+| server version | `8.0.37` | MySQL 8 policy | yes |
+| server UUID | `256c7a4e-d275-11f1-885b-b025aa71d167` | identical | yes |
+| current user | `modern_erp_test@127.0.0.1` | identical | yes |
+| grants fingerprint | `bef61617d1b96913f479c7642176eca53f60410b003773707cd56355e4ce807e` | identical | yes |
+| database identity | `modern_erp_domain_test` on `127.0.0.1:3306` | identical | yes |
+| initial object inventory | tables 0, views 0, triggers 0, routines 0, events 0 | `EMPTY_ONLY` | yes |
+| disposable target authorization | valid | `mysql://modern_erp_test@127.0.0.1:3306/modern_erp_domain_test` | yes |
+| machine-wide lock | acquired | `ModernERP.MySqlGate.modern_erp_domain_test` | yes |
+
+The setup script was not executed, the grants fingerprint was not re-pinned, the account and the
+password were not changed, no test schema was created, no other MySQL instance was selected and no
+object was deleted to make the preflight green. No credential, token or secret was written into the
+evidence.
+
+#### 37.54.38.4 The command and the process exit code
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gates/run-mysql-local-gate.ps1 -Script test:mysql:wave11-a:selector
+```
+
+The real process exit code was `0`. The campaign was started once, by the launcher, and no retry loop
+was used. The suite was never executed directly and the gate runner was never invoked directly.
+
+#### 37.54.38.5 The strict TAP acceptance
+
+The captured raw bytes were parsed independently with the repository's own strict parser
+`scripts/gates/mysql-wave10-tap-transcript.mjs`:
+
+| Condition | Result |
+| --- | --- |
+| TAP version | exactly one `TAP version 13` |
+| top-level plan | exactly one `1..10` |
+| top-level results | 10, ids 1 to 10 contiguous and unique |
+| every result | plain `ok` |
+| skip / todo | none |
+| bail out | none |
+| malformed records | none |
+| summary | `tests 10`, `pass 10`, `fail 0`, `cancelled 0`, `skipped 0`, `todo 0` |
+| process exit code | 0 |
+
+#### 37.54.38.6 S01 to S10
+
+| ID | Result | SQLite business result | MySQL business result | Assertions |
+| --- | --- | --- | --- | --- |
+| S01 | PASS | 13 logical options | 13 logical options | identical option sets and totals on the identical business fixture, both engines zero-write |
+| S02 | PASS | admin 13, cross 13, self 12, other 13, unmapped 12, expired 12, future 12, denied 403 | the same counts, the same scope types, the same denial | the exact option set, the exact scope types and the exact count of seven readers, `CREDIT_SCOPE_DENIED` for the denied reader, and the `CREDIT_VIEW`-only permission set |
+| S03 | PASS | 13 options, 7-field DTO, one option for two Profile versions, two options for two Credit Objects, two options for the same display name | identical | the approved field set only, the grouping, the count equal to the logical option count, non-overlapping pages that rebuild the set |
+| S04 | PASS | the six defined probes return the expected sets, the wildcards return the 12 authorized options | identical | the defined ASCII probes, the Credit Object identity probe, the unauthorized target probe, the wildcard parity and the authorized-subset invariant |
+| S05 | PASS | the exact identity returns one option, the other Credit Object returns its own, a different Credit Object type returns nothing, six inputs are refused | identical, with identical refusal codes | the exact identity, a different Credit Object, a different Credit Object type and six refused inputs with the same code on both engines |
+| S06 | PASS | the historical date selects the sub-limit version and the current date does not, the revoked membership is not restored | identical | the effective-date window and the revoked self membership |
+| S07 | PASS | HTTP 409 `CREDIT_PROFILE_EFFECTIVE_AMBIGUOUS`, restored afterwards to 200 with one option | identical | the existing 409 semantic, never a collapsed option, and the version count is not disclosed |
+| S08 | PASS | the unknown and the unauthorized identity return byte-identical bodies | identical | non-enumeration and the scope predicate applied before the projection |
+| S09 | PASS | two identical reads, unchanged digest | two identical reads, unchanged digest | repeatability and the zero-write guarantee over the complete database digest |
+| S10 | PASS | the reference order and the reference search results | the live metadata, the reference order and the measured search results | the read-only MySQL metadata, the truncation-boundary proof, the stable order of the collation-unambiguous identities, the stable pagination and the full measurement matrix |
+
+#### 37.54.38.7 The live MySQL metadata
+
+| Fact | Live value |
+| --- | --- |
+| server version | `8.0.37` |
+| `@@sql_mode` | `IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION` |
+| `@@max_sort_length` | `1024` |
+| `@@collation_server` | `utf8mb4_0900_ai_ci` |
+| `@@collation_connection` | `utf8mb4_general_ci` |
+| `utf8mb4_0900_ai_ci` | `PAD_ATTRIBUTE = NO PAD`, `IS_COMPILED = Yes` |
+| `credit_object_type` | `longtext`, `utf8mb4_0900_ai_ci` |
+| `credit_object_id` | `varchar(128)`, `utf8mb4_0900_ai_ci` |
+| `customer_id` | `varchar(128)`, `utf8mb4_0900_ai_ci` |
+| `salesperson_scope_key` | `varchar(128)`, `utf8mb4_0900_ai_ci` |
+| `effective_from` | `varchar(128)`, `utf8mb4_0900_ai_ci` |
+| `effective_to` | `longtext`, `utf8mb4_0900_ai_ci` |
+| observed maximum `credit_object_type` length | 11 bytes over 18 rows |
+
+The truncation boundary of a MySQL group or sort key on a `TEXT` column is `max_sort_length`, 1024 bytes
+here. The production writer bounds `credit_object_type` to 50 ASCII uppercase characters, and the
+observed maximum is 11 bytes. The boundary is therefore unreachable for the supported range and no
+grouping truncation is possible. The live `PAD_ATTRIBUTE` is `NO PAD`, as the design predicted.
+
+#### 37.54.38.8 The measured differences and their attribution
+
+Seven probes are identical on both engines: `ascii-case-lower`, `ascii-case-upper`,
+`unicode-case-exact`, `accent-exact-lower`, `accent-exact-capital`, `wildcard-percent` and
+`wildcard-underscore`.
+
+Four probes differ. They belong to two different undefined dimensions, and they do not belong to the
+same one.
+
+**Open Decision A — `CUSTOMER_NAME_SEARCH_SEMANTICS_OPEN`.**
+
+| Probe | Query | SQLite | MySQL | Affected field |
+| --- | --- | --- | --- | --- |
+| `accent-folded` | `muller` | no row | the case customer | customer name `Müller GmbH` |
+| `accent-upper-case` | `MÜLLER` | no row | the case customer | customer name `Müller GmbH` |
+| `unicode-case-lower` | `ångström` | no row | the unicode customer | customer name `Ångström AB` |
+
+The cause is the folding: the SQLite `LOWER` folds ASCII only, while the MySQL comparison runs under a
+case- and accent-insensitive collation and folds Unicode letters. The exact-case forms of the same
+text match on both engines, so only the case and accent variants differ.
+
+**Open Decision B — `SEARCH_LIKE_ESCAPE_SEMANTICS_OPEN`.**
+
+| Probe | Query | SQLite | MySQL | Affected field |
+| --- | --- | --- | --- | --- |
+| `backslash-escape` | `cus-w11-sel\f` | no row | the self customer | customer code `CUS-W11-SELF` |
+
+The cause is the escape semantics, not the folding: `NO_BACKSLASH_ESCAPES` is absent from the live
+`sql_mode`, so the backslash escapes the following character in a MySQL `LIKE` pattern, while the SQLite
+`LIKE` treats it as a literal character. The same pattern is applied by the production selector to the
+customer code, the customer name, the Credit Object type and the Credit Object identity, so the escape
+semantics reaches all four searchable fields; the measured instance is a customer code search and it is
+therefore not attributable to the customer-name case and accent question.
+
+**No defined contract is violated.** The six defined search probes of S04 return identical results on
+both engines. No unauthorized customer appears in any measured result, and every measured result stays
+inside the authorized set of the reader. The logical count, the grouping, the pagination partition, the
+stable order of the collation-unambiguous identities, the DTO field set, the refusal codes and the
+zero-write guarantee are identical on both engines. The order of the full list differs only in the
+position of the mixed-case customer, whose relative order against the collation-unambiguous identities is
+unchanged.
+
+#### 37.54.38.9 The cleanup
+
+The campaign performed its final reset and reported the zero-object inventory, and the launcher then
+re-counted the five object categories on a fresh session after the campaign's own report:
+
+```text
+FINAL ZERO OBJECTS = {"tables":0,"views":0,"triggers":0,"routines":0,"events":0}
+CLEANUP = CONFIRMED (tables=0 views=0 triggers=0 routines=0 events=0)
+```
+
+The lease was released, the sensitive environment variables were cleared and the test account was kept
+for the next run. There was no child timeout and no unconfirmed termination.
+
+#### 37.54.38.10 The evidence
+
+The controlled evidence directory outside the repository is
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-selector-e3-2026-10-30`.
+
+| File | Role | SHA-256 |
+| --- | --- | --- |
+| `gate-run-raw.log` | the raw merged output of the single authorized execution | `f73933fc92fdf3627617b516821056ca535766236311bea9c1354c07c12b5822` |
+| `gate-exit-code.txt` | the real process exit code | `075f2953c5c5005351548921c2d3d7e086c59430f396541919b2c9f1204b5be8` |
+| `selector-mysql-e3-evidence.json` | the evidence JSON written by the suite | `0d2916621caa08c32464a1e4e5d8d201ca98612c1658d80e956ca554d58f63da` |
+| `derived-strict-tap-verification.txt` | the independent strict TAP parse of the raw bytes | `0c61a239bfbb6a3bfd8412f56c125913fc154247511e591927e60a6af37e5925` |
+| `derived-s01-s10-matrix.txt` | the derived per-case and divergence matrix | `6fa2de85dee29184390009cbf000b056d06eb7681c88d3b3141125b909592417` |
+
+The first three files are the authoritative raw bytes; the last two are derived read-only views of them
+and are labelled as such. No credential, token or secret is present in any file.
+
+#### 37.54.38.11 Two evidence defects recorded without repair
+
+1. The evidence summary `cases.S10.divergentProbes` lists four `null` entries. The probe records in
+   `findings.collation.probes` carry the label as the object key and not as a field, so the summary
+   could not project the labels. The four divergent probes are `unicode-case-lower`, `accent-folded`,
+   `accent-upper-case` and `backslash-escape`, and they are recoverable from the probe object keys.
+   This is a presentation defect in the evidence summary only. It affects no assertion and no verdict.
+2. The evidence JSON records explicit per-case business evidence for S01, S02, S04 and S10. S03, S05,
+   S06, S07, S08 and S09 are proven by their assertions, which the TAP transcript reports as plain `ok`
+   results and which the frozen suite SHA fixes.
+
+Neither defect was repaired in this round, because the round forbids any modification of the test or
+production code. Both are registered for a future authorized stage.
+
+#### 37.54.38.12 Status
+
+The protected execution passed on every defined contract: ten of ten, a strict TAP transcript, a
+process exit code of zero and a confirmed cleanup with a zero inventory in all five object categories.
+
+The customer-name case and accent semantics and the `LIKE` escape semantics remain undecided business
+rules. A gate PASS does not decide them, and the U3 Final Freeze stays blocked.
+
+**Execution status: `W11_A_U3_MYSQL_SELECTOR_E3_EXECUTION_PASS`.**
+**Freeze status: `W11_A_U3_FINAL_FREEZE_BLOCKED_BY_OPEN_SEARCH_SEMANTICS`.**
+
+### 37.54.39 W11-A U3 Search Semantics Closure — Design Amendment (2026-10-30)
+
+#### 37.54.39.1 Authorization, baseline and reuse
+
+The user adjudicated POLICY-01 and POLICY-02 and authorized one consecutive sequence: a targeted
+semantic audit, a bounded Requirement amendment, a bounded Design amendment and an acceptance-impact
+and test plan, ending in a hard stop. No production code, test, fixture, runner, schema or migration was
+modified. No MySQL was executed. The protected gate was not re-run.
+
+The baseline is branch `work/sales-waves6-13-recovery-20261025`, HEAD
+`8c716f64dbeb8d650c3dd87a43661ed205fdcfdd`, version `1.6.2`, an empty index and exactly the 30
+authorized U3 worktree paths.
+
+The Requirement layer is `document.md` "W11-A U3 Search Semantics Closure — Bounded Requirement
+Amendment (2026-10-30)", R-U3-SEARCH-01 through R-U3-SEARCH-06. The reuse basis is `document.md`
+R-U3-GATE-01 to R-U3-GATE-06, `solution.md` §37.54.35.7 and §37.54.36, the real MySQL E3 execution and
+its S10 findings. The complete U3 audit was not repeated. The four measured divergences are the input:
+`accent-folded`, `accent-upper-case`, `unicode-case-lower` and `backslash-escape`.
+
+#### 37.54.39.2 The targeted semantic audit
+
+**The search parameter.** `q` is read from the query string, trimmed, and rejected with HTTP 400
+`CREDIT_QUERY_OPTIONS_INVALID_INPUT` when it is longer than 100 characters. It is a data filter, never
+an authorization input.
+
+**The pattern.** The module builds two patterns from `q`: a prefix pattern `q + '%'` and a containment
+pattern `'%' + q + '%'`. The prefix pattern is applied to the customer code and to the Credit Object
+type; the containment pattern is applied to the customer name and to the Credit Object identity. The
+current relation is:
+
+```sql
+(LOWER(c.code) LIKE LOWER(?) OR LOWER(c.name) LIKE LOWER(?)
+  OR LOWER(cp.credit_object_type) LIKE LOWER(?) OR LOWER(cp.credit_object_id) LIKE LOWER(?))
+```
+
+**The four search fields.** The customer code and the customer name come from the `customers` table
+through an inner join; the Credit Object type and the Credit Object identity come from the
+`credit_profile` table. All four are reachable only through a row that already passed the canonical
+Credit Read Scope predicate.
+
+**The escape character.** There is none today. No `ESCAPE` clause exists, so the MySQL `LIKE` uses its
+default backslash escape while the SQLite `LIKE` has no default escape. This is the whole cause of the
+`backslash-escape` divergence, and it is independent of the folding.
+
+**The parameter binding.** The MySQL adapter sends the statement through `conn.query(sql, values)`,
+which escapes the values client-side and interpolates them; the SQLite handle binds the values
+exactly. The pattern bytes that reach the engine are therefore identical on both engines. Only the
+interpretation of those bytes by `LIKE` differs, which is why the divergence is a semantic difference
+and not a binding difference.
+
+**The boundary classification.**
+
+| Concern | Today | Under the two policies |
+| --- | --- | --- |
+| Search matching | `LOWER(...) LIKE LOWER(...)`, engine-dependent folding, engine-dependent escape | folded, byte-exact, literal |
+| Identity exact match | `cp.customer_id=? AND cp.credit_object_type=? AND cp.credit_object_id=?` | unchanged, still an equality comparison |
+| Database collation | the column collation decides the comparison: `utf8mb4_0900_ai_ci` on MySQL, binary on SQLite | irrelevant, the comparison becomes byte exact on a dedicated key column |
+| Frontend input | the ordinary search box of the selector, a 180 ms debounce, a 100 character limit, no client-side filtering | unchanged |
+| Authorization scope | the canonical Credit Read Scope predicate inside the same relation, applied before the grouping, the count and the pagination | unchanged |
+
+**The count, the grouping, the order and the pagination.** The count is a derived table over the same
+relation and groups by the logical key. The list groups by
+`cp.customer_id, c.code, c.name, c.active, cp.credit_object_type, cp.credit_object_id` and orders by
+`c.code, cp.customer_id, cp.credit_object_type, cp.credit_object_id`. The pagination applies `LIMIT` and
+`OFFSET` over that order. All of it is inside the authorized relation.
+
+**The audit conclusions.**
+
+1. The accent and Unicode divergences are caused by the folding, not by the binding and not by the
+   collation of the parameter.
+2. The backslash divergence is caused by the missing escape contract, not by the folding. The two
+   dimensions are independent and need independent fixes.
+3. The exact identity filter is an equality comparison that runs under the column collation, so it is
+   case-insensitive on MySQL and case-sensitive on SQLite. The bytes that the selector itself hands to
+   it always come from the DTO of the same row, so the reachable states agree, but the difference is
+   real and it belongs to the identity domain. It is disclosed here and is explicitly not changed by
+   this amendment.
+4. The grouping is effectively engine consistent for the reachable states, because the customer
+   identity is itself case- and accent-insensitive on MySQL, so two identities that differ only by case
+   or accent cannot both exist there.
+5. The ordering and therefore the page partition are engine dependent while a case-varied customer
+   code exists. The measured order places the mixed-case customer last on SQLite and second on MySQL.
+   The defined contract, a stable order with non-overlapping pages, holds on each engine, but the page
+   boundary cuts differently. This is a display-order matter, it is outside the two policies, and this
+   amendment does not change the ordering rule.
+
+#### 37.54.39.3 The option comparison
+
+**Option A — the database collation and plain SQL.** A1: make SQLite use the MySQL collation. The
+Node SQLite handle exposes no custom collation API, so this is impossible. A2: use a MySQL-only
+function or collation: the two engines would diverge again. A3: keep the `LOWER` comparison: the ASCII
+case folding already agrees on both engines, but the accent and Unicode folding never will, so
+POLICY-01 cannot be met. A4: add the `ESCAPE` clause and escape the pattern: this meets POLICY-02
+completely and needs no schema change. **A is adopted for POLICY-02 and rejected for POLICY-01.**
+
+**Option B — a deterministic Unicode normalization applied by the application.** B1: fold in the
+application and filter in JavaScript after the SQL authorization. This moves the filter, the count and
+the pagination out of SQL, fetches the whole authorized set, and leaves the engine-dependent order in
+place. It is rejected. B2: fold in the application and materialize the folded value in the database,
+then compare byte-exactly in SQL. This meets both policies, keeps the authorization, the count, the
+grouping, the order and the pagination in SQL, and keeps the SQL engine-neutral. B3: register a custom
+SQL function. The Node SQLite handle supports a scalar function, but MySQL would need a stored
+function, which needs a schema object, DDL privileges and a binary-log setting; the asymmetry makes it
+unusable. **B2 is selected.**
+
+**Option C — a search key or index.** The materialized key of B2 is exactly the search key of C. An index
+on the key is useless, because a containment match with a leading wildcard cannot use an index, so no
+index is added. The one requirement of C is the collation of the key column: it must be byte exact on
+both engines, because the folded value is already normalized and any further folding by the collation
+would reintroduce the very difference the policies remove. The repository already owns this exact
+pattern in `server/migrations/sales-customer-wave8-service-consignment.js`, where `lot_code_key` is
+`TEXT COLLATE BINARY` on SQLite and `VARCHAR(128) COLLATE utf8mb4_0900_bin` on MySQL, precisely so
+that the identity never folds under a case-insensitive or trailing-space comparison. The search key
+follows the same rule.
+
+#### 37.54.39.4 The selected design
+
+**The fold.** One pure, deterministic, locale-independent function, shared by the write paths, the
+selector and the migration:
+
+```text
+fold(text) = NFKD(text) with every Unicode non-spacing mark (category Mn) removed, then uppercased
+```
+
+The verified behaviour on the texts that matter is: `Müller GmbH`, `muller` and `MÜLLER` all fold to
+`MULLER` and `MULLER GMBH`; `Ångström AB`, `ångström` and `Ångström` all fold to `ANGSTROM` and
+`ANGSTROM AB`; Chinese and other non-Latin text is returned unchanged; the German sharp S folds to
+`SS`, so `straße` and `STRASSE` are equal; the Turkish dotted and dotless I both fold to `I`, so the
+folding is locale independent; and the fold is stable across the Unicode normalization forms, so the
+same text stored in the composed or the decomposed form folds to the same key.
+
+The supported range and the boundaries are those of R-U3-SEARCH-05: the runtime Unicode version is
+shared by both engines, so the two engines always agree; only the non-spacing marks are removed, so
+the spacing marks of the Indic and Thai scripts survive; the compatibility-only characters are folded
+as far as the runtime allows; and no language-specific equivalence beyond these rules is claimed.
+
+**The literal pattern.** The pattern is escaped and the comparison carries an explicit `ESCAPE`
+clause. The escape character is `!`, which is chosen because it is not special in either engine and
+because the pattern can escape it. The rules are: `!` becomes `!!`, `%` becomes `!%`, `_` becomes `!_`,
+and the backslash is left as an ordinary character because it is no longer the escape character once
+the `ESCAPE` clause names `!`. The pattern that reaches the engine is therefore identical on both
+engines, and the `LIKE` interpretation of it is identical as well, because the escape clause is
+explicit and the key column is byte exact.
+
+**The materialized search key.** The folded value of each of the four searchable fields is materialized
+in its own column, so that the per-field pattern position of today, a prefix for the customer code and
+the Credit Object type and a containment for the customer name and the Credit Object identity, is
+preserved exactly.
+
+| Column | Content | Pattern position |
+| --- | --- | --- |
+| `customers.code_search_key` | `fold(code)` | prefix |
+| `customers.name_search_key` | `fold(name)` | containment |
+| `credit_profile.credit_object_type_search_key` | `fold(credit_object_type)` | prefix |
+| `credit_profile.credit_object_id_search_key` | `fold(credit_object_id)` | containment |
+
+The columns are derived matching artifacts. They are never an identity, never a uniqueness constraint
+and never a source of truth for a business value.
+
+**The declared Schema and Migration Amendment.** The realization of the two policies inside the
+current code and schema boundary is not possible without it, and it is declared here and not
+implemented. The amendment is additive and bounded:
+
+1. a new migration module that adds the four columns, gives them a byte-exact collation, and backfills
+   the existing rows;
+2. the SQLite registration of that migration in the migration chain of `server/db.js`;
+3. the invocation of the same migration against the live MySQL adapter after the bootstrap, following
+   the `migrateV14E2BusinessDate` precedent, so that an existing MySQL deployment gains the columns
+   and the backfill and not only a fresh bootstrap.
+
+The MySQL column definition is `LONGTEXT COLLATE utf8mb4_0900_bin`, the SQLite definition is
+`TEXT COLLATE BINARY`, and both are nullable. The columns are nullable on purpose: a row without a key
+is simply not findable by a search, and the backfill plus the write paths guarantee that every business
+row has one. A leading-wildcard containment match cannot use an index, so no index is added.
+
+The backfill recomputes the key from the source columns and is therefore idempotent. It runs in
+batches, so a large customer table does not hold one long transaction.
+
+**The write paths.** The customer keys are set by the customer create and update handlers and by the
+customer bulk import; the profile keys are set by the Profile creation handler. The Profile handler
+that only closes a predecessor version does not touch the searchable fields and therefore does not
+recompute the keys. The shared W11-SEC fixture is frozen and is not touched; it inserts customers
+directly, so the rows it creates carry no key and are not findable by a search. No frozen test searches
+the selector, so no frozen assertion changes. The revisable U3-A suite and the new Selector gate
+fixture create their own search customers with the keys present.
+
+**The selector predicate.** The relation keeps its authorization predicate, its grouping, its count,
+its order and its pagination, and only the four search comparisons change, from the raw column to the
+key column, with the folded and escaped pattern and the explicit `ESCAPE` clause. The exact identity
+filter, the seven-field DTO and every other clause of the relation are unchanged.
+
+#### 37.54.39.5 The invariants the implementation must preserve
+
+1. The canonical Credit Read Scope predicate stays the only authorization source. No second scope
+   resolver is introduced and the search never widens the authorized set.
+2. The logical count stays a derived table over the same relation, so the count and the list always
+   describe the same authorized set.
+3. The grouping, the order and the pagination stay in SQL and stay unchanged in rule.
+4. The exact identity filter stays an equality comparison over the customer, the Credit Object type and
+   the Credit Object identity.
+5. The seven-field DTO and its meaning are unchanged.
+6. Every measured search GET stays zero-write.
+7. The refused-input contract, the unknown and unauthorized indistinguishability and the
+   `CREDIT_SCOPE_DENIED` refusal are unchanged.
+
+#### 37.54.39.6 The exact future implementation whitelist
+
+| Path | Action | Reason |
+| --- | --- | --- |
+| `server/lib/search-fold.js` | new | the shared, pure, deterministic fold and the pattern escaping |
+| `server/migrations/sales-customer-wave11-a-selector-search-key.js` | new | the additive migration, the byte-exact collation and the backfill |
+| `server/db.js` | modify | register the migration in the SQLite chain |
+| `server/database/mysql-adapter.js` | modify | run the migration against the live MySQL adapter after the bootstrap |
+| `server/modules/customers.js` | modify | set the two customer keys on create and update |
+| `server/modules/commercial-golive.js` | modify | set the two customer keys in the customer bulk import |
+| `server/modules/credit-profile.js` | modify | set the two Profile keys on creation |
+| `server/modules/credit-query-options.js` | modify | the folded, escaped, literal search predicate |
+| `server/sales-customer-wave11-a-credit-query-ui.test.js` | modify | the search case uses a customer with a key; the new literal and fold cases |
+| `server/sales-customer-wave11-a-search-semantics.test.js` | new | the dedicated SQLite search matrix |
+| `server/test-utils/wave11-a-selector-gate-fixture.js` | modify | the search customers carry their keys |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | modify | the S10 measurement becomes an assertion; the per-case evidence records; the label defect |
+| `scripts/testing/test-suites.js` | modify | one new FULL registration of the new SQLite suite, additive, following the frozen-file amendment precedent |
+| `scripts/acceptance/sales-customer-wave11-a-u3-browser-uat.mjs` | modify | the browser search regression cases |
+| `document.md`, `solution.md`, `log/<date>.md` | append | the implementation record |
+
+No frozen file is modified, with two additive exceptions that follow the established precedent:
+`scripts/testing/test-suites.js` receives one new FULL registration and `package.json` would receive
+no change at all, because the gate script of the Selector already exists. The frozen migration
+registry `server/migrations/sales-customer-domain.js` is deliberately not used, because the new
+migration is registered in `server/db.js` instead.
+
+#### 37.54.39.7 The SQLite test plan
+
+A new suite `server/sales-customer-wave11-a-search-semantics.test.js`, registered in FULL and not in
+FAST, because every case migrates a fresh database and drives the production writers.
+
+| ID | Case |
+| --- | --- |
+| `SE-01` | `Müller GmbH` is found by `muller`, `Müller`, `MÜLLER` and `MULLER` |
+| `SE-02` | `Ångström AB` is found by `ångström`, `Ångström` and `ANGSTROM` |
+| `SE-03` | an ASCII mixed-case customer code is found by its lower and its upper form |
+| `SE-04` | a Unicode case variant is found |
+| `SE-05` | a literal `%` selects only a customer whose text contains a `%` |
+| `SE-06` | a literal `_` selects only a customer whose text contains a `_` |
+| `SE-07` | a literal `\` selects only a customer whose text contains a `\` |
+| `SE-08` | a multi-character containment works and the prefix position of the customer code is preserved |
+| `SE-09` | the five read modes keep their authorized sets when the query matches an unauthorized customer |
+| `SE-10` | the count, the pages and the rebuilt set agree under a filtered set |
+| `SE-11` | the ordering is stable and the collation-unambiguous identities keep their relative order |
+| `SE-12` | every measured search GET is zero-write |
+| `SE-13` | the refused-input contract is unchanged |
+| `SE-14` | the exact identity filter stays an equality comparison and stays engine neutral for the bytes the DTO returns |
+
+The four cases that the last real MySQL execution measured as divergent, `accent-folded`,
+`accent-upper-case`, `unicode-case-lower` and `backslash-escape`, become equality assertions. They are
+not weakened; they are reversed from a measurement into a contract.
+
+#### 37.54.39.8 The MySQL retest plan
+
+1. The protected gate is re-executed once through the existing launcher, with its own campaign, its
+   own evidence directory and its own archive. The previous execution evidence keeps its SHA-256 and
+   is never overwritten.
+2. The S10 measurement of the Selector gate becomes an equality assertion for the folded and the literal
+   probes, so a reappearing divergence fails the gate instead of being recorded.
+3. The literal probes join the defined probes of S04.
+4. The S10 metadata probe re-confirms the live `PAD_ATTRIBUTE`, the live collation and the live
+   `@@max_sort_length`, and it must additionally confirm that the four key columns carry the byte-exact
+   collation on the live target, which is the fact the design now depends on.
+5. The migration runs against the live MySQL target inside the campaign, so the retest also proves the
+   additive migration path, the byte-exact collation enforcement and the backfill on a real MySQL
+   database, and the final zero-object inventory proves that the cleanup still holds.
+6. The gate proves that a customer whose key was backfilled is found by the folded pattern, and that a
+   customer created during the run through the production writer is found as well.
+
+#### 37.54.39.9 The browser regression plan
+
+The browser acceptance harness gains the search scenarios of the ordinary search box: a mixed-case
+query, an accent-folded query, a literal `%`, a literal `_` and a literal `\`, each with the loading
+state, the result count, the empty state for a query that matches nothing authorized, the reset of a
+stale context when the query changes, the navigation into a detail from a search result and the deep
+link back into that result. The four viewport widths are re-measured for the search result list, because
+a longer or a CJK result text changes the layout of the list.
+
+#### 37.54.39.10 The evidence quality improvement plan
+
+Both defects are presentation defects of the evidence, and they are corrected in the same future
+implementation as the search semantics. The correction never weakens an assertion and never rewrites a
+historical run.
+
+1. The `divergentProbes` summary: every probe record carries its own label, so the summary projects the
+   real labels. After the implementation the summary reports an empty divergence list, because the four
+   measured divergences are gone. The historical run keeps its four entries and its four `null` labels,
+   because that file is evidence and is never modified.
+2. The per-case structured evidence: every one of the ten cases writes its own record into the evidence
+   file, with the business facts it proved on both engines, so the evidence is self-describing instead
+   of being carried by the TAP records alone.
+3. The original raw artifacts keep their SHA-256. The new run writes into a new directory. The derived
+   views are labelled as derived. No historical run data is fabricated, and the corrected evidence is
+   never presented as the evidence of the earlier run.
+
+#### 37.54.39.11 The freeze compatibility
+
+The frozen W11-SEC payloads, including `server/test-utils/wave11-sec-scope-fixture.js`,
+`server/modules/credit-scope.js`, `server/modules/credit-check.js`,
+`server/modules/credit-special-approval.js` and the protected launcher family, are not modified. The
+frozen U2 E3 suite and the frozen W11-SEC MySQL suite keep their assertions. The additive schema
+change does alter their database environment, because they gain four derived columns and the backfill
+runs on their schema; their business facts and their assertions are unaffected, and the effect is
+declared here so that the freeze owner can acknowledge it. The frozen `credit-query.js` and
+`credit-check.js` identities, the CSP and CCHK identities, the ONE_TIME semantics, the OVERDUE evidence
+foundation and the existing browser acceptance evidence are unchanged.
+
+#### 37.54.39.12 The remaining risks and the open items
+
+1. The additive schema change and the live MySQL migration path are the largest part of the
+   implementation. They are bounded and additive, but they are a schema change and they are declared,
+   not implemented.
+2. The ordering and the page partition stay engine dependent while a case-varied customer code exists.
+   Ordering by the folded key would remove that difference, because the key is materialized anyway, but
+   it would change the visible order of such customers and is therefore outside the two policies and
+   outside this amendment. It stays an open item for the business owner.
+3. The exact identity filter stays collation dependent, which is an identity-domain matter and is
+   explicitly out of the scope of this amendment.
+4. The customers that the frozen shared fixture inserts directly carry no search key and are therefore
+   not findable by a search. This affects no frozen assertion, but a future writer of that fixture must
+   know it.
+5. The Unicode repertoire of the folding follows the runtime, so an upgrade of the runtime can change a
+   folded key. Both engines move together, so the cross-engine consistency is unaffected; the stored
+   keys would have to be recomputed by a future migration.
+6. The two evidence presentation defects remain open until the implementation that corrects them.
+
+**Design status: `W11_A_U3_SEARCH_SEMANTICS_DESIGN_READY`.**
+
+### 37.54.40 W11-A U3 Search Semantics — Final Bounded Design Correction (2026-10-30)
+
+#### 37.54.40.1 Authorization, baseline and reuse
+
+The user approved the deterministic logical ordering policy for the U3 Selector and authorized one final
+bounded correction: the ordering requirement, the folding safety, the search key migration and writer
+completeness, and the final whitelist verification. Only the Requirement and the Design are authorized.
+No production code, schema, migration, test, MySQL execution, Git write, Acceptance, Freeze, Release or
+Deploy happened.
+
+The baseline is branch `work/sales-waves6-13-recovery-20261025`, HEAD
+`8c716f64dbeb8d650c3dd87a43661ed205fdcfdd`, version `1.6.2`, an empty index and exactly the 30
+authorized U3 worktree paths.
+
+The Requirement layer is `document.md` "W11-A U3 Search Semantics — Final Bounded Design Correction,
+Requirement Amendment (2026-10-30)", R-U3-SEARCH-07 to R-U3-SEARCH-12. The reuse basis is
+R-U3-SEARCH-01 to R-U3-SEARCH-05, §37.54.39, the real MySQL E3 execution and its S10 findings, the
+frozen inventory of the U2 freeze record and the W11-SEC-01 delivery commit. The whole U3 audit was not
+redone.
+
+This correction closes four gaps of §37.54.39: the ordering was left engine dependent, the folding
+removed every non-spacing mark, the literal contract was stated but not bound to a concrete syntax, and
+the writer completeness was asserted by file name rather than proved.
+
+#### 37.54.40.2 D1 — The deterministic ordering design
+
+**The order.** The Selector's order becomes an explicit, fully pinned logical order. Every field and its
+comparison collation are named:
+
+| # | Order field | Meaning | Collation |
+| --- | --- | --- | --- |
+| 1 | `c.code_search_key` | the Search Fold Key of the customer code, the primary key | byte exact, pinned explicitly |
+| 2 | `c.code` | the original customer code bytes, the tie-break of a colliding fold key | byte exact, pinned explicitly |
+| 3 | `cp.customer_id` | the original customer identity bytes | byte exact, pinned explicitly |
+| 4 | `cp.credit_object_type_search_key` | the normalized Credit Object type | byte exact, pinned explicitly |
+| 5 | `cp.credit_object_id_search_key` | the normalized Credit Object identity | byte exact, pinned explicitly |
+| 6 | `cp.credit_object_id` | the original Credit Object identity bytes, the final tie-break | byte exact, pinned explicitly |
+
+The byte-exact collation is `BINARY` on SQLite and `utf8mb4_0900_bin` on MySQL, both no-pad. The two
+collations are chosen because the repository already uses exactly this pair for the derived key column
+`lot_code_key`, precisely so that an identity never folds under a case-insensitive or a trailing-space
+comparison. The comparison is pinned per field with an explicit `COLLATE` clause rather than inherited
+from the column or from the connection, so the order never depends on a default. The two engines
+therefore agree byte for byte.
+
+**The total order.** The logical option is the group
+`customer_id + credit_object_type + credit_object_id`, and the order ends with the original Credit Object
+identity bytes, so the six fields form a total order over the logical options. No two distinct logical
+options can compare equal, and no generated technical identity and no insertion order enters the order.
+
+**The grouping consequence.** The order references the three search key columns, and the live MySQL runs
+with `ONLY_FULL_GROUP_BY`, which rejects an order expression that is not in the group key and is not
+provably functionally dependent on it. The three search key columns are therefore added to the group key.
+The grouping partition is unchanged, because each added column is a deterministic function of a column
+that is already grouped, so the groups and their contents are exactly the same as before. The logical
+grouping contract of R-U3-SEARCH-03 is preserved; only the group key expression grows.
+
+**The collision cases.**
+
+| Case | Behaviour |
+| --- | --- |
+| Two customer codes with the same fold key, different original bytes | ordered by the original code bytes, field 2. On MySQL the customer code is unique under a case- and accent-insensitive collation, so two such customers cannot coexist there; the difference belongs to the environment class of R-U3-GATE-03 and not to a business result. |
+| Two customer codes that differ only in their original case | the same rule: the fold key collides and the original bytes decide. The customer CSV import can create such a code on SQLite and is refused by the unique key on MySQL, which is an existing environment difference and is not introduced here. |
+| Two customers that share a display name | the display name is not an order field, so the order is decided by the customer code fold key and then by the original bytes. Two same-named customers are two distinct logical options and keep a stable relative order. |
+| One customer with several Credit Objects | ordered by the normalized type, the normalized identity and the original identity bytes. The type is written by the production writer as an ASCII upper-case code, so its normalized form equals its original form and the three fields are consistent. |
+| The page boundary | the total order plus the identical authorized set and the identical filtered set give identical page slices on both engines, and a page is reproducible by repeating the same offset. |
+
+**The scope.** Only the presentation order of the Selector changes. The customer identity, the Credit
+Object identity, the authorization predicate, the logical grouping and the authorized result set are
+unchanged, and the seven-field DTO is unchanged.
+
+#### 37.54.40.3 D2 — The folding safety design
+
+**The algorithm.** One pure, deterministic, locale-independent function, shared by the write paths, the
+selector, the migration and the verification:
+
+```text
+fold(text):
+  1. decompose with Unicode NFKD
+  2. scan the decomposed code points, tracking the last base character
+  3. drop a non-spacing mark only when that base is a Latin-script letter
+  4. uppercase the result with the locale-independent Unicode uppercase mapping
+```
+
+The step 3 condition is the whole correction. The previous design removed every non-spacing mark, which
+destroyed the meaning of the marks of the Devanagari, the Thai, the Hebrew, the Arabic, the Greek and
+the Cyrillic scripts, and that loss was not harmless. The corrected algorithm folds a mark only where it
+is a diacritic of a Latin letter.
+
+**The verified behaviour.** Every case required by R-U3-SEARCH-08 was executed against the algorithm on
+this runtime:
+
+| Input | Folded | Note |
+| --- | --- | --- |
+| `Müller GmbH` | `MULLER GMBH` | the Latin diaeresis is folded |
+| `muller` | `MULLER` | contained in `MULLER GMBH`, so the query finds the row |
+| `MÜLLER` | `MULLER` | the Unicode uppercase of `Ü` is applied first |
+| `Ångström AB` | `ANGSTROM AB` | the ring above and the diaeresis are folded |
+| `ångström` | `ANGSTROM` | contained in `ANGSTROM AB` |
+| `Ångström` | `ANGSTROM` | the composed and the decomposed form agree |
+| `straße` | `STRASSE` | the sharp S maps to `SS`, so it equals `STRASSE` |
+| `İstanbul` | `ISTANBUL` | the dot above the capital I is a Latin diacritic and is folded |
+| `ıstanbul` | `ISTANBUL` | the dotless I maps to `I`, so all three agree and the result is locale independent |
+| `中文客户` | `中文客户` | unchanged, still searchable |
+| `हिन्दी` | `हिन्दी` | the Devanagari virama is preserved |
+| `नँ` | `नँ` | the Devanagari chandrabindu is preserved |
+| `ม้า` | `ม้า` | the Thai tone mark is preserved |
+| `ที่` | `ที่` | the Thai vowel sign is preserved |
+| `שָׁלוֹם` | `שָׁלוֹם` | the Hebrew niqqud is preserved |
+| `مَرْحَبًا` | `مَرْحَبًا` | the Arabic harakat are preserved |
+| `ά` | `Ά` | the Greek tonos is preserved, so `ά` and `α` stay different |
+| `й` | `Й` | the Cyrillic breve is preserved, so `й` and `и` stay different |
+| `Müller 中文 GmbH` | `MULLER 中文 GMBH` | a mixed string folds each part under its own rule |
+
+**The supported accent forms.** The supported set is the combining marks of the Latin script, including
+the precomposed Latin-1 and Latin Extended-A letters: the acute, the grave, the circumflex, the
+diaeresis, the tilde, the macron, the breve, the caron, the cedilla, the ring, the ogonek and the
+double acute. The supported set is stated as an explicit list so that the folding is a bounded,
+documented range and not an open-ended claim.
+
+**The disclosed loss.** Two names that differ only by a Latin diacritic are folded together. That
+includes the Vietnamese syllables that differ only by their tone, because the Vietnamese tone marks are
+the very same combining marks as the European accents and cannot be told apart by the mark. This loss is
+disclosed, it is a consequence of the approved accent-insensitive policy, and it is confined to the
+derived search key: no stored business text, no customer identity and no business value is changed by
+it. The reverse direction is disclosed as well: a Hebrew, an Arabic, a Greek, a Cyrillic, a Devanagari
+or a Thai name that differs only by one of its semantic marks is not folded together, so a query that
+omits the mark does not find the name.
+
+**The algorithm version and the recomputation strategy.** The fold module exports an explicit algorithm
+version constant, `SEARCH_FOLD_VERSION`, which names the algorithm, the normalization form and the
+mark rule. The stored key columns are bound to that version. A change of the algorithm, or a Node or
+Unicode runtime upgrade that changes the repertoire or the mappings, invalidates the stored keys; the
+recomputation is the same idempotent backfill, re-run as an explicit operator-triggered migration, which
+recomputes every key from its source columns and therefore needs no separate repair path and no lazy
+write on a read path. The Selector never repairs a key at read time; the zero-write invariant holds
+absolutely.
+
+#### 37.54.40.4 D3 — The literal LIKE contract
+
+**The pattern construction.** The search text is folded first, then escaped, and the escape character is
+`!`:
+
+| Input character | In the pattern |
+| --- | --- |
+| `!` | `!!` |
+| `%` | `!%` |
+| `_` | `!_` |
+| `\` | unchanged, because `!` is the escape character and the backslash is no longer special |
+| everything else | unchanged |
+
+**The statement.** The comparison carries an explicit escape clause, so the pattern interpretation is
+defined by the statement and not by the engine:
+
+```sql
+c.code_search_key LIKE ? ESCAPE '!'
+```
+
+**The binding.** The four patterns are bound as ordinary parameters. On SQLite the parameters are bound
+exactly; on MySQL the adapter escapes the values client-side and interpolates them. The pattern bytes
+that reach the engine are therefore identical on both engines, and with the explicit escape clause and
+the byte-exact key column the interpretation of those bytes is identical as well.
+
+**The SQL mode.** The live MySQL runs with `sql_mode` that does not contain `NO_BACKSLASH_ESCAPES`, which
+is why the backslash escaped in the previous design. With an explicit `ESCAPE '!'` clause the backslash
+is no longer the escape character, so the mode cannot change the result. This is a claim that the live
+retest must prove rather than a claim that is assumed here: the retest asserts the literal behavior on
+the live target and records the live `sql_mode` next to it.
+
+**The field positions.** The prefix position of the customer code and of the Credit Object type and the
+containment position of the customer name and of the Credit Object identity are unchanged. The exact
+identity filter remains an equality comparison and is not affected.
+
+#### 37.54.40.5 D4 — The search key migration and the writer completeness
+
+**The column definition.**
+
+| Table | Column | SQLite | MySQL | Nullable |
+| --- | --- | --- | --- | --- |
+| `customers` | `code_search_key` | `TEXT COLLATE BINARY` | `LONGTEXT COLLATE utf8mb4_0900_bin` | yes |
+| `customers` | `name_search_key` | `TEXT COLLATE BINARY` | `LONGTEXT COLLATE utf8mb4_0900_bin` | yes |
+| `credit_profile` | `credit_object_type_search_key` | `TEXT COLLATE BINARY` | `LONGTEXT COLLATE utf8mb4_0900_bin` | yes |
+| `credit_profile` | `credit_object_id_search_key` | `TEXT COLLATE BINARY` | `LONGTEXT COLLATE utf8mb4_0900_bin` | yes |
+
+No index is added: a containment match with a leading wildcard cannot use an index. The columns are
+derived matching artifacts, never an identity, never a uniqueness constraint and never a source of truth.
+
+**The complete writer inventory.** The audit was executed over the actual statements of the whole
+repository, not over the file names. Every write entry point that creates or changes a searchable
+business value is listed:
+
+| Write entry point | File and statement | Search key maintenance |
+| --- | --- | --- |
+| API customer create | `server/modules/customers.js`, `INSERT INTO customers` | both customer keys are written in the same statement |
+| API customer update | `server/modules/customers.js`, `UPDATE customers SET code=?, name=?` | both customer keys are recomputed in the same statement |
+| Customer CSV import commit | `server/modules/commercial-golive.js`, `INSERT INTO customers` inside `commitImport` | both customer keys are written in the same statement |
+| Demo seed | `server/db.js`, `INSERT OR IGNORE INTO customers` inside `seedDemoData` | both customer keys are written in the same statement |
+| Credit Profile creation | `server/modules/credit-profile.js`, `INSERT INTO credit_profile` | both Profile keys are written in the same statement |
+| Credit Profile predecessor close | `server/modules/credit-profile.js`, `UPDATE credit_profile SET effective_to=?` | no key maintenance: the searchable fields are not touched |
+| Frozen W11-SEC fixture | `server/test-utils/wave11-sec-scope-fixture.js`, `INSERT INTO customers` | not modified, the file is frozen. Its rows carry no key and are therefore not findable by a search. No frozen test searches the Selector, so no frozen assertion changes. |
+| Frozen W10 acceptance fixture | `server/test-utils/wave10-mysql-acceptance-fixture.js`, `INSERT INTO credit_profile` | not modified. It is used by the frozen U2 E3 suite, which exercises SC101 and SC102 and never the Selector. |
+| Selector gate fixture | `server/test-utils/wave11-a-selector-gate-fixture.js` | modified: its search customers carry their keys |
+| U3-A suite | `server/sales-customer-wave11-a-credit-query-ui.test.js` | modified: its search case uses a customer that carries a key |
+| Other test and integration files | about fifty files with direct inserts of disposable facts | out of scope. They create facts that no search has to find. The completeness proof is below. |
+
+**The completeness proof.** Only seven source files reference the Selector at all: the owner module, the
+route registration in `server/app.js`, the page, the browser harness, the gate runner, the gate suite and
+the U3-A suite. Of those, exactly one both exercises the Selector and writes a searchable fact: the
+U3-A suite, which is already in the implementation whitelist. The gate suite and the browser harness use
+the dedicated gate fixture, which is also in the whitelist. The route registration and the page need no
+change, because the literal and the folding rules are server side and the page only sends the query
+text. No other test file can be affected by the search keys, because no other test file searches the
+Selector.
+
+**The twelve lifecycle points.**
+
+| Point | How it is satisfied |
+| --- | --- |
+| 1. Fresh SQLite initialization | the migration runs at the end of the migration chain of `server/db.js`, after the customer and the Credit Profile tables exist |
+| 2. Existing SQLite additive migration | the same migration, idempotent: the columns are added when missing and the backfill recomputes every key |
+| 3. Fresh MySQL bootstrap | the SQLite snapshot already carries the migrated columns, so the bootstrap emits them, and the live MySQL migration then enforces the byte-exact collation, which the snapshot path does not carry |
+| 4. Existing MySQL live migration | the migration runs against the live MySQL adapter after the bootstrap, following the `migrateV14E2BusinessDate` precedent, and adds the columns, enforces the collation and backfills |
+| 5. Demo seed | the seed writes the keys in the same insert |
+| 6. API customer create and update | the keys are written in the same statement |
+| 7. Customer CSV import | the keys are written in the same insert; the import is idempotent on the batch status, so a replay does not write twice |
+| 8. Credit Profile create and versioning | the keys are written at creation; the predecessor close does not touch the searchable fields |
+| 9. Idempotency replay | the customer create replays the stored response and never re-inserts, so the key of the original insert stands; the profile create behaves the same way |
+| 10. Interrupted migration or retry | the migration is idempotent and restartable: the column addition is conditional, the backfill recomputes from the source columns, and the verification pass recomputes and compares, so a retry converges |
+| 11. Missing or stale key detection | the migration verification pass recomputes every stored key and compares it, and it counts the rows that carry no key. The count is reported, and the Selector never repairs a key at read time |
+| 12. Backfill completeness before the search is available | the migration chain completes before any route serves, and the live MySQL migration runs before the adapter is handed to the application, so the search is reachable only after the backfill has completed |
+
+**The backfill, the idempotency and the failure boundary.** The backfill reads the source rows in
+batches, computes the key with the shared fold and writes it back. It is idempotent, because it always
+recomputes from the source, and it is restartable after an interruption. The migration never swallows an
+error: a failed batch aborts the migration with a non-zero result and the operator sees it. The failure
+boundary is the migration itself: the columns may exist and the keys may be partially written, but the
+application never starts against a half-migrated schema, because the migration runs inside the
+initialization chain and a failure prevents the chain from completing. The verification pass after the
+backfill fails the migration when a stored key differs from the recomputed key.
+
+**The upgrade ordering and the version compatibility.** The new migration is registered at the end of
+the SQLite chain, after the sales and the customer domain migrations, and it is invoked against the live
+MySQL adapter after the bootstrap. The stored keys are bound to `SEARCH_FOLD_VERSION`. A change of the
+algorithm or of the runtime repertoire requires an explicit operator-triggered recomputation migration,
+which is the same idempotent backfill. No other deployment step is required.
+
+**The zero-write invariant.** The Selector never writes. It never repairs a missing key, it never
+caches a fold and it never materializes a key on a read. The only writes of a key are the write paths and
+the migration.
+
+#### 37.54.40.6 D5 — The frozen contract impact
+
+| Category | Impact |
+| --- | --- |
+| A. The schema of the new derived search columns | Four additive, nullable, unindexed columns on `customers` and `credit_profile`, with a byte-exact collation on both engines, plus one migration module and its registration. No existing column changes, no constraint changes, no data of a business column is modified. |
+| B. The frozen Credit Profile business fields and the permission behaviour | `credit-scope.js`, `credit-check.js`, `credit-query.js` and `credit-special-approval.js` are not modified. The scope predicate, the read modes, the check decision, the exposure DTO and the approval semantics are untouched. The search key is not part of any authorization predicate. |
+| C. The existing frozen W11-SEC, U2 and OVERDUE tests | Their assertions are unchanged. Their database gains four derived columns and their fixtures gain keyless rows, which no frozen assertion observes, because no frozen test searches the Selector. The frozen shared fixtures are not modified. |
+| D. The MySQL bootstrap and the migration impact | The bootstrap path gains the four columns through the SQLite snapshot, and the live MySQL migration enforces the byte-exact collation and the backfill on both a fresh and an existing database. The final zero-object inventory of the protected campaign is unaffected, because the migration creates no persistent object outside the two tables. |
+| E. The new business behaviour of the Selector | The search becomes case-insensitive, accent-insensitive for the Latin diacritics, Unicode-aware and engine consistent, and literal for the three special characters. The order becomes deterministic across the engines. The authorized set, the DTO, the grouping, the count contract, the pagination contract and the zero-write property are unchanged. |
+
+#### 37.54.40.7 D6 — The acceptance matrix
+
+| Area | Coverage |
+| --- | --- |
+| The SQLite search suite | the fourteen `SE-01` to `SE-14` cases of §37.54.39.7, extended with the script-aware folding cases, the Devanagari, the Thai, the Hebrew, the Arabic, the Greek, the Cyrillic, the mixed string and the normalization form cases |
+| The gate suite | S01 to S10 under the new semantics, with the four previously divergent probes turned into equality assertions and the literal probes joined to the defined probes of S04 |
+| Fresh and upgraded SQLite | a fresh database and a database migrated from the previous schema, both proving the key completeness and the search results |
+| Fresh and upgraded MySQL | the same two shapes on the live target, proving the migration path, the collation enforcement and the backfill |
+| Unicode and literal search | the folding equivalences and the literal treatment of the three special characters, including the escape character escaping itself |
+| The search key backfill | the completeness, the idempotency, the restartability and the verification pass |
+| All writer paths | the API create and update, the CSV import, the demo seed and the Credit Profile creation, each asserting that the key is present and that a search finds the row |
+| The search ordering | the colliding fold keys, the original case difference, the same display name, several Credit Objects and the total order |
+| The exact pagination slices | the page slices of the ordered set, identical between the engines and reproducible by the same offset |
+| The five Credit Read Modes | the mode matrix under a query that matches an unauthorized customer |
+| The unauthorized customer exclusion | the authorized-subset invariant for every probe |
+| The GET zero-write | the complete database digest around every measured search |
+| The browser | the search box with the mixed-case, the accent-folded and the three literal characters, at 320, 390, 430 and 680 |
+| The frozen regression | FAST, FULL, the build and the frozen suites, with the frozen SHA manifest re-verified |
+| The protected MySQL cleanup | the final zero-object inventory in all five categories |
+
+The existing real MySQL E3 PASS evidence is preserved. The retest uses a new evidence directory, the
+real protected launcher and its own independent execution authorization.
+
+#### 37.54.40.8 The final implementation whitelist
+
+The fifteen registered paths of §37.54.39.6 are confirmed complete by the writer audit of
+§37.54.40.5: every production write entry point is already covered, and the completeness proof shows
+that no other test file can be affected. No path is added and no path is removed.
+
+| Path | Action |
+| --- | --- |
+| `server/lib/search-fold.js` | new: the versioned fold and the pattern escaping |
+| `server/migrations/sales-customer-wave11-a-selector-search-key.js` | new: the additive migration, the byte-exact collation, the batched idempotent backfill and the verification pass |
+| `server/db.js` | modify: register the migration and set the keys in the demo seed |
+| `server/database/mysql-adapter.js` | modify: run the migration against the live MySQL adapter after the bootstrap |
+| `server/modules/customers.js` | modify: maintain the keys on create and update |
+| `server/modules/commercial-golive.js` | modify: maintain the keys in the customer CSV import |
+| `server/modules/credit-profile.js` | modify: maintain the keys on Profile creation |
+| `server/modules/credit-query-options.js` | modify: the folded, escaped, literal search predicate and the deterministic order |
+| `server/sales-customer-wave11-a-credit-query-ui.test.js` | modify: the search case and the new cases |
+| `server/sales-customer-wave11-a-search-semantics.test.js` | new: the dedicated SQLite search matrix |
+| `server/test-utils/wave11-a-selector-gate-fixture.js` | modify: the search customers carry their keys |
+| `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` | modify: the assertions, the per-case evidence and the label defect |
+| `scripts/testing/test-suites.js` | modify: one new FULL registration, additive |
+| `scripts/acceptance/sales-customer-wave11-a-u3-browser-uat.mjs` | modify: the browser search regression cases |
+| `document.md`, `solution.md`, `log/<date>.md` | append |
+
+No frozen file is modified. The frozen migration registry is deliberately not used, because the new
+migration is registered in `server/db.js`. `package.json` needs no change, because the Selector gate
+script already exists. The page and the route registration need no change, because the rules are
+server side.
+
+#### 37.54.40.9 The remaining risks
+
+1. The additive schema change and the live MySQL migration path remain the largest part of the
+   implementation. They are declared, bounded and additive.
+2. The folding merges the Vietnamese syllables that differ only by a tone. The loss is disclosed and is
+   confined to the derived search key, but it is a real consequence of the approved policy.
+3. The folding preserves the semantic marks of the non-Latin scripts, so a query that omits a Hebrew
+   niqqud or an Arabic harakat does not find the name. This is the intended direction of the correction
+   and it is disclosed.
+4. The exact identity filter stays collation dependent. It is an identity-domain matter and is
+   explicitly outside this amendment.
+5. The customers that the frozen shared fixtures insert directly carry no key and are not findable by a
+   search. No frozen assertion is affected, and the two new search suites create their search customers
+   with a key.
+6. A Node or Unicode runtime upgrade can change a fold and therefore invalidate the stored keys. The
+   recomputation is the idempotent backfill, re-run as an explicit operator-triggered migration.
+7. The two evidence presentation defects remain open until the implementation that corrects them.
+
+**Design status: `W11_A_U3_SEARCH_SEMANTICS_DESIGN_READY_FINAL`.**
+
+### 37.54.41 W11-A U3 Search Semantics — Implementation Gate Finding (2026-10-30)
+
+#### 37.54.41.1 Authorization and implementation completed before the gate
+
+The implementation authorization corrected the whitelist arithmetic to seventeen exact paths: three
+new source/test paths, eleven modified code/test paths and three append-only canonical documents. It
+authorized the additive SQLite migration in isolated disposable databases, but no real MySQL, protected
+gate, Git write, Acceptance/Freeze, release or deployment.
+
+Within that boundary the implementation established `SEARCH_FOLD_VERSION = W11-A-SEARCH-FOLD-V1`,
+script-aware NFKD folding, explicit `ESCAPE '!'` literal patterns, four nullable byte-exact derived
+columns, batched reconciliation and verification, all four production writers, SQL-side authorized
+COUNT/LIST search and the Requirement order with the stable customer identity immediately after the
+original customer code. The live MySQL adapter invokes the same fail-closed migration after bootstrap;
+that path was implemented but not connected to a real MySQL server.
+
+The dedicated Search/U3 focused command passed 45/45. It covers the three fold cases, SE-01 through
+SE-14, eight migration cases, four writer cases and the existing sixteen U3-A/U3-B/U3-C cases. No case
+was skipped, marked todo or restricted with only.
+
+#### 37.54.41.2 Stage B incompatibility and hard stop
+
+The Stage B command executed 103 tests: 97 passed and 6 failed. Five failures have the same root cause:
+the canonical runner replays Wave 9 after the new columns exist, and
+`server/migrations/sales-customer-wave9-credit-foundation.js` rejects the additive
+`credit_profile` columns as `column identity/order drifted`. The sixth failure is the test cleanup of a
+database handle left open after that migration exception and is not independent evidence of a second
+business defect.
+
+The approved Design assumed that the frozen Wave 9 migration would remain idempotent after the additive
+columns, but the real guard proves that assumption false. None of the seventeen authorized paths owns
+that guard. The prompt explicitly requires a HARD STOP when local regression reveals a whitelist-outside
+dependency, and AGENTS.md requires returning to Requirement/Design when a new migration compatibility
+rule is discovered.
+
+No workaround is selected here. Candidate designs such as teaching the frozen guard to accept an exact
+approved additive suffix, changing the canonical runner lifecycle, or introducing a different schema
+compatibility mechanism have different freeze and upgrade consequences and require explicit business
+and technical approval before implementation.
+
+#### 37.54.41.3 Verification boundary
+
+- Focused Search/U3: 45/45 PASS.
+- Stage B: 97/103 PASS, 6 FAIL, blocked by the Wave 9 additive-column guard.
+- `git diff --check`: PASS.
+- Frozen SHA: `credit-check.js` remains
+  `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`; `credit-query.js` remains
+  `24889d82a602cd2cd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`.
+- FAST, FULL, build and browser preliminary verification: NOT_RUN after the mandatory Stage B stop.
+- Real MySQL and the protected MySQL gate: NOT_RUN and not authorized.
+- Git add/commit/push and Final Acceptance/Freeze: NOT_RUN and not authorized.
+
+**Implementation status: `W11_A_U3_SEARCH_SEMANTICS_IMPLEMENTATION_BLOCKED`.**
+
+
+### 37.54.42 W11-A U3 / Wave 9 Exact Additive Schema Compatibility — Design (2026-10-30)
+
+#### 37.54.42.1 Authorization, inputs and stage boundary
+
+The user authorized this Design consecutively with the approved Requirement in `document.md`,
+R-U3-W9-COMPAT-01 through R-U3-W9-COMPAT-07. The input evidence is the real Wave 9 migration, the
+canonical migration runner, both database initialization paths, the U3 Search migration and suites,
+the five U1 `withFixture()` failures and the masked reopen failure. This stage changes only
+`solution.md` and the real-date append-only log. It does not modify or execute code, migrations or
+tests. Implementation is not authorized and this Design ends in a hard stop.
+
+The pre-exception Wave 9 migration identity is
+`87d4a6628b68645cc7ce743aaa7bf5e4244b6c9c0a3a91df1f33796ec1de4f32`. The exception name is
+`WAVE9_ADDITIVE_SCHEMA_COMPATIBILITY_EXCEPTION`.
+
+#### 37.54.42.2 Exact call-path finding
+
+SQLite startup runs the canonical Sales & Customer registry first and the U3 Search Key migration
+second. A first startup therefore creates Wave 9 V0 and then reaches V2. A reopen enters Wave 9 while
+V2 already exists and currently fails before the U3 migration can reconcile it. The five U1 failures
+make the same replay explicitly after `createDatabase()` has returned V2. The sixth test's `EBUSY` is
+cleanup masking: the second `createDatabase()` throws before returning its SQLite handle, so the outer
+directory removal observes the still-open file.
+
+Fresh MySQL bootstrap receives a SQLite snapshot that already contains V2. The live adapter then runs
+the U3 migration, and the outer database factory subsequently replays the canonical Sales registry.
+An existing MySQL deployment follows the same live sequence. Therefore the Wave 9 validator must
+accept exact V0/V1/V2 regardless of which side of the U3 migration it observes, while only U3 can
+declare the physical columns and backfill complete.
+
+#### 37.54.42.3 Option comparison
+
+| Option | Mechanism | Correctness and cost | Decision |
+| --- | --- | --- | --- |
+| A — narrow Wave 9 validator amendment | Amend only the `credit_profile` column-identity predicate so the original nineteen columns plus the exact zero/one/two-column approved suffix pass; retain every other guard | Smallest change; keeps one canonical migration runner; supports SQLite reopen and MySQL non-transactional V1 recovery; no Search or Credit semantic change | **Selected** |
+| B — external compatibility validation | Add a later layer without changing Wave 9 | Cannot make a later layer run before the existing Wave 9 throw without reordering/bypassing the frozen registry. Hiding columns or faking metadata is prohibited, and a pre-Wave-9 layer would duplicate/replace the canonical validator | Rejected |
+| C — Search Key sidecar table | Move Profile keys to a new table and join it into Selector COUNT/LIST | Avoids the two Profile columns, but changes the approved U3 schema, migration, four-writer atomicity, backfill, query joins, grouping, cleanup and MySQL parity surface. It is much broader and introduces an additional owner | Rejected |
+
+Option A is the only design that preserves the approved U3 business behavior and changes the exact
+guard that rejects it. It is not a general superset rule.
+
+#### 37.54.42.4 Wave 9 validator algorithm and function scope
+
+`server/migrations/sales-customer-wave9-credit-foundation.js` gains one frozen constant and one private
+predicate; no DDL, table contract, index, anchor or exported business API changes:
+
+```text
+WAVE9_CREDIT_PROFILE_APPROVED_SUFFIX =
+  [credit_object_type_search_key, credit_object_id_search_key]
+
+matchesWave9ColumnIdentity(table, actual, base):
+  if table is not credit_profile:
+    return exact(actual, base)
+  reject when actual length is below base length or above base length + 2
+  require exact(actual[0..18], base[0..18])
+  suffix = actual after index 18
+  require exact(suffix, approvedSuffix[0..suffix.length-1])
+```
+
+Both `assertSqlite()` and `assertMySql()` call this same predicate in place of only their current
+complete-array comparison. The bounded length and exact suffix-prefix comparison are inseparable. The
+algorithm therefore allows only V0, V1 and V2 and rejects a second-only suffix, reversed suffix,
+unknown third column, unknown one-column suffix and every original-column deletion, insertion,
+replacement or reorder. It is not `includes`, a set comparison, an unbounded `startsWith`, or an
+arbitrary superset allowance.
+
+All existing PK, FK, CHECK, index, MySQL physical-type/nullability probes, six-table and GLOBAL Anchor
+checks remain byte-for-byte in responsibility and execution order. The other five table column arrays
+still use exact equality. Wave 9 creates neither Search Key column and never validates their Search
+Fold values.
+
+#### 37.54.42.5 U3 physical-definition verification
+
+The audit also found that the present U3 migration recognizes an existing column by name; its SQLite
+path does not prove type/collation, and its MySQL path can miss an illegal type when the collation is
+already binary. M12 therefore requires a bounded addition in
+`server/migrations/sales-customer-wave11-a-selector-search-key.js`.
+
+After column reconciliation and before any backfill, a private definition verifier checks:
+
+- SQLite: declared type `TEXT`, nullable, and the exact declared `COLLATE BINARY` clause for each of the
+  four Search Key columns, using `PRAGMA table_info` plus the canonical `sqlite_master.sql` declaration;
+- MySQL: `DATA_TYPE=longtext`, `IS_NULLABLE=YES`, and `COLLATION_NAME=utf8mb4_0900_bin` from
+  `information_schema.COLUMNS`;
+- no Search Key index is introduced.
+
+The already-approved MySQL collation reconciliation remains allowed: an otherwise legal LONGTEXT
+nullable column with a wrong collation is changed to the approved binary collation and then verified.
+An existing wrong type or nullability fails before backfill rather than being accepted as an identity
+match. SQLite illegal physical definitions fail because rebuilding a populated table is outside this
+bounded amendment. Missing columns are still added with the canonical definition.
+
+The U3 migration then performs the versioned fold backfill and missing/stale verification. Only a final
+V2 definition plus a clean verification permits the adapter/database factory to return. A Wave 9 V1
+PASS is explicitly not service readiness.
+
+#### 37.54.42.6 Interrupted migration, transaction and error behavior
+
+SQLite V0 proceeds through Wave 9, U3 adds both columns and verifies V2. SQLite V1 passes Wave 9 on a
+retry, U3 adds the second column and reconciles all keys. SQLite V2 passes Wave 9 and U3 re-verifies it.
+
+MySQL DDL may commit per statement. A failure after adding the first column can therefore leave V1;
+a failure after adding both columns can leave V2 with incomplete keys. The retry accepts the exact
+base identity, resumes missing DDL/backfill and blocks adapter return until U3 physical and value
+verification succeeds. `createMySqlDatabase()` closes the adapter and rethrows on failure. No schema
+conflict, definition error or backfill error is caught and ignored.
+
+No transaction is claimed across MySQL DDL. Retryability and the explicit V0/V1/V2 state machine are
+the rollback strategy. Before database deployment the code revision can be reverted. After V1/V2 is
+durable, rollback is forward completion or a separately authorized destructive database rollback; a
+code-only rollback to the old Wave 9 SHA is not compatible with that database.
+
+#### 37.54.42.7 Migration replay matrix
+
+| Case | Fixture and assertion | Expected owner/result |
+| --- | --- | --- |
+| M01 | Original nineteen-column Profile | Wave 9 base PASS; U3 may advance it |
+| M02 | Original nineteen plus both approved columns | Wave 9 base PASS; U3 definition/backfill verification still required |
+| M03 | Original nineteen plus only the first approved column | Wave 9 base PASS; U3 adds the second column, backfills and reaches V2 |
+| M04 | Second approved column exists without the first | Wave 9 FAIL before U3 |
+| M05 | Approved columns exist in reverse order | Wave 9 FAIL |
+| M06 | Unknown suffix column or a third column | Wave 9 FAIL |
+| M07 | Original column missing, replaced, inserted or reordered | Wave 9 FAIL |
+| M08 | Original PK/FK/CHECK/index drift | Existing Wave 9 guards FAIL unchanged |
+| M09 | SQLite first start, second start and repeated canonical replay | PASS and one GLOBAL Anchor |
+| M10 | Fresh MySQL bootstrap and existing live replay at V0/V1/V2 | Wave 9 + U3 PASS; adapter returned only after V2 verification |
+| M11 | Backfill interruption with V1 or V2 durable | Retry converges; missing/stale count becomes zero |
+| M12 | Existing Search Key wrong type/nullability/collation or unverifiable definition | U3 repairs only the approved MySQL collation case; otherwise FAIL/BLOCKED |
+
+M01–M09, M11 and the illegal-shape portions of M12 are added to the existing FULL-only U3 Search
+Semantics suite with disposable SQLite databases. They drive the real Wave 9 and U3 migration entry
+points; source scanning is not acceptance. The unchanged original Wave 9 suite is rerun and must pass.
+
+M10 and the MySQL portions of M03/M11/M12 are added to the existing W11-A Selector MySQL integration
+suite and run only through the separately authorized protected disposable gate. The historical E3
+directory and artifacts remain immutable; a new run uses a new evidence directory and ends with the
+existing five-category cleanup confirmation.
+
+#### 37.54.42.8 Exact future Implementation whitelist
+
+The future bounded Implementation is exactly these seven paths:
+
+1. `server/migrations/sales-customer-wave9-credit-foundation.js` — the narrow shared V0/V1/V2 column
+   identity predicate only;
+2. `server/migrations/sales-customer-wave11-a-selector-search-key.js` — exact physical-definition
+   verification required by M12;
+3. `server/sales-customer-wave11-a-search-semantics.test.js` — SQLite M01–M09/M11/M12 and the six
+   failure-path regression;
+4. `server/mysql-sales-customer-wave11-a-credit-query-options.integration.js` — prepared real MySQL
+   M10 and V1/backfill/definition evidence, executed only under separate authorization;
+5. `document.md` — append-only Implementation result/status;
+6. `solution.md` — append-only Implementation evidence and new forward SHA manifest;
+7. `log/<actual-date>.md` — append-only real-date implementation log.
+
+No new file is required. `server/sales-customer-wave9-credit-foundation.test.js` remains unchanged and
+is rerun as the original regression. `scripts/testing/test-suites.js` remains unchanged because the U3
+Search suite is already FULL-only. `server/migrations/sales-customer-domain.js`, `server/db.js`,
+`server/database/mysql-adapter.js`, all Wave 9 business writers, Credit Scope/Check/Query/Special
+Approval owners, protected launchers, shared runner support and the U2 E3 suite remain outside the
+whitelist. A newly discovered need for any eighth path requires a new Requirement/Design decision.
+
+#### 37.54.42.9 Verification sequence and acceptance boundary
+
+Future Implementation verification is ordered:
+
+1. focused M01–M12 local portions, original Wave 9 migration suite, U1 primitives, U3 Search and U3-A;
+2. exact re-execution of the six Stage B failures and then the complete prior Stage B selection;
+3. FAST, FULL, build and `git diff --check`;
+4. SHA manifest: old Wave 9 SHA retained as historical, new Wave 9 SHA recorded as the exception
+   revision, frozen Credit Core SHAs re-verified;
+5. under separate authorization only, the protected real MySQL Selector gate with fresh/upgrade/V1
+   recovery, collation, parity, zero-write and cleanup evidence;
+6. browser preliminary verification only if separately required by the U3 gate sequence.
+
+Passing Wave 9 alone never authorizes service; local Implementation PASS does not replace real MySQL
+revalidation; neither replaces user Acceptance/Freeze. No historical evidence is overwritten.
+
+#### 37.54.42.10 Remaining risks and rollback
+
+1. SQLite exposes declared collation only through the canonical table DDL text, so the implementation
+   must use a bounded identifier/declaration check and negative tests rather than a loose substring.
+2. MySQL DDL interruption can persist V1 or V2 independently of the process result; the protected gate
+   must actually exercise V1 recovery and verify the final definition and data.
+3. The Wave 9 source SHA necessarily changes. Any manifest that still calls the old SHA current after
+   Implementation is invalid; the old identity remains historical evidence only.
+4. A code-only rollback after schema deployment is unsafe. Operational rollback remains a separately
+   authorized database operation; forward completion is the default recovery.
+
+All Requirement/Design conflicts are closed without changing business identity, Credit primitives,
+other Wave 9 table schemas or the frozen migration registry.
+
+**Design status: `W11_A_U3_WAVE9_ADDITIVE_COMPAT_DESIGN_READY`.**
+
+#### 37.54.43 Wave 9 additive compatibility implementation evidence (2026-10-30)
+
+The approved narrow validator amendment was implemented without changing Wave 9 DDL or Credit business
+semantics. `matchesWave9ColumnIdentity()` keeps exact equality for every table except `credit_profile`;
+there it requires the original nineteen-column prefix plus exactly the zero-, one- or two-column prefix
+of the approved ordered suffix. This closes V0/V1/V2 replay while continuing to reject second-only,
+reverse, unknown, overlong and original-column drift.
+
+The U3 Search Key migration now verifies physical definitions before backfill. SQLite requires nullable
+`TEXT` and a bounded canonical `COLLATE BINARY` declaration. MySQL requires nullable `LONGTEXT` and the
+approved binary collation; only a collation mismatch on that otherwise legal shape is reconciled. Type,
+nullability or unverifiable-definition drift fails closed. Backfill, missing/stale verification and
+adapter-return boundaries remain unchanged.
+
+Implementation SHA-256 manifest:
+
+- historical pre-exception Wave 9 migration:
+  `87d4a6628b68645cc7ce743aaa7bf5e4244b6c9c0a3a91df1f33796ec1de4f32`;
+- current compatibility revision:
+  `5b7a6df8bcdb2f57373c00fc64a1955522dbf1f1fa8cb3c47a653993175d869b`;
+- U3 Search Key migration:
+  `cf687aeb3e629ed2ea81e21d0761c58bdb547edf7fe15d9718ddf67a7e3d2965`;
+- U3 Search Semantics suite:
+  `b69bbd24f42d5e4e3bb298885c9c846c3e9a860b248518b60bfd8257f1a511ee`;
+- MySQL Selector integration suite:
+  `79038823c1efc5ec9b4af187eaf3512482e5b1b069414b4b7dfca74300f01a23`;
+- frozen `server/modules/credit-check.js` remains
+  `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`;
+- frozen `server/modules/credit-query.js` remains
+  `24889d82a602cd2cd1187dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`.
+
+Verification evidence: local M01–M09/M11/M12 11/11 PASS; exact six prior failures 6/6 PASS; complete
+Stage B 103/103 PASS; focused Wave 9 plus U3 Search/UI 77/77 PASS. FAST stopped the sequence at 499/500
+because the run emitted `WebSocket server error: Port 24678 is already in use`. A post-run read-only
+inspection found no remaining port owner, but the failed gate remains authoritative. Consequently FULL,
+build, final `git diff --check`, browser preliminary verification and the protected real MySQL gate were
+not run. M10 therefore remains `NOT_RUN_MYSQL`.
+
+No eighth path was used. The index remained empty; no commit, push, tag, merge, release, deploy,
+Acceptance or Freeze occurred.
+
+**Implementation status: `W11_A_U3_SEARCH_SEMANTICS_IMPLEMENTATION_BLOCKED`.**
+
+#### 37.54.44 FAST port 24678 read-only diagnosis (2026-10-30)
+
+The prior FAST tool record was recovered from the local Codex session. It proves exit code 1 with 500
+tests, 37 suites, 499 pass, 1 fail, 0 cancelled, 0 skipped and 0 todo, and contains the diagnostic
+`WebSocket server error: Port 24678 is already in use`. The retained output was truncated in its middle,
+so its exact `not ok` test file/name is not recoverable. Vite's dedicated `EADDRINUSE` logger emits only
+that one line, so there is no port-error stack in the original output. The failure is not assigned to an
+invented test identity.
+
+The current read-only Windows check found no connection/listener on 24678 and no IPv4/IPv6 excluded-port
+range containing it. Process command-line inspection through CIM was denied by the current security
+context; because there is no listener, there is no current owning PID to terminate or attribute.
+
+The repository call chain nevertheless proves an internal competition condition. `pnpm test:fast` runs
+`scripts/testing/run-tests.js fast`, which starts one `node --test` child over 23 FAST files with no
+`NODE_TEST_FLAGS` override. Independent test files may execute in concurrent child processes.
+`server/mobile-shell.test.js:39-44` and `server/teacher-acceptance-matrix.test.js:775,1045` each create a
+middleware-mode Vite server without `hmr: false`. Vite 7's `createWebSocketServer()` selects
+`hmr.port || 24678`, creates a separate WebSocket HTTP server in this middleware configuration and calls
+`listen(port, host)`. Thus at least two independent FAST file processes can bind the same fixed port.
+The inspected SPA, approval and launcher suites disable HMR; the launcher setting is present in its
+multi-line configuration.
+
+This is `TEST-INTERNAL`, not `TRANSIENT-CLEARED`. The authorized one-time FAST retry condition is not
+met, so FAST was not rerun and FULL, build, final `git diff --check`, frozen-gate continuation and Edge
+browser preliminary verification were not executed. The minimal future repair is to disable HMR on the
+middleware-only SSR test servers that do not test HMR, at minimum the `mobile-shell` call and both
+`teacher-acceptance-matrix` calls. That change was not authorized and was not made.
+
+The Wave 9 exception identities remain historical
+`87d4a6628b68645cc7ce743aaa7bf5e4244b6c9c0a3a91df1f33796ec1de4f32` and forward
+`5b7a6df8bcdb2f57373c00fc64a1955522dbf1f1fa8cb3c47a653993175d869b`. Protected hashes remain:
+
+- `credit-check.js`: `6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`;
+- `credit-query.js`: `24889d82a602cd2cd1187dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`;
+- `credit-scope.js`: `f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc`;
+- `credit-special-approval.js`: `04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4`;
+- frozen U2 gate: `c3b9b7c6025774d9421d85246fdfb442e115b3c46aca43d6382ec04e67d867e2`;
+- frozen U2 E3 suite: `51c07397e2deee9d8c84676d09af4504dc9bfb77982dc372472d9b00bd295892`;
+- protected local launcher: `209527dce8ef7cd4a05a6951e041892256c3b06736cbdde12be86bef0e00bd65`;
+- shared runner support: `f48b76f8a223af59ac2b703c495f70303fea0adb8318eb1c5f1a1855a6bf2b03`;
+- Selector launcher: `e1cbf47190b991b4174e173929f73e70bc51ddaab7600ed3c434735c591fa779`.
+
+The controlled evidence is outside the repository at
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-fast-port-diagnosis-20261030\diagnosis.md`.
+No code, test, port configuration or `document.md` change was made; no process was stopped; no MySQL,
+Git write, Acceptance/Freeze, release or deployment occurred.
+
+**Diagnosis status: `W11_A_U3_FAST_PORT_TEST_BLOCKED`.**
+
+#### 37.54.45 Bounded Vite HMR correction result (2026-10-30)
+
+The installed version is Vite `7.3.6`, not merely the `package.json` semver range. Its
+`createWebSocketServer()` recognizes `server.ws === false` and immediately returns a no-listener
+transport. By contrast, `hmr: false` alone is insufficient in this version: the normalized hot channel's
+`listen()` still delegates to the underlying WebSocket channel, whose default port is 24678.
+
+Within the exact correction whitelist, the `server/mobile-shell.test.js` instance and both
+`server/teacher-acceptance-matrix.test.js` instances now use
+`{ middlewareMode: true, hmr: false, ws: false }`. No assertion, hook, production code, global Vite
+configuration, dependency, runner or port was changed. SHA-256 changed as follows:
+
+- `mobile-shell.test.js`: `dfca1d115b12edbd9b15cd31cb721b2ac2cd8f988a842bf5e715ea3f70fcaaf6`
+  -> `535127e266b3244fd88e5a3d70cfbaa578d2b176a9c2809ae5bd7d9f39b38644`;
+- `teacher-acceptance-matrix.test.js`:
+  `6a4313abff2fac3450cc598c26da67a7ef40043f13df3d31482f1c84f75bbbb4`
+  -> `aa80a456001620c0ddc9ab86c583b59b28999efe2dc380cd29b6b4ea8ff95489`.
+
+Both files passed `node --check`. Their required parallel run passed with exit 0: 86 tests, 20 suites,
+86 pass, 0 fail/cancelled/skipped/todo; SSR module loading, React rendering and Vite closure completed,
+with zero 24678 connections before and after and no port diagnostic in the focused TAP.
+
+The authorized one-time FAST run then exited 1: 500 tests, 37 suites, 499 pass, 1 fail, 0
+cancelled/skipped/todo. Its complete output still contains two `Port 24678 is already in use`
+diagnostics. Static follow-up identifies three other FAST middleware Vite calls with `hmr: false` but no
+`ws: false`: `spa-navigation-hotfix.test.js:27`, `mobile-approval-center.test.js:126` and
+`mobile-application-launcher.test.js:30`. In Vite 7.3.6 they remain port binders, but all three paths are
+outside the exact correction whitelist.
+
+FAST also exposed one exact assertion failure outside the whitelist:
+`mobile-approval-center.test.js:195`, `inventory check approve uses the transactional stock adjustment`,
+expected 22 and actual 20; its enclosing `M3R actions reuse existing state machines` suite failed. No
+second FAST run or out-of-scope repair was attempted. Because FAST failed and the port collision remains,
+FULL, build, final `git diff --check`, frozen-gate continuation and Edge preliminary verification were not
+run.
+
+Wave 9 remains historical
+`87d4a6628b68645cc7ce743aaa7bf5e4244b6c9c0a3a91df1f33796ec1de4f32` and forward
+`5b7a6df8bcdb2f57373c00fc64a1955522dbf1f1fa8cb3c47a653993175d869b`. Frozen `credit-check.js`,
+`credit-query.js`, `credit-scope.js` and `credit-special-approval.js` remain respectively
+`6a7f322ae81f860b7066181244c786174bf5dfed5bfcf796db1f32483391c7c1`,
+`24889d82a602cd2cd1187dd11807bbfa163f584b7fb6c13f55f62cdb0d04133b`,
+`f31033bd75520643c50202c18f640440aacbcde892595efad7d4e0ba2041a3bc` and
+`04594b3dc01240c5b3addddf50897fbeab54802daf9fbd7d49c5e36cccf289c4`.
+
+The index remains empty, HEAD/version remain unchanged and the worktree moved from 39 to the expected 41
+paths. Complete raw focused and FAST outputs are preserved outside the repository under
+`C:\Users\Administrator\AppData\Local\Temp\modern-erp-w11a-u3-vite-hmr-correction-20261030`.
+
+**Correction status: `W11_A_U3_FAST_PORT_TEST_BLOCKED`.**

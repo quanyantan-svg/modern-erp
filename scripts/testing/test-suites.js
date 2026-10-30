@@ -139,6 +139,15 @@ const FULL = [
   // and drives the real Credit writers, which is outside the FAST criterion of
   // a bounded, database-free regression.
   'server/sales-customer-wave11-a-credit-query.test.js',
+  // W11-A U3-A/U3-B — CREDIT_VIEW-only query options and the canonical
+  // mobile Credit Query route/screen contract. Disposable SQLite proves the
+  // selector authorization/projection/zero-write path; Vite/static UI cases
+  // cover registry, deep-link, API mapping and responsive behavior.
+  'server/sales-customer-wave11-a-credit-query-ui.test.js',
+  // W11-A U3 Search Semantics — the script-aware fold, literal LIKE,
+  // additive search-key migration, four writer paths and deterministic
+  // Selector ordering. Database-backed and therefore FULL-only.
+  'server/sales-customer-wave11-a-search-semantics.test.js',
   // W11-A forward-only OVERDUE evidence amendment. Disposable SQLite proof
   // for prospective immutable AR observation evidence, historical UNKNOWN,
   // five-category server filtering, pagination/scope and replay preservation.

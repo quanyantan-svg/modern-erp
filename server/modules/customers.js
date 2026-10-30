@@ -30,6 +30,7 @@ import {
   requiredText,
   send,
 } from '../lib/http.js';
+import { foldSearchText } from '../lib/search-fold.js';
 import { paymentTermsDays } from '../lib/payment-terms.js';
 import { deleteMasterRecord } from './data-lifecycle.js';
 
@@ -47,8 +48,14 @@ export async function createCustomer(db, req, res, actor) {
   const body = await readJson(req);
   const customer = customerInput(body);
   const customerId = id(); const now = new Date().toISOString();
-  db.prepare(`INSERT INTO customers(id,code,name,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,?,?)`)
-    .run(customerId, customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, now, now);
+  // W11-A U3 — the derived search keys are written in the same statement, so
+  // a customer is searchable the moment it exists.
+  db.prepare(`INSERT INTO customers(id,code,name,code_search_key,name_search_key,contact,phone,address,payment_terms_days,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)`)
+    .run(
+      customerId, customer.code, customer.name,
+      foldSearchText(customer.code), foldSearchText(customer.name),
+      customer.contact, customer.phone, customer.address, customer.paymentTermsDays, now, now,
+    );
   audit(db, actor.id, 'CREATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 201, { id: customerId });
 }
@@ -59,8 +66,14 @@ export async function updateCustomer(db, req, res, actor, customerId) {
   if (!current) throw new HttpError(404, '客户不存在');
   const body = await readJson(req); const customer = customerInput({ ...current, ...body });
   const active = body.active === undefined ? current.active : Boolean(body.active) ? 1 : 0;
-  db.prepare('UPDATE customers SET code=?,name=?,contact=?,phone=?,address=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
-    .run(customer.code, customer.name, customer.contact, customer.phone, customer.address, customer.paymentTermsDays, active, new Date().toISOString(), customerId);
+  // W11-A U3 — the derived search keys are recomputed in the same statement,
+  // so a changed code or name never leaves a stale key behind.
+  db.prepare('UPDATE customers SET code=?,name=?,code_search_key=?,name_search_key=?,contact=?,phone=?,address=?,payment_terms_days=?,active=?,updated_at=? WHERE id=?')
+    .run(
+      customer.code, customer.name,
+      foldSearchText(customer.code), foldSearchText(customer.name),
+      customer.contact, customer.phone, customer.address, customer.paymentTermsDays, active, new Date().toISOString(), customerId,
+    );
   audit(db, actor.id, 'UPDATE', 'CUSTOMER', customerId, customer.code);
   return send(res, 200, { ok: true });
 }

@@ -772,7 +772,7 @@ describe('Teacher Acceptance Matrix — Frontend crash sweep on currently reacha
   const platformWorkflowsSource = readFileSync(resolve(repoRoot, 'src', 'pages', 'platform-workflows.jsx'), 'utf8');
 
   before(async () => {
-    vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true }, appType: 'custom' });
+    vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
   });
 
   after(async () => {
@@ -1042,7 +1042,7 @@ describe('Teacher Acceptance Matrix — Deferred features remain hidden', () => 
   const dbSource = readFileSync(resolve(repoRoot, 'server', 'db.js'), 'utf8');
 
   before(async () => {
-    vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true }, appType: 'custom' });
+    vite = await createViteServer({ root: repoRoot, server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
   });
 
   after(async () => {
