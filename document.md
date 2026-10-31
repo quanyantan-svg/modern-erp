@@ -2274,6 +2274,163 @@ dependency 不进入 capability disposition 计数；它仅是 acceptance depend
 
 ---
 
+### 31.12 M1 采购与委外关键断链统一整改 Requirement（2026-10-31；待业务所有者验收）
+
+> **阶段与授权**：用户已接受《M1 Procurement & Outsourcing Critical Chain Audit Report》的有限勘误，并明确授权将已确认 Gap 和四组业务决策统一整理进入 **REQUIREMENT**。本节仅为业务 Requirement 修订，不构成 DESIGN / IMPLEMENTATION / ACCEPTANCE / FREEZE 或 Git 远端写入授权。依据：`document.md §22.1 / §22.21 / §31.1–31.11 / §35.8`、`solution.md §26`、M1 审计报告及 M1-AE 有限勘误；远端基线 `master@498d50143c1bd54f0d71447e5477872775910a81`。
+>
+> **证据纪律**：手册语义取自业务审查方提供的 B3101 / B3121 摘要及已批准 §22/§31，不得声称 Claude/Codex 可直接读取原 Word 手册。M1 原报告中的临时 SQLite 运行结果是“原审计执行者报告的证据”，本节不冒称重新执行；未运行的 MySQL / 浏览器验收均为 `NOT_RUN`。原 §31.11 的历史证据与 `NOT READY` 状态保持原样。
+
+#### 31.12.1 目标、范围和 Domain Owner
+
+目标：以**单次、跨能力的业务合同闭合**替代 G-1～G-5 的零散修补，完成“采购订单→收料通知→采购入库”和“委外订单/加工费 PO→完成通知→待检收货明细→质量门禁→成品入库→加工费账单→AP/GL”的真实业务可达性；同时补齐委外材料实物/WIP/成本、VMI 结算与验收证据。
+
+- **Procurement & Outsourcing Owner**：订单、来源/通知、委外业务单据、材料执行指令、加工费来源及可追踪业务证据；不得直接代替库存、质量、财务或总账 Owner。
+- **Inventory & Warehouse Owner**：位置/所有权、LOT/SERIAL、唯一权威物理库存 Mutation 与跟踪分配；Supplier WIP 只能作为“企业所有、供应商位置”的库存身份。
+- **Quality Owner**：IQC 规则、检验记录和允许/拒绝入库的质量判定。
+- **Finance Operations Owner**：Supplier Bill、AP、GRNI/暂估、付款、供应商贷项、存货估值与后续成本调整；不允许委外模块建立第二 AP、第二估值账或直接写余额。
+- **Accounting & Analytics Owner**：会计事件（若设计采纳）、系统凭证/分录、会计期间、GL 及对账。Accounting Domain Closure 尚未完成；不能因此伪造会计规则或宣告闭环。
+- **Planning Owner**：保留现有委外 handoff 的 exactly-once 来源合同；不得因整改修改已冻结 Planning 业务语义。
+
+保留 §31.6/§31.7 不变性：SQLite/MySQL parity、加性迁移、零破坏性历史改写、不新建第二 Owner 引擎、不扩展到完整工序委外、多组织/多币种、通用工作流重构等。保留所有已批准的历史 Capability 与状态机，不以本节覆盖旧的冻结/验收记录。
+
+#### 31.12.2 经 M1-AE 纠正的 Gap 与 Coverage（本轮整改基线）
+
+Coverage 使用且仅使用 `COVERED / PARTIAL / MISSING / SEMANTIC_MISMATCH / OUT_OF_SCOPE`；下表表示**当前待整改状态**，不是修复完成后的状态。
+
+| Workstream | 关联已登记 Gap / 发现 | 关联 Capability | 当前 Coverage | Severity | 可验证缺口与本轮归属 |
+|---|---|---|---|---|---|
+| A-01 委外收货明细 | G-1 / M1-F01 | OUT-18..22 | `MISSING` | P0 | 正式收货 API 仅写表头；`outsourcing_receipt_items` 无业务 Writer；IQC/加工费下游无法从真实生产接口获取明细。 |
+| C-01 加工费财务闭环 | G-2 / M1-F02、M1-N02 | OUT-20/21 + Finance/Accounting | `PARTIAL` | P0 | 专用 POST 写 AP 但缺标准期间/总账确认路径；输入校验可能返回 500；不可把局部 AP 写入视为 GL 闭环。 |
+| A-02 收料通知转换 | G-3 / M1-F03、M1-N06/N10、M1-AE E-06 | PRC-20/22/26、OUT-17/19 | `PARTIAL` | P1 | 通知→入库来源与转换未接线；订单类型隔离、分批上限与事务内校验欠缺。 |
+| B-01 委外库存/WIP/估值 | G-4 / M1-F04、M1-N05/N07/N08/N09 | OUT-04、OUT-11..16、OUT-21..23 | `SEMANTIC_MISMATCH` | P0 | 材料发退补与权威库存/WIP/LOT/估值不一致；差异方向、审批与跨单 WIP 成本守恒未闭合。 |
+| T-01 VMI 旧 UAT 合同 | G-5 / M1-F05 | VMI-02/03/05 Acceptance | `SEMANTIC_MISMATCH` | P2 | UAT-14 仍期待旧版 Owner Dimension 409，而当前 Owner Dimension 已可用；属于验收 Oracle 漂移，不等于 VMI 物理能力全部缺失。 |
+| D-01 VMI 期间结算 | M1-N03 | VMI-04 | `MISSING` | P1 | 现有 summary 是累计视图，未形成按期间/结算窗口的可信业务事实。 |
+| D-02 VMI 财务交接 | M1-N04 | VMI-05 | `PARTIAL` | P1 | 物权转移写数量，未形成基于已批准结算数量/价格的 Canonical Supplier Bill。 |
+| U-01 移动工作面 API | M1-N01 | 采购寻源/委外相关 UI | `MISSING`（所涉页面可执行性） | P1 | 页面调用 `api.get`/`api.post`，但共享 `api` 当前为函数；此处不借机重设计移动 UI。 |
+| T-02 MySQL 并发证据 | M1-N11 | §31.8.E Acceptance | `SEMANTIC_MISMATCH`（证据层） | P1 | 11 项 `race_probe_generic` 探针没有调用对应真实 Domain Handler，不能作为 11 条业务竞态的验收证据。 |
+
+**去重规则**：N02→G-2；N05/N07/N08/N09→G-4；N06/N10/E-06→G-3；N01、N03、N04、N11独立追踪。此前报告 §3.3 对 `M1-N06` 的误标 `M1-N09` 已纠正。新增细分缺陷不得复制生成同义正式 Gap ID；任一 `COVERED` 结论均须未来 Acceptance 实测。
+
+#### 31.12.3 A 组：收料通知、委外收货与来源明细合同（A-01 / A-02）
+
+**已批准业务前提（不重开政策）**：B3101 允许采购订单直接生成采购入库，也允许“采购订单→收料通知→采购入库”；支持多采购订单合并收料。B3121 委外完工应从委外订单及其关联加工费采购订单产生完成通知，经免检或合格检验后进入成品入库。`document.md §31.2/§31.3.3` 已要求通知单**不**改变库存、估值、GRNI 或 AP；完成入库必须保留订单、供应商与来源关系。`solution.md §26.18` 已批准 `OUTSOURCE_PROCESSING` PO 语义隔离，不能把委外加工费 PO 当普通采购物料 PO。
+
+A-REQ-01 **来源与可达性**：正式 API 必须可以创建包含一条或多条**非空、合法产品/数量明细**的委外收货草稿/待检事实；每行指向委外订单、适用的加工费 PO 行/完成通知来源，以及必要的产品/UOM/LOT/SERIAL/仓库身份。不得依赖测试私有 SQL INSERT 制造下游可达条件。表头和明细必须原子创建，失败时零副作用；总数量与明细之和必须一致。
+
+A-REQ-02 **通知转换**：标准采购的通知行可生成采购入库行；委外完成通知行可生成委外收货行。无通知的直接订单→采购入库仍为合法既有路径，不能被强制取消。转换必须由服务端验证 `business_type`、supplier、订单/订单行、warehouse、quantity、UOM 和状态；不同业务类型强制拒绝，不能凭客户端字段绕过。
+
+A-REQ-03 **合并与分批**：一张标准采购通知可关联多个同供应商、兼容仓库/业务类型的采购订单**明细来源**；不得被单值 `purchase_order_id` 结构限制。支持部分转换及重复收货，但累计转换/已确认数量不得超过通知行、有效订单行、交期/容差和委外订单剩余可收量。转换已用数量与剩余量应可查询、可审计、可追溯。
+
+A-REQ-04 **质量门禁与效力时点**：采购/委外入库在应检验场景必须由权威 Quality 判定 PASS/WAIVED 才能形成库存效力；不合格/未检时不得进入可用库存/成本。可以先产生待检收货表头明细供 IQC 读取；“建待检单据”和“确认库存效力”是不同动作。重复确认和并发转换不能重复计入库存、成本或通知数量。
+
+A-REQ-05 **事务与前后置条件**：通知创建、确认、转换、收货确认都应在单一权威事务中重读并锁定必要的来源/数量容量。当前 `confirmReceiptNotice` 对仅汇总 `CONFIRMED` 的值减去仍是 `DRAFT` 的本通知数量，导致本次确认量未进入上限比较（M1-AE E-06）；未来必须以 `other_confirmed + this_notice_qty <= open_qty` 等价安全不变量证明修正。不同状态、错误、权限和审计保持 fail-closed。
+
+A-REQ-06 **设计冲突留待 Design 协调**：`solution.md §26.12` 提议独立委外完成通知表，而 `§26.20` 又要求复用 `receipt_notices`；这是**物理模型设计冲突**，不是用户尚未确定的业务语义。本 Requirement 只固定来源、行级身份、业务类型和数量不变量，不预先要求建立两套通知单表，也不批准重复的“第二收货引擎”。Design 需提出一个与历史数据兼容、SQLite/MySQL 对等的唯一权威模型并说明迁移。
+
+#### 31.12.4 B 组：委外材料、Supplier WIP、所有权与成本合同（B-01）
+
+**已批准业务前提**：委外材料在全过程**属于企业**；Supplier WIP 是物理/保管位置，不是 VMI 的物权变更。发料由企业仓→供应商 WIP、退料由供应商 WIP→企业仓；补料遵守来源、数量及仓库规则。材料执行、倒冲、LOT/SERIAL 必须复用 Inventory 唯一权威 Writer/位置/跟踪；不得裸 UPDATE 库存余额。OUT-21 成本只含实际倒冲消耗材料的账面价值及加工费，不包括发出未耗用、已退回、仍留在 Supplier WIP 的材料价值。
+
+B-REQ-01 **实物与业务同事务一致**：Issue/Supplement/Return 的有效业务状态与仓位 Mutation、tracking、库存流水必须原子一致。供应商 WIP 仓库由已验证的 supplier profile/订单上下文决定，不接受任意客户端 `fromWarehouseId/toWarehouseId` 越权指定。缺失 WIP 仓库、库存不足、不相容 tracking、无权限或数量非法时 fail-closed，业务单据、库存、估值、审计不得出现部分成功。
+
+B-REQ-02 **权威位置与守恒**：按产品、仓库、owner、库存状态、批/序列号及订单相关身份追踪；发/退/补/转移每一步必须证明总物理数量守恒或明确的合法增减来源。不得因业务计数器变化而凭空产生库存。数量要求有限、正数、合法 UOM，并约束累计已发、已退、已补、可用 WIP、可倒冲数量；重放不应产生第二次动作。
+
+B-REQ-03 **倒冲和成品入库**：按委外订单材料清单行与累计合格收货量计算增量倒冲；只消耗该订单对应可追溯 WIP，不得越额、跨订单、跨 LOT/SERIAL 或跨 UOM 静默取料。使用 Canonical Valuation Writer，使 material carrying value 与 valuation movements/balances、OUT-21 cost evidence 一致。只有完成质量及其他入库门禁时，成品才通过唯一权威 Inventory Writer 进入企业仓；禁止硬编码 `warehouse-001/002`、裸插值变动表但不更新价值余额。
+
+B-REQ-04 **倒冲差异**：按 B3121 的方向约定：供应商盘点实际数量大于应有账面时，形成委外退料候选；小于账面时，形成委外补料候选。Preview/Allocate/Apply/审核/生效应有清楚状态界限，单据在获得所需审核前不得直接标为已生效；每笔差异、物料行与源/目标仓必须可追溯，并防止重复分摊。差异所需业务审核阶段以手册语义为下限，具体权限/角色由后续 Design 承接已有 RBAC/SoD。
+
+B-REQ-05 **月末 WIP 转移**：订单内/订单间在制转移保留源订单、目标订单、产品、数量、所属 WIP 位置及成本身份；企业所有权保持不变。数量和金额不可仅改单边业务计数器；成本携带、期间边界、过账/冲销和跨仓中转规则列入待裁定 B-P01，未裁定前不得通过假定平均价生成不可逆历史账务。
+
+B-REQ-06 **独立推进边界**：发退补料的 canonical inventory Mutation 可以在来源与仓位合同明确后独立设计；**不是必须依赖** A 组委外收货明细迁移。倒冲与成品入库成本集成依赖可靠的材料事实，最终加工费与 GL 对账依赖 A/B 组共同提供的来源/成本证据。
+
+#### 31.12.5 C 组：加工费、AP、GL 与期间合同（C-01）
+
+**已批准业务前提**：委外加工费是加工服务商业金额，而不是企业供料的采购材料价。加工费来源应通过 `OUTSOURCING_RECEIPT_ITEM` 等权威行级 source trace 接入 Canonical Supplier Bill；允许合法的部分开票和多收货行开票，累计 active reserved quantity 不超过 eligible quantity。Finance 拥有 Supplier Bill/AP/GRNI/估值调整；Accounting 拥有 GL/Voucher/会计期间。不得新建第二 payable、会计凭证或成本引擎。
+
+C-REQ-01 **来源与金额**：开票行只能消费已达合法可计费阶段、来源完整、供应商相符、加工费 PO 相容的委外收货行。行级来源、数量、单位、加工费单价、税额和实际过账金额须一致且可追溯。DRAFT/WAITING_MATCH/POSTED 预留量合并参与容量检查；退款、撤销、冲销释放或扣减容量需具有可审计的规范行为。输入缺失/非法应返回稳定 4xx 业务错误，不得抛未处理 500。
+
+C-REQ-02 **AP 与 GL 不混同**：加工费 Supplier Bill POST 必须经过与现有 Canonical Finance 合同一致的业务日期/期间门禁、AP 确认与系统会计分录交接；账单已 POSTED 不能表示“已有总账凭证”。完整业务验收应区分 `AP_CLOSED`、`GL_CLOSED`、`END_TO_END_CLOSED`；借贷平衡、来源金额、期间和冲销应逐一验证。不能错误地称“某付款凭证不平衡”：当前风险是原始加工费确认与整条 AP/GL 业务对账缺口。
+
+C-REQ-03 **确认/暂估政策的 Stop Point**：委外收货的材料实耗价值与加工费暂估、正式账单金额和差异必须分别记录并可追溯；在 C-P01～C-P04 会计政策获批准前，禁止擅自采用普通采购 `Dr GRNI / Cr AP`、任意费用科目、直接制造差异或补记不可逆历史凭证。关闭期间的加工费 AP/GL 写入必须拒绝；是否同时封锁材料库存动作取决于**其自身 Inventory/Accounting 期间合同**，不得以“AP 已结账”一刀切阻断全部委外发料。
+
+C-REQ-04 **退货与冲销**：已开票委外退货必须保留原收货行、已计费数量、Credit Note/AP 减少、材料及成品成本反向追踪；账务冲销/红冲应归 canonical Finance/Accounting；不得只创建贷项却缺少可抵销的历史原始凭证。禁止在本阶段通过修改生产行为修补历史账务。
+
+#### 31.12.6 D 组：VMI 消耗汇总、物权转移与供应商结算（D-01/D-02/T-01）
+
+**已批准业务前提**：VMI 实物存于企业仓，收货后 Owner=`SUPPLIER`；普通委外则始终 Owner=`ENTERPRISE`。V21 的 Owner Dimension 已由 Inventory canonical mutation 支持；不得恢复旧版 `INVENTORY_OWNER_DIMENSION_UNAVAILABLE`。VMI 收货、消耗和物权转移不应无条件直接生成 AP；§31.3.2 已批准 VMI-04 期间汇总/结算窗口及 VMI-05 物权转移后的 Canonical Supplier Bill handoff。
+
+D-REQ-01 **期间结算事实**：VMI-04 应按明确的 agreement/supplier/product/period 口径输出期初、收货、耗用、已转移、可结算、已结算、调整和期末数量；支持结算窗口及可审计的重复生成/重放。当前 `getVmiSummary()` 的生命周期累计数字不自动等于结算期事实，不得用 `received-consumed-transferred` 的未裁定口径冒充已批准的可开票数量。
+
+D-REQ-02 **物权变更与支付来源**：合法的 `SUPPLIER → ENTERPRISE` 必须由 Inventory 的 owner-dimensional `OWNER_CHANGE` 原子执行，不能重复加总物理库存；适用且经确认的 released quantity 才能形成 canonical Supplier Bill/AP 来源。需要说明消耗先发生、物权后转移、先转移后消耗等策略的合法适用条件和数量/计价一致性；**在 D-P01/D-P02 政策裁定前不得凭空推导统一触发模式或价格**。
+
+D-REQ-03 **老测试合同纠正**：采购/委外 UAT-14 必须针对当前 V21 合同，收货创建 `201`，收货确认 `200`，后者证明供应商 Owner 仓位实际增加；拒绝恢复过时 409 作为测试捷径。库存 UAT-20 既有 `+50` 预期源于整段操作“+50 入库、-20 转出、+20 转入”，算术正确，**不得误改为 0**；但该脚本不等于直接证明原子 `OWNER_CHANGE` Handler，应另加一项直接 Handler 级测试。UAT-20 中间的 ownership shift 在无额外收发的情况下物理净变化必须为 0。
+
+#### 31.12.7 U/T 组：UI 和验收证据质量（不新增业务政策）
+
+U-REQ-01：采购寻源和委外现有工作面应能正确调用项目统一的 `api(path,options)` 接口及对应后端权限/路由；必须通过真实浏览器检查入口、列表/详情/提交及错误展示。只解决已发现可执行性缺陷，不在 M1 重设计导航/视觉体系。
+
+T-REQ-01：涉及业务闭环的最终 UAT 必须通过生产 API 建立订单、通知、收货行、IQC、加工费账单、库存事实，不能只靠手写 SQL Fixture。单元测试可保留明确用途的数据库 Fixture，但必须与业务可达性 Gate 分开，且测试记录明确其证据层级。
+
+T-REQ-02：MySQL 并发要求真实 Domain Handler（而非 `race_probe_generic` 模型）在真实 MySQL 8 中对同一业务资源竞争，证明“一方成功/另一方合规拒绝或确定性串行”、零重复写入、零部分副作用。11 项关键竞态必须逐个映射源码、前后库存/AP/收货行快照和事务锁证据；SQLite 不能代替 MySQL。任何 `NOT_RUN` 不得改写为 PASS。
+
+T-REQ-03：错误断言精确验证 status + error code/message + 状态不变；不得用 `201 或 409` 这种宽松区间掩盖错误。真实业务测试必须区分“源事实由 API 可生成”“函数可直接调用”“直接 SQL 造数”三个证据等级。
+
+#### 31.12.8 集中业务决策登记（不重复要求确认已获批规则）
+
+| ID | 归属 | 待定内容 | 当前建议/约束 | 负责人及停止点 |
+|---|---|---|---|---|
+| A-P01 | A | `solution.md §26.12` 独立完成通知表 vs `§26.20` 复用通知表，及历史行级来源迁移 | **Design reconciliation**，业务要求仅是单一可追溯的通知→收货来源；不得预先强制重复建表 | Procurement Design；Design 前需提供兼容论证 |
+| A-P02 | A | 完成通知部分转换、拒收/退回重开、剩余量与批号继承边界中 Canonical 尚未明确之处 | 不改变已获批 multi-PO 和质量门禁；保持行级容量守恒 | Procurement/Quality Owner；具体规则不可证实时暂停该子项 |
+| B-P01 | B | 跨订单/跨期 Supplier WIP 价值携带（源账面价值、价格差异、转移时点、期间锁） | 数量+成本必须守恒；不创造余额或历史凭证，暂不指定计价方法 | Finance Valuation + Inventory Owner；成本变动前需业务裁定 |
+| B-P02 | B | 倒冲差异生成单据后的具体审核人、退补单撤销/冲销状态 | 手册方向与审核要求已明确；只待权限/状态细节 | Outsourcing + RBAC Owner；Design 需补充 |
+| C-P01 | C | 委外加工费在收货、暂估、正式过账各时点的金额确认；是否产生及何时冲回 GRNI | 不直接照搬普通采购账务分录 | Finance + Accounting Owner；GL Implementation HARD STOP |
+| C-P02 | C | 加工费会计科目/资本化、价差与税务（进项税适用性） | 不预设 `NO_TAX` 永久正确，也不允许伪造凭证模板 | Finance + Accounting Owner；GL Implementation HARD STOP |
+| C-P03 | C | 过账后红冲/贷项与历史无原始凭证数据的处理 | 禁止自动补记不明来源的历史总账；迁移/补偿需独立授权 | Finance + Accounting Owner；历史处理 HARD STOP |
+| C-P04 | C | Accounting Domain 尚未 Domain Closure 时，委外 Source→Canonical Voucher 的有界接入边界 | GL Owner 已固定为 Accounting；不创建委外专用第二 GL | Accounting Owner；跨域需求批准后设计 |
+| D-P01 | D | VMI 结算窗口（周期/自定义）、消耗与物权转移的前后顺序、可结算数量口径 | 企业仓供应商所有权 + 数量守恒已批准；触发策略未批准 | Procurement/VMI + Finance Owner；结算 Implementation HARD STOP |
+| D-P02 | D | VMI 物权释放数量的协议价格、税与账单日期以及部分结算规则 | 必须产生 Canonical Supplier Bill，不得仅保存客户端传入 ID | Procurement/VMI + Finance Owner；账单 Implementation HARD STOP |
+
+不再重新征询：`STANDARD_PURCHASE` / `OUTSOURCE_PROCESSING` 区分、是否支持多 PO 收料、委外材料企业所有权、WIP 是地点而非物权、GL Owner 属 Accounting、采用 Canonical Supplier Bill 等已批准事实。没有完成 C/D 组政策裁定时，可独立推进其他不依赖子项的 Requirement/Design，但不能宣告整体闭合。
+
+#### 31.12.9 未来验收 Gate（本轮全部 NOT_RUN）
+
+| Gate | 业务断言（必要条件；不得以单个 HTTP 2xx 代替） | 证据层 |
+|---|---|---|
+| M1-GA01 | 委外收货生产 API 实际写表头+明细、来源正确、零空明细，IQC 从正式明细可达；无 SQL 造数 | HTTP + SQLite/MySQL |
+| M1-GA02 | Standard PO→Notice→Purchase Receipt，允许无通知直接 PO→Receipt；多 PO 合并与行级部分转换，数量上限/事务/重放安全 | HTTP + SQLite/MySQL race |
+| M1-GA03 | OUTSOURCE Order/Processing PO→完成通知→待检收货→IQC PASS/WAIVED→确认入库；错误来源 409、失败时库存/成本零副作用 | HTTP + Quality + Inventory |
+| M1-GB01 | 委外发料/补料/退料沿 canonical stock positions/WIP/tracking 写真实库存；企业所有权保持、库存数量与流水可对账 | HTTP + Inventory snapshots |
+| M1-GB02 | 分批完工、倒冲增量、真实估值 Writer、材料成本 + 加工费暂估证据一致；重复确认和并发不得双扣/双收 | HTTP + Valuation snapshots |
+| M1-GB03 | 盘点多/少两方向正确生成候选退/补单，审核后才实效；跨单 WIP 迁移数量及经批准的成本算法守恒 | HTTP + approval + period |
+| M1-GC01 | 加工费部分账单满足 active reservation ≤ eligible；缺字段 4xx；重复 POST 合规拒绝或幂等；关闭 AP/GL 业务日期拒绝过账 | HTTP + Finance |
+| M1-GC02 | 经批准的会计政策下加工费 Supplier Bill→AP→Accounting Voucher/Entries→Payment/Credit 的来源与金额对账、期间/冲销可查 | Finance + Accounting reconciliation |
+| M1-GD01 | VMI 期间汇总和 released quantity 可按结算窗口复现；Owner Change 物理数量净 0、供应商/企业 Owner 两端方向正确 | HTTP + Inventory + period |
+| M1-GD02 | 经批准的 VMI 结算策略下 Supplier Bill/AP 从合法物权/数量/价格源自动形成且无重复结算 | HTTP + Finance |
+| M1-GU01 | 两个受影响移动工作面无 `api.get/post` TypeError；320/390/430/680 宽度交互成功并检查 server RBAC | Browser |
+| M1-GT01 | 11 项 MySQL 同资源竞争均直接调用真实 Domain Handler；证据包含拒绝方零副作用和权威库存/应付/通知快照 | Real MySQL 8 concurrency |
+| M1-GT02 | UAT-14 正向 VMI Owner Dimension；库存 UAT-20 保留全段 +50 算术并新增独立 OWNER_CHANGE Handler Gate；历史 oracle 不掩盖错误 | Browser/HTTP + Inventory |
+
+**真实性规则**：测试先证明原始 API 可执行，再证明领域 Writer/状态机/跨域后果；MySQL 必须是受保护、已明确授权的独立测试目标；不得运行或清理用户真实数据。测试直接创建 SQL Fixture 仅可用于独立单元/负向边界，不作为生产链通路证据。任何一个 Gate `NOT_RUN`、`FAIL`、手工造数替代业务或会计政策待定，都不能签发对应能力 `COVERED`。
+
+#### 31.12.10 修复依赖与下一阶段边界
+
+依赖仅定义为未来 Design/Implementation 规划约束，**不等于当前 Implementation 授权**：
+
+- **可并行独立设计**：A（来源/收货明细与转换）、B（委外材料到 WIP 的权威实物与追踪）、D（VMI 期间汇总/Owner Change 与账单交接）、U/T（UI 可执行性、测试架构）；共同遵守 Domain Owner 与 shared writer 合同。
+- **需要真实前置事实**：B 的倒冲/估值后续需要已生效材料/WIP 来源；A 的委外完成入库成本校验需要可信材料成本；C 的最终 AP/GL 过账需要 A 的正式收货行来源、B 的成本证据及经批准的 C 组会计政策。
+- **不允许的强依赖**：不得将“完成所有委外收货 Schema”作为“开始修订委外发退料权威库存 Writer”的全局阻塞；不得把 UI 修复、VMI 结算或 11 项并发测试放在最后才补而不随批次运行。
+- **设计必须解决**：§26.12/§26.20 通知表语义冲突、Canonical Inventory/Valuation 的一次写入、SQLite/MySQL 行锁与 schema parity、跨域事务/期间门禁、历史兼容与可逆性；只在获批 Design 阶段写入 `solution.md`。
+
+#### 31.12.11 Requirement Stage 状态与 HARD STOP
+
+- 本节是 **M1 Requirement 统一需求包的待验收文本**，不修改当前已冻结能力；§31 原始 Closure 历史不能被本节伪装成现已通过的 Domain Acceptance。
+- 上游 M1 原报告及 M1-AE 有限勘误为审计输入；两者保留独立证据层级。原报告 UAT-20 `+50` 误判已撤回；VMI confirm HTTP 200；原报告 7 处 SQL INSERT 的小计更正为四个文件内 **8 处显式 INSERT**；E-06 是静态确认、运行未证。
+- **尚未通过的决策**：A-P01/A-P02（结构/条件协调）、B-P01/B-P02（在制成本/审批）、C-P01..C-P04（会计政策及跨域接口）、D-P01/D-P02（VMI 结算策略）仍需设计/业务 Owner 按表裁定；不得因为本 Requirement 草案已写而默认为 APPROVED。
+- **当前总体状态**：`PROCUREMENT_OUTSOURCING_DOMAIN_NOT_READY`。原 `G-1..G-5`、独立 UI/VMI/证据 Gap 保持开放；本阶段不签发 `COVERED`、Acceptance、Freeze、Release Readiness。
+- **本阶段结束标识**：`M1_REQUIREMENT_DRAFT_READY_PENDING_OWNER_REVIEW`。等待用户批准 Requirement 与未决业务政策；**未授权 Design、Implementation、Migration、MySQL 写入、Git Commit/Push、发布、部署**。文档更新完成后按 `AGENTS.md §4.2` HARD STOP。
+
+---
+
 ## 32. Inventory & Warehouse Domain Closure Requirement
 
 > 本节固化 Inventory & Warehouse Domain Closure 的 Requirement 阶段成果。
