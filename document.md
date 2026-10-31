@@ -7242,6 +7242,184 @@ Stage C authorization is still **NOT GRANTED** by this record.
 
 ---
 
+## 35. 当前项目状态快照（2026-10-31）
+
+### 35.1 本节的定位与约束
+
+本节是**当前项目状态的唯一入口**。它引用而不复制历史冻结证据。
+
+- 本节**不覆盖、不删除、不改写**任何历史 Requirement、Design、Acceptance 或 Freeze 记录。
+  全部历史结论继续保留在 §26–§34 与本节之后的 dated 章节中，其**历史含义不因本节而改变**。
+- 凡与本节冲突的历史陈述，一律按 **dated supersession** 处理：历史陈述在其自身日期为真，
+  其"当前状态"含义已被本节取代，而**不是被删除或伪造**。
+- 本节**不得**把 §22 的 2026-10-06 初始 Coverage 矩阵覆盖为推断值。凡缺少逐条证据支持的
+  Capability，一律保持 `UNVERIFIED`。
+- 本节不是 Acceptance，也不是 Freeze。它不签发任何 Acceptance 标识。
+
+本节的形成依据是 2026-10-31 的《ERP Project-Wide Progress Baseline & Next Milestone Audit》
+项目级审计，以及该审计的勘误（`solution.md §37.54.48`）。
+
+### 35.2 审计勘误（对上一版项目级审计结论的更正）
+
+| # | 上一版审计的结论 | 更正 | 依据 |
+|---|---|---|---|
+| E-1 | W11-A 包级 Acceptance 需等待 W11-B/C/D | **撤销**。W11-A 的唯一硬依赖是 W11-SEC；`W11-B`、`W11-D` 不依赖 W11-A，`W11-A` 不依赖 W11-B/C | `solution.md §37.54.15.1` 依赖 DAG 与 CORRECTION-5（2026-10-27） |
+| E-2 | W11-D 必须等待 W11-B/W11-C | **撤销**。W11-D 只依赖 W11-SEC 的 Scope 合同 | 同上 |
+| E-3 | 缺少某类机器 Token 即历史验收无效 | **撤销**。冻结层级是七种不同状态，缺一种不等于其余无效；且**不得补造历史用户授权** | `AGENTS.md §4.5`；`docs/operations/global-implementation-status-audit-2026-10-14.md:103` |
+| E-4 | Planned Order → Production Order 追溯链 **BROKEN** | **撤销**。该链经 `production_instruction_items.planned_order_id` 与 `production_orders.production_instruction_item_id` **两跳 FK 完整可追溯**，且生产代码已在反向使用该关联 | `server/migrations/planning-domain-schema.js:287`；`server/migrations/manufacturing-quality-schema.js:52`；`server/migrations/v13-phase4-production-integrity.js:10,27`；`server/modules/planning-documents.js:231,348,365` |
+| E-5 | 上一版审计列出的采购委外缺陷 | **保留**（有源码支持），登记为待治理缺陷／待确认风险，不擅自修改生产行为 | 见 §35.8 |
+
+### 35.3 九个 Domain 当前进度
+
+冻结层级严格区分七种状态，任何一种都不得替代另一种：
+`Requirement Complete` → `Implementation Complete` → `Stage Acceptance` → `Capability Freeze`
+→ `Domain-Level Acceptance` → `Manual Capability Closure` → `Release Readiness`。
+
+| Domain | Requirement | Implementation | Stage Acceptance | Capability Freeze | Domain-Level Acceptance | Manual Capability Closure | Release Readiness |
+|---|---|---|---|---|---|---|---|
+| Master & Engineering | §28 Complete | Complete | — | — | 未见独立 token（下游日志记 `V17 §28` FROZEN） | 未见 | 未就绪 |
+| Manufacturing & Quality | §29 Complete | Complete | — | — | 未见独立 token（下游日志记 `V18 §29` FROZEN） | 未见 | 未就绪 |
+| Planning | §30 Complete | Complete | `Final Acceptance: PASS` | `Freeze: YES` | **有明确用户 Freeze** | §30 覆盖范围内 | 未就绪（整体） |
+| Procurement & Outsourcing | §31 Complete | Complete | 28/28 browser + 11/11 MySQL race | 未冻结 | **§31.11 `NOT READY`，不得 Freeze** | 未见 | 未就绪 |
+| Inventory & Warehouse | §32 Complete | Partial Complete | — | — | 未见独立 token | 未见 | 未就绪 |
+| Finance Operations | §33 Complete | Complete | — | — | 未见独立 token | 未见 | 未就绪 |
+| Sales & Customer | §34 FROZEN | Complete（Wave 0–10 + W11） | Wave 6/7/9 + Gate A PASS | Wave 6/7/9 + Gate A + Wave 10 | 部分：Wave 8 待提交、Waves 1–2 无验收记录、整域明确未冻结 | CAP-1..36 部分 | 未就绪 |
+| Accounting & Analytics | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3114–B3117） | 未就绪 |
+| Platform | **无 Domain Closure Requirement** | Partial | — | — | 未见 | **未闭合**（B3122） | 未就绪 |
+
+**没有任何 Domain 达到 Release Readiness。** 生产发布仍未获授权（`document.md:11187`）。
+
+### 35.4 B3101–B3122 最新 Coverage 来源
+
+§22 仍是**已批准的手册能力基线**；本节只指定"当前 Coverage 应从哪里读"，**不重新计数、不覆盖 §22**。
+逐 Capability 的后验收覆盖统计本次**未逐条核验**，因此保持 `UNVERIFIED`。
+
+| 手册 | 当前 Coverage 权威来源 | Capability 规模 | 状态 |
+|---|---|---|---|
+| B3101 采购 | §31.3.1 | PRC-01..26 | Requirement 完成；Acceptance `NOT READY` |
+| B3102 销售 | §34.8 | CAP-1..27 | 已实现并部分冻结 |
+| B3103 信用 | §34.8 + Stage B SC82–SC107 | CAP-28..36 | 已实现并冻结 |
+| B3104 库存 / B3105 条码 | §32.3 | INV-01..44（Barcode = INV-39..44） | Requirement 完成；Domain Acceptance 未见 |
+| B3106 存货核算 / B3107 固资 | §33.1.3 仅确认归属 | **无能力矩阵** | Coverage `UNVERIFIED` |
+| B3108–B3113 | §33.5 + §33.2 三种识别模型 | FO01..FO58 | Requirement 完成；Domain Acceptance 未见 |
+| B3114 智能会计 / B3115 总账 / B3116 报表 / B3117 经营会计 | **无能力矩阵** | — | Coverage `UNVERIFIED` |
+| B3118 工程数据 | §28.3 | ME-01..31 | 已实现；Domain Acceptance 未见 |
+| B3119 生产管理 | §29.3 | MQ-01..43 | 已实现；Domain Acceptance 未见 |
+| B3120 计划 | §30.2 | PL-01..45 | 已实现并冻结 |
+| B3121 委外 | §31.3.3 + VMI-01..05 | OUT-01..23 | Requirement 完成；Acceptance `NOT READY` |
+| B3122 工作流 | §22.22 | — | 仍然开放（正确） |
+
+### 35.5 已验收、待验收与未实施
+
+**已验收并冻结**（各自的 Acceptance 标识与锚点见其冻结记录，本节不复制）：
+Planning；Sales Wave 6 / 7 / 9、Gate A、Wave 10（**能力冻结，发布仍阻塞**）；Package B 测试隔离；
+W11-SEC-01；W11-A U1、U2、OVERDUE Foundation、U3。
+
+**实现完成但缺 Domain-Level Acceptance**：Master & Engineering、Manufacturing & Quality、
+Inventory & Warehouse、Finance Operations。
+
+**待验收**：Procurement & Outsourcing（`NOT READY`）。
+
+**未实施**：W11-B Credit Evaluation Foundation、W11-C Multi-Scorer / Rating Application、
+W11-D Reconciliation / Recalculation；Accounting & Analytics 的 Smart Accounting 规则平台、
+Cash Flow、Report Designer、Management Accounting；Platform Generic Workflow 执行引擎。
+
+### 35.6 W11 依赖 DAG 与 W11-A 包级 Acceptance 就绪度
+
+以 `solution.md §37.54.15.1` 为唯一权威：
+
+```text
+硬依赖
+  W11-A  -> W11-SEC   （Stage B §11）
+  W11-C  -> W11-B    （SC106 评分表与 SC107 结果对象由 W11-B 提供）
+  W11-D  -> W11-SEC  （W11-D 的对外读取必须满足 W11-SEC 的 Scope 合同）
+
+非依赖（明确不构成阻塞）
+  W11-B  !-> W11-A
+  W11-D  !-> W11-A   （CORRECTION-5，2026-10-27 撤销）
+  W11-A  !-> W11-B / W11-C
+  W11-D  !-> W11-B / W11-C
+```
+
+`W11-D ↔ W11-A` 仅为**可选复用**：`W11-D` 可以复用 W11-A 的读取构造器，但**不因此被阻塞**，
+也**不得**因此新增硬依赖。
+
+**W11-A 包级 Acceptance 就绪度（重新评估）**：
+`solution.md §37.54.15.3` 定义的 W11-A 契约范围为 3 个 GET 端点 + `credit-query.js` +
+`credit-query.jsx` + W11-A U1/U2/U3 增量，其 Acceptance 标识为 `W11_A_ACCEPTANCE_PASS`，
+其**依赖为"W11-SEC 必须先通过"**。
+
+- 该硬依赖**已满足**（W11-SEC-01 于 2026-10-28 验收冻结）；
+- 契约范围内的各单元**均已验收冻结**，并已有 Git 锚点与双远端推送；
+- 因此 W11-A **满足其自身契约的包级验收条件**。
+
+**但本节不签发 `W11_A_ACCEPTANCE_PASS`。** 该标识此前被明确保留给完整 W11-A 包
+（`document.md:12401, 12506, 13216, 13380, 13394`；`solution.md:32565, 32844, 35103`），
+签发是业务所有者的决定。另有两项**需要在包级冻结前处理**的记录事实：
+
+1. W11-A OVERDUE Foundation 的冻结记录**本身未记载 Git SHA**，其验收工作树保持未暂存/未提交
+   （`document.md:13708-13710`）。包级冻结若要引用完整锚点集，应先闭合该锚点；
+2. W11-A 的所有单元冻结记录都明确把"W11-A Package"列入排除项，因此包级冻结需要一次**独立的**、
+   覆盖整个包的 Acceptance 决定，而不是对既有单元冻结的自动汇总。
+
+### 35.7 Frozen SHA 与 Git 状态
+
+| 项 | 值 |
+|---|---|
+| Frozen Implementation（W11-A U3） | `ec618eb81684d645707c70a8b69ff9379682fbaa`（tree `908c10310cd92a509374ada2bd31b5882be580f2`） |
+| Closure HEAD | `ebe3363fe88d64222a6aa619a932bfe9a4fa3578` |
+| WIP 父提交 / Recovery 基线 | `60f3fbd169d7b43bbae3824b10b538edef4aeec1` / `8c716f64dbeb8d650c3dd87a43661ed205fdcfdd` |
+| 分支 | `review/w11a-u3-fast-blocked-20261030`，GitHub 与 Gitee 同名 Review Branch 均指向 Closure HEAD |
+| `master`（两端） | `aee1e0c13d26dd840ae4b596340212eef03479c0`（未变） |
+| Release tag | `v1.6.0` / `v1.6.1` / `v1.6.2`（未变） |
+| 版本 | `1.6.2`（未变） |
+
+### 35.8 五条端到端主链闭合情况与待治理缺陷
+
+| 主链 | 步骤齐备 | 结构完整 | 主要断点 |
+|---|---|---|---|
+| Order-to-Cash | 10/10 | 是 | 识别模式分支（`LEGACY_DIRECT` 的 AR 来源是 Delivery 而非 Invoice）；AR aging 报告不保留 source 维度，无法回溯到发票或出库 |
+| Procure-to-Pay | 12/12 | 否 | Receipt Notice → Purchase Receipt 转换未接线；`SEPARATE` 下 GRNI→Bill 为人工触发；bill 匹配只计算价差不标记 |
+| Plan-to-Produce | 9/9 | 是 | Planned Order → Production Instruction → Production Order 经两跳 FK 完整可追溯；仅指令**表头**不直接携带 `planned_order_id`，属设计特征而非断链 |
+| Plan-to-Outsource | 9 识别 / 4 不可达 | 否 | 见下方待治理缺陷 |
+| Record-to-Report | 7/7 | 部分 | 无 Accounting Event 层（FO58 无实现）；TB/P&L/BS 不保留 source 维度；手工凭证以自身 id 为 source_id；报表与健康检查使用两套日期基准 |
+
+**待治理缺陷 / 待确认风险（登记，不擅自修改生产行为）**：
+
+| # | 缺陷 | 证据 | 性质 |
+|---|---|---|---|
+| G-1 | `outsourcing_receipt_items` **无生产写入路径**（`createOutsourcingReceipt` 只写表头，无 items 参数）；因此委外完工收货的 IQC、加工费 AP 与 FINAL 差异在 API 上不可达 | `server/modules/outsourcing.js:344-359`；`server/modules/quality-gates.js:162-163`；`server/modules/outsourcing-finance.js:166,178-179` | 源码支持的缺陷 |
+| G-2 | processing-fee Supplier Bill 的 **AP/GL 与财务期间**：`postProcessingFeeBill` 写 AP 未写 GL 凭证，且未执行 `assertFinancialPeriodsOpen`；与 `postSupplierBill` 行为不一致 | `server/modules/outsourcing-finance.js:221-240`；对照 `server/modules/commercial-golive.js:306,315-320` | 源码支持的缺陷 |
+| G-3 | **Receipt Notice → Receipt 执行转换**未接线：`assertNoticeCompatibleWithReceipt` 无生产调用点；委外收货表亦无 `receipt_notice_id` 外键 | `server/modules/procurement-receiving.js:61,228`；`server/migrations/procurement-outsourcing-schema.js:557-589` | 源码支持的缺陷（与 UAT-21 相关） |
+| G-4 | **Outsourcing Material Issue/Return 与真实库存移动**：发料不写库存移动；退回路径以硬编码仓库串写 `from_warehouse_id`/`to_warehouse_id` | `server/modules/outsourcing.js:242-260`；`server/modules/outsourcing-finance.js:369-372`；`document.md:2242` | 源码支持的缺陷 + 已知 Requirement 风险 |
+| G-5 | **UAT-14 旧 Test Oracle 与当前 V21 Contract 冲突**：验收 harness 仍硬编码 `INVENTORY_OWNER_DIMENSION_UNAVAILABLE` 的 409 期望 | `scripts/acceptance/procurement-outsourcing-functional-uat.mjs:235-240`；`docs/operations/global-implementation-status-audit-2026-10-14.md:59` | **待确认风险**：修 test 还是修 contract 属业务决定，不得由本节自行决定 |
+
+### 35.9 Release Blockers
+
+| 标识 | 状态 | 阻塞范围 |
+|---|---|---|
+| `W10-INV-RISK-01` | `BLOCKS_RELEASE_ONLY` | 仅发布 |
+| `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` | 冻结且发布阻塞 | 发布 |
+| `LEGACY_DATA_EVIDENCE_PENDING` | 开放 | 非阻塞（外部证据依赖未解） |
+| `CREDENTIAL_EXPOSURE_OPEN` | `USER_ACCEPTED / DEFERRED` | 非阻塞（**已被接受并延后，不等于风险消除**） |
+| `R-U3-INV-09` | `ACCEPTED_RESIDUAL` | 非阻塞（限 Selector 精确身份过滤的已测 Collation 差异） |
+| `R-U3-INV-10` | `DEFERRED_OUT_OF_SCOPE` | 阻塞受影响目标的部署/迁移 |
+| `CURRENT ACCEPTANCE HARNESS DRIFT` | 开放 | Procurement 最终验收/冻结 |
+| `D-2` / `D-3` / `D-4` / `D-5` | 开放设计决策 | W11-B、W11-C |
+| `G-1`..`G-5` | 本节新登记 | 待治理缺陷，见 §35.8 |
+
+**Fresh MySQL Inventory Demo Seed 门禁的 PASS 不关闭任何历史库存风险**（`document.md:15314-15315`）。
+
+### 35.10 当前推荐的下一个工作包
+
+**A — 项目 Git / 文档基线纠偏**（本节所属阶段）。
+理由：canonical 文档此前陈述的是若干阶段之前的状态，任何后续业务包都会基于错误基线被规划与复核；
+本包零回归风险、零 MySQL 依赖，且已把 §35.8 的源码级缺陷写入待治理清单。
+
+候选对比与执行顺序见 `solution.md §37.54.48`。**本节不构成对任何业务包的启动授权。**
+
+---
+
 ## Stage B Requirement Amendment — Sales Credit Profile Authorization Policy (Wave 9) (2026-10-22)
 
 **Authorization:** explicit user approval of the complete Credit Profile authorization policy, under bounded authorization `WAVE9_BOUNDED_REQUIREMENT_CLOSURE`.

@@ -40367,3 +40367,219 @@ HARD STOP. The next stage is the Final Acceptance of the W11-A U3 package, which
 authorization.
 
 **Stage status: `W11_A_U3_RESIDUAL_RISK_MYSQL_INVENTORY_GATE_PASS_PENDING_FINAL_ACCEPTANCE`.**
+
+### 37.54.48 W11-A U3 Acceptance Record, Project-Wide Audit Errata and Current Technical Design Status Index (2026-10-31)
+
+#### 1. Authorization, inputs and boundary
+
+This section is the Design-layer counterpart of `document.md §35` "当前项目状态快照（2026-10-31）".
+It records three things:
+
+1. the **Acceptance and Freeze** of the W11-A U3 unit, which the design layer did not previously carry;
+2. the **errata** that correct the 2026-10-31 project-wide audit
+   《ERP Project-Wide Progress Baseline & Next Milestone Audit》;
+3. a **current technical design status index**, so that "which design is authoritative today" is
+   answerable without re-reading the whole 40,000-line tail.
+
+No production code, test, schema, migration, launcher, runner, suite registry or package script was
+modified. No MySQL was contacted and no gate was executed. No Git write, no Acceptance and no Freeze
+occurred in this stage. The only changed paths are `README.md`, `document.md`, `solution.md` and
+`log/2026-10-31.md`.
+
+#### 2. The W11-A U3 Acceptance and Freeze record (design layer)
+
+The design-layer record of the state that `document.md` "W11-A U3 Freeze Registration (2026-10-31)"
+already carries as the Requirement-layer record:
+
+| Item | Value |
+| --- | --- |
+| Acceptance | `W11_A_U3_ACCEPTANCE_PASS` — granted by the business owner on 2026-10-31 |
+| Freeze | `FROZEN` |
+| Frozen Implementation Commit | `ec618eb81684d645707c70a8b69ff9379682fbaa` |
+| Frozen Tree SHA | `908c10310cd92a509374ada2bd31b5882be580f2` |
+| Parent | `60f3fbd169d7b43bbae3824b10b538edef4aeec1` |
+| Closure HEAD (freeze journal) | `ebe3363fe88d64222a6aa619a932bfe9a4fa3578` |
+| Version | `1.6.2`, unchanged |
+| Frozen scope | W11-A U3 Credit Query Selector / Search Semantics and its directly related approved regression fixes only |
+
+The preceding section `§37.54.47` ends on the **pre-acceptance** token
+`W11_A_U3_RESIDUAL_RISK_MYSQL_INVENTORY_GATE_PASS_PENDING_FINAL_ACCEPTANCE`. That token remains the
+accurate statement **for the state at the end of §37.54.47** and is not rewritten; this section
+supersedes it as the current design status, exactly as `document.md:15338` supersedes it on the
+Requirement layer. The Acceptance evidence itself is recorded in `log/2026-10-31.md` and is not
+duplicated here.
+
+#### 3. The audit errata
+
+The project-wide audit of 2026-10-31 is superseded on the following five points. Each erratum names
+the design authority that settles it.
+
+##### 3.1 E-1 / E-2 — the W11 dependency DAG
+
+**Erratum.** The audit concluded that the W11-A package-level Acceptance had to wait for W11-B / W11-C /
+W11-D, and that W11-D had to wait for W11-B / W11-C. **Both conclusions are withdrawn.**
+
+**Authority.** `solution.md §37.54.15.1` "依赖 DAG", including **CORRECTION-5 (2026-10-27)**, which
+itself revoked an earlier unsourced `W11-A → W11-D` edge:
+
+```text
+硬依赖（成立，且有 Requirement / Stage B 依据）
+  W11-A  -> W11-SEC   （Stage B §11："W11-SEC 必须先于开放新的历史查询入口完成"）
+  W11-C  -> W11-B    （SC106 的评分表与 SC107 的评估结果对象由 W11-B 提供）
+  W11-D  -> W11-SEC  （W11-D 的对外读取必须满足 W11-SEC 的 Scope 合同）
+
+非依赖（明确不构成阻塞）
+  W11-B  !-> W11-A
+  W11-D  !-> W11-A   （撤销）
+  W11-A  !-> W11-B / W11-C
+  W11-D  !-> W11-B / W11-C
+```
+
+`W11-D ↔ W11-A` is **optional reuse only**: W11-D *may* reuse the W11-A read constructors when W11-A
+has landed, but its implementation is **not blocked** by that and **must not** gain a hard dependency
+because of it. Both packages resolve the **same** authorization decision through
+`credit-scope.js` `resolveCreditReadMode`, so two conflicting Scope semantics cannot arise.
+
+**Consequence.** `solution.md §37.54.15.3` defines the W11-A package contract and names exactly one
+dependency — "**W11-SEC 必须先通过**". W11-SEC-01 was accepted and frozen on 2026-10-28
+(`document.md:12228`), and every unit inside the W11-A contract (U1, U2, OVERDUE, U3) is accepted and
+frozen with a Git anchor. The W11-A package therefore **satisfies its own contract's package-level
+Acceptance condition**.
+
+**This section does not issue `W11_A_ACCEPTANCE_PASS`.** The token remains reserved for the complete
+W11-A package (`document.md:12401, 12506, 13216, 13380, 13394`; `solution.md:32565, 32844, 35103`),
+and issuing it is the business owner's decision. Two record facts remain to be closed before a
+package-level freeze can cite a complete anchor set:
+
+1. the W11-A OVERDUE Foundation freeze record carries **no Git SHA** of its own — its accepted
+   worktree was deliberately left unstaged and uncommitted (`document.md:13708-13710`);
+2. every W11-A unit freeze record explicitly lists "W11-A Package" among its exclusions, so a
+   package freeze needs an **independent** whole-package Acceptance decision and cannot be an
+   automatic roll-up of the unit freezes.
+
+##### 3.2 E-3 — freeze terminology
+
+**Erratum.** The audit treated the absence of a particular machine token as evidence that a historical
+acceptance was invalid. **That inference is withdrawn.** A missing token of one kind is not evidence
+that a different kind of acceptance did not happen, and the absence of a recorded user approval must
+**never** be repaired by fabricating one.
+
+**Authority.** `AGENTS.md §4.5` and the seven-level vocabulary that the repository itself uses:
+
+| Level | Meaning | Repository example |
+| --- | --- | --- |
+| Requirement Complete | the Requirement-stage artifact is finished | `document.md:1487`, `:1723`, `:1858`, `:2252`, `:2855`, `:4269` |
+| Implementation Complete | the implementation exists | domain implementation records |
+| Stage Acceptance | a bounded stage passed | `WAVE6_FINAL_ACCEPTANCE_PASS` |
+| Capability Freeze | a bounded capability is frozen | `WAVE10_CAPABILITY_FROZEN_RELEASE_BLOCKED` |
+| Domain-Level Acceptance | the whole domain was accepted by the user | `log/2026-10-08.md:288` (Planning) |
+| Manual Capability Closure | a manual's capability set is closed | §31 / §32 / §33 / §34 matrices |
+| Release Readiness | the product may be released | **none of the nine domains holds it** |
+
+The five domain closures use prose status strings rather than machine tokens, and the 2026-10-14
+evidence audit explicitly declined to fabricate the missing original approvals
+(`docs/operations/global-implementation-status-audit-2026-10-14.md:103`). That position is preserved
+here unchanged.
+
+##### 3.3 E-4 — the Planned Order → Production Order trace
+
+**Erratum.** The audit classified this chain link as **BROKEN** because `production_orders` has no
+`planned_order_id` column. **That classification is withdrawn.** An indirect relation that is
+complete and FK-backed is not a broken link.
+
+**Authority.** The trace is a complete two-hop chain:
+
+```text
+planned_orders.id
+  -> production_instruction_items.planned_order_id   (FK to planned_orders(id))
+  -> production_instruction_items.id
+  -> production_orders.production_instruction_item_id (indexed FK to the instruction item)
+```
+
+Evidence: the column is added in `server/migrations/planning-domain-schema.js:287` and written in
+`server/modules/planning-domain.js:491, 494`; `production_orders` carries
+`production_instruction_id` and `production_instruction_item_id`
+(`server/migrations/manufacturing-quality-schema.js:52`;
+`server/migrations/v13-phase4-production-integrity.js:10` with the index at `:27`), written from the
+instruction item in `server/modules/manufacturing-orders.js:148` and driven from
+`server/modules/planning-documents.js:365`; and the **reverse** direction is already used by
+production code to compute the converted quantity
+(`server/modules/planning-documents.js:231, 348`).
+
+**Residual characteristic (not a defect).** The `production_instructions` **header** does not carry
+`planned_order_id`; the instruction **item** does. A trace from a planned order to its production
+orders therefore resolves through the item. This is a header-level convenience difference, and it is
+recorded here as a design characteristic rather than a broken link.
+
+##### 3.4 E-5 — the Procurement / Outsourcing defects that are retained
+
+The audit's source-supported findings are **retained** and are registered as defects or risks to be
+governed. **No production behaviour is changed by this stage.** The full table, with evidence, is
+`document.md §35.8` under G-1 … G-5.
+
+The most consequential is **G-1**: `outsourcing_receipt_items` has **no production writer** —
+`createOutsourcingReceipt` (`server/modules/outsourcing.js:344-359`) inserts the header row only and
+accepts no items — while `loadQualitySource` (`server/modules/quality-gates.js:162-163`) and
+`createProcessingFeeBill` (`server/modules/outsourcing-finance.js:166, 178-179`) both require the
+item rows. The outsourcing IQC, processing-fee AP and FINAL-basis variance steps are therefore not
+reachable through the API. The previously recorded OUT-21 acceptance evidence was taken against a
+state that only test fixtures can create.
+
+**G-5 is a business decision, not a defect to be silently fixed**: the UAT-14 harness expectation and
+the current V21 owner-dimension contract contradict each other, and which side is authoritative is the
+business owner's call.
+
+#### 4. The current technical design status index
+
+| Design subject | Authoritative design | Implementation state | Design gap |
+| --- | --- | --- | --- |
+| Core scope / domain alignment | `solution.md` §26–§27 | Complete | — |
+| Master & Engineering | §28 | Complete | retained Multi-Org / Mold / APS gaps |
+| Manufacturing & Quality | §29 | Complete | Dispatch / Operation Transfer / NC disposition |
+| Planning | §30 | Complete | Multi-Org, full outsourcing execution |
+| Procurement & Outsourcing | §31 | Complete | Acceptance `NOT READY`; G-1..G-5 |
+| Inventory & Warehouse | §32 | Partial Complete | barcode generate, PDA execution, stocktake scan, assembly; bin/status/owner/stocktake CRUD not routed |
+| Finance Operations | §33 | Complete | FO13 reversal half; GRNI reversal by design |
+| Sales & Customer | §34 | Complete (Wave 0–10 + W11) | Waves 1–2 unaccepted; whole domain not frozen |
+| Accounting & Analytics | **none** | Partial | Smart Accounting rule platform, Cash Flow, Report Designer, Management Accounting |
+| Platform | **none** | Partial | no generic workflow execution engine |
+| W11-A U3 | §37.54.36 – §37.54.48 | Complete, frozen | package-level token reserved |
+
+**Two structural defects of the design document itself**, recorded here rather than silently repaired:
+
+1. `solution.md:1166` carries a second `## 21. 当前设计状态` heading that collides with
+   `## 21. Core Scope Cleanup Implementation Design` at `:1178`, and the 2026-10-06 content at `:1166`
+   states "Domain Alignment 尚未实施", which is factually wrong. **Renumbering it would edit a frozen
+   historical section**, so it is listed as a required user decision instead.
+2. The four inventory dimension master-data modules — `server/modules/warehouse-bin.js`,
+   `server/modules/stock-status.js`, `server/modules/owner-dimension.js` and
+   `server/modules/inventory-stocktake.js` — are **not imported by `server/app.js`**, so their CRUD
+   surfaces are unreachable over HTTP even though their data model is canonical and used by
+   `server/lib/inventory-position.js` and `server/modules/consignment.js`. This is recorded as a design
+   coverage observation; registering routes would be a Design change and is not made here.
+
+#### 5. The documentation change set
+
+| Path | Action |
+| --- | --- |
+| `README.md` | new "当前项目状态快照（2026-10-31）" entry point; the stale "Wave 10 未验收 / Wave 11 未开始" statements restated with their historical framing preserved; the gap lists corrected against the current source; the release-blocker table added; three missing package scripts and two missing `docs/` directories added |
+| `document.md` | new `§35 当前项目状态快照（2026-10-31）` inserted at the end of the numbered block, before the dated history tail; §22 and every dated section left byte-unchanged |
+| `solution.md` | this section, appended |
+| `log/2026-10-31.md` | the append-only stage record |
+
+No historical Requirement, Design, Acceptance, Freeze, audit or log record was deleted, rewritten,
+re-dated or fabricated. Where a historical statement is superseded, it is marked as superseded by a
+**dated** pointer; the original wording and its historical meaning are preserved.
+
+#### 6. What did not happen and the pause point
+
+- No production code, test, schema, migration, launcher, runner, suite registry or package script was
+  modified. The four changed paths are documentation only.
+- No MySQL, no FAST, no FULL, no HEAVY, no build and no browser execution.
+- No Git add, commit, push, merge, rebase, tag, release or deploy. The index stays empty.
+- No Acceptance and no Freeze. `W11_A_ACCEPTANCE_PASS` is **not** issued.
+- No business contract was changed. G-1 … G-5 are registered, not fixed.
+
+HARD STOP. The next stage requires its own explicit authorization and is not started by this section.
+
+**Stage status: `ERP_PROJECT_BASELINE_RECONCILED_PENDING_ACCEPTANCE`.**
