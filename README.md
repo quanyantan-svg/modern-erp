@@ -66,6 +66,12 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 上一版项目级审计为《ERP Project-Wide Progress Baseline & Next Milestone Audit》（2026-10-31），
 其勘误见 `solution.md §37.54.48`。
 
+本节所属的 **M0 阶段（项目级文档基线纠偏与审计勘误）已由业务所有者于 2026-10-31 验收通过**：
+`M0_BASELINE_ACCEPTANCE_PASS`，验收锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`，
+登记见 `document.md §35.11`。该验收**只闭合 M0 本身**：它**不构成任何 Domain 的
+Domain-Level Acceptance**，**不签发** `W11_A_ACCEPTANCE_PASS`，也**不关闭**
+G-1…G-5、D-2…D-5、历史库存完整性或任何 Release Blocker。
+
 ### 九个 Domain 当前进度
 
 冻结层级严格区分七种状态，不得互相替代：
@@ -109,6 +115,9 @@ Modern ERP 是一套基于 **React 19 + Vite 7 + Node.js 22.23.2 + SQLite/MySQL 
 
 - **已验收并冻结**：Planning；Sales Wave 6 / 7 / 9、Gate A、Wave 10（能力冻结，发布仍阻塞）；
   Package B 测试隔离；W11-SEC-01、W11-A U1、U2、OVERDUE、U3。
+- **已验收（文档层基线验收，非能力冻结）**：M0 项目级文档基线纠偏与审计勘误
+  （`M0_BASELINE_ACCEPTANCE_PASS`，锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`）。
+  它**不构成任何 Domain 的 Domain-Level Acceptance**，也不关闭任何待治理缺陷或 Release Blocker。
 - **实现完成但缺 Domain-Level Acceptance**：Master & Engineering、Manufacturing & Quality、
   Inventory & Warehouse、Finance Operations。
 - **待验收**：Procurement & Outsourcing（`NOT READY`）。
@@ -173,10 +182,15 @@ W11-A OVERDUE Foundation 的冻结记录本身**未记载 Git SHA**（其工作�
 
 ### 当前推荐的下一个工作包
 
-**A — 项目 Git / 文档基线纠偏**（即本节）。理由：当前 canonical 文档陈述的仍是若干阶段之前的
+**A — 项目 Git / 文档基线纠偏**（即本节，即 M0）。**已于 2026-10-31 验收通过**：
+`M0_BASELINE_ACCEPTANCE_PASS`，锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1`。
+理由：当前 canonical 文档陈述的仍是若干阶段之前的
 状态，任何后续业务包都会基于错误基线被规划与复核；本包零回归风险、零 MySQL 依赖，且已把
 两项源码级缺陷（`outsourcing_receipt_items` 无生产写入路径、processing-fee bill 无 GL 凭证）
 写入待治理清单。详见 `document.md §35` 与 `solution.md §37.54.48`。
+
+M0 验收后，**后续业务包的启动仍需各自的显式授权**；W11-A 整包验收、G-1…G-5、D-2…D-5、
+历史库存完整性与全部 Release Blocker 均保持开放，采购委外 Domain 仍为 `NOT READY`。
 
 ---
 
@@ -211,7 +225,13 @@ W11-A OVERDUE Foundation 的冻结记录本身**未记载 Git SHA**（其工作�
 ### Procurement & Outsourcing
 
 - 已实现 Sourcing、Supplier Allocation / Quota、采购价格与折扣、PO Change、Receipt Notice、采购退货四分支、Procurement Scan；
-- VMI business layer 已实现；Inventory owner-dimension 物理动作当前明确 fail closed；
+- VMI business layer 已实现；自 V21 起 Inventory owner dimension **已可用**，VMI 收货 / 消耗 / 所有权转移
+  统一经 `applyInventoryMutation` 落物理库存（所有权转移使用 `OWNER_CHANGE` 移动类型，
+  该移动类型由库存域按 owner 身份成对记账），legacy fail-closed helper 已移除并成为 no-op
+  （`server/modules/procurement-vmi.js:14-20`；`server/lib/inventory-mutation.js:43,248`）。
+  **仍然开放**的是旧验收 harness 的 UAT-14 oracle 仍硬编码 409 `INVENTORY_OWNER_DIMENSION_UNAVAILABLE`
+  （`scripts/acceptance/procurement-outsourcing-functional-uat.mjs:235-240`），
+  即 `document.md §35.8` 的 **G-5**：修 test 还是修 contract 仍属业务决定；
 - Outsourcing Order、材料发/退/补、倒冲、收货、加工费 Supplier Bill/AP、成本证据、完工退货商业贷项、差异/WIP/报表已实现；
 - **历史检查点（2026-10-09）**：functional browser UAT 25/28 PASS，缺口为 authoritative Planning handoff
   consumption、Completion Receipt Notice、`OUTSOURCING_RECEIPT` Inspection。**该检查点已被后续实现取代**：

@@ -40583,3 +40583,133 @@ re-dated or fabricated. Where a historical statement is superseded, it is marked
 HARD STOP. The next stage requires its own explicit authorization and is not started by this section.
 
 **Stage status: `ERP_PROJECT_BASELINE_RECONCILED_PENDING_ACCEPTANCE`.**
+
+---
+
+### 37.54.49 M0 Project Baseline Acceptance Record and Design Status Index Update (2026-10-31)
+
+#### 1. Authorization, inputs and boundary
+
+The business owner formally confirmed `M0_BASELINE_ACCEPTANCE_PASS` on 2026-10-31 for the
+**M0 Project Baseline Reconciliation & Audit Errata** stage recorded in `§37.54.48`.
+
+This section is the **design-layer counterpart** of the Requirement-layer registration in
+`document.md §35.11`. It records the acceptance on the design layer and updates the
+**current technical design status index** that `§37.54.48 §4` opened.
+
+The authorization covers the **documentation-level acceptance registration only**:
+
+- `document.md` — `§35.11` acceptance registration plus the internal-consistency amendments to
+  `§35.1`, `§35.5`, `§35.7` and `§35.10`;
+- `README.md` — the M0 status entry point and the correction of the stale VMI owner-dimension
+  statement;
+- `solution.md` — this section;
+- `log/2026-10-31.md` — the append-only record of this stage.
+
+Not authorized and not performed: no production code, test, schema, migration, launcher, runner,
+suite registry or package script change; no MySQL and no test gate; no Git commit, push, merge,
+rebase, tag, release or deploy; no Domain-Level Acceptance; no Freeze.
+
+#### 2. The acceptance record (design layer)
+
+| Item | Value |
+| --- | --- |
+| Acceptance | `M0_BASELINE_ACCEPTANCE_PASS` — granted by the business owner on 2026-10-31 |
+| Accepted object | the M0 Project Baseline Reconciliation & Audit Errata stage (`§37.54.48`) |
+| Acceptance anchor commit | `3e70c380eec7d34dd938a29d23dbf07227656ef1` |
+| Anchor subject | `docs(erp): 收口M0全局项目基线审计勘误与状态快照` |
+| Anchor changed paths | `README.md`, `document.md`, `solution.md`, `log/2026-10-31.md` — 4 paths, documentation only |
+| Version | `1.6.2`, unchanged |
+| Release tags | `v1.6.0`, `v1.6.1`, `v1.6.2`, unchanged |
+| Accepted scope | the documentation baseline reconciliation and the audit errata of E-1 … E-5 only |
+
+#### 3. The stage status transition, by dated supersession
+
+```text
+Before : ERP_PROJECT_BASELINE_RECONCILED_PENDING_ACCEPTANCE
+         (§37.54.48 结尾，以及 log/2026-10-31.md 的 M0 阶段记录)
+After  : M0_BASELINE_ACCEPTANCE_PASS
+         (业务所有者 2026-10-31 的显式决定)
+```
+
+The `§37.54.48` stage-status token is **not deleted, not rewritten and not re-dated**. It remains
+the accurate statement of the state at the end of the M0 stage, exactly as `§37.54.48 §2` did
+for the `§37.54.47` token. This section supersedes it as the **current** design status only.
+The historical Requirement, Design, Acceptance and Freeze records are untouched.
+
+#### 4. The updated current technical design status index
+
+This table supersedes `§37.54.48 §4` as the current index. The `§37.54.48 §4` table is preserved
+unchanged as the historical index of the M0 stage.
+
+| Design subject | Authoritative design | Implementation state | Design gap |
+| --- | --- | --- | --- |
+| Core scope / domain alignment | `solution.md` §26–§27 | Complete | — |
+| Master & Engineering | §28 | Complete | retained Multi-Org / Mold / APS gaps |
+| Manufacturing & Quality | §29 | Complete | Dispatch / Operation Transfer / NC disposition |
+| Planning | §30 | Complete | Multi-Org, full outsourcing execution |
+| Procurement & Outsourcing | §31 | Complete | Acceptance `NOT READY`; G-1..G-5 |
+| Inventory & Warehouse | §32 | Partial Complete | barcode generate, PDA execution, stocktake scan, assembly; bin/status/owner/stocktake CRUD not routed |
+| Finance Operations | §33 | Complete | FO13 reversal half; GRNI reversal by design |
+| Sales & Customer | §34 | Complete (Wave 0–10 + W11) | Waves 1–2 unaccepted; whole domain not frozen |
+| Accounting & Analytics | **none** | Partial | Smart Accounting rule platform, Cash Flow, Report Designer, Management Accounting |
+| Platform | **none** | Partial | no generic workflow execution engine |
+| W11-A U3 | §37.54.36 – §37.54.48 | Complete, frozen | package-level token reserved |
+| **M0 project baseline reconciliation** | §37.54.48 | **Complete, accepted 2026-10-31** (`M0_BASELINE_ACCEPTANCE_PASS`, anchor `3e70c380eec7d34dd938a29d23dbf07227656ef1`) | none of its own; it closes **no** business gap |
+
+#### 5. The stale VMI owner-dimension statement, corrected against the source
+
+The README carried a statement that the VMI owner-dimension physical actions were "明确 fail closed".
+That statement was **stale** and has been corrected. The source evidence:
+
+- `server/modules/procurement-vmi.js:14-20` — under V21 the legacy fail-closed helper
+  `assertInventoryOwnerDimension` was **removed** and is now a **no-op**, with the comment
+  "Owner dimension is now available through Inventory domain";
+- `server/modules/procurement-vmi.js:96,116,191-219` — the VMI receipt, the consumption and the
+  ownership transfer all route through `applyInventoryMutation`, the ownership transfer using
+  `movementKind: 'OWNER_CHANGE'`;
+- `server/lib/inventory-mutation.js:43,248,311` — `OWNER_CHANGE` is a first-class paired movement
+  kind in the canonical inventory mutation dispatcher, and the owner identity is validated through
+  `validateOwner`;
+- `server/procurement-vmi.test.js:5,37-40` — the focused suite asserts the **positive** canonical
+  path ("VMI business layer with owner-dimension canonical path"): the receipt creates a
+  SUPPLIER-owned position distinct from ENTERPRISE stock, the consumption reduces supplier stock,
+  and the ownership transfer moves quantity from SUPPLIER to ENTERPRISE.
+
+What genuinely remains open is **not** a production fail-closed behaviour. It is the **legacy
+acceptance oracle** in `scripts/acceptance/procurement-outsourcing-functional-uat.mjs:235-240`
+(UAT-14), which still hard-codes the 409 `INVENTORY_OWNER_DIMENSION_UNAVAILABLE` expectation.
+That is exactly the registered **G-5** of `document.md §35.8`: whether the **test** is corrected or
+the **contract** is corrected is a business decision and was **not** decided here.
+
+This correction changed **no** production behaviour, **no** API, **no** schema and **no** test. It
+corrects a documentation statement that no longer described the source, and it therefore does
+**not** constitute a Procurement & Outsourcing Domain-Level Acceptance, which remains `NOT READY`
+(`document.md §31.11`).
+
+#### 6. What this acceptance does not close
+
+- **W11-A package-level Acceptance** — still an independent business decision;
+  `W11_A_ACCEPTANCE_PASS` remains **not issued**. `§37.54.48 §3.1` is unchanged in that respect.
+- **G-1 … G-5** — registered, **not fixed**.
+- **D-2 / D-3 / D-4 / D-5** — open design decisions, still blocking W11-B and W11-C.
+- **The historical inventory integrity** — `R-U3-INV-10 = DEFERRED_OUT_OF_SCOPE`, governed by its own
+  independent Requirement, **not closed**.
+- **The existing Release Blockers** — every entry of `document.md §35.9` keeps its state;
+  `CREDENTIAL_EXPOSURE_OPEN` stays `USER_ACCEPTED / DEFERRED`, which is **not** risk elimination.
+- **Procurement & Outsourcing Domain-Level Acceptance** — still `NOT READY`.
+- **Release Readiness** — no Domain holds it; production release remains unauthorized.
+
+#### 7. What did not happen and the pause point
+
+- No production code, test, schema, migration, launcher, runner, suite registry or package script
+  was modified. The changed paths are documentation only.
+- No MySQL, no FAST, no FULL, no HEAVY, no build and no browser execution.
+- No Git add, commit, push, merge, rebase, tag, release or deploy. The index stays empty.
+- No Domain-Level Acceptance and no Freeze. `W11_A_ACCEPTANCE_PASS` is **not** issued.
+- No business contract was changed. G-1 … G-5 and D-2 … D-5 are registered, not fixed.
+
+HARD STOP. The M0 acceptance registration is a documentation-only change whose own commit and
+dual-remote push require a separate explicit authorization.
+
+**Stage status: `M0_BASELINE_ACCEPTANCE_REGISTERED — AWAITING_GIT_COMMIT_AUTHORIZATION`.**

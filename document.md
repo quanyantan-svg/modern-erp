@@ -7255,6 +7255,9 @@ Stage C authorization is still **NOT GRANTED** by this record.
 - 本节**不得**把 §22 的 2026-10-06 初始 Coverage 矩阵覆盖为推断值。凡缺少逐条证据支持的
   Capability，一律保持 `UNVERIFIED`。
 - 本节不是 Acceptance，也不是 Freeze。它不签发任何 Acceptance 标识。
+  **（2026-10-31 限定说明）**：该约束适用于 §35.1–§35.10，即本节自身的审计快照部分。
+  §35.11 登记的是业务所有者于 2026-10-31 显式作出的 `M0_BASELINE_ACCEPTANCE_PASS` 决定；
+  该标识来自该决定本身，**不由本节自行签发**，也不改变本节其余部分“不是 Acceptance”的性质。
 
 本节的形成依据是 2026-10-31 的《ERP Project-Wide Progress Baseline & Next Milestone Audit》
 项目级审计，以及该审计的勘误（`solution.md §37.54.48`）。
@@ -7315,6 +7318,11 @@ Stage C authorization is still **NOT GRANTED** by this record.
 Planning；Sales Wave 6 / 7 / 9、Gate A、Wave 10（**能力冻结，发布仍阻塞**）；Package B 测试隔离；
 W11-SEC-01；W11-A U1、U2、OVERDUE Foundation、U3。
 
+**已验收但不属于业务能力冻结**（文档层基线验收，详见 §35.11）：
+M0 Project Baseline Reconciliation & Audit Errata（`M0_BASELINE_ACCEPTANCE_PASS`）。
+它是**文档与基线层面的验收**，**不是**任何 Domain 的 Domain-Level Acceptance，
+**不关闭**任何 G-1…G-5、D-2…D-5、历史库存完整性或 Release Blocker。
+
 **实现完成但缺 Domain-Level Acceptance**：Master & Engineering、Manufacturing & Quality、
 Inventory & Warehouse、Finance Operations。
 
@@ -7367,9 +7375,10 @@ Cash Flow、Report Designer、Management Accounting；Platform Generic Workflow 
 | 项 | 值 |
 |---|---|
 | Frozen Implementation（W11-A U3） | `ec618eb81684d645707c70a8b69ff9379682fbaa`（tree `908c10310cd92a509374ada2bd31b5882be580f2`） |
-| Closure HEAD | `ebe3363fe88d64222a6aa619a932bfe9a4fa3578` |
+| Closure HEAD（W11-A U3 冻结日志） | `ebe3363fe88d64222a6aa619a932bfe9a4fa3578` |
+| **M0 验收锚点提交** | `3e70c380eec7d34dd938a29d23dbf07227656ef1`（`docs(erp): 收口M0全局项目基线审计勘误与状态快照`；M0 已验收，见 §35.11） |
 | WIP 父提交 / Recovery 基线 | `60f3fbd169d7b43bbae3824b10b538edef4aeec1` / `8c716f64dbeb8d650c3dd87a43661ed205fdcfdd` |
-| 分支 | `review/w11a-u3-fast-blocked-20261030`，GitHub 与 Gitee 同名 Review Branch 均指向 Closure HEAD |
+| 分支 | `review/w11a-u3-fast-blocked-20261030`，GitHub 与 Gitee 同名 Review Branch 均指向 M0 验收锚点 `3e70c380eec7d34dd938a29d23dbf07227656ef1` |
 | `master`（两端） | `aee1e0c13d26dd840ae4b596340212eef03479c0`（未变） |
 | Release tag | `v1.6.0` / `v1.6.1` / `v1.6.2`（未变） |
 | 版本 | `1.6.2`（未变） |
@@ -7412,11 +7421,86 @@ Cash Flow、Report Designer、Management Accounting；Platform Generic Workflow 
 
 ### 35.10 当前推荐的下一个工作包
 
-**A — 项目 Git / 文档基线纠偏**（本节所属阶段）。
+**A — 项目 Git / 文档基线纠偏**（本节所属阶段，即 M0）。
+**已于 2026-10-31 由业务所有者验收通过**：`M0_BASELINE_ACCEPTANCE_PASS`，验收锚点
+`3e70c380eec7d34dd938a29d23dbf07227656ef1`，登记见 §35.11。
+
 理由：canonical 文档此前陈述的是若干阶段之前的状态，任何后续业务包都会基于错误基线被规划与复核；
 本包零回归风险、零 MySQL 依赖，且已把 §35.8 的源码级缺陷写入待治理清单。
 
-候选对比与执行顺序见 `solution.md §37.54.48`。**本节不构成对任何业务包的启动授权。**
+候选对比与执行顺序见 `solution.md §37.54.48`。**M0 的验收只闭合 M0 本身**：
+它既不构成对任何业务包的启动授权，也不构成对任何 Domain 的 Domain-Level Acceptance。
+后续业务包的启动与授权仍须单独取得用户批准；§35.6 的 W11-A 包级验收、§35.8 的 G-1…G-5、
+§35.9 的 D-2…D-5、历史库存完整性以及全部 Release Blockers 均保持开放。
+
+### 35.11 M0 项目基线验收登记（2026-10-31）
+
+#### 35.11.1 验收决定
+
+业务所有者于 **2026-10-31** 正式确认：
+
+```text
+M0_BASELINE_ACCEPTANCE_PASS
+```
+
+| 项 | 值 |
+|---|---|
+| 验收对象 | M0 Project Baseline Reconciliation & Audit Errata（项目级文档基线纠偏与审计勘误） |
+| Acceptance 标识 | `M0_BASELINE_ACCEPTANCE_PASS` |
+| 验收锚点提交 | `3e70c380eec7d34dd938a29d23dbf07227656ef1` |
+| 锚点提交主题 | `docs(erp): 收口M0全局项目基线审计勘误与状态快照` |
+| 锚点提交变更路径 | `README.md`、`document.md`、`solution.md`、`log/2026-10-31.md`（4 条，纯文档） |
+| 版本 | `1.6.2`，未变 |
+| Release tag | `v1.6.0` / `v1.6.1` / `v1.6.2`，未变 |
+
+#### 35.11.2 阶段状态迁移
+
+```text
+Before : ERP_PROJECT_BASELINE_RECONCILED_PENDING_ACCEPTANCE
+         （M0 阶段结束时的状态，见 solution.md §37.54.48 结尾与 log/2026-10-31.md 的 M0 阶段记录）
+After  : M0_BASELINE_ACCEPTANCE_PASS
+         （业务所有者 2026-10-31 的显式决定）
+```
+
+迁移采用**日期化 supersession**：`solution.md §37.54.48` 结尾的
+`ERP_PROJECT_BASELINE_RECONCILED_PENDING_ACCEPTANCE` 与 `log/2026-10-31.md` 中的同名标识
+**均不删除、不改写**。它们对其各自阶段结束时的状态仍然为真，只是其"当前状态"含义已被本节取代。
+历史 Requirement、Design、Acceptance、Freeze 记录全部保持原样。
+
+#### 35.11.3 验收范围
+
+被验收的是 **M0 阶段本身**，其范围严格限于：
+
+- §35 状态快照的建立与 §35.2 的五项审计勘误（E-1…E-5）；
+- `README.md` 的状态入口与失效陈述更正；
+- `solution.md §37.54.48` 的设计层记录与技术设计状态索引；
+- `log/2026-10-31.md` 的 append-only 阶段记录。
+
+M0 **不改变任何生产行为、API、schema、migration、权限、状态机或业务语义**。
+
+#### 35.11.4 明确不因 M0 PASS 而关闭的事项
+
+以下全部**保持开放**，M0 PASS 对它们**没有任何关闭作用**：
+
+| 事项 | 当前位置 | 状态 |
+|---|---|---|
+| **W11-A 整包验收** | §35.6 | **仍需独立决定**；`W11_A_ACCEPTANCE_PASS` 仍未签发，签发是业务所有者的独立决定 |
+| **G-1**（`outsourcing_receipt_items` 无生产写入路径） | §35.8 | 开放，源码支持的缺陷 |
+| **G-2**（processing-fee bill 的 AP/GL 与财务期间） | §35.8 | 开放，源码支持的缺陷 |
+| **G-3**（Receipt Notice → Receipt 转换未接线） | §35.8 | 开放，源码支持的缺陷 |
+| **G-4**（委外材料发/退与真实库存移动） | §35.8 | 开放，源码支持的缺陷 + 已知 Requirement 风险 |
+| **G-5**（UAT-14 旧 Test Oracle 与 V21 Contract 冲突） | §35.8 | 开放，**待确认风险**；修 test 还是修 contract 仍是业务决定 |
+| **D-2 / D-3 / D-4 / D-5** | §35.9 | 开放设计决策，阻塞 W11-B、W11-C |
+| **历史库存完整性**（R-U3-INV-10） | §35.9 `R-U3-INV-10 = DEFERRED_OUT_OF_SCOPE` | 独立 Requirement，**未关闭**；新鲜库门禁 PASS 不关闭任何历史库存风险 |
+| **现有 Release Blockers** | §35.9 全表 | 全部保持原状态；`CREDENTIAL_EXPOSURE_OPEN` 仍为 `USER_ACCEPTED / DEFERRED`，**不等于风险消除** |
+| **Procurement & Outsourcing Domain Acceptance** | §35.3 / §35.5 | **仍为 `NOT READY`**；M0 PASS **不构成**该 Domain 的 Domain-Level Acceptance，**不得据此宣告采购委外 Domain 验收** |
+| **Release Readiness** | §35.3 | 没有任何 Domain 达到 Release Readiness；生产发布仍未获授权 |
+
+#### 35.11.5 验收之后的暂停点
+
+- M0 已闭合。后续任何业务包、Domain Acceptance、W11-A 包级冻结、Release 或部署，
+  都**仍需各自的显式授权**。
+- M0 的验收登记本身是一次**纯文档变更**，其提交与双远端推送**尚未授权**，等待单独批准。
 
 ---
 
